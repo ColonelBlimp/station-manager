@@ -2,7 +2,6 @@ package api
 
 import (
 	"net/http"
-	"strings"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 )
@@ -66,7 +65,13 @@ func (s *Server) handleForwarderQueues(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleClearForwarderQueue(w http.ResponseWriter, r *http.Request) {
 	const op errors.Op = "api.handleClearForwarderQueue"
 
-	name := strings.TrimSpace(r.PathValue("name"))
+	// Use the EXACT path value, not a trimmed copy: forwarder names are stored and
+	// listed (GET /v1/forwarder-queues) verbatim, and config validation only
+	// rejects an empty name — it neither trims nor forbids surrounding whitespace.
+	// Trimming here would make a legitimately-configured name like " qrz " show up
+	// in the readout yet be unclearable (lookup misses → 404). Round-trip the name
+	// the GET returns.
+	name := r.PathValue("name")
 	if name == "" {
 		s.writeError(w, http.StatusBadRequest, "invalid_forwarder", "forwarder name is required", op)
 		return

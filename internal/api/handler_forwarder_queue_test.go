@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/status"
@@ -54,7 +55,7 @@ func seedForwarderUpload(t *testing.T, srv *Server, lbID int64, fwd, call, tm st
 
 func clearQueue(t *testing.T, srv *Server, name string, setPath bool) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/v1/forwarder/"+name+"/queue/clear", nil)
+	req := httptest.NewRequest(http.MethodPost, "/v1/forwarder/"+url.PathEscape(name)+"/queue/clear", nil)
 	if setPath {
 		req.SetPathValue("name", name)
 	}
@@ -146,6 +147,27 @@ func TestClearForwarderQueue_Validation(t *testing.T) {
 			t.Errorf("discarded = %d, want 0 (disabled forwarder, no rows)", got.Discarded)
 		}
 	})
+}
+
+// TestClearForwarderQueue_PreservesExactName pins the fix for a round-trip gap
+// (W-0005 review): forwarder names are stored and listed verbatim, and config
+// validation permits surrounding whitespace, so the clear must look up the EXACT
+// path value. A trimmed lookup would 404 a name the queue readout advertises.
+func TestClearForwarderQueue_PreservesExactName(t *testing.T) {
+	const padded = " qrz " // legal per config — only empty names are rejected
+	srv := serverWithForwarders(t, forwarderCfg(padded, "qrz", true, "insert"))
+
+	w := clearQueue(t, srv, padded, true)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 — the exact configured name must be clearable; body = %s", w.Code, w.Body.String())
+	}
+	var got clearForwarderQueueResponse
+	if err := unmarshalJSON(w.Body.String(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Discarded != 0 {
+		t.Errorf("discarded = %d, want 0 (no rows) — the point is the 200, not the count", got.Discarded)
+	}
 }
 
 // TestForwarderQueues_ListsAllWithCounts: every CONFIGURED forwarder appears with
