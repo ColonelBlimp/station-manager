@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/svelte';
 import ForwardingSection from './ForwardingSection.svelte';
 import { forwardingState } from './forwarding.svelte';
+import { toastsState, _resetForTests as resetToasts } from '../ui/toasts.svelte';
 
 /*
     FORWARDING SECTION — WHAT THE OPERATOR SEES.
@@ -21,6 +22,7 @@ import { forwardingState } from './forwarding.svelte';
 
 afterEach(() => {
     vi.restoreAllMocks();
+    resetToasts();
     forwardingState.drafts = [];
     forwardingState.types = [];
     forwardingState.loaded = false;
@@ -82,6 +84,58 @@ async function renderLoaded() {
     mockDaemon();
     render(ForwardingSection);
     await vi.waitFor(() => expect(forwardingState.loaded).toBe(true));
+}
+
+// A daemon mock that also answers the W-0005 queue endpoints. The queue GET
+// reports `initialQueues`; a SUCCESSFUL clear drops that forwarder's CLEARABLE to
+// zero on the next GET — in_flight is PRESERVED, because a clear must never touch
+// the batch a worker is mid-upload on. `clearResult` sets the POST outcome. With
+// `deferRefresh`, the post-clear GET hangs until `releaseRefresh()` is called, so
+// a test can observe the state while the refetch is in flight.
+function mockForwardingWithQueues(
+    initialQueues: Array<{ name: string; clearable: number; in_flight: number }>,
+    opts: { clearResult?: { status: number; body: unknown }; deferRefresh?: boolean } = {}
+) {
+    const clearResult = opts.clearResult ?? { status: 200, body: { discarded: 0 } };
+    const cleared = new Set<string>();
+    const calls = { clear: [] as string[] };
+    let queueGets = 0;
+    let releaseRefresh: (() => void) | null = null;
+    const json = (body: unknown, status = 200) =>
+        new Response(JSON.stringify(body), {
+            status,
+            headers: { 'Content-Type': 'application/json' },
+        });
+    const queueBody = () => ({
+        // Clear zeroes ONLY clearable; in_flight is preserved.
+        forwarders: initialQueues.map((q) => (cleared.has(q.name) ? { ...q, clearable: 0 } : q)),
+    });
+    vi.stubGlobal(
+        'fetch',
+        vi.fn((url: RequestInfo | URL) => {
+            const u = url instanceof URL ? url.href : typeof url === 'string' ? url : url.url;
+            if (u.includes('forwarder-types')) return Promise.resolve(json(TYPES));
+            if (u.includes('/queue/clear')) {
+                const name = decodeURIComponent(
+                    u.split('/v1/forwarder/')[1].split('/queue/clear')[0]
+                );
+                calls.clear.push(name);
+                if (clearResult.status >= 200 && clearResult.status < 300) cleared.add(name);
+                return Promise.resolve(json(clearResult.body, clearResult.status));
+            }
+            if (u.includes('forwarder-queues')) {
+                queueGets++;
+                if (opts.deferRefresh && queueGets > 1) {
+                    return new Promise<Response>((resolve) => {
+                        releaseRefresh = () => resolve(json(queueBody()));
+                    });
+                }
+                return Promise.resolve(json(queueBody()));
+            }
+            return Promise.resolve(json(CONFIG));
+        })
+    );
+    return { calls, releaseRefresh: () => releaseRefresh?.() };
 }
 
 describe('ForwardingSection', () => {
@@ -257,5 +311,92 @@ describe('ForwardingSection', () => {
 
         await fireEvent.click(screen.getByRole('button', { name: /reset to default/i }));
         expect(screen.getByText(/apply when the daemon restarts/i)).toBeTruthy();
+    });
+
+    // U11 — THE LIVE QUEUE DEPTH IS SHOWN PER DESTINATION (W-0005). Distinguishes
+    // the clearable backlog from the in-flight batch so "clear" is never confused
+    // with "nothing is still sending."
+    it('U11: shows each destination’s clearable/in-flight queue depth', async () => {
+        mockForwardingWithQueues([
+            { name: 'qrz', clearable: 12, in_flight: 3 },
+            { name: 'smcloud', clearable: 0, in_flight: 0 },
+        ]);
+        render(ForwardingSection);
+        await vi.waitFor(() =>
+            expect(screen.getByText('12 queued · 3 in flight')).toBeInTheDocument()
+        );
+        expect(screen.getByText('0 queued · 0 in flight')).toBeInTheDocument();
+    });
+
+    // U12 — CLEAR QUEUE: confirm, POST, report the count, stay DISABLED through the
+    // refetch (no stale-count re-enable / double clear), and PRESERVE in-flight.
+    it('U12: clears after confirm, reports, stays disabled through refresh, keeps in-flight', async () => {
+        vi.spyOn(window, 'confirm').mockReturnValue(true);
+        const { calls, releaseRefresh } = mockForwardingWithQueues(
+            [{ name: 'qrz', clearable: 5, in_flight: 2 }],
+            { clearResult: { status: 200, body: { discarded: 5 } }, deferRefresh: true }
+        );
+        render(ForwardingSection);
+
+        const btn = await vi.waitFor(() =>
+            screen.getByRole('button', { name: /clear queue \(5\)/i })
+        );
+        await fireEvent.click(btn);
+
+        // Posted once and reported.
+        await vi.waitFor(() => expect(calls.clear).toEqual(['qrz']));
+        await vi.waitFor(() =>
+            expect(toastsState.items.some((t) => t.message.includes('Cleared 5'))).toBe(true)
+        );
+        // Refresh still in flight: the control is DISABLED (shows "Clearing…"), not
+        // a re-enabled stale "Clear queue (5)" a second click could fire.
+        expect(screen.getByRole('button', { name: /clearing/i })).toBeDisabled();
+        expect(screen.queryByRole('button', { name: /clear queue \(5\)/i })).toBeNull();
+
+        // Release the refetch: queued drops to 0, in-flight is untouched, one clear.
+        releaseRefresh();
+        await vi.waitFor(() =>
+            expect(screen.getByText('0 queued · 2 in flight')).toBeInTheDocument()
+        );
+        expect(screen.getByRole('button', { name: /clear queue \(0\)/i })).toBeDisabled();
+        expect(calls.clear).toEqual(['qrz']);
+    });
+
+    // U12b — CANCELLING THE CONFIRM MAKES NO REQUEST.
+    it('U12b: cancelling the confirm does not clear', async () => {
+        vi.spyOn(window, 'confirm').mockReturnValue(false);
+        const { calls } = mockForwardingWithQueues([{ name: 'qrz', clearable: 5, in_flight: 0 }]);
+        render(ForwardingSection);
+
+        const btn = await vi.waitFor(() =>
+            screen.getByRole('button', { name: /clear queue \(5\)/i })
+        );
+        await fireEvent.click(btn);
+        expect(calls.clear).toEqual([]);
+    });
+
+    // U13 — A FAILED CLEAR SURFACES THE DAEMON'S ACTUAL MESSAGE (proving
+    // daemonErrorMessage survives end-to-end), and changes nothing.
+    it('U13: a failed clear surfaces the daemon error message', async () => {
+        vi.spyOn(window, 'confirm').mockReturnValue(true);
+        mockForwardingWithQueues([{ name: 'qrz', clearable: 3, in_flight: 0 }], {
+            clearResult: {
+                status: 404,
+                body: { code: 'unknown_forwarder', message: 'no such forwarder' },
+            },
+        });
+        render(ForwardingSection);
+
+        const btn = await vi.waitFor(() =>
+            screen.getByRole('button', { name: /clear queue \(3\)/i })
+        );
+        await fireEvent.click(btn);
+        await vi.waitFor(() =>
+            expect(
+                toastsState.items.some(
+                    (t) => t.level === 'error' && t.message === 'no such forwarder'
+                )
+            ).toBe(true)
+        );
     });
 });

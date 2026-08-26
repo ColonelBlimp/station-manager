@@ -17,9 +17,66 @@
     // control, shown solely for fields the daemon declares Clearable.
     import { onMount } from 'svelte';
     import { forwardingState } from './forwarding.svelte';
+    import {
+        fetchForwarderQueues,
+        clearForwarderQueue,
+        type ForwarderQueueCount,
+    } from '../api/forwarder-queues';
+    import { toasts } from '../ui/toasts.svelte';
     import MaskedField from './MaskedField.svelte';
 
-    onMount(() => void forwardingState.load());
+    // Live upload-queue counts, keyed by forwarder name. This is DAEMON-live
+    // state, deliberately separate from the config draft/save/restart lifecycle:
+    // it reflects the currently-running worker's queue, not the drafted `enabled`.
+    // A load failure just leaves a forwarder's count absent (the line hides) — a
+    // transient count error must not block editing config.
+    let queues = $state<Record<string, ForwarderQueueCount>>({});
+    let clearing = $state<Record<string, boolean>>({});
+
+    async function loadQueues(): Promise<void> {
+        const out = await fetchForwarderQueues();
+        if (out.kind === 'ok') {
+            const next: Record<string, ForwarderQueueCount> = {};
+            for (const q of out.forwarders) next[q.name] = q;
+            queues = next;
+        }
+    }
+
+    onMount(() => {
+        void forwardingState.load();
+        void loadQueues();
+    });
+
+    // Discard a forwarder's clearable (pending+failed) backlog. Confirmed because
+    // it's irreversible; in-flight uploads finish, so the wording promises that.
+    async function onClearQueue(name: string, label: string): Promise<void> {
+        const n = queues[name]?.clearable ?? 0;
+        if (
+            !window.confirm(
+                `Discard ${n} queued upload${n === 1 ? '' : 's'} for ${label}? ` +
+                    `In-flight uploads finish; upload history is kept. This can't be undone.`
+            )
+        ) {
+            return;
+        }
+        // Hold the disabled latch through the POST *and* the refetch: releasing it
+        // before loadQueues() resolves would briefly re-enable the button showing a
+        // stale count, letting a second clear fire against already-cleared rows.
+        clearing = { ...clearing, [name]: true };
+        try {
+            const out = await clearForwarderQueue(name);
+            if (out.kind === 'ok') {
+                toasts.info(
+                    `Cleared ${out.discarded} queued upload${out.discarded === 1 ? '' : 's'} from ${label}.`
+                );
+                await loadQueues();
+            } else {
+                toasts.error(out.message);
+            }
+        } finally {
+            clearing = { ...clearing, [name]: false };
+        }
+    }
 
     function isSet(setKeys: string[], key: string): boolean {
         return setKeys.includes(key);
@@ -78,6 +135,7 @@
                      TOGGLE lives inside: an interactive control in <summary>
                      fights the disclosure for the click. -->
                 {@const edited = forwardingState.hasEdits(f.name)}
+                {@const q = queues[f.name]}
                 <details class="rounded-md border border-line" open={edited || undefined}>
                     <!-- A card with unsaved edits CANNOT be collapsed: hiding a
                          pending change behind a closed disclosure is how an
@@ -142,6 +200,17 @@
                             >
                                 {f.enabled ? 'enabled' : 'disabled'}
                             </span>
+                            <!-- Live queue depth (W-0005): clearable backlog vs
+                                 the in-flight batch. Reads at a glance on the
+                                 collapsed card, beside the on/off pill. -->
+                            {#if q}
+                                <span
+                                    class="text-[11px] text-muted"
+                                    title="Queued uploads waiting to send · currently being sent"
+                                >
+                                    {q.clearable} queued · {q.in_flight} in flight
+                                </span>
+                            {/if}
                             {#if !td}
                                 <span class="text-xs text-warning">unsupported</span>
                             {/if}
@@ -157,6 +226,30 @@
                             />
                             Enabled
                         </label>
+
+                        <!-- Clear queue (W-0005): drop this destination's
+                             pending+failed backlog. A live daemon action, kept
+                             OUT of <summary> (click conflict) and out of the
+                             draft/Save machinery. Disabled when nothing is
+                             clearable or a clear is in flight. -->
+                        {#if q}
+                            <div class="mt-3">
+                                <button
+                                    class="btn"
+                                    disabled={q.clearable === 0 || clearing[f.name]}
+                                    onclick={() =>
+                                        onClearQueue(f.name, f.label || td?.display_name || f.type)}
+                                >
+                                    {clearing[f.name]
+                                        ? 'Clearing…'
+                                        : `Clear queue (${q.clearable})`}
+                                </button>
+                                <p class="mt-1 text-xs text-muted">
+                                    Drops queued (not-yet-sent) uploads for this destination.
+                                    In-flight uploads finish and upload history is kept.
+                                </p>
+                            </div>
+                        {/if}
 
                         {#if !td}
                             <p class="mt-3 text-sm text-warning">
