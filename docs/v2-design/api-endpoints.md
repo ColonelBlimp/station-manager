@@ -94,6 +94,22 @@ unregistered, the path is a **404** (there is no root SPA catch-all as of 2026-0
 - **Response:** **200**, body `{"enqueued": N, "skipped_uploaded": M, "skipped_deleted"?: ["…"], "not_found"?: ["…"]}`.
 - **Errors:** 400 `invalid_forwarder` (empty name); 400 `missing_required_field` (empty `uuids`); 400 `batch_too_large` (> 5000 uuids); 400 `forwarder_unavailable` (forwarder unknown, **disabled**, or doesn't forward inserts — a disabled forwarder has no worker and gets its queue rows discarded at startup, so enqueuing would strand them); 400 malformed body; 500 `enqueue_failed`.
 
+### `GET /v1/forwarder-queues`
+- **Purpose:** Per-forwarder upload-queue readout for Settings → Forwarding (W-0005) — the clearable backlog vs the in-flight batch, so an operator can see what a "Clear queue" would drop and what is still being sent.
+- **Gating:** Always-on.
+- **Request:** No body.
+- **Behaviour:** One entry per **configured** forwarder (enabled or disabled, in config order). `clearable` = rows at status `pending` + `failed` (what a clear removes); `in_flight` = rows at status `in_progress` (the currently-claimed batch, never cleared); `uploaded` history is counted in neither. A forwarder with no queued rows reads `{clearable: 0, in_flight: 0}`.
+- **Response:** **200**, body `{"forwarders": [{"name": "…", "clearable": N, "in_flight": N}, …]}`.
+- **Errors:** 500 `queue_counts_failed`.
+
+### `POST /v1/forwarder/{name}/queue/clear`
+- **Purpose:** Operator-triggered queue clear (W-0005) — "drop the remaining backlog, finish the currently claimed batch." Discards only the named forwarder's `pending` + `failed` rows; `in_progress` (the batch a live worker is processing) and `uploaded` (history, carries the remote upstream_id) are left untouched, so the clear is race-free against a running worker with no coordination. Independent of enable/disable — an enabled or disabled forwarder may both be cleared.
+- **Gating:** Always-on.
+- **Request:** Path `{name}` (the forwarder's config name). No body.
+- **Behaviour:** Per-forwarder (a `forwarder_name` equality), never global. The affected QSOs revert to "not uploaded to X" — the ADIF upload stamp, not the queue row, is the source of truth — and are recoverable via manual backfill (`POST /v1/forwarder/{name}/uploads`).
+- **Response:** **200**, body `{"discarded": N}` (rows removed).
+- **Errors:** 400 `invalid_forwarder` (empty name); 404 `unknown_forwarder` (not a configured forwarder); 500 `clear_failed`.
+
 ### `POST /v1/smcloud/reconcile`
 - **Purpose:** On-demand SM Cloud reconcile (ADR 0040 S4) — run one detect+heal pass NOW instead of waiting for the hourly loop: compute the local live-row `{count, hash}` (the shared `internal/cloud/reconcile` summary), compare with the cloud's, and on mismatch diff the two manifests and re-enqueue diverged UUIDs through the smcloud forwarder's queue (upserts via the backfill path, missed tombstones via delete rows). The operator's "back up / check now" button.
 - **Gating:** Wired only when an **enabled `smcloud` forwarder** exists at startup (cmd/smd injects the reconciler); otherwise the route answers 503.

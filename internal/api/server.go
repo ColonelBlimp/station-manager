@@ -216,6 +216,13 @@ func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *l
 	// handler_forwarder_uploads.go.
 	mux.HandleFunc("POST /v1/forwarder/{name}/uploads", s.handleEnqueueForwarderUploads)
 
+	// Operator-triggered forwarder queue clearing (W-0005). The counts GET drives
+	// Settings → Forwarding (clearable vs in-flight per forwarder); the clear POST
+	// drops a named forwarder's pending+failed backlog, leaving the in-flight batch
+	// and upload history. See handler_forwarder_queue.go.
+	mux.HandleFunc("GET /v1/forwarder-queues", s.handleForwarderQueues)
+	mux.HandleFunc("POST /v1/forwarder/{name}/queue/clear", s.handleClearForwarderQueue)
+
 	// SM Cloud on-demand reconcile (ADR 0040 S4) — one detect+heal pass now.
 	// 503 until cmd/smd wires an enabled smcloud forwarder's reconciler.
 	mux.HandleFunc("POST /v1/smcloud/reconcile", s.handleSmcloudReconcile)
