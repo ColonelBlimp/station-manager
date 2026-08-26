@@ -1,6 +1,6 @@
 # W-0005 — Operator-triggered forwarder queue clearing
 
-**Status:** Open — decisions settled and implementation landed (2026-08-26); closure sign-off pending CI-green
+**Status:** Completed 2026-08-26 — operator-triggered forwarder queue clearing shipped and CI-green on `main`: the pending+failed clear, per-forwarder queue counts, the two HTTP endpoints, and the Settings → Forwarding surface (with reconcile-after-clear safety) are all in place.
 **Selected:** 2026-08-20
 **Outcome:** An operator can deliberately discard a forwarder's queued (not-yet-uploaded)
 backlog — "don't send the backlog, start forwarding from now" — without losing real upload
@@ -8,7 +8,10 @@ history, from the consolidated app's Forwarding settings, with a defined policy 
 enabled forwarder whose worker may be mid-batch.
 
 `W-0005` is an immutable identity. Its status may change, while priority and ranked position
-live only in [`docs/backlog.md`](../backlog.md).
+live only in [`docs/backlog.md`](../../backlog.md).
+
+Closed 2026-08-26 after CI-green on `main` (`60f3a67c`). The settled policy, what shipped, and
+the met acceptance criteria are recorded in **Decisions settled** and **Implementation** below.
 
 ## Verified current state
 
@@ -16,7 +19,7 @@ The primitive and the disabled-forwarder path already exist; the operator-trigge
 and the enabled-forwarder policy do not.
 
 - **The discard primitive exists and preserves history.**
-  [`DiscardQueuedUploadsForForwarderWithContext`](../../internal/database/sqlite/api_context.go)
+  [`DiscardQueuedUploadsForForwarderWithContext`](../../../internal/database/sqlite/api_context.go)
   (`internal/database/sqlite/api_context.go:2521`) deletes the named forwarder's `qso_upload`
   rows whose status is `Pending`, `InProgress`, or `Failed`, and only those — `uploaded` /
   `success` rows are never matched, so real upload history survives. Scope is per-forwarder
@@ -108,7 +111,7 @@ Shipped as five TDD slices, each with a reversion or mutation proof:
 - **API**: `GET /v1/forwarder-queues` (every configured forwarder, `{0,0}` default) and
   `POST /v1/forwarder/{name}/queue/clear` (`{discarded}`; `400 invalid_forwarder`,
   `404 unknown_forwarder`; the exact configured name is round-tripped, not trimmed). Documented in
-  [`api-endpoints.md`](../v2-design/api-endpoints.md).
+  [`api-endpoints.md`](../../v2-design/api-endpoints.md).
 - **App** (Settings → Forwarding): "N queued · M in flight" per destination and a confirmed
   "Clear queue" button reporting the discarded count. A clear reconciles against the daemon before
   re-enabling — an indeterminate outcome (timeout, dropped connection, or unreadable 200) or a
@@ -132,19 +135,19 @@ action is needed.
 
 ## References
 
-- [`docs/backlog.md`](../backlog.md) — authoritative ranking (this item's P2 rank lives there).
-- [`ADR 0022`](../decisions/0022-forwarder-enqueue-by-config-presence.md) — enqueue by config
+- [`docs/backlog.md`](../../backlog.md) — authoritative ranking (this item's P2 rank lives there).
+- [`ADR 0022`](../../decisions/0022-forwarder-enqueue-by-config-presence.md) — enqueue by config
   presence, the reason a disabled forwarder accumulates a queue.
-- [`ADR 0039`](../decisions/0039-forwarder-enabled-gates-enqueue-config-driven.md) —
+- [`ADR 0039`](../../decisions/0039-forwarder-enabled-gates-enqueue-config-driven.md) —
   forwarder-enabled gating of enqueue, and the startup purge of a disabled forwarder's
   non-uploaded rows.
-- [`internal/database/sqlite/api_context.go`](../../internal/database/sqlite/api_context.go)
+- [`internal/database/sqlite/api_context.go`](../../../internal/database/sqlite/api_context.go)
   `DiscardQueuedUploadsForForwarderWithContext` (`:2521`) — the history-preserving primitive.
-- [`cmd/smd/lifecycle_adapters.go`](../../cmd/smd/lifecycle_adapters.go) `startWorkers` — the
+- [`cmd/smd/lifecycle_adapters.go`](../../../cmd/smd/lifecycle_adapters.go) `startWorkers` — the
   existing startup disabled-forwarder discard call site.
-- [`docs/v2-design/config.md`](../v2-design/config.md) — the `forwarders[]` configuration
+- [`docs/v2-design/config.md`](../../v2-design/config.md) — the `forwarders[]` configuration
   contract the Settings → Forwarding surface edits.
-- ClubLog `putlogs.php` bulk-backfill item in [`docs/backlog.md`](../backlog.md) (Forwarding /
+- ClubLog `putlogs.php` bulk-backfill item in [`docs/backlog.md`](../../backlog.md) (Forwarding /
   data cluster) — **cross-linked, not absorbed**: it notes the same startup purge and the
   "disabling ClubLog mid-403 loses failed-row retry eligibility" provenance limitation, which
   this item's clear policy interacts with but does not resolve.
