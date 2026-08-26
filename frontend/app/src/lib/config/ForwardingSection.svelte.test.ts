@@ -96,7 +96,7 @@ function mockForwardingWithQueues(
     initialQueues: Array<{ name: string; clearable: number; in_flight: number }>,
     opts: {
         clearResult?: { status: number; body: unknown };
-        clearTimesOut?: boolean;
+        clearFails?: 'timeout' | 'network';
         refreshFails?: boolean;
         deferRefresh?: boolean;
     } = {}
@@ -125,12 +125,14 @@ function mockForwardingWithQueues(
                     u.split('/v1/forwarder/')[1].split('/queue/clear')[0]
                 );
                 calls.clear.push(name);
-                if (opts.clearTimesOut) {
-                    // safeFetch maps a TimeoutError-named rejection to timedOut.
-                    const e = new Error('request timed out');
-                    e.name = 'TimeoutError';
-                    // A timeout is ambiguous — the delete may have committed.
+                if (opts.clearFails) {
+                    // The daemon deletes before it responds, so a post-dispatch
+                    // failure — a timeout OR a connection reset — may have committed.
                     cleared.add(name);
+                    const e = new Error(
+                        opts.clearFails === 'timeout' ? 'request timed out' : 'connection reset'
+                    );
+                    if (opts.clearFails === 'timeout') e.name = 'TimeoutError';
                     return Promise.reject(e);
                 }
                 if (clearResult.status >= 200 && clearResult.status < 300) cleared.add(name);
@@ -446,7 +448,29 @@ describe('ForwardingSection', () => {
     it('U15: a clear timeout reconciles instead of reporting failure', async () => {
         vi.spyOn(window, 'confirm').mockReturnValue(true);
         mockForwardingWithQueues([{ name: 'qrz', clearable: 5, in_flight: 2 }], {
-            clearTimesOut: true,
+            clearFails: 'timeout',
+        });
+        render(ForwardingSection);
+
+        const btn = await vi.waitFor(() =>
+            screen.getByRole('button', { name: /clear queue \(5\)/i })
+        );
+        await fireEvent.click(btn);
+
+        await vi.waitFor(() =>
+            expect(screen.getByText('0 queued · 2 in flight')).toBeInTheDocument()
+        );
+        expect(toastsState.items.some((t) => t.level === 'warn')).toBe(true);
+        expect(toastsState.items.some((t) => t.level === 'error')).toBe(false);
+    });
+
+    // U16 — A NON-TIMEOUT post-dispatch failure (connection reset after the daemon
+    // committed the delete) is ALSO reconciled, not reported as a plain failure —
+    // the same ambiguity as a timeout, so the same reconcile-not-error handling.
+    it('U16: a post-dispatch connection failure reconciles, not errors', async () => {
+        vi.spyOn(window, 'confirm').mockReturnValue(true);
+        mockForwardingWithQueues([{ name: 'qrz', clearable: 5, in_flight: 2 }], {
+            clearFails: 'network',
         });
         render(ForwardingSection);
 

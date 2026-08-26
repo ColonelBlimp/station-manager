@@ -85,24 +85,35 @@ describe('clearForwarderQueue', () => {
         expect(init?.method).toBe('POST');
     });
 
-    it('surfaces the daemon error MESSAGE on a 404', async () => {
+    it('surfaces the daemon error MESSAGE on a 404 — a DEFINITE failure (not indeterminate)', async () => {
         stubJson(404, { code: 'unknown_forwarder', message: 'no such forwarder' });
         const out = await clearForwarderQueue('nope');
         expect(out.kind).toBe('error');
         if (out.kind === 'error') {
             expect(out.message).toBe('no such forwarder');
+            // The daemon RESPONDED with an error → it did not delete → count accurate.
+            expect(out.indeterminate).toBeFalsy();
         }
     });
 
-    it('swallows a plain transport failure — NOT flagged ambiguous (it never reached the daemon)', async () => {
+    it('a 200 with an unreadable body is INDETERMINATE (the delete committed)', async () => {
+        stubJson(200, [1, 2, 3]); // 200 but not the {discarded} object envelope
+        const out = await clearForwarderQueue('qrz');
+        expect(out.kind).toBe('error');
+        if (out.kind === 'error') {
+            expect(out.indeterminate).toBe(true);
+        }
+    });
+
+    it('flags ANY post-dispatch transport failure as indeterminate (may have committed)', async () => {
         vi.stubGlobal(
             'fetch',
-            vi.fn(() => Promise.reject(new Error('connection refused')))
+            vi.fn(() => Promise.reject(new Error('connection reset')))
         );
         const out = await clearForwarderQueue('qrz');
         expect(out.kind).toBe('error');
         if (out.kind === 'error') {
-            expect(out.timedOut).toBeFalsy();
+            expect(out.indeterminate).toBe(true);
         }
     });
 
@@ -111,14 +122,14 @@ describe('clearForwarderQueue', () => {
             'fetch',
             vi.fn(() => {
                 const e = new Error('request timed out');
-                e.name = 'TimeoutError'; // safeFetch maps this to timedOut
+                e.name = 'TimeoutError';
                 return Promise.reject(e);
             })
         );
         const out = await clearForwarderQueue('qrz');
         expect(out.kind).toBe('error');
         if (out.kind === 'error') {
-            expect(out.timedOut).toBe(true);
+            expect(out.indeterminate).toBe(true);
         }
     });
 });

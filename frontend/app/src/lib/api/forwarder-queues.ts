@@ -28,11 +28,15 @@ export type QueuesOutcome =
 
 export type ClearOutcome =
     | { kind: 'ok'; discarded: number }
-    /** `timedOut` marks the AMBIGUOUS failure: the POST reached (or may have
-     *  reached) the daemon and no response came, so the delete may already have
-     *  committed. The caller must NOT report a plain failure — it should
-     *  reconcile with a fresh GET before allowing another clear. */
-    | { kind: 'error'; message: string; timedOut?: boolean };
+    /** `indeterminate` marks a failure where the clear MAY have committed: the
+     *  daemon deletes rows before serializing its response, so any failure AFTER
+     *  dispatch — a transport failure of any kind (timeout, or a connection reset
+     *  after the request left), or a 200 whose body can't be read — may have
+     *  already deleted. The caller must NOT report a plain failure; it must
+     *  reconcile with a fresh GET before allowing another clear. A DEFINITE
+     *  failure (the daemon RESPONDED with an error status → it did not act) leaves
+     *  this false. */
+    | { kind: 'error'; message: string; indeterminate?: boolean };
 
 const num = (v: unknown): number => (typeof v === 'number' ? v : 0);
 
@@ -71,18 +75,23 @@ export async function clearForwarderQueue(
         { timeoutMs: WRITE_TIMEOUT_MS }
     );
     if (!fetched.ok) {
-        return {
-            kind: 'error',
-            message: fetched.message,
-            timedOut: fetched.kind === 'network' && fetched.timedOut === true,
-        };
+        // Transport failure (no HTTP response): timeout, or a connection dropped
+        // after the request left. We can't prove the request never reached the
+        // daemon, so the delete may have committed — indeterminate. (Operator
+        // aborts don't occur here: no caller signal is passed.)
+        return { kind: 'error', message: fetched.message, indeterminate: true };
     }
     const body = await readJsonBody(fetched.response);
     if (!fetched.response.ok) {
+        // The daemon RESPONDED with an error status. For this endpoint that means
+        // it did not delete (validation rejects before the delete; a failed delete
+        // rolls back), so the shown count is still accurate — a DEFINITE failure.
         return { kind: 'error', message: daemonErrorMessage(fetched.response.status, body) };
     }
     if (!isPlainObject(body)) {
-        return { kind: 'error', message: 'Unexpected clear response.' };
+        // 200 but unreadable — the daemon writes 200 only after the delete commits,
+        // so this succeeded; the caller must reconcile to learn the new count.
+        return { kind: 'error', message: 'Unexpected clear response.', indeterminate: true };
     }
     return { kind: 'ok', discarded: num(body.discarded) };
 }

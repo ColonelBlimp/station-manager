@@ -93,15 +93,16 @@
                         `Couldn't refresh ${label}'s queue count — it'll update on the next load.`
                     );
                 }
-            } else if (out.timedOut) {
-                // The delete may have committed despite the timeout — reconcile and
-                // report "unknown", never a plain failure, and never leave a stale
-                // count a retry could act on.
+            } else if (out.indeterminate) {
+                // The clear may have committed despite the error — the daemon
+                // deletes before it responds, so any post-dispatch failure is
+                // ambiguous. Reconcile, report "unknown" (never a plain failure),
+                // and never leave a stale count a retry could act on.
                 const confirmed = await reconcileQueue(name);
                 toasts.warn(
                     confirmed
-                        ? `Clearing ${label} timed out; its queue count has been refreshed to its current state.`
-                        : `Clearing ${label} timed out and its queue couldn't be re-read — whether it cleared is unknown.`
+                        ? `Clearing ${label} didn't confirm cleanly; its queue count has been refreshed to its current state.`
+                        : `Clearing ${label} didn't confirm and its queue couldn't be re-read — whether it cleared is unknown.`
                 );
             } else {
                 toasts.error(out.message);
