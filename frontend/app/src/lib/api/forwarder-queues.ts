@@ -64,21 +64,23 @@ export async function fetchForwarderQueues(signal?: AbortSignal): Promise<Queues
 
 /** Discard forwarder `name`'s pending+failed backlog; returns the count removed.
  *  The name is URL-encoded so the daemon can round-trip it verbatim (a name with
- *  surrounding whitespace is a legal, distinct forwarder). */
-export async function clearForwarderQueue(
-    name: string,
-    signal?: AbortSignal
-): Promise<ClearOutcome> {
+ *  surrounding whitespace is a legal, distinct forwarder).
+ *
+ *  Deliberately takes NO AbortSignal: a destructive write must not be cancelled
+ *  mid-flight (an abort wouldn't undo a committed delete), and dropping the signal
+ *  removes safeFetch's `aborted` outcome — so every transport failure here is a
+ *  genuine timeout/reset that may have committed, which is why they are all
+ *  treated as indeterminate below. */
+export async function clearForwarderQueue(name: string): Promise<ClearOutcome> {
     const fetched = await safeFetch(
         `/v1/forwarder/${encodeURIComponent(name)}/queue/clear`,
-        { method: 'POST', signal },
+        { method: 'POST' },
         { timeoutMs: WRITE_TIMEOUT_MS }
     );
     if (!fetched.ok) {
-        // Transport failure (no HTTP response): timeout, or a connection dropped
-        // after the request left. We can't prove the request never reached the
-        // daemon, so the delete may have committed — indeterminate. (Operator
-        // aborts don't occur here: no caller signal is passed.)
+        // No caller abort is possible (no signal), so a failure here is always a
+        // network timeout/reset that reached (or may have reached) the daemon —
+        // the delete may have committed. Indeterminate; the caller must reconcile.
         return { kind: 'error', message: fetched.message, indeterminate: true };
     }
     const body = await readJsonBody(fetched.response);
