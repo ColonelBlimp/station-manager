@@ -42,6 +42,25 @@
         }
     }
 
+    // Reconcile one forwarder's count with a fresh GET after a clear whose effect
+    // we can't trust from the POST alone (a success to confirm, or an ambiguous
+    // timeout that may have committed). On success the counts refresh; on failure
+    // we DROP this forwarder's count so no stale "Clear queue (N)" survives for a
+    // second, wrongly-scoped click. Returns whether the GET succeeded.
+    async function reconcileQueue(name: string): Promise<boolean> {
+        const out = await fetchForwarderQueues();
+        if (out.kind === 'ok') {
+            const next: Record<string, ForwarderQueueCount> = {};
+            for (const q of out.forwarders) next[q.name] = q;
+            queues = next;
+            return true;
+        }
+        const rest = { ...queues };
+        delete rest[name];
+        queues = rest;
+        return false;
+    }
+
     onMount(() => {
         void forwardingState.load();
         void loadQueues();
@@ -69,7 +88,21 @@
                 toasts.info(
                     `Cleared ${out.discarded} queued upload${out.discarded === 1 ? '' : 's'} from ${label}.`
                 );
-                await loadQueues();
+                if (!(await reconcileQueue(name))) {
+                    toasts.warn(
+                        `Couldn't refresh ${label}'s queue count — it'll update on the next load.`
+                    );
+                }
+            } else if (out.timedOut) {
+                // The delete may have committed despite the timeout — reconcile and
+                // report "unknown", never a plain failure, and never leave a stale
+                // count a retry could act on.
+                const confirmed = await reconcileQueue(name);
+                toasts.warn(
+                    confirmed
+                        ? `Clearing ${label} timed out; its queue count has been refreshed to its current state.`
+                        : `Clearing ${label} timed out and its queue couldn't be re-read — whether it cleared is unknown.`
+                );
             } else {
                 toasts.error(out.message);
             }

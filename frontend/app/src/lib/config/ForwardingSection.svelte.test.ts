@@ -94,7 +94,12 @@ async function renderLoaded() {
 // a test can observe the state while the refetch is in flight.
 function mockForwardingWithQueues(
     initialQueues: Array<{ name: string; clearable: number; in_flight: number }>,
-    opts: { clearResult?: { status: number; body: unknown }; deferRefresh?: boolean } = {}
+    opts: {
+        clearResult?: { status: number; body: unknown };
+        clearTimesOut?: boolean;
+        refreshFails?: boolean;
+        deferRefresh?: boolean;
+    } = {}
 ) {
     const clearResult = opts.clearResult ?? { status: 200, body: { discarded: 0 } };
     const cleared = new Set<string>();
@@ -120,11 +125,22 @@ function mockForwardingWithQueues(
                     u.split('/v1/forwarder/')[1].split('/queue/clear')[0]
                 );
                 calls.clear.push(name);
+                if (opts.clearTimesOut) {
+                    // safeFetch maps a TimeoutError-named rejection to timedOut.
+                    const e = new Error('request timed out');
+                    e.name = 'TimeoutError';
+                    // A timeout is ambiguous — the delete may have committed.
+                    cleared.add(name);
+                    return Promise.reject(e);
+                }
                 if (clearResult.status >= 200 && clearResult.status < 300) cleared.add(name);
                 return Promise.resolve(json(clearResult.body, clearResult.status));
             }
             if (u.includes('forwarder-queues')) {
                 queueGets++;
+                if (queueGets > 1 && opts.refreshFails) {
+                    return Promise.reject(new Error('connection refused'));
+                }
                 if (opts.deferRefresh && queueGets > 1) {
                     return new Promise<Response>((resolve) => {
                         releaseRefresh = () => resolve(json(queueBody()));
@@ -398,5 +414,51 @@ describe('ForwardingSection', () => {
                 )
             ).toBe(true)
         );
+    });
+
+    // U14 — IF THE POST-CLEAR REFRESH FAILS, drop the stale count so a second,
+    // wrongly-scoped clear cannot fire against newly-queued uploads. The button
+    // and its count disappear until a later successful load, with a warn.
+    it('U14: a failed post-clear refresh drops the stale Clear action', async () => {
+        vi.spyOn(window, 'confirm').mockReturnValue(true);
+        mockForwardingWithQueues([{ name: 'qrz', clearable: 5, in_flight: 0 }], {
+            clearResult: { status: 200, body: { discarded: 5 } },
+            refreshFails: true,
+        });
+        render(ForwardingSection);
+
+        const btn = await vi.waitFor(() =>
+            screen.getByRole('button', { name: /clear queue \(5\)/i })
+        );
+        await fireEvent.click(btn);
+
+        await vi.waitFor(() =>
+            expect(toastsState.items.some((t) => t.level === 'warn')).toBe(true)
+        );
+        // No stale Clear button and no stale count survive the failed refresh.
+        expect(screen.queryByRole('button', { name: /clear queue/i })).toBeNull();
+        expect(screen.queryByText(/queued ·/)).toBeNull();
+    });
+
+    // U15 — AN AMBIGUOUS TIMEOUT is reconciled, not reported as failure: the
+    // delete may have committed, so re-read. The count refreshes (in-flight
+    // preserved) and a warn — not an error — states the outcome was uncertain.
+    it('U15: a clear timeout reconciles instead of reporting failure', async () => {
+        vi.spyOn(window, 'confirm').mockReturnValue(true);
+        mockForwardingWithQueues([{ name: 'qrz', clearable: 5, in_flight: 2 }], {
+            clearTimesOut: true,
+        });
+        render(ForwardingSection);
+
+        const btn = await vi.waitFor(() =>
+            screen.getByRole('button', { name: /clear queue \(5\)/i })
+        );
+        await fireEvent.click(btn);
+
+        await vi.waitFor(() =>
+            expect(screen.getByText('0 queued · 2 in flight')).toBeInTheDocument()
+        );
+        expect(toastsState.items.some((t) => t.level === 'warn')).toBe(true);
+        expect(toastsState.items.some((t) => t.level === 'error')).toBe(false);
     });
 });

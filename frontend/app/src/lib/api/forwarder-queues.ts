@@ -9,7 +9,13 @@
     live daemon state, independent of the config draft/save/restart lifecycle.
 */
 
-import { daemonErrorMessage, isPlainObject, readJsonBody, safeFetch } from './_helpers';
+import {
+    daemonErrorMessage,
+    isPlainObject,
+    readJsonBody,
+    safeFetch,
+    WRITE_TIMEOUT_MS,
+} from './_helpers';
 
 export interface ForwarderQueueCount {
     name: string;
@@ -20,7 +26,13 @@ export interface ForwarderQueueCount {
 export type QueuesOutcome =
     { kind: 'ok'; forwarders: ForwarderQueueCount[] } | { kind: 'error'; message: string };
 
-export type ClearOutcome = { kind: 'ok'; discarded: number } | { kind: 'error'; message: string };
+export type ClearOutcome =
+    | { kind: 'ok'; discarded: number }
+    /** `timedOut` marks the AMBIGUOUS failure: the POST reached (or may have
+     *  reached) the daemon and no response came, so the delete may already have
+     *  committed. The caller must NOT report a plain failure — it should
+     *  reconcile with a fresh GET before allowing another clear. */
+    | { kind: 'error'; message: string; timedOut?: boolean };
 
 const num = (v: unknown): number => (typeof v === 'number' ? v : 0);
 
@@ -53,11 +65,18 @@ export async function clearForwarderQueue(
     name: string,
     signal?: AbortSignal
 ): Promise<ClearOutcome> {
-    const fetched = await safeFetch(`/v1/forwarder/${encodeURIComponent(name)}/queue/clear`, {
-        method: 'POST',
-        signal,
-    });
-    if (!fetched.ok) return { kind: 'error', message: fetched.message };
+    const fetched = await safeFetch(
+        `/v1/forwarder/${encodeURIComponent(name)}/queue/clear`,
+        { method: 'POST', signal },
+        { timeoutMs: WRITE_TIMEOUT_MS }
+    );
+    if (!fetched.ok) {
+        return {
+            kind: 'error',
+            message: fetched.message,
+            timedOut: fetched.kind === 'network' && fetched.timedOut === true,
+        };
+    }
     const body = await readJsonBody(fetched.response);
     if (!fetched.response.ok) {
         return { kind: 'error', message: daemonErrorMessage(fetched.response.status, body) };

@@ -94,11 +94,31 @@ describe('clearForwarderQueue', () => {
         }
     });
 
-    it('swallows a transport failure into an error result', async () => {
+    it('swallows a plain transport failure — NOT flagged ambiguous (it never reached the daemon)', async () => {
         vi.stubGlobal(
             'fetch',
             vi.fn(() => Promise.reject(new Error('connection refused')))
         );
-        expect((await clearForwarderQueue('qrz')).kind).toBe('error');
+        const out = await clearForwarderQueue('qrz');
+        expect(out.kind).toBe('error');
+        if (out.kind === 'error') {
+            expect(out.timedOut).toBeFalsy();
+        }
+    });
+
+    it('flags an ambiguous timeout so the caller can reconcile instead of reporting failure', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => {
+                const e = new Error('request timed out');
+                e.name = 'TimeoutError'; // safeFetch maps this to timedOut
+                return Promise.reject(e);
+            })
+        );
+        const out = await clearForwarderQueue('qrz');
+        expect(out.kind).toBe('error');
+        if (out.kind === 'error') {
+            expect(out.timedOut).toBe(true);
+        }
     });
 });
