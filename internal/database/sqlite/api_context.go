@@ -2704,6 +2704,59 @@ WHERE forwarder_name = ? AND status IN (?, ?)`,
 	return out, nil
 }
 
+// ForwarderQueueCounts is one forwarder's upload-queue breakdown for the
+// operator-facing Settings → Forwarding surface (W-0005): Clearable is the
+// pending+failed backlog an operator-triggered clear would remove; InFlight is
+// the in_progress batch a live worker is processing and never clears. Uploaded
+// rows are history and counted in neither.
+type ForwarderQueueCounts struct {
+	Clearable int64
+	InFlight  int64
+}
+
+// ForwarderQueueCountsWithContext returns per-forwarder queue counts, keyed by
+// forwarder_name, for every forwarder that has any qso_upload rows. A forwarder
+// with only uploaded rows reads {0,0}; one with no rows at all is absent (its
+// zero value is also {0,0}). The caller pairs this with the configured forwarder
+// list, defaulting the rest to zero. One GROUP BY scan drives the whole surface.
+func (s *Service) ForwarderQueueCountsWithContext(ctx context.Context) (map[string]ForwarderQueueCounts, error) {
+	const op errors.Op = "sqlite.Service.ForwarderQueueCountsWithContext"
+	if err := checkService(op, s); err != nil {
+		return nil, err
+	}
+
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+
+	var rows []struct {
+		ForwarderName string `boil:"forwarder_name"`
+		Clearable     int64  `boil:"clearable"`
+		InFlight      int64  `boil:"in_flight"`
+	}
+	err = queries.Raw(`
+SELECT
+    forwarder_name,
+    COALESCE(SUM(CASE WHEN status IN (?, ?) THEN 1 ELSE 0 END), 0) AS clearable,
+    COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0)       AS in_flight
+FROM qso_upload
+GROUP BY forwarder_name`,
+		status.Pending.String(), status.Failed.String(), status.InProgress.String(),
+	).Bind(ctx, h, &rows)
+	if err != nil {
+		return nil, errors.New(op).WithErr(err).WithMsg("query forwarder queue counts")
+	}
+
+	out := make(map[string]ForwarderQueueCounts, len(rows))
+	for _, r := range rows {
+		out[r.ForwarderName] = ForwarderQueueCounts{Clearable: r.Clearable, InFlight: r.InFlight}
+	}
+	return out, nil
+}
+
 // FetchQsoHistoryByUUIDWithContext returns every qso_history row for
 // the given QSO, ordered by `at ASC` so callers see mutations in the
 // order they happened. The QSO's UUID is the lookup key (not the

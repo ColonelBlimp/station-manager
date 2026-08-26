@@ -1894,6 +1894,52 @@ func TestDiscardClearableUploadsForForwarder(t *testing.T) {
 	}
 }
 
+// TestForwarderQueueCounts proves the per-forwarder queue breakdown that drives
+// the Settings → Forwarding surface (W-0005): clearable = pending+failed,
+// in_flight = in_progress, uploaded rows count as neither, and counts never
+// bleed across forwarders. A forwarder with only uploaded rows reads {0,0}; one
+// never seeded is absent (zero value).
+func TestForwarderQueueCounts(t *testing.T) {
+	svc := testService(t)
+	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
+	ctx := context.Background()
+
+	// qrz: clearable = 2 pending + 1 failed = 3; in_flight = 1; +1 uploaded (neither).
+	seedUploadInState(t, svc, lbID, "qrz", "AA1AA", "0900", status.Uploaded)
+	seedUploadInState(t, svc, lbID, "qrz", "BB2BB", "0905", status.Failed)
+	seedUploadInState(t, svc, lbID, "qrz", "CC3CC", "0910", status.InProgress)
+	seedUploadInState(t, svc, lbID, "qrz", "DD4DD", "0915", status.Pending)
+	seedUploadInState(t, svc, lbID, "qrz", "EE5EE", "0920", status.Pending)
+
+	// clublog: clearable = 1 failed; in_flight = 2 in_progress.
+	seedUploadInState(t, svc, lbID, "clublog", "FF6FF", "0925", status.Failed)
+	seedUploadInState(t, svc, lbID, "clublog", "GG7GG", "0930", status.InProgress)
+	seedUploadInState(t, svc, lbID, "clublog", "HH8HH", "0935", status.InProgress)
+
+	// hamqth: only an uploaded row → present but {0,0}.
+	seedUploadInState(t, svc, lbID, "hamqth", "II9II", "0940", status.Uploaded)
+
+	counts, err := svc.ForwarderQueueCountsWithContext(ctx)
+	if err != nil {
+		t.Fatalf("counts: %v", err)
+	}
+
+	if got := counts["qrz"]; got.Clearable != 3 || got.InFlight != 1 {
+		t.Errorf("qrz = %+v, want {Clearable:3 InFlight:1}", got)
+	}
+	if got := counts["clublog"]; got.Clearable != 1 || got.InFlight != 2 {
+		t.Errorf("clublog = %+v, want {Clearable:1 InFlight:2}", got)
+	}
+	// Uploaded-only: real history contributes no clearable/in-flight work.
+	if got := counts["hamqth"]; got.Clearable != 0 || got.InFlight != 0 {
+		t.Errorf("hamqth (uploaded only) = %+v, want {0 0}", got)
+	}
+	// A never-seeded forwarder is absent — its zero value is {0,0}.
+	if got := counts["absent"]; got.Clearable != 0 || got.InFlight != 0 {
+		t.Errorf("absent forwarder = %+v, want zero value {0 0}", got)
+	}
+}
+
 func TestFetchUploadsByQsoID_Empty(t *testing.T) {
 	svc := testService(t)
 	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
