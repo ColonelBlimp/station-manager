@@ -1,6 +1,6 @@
 # W-0005 — Operator-triggered forwarder queue clearing
 
-**Status:** Open — enabled-forwarder in-flight coordination policy required
+**Status:** Open — decisions settled and implementation landed (2026-08-26); closure sign-off pending CI-green
 **Selected:** 2026-08-20
 **Outcome:** An operator can deliberately discard a forwarder's queued (not-yet-uploaded)
 backlog — "don't send the backlog, start forwarding from now" — without losing real upload
@@ -29,12 +29,14 @@ and the enabled-forwarder policy do not.
   is the shadow side of ADR 0022's enqueue-by-presence — a disabled forwarder silently
   accumulates `pending` rows, so enabling it later would flush the whole backlog unless it was
   discarded first.
-- **What remains is entirely the operator-triggered path.** There is no API endpoint or app
-  UI for an operator to invoke the discard on demand, and — critically — no coordination
-  policy for an **enabled** forwarder. Because the primitive's delete scope includes
-  `InProgress`, a clear issued while an enabled forwarder's worker is mid-push would race and
-  could delete a row the worker is actively uploading. The disabled-at-startup path is
-  race-free only because the worker for a disabled forwarder is never spawned.
+- **The operator-triggered path was the whole of the remaining work.** At selection there was
+  no API endpoint or app UI to invoke the discard on demand, and — critically — no coordination
+  policy for an **enabled** forwarder: the startup primitive's delete scope includes
+  `InProgress`, so a clear issued while an enabled forwarder's worker is mid-push would race and
+  could delete a row the worker is actively uploading (the disabled-at-startup path is race-free
+  only because the worker for a disabled forwarder is never spawned). That is now built — see
+  **Decisions settled** and **Implementation** below; the coordination policy was resolved by
+  scoping the operator-triggered clear to `pending`+`failed`, leaving `in_progress` untouched.
 
 ## Scope
 
@@ -74,23 +76,48 @@ to how live logging-time enqueue works (ADR 0022).
    and the operation degrades safely (reports an error, changes nothing) if the daemon write
    fails.
 
-## Decisions required before implementation
+## Decisions settled (2026-08-26)
 
-- **Enabled-forwarder in-flight coordination policy (open).** Options include: quiesce the
-  worker (pause/drain) for the duration of the clear; restrict the operator-triggered clear to
-  `pending` + `failed` and leave `in_progress` to the worker; or confirm-through-in-flight
-  (clear pending/failed, then let the current in-flight row complete or be re-evaluated). This
-  is the substance of "what remains" and must be settled before building; it changes both the
-  daemon operation's row-scope and its concurrency guarantees.
-- Should disabling a forwarder from the UI **offer** to clear its queue at the same time, or
-  stay a separate deliberate action? (The startup auto-discard already handles the
-  daemon-restart case; this is about the live disable.)
-- Should a purge be recorded in the audit trail (`qso_history`) so a cleared backlog is
-  explainable later, or is the reported discard count sufficient?
-- Where does the operator-facing explanation live — the (stub) manual forwarding chapter —
-  and what does it say: adding a forwarder queues *future* QSOs; disabling stops sending but
-  not queue growth; this is the lever to empty it; the inverse (backfill an existing log) is a
-  separate feature.
+- **Enabled-forwarder in-flight coordination: clear `pending` + `failed` only.** The
+  operator-triggered clear leaves `in_progress` to the worker — "finish the currently claimed
+  batch, drop the remaining backlog." Race-free by construction with no worker coordination:
+  `ClaimPendingUploads` moves a whole batch `pending`→`in_progress` in one atomic UPDATE, so
+  `in_progress` is exactly the batch a worker is processing; leaving it alone lets those rows
+  complete while the not-yet-claimed backlog is dropped. The rejected alternatives: quiescing the
+  worker needs a per-forwarder worker registry that does not exist; clearing `in_progress` under
+  the re-arm guard risks an upload that succeeds upstream with no local record.
+- **Clearing is a separate, deliberate action**, independent of enable/disable. Disabling does
+  not offer to clear the queue: enable/disable is restart-to-apply, so coupling a live clear to a
+  config change needing a restart is muddled, and the startup auto-discard already covers the
+  disable-then-restart case.
+- **The clear is not recorded in `qso_history`.** The reported discard count is sufficient; the
+  QSO itself is untouched (only its pending/failed upload-attempt rows are removed), so a
+  queue-clear is not a QSO edit and `qso_history` stays for actual QSO changes.
+- **The operator-facing explanation lives in the manual's forwarding chapter** ("Clearing a
+  queued backlog"): Clear queue drops a destination's not-yet-sent backlog now, in-flight uploads
+  finish, upload history is kept; the inverse — backfilling an existing log — is a separate
+  feature.
+
+## Implementation (landed 2026-08-26)
+
+Shipped as five TDD slices, each with a reversion or mutation proof:
+
+- **Store** (`internal/database/sqlite`): `DiscardClearableUploadsForForwarderWithContext`
+  (`pending`+`failed` only, per-forwarder, preserving `in_progress`/`uploaded`) and
+  `ForwarderQueueCountsWithContext` (per-forwarder `{clearable, in_flight}` via one `GROUP BY`).
+- **API**: `GET /v1/forwarder-queues` (every configured forwarder, `{0,0}` default) and
+  `POST /v1/forwarder/{name}/queue/clear` (`{discarded}`; `400 invalid_forwarder`,
+  `404 unknown_forwarder`; the exact configured name is round-tripped, not trimmed). Documented in
+  [`api-endpoints.md`](../v2-design/api-endpoints.md).
+- **App** (Settings → Forwarding): "N queued · M in flight" per destination and a confirmed
+  "Clear queue" button reporting the discarded count. A clear reconciles against the daemon before
+  re-enabling — an indeterminate outcome (timeout, dropped connection, or unreadable 200) or a
+  failed refresh invalidates the stale count rather than leaving a re-fireable action.
+- **Docs**: this dossier + the manual's "Clearing a queued backlog" section.
+
+All six operator-observable acceptance criteria are met; the daemon operation clears only
+`pending`+`failed` for the named forwarder and never touches `in_progress`, `uploaded`, or other
+forwarders (proven at the storage boundary).
 
 ## Verification standard
 

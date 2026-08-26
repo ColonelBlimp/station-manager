@@ -178,6 +178,26 @@ cleared). This is deliberate — it's the clean way to keep a batch of QSOs
 new QSOs queue again, but the ones logged while it was off do **not** get
 sent automatically. You send those yourself — see "Catching up" below.
 
+### Clearing a queued backlog
+
+If uploads to a destination have piled up — a contest batch you would rather not
+send, or a destination you have stopped using but whose backlog is still
+waiting — you can empty that one destination's queue on demand from **Settings →
+Forwarding**.
+
+Each destination shows its queue at a glance, for example *12 queued · 3 in
+flight*: **queued** is the backlog still waiting to send, and **in flight** is
+the small batch the uploader is sending right now. **Clear queue** discards the
+*queued* backlog for that destination only. It does not touch your logged
+contacts, anything already uploaded, or the batch in flight — an upload already
+being sent finishes normally, and only the not-yet-started backlog is dropped.
+The button reports how many waiting uploads it removed.
+
+This is the immediate lever to empty a backlog: turning a destination off (or
+restarting the daemon) also clears its queue, but Clear queue does it now, per
+destination, without a restart. The opposite direction — *sending* past QSOs to
+a service — is backfill; see "Catching up" below.
+
 ### Catching up: sending past QSOs to a service (backfill)
 
 QSOs logged while a service was disabled, logged before you added it, or
