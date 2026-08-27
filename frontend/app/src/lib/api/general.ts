@@ -100,6 +100,10 @@ export interface BuildInfo {
     daemon: string;
     /** Go runtime the daemon was built with (e.g. "go1.24.0"). */
     go: string;
+    /** Build environment: 'dev' for any source build, 'release' only for a packaged
+     *  binary. Anything not exactly "dev" resolves to 'release' so a missing or odd
+     *  value can never falsely mark a daemon DEV (W-0004 AC2). */
+    env: 'dev' | 'release';
     /** Log-DB schema migration state; absent when the daemon's query failed. */
     schema?: { version: number; dirty: boolean };
 }
@@ -114,7 +118,13 @@ export async function fetchBuildInfo(signal?: AbortSignal): Promise<BuildInfoOut
     if (!isPlainObject(body) || typeof body.daemon !== 'string' || typeof body.go !== 'string') {
         return { kind: 'error', message: 'malformed /v1/version response' };
     }
-    const info: BuildInfo = { daemon: body.daemon, go: body.go };
+    const info: BuildInfo = {
+        daemon: body.daemon,
+        go: body.go,
+        // Only the exact literal "dev" marks a development daemon; everything else
+        // (release, absent, unexpected) is release — never fabricate DEV (AC2).
+        env: body.env === 'dev' ? 'dev' : 'release',
+    };
     if (isPlainObject(body.schema)) {
         const sv = body.schema as { version?: unknown; dirty?: unknown };
         if (typeof sv.version === 'number') {

@@ -1,6 +1,7 @@
 <script lang="ts">
     import Logo from './Logo.svelte';
     import OperateNav from './OperateNav.svelte';
+    import BuildBadge from './BuildBadge.svelte';
     import { ui, toggleTheme, toggleNav } from './state.svelte';
     import { router, navigate, type View } from '../router.svelte';
 
@@ -218,10 +219,7 @@
                     </button>
 
                     <div class="footer-meta mt-2 flex items-center gap-2 px-2">
-                        <span
-                            class="footer-version rounded bg-surface-muted px-2 py-1 text-[11px] text-muted"
-                            >v2.0.0-alpha.1</span
-                        >
+                        <BuildBadge />
                         <button
                             class="theme-toggle ml-auto cursor-pointer rounded-md border border-line px-2 py-1 text-muted hover:bg-surface-muted hover:text-ink"
                             title="Toggle light / dark"

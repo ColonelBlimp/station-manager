@@ -120,6 +120,8 @@ describe('generalState', () => {
         expect(generalState.buildInfo).toEqual({
             daemon: '2.0-x',
             go: 'go1.24.0',
+            // env defaults to release when the daemon omits it (W-0004 AC2 fail-safe).
+            env: 'release',
             schema: { version: 6, dirty: false },
         });
     });

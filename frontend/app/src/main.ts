@@ -17,6 +17,11 @@ import {
     setFt8Mode,
 } from './lib/operate/rig.svelte';
 import { openRigEvents } from './lib/api/rig-sse';
+import {
+    loadBuildIdentity,
+    noteStreamError,
+    noteStreamReopen,
+} from './lib/ui/buildIdentity.svelte';
 import { openFt8Events } from './lib/api/ft8-sse';
 import {
     setFt8Transport,
@@ -383,6 +388,17 @@ function applyStationContext(c: StationContext): void {
         // argument) and rig.svelte may not import modeRestore (cycle).
         openRigEvents({
             ...catLink,
+            // Build identity re-fetches once per reconnection transition (W-0004 AC3):
+            // the rig stream is the shell's transport, so its drop→reopen is where a
+            // post-restart daemon (possibly a new build) is picked up without a reload.
+            onOpen: () => {
+                catLink.onOpen();
+                noteStreamReopen();
+            },
+            onTransportError: () => {
+                catLink.onTransportError();
+                noteStreamError();
+            },
             onRigState: (p) => {
                 catLink.onRigState(p);
                 noteRigReport(router.mode);
@@ -398,6 +414,11 @@ function applyStationContext(c: StationContext): void {
 // The restore is fire-and-forget: it commands the rig and the confirming push
 // arrives over the CAT stream, so nothing here waits on it.
 setModeChangeHook((from, to) => void onOperatingModeChange(from, to));
+
+// Build identity for the Sidebar footer + tab title — always-on /v1/version, fetched
+// once at boot independently of station context (W-0004 AC1). Fire-and-forget: an
+// outage settles to an honest unavailable state and never blocks the shell.
+void loadBuildIdentity();
 
 void fetchStationContext().then((c) => {
     applyStationContext(c);

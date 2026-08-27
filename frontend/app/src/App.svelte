@@ -26,6 +26,8 @@
     import { storageSet } from './lib/utils/storage';
     import { onMount } from 'svelte';
     import { installSettingsGuards } from './lib/config/unsaved';
+    import { computeTitle } from './lib/ui/title';
+    import { isDevDaemon } from './lib/ui/buildIdentity.svelte';
 
     // Ask before unsaved Settings edits are discarded. Installed from the SHELL,
     // not from Settings: Settings unmounts the moment the operator navigates
@@ -68,6 +70,14 @@
         config: 'Settings',
         map: 'Contacts Map',
     };
+
+    // Browser-tab title: current view + build identity (W-0004 AC2). Central owner
+    // for EVERY view, including the full-window Map (which no longer sets its own
+    // <title>). isDevDaemon() is false until identity loads and for any release or
+    // unavailable daemon, so the title stays the neutral release form until proven dev.
+    $effect(() => {
+        document.title = computeTitle(titles[router.view], isDevDaemon());
+    });
 </script>
 
 <!-- First-run gate: every logbook-backed surface (map tab included) 404s
