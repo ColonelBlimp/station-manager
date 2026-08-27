@@ -1,20 +1,21 @@
-// The daemon serves this SPA under a base path (/app/) while the shipping logging
-// SPA owns '/'. The router must strip that base before parsing and re-add it before
-// writing the URL — otherwise the initial normalise reverts '/app/…' to '/', which
-// is a DIFFERENT SPA. These pin the base round-trip (the bug: URL jumped off /app/).
+// The router is base-AGNOSTIC: it strips Vite's BASE_URL before parsing and re-adds
+// it before writing the URL, so it routes correctly under ANY base. It now serves at
+// the canonical root (base '' — the root case below); the '/app' cases pin that same
+// round-trip under a NON-EMPTY base — the FORMER '/app/' transition mount, where a
+// missing strip reverted '/app/…' to '/' (a different SPA) and the URL jumped off.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { subPathOf, urlOf, router, setMode, setModeChangeHook } from './router.svelte';
 
 describe('router base-path handling', () => {
-    it('strips the /app base before parsing', () => {
+    it('strips a non-empty base before parsing (the former /app mount)', () => {
         expect(subPathOf('/app/operate/ft8', '/app')).toBe('/operate/ft8');
         expect(subPathOf('/app/logbook', '/app')).toBe('/logbook');
         expect(subPathOf('/app/', '/app')).toBe('/'); // default view
         expect(subPathOf('/app', '/app')).toBe('/'); // no trailing slash
     });
 
-    it('re-adds the /app base when building the address-bar URL', () => {
+    it('re-adds a non-empty base when building the URL (the former /app mount)', () => {
         expect(urlOf('operate', 'ft8', '/app')).toBe('/app/operate/ft8');
         expect(urlOf('operate', 'phone', '/app')).toBe('/app/operate/phone');
         expect(urlOf('logbook', 'phone', '/app')).toBe('/app/logbook');

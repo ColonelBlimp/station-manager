@@ -405,39 +405,28 @@ func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *l
 	// can only reach TCP listeners). See docs/v2-design/frontend-spa.md
 	// and docs/v2-design/topology.md.
 	if cfg.Server.Protocol == "tcp" && cfg.Server.ServeSPA != nil && *cfg.Server.ServeSPA {
-		// The standalone config SPA was retired 2026-08-19 (W-0003); the app SPA
-		// owns station configuration now (Settings at /app/config). Its former
-		// paths — the bare "/config" and the "/config/" subtree (any old deep
-		// link) — 307-redirect to that Settings route. Registered only inside
-		// this SPA-serving block, so a headless Unix-socket deployment (no
-		// browser) 404s "/config" rather than redirecting. TEMPORARY (307): drop
-		// this compatibility route when the app moves to the canonical root and
-		// "/config" becomes the shell route itself.
-		mux.Handle("GET /config", http.RedirectHandler("/app/config", http.StatusTemporaryRedirect))
-		mux.Handle("GET /config/", http.RedirectHandler("/app/config", http.StatusTemporaryRedirect))
-		// The standalone logbook SPA was retired 2026-08-19 (W-0003); the app SPA
-		// owns the logbook now (/app/logbook). Its former paths — the bare
-		// "/logbook" and the "/logbook/" subtree (any old deep link) — 307-redirect
-		// there, registered only inside this SPA-serving block (a headless daemon
-		// 404s them). TEMPORARY (307): drop when the app moves to the canonical root
-		// and "/logbook" becomes the shell route itself.
-		mux.Handle("GET /logbook", http.RedirectHandler("/app/logbook", http.StatusTemporaryRedirect))
-		mux.Handle("GET /logbook/", http.RedirectHandler("/app/logbook", http.StatusTemporaryRedirect))
-		// Consolidated app SPA (ADR 0044) at the /app/ sub-path — the
-		// full-replacement operator client, now the SOLE embedded operator SPA
-		// (logging/config/logbook all retired), and the target of the /config,
-		// /logbook, and root redirects.
-		mux.Handle("GET /app/", http.StripPrefix("/app", spaHandler(frontend.AppFS())))
-		// Operator manual at /manual/ — a static, zero-JS Hugo page (ADR 0036),
-		// NOT an SPA, so it uses manualHandler (plain file server, real 404s) not
-		// spaHandler. Same StripPrefix + subtree-redirect rationale as the SPAs.
+		// The app moved to the canonical root (W-0003), so the retired /app/
+		// mount's URLs 301-redirect (PERMANENT — saved bookmarks survive) to their
+		// root equivalents: /app and /app/ → /, and any /app/{path} → /{path},
+		// preserving the query string (see redirectAppToRoot). The former /config
+		// and /logbook 307-compat redirects are gone: those are now real shell
+		// routes, served by index.html via the root mount below. Registered only
+		// inside this SPA-serving block, so a headless daemon 404s them.
+		mux.HandleFunc("GET /app", redirectAppToRoot)
+		mux.HandleFunc("GET /app/", redirectAppToRoot)
+		// Operator manual at /manual/ — a static, zero-JS Hugo page (ADR 0036), NOT
+		// an SPA, so it uses manualHandler (plain file server, real 404s). Declared
+		// before the root mount for readability; ServeMux precedence — not order —
+		// is what routes /manual/* here rather than to the catch-all.
 		mux.Handle("GET /manual/", http.StripPrefix("/manual", manualHandler(manual.FS())))
-		// The root redirects to the app SPA (ADR 0044). The legacy logging SPA that
-		// served "/" as a catch-all was retired 2026-07-21. This is an EXACT-match
-		// "/{$}" pattern, not a catch-all, so there is no longer a root SPA fallthrough:
-		// any GET path matching no route (incl. /debug/pprof/* when profiling is off)
-		// is a clean 404 rather than SPA HTML.
-		mux.Handle("GET /{$}", http.RedirectHandler("/app/", http.StatusFound))
+		// Consolidated app SPA (ADR 0044) at the CANONICAL ROOT — the sole embedded
+		// operator client. Any GET not matched by a more-specific pattern (/v1/*,
+		// /debug/pprof/*, /manual/*, /app, /app/) falls through to index.html so
+		// client-side routing owns /operate, /logbook, /config, and deep-link
+		// reloads. spaHandler keeps the /v1/* and /debug/pprof* server namespaces
+		// honest 404s rather than SPA HTML — LOAD-BEARING now that every unmatched
+		// path reaches this catch-all (there is no /app prefix quarantining it).
+		mux.Handle("GET /", spaHandler(frontend.AppFS()))
 	}
 }
 

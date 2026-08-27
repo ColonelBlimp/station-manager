@@ -14,14 +14,15 @@ import (
 // /log or /logbook would 404 because no logging-app SPA file at those
 // names exists in dist/.
 //
-// Safe co-existence with /v1/* handlers: Go 1.22+'s http.ServeMux gives
-// pattern-matched routes priority over the bare "/" catch-all, so any
-// request matching a /v1/* pattern is dispatched there before reaching
-// this handler. The catch-all is therefore naturally bounded to "paths
-// that match nothing else." A /v1/* path that matches NO registered
-// pattern (a disabled subsystem like bridge/FT8, or a typo) DOES reach
-// here — and gets an honest 404, not an SPA-fallback 200, so API misses
-// stay truthful for curl/script/EventSource/fetch consumers.
+// Safe co-existence with server namespaces: Go 1.22+'s http.ServeMux gives
+// pattern-matched routes priority over the bare "/" catch-all, so a request
+// matching a /v1/* or /debug/pprof/* pattern is dispatched there before
+// reaching this handler. At the canonical root, though, EVERY unmatched path
+// reaches this catch-all — so a server-namespace path that matched no route (a
+// disabled subsystem like bridge/FT8/profiling, or a typo, in bare or subtree
+// form) is explicitly 404ed below rather than SPA-falling-through to a 200
+// index.html, so API misses stay truthful for curl/script/EventSource/fetch
+// consumers.
 //
 // See docs/v2-design/frontend-spa.md for the full design.
 func spaHandler(spa fs.FS) http.Handler {
@@ -37,13 +38,19 @@ func spaHandler(spa fs.FS) http.Handler {
 		w.Header().Set("Cache-Control", "no-cache")
 		// http.FS opens paths relative to the FS root. The leading
 		// "/" is stripped so e.g. "/assets/main.js" → "assets/main.js".
-		// A /v1/* path reaching this catch-all matched no API route — a disabled
-		// subsystem (bridge/FT8 off) or a typo. Return a real 404 rather than
-		// SPA-falling-through to a 200 index.html: /v1/* is the API namespace,
-		// never an SPA client route, and a 200 HTML page misleads every
-		// curl/script/EventSource/fetch consumer (a disabled GET /v1/rig/events
-		// would otherwise 200-HTML; POST /v1/rig/command would 405 vs GET /).
-		if strings.HasPrefix(r.URL.Path, "/v1/") {
+		// A server-namespace path reaching this catch-all matched no route — a
+		// disabled subsystem (bridge/FT8 off, or profiling off) or a typo. Return a
+		// real 404 rather than SPA-falling-through to a 200 index.html: /v1/* and
+		// /debug/pprof* are server namespaces, never SPA client routes, and a 200
+		// HTML page misleads every curl/script/EventSource/fetch consumer (a
+		// disabled GET /v1/rig/events would otherwise 200-HTML; POST /v1/rig/command
+		// would 405 vs GET /). This is load-bearing at the canonical root, where
+		// there is no /app prefix to quarantine the fallthrough — profiling-off
+		// /debug/pprof* would otherwise become SPA HTML instead of the 404 the
+		// full-server pprof tests require.
+		p := r.URL.Path
+		if p == "/v1" || strings.HasPrefix(p, "/v1/") ||
+			p == "/debug/pprof" || strings.HasPrefix(p, "/debug/pprof/") {
 			http.NotFound(w, r)
 			return
 		}
@@ -71,4 +78,20 @@ func spaHandler(spa fs.FS) http.Handler {
 		}
 		fileServer.ServeHTTP(w, r)
 	})
+}
+
+// redirectAppToRoot 301-redirects a legacy /app or /app/{path} URL to its
+// canonical-root equivalent, preserving the query string, so bookmarks saved
+// during the /app/ transition survive the move to the root (W-0003). /app and
+// /app/ both go to "/"; /app/config → "/config". Permanent (301): the /app/
+// mount is gone for good, so caches and bookmarks should update.
+func redirectAppToRoot(w http.ResponseWriter, r *http.Request) {
+	target := strings.TrimPrefix(r.URL.Path, "/app")
+	if target == "" {
+		target = "/"
+	}
+	if r.URL.RawQuery != "" {
+		target += "?" + r.URL.RawQuery
+	}
+	http.Redirect(w, r, target, http.StatusMovedPermanently)
 }

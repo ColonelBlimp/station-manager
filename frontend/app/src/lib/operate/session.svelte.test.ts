@@ -1,6 +1,6 @@
 // The session list is the operator's "this sitting" glance + the export/email
 // source. It's in-memory but MUST survive a page reload (a dogfood redeploy
-// reloads /app/) — otherwise the whole session's contacts vanish. These pin the
+// reloads the page) — otherwise the whole session's contacts vanish. These pin the
 // sessionStorage persistence.
 
 import { describe, it, expect, beforeEach } from 'vitest';

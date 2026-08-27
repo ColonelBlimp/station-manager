@@ -3,7 +3,7 @@
 // glance, fed by the submit-response (Phone/CW) and the ft8-logged SSE (FT8).
 //
 // Persisted to sessionStorage so it survives a page reload — a dogfood redeploy
-// (or any F5) reloads /app/, and without this the whole session's contacts would
+// (or any F5) reloads the page, and without this the whole session's contacts would
 // vanish from the review/export panel. sessionStorage (not localStorage) matches
 // the "this sitting" semantics: a reload keeps it, closing the tab ends it.
 

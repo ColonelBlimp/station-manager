@@ -5,8 +5,9 @@ the separate `logging`, `config`, and `logbook` SPAs behind a single shell
 (dashboard · Operate · Logbook · Settings; the manual stays a separate zero-JS
 site per ADR 0036).
 
-**Status: scaffold.** Being built up step by step. The design is settled in two
-places:
+**Status: shipped.** The sole embedded operator SPA — it replaced and retired the
+separate `logging`, `config`, and `logbook` clients and is served at the canonical
+root `/` (W-0003). The design is settled in two places:
 
 - **Visual / IA spec:** `docs/v2-design/shell-mock/index.html` (the throwaway
   Tailwind-v4 mock the shell was designed in).

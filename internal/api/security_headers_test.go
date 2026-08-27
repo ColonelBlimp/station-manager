@@ -30,8 +30,10 @@ func assertSecurityHeaders(t *testing.T, w *httptest.ResponseRecorder, where str
 }
 
 // C1 + C2: the frame-denial + browser-trust headers are present on every response served
-// through the real handler stack — the root redirect (not followed), a SPA document, a SPA
-// fallback route, a real static JS asset, and a representative API response.
+// through the real handler stack — the /app→root compat redirect (not followed), the root
+// SPA document, a SPA fallback route, a real static JS asset, and a representative API
+// response. (W-0003 moved the app to the canonical root, so `/` is now a 200 document and
+// the 3xx probe is the permanent /app redirect instead of the old root redirect.)
 func TestSecurityHeaders_OnEveryResponse(t *testing.T) {
 	srv := testServer(t)
 
@@ -43,20 +45,20 @@ func TestSecurityHeaders_OnEveryResponse(t *testing.T) {
 		return w
 	}
 
-	// Root redirect — assert on the 3xx itself, without following it.
-	root := get("/")
-	if root.Code != http.StatusFound {
-		t.Fatalf("GET /: status = %d, want 302 (%s)", root.Code, root.Body.String())
+	// The /app→root compatibility redirect — assert on the 3xx itself, not followed.
+	appRedirect := get("/app/config")
+	if appRedirect.Code != http.StatusMovedPermanently {
+		t.Fatalf("GET /app/config: status = %d, want 301 (%s)", appRedirect.Code, appRedirect.Body.String())
 	}
-	assertSecurityHeaders(t, root, "root redirect")
+	assertSecurityHeaders(t, appRedirect, "app→root redirect")
 
-	assertSecurityHeaders(t, get("/app/"), "SPA document")
-	assertSecurityHeaders(t, get("/app/some-client-route"), "SPA fallback")
+	assertSecurityHeaders(t, get("/"), "SPA document")
+	assertSecurityHeaders(t, get("/some-client-route"), "SPA fallback")
 
 	// A real static asset — nosniff is what makes an incorrect MIME type matter, so cover one.
-	asset := get("/app/assets/index.js")
+	asset := get("/assets/index.js")
 	if asset.Code != http.StatusOK {
-		t.Fatalf("GET /app/assets/index.js: status = %d, want 200 (real asset)", asset.Code)
+		t.Fatalf("GET /assets/index.js: status = %d, want 200 (real asset)", asset.Code)
 	}
 	assertSecurityHeaders(t, asset, "static JS asset")
 

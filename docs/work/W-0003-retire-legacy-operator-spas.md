@@ -45,6 +45,30 @@ operator SPA remains. Source
 presence is not itself the defect: live routes, embedded assets, and mandatory build gates are the
 retirement boundary.
 
+## Slice A — app moved to the canonical root (2026-08-27)
+
+The app now serves at the canonical root `/`, retiring the `/app/` transition mount (AC1/AC5/AC7):
+
+- [`internal/api/server.go`](../../internal/api/server.go): a root `GET /` SPA mount replaces the
+  `StripPrefix("/app")` mount and the `GET /{$}` → `/app/` redirect; the four `/config`,`/logbook`
+  307 redirects are gone — those are now shell routes served by `index.html`. `/app`,`/app/` and
+  any `/app/{path}` **301-redirect** (permanent, for saved bookmarks) to their root equivalents,
+  query string preserved (`redirectAppToRoot`). All still inside the `Protocol=="tcp" && *ServeSPA`
+  gate, so a headless daemon registers none of it.
+- [`internal/api/spa.go`](../../internal/api/spa.go): the honest-404 guard now covers the `/v1` AND
+  `/debug/pprof` server namespaces (bare + subtree) — load-bearing now that every unmatched path
+  reaches the root catch-all rather than being quarantined under `/app`.
+- [`vite.config.ts`](../../frontend/app/vite.config.ts): `base: '/'`; `dist/index.html` rebuilt with
+  root asset refs. The router needed NO change — it derives from `BASE_URL` and is base-agnostic
+  (`BASE=''` at root); its `/app` comments/tests were reframed as the former deployment.
+- Docs (AC7): the canonical [`api-endpoints.md`](../v2-design/api-endpoints.md) SPA-route contract
+  was rewritten in the same change; the app README "scaffold" status → "shipped".
+
+Tests: `spa_test.go` rewritten (root-serves-shell; shell routes serve index; `/app`→root 301 with
+query; root base marker; `/v1`+`/debug/pprof` guard; gate-off 404s). `handler_pprof_test.go` now
+validates pprof precedence (profiling on) and the SPA guard (profiling off) at root;
+`security_headers_test.go` reprobed. **AC1, AC5, AC7 met; AC6 (lazy loading) is Slice B.**
+
 ## Logging SPA retirement (2026-08-18)
 
 The `frontend/logging` source tree — its route + embed + build gates already gone since 2026-07-21 —

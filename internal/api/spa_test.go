@@ -22,100 +22,93 @@ func testSPAFS() fs.FS {
 	}
 }
 
-// TestRootRedirectsToApp confirms GET / 302-redirects to the app SPA at /app/
-// (the logging SPA that served / as a catch-all was retired 2026-07-21). Driven
-// through the full server handler so the route registration itself is covered.
-func TestRootRedirectsToApp(t *testing.T) {
+// TestRootServesShell confirms GET / now serves the consolidated app's index.html
+// directly — the app moved to the canonical root (W-0003), so `/` is the shell,
+// not a 302 to the retired /app/ mount. Driven through the full server handler so
+// the route registration itself is covered.
+func TestRootServesShell(t *testing.T) {
 	srv := testServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "127.0.0.1:8080" // loopback: the Host allowlist now covers safe methods too (ST-1)
 	w := httptest.NewRecorder()
 	srv.httpServer.Handler.ServeHTTP(w, req)
-	if w.Code != http.StatusFound {
-		t.Fatalf("GET /: status = %d, want 302 (%s)", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /: status = %d, want 200 (%s)", w.Code, w.Body.String())
 	}
-	if loc := w.Header().Get("Location"); loc != "/app/" {
-		t.Fatalf("GET /: Location = %q, want /app/", loc)
+	if !strings.Contains(w.Body.String(), "Station Manager") {
+		t.Fatalf("GET /: body missing SPA marker; got %s", w.Body.String())
 	}
 }
 
-// TestConfigRedirectsToApp confirms the retired config SPA's paths — the bare
-// /config and the /config/ subtree (any old deep link) — 307-redirect to the
-// app's Settings route at /app/config (the standalone config SPA was retired
-// 2026-08-19; W-0003). Driven through the full server handler so the route
-// registration itself is covered.
-func TestConfigRedirectsToApp(t *testing.T) {
+// TestShellRoutesServeIndex confirms the former legacy-SPA paths are now shell
+// routes served by the app's index.html — the 307 redirects to /app/config and
+// /app/logbook were dropped when the app reached the canonical root (W-0003), so a
+// deep-link reload of any shell route returns index.html for client-side routing.
+func TestShellRoutesServeIndex(t *testing.T) {
 	srv := testServer(t)
-	for _, path := range []string{"/config", "/config/"} {
+	for _, path := range []string{"/config", "/config/", "/logbook", "/logbook/", "/operate"} {
 		t.Run(path, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, path, nil)
 			req.Host = "127.0.0.1:8080" // loopback: satisfies the Host allowlist (ST-1)
 			w := httptest.NewRecorder()
 			srv.httpServer.Handler.ServeHTTP(w, req)
-			if w.Code != http.StatusTemporaryRedirect {
-				t.Fatalf("GET %s: status = %d, want 307 (%s)", path, w.Code, w.Body.String())
+			if w.Code != http.StatusOK {
+				t.Fatalf("GET %s: status = %d, want 200 (shell route; %s)", path, w.Code, w.Body.String())
 			}
-			if loc := w.Header().Get("Location"); loc != "/app/config" {
-				t.Fatalf("GET %s: Location = %q, want /app/config", path, loc)
+			if !strings.Contains(w.Body.String(), "Station Manager") {
+				t.Fatalf("GET %s: body missing SPA marker", path)
 			}
 		})
 	}
 }
 
-// TestConfigRedirectAbsentWhenSPADisabled confirms the /config compatibility
-// redirect is registered ONLY inside the SPA-serving block: with ServeSPA off (a
-// headless Unix-socket deployment with no browser), /config is a plain 404, not a
-// redirect — the redirect is a browser convenience, not an API contract.
-func TestConfigRedirectAbsentWhenSPADisabled(t *testing.T) {
-	srv := testServerWithCfg(t, func(cfg *config.Config) {
-		serve := false
-		cfg.Server.ServeSPA = &serve
-	})
-	req := httptest.NewRequest(http.MethodGet, "/config", nil)
-	req.Host = "127.0.0.1:8080"
-	w := httptest.NewRecorder()
-	srv.httpServer.Handler.ServeHTTP(w, req)
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("GET /config with ServeSPA off: status = %d, want 404 (no redirect registered)", w.Code)
-	}
-}
-
-// TestLogbookRedirectsToApp confirms the retired logbook SPA's paths — the bare
-// /logbook and the /logbook/ subtree — 307-redirect to the app's logbook route at
-// /app/logbook (the standalone logbook SPA was retired 2026-08-19; W-0003). Driven
-// through the full server handler so the route registration is covered.
-func TestLogbookRedirectsToApp(t *testing.T) {
+// TestAppPathsRedirectToRoot confirms the retired /app/ mount's URLs 301-redirect
+// (permanent, so saved bookmarks survive) to their canonical-root equivalents,
+// preserving the path suffix AND the query string. Registered only inside the
+// SPA-serving block.
+func TestAppPathsRedirectToRoot(t *testing.T) {
 	srv := testServer(t)
-	for _, path := range []string{"/logbook", "/logbook/"} {
-		t.Run(path, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, path, nil)
-			req.Host = "127.0.0.1:8080" // loopback: satisfies the Host allowlist (ST-1)
+	cases := []struct{ path, want string }{
+		{"/app", "/"},
+		{"/app/", "/"},
+		{"/app/config", "/config"},
+		{"/app/logbook?dest=clublog", "/logbook?dest=clublog"},
+	}
+	for _, c := range cases {
+		t.Run(c.path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, c.path, nil)
+			req.Host = "127.0.0.1:8080"
 			w := httptest.NewRecorder()
 			srv.httpServer.Handler.ServeHTTP(w, req)
-			if w.Code != http.StatusTemporaryRedirect {
-				t.Fatalf("GET %s: status = %d, want 307 (%s)", path, w.Code, w.Body.String())
+			if w.Code != http.StatusMovedPermanently {
+				t.Fatalf("GET %s: status = %d, want 301 (%s)", c.path, w.Code, w.Body.String())
 			}
-			if loc := w.Header().Get("Location"); loc != "/app/logbook" {
-				t.Fatalf("GET %s: Location = %q, want /app/logbook", path, loc)
+			if loc := w.Header().Get("Location"); loc != c.want {
+				t.Fatalf("GET %s: Location = %q, want %q", c.path, loc, c.want)
 			}
 		})
 	}
 }
 
-// TestLogbookRedirectAbsentWhenSPADisabled confirms the /logbook compatibility
-// redirect is registered ONLY inside the SPA-serving block: with ServeSPA off, it's
-// a plain 404, not a redirect.
-func TestLogbookRedirectAbsentWhenSPADisabled(t *testing.T) {
+// TestSpaRoutesAbsentWhenSPADisabled confirms the SPA, its shell routes, and the
+// /app compatibility redirects are ALL registered only inside the SPA-serving
+// block: with ServeSPA off (a headless Unix-socket deployment, no browser), every
+// browser-facing path is a plain 404 — not HTML, not a redirect.
+func TestSpaRoutesAbsentWhenSPADisabled(t *testing.T) {
 	srv := testServerWithCfg(t, func(cfg *config.Config) {
 		serve := false
 		cfg.Server.ServeSPA = &serve
 	})
-	req := httptest.NewRequest(http.MethodGet, "/logbook", nil)
-	req.Host = "127.0.0.1:8080"
-	w := httptest.NewRecorder()
-	srv.httpServer.Handler.ServeHTTP(w, req)
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("GET /logbook with ServeSPA off: status = %d, want 404 (no redirect registered)", w.Code)
+	for _, path := range []string{"/", "/config", "/logbook", "/operate", "/app", "/app/config"} {
+		t.Run(path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			req.Host = "127.0.0.1:8080"
+			w := httptest.NewRecorder()
+			srv.httpServer.Handler.ServeHTTP(w, req)
+			if w.Code != http.StatusNotFound {
+				t.Fatalf("GET %s with ServeSPA off: status = %d, want 404 (no SPA routes registered)", path, w.Code)
+			}
+		})
 	}
 }
 
@@ -141,11 +134,11 @@ func TestSpaHandler_ServesIndexAtRoot(t *testing.T) {
 }
 
 // TestSpaHandler_ServesAppIndex confirms the consolidated app SPA's (ADR 0044)
-// embedded index.html is reachable through its filesystem, and that it carries
-// the /app/ base path its /app/ mount depends on. Guards both the committed
-// dist/index.html placeholder against being stripped from git (which would
-// break //go:embed all:app/dist) and a regression of `base: '/app/'` in the
-// app's vite.config.ts (which would 404 the bundle at runtime).
+// embedded index.html is reachable through its filesystem, and that it carries the
+// ROOT base path its canonical-root mount depends on (W-0003 moved the app off the
+// /app/ sub-path). Guards both the committed dist/index.html against being stripped
+// from git (which would break //go:embed all:app/dist) and a regression of
+// `base: '/'` in the app's vite.config.ts (which would 404 the bundle at runtime).
 func TestSpaHandler_ServesAppIndex(t *testing.T) {
 	h := spaHandler(frontend.AppFS())
 	rec := httptest.NewRecorder()
@@ -156,8 +149,11 @@ func TestSpaHandler_ServesAppIndex(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "/app/assets/index.js") {
-		t.Fatalf("body missing /app/ base-path marker; got: %s", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), "/assets/index.js") {
+		t.Fatalf("body missing root base-path marker /assets/index.js; got: %s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "/app/assets/index.js") {
+		t.Fatalf("index.html still carries the retired /app/ base path")
 	}
 }
 
@@ -168,7 +164,7 @@ func TestSpaHandler_ServesAppIndex(t *testing.T) {
 // consumer (review 2026-07-05 internal/api finding 2).
 func TestSpaHandler_ApiPathReturns404(t *testing.T) {
 	h := spaHandler(testSPAFS())
-	for _, path := range []string{"/v1/rig/events", "/v1/rig/command", "/v1/typo"} {
+	for _, path := range []string{"/v1", "/v1/rig/events", "/v1/rig/command", "/v1/typo"} {
 		t.Run(path, func(t *testing.T) {
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
@@ -177,6 +173,28 @@ func TestSpaHandler_ApiPathReturns404(t *testing.T) {
 			}
 			if strings.Contains(rec.Body.String(), "Station Manager SPA") {
 				t.Fatalf("served SPA index.html for an API path instead of 404")
+			}
+		})
+	}
+}
+
+// TestSpaHandler_GuardsDebugPprof confirms a /debug/pprof* path reaching the SPA
+// catch-all gets an honest 404, never SPA HTML — the same server-namespace
+// invariant as /v1/*. This is load-bearing once the app serves at the canonical
+// root: with profiling OFF the pprof routes aren't registered, so /debug/pprof*
+// falls through here, and it must NOT become a 200 index.html (which would break
+// the full-server pprof-off 404 contract in handler_pprof_test.go).
+func TestSpaHandler_GuardsDebugPprof(t *testing.T) {
+	h := spaHandler(testSPAFS())
+	for _, path := range []string{"/debug/pprof/", "/debug/pprof/heap", "/debug/pprof"} {
+		t.Run(path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, want 404 (server namespace, not SPA fallback)", rec.Code)
+			}
+			if strings.Contains(rec.Body.String(), "Station Manager SPA") {
+				t.Fatalf("served SPA index.html for a /debug/pprof path")
 			}
 		})
 	}

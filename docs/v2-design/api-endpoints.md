@@ -7,9 +7,13 @@
 > `internal/api/handler_*.go`. Update this file in the same commit as any route change.
 
 All application endpoints live under the `/v1/*` prefix (API versioning — unrelated to
-the project's v1/v2 distinction). The embedded SPAs are served at `/`, `/config/`,
-`/logbook/`, and `/app/` (the consolidated full-replacement client, ADR 0044); the
-operator manual at `/manual/`; profiling at `/debug/pprof/*`.
+the project's v1/v2 distinction). The consolidated operator SPA (ADR 0044, the sole
+embedded client) is served at the **canonical root** `/`: `GET /` and every unmatched
+path fall through to its `index.html`, so `/operate`, `/logbook`, `/config`, and
+deep-link reloads are client-side routes (W-0003). The retired `/app/` transition mount's
+URLs **301-redirect** to their root equivalents (`/app`,`/app/` → `/`; `/app/{path}` →
+`/{path}`, query preserved) for saved bookmarks. The operator manual is at `/manual/`;
+profiling at `/debug/pprof/*`.
 
 ## Conventions
 
@@ -41,8 +45,11 @@ comment every 30s, clear/re-arm write deadlines so long-lived streams survive
 
 **Gating.** "Always-on" = registered whenever the server runs. Subsystem routes are
 registered only when their subsystem is enabled (bridge / FT8 / profiling / SPA); when
-unregistered, the path is a **404** (there is no root SPA catch-all as of 2026-07-21 —
-`GET /` exact-redirects to `/app/`; a headless daemon has no SPA routes at all).
+unregistered, the path is a **404**. Since W-0003 the SPA IS the root catch-all (`GET /`),
+so an unmatched *non-namespace* path serves `index.html` for client routing — but the
+server namespaces stay honest 404s: an unmatched `/v1/*` or a profiling-off `/debug/pprof*`
+is explicitly `404`ed, never SPA HTML. A headless (non-TCP or `ServeSPA` off) daemon
+registers no SPA routes, redirects, or root mount at all, so those paths `404` there too.
 
 ---
 
@@ -447,18 +454,18 @@ unregistered, the path is a **404** (there is no root SPA catch-all as of 2026-0
 - **Purpose:** Go runtime profiling (goroutine/heap/CPU/trace). Development affordance, not a stable contract; lives outside `/v1/*`.
 - **Gating:** **Only when `Server.EnableProfiling` is true** (off by default; logs a warning at mount).
 - **Routes:** `GET /debug/pprof/`, `/cmdline`, `/profile`, `/symbol` (GET+POST), `/trace`. Standard `net/http/pprof` semantics (`profile?seconds=N` blocks N seconds — a DoS vector, so it stays off by default).
-- **Notes:** Registered on this mux (not `http.DefaultServeMux`); method-specific GET registration keeps these patterns clean under Go 1.22 ServeMux. The root route is an exact redirect rather than a catch-all, so an unmounted pprof path (profiling off) is a plain 404.
+- **Notes:** Registered on this mux (not `http.DefaultServeMux`); method-specific GET registration keeps these patterns clean under Go 1.22 ServeMux. Since W-0003 the root `GET /` is the SPA catch-all, so a profiling-off `/debug/pprof*` path falls through to it — but `spaHandler` explicitly **404**s the `/debug/pprof` namespace (like `/v1`) rather than serving SPA HTML, so an unmounted pprof path stays a plain 404.
 
-### `GET /{$}`, `GET /app/` (embedded SPA); `GET /config`, `GET /config/`, `GET /logbook`, `GET /logbook/` (redirects)
-- **Purpose:** Serve the embedded Svelte **app SPA** at `/app/` (ADR 0044) — the SOLE embedded operator client — with client-side-routing fallback. `GET /` 302-redirects to `/app/`. The standalone config (settings) and logbook SPAs were **retired 2026-08-19** (W-0003); the app owns both surfaces now, and their former paths **307-redirect** to the app routes (`/config`,`/config/` → `/app/config`; `/logbook`,`/logbook/` → `/app/logbook`) as temporary compatibility routes.
-- **Gating:** **Only when `Protocol == "tcp" && *ServeSPA`** (browsers need TCP; a headless Unix-socket daemon leaves these — including the redirects — unregistered, so `/config` and `/logbook` are plain 404s there).
-- **Routes:** `GET /app/` → `StripPrefix("/app", spaHandler(AppFS()))` (subtree pattern; bare `/app` 301→ trailing slash); `GET /config`, `GET /config/` → `RedirectHandler("/app/config", 307)` and `GET /logbook`, `GET /logbook/` → `RedirectHandler("/app/logbook", 307)` (both the bare path and any old subtree deep link); `GET /{$}` → `RedirectHandler("/app/", 302)`. The root is an **exact-match** pattern, not a catch-all, so any GET matching no route (incl. `/debug/pprof/*` when profiling is off) is a clean **404** rather than an SPA fallthrough.
-- **Response:** For the app SPA, **200** with the static asset, or `index.html` when the path doesn't resolve to a file (SPA-router fallback within `/app/`, so a refresh on `/app/logbook` etc. doesn't 404). `Cache-Control: no-cache` on every asset (the entry bundle has a stable, hash-free name). `GET /` → **302** to `/app/`; `GET /config[/]` → **307** to `/app/config`; `GET /logbook[/]` → **307** to `/app/logbook`. The `/config` and `/logbook` redirects are TEMPORARY — removed when the app moves to the canonical root and those become shell routes themselves.
+### `GET /` (embedded SPA at the canonical root); `GET /app`, `GET /app/` (bookmark redirects)
+- **Purpose:** Serve the embedded Svelte **app SPA** (ADR 0044) — the SOLE embedded operator client — at the **canonical root** `/` (W-0003), with client-side-routing fallback. `GET /` is the catch-all: any GET not matched by a more-specific pattern (`/v1/*`, `/debug/pprof/*`, `/manual/*`, `/app`, `/app/`) falls through to `index.html`, so `/operate`, `/logbook`, `/config`, and deep-link reloads are client-side routes. The retired `/app/` transition mount's URLs **301-redirect** (permanent — saved bookmarks) to their root equivalents; the former `/config`,`/logbook` 307-compat redirects are gone (those are now real shell routes served by `index.html`).
+- **Gating:** **Only when `Protocol == "tcp" && *ServeSPA`** (browsers need TCP; a headless Unix-socket daemon leaves the root mount AND the `/app` redirects unregistered, so `/`, `/config`, `/logbook`, `/app` are all plain 404s there).
+- **Routes:** `GET /` → `spaHandler(AppFS())` (the catch-all — loses to every more-specific pattern). `GET /app`, `GET /app/` → `redirectAppToRoot` (**301**): `/app`,`/app/` → `/`; any `/app/{path}` → `/{path}`, query string preserved. `spaHandler` explicitly **404**s an unmatched server-namespace path (`/v1`, `/v1/*`, `/debug/pprof`, `/debug/pprof/*`) rather than SPA-falling-through — load-bearing now that every unmatched path reaches the root catch-all (there is no `/app` prefix quarantining it).
+- **Response:** **200** with the static asset, or `index.html` when the path doesn't resolve to a file (SPA-router fallback, so a refresh on `/logbook` etc. doesn't 404). `Cache-Control: no-cache` on every asset (stable, hash-free entry bundle). `GET /app[/{path}]` → **301** to the root equivalent, query preserved.
 
 ### `GET /manual/` (embedded operator manual)
 - **Purpose:** Serve the embedded operator manual — a single self-contained, zero-JS Hugo page (ADR 0036). Distinct from the SPAs: plain static files, **no** client-side-router fallback.
 - **Gating:** Same as the SPAs — **only when `Protocol == "tcp" && *ServeSPA`**. The on-disk copy (`/usr/share/doc/station-manager/manual/`, shipped in the RPM) covers reading it from `file://` when the daemon isn't serving.
-- **Routes:** `GET /manual/` → `StripPrefix("/manual", manualHandler(manual.FS()))` (subtree pattern; bare `/manual` 301→`/manual/`). A subtree pattern, matched independently of the `GET /{$}` exact-root redirect.
+- **Routes:** `GET /manual/` → `StripPrefix("/manual", manualHandler(manual.FS()))` (subtree pattern; bare `/manual` 301→`/manual/`). A subtree pattern, matched by ServeMux precedence ahead of the root `GET /` SPA catch-all.
 - **Response:** **200** with the static page, **404** for any unresolved path (no SPA fallback — it's static). `Cache-Control: no-cache` (the manual is rebuilt with the daemon, so the served copy always matches the running version).
 
 ---
@@ -466,6 +473,6 @@ unregistered, the path is a **404** (there is no root SPA catch-all as of 2026-0
 ## Related
 
 - [api.md](api.md) — the API design brief (rationale, cross-cutting decisions, the decision trail).
-- [frontend-spa.md](frontend-spa.md) — SPA embed/serving (the `/` and `/config/` routes).
+- [frontend-spa.md](frontend-spa.md) — SPA embed/serving (the root `/` mount and its client-routing fallback).
 - [decisions/0036-operator-manual-embedded-zero-js-site.md](../decisions/0036-operator-manual-embedded-zero-js-site.md) — the operator manual at `/manual/` (Hugo, zero-JS, embedded + on-disk).
 - ADRs: [0010](../decisions/0010-rig-sse-wire-shape.md) (SSE/error shape), [0013](../decisions/0013-daemon-owns-bridge-as-subsystem.md), [0017](../decisions/0017-enrichment-pipeline-domain-table-cache.md), [0026](../decisions/0026-rig-command-path-freq-mode.md), [0027](../decisions/0027-tune-carrier-control.md), [0028](../decisions/0028-rig-profiles-single-active-hotswap.md), [0029](../decisions/0029-ft8-transmit-manual-sequencing.md)/0030/0031/0033 (FT8).

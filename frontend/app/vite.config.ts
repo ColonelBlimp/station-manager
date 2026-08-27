@@ -4,12 +4,11 @@ import { svelteTesting } from '@testing-library/svelte/vite';
 import tailwindcss from '@tailwindcss/vite';
 
 export default defineConfig({
-    // The consolidated app SPA (ADR 0044) is served by the daemon under the
-    // /app/ sub-path (the logging SPA still owns the root during the
-    // consolidation). `base` makes the built index.html reference /app/assets/*
-    // so the StripPrefix("/app") route resolves both index.html and its bundle.
-    // See docs/v2-design/frontend-spa.md.
-    base: '/app/',
+    // The consolidated app SPA (ADR 0044) is served by the daemon at the CANONICAL
+    // ROOT (W-0003 retired the /app/ transition mount; all legacy SPAs are gone).
+    // `base: '/'` makes the built index.html reference /assets/* so the root `GET /`
+    // mount resolves both index.html and its bundle. See docs/v2-design/frontend-spa.md.
+    base: '/',
     plugins: [svelte(), svelteTesting(), tailwindcss()],
     server: {
         // 5173 logging · 5174 config · 5175 logbook · 5176 app (avoid clashes so

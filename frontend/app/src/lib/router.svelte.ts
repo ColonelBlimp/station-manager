@@ -53,12 +53,12 @@ function pathFor(view: View, mode: OpMode): string {
     }
 }
 
-// The daemon serves this SPA UNDER a base path (/app/ — Vite's BASE_URL) while the
-// shipping logging SPA still owns '/'. Real-path routing must therefore live under
-// that base: strip it before parsing, re-add it before writing. Without this the
-// initial normalise turned '/app/…' into a bare '/operate/ft8' etc. and, for the
-// default view, into '/' — which is a DIFFERENT SPA, so the URL reverted off /app/.
-// BASE is '' when served at the root (no base), so this is base-agnostic.
+// This SPA is base-AGNOSTIC: it routes UNDER Vite's BASE_URL, stripping the base
+// before parsing and re-adding it before writing. It now serves at the CANONICAL
+// ROOT (W-0003), so BASE is '' and every path is already canonical. The base
+// stripping stays because the logic must survive any base: under the FORMER '/app/'
+// transition mount a missing strip turned '/app/…' into a bare '/operate/ft8' and,
+// for the default view, into '/' — a different SPA — so the URL jumped off /app/.
 const BASE = import.meta.env.BASE_URL.replace(/\/+$/, '');
 
 // The path WITHIN the app's base — what parse() understands. Pure + base-explicit
@@ -81,7 +81,7 @@ const initial = parse(subPath(), storedMode());
 export const router = $state<Loc>(initial);
 storageSet(MODE_KEY, router.mode); // remember a deep-linked mode
 
-// Normalise the URL (e.g. a bare /operate, or /app → /app/) to the canonical path
+// Normalise the URL (e.g. a bare /operate → /operate/phone) to the canonical path
 // without adding a history entry.
 {
     const canonical = urlFor(router.view, router.mode);

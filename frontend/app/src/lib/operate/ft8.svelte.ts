@@ -144,7 +144,7 @@ const emptyQsoStatus = (): Ft8QsoStatus => ({
 let decodeSeq = 0;
 
 // The operator's TX-offset pick persists across a page reload (localStorage) so a
-// daemon redeploy — which reloads /app/ to pick up the new build — doesn't silently
+// daemon redeploy — which reloads the page to pick up the new build — doesn't silently
 // drop the chosen channel. Best-effort: private-mode / disabled storage falls back
 // to session-only. It's an audio offset within the FT8 passband (band-independent),
 // so a saved value stays valid across bands.
