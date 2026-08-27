@@ -90,6 +90,33 @@ func TestAppPathsRedirectToRoot(t *testing.T) {
 	}
 }
 
+// TestRedirectAppToRoot_LocalOnly confirms the /app→root redirect can't be turned
+// into an OPEN REDIRECT: a crafted path that decodes to a leading double slash (or
+// backslash) — which http.Redirect would emit as a scheme-relative EXTERNAL target
+// (`//evil.example` → https://evil.example), cached because it's a 301 — is
+// normalized to a single-slash LOCAL path. (W-0003 review.) Tested on the handler
+// directly with the decoded r.URL.Path ServeMux would hand it.
+func TestRedirectAppToRoot_LocalOnly(t *testing.T) {
+	for _, decoded := range []string{"/app//evil.example", "/app/\\evil.example", "/app///evil"} {
+		t.Run(decoded, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/app/x", nil)
+			req.URL.Path = decoded // the path ServeMux hands the handler after decoding
+			w := httptest.NewRecorder()
+			redirectAppToRoot(w, req)
+			if w.Code != http.StatusMovedPermanently {
+				t.Fatalf("status = %d, want 301", w.Code)
+			}
+			loc := w.Header().Get("Location")
+			if strings.HasPrefix(loc, "//") || strings.HasPrefix(loc, "/\\") {
+				t.Fatalf("open redirect: Location = %q (scheme-relative external target)", loc)
+			}
+			if !strings.HasPrefix(loc, "/") {
+				t.Fatalf("Location = %q, want a local path with a single leading slash", loc)
+			}
+		})
+	}
+}
+
 // TestSpaRoutesAbsentWhenSPADisabled confirms the SPA, its shell routes, and the
 // /app compatibility redirects are ALL registered only inside the SPA-serving
 // block: with ServeSPA off (a headless Unix-socket deployment, no browser), every

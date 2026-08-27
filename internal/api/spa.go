@@ -86,10 +86,14 @@ func spaHandler(spa fs.FS) http.Handler {
 // /app/ both go to "/"; /app/config → "/config". Permanent (301): the /app/
 // mount is gone for good, so caches and bookmarks should update.
 func redirectAppToRoot(w http.ResponseWriter, r *http.Request) {
-	target := strings.TrimPrefix(r.URL.Path, "/app")
-	if target == "" {
-		target = "/"
-	}
+	// Normalize the suffix to a single-slash LOCAL path. A crafted URL whose path
+	// decodes to a leading double slash or backslash (e.g. /app/%2Fevil.example →
+	// "/app//evil.example") would otherwise trim to "//evil.example", which
+	// http.Redirect emits as a scheme-relative EXTERNAL target — an open redirect,
+	// made worse by the permanent (cacheable) 301. Collapsing every leading "/"
+	// and "\" to exactly one "/" keeps the destination on this origin.
+	suffix := strings.TrimPrefix(r.URL.Path, "/app")
+	target := "/" + strings.TrimLeft(suffix, "/\\")
 	if r.URL.RawQuery != "" {
 		target += "?" + r.URL.RawQuery
 	}
