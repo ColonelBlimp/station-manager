@@ -1,17 +1,43 @@
 # W-0004 — Complete app UI cohesion and ambient build identity
 
-**Status:** Open — palette decisions required
+**Status:** Completed 2026-08-27 — the app shows the running daemon build in the shell and tab
+title (DEV-marked, honest "unavailable" fallback), the FT8 occupancy pickers read one
+fixture-validated light/dark semantic-token palette, and named palettes are declined; shipped and
+green on `main`.
 **Selected:** 2026-08-18
 **Outcome:** The consolidated app presents trustworthy build identity and a coherent, readable
 visual system across its supported themes and FT8 occupancy states.
 
 `W-0004` is an immutable identity. Its status may change, while priority and ranked position live
-only in [`docs/backlog.md`](../backlog.md).
+only in [`docs/backlog.md`](../../backlog.md).
+
+## Closure — 2026-08-27
+
+All seven acceptance criteria are met; shipped in three commits on `main` — occupancy palette
+`d6fa11cd`, build identity `86f3f833`, ordering-guard fix `84214b76` — with the full app suite
+green (1370 tests), lint/format/svelte-check clean.
+
+- **AC1–AC3 (build identity).** The Sidebar footer shows the running daemon's `/v1/version` build
+  (no source constant); a development daemon carries a DEV pill and a `DEV · ` tab-title prefix, a
+  release daemon does not; an unreachable or malformed version reads "Version unavailable" and
+  drops the marker, and only the exact literal `dev` marks DEV. Identity is fetched once at boot
+  and once per SSE reconnection transition, guarded against stale out-of-order responses.
+- **AC4 (theme state).** Untouched — no theme-state change was made, so its characterize-first
+  clause never triggered; the shipped pre-paint / persist / cross-tab behaviour stands.
+- **AC5–AC6 (occupancy palette).** Both pickers read one semantic `--color-occ-*` token layer
+  (light values plus a dark override), seeded by reference to the Tailwind palette and validated on
+  a rendered light/dark state-matrix fixture, then accepted unchanged. Colour is never the sole
+  carrier — titles, ★/▼ markers, and graded captions remain the primary signal.
+- **AC7 (named palettes) — DECLINED.** Light and dark are the complete supported theme set. No
+  concrete consumer justified named palettes, and reviving them risked the vestigial FT8
+  CQ-highlight settings the app preserves but does not render. Theme is device-local
+  (`localStorage`, ADR 0044) with no config or API wire surface, so there is no canonical
+  wire/config reference to amend — this dossier is the record of the decision.
 
 ## Verified current state
 
 The old “UI cohesion across all SPAs” premise is mostly historical. `frontend/app` already owns one
-semantic token layer in [`app.css`](../../frontend/app/src/styles/app.css), a light/dark toggle, an
+semantic token layer in [`app.css`](../../../frontend/app/src/styles/app.css), a light/dark toggle, an
 OS-preference default, pre-paint theme selection, persisted local override, and cross-tab theme
 synchronization. ADR 0044 deliberately chose `localStorage` for that device-local override.
 W-0003 owns retiring the remaining config/logbook builds; this item does not need to converge their
@@ -19,7 +45,7 @@ styles first.
 
 Three narrower outcomes remain:
 
-- [`Sidebar.svelte`](../../frontend/app/src/lib/ui/Sidebar.svelte) displays the literal
+- [`Sidebar.svelte`](../../../frontend/app/src/lib/ui/Sidebar.svelte) displays the literal
   `v2.0.0-alpha.1`, while the running daemon's authoritative build string and environment are
   already available from `GET /v1/version`. The browser title remains the static “Station Manager”.
   (The 2026-08-20 audit reconciliation routes the build-identity half of frontend-app review **F-09**
@@ -102,12 +128,12 @@ hardware-dependent action is needed.
 
 ## References
 
-- [`docs/backlog.md`](../backlog.md) — authoritative ranking.
-- [`ADR 0044`](../decisions/0044-consolidate-operator-spas-into-one-shell.md) — one token system,
+- [`docs/backlog.md`](../../backlog.md) — authoritative ranking.
+- [`ADR 0044`](../../decisions/0044-consolidate-operator-spas-into-one-shell.md) — one token system,
   dark variant, and device-local theme override.
-- [`W-0003`](../archive/work/W-0003-retire-legacy-operator-spas.md) — legacy route/embed/build retirement boundary.
-- [`docs/v2-design/api-endpoints.md`](../v2-design/api-endpoints.md) — current `/v1/version` wire
+- [`W-0003`](W-0003-retire-legacy-operator-spas.md) — legacy route/embed/build retirement boundary.
+- [`docs/v2-design/api-endpoints.md`](../../v2-design/api-endpoints.md) — current `/v1/version` wire
   contract and documented DEV distinction.
-- [`Ft8OccupancyStrip.svelte`](../../frontend/app/src/lib/operate/Ft8OccupancyStrip.svelte) and
-  [`Ft8OccupancySpectrum.svelte`](../../frontend/app/src/lib/operate/Ft8OccupancySpectrum.svelte) —
+- [`Ft8OccupancyStrip.svelte`](../../../frontend/app/src/lib/operate/Ft8OccupancyStrip.svelte) and
+  [`Ft8OccupancySpectrum.svelte`](../../../frontend/app/src/lib/operate/Ft8OccupancySpectrum.svelte) —
   current occupancy state presentation.
