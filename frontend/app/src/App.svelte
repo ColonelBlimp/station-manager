@@ -9,8 +9,10 @@
     import SetupCard from './lib/ui/SetupCard.svelte';
     import { setup } from './lib/setup.svelte';
     import Operate from './lib/operate/Operate.svelte';
-    import Logbook from './lib/logbook/Logbook.svelte';
-    import Settings from './lib/config/Settings.svelte';
+    // Logbook and Settings are lazy (ADR 0044 code-splitting, AC6): each is its
+    // own chunk, fetched only when the operator opens that view, so the eager
+    // Operate (Phone/CW) first load doesn't carry them. Operate stays a static
+    // import — it is the default operating surface. Map is lazy too (below).
     import {
         ui,
         THEME_KEY,
@@ -111,9 +113,13 @@
                 {#if router.view === 'operate'}
                     <Operate />
                 {:else if router.view === 'logbook'}
-                    <Logbook />
+                    {#await import('./lib/logbook/Logbook.svelte') then logbookModule}
+                        <logbookModule.default />
+                    {/await}
                 {:else if router.view === 'config'}
-                    <Settings />
+                    {#await import('./lib/config/Settings.svelte') then settingsModule}
+                        <settingsModule.default />
+                    {/await}
                 {:else}
                     <!-- Placeholder for views not yet built (dashboard). -->
                     <h1 class="text-2xl font-semibold text-ink">{titles[router.view]}</h1>

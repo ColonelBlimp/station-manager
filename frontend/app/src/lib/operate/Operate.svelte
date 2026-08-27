@@ -14,7 +14,6 @@
     import CallsignStackPanel from './CallsignStackPanel.svelte';
     import ExportDialog from './ExportDialog.svelte';
     import RigKeys from './RigKeys.svelte';
-    import Ft8View from './Ft8View.svelte';
     import SessionPanel from './SessionPanel.svelte';
     import RigPanel from './RigPanel.svelte';
     import { isVisible, AMBIENT_TILES, WORKFLOW_TILES, TILES } from './layout.svelte';
@@ -34,7 +33,13 @@
         {/each}
     </div>
 {:else}
-    <Ft8View />
+    <!-- FT8 is a separate lazy chunk (ADR 0044 code-splitting, AC6): the large
+         FT8 subtree is fetched only when the operator switches to FT8, so a
+         Phone/CW load never carries it. The ambient host, rail, drawer and
+         RigKeys below render regardless of which workspace is up. -->
+    {#await import('./Ft8View.svelte') then ft8}
+        <ft8.default />
+    {/await}
 {/if}
 
 <!-- Rail + drawer + overlays for the whole Operate view. -->

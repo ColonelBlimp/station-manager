@@ -69,6 +69,25 @@ query; root base marker; `/v1`+`/debug/pprof` guard; gate-off 404s). `handler_pp
 validates pprof precedence (profiling on) and the SPA guard (profiling off) at root;
 `security_headers_test.go` reprobed. **AC1, AC5, AC7 met; AC6 (lazy loading) is Slice B.**
 
+## Slice B — route-level lazy loading (2026-08-27, AC6)
+
+Operate (Phone/CW) stays the eager default; the heavy views load on demand:
+
+- [`App.svelte`](../../frontend/app/src/App.svelte): Logbook and Settings converted from static
+  imports to `{#await import()}` (mirroring the existing Map lazy load), so each is its own chunk
+  fetched only when that view opens.
+- [`Operate.svelte`](../../frontend/app/src/lib/operate/Operate.svelte): the FT8 subtree (`Ft8View`)
+  split out of the eager Operate chunk via `{#await import('./Ft8View.svelte')}`, so a Phone/CW load
+  never carries it.
+
+Evidence (production build manifest, same toolchain): the eager entry `index.js` dropped
+**383.05 → 198.76 kB** (gzip 116.21 → 59.35), with new on-demand chunks `Logbook` (27 kB),
+`Settings` (65 kB), and `Ft8View` (43 kB) alongside the existing `MapView` (150 kB); the shared
+`daemonClock`/`_helpers` deps stay eagerly modulepreloaded. The lazy view chunks are not in the
+entry, so they are not fetched on a Phone/CW first load. The frontend suite (1344 tests) stays green
+— the FT8-mode Operate tests assert the ambient host, which renders synchronously regardless of the
+lazy `Ft8View`. **AC6 met.** All seven acceptance criteria are now satisfied.
+
 ## Logging SPA retirement (2026-08-18)
 
 The `frontend/logging` source tree — its route + embed + build gates already gone since 2026-07-21 —
