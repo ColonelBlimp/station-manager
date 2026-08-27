@@ -105,7 +105,7 @@ hardware-dependent action is needed.
 - [`docs/backlog.md`](../backlog.md) — authoritative ranking.
 - [`ADR 0044`](../decisions/0044-consolidate-operator-spas-into-one-shell.md) — one token system,
   dark variant, and device-local theme override.
-- [`W-0003`](W-0003-retire-legacy-operator-spas.md) — legacy route/embed/build retirement boundary.
+- [`W-0003`](../archive/work/W-0003-retire-legacy-operator-spas.md) — legacy route/embed/build retirement boundary.
 - [`docs/v2-design/api-endpoints.md`](../v2-design/api-endpoints.md) — current `/v1/version` wire
   contract and documented DEV distinction.
 - [`Ft8OccupancyStrip.svelte`](../../frontend/app/src/lib/operate/Ft8OccupancyStrip.svelte) and

@@ -162,24 +162,6 @@
       "summary": "W-0002 evidence and acceptance boundary for on-air validation of the shipped FT8 reduced type-4 ladder."
     },
     {
-      "id": "work.w-0003",
-      "path": "docs/work/W-0003-retire-legacy-operator-spas.md",
-      "class": "work-item",
-      "audiences": ["operator", "contributor", "agent"],
-      "topics": ["app-shell", "frontend-consolidation", "legacy-spa-retirement"],
-      "scopes": [
-        "frontend/app/**",
-        "frontend/embed.go",
-        "internal/api/server.go",
-        "internal/api/spa.go",
-        "Taskfile.yml",
-        ".github/workflows/ci.yml",
-        "scripts/release-rpm.sh",
-        "scripts/dev-rpm.sh"
-      ],
-      "summary": "W-0003 current-state evidence and acceptance boundary for completing the app shell and retiring legacy operator SPA routes, embeds, and build gates."
-    },
-    {
       "id": "work.w-0004",
       "path": "docs/work/W-0004-complete-app-ui-cohesion.md",
       "class": "work-item",

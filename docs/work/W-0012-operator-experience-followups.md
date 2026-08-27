@@ -10,7 +10,7 @@ not compete with the app-shell, notification-history, or UI-cohesion dossiers.
 - [W-0001](../archive/work/W-0001-durable-notifications.md) owns durable notification history; ADR 0060 owns alert
   placement and ADR 0061 the proposed structured event store. Never expose `smd.log` as the event
   history.
-- [W-0003](W-0003-retire-legacy-operator-spas.md) owns canonical app routing and remaining shell
+- [W-0003](../archive/work/W-0003-retire-legacy-operator-spas.md) owns canonical app routing and remaining shell
   consolidation; [W-0004](W-0004-complete-app-ui-cohesion.md) owns themes, occupancy colors, and
   ambient build identity.
 - **Operate workflow:** reorganize the contact view; decide whether QTH belongs on the Phone/CW

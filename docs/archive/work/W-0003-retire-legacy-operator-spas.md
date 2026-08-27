@@ -1,12 +1,17 @@
 # W-0003 — Complete the app shell and retire legacy operator SPAs
 
-**Status:** Open
+**Status:** Completed 2026-08-27 — the consolidated app is the sole embedded operator SPA, served at the canonical root with in-shell `/config`/`/logbook`/`/operate` routes and route-level lazy loading; shipped and CI-green on `main`.
 **Selected:** 2026-08-18
 **Outcome:** `frontend/app` is the sole embedded operator SPA, with the remaining legacy
 affordances preserved and the zero-JS manual still independent.
 
 `W-0003` is an immutable identity. Its status may change, while priority and ranked position live
-only in [`docs/backlog.md`](../backlog.md).
+only in [`docs/backlog.md`](../../backlog.md).
+
+Closed 2026-08-27 after CI-green on `main` (`a7e12ca4`). All seven acceptance criteria are met; the
+three legacy-SPA retirements (AC1–AC4) plus **Slice A** (canonical root) and **Slice B** (lazy
+loading) are recorded below. The only carried-over thread is the separately-tracked W-0017 bridge
+streaming-startup flake, which did not fire on the closing run.
 
 ## Verified current state
 
@@ -18,8 +23,8 @@ Settings, and Map views. Settings is no longer a blocker; only Dashboard remains
 The consolidation is nevertheless incomplete:
 
 - the config and logbook SPAs' embeds and routes were both retired 2026-08-19 (see the two
-  retirement sections below). [`frontend/embed.go`](../../frontend/embed.go) now embeds ONLY the app
-  build (`appSPA`/`AppFS`), and [`internal/api/server.go`](../../internal/api/server.go) serves only
+  retirement sections below). [`frontend/embed.go`](../../../frontend/embed.go) now embeds ONLY the app
+  build (`appSPA`/`AppFS`), and [`internal/api/server.go`](../../../internal/api/server.go) serves only
   `/app/`; `/config`,`/config/` → `/app/config` and `/logbook`,`/logbook/` → `/app/logbook`
   307-redirect (temporary compatibility routes). The **app is now the sole embedded operator SPA**
   (AC4 met);
@@ -49,19 +54,19 @@ retirement boundary.
 
 The app now serves at the canonical root `/`, retiring the `/app/` transition mount (AC1/AC5/AC7):
 
-- [`internal/api/server.go`](../../internal/api/server.go): a root `GET /` SPA mount replaces the
+- [`internal/api/server.go`](../../../internal/api/server.go): a root `GET /` SPA mount replaces the
   `StripPrefix("/app")` mount and the `GET /{$}` → `/app/` redirect; the four `/config`,`/logbook`
   307 redirects are gone — those are now shell routes served by `index.html`. `/app`,`/app/` and
   any `/app/{path}` **301-redirect** (permanent, for saved bookmarks) to their root equivalents,
   query string preserved (`redirectAppToRoot`). All still inside the `Protocol=="tcp" && *ServeSPA`
   gate, so a headless daemon registers none of it.
-- [`internal/api/spa.go`](../../internal/api/spa.go): the honest-404 guard now covers the `/v1` AND
+- [`internal/api/spa.go`](../../../internal/api/spa.go): the honest-404 guard now covers the `/v1` AND
   `/debug/pprof` server namespaces (bare + subtree) — load-bearing now that every unmatched path
   reaches the root catch-all rather than being quarantined under `/app`.
-- [`vite.config.ts`](../../frontend/app/vite.config.ts): `base: '/'`; `dist/index.html` rebuilt with
+- [`vite.config.ts`](../../../frontend/app/vite.config.ts): `base: '/'`; `dist/index.html` rebuilt with
   root asset refs. The router needed NO change — it derives from `BASE_URL` and is base-agnostic
   (`BASE=''` at root); its `/app` comments/tests were reframed as the former deployment.
-- Docs (AC7): the canonical [`api-endpoints.md`](../v2-design/api-endpoints.md) SPA-route contract
+- Docs (AC7): the canonical [`api-endpoints.md`](../../v2-design/api-endpoints.md) SPA-route contract
   was rewritten in the same change; the app README "scaffold" status → "shipped".
 
 Tests: `spa_test.go` rewritten (root-serves-shell; shell routes serve index; `/app`→root 301 with
@@ -73,10 +78,10 @@ validates pprof precedence (profiling on) and the SPA guard (profiling off) at r
 
 Operate (Phone/CW) stays the eager default; the heavy views load on demand:
 
-- [`App.svelte`](../../frontend/app/src/App.svelte): Logbook and Settings converted from static
+- [`App.svelte`](../../../frontend/app/src/App.svelte): Logbook and Settings converted from static
   imports to `{#await import()}` (mirroring the existing Map lazy load), so each is its own chunk
   fetched only when that view opens.
-- [`Operate.svelte`](../../frontend/app/src/lib/operate/Operate.svelte): the FT8 subtree (`Ft8View`)
+- [`Operate.svelte`](../../../frontend/app/src/lib/operate/Operate.svelte): the FT8 subtree (`Ft8View`)
   split out of the eager Operate chunk via `{#await import('./Ft8View.svelte')}`, so a Phone/CW load
   never carries it.
 
@@ -159,7 +164,7 @@ when the app moves to the canonical root and `/config` becomes the shell route i
 `ServeSPA` is off); the `configSPA` embed + `ConfigFS()` (`frontend/embed.go`); the
 `frontend:config:*` Taskfile tasks + deps; the CI "Config SPA gate"; and the `config` entries in the
 release/dev/local-CI SPA loops. The canonical HTTP reference
-([`api-endpoints.md`](../v2-design/api-endpoints.md)) changed in the same commit.
+([`api-endpoints.md`](../../v2-design/api-endpoints.md)) changed in the same commit.
 
 **Preservation + deletion:** the `frontend/config` source tree was DELETED after the boundary
 removal. Preservation: annotated tag **`legacy-config-spa-retired`** on the last commit that still
@@ -195,7 +200,7 @@ retained. TEMPORARY — removed when the app moves to the canonical root.
 off); the `logbookSPA` embed + `LogbookFS()` (`frontend/embed.go`, removing the now-obsolete
 `TestSpaHandler_ServesLogbookIndex`); the `frontend:logbook:*` Taskfile tasks + deps; the CI "Logbook
 SPA gate"; and the `logbook` entries in the release/dev/local-CI SPA loops. The canonical HTTP
-reference ([`api-endpoints.md`](../v2-design/api-endpoints.md)) changed in the same commit.
+reference ([`api-endpoints.md`](../../v2-design/api-endpoints.md)) changed in the same commit.
 
 **Preservation + deletion:** the `frontend/logbook` source tree was DELETED after the boundary
 removal. Preservation: annotated tag **`legacy-logbook-spa-retired`** on the last commit that still
@@ -295,16 +300,16 @@ change), and the full local release gate when the implementation is ready.
 
 ## References
 
-- [`docs/backlog.md`](../backlog.md) — authoritative ranking.
-- [`ADR 0044`](../decisions/0044-consolidate-operator-spas-into-one-shell.md) — selected shell,
+- [`docs/backlog.md`](../../backlog.md) — authoritative ranking.
+- [`ADR 0044`](../../decisions/0044-consolidate-operator-spas-into-one-shell.md) — selected shell,
   routing, manual, theme, and first-load constraints.
-- [`docs/v2-design/api-endpoints.md`](../v2-design/api-endpoints.md) — canonical current SPA route
+- [`docs/v2-design/api-endpoints.md`](../../v2-design/api-endpoints.md) — canonical current SPA route
   contract; update with behavior.
 - Operator-facing bridge error wording (was the retired logging SPA's `i18n/en.ts`) — the
   disconnect/fault strings are ported to
-  [`operate/bridgeMessages.ts`](../../frontend/app/src/lib/operate/bridgeMessages.ts); the full
+  [`operate/bridgeMessages.ts`](../../../frontend/app/src/lib/operate/bridgeMessages.ts); the full
   catalogue is preserved under the `legacy-logging-spa-retired` tag.
 - ClubLog retry-only behavior (was the retired logbook SPA's `LogbookView.svelte`) — ported to
-  [`logbook/Logbook.svelte`](../../frontend/app/src/lib/logbook/Logbook.svelte) +
-  [`logbook/logbook.svelte.ts`](../../frontend/app/src/lib/logbook/logbook.svelte.ts); the full
+  [`logbook/Logbook.svelte`](../../../frontend/app/src/lib/logbook/Logbook.svelte) +
+  [`logbook/logbook.svelte.ts`](../../../frontend/app/src/lib/logbook/logbook.svelte.ts); the full
   source is preserved under the `legacy-logbook-spa-retired` tag.
