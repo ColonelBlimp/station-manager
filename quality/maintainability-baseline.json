@@ -104,7 +104,7 @@
       "language": "frontend",
       "metric": "cyclomatic-complexity",
       "path": "frontend/app/src/main.ts",
-      "function": "line@453",
+      "function": "line@474",
       "direction": "maximum",
       "value": 39
     },
