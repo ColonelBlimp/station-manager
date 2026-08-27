@@ -47,23 +47,25 @@
     );
 
     // Footprint tint + caption by proximity — soft, judgment-friendly (no "occupied").
+    // Semantic tokens (--color-occ-*) carry the graded proximity palette; app.css owns
+    // the light/dark hues (no dark: variants here). Alpha stays in the utility.
     const footprintClass = $derived(
         prox === null
             ? ''
             : prox.kind === 'sharing'
-              ? 'bg-orange-500/40 border-orange-500'
+              ? 'bg-occ-sharing/40 border-occ-sharing'
               : prox.kind === 'near'
-                ? 'bg-amber-400/50 border-amber-500'
-                : 'bg-green-500/40 border-green-600'
+                ? 'bg-occ-near/50 border-occ-near'
+                : 'bg-occ-clear/40 border-occ-clear'
     );
     const captionClass = $derived(
         prox === null
             ? 'text-muted'
             : prox.kind === 'sharing'
-              ? 'text-orange-600 dark:text-orange-400'
+              ? 'text-occ-sharing'
               : prox.kind === 'near'
-                ? 'text-amber-600 dark:text-amber-400'
-                : 'text-green-600 dark:text-green-400'
+                ? 'text-occ-near'
+                : 'text-occ-clear'
     );
     const captionText = $derived.by(() => {
         if (selected === null) return 'auto — daemon pick';
@@ -158,7 +160,7 @@
                     type="button"
                     class="absolute top-0 -mt-0.5 -translate-x-1/2 cursor-pointer border-0 bg-transparent p-0 text-[11px] leading-none hover:opacity-70 {s ===
                     recommended
-                        ? 'z-50 text-amber-500'
+                        ? 'z-50 text-occ-recommend'
                         : 'text-focus'}"
                     style:left="{pct(s + signalWidth / 2)}%"
                     title={`Select clear offset ${s} Hz${s === recommended ? ' (top pick)' : ''}`}
@@ -187,7 +189,7 @@
                 <!-- Signals: soft neutral shading at their true positions. -->
                 {#each occupied as b (b.low_hz)}
                     <div
-                        class="pointer-events-none absolute top-0 h-full bg-slate-400/40 dark:bg-slate-400/30"
+                        class="pointer-events-none absolute top-0 h-full bg-occ-signal/40"
                         style:left="{pct(b.low_hz)}%"
                         style:width="{((b.high_hz - b.low_hz) / span) * 100}%"
                     ></div>

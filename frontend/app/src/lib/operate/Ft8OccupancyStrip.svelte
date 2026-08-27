@@ -76,11 +76,12 @@
     );
 
     // Occupancy fill only; the selection shows via the arrows, not by recolouring.
-    // Literal classes so Tailwind's scanner emits them; both read on light + dark.
+    // Semantic tokens (--color-occ-*) carry the palette — app.css owns the light/dark
+    // hues, so there are no dark: variants here. Alpha stays in the utility.
     function cellClass(busy: boolean): string {
         return busy
-            ? 'bg-red-500/65 hover:bg-red-500/80 dark:bg-red-500/55 dark:hover:bg-red-500/75'
-            : 'bg-green-700/75 hover:bg-green-700/90 dark:bg-green-400/65 dark:hover:bg-green-400/85';
+            ? 'bg-occ-busy/70 hover:bg-occ-busy/85'
+            : 'bg-occ-clear/80 hover:bg-occ-clear/90';
     }
 
     function cellTitle(offset: number, busy: boolean): string {
@@ -117,7 +118,7 @@
                             c.busy
                         )}"
                         class:border-b-2={c.offset === recommendedCell}
-                        class:border-b-amber-400={c.offset === recommendedCell}
+                        class:border-b-occ-recommend={c.offset === recommendedCell}
                         style:width="{c.widthPct}%"
                         title={cellTitle(c.offset, c.busy)}
                         aria-label={`Select TX offset ${c.offset} hertz`}

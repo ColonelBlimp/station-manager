@@ -45,6 +45,23 @@
     --color-map-water: #fff; /* white — ocean */
     --color-map-land: oklch(87.2% 0.01 258.338); /* gray-300 — landmass */
     --color-map-border: oklch(70.7% 0.022 261.325); /* gray-400 — coast/borders */
+
+    /* FT8 occupancy pickers (Ft8OccupancyStrip + Ft8OccupancySpectrum). Own tokens
+       so the two surfaces carry ONE semantic palette instead of first-pass literal
+       red/green/amber/orange utilities, and so light↔dark is a single override point
+       (W-0004 AC5). Seeded by REFERENCE to the shipped Tailwind palette — no invented
+       coordinates — with the known light-mode wash-out fixed by a darker step (busy
+       red-600, sharing orange-600, near amber-600) so a fill/text reads on the
+       white/gray-100 ground. Alpha stays in the utility (the /NN opacity modifier);
+       the token carries the hue per theme. Values validated on the light/dark state-
+       matrix fixture and accepted unchanged (W-0004 AC5, 2026-08-27); this is the
+       single override point — change them here only. */
+    --color-occ-busy: var(--color-red-600); /* a busy channel / overlapped span */
+    --color-occ-clear: var(--color-green-700); /* a clear channel + a clear pick */
+    --color-occ-near: var(--color-amber-600); /* pick within a signal-width of a signal */
+    --color-occ-sharing: var(--color-orange-600); /* pick overlapping a signal */
+    --color-occ-recommend: var(--color-amber-500); /* ★ top pick + daemon-recommend underline */
+    --color-occ-signal: var(--color-slate-400); /* neutral "a signal" shading */
 }
 
 /* Dark theme — override the colour custom-properties only (TWP dark sidebar). */
@@ -68,6 +85,15 @@ html[data-theme='dark'] {
     --color-map-water: #101828; /* gray-900 — ocean */
     --color-map-land: #364153; /* gray-700 — landmass */
     --color-map-border: rgba(255, 255, 255, 0.2); /* white/20 — coast/borders */
+
+    /* Occupancy palette — dark ground (gray-900/gray-800). Lighter steps read on
+       the dark canvas where the light-mode darker steps would go muddy. */
+    --color-occ-busy: var(--color-red-500);
+    --color-occ-clear: var(--color-green-400);
+    --color-occ-near: var(--color-amber-400);
+    --color-occ-sharing: var(--color-orange-500);
+    --color-occ-recommend: var(--color-amber-400);
+    --color-occ-signal: var(--color-slate-400);
 }
 
 @layer base {
