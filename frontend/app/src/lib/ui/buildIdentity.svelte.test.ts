@@ -56,6 +56,32 @@ describe('build identity store', () => {
         expect(isDevDaemon()).toBe(false); // unknown identity must not claim DEV
     });
 
+    it('a stale in-flight load never overwrites a newer result (ordering guard)', async () => {
+        // The boot fetch and a reconnection fetch overlap. The OLDER (boot) request
+        // resolves LAST with an outdated build; it must not clobber the newer result.
+        const resolvers: Array<(r: Response) => void> = [];
+        const json = (body: unknown) =>
+            new Response(JSON.stringify(body), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+            });
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => new Promise<Response>((resolve) => resolvers.push(resolve)))
+        );
+
+        const boot = loadBuildIdentity(); // gen 1 — old build, will resolve last
+        const reconnect = loadBuildIdentity(); // gen 2 — the current build
+
+        resolvers[1](json({ daemon: 'v-new', go: 'go1.24.0', env: 'release' }));
+        await reconnect;
+        expect(buildIdentity.info?.daemon).toBe('v-new');
+
+        resolvers[0](json({ daemon: 'v-old', go: 'go1.24.0', env: 'release' }));
+        await boot;
+        expect(buildIdentity.info?.daemon).toBe('v-new'); // stale boot result dropped
+    });
+
     it('re-fetches once on a reconnection (error → reopen), not on the first open', async () => {
         const spy = stubVersion({ daemon: 'v1', go: 'go1.24.0', env: 'release' });
 

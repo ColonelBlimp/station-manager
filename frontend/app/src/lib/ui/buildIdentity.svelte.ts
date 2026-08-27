@@ -33,9 +33,18 @@ export const buildIdentity = $state<BuildIdentity>({ status: 'loading', info: nu
 // reconnection (error → open) from the very first connect (open with no prior error).
 let sawError = false;
 
+// Monotonic request generation. The boot fetch and reconnection fetches run
+// concurrently and can resolve out of order; only the LATEST-started request may
+// commit, so a slow older response (an out-of-date build, or a stale failure) can
+// never overwrite a newer result. Latest-started wins — an honest 'unavailable' from
+// the current attempt is preferred over a plausible-but-stale build (AC3).
+let loadGen = 0;
+
 /** Fetch the daemon's build identity and settle status. Idempotent; safe to re-run. */
 export async function loadBuildIdentity(): Promise<void> {
+    const gen = ++loadGen;
     const res = await fetchBuildInfo();
+    if (gen !== loadGen) return; // a newer load started meanwhile — drop this result
     if (res.kind === 'ok') {
         buildIdentity.info = res.info;
         buildIdentity.status = 'ready';
@@ -69,4 +78,5 @@ export function resetBuildIdentityForTests(): void {
     buildIdentity.status = 'loading';
     buildIdentity.info = null;
     sawError = false;
+    loadGen = 0;
 }
