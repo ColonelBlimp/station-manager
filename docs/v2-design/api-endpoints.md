@@ -139,7 +139,7 @@ registers no SPA routes, redirects, or root mount at all, so those paths `404` t
 - **Purpose:** Create a logbook. **Always-on.** Body `{"name" (req), "callsign" (req), "description"?}` (callsign validated/uppercased). **201** `{"id": int64}`. Errors: 400 `missing_required_field`/`invalid_field_value`/`invalid_json`; 409 `duplicate_name`; 500 `db_error`.
 
 ### `PATCH /v1/logbook/{id}`
-- **Purpose:** Update name/description (callsign not editable here). **Always-on.** Body `{"name": *string, "description": *string}` (presence-aware). **200** updated `types.Logbook`. Errors: 400 `invalid_id`/`invalid_field_value`/`invalid_json`; 404 `not_found`; 409 `duplicate_name`; 500 `db_error`.
+- **Purpose:** Update name/description (callsign not editable here). **Always-on.** Body `{"name": *string, "description": *string}` (presence-aware) — a **field-level partial write**: only supplied members change (`UPDATE … RETURNING`), so two overlapping PATCHes to different fields both survive with no lost update. **200** is the committed `types.Logbook` (the stored row, not the request's pre-update snapshot). Errors: 400 `invalid_id`/`invalid_field_value`/`invalid_json`; 404 `not_found` (absent or concurrently soft-deleted); 409 `duplicate_name`; 500 `db_error`. No revision-conflict response — the logbook row carries no revision.
 
 ### `DELETE /v1/logbook/{id}`
 - **Purpose:** Delete a logbook (refuses if it holds QSOs, or if it is the configured default). **Always-on.** **204**. Errors: 400 `invalid_id`; 404 `not_found`; 409 `has_qsos`/`default_logbook` (the configured default — set another default first); 500 `db_error`.

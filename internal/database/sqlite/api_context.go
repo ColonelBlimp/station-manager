@@ -1875,6 +1875,69 @@ func (s *Service) UpdateLogbookWithContext(ctx context.Context, logbook types.Lo
 	return nil
 }
 
+// UpdateLogbookFieldsWithContext applies a PARTIAL logbook update: only the columns
+// whose pointer is non-nil are written (PT-4, W-0008). Passing a stale full-row DTO to
+// UpdateLogbookWithContext let two overlapping partial PATCHes clobber each other's
+// unrelated fields — a description-only edit holding a pre-rename snapshot wrote back
+// the stale name. Here a concurrent patch to a DIFFERENT field is untouched. modified_at
+// is always refreshed. The `deleted_at IS NULL` predicate lives in the UPDATE, so a
+// DELETE that commits between a caller's read and this write matches zero rows
+// (→ ErrNotFound) instead of resurrecting a soft-deleted logbook. A UNIQUE(name)
+// collision surfaces as ErrDuplicateName. UPDATE ... RETURNING yields the committed row
+// in one operation, so the caller responds with what was stored, not a stale pre-update
+// DTO. Callers pass ALREADY-NORMALIZED values (the api layer trims/validates).
+func (s *Service) UpdateLogbookFieldsWithContext(ctx context.Context, id int64, name, description *string) (types.Logbook, error) {
+	const op errors.Op = "sqlite.Service.UpdateLogbookFieldsWithContext"
+	if err := checkService(op, s); err != nil {
+		return types.Logbook{}, err
+	}
+	if id < 1 {
+		return types.Logbook{}, errors.New(op).WithMsg(errMsgInvalidId)
+	}
+
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return types.Logbook{}, err
+	}
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+
+	// Only supplied columns are written; modified_at always. The column names are
+	// static identifiers and every value is a bound param — no interpolation of caller
+	// data.
+	sets := []string{models.LogbookColumns.ModifiedAt + " = ?"}
+	args := []any{time.Now().UTC()}
+	if name != nil {
+		sets = append(sets, models.LogbookColumns.Name+" = ?")
+		args = append(args, *name)
+	}
+	if description != nil {
+		sets = append(sets, models.LogbookColumns.Description+" = ?")
+		args = append(args, *description)
+	}
+	args = append(args, id)
+
+	query := "UPDATE logbook SET " + strings.Join(sets, ", ") +
+		" WHERE id = ? AND deleted_at IS NULL RETURNING *"
+
+	var model models.Logbook
+	if err := queries.Raw(query, args...).Bind(ctx, h, &model); err != nil {
+		if isUniqueConstraintError(err) {
+			return types.Logbook{}, errors.New(op).WithErr(errors.ErrDuplicateName)
+		}
+		if stderr.Is(err, sql.ErrNoRows) {
+			return types.Logbook{}, errors.New(op).WithErr(errors.ErrNotFound).WithMsgf("no active logbook with id %d", id)
+		}
+		return types.Logbook{}, errors.New(op).WithErr(err).WithMsg("failed to update logbook fields")
+	}
+
+	logbook, err := adapters.LogbookModelToType(&model)
+	if err != nil {
+		return types.Logbook{}, errors.New(op).WithErr(err)
+	}
+	return logbook, nil
+}
+
 /**********************************************************************************************************************
  * Contest Related Methods
  **********************************************************************************************************************/

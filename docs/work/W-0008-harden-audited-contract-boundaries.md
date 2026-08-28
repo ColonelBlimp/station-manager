@@ -12,7 +12,8 @@ audit reconciliation; [`docs/backlog.md`](../backlog.md) alone ranks this dossie
 ## Ordered slices
 
 1. **Persistence:** PT-3 session-email stamps only the revision actually sent and reports the true
-   emailed set; PT-4 partial logbook PATCH detects a concurrent revision; PT-5 import fallback does
+   emailed set; PT-4 partial logbook PATCH applies an atomic field-level partial update (writes only
+   the present members; no revision-conflict response — the logbook row has no revision column); PT-5 import fallback does
    not proceed after an unverified rollback; PT-6/CC-5 config replacement gains unique temporary
    files and crash-durability, after the operator decides how to report a post-rename directory
    sync failure.

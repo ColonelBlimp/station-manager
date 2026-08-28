@@ -102,8 +102,11 @@ func (s *Server) handleUpdateLogbook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	existing, err := s.db.FetchLogbookByIDWithContext(r.Context(), id)
-	if err != nil {
+	// Early existence check before parsing the body (retained). The row's VALUES are
+	// deliberately not reused for the write — a stale full-row DTO is exactly what let
+	// overlapping partial PATCHes clobber each other (PT-4); the field-level update
+	// below writes only the supplied columns.
+	if _, err := s.db.FetchLogbookByIDWithContext(r.Context(), id); err != nil {
 		if stderr.Is(err, errors.ErrNotFound) {
 			s.writeError(w, http.StatusNotFound, "not_found", "logbook not found", op)
 			return
@@ -121,26 +124,31 @@ func (s *Server) handleUpdateLogbook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Normalize the supplied fields and pass only present members through — so a
+	// concurrent patch to a DIFFERENT field is never overwritten by this request's
+	// stale snapshot of it (PT-4).
+	var name, description *string
 	if req.Name != nil {
-		name := strings.TrimSpace(*req.Name)
-		if name == "" {
+		n := strings.TrimSpace(*req.Name)
+		if n == "" {
 			s.writeError(w, http.StatusBadRequest, "invalid_field_value", "name cannot be empty", op)
 			return
 		}
-		existing.Name = name
+		name = &n
 	}
 	if req.Description != nil {
-		existing.Description = strings.TrimSpace(*req.Description)
+		d := strings.TrimSpace(*req.Description)
+		description = &d
 	}
 
-	if err = s.db.UpdateLogbookWithContext(r.Context(), existing); err != nil {
+	updated, err := s.db.UpdateLogbookFieldsWithContext(r.Context(), id, name, description)
+	if err != nil {
 		if stderr.Is(err, errors.ErrDuplicateName) {
 			s.writeError(w, http.StatusConflict, "duplicate_name", "a logbook with that name already exists", op)
 			return
 		}
-		// The logbook was active when fetched but a concurrent DELETE
-		// soft-deleted it before the update committed (the active-row update
-		// matched zero rows → ErrNotFound). That's a 404, not a server fault.
+		// A concurrent DELETE soft-deleted the row before the write committed (the
+		// active-row update matched zero rows → ErrNotFound). That's a 404, not a fault.
 		if stderr.Is(err, errors.ErrNotFound) {
 			s.writeError(w, http.StatusNotFound, "not_found", "logbook not found", op)
 			return
@@ -149,7 +157,8 @@ func (s *Server) handleUpdateLogbook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.writeJSON(w, http.StatusOK, existing)
+	// Respond with the COMMITTED row, not the stale pre-update object.
+	s.writeJSON(w, http.StatusOK, updated)
 }
 
 func (s *Server) handleDeleteLogbook(w http.ResponseWriter, r *http.Request) {
