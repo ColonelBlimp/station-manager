@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/adif"
+	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/email"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/fsperm"
@@ -163,13 +164,6 @@ func (s *Server) handleSessionEmail(w http.ResponseWriter, r *http.Request) {
 			"none of the supplied QSOs could be found", op)
 		return
 	}
-	stampIDs := make([]int64, 0, len(qsos))
-	emailed := make([]string, 0, len(qsos))
-	for _, q := range qsos {
-		stampIDs = append(stampIDs, q.ID)
-		emailed = append(emailed, q.UUID)
-	}
-
 	adifBody, err := adif.ComposeToAdifString(qsos)
 	if err != nil {
 		s.logger.ErrorWith().Err(err).Msg("session email: failed to compose ADIF")
@@ -245,39 +239,57 @@ func (s *Server) handleSessionEmail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Stamp the durable "forwarded by email" flag AFTER a successful
-	// send. A failure here does not fail the request — the mail has
-	// already left — so we log it and report an empty emailed list,
-	// which the SPA renders as still-unsent. The Logbook SPA (or a
-	// re-send) reconciles the gap. UTC YYYYMMDD matches the upload
-	// stamp's granularity.
-	// ONE clock reading, taken now (not the pre-send `now`) and passed into
-	// the stamp, so the stored date and the reported date cannot diverge when
-	// a slow send crosses UTC midnight (codex 2026-08-08 P3).
+	// Stamp the durable "forwarded by email" flag AFTER a successful send, matching
+	// each row on the revision that was composed into the attachment. A row edited or
+	// deleted between compose and stamp no longer matches, so it is left unmarked — a
+	// durable "emailed" stamp therefore certifies the marked content is the content
+	// that was sent (PT-3, W-0008). A stamp error does not fail the request — the mail
+	// has already left — so it is logged and the response reports an empty durable
+	// set, which the SPA renders as still-unsent (the Logbook SPA / a re-send
+	// reconciles). ONE clock reading, passed into the stamp, so the stored and
+	// reported dates cannot diverge across UTC midnight (codex 2026-08-08 P3).
 	stampDate := time.Now().UTC().Format("20060102")
-	n, err := s.db.MarkSessionEmailedWithContext(r.Context(), stampIDs, stampDate)
-	if err != nil {
-		s.logger.ErrorWith().Err(err).Int("qso_count", len(stampIDs)).
-			Msg("session email sent but stamping forwarded-by-email flag failed")
-		emailed = emailed[:0]
-		stampDate = ""
-	} else if int(n) != len(stampIDs) {
-		// Some rows vanished between fetch and stamp (soft-deleted).
-		// The mail still carried them; we just couldn't mark them. The
-		// count mismatch is logged for visibility; emailed stays as the
-		// full set we attempted, since the SPA's optimistic mark is
-		// harmless and a re-send re-stamps.
-		s.logger.WarnWith().Int64("stamped", n).Int("expected", len(stampIDs)).
-			Msg("session email: fewer rows stamped than sent")
+	targets := make([]sqlite.SessionEmailTarget, len(qsos))
+	for i, q := range qsos {
+		targets[i] = sqlite.SessionEmailTarget{ID: q.ID, Revision: q.Revision}
 	}
-	if err == nil {
-		// The stamp bumped each row's revision — re-enqueue to the row-mirror
-		// forwarder(s) (SM Cloud) so their copies don't drift until the hourly
-		// reconcile. Best-effort: the stamp is committed, the mail has left,
+	emailed := make([]string, 0, len(qsos))
+	stampedIDs, err := s.db.MarkSessionEmailedAtRevisionWithContext(r.Context(), targets, stampDate)
+	if err != nil {
+		s.logger.ErrorWith().Err(err).Int("qso_count", len(targets)).
+			Msg("session email sent but stamping forwarded-by-email flag failed")
+		stampDate = ""
+	} else {
+		// emailed lists ONLY the rows durably stamped at the sent revision, in
+		// request order. A QSO edited or deleted after compose is excluded so it
+		// stays re-sendable — never over-reported as forwarded.
+		stampedSet := make(map[int64]struct{}, len(stampedIDs))
+		for _, id := range stampedIDs {
+			stampedSet[id] = struct{}{}
+		}
+		for _, q := range qsos {
+			if _, ok := stampedSet[q.ID]; ok {
+				emailed = append(emailed, q.UUID)
+			}
+		}
+		if len(stampedIDs) != len(targets) {
+			// Rows changed or were removed between compose and stamp; the mail
+			// carried their composed content but they are deliberately not marked.
+			s.logger.WarnWith().Int("stamped", len(stampedIDs)).Int("sent", len(targets)).
+				Msg("session email: some rows changed or were removed between compose and stamp; not marked")
+		}
+		if len(emailed) == 0 {
+			stampDate = ""
+		}
+		// The stamp bumped each stamped row's revision — re-enqueue ONLY those to the
+		// row-mirror forwarder(s) (SM Cloud) so their copies don't drift until the
+		// hourly reconcile. Best-effort: the stamp is committed, the mail has left,
 		// and the reconciler backstops a missed enqueue.
-		if _, serr := s.qso.EnqueueStampSync(r.Context(), stampIDs); serr != nil {
-			s.logger.WarnWith().Err(serr).Int("qso_count", len(stampIDs)).
-				Msg("session email: stamp sync enqueue failed (reconcile will heal)")
+		if len(stampedIDs) > 0 {
+			if _, serr := s.qso.EnqueueStampSync(r.Context(), stampedIDs); serr != nil {
+				s.logger.WarnWith().Err(serr).Int("qso_count", len(stampedIDs)).
+					Msg("session email: stamp sync enqueue failed (reconcile will heal)")
+			}
 		}
 	}
 

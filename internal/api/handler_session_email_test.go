@@ -3,6 +3,7 @@ package api
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -517,6 +518,159 @@ type apiSmtpFake struct {
 	// transaction still completes, it just takes longer than the HTTP
 	// server's WriteTimeout (the codex 2026-08-08 P1 duplicate-send window).
 	stall time.Duration
+	// Compose→stamp interleave gate (PT-3). When paused is non-nil, handle()
+	// records the DATA body (the composed attachment), signals paused once the
+	// body is fully received — the attachment is now immutable and the send is
+	// in flight — then blocks on release before acknowledging. That is a
+	// deterministic window in which the test can mutate rows mid-send.
+	bodyMu  sync.Mutex
+	body    strings.Builder
+	paused  chan struct{}
+	release chan struct{}
+}
+
+// capturedBody returns the DATA body the fake received (the sent attachment).
+func (f *apiSmtpFake) capturedBody() string {
+	f.bodyMu.Lock()
+	defer f.bodyMu.Unlock()
+	return f.body.String()
+}
+
+// decodeAdifAttachment pulls the base64 ADIF part out of the fake's captured MIME
+// body and decodes it. The plaintext body part is 8bit, so the base64 marker is
+// unique to the attachment.
+func decodeAdifAttachment(t *testing.T, mimeBody string) string {
+	t.Helper()
+	const marker = "Content-Transfer-Encoding: base64\r\n\r\n"
+	i := strings.Index(mimeBody, marker)
+	if i < 0 {
+		t.Fatalf("no base64 attachment found in MIME body:\n%s", mimeBody)
+	}
+	rest := mimeBody[i+len(marker):]
+	if end := strings.Index(rest, "\r\n--"); end >= 0 {
+		rest = rest[:end]
+	}
+	dec, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(rest, "\r\n", ""))
+	if err != nil {
+		t.Fatalf("decode base64 attachment: %v", err)
+	}
+	return string(dec)
+}
+
+// TestSessionEmail_StampsOnlyComposedRevision (PT-3, W-0008). A durable "emailed"
+// stamp must certify the content that was composed and sent — not whatever the row
+// happens to say at stamp time. Before PT-3 the handler composed an immutable
+// attachment but then stamped by integer ID with no revision guard, and on a short
+// stamp count left the FULL attempted set in `emailed`: a QSO edited after compose
+// got its NEW row stamped (blocking a re-send of the correction), and a QSO deleted
+// after compose was still over-reported as emailed. This pauses the mailer once the
+// attachment is on the wire, edits one QSO and deletes another, then releases the
+// send and asserts the stamp/response describe only what was actually sent.
+func TestSessionEmail_StampsOnlyComposedRevision(t *testing.T) {
+	fake := newAPISmtpFake(t)
+	defer fake.close()
+	fake.paused = make(chan struct{}, 1)
+	fake.release = make(chan struct{})
+	host, port := fake.hostPort()
+
+	srv := testServerWithMailer(t, types.SmtpConfig{
+		Enabled: true, Host: host, Port: port, From: "f@x", StartTLS: false, TimeoutSec: 5,
+	})
+	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
+
+	// Three DISTINCT QSOs (unique 5-char callsigns so nothing dedupes).
+	submitDistinct := func(call string) string {
+		t.Helper()
+		rec := strings.Replace(testQsoADIF, "M0CMC", call, 1)
+		w := submitQso(t, srv, lbID, rec, false)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("submit %s: status = %d; body = %s", call, w.Code, w.Body.String())
+		}
+		var res qsoservice.SubmitResult
+		if err := unmarshalJSON(w.Body.String(), &res); err != nil {
+			t.Fatalf("decode submit %s: %v", call, err)
+		}
+		return res.UUID
+	}
+	uuidA := submitDistinct("M0CMA")
+	uuidB := submitDistinct("M0CMB")
+	uuidC := submitDistinct("M0CMC")
+
+	// A carries a DISTINCT composed comment; the sent attachment must reflect THIS
+	// value, and the post-compose edit's value must never appear in it.
+	if w := patchQso(t, srv, uuidA, `{"comment":"COMPOSEDOLD"}`); w.Code != http.StatusOK {
+		t.Fatalf("seed A comment: status = %d; body = %s", w.Code, w.Body.String())
+	}
+
+	body := `{"to":"manager@example.com","uuids":["` + uuidA + `","` + uuidB + `","` + uuidC + `"]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/session/email", strings.NewReader(body))
+	w := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		srv.handleSessionEmail(w, req)
+	}()
+
+	// Wait until the attachment is composed and received (send in flight).
+	select {
+	case <-fake.paused:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for the attachment to reach the mailer")
+	}
+
+	// Mutate inside the compose→stamp window: edit A (bumps its revision) and
+	// delete B (soft-delete). Neither content was in the attachment.
+	if pw := patchQso(t, srv, uuidA, `{"comment":"MUTATEDNEW"}`); pw.Code != http.StatusOK {
+		t.Fatalf("edit A mid-send: status = %d; body = %s", pw.Code, pw.Body.String())
+	}
+	if dw := deleteQso(t, srv, uuidB); dw.Code != http.StatusNoContent {
+		t.Fatalf("delete B mid-send: status = %d; body = %s", dw.Code, dw.Body.String())
+	}
+
+	close(fake.release) // let the send + stamp complete
+	<-done
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+	var resp SessionEmailResponse
+	if err := unmarshalJSON(w.Body.String(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	// The attachment was immutable: A's composed comment is present, the later edit is
+	// not. The ADIF rides as a base64 MIME part, so decode it before asserting.
+	sent := decodeAdifAttachment(t, fake.capturedBody())
+	if !strings.Contains(sent, "COMPOSEDOLD") {
+		t.Errorf("attachment missing A's composed comment; decoded = %q", sent)
+	}
+	if strings.Contains(sent, "MUTATEDNEW") {
+		t.Errorf("attachment leaked the post-compose edit to A into the sent ADIF")
+	}
+
+	// emailed must list ONLY the unchanged batch-mate C: A was edited (a different
+	// revision is now current) and B was deleted — neither was durably stamped as sent.
+	if len(resp.Emailed) != 1 || resp.Emailed[0] != uuidC {
+		t.Errorf("emailed = %v, want [%s] (A edited + B deleted must be excluded)", resp.Emailed, uuidC)
+	}
+
+	// A's row is NOT stamped, so the corrected QSO stays re-sendable.
+	a, err := srv.db.FetchQsoByUUIDWithContext(req.Context(), uuidA)
+	if err != nil {
+		t.Fatalf("fetch A: %v", err)
+	}
+	if a.SmFwrdByEmailStatus == adif.YesString {
+		t.Errorf("A stamped forwarded-by-email though a newer revision was current — blocks the re-send")
+	}
+	// The unchanged C IS stamped (positive control).
+	c, err := srv.db.FetchQsoByUUIDWithContext(req.Context(), uuidC)
+	if err != nil {
+		t.Fatalf("fetch C: %v", err)
+	}
+	if c.SmFwrdByEmailStatus != adif.YesString {
+		t.Errorf("unchanged C should be stamped, got status %q", c.SmFwrdByEmailStatus)
+	}
 }
 
 func newAPISmtpFake(t *testing.T) *apiSmtpFake {
@@ -597,6 +751,15 @@ func (f *apiSmtpFake) handle(c net.Conn) {
 				if bl == ".\r\n" || bl == ".\n" {
 					break
 				}
+				f.bodyMu.Lock()
+				f.body.WriteString(bl)
+				f.bodyMu.Unlock()
+			}
+			// The attachment is fully composed and received: open the interleave
+			// window if the test armed one, then acknowledge.
+			if f.paused != nil {
+				f.paused <- struct{}{}
+				<-f.release
 			}
 			flush("250 OK")
 		case upper == "QUIT":

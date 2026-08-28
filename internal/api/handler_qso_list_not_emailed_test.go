@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"testing"
+
+	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 )
 
 func listNotEmailed(t *testing.T, srv *Server, lbID int64, raw string) *httptest.ResponseRecorder {
@@ -41,8 +43,10 @@ func TestListQsoByLogbook_NotEmailedFiltersEmailed(t *testing.T) {
 	_, unsentUUID := submitAndGetID(t, srv, lbID, testQsoADIF2)
 
 	// Stamp the first QSO "forwarded by email" (the durable additional_data flag
-	// the filter keys on — the same stamp a real session email writes).
-	if _, err := srv.db.MarkSessionEmailedWithContext(t.Context(), []int64{emailedID}, "20260808"); err != nil {
+	// the filter keys on — the same stamp a real session email writes). A fresh
+	// submit is at revision 0, which the revision-guarded stamp matches.
+	if _, err := srv.db.MarkSessionEmailedAtRevisionWithContext(t.Context(),
+		[]sqlite.SessionEmailTarget{{ID: emailedID, Revision: 0}}, "20260808"); err != nil {
 		t.Fatalf("mark emailed: %v", err)
 	}
 

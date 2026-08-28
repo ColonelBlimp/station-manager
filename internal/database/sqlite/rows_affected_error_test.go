@@ -101,17 +101,20 @@ func TestMarkUploadSuccessWithAdifStamp_RowsAffectedFailureRollsBack(t *testing.
 	}
 }
 
-func TestMarkSessionEmailed_RowsAffectedFailureReturnsError(t *testing.T) {
+func TestMarkSessionEmailed_QueryFailureReturnsError(t *testing.T) {
 	s, mock := rowsAffectedTestService(t)
-	fault := stderrors.New("session email rows affected fault")
-	mock.ExpectExec("UPDATE qso").WillReturnResult(sqlmock.NewErrorResult(fault))
+	fault := stderrors.New("session email query fault")
+	// The revision-guarded stamp reads its result set via UPDATE ... RETURNING, so a
+	// DB fault surfaces on the query itself, not on RowsAffected.
+	mock.ExpectQuery("UPDATE qso").WillReturnError(fault)
 
-	n, err := s.MarkSessionEmailedWithContext(context.Background(), []int64{1, 2}, "20260815")
-	if n != 0 {
-		t.Fatalf("affected rows = %d, want 0 on result failure", n)
+	stamped, err := s.MarkSessionEmailedAtRevisionWithContext(context.Background(),
+		[]SessionEmailTarget{{ID: 1, Revision: 0}, {ID: 2, Revision: 0}}, "20260815")
+	if stamped != nil {
+		t.Fatalf("stamped = %v, want nil on query failure", stamped)
 	}
 	if !stderrors.Is(err, fault) {
-		t.Fatalf("session stamp error = %v, want rows-affected fault", err)
+		t.Fatalf("session stamp error = %v, want query fault", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

@@ -1,11 +1,11 @@
 # Current work
 
-Updated: 2026-08-27
+Updated: 2026-08-28
 
-- **Goal:** No workstream selected. W-0004 (app UI cohesion + build identity) closed 2026-08-27 and archived to [`archive/work/`](archive/work/W-0004-complete-app-ui-cohesion.md); W-0001, W-0003, W-0005 closed earlier. Pick the next item from [`docs/backlog.md`](backlog.md); the operator owns priority.
-- **State:** W-0004 shipped and green on `main` in three commits — occupancy palette `d6fa11cd`, build identity `86f3f833`, ordering-guard fix `84214b76` — full app suite green (1370). All seven ACs met: FT8 pickers read one fixture-validated light/dark `--color-occ-*` palette; the Sidebar footer + tab title show the running daemon build (DEV-marked, honest "unavailable"); named palettes declined. Pushed to `origin/main` (closure `75d99222`).
-- **Next:** Operator selects the next workstream. Backlog top is W-0002 (FT8 type-4 on-air validation — operator-initiated RF), then W-0008. [`W-0017`](work/W-0017-deflake-bridge-sse-streaming-test.md) stays open: evidence `SQLITE_BUSY` fixed, but **bridge sub-item A (streaming-startup barrier) is latent/unfixed** — fix on next recurrence or when touching `internal/bridge`.
-- **Decisions not to revisit:** W-0004 — named palettes DECLINED; light/dark is the complete supported theme set (device-local, ADR 0044, no config/API surface). `docs/backlog.md` alone owns priority.
-- **Do not:** re-open a closed dossier (W-0001, W-0003, W-0004, W-0005) without a fresh one; initiate RF/hardware without per-occasion agreement; amend or push without operator direction.
-- **Relevant files:** [`backlog`](backlog.md), [`W-0017`](work/W-0017-deflake-bridge-sse-streaming-test.md), [`W-0004` archived](archive/work/W-0004-complete-app-ui-cohesion.md).
+- **Goal:** W-0008 (harden audited contract boundaries) — slice 1 (Persistence). **PT-3** (session-email revision stamping) COMPLETE + verified; **PT-4 next**. W-0001/W-0003/W-0004/W-0005 closed; [`W-0004`](archive/work/W-0004-complete-app-ui-cohesion.md) archived. [`docs/backlog.md`](backlog.md) owns priority.
+- **State:** PT-3 shipped: the session-email stamp is revision-guarded (matches `(id, revision)` via `json_each`, scale-safe to the 10k request cap) and `emailed` reports only durably-stamped rows; a stamp error still returns an empty set. RED→GREEN; api `-race` + sqlite + gofmt/vet green. `main` green at `4a2576c5`.
+- **Next:** slice 1 continues **PT-4** (partial logbook PATCH concurrent-revision guard), then PT-5 (import rollback), PT-6/CC-5 (config crash-durability; needs an operator decision). Then slices 2–4. W-0002 (FT8 type-4 on-air) stays RF-gated. [`W-0017`](work/W-0017-deflake-bridge-sse-streaming-test.md) bridge sub-item A latent.
+- **Decisions not to revisit:** W-0004 named palettes DECLINED (light/dark is the set). W-0008 operator decisions pending at their slice: PT-6, AW-3/AW-6/AW-1.
+- **Do not:** re-open a closed dossier (W-0001/W-0003/W-0004/W-0005); initiate RF/hardware without per-occasion agreement; amend or push without operator direction.
+- **Relevant files:** [`backlog`](backlog.md), [`W-0008`](work/W-0008-harden-audited-contract-boundaries.md), [`persistence audit`](reviews/internal-persistence-transaction-audit.md).
 - **Coordination:** Leave committing and pushing to the operator; non-Markdown commits draw a codex review to triage.
