@@ -195,10 +195,20 @@ func (s *Service) importBatch(
 		for _, p := range toInsert {
 			qsoID, ierr := s.DB.InsertQsoTx(ctx, tx, p.qso)
 			if ierr != nil {
-				s.rollbackTx(tx, op)
-				// Record why the efficient batch path failed before dropping to
-				// per-record inserts — otherwise a systematic cause (a constraint, a
-				// schema drift) is invisible and reads only as "imports are slow" (Q8).
+				if rbErr := s.rollbackTx(tx, op); rbErr != nil {
+					// The rollback ITSELF failed: the batch transaction's disposition is
+					// unverified, so replaying the batch per-record could duplicate or
+					// misclassify rows. Abort with BOTH causes preserved (the cleanup
+					// error never replaces the insert error) and do NOT fall back —
+					// per-record replay is safe only after a confirmed rollback (PT-5).
+					return errors.New(op).WithErr(stderr.Join(ierr, rbErr)).WithMsgf(
+						"import batch rollback unverified after QSO insert failure (base_index %d, index %d); aborting without fallback",
+						baseIndex, p.idx)
+				}
+				// Confirmed rollback: record why the efficient batch path failed before
+				// dropping to per-record inserts — otherwise a systematic cause (a
+				// constraint, schema drift) is invisible and reads only as "imports are
+				// slow" (Q8).
 				s.Logger.WarnWith().Err(ierr).Int("base_index", baseIndex).Int("index", p.idx).
 					Msg("import batch QSO insert failed; falling back to per-record inserts")
 				return s.importBatchFallback(ctx, logbookID, batch, baseIndex, forwardTo, res)
@@ -208,7 +218,12 @@ func (s *Service) importBatch(
 					continue
 				}
 				if uerr := s.DB.InsertQsoUploadTx(ctx, tx, qsoID, action.Insert, fwd.Name, fwd.Type, origin.Import); uerr != nil {
-					s.rollbackTx(tx, op)
+					if rbErr := s.rollbackTx(tx, op); rbErr != nil {
+						// Unverified rollback — abort with both causes, no fallback (PT-5).
+						return errors.New(op).WithErr(stderr.Join(uerr, rbErr)).WithMsgf(
+							"import batch rollback unverified after upload-queue insert failure (base_index %d, index %d, forwarder %s); aborting without fallback",
+							baseIndex, p.idx, fwd.Name)
+					}
 					s.Logger.WarnWith().Err(uerr).Int("base_index", baseIndex).Int("index", p.idx).
 						Str("forwarder", fwd.Name).
 						Msg("import batch upload-queue insert failed; falling back to per-record inserts")

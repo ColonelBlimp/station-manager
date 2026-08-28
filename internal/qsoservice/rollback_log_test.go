@@ -17,10 +17,17 @@ import (
 // held, and these sites are the only place that can observe it. rollbackTx now warns
 // on a non-nil rollback error; a clean rollback stays silent.
 //
-// A committed tx makes Rollback return sql.ErrTxDone — a deterministic real failure,
-// no fake needed.
+// After PT-5, rollbackTx CLASSIFIES its result (reusing txutil.Rollback): a clean
+// rollback and a benign sql.ErrTxDone are CONFIRMED (nil, silent); only a genuine
+// rollback failure is UNVERIFIED (returned + warn-logged). A genuine failure needs a
+// controllable driver, so it is proven in the sqlmock import test
+// (TestSubmitImportBatch_UncertainRollbackAbortsWithoutFallback); the two cases below
+// pin the confirmed side that a real in-memory DB can produce.
 
-func TestRollbackTx_FailedRollbackLogsWarn(t *testing.T) {
+// A committed (or already auto-rolled-back) transaction makes Rollback return
+// sql.ErrTxDone. That is BENIGN — a confirmed completion, not an unverified failure —
+// so rollbackTx returns nil and stays silent.
+func TestRollbackTx_BenignErrTxDoneIsConfirmedAndSilent(t *testing.T) {
 	s := newTestService(t)
 	buf := logbuf(s)
 	ctx := context.Background()
@@ -28,18 +35,15 @@ func TestRollbackTx_FailedRollbackLogsWarn(t *testing.T) {
 	tx, cancel, err := s.DB.BeginTxContext(ctx)
 	require.NoError(t, err)
 	defer cancel()
-	require.NoError(t, tx.Commit()) // now done: a subsequent Rollback returns sql.ErrTxDone
+	require.NoError(t, tx.Commit()) // a subsequent Rollback returns sql.ErrTxDone
 
-	s.rollbackTx(tx, errors.Op("qsoservice.testRollback"))
-
-	out := buf.String()
-	require.Contains(t, out, `"level":"warn"`,
-		"a rollback that itself fails is the only observable evidence the atomic write may not have held")
-	require.Contains(t, out, "rollback failed", "the message names the failed cleanup")
-	require.Contains(t, out, "qsoservice.testRollback", "and the operation it was rolling back")
+	require.NoError(t, s.rollbackTx(tx, errors.Op("qsoservice.testRollback")),
+		"sql.ErrTxDone is a benign, confirmed rollback — not an unverified failure")
+	require.NotContains(t, buf.String(), "rollback failed",
+		"a benign ErrTxDone must not warn about unverified atomicity")
 }
 
-func TestRollbackTx_CleanRollbackIsSilent(t *testing.T) {
+func TestRollbackTx_CleanRollbackIsConfirmedAndSilent(t *testing.T) {
 	s := newTestService(t)
 	buf := logbuf(s)
 	ctx := context.Background()
@@ -48,8 +52,8 @@ func TestRollbackTx_CleanRollbackIsSilent(t *testing.T) {
 	require.NoError(t, err)
 	defer cancel()
 
-	s.rollbackTx(tx, errors.Op("qsoservice.testRollback")) // fresh tx → clean rollback
-
+	require.NoError(t, s.rollbackTx(tx, errors.Op("qsoservice.testRollback")), // fresh tx → clean
+		"a clean rollback is confirmed → nil")
 	require.NotContains(t, buf.String(), "rollback failed",
-		"a clean rollback must stay silent — only a FAILED rollback is worth a line")
+		"a clean rollback must stay silent — only an UNVERIFIED rollback is worth a line")
 }

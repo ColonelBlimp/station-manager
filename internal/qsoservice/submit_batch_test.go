@@ -176,8 +176,13 @@ func TestSubmitImportBatch_FallbackLogsTriggeringError(t *testing.T) {
 	}
 	buf := logbuf(s)
 	res, err := s.SubmitImportBatch(ctx, lbID, recs, nil, 2, nil)
-	require.NoError(t, err)
+	require.NoError(t, err, "a clean rollback enters the per-record recovery path, not an abort")
 	require.Equal(t, 1, res.Stored, "K2BBB stored via the fallback")
+	// The confirmed-rollback fallback must produce the correct per-record tally: the
+	// UUID collision is reported as an error, nothing is mis-counted as a duplicate.
+	require.Len(t, res.Errors, 1, "the colliding record is reported errored, not stored")
+	require.Contains(t, res.Errors[0].Reason, "uuid_conflict")
+	require.Equal(t, 0, res.Duplicate, "a uuid conflict is not a dedupe duplicate")
 
 	line := logLineWith(t, buf.String(), "falling back to per-record")
 	require.Contains(t, line, `"level":"warn"`, "the fallback trigger must be visible")
