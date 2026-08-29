@@ -639,8 +639,13 @@ and rename. A partial write cannot leave a half-formed primary file. Go's JSON
 encoder gives deterministic map-key ordering for the owned typed shape.
 
 `Service.Update` writes disk before swapping memory and holds the write lock through
-both. The update callback receives a deep clone, so failed validation or persistence
-cannot leak nested slice/map/pointer mutations into the live snapshot.
+both. All three update primitives (`Update`, `UpdateIfChanged`,
+`UpdateInMemoryThenPersist`) run the canonical normalize→validate pipeline on the
+candidate before any commit, so the boundary itself — not caller discipline — rejects
+a shape the next Load would refuse, returning a typed validation error. The update
+callback receives a deep clone, so that rejection (like a persistence failure) cannot
+leak nested slice/map/pointer mutations into the live snapshot. `UpdateInMemoryThenPersist`
+still commits memory once the candidate validates, even if the subsequent write fails.
 
 ### 15.4 API writes
 

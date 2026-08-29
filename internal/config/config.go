@@ -2336,6 +2336,13 @@ func (s *Service) Update(fn func(cfg *Config) error) (Durability, error) {
 	if err := fn(&next); err != nil {
 		return Durable, err
 	}
+	// Authoritative boundary (CC-4): normalize then validate the candidate before it
+	// can reach disk or memory, so a caller that skips the pipeline cannot commit a
+	// shape the next Load would reject. Idempotent for the disciplined API path, which
+	// already normalized+validated inside fn.
+	if err := normalizeAndValidate(&next); err != nil {
+		return Durable, err
+	}
 
 	dur, err := writeJSONDurable(s.Path, next, s.fsOrDefault())
 	if err != nil {
@@ -2370,6 +2377,12 @@ func (s *Service) UpdateIfChanged(forceWrite bool, fn func(cfg *Config) error) (
 	before := s.Cfg.Clone()
 	next := s.Cfg.Clone()
 	if err := fn(&next); err != nil {
+		return nil, Durable, err
+	}
+	// Normalize+validate the fresh under-lock candidate BEFORE the equality decision
+	// (CC-4): the delta is computed against the canonical shape, and an invalid
+	// candidate is rejected here rather than silently skipped as a no-op.
+	if err := normalizeAndValidate(&next); err != nil {
 		return nil, Durable, err
 	}
 
@@ -2408,6 +2421,13 @@ func (s *Service) UpdateInMemoryThenPersist(fn func(cfg *Config) error) (Durabil
 	// config's nested slices/maps.
 	next := s.Cfg.Clone()
 	if err := fn(&next); err != nil {
+		return Durable, err
+	}
+	// Validate BEFORE the in-memory commit (CC-4): an invalid self-heal result is a
+	// programming/invariant failure and must not become runtime state. Once the
+	// candidate validates, the established guarantee holds — memory commits below even
+	// if the disk write then fails.
+	if err := normalizeAndValidate(&next); err != nil {
 		return Durable, err
 	}
 	s.Cfg = next // memory wins regardless of the disk outcome below

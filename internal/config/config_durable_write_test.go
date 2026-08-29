@@ -279,7 +279,7 @@ func TestServiceUpdate_DirSyncUncertain_PublishesAndReportsCaveat(t *testing.T) 
 	path := filepath.Join(dir, "config.json")
 	seedConfig(t, path, "OLD")
 
-	svc := New(Config{})
+	svc := New(DefaultConfig(dir))
 	svc.SetPath(path)
 	svc.fs = &stepFS{real: osFS{}, failAt: "syncdir", failErr: os.ErrInvalid}
 
@@ -300,7 +300,7 @@ func TestServiceUpdate_HardWriteFailure_DoesNotPublish(t *testing.T) {
 	path := filepath.Join(dir, "config.json")
 	seedConfig(t, path, "OLD")
 
-	svc := New(Config{})
+	svc := New(DefaultConfig(dir))
 	svc.SetPath(path)
 	svc.fs = &stepFS{real: osFS{}, failAt: "write", failErr: os.ErrInvalid}
 

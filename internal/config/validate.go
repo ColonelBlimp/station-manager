@@ -751,3 +751,28 @@ func validateLogging(lg types.LoggingConfig) []Finding {
 	}
 	return out
 }
+
+// ValidationError wraps the first blocking Finding rejected by the service update
+// boundary's normalize→validate pipeline (CC-4). Callers can errors.As it to recover
+// the structured finding; its message matches Load's fatal form.
+type ValidationError struct {
+	Finding Finding
+}
+
+func (e *ValidationError) Error() string {
+	return fmt.Sprintf("invalid config (%s): %s", e.Finding.Code, e.Finding.Message)
+}
+
+// normalizeAndValidate runs the canonical normalize→validate pipeline on an update
+// candidate and returns a *ValidationError for the first blocking finding, so the
+// service update boundary is authoritative regardless of caller discipline (CC-4). It
+// is idempotent for a Load-derived config, which Load already normalized and validated.
+func normalizeAndValidate(next *Config) error {
+	Normalize(next)
+	for _, f := range Validate(*next) {
+		if !f.Warning {
+			return &ValidationError{Finding: f}
+		}
+	}
+	return nil
+}
