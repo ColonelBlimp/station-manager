@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -90,6 +91,8 @@ func Validate(cfg Config) []Finding {
 	out = append(out, validateFt8FieldDay(cfg.Ft8.FieldDay)...)
 	out = append(out, validateEvidence(cfg.Evidence)...)
 	out = append(out, validateEvidenceSync(cfg)...)
+	out = append(out, validateDatastore(cfg.Datastore)...)
+	out = append(out, validateLogging(cfg.Logging)...)
 	// Advisory findings (non-fatal). Currently just the ACKNOWLEDGED non-loopback
 	// bind notice — an unacknowledged bind is fatal (validateServer above) and
 	// Warnings() returns nothing for it, so the two paths never both fire (ST-3a).
@@ -667,4 +670,84 @@ func zoneInRange(s string, lo, hi int) bool {
 		return false
 	}
 	return n >= lo && n <= hi
+}
+
+// validateDatastore mirrors the SQLite consumer's rules (the struct tags on
+// types.DatastoreConfig that internal/database/sqlite/validation.go enforces) at the
+// config boundary, so a hand-edited datastore block fails at Load with a field-
+// specific code instead of later as a generic dependency-injection error (CC-3).
+// Structural only — no I/O; filesystem viability and the actual DB open stay a
+// startup concern. The consumer is kept as a defensive boundary; a parity test in
+// internal/database/sqlite guards the two against drift.
+func validateDatastore(ds types.DatastoreConfig) []Finding {
+	var out []Finding
+	add := func(field, msg string) {
+		out = append(out, Finding{Field: field, Code: "invalid_datastore", Message: msg})
+	}
+	if ds.Driver != types.SqliteDriverName {
+		add("datastore.driver", fmt.Sprintf("driver must be %q", types.SqliteDriverName))
+	}
+	if ds.Path == "" {
+		add("datastore.path", "path is required")
+	}
+	if ds.MaxOpenConns < 1 {
+		add("datastore.max_open_conns", "max_open_conns must be at least 1")
+	}
+	if ds.MaxIdleConns < 1 {
+		add("datastore.max_idle_conns", "max_idle_conns must be at least 1")
+	}
+	if ds.ConnMaxLifetime < 0 {
+		add("datastore.conn_max_lifetime", "conn_max_lifetime must be 0 or greater")
+	}
+	if ds.ConnMaxIdleTime < 0 {
+		add("datastore.conn_max_idle_time", "conn_max_idle_time must be 0 or greater")
+	}
+	if ds.ContextTimeout < 5 {
+		add("datastore.context_timeout", "context_timeout must be at least 5 seconds")
+	}
+	if ds.TransactionContextTimeout < 5 {
+		add("datastore.transaction_context_timeout", "transaction_context_timeout must be at least 5 seconds")
+	}
+	return out
+}
+
+// validateLogging mirrors the logging consumer's rules (the struct tags on
+// types.LoggingConfig plus internal/logging/validation.go's level, skip-frame, and
+// relative-path semantic checks) at the config boundary (CC-3). Structural/semantic
+// only — no I/O. Without this an invalid logging block passes Load and surfaces only
+// when the structured logger itself cannot start. A parity test in internal/logging
+// guards against drift. `omitempty` size/timeout fields treat 0 as "use the default".
+func validateLogging(lg types.LoggingConfig) []Finding {
+	var out []Finding
+	add := func(field, msg string) {
+		out = append(out, Finding{Field: field, Code: "invalid_logging", Message: msg})
+	}
+	switch lg.Level {
+	case "trace", "debug", "info", "warn", "error", "fatal", "panic":
+	default:
+		add("logging.level", "level must be one of trace, debug, info, warn, error, fatal, panic")
+	}
+	if lg.SkipFrameCount < 0 || lg.SkipFrameCount > 20 {
+		add("logging.skip_frame_count", "skip_frame_count must be between 0 and 20")
+	}
+	if lg.RelLogFileDir == "" {
+		add("logging.rel_log_file_dir", "rel_log_file_dir is required")
+	} else if clean := filepath.Clean(lg.RelLogFileDir); strings.Contains(clean, "..") {
+		add("logging.rel_log_file_dir", "rel_log_file_dir must not contain '..' (directory traversal)")
+	} else if filepath.IsAbs(clean) {
+		add("logging.rel_log_file_dir", "rel_log_file_dir must be a relative path")
+	}
+	if lg.LogFileMaxBackups < 0 {
+		add("logging.log_file_max_backups", "log_file_max_backups must be 0 or greater")
+	}
+	if lg.LogFileMaxAgeDays < 0 {
+		add("logging.log_file_max_age_days", "log_file_max_age_days must be 0 or greater")
+	}
+	if lg.LogFileMaxSizeMB < 0 {
+		add("logging.log_file_max_size_mb", "log_file_max_size_mb must be 0 (default) or at least 1")
+	}
+	if lg.ShutdownTimeoutMS != 0 && (lg.ShutdownTimeoutMS < 10 || lg.ShutdownTimeoutMS > 10000) {
+		add("logging.shutdown_timeout_ms", "shutdown_timeout_ms must be 0 (default) or between 10 and 10000")
+	}
+	return out
 }

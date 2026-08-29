@@ -263,9 +263,13 @@ Every loaded or API-mutated candidate is normalized, then passed to
 - unique valid operator callsigns and a resolving default operator;
 - station callsigns, Maidenhead locator, coordinate/locator consistency, zones,
   DXCC, amplifier multiplier, fallback power, and operating bands;
-- FT8 display, audio, occupancy, and Field Day values; and
+- FT8 display, audio, occupancy, and Field Day values;
 - evidence cap, antenna declarations, and the evidence-sync dependency on an
-  enabled, credentialed SM Cloud forwarder.
+  enabled, credentialed SM Cloud forwarder; and
+- datastore driver, path, connection-pool bounds, and context timeouts, plus the
+  logging level, relative log directory, rotation bounds, skip-frame count, and
+  shutdown timeout — mirrored 1:1 from the SQLite and logging consumers so a bad
+  hand-edit fails at the config boundary rather than later at startup.
 
 Warnings are advisory findings. All other findings block Load and cause a config
 PUT to fail without changing disk or memory. A PUT that carries forwarders also

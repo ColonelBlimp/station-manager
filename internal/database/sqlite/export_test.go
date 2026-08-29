@@ -6,6 +6,13 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
+// ValidateDatastoreConfig exposes the unexported consumer validator so the CC-3 parity
+// test (in package sqlite_test) can confirm it agrees with config.Validate on every
+// input. Compiled ONLY under test, so it never becomes a production entry point.
+func ValidateDatastoreConfig(cfg *types.DatastoreConfig) error {
+	return validateConfig(cfg)
+}
+
 // NewServiceWithDB builds a Service backed by an already-open *sql.DB, for tests that
 // need a controllable driver (e.g. go-sqlmock) to exercise transaction and rollback
 // paths deterministically. It sets the same unexported readiness state the real
