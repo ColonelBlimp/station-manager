@@ -634,9 +634,13 @@ field's established zero semantics.
 
 ### 15.3 Deterministic, atomic, daemon-owned writes
 
-`WriteJSON` uses indented JSON, a sibling `.tmp` file, explicit private permissions,
-and rename. A partial write cannot leave a half-formed primary file. Go's JSON
-encoder gives deterministic map-key ordering for the owned typed shape.
+`WriteJSON` uses indented JSON, a unique temporary file in the target directory,
+explicit private permissions, an fsync of that file, an atomic rename, and a final
+fsync of the parent directory (PT-6 — crash-durable). A partial write cannot leave a
+half-formed primary file; a nil error with `Durable` means the replacement survives a
+crash, while a rename that succeeds before the directory fsync fails is reported as
+durability-uncertain — applied and live, not a failure. Go's JSON encoder gives
+deterministic map-key ordering for the owned typed shape.
 
 `Service.Update` writes disk before swapping memory and holds the write lock through
 both. All three update primitives (`Update`, `UpdateIfChanged`,
