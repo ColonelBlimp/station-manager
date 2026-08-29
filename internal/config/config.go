@@ -681,25 +681,97 @@ func DefaultConfig(dataDir string) Config {
 	return cfg
 }
 
-// WriteJSON serialises cfg to path as indented JSON via temp-file +
-// rename so a partial write can never leave a half-formed config on
-// disk for the next startup. The parent directory must already exist;
-// daemon startup resolves that elsewhere via utils.WorkingDir.
+// Durability reports how far a config write reached the disk. It is meaningful only
+// when WriteJSON returns a nil error (a non-nil error means nothing was replaced).
+type Durability int
+
+const (
+	// Durable: the temp file's data was fsync'd, renamed over the target, and the
+	// parent directory fsync'd — the replacement survives a crash.
+	Durable Durability = iota
+	// DurabilityUncertain: the rename succeeded, so config.json IS the new file and
+	// is live to every reader, but the parent-directory fsync failed — the change is
+	// APPLIED yet its survival across a crash is unconfirmed (PT-6). Callers publish
+	// the in-memory value (it matches the on-disk file) and report a caveat, never a
+	// generic failure that would leave callers assuming nothing changed.
+	DurabilityUncertain
+)
+
+// fsFile is the subset of *os.File the durable write uses. Kept small so a test
+// injector can fail any individual step (write, chmod, sync, close).
+type fsFile interface {
+	Write(p []byte) (int, error)
+	Chmod(mode os.FileMode) error
+	Sync() error
+	Close() error
+	Name() string
+}
+
+// fsOps is the small, unexported file-system seam WriteJSON is parameterised over so
+// its crash-durability barriers are deterministically testable. Production uses osFS;
+// tests inject faults (config-package _test.go). It is owned by the durable-write
+// helper alone — not a general abstraction.
+type fsOps interface {
+	Stat(name string) (os.FileInfo, error)
+	CreateTemp(dir, pattern string) (fsFile, error)
+	Rename(oldpath, newpath string) error
+	SyncDir(dir string) error
+	Remove(name string) error
+}
+
+// osFS is the production fsOps: the real os calls. SyncDir opens the directory and
+// fsyncs its descriptor — the barrier that persists the rename's directory entry
+// (fsync(2): a file fsync does not ensure the containing directory entry reached disk).
+type osFS struct{}
+
+func (osFS) Stat(name string) (os.FileInfo, error)          { return os.Stat(name) }
+func (osFS) CreateTemp(dir, pattern string) (fsFile, error) { return os.CreateTemp(dir, pattern) }
+func (osFS) Rename(oldpath, newpath string) error           { return os.Rename(oldpath, newpath) }
+func (osFS) Remove(name string) error                       { return os.Remove(name) }
+
+func (osFS) SyncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	if serr := d.Sync(); serr != nil {
+		_ = d.Close()
+		return serr
+	}
+	return d.Close()
+}
+
+// WriteJSON serialises cfg to path as indented JSON and replaces path CRASH-DURABLY:
+// a UNIQUE temp file in the target's directory (CC-5 — no fixed ".tmp" for concurrent
+// writers to collide on), fsync of the temp's data BEFORE the rename, an atomic
+// rename, then an fsync of the parent DIRECTORY so the rename survives a crash (PT-6).
+// The parent directory must already exist (daemon startup resolves it via
+// utils.WorkingDir).
 //
-// The file is written 0600 (owner read/write only): config.json holds
-// plaintext secrets — SMTP credentials, lookup-provider passwords, forwarder
-// API keys — that are deliberately kept off the /v1/config API, so the on-disk
-// copy must not be world/group-readable on a multi-user host either (review
-// 2026-06-19 M1). An existing file that's already stricter (e.g. 0400) is
-// preserved; a wider one (a legacy 0644) is tightened on the next write.
-func WriteJSON(path string, cfg Config) error {
+// Returns Durable on full success. If only the final directory fsync fails, the rename
+// already happened — config.json is the new file, live to readers — so it returns
+// DurabilityUncertain with a NIL error: the change is applied but its crash survival is
+// unconfirmed, and the caller must publish in-memory (coherent) and report a caveat,
+// not a failure. Any failure BEFORE the rename returns a non-nil error with the old
+// file untouched and the temp removed.
+//
+// The file is written 0600 (owner read/write only): config.json holds plaintext
+// secrets — SMTP credentials, lookup-provider passwords, forwarder API keys — kept off
+// the /v1/config API, so the on-disk copy must not be world/group-readable on a
+// multi-user host either (review 2026-06-19 M1). An existing stricter mode (e.g. 0400)
+// is preserved; a wider one (a legacy 0644) is tightened on the next write.
+func WriteJSON(path string, cfg Config) (Durability, error) {
+	return writeJSONDurable(path, cfg, osFS{})
+}
+
+func writeJSONDurable(path string, cfg Config, fs fsOps) (Durability, error) {
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
-		return fmt.Errorf("marshalling config: %w", err)
+		return Durable, fmt.Errorf("marshalling config: %w", err)
 	}
 
 	mode := os.FileMode(0o600)
-	if fi, statErr := os.Stat(path); statErr == nil {
+	if fi, statErr := fs.Stat(path); statErr == nil {
 		// Preserve an operator-tightened mode (a subset of owner-rw, e.g. 0400);
 		// never loosen, and tighten anything wider down to 0600.
 		if perm := fi.Mode().Perm(); perm&^0o600 == 0 && perm != 0 {
@@ -707,21 +779,48 @@ func WriteJSON(path string, cfg Config) error {
 		}
 	}
 
-	tmp := path + ".tmp"
-	if err = os.WriteFile(tmp, data, mode); err != nil {
-		return fmt.Errorf("writing temp config: %w", err)
+	dir := filepath.Dir(path)
+	f, err := fs.CreateTemp(dir, filepath.Base(path)+"-*.tmp")
+	if err != nil {
+		return Durable, fmt.Errorf("creating temp config: %w", err)
 	}
-	// WriteFile applies the mode through umask on create; force it exactly so a
-	// permissive umask can't leave the secret-bearing file group/world-readable.
-	if err = os.Chmod(tmp, mode); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("setting temp config mode: %w", err)
+	tmp := f.Name()
+
+	// Every failure BEFORE the rename removes the temp and leaves the old file intact.
+	if _, err = f.Write(data); err != nil {
+		_ = f.Close()
+		_ = fs.Remove(tmp)
+		return Durable, fmt.Errorf("writing temp config: %w", err)
 	}
-	if err = os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("renaming temp config to %s: %w", path, err)
+	// Force the mode exactly: CreateTemp makes 0600 already, but an operator-tightened
+	// 0400 must be honoured and any umask influence removed on the secret-bearing file.
+	if err = f.Chmod(mode); err != nil {
+		_ = f.Close()
+		_ = fs.Remove(tmp)
+		return Durable, fmt.Errorf("setting temp config mode: %w", err)
 	}
-	return nil
+	// Barrier 1: the new inode's DATA is durable before it is linked into place, so a
+	// durable directory entry can never point at unflushed bytes.
+	if err = f.Sync(); err != nil {
+		_ = f.Close()
+		_ = fs.Remove(tmp)
+		return Durable, fmt.Errorf("syncing temp config: %w", err)
+	}
+	if err = f.Close(); err != nil {
+		_ = fs.Remove(tmp)
+		return Durable, fmt.Errorf("closing temp config: %w", err)
+	}
+	if err = fs.Rename(tmp, path); err != nil {
+		_ = fs.Remove(tmp)
+		return Durable, fmt.Errorf("renaming temp config to %s: %w", path, err)
+	}
+	// Barrier 2: fsync the parent directory so the rename (the name→inode link)
+	// survives a crash. If THIS fails the file is already live — applied, durability
+	// unconfirmed — never a failure.
+	if err = fs.SyncDir(dir); err != nil {
+		return DurabilityUncertain, nil
+	}
+	return Durable, nil
 }
 
 // TightenFileMode narrows a config file wider than 0600 down to 0600 as an
@@ -2134,6 +2233,18 @@ type Service struct {
 	Path        string // filesystem path the daemon loaded from / writes back to
 	initialized atomic.Bool
 	mu          sync.RWMutex
+	// fs is the file-system seam the persist methods write through. Nil in production
+	// (fsOrDefault resolves to osFS); a config-package test sets it to a fault injector
+	// to exercise the crash-durability outcomes (PT-6).
+	fs fsOps
+}
+
+// fsOrDefault returns the injected fsOps or the production osFS.
+func (s *Service) fsOrDefault() fsOps {
+	if s.fs != nil {
+		return s.fs
+	}
+	return osFS{}
 }
 
 // New constructs a Service with the given Config.
@@ -2213,25 +2324,29 @@ func (c Config) Clone() Config {
 // Pattern: the API handler reads Snapshot(), constructs the new
 // value, calls Update with a closure that copies the new value into
 // *cfg. Keeps the write window narrow and the mutation explicit.
-func (s *Service) Update(fn func(cfg *Config) error) error {
+func (s *Service) Update(fn func(cfg *Config) error) (Durability, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.Path == "" {
-		return fmt.Errorf("config.Service.Update: no on-disk path set; cannot persist update")
+		return Durable, fmt.Errorf("config.Service.Update: no on-disk path set; cannot persist update")
 	}
 
 	next := s.Cfg.Clone()
 	if err := fn(&next); err != nil {
-		return err
+		return Durable, err
 	}
 
-	if err := WriteJSON(s.Path, next); err != nil {
-		return fmt.Errorf("config.Service.Update: writing config: %w", err)
+	dur, err := writeJSONDurable(s.Path, next, s.fsOrDefault())
+	if err != nil {
+		return Durable, fmt.Errorf("config.Service.Update: writing config: %w", err)
 	}
 
+	// Publish on BOTH Durable and DurabilityUncertain: an uncertain write has already
+	// renamed config.json into place (it is the live on-disk file), so in-memory must
+	// match it (PT-6). The caveat rides out in the Durability return.
 	s.Cfg = next
-	return nil
+	return dur, nil
 }
 
 // UpdateIfChanged applies fn to a clone and persists ONLY when the typed result
@@ -2244,31 +2359,32 @@ func (s *Service) Update(fn func(cfg *Config) error) error {
 // must still reach disk: a schema migration re-shapes the RAW document (retired
 // keys removed), which the typed before/after cannot see because both sides are
 // already the migrated Config. The caller names that reason.
-func (s *Service) UpdateIfChanged(forceWrite bool, fn func(cfg *Config) error) ([]FieldChange, error) {
+func (s *Service) UpdateIfChanged(forceWrite bool, fn func(cfg *Config) error) ([]FieldChange, Durability, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.Path == "" {
-		return nil, fmt.Errorf("config.Service.UpdateIfChanged: no on-disk path set; cannot persist update")
+		return nil, Durable, fmt.Errorf("config.Service.UpdateIfChanged: no on-disk path set; cannot persist update")
 	}
 
 	before := s.Cfg.Clone()
 	next := s.Cfg.Clone()
 	if err := fn(&next); err != nil {
-		return nil, err
+		return nil, Durable, err
 	}
 
 	changes := Diff(before, next)
 	if len(changes) == 0 && !forceWrite {
-		return nil, nil // semantic no-op — do not touch the file
+		return nil, Durable, nil // semantic no-op — do not touch the file
 	}
 
-	if err := WriteJSON(s.Path, next); err != nil {
-		return nil, fmt.Errorf("config.Service.UpdateIfChanged: writing config: %w", err)
+	dur, err := writeJSONDurable(s.Path, next, s.fsOrDefault())
+	if err != nil {
+		return nil, Durable, fmt.Errorf("config.Service.UpdateIfChanged: writing config: %w", err)
 	}
 
 	s.Cfg = next
-	return changes, nil
+	return changes, dur, nil
 }
 
 // UpdateInMemoryThenPersist applies fn and commits the result to the in-memory
@@ -2283,7 +2399,7 @@ func (s *Service) UpdateIfChanged(forceWrite bool, fn func(cfg *Config) error) (
 // QSO submit) is worse than not persisting the fix; the next startup re-runs
 // the heal. For ordinary updates use Update, where the file is the source of
 // truth and a failed write leaves memory untouched.
-func (s *Service) UpdateInMemoryThenPersist(fn func(cfg *Config) error) error {
+func (s *Service) UpdateInMemoryThenPersist(fn func(cfg *Config) error) (Durability, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -2292,19 +2408,20 @@ func (s *Service) UpdateInMemoryThenPersist(fn func(cfg *Config) error) error {
 	// config's nested slices/maps.
 	next := s.Cfg.Clone()
 	if err := fn(&next); err != nil {
-		return err
+		return Durable, err
 	}
 	s.Cfg = next // memory wins regardless of the disk outcome below
 
 	if s.Path == "" {
-		return fmt.Errorf(
+		return Durable, fmt.Errorf(
 			"config.Service.UpdateInMemoryThenPersist: in-memory update applied but no on-disk path set to persist it")
 	}
-	if err := WriteJSON(s.Path, next); err != nil {
-		return fmt.Errorf(
+	dur, err := writeJSONDurable(s.Path, next, s.fsOrDefault())
+	if err != nil {
+		return Durable, fmt.Errorf(
 			"config.Service.UpdateInMemoryThenPersist: in-memory update applied but writing config failed: %w", err)
 	}
-	return nil
+	return dur, nil
 }
 
 // Initialize prepares the service for use. Resolves the working directory.

@@ -13,6 +13,7 @@ import {
     type StationConfig,
     type QslFields,
 } from '../api/config';
+import { noteConfigDurability } from './durability';
 import { toasts } from '../ui/toasts.svelte';
 
 const EMPTY_QSL: QslFields = { qsl_via: '', qslmsg: '', qsl_sent_via: '' };
@@ -124,7 +125,9 @@ class StationState {
             // the response we already hold (form == the daemon's post-save
             // values), never a second fetch (review 2026-07-20 #2 / round 3 #1).
             await onSaved?.({ ...this.form });
-            toasts.info('Station settings saved.');
+            if (!noteConfigDurability(res.durabilityUnconfirmed ?? false)) {
+                toasts.info('Station settings saved.');
+            }
         } finally {
             this.saving = false;
         }

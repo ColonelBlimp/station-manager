@@ -484,7 +484,7 @@ func newTestDepsWithCfg(t *testing.T, mut func(*config.Config)) (*sqlite.Service
 	}
 	cfgSvc := config.New(cfg)
 	cfgPath := filepath.Join(tmp, "config.json")
-	if err := config.WriteJSON(cfgPath, cfg); err != nil {
+	if _, err := config.WriteJSON(cfgPath, cfg); err != nil {
 		t.Fatalf("seed config.json: %v", err)
 	}
 	cfgSvc.SetPath(cfgPath)

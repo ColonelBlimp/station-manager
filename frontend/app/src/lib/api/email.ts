@@ -24,6 +24,7 @@
         the Station section. Omitting them leaves the daemon's blocks untouched.
 */
 import { safeFetch, readJsonBody, isPlainObject } from './_helpers';
+import { isDurabilityUnconfirmed } from '../config/durability';
 
 /** The SMTP block as GET /v1/config reports it — password masked to a flag. */
 export interface SmtpEntry {
@@ -52,7 +53,9 @@ export interface SmtpPayload {
     password_clear?: boolean;
 }
 
-export type SmtpOutcome = { kind: 'ok'; smtp: SmtpEntry } | { kind: 'error'; message: string };
+export type SmtpOutcome =
+    | { kind: 'ok'; smtp: SmtpEntry; durabilityUnconfirmed?: boolean }
+    | { kind: 'error'; message: string };
 
 function toEntry(v: unknown): SmtpEntry {
     const o = isPlainObject(v) ? v : {};
@@ -93,5 +96,9 @@ export async function saveEmail(payload: SmtpPayload, signal?: AbortSignal): Pro
         return { kind: 'error', message: err?.message ?? `HTTP ${fetched.response.status}` };
     }
     if (!isPlainObject(body)) return { kind: 'error', message: 'malformed save response' };
-    return { kind: 'ok', smtp: toEntry(body.smtp) };
+    return {
+        kind: 'ok',
+        smtp: toEntry(body.smtp),
+        durabilityUnconfirmed: isDurabilityUnconfirmed(body),
+    };
 }

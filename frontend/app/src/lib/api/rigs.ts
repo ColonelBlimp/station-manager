@@ -9,6 +9,7 @@
     and the config SPA's api/rigs.ts.
 */
 import { safeFetch, readJsonBody, isShape, isPlainObject } from './_helpers';
+import { isDurabilityUnconfirmed } from '../config/durability';
 
 /** One rig-mode literal's ADIF mapping (mirrors types.ModeMapping): an ADIF MODE
  *  and an optional SUBMODE refinement. */
@@ -155,7 +156,7 @@ function catalogueById(catalogue: unknown): Record<string, RigDef> {
 }
 
 export type RigsSaveOutcome =
-    | { kind: 'ok' }
+    | { kind: 'ok'; durabilityUnconfirmed?: boolean }
     // `timedOut` marks the AMBIGUOUS write: the PUT reached the daemon and its
     // response was lost, so it MAY already have committed. The field-merge save()
     // ignores it (a retry re-applies the same field idempotently), but the
@@ -202,7 +203,7 @@ export async function saveRigs(
         const err = isPlainObject(body) ? (body as { message?: string }) : null;
         return { kind: 'error', message: err?.message ?? `HTTP ${fetched.response.status}` };
     }
-    return { kind: 'ok' };
+    return { kind: 'ok', durabilityUnconfirmed: isDurabilityUnconfirmed(body) };
 }
 
 /**
@@ -224,7 +225,7 @@ export async function setDefaultRig(id: number, signal?: AbortSignal): Promise<R
         const err = isPlainObject(body) ? (body as { message?: string }) : null;
         return { kind: 'error', message: err?.message ?? `HTTP ${fetched.response.status}` };
     }
-    return { kind: 'ok' };
+    return { kind: 'ok', durabilityUnconfirmed: isDurabilityUnconfirmed(body) };
 }
 
 export async function fetchRigs(signal?: AbortSignal): Promise<RigsOutcome> {
@@ -264,7 +265,7 @@ export async function fetchBridgeEnabled(signal?: AbortSignal): Promise<BridgeEn
 }
 
 export type BridgeEnabledSaveOutcome =
-    | { kind: 'ok' }
+    | { kind: 'ok'; durabilityUnconfirmed?: boolean }
     // `timedOut` marks the AMBIGUOUS write: the PUT reached the daemon and its
     // response was lost, so it MAY already have committed — the caller must
     // re-read rather than blindly revert the toggle (mirrors saveFt8Settings).
@@ -295,5 +296,5 @@ export async function saveBridgeEnabled(
         const err = isPlainObject(body) ? (body as { message?: string }) : null;
         return { kind: 'error', message: err?.message ?? `HTTP ${fetched.response.status}` };
     }
-    return { kind: 'ok' };
+    return { kind: 'ok', durabilityUnconfirmed: isDurabilityUnconfirmed(body) };
 }

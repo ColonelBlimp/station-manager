@@ -319,7 +319,7 @@ func TestService_Update_NestedMutationRollback(t *testing.T) {
 	svc.SetPath(t.TempDir() + "/config.json")
 
 	wantErr := stderrors.New("abort")
-	err := svc.Update(func(cfg *Config) error {
+	_, err := svc.Update(func(cfg *Config) error {
 		cfg.Forwarders = append(cfg.Forwarders, types.ForwarderConfig{Name: "leak", Type: "clublog"})
 		cfg.Forwarders[0].Enabled = false // also mutate an existing element in place
 		return wantErr
@@ -404,7 +404,7 @@ func TestService_UpdateAccessorRace(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < iterations; i++ {
-			_ = svc.Update(func(cfg *Config) error {
+			_, _ = svc.Update(func(cfg *Config) error {
 				// Reassign the very slice the reader reads.
 				cfg.Forwarders = []types.ForwarderConfig{{Name: "qrz", Type: "qrz", Enabled: i%2 == 0}}
 				return nil

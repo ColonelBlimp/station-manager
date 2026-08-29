@@ -13,6 +13,7 @@
         therefore left untouched.
 */
 import { safeFetch, readJsonBody, isPlainObject } from './_helpers';
+import { isDurabilityUnconfirmed } from '../config/durability';
 
 export interface GeneralConfig {
     /** restore_rig_on_mode_switch (*bool, default ON) — the mode-switch rig-restore knob. */
@@ -24,7 +25,7 @@ export interface GeneralConfig {
 }
 
 export type GeneralOutcome =
-    | { kind: 'ok'; config: GeneralConfig }
+    | { kind: 'ok'; config: GeneralConfig; durabilityUnconfirmed?: boolean }
     // `timedOut` marks the AMBIGUOUS write: the PUT reached the daemon and its
     // response was lost, so it MAY already have committed. The caller must re-read
     // rather than report a plain failure — a blind retry resends the whole `map`
@@ -90,7 +91,9 @@ export async function saveGeneral(
         return { kind: 'error', message: err?.message ?? `HTTP ${fetched.response.status}` };
     }
     const config = parseGeneral(resBody);
-    return config ? { kind: 'ok', config } : { kind: 'error', message: 'malformed save response' };
+    return config
+        ? { kind: 'ok', config, durabilityUnconfirmed: isDurabilityUnconfirmed(resBody) }
+        : { kind: 'error', message: 'malformed save response' };
 }
 
 // ---- About / build info (read-only, GET /v1/version) ----

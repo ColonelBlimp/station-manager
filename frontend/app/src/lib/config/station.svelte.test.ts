@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { stationState, STATION_KEYS, setStationSaved } from './station.svelte';
 import type { StationFields } from '../api/config';
+import { toasts } from '../ui/toasts.svelte';
 
 afterEach(() => {
     vi.restoreAllMocks();
@@ -313,5 +314,37 @@ describe('stationState — F-01 baseline safety', () => {
         expect(contextPushed).toBe(false);
         expect(stationState.dirty).toBe(true);
         expect(stationState.loaded).toBe(true);
+    });
+});
+
+// PT-6: a save whose PUT response carries `durability:"unconfirmed"` (the daemon
+// applied it and it is live on disk, but the parent-directory fsync failed after
+// the atomic rename, so crash-durability is not confirmed) must surface ONE
+// unambiguous outcome — the caveat toast — and SUPPRESS the ordinary "saved" one.
+// This exercises the whole chain: response body → saveStation extraction →
+// section toast decision → noteConfigDurability. Reverting either the API-layer
+// extraction or the section's suppression flips both assertions.
+describe('stationState durability caveat', () => {
+    it('surfaces the caveat and suppresses the ordinary saved toast when unconfirmed', async () => {
+        const warn = vi.spyOn(toasts, 'warn').mockImplementation(() => 0);
+        const info = vi.spyOn(toasts, 'info').mockImplementation(() => 0);
+        mockJSON(200, { ...configBody(), durability: 'unconfirmed' });
+        await stationState.load();
+        stationState.form.station_callsign = '7Q8AC';
+        await stationState.save();
+        expect(warn, 'the durability caveat is shown').toHaveBeenCalledOnce();
+        expect(String(warn.mock.calls[0][0])).toMatch(/survive a crash/i);
+        expect(info, 'the ordinary saved toast is suppressed').not.toHaveBeenCalled();
+    });
+
+    it('shows the ordinary saved toast and no caveat on a durable save', async () => {
+        const warn = vi.spyOn(toasts, 'warn').mockImplementation(() => 0);
+        const info = vi.spyOn(toasts, 'info').mockImplementation(() => 0);
+        mockJSON(200, configBody()); // no `durability` field — an ordinary durable write
+        await stationState.load();
+        stationState.form.station_callsign = '7Q8AC';
+        await stationState.save();
+        expect(info).toHaveBeenCalledWith('Station settings saved.');
+        expect(warn, 'no caveat on a durable save').not.toHaveBeenCalled();
     });
 });

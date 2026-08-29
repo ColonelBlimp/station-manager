@@ -32,7 +32,7 @@ func TestConfigPut_MaxRepeatsLiveApplyMatchesCommitted(t *testing.T) {
 
 	update := func(v int) {
 		t.Helper()
-		if err := srv.cfg.Update(func(cfg *config.Config) error {
+		if _, err := srv.cfg.Update(func(cfg *config.Config) error {
 			if cfg.Ft8.TX == nil {
 				cfg.Ft8.TX = &types.Ft8TXConfig{}
 			}

@@ -538,16 +538,23 @@ func ensureDefaultLogbook(
 		// only commits memory on success, so a failed write would leave
 		// the stale id in memory and the first QSO submit would hit the
 		// exact missing-logbook FK error this heal prevents.)
-		if uErr := cfgSvc.UpdateInMemoryThenPersist(func(c *config.Config) error {
+		dur, uErr := cfgSvc.UpdateInMemoryThenPersist(func(c *config.Config) error {
 			c.DefaultLogbookID = id
 			return nil
-		}); uErr != nil {
+		})
+		if uErr != nil {
 			logger.WarnWith().
 				Err(uErr).
 				Int64("from", cfg.DefaultLogbookID).
 				Int64("to", id).
 				Msg("startup: default_logbook_id corrected in memory but could not persist to config.json")
 			return nil
+		}
+		if dur == config.DurabilityUncertain {
+			logger.WarnWith().
+				Int64("from", cfg.DefaultLogbookID).
+				Int64("to", id).
+				Msg("startup: default_logbook_id corrected and written, but config directory fsync failed — crash durability unconfirmed")
 		}
 		logger.InfoWith().
 			Int64("from", cfg.DefaultLogbookID).
@@ -586,7 +593,11 @@ func persistResolvedConfig(cfgSvc *config.Service, userAgent string) ([]config.F
 		migrated = v < config.CurrentSchemaVersion()
 	}
 
-	changes, err := cfgSvc.UpdateIfChanged(migrated, func(c *config.Config) error {
+	// The durability outcome is discarded here: a boot schema-migration write is
+	// idempotent (re-applied next boot if a directory fsync were lost), and the
+	// operator-facing "durability unconfirmed" caveat is surfaced on the PUT (PT-6),
+	// not at startup where no operator is waiting on a response.
+	changes, _, err := cfgSvc.UpdateIfChanged(migrated, func(c *config.Config) error {
 		c.UserAgent = userAgent
 		// Scrub any legacy ClubLog application API key left in config
 		// credentials. The key is build-injected now (ADR 0054); an older config
@@ -1023,7 +1034,9 @@ func loadConfig(path string) (cfg config.Config, firstRunPath string, err error)
 // stderr is the operator's last available channel.
 func firstRunWrite(path, baseDir string) (config.Config, string, error) {
 	cfg := config.DefaultConfig(baseDir)
-	if err := config.WriteJSON(path, cfg); err != nil {
+	// First-run seed: the structured logger may not be up yet (stderr is the fallback
+	// below), and the seed is idempotent, so the durability outcome is discarded here.
+	if _, err := config.WriteJSON(path, cfg); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr,
 			"smd: could not seed default config at %s: %v (continuing with in-memory defaults)\n",
 			path, err)

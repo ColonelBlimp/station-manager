@@ -20,6 +20,7 @@
         them leaves the daemon's current blocks untouched.
 */
 import { safeFetch, readJsonBody, isPlainObject } from './_helpers';
+import { isDurabilityUnconfirmed } from '../config/durability';
 
 /** One credential input, as declared by the forwarder type in Go. */
 export interface CredentialField {
@@ -66,7 +67,8 @@ export interface ForwarderPayload {
 }
 
 export type ForwardersOutcome =
-    { kind: 'ok'; forwarders: ForwarderEntry[] } | { kind: 'error'; message: string };
+    | { kind: 'ok'; forwarders: ForwarderEntry[]; durabilityUnconfirmed?: boolean }
+    | { kind: 'error'; message: string };
 
 export type TypesOutcome =
     { kind: 'ok'; types: ForwarderType[] } | { kind: 'error'; message: string };
@@ -151,5 +153,9 @@ export async function saveForwarders(
         const err = isPlainObject(body) ? (body as { message?: string }) : null;
         return { kind: 'error', message: err?.message ?? `HTTP ${fetched.response.status}` };
     }
-    return { kind: 'ok', forwarders: parseForwarders(body) };
+    return {
+        kind: 'ok',
+        forwarders: parseForwarders(body),
+        durabilityUnconfirmed: isDurabilityUnconfirmed(body),
+    };
 }

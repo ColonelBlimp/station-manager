@@ -138,11 +138,12 @@ func TestSubmit_DefaultsOperatorFromRoster(t *testing.T) {
 
 	// Config.Update persists, so give the service an on-disk path (temp).
 	s.Config.SetPath(t.TempDir() + "/config.json")
-	require.NoError(t, s.Config.Update(func(c *config.Config) error {
+	_, err := s.Config.Update(func(c *config.Config) error {
 		c.Operators = []types.Operator{{Callsign: "G0XYZ", Name: "Marc"}}
 		c.DefaultOperator = "G0XYZ"
 		return nil
-	}))
+	})
+	require.NoError(t, err)
 
 	base := adif.Record{
 		ContactedStation: types.ContactedStation{Call: "K1ABC"},

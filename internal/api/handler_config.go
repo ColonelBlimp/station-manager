@@ -198,7 +198,18 @@ type ConfigResponse struct {
 	// (resolved — true when unset, so consumers get a definite bool); presence-aware
 	// on PUT (omit → untouched).
 	RestoreRigOnModeSwitch *bool `json:"restore_rig_on_mode_switch,omitempty"`
+	// Durability is a SAVE-OUTCOME caveat, set only on a PUT whose write applied but
+	// whose directory fsync failed: "unconfirmed" means the new config is live on disk
+	// (in-memory matches it) but its survival across a crash is not guaranteed (PT-6).
+	// Omitted on every ordinary success and on GET, so it is a backward-compatible
+	// optional field — the SPA distinguishes "applied, durability unconfirmed" from
+	// plain saved success by its presence.
+	Durability string `json:"durability,omitempty"`
 }
+
+// durabilityUnconfirmed is the ConfigResponse.Durability value for an applied write
+// whose crash durability could not be confirmed (PT-6).
+const durabilityUnconfirmed = "unconfirmed"
 
 // LookupProviderInfo is the config SPA's view of one enrichment provider
 // (hamnut or a chain entry). Asymmetric like ForwarderInfo to keep the password
@@ -762,7 +773,7 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	// the overlay so they are logged AFTER the commit — outside the config lock, and
 	// only when the write actually persisted (A11). Same discipline as forwarderCause.
 	var credWarnings []credDecodeWarning
-	if err := s.cfg.Update(func(cfg *config.Config) error {
+	dur, err := s.cfg.Update(func(cfg *config.Config) error {
 		before = cfg.Clone()
 		credWarnings = overlayConfig(cfg, &req)
 		config.Normalize(cfg)
@@ -813,7 +824,8 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		// LAST, after every mutation above — this is the committed shape.
 		after = cfg.Clone()
 		return nil
-	}); err != nil {
+	})
+	if err != nil {
 		if stderr.Is(err, errPutValidation) {
 			if forwarderCause != nil {
 				s.logger.WarnWith().Err(forwarderCause).Str("code", blocking.Code).
@@ -832,6 +844,9 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	// would leave exactly that case — the one where the operator is most
 	// likely to be misled — with no record at all.
 	s.logConfigSave(before, after, setupCompleted)
+	// Same A8 discipline: log an applied-but-unconfirmed write here, before the
+	// fallible buildConfigResponse, so a 500 can't lose the durability record.
+	s.logDurabilityCaveat(dur)
 
 	// Undecodable stored credentials were PRESERVED (not dropped) by the merge; warn
 	// so the corruption in config.json is visible and the operator knows their edits to
@@ -860,7 +875,35 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// If the save applied but its directory fsync failed, mark the response caveat
+	// (PT-6). The paired log was emitted above, before the fallible response build.
+	s.markDurabilityCaveat(&resp, dur)
+
 	s.writeJSON(w, http.StatusOK, resp)
+}
+
+// logDurabilityCaveat warns when a config save's atomic rename succeeded but the
+// parent-directory fsync then failed (PT-6): the change is live on disk AND in memory
+// — only its survival across a crash is unconfirmed, so it is a 200 with a caveat, not
+// a failure. Split from markDurabilityCaveat so this log lands right after the commit,
+// before the fallible response build, and is never lost to a response-build 500. Silent
+// on a durable write.
+func (s *Server) logDurabilityCaveat(dur config.Durability) {
+	if dur != config.DurabilityUncertain {
+		return
+	}
+	s.logger.WarnWith().
+		Msg("config saved but directory fsync failed; change is applied and live on disk, crash durability is unconfirmed")
+}
+
+// markDurabilityCaveat sets the response's "applied, durability unconfirmed" field
+// (PT-6). The paired warning is logged separately by logDurabilityCaveat, right
+// after the commit, so the durability risk is recorded even if response
+// construction fails. Silent on a durable write.
+func (s *Server) markDurabilityCaveat(resp *ConfigResponse, dur config.Durability) {
+	if dur == config.DurabilityUncertain {
+		resp.Durability = durabilityUnconfirmed
+	}
 }
 
 // logConfigSave records a committed config change (SHIP GATE (a)). Silent when

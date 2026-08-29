@@ -33,6 +33,7 @@ import {
     type Ft8Settings,
     type Ft8DisplayEntry,
 } from '../api/ft8-config';
+import { noteConfigDurability } from './durability';
 import { toasts } from '../ui/toasts.svelte';
 
 /** The Band Activity display prefs as the live FT8 view consumes them. */
@@ -212,11 +213,13 @@ class Ft8SettingsState {
             // applying a refused value would show the operator a live view that
             // disagrees with both their form and the daemon.
             onPrefsSaved?.(livePrefs(res.settings.display));
-            toasts.info(
-                needsRestart
-                    ? 'FT8 settings saved — restart the daemon to apply them.'
-                    : 'FT8 settings saved.'
-            );
+            if (!noteConfigDurability(res.durabilityUnconfirmed ?? false)) {
+                toasts.info(
+                    needsRestart
+                        ? 'FT8 settings saved — restart the daemon to apply them.'
+                        : 'FT8 settings saved.'
+                );
+            }
         } finally {
             this.saving = false;
         }

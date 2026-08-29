@@ -42,7 +42,7 @@ func setupImportTestbed(t *testing.T, mut func(*config.Config)) string {
 	}
 
 	cfgPath := filepath.Join(tmp, "config.json")
-	if err := config.WriteJSON(cfgPath, cfg); err != nil {
+	if _, err := config.WriteJSON(cfgPath, cfg); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 

@@ -13,6 +13,7 @@ import {
     type GeneralConfig,
     type BuildInfo,
 } from '../api/general';
+import { noteConfigDurability } from './durability';
 import { toasts } from '../ui/toasts.svelte';
 
 interface GeneralForm {
@@ -145,7 +146,9 @@ class GeneralState {
             // form: an edit made while the PUT was in flight is unsaved work, not a
             // value to overwrite with what we just sent (clean-room review 16cb3ea3 P1).
             this.#rebaseline(res.config);
-            toasts.info('General settings saved.');
+            if (!noteConfigDurability(res.durabilityUnconfirmed ?? false)) {
+                toasts.info('General settings saved.');
+            }
         } finally {
             this.saving = false;
         }

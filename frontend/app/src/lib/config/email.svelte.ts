@@ -25,6 +25,7 @@
     clear-wins rule for foreign clients, but ours must never need it).
 */
 import { fetchEmail, saveEmail, type SmtpEntry, type SmtpPayload } from '../api/email';
+import { noteConfigDurability } from './durability';
 import { toasts } from '../ui/toasts.svelte';
 
 /** The form's view of the SMTP block, plus the two transient intents. */
@@ -144,7 +145,9 @@ class EmailState {
                 return;
             }
             this.#apply(res.smtp);
-            toasts.info('Email settings saved. Restart the daemon to apply.');
+            if (!noteConfigDurability(res.durabilityUnconfirmed ?? false)) {
+                toasts.info('Email settings saved. Restart the daemon to apply.');
+            }
         } finally {
             this.saving = false;
         }

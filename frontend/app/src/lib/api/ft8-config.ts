@@ -27,6 +27,7 @@
         section, and which the standalone config SPA still carries.
 */
 import { safeFetch, readJsonBody, isPlainObject } from './_helpers';
+import { isDurabilityUnconfirmed } from '../config/durability';
 
 /** Band Activity display prefs, as GET reports them (resolved). */
 export interface Ft8DisplayEntry {
@@ -63,7 +64,7 @@ export interface Ft8Settings {
 }
 
 export type Ft8SettingsOutcome =
-    | { kind: 'ok'; settings: Ft8Settings }
+    | { kind: 'ok'; settings: Ft8Settings; durabilityUnconfirmed?: boolean }
     /** `timedOut` marks the AMBIGUOUS write: the PUT reached the daemon and the
      *  response never came, so it may already have committed. Callers must not
      *  report that as a failure — see the reconcile in ft8.svelte.ts. */
@@ -153,5 +154,9 @@ export async function saveFt8Settings(
         return { kind: 'error', message: err?.message ?? `HTTP ${fetched.response.status}` };
     }
     if (!isPlainObject(body)) return { kind: 'error', message: 'malformed save response' };
-    return { kind: 'ok', settings: toSettings(body) };
+    return {
+        kind: 'ok',
+        settings: toSettings(body),
+        durabilityUnconfirmed: isDurabilityUnconfirmed(body),
+    };
 }

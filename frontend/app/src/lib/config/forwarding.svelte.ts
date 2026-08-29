@@ -15,6 +15,7 @@ import {
     type ForwarderPayload,
     type ForwarderType,
 } from '../api/forwarders';
+import { noteConfigDurability } from './durability';
 import { toasts } from '../ui/toasts.svelte';
 
 /** One destination as the form holds it: the masked entry plus local edits. */
@@ -127,7 +128,9 @@ class ForwardingState {
                 return;
             }
             this.#apply(res.forwarders);
-            toasts.info('Forwarding settings saved. Restart the daemon to apply.');
+            if (!noteConfigDurability(res.durabilityUnconfirmed ?? false)) {
+                toasts.info('Forwarding settings saved. Restart the daemon to apply.');
+            }
         } finally {
             this.saving = false;
         }

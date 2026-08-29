@@ -105,7 +105,7 @@ func identityTestServer(t *testing.T, callsign string) (*Server, *bytes.Buffer) 
 	srv := testServerWithLogger(t, nil, nil, logging.NewForWriter(buf))
 	srv.ft8 = ft8.NewService(types.Ft8Config{Enabled: true}, &logging.Service{}, "")
 	if callsign != "" {
-		if err := srv.cfg.Update(func(c *config.Config) error {
+		if _, err := srv.cfg.Update(func(c *config.Config) error {
 			c.LoggingStation.StationCallsign = callsign
 			return nil
 		}); err != nil {

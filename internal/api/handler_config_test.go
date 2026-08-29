@@ -1654,7 +1654,7 @@ func TestHandlePutConfig_ForwarderlessPutSkipsStartupCheck(t *testing.T) {
 
 	// Seed a valid enabled forwarder, then make the STORED entry unstartable the
 	// way a hand-edited config.json would (bypassing the PUT path entirely).
-	if err := srv.cfg.Update(func(cfg *config.Config) error {
+	if _, err := srv.cfg.Update(func(cfg *config.Config) error {
 		cfg.Forwarders = []types.ForwarderConfig{{
 			Name: "cl", Type: "clublog", Enabled: true,
 			ActionFilter: []string{"insert"},

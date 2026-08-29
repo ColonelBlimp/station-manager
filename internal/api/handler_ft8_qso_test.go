@@ -24,7 +24,7 @@ func ft8QsoTestServer(t *testing.T, callsign string) *Server {
 	srv := testServer(t)
 	srv.ft8 = ft8.NewService(types.Ft8Config{Enabled: true}, &logging.Service{}, "")
 	if callsign != "" {
-		if err := srv.cfg.Update(func(c *config.Config) error {
+		if _, err := srv.cfg.Update(func(c *config.Config) error {
 			c.LoggingStation.StationCallsign = callsign
 			return nil
 		}); err != nil {
@@ -52,7 +52,7 @@ func TestCurrentStationCallsign_FromCurrentLogbook(t *testing.T) {
 	ctx := context.Background()
 
 	// No logbook at the default id yet → falls back to the config callsign.
-	if err := srv.cfg.Update(func(c *config.Config) error {
+	if _, err := srv.cfg.Update(func(c *config.Config) error {
 		c.LoggingStation.StationCallsign = "7Q5MLV"
 		return nil
 	}); err != nil {

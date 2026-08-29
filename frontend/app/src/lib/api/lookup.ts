@@ -28,6 +28,7 @@
       - NOTHING but `lookup` is sent.
 */
 import { safeFetch, readJsonBody, isPlainObject } from './_helpers';
+import { isDurabilityUnconfirmed } from '../config/durability';
 
 /** Canonical provider names the daemon stamps (internal/types/lookup.go). */
 export const HAMNUT_PROVIDER = 'hamnutlookupservice';
@@ -150,7 +151,8 @@ export async function fetchLookupTypes(signal?: AbortSignal): Promise<LookupType
 }
 
 export type LookupOutcome =
-    { kind: 'ok'; lookup: LookupEntry } | { kind: 'error'; message: string };
+    | { kind: 'ok'; lookup: LookupEntry; durabilityUnconfirmed?: boolean }
+    | { kind: 'error'; message: string };
 
 function toProvider(v: unknown, fallbackPriority = 0): LookupProvider {
     const o = isPlainObject(v) ? v : {};
@@ -221,5 +223,9 @@ export async function saveLookup(
         return { kind: 'error', message: err?.message ?? `HTTP ${fetched.response.status}` };
     }
     if (!isPlainObject(body)) return { kind: 'error', message: 'malformed save response' };
-    return { kind: 'ok', lookup: toEntry(body.lookup) };
+    return {
+        kind: 'ok',
+        lookup: toEntry(body.lookup),
+        durabilityUnconfirmed: isDurabilityUnconfirmed(body),
+    };
 }

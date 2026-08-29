@@ -17,6 +17,7 @@
         current operational block untouched.
 */
 import { safeFetch, readJsonBody, isPlainObject } from './_helpers';
+import { isDurabilityUnconfirmed } from '../config/durability';
 
 // Every logging_station value is a string (ADIF MY_* fields), so a string map
 // both types the known fields and preserves any the form doesn't render.
@@ -41,7 +42,8 @@ export interface StationConfig {
 }
 
 export type StationOutcome =
-    { kind: 'ok'; config: StationConfig } | { kind: 'error'; message: string };
+    | { kind: 'ok'; config: StationConfig; durabilityUnconfirmed?: boolean }
+    | { kind: 'error'; message: string };
 
 // strictStationFields decodes the REQUIRED logging_station block, returning null
 // (a rejection) rather than a silently-empty map when the read is semantically
@@ -115,5 +117,7 @@ export async function saveStation(
     // Re-apply the daemon's authoritative post-save view: it re-derives my_lat/
     // my_lon from the grid square, so the form should reflect what was stored.
     const config = parseConfig(body);
-    return config ? { kind: 'ok', config } : { kind: 'error', message: 'malformed save response' };
+    return config
+        ? { kind: 'ok', config, durabilityUnconfirmed: isDurabilityUnconfirmed(body) }
+        : { kind: 'error', message: 'malformed save response' };
 }

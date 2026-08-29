@@ -31,6 +31,7 @@ import {
     type LookupProvider,
     type LookupProviderPayload,
 } from '../api/lookup';
+import { noteConfigDurability } from './durability';
 import { toasts } from '../ui/toasts.svelte';
 
 /*
@@ -226,7 +227,9 @@ class EnrichmentState {
                 return;
             }
             this.#apply(res.lookup);
-            toasts.info('Enrichment settings saved. Restart the daemon to apply.');
+            if (!noteConfigDurability(res.durabilityUnconfirmed ?? false)) {
+                toasts.info('Enrichment settings saved. Restart the daemon to apply.');
+            }
         } finally {
             this.saving = false;
         }

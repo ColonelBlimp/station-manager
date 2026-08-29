@@ -43,7 +43,7 @@ func startupConfigService(t *testing.T, mutate func(c *config.Config)) *config.S
 		mutate(&cfg)
 	}
 	path := filepath.Join(dir, "config.json")
-	if err := config.WriteJSON(path, cfg); err != nil {
+	if _, err := config.WriteJSON(path, cfg); err != nil {
 		t.Fatalf("fixture: seeding config.json must succeed: %v", err)
 	}
 	svc := config.New(cfg)

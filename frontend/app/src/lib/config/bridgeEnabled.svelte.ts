@@ -11,6 +11,7 @@
     daemon's message is shown.
 */
 import { fetchBridgeEnabled, saveBridgeEnabled } from '../api/rigs';
+import { noteConfigDurability } from './durability';
 import { toasts } from '../ui/toasts.svelte';
 
 class BridgeEnabledState {
@@ -68,7 +69,9 @@ class BridgeEnabledState {
         }
         this.saving = false;
         this.restartPending = true;
-        toasts.info(`CAT ${next ? 'enabled' : 'disabled'} — restart the daemon to apply.`);
+        if (!noteConfigDurability(res.durabilityUnconfirmed ?? false)) {
+            toasts.info(`CAT ${next ? 'enabled' : 'disabled'} — restart the daemon to apply.`);
+        }
     }
 
     // Settle a toggle whose PUT timed out: re-read the daemon's authoritative value

@@ -348,7 +348,7 @@ func TestWriteJSON_RoundTrip(t *testing.T) {
 	path := filepath.Join(dir, "config.json")
 
 	original := DefaultConfig(dir)
-	if err := WriteJSON(path, original); err != nil {
+	if _, err := WriteJSON(path, original); err != nil {
 		t.Fatalf("WriteJSON: %v", err)
 	}
 
@@ -375,7 +375,7 @@ func TestWriteJSON_AtomicViaTempFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
 
-	if err := WriteJSON(path, DefaultConfig(dir)); err != nil {
+	if _, err := WriteJSON(path, DefaultConfig(dir)); err != nil {
 		t.Fatalf("WriteJSON: %v", err)
 	}
 
@@ -428,7 +428,7 @@ func TestWriteJSON_FileMode(t *testing.T) {
 
 	t.Run("fresh write is 0600", func(t *testing.T) {
 		path := filepath.Join(dir, "fresh.json")
-		if err := WriteJSON(path, DefaultConfig(dir)); err != nil {
+		if _, err := WriteJSON(path, DefaultConfig(dir)); err != nil {
 			t.Fatalf("WriteJSON: %v", err)
 		}
 		fi, err := os.Stat(path)
@@ -445,7 +445,7 @@ func TestWriteJSON_FileMode(t *testing.T) {
 		if err := os.WriteFile(path, []byte("{}"), 0o644); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
-		if err := WriteJSON(path, DefaultConfig(dir)); err != nil {
+		if _, err := WriteJSON(path, DefaultConfig(dir)); err != nil {
 			t.Fatalf("WriteJSON: %v", err)
 		}
 		fi, _ := os.Stat(path)
@@ -459,7 +459,7 @@ func TestWriteJSON_FileMode(t *testing.T) {
 		if err := os.WriteFile(path, []byte("{}"), 0o400); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
-		if err := WriteJSON(path, DefaultConfig(dir)); err != nil {
+		if _, err := WriteJSON(path, DefaultConfig(dir)); err != nil {
 			t.Fatalf("WriteJSON: %v", err)
 		}
 		fi, _ := os.Stat(path)
@@ -472,7 +472,7 @@ func TestWriteJSON_FileMode(t *testing.T) {
 func TestWriteJSON_FailsOnBadParentDir(t *testing.T) {
 	// Parent directory doesn't exist — temp-file write must fail and
 	// surface the error rather than silently succeeding.
-	err := WriteJSON("/nonexistent/dir/config.json", DefaultConfig("/nonexistent/dir"))
+	_, err := WriteJSON("/nonexistent/dir/config.json", DefaultConfig("/nonexistent/dir"))
 	if err == nil {
 		t.Fatal("WriteJSON expected error for nonexistent parent dir, got nil")
 	}
@@ -1010,7 +1010,7 @@ func TestLoad_MigratesLegacyBridge(t *testing.T) {
 	base.Bridge.Cat = &types.BridgeCatConfig{Driver: "yaesu-ftdx10"}
 	base.Bridge.Serial = &types.BridgeSerialConfig{Port: "/dev/ttyUSB0"}
 	base.Ft8.Device = "codec-a"
-	if err := WriteJSON(path, base); err != nil {
+	if _, err := WriteJSON(path, base); err != nil {
 		t.Fatal(err)
 	}
 	got, err := Load(path)
@@ -1040,14 +1040,14 @@ func TestLoad_RigCatalogueRoundTrip(t *testing.T) {
 		{ID: 2, Model: "yaesu-ft710", Port: "/dev/ttyUSB2", Audio: types.RigAudioConfig{RX: "codec-b-in", TX: "codec-b-out"}},
 	}
 	base.DefaultRigID = 2
-	if err := WriteJSON(p1, base); err != nil {
+	if _, err := WriteJSON(p1, base); err != nil {
 		t.Fatal(err)
 	}
 	c1, err := Load(p1)
 	if err != nil {
 		t.Fatalf("Load p1: %v", err)
 	}
-	if err := WriteJSON(p2, c1); err != nil {
+	if _, err := WriteJSON(p2, c1); err != nil {
 		t.Fatal(err)
 	}
 	c2, err := Load(p2)

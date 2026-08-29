@@ -10,6 +10,7 @@
 */
 
 import { isPlainObject, readJsonBody, safeFetch, WRITE_TIMEOUT_MS } from './_helpers';
+import { isDurabilityUnconfirmed, noteConfigDurability } from '../config/durability';
 
 export type SetupOutcome = { kind: 'ok' } | { kind: 'error'; message: string };
 
@@ -40,5 +41,10 @@ export async function completeSetup(callsign: string): Promise<SetupOutcome> {
                 : `Daemon error (${fetched.response.status}).`;
         return { kind: 'error', message };
     }
+    // Setup is APPLIED, not failed, even when the daemon couldn't confirm the write
+    // survives a crash (PT-6) — and setup_complete especially matters across a reboot.
+    // Surface the same caveat (there is no success toast here to suppress) and let the
+    // caller continue the completion flow.
+    noteConfigDurability(isDurabilityUnconfirmed(await readJsonBody(fetched.response)));
     return { kind: 'ok' };
 }

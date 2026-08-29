@@ -32,6 +32,7 @@
     loss, since the PUT omits default_rig_id.
 */
 import { fetchRigs, saveRigs, setDefaultRig, type RigConfig, type RigDef } from '../api/rigs';
+import { noteConfigDurability } from './durability';
 import { fetchHardware, type SerialPort, type AudioDevice } from '../api/hardware';
 import { toasts } from '../ui/toasts.svelte';
 
@@ -82,6 +83,16 @@ function restartRelevant(rig: RigConfig): string {
     const rest: Record<string, unknown> = { ...rig };
     delete rest.my_rig;
     return JSON.stringify(rest);
+}
+
+// Announce one successful rig-config save: on a durability-unconfirmed write the
+// caveat replaces the ordinary toast, so the operator sees a single outcome
+// (PT-6). Centralised because every rig-save site shares this decision, and it
+// keeps the branch out of the already-heavy save().
+function announceRigSaved(outcome: { durabilityUnconfirmed?: boolean }, message: string): void {
+    if (!noteConfigDurability(outcome.durabilityUnconfirmed ?? false)) {
+        toasts.info(message);
+    }
 }
 
 class RigsState {
@@ -410,7 +421,8 @@ class RigsState {
         this.#applyFetched({ ...fresh.data, rigs: next });
         this.baselines[id] = cloneRig(patched);
         this.drafts[id] = cloneRig(patched);
-        toasts.info(
+        announceRigSaved(
+            outcome,
             restartNeeded
                 ? 'Rig saved — restart the daemon to apply.'
                 : // MY_RIG is resolved live per QSO, so no restart instruction here.
@@ -435,7 +447,7 @@ class RigsState {
             return;
         }
         this.defaultRigId = id;
-        toasts.info('Default rig set — restart to connect to it.');
+        announceRigSaved(outcome, 'Default rig set — restart to connect to it.');
     }
 
     // Add a rig — an IMMEDIATE structural write (operator ruling 2026-08-19: the
@@ -491,7 +503,7 @@ class RigsState {
         });
         this.selectedId = id; // focus the new rig so the operator can configure it
         this.#ensureDraft();
-        toasts.info('Rig added — set its connection, then Save.');
+        announceRigSaved(outcome, 'Rig added — set its connection, then Save.');
     }
 
     // Settle an add whose PUT timed out by re-reading the rig list. If our rig (the
@@ -592,7 +604,7 @@ class RigsState {
             defaultRigId: nextDefault ?? fresh.data.defaultRigId,
             catalogue: fresh.data.catalogue,
         });
-        toasts.info('Rig deleted.');
+        announceRigSaved(outcome, 'Rig deleted.');
     }
 
     // Apply a fetched rigs payload, reconcile the selection against the list, and
