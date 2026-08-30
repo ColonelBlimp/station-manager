@@ -1,5 +1,9 @@
 # v2 design — release acceptance
 
+> **Historical record:** this 2026-05 draft names retired product surfaces and is no longer the
+> executable release gate. The current mandatory user-driven gate is
+> [`../dogfood-acceptance.md`](../dogfood-acceptance.md). Preserve this file as design history.
+
 **Status:** initial draft 2026-05-16; per-commit CI gate added same day. Scopes both:
 
 1. The **release-tag cadence** — "is `vX.Y.Z` ready to cut?" gate (this document's original scope).

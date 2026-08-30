@@ -65,6 +65,15 @@
       "summary": "Canonical config.json shape, defaults, validation, migration, and persistence rules."
     },
     {
+      "id": "reference.dogfood-acceptance",
+      "path": "docs/dogfood-acceptance.md",
+      "class": "canonical",
+      "audiences": ["operator", "contributor", "agent"],
+      "topics": ["dogfood-acceptance", "release-acceptance"],
+      "scopes": ["repository"],
+      "summary": "Mandatory user-driven gate for clean-install, upgrade, all operator-facing behavior, recovery, and separately approved hardware/RF acceptance."
+    },
+    {
       "id": "reference.ft8",
       "path": "docs/ft8.md",
       "class": "canonical",
