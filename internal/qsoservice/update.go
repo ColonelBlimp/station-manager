@@ -356,6 +356,13 @@ func (s *Service) resolveNoOp(ctx context.Context, op errors.Op, merged, existin
 			Message: "the QSO changed while this edit was in flight — reload it and re-apply the edit",
 		}
 	}
+	// Accepted residual window (codex ded00ab1 P2): a concurrent edit or delete can
+	// commit between the revision read above and this return, leaving the returned
+	// snapshot momentarily stale. It is benign — the no-op performs NO write, so it can
+	// neither overwrite nor lose that concurrent change (no data loss), and any ordinary
+	// post-commit response is stale-able the same way, reconciled by the next fetch/SSE.
+	// A guard transaction would add locking without strengthening the operator-visible
+	// zero-side-effect outcome, and the approved AC keeps the no-op transaction-free.
 	return existing, true, nil
 }
 
