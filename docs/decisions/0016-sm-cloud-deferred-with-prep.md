@@ -13,6 +13,18 @@ date: 2026-05-06
 > the full multi-tenant SaaS is now *sequenced* (single-tenant first), not
 > indefinitely deferred.
 
+> **Update 2026-08-30:** AW-1's `v2.0.0-alpha.2` compatibility phase completed
+> the UUID identity boundary. `qso.*` and `forward.*` events now carry
+> `qso_uuid`; public QSO responses use an explicit projection; SM Cloud payloads
+> omit daemon-local QSO and logbook ids; and the SPA requires and keys QSO rows
+> on `uuid`. The deprecated numeric QSO identity fields remain on the public
+> daemon wire for alpha.2 only and are scheduled for removal in
+> `v2.0.0-alpha.3` by the bounded checklist in
+> [`W-0008`](../work/W-0008-harden-audited-contract-boundaries.md). This does
+> not remove the SQLite QSO primary key, numeric `logbook_id`, or the upload
+> queue row's own `id`. Add another dated update here when the alpha.3 removal
+> lands.
+
 ## Context
 
 The operator surfaced a future shape they have always had in mind: an **SM
@@ -104,7 +116,7 @@ production. External surface: every QSO API path (`GET/PATCH/DELETE
 as `APP_SM_QSO_ID` on every record (omit-when-empty). The internal int
 PK stays as a storage detail; the submit response carries a transitional
 `id` field for one release alongside the `uuid` field, then disappears.
-Known wire-shape gap: `internal/events` SSE payloads still carry only int
+Known wire-shape gap at that date: `internal/events` SSE payloads carried only int
 `qso_id` because no live consumer yet exists; they grow `qso_uuid` when
 the SPA wires up event consumption.
 
