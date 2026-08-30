@@ -12,7 +12,7 @@ import (
 // the explicit operator gate before any FT8 RF — nothing transmits while
 // disarmed. Idempotent.
 type ft8TxArmRequest struct {
-	Armed bool `json:"armed"`
+	Armed *bool `json:"armed"`
 }
 
 // ft8TxSendRequest is the POST /v1/ft8/tx/send body: the standard FT8 message
@@ -31,10 +31,14 @@ func (s *Server) handleFt8TxArm(w http.ResponseWriter, r *http.Request) {
 	const op errors.Op = "api.handleFt8TxArm"
 
 	var req ft8TxArmRequest
-	if !s.readJSONBody(w, r, op, &req) {
+	if !s.readCommandJSON(w, r, op, &req) {
 		return
 	}
-	if err := s.ft8.ArmTx(req.Armed); err != nil {
+	if req.Armed == nil {
+		s.writeError(w, http.StatusBadRequest, "missing_required_field", "armed is required", op)
+		return
+	}
+	if err := s.ft8.ArmTx(*req.Armed); err != nil {
 		s.writeFt8TxError(w, op, err)
 		return
 	}

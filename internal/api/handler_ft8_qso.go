@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	stderr "errors"
 	"fmt"
 	"math"
@@ -139,10 +140,14 @@ type ft8QsoStartRequest struct {
 	// that decides how the run this start leaves behind treats callers (auto
 	// modes arm a hands-off run; operator_pick leaves a listing run that
 	// transmits at nobody until the operator chooses). Empty = the config
-	// default; junk is a 400. The retired auto_work intent field (ADR 0065)
-	// is an ignored unknown key if an old client still sends it — lenient
-	// decode, the same tolerance the legacy config key gets.
+	// default; junk is a 400. The retired auto_work intent field (ADR 0065) is the
+	// ONE legacy key still tolerated: it is declared as AutoWork below so the strict
+	// decoder accepts it while rejecting every OTHER unknown key (AW-2).
 	AnswerMode string `json:"answer_mode,omitempty"`
+	// AutoWork is the retired ADR 0065 intent field, captured into an ignored value
+	// so an old client that still sends it is accepted; the strict decoder rejects any
+	// other unknown key. Deliberately unread.
+	AutoWork json.RawMessage `json:"auto_work,omitempty"`
 }
 
 // handleFt8QsoStart begins a manual answer-a-CQ exchange (ADR 0031, step e3).
@@ -165,7 +170,7 @@ func (s *Server) handleFt8QsoStart(w http.ResponseWriter, r *http.Request) {
 	const op errors.Op = "api.handleFt8QsoStart"
 
 	var req ft8QsoStartRequest
-	if !s.readJSONBody(w, r, op, &req) {
+	if !s.readCommandJSON(w, r, op, &req) {
 		return
 	}
 	if strings.TrimSpace(req.TheirCall) == "" {
@@ -421,10 +426,14 @@ type ft8QsoWorkRequest struct {
 	// that decides how the run this start leaves behind treats callers (auto
 	// modes arm a hands-off run; operator_pick leaves a listing run that
 	// transmits at nobody until the operator chooses). Empty = the config
-	// default; junk is a 400. The retired auto_work intent field (ADR 0065)
-	// is an ignored unknown key if an old client still sends it — lenient
-	// decode, the same tolerance the legacy config key gets.
+	// default; junk is a 400. The retired auto_work intent field (ADR 0065) is the
+	// ONE legacy key still tolerated: it is declared as AutoWork below so the strict
+	// decoder accepts it while rejecting every OTHER unknown key (AW-2).
 	AnswerMode string `json:"answer_mode,omitempty"`
+	// AutoWork is the retired ADR 0065 intent field, captured into an ignored value
+	// so an old client that still sends it is accepted; the strict decoder rejects any
+	// other unknown key. Deliberately unread.
+	AutoWork json.RawMessage `json:"auto_work,omitempty"`
 }
 
 // handleFt8QsoWork begins working a station that is calling us (ADR 0033). The operator
@@ -435,7 +444,7 @@ func (s *Server) handleFt8QsoWork(w http.ResponseWriter, r *http.Request) {
 	const op errors.Op = "api.handleFt8QsoWork"
 
 	var req ft8QsoWorkRequest
-	if !s.readJSONBody(w, r, op, &req) {
+	if !s.readCommandJSON(w, r, op, &req) {
 		return
 	}
 	if strings.TrimSpace(req.TheirCall) == "" {
@@ -539,12 +548,16 @@ func (s *Server) handleFt8QsoPath(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleFt8QsoSkip(w http.ResponseWriter, r *http.Request) {
 	const op errors.Op = "api.handleFt8QsoSkip"
 	var req struct {
-		Armed bool `json:"armed"`
+		Armed *bool `json:"armed"`
 	}
-	if !s.readJSONBody(w, r, op, &req) {
-		return // readJSONBody already wrote the error envelope
+	if !s.readCommandJSON(w, r, op, &req) {
+		return // readCommandJSON already wrote the error envelope
 	}
-	if err := s.ft8.SetQsoSkip(req.Armed); err != nil {
+	if req.Armed == nil {
+		s.writeError(w, http.StatusBadRequest, "missing_required_field", "armed is required", op)
+		return
+	}
+	if err := s.ft8.SetQsoSkip(*req.Armed); err != nil {
 		s.writeFt8QsoError(w, op, err)
 		return
 	}

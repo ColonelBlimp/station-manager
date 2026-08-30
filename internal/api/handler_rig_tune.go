@@ -13,7 +13,7 @@ import (
 // pre-tune mode + power. Both are idempotent — a redundant start while tuning,
 // or a stop while idle, is a no-op.
 type rigTuneRequest struct {
-	Active bool `json:"active"`
+	Active *bool `json:"active"`
 }
 
 // handleRigTune drives the daemon-owned tune controller (ADR 0027) — the first
@@ -25,12 +25,16 @@ func (s *Server) handleRigTune(w http.ResponseWriter, r *http.Request) {
 	const op errors.Op = "api.handleRigTune"
 
 	var req rigTuneRequest
-	if !s.readJSONBody(w, r, op, &req) {
+	if !s.readCommandJSON(w, r, op, &req) {
+		return
+	}
+	if req.Active == nil {
+		s.writeError(w, http.StatusBadRequest, "missing_required_field", "active is required", op)
 		return
 	}
 
 	var err error
-	if req.Active {
+	if *req.Active {
 		err = s.bridge.StartTune(r.Context())
 	} else {
 		err = s.bridge.StopTune(r.Context())
