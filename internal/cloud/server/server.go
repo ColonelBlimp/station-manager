@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/cloud/reconcile"
@@ -22,6 +23,15 @@ import (
 // ~1 MB; 32 MB comfortably covers a full-logbook first backup pushed in big
 // batches while still bounding a hostile body.
 const maxBodyBytes = 32 << 20
+
+// maxQsoBatchRows caps one PUT /v1/qsos envelope's row count (AW-6). The shipped daemon
+// forwarder sends one QSO per request; a restore/backfill client sends far fewer than
+// this. The byte cap alone is not enough: a minimally shaped accepted row (little more
+// than a UUID and modified_at) lets the 32 MiB body carry hundreds of thousands of rows,
+// each a prepared-statement execution inside one transaction, which can pin every DB
+// connection. This bounds the per-request work independently of the byte size. Mirrors
+// maxEvidenceBatchRows.
+const maxQsoBatchRows = 1000
 
 // Server is the SM Cloud HTTP API over the Postgres store. Construct with New,
 // mount via Handler.
@@ -159,6 +169,110 @@ func (s *Server) rejectBody(w http.ResponseWriter, err error) bool {
 	return false
 }
 
+// invalidBody writes the generic 400 for a body that is well-formed JSON but not the
+// shape this endpoint expects (a non-object, a non-array qsos, trailing content).
+func (s *Server) invalidBody(w http.ResponseWriter) bool {
+	s.writeError(w, http.StatusBadRequest, "invalid_body", "request body must be a single valid JSON document")
+	return false
+}
+
+// decodePutQsos streams the PUT /v1/qsos body so the batch row cap is enforced DURING
+// decode: a minimal-object flood within the byte cap must not decode into a giant slice
+// before a length check can run (AW-6). It reproduces decodeSingleJSON's classification
+// (413 body_too_large on the transport cap, a generic logged-not-leaked 400 invalid_body
+// otherwise, exactly one document) and stops at the (maxQsoBatchRows+1)th qso element with
+// batch_too_large. Returns false (having written the error) on any failure.
+func (s *Server) decodePutQsos(w http.ResponseWriter, r *http.Request) (PutQsosRequest, bool) {
+	var req PutQsosRequest
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+
+	if tok, err := dec.Token(); err != nil {
+		return req, s.rejectBody(w, err)
+	} else if d, ok := tok.(json.Delim); !ok || d != '{' {
+		return req, s.invalidBody(w)
+	}
+	var qsosSeen bool
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return req, s.rejectBody(w, err)
+		}
+		// encoding/json matches struct fields under Unicode simple folding, not plain
+		// lowercasing; use EqualFold so a differently-cased member maps to the same field
+		// the struct decode would have used (codex 5be97c03 P2).
+		key, _ := keyTok.(string)
+		switch {
+		case strings.EqualFold(key, "qsos"):
+			// Only a duplicate qsos is ambiguous under the streaming cap (which array
+			// counts?) — the struct decode this replaces took the last value, which the
+			// stream cannot without reading the whole array. Reject it rather than
+			// silently change which rows are written (codex f0b32395 P2). Other members
+			// keep their prior last-value-wins / ignore-unknown behavior (codex
+			// 90f4dbde P2).
+			if qsosSeen {
+				return req, s.invalidBody(w)
+			}
+			qsosSeen = true
+			if !s.streamQsos(w, dec, &req.Qsos) {
+				return req, false
+			}
+		case strings.EqualFold(key, "logbook"):
+			if err := dec.Decode(&req.Logbook); err != nil {
+				return req, s.rejectBody(w, err)
+			}
+		default:
+			// Unknown keys are skipped, matching the prior lenient decode.
+			if err := dec.Decode(new(json.RawMessage)); err != nil {
+				return req, s.rejectBody(w, err)
+			}
+		}
+	}
+	if _, err := dec.Token(); err != nil { // closing '}'
+		return req, s.rejectBody(w, err)
+	}
+	// Exactly one document. dec.More() would SUPPRESS a read error here (e.g. trailing
+	// whitespace pushing the body over the byte cap), silently accepting it — so decode
+	// again and require EOF, surfacing a *http.MaxBytesError as 413 (codex f25cf768 P2).
+	if err := dec.Decode(new(json.RawMessage)); !stderr.Is(err, io.EOF) {
+		if err == nil {
+			return req, s.invalidBody(w)
+		}
+		return req, s.rejectBody(w, err)
+	}
+	return req, true
+}
+
+// streamQsos decodes the qsos array element by element, refusing the
+// (maxQsoBatchRows+1)th before decoding it — so an over-cap batch never grows the slice
+// past the cap. Returns false (error written) on failure.
+func (s *Server) streamQsos(w http.ResponseWriter, dec *json.Decoder, out *[]QsoUpload) bool {
+	tok, err := dec.Token()
+	if err != nil {
+		return s.rejectBody(w, err)
+	}
+	if tok == nil { // JSON null decodes to a nil slice, matching the struct decode
+		return true
+	}
+	if d, ok := tok.(json.Delim); !ok || d != '[' {
+		return s.invalidBody(w)
+	}
+	for dec.More() {
+		if len(*out) >= maxQsoBatchRows {
+			s.writeError(w, http.StatusBadRequest, "batch_too_large", "qsos exceeds the batch row cap")
+			return false
+		}
+		var q QsoUpload
+		if err := dec.Decode(&q); err != nil {
+			return s.rejectBody(w, err)
+		}
+		*out = append(*out, q)
+	}
+	if _, err := dec.Token(); err != nil { // closing ']'
+		return s.rejectBody(w, err)
+	}
+	return true
+}
+
 // tenantKey is the request-context key carrying the authenticated tenant id.
 type tenantKey struct{}
 
@@ -264,8 +378,8 @@ type PutQsosResponse struct {
 }
 
 func (s *Server) handlePutQsos(w http.ResponseWriter, r *http.Request) {
-	var req PutQsosRequest
-	if !s.decodeSingleJSON(w, r, &req) {
+	req, ok := s.decodePutQsos(w, r)
+	if !ok {
 		return
 	}
 	if req.Logbook == "" || len(req.Logbook) > 64 {

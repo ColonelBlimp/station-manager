@@ -10,9 +10,12 @@ import (
 	"testing"
 )
 
-// filler streams n bytes of 'a' without allocating them, so an oversized-body test can
+// filler streams n bytes of b without allocating them, so an oversized-body test can
 // drive MaxBytesReader past its cap cheaply.
-type filler struct{ n int }
+type filler struct {
+	n int
+	b byte
+}
 
 func (f *filler) Read(p []byte) (int, error) {
 	if f.n <= 0 {
@@ -23,7 +26,7 @@ func (f *filler) Read(p []byte) (int, error) {
 		k = f.n
 	}
 	for i := 0; i < k; i++ {
-		p[i] = 'a'
+		p[i] = f.b
 	}
 	f.n -= k
 	return k, nil
@@ -58,7 +61,7 @@ func TestCloudIngest_OversizedBody_Is413NoLeak(t *testing.T) {
 		t.Run(hc.name, func(t *testing.T) {
 			// An unterminated JSON string just past the 32 MiB cap: valid JSON start, so
 			// the decoder keeps reading until MaxBytesReader trips (not a syntax error).
-			body := io.MultiReader(strings.NewReader(`"`), &filler{n: maxBodyBytes + 100})
+			body := io.MultiReader(strings.NewReader(`"`), &filler{n: maxBodyBytes + 100, b: 'a'})
 			req := httptest.NewRequest(http.MethodPut, hc.path, body)
 			w := httptest.NewRecorder()
 			hc.h(w, req)
