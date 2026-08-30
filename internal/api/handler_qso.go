@@ -32,7 +32,7 @@ func (s *Server) handleGetQso(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.writeJSON(w, http.StatusOK, qso)
+	s.writePublicQso(w, op, http.StatusOK, qso)
 }
 
 func (s *Server) handleDeleteQso(w http.ResponseWriter, r *http.Request) {
@@ -128,7 +128,7 @@ func (s *Server) handleUpdateQso(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.writeJSON(w, http.StatusOK, updated)
+	s.writePublicQso(w, op, http.StatusOK, updated)
 }
 
 func (s *Server) handleSubmitQso(w http.ResponseWriter, r *http.Request) {

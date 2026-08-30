@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -136,14 +137,13 @@ func TestStress_20Clients_50QSOs(t *testing.T) {
 				}
 				fetched.Add(1)
 
-				// Capture the pre-patch dedupe key so we can verify FREQ
-				// change triggers recompute.
-				var fetched1 struct {
-					DedupeKey string `json:"dedupe_key"`
-				}
-				if err := unmarshalJSON(getW.Body.String(), &fetched1); err != nil || fetched1.DedupeKey == "" {
+				// Capture the pre-patch dedupe key so we can verify a FREQ change triggers
+				// recompute. dedupe_key is server-internal (pruned from the public
+				// projection, AW-1) — read it from the store, not the response.
+				preQso, err := srv.db.FetchQsoByUUIDWithContext(context.Background(), qsoUUID)
+				if err != nil {
 					patchErrCount.Add(1)
-					t.Logf("client %d qso %d: cannot decode pre-patch dedupe_key", clientID, i)
+					t.Logf("client %d qso %d: cannot read pre-patch dedupe_key: %v", clientID, i, err)
 					continue
 				}
 
@@ -166,8 +166,7 @@ func TestStress_20Clients_50QSOs(t *testing.T) {
 					continue
 				}
 				var fetched2 struct {
-					DedupeKey string `json:"dedupe_key"`
-					Comment   string `json:"comment"`
+					Comment string `json:"comment"`
 				}
 				if err := unmarshalJSON(patchW.Body.String(), &fetched2); err != nil {
 					patchErrCount.Add(1)
@@ -179,9 +178,12 @@ func TestStress_20Clients_50QSOs(t *testing.T) {
 					t.Logf("client %d qso %d patch: comment not updated, body=%s", clientID, i, patchW.Body.String())
 					continue
 				}
-				if fetched2.DedupeKey == fetched1.DedupeKey {
+				// dedupe_key is server-internal (AW-1) — read it from the store and confirm
+				// the FREQ change recomputed it.
+				postQso, err := srv.db.FetchQsoByUUIDWithContext(context.Background(), qsoUUID)
+				if err != nil || postQso.DedupeKey == preQso.DedupeKey {
 					patchErrCount.Add(1)
-					t.Logf("client %d qso %d patch: dedupe_key not recomputed after FREQ change", clientID, i)
+					t.Logf("client %d qso %d patch: dedupe_key not recomputed after FREQ change: %v", clientID, i, err)
 					continue
 				}
 				patched.Add(1)

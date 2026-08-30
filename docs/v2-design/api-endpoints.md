@@ -68,11 +68,18 @@ or root mount at all, so those paths `404` there too. (SM Cloud's API returns th
 
 ## QSO
 
+**Public QSO projection (AW-1).** `GET`/`PATCH /v1/qso/{uuid}` and the `GET /v1/logbook/{id}/qso`
+items return a QSO through a boundary projection of `types.Qso`: the canonical **`uuid`**,
+`logbook_id`, and all populated ADIF/enrichment fields are preserved, while the server-internal identifiers
+**`dedupe_key`**, **`csid`**, and **`country_details.id`** are omitted. The daemon-local `id` and
+`contact_history[].id` are **DEPRECATED** — retained through `v2.0.0-alpha.2`, removed in
+`v2.0.0-alpha.3`; key on `uuid`.
+
 ### `POST /v1/qso`
 - **Purpose:** Submit exactly one QSO as ADIF — the primary logging write path (consolidated app, `curl`, import tooling). Bulk import is a separate tool (`cmd/importer`), not this endpoint.
 - **Gating:** Always-on; additionally wrapped in `limitSubmitRate`.
 - **Request:** Content-Type `application/x-adif` / `text/plain` / empty (other → 415 `unsupported_media_type`). Body = a single-record ADIF doc. Query: `logbook` (int, **required**, ≥1; must exist), `force` (bool, optional — bypass dedupe). **`STATION_CALLSIGN` is derived from the logbook** (ADR 0055): the daemon stamps the QSO with the logbook's own callsign, so a record's own `STATION_CALLSIGN` is ignored on a live submit and need not be present (an **import** keeps the record's value for historical fidelity).
-- **Response:** **201** on store / **200** on duplicate. Body `{"status": "stored"|"duplicate", "uuid": string, "id": int64}`.
+- **Response:** **201** on store / **200** on duplicate. Body `{"status": "stored"|"duplicate", "uuid": string, "id": int64}` (`id` is **DEPRECATED**, removed in `v2.0.0-alpha.3`; use `uuid`).
 - **Errors:** 400 `invalid_adif`, `too_many_records`, `missing_required_field`, `invalid_field_value`, `missing_required_param`, `invalid_id`, `invalid_query_param`, `invalid_time_range`; 404 `logbook_not_found`; 429 `rate_limited`; 503 `server_busy`; 500 `submit_failed`/`db_error`.
 - **Notes:** One-fails-all-fail atomic write (QSO row + upload-queue rows in one tx). Idempotent dedupe — a known duplicate returns 200 with the existing UUID/ID. **Dedupe is minute-precision** (`CALL|BAND|MODE|FREQ|QSO_DATE|TIME_ON`, TIME_ON truncated to HHMM), so two contacts in the same minute collide — even though times are **stored and exported at full `HH:MM:SS`** where supplied (ADIF `HHMMSS` preserved since migration 0003; seconds matter to QSL managers matching on exact timestamp). A **midnight-crossing** QSO (`TIME_ON` > `TIME_OFF`) must carry `QSO_DATE_OFF` on the **following day** or it's rejected `invalid_time_range`; SM's own clients (consolidated app + FT8 daemon) **always populate `QSO_DATE_OFF`** — the date at `TIME_OFF`, equal to `QSO_DATE` for a same-day contact.
 
@@ -80,14 +87,14 @@ or root mount at all, so those paths `404` there too. (SM Cloud's API returns th
 - **Purpose:** Fetch one QSO by canonical UUIDv7 (SPA edit/detail).
 - **Gating:** Always-on.
 - **Request:** Path `{uuid}` (UUIDv7).
-- **Response:** **200**, body = full `types.Qso`. Excludes soft-deleted rows.
+- **Response:** **200**, body = the public QSO projection (see the QSO-section note). Excludes soft-deleted rows.
 - **Errors:** 400 `invalid_uuid`; 404 `not_found`; 500 `db_error`.
 
 ### `PATCH /v1/qso/{uuid}`
 - **Purpose:** Update fields of an existing QSO (SPA edit flow).
 - **Gating:** Always-on.
 - **Request:** Path `{uuid}`. JSON body overlaid on the existing QSO; immutable fields (ids, upload statuses) are stash-restored. A body with **no effective change** — empty, `{}`, unknown-only, immutable-only, or values that normalize back to the stored ones — is a **true no-op**: it returns the existing row unchanged, with no revision/modified bump, audit row, forwarder re-arm, or `qso.updated` event (AW-3, decided at the service boundary on an editable-field projection).
-- **Response:** **200**, body = updated `types.Qso`.
+- **Response:** **200**, body = the public QSO projection of the updated row.
 - **Errors:** 400 `invalid_uuid`/`invalid_json`/`missing_required_field`/`invalid_field_value`/`invalid_time_range`; 409 `duplicate_key` (dedupe collision) / `edit_conflict` (the QSO changed since this request fetched it — revision CAS; re-fetch and re-apply); 404 `not_found`; 500 `update_failed`/`db_error`.
 
 ### `DELETE /v1/qso/{uuid}`
@@ -161,7 +168,7 @@ or root mount at all, so those paths `404` there too. (SM Cloud's API returns th
 - **Purpose:** Cursor-paginated QSO list for a logbook (logbook-browse views).
 - **Gating:** Always-on.
 - **Request:** Path `{id}`. Query: `limit` (int, default `Server.DefaultPageLimit`, clamped to `MaxPageLimit`, ≥1), `after` (opaque base64url cursor over `{qso_date, time_on, id}`), `missing_from` (forwarder **name**) — filter to QSOs **not yet uploaded** to that destination (ADR 0039 backfill). "Not uploaded" = the destination's ADIF upload-status stamp (`<prefix>_qso_upload_status`) is absent or not `"Y"` — the durable, import-surviving signal (same source as the SPA's tri-state colour + the enqueue skip-check). Resolved name→type→ADIF-prefix server-side.
-- **Response:** **200**, body `{"items": types.QsoSlice, "next_cursor": string|null}` (`next_cursor` set only when more rows exist).
+- **Response:** **200**, body `{"items": [public QSO projection, …], "next_cursor": string|null}` (`next_cursor` set only when more rows exist).
 - **Errors:** 400 `invalid_id`/`invalid_limit`/`invalid_cursor`; 400 `invalid_missing_from` (names no configured forwarder) or `missing_from_unsupported` (the forwarder exists but its type records no per-QSO upload status, so "missing from it" is undefined; it remains a valid upload target). Note "no stamp" does NOT imply the destination mirrors rows — SM Cloud does, the dev stub does not; row mirroring is a separate registered capability. These were ONE code with one message, which read as "you got the name wrong" for a name that was perfectly good; clients must be able to tell the two apart. 404 `logbook_not_found`; 500 `db_error`.
 
 ### `GET /v1/logbook/{id}/count`

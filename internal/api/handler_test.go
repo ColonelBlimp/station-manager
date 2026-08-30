@@ -1232,6 +1232,18 @@ func submitAndGetID(t *testing.T, srv *Server, lbID int64, body string) (int64, 
 	return r.ID, r.UUID
 }
 
+// fetchDedupeKey reads a QSO's dedupe_key straight from the store. Since AW-1 the public
+// API projection prunes dedupe_key from the wire (it is a server-internal identifier), so a
+// test verifying dedupe recomputation reads it here rather than from a handler response.
+func fetchDedupeKey(t *testing.T, srv *Server, uuid string) string {
+	t.Helper()
+	qso, err := srv.db.FetchQsoByUUIDWithContext(context.Background(), uuid)
+	if err != nil {
+		t.Fatalf("fetch dedupe key for %s: %v", uuid, err)
+	}
+	return qso.DedupeKey
+}
+
 // patchQso is a test helper that sends a PATCH to /v1/qso/{uuid}.
 func patchQso(t *testing.T, srv *Server, qsoUUID string, body string) *httptest.ResponseRecorder {
 	t.Helper()
@@ -1262,17 +1274,9 @@ func TestUpdateQso_RecomputesDedupeKey(t *testing.T) {
 	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
 	_, id := submitAndGetID(t, srv, lbID, testQsoADIF)
 
-	// Fetch the pre-edit dedupe key.
-	getW := httptest.NewRecorder()
-	getReq := httptest.NewRequest(http.MethodGet, "/v1/qso/"+id, nil)
-	getReq.SetPathValue("uuid", id)
-	srv.handleGetQso(getW, getReq)
-	var before struct {
-		DedupeKey string `json:"dedupe_key"`
-	}
-	if err := unmarshalJSON(getW.Body.String(), &before); err != nil {
-		t.Fatalf("decode pre-edit: %v", err)
-	}
+	// dedupe_key is server-internal (pruned from the public projection, AW-1) — read it
+	// from the store to verify recomputation.
+	before := fetchDedupeKey(t, srv, id)
 
 	// Change CALL — a dedupe input — and confirm the key changed.
 	w := patchQso(t, srv, id, `{"call":"M0XYZ"}`)
@@ -1280,8 +1284,7 @@ func TestUpdateQso_RecomputesDedupeKey(t *testing.T) {
 		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusOK, w.Body.String())
 	}
 	var after struct {
-		Call      string `json:"call"`
-		DedupeKey string `json:"dedupe_key"`
+		Call string `json:"call"`
 	}
 	if err := unmarshalJSON(w.Body.String(), &after); err != nil {
 		t.Fatalf("decode post-edit: %v", err)
@@ -1289,8 +1292,8 @@ func TestUpdateQso_RecomputesDedupeKey(t *testing.T) {
 	if after.Call != "M0XYZ" {
 		t.Fatalf("call = %q, want M0XYZ", after.Call)
 	}
-	if after.DedupeKey == before.DedupeKey {
-		t.Fatalf("dedupe key unchanged after CALL edit: %s", after.DedupeKey)
+	if k := fetchDedupeKey(t, srv, id); k == before {
+		t.Fatalf("dedupe key unchanged after CALL edit: %s", k)
 	}
 }
 
@@ -1299,17 +1302,9 @@ func TestUpdateQso_FreqChangeRecomputesDedupe(t *testing.T) {
 	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
 	_, id := submitAndGetID(t, srv, lbID, testQsoADIF)
 
-	// Pre-edit dedupe key.
-	getW := httptest.NewRecorder()
-	getReq := httptest.NewRequest(http.MethodGet, "/v1/qso/"+id, nil)
-	getReq.SetPathValue("uuid", id)
-	srv.handleGetQso(getW, getReq)
-	var before struct {
-		DedupeKey string `json:"dedupe_key"`
-	}
-	if err := unmarshalJSON(getW.Body.String(), &before); err != nil {
-		t.Fatalf("decode pre-edit: %v", err)
-	}
+	// dedupe_key is server-internal (pruned from the public projection, AW-1) — read it
+	// from the store to verify recomputation.
+	before := fetchDedupeKey(t, srv, id)
 
 	// Change FREQ — a dedupe input — and confirm the key changed.
 	w := patchQso(t, srv, id, `{"freq":"7.120"}`)
@@ -1317,8 +1312,7 @@ func TestUpdateQso_FreqChangeRecomputesDedupe(t *testing.T) {
 		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusOK, w.Body.String())
 	}
 	var after struct {
-		Freq      string `json:"freq"`
-		DedupeKey string `json:"dedupe_key"`
+		Freq string `json:"freq"`
 	}
 	if err := unmarshalJSON(w.Body.String(), &after); err != nil {
 		t.Fatalf("decode post-edit: %v", err)
@@ -1326,8 +1320,8 @@ func TestUpdateQso_FreqChangeRecomputesDedupe(t *testing.T) {
 	if after.Freq != "7.120" {
 		t.Fatalf("freq = %q, want canonical MHz 7.120", after.Freq)
 	}
-	if after.DedupeKey == before.DedupeKey {
-		t.Fatalf("dedupe key unchanged after FREQ edit: %s", after.DedupeKey)
+	if k := fetchDedupeKey(t, srv, id); k == before {
+		t.Fatalf("dedupe key unchanged after FREQ edit: %s", k)
 	}
 }
 

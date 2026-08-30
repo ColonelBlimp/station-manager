@@ -189,11 +189,16 @@ func (s *Server) handleListQsoByLogbook(w http.ResponseWriter, r *http.Request) 
 		nextCursor = &c
 	}
 
+	projected, err := projectPublicQsos(items)
+	if err != nil {
+		s.writeServerError(w, op, err, "serialize_error", "failed to serialize QSO list")
+		return
+	}
 	s.writeJSON(w, http.StatusOK, struct {
-		Items      types.QsoSlice `json:"items"`
-		NextCursor *string        `json:"next_cursor"`
+		Items      []json.RawMessage `json:"items"`
+		NextCursor *string           `json:"next_cursor"`
 	}{
-		Items:      items,
+		Items:      projected,
 		NextCursor: nextCursor,
 	})
 }
