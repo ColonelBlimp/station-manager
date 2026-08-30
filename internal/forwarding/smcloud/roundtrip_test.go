@@ -120,6 +120,15 @@ DROP TABLE IF EXISTS tenants; DROP TABLE IF EXISTS schema_migrations`)
 	want := q
 	want.ModifiedAt = time.Time{}
 	want.DeletedAt = time.Time{}
+	// AW-1: the cloud projection (projectCloudQso) strips daemon-local identifiers from
+	// the payload — the cloud keys on uuid and provisions its own logbook — so they do not
+	// round-trip. Zero them on the expectation (id/dedupe_key/csid/country_details.id and
+	// every contact_history[].id likewise; this QSO sets only logbook_id).
+	want.ID = 0
+	want.LogbookID = 0
+	want.DedupeKey = ""
+	want.ContactedStation.CSID = 0
+	want.CountryDetails.ID = 0
 	if !reflect.DeepEqual(want, restored) {
 		t.Errorf("payload round-trip not deep-equal:\n want %+v\n got  %+v", want, restored)
 	}
