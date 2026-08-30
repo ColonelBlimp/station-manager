@@ -121,6 +121,44 @@ func (s *Server) writeError(w http.ResponseWriter, status int, code, message str
 	s.writeJSON(w, status, errorResponse{Code: code, Message: message})
 }
 
+// decodeSingleJSON reads exactly one JSON document from the request body into dst under
+// the shared size cap — the single body-decode point both ingest handlers use (AW-5).
+// It classifies an oversized body (a *http.MaxBytesError on either the document or the
+// trailing-content read) as 413 body_too_large, matching the daemon's vocabulary, and
+// every syntax/type error or trailing content as a generic 400 invalid_body with the
+// decoder detail logged rather than leaked to the client. Returns true only on a clean
+// single-document decode.
+func (s *Server) decodeSingleJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+	if err := dec.Decode(dst); err != nil {
+		return s.rejectBody(w, err)
+	}
+	// Exactly one JSON document: trailing content after the request object is a malformed
+	// (or smuggled) body, not extra data to silently ignore.
+	if err := dec.Decode(new(json.RawMessage)); !stderr.Is(err, io.EOF) {
+		if err == nil {
+			err = stderr.New("unexpected content after the JSON document")
+		}
+		return s.rejectBody(w, err)
+	}
+	return true
+}
+
+// rejectBody writes the error envelope for a failed body decode and returns false. A
+// transport size cap is 413 body_too_large with a generic message; anything else is 400
+// invalid_body, with the decoder detail logged for diagnostics but never returned — a
+// malformed or oversized body must not echo implementation-specific reader text.
+func (s *Server) rejectBody(w http.ResponseWriter, err error) bool {
+	var maxErr *http.MaxBytesError
+	if stderr.As(err, &maxErr) {
+		s.writeError(w, http.StatusRequestEntityTooLarge, "body_too_large", "request body exceeds the maximum size")
+		return false
+	}
+	s.log.Warn("cloud ingest: rejected request body", "err", err)
+	s.writeError(w, http.StatusBadRequest, "invalid_body", "request body must be a single valid JSON document")
+	return false
+}
+
 // tenantKey is the request-context key carrying the authenticated tenant id.
 type tenantKey struct{}
 
@@ -227,15 +265,7 @@ type PutQsosResponse struct {
 
 func (s *Server) handlePutQsos(w http.ResponseWriter, r *http.Request) {
 	var req PutQsosRequest
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes))
-	if err := dec.Decode(&req); err != nil {
-		s.writeError(w, http.StatusBadRequest, "invalid_body", "body must be JSON: "+err.Error())
-		return
-	}
-	// Exactly one JSON document: trailing content after the request object is
-	// a malformed (or smuggled) body, not extra data to silently ignore.
-	if err := dec.Decode(new(json.RawMessage)); !stderr.Is(err, io.EOF) {
-		s.writeError(w, http.StatusBadRequest, "invalid_body", "body must be a single JSON document")
+	if !s.decodeSingleJSON(w, r, &req) {
 		return
 	}
 	if req.Logbook == "" || len(req.Logbook) > 64 {

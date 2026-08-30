@@ -1,9 +1,6 @@
 package server
 
 import (
-	"encoding/json"
-	stderr "errors"
-	"io"
 	"net/http"
 
 	"github.com/ColonelBlimp/station-manager/internal/cloud/evidencewire"
@@ -23,13 +20,7 @@ const maxEvidenceBatchRows = 1000
 // store.UpsertEvidence.
 func (s *Server) handlePutEvidence(w http.ResponseWriter, r *http.Request) {
 	var req evidencewire.PutRequest
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes))
-	if err := dec.Decode(&req); err != nil {
-		s.writeError(w, http.StatusBadRequest, "invalid_body", "body must be JSON: "+err.Error())
-		return
-	}
-	if err := dec.Decode(new(json.RawMessage)); !stderr.Is(err, io.EOF) {
-		s.writeError(w, http.StatusBadRequest, "invalid_body", "body must be a single JSON document")
+	if !s.decodeSingleJSON(w, r, &req) {
 		return
 	}
 	if len(req.Records) == 0 {
