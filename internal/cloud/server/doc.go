@@ -18,12 +18,13 @@
 //
 // # Wire contract
 //
-// The QSO payload on the wire IS types.Qso — same repo/module, so the contract
-// holds at compile time (ADR 0040 § Codebase). The server stores the payload
-// bytes VERBATIM (json.RawMessage end to end): it unmarshals only to validate
-// shape and extract the UUID, never re-marshals — so restore returns exactly
-// what backup sent, byte for byte (UUID, HH:MM:SS seconds, additional_data
-// intact). modified_at/revision/deleted_at ride an envelope beside the
+// The QSO payload on the wire is canonical types.Qso JSON, projected by the
+// daemon to remove the daemon-local fields the cloud never reads (id,
+// logbook_id, dedupe_key, csid, country_details.id, contact_history[].id — see
+// smcloud.projectCloudQso). The server stores the projected bytes VERBATIM
+// (json.RawMessage end to end): it unmarshals only to validate shape and
+// extract the UUID, never re-marshals — so restore returns exactly what backup
+// sent, byte for byte (UUID, HH:MM:SS seconds, additional_data intact). modified_at/revision/deleted_at ride an envelope beside the
 // payload because they are storage-row facts (trigger-stamped locally), not
 // ADIF fields. revision (ADR 0050) is the version marker the upsert guard
 // orders on — revision first, modified_at breaking ties — because local

@@ -172,8 +172,15 @@ func TestSubmit_InsertWireShape(t *testing.T) {
 	if !up.ModifiedAt.Equal(q.ModifiedAt) || up.DeletedAt != nil {
 		t.Errorf("envelope = modified %v deleted %v", up.ModifiedAt, up.DeletedAt)
 	}
-	if up.Qso.UUID != q.UUID || up.Qso.Call != "DL9UW" {
-		t.Errorf("payload qso = %+v", up.Qso)
+	var qsoBody struct {
+		UUID string `json:"uuid"`
+		Call string `json:"call"`
+	}
+	if err := json.Unmarshal(up.Qso, &qsoBody); err != nil {
+		t.Fatalf("decode projected qso: %v", err)
+	}
+	if qsoBody.UUID != q.UUID || qsoBody.Call != "DL9UW" {
+		t.Errorf("payload qso = %s", up.Qso)
 	}
 }
 

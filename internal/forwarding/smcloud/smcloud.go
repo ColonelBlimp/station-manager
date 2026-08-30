@@ -1,9 +1,11 @@
 // Package smcloud provides the SM Cloud forwarder (ADR 0040 /
 // docs/v2-design/sm-cloud-p1.md, step S3) — the daemon-side backup client.
 // It PUTs each QSO to the operator's own smcloud service (cmd/smcloud) as
-// full-fidelity JSON: the whole types.Qso payload plus a modified_at /
-// deleted_at envelope, so restore round-trips identity (UUID, seconds,
-// additional_data) — never lossy ADIF.
+// full-fidelity JSON: the canonical types.Qso JSON projected to remove the
+// daemon-local fields the cloud never reads (see projectCloudQso — id,
+// logbook_id, dedupe_key, csid, country_details.id, contact_history[].id), plus
+// a modified_at / deleted_at envelope, so restore round-trips identity (UUID,
+// seconds, additional_data) — never lossy ADIF.
 //
 // Credentials shape (url + token required):
 //
@@ -211,7 +213,9 @@ type qsoUpload struct {
 	// modified_at (types.Qso tags it json:"-", so it never rides the payload).
 	Revision  int64      `json:"revision,omitempty"`
 	DeletedAt *time.Time `json:"deleted_at,omitempty"`
-	Qso       types.Qso  `json:"qso"`
+	// Qso is the projected QSO body (projectCloudQso) — the canonical types.Qso JSON with
+	// the daemon-local identifiers stripped (AW-1), never the raw struct.
+	Qso json.RawMessage `json:"qso"`
 }
 
 type putRequest struct {
@@ -260,7 +264,14 @@ func (f *Forwarder) Submit(
 		}
 	}
 
-	up := qsoUpload{ModifiedAt: qso.ModifiedAt, Revision: qso.Revision, Qso: qso}
+	projected, err := projectCloudQso(qso)
+	if err != nil {
+		return forwarding.Result{
+			Outcome: forwarding.OutcomeTerminal,
+			Err:     errors.New(op).WithErr(err).WithMsg("project qso for cloud payload"),
+		}
+	}
+	up := qsoUpload{ModifiedAt: qso.ModifiedAt, Revision: qso.Revision, Qso: projected}
 	switch act {
 	case action.Insert, action.Update:
 		// plain upsert

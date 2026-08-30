@@ -352,8 +352,9 @@ func (s *Server) handleVersion(w http.ResponseWriter, _ *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]string{"version": s.version})
 }
 
-// QsoUpload is one QSO on the PUT /v1/qsos wire: the full types.Qso as sent
-// (stored verbatim) plus the storage-row facts that are not ADIF fields.
+// QsoUpload is one QSO on the PUT /v1/qsos wire: canonical types.Qso JSON as
+// sent — projected by the daemon to drop daemon-local fields, stored verbatim —
+// plus the storage-row facts that are not ADIF fields.
 // DeletedAt set = tombstone (soft delete; the cloud is retentive). Revision
 // is the row's monotonic edit counter (ADR 0050); absent decodes as 0 =
 // legacy client, which the store guard handles via its modified_at fallback.
