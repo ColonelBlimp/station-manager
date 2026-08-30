@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	stderr "errors"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/enums/bands"
@@ -69,8 +71,13 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte, s
 	}
 
 	merged := existing
-	if err := json.Unmarshal(body, &merged); err != nil {
-		return types.Qso{}, &SubmitError{Code: "invalid_json", Message: "failed to parse request body"}
+	// An empty body carries no edits — treat it as the no-op {} (the API handler maps
+	// it the same way). Only a non-empty body is parsed, so a genuinely malformed body
+	// still fails as invalid_json rather than being silently accepted.
+	if len(body) > 0 {
+		if err := json.Unmarshal(body, &merged); err != nil {
+			return types.Qso{}, &SubmitError{Code: "invalid_json", Message: "failed to parse request body"}
+		}
 	}
 
 	// ---- Restore immutables ----
@@ -225,50 +232,13 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte, s
 	}
 
 	// ---- Dedupe recompute + collision check ----
-	// TimeOn compared at minute precision — the dedupe key is minute-based, so a
-	// seconds-only edit doesn't change the key and needn't trigger a recompute.
-	dedupeChanged := merged.ContactedStation.Call != existing.ContactedStation.Call ||
-		merged.QsoDetails.Band != existing.QsoDetails.Band ||
-		merged.QsoDetails.Mode != existing.QsoDetails.Mode ||
-		merged.QsoDetails.Freq != existing.QsoDetails.Freq ||
-		merged.QsoDetails.QsoDate != existing.QsoDetails.QsoDate ||
-		utils.TimeToHHMM(merged.QsoDetails.TimeOn) != utils.TimeToHHMM(existing.QsoDetails.TimeOn)
+	if err := s.recomputeDedupeKey(ctx, op, &merged, existing); err != nil {
+		return types.Qso{}, err
+	}
 
-	if dedupeChanged {
-		// Hash input uses the int-kHz string for determinism — the same
-		// contract as Submit. merged.Freq is canonical MHz (set above),
-		// so this parse cannot fail.
-		kHz, _ := utils.ParseFreqMHz(merged.QsoDetails.Freq)
-		newKey := ComputeDedupeKey(
-			merged.ContactedStation.Call,
-			merged.QsoDetails.Band,
-			merged.QsoDetails.Mode,
-			strconv.FormatInt(kHz, 10),
-			merged.QsoDetails.QsoDate,
-			utils.TimeToHHMM(merged.QsoDetails.TimeOn),
-		)
-		// Pre-tx collision check is a fast-path optimization: it avoids
-		// the BeginTx + UpdateQsoTx + rollback round-trip in the common
-		// case where the operator's edit obviously collides with an
-		// existing row. The cross-handler race window (a concurrent
-		// Submit/Update commits between this check and the UPDATE
-		// below) is intentionally left open here — the H2 backstop
-		// in the UpdateQsoTx error branch translates the
-		// UNIQUE-constraint violation into the same duplicate_key
-		// outcome, so the race resolves correctly without holding a
-		// pre-tx read lock that sqlite would have to serialize against
-		// every concurrent writer.
-		collision, err := s.DB.FetchQsoByDedupeKeyWithContext(ctx, merged.LogbookID, newKey)
-		if err == nil && collision.ID != merged.ID {
-			return types.Qso{}, &SubmitError{
-				Code:    "duplicate_key",
-				Message: "edit would collide with another QSO in this logbook",
-			}
-		}
-		if err != nil && !stderr.Is(err, errors.ErrNotFound) {
-			return types.Qso{}, errors.New(op).WithErr(err).WithMsg("dedupe collision check failed")
-		}
-		merged.DedupeKey = newKey
+	// ---- No-effective-change short-circuit (AW-3) ----
+	if result, handled, nerr := s.resolveNoOp(ctx, op, merged, existing); handled {
+		return result, nerr
 	}
 
 	// ---- Atomic write: QSO update + update-action upload rows + qso_history ----
@@ -360,4 +330,95 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte, s
 	})
 
 	return merged, nil
+}
+
+// resolveNoOp detects a no-effective-change PATCH — a normalized, immutable-restored
+// candidate matching the stored row in every operator-editable field — and resolves it
+// without writing, so an empty / unknown-only / immutable-only / canonically equivalent
+// edit (or a client retry) does not bump the revision, append an audit row, re-arm
+// forwarders, or publish qso.updated. handled is true when the request is fully resolved:
+// a no-op success, OR the edit_conflict / error a STALE snapshot must produce, because
+// the short-circuit skips the revision-guarded write and must not report a false success
+// when a concurrent edit or delete has moved the row past the caller's snapshot. handled
+// is false when there is a real change to persist. The comparison uses editableView, not
+// whole-struct equality, which would treat a storage/enrichment difference as an edit.
+func (s *Service) resolveNoOp(ctx context.Context, op errors.Op, merged, existing types.Qso) (types.Qso, bool, error) {
+	if !reflect.DeepEqual(editableView(merged), editableView(existing)) {
+		return types.Qso{}, false, nil
+	}
+	current, ferr := s.DB.FetchQsoByUUIDWithContext(ctx, existing.UUID)
+	if ferr != nil && !stderr.Is(ferr, errors.ErrNotFound) {
+		return types.Qso{}, true, errors.New(op).WithErr(ferr).WithMsg("no-op revision check failed")
+	}
+	if ferr != nil || current.Revision != existing.Revision {
+		return types.Qso{}, true, &SubmitError{
+			Code:    "edit_conflict",
+			Message: "the QSO changed while this edit was in flight — reload it and re-apply the edit",
+		}
+	}
+	return existing, true, nil
+}
+
+// recomputeDedupeKey recomputes merged's dedupe key when a key-driving field changed
+// (call/band/mode/freq/date/minute) and rejects a pre-tx collision with another row in
+// the same logbook. TimeOn is compared at minute precision — the key is minute-based, so
+// a seconds-only edit leaves it unchanged and this is a no-op. The pre-tx check is a
+// fast path; the cross-handler race is closed by the UNIQUE backstop in UpdateQsoTx, not
+// a pre-tx lock sqlite would serialize every writer against.
+func (s *Service) recomputeDedupeKey(ctx context.Context, op errors.Op, merged *types.Qso, existing types.Qso) error {
+	dedupeChanged := merged.ContactedStation.Call != existing.ContactedStation.Call ||
+		merged.QsoDetails.Band != existing.QsoDetails.Band ||
+		merged.QsoDetails.Mode != existing.QsoDetails.Mode ||
+		merged.QsoDetails.Freq != existing.QsoDetails.Freq ||
+		merged.QsoDetails.QsoDate != existing.QsoDetails.QsoDate ||
+		utils.TimeToHHMM(merged.QsoDetails.TimeOn) != utils.TimeToHHMM(existing.QsoDetails.TimeOn)
+	if !dedupeChanged {
+		return nil
+	}
+	// Hash input uses the int-kHz string for determinism (the same contract as Submit);
+	// merged.Freq is canonical MHz, so this parse cannot fail.
+	kHz, _ := utils.ParseFreqMHz(merged.QsoDetails.Freq)
+	newKey := ComputeDedupeKey(
+		merged.ContactedStation.Call,
+		merged.QsoDetails.Band,
+		merged.QsoDetails.Mode,
+		strconv.FormatInt(kHz, 10),
+		merged.QsoDetails.QsoDate,
+		utils.TimeToHHMM(merged.QsoDetails.TimeOn),
+	)
+	collision, err := s.DB.FetchQsoByDedupeKeyWithContext(ctx, merged.LogbookID, newKey)
+	if err == nil && collision.ID != merged.ID {
+		return &SubmitError{Code: "duplicate_key", Message: "edit would collide with another QSO in this logbook"}
+	}
+	if err != nil && !stderr.Is(err, errors.ErrNotFound) {
+		return errors.New(op).WithErr(err).WithMsg("dedupe collision check failed")
+	}
+	merged.DedupeKey = newKey
+	return nil
+}
+
+// editableView blanks every field the update contract does NOT let a client edit — the
+// structural immutables and forwarder/enrichment state restored above, plus the
+// column-only storage metadata (modified_at, deleted_at, revision) — so two QSOs
+// compare equal iff their operator-editable fields match. It is the AW-3 no-op test's
+// projection: kept in lockstep with the immutable-restore block in Update, and used
+// instead of whole-struct equality, which would treat a storage/enrichment difference
+// as an operator edit. DedupeKey is derived from editable fields, so it is excluded too.
+func editableView(q types.Qso) types.Qso {
+	q.ID = 0
+	q.UUID = ""
+	q.LogbookID = 0
+	q.DedupeKey = ""
+	q.ModifiedAt = time.Time{}
+	q.DeletedAt = time.Time{}
+	q.Revision = 0
+	q.LoggingStation.StationCallsign = ""
+	q.SmQsoUploadDate, q.SmQsoUploadStatus = "", ""
+	q.SmFwrdByEmailDate, q.SmFwrdByEmailStatus = "", ""
+	q.QrzComUploadDate, q.QrzComUploadStatus = "", ""
+	q.ClubLogUploadDate, q.ClubLogUploadStatus = "", ""
+	q.QrzlogLogid = ""
+	q.CountryDetails = types.Country{}
+	q.ContactHistory = nil
+	return q
 }

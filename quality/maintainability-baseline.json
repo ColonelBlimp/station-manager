@@ -234,7 +234,7 @@
       "path": "internal/qsoservice/update.go",
       "function": "(*Service).Update",
       "direction": "maximum",
-      "value": 54
+      "value": 50
     },
     {
       "language": "go",
@@ -354,7 +354,7 @@
       "path": "internal/qsoservice/update.go",
       "function": "(*Service).Update",
       "direction": "maximum",
-      "value": 47
+      "value": 40
     },
     {
       "language": "go",
@@ -498,7 +498,7 @@
       "path": "internal/qsoservice/update.go",
       "function": "(*Service).Update",
       "direction": "minimum",
-      "value": 11
+      "value": 13
     }
   ],
   "allowedDuplications": [

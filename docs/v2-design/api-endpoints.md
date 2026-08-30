@@ -73,7 +73,7 @@ registers no SPA routes, redirects, or root mount at all, so those paths `404` t
 ### `PATCH /v1/qso/{uuid}`
 - **Purpose:** Update fields of an existing QSO (SPA edit flow).
 - **Gating:** Always-on.
-- **Request:** Path `{uuid}`. JSON body overlaid on the existing QSO (empty → no-op); immutable fields (upload statuses) stash-restored.
+- **Request:** Path `{uuid}`. JSON body overlaid on the existing QSO; immutable fields (ids, upload statuses) are stash-restored. A body with **no effective change** — empty, `{}`, unknown-only, immutable-only, or values that normalize back to the stored ones — is a **true no-op**: it returns the existing row unchanged, with no revision/modified bump, audit row, forwarder re-arm, or `qso.updated` event (AW-3, decided at the service boundary on an editable-field projection).
 - **Response:** **200**, body = updated `types.Qso`.
 - **Errors:** 400 `invalid_uuid`/`invalid_json`/`missing_required_field`/`invalid_field_value`/`invalid_time_range`; 409 `duplicate_key` (dedupe collision) / `edit_conflict` (the QSO changed since this request fetched it — revision CAS; re-fetch and re-apply); 404 `not_found`; 500 `update_failed`/`db_error`.
 
