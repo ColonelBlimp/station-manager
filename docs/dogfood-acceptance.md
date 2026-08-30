@@ -164,6 +164,26 @@ an earlier case only when the starting state, action, expected result, and evide
 same. The operator decides any thresholds, timeouts, visual tolerances, upstream-account checks, and
 hardware/RF exercises before execution.
 
+### A5. Drain the SM Cloud upload queue before upgrading — TEMPORARY (alpha.2 transition only)
+
+alpha.2 projects daemon-local fields out of the SM Cloud QSO payload (`smcloud.projectCloudQso`).
+A QSO the cloud committed under a **pre-alpha.2** daemon whose response was lost stays `pending`
+locally; retried after the upgrade it sends the new (shorter) payload at the same version, which the
+cloud's strict equal-version guard correctly rejects as a conflict — the row then fails terminally
+even though the QSO is already backed up. Before upgrading a station that already talks to an SM
+Cloud service:
+
+- Inventory the SM Cloud forwarder's `qso_upload` rows whose status is **not** `uploaded`.
+- Let `pending`/`in_progress` rows **drain to `uploaded` under the pre-alpha.2 daemon** first.
+- Resolve any `failed` rows individually (understand and clear the cause).
+- Do **not** blindly clear queue rows or wipe the cloud. A development-cloud reset is an explicit
+  operator-approved fallback **only after local backup verification**.
+- If no non-`uploaded` SM Cloud rows remain, the false-conflict trigger is absent; already-`uploaded`
+  rows do not re-trigger via reconcile (the manifest matches on version, not payload).
+
+**Remove this step once no pre-alpha.2 daemon can still upgrade against an existing SM Cloud service.**
+Rationale: `smcloud.projectCloudQso` and ADR 0016.
+
 ## Gate B — deploy and accept the candidate
 
 ### B1. Exercise the upgrade itself

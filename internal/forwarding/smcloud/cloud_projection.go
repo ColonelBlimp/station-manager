@@ -16,6 +16,19 @@ import (
 //
 // This is deliberately SEPARATE from the daemon's public API projection: the API keeps
 // logbook_id (its public logbook key) and a transitional id, while the cloud needs neither.
+//
+// Transition caveat (alpha.2). A QSO that a PRE-alpha.2 daemon uploaded — the cloud
+// committing the OLD, unprojected payload — can false-conflict if that upload's response was
+// lost (the local row stays pending) and it retries after upgrading to alpha.2: the retry
+// sends the projected payload at the SAME (revision, modified_at), and the cloud's PT-1
+// tie-break (store.go tieConflictQ) flags the equal-version payload divergence as a genuine
+// conflict → 409, which the forwarder treats as terminal. This is ACCEPTED, not worked
+// around: the deployment is pre-production (ADR 0016), and the alternative — teaching the
+// opaque cloud store to ignore a daemon-specific field exclusion list — would weaken PT-1's
+// real equal-version conflict detection. It is contained operationally: the alpha.2 dogfood
+// pre-deploy gate drains all non-uploaded SM Cloud rows under the pre-alpha.2 daemon first,
+// so the trigger is absent (docs/dogfood-acceptance.md). Already-uploaded rows do not
+// re-trigger via reconcile — the manifest keys on uuid+revision+modified_at, not payload.
 func projectCloudQso(q types.Qso) (json.RawMessage, error) {
 	raw, err := json.Marshal(q)
 	if err != nil {
