@@ -532,14 +532,22 @@ func TestCIVRecovery_RevalidatesAfterWaitingForKeyMu(t *testing.T) {
 // Pressing Re-check is not an operator override. If CI-V never ACKs the safe
 // tx_off, the request fails and both the warning and TX gate remain latched.
 func TestRecheckTx_CIVMissingAckKeepsAlarm(t *testing.T) {
-	s, fake, _, cleanup := startedCIVService(t, []byte(civAckOKFrame))
-	defer cleanup()
+	// This is deliberately NOT startedCIVService: that helper runs the read
+	// pipeline and auto-ACKs setup writes. Switching its reply hook to silence
+	// after startup leaves a timing window where an already-queued setup ACK can
+	// satisfy this re-check's newly installed waiter. A silent, unstarted fake
+	// still exercises the real CI-V write+ACK timeout while making the absence of
+	// an ACK structural rather than scheduler-dependent.
+	s, fake := newCIVPipelineTestService(t)
 	s.civAckTimeout = 20 * time.Millisecond
-	fake.mu.Lock()
-	fake.onWrite = func([]byte) []byte { return nil }
-	fake.mu.Unlock()
 
 	s.mu.Lock()
+	if s.runCtx != nil {
+		s.mu.Unlock()
+		t.Fatal("missing-ACK fixture started a read pipeline that could deliver a stale ACK")
+	}
+	s.activeClient = fake
+	s.identityConfirmed = true
 	s.txAlarmActive = true
 	s.txUncertain = true
 	s.mu.Unlock()
