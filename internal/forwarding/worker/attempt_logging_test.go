@@ -303,7 +303,7 @@ func TestAttemptLogging_RearmedRowIsNotReportedAsCompleted(t *testing.T) {
 		t.Fatalf("new worker: %v", err)
 	}
 	w.persistOutcome(context.Background(), row, "G0ABC",
-		forwarding.Result{Outcome: forwarding.OutcomeSuccess, UpstreamID: "stub-ok"}, 7*time.Millisecond)
+		forwarding.Result{Outcome: forwarding.OutcomeSuccess, UpstreamID: "stub-ok"}, 7*time.Millisecond, forwardTestUUID)
 
 	recs := withMessage(t, buf, msgAttempt)
 	if len(recs) != 1 {
@@ -336,7 +336,7 @@ func TestAttemptLogging_PersistFailureIsErrorAndNotCompleted(t *testing.T) {
 		t.Fatalf("close db: %v", cerr)
 	}
 	w.persistOutcome(context.Background(), row, "G0ABC",
-		forwarding.Result{Outcome: forwarding.OutcomeSuccess, UpstreamID: "stub-ok"}, 7*time.Millisecond)
+		forwarding.Result{Outcome: forwarding.OutcomeSuccess, UpstreamID: "stub-ok"}, 7*time.Millisecond, forwardTestUUID)
 
 	recs := withMessage(t, buf, msgAttempt)
 	if len(recs) != 1 {
@@ -424,7 +424,7 @@ func TestAttemptLogging_OutcomeDetailFromResult(t *testing.T) {
 
 			w.persistOutcome(context.Background(), row, "G0ABC",
 				forwarding.Result{Outcome: forwarding.OutcomeSuccess, UpstreamID: "id-1", Detail: tc.detail},
-				7*time.Millisecond)
+				7*time.Millisecond, forwardTestUUID)
 
 			recs := withMessage(t, buf, msgAttempt)
 			if len(recs) != 1 {

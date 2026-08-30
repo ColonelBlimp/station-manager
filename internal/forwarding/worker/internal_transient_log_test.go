@@ -136,7 +136,7 @@ func TestPersistOutcome_UnrecognisedOutcomeLogsError(t *testing.T) {
 		t.Fatalf("new worker: %v", err)
 	}
 	w.persistOutcome(context.Background(), row, "K1ABC",
-		forwarding.Result{Outcome: "bogus_outcome", Err: stderrors.New("plugin returned garbage")}, 0)
+		forwarding.Result{Outcome: "bogus_outcome", Err: stderrors.New("plugin returned garbage")}, 0, forwardTestUUID)
 
 	recs := withMessage(t, buf, "forwarder: returned unrecognised Outcome")
 	if len(recs) != 1 {

@@ -43,7 +43,7 @@ func TestShutdownCancel_AttributableCancelIsFullySuppressed(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // daemon is shutting down
 	w.persistOutcome(ctx, row, "G0ABC",
-		forwarding.Result{Outcome: forwarding.OutcomeUnreachable, Err: context.Canceled}, time.Millisecond)
+		forwarding.Result{Outcome: forwarding.OutcomeUnreachable, Err: context.Canceled}, time.Millisecond, forwardTestUUID)
 
 	if recs := withMessage(t, buf, msgAttempt); len(recs) != 0 {
 		t.Errorf("attempt records = %d, want 0 — a shutdown cancel is not an attempt result\n%s", len(recs), buf.String())
@@ -78,7 +78,7 @@ func TestShutdownCancel_CoincidentRealFailureStillLogsAndMarksDown(t *testing.T)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	w.persistOutcome(ctx, row, "G0ABC",
-		forwarding.Result{Outcome: forwarding.OutcomeUnreachable, Err: stderrors.New("no route to host")}, time.Millisecond)
+		forwarding.Result{Outcome: forwarding.OutcomeUnreachable, Err: stderrors.New("no route to host")}, time.Millisecond, forwardTestUUID)
 
 	if recs := withMessage(t, buf, msgShutdownCancel); len(recs) != 0 {
 		t.Errorf("shutdown-cancel breadcrumb records = %d, want 0 — this was a real upstream failure", len(recs))
@@ -104,7 +104,7 @@ func TestShutdownCancel_SuccessDuringCancelStillRecorded(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	w.persistOutcome(ctx, row, "G0ABC",
-		forwarding.Result{Outcome: forwarding.OutcomeSuccess, UpstreamID: "stub-ok"}, time.Millisecond)
+		forwarding.Result{Outcome: forwarding.OutcomeSuccess, UpstreamID: "stub-ok"}, time.Millisecond, forwardTestUUID)
 
 	if recs := withMessage(t, buf, msgShutdownCancel); len(recs) != 0 {
 		t.Errorf("shutdown-cancel breadcrumb records = %d, want 0 — a success is not a cancel", len(recs))

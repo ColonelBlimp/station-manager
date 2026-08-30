@@ -112,6 +112,7 @@ func (s *Service) Delete(ctx context.Context, existing types.Qso, src source.Sou
 		Msg("QSO soft-deleted")
 
 	s.Hub.Publish(events.NameQsoDeleted, events.QsoDeletedPayload{
+		QsoUUID:   existing.UUID,
 		QsoID:     existing.ID,
 		LogbookID: logbookID,
 	})

@@ -43,6 +43,13 @@ three SSE streams share one subscriber cap (**503 `server_busy`**).
 comment every 30s, clear/re-arm write deadlines so long-lived streams survive
 `WriteTimeout`, and return promptly on graceful shutdown.
 
+**Event identity (AW-1).** The `qso.*` (`qso.stored`/`qso.updated`/`qso.deleted`) and
+`forward.*` (`forward.succeeded`/`forward.failed`) payloads on `/v1/events` carry
+**`qso_uuid`**, the canonical QSO identifier, alongside the daemon-local **`qso_id`**.
+`qso_id` is **DEPRECATED** and retained only through **`v2.0.0-alpha.2`**; it is removed in
+**`v2.0.0-alpha.3`**. `logbook_id` stays numeric (the public logbook key). New consumers
+key on `qso_uuid`; the addition is backward-compatible (both ids are present in alpha.2).
+
 **Gating.** "Always-on" = registered whenever the server runs. Subsystem routes are
 registered only when their subsystem is enabled (bridge / FT8 / profiling / SPA); when
 unregistered, the path is a **404**. The `/v1/` API namespace is routed on its own mux
@@ -211,7 +218,7 @@ or root mount at all, so those paths `404` there too. (SM Cloud's API returns th
 - **Request:** Query `?limit=N` (optional; default 50) — must be an integer in `[1,500]` (the per-category retention ceiling).
 - **Response:** **200** `{"items": [OperatorEvent…]}`, newest first. Each `OperatorEvent` = `{id, category, kind, severity, occurred_at (RFC3339), build, detail (embedded JSON object)}`. Empty history is `{"items": []}` (never null).
 - **Errors:** 400 `invalid_field_value` (limit non-integral or out of range); 500 `db_error`.
-- **Notes:** Reads the `notification` category via `FetchOperatorEventsByCategoryWithContext`; `detail` is the stored typed metadata verbatim (never raw provider text). Only the `notification` category is exposed today.
+- **Notes:** Reads the `notification` category via `FetchOperatorEventsByCategoryWithContext`; `detail` is the stored typed metadata verbatim (never raw provider text). Only the `notification` category is exposed today. The daemon-originated `forward.failed` detail carries **`qso_uuid`** (canonical) alongside the **DEPRECATED** `qso_id` (retained through `v2.0.0-alpha.2`, removed in `v2.0.0-alpha.3`) — matching the `forward.*` SSE payloads (AW-1).
 
 ### `POST /v1/notifications`
 - **Purpose:** Record a durable, browser-originated operator notification that must survive its transient toast and a page reload (W-0001 / ADR 0076). The only wired kind is a failed ADIF export (Export dialog).

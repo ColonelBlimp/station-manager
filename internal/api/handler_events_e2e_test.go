@@ -115,8 +115,11 @@ func TestE2E_SSE_InsertFlow(t *testing.T) {
 			if err := json.Unmarshal([]byte(f.data), &p); err != nil {
 				t.Fatalf("qso.stored payload: %v, raw=%q", err, f.data)
 			}
+			if p.QsoUUID != qsoUUID {
+				t.Errorf("qso.stored QsoUUID = %q, want %q (AW-1)", p.QsoUUID, qsoUUID)
+			}
 			if p.QsoID != qsoID || p.LogbookID != lbID {
-				t.Errorf("qso.stored payload = %+v, want {qso:%d, logbook:%d}", p, qsoID, lbID)
+				t.Errorf("qso.stored payload = %+v, want {uuid:%s, qso:%d, logbook:%d}", p, qsoUUID, qsoID, lbID)
 			}
 			sawStored = true
 
@@ -124,6 +127,9 @@ func TestE2E_SSE_InsertFlow(t *testing.T) {
 			var p events.ForwardSucceededPayload
 			if err := json.Unmarshal([]byte(f.data), &p); err != nil {
 				t.Fatalf("forward.succeeded payload: %v, raw=%q", err, f.data)
+			}
+			if p.QsoUUID != qsoUUID {
+				t.Errorf("forward.succeeded QsoUUID = %q, want %q (AW-1)", p.QsoUUID, qsoUUID)
 			}
 			if p.QsoID != qsoID {
 				t.Errorf("forward.succeeded QsoID = %d, want %d", p.QsoID, qsoID)
@@ -192,8 +198,11 @@ func TestE2E_SSE_UpdateAndDeleteFlow(t *testing.T) {
 			if err := json.Unmarshal([]byte(f.data), &p); err != nil {
 				t.Fatalf("qso.updated payload: %v, raw=%q", err, f.data)
 			}
+			if p.QsoUUID != qsoUUID {
+				t.Errorf("qso.updated QsoUUID = %q, want %q (AW-1)", p.QsoUUID, qsoUUID)
+			}
 			if p.QsoID != qsoID || p.LogbookID != lbID {
-				t.Errorf("qso.updated payload = %+v, want {qso:%d, logbook:%d}", p, qsoID, lbID)
+				t.Errorf("qso.updated payload = %+v, want {uuid:%s, qso:%d, logbook:%d}", p, qsoUUID, qsoID, lbID)
 			}
 			sawUpdated = true
 		case events.NameQsoDeleted:
@@ -201,8 +210,11 @@ func TestE2E_SSE_UpdateAndDeleteFlow(t *testing.T) {
 			if err := json.Unmarshal([]byte(f.data), &p); err != nil {
 				t.Fatalf("qso.deleted payload: %v, raw=%q", err, f.data)
 			}
+			if p.QsoUUID != qsoUUID {
+				t.Errorf("qso.deleted QsoUUID = %q, want %q (AW-1)", p.QsoUUID, qsoUUID)
+			}
 			if p.QsoID != qsoID || p.LogbookID != lbID {
-				t.Errorf("qso.deleted payload = %+v, want {qso:%d, logbook:%d}", p, qsoID, lbID)
+				t.Errorf("qso.deleted payload = %+v, want {uuid:%s, qso:%d, logbook:%d}", p, qsoUUID, qsoID, lbID)
 			}
 			sawDeleted = true
 		}
@@ -271,6 +283,9 @@ func TestE2E_SSE_FailureFlow(t *testing.T) {
 			var p events.ForwardFailedPayload
 			if err := json.Unmarshal([]byte(f.data), &p); err != nil {
 				t.Fatalf("forward.failed payload: %v, raw=%q", err, f.data)
+			}
+			if p.QsoUUID != qsoUUID {
+				t.Errorf("forward.failed QsoUUID = %q, want %q (AW-1)", p.QsoUUID, qsoUUID)
 			}
 			if p.QsoID != qsoID || p.ForwarderName != "qrz" || p.Action != "insert" {
 				t.Errorf("payload = %+v", p)

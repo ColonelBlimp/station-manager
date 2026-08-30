@@ -37,6 +37,12 @@ func randomDedupeKey(t *testing.T) string {
 	return hex.EncodeToString(buf[:])
 }
 
+// forwardTestUUID is a placeholder canonical uuid threaded into persistOutcome /
+// markSuccess by tests that drive an outcome directly and do not assert the identifier
+// itself (AW-1); the resolution and per-path uuid contract are pinned in
+// forward_event_uuid_test.go.
+const forwardTestUUID = "01a00000-0000-7000-8000-0000000000ff"
+
 // testHarness wires up real services over an in-memory sqlite db, plus
 // an initialized logger and an event hub. No mocks; per CLAUDE.md this
 // is the preferred shape.
@@ -1304,7 +1310,7 @@ func TestMarkSuccess_ReArmed_NoTerminalEvent(t *testing.T) {
 	defer unsub()
 
 	// Stale completion of the claimed (now re-armed) row.
-	w.markSuccess(context.Background(), claimed[0], "logid-stale")
+	w.markSuccess(context.Background(), claimed[0], "logid-stale", forwardTestUUID)
 
 	select {
 	case ev := <-sub:

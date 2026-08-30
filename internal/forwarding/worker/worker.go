@@ -303,7 +303,7 @@ func (w *Worker) processRow(ctx context.Context, row types.QsoUpload) {
 			Int64("upload_id", row.ID).
 			Str("action", row.Action).
 			Msg("forwarder: row carries unknown action string")
-		_ = w.markFailed(ctx, row, fmt.Sprintf("unknown action %q", row.Action))
+		_ = w.markFailed(ctx, row, fmt.Sprintf("unknown action %q", row.Action), "")
 		return
 	}
 
@@ -342,7 +342,7 @@ func (w *Worker) processRow(ctx context.Context, row types.QsoUpload) {
 	res := w.fwd.Submit(ctx, qso, act, priorUpstreamID)
 	submitDur := time.Since(start)
 
-	w.persistOutcome(ctx, row, call, res, submitDur)
+	w.persistOutcome(ctx, row, call, res, submitDur, qso.UUID)
 }
 
 // resolvePriorUpstreamID fetches the upstream_id recorded on the prior
@@ -414,7 +414,7 @@ func (w *Worker) fetchQsoForAction(ctx context.Context, row types.QsoUpload, act
 		// a persist failure is logged by markFailed, and a re-arm leaves the row pending
 		// (it will forward again), so the "terminally failed" line must not run ahead of
 		// the write that makes it true.
-		if w.markFailed(ctx, row, reason) == dispPersisted {
+		if w.markFailed(ctx, row, reason, "") == dispPersisted {
 			w.logger.WarnWith().
 				Str("forwarder", w.cfg.Name).
 				Int64("upload_id", row.ID).
@@ -461,7 +461,7 @@ func (w *Worker) fetchQsoForAction(ctx context.Context, row types.QsoUpload, act
 		Int64("upload_id", row.ID).
 		Str("action", act.String()).
 		Msg("forwarder: switch reached unreachable action")
-	_ = w.markFailed(ctx, row, fmt.Sprintf("unreachable action %q", act))
+	_ = w.markFailed(ctx, row, fmt.Sprintf("unreachable action %q", act), "")
 	return types.Qso{}, true
 }
 
@@ -473,7 +473,7 @@ func (w *Worker) fetchQsoForAction(ctx context.Context, row types.QsoUpload, act
 // call is the contacted-station callsign for log lines; persistOutcome
 // itself doesn't otherwise touch the QSO row.
 func (w *Worker) persistOutcome(
-	ctx context.Context, row types.QsoUpload, call string, res forwarding.Result, submitDur time.Duration,
+	ctx context.Context, row types.QsoUpload, call string, res forwarding.Result, submitDur time.Duration, qsoUUID string,
 ) {
 	// Shutdown cancelled this attempt mid-flight (L11-C4). This is not an upstream
 	// fault and must not be logged as one, nor mark the destination unreachable: the
@@ -513,18 +513,18 @@ func (w *Worker) persistOutcome(
 	switch res.Outcome {
 	case forwarding.OutcomeSuccess:
 		attempt.upstreamID = res.UpstreamID
-		disp, stamped = w.markSuccess(ctx, row, res.UpstreamID)
+		disp, stamped = w.markSuccess(ctx, row, res.UpstreamID, qsoUUID)
 
 	case forwarding.OutcomeTerminal:
 		// The Forwarder contract sets Result.Err on a non-success outcome, but
 		// don't trust it blindly — a nil here would store an empty last_error
 		// and emit an empty forward.failed reason (review 2026-06-05 L2).
 		cause = nonNilErr(res.Err, "forwarder reported terminal outcome without an error")
-		disp = w.markFailed(ctx, row, cause.Error())
+		disp = w.markFailed(ctx, row, cause.Error(), qsoUUID)
 
 	case forwarding.OutcomeTransient:
 		cause = nonNilErr(res.Err, "forwarder reported transient outcome without an error")
-		outcome, disp = w.markTransientFromForwarder(ctx, row, cause, attempt)
+		outcome, disp = w.markTransientFromForwarder(ctx, row, cause, attempt, qsoUUID)
 
 	case forwarding.OutcomeUnreachable:
 		cause = nonNilErr(res.Err, "forwarder reported unreachable outcome without an error")
@@ -547,7 +547,7 @@ func (w *Worker) persistOutcome(
 		}
 		ev.Msg("forwarder: returned unrecognised Outcome")
 		cause = nonNilErr(res.Err, "forwarder reported an unrecognised outcome")
-		disp = w.markFailed(ctx, row, fmt.Sprintf("unknown outcome %q: %s", res.Outcome, errText(res.Err)))
+		disp = w.markFailed(ctx, row, fmt.Sprintf("unknown outcome %q: %s", res.Outcome, errText(res.Err)), qsoUUID)
 	}
 
 	// Reachability transition (L11). An unreachable outcome marks the destination
@@ -723,11 +723,11 @@ const outcomeExhausted = "exhausted"
 // (transient vs exhausted — the operator action differs) and the local
 // disposition; the caller emits the single record.
 func (w *Worker) markTransientFromForwarder(
-	ctx context.Context, row types.QsoUpload, cause error, extra *attemptFields,
+	ctx context.Context, row types.QsoUpload, cause error, extra *attemptFields, qsoUUID string,
 ) (string, disposition) {
 	nextAttempts := row.Attempts + 1
 	if nextAttempts >= int64(w.cfg.Retry.MaxAttempts) {
-		return outcomeExhausted, w.markFailed(ctx, row, errText(cause))
+		return outcomeExhausted, w.markFailed(ctx, row, errText(cause), qsoUUID)
 	}
 	delay := computeBackoff(nextAttempts, w.cfg.Retry)
 	extra.delay = delay
@@ -780,7 +780,7 @@ func (w *Worker) markTransientInternal(ctx context.Context, row types.QsoUpload,
 	// assert a transition that never committed — the exact trap persistOutcome/logAttempt
 	// avoids. Only a committed (dispPersisted) transition earns a line.
 	if nextAttempts >= int64(w.cfg.Retry.MaxAttempts) {
-		if w.markFailed(ctx, row, "internal: "+errText(cause)) == dispPersisted {
+		if w.markFailed(ctx, row, "internal: "+errText(cause), "") == dispPersisted {
 			base(w.logger.WarnWith()).Msg("forwarding: internal transient exhausted — row failed")
 		}
 		return
@@ -827,7 +827,44 @@ func (w *Worker) markTransientRetry(
 	return dispPersisted
 }
 
-func (w *Worker) markFailed(ctx context.Context, row types.QsoUpload, lastErr string) disposition {
+// resolveQsoUUID recovers a QSO's canonical uuid from its numeric qso_id for a forward.*
+// event when the caller did not hydrate the QSO — the early terminal paths (unknown action,
+// soft-deleted insert/update, internal-fetch retry exhaustion). It is a NARROW uuid-only,
+// including-deleted read (FetchQsoUUIDByIDWithContext), NOT full hydration: a row with
+// malformed additional_data must not prevent identity resolution during that exhaustion,
+// and a soft-deleted row still has its uuid. Returns "" only when even that fails, so a
+// caller can drop the event rather than publish an empty identifier. A non-ErrNotFound
+// error is a real fault worth a line; an absent row (a dangling upload FK ingest should
+// never produce) is not. The resolve happens BEFORE the terminal write so no fallible read
+// stands between a committed transition and its event.
+func (w *Worker) resolveQsoUUID(ctx context.Context, qsoID int64) string {
+	uuid, err := w.db.FetchQsoUUIDByIDWithContext(ctx, qsoID)
+	if err != nil {
+		if !stderr.Is(err, errors.ErrNotFound) {
+			w.logger.WarnWith().
+				Str("forwarder", w.cfg.Name).
+				Int64("qso_id", qsoID).
+				Err(err).
+				Msg("forwarding: could not resolve qso uuid for event")
+		}
+		return ""
+	}
+	return uuid
+}
+
+// markFailed persists a terminal upload failure and publishes forward.failed (ephemeral
+// SSE) plus a durable operator record. qsoUUID is the QSO's canonical uuid: the normal
+// outcome paths thread the already-hydrated uuid; the early paths (unknown action,
+// soft-deleted insert/update, retry exhaustion) pass "" and it is resolved here — a narrow
+// including-deleted read, done BEFORE the terminal write so no fallible read stands between
+// the committed transition and its event, and so the SAME uuid stamps both publications.
+// Never emit an empty qso_uuid: if it stays unresolved (a dangling upload FK ingest should
+// never produce), the ephemeral SSE is dropped while the durable record still fires.
+func (w *Worker) markFailed(ctx context.Context, row types.QsoUpload, lastErr, qsoUUID string) disposition {
+	if qsoUUID == "" {
+		qsoUUID = w.resolveQsoUUID(ctx, row.QsoID)
+	}
+
 	err := w.db.MarkUploadFailedWithContext(ctx, row.ID, lastErr)
 	if w.reArmed(err, row.ID, "failed") {
 		return dispRearmed
@@ -840,26 +877,35 @@ func (w *Worker) markFailed(ctx context.Context, row types.QsoUpload, lastErr st
 			Msg("forwarder: mark failed failed")
 		return dispPersistFailed
 	}
-	w.hub.Publish(events.NameForwardFailed, events.ForwardFailedPayload{
-		QsoID:         row.QsoID,
-		ForwarderName: w.cfg.Name,
-		Action:        row.Action,
-		Attempts:      int(row.Attempts) + 1,
-		Reason:        lastErr,
-	})
+	if qsoUUID != "" {
+		w.hub.Publish(events.NameForwardFailed, events.ForwardFailedPayload{
+			QsoUUID:       qsoUUID,
+			QsoID:         row.QsoID,
+			ForwarderName: w.cfg.Name,
+			Action:        row.Action,
+			Attempts:      int(row.Attempts) + 1,
+			Reason:        lastErr,
+		})
+	} else {
+		w.logger.WarnWith().
+			Str("forwarder", w.cfg.Name).
+			Int64("upload_id", row.ID).
+			Int64("qso_id", row.QsoID).
+			Msg("forwarding: forward.failed SSE suppressed — QSO identity unresolved")
+	}
 
 	// Durable operator-facing record of the terminal failure (W-0001 / ADR 0076).
 	// Explicit per-boundary write — never via a hub subscriber. Best-effort: it
 	// runs in its own store transaction (outside the QSO/upload writes) and a
 	// failure here must not change the disposition or suppress the hub event
-	// above, so the error is logged and swallowed. The typed detail carries only
-	// qso_id/forwarder/action/attempts — never the provider Reason in lastErr.
+	// above, so the error is logged and swallowed. The typed detail carries
+	// qso_uuid/qso_id/forwarder/action/attempts — never the provider Reason in lastErr.
 	if recErr := w.db.RecordOperatorEvent(ctx, sqlite.OperatorEventInput{
 		Category: "notification",
 		Kind:     "forward.failed",
 		Severity: "warn",
 		Build:    buildinfo.Version,
-		Detail:   forwardFailedDetail(row, w.cfg.Name),
+		Detail:   forwardFailedDetail(row, w.cfg.Name, qsoUUID),
 	}); recErr != nil {
 		w.logger.ErrorWith().
 			Str("forwarder", w.cfg.Name).
@@ -889,7 +935,7 @@ func (w *Worker) markFailed(ctx context.Context, row types.QsoUpload, lastErr st
 // attempt record now emitted after markSuccess returns, a hook failure would
 // erase the only trace of an upload that already persisted — which is exactly
 // what the pre-restructure ordering could not do (clean-room review of f31738bc).
-func (w *Worker) markSuccess(ctx context.Context, row types.QsoUpload, upstreamID string) (disposition, bool) {
+func (w *Worker) markSuccess(ctx context.Context, row types.QsoUpload, upstreamID, qsoUUID string) (disposition, bool) {
 	stamped := false
 	prefix := w.fwd.AdifPrefix()
 	if prefix != "" && row.Action != action.Delete.String() {
@@ -927,13 +973,25 @@ func (w *Worker) markSuccess(ctx context.Context, row types.QsoUpload, upstreamI
 		}
 	}
 
-	w.hub.Publish(events.NameForwardSucceeded, events.ForwardSucceededPayload{
-		QsoID:         row.QsoID,
-		ForwarderName: w.cfg.Name,
-		Action:        row.Action,
-		UpstreamID:    upstreamID,
-		Attempts:      int(row.Attempts) + 1,
-	})
+	// AW-1: carry the QSO's canonical uuid. A success is always reached with the QSO
+	// hydrated (it was just submitted), so the caller threads the uuid rather than
+	// re-reading it; guard never-empty regardless.
+	if qsoUUID != "" {
+		w.hub.Publish(events.NameForwardSucceeded, events.ForwardSucceededPayload{
+			QsoUUID:       qsoUUID,
+			QsoID:         row.QsoID,
+			ForwarderName: w.cfg.Name,
+			Action:        row.Action,
+			UpstreamID:    upstreamID,
+			Attempts:      int(row.Attempts) + 1,
+		})
+	} else {
+		w.logger.WarnWith().
+			Str("forwarder", w.cfg.Name).
+			Int64("upload_id", row.ID).
+			Int64("qso_id", row.QsoID).
+			Msg("forwarding: forward.succeeded SSE suppressed — QSO identity unresolved")
+	}
 	return dispPersisted, stamped
 }
 

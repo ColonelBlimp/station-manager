@@ -749,6 +749,48 @@ func (s *Service) FetchQsoByIDIncludingDeletedWithContext(ctx context.Context, i
 	return qso, nil
 }
 
+// FetchQsoUUIDByIDWithContext returns just a QSO's canonical uuid for a numeric row id,
+// INCLUDING soft-deleted rows. It exists so the forwarder worker can stamp a forward.*
+// event's qso_uuid for a row whose full QSO it did not (or could not) hydrate — a
+// soft-deleted insert/update, or an internal-fetch retry exhaustion. It SELECTs only the
+// uuid column, so a row with malformed additional_data (which would fail full hydration via
+// QsoModelToType) still yields its identity. errors.ErrNotFound on an absent row.
+func (s *Service) FetchQsoUUIDByIDWithContext(ctx context.Context, id int64) (string, error) {
+	const op errors.Op = "sqlite.Service.FetchQsoUUIDByIDWithContext"
+	if err := checkService(op, s); err != nil {
+		return "", err
+	}
+	if id < 1 {
+		return "", errors.New(op).WithMsg(errMsgInvalidId)
+	}
+
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return "", err
+	}
+
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+
+	// Bind only the uuid column (no additional_data, no adapter conversion) so identity
+	// resolution never depends on the rest of the row being well-formed. NewQuery + qm
+	// mods stay on the sqlboiler path (see FetchQsoByIDIncludingDeletedWithContext).
+	model := &models.Qso{}
+	err = models.NewQuery(
+		qm.Select(models.QsoColumns.UUID),
+		qm.From(models.TableNames.Qso),
+		qm.Where(models.QsoColumns.ID+"=?", id),
+		qm.Limit(1),
+	).Bind(ctx, h, model)
+	if err != nil {
+		if stderr.Is(err, sql.ErrNoRows) {
+			return "", errors.ErrNotFound
+		}
+		return "", errors.New(op).WithErr(err)
+	}
+	return model.UUID, nil
+}
+
 func (s *Service) FetchQsoByDedupeKeyWithContext(ctx context.Context, logbookID int64, dedupeKey string) (types.Qso, error) {
 	const op errors.Op = "sqlite.Service.FetchQsoByDedupeKeyWithContext"
 	if err := checkService(op, s); err != nil {

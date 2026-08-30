@@ -325,6 +325,7 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte, s
 		Msg("QSO updated")
 
 	s.Hub.Publish(events.NameQsoUpdated, events.QsoUpdatedPayload{
+		QsoUUID:   merged.UUID,
 		QsoID:     merged.ID,
 		LogbookID: merged.LogbookID,
 	})

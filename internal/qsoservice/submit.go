@@ -521,6 +521,7 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 		Msg("QSO stored")
 
 	s.Hub.Publish(events.NameQsoStored, events.QsoStoredPayload{
+		QsoUUID:   qso.UUID,
 		QsoID:     qsoID,
 		LogbookID: logbookID,
 	})

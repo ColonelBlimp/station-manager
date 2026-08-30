@@ -58,7 +58,7 @@ func TestQueueContext_AttemptRecordCarriesQueueFields(t *testing.T) {
 		ForwarderName: "stub", Origin: "live", Attempts: 2, CreatedAt: queuedAt,
 	}
 	w.persistOutcome(context.Background(), row, "G0ABC",
-		forwarding.Result{Outcome: forwarding.OutcomeSuccess, UpstreamID: "stub-ok"}, 7*time.Millisecond)
+		forwarding.Result{Outcome: forwarding.OutcomeSuccess, UpstreamID: "stub-ok"}, 7*time.Millisecond, forwardTestUUID)
 
 	recs := withMessage(t, buf, msgAttempt)
 	if len(recs) != 1 {
@@ -100,7 +100,7 @@ func TestQueueContext_QueueAgeIsNonNegativeUnderClockSkew(t *testing.T) {
 		ForwarderName: "stub", Origin: "live", CreatedAt: now.Add(5 * time.Second), // future
 	}
 	w.persistOutcome(context.Background(), row, "G0ABC",
-		forwarding.Result{Outcome: forwarding.OutcomeSuccess, UpstreamID: "stub-ok"}, time.Millisecond)
+		forwarding.Result{Outcome: forwarding.OutcomeSuccess, UpstreamID: "stub-ok"}, time.Millisecond, forwardTestUUID)
 
 	recs := withMessage(t, buf, msgAttempt)
 	if len(recs) != 1 {

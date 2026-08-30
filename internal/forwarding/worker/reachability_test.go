@@ -66,12 +66,12 @@ func seedClaimedRow(t *testing.T, h *testHarness) types.QsoUpload {
 
 func driveUnreachable(w *Worker, row types.QsoUpload, cause error) {
 	w.persistOutcome(context.Background(), row, "G0ABC",
-		forwarding.Result{Outcome: forwarding.OutcomeUnreachable, Err: cause}, time.Millisecond)
+		forwarding.Result{Outcome: forwarding.OutcomeUnreachable, Err: cause}, time.Millisecond, forwardTestUUID)
 }
 
 func driveSuccess(w *Worker, row types.QsoUpload) {
 	w.persistOutcome(context.Background(), row, "G0ABC",
-		forwarding.Result{Outcome: forwarding.OutcomeSuccess, UpstreamID: "stub-ok"}, time.Millisecond)
+		forwarding.Result{Outcome: forwarding.OutcomeSuccess, UpstreamID: "stub-ok"}, time.Millisecond, forwardTestUUID)
 }
 
 // C2: many unreachable retries produce exactly ONE default-level "destination unreachable"
@@ -148,7 +148,7 @@ func TestReachability_TerminalCountsAsRecovery(t *testing.T) {
 
 	driveUnreachable(w, row, stderrors.New("connection refused"))
 	w.persistOutcome(context.Background(), row, "G0ABC",
-		forwarding.Result{Outcome: forwarding.OutcomeTerminal, Err: stderrors.New("400 rejected")}, time.Millisecond)
+		forwarding.Result{Outcome: forwarding.OutcomeTerminal, Err: stderrors.New("400 rejected")}, time.Millisecond, forwardTestUUID)
 
 	if rec := withMessage(t, buf, msgDestRecovered); len(rec) != 1 {
 		t.Fatalf("recovered records = %d, want 1 — a Terminal rejection proves the host is reachable\n%s",

@@ -22,6 +22,7 @@ import (
 // verbatim, and never change the forward disposition or suppress the hub event.
 
 type forwardFailedDetailFields struct {
+	QsoUUID   string `json:"qso_uuid"`
 	QsoID     int64  `json:"qso_id"`
 	Forwarder string `json:"forwarder"`
 	Action    string `json:"action"`
@@ -38,7 +39,7 @@ func TestForwardFailed_RecordsTypedDetailWithoutProviderReason(t *testing.T) {
 	const secret = "token=SECRET-abc123"
 	reason := "401 unauthorized: " + secret + " — do not store"
 	w.persistOutcome(context.Background(), row, "G0ABC",
-		forwarding.Result{Outcome: forwarding.OutcomeTerminal, Err: stderrors.New(reason)}, time.Millisecond)
+		forwarding.Result{Outcome: forwarding.OutcomeTerminal, Err: stderrors.New(reason)}, time.Millisecond, forwardTestUUID)
 
 	evs, err := h.db.FetchOperatorEventsByCategoryWithContext(context.Background(), "notification", 10)
 	if err != nil {
@@ -83,7 +84,7 @@ func TestForwardFailedDetail_BoundsActionAndOmitsReason(t *testing.T) {
 		{"insert; DROP TABLE qso", "unknown"},
 	} {
 		row := types.QsoUpload{QsoID: 42, Action: tc.in, Attempts: 2}
-		raw := forwardFailedDetail(row, "qrz")
+		raw := forwardFailedDetail(row, "qrz", "u-42")
 
 		var d forwardFailedDetailFields
 		if err := json.Unmarshal(raw, &d); err != nil {
@@ -92,8 +93,8 @@ func TestForwardFailedDetail_BoundsActionAndOmitsReason(t *testing.T) {
 		if d.Action != tc.want {
 			t.Errorf("action %q -> %q, want %q", tc.in, d.Action, tc.want)
 		}
-		if d.QsoID != 42 || d.Forwarder != "qrz" || d.Attempts != 3 {
-			t.Errorf("action %q: detail = %+v, want qso_id=42 forwarder=qrz attempts=3", tc.in, d)
+		if d.QsoUUID != "u-42" || d.QsoID != 42 || d.Forwarder != "qrz" || d.Attempts != 3 {
+			t.Errorf("action %q: detail = %+v, want qso_uuid=u-42 qso_id=42 forwarder=qrz attempts=3", tc.in, d)
 		}
 		for _, forbidden := range []string{"reason", "last_error"} {
 			if strings.Contains(strings.ToLower(string(raw)), forbidden) {
@@ -118,7 +119,7 @@ func TestForwardFailed_RecordFailureDoesNotDisturbForwardOutcome(t *testing.T) {
 	defer unsub()
 
 	w.persistOutcome(context.Background(), row, "G0ABC",
-		forwarding.Result{Outcome: forwarding.OutcomeTerminal, Err: stderrors.New("400 rejected")}, time.Millisecond)
+		forwarding.Result{Outcome: forwarding.OutcomeTerminal, Err: stderrors.New("400 rejected")}, time.Millisecond, forwardTestUUID)
 
 	// The ephemeral hub event still fires — the record failure must not suppress it.
 	select {
