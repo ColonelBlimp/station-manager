@@ -17,7 +17,10 @@
 import { openReviving } from './sse-reviving';
 
 export interface QsoEventPayload {
-    qso_id: number;
+    /** Canonical QSO identifier (AW-1). Present from v2.0.0-alpha.2. */
+    qso_uuid?: string;
+    /** DEPRECATED daemon-local numeric id — removed in v2.0.0-alpha.3. Prefer qso_uuid. */
+    qso_id?: number;
     logbook_id: number;
 }
 
@@ -30,14 +33,34 @@ export interface LogEventHandlers {
     onQsoChanged: (event: string, payload: QsoEventPayload) => void;
 }
 
-function parse(ev: MessageEvent<string>, label: string): QsoEventPayload | null {
+/**
+ * Decode a qso.* event's JSON payload, or null when it is unusable.
+ *
+ * AW-1 alpha.2 (additive): a payload is accepted when it carries a numeric `logbook_id`
+ * AND at least one QSO identifier — `qso_uuid` (canonical) preferred, the deprecated
+ * numeric `qso_id` still tolerated so a legacy alpha.1 event is not dropped. A payload with
+ * neither identifier, or a non-numeric `logbook_id` (the map keys on it), is rejected. In
+ * alpha.3 the `qso_id`-only fallback is removed and `qso_uuid` becomes required.
+ */
+export function decodeQsoEvent(data: string): QsoEventPayload | null {
+    let decoded: unknown;
     try {
-        const p = JSON.parse(ev.data) as QsoEventPayload;
-        return typeof p.qso_id === 'number' && typeof p.logbook_id === 'number' ? p : null;
-    } catch (e) {
-        console.warn(`[log-events] ${label} JSON parse failed`, e);
+        decoded = JSON.parse(data) as unknown;
+    } catch {
         return null;
     }
+    if (typeof decoded !== 'object' || decoded === null || Array.isArray(decoded)) return null;
+    const p = decoded as QsoEventPayload;
+    if (typeof p.logbook_id !== 'number') return null;
+    const hasUuid = typeof p.qso_uuid === 'string' && p.qso_uuid !== '';
+    const hasId = typeof p.qso_id === 'number';
+    return hasUuid || hasId ? p : null;
+}
+
+function parse(ev: MessageEvent<string>, label: string): QsoEventPayload | null {
+    const p = decodeQsoEvent(ev.data);
+    if (p === null) console.warn(`[log-events] ${label} payload rejected`, ev.data);
+    return p;
 }
 
 const QSO_EVENTS = ['qso.stored', 'qso.updated', 'qso.deleted'] as const;

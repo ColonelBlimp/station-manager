@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { logbookState } from './logbook.svelte';
 import type { LogbookQso } from '../api/logbooks';
 
-function qso(id: number, uuid?: string): LogbookQso {
+function qso(id: number, uuid: string): LogbookQso {
     return { id, uuid, call: `C${id}` };
 }
 
@@ -11,18 +11,20 @@ afterEach(() => {
     logbookState.rows = [];
 });
 
-// The email-out payload keys off UUIDs, but selection is by numeric id and spans
-// pages — so the UUID has to be captured at toggle time, not read back from the
-// (page-only) `rows`. These tests pin that capture + the markEmailed mirror.
+// Selection keys on the QSO UUID (AW-1) and spans pages, so the email-out payload is just
+// the selected set's contents — no id→UUID side map, and a paged-away row's selection
+// survives on its own. Selection is UUID-only: no numeric fallback. These tests pin that +
+// the markEmailed mirror.
 describe('logbook selection → email UUIDs', () => {
-    it('toggleRow captures the UUID; selectedUuids lists the selected rows', () => {
+    it('toggleRow keys the selection on the UUID; selectedUuids lists the selected rows', () => {
         logbookState.toggleRow(qso(1, 'u1'));
         logbookState.toggleRow(qso(2, 'u2'));
         expect(logbookState.selectedCount).toBe(2);
+        expect([...logbookState.selected].sort()).toEqual(['u1', 'u2']); // the set holds UUIDs
         expect(logbookState.selectedUuids.sort()).toEqual(['u1', 'u2']);
     });
 
-    it('toggling a row off drops both its id and its UUID', () => {
+    it('toggling a row off deselects it by UUID', () => {
         const a = qso(1, 'u1');
         logbookState.toggleRow(a);
         logbookState.toggleRow(qso(2, 'u2'));
@@ -38,11 +40,10 @@ describe('logbook selection → email UUIDs', () => {
         expect(logbookState.selectedUuids).toEqual(['u1']);
     });
 
-    it('a selected row without a UUID is counted but excluded from the email payload', () => {
-        logbookState.toggleRow(qso(1)); // no uuid (pre-UUID legacy import)
-        logbookState.toggleRow(qso(2, 'u2'));
-        expect(logbookState.selectedCount).toBe(2);
-        expect(logbookState.selectedUuids).toEqual(['u2']);
+    it('selects rows by UUID even when the deprecated numeric id is absent', () => {
+        logbookState.toggleRow({ uuid: 'a', call: 'A' });
+        logbookState.toggleRow({ uuid: 'b', call: 'B' });
+        expect(logbookState.selectedUuids.sort()).toEqual(['a', 'b']); // no id collision
     });
 
     it('toggleAllVisible selects then clears the visible rows and their UUIDs', () => {
@@ -155,8 +156,8 @@ describe('bulk re-enrich (skip-if-unchanged)', () => {
         ];
         logbookState.toggleRow(logbookState.rows[0]);
         logbookState.toggleRow(logbookState.rows[1]);
-        // A third selected id with no row on this page → "skipped" count.
-        logbookState.selected.add(999);
+        // A third selected UUID with no row on this page → "skipped" count.
+        logbookState.selected.add('u-offpage');
 
         await logbookState.reEnrichSelected();
 

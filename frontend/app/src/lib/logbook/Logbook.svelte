@@ -246,10 +246,10 @@
                     </tr>
                 </thead>
                 <tbody>
-                    {#each logbookState.visibleRows as row (row.id)}
+                    {#each logbookState.visibleRows as row (row.uuid)}
                         <tr
                             class="h-6 border-b border-line font-mono whitespace-nowrap text-ink last:border-b-0 hover:bg-surface-muted {logbookState.selected.has(
-                                row.id
+                                row.uuid
                             )
                                 ? 'bg-focus/10'
                                 : ''}"
@@ -259,7 +259,7 @@
                                     type="checkbox"
                                     class="cursor-pointer items-center"
                                     aria-label="Select QSO with {row.call ?? 'unknown'}"
-                                    checked={logbookState.selected.has(row.id)}
+                                    checked={logbookState.selected.has(row.uuid)}
                                     onchange={() => logbookState.toggleRow(row)}
                                 />
                             </td>

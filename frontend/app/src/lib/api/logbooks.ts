@@ -26,8 +26,10 @@ export interface Logbook {
  * top-level keys. Only the fields the table renders are typed here.
  */
 export interface LogbookQso {
-    id: number;
-    uuid?: string;
+    /** Canonical QSO identifier (AW-1) — the key for selection, edit, and row rendering. */
+    uuid: string;
+    /** DEPRECATED daemon-local numeric id — removed in v2.0.0-alpha.3. Do not key on it. */
+    id?: number;
     qso_date?: string; // ADIF YYYYMMDD
     qso_date_off?: string; // ADIF YYYYMMDD (overnight QSOs)
     time_on?: string; // ADIF HHMM[SS]

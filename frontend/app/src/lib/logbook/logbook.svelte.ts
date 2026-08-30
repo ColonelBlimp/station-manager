@@ -35,7 +35,7 @@ const PAGE_SIZES = [25, 50, 100] as const;
 // from the retiring logbook SPA (W-0003 AC2).
 const NO_BULK_BACKFILL_TYPES = new Set(['clublog']);
 
-class LogbookState {
+export class LogbookState {
     /** All logbooks (the selector). */
     logbooks: Logbook[] = $state([]);
     /** Selected logbook id, or null before one is chosen / none exist. */
@@ -63,16 +63,12 @@ class LogbookState {
     /** Edit error to show in the modal (validation/conflict/transport), or null. */
     editError: string | null = $state(null);
 
-    // Selected QSO row ids (the numeric primary key), for bulk actions (email today;
-    // forward/export are a follow-up). Selection persists across pages so an operator
-    // can gather rows from several pages before acting; it's cleared only when
-    // switching logbooks. SvelteSet so `.has()` reads are reactive.
-    readonly selected = new SvelteSet<number>();
-    // id → UUID for every selected row, captured at selection time. The page only
-    // holds the current rows, but selection spans pages, so we can't recover a
-    // paged-away row's UUID from `rows` at send time — we stash it on toggle. Plain
-    // Map: read only when building the email payload, never in render.
-    readonly #selectedUuids = new Map<number, string>();
+    // Selected QSO UUIDs (the canonical identifier — AW-1), for bulk actions (email today;
+    // forward/export are a follow-up). Selection persists across pages so an operator can
+    // gather rows from several pages before acting; keying on the UUID means a paged-away
+    // row's selection survives on its own, with no id→UUID side map to keep. Cleared only
+    // when switching logbooks. SvelteSet so `.has()` reads are reactive.
+    readonly selected = new SvelteSet<string>();
 
     // Mailer config (SMTP enabled + default recipient), read once on init from
     // /v1/config so the email-out controls can gate + pre-fill — mirroring the
@@ -214,48 +210,34 @@ class LogbookState {
     /** True when every VISIBLE row is selected (and there is at least one). */
     get allVisibleSelected(): boolean {
         return (
-            this.visibleRows.length > 0 && this.visibleRows.every((r) => this.selected.has(r.id))
+            this.visibleRows.length > 0 && this.visibleRows.every((r) => this.selected.has(r.uuid))
         );
     }
     /** True when some — but not all — visible rows are selected (header checkbox indeterminate). */
     get someVisibleSelected(): boolean {
-        return this.visibleRows.some((r) => this.selected.has(r.id)) && !this.allVisibleSelected;
+        return this.visibleRows.some((r) => this.selected.has(r.uuid)) && !this.allVisibleSelected;
     }
 
-    /** UUIDs of the selected rows (skips any row lacking a UUID — e.g. a pre-UUID
-     *  legacy import, which can't be emailed). The email payload keys off these. */
+    /** UUIDs of the selected rows — the set is keyed on the UUID, so this is just its
+     *  contents. The email payload keys off these. */
     get selectedUuids(): string[] {
-        const out: string[] = [];
-        for (const id of this.selected) {
-            const uuid = this.#selectedUuids.get(id);
-            if (uuid) out.push(uuid);
-        }
-        return out;
+        return [...this.selected];
     }
 
-    /** Toggle one row's selection. Takes the row (not just the id) so the UUID is
-     *  captured for cross-page email — see #selectedUuids. */
+    /** Toggle one row's selection, keyed on its canonical UUID. */
     toggleRow(row: LogbookQso): void {
-        if (this.selected.has(row.id)) {
-            this.selected.delete(row.id);
-            this.#selectedUuids.delete(row.id);
+        if (this.selected.has(row.uuid)) {
+            this.selected.delete(row.uuid);
         } else {
-            this.selected.add(row.id);
-            if (row.uuid) this.#selectedUuids.set(row.id, row.uuid);
+            this.selected.add(row.uuid);
         }
     }
     /** Header checkbox: select all visible rows, or clear them if all are already selected. */
     toggleAllVisible(): void {
         if (this.allVisibleSelected) {
-            for (const r of this.visibleRows) {
-                this.selected.delete(r.id);
-                this.#selectedUuids.delete(r.id);
-            }
+            for (const r of this.visibleRows) this.selected.delete(r.uuid);
         } else {
-            for (const r of this.visibleRows) {
-                this.selected.add(r.id);
-                if (r.uuid) this.#selectedUuids.set(r.id, r.uuid);
-            }
+            for (const r of this.visibleRows) this.selected.add(r.uuid);
         }
     }
 
@@ -272,7 +254,6 @@ class LogbookState {
     /** Drop the entire selection. */
     clearSelection(): void {
         this.selected.clear();
-        this.#selectedUuids.clear();
     }
 
     /** Flip the loaded rows whose UUID was just emailed to "forwarded by email"
@@ -286,10 +267,9 @@ class LogbookState {
      *  that lands after a logbook switch can't reset the unrelated one. */
     markEmailed(uuids: string[], originLogbookId: number | null): void {
         if (uuids.length === 0) return;
-        const set = new Set(uuids);
         for (let i = 0; i < this.rows.length; i++) {
             const uuid = this.rows[i].uuid;
-            if (uuid && set.has(uuid)) {
+            if (uuid && uuids.includes(uuid)) {
                 this.rows[i] = { ...this.rows[i], sm_fwrd_by_email_status: 'Y' };
             }
         }
@@ -346,7 +326,7 @@ class LogbookState {
         }
         // Replace the row in place by id ($state arrays are deeply reactive, so
         // an index assignment re-renders just that row).
-        const i = this.rows.findIndex((r) => r.id === target.id);
+        const i = this.rows.findIndex((r) => r.uuid === target.uuid);
         if (i !== -1) this.rows[i] = out.qso;
         this.closeEdit();
         return true;
@@ -473,7 +453,7 @@ class LogbookState {
     // eslint-disable-next-line complexity
     async reEnrichSelected(): Promise<void> {
         if (this.reEnriching) return;
-        const onPage = this.rows.filter((r) => this.selected.has(r.id));
+        const onPage = this.rows.filter((r) => this.selected.has(r.uuid));
         const targets = onPage.filter((r) => r.uuid && (r.call ?? '').trim() !== '');
         const offPage = this.selected.size - onPage.length;
         if (targets.length === 0) {
@@ -525,12 +505,12 @@ class LogbookState {
                 unchanged++;
                 continue;
             }
-            const res = await patchQso(row.uuid as string, patch);
+            const res = await patchQso(row.uuid, patch);
             if (res.kind !== 'ok') {
                 failed++;
                 continue;
             }
-            const idx = this.rows.findIndex((r) => r.id === row.id);
+            const idx = this.rows.findIndex((r) => r.uuid === row.uuid);
             if (idx !== -1) this.rows[idx] = res.qso;
             changed++;
         }

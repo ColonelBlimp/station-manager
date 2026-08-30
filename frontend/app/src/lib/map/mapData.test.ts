@@ -14,7 +14,7 @@ import {
 } from './mapData.svelte';
 import type { LogbookQso, QsoPageOutcome } from '../api/logbooks';
 
-const q = (over: Partial<LogbookQso>): LogbookQso => ({ id: 1, ...over });
+const q = (over: Partial<LogbookQso>): LogbookQso => ({ id: 1, uuid: 'u-1', ...over });
 
 describe('storedDurationMin', () => {
     it('restores a persisted picker choice', () => {
