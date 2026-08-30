@@ -40,14 +40,17 @@ func spaHandler(spa fs.FS) http.Handler {
 		// "/" is stripped so e.g. "/assets/main.js" → "assets/main.js".
 		// A server-namespace path reaching this catch-all matched no route — a
 		// disabled subsystem (bridge/FT8 off, or profiling off) or a typo. Return a
-		// real 404 rather than SPA-falling-through to a 200 index.html: /v1/* and
-		// /debug/pprof* are server namespaces, never SPA client routes, and a 200
-		// HTML page misleads every curl/script/EventSource/fetch consumer (a
-		// disabled GET /v1/rig/events would otherwise 200-HTML; POST /v1/rig/command
-		// would 405 vs GET /). This is load-bearing at the canonical root, where
-		// there is no /app prefix to quarantine the fallthrough — profiling-off
+		// real 404 rather than SPA-falling-through to a 200 index.html: /debug/pprof*
+		// is a server namespace, never a SPA client route, and a 200 HTML page misleads
+		// every curl/script/pprof consumer. This is load-bearing at the canonical root,
+		// where there is no /app prefix to quarantine the fallthrough — profiling-off
 		// /debug/pprof* would otherwise become SPA HTML instead of the 404 the
 		// full-server pprof tests require.
+		//
+		// /v1/* no longer reaches here: apiRouter (see route_fallback.go) dispatches the
+		// whole /v1/ namespace to its own mux and returns the JSON error envelope for an
+		// unmatched route (AW-4). The /v1 arm below is kept as a cheap defensive net in
+		// case a future root mount is reached directly.
 		p := r.URL.Path
 		if p == "/v1" || strings.HasPrefix(p, "/v1/") ||
 			p == "/debug/pprof" || strings.HasPrefix(p, "/debug/pprof/") {

@@ -152,7 +152,7 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 	}
 
 	mux := http.NewServeMux()
-	s.registerRoutes(mux, cfg, logger, br, ft8Svc)
+	apiMux := s.registerRoutes(mux, cfg, logger, br, ft8Svc)
 
 	// Middleware chain — outermost first:
 	//   securityHeaders   — browser-trust headers on EVERY response, incl. 403/500 (ST-2)
@@ -161,10 +161,12 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 	//   limitConcurrent   — non-SSE concurrent-request cap
 	//   recoverPanic      — panic safety net + structured panic log
 	//   requireSameOrigin — Host allowlist (all methods) + Origin (unsafe methods)
-	//   mux               — per-route handlers (with their own per-route
-	//                       middleware like limitSubmitRate / limitEventSubscribers)
+	//   apiRouter         — dispatches /v1/* to apiMux (re-emitting unmatched-route
+	//                       404/405 as the JSON envelope, AW-4) and everything else to
+	//                       mux; both carry their own per-route middleware like
+	//                       limitSubmitRate / limitEventSubscribers
 	s.httpServer = &http.Server{
-		Handler: s.securityHeaders(s.logRequests(s.rejectWhenDraining(s.limitConcurrent(s.recoverPanic(s.requireSameOrigin(mux)))))),
+		Handler: s.securityHeaders(s.logRequests(s.rejectWhenDraining(s.limitConcurrent(s.recoverPanic(s.requireSameOrigin(s.apiRouter(apiMux, mux))))))),
 		// net/http writes its own diagnostics — accept errors, TLS handshake
 		// failures, and panics on paths recoverPanic does not wrap — through
 		// ErrorLog. Left nil it falls back to log.Default(), i.e. stderr, so those
@@ -193,7 +195,16 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 	return s
 }
 
-// registerRoutes wires every HTTP route onto the mux.
+// registerRoutes wires the /v1/ API namespace onto a dedicated ServeMux (returned to
+// New) and the non-API surfaces — SPA root, operator manual, pprof — onto mux.
+//
+// The two-mux split is load-bearing for AW-4: the SPA catch-all (GET /) path-matches
+// every request, so if the /v1/ routes shared its mux, ServeMux would classify an
+// unmatched /v1/ request against GET / — a non-GET unknown path would 405 with a
+// spurious Allow: GET instead of 404, and a real method mismatch would gain a phantom
+// GET in its Allow set. On its own mux the API namespace classifies 404 vs 405 (with an
+// accurate Allow) cleanly; New dispatches /v1/ to it through apiRouter, which re-emits
+// those plain-text fallbacks as the JSON error envelope.
 //
 // Split out of New during the ADR 0062 build, when adding ONE route tripped the
 // maintidx gate. The routing table is the part of New that grows with every
@@ -201,92 +212,95 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 // struct literal above it — so it is the natural seam. Middleware composition
 // deliberately stays in New: that one HAS an order that matters, and reading it
 // beside the server it wraps is the point.
-func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *logging.Service, br *bridge.Service, ft8Svc *ft8.Service) {
+func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *logging.Service, br *bridge.Service, ft8Svc *ft8.Service) *http.ServeMux {
+	// apiMux owns the /v1/ namespace only — never the SPA catch-all — so its built-in
+	// 404/405 classification (and Allow header) stay accurate.
+	apiMux := http.NewServeMux()
 
 	// QSO — POST /v1/qso carries the hottest per-endpoint cap (token
 	// bucket). See docs/v2-design/api.md §6 for the threat model.
-	mux.Handle("POST /v1/qso", s.limitSubmitRate(http.HandlerFunc(s.handleSubmitQso)))
-	mux.HandleFunc("GET /v1/qso/{uuid}", s.handleGetQso)
-	mux.HandleFunc("PATCH /v1/qso/{uuid}", s.handleUpdateQso)
-	mux.HandleFunc("DELETE /v1/qso/{uuid}", s.handleDeleteQso)
-	mux.HandleFunc("GET /v1/qso/{uuid}/uploads", s.handleListQsoUploads)
+	apiMux.Handle("POST /v1/qso", s.limitSubmitRate(http.HandlerFunc(s.handleSubmitQso)))
+	apiMux.HandleFunc("GET /v1/qso/{uuid}", s.handleGetQso)
+	apiMux.HandleFunc("PATCH /v1/qso/{uuid}", s.handleUpdateQso)
+	apiMux.HandleFunc("DELETE /v1/qso/{uuid}", s.handleDeleteQso)
+	apiMux.HandleFunc("GET /v1/qso/{uuid}/uploads", s.handleListQsoUploads)
 
 	// Manual upload backfill (ADR 0039) — the logbook SPA queues selected
 	// stored QSOs for upload to one enabled forwarder. See
 	// handler_forwarder_uploads.go.
-	mux.HandleFunc("POST /v1/forwarder/{name}/uploads", s.handleEnqueueForwarderUploads)
+	apiMux.HandleFunc("POST /v1/forwarder/{name}/uploads", s.handleEnqueueForwarderUploads)
 
 	// Operator-triggered forwarder queue clearing (W-0005). The counts GET drives
 	// Settings → Forwarding (clearable vs in-flight per forwarder); the clear POST
 	// drops a named forwarder's pending+failed backlog, leaving the in-flight batch
 	// and upload history. See handler_forwarder_queue.go.
-	mux.HandleFunc("GET /v1/forwarder-queues", s.handleForwarderQueues)
-	mux.HandleFunc("POST /v1/forwarder/{name}/queue/clear", s.handleClearForwarderQueue)
+	apiMux.HandleFunc("GET /v1/forwarder-queues", s.handleForwarderQueues)
+	apiMux.HandleFunc("POST /v1/forwarder/{name}/queue/clear", s.handleClearForwarderQueue)
 
 	// SM Cloud on-demand reconcile (ADR 0040 S4) — one detect+heal pass now.
 	// 503 until cmd/smd wires an enabled smcloud forwarder's reconciler.
-	mux.HandleFunc("POST /v1/smcloud/reconcile", s.handleSmcloudReconcile)
-	mux.HandleFunc("POST /v1/restart", s.handleRestart)
+	apiMux.HandleFunc("POST /v1/smcloud/reconcile", s.handleSmcloudReconcile)
+	apiMux.HandleFunc("POST /v1/restart", s.handleRestart)
 
 	// Logbook CRUD
-	mux.HandleFunc("GET /v1/logbook", s.handleListLogbooks)
-	mux.HandleFunc("GET /v1/logbook/{id}", s.handleGetLogbook)
-	mux.HandleFunc("POST /v1/logbook", s.handleCreateLogbook)
-	mux.HandleFunc("PATCH /v1/logbook/{id}", s.handleUpdateLogbook)
-	mux.HandleFunc("DELETE /v1/logbook/{id}", s.handleDeleteLogbook)
-	mux.HandleFunc("GET /v1/logbook/{id}/qso", s.handleListQsoByLogbook)
-	mux.HandleFunc("GET /v1/logbook/{id}/count", s.handleLogbookCount)
+	apiMux.HandleFunc("GET /v1/logbook", s.handleListLogbooks)
+	apiMux.HandleFunc("GET /v1/logbook/{id}", s.handleGetLogbook)
+	apiMux.HandleFunc("POST /v1/logbook", s.handleCreateLogbook)
+	apiMux.HandleFunc("PATCH /v1/logbook/{id}", s.handleUpdateLogbook)
+	apiMux.HandleFunc("DELETE /v1/logbook/{id}", s.handleDeleteLogbook)
+	apiMux.HandleFunc("GET /v1/logbook/{id}/qso", s.handleListQsoByLogbook)
+	apiMux.HandleFunc("GET /v1/logbook/{id}/count", s.handleLogbookCount)
 
 	// Contest
-	mux.HandleFunc("GET /v1/contest-dupe", s.handleContestDupe)
+	apiMux.HandleFunc("GET /v1/contest-dupe", s.handleContestDupe)
 
 	// QSO draft support
-	mux.HandleFunc("GET /v1/contact-history", s.handleContactHistory)
+	apiMux.HandleFunc("GET /v1/contact-history", s.handleContactHistory)
 
 	// Enrichment pipeline (ADR 0017). Always-200; SPA fires this on
 	// Tab-out from the Callsign field.
-	mux.HandleFunc("GET /v1/enrich/callsign", s.handleEnrichCallsign)
+	apiMux.HandleFunc("GET /v1/enrich/callsign", s.handleEnrichCallsign)
 
 	// Session ADIF email — SessionPanel "send" button. Daemon owns
 	// SMTP creds; SPA owns the session list. Body shape and contract
 	// in handler_session_email.go.
-	mux.HandleFunc("POST /v1/session/email", s.handleSessionEmail)
-	mux.HandleFunc("POST /v1/session/export", s.handleSessionExport)
+	apiMux.HandleFunc("POST /v1/session/email", s.handleSessionEmail)
+	apiMux.HandleFunc("POST /v1/session/export", s.handleSessionExport)
 
 	// Durable operator notifications (W-0001 / ADR 0076) — the browser records
 	// an allowlisted, typed failure event that must survive toast expiry. Any
 	// POST here is same-origin/CSRF protected by the mux-wide gate.
-	mux.HandleFunc("POST /v1/notifications", s.handleRecordNotification)
-	mux.HandleFunc("GET /v1/notifications", s.handleListNotifications)
+	apiMux.HandleFunc("POST /v1/notifications", s.handleRecordNotification)
+	apiMux.HandleFunc("GET /v1/notifications", s.handleListNotifications)
 
 	// Event stream (SSE firehose — see docs/v2-design/api.md §4.5).
 	// Wrapped with its own subscriber cap (NOT counted against the
 	// general concurrent-request limit since SSE connections are
 	// long-lived by design).
-	mux.Handle("GET /v1/events", s.limitEventSubscribers(http.HandlerFunc(s.handleEvents)))
+	apiMux.Handle("GET /v1/events", s.limitEventSubscribers(http.HandlerFunc(s.handleEvents)))
 
 	// Config — operator's writable subset (logging_station,
 	// default_*_id) plus joined display details for the default
 	// logbook/rig. See docs/v2-design/api.md.
-	mux.HandleFunc("GET /v1/config", s.handleGetConfig)
-	mux.HandleFunc("PUT /v1/config", s.handlePutConfig)
+	apiMux.HandleFunc("GET /v1/config", s.handleGetConfig)
+	apiMux.HandleFunc("PUT /v1/config", s.handlePutConfig)
 
 	// Hardware enumeration — serial ports + audio devices for the config
 	// SPA's rig-profile pickers (friendly labels, no hand-typed ids).
-	mux.HandleFunc("GET /v1/hardware", s.handleHardware)
+	apiMux.HandleFunc("GET /v1/hardware", s.handleHardware)
 
 	// Rig-profiles editor surface — configured rigs (overrides) + the rigdef
 	// catalogue (defaults) for the config SPA's default-vs-override editing.
-	mux.HandleFunc("GET /v1/rigs", s.handleRigs)
+	apiMux.HandleFunc("GET /v1/rigs", s.handleRigs)
 
 	// Data-driven forwarder-type descriptors for the config SPA's Forwarding tab
 	// (display name, supported actions, credential field shapes).
-	mux.HandleFunc("GET /v1/forwarder-types", s.handleForwarderTypes)
-	mux.HandleFunc("GET /v1/lookup-types", s.handleLookupTypes)
+	apiMux.HandleFunc("GET /v1/forwarder-types", s.handleForwarderTypes)
+	apiMux.HandleFunc("GET /v1/lookup-types", s.handleLookupTypes)
 
 	// Operational
-	mux.HandleFunc("GET /v1/healthz", s.handleHealthz)
-	mux.HandleFunc("GET /v1/version", s.handleVersion)
+	apiMux.HandleFunc("GET /v1/healthz", s.handleHealthz)
+	apiMux.HandleFunc("GET /v1/version", s.handleVersion)
 
 	// Rig SSE — opt-in via cfg.Bridge.Enabled (ADR 0013 + ADR 0019).
 	// When the bridge subsystem is disabled (master smd / headless
@@ -303,20 +317,20 @@ func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *l
 	// the cap because both consume the same "long-lived subscriber
 	// slot" resource.
 	if br != nil && br.Enabled() {
-		mux.Handle("GET /v1/rig/events", s.limitEventSubscribers(br.HTTPHandler(s.shutdownCh)))
+		apiMux.Handle("GET /v1/rig/events", s.limitEventSubscribers(br.HTTPHandler(s.shutdownCh)))
 		// Inbound command path (ADR 0026) — same enablement gate as the
 		// SSE route. A normal request (not long-lived), so the global
 		// limitConcurrent middleware covers it; no per-route SSE cap.
-		mux.HandleFunc("POST /v1/rig/command", s.handleRigCommand)
+		apiMux.HandleFunc("POST /v1/rig/command", s.handleRigCommand)
 		// Tune-carrier control (ADR 0027) — the first TX endpoint. Same
 		// enablement gate; a normal (not long-lived) request, so the global
 		// limitConcurrent middleware covers it. The daemon owns the
 		// guaranteed stop, so this can't strand a carrier.
-		mux.HandleFunc("POST /v1/rig/tune", s.handleRigTune)
+		apiMux.HandleFunc("POST /v1/rig/tune", s.handleRigTune)
 		// TX-alarm re-check (2026-07-21 stuck-TX incident). Obtains fresh
 		// protocol evidence: a status query where supported, otherwise an
 		// ACK-awaited safe CI-V tx_off.
-		mux.HandleFunc("POST /v1/rig/tx/recheck", s.handleRigTxRecheck)
+		apiMux.HandleFunc("POST /v1/rig/tx/recheck", s.handleRigTxRecheck)
 	}
 
 	// FT8 occupancy SSE — opt-in via ft8.enabled (ADR 0029 step a). When the
@@ -331,41 +345,41 @@ func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *l
 	// surface) — registered unconditionally: "disabled" is itself the answer
 	// when no writer exists, and gating the route would make "capture off"
 	// indistinguishable from "endpoint missing".
-	mux.HandleFunc("GET /v1/evidence/status", s.handleEvidenceStatus)
+	apiMux.HandleFunc("GET /v1/evidence/status", s.handleEvidenceStatus)
 
 	// idle and the stream simply carries keepalives until a slot is processed.
 	if ft8Svc != nil && ft8Svc.Enabled() {
-		mux.Handle("GET /v1/ft8/events", s.limitEventSubscribers(ft8Svc.HTTPHandler(s.shutdownCh)))
+		apiMux.Handle("GET /v1/ft8/events", s.limitEventSubscribers(ft8Svc.HTTPHandler(s.shutdownCh)))
 		// FT8 transmit (ADR 0030 step e1) — arm/disarm the TX path and queue a
 		// message on the next slot. Same enablement gate as the SSE route;
 		// normal (not long-lived) requests, so the global limitConcurrent
 		// middleware covers them. The daemon owns the guaranteed stop, and
 		// arming is refused unless a rig is connected — neither can strand RF.
-		mux.HandleFunc("POST /v1/ft8/tx/arm", s.handleFt8TxArm)
-		mux.HandleFunc("POST /v1/ft8/tx/send", s.handleFt8TxSend)
+		apiMux.HandleFunc("POST /v1/ft8/tx/arm", s.handleFt8TxArm)
+		apiMux.HandleFunc("POST /v1/ft8/tx/send", s.handleFt8TxSend)
 		// Manual sequencer (ADR 0031 step e3) — start/abandon an answer-a-CQ
 		// exchange the daemon then auto-advances. Same enablement gate.
-		mux.HandleFunc("POST /v1/ft8/qso/start", s.handleFt8QsoStart)
+		apiMux.HandleFunc("POST /v1/ft8/qso/start", s.handleFt8QsoStart)
 		// Work a station calling US, picked from the pile-up (ADR 0033 "work a
 		// caller") — a caller-style exchange against the chosen station; idle on
 		// completion. Abandon uses the shared qso/abandon route.
-		mux.HandleFunc("POST /v1/ft8/qso/work", s.handleFt8QsoWork)
-		mux.HandleFunc("POST /v1/ft8/qso/path", s.handleFt8QsoPath)
-		mux.HandleFunc("POST /v1/ft8/qso/abandon", s.handleFt8QsoAbandon)
+		apiMux.HandleFunc("POST /v1/ft8/qso/work", s.handleFt8QsoWork)
+		apiMux.HandleFunc("POST /v1/ft8/qso/path", s.handleFt8QsoPath)
+		apiMux.HandleFunc("POST /v1/ft8/qso/abandon", s.handleFt8QsoAbandon)
 		// Stop the auto-work run only (ADR 0065) — abandon stops run AND contact.
-		mux.HandleFunc("POST /v1/ft8/autowork/stop", s.handleFt8AutoWorkStop)
-		mux.HandleFunc("POST /v1/ft8/qso/skip", s.handleFt8QsoSkip)
-		mux.HandleFunc("POST /v1/ft8/qso/next", s.handleFt8QsoNext)
+		apiMux.HandleFunc("POST /v1/ft8/autowork/stop", s.handleFt8AutoWorkStop)
+		apiMux.HandleFunc("POST /v1/ft8/qso/skip", s.handleFt8QsoSkip)
+		apiMux.HandleFunc("POST /v1/ft8/qso/next", s.handleFt8QsoNext)
 		// Caller-side sequencer (ADR 0033) — start a Call-CQ session that works the
 		// stations that answer (auto_first / operator_pick per ft8.tx.caller_answer_mode);
 		// abandon uses the shared qso/abandon route. Same enablement gate.
-		mux.HandleFunc("POST /v1/ft8/cq/start", s.handleFt8CqStart)
+		apiMux.HandleFunc("POST /v1/ft8/cq/start", s.handleFt8CqStart)
 		// Commit a listed operator_pick answerer into the run (ADR 0065) — the
 		// candidate list rides the ft8-qso SSE (answerers).
-		mux.HandleFunc("POST /v1/ft8/cq/pick", s.handleFt8CqPick)
-		mux.HandleFunc("POST /v1/ft8/cq/bag", s.handleFt8CqBag)
-		mux.HandleFunc("POST /v1/ft8/cq/unbag", s.handleFt8CqUnbag)
-		mux.HandleFunc("POST /v1/ft8/cq/resume", s.handleFt8CqResume)
+		apiMux.HandleFunc("POST /v1/ft8/cq/pick", s.handleFt8CqPick)
+		apiMux.HandleFunc("POST /v1/ft8/cq/bag", s.handleFt8CqBag)
+		apiMux.HandleFunc("POST /v1/ft8/cq/unbag", s.handleFt8CqUnbag)
+		apiMux.HandleFunc("POST /v1/ft8/cq/resume", s.handleFt8CqResume)
 	}
 
 	// pprof — opt-in via cfg.Server.EnableProfiling. Off by default
@@ -420,14 +434,17 @@ func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *l
 		// is what routes /manual/* here rather than to the catch-all.
 		mux.Handle("GET /manual/", http.StripPrefix("/manual", manualHandler(manual.FS())))
 		// Consolidated app SPA (ADR 0044) at the CANONICAL ROOT — the sole embedded
-		// operator client. Any GET not matched by a more-specific pattern (/v1/*,
-		// /debug/pprof/*, /manual/*, /app, /app/) falls through to index.html so
-		// client-side routing owns /operate, /logbook, /config, and deep-link
-		// reloads. spaHandler keeps the /v1/* and /debug/pprof* server namespaces
-		// honest 404s rather than SPA HTML — LOAD-BEARING now that every unmatched
-		// path reaches this catch-all (there is no /app prefix quarantining it).
+		// operator client. Any GET not matched by a more-specific pattern
+		// (/debug/pprof/*, /manual/*, /app, /app/) falls through to index.html so
+		// client-side routing owns /operate, /logbook, /config, and deep-link reloads.
+		// The /v1/* namespace never reaches this mux — apiRouter dispatches it to apiMux
+		// upstream (see New) — so spaHandler now keeps only /debug/pprof* honest 404s
+		// rather than SPA HTML (LOAD-BEARING: there is no /app prefix quarantining this
+		// catch-all, so profiling-off pprof paths would otherwise become SPA HTML).
 		mux.Handle("GET /", spaHandler(frontend.AppFS()))
 	}
+
+	return apiMux
 }
 
 // tuneStopper and ft8Stopper adapt each SM-owned transmitter to the retune

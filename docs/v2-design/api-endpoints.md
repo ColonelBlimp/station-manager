@@ -45,11 +45,17 @@ comment every 30s, clear/re-arm write deadlines so long-lived streams survive
 
 **Gating.** "Always-on" = registered whenever the server runs. Subsystem routes are
 registered only when their subsystem is enabled (bridge / FT8 / profiling / SPA); when
-unregistered, the path is a **404**. Since W-0003 the SPA IS the root catch-all (`GET /`),
-so an unmatched *non-namespace* path serves `index.html` for client routing — but the
-server namespaces stay honest 404s: an unmatched `/v1/*` or a profiling-off `/debug/pprof*`
-is explicitly `404`ed, never SPA HTML. A headless (non-TCP or `ServeSPA` off) daemon
-registers no SPA routes, redirects, or root mount at all, so those paths `404` there too.
+unregistered, the path is a **404**. The `/v1/` API namespace is routed on its own mux
+(`apiRouter`, `route_fallback.go`), isolated from the SPA catch-all so its classification
+stays accurate and always returns the JSON error envelope: an unknown `/v1/` path (any
+method, `/v1` and `/v1/` included) is **404 `not_found`** with no `Allow`, and a method
+mismatch on a real route is **405 `method_not_allowed`** whose `Allow` lists only the
+methods that route actually supports — never plain text or SPA HTML. Since W-0003 the SPA
+IS the root catch-all (`GET /`), so an unmatched *non-namespace* path serves `index.html`
+for client routing, while a profiling-off `/debug/pprof*` is still plain-`404`ed rather than
+SPA HTML. A headless (non-TCP or `ServeSPA` off) daemon registers no SPA routes, redirects,
+or root mount at all, so those paths `404` there too. (SM Cloud's API returns the same
+`not_found` / `method_not_allowed` envelope for unmatched routes.)
 
 ---
 

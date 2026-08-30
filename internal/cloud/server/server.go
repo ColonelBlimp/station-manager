@@ -107,7 +107,9 @@ func (s *Server) Handler() http.Handler {
 	// still gzipped correctly, and inside accessLog, so the access line records the
 	// 500 and shares its request_id): an application panic surfaces structured, not
 	// as a dropped connection (L6).
-	return s.accessLog(limitMiddleware(gzipMiddleware(s.log, s.recoverPanic(mux)), s.maxConcurrent))
+	// jsonRouteErrors sits directly around the mux — inside recoverPanic — so an
+	// unmatched route's 404/405 is the JSON envelope, not ServeMux's plain text (AW-4).
+	return s.accessLog(limitMiddleware(gzipMiddleware(s.log, s.recoverPanic(s.jsonRouteErrors(mux))), s.maxConcurrent))
 }
 
 // ---- transport helpers ------------------------------------------------------
