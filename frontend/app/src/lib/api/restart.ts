@@ -8,17 +8,31 @@
     transmitting first); 503 when the daemon has no service-manager restart wired
     (split-host / non-systemd run).
 */
-import { safeFetch, readJsonBody, isPlainObject } from './_helpers';
+import { safeFetch, readJsonBody, isPlainObject, WRITE_TIMEOUT_MS } from './_helpers';
 
 export type RestartOutcome =
     | { kind: 'accepted' }
     | { kind: 'tx_active' }
     | { kind: 'unavailable' }
-    | { kind: 'error'; message: string };
+    // `timedOut` marks the AMBIGUOUS restart (F-04b, ADR 0078): the daemon replies
+    // 202 then exits, so the response can be lost while it is already respawning.
+    // The caller MUST confirm via the new-instance signal (waitForDaemonBack)
+    // rather than declaring a definite "Restart failed". A definite (non-timeout)
+    // transport failure carries no marker and keeps its existing wording.
+    | { kind: 'error'; message: string; timedOut?: boolean };
 
 export async function restartDaemon(signal?: AbortSignal): Promise<RestartOutcome> {
-    const fetched = await safeFetch('/v1/restart', { method: 'POST', signal });
-    if (!fetched.ok) return { kind: 'error', message: fetched.message };
+    // A restart is a state-mutating write; give it the write-class window so a
+    // slow-to-shut-down daemon isn't abandoned early on the read default.
+    const fetched = await safeFetch(
+        '/v1/restart',
+        { method: 'POST', signal },
+        { timeoutMs: WRITE_TIMEOUT_MS }
+    );
+    if (!fetched.ok) {
+        const timedOut = fetched.kind === 'network' ? fetched.timedOut : undefined;
+        return { kind: 'error', message: fetched.message, timedOut };
+    }
     const res = fetched.response;
     if (res.status === 202) return { kind: 'accepted' };
     const body = await readJsonBody(res);

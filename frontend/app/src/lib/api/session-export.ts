@@ -5,7 +5,7 @@
 // attachment. Same send-UUIDs-not-a-blob contract as session-email; the SPA
 // never composes ADIF itself.
 
-import { safeFetch, readJsonBody, isPlainObject } from './_helpers';
+import { safeFetch, readJsonBody, isPlainObject, WRITE_TIMEOUT_MS } from './_helpers';
 
 export type SessionExportOutcome =
     | { kind: 'ok'; filename: string; body: string }
@@ -13,7 +13,11 @@ export type SessionExportOutcome =
     | { kind: 'invalid'; code: string; message: string }
     | { kind: 'server'; code: string; message: string }
     | { kind: 'aborted'; message: string }
-    | { kind: 'network'; message: string };
+    // `timedOut` marks the AMBIGUOUS export (F-04b, ADR 0078): the daemon archives
+    // a best-effort backup server-side before streaming the file, so a timed-out
+    // request leaves that backup's state unknown. The dialog must say "outcome
+    // unknown; export again", never a definite "Export failed".
+    | { kind: 'network'; message: string; timedOut?: boolean };
 
 interface DaemonError {
     code: string;
@@ -31,14 +35,23 @@ export async function exportSessionAdif(
     uuids: string[],
     signal?: AbortSignal
 ): Promise<SessionExportOutcome> {
-    const fetched = await safeFetch('/v1/session/export', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ uuids }),
-        signal,
-    });
+    const fetched = await safeFetch(
+        '/v1/session/export',
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ uuids }),
+            signal,
+        },
+        // Export archives a backup server-side — a state-mutating write — so it
+        // must use the write-class window, not the read default (F-04b).
+        { timeoutMs: WRITE_TIMEOUT_MS }
+    );
     if (!fetched.ok) {
-        return { kind: fetched.kind, message: fetched.message };
+        if (fetched.kind === 'network') {
+            return { kind: 'network', message: fetched.message, timedOut: fetched.timedOut };
+        }
+        return { kind: 'aborted', message: fetched.message };
     }
     const response = fetched.response;
 

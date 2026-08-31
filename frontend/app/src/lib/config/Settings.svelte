@@ -13,6 +13,7 @@
     import EnrichmentSection from './EnrichmentSection.svelte';
     import GeneralSection from './GeneralSection.svelte';
     import { restartDaemon, waitForDaemonBack, fetchDaemonInstance } from '../api/restart';
+    import { OUTCOME_UNKNOWN_LEAD } from '../api/_helpers';
     import { toasts } from '../ui/toasts.svelte';
 
     // Strip order groups the station and how it operates (Station, Rigs, FT8)
@@ -36,6 +37,24 @@
     // Manual daemon restart — applies the "Requires a restart" config changes
     // (active rig, connection, mappings, overrides). Refused while transmitting.
     let restarting = $state(false);
+
+    // F-04b (ADR 0078): a restart POST that TIMED OUT is ambiguous — the daemon
+    // replies 202 then exits, so the response can be lost while it is already
+    // respawning. Confirm with the SAME new-instance signal the accepted path
+    // uses (a DIFFERENT /v1/version.instance): a new instance proves the restart;
+    // none within the cap leaves the outcome unknown — never a definite "failed".
+    async function reconcileRestartTimeout(before: string): Promise<void> {
+        toasts.info('Restarting the daemon…');
+        const back = await waitForDaemonBack(before);
+        if (back) {
+            toasts.info('Daemon restarted.');
+        } else {
+            toasts.warn(
+                `${OUTCOME_UNKNOWN_LEAD} Wait for Station Manager to reconnect or verify its status before trying again.`
+            );
+        }
+    }
+
     async function doRestart(): Promise<void> {
         if (restarting) return;
         if (
@@ -75,7 +94,13 @@
                 restarting = false;
                 break;
             case 'error':
-                toasts.error(`Restart failed: ${out.message}`);
+                // A timed-out POST is reconciled by the new-instance signal, not
+                // declared a failure (F-04b); every other error keeps its wording.
+                if (out.timedOut === true) {
+                    await reconcileRestartTimeout(before);
+                } else {
+                    toasts.error(`Restart failed: ${out.message}`);
+                }
                 restarting = false;
                 break;
         }

@@ -61,6 +61,15 @@ export type FetchOutcome =
     | { ok: false; kind: 'network'; message: string; timedOut?: boolean };
 
 /**
+ * The shared operator-facing lead for a write whose outcome the SPA could not
+ * confirm because the request timed out after (possibly) reaching the daemon
+ * (F-04, ADR 0078). Each write path appends its own guidance sentence. Never
+ * label such a write "failed" — the outcome is genuinely unknown, not negative.
+ */
+export const OUTCOME_UNKNOWN_LEAD =
+    'The request timed out before Station Manager confirmed the result, so the outcome is unknown.';
+
+/**
  * Default request timeout (ms) applied to every `safeFetch` unless the
  * caller overrides it. The SPA only ever talks to the LOCAL daemon, so a
  * healthy request resolves in well under a second; this ceiling exists to

@@ -60,8 +60,11 @@ export type SessionEmailOutcome =
     /** AMBIGUOUS for this write: SMTP may have ACCEPTED the message before
      *  the connection dropped (the daemon's 30 s SMTP/HTTP timeouts), and
      *  the browser can't tell that from connect-refused — so callers warn
-     *  "may have gone out", never "definitely failed". */
-    | { kind: 'network'; message: string };
+     *  "may have gone out", never "definitely failed". `timedOut` marks the
+     *  FIRED-timeout subset (F-04b, ADR 0078): callers steer that with the
+     *  shared "outcome unknown" lead, while a generic (non-timeout) network
+     *  failure keeps its existing cautious wording. */
+    | { kind: 'network'; message: string; timedOut?: boolean };
 
 interface DaemonError {
     code: string;
@@ -86,7 +89,10 @@ export async function sendSessionEmail(
         { timeoutMs: EMAIL_TIMEOUT_MS }
     );
     if (!fetched.ok) {
-        return { kind: fetched.kind, message: fetched.message };
+        if (fetched.kind === 'network') {
+            return { kind: 'network', message: fetched.message, timedOut: fetched.timedOut };
+        }
+        return { kind: 'aborted', message: fetched.message };
     }
     const response = fetched.response;
 

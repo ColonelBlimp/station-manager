@@ -15,6 +15,7 @@
     import { sendSessionEmail } from '../api/session-email';
     import { exportSessionAdif, downloadTextFile } from '../api/session-export';
     import { recordExportFailed } from '../api/notifications';
+    import { OUTCOME_UNKNOWN_LEAD } from '../api/_helpers';
     import { toasts } from '../ui/toasts.svelte';
 
     let recipient = $state('');
@@ -77,6 +78,13 @@
                 downloadTextFile(outcome.filename, outcome.body);
                 toasts.info(`Exported ${count} QSO${count === 1 ? '' : 's'} to ADIF`);
                 closeExport();
+            } else if (outcome.kind === 'network' && outcome.timedOut === true) {
+                // A timed-out export is AMBIGUOUS about its server-side backup —
+                // not a definite failure. Warn "outcome unknown; export again", and
+                // record NO failure notification (F-04b, ADR 0078).
+                toasts.warn(
+                    `${OUTCOME_UNKNOWN_LEAD} Export again if you still need the file; another backup may be archived.`
+                );
             } else if (outcome.kind !== 'aborted') {
                 toasts.error(`Export failed: ${outcome.message}`);
                 // Durably record the failure so it survives the toast (W-0001).
@@ -125,10 +133,18 @@
                     // just a timeout — the daemon's 30 s SMTP/HTTP timeouts
                     // can drop the connection after SMTP accepted, and the
                     // browser can't tell that from connect-refused. A blind
-                    // re-send risks a duplicate email in a real inbox.
-                    toasts.error(
-                        'Cannot confirm the send — the connection to the daemon failed. The email may still have gone out; check the inbox (or the Emailed markers) before re-sending.'
-                    );
+                    // re-send risks a duplicate email in a real inbox. A FIRED
+                    // timeout gets the shared "outcome unknown" lead; a generic
+                    // network failure keeps the existing cautious wording (F-04b).
+                    if (outcome.timedOut === true) {
+                        toasts.warn(
+                            `${OUTCOME_UNKNOWN_LEAD} The email may already have been sent; check before retrying.`
+                        );
+                    } else {
+                        toasts.error(
+                            'Cannot confirm the send — the connection to the daemon failed. The email may still have gone out; check the inbox (or the Emailed markers) before re-sending.'
+                        );
+                    }
                     break;
             }
         } finally {

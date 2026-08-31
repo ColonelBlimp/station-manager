@@ -20,6 +20,7 @@
     */
     import { logbookState } from './logbook.svelte';
     import { sendSessionEmail } from '../api/session-email';
+    import { OUTCOME_UNKNOWN_LEAD } from '../api/_helpers';
     import { toasts } from '../ui/toasts.svelte';
 
     let recipient = $state('');
@@ -95,14 +96,26 @@
                 // duplicate email in a real inbox. The verbose, PERSISTENT
                 // inline warning stays the primary surface (a transient toast
                 // must never be the only record of "check before re-sending");
-                // the warn toast is a brief companion pointing back to it.
-                result = {
-                    ok: false,
-                    text: 'Cannot confirm the send — the connection to the daemon failed. The email may still have gone out; check the inbox (or the Emailed column) before re-sending.',
-                };
-                toasts.warn(
-                    'Email send unconfirmed — it may still have gone out; see the note by the button before re-sending.'
-                );
+                // the warn toast is a brief companion pointing back to it. A
+                // FIRED timeout gets the shared "outcome unknown" lead; a generic
+                // network failure keeps the existing cautious wording (F-04b).
+                if (outcome.timedOut === true) {
+                    result = {
+                        ok: false,
+                        text: `${OUTCOME_UNKNOWN_LEAD} The email may already have been sent; check before retrying.`,
+                    };
+                    toasts.warn(
+                        'Email send unconfirmed — the outcome is unknown; see the note by the button before re-sending.'
+                    );
+                } else {
+                    result = {
+                        ok: false,
+                        text: 'Cannot confirm the send — the connection to the daemon failed. The email may still have gone out; check the inbox (or the Emailed column) before re-sending.',
+                    };
+                    toasts.warn(
+                        'Email send unconfirmed — it may still have gone out; see the note by the button before re-sending.'
+                    );
+                }
                 break;
         }
     }

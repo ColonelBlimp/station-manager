@@ -235,6 +235,94 @@ describe('ExportDialog', () => {
         expect(posted).toBe(false);
     });
 
+    // F-04b (ADR 0078): a timed-out export is ambiguous about its server-side
+    // backup, so it is NOT a definite failure — it must warn "outcome unknown;
+    // export again" and must NOT record an export.adif_failed notification.
+    it('a timed-out export reports outcome-unknown (not "Export failed") and records no failure', async () => {
+        addQso({ callsign: 'A', uuid: 'u1' });
+
+        const fetchSpy = vi.fn((input: RequestInfo | URL) => {
+            if (urlOf(input) === '/v1/notifications') {
+                return Promise.resolve(new Response(null, { status: 204 }));
+            }
+            // The export POST times out → safeFetch maps TimeoutError to network+timedOut.
+            return Promise.reject(Object.assign(new Error('timed out'), { name: 'TimeoutError' }));
+        });
+        vi.stubGlobal('fetch', fetchSpy);
+        const errSpy = vi.spyOn(toasts, 'error');
+        const warnSpy = vi.spyOn(toasts, 'warn');
+
+        operate.exportOpen = true;
+        render(ExportDialog);
+        flushSync();
+        await fireEvent.click(screen.getByRole('button', { name: /ADIF/ }));
+        await flush();
+        await flush();
+        flushSync();
+
+        // Outcome-unknown warning, never a definite "Export failed" error…
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        expect(warnSpy.mock.calls[0][0]).toMatch(/the outcome is unknown/);
+        expect(errSpy).not.toHaveBeenCalled();
+        // …and no durable failure record (it did not definitely fail).
+        const recorded = fetchSpy.mock.calls.some((c) => urlOf(c[0]) === '/v1/notifications');
+        expect(recorded).toBe(false);
+    });
+
+    // F-04b: a timed-out EMAIL is ambiguous (SMTP may have accepted before the
+    // response was lost) → the shared "outcome unknown" lead.
+    it('a timed-out email send reports the shared outcome-unknown lead', async () => {
+        setMailer(true, 'qsl@example.com');
+        addQso({ callsign: 'A', uuid: 'u1' });
+
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() =>
+                Promise.reject(Object.assign(new Error('timed out'), { name: 'TimeoutError' }))
+            )
+        );
+        const errSpy = vi.spyOn(toasts, 'error');
+        const warnSpy = vi.spyOn(toasts, 'warn');
+
+        operate.exportOpen = true;
+        render(ExportDialog);
+        flushSync();
+        await fireEvent.click(screen.getByRole('button', { name: /Send/ }));
+        await flush();
+        await flush();
+        flushSync();
+
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        expect(warnSpy.mock.calls[0][0]).toMatch(/the outcome is unknown/);
+        expect(warnSpy.mock.calls[0][0]).toMatch(/may already have been sent/);
+        expect(errSpy).not.toHaveBeenCalled();
+    });
+
+    // A GENERIC (non-timeout) network failure on a send keeps its existing
+    // cautious wording unchanged (ruling 2): still an error toast, still
+    // "may still have gone out".
+    it('a generic network failure on a send keeps the existing cautious wording', async () => {
+        setMailer(true, 'qsl@example.com');
+        addQso({ callsign: 'A', uuid: 'u1' });
+
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => Promise.reject(new TypeError('connection refused')))
+        );
+        const errSpy = vi.spyOn(toasts, 'error');
+
+        operate.exportOpen = true;
+        render(ExportDialog);
+        flushSync();
+        await fireEvent.click(screen.getByRole('button', { name: /Send/ }));
+        await flush();
+        await flush();
+        flushSync();
+
+        expect(errSpy).toHaveBeenCalledTimes(1);
+        expect(errSpy.mock.calls[0][0]).toMatch(/may still have gone out/);
+    });
+
     it('still shows the toast when the notification POST itself fails', async () => {
         addQso({ callsign: 'A', uuid: 'u1' });
 

@@ -22,8 +22,8 @@ The operator-observable harm: guidance can contradict daemon state. A confirm-by
 an error toast while SSE then shows the requested state; a config save persists while the form still
 says it failed; a QSO edit or an upload enqueue that actually committed invites a retry that repeats
 non-idempotent work. The write surface is broad (~14 paths), so the fix is sliced; F-04a is the
-first slice (QSO PATCH + upload enqueue) and this ADR records the cross-cutting policy the whole of
-F-04 follows.
+first slice (QSO PATCH + upload enqueue) and F-04b the second (session email / export + restart).
+This ADR records the cross-cutting policy the whole of F-04 follows.
 
 ## Decision
 
@@ -47,11 +47,18 @@ Each write belongs to one reconciliation class, defined by the evidence availabl
     the matching queue entry, the outcome stays unknown — do **not** infer failure. (A multi-uuid
     batch drained in the background with no per-entry proof API is not reconcilable, so it resolves
     to the non-reconcilable treatment below.)
-  - Restart: confirm only through lifecycle observation that proves a **new** daemon instance;
-    reconnection alone is insufficient. Otherwise treat it as non-reconcilable.
-- **Non-reconcilable** (session email / export; restart when a new instance cannot be proven): there
-  is no evidence that separates committed from not, so report the outcome as unknown rather than
-  failed and warn against a blind retry.
+  - Restart: confirm only through lifecycle observation that proves a **new** daemon instance —
+    a changed `/v1/version.instance` (`waitForDaemonBack`), keyed on the id captured before the
+    POST so the still-shutting-down old daemon on a reused keep-alive is not mistaken for the
+    replacement. Reconnection alone is insufficient. A new instance confirms the restart; none
+    within the existing cap leaves it unknown; an explicit 409/503 is a definite failure with no
+    reconciliation. Applied on the timed-out POST as well as the accepted 202, since the daemon may
+    already be respawning when the response is lost.
+- **Non-reconcilable** (session email / export): there is no evidence that separates committed from
+  not, so report the outcome as unknown rather than failed. Email warns against a blind retry (a real
+  message is the worst write to double-fire). Export is lighter: its only side effect is a
+  best-effort server-side backup and the operator-visible download definitely did not arrive, so a
+  re-export is acceptable and only a duplicate backup can result.
 
 Every ambiguous outcome carries the same shared operator-facing lead, with operation-specific
 recovery guidance appended:
@@ -61,7 +68,8 @@ recovery guidance appended:
 - QSO: "Reload this QSO before trying again."
 - Upload: "Check its upload status before trying again."
 - Email: "The email may already have been sent; check before retrying."
-- Restart: "Wait for Station Manager to reconnect before trying again."
+- Export: "Export again if you still need the file; another backup may be archived."
+- Restart: "Wait for Station Manager to reconnect or verify its status before trying again."
 
 Ambiguity is represented by adding an optional `timedOut?: boolean` to each affected API outcome
 type, incrementally, per sub-slice — not by migrating the whole write surface to a shared outcome

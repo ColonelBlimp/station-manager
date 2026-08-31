@@ -98,6 +98,25 @@ describe('LogbookEmailControls toasts', () => {
         expect(screen.getByText(/may still have gone out/)).toBeInTheDocument();
     });
 
+    // F-04b (ADR 0078): a FIRED timeout is the ambiguous case — SMTP may have
+    // accepted before the response was lost. It gets the shared "outcome unknown"
+    // lead inline (persistent, the primary record) plus a companion warn toast;
+    // the generic (non-timeout) network wording above is preserved unchanged.
+    it('a timed-out send shows the shared outcome-unknown lead inline and warns', async () => {
+        armOneRow();
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() =>
+                Promise.reject(Object.assign(new Error('timed out'), { name: 'TimeoutError' }))
+            )
+        );
+        await renderAndSend();
+
+        expect(toastsState.items.some((t) => t.level === 'warn')).toBe(true);
+        expect(screen.getByText(/the outcome is unknown/)).toBeInTheDocument();
+        expect(screen.getByText(/check before retrying/)).toBeInTheDocument();
+    });
+
     it('an SMTP failure pushes an error toast', async () => {
         armOneRow();
         stubJson(502, { code: 'smtp_failure', message: 'relay refused' });
