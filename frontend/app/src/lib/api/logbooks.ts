@@ -79,6 +79,66 @@ export type QsoPageOutcome =
 const transportMessage = (kind: string): string =>
     kind === 'network' ? 'Cannot reach the daemon.' : 'Request failed.';
 
+// Per-record decoders (F-03c, ADR 0077). The daemon's list endpoints feed long-lived keyed
+// renders (the logbook selector, the QSO table), so a malformed or duplicate-keyed record would
+// throw mid-render rather than degrade one row. decodeRecords drops the bad ones (keeping the
+// good), deduplicates on the render key, and warns ONCE per response with the drop count.
+function isLogbook(v: unknown): v is Logbook {
+    return (
+        isPlainObject(v) &&
+        typeof v.id === 'number' &&
+        typeof v.name === 'string' &&
+        typeof v.callsign === 'string'
+    );
+}
+// A page row keys selection, edit, and rendering on uuid, so a row without a usable one is unkeyed
+// and dropped; every other field is display-only and left to the row to render defensively.
+function isLogbookQso(v: unknown): v is LogbookQso {
+    return isPlainObject(v) && typeof v.uuid === 'string' && v.uuid !== '';
+}
+
+function decodeRecords<T>(
+    raw: unknown[],
+    validate: (v: unknown) => v is T,
+    keyOf: (v: T) => string | number,
+    label: string
+): T[] {
+    const out: T[] = [];
+    const seen = new Set<string | number>();
+    let dropped = 0;
+    for (const el of raw) {
+        if (!validate(el)) {
+            dropped++;
+            continue;
+        }
+        const key = keyOf(el);
+        if (seen.has(key)) {
+            dropped++;
+            continue;
+        }
+        seen.add(key);
+        out.push(el);
+    }
+    if (dropped > 0) {
+        console.warn(
+            `[${label}] dropped ${dropped} of ${raw.length} malformed or duplicate record(s)`
+        );
+    }
+    return out;
+}
+
+// next_cursor is the pagination boundary. The daemon always serializes it (a *string with no
+// omitempty), so exactly a string (the opaque cursor) or null (no more rows) is valid. Anything
+// else — a number, an object, or a MISSING key (undefined) — is a malformed boundary: stop paging
+// (the safe side: never page past a cursor we cannot parse) and warn, rather than treat the gap as
+// a clean end.
+function decodeCursor(v: unknown, label: string): string | null {
+    if (typeof v === 'string') return v;
+    if (v === null) return null;
+    console.warn(`[${label}] next_cursor was not string|null; treating as end of pagination`);
+    return null;
+}
+
 /** List all logbooks for the selector. */
 export async function fetchLogbooks(signal?: AbortSignal): Promise<LogbooksOutcome> {
     const fetched = await safeFetch('/v1/logbook', { signal });
@@ -87,7 +147,8 @@ export async function fetchLogbooks(signal?: AbortSignal): Promise<LogbooksOutco
     if (!fetched.response.ok)
         return { kind: 'error', message: daemonErrorMessage(fetched.response.status, body) };
     if (!Array.isArray(body)) return { kind: 'error', message: 'Unexpected logbooks response.' };
-    return { kind: 'ok', logbooks: body as Logbook[] };
+    const logbooks = decodeRecords(body, isLogbook, (l) => l.id, 'logbooks');
+    return { kind: 'ok', logbooks };
 }
 
 /** Total QSO count for a logbook (the "of N"). `missingFrom` (a forwarder name)
@@ -139,6 +200,7 @@ export async function fetchQsoPage(
     if (!isPlainObject(body) || !Array.isArray(body.items)) {
         return { kind: 'error', message: 'Unexpected QSO-page response.' };
     }
-    const nextCursor = typeof body.next_cursor === 'string' ? body.next_cursor : null;
-    return { kind: 'ok', items: body.items as LogbookQso[], nextCursor };
+    const items = decodeRecords(body.items, isLogbookQso, (q) => q.uuid, 'logbook-page');
+    const nextCursor = decodeCursor(body.next_cursor, 'logbook-page');
+    return { kind: 'ok', items, nextCursor };
 }

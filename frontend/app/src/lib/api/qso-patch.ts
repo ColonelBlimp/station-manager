@@ -11,8 +11,26 @@
     the {code, message} envelope; the message is operator-facing enough to show.
 */
 
-import { DEFAULT_TIMEOUT_MS, readJsonBody, safeFetch, WRITE_TIMEOUT_MS } from './_helpers';
+import {
+    DEFAULT_TIMEOUT_MS,
+    isPlainObject,
+    readJsonBody,
+    safeFetch,
+    WRITE_TIMEOUT_MS,
+} from './_helpers';
 import type { LogbookQso } from './logbooks';
+
+// F-03c (ADR 0077): a single-record GET/PATCH response must be a plain object (an array is NOT —
+// typeof [] === 'object' would otherwise pass and land an array in the store as a QSO) whose uuid
+// EQUALS the one we requested. A mismatched or missing uuid means a wrong or corrupted record;
+// return it as an error so the caller never writes it to the store keyed as the edited QSO.
+function decodeQso(body: unknown, uuid: string, label: string): PatchOutcome {
+    if (!isPlainObject(body)) return { kind: 'error', message: label };
+    if (typeof body.uuid !== 'string' || body.uuid !== uuid) {
+        return { kind: 'error', message: 'The daemon returned a QSO with an unexpected id.' };
+    }
+    return { kind: 'ok', qso: body as unknown as LogbookQso };
+}
 
 /** The editable subset of a QSO, by ADIF JSON tag. All optional — only the
  *  fields the edit form touches are sent. */
@@ -65,10 +83,7 @@ export async function fetchQso(uuid: string): Promise<PatchOutcome> {
                 : `Daemon error (${fetched.response.status}).`;
         return { kind: 'error', message };
     }
-    if (body === null || typeof body !== 'object') {
-        return { kind: 'error', message: 'Unexpected QSO response.' };
-    }
-    return { kind: 'ok', qso: body as LogbookQso };
+    return decodeQso(body, uuid, 'Unexpected QSO response.');
 }
 
 /** Apply an edit to one QSO. `uuid` is the QSO's canonical id (carried on every
@@ -100,8 +115,5 @@ export async function patchQso(uuid: string, patch: QsoPatch): Promise<PatchOutc
                 : `Daemon error (${fetched.response.status}).`;
         return { kind: 'error', message };
     }
-    if (body === null || typeof body !== 'object') {
-        return { kind: 'error', message: 'Unexpected update response.' };
-    }
-    return { kind: 'ok', qso: body as LogbookQso };
+    return decodeQso(body, uuid, 'Unexpected update response.');
 }

@@ -76,7 +76,9 @@ Three strictness rules sharpen "load-bearing", each tied to the daemon's wire co
 `LogbookQso` needs a non-empty string `uuid`; a `Logbook` needs numeric `id` + string `name` +
 string `callsign`. Invalid elements are dropped (valid ones kept); **page uuids and logbook ids are
 deduplicated** so keyed rendering cannot throw on a duplicate key; `next_cursor` is accepted only as
-exactly `string` or `null`. A single-object response (`patchQso`/`fetchQso`) must be a plain object
+exactly `string` or `null` — any other type stops pagination (the safe side: never page past a
+cursor we cannot parse) and warns, rather than discarding the page's valid rows. A single-object
+response (`patchQso`/`fetchQso`) must be a plain object
 whose `uuid` **equals the requested uuid**, else it is an error — never a QSO written to the store.
 
 **Diagnostics (deterministic, no time interval).** SSE: at most one warning per `(event label,

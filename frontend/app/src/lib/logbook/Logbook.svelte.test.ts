@@ -374,7 +374,9 @@ describe('Logbook destination picker: destinations that stamp nothing', () => {
             if (url.includes('/count')) return Promise.resolve(jsonResponse({ count: 5 }));
             if (url.includes('/qso'))
                 return Promise.resolve(jsonResponse({ items: [], next_cursor: null }));
-            return Promise.resolve(jsonResponse([{ id: 1, name: 'My Log' }]));
+            // types.Logbook always carries callsign on the wire (non-omitempty), so the
+            // fixture does too — the F-03c per-record decoder requires it.
+            return Promise.resolve(jsonResponse([{ id: 1, name: 'My Log', callsign: '7Q5MLV' }]));
         });
         return fetchMock;
     }
