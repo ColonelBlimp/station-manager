@@ -99,10 +99,28 @@ export async function submitQso(
                 message: 'daemon returned a successful submit without a uuid',
             };
         }
-        if (body.status === 'duplicate') {
-            return { kind: 'duplicate', uuid: body.uuid };
+        // The exact submit contract: status is 'stored' (201) or 'duplicate' (200). Any other
+        // 2xx status is a contract violation (version skew / proxy / regression) — downgrade to
+        // malformed rather than assume 'stored' and clear the draft (F-03, ADR 0077).
+        const status = body.status;
+        if (status !== 'stored' && status !== 'duplicate') {
+            return {
+                kind: 'server',
+                code: 'malformed_response',
+                message: `daemon returned an unexpected submit status: ${String(status)}`,
+            };
         }
-        return { kind: 'stored', uuid: body.uuid };
+        // body.status is authoritative; a mismatched HTTP code is a benign inconsistency — logged,
+        // not fatal, so a genuinely stored QSO is never false-reported as malformed.
+        const expectedHttp = status === 'stored' ? 201 : 200;
+        if (response.status !== expectedHttp) {
+            console.warn(
+                `[submit] status "${status}" arrived with HTTP ${response.status} (expected ${expectedHttp})`
+            );
+        }
+        return status === 'duplicate'
+            ? { kind: 'duplicate', uuid: body.uuid }
+            : { kind: 'stored', uuid: body.uuid };
     }
 
     const err = isPlainObject(body) ? (body as unknown as DaemonError) : null;
