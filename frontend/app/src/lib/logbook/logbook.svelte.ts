@@ -467,6 +467,9 @@ export class LogbookState {
         let unchanged = 0;
         let noData = 0;
         let failed = 0;
+        // F-04a: a timed-out PATCH is outcome-unknown (it may have committed), not a definite
+        // failure — counted apart so the summary never tells the operator it "failed".
+        let unknown = 0;
         for (let i = 0; i < targets.length; i++) {
             const row = targets[i];
             this.reEnrichProgress = `${i + 1}/${targets.length}`;
@@ -507,7 +510,10 @@ export class LogbookState {
             }
             const res = await patchQso(row.uuid, patch);
             if (res.kind !== 'ok') {
-                failed++;
+                // Split without a branch (keeps this baseline-debt function's complexity flat):
+                // an outcome-unknown timeout tallies as unknown, every other error as failed.
+                unknown += Number(res.timedOut === true);
+                failed += Number(res.timedOut !== true);
                 continue;
             }
             const idx = this.rows.findIndex((r) => r.uuid === row.uuid);
@@ -516,11 +522,19 @@ export class LogbookState {
         }
         this.reEnriching = false;
         this.reEnrichProgress = '';
+        // Data-driven so a new count (outcome unknown) adds a row here, not another branch in this
+        // already-exempt function. Order matches the operator-facing summary.
         const bits = [`Re-enriched ${changed}`];
-        if (unchanged > 0) bits.push(`${unchanged} unchanged`);
-        if (noData > 0) bits.push(`${noData} no data`);
-        if (failed > 0) bits.push(`${failed} failed`);
-        if (offPage > 0) bits.push(`${offPage} selected on other pages skipped`);
+        const counts: [number, string][] = [
+            [unchanged, 'unchanged'],
+            [noData, 'no data'],
+            [unknown, 'outcome unknown'],
+            [failed, 'failed'],
+            [offPage, 'selected on other pages skipped'],
+        ];
+        for (const [n, label] of counts) {
+            if (n > 0) bits.push(`${n} ${label}`);
+        }
         this.notice = bits.join(' \u00b7 ') + '.';
     }
 

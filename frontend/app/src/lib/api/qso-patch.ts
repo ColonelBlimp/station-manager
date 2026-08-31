@@ -32,6 +32,33 @@ function decodeQso(body: unknown, uuid: string, label: string): PatchOutcome {
     return { kind: 'ok', qso: body as unknown as LogbookQso };
 }
 
+// F-04a: shared operator-facing lead for a write whose outcome the SPA could not confirm because the
+// request timed out after (possibly) reaching the daemon. Never label this "failed".
+const OUTCOME_UNKNOWN_LEAD =
+    'The request timed out before Station Manager confirmed the result, so the outcome is unknown.';
+
+// A timed-out PATCH is ambiguous — it may have committed. Reconcile by re-reading the QSO and
+// comparing only the fields the operator attempted to change: a full match proves the PATCH landed
+// (report the stored record as success); anything else — a field that differs, or a re-read we
+// cannot complete — stays outcome-unknown. Daemon-side normalization (e.g. band re-derivation) that
+// alters an attempted field therefore degrades to unknown rather than a false success claim, which
+// is the safe direction: the operator reloads and sees the real stored state before retrying.
+async function reconcilePatchTimeout(uuid: string, patch: QsoPatch): Promise<PatchOutcome> {
+    const unknown: PatchOutcome = {
+        kind: 'error',
+        message: `${OUTCOME_UNKNOWN_LEAD} Reload this QSO before trying again.`,
+        timedOut: true,
+    };
+    const reread = await fetchQso(uuid);
+    if (reread.kind !== 'ok') return unknown;
+    const stored = reread.qso as unknown as Record<string, unknown>;
+    const attempted = Object.keys(patch) as (keyof QsoPatch)[];
+    const committed = attempted.every(
+        (k) => (patch[k] ?? '') === ((stored[k] as string | undefined) ?? '')
+    );
+    return committed ? { kind: 'ok', qso: reread.qso } : unknown;
+}
+
 /** The editable subset of a QSO, by ADIF JSON tag. All optional — only the
  *  fields the edit form touches are sent. */
 export interface QsoPatch {
@@ -59,7 +86,12 @@ export interface QsoPatch {
     cont?: string;
 }
 
-export type PatchOutcome = { kind: 'ok'; qso: LogbookQso } | { kind: 'error'; message: string };
+export type PatchOutcome =
+    | { kind: 'ok'; qso: LogbookQso }
+    // `timedOut` marks the AMBIGUOUS write (F-04a): the PATCH may have committed before its response
+    // was lost and reconciliation could not confirm it, so the caller must show "outcome unknown"
+    // and steer the operator to reload rather than blindly retry.
+    | { kind: 'error'; message: string; timedOut?: boolean };
 
 /** Fetch one QSO by its canonical uuid — GET /v1/qso/{uuid}. The response is
  *  the full QSO JSON, a superset of the logbook list-row shape, so surfaces
@@ -99,6 +131,12 @@ export async function patchQso(uuid: string, patch: QsoPatch): Promise<PatchOutc
         { timeoutMs: WRITE_TIMEOUT_MS }
     );
     if (!fetched.ok) {
+        // A fired write timeout is the ONLY ambiguous case — the request reached (or may have
+        // reached) the daemon and the response was lost, so it may already have committed. Every
+        // other transport failure keeps its existing generic wording unchanged (F-04a).
+        if (fetched.kind === 'network' && fetched.timedOut === true) {
+            return reconcilePatchTimeout(uuid, patch);
+        }
         return {
             kind: 'error',
             message: fetched.kind === 'network' ? 'Cannot reach the daemon.' : 'Request failed.',

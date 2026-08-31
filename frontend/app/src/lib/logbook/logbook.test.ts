@@ -170,6 +170,54 @@ describe('bulk re-enrich (skip-if-unchanged)', () => {
         // The patched row was replaced in place with the daemon's canonical merge.
         expect(logbookState.rows[1].name).toBe('Ana');
     });
+
+    // F-04a: a PATCH that times out during bulk re-enrich is outcome-unknown (it may have
+    // committed), not a definite failure. It must be reported distinctly so the operator is not
+    // told it "failed" — which would invite the exact duplicate-write retry F-04a prevents.
+    it('counts a timed-out PATCH as outcome-unknown, never as failed (F-04a)', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+                const url = urlText(input);
+                if (url.startsWith('/v1/enrich/callsign')) {
+                    return Promise.resolve(
+                        new Response(
+                            JSON.stringify(
+                                enrichBody('EA1AAA', { name: 'Ana', country: 'Spain', dxcc: '281' })
+                            ),
+                            { status: 200 }
+                        )
+                    );
+                }
+                if (url.startsWith('/v1/qso/') && init?.method === 'PATCH') {
+                    // The write times out — safeFetch classifies TimeoutError as network+timedOut.
+                    return Promise.reject(
+                        Object.assign(new Error('timed out'), { name: 'TimeoutError' })
+                    );
+                }
+                if (url.startsWith('/v1/qso/')) {
+                    // Reconciliation re-read: the stored row lacks the attempted fields, so the
+                    // outcome stays unknown (not a false success).
+                    return Promise.resolve(
+                        new Response(JSON.stringify({ uuid: 'u-2', call: 'EA1AAA' }), {
+                            status: 200,
+                        })
+                    );
+                }
+                return Promise.resolve(new Response('nf', { status: 404 }));
+            })
+        );
+
+        logbookState.rows = [
+            { id: 2, uuid: 'u-2', call: 'EA1AAA', country: 'Spain', gridsquare: '' },
+        ];
+        logbookState.toggleRow(logbookState.rows[0]);
+
+        await logbookState.reEnrichSelected();
+
+        expect(logbookState.notice).toContain('outcome unknown');
+        expect(logbookState.notice).not.toContain('failed');
+    });
 });
 
 // Request-generation guard: the selector stays enabled during a load, so a

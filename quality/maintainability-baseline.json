@@ -74,7 +74,7 @@
       "path": "frontend/app/src/lib/logbook/logbook.svelte.ts",
       "function": "reEnrichSelected",
       "direction": "maximum",
-      "value": 36
+      "value": 34
     },
     {
       "language": "frontend",
