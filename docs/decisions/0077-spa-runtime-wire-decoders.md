@@ -56,6 +56,22 @@ slot/passband/dial fields. A frame failing any load-bearing check is dropped; th
 stands. Defaulting is rejected specifically because defaulting `alarm.active` to `false` would clear
 a real alarm.
 
+Three strictness rules sharpen "load-bearing", each tied to the daemon's wire contract:
+
+- **Always-sent scalars are required, not merely typed-if-present.** `ft8-tx.armed`/`transmitting`,
+  `ft8-qso.active`, and `rig-meters.{meter,value}` carry no `omitempty` — the daemon marshals them
+  on every frame — so a frame that omits one is malformed and dropped. Accepting it would let the
+  consumer's `?? false` clear a live arm/transmit/session to idle, or dispatch a half meter reading.
+- **Enumerated fields are checked against their value set, not just their type.**
+  `rig-state.selectedVfo` must be `A`/`B` (the consumer's field is typed `'A' | 'B'`); an FT8 slot
+  `period` must be `even`/`odd`. `rig-state` is a partial merge, so it must also carry at least one
+  field this build models — an empty or unknown-only frame is dropped, not merged as a silent no-op
+  (the SPA ships embedded with its daemon, so a real frame always names a known field).
+- **Consumed strings are string-checked, and `ft8-logged` rejects whitespace-only identity.** Every
+  `ft8-qso` string the state module reads is validated (`their_call` and `end_reason` reach `.trim()`,
+  which throws on a non-string); `ft8-logged` requires a non-whitespace `uuid` and callsign, since a
+  blank uuid cannot dedup a session row and a blank callsign cannot key one.
+
 **List/page/edit (`logbooks.ts`, `qso-patch.ts`, `fetchQso`).** Per-record decode: a page
 `LogbookQso` needs a non-empty string `uuid`; a `Logbook` needs numeric `id` + string `name` +
 string `callsign`. Invalid elements are dropped (valid ones kept); **page uuids and logbook ids are

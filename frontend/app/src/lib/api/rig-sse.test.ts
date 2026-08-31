@@ -115,3 +115,108 @@ describe('openRigEvents', () => {
         expect(FakeEventSource.instances[0].closed).toBe(true);
     });
 });
+
+// F-03: valid JSON with the wrong shape must be dropped, leaving the last known good state —
+// never dispatched to a handler (which would silently corrupt a safety state) and never
+// thrown. Each drop warns once per (event, reason) per subscription.
+describe('openRigEvents — wrong-shape frames are dropped (F-03)', () => {
+    // Each call opens its OWN source and emits through THAT one (the newest), then closes it,
+    // so a test that calls emit() more than once asserts against the handler set actually wired
+    // to the source it dispatched through — not instances[0], whose listeners belong to the
+    // first call's handlers (which would make every later assertion a false positive).
+    function emit(type: string, data: string): RigEventHandlers {
+        const h = makeHandlers();
+        const close = openRigEvents(h);
+        FakeEventSource.instances[FakeEventSource.instances.length - 1].emit(type, data);
+        close();
+        return h;
+    }
+
+    it('drops a tune-state whose active is not a boolean (tune state unchanged)', () => {
+        expect(emit('tune-state', '{"active":"true"}').onTuneState).not.toHaveBeenCalled();
+    });
+
+    it('drops a tx-alarm whose active is not a boolean (the safety alarm is never falsely set/cleared)', () => {
+        expect(emit('tx-alarm', '{"active":0}').onTxAlarm).not.toHaveBeenCalled();
+    });
+
+    it('drops a drive-alarm with a non-boolean active', () => {
+        expect(emit('drive-alarm', '{"active":"x"}').onDriveAlarm).not.toHaveBeenCalled();
+    });
+
+    it('drops a rig-state whose vfoA is a string (never a wrong logged frequency)', () => {
+        expect(emit('rig-state', '{"vfoA":"14255000"}').onRigState).not.toHaveBeenCalled();
+    });
+
+    it('drops a rig-state whose mode is numeric, or vfoB/selectedVfo are wrong-typed', () => {
+        expect(emit('rig-state', '{"mode":5}').onRigState).not.toHaveBeenCalled();
+        expect(emit('rig-state', '{"vfoB":"x"}').onRigState).not.toHaveBeenCalled();
+        expect(emit('rig-state', '{"selectedVfo":1}').onRigState).not.toHaveBeenCalled();
+    });
+
+    // selectedVfo is exactly "A" | "B" on the wire; any other value would corrupt the
+    // consumer's 'A' | 'B'-typed field, so a valid-JSON string like "C" is still dropped.
+    it('drops a rig-state whose selectedVfo is a string other than A or B', () => {
+        expect(emit('rig-state', '{"selectedVfo":"C"}').onRigState).not.toHaveBeenCalled();
+        expect(emit('rig-state', '{"selectedVfo":"B"}').onRigState).toHaveBeenCalledWith({
+            selectedVfo: 'B',
+        });
+    });
+
+    // An empty or unknown-only frame carries no state this build models — dropped, not merged
+    // as a silent no-op (the embedded SPA ships with its daemon; a real frame has a known key).
+    it('drops an empty or unknown-only rig-state frame', () => {
+        expect(emit('rig-state', '{}').onRigState).not.toHaveBeenCalled();
+        expect(emit('rig-state', '{"someFutureField":5}').onRigState).not.toHaveBeenCalled();
+    });
+
+    it('drops a rig-meters whose value is a string', () => {
+        expect(
+            emit('rig-meters', '{"meter":"ALC","value":"26"}').onRigMeters
+        ).not.toHaveBeenCalled();
+    });
+
+    // A meter poll is a (meter, value) pair the daemon always sends whole; either half missing
+    // is meaningless, so the frame is dropped rather than dispatched with a defaulted half.
+    it('drops a rig-meters that omits meter or value', () => {
+        expect(emit('rig-meters', '{"meter":"ALC"}').onRigMeters).not.toHaveBeenCalled();
+        expect(emit('rig-meters', '{"value":26}').onRigMeters).not.toHaveBeenCalled();
+    });
+
+    it('drops a bridge-error / rig-disconnected with a non-string code', () => {
+        expect(emit('bridge-error', '{"code":5}').onBridgeError).not.toHaveBeenCalled();
+        expect(emit('rig-disconnected', '{}').onRigDisconnected).not.toHaveBeenCalled();
+    });
+
+    it('drops a non-object frame (array or primitive)', () => {
+        const h = makeHandlers();
+        openRigEvents(h);
+        const src = FakeEventSource.instances[0];
+        src.emit('rig-state', '[]');
+        src.emit('tune-state', '5');
+        expect(h.onRigState).not.toHaveBeenCalled();
+        expect(h.onTuneState).not.toHaveBeenCalled();
+    });
+
+    it('warns once per (event, reason) per subscription, and still dispatches a later valid frame', () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const h = makeHandlers();
+        openRigEvents(h);
+        const src = FakeEventSource.instances[0];
+        src.emit('tune-state', '{"active":"true"}'); // wrong shape → 1 warn
+        src.emit('tune-state', '{"active":"false"}'); // same (event, reason) → no second warn
+        expect(warn).toHaveBeenCalledTimes(1);
+        src.emit('tune-state', '{"active":true}'); // valid → dispatched
+        expect(h.onTuneState).toHaveBeenCalledWith({ active: true });
+    });
+
+    it('resets the warn throttle on a fresh subscription (close/reopen)', () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const close = openRigEvents(makeHandlers());
+        FakeEventSource.instances[0].emit('tune-state', '{"active":"true"}');
+        close();
+        openRigEvents(makeHandlers()); // new subscription → throttle reset
+        FakeEventSource.instances[1].emit('tune-state', '{"active":"true"}');
+        expect(warn).toHaveBeenCalledTimes(2);
+    });
+});

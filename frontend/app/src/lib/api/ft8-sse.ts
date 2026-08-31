@@ -16,6 +16,15 @@
 
 /** One occupied audio-frequency range. Mirrors internal/ft8.Band (snake_case wire). */
 import { openReviving } from './sse-reviving';
+import {
+    decodeFrame,
+    makeSseWarn,
+    isPlainObject,
+    isArrayOf,
+    optNum,
+    optStr,
+    optBool,
+} from './sse-decode';
 
 export interface Ft8Band {
     low_hz: number;
@@ -168,14 +177,129 @@ export interface Ft8EventHandlers {
     onAudioLevel: (p: AudioLevelPayload) => void;
 }
 
-function parse<T>(ev: MessageEvent<string>, label: string): T | null {
-    try {
-        return JSON.parse(ev.data) as T;
-    } catch (e) {
-        console.warn(`[ft8-sse] ${label} JSON parse failed`, e);
-        return null;
-    }
+// Per-event validators (F-03, ADR 0077). They validate the complete LOAD-BEARING structure —
+// nested slot/passband/dial, array-ness AND element shapes, and the safety/control scalars —
+// so a wrong-shape frame is dropped, leaving the last known good state, and no consumer throws
+// while spreading a non-array. Pure display strings are not checked (over-validating them would
+// drop frames needlessly); a frame carrying unknown extra fields is still accepted.
+const isCallSnr = (v: unknown): v is { call: string; snr: number } =>
+    isPlainObject(v) && typeof v.call === 'string' && typeof v.snr === 'number';
+function isBand(v: unknown): v is Ft8Band {
+    return (
+        isPlainObject(v) &&
+        typeof v.low_hz === 'number' &&
+        typeof v.high_hz === 'number' &&
+        optStr(v.source) &&
+        optNum(v.level)
+    );
 }
+const isSlot = (v: unknown): v is Ft8SlotRef =>
+    isPlainObject(v) &&
+    typeof v.start_utc === 'string' &&
+    (v.period === 'even' || v.period === 'odd');
+function isDecodeLine(v: unknown): v is DecodeLine {
+    return (
+        isPlainObject(v) &&
+        typeof v.text === 'string' &&
+        typeof v.freq_hz === 'number' &&
+        typeof v.dt_s === 'number' &&
+        typeof v.snr === 'number'
+    );
+}
+function isOccupancy(v: unknown): v is OccupancyPayload {
+    return (
+        isPlainObject(v) &&
+        isSlot(v.slot) &&
+        isBand(v.passband) &&
+        optNum(v.dial_mhz) &&
+        typeof v.signal_width_hz === 'number' &&
+        (v.occupied === null || isArrayOf(v.occupied, isBand)) &&
+        (v.suggested === null || isArrayOf(v.suggested, (x): x is number => typeof x === 'number'))
+    );
+}
+function isDecodeReport(v: unknown): v is DecodeReport {
+    return (
+        isPlainObject(v) &&
+        isSlot(v.slot) &&
+        optNum(v.dial_mhz) &&
+        (v.decodes === null || isArrayOf(v.decodes, isDecodeLine))
+    );
+}
+function isTx(v: unknown): v is TxPayload {
+    // armed and transmitting are the TX safety state; the daemon always sends them (no
+    // omitempty), so require them — a frame that omits them ({}) must NOT dispatch, or the
+    // consumer's `?? false` would silently clear a live arm/transmit into disarmed/idle.
+    return (
+        isPlainObject(v) &&
+        typeof v.armed === 'boolean' &&
+        typeof v.transmitting === 'boolean' &&
+        optNum(v.offset_hz) &&
+        optStr(v.message) &&
+        optStr(v.error) &&
+        optStr(v.disarm_cause)
+    );
+}
+// Grouped by guard so isQso stays a flat conjunction (the many fields are a list, not branching
+// logic). Every string field is CONSUMED by the ft8 state module — their_call and end_reason via
+// .trim(), which THROWS on a non-string — so each present one must be a string.
+const QSO_BOOL_FIELDS = [
+    'skip_armed',
+    'next_armed',
+    'auto_work_armed',
+    'drain_paused',
+    'fd',
+    'type4',
+] as const;
+const QSO_NUM_FIELDS = ['repeats', 'max_repeats', 'dial_freq_mhz'] as const;
+const QSO_STR_FIELDS = [
+    'role',
+    'their_call',
+    'their_grid',
+    'state',
+    'next_message',
+    'our_report',
+    'their_report',
+    'their_period',
+    'our_class',
+    'our_section',
+    'their_class',
+    'their_section',
+    'answer_mode',
+    'end_reason',
+] as const;
+function isQso(v: unknown): v is QsoPayload {
+    // active is the session gate; the daemon always sends it (no omitempty), so require it — a
+    // frame that omits it must NOT dispatch, or the consumer's `?? false` would clear a live
+    // session to idle.
+    return (
+        isPlainObject(v) &&
+        typeof v.active === 'boolean' &&
+        QSO_BOOL_FIELDS.every((k) => optBool(v[k])) &&
+        QSO_NUM_FIELDS.every((k) => optNum(v[k])) &&
+        QSO_STR_FIELDS.every((k) => optStr(v[k])) &&
+        (v.answerers === undefined || isArrayOf(v.answerers, isCallSnr)) &&
+        (v.queue === undefined || isArrayOf(v.queue, isCallSnr))
+    );
+}
+function isLogged(v: unknown): v is LoggedPayload {
+    // Success boundary: a non-empty uuid AND a usable callsign are required, or the frame is
+    // dropped — a malformed logged event must never create a phantom session row. Whitespace-
+    // only values are not usable (a blank uuid can't dedup, a blank call can't key a row).
+    return (
+        isPlainObject(v) &&
+        typeof v.uuid === 'string' &&
+        v.uuid.trim() !== '' &&
+        typeof v.callsign === 'string' &&
+        v.callsign.trim() !== '' &&
+        optNum(v.freq_hz) &&
+        optStr(v.band) &&
+        optStr(v.mode) &&
+        optStr(v.time_on) &&
+        optStr(v.qso_date)
+    );
+}
+const isAudioLevel = (v: unknown): v is AudioLevelPayload =>
+    isPlainObject(v) && typeof v.peak_dbfs === 'number' && typeof v.rms_dbfs === 'number';
 
 const SSE_URL = '/v1/ft8/events';
 
@@ -186,32 +310,35 @@ const SSE_URL = '/v1/ft8/events';
  * each call opens one source and hands back its own closer.
  */
 export function openFt8Events(handlers: Ft8EventHandlers): () => void {
+    // One throttled warn per subscription (survives openReviving's internal revives; a fresh
+    // openFt8Events after close resets it — F-03, ADR 0077).
+    const warn = makeSseWarn('ft8-sse');
     return openReviving(SSE_URL, (src) => {
         src.addEventListener('open', () => handlers.onOpen());
         src.addEventListener('error', () => handlers.onError());
 
         src.addEventListener('ft8-occupancy', (ev: MessageEvent<string>) => {
-            const p = parse<OccupancyPayload>(ev, 'ft8-occupancy');
+            const p = decodeFrame(ev.data, 'ft8-occupancy', isOccupancy, warn);
             if (p !== null) handlers.onOccupancy(p);
         });
         src.addEventListener('ft8-decode', (ev: MessageEvent<string>) => {
-            const p = parse<DecodeReport>(ev, 'ft8-decode');
+            const p = decodeFrame(ev.data, 'ft8-decode', isDecodeReport, warn);
             if (p !== null) handlers.onDecode(p);
         });
         src.addEventListener('ft8-tx', (ev: MessageEvent<string>) => {
-            const p = parse<TxPayload>(ev, 'ft8-tx');
+            const p = decodeFrame(ev.data, 'ft8-tx', isTx, warn);
             if (p !== null) handlers.onTx(p);
         });
         src.addEventListener('ft8-qso', (ev: MessageEvent<string>) => {
-            const p = parse<QsoPayload>(ev, 'ft8-qso');
+            const p = decodeFrame(ev.data, 'ft8-qso', isQso, warn);
             if (p !== null) handlers.onQso(p);
         });
         src.addEventListener('ft8-logged', (ev: MessageEvent<string>) => {
-            const p = parse<LoggedPayload>(ev, 'ft8-logged');
+            const p = decodeFrame(ev.data, 'ft8-logged', isLogged, warn);
             if (p !== null) handlers.onLogged(p);
         });
         src.addEventListener('ft8-audio-level', (ev: MessageEvent<string>) => {
-            const p = parse<AudioLevelPayload>(ev, 'ft8-audio-level');
+            const p = decodeFrame(ev.data, 'ft8-audio-level', isAudioLevel, warn);
             if (p !== null) handlers.onAudioLevel(p);
         });
     });
