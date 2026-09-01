@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { forwardingState } from './forwarding.svelte';
+import { toasts } from '../ui/toasts.svelte';
 
 /*
     FORWARDING SECTION — CREDENTIAL SAFETY.
@@ -370,5 +371,221 @@ describe('forwardingState credential safety', () => {
         await forwardingState.save();
 
         expect(puts).toHaveLength(0);
+    });
+});
+
+// F-04c (ADR 0078): a Forwarding save whose PUT TIMED OUT is outcome-unknown,
+// not failed. save() re-reads the authoritative forwarders block (a WHOLE-list
+// replace keyed by name) and lays the operator's OWN edits back over it, with
+// explicit collection membership/order rules:
+//   - a per-entry owned field (a toggled enable) is kept; an untouched field
+//     adopts the concurrent stored value;
+//   - a newly stored entry is ADOPTED;
+//   - an entry the daemon removed concurrently is DROPPED if untouched, but
+//     RETAINED if it carries an operator edit (so unsaved work is never lost);
+//   - typed credentials and explicit reset (`cleared`) intents are preserved
+//     (the re-read never carries a credential value), `credentialsSet` refreshes
+//     from stored.
+// Rebaseline to stored, report outcome-unknown — never "saved". A re-read that
+// also fails stays unknown with the double-fault guidance; a NON-timeout error
+// still says "Save failed".
+function timeoutError(): Error {
+    return Object.assign(new Error('timed out'), { name: 'TimeoutError' });
+}
+
+function configWith(forwarders: unknown[]) {
+    return { forwarders };
+}
+
+// PUT rejects (timeout by default); /v1/forwarder-types always returns TYPES;
+// each /v1/config GET returns the next queued forwarders body (load first,
+// reconcile re-read second).
+function stubReconcile(configBodies: unknown[], putReject: () => Error = timeoutError) {
+    let cfg = 0;
+    const spy = vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
+        const u = url instanceof URL ? url.href : typeof url === 'string' ? url : url.url;
+        if (init?.method === 'PUT') return Promise.reject(putReject());
+        if (u.includes('forwarder-types')) {
+            return Promise.resolve(
+                new Response(JSON.stringify(TYPES), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                })
+            );
+        }
+        const body = configBodies[Math.min(cfg, configBodies.length - 1)];
+        cfg++;
+        return Promise.resolve(
+            new Response(JSON.stringify(body), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+            })
+        );
+    });
+    vi.stubGlobal('fetch', spy);
+    return spy;
+}
+
+const draftNamed = (name: string) => forwardingState.drafts.find((d) => d.name === name);
+
+describe('forwardingState — timed-out reconciliation (F-04c)', () => {
+    it('re-reads, keeps the operator toggle, adopts a concurrent untouched change, warns unknown, never "saved"', async () => {
+        const warn = vi.spyOn(toasts, 'warn').mockImplementation(() => 0);
+        const info = vi.spyOn(toasts, 'info').mockImplementation(() => 0);
+        const error = vi.spyOn(toasts, 'error').mockImplementation(() => 0);
+        // Re-read: a second writer disabled the UNTOUCHED smcloud; qrz unchanged.
+        const reread = configWith([
+            { name: 'qrz', type: 'qrz', enabled: true, credentials_set: ['api_key', 'username'] },
+            {
+                name: 'smcloud',
+                type: 'smcloud',
+                enabled: false,
+                credentials_set: ['url', 'logbook'],
+            },
+            { name: 'mystery', type: 'mystery', enabled: false, credentials_set: ['token'] },
+        ]);
+        stubReconcile([CONFIG, reread]);
+
+        await forwardingState.load();
+        draftNamed('qrz')!.enabled = false; // owned edit; smcloud untouched
+
+        await forwardingState.save();
+
+        expect(draftNamed('qrz')!.enabled).toBe(false); // owned kept
+        expect(draftNamed('smcloud')!.enabled).toBe(false); // untouched adopts stored
+        expect(warn).toHaveBeenCalledOnce();
+        expect(String(warn.mock.calls[0][0])).toMatch(/the outcome is unknown/);
+        expect(String(warn.mock.calls[0][0])).toMatch(/review and save again/);
+        expect(info).not.toHaveBeenCalled();
+        expect(error).not.toHaveBeenCalled();
+        expect(forwardingState.dirty).toBe(true);
+    });
+
+    it('adopts a newly stored entry that appeared concurrently', async () => {
+        const warn = vi.spyOn(toasts, 'warn').mockImplementation(() => 0);
+        const reread = configWith([
+            ...CONFIG.forwarders,
+            { name: 'newdest', type: 'mystery', enabled: true, credentials_set: [] },
+        ]);
+        stubReconcile([CONFIG, reread]);
+
+        await forwardingState.load();
+        draftNamed('qrz')!.enabled = false; // make the save dirty
+
+        await forwardingState.save();
+
+        expect(draftNamed('newdest')).toBeDefined(); // adopted
+        expect(draftNamed('newdest')!.enabled).toBe(true);
+        expect(warn).toHaveBeenCalledOnce();
+    });
+
+    it('drops an untouched entry the daemon removed concurrently', async () => {
+        const warn = vi.spyOn(toasts, 'warn').mockImplementation(() => 0);
+        const reread = configWith(CONFIG.forwarders.filter((f) => f.name !== 'mystery'));
+        stubReconcile([CONFIG, reread]);
+
+        await forwardingState.load();
+        draftNamed('qrz')!.enabled = false; // dirty; mystery untouched
+
+        await forwardingState.save();
+
+        expect(draftNamed('mystery')).toBeUndefined(); // dropped
+        expect(warn).toHaveBeenCalledOnce();
+    });
+
+    it('retains a concurrently-removed entry that carries an operator edit', async () => {
+        const warn = vi.spyOn(toasts, 'warn').mockImplementation(() => 0);
+        // Re-read omits smcloud — but the operator has an unsaved edit on it.
+        const reread = configWith(CONFIG.forwarders.filter((f) => f.name !== 'smcloud'));
+        stubReconcile([CONFIG, reread]);
+
+        await forwardingState.load();
+        draftNamed('smcloud')!.credentials.url = 'https://typed'; // operator edit on smcloud
+
+        await forwardingState.save();
+
+        const smcloud = draftNamed('smcloud');
+        expect(smcloud).toBeDefined(); // retained despite the daemon removing it
+        expect(smcloud!.credentials.url).toBe('https://typed'); // the edit survives
+        expect(warn).toHaveBeenCalledOnce();
+    });
+
+    it('preserves typed credentials and an explicit clear intent across the reconcile', async () => {
+        const warn = vi.spyOn(toasts, 'warn').mockImplementation(() => 0);
+        const spy = stubReconcile([CONFIG, CONFIG]); // re-read unchanged
+
+        await forwardingState.load();
+        draftNamed('qrz')!.credentials.api_key = 'NEWKEY'; // typed secret
+        forwardingState.clear('smcloud', 'logbook'); // explicit reset intent
+
+        await forwardingState.save();
+
+        expect(spy.mock.calls.length).toBe(4); // load config+types, timed-out PUT, reconcile GET
+        expect(draftNamed('qrz')!.credentials.api_key).toBe('NEWKEY'); // preserved
+        expect(draftNamed('smcloud')!.cleared).toContain('logbook'); // preserved
+        expect(warn).toHaveBeenCalledOnce();
+        // and the intents still ride on a resave
+        const payload = forwardingState.buildPayload();
+        expect(payload.find((f) => f.name === 'qrz')?.credentials?.api_key).toBe('NEWKEY');
+        expect(payload.find((f) => f.name === 'smcloud')?.credentials?.logbook).toBe('');
+    });
+
+    it('when the reconciling re-read ALSO fails, stays outcome-unknown, keeps edits, does not rebaseline', async () => {
+        const error = vi.spyOn(toasts, 'error').mockImplementation(() => 0);
+        const info = vi.spyOn(toasts, 'info').mockImplementation(() => 0);
+        let cfg = 0;
+        vi.stubGlobal(
+            'fetch',
+            vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
+                const u = url instanceof URL ? url.href : typeof url === 'string' ? url : url.url;
+                if (init?.method === 'PUT') return Promise.reject(timeoutError());
+                if (u.includes('forwarder-types')) {
+                    return Promise.resolve(
+                        new Response(JSON.stringify(TYPES), {
+                            status: 200,
+                            headers: { 'Content-Type': 'application/json' },
+                        })
+                    );
+                }
+                cfg++;
+                if (cfg === 1) {
+                    return Promise.resolve(
+                        new Response(JSON.stringify(CONFIG), {
+                            status: 200,
+                            headers: { 'Content-Type': 'application/json' },
+                        })
+                    );
+                }
+                return Promise.resolve(new Response('nope', { status: 503 })); // re-read fails
+            })
+        );
+
+        await forwardingState.load();
+        draftNamed('qrz')!.enabled = false;
+        await forwardingState.save();
+
+        expect(error).toHaveBeenCalledOnce();
+        expect(String(error.mock.calls[0][0])).toMatch(/the outcome is unknown/);
+        expect(String(error.mock.calls[0][0])).toMatch(
+            /check its status before deciding whether to retry/
+        );
+        expect(draftNamed('qrz')!.enabled).toBe(false); // kept
+        expect(forwardingState.dirty).toBe(true);
+        expect(forwardingState.loaded).toBe(true);
+        expect(info).not.toHaveBeenCalled();
+    });
+
+    it('a NON-timeout save error still reports "Save failed" and does not re-read', async () => {
+        const error = vi.spyOn(toasts, 'error').mockImplementation(() => 0);
+        const spy = stubReconcile([CONFIG], () => new TypeError('Failed to fetch'));
+
+        await forwardingState.load();
+        const afterLoad = spy.mock.calls.length; // 2 (config + types)
+        draftNamed('qrz')!.enabled = false;
+        await forwardingState.save();
+
+        expect(error).toHaveBeenCalledOnce();
+        expect(String(error.mock.calls[0][0])).toMatch(/Save failed/);
+        expect(spy.mock.calls.length).toBe(afterLoad + 1); // only the failed PUT; no re-read
     });
 });

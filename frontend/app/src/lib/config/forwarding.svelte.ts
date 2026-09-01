@@ -16,6 +16,11 @@ import {
     type ForwarderType,
 } from '../api/forwarders';
 import { noteConfigDurability } from './durability';
+import {
+    OUTCOME_UNKNOWN_LEAD,
+    CONFIG_TIMEOUT_TAIL_RECONCILED,
+    CONFIG_TIMEOUT_TAIL_REREAD_FAILED,
+} from '../api/_helpers';
 import { toasts } from '../ui/toasts.svelte';
 
 /** One destination as the form holds it: the masked entry plus local edits. */
@@ -32,6 +37,83 @@ export interface ForwarderDraft {
     credentials: Record<string, string>;
     /** Keys the operator explicitly reset (clearable fields only). */
     cleared: string[];
+}
+
+/** A masked daemon entry as the form holds it — the shape #apply builds. */
+function entryToDraft(e: ForwarderEntry): ForwarderDraft {
+    return {
+        name: e.name,
+        type: e.type,
+        label: e.label ?? '',
+        enabled: e.enabled,
+        action_filter: e.action_filter,
+        credentialsSet: e.credentials_set ?? [],
+        credentials: {},
+        cleared: [],
+    };
+}
+
+// True when a draft carries unsaved operator work versus its loaded baseline: a
+// toggled enable, a typed credential, or a pending reset. A draft with no
+// baseline (e.g. one retained from an earlier reconcile) counts as edited.
+function draftHasEdits(d: ForwarderDraft, before: ForwarderDraft | undefined): boolean {
+    if (!before) return true;
+    return (
+        d.enabled !== before.enabled ||
+        d.cleared.length > 0 ||
+        Object.values(d.credentials).some((v) => v.trim() !== '')
+    );
+}
+
+// Lay the operator's OWN edits back over a freshly re-read forwarders list after
+// a timed-out save (F-04c, ADR 0078). The block is a WHOLE-list replace keyed by
+// name, so membership and order come from `stored` (the daemon's current list),
+// with these rules:
+//   - present in both → keep a toggled `enabled` iff the operator owns it
+//     (draft ≠ sent ∨ sent ≠ before); adopt stored for daemon-owned fields;
+//     PRESERVE typed credentials + `cleared` (never in the re-read); refresh
+//     `credentialsSet` from stored;
+//   - newly stored, not in the draft → ADOPT it;
+//   - a draft entry the daemon dropped → RETAIN it iff it carries an operator
+//     edit (unsaved work is never lost), else DROP it.
+function mergeForwarders(
+    before: ForwarderDraft[],
+    sent: ForwarderDraft[],
+    draft: ForwarderDraft[],
+    stored: ForwarderEntry[]
+): ForwarderDraft[] {
+    const index = (list: ForwarderDraft[]) => new Map(list.map((d) => [d.name, d]));
+    const beforeByName = index(before);
+    const sentByName = index(sent);
+    const draftByName = index(draft);
+    const storedNames = new Set(stored.map((e) => e.name));
+
+    // 1. Walk the stored list (daemon membership + order); overlay owned edits.
+    const merged: ForwarderDraft[] = stored.map((e) => {
+        const d = draftByName.get(e.name);
+        if (!d) return entryToDraft(e); // newly stored ⇒ adopt
+        const b = beforeByName.get(e.name);
+        const s = sentByName.get(e.name);
+        const enabledOwned = d.enabled !== s?.enabled || s?.enabled !== b?.enabled;
+        return {
+            name: e.name,
+            type: e.type,
+            label: e.label ?? '',
+            enabled: enabledOwned ? d.enabled : e.enabled,
+            action_filter: e.action_filter,
+            credentialsSet: e.credentials_set ?? [],
+            credentials: { ...d.credentials },
+            cleared: [...d.cleared],
+        };
+    });
+
+    // 2. A draft entry the daemon dropped: retain iff it carries an operator
+    //    edit; otherwise drop it (adopt the daemon's removal).
+    for (const d of draft) {
+        if (storedNames.has(d.name)) continue;
+        if (draftHasEdits(d, beforeByName.get(d.name))) merged.push(d);
+    }
+    return merged;
 }
 
 class ForwardingState {
@@ -121,9 +203,20 @@ class ForwardingState {
         // the wire if another caller or a rendering race invokes it anyway.
         if (this.saving || !this.loaded || !this.dirty) return;
         this.saving = true;
+        // Captured BEFORE the write: a timed-out save is judged against the saved
+        // baseline (`before`) and exactly what THIS save carried (`sent`), never
+        // drafts that may have moved while the PUT was in flight.
+        const before = (JSON.parse(this.#pristineEntries) as ForwarderEntry[]).map(entryToDraft);
+        const sent = JSON.parse(JSON.stringify(this.drafts)) as ForwarderDraft[];
         try {
             const res = await saveForwarders(this.buildPayload());
             if (res.kind === 'error') {
+                // A timed-out PUT is reconciled by re-reading, not declared a
+                // failure (F-04c, ADR 0078); every other error keeps its wording.
+                if (res.timedOut) {
+                    await this.#reconcileAfterTimeout(before, sent);
+                    return;
+                }
                 toasts.error(`Save failed: ${res.message}`);
                 return;
             }
@@ -134,6 +227,32 @@ class ForwardingState {
         } finally {
             this.saving = false;
         }
+    }
+
+    /**
+     * Settle a save whose PUT timed out (F-04c, ADR 0078). The forwarders block
+     * may already have been replaced, so re-read it and lay the operator's own
+     * edits back over the stored list (mergeForwarders — membership/order rules
+     * documented there). Rebaseline to stored (so `dirty` means "differs from the
+     * daemon" and Cancel reveals the daemon's list) and warn outcome-unknown —
+     * never "saved". Only the forwarders config is re-read; the type descriptors
+     * are static and stay loaded.
+     */
+    async #reconcileAfterTimeout(before: ForwarderDraft[], sent: ForwarderDraft[]): Promise<void> {
+        const cfg = await fetchForwarders();
+        if (cfg.kind === 'error') {
+            // The re-read failed too — the whole-list state can't be refreshed
+            // here. Keep the drafts dirty and enabled (no rebaseline); a later
+            // timed-out save re-reads again.
+            toasts.error(`${OUTCOME_UNKNOWN_LEAD} ${CONFIG_TIMEOUT_TAIL_REREAD_FAILED}`);
+            return;
+        }
+        // Compute the merged list from the CURRENT drafts BEFORE #apply overwrites
+        // them with the stored entries.
+        const merged = mergeForwarders(before, sent, this.drafts, cfg.forwarders);
+        this.#apply(cfg.forwarders); // baselines ← stored
+        this.drafts = merged; // restore the operator's merged edits over stored
+        toasts.warn(`${OUTCOME_UNKNOWN_LEAD} ${CONFIG_TIMEOUT_TAIL_RECONCILED}`);
     }
 
     /**
@@ -224,16 +343,7 @@ class ForwardingState {
     }
 
     #apply(entries: ForwarderEntry[]): void {
-        this.drafts = entries.map((e) => ({
-            name: e.name,
-            type: e.type,
-            label: e.label ?? '',
-            enabled: e.enabled,
-            action_filter: e.action_filter,
-            credentialsSet: e.credentials_set ?? [],
-            credentials: {},
-            cleared: [],
-        }));
+        this.drafts = entries.map(entryToDraft);
         this.#pristine = JSON.stringify(this.#comparable());
         this.#pristineEntries = JSON.stringify(entries);
     }
