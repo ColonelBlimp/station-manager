@@ -32,6 +32,11 @@ import {
     type LookupProviderPayload,
 } from '../api/lookup';
 import { noteConfigDurability } from './durability';
+import {
+    OUTCOME_UNKNOWN_LEAD,
+    CONFIG_TIMEOUT_TAIL_RECONCILED,
+    CONFIG_TIMEOUT_TAIL_REREAD_FAILED,
+} from '../api/_helpers';
 import { toasts } from '../ui/toasts.svelte';
 
 /*
@@ -124,6 +129,120 @@ function draftFrom(e: LookupEntry): EnrichmentDraft {
         countryTtlDays: String(e.country_ttl_days),
         stationTtlDays: String(e.station_ttl_days),
         refreshMaxInFlight: String(e.refresh_max_in_flight),
+    };
+}
+
+// A field is the operator's iff this save changed it (sent ≠ before) or they
+// edited it in flight (draft ≠ sent): keep the draft; otherwise adopt `stored`.
+// Mirrors mergeGeneral (config/general.svelte.ts).
+function pick<T>(before: T | undefined, sent: T | undefined, draft: T, stored: T): T {
+    return draft !== sent || sent !== before ? draft : stored;
+}
+
+// True when a provider draft carries unsaved operator work versus its loaded
+// baseline. A provider with no baseline (e.g. one retained from an earlier
+// reconcile) counts as edited.
+function providerHasEdits(d: ProviderDraft, before: ProviderDraft | undefined): boolean {
+    if (!before) return true;
+    return (
+        d.enabled !== before.enabled ||
+        d.priority !== before.priority ||
+        d.username !== before.username ||
+        d.url !== before.url ||
+        d.timeoutSec !== before.timeoutSec ||
+        d.viewUrl !== before.viewUrl ||
+        d.password.trim() !== '' ||
+        d.passwordCleared
+    );
+}
+
+// Overlay one provider's OWN edits over the freshly re-read (stored) provider.
+// The masked password and clear intent are never in the re-read, so they are
+// kept from the draft; `passwordSet` and `label` are daemon-owned.
+function mergeProvider(
+    b: ProviderDraft | undefined,
+    s: ProviderDraft | undefined,
+    d: ProviderDraft,
+    st: ProviderDraft
+): ProviderDraft {
+    return {
+        name: st.name,
+        country: st.country,
+        label: st.label,
+        passwordSet: st.passwordSet,
+        password: d.password,
+        passwordCleared: d.passwordCleared,
+        priority: pick(b?.priority, s?.priority, d.priority, st.priority),
+        enabled: pick(b?.enabled, s?.enabled, d.enabled, st.enabled),
+        username: pick(b?.username, s?.username, d.username, st.username),
+        url: pick(b?.url, s?.url, d.url, st.url),
+        timeoutSec: pick(b?.timeoutSec, s?.timeoutSec, d.timeoutSec, st.timeoutSec),
+        viewUrl: pick(b?.viewUrl, s?.viewUrl, d.viewUrl, st.viewUrl),
+    };
+}
+
+// Lay the operator's OWN edits back over a freshly re-read lookup block after a
+// timed-out save (F-04c, ADR 0078). The chain is a WHOLE-list replace, so
+// membership and order come from `stored`: a provider present in both keeps its
+// owned fields (adopting stored for the rest), a newly stored provider is
+// adopted, and a provider the daemon dropped is retained only if it carries an
+// operator edit. Then the callsign chain is re-normalised to UNIQUE priorities
+// 1..N (hamnut/country keeps 0) so a concurrent reorder cannot leave a
+// collision. TTLs are compared as strings, keeping blank ("use default")
+// distinct from "0" ("never stale").
+function mergeEnrichmentDraft(
+    before: EnrichmentDraft,
+    sent: EnrichmentDraft,
+    draft: EnrichmentDraft,
+    stored: EnrichmentDraft
+): EnrichmentDraft {
+    const index = (e: EnrichmentDraft) => new Map(e.providers.map((p) => [p.name, p]));
+    const bByName = index(before);
+    const sByName = index(sent);
+    const dByName = index(draft);
+    const storedNames = new Set(stored.providers.map((p) => p.name));
+
+    const merged: ProviderDraft[] = stored.providers.map((st) => {
+        const d = dByName.get(st.name);
+        if (!d) return { ...st }; // newly stored ⇒ adopt
+        return mergeProvider(bByName.get(st.name), sByName.get(st.name), d, st);
+    });
+    // A draft provider the daemon dropped: retain iff it carries an operator edit
+    // (clone so the re-normalisation below never mutates the live draft), else drop.
+    for (const d of draft.providers) {
+        if (storedNames.has(d.name)) continue;
+        if (providerHasEdits(d, bByName.get(d.name))) merged.push({ ...d });
+    }
+    // Prevent duplicate chain priorities after a concurrent reorder: re-normalise
+    // the callsign chain to 1..N by sorted order (country/hamnut keeps 0).
+    const country = merged.filter((p) => p.country);
+    const chain = merged.filter((p) => !p.country).sort((a, b) => a.priority - b.priority);
+    chain.forEach((p, i) => (p.priority = i + 1));
+
+    const listOwned =
+        JSON.stringify(draft.continueIfBlank) !== JSON.stringify(sent.continueIfBlank) ||
+        JSON.stringify(sent.continueIfBlank) !== JSON.stringify(before.continueIfBlank);
+    return {
+        providers: [...country, ...chain],
+        continueIfBlank: listOwned ? draft.continueIfBlank : stored.continueIfBlank,
+        countryTtlDays: pick(
+            before.countryTtlDays,
+            sent.countryTtlDays,
+            draft.countryTtlDays,
+            stored.countryTtlDays
+        ),
+        stationTtlDays: pick(
+            before.stationTtlDays,
+            sent.stationTtlDays,
+            draft.stationTtlDays,
+            stored.stationTtlDays
+        ),
+        refreshMaxInFlight: pick(
+            before.refreshMaxInFlight,
+            sent.refreshMaxInFlight,
+            draft.refreshMaxInFlight,
+            stored.refreshMaxInFlight
+        ),
     };
 }
 
@@ -220,9 +339,20 @@ class EnrichmentState {
         // never successfully filled would delete every provider.
         if (this.saving || !this.loaded || !this.dirty) return;
         this.saving = true;
+        // Captured BEFORE the write: a timed-out save is judged against the saved
+        // baseline (`before`) and exactly what THIS save carried (`sent`), never a
+        // draft that may have moved while the PUT was in flight.
+        const before = JSON.parse(this.#pristine) as EnrichmentDraft;
+        const sent = JSON.parse(JSON.stringify(this.draft)) as EnrichmentDraft;
         try {
             const res = await saveLookup(this.buildPayload());
             if (res.kind === 'error') {
+                // A timed-out PUT is reconciled by re-reading, not declared a
+                // failure (F-04c, ADR 0078); every other error keeps its wording.
+                if (res.timedOut) {
+                    await this.#reconcileAfterTimeout(before, sent);
+                    return;
+                }
                 toasts.error(`Save failed: ${res.message}`);
                 return;
             }
@@ -233,6 +363,32 @@ class EnrichmentState {
         } finally {
             this.saving = false;
         }
+    }
+
+    /**
+     * Settle a save whose PUT timed out (F-04c, ADR 0078). The lookup block may
+     * already have been replaced, so re-read it and lay the operator's own edits
+     * back over the stored chain (mergeEnrichmentDraft — membership/order and
+     * priority-uniqueness rules documented there). Rebaseline to stored (so
+     * `dirty` means "differs from the daemon" and Cancel reveals the daemon's
+     * chain) and warn outcome-unknown — never "saved". Only the lookup config is
+     * re-read; the provider descriptors are static and stay loaded.
+     */
+    async #reconcileAfterTimeout(before: EnrichmentDraft, sent: EnrichmentDraft): Promise<void> {
+        const out = await fetchLookup();
+        if (out.kind === 'error') {
+            // The re-read failed too — the whole-chain state can't be refreshed
+            // here. Keep the draft dirty and enabled (no rebaseline); a later
+            // timed-out save re-reads again.
+            toasts.error(`${OUTCOME_UNKNOWN_LEAD} ${CONFIG_TIMEOUT_TAIL_REREAD_FAILED}`);
+            return;
+        }
+        // Compute the merged draft from the CURRENT draft BEFORE #apply overwrites
+        // it with the stored values.
+        const merged = mergeEnrichmentDraft(before, sent, this.draft, draftFrom(out.lookup));
+        this.#apply(out.lookup); // baseline ← stored
+        this.draft = merged; // restore the operator's merged edits over stored
+        toasts.warn(`${OUTCOME_UNKNOWN_LEAD} ${CONFIG_TIMEOUT_TAIL_RECONCILED}`);
     }
 
     /** Record a typed password; supersedes a pending removal. */

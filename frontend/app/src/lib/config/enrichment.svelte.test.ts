@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { enrichmentState } from './enrichment.svelte';
+import { toasts } from '../ui/toasts.svelte';
 
 /*
     ENRICHMENT SECTION — WHAT GOES ON THE WIRE.
@@ -455,5 +456,292 @@ describe('enrichmentState wire behaviour', () => {
         await enrichmentState.save();
 
         expect(lookupOf(puts[0]).continue_if_blank).toEqual(['gridsquare']);
+    });
+});
+
+// F-04c (ADR 0078): an Enrichment save whose PUT TIMED OUT is outcome-unknown,
+// not failed. save() re-reads the authoritative lookup block (a WHOLE-chain
+// replace) and lays the operator's OWN edits back over it, with the same
+// collection membership/order rules Forwarding uses (adopt newly stored, drop
+// concurrently-removed UNTOUCHED, retain removed-with-edits) PLUS an
+// Enrichment-specific rule: after a concurrent reorder the merged chain is
+// re-normalised to unique priorities 1..N. Per-provider typed passwords and
+// explicit clear intents are preserved (the re-read never carries a value);
+// TTLs are held as strings so blank ("use default") stays distinct from "0"
+// ("never stale"). Rebaseline to stored, report outcome-unknown — never "saved".
+function timeoutError(): Error {
+    return Object.assign(new Error('timed out'), { name: 'TimeoutError' });
+}
+
+function withLookup(lookup: unknown) {
+    return { ...CONFIG, lookup };
+}
+
+// PUT rejects (timeout by default); /v1/lookup-types always returns TYPES; each
+// /v1/config GET returns the next queued body (load first, reconcile re-read
+// second).
+function stubReconcile(configBodies: unknown[], putReject: () => Error = timeoutError) {
+    let cfg = 0;
+    const spy = vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
+        const u = url instanceof URL ? url.href : typeof url === 'string' ? url : url.url;
+        if (u.includes('lookup-types')) {
+            return Promise.resolve(
+                new Response(JSON.stringify(TYPES), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                })
+            );
+        }
+        if (init?.method === 'PUT') return Promise.reject(putReject());
+        const body = configBodies[Math.min(cfg, configBodies.length - 1)];
+        cfg++;
+        return Promise.resolve(
+            new Response(JSON.stringify(body), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+            })
+        );
+    });
+    vi.stubGlobal('fetch', spy);
+    return spy;
+}
+
+const draftProvider = (name: string) =>
+    enrichmentState.draft.providers.find((p) => p.name === name);
+
+describe('enrichmentState — timed-out reconciliation (F-04c)', () => {
+    it('re-reads, keeps the operator edit, adopts a concurrent untouched change, warns unknown, never "saved"', async () => {
+        const warn = vi.spyOn(toasts, 'warn').mockImplementation(() => 0);
+        const info = vi.spyOn(toasts, 'info').mockImplementation(() => 0);
+        const error = vi.spyOn(toasts, 'error').mockImplementation(() => 0);
+        // Re-read: a second writer changed the UNTOUCHED hamqth's username; qrz
+        // unchanged on the daemon (our save's fate unknown).
+        const reread = {
+            ...CONFIG.lookup,
+            chain: [CONFIG.lookup.chain[0], { ...CONFIG.lookup.chain[1], username: 'changed' }],
+        };
+        stubReconcile([CONFIG, withLookup(reread)]);
+
+        await enrichmentState.load();
+        qrzDraft().username = 'M0XYZ'; // owned edit; hamqth untouched
+
+        await enrichmentState.save();
+
+        expect(qrzDraft().username).toBe('M0XYZ'); // owned kept
+        expect(draftProvider('hamqth')!.username).toBe('changed'); // untouched adopts stored
+        expect(warn).toHaveBeenCalledOnce();
+        expect(String(warn.mock.calls[0][0])).toMatch(/the outcome is unknown/);
+        expect(String(warn.mock.calls[0][0])).toMatch(/review and save again/);
+        expect(info).not.toHaveBeenCalled();
+        expect(error).not.toHaveBeenCalled();
+        expect(enrichmentState.dirty).toBe(true);
+    });
+
+    it('adopts a newly stored provider that appeared concurrently', async () => {
+        const warn = vi.spyOn(toasts, 'warn').mockImplementation(() => 0);
+        const reread = {
+            ...CONFIG.lookup,
+            chain: [
+                ...CONFIG.lookup.chain,
+                {
+                    name: 'newprov',
+                    priority: 3,
+                    enabled: true,
+                    url: 'https://new.example',
+                    username: 'u',
+                    password_set: false,
+                    timeout_sec: 5,
+                },
+            ],
+        };
+        stubReconcile([CONFIG, withLookup(reread)]);
+
+        await enrichmentState.load();
+        qrzDraft().username = 'M0XYZ'; // make the save dirty
+
+        await enrichmentState.save();
+
+        expect(draftProvider('newprov')).toBeDefined(); // adopted
+        expect(warn).toHaveBeenCalledOnce();
+    });
+
+    it('drops an untouched provider the daemon removed concurrently', async () => {
+        const warn = vi.spyOn(toasts, 'warn').mockImplementation(() => 0);
+        const reread = { ...CONFIG.lookup, chain: [CONFIG.lookup.chain[0]] }; // hamqth removed
+        stubReconcile([CONFIG, withLookup(reread)]);
+
+        await enrichmentState.load();
+        qrzDraft().username = 'M0XYZ'; // dirty; hamqth untouched
+
+        await enrichmentState.save();
+
+        expect(draftProvider('hamqth')).toBeUndefined(); // dropped
+        expect(warn).toHaveBeenCalledOnce();
+    });
+
+    it('retains a concurrently-removed provider that carries an operator edit', async () => {
+        const warn = vi.spyOn(toasts, 'warn').mockImplementation(() => 0);
+        const reread = { ...CONFIG.lookup, chain: [CONFIG.lookup.chain[0]] }; // hamqth removed
+        stubReconcile([CONFIG, withLookup(reread)]);
+
+        await enrichmentState.load();
+        draftProvider('hamqth')!.username = 'edited'; // operator edit on hamqth
+
+        await enrichmentState.save();
+
+        const hamqth = draftProvider('hamqth');
+        expect(hamqth).toBeDefined(); // retained despite the daemon removing it
+        expect(hamqth!.username).toBe('edited'); // the edit survives
+        expect(warn).toHaveBeenCalledOnce();
+    });
+
+    it('re-normalises to UNIQUE chain priorities after a concurrent reorder', async () => {
+        const warn = vi.spyOn(toasts, 'warn').mockImplementation(() => 0);
+        // Load three callsign providers at 1/2/3.
+        const load3 = {
+            ...CONFIG.lookup,
+            chain: [
+                { ...CONFIG.lookup.chain[0], priority: 1 }, // qrz
+                { ...CONFIG.lookup.chain[1], priority: 2 }, // hamqth
+                {
+                    name: 'extra',
+                    priority: 3,
+                    enabled: true,
+                    url: 'https://extra.example',
+                    username: 'e',
+                    password_set: false,
+                    timeout_sec: 5,
+                },
+            ],
+        };
+        // Re-read: a concurrent writer moved hamqth to 1 (still a unique 1/2/3).
+        const reread3 = {
+            ...CONFIG.lookup,
+            chain: [
+                { ...CONFIG.lookup.chain[1], priority: 1 }, // hamqth
+                { ...CONFIG.lookup.chain[0], priority: 2 }, // qrz
+                {
+                    name: 'extra',
+                    priority: 3,
+                    enabled: true,
+                    url: 'https://extra.example',
+                    username: 'e',
+                    password_set: false,
+                    timeout_sec: 5,
+                },
+            ],
+        };
+        stubReconcile([withLookup(load3), withLookup(reread3)]);
+
+        await enrichmentState.load();
+        // Operator owns qrz→3 (swaps extra→1); hamqth's priority is untouched and
+        // the re-read wants it at 1 → a collision the merge must resolve.
+        enrichmentState.setPriority(QRZ, 3);
+
+        await enrichmentState.save();
+
+        const chain = enrichmentState.draft.providers.filter((p) => !p.country);
+        const priorities = chain.map((p) => p.priority);
+        expect(new Set(priorities).size).toBe(chain.length); // no duplicates
+        expect([...priorities].sort((a, b) => a - b)).toEqual(chain.map((_, i) => i + 1)); // 1..N
+        expect(warn).toHaveBeenCalledOnce();
+    });
+
+    it('preserves per-provider typed passwords and clear intents across the reconcile', async () => {
+        const warn = vi.spyOn(toasts, 'warn').mockImplementation(() => 0);
+        const spy = stubReconcile([CONFIG, CONFIG]); // re-read unchanged
+
+        await enrichmentState.load();
+        enrichmentState.setPassword(QRZ, 'NEWKEY'); // typed secret on qrz
+        draftProvider('hamqth')!.passwordCleared = true; // pending clear on hamqth
+
+        await enrichmentState.save();
+
+        expect(spy.mock.calls.length).toBe(4); // load config+types, timed-out PUT, reconcile GET
+        expect(qrzDraft().password).toBe('NEWKEY'); // preserved
+        expect(draftProvider('hamqth')!.passwordCleared).toBe(true); // preserved
+        expect(warn).toHaveBeenCalledOnce();
+        // and the intents still ride on a resave
+        const puts = enrichmentState.buildPayload();
+        expect(puts.chain.find((p) => p.name === QRZ)?.password).toBe('NEWKEY');
+        expect(puts.chain.find((p) => p.name === 'hamqth')?.password_clear).toBe(true);
+    });
+
+    it('preserves the TTL blank-vs-"0" distinction across the reconcile', async () => {
+        const warn = vi.spyOn(toasts, 'warn').mockImplementation(() => 0);
+        stubReconcile([CONFIG, CONFIG]); // re-read unchanged
+
+        await enrichmentState.load();
+        enrichmentState.draft.countryTtlDays = ''; // "use the default"
+        enrichmentState.draft.stationTtlDays = '0'; // "never goes stale"
+
+        await enrichmentState.save();
+
+        expect(enrichmentState.draft.countryTtlDays).toBe(''); // preserved (owned)
+        expect(enrichmentState.draft.stationTtlDays).toBe('0'); // preserved (owned)
+        expect(warn).toHaveBeenCalledOnce();
+        // and the distinction still reaches the wire on a resave
+        const payload = enrichmentState.buildPayload();
+        expect('country_ttl_days' in payload).toBe(false); // blank ⇒ omitted
+        expect(payload.station_ttl_days).toBe(0); // explicit 0 ⇒ sent
+    });
+
+    it('when the reconciling re-read ALSO fails, stays outcome-unknown, keeps edits, does not rebaseline', async () => {
+        const error = vi.spyOn(toasts, 'error').mockImplementation(() => 0);
+        const info = vi.spyOn(toasts, 'info').mockImplementation(() => 0);
+        let cfg = 0;
+        vi.stubGlobal(
+            'fetch',
+            vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
+                const u = url instanceof URL ? url.href : typeof url === 'string' ? url : url.url;
+                if (u.includes('lookup-types')) {
+                    return Promise.resolve(
+                        new Response(JSON.stringify(TYPES), {
+                            status: 200,
+                            headers: { 'Content-Type': 'application/json' },
+                        })
+                    );
+                }
+                if (init?.method === 'PUT') return Promise.reject(timeoutError());
+                cfg++;
+                if (cfg === 1) {
+                    return Promise.resolve(
+                        new Response(JSON.stringify(CONFIG), {
+                            status: 200,
+                            headers: { 'Content-Type': 'application/json' },
+                        })
+                    );
+                }
+                return Promise.resolve(new Response('nope', { status: 503 })); // re-read fails
+            })
+        );
+
+        await enrichmentState.load();
+        qrzDraft().username = 'M0XYZ';
+        await enrichmentState.save();
+
+        expect(error).toHaveBeenCalledOnce();
+        expect(String(error.mock.calls[0][0])).toMatch(/the outcome is unknown/);
+        expect(String(error.mock.calls[0][0])).toMatch(
+            /check its status before deciding whether to retry/
+        );
+        expect(qrzDraft().username).toBe('M0XYZ'); // kept
+        expect(enrichmentState.dirty).toBe(true);
+        expect(enrichmentState.loaded).toBe(true);
+        expect(info).not.toHaveBeenCalled();
+    });
+
+    it('a NON-timeout save error still reports "Save failed" and does not re-read', async () => {
+        const error = vi.spyOn(toasts, 'error').mockImplementation(() => 0);
+        const spy = stubReconcile([CONFIG], () => new TypeError('Failed to fetch'));
+
+        await enrichmentState.load();
+        const afterLoad = spy.mock.calls.length; // 2 (config + types)
+        qrzDraft().username = 'M0XYZ';
+        await enrichmentState.save();
+
+        expect(error).toHaveBeenCalledOnce();
+        expect(String(error.mock.calls[0][0])).toMatch(/Save failed/);
+        expect(spy.mock.calls.length).toBe(afterLoad + 1); // only the failed PUT; no re-read
     });
 });
