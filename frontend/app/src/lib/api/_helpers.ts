@@ -70,6 +70,22 @@ export const OUTCOME_UNKNOWN_LEAD =
     'The request timed out before Station Manager confirmed the result, so the outcome is unknown.';
 
 /**
+ * Recovery tails appended to `OUTCOME_UNKNOWN_LEAD` when a config-family save
+ * (Station / Email / Forwarding / Enrichment) times out (F-04c, ADR 0078). The
+ * daemon may already have replaced the block, so the section re-reads to refresh
+ * the untouched state and the baseline while keeping the operator's edits, and
+ * never claims the save landed.
+ *   - RECONCILED: the re-read succeeded; the operator's edits are kept for a
+ *     deliberate resave.
+ *   - REREAD_FAILED: the reconciling GET also failed, so even the refresh is
+ *     unavailable — the operator checks the daemon before deciding to retry.
+ */
+export const CONFIG_TIMEOUT_TAIL_RECONCILED =
+    'Your edits are kept — review and save again if needed.';
+export const CONFIG_TIMEOUT_TAIL_REREAD_FAILED =
+    'Station Manager could not be re-read; your edits are kept — check its status before deciding whether to retry.';
+
+/**
  * Default request timeout (ms) applied to every `safeFetch` unless the
  * caller overrides it. The SPA only ever talks to the LOCAL daemon, so a
  * healthy request resolves in well under a second; this ceiling exists to

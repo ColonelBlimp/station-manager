@@ -348,3 +348,127 @@ describe('stationState durability caveat', () => {
         expect(warn, 'no caveat on a durable save').not.toHaveBeenCalled();
     });
 });
+
+// F-04c (ADR 0078): a Station save whose PUT TIMED OUT is outcome-unknown, not
+// failed. save() re-reads the authoritative config, overlays the operator's OWN
+// edits onto the freshly stored block (so a concurrent change to an UNTOUCHED
+// field is adopted, never reverted), rebaselines to stored, pushes the STORED
+// identity — not the merged draft, which may hold unsaved edits — to the shared
+// context, and reports outcome-unknown. A re-read that also fails stays unknown
+// with the double-fault guidance; a NON-timeout error still says "Save failed".
+function timeoutError(): Error {
+    return Object.assign(new Error('timed out'), { name: 'TimeoutError' });
+}
+
+// A fetch stub: the PUT rejects (timeout by default), each GET returns the next
+// queued config body (load first, reconcile re-read second).
+function stubPutTimeoutGets(getBodies: unknown[], putReject: () => Error = timeoutError) {
+    let get = 0;
+    const spy = vi.fn((_url: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.method === 'PUT') return Promise.reject(putReject());
+        const body = getBodies[Math.min(get, getBodies.length - 1)];
+        get++;
+        return Promise.resolve(
+            new Response(JSON.stringify(body), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+            })
+        );
+    });
+    vi.stubGlobal('fetch', spy);
+    return spy;
+}
+
+describe('stationState — timed-out reconciliation (F-04c)', () => {
+    it('re-reads, keeps the operator edit, adopts a concurrent untouched change, warns unknown, never "saved"', async () => {
+        const warn = vi.spyOn(toasts, 'warn').mockImplementation(() => 0);
+        const info = vi.spyOn(toasts, 'info').mockImplementation(() => 0);
+        const error = vi.spyOn(toasts, 'error').mockImplementation(() => 0);
+        // GET1 (load): operator op1 / my_name name1. GET2 (re-read): a second
+        // writer changed the UNTOUCHED my_name to name2; operator still op1.
+        stubPutTimeoutGets([
+            configBody({ operator: 'op1', my_name: 'name1' }),
+            configBody({ operator: 'op1', my_name: 'name2' }),
+        ]);
+
+        await stationState.load();
+        stationState.form.operator = 'op2'; // operator-owned edit; my_name untouched
+
+        const saved: StationFields[] = [];
+        setStationSaved((s) => {
+            saved.push({ ...s });
+        });
+
+        await stationState.save();
+
+        // Merge: operator (owned) kept; my_name (untouched) adopts stored.
+        expect(stationState.form.operator).toBe('op2');
+        expect(stationState.form.my_name).toBe('name2');
+        // Outcome-unknown warn with the success re-read tail; no failure, no "saved".
+        expect(warn).toHaveBeenCalledOnce();
+        expect(String(warn.mock.calls[0][0])).toMatch(/the outcome is unknown/);
+        expect(String(warn.mock.calls[0][0])).toMatch(/review and save again/);
+        expect(info).not.toHaveBeenCalledWith('Station settings saved.');
+        expect(error).not.toHaveBeenCalled();
+        // Context is fed the STORED identity (op1/name2), NOT the merged draft (op2).
+        expect(saved).toHaveLength(1);
+        expect(saved[0].operator).toBe('op1');
+        expect(saved[0].my_name).toBe('name2');
+        // Rebaselined to stored ⇒ still dirty, because op2 is unsaved.
+        expect(stationState.dirty).toBe(true);
+    });
+
+    it('when the reconciling re-read ALSO fails, stays outcome-unknown, keeps edits, does not rebaseline', async () => {
+        const error = vi.spyOn(toasts, 'error').mockImplementation(() => 0);
+        const info = vi.spyOn(toasts, 'info').mockImplementation(() => 0);
+        let get = 0;
+        vi.stubGlobal(
+            'fetch',
+            vi.fn((_url: RequestInfo | URL, init?: RequestInit) => {
+                if (init?.method === 'PUT') return Promise.reject(timeoutError());
+                get++;
+                if (get === 1) {
+                    return Promise.resolve(
+                        new Response(JSON.stringify(configBody({ operator: 'op1' })), {
+                            status: 200,
+                            headers: { 'Content-Type': 'application/json' },
+                        })
+                    );
+                }
+                return Promise.resolve(new Response('{}', { status: 503 })); // re-read fails
+            })
+        );
+
+        await stationState.load();
+        stationState.form.operator = 'op2';
+        await stationState.save();
+
+        expect(error).toHaveBeenCalledOnce();
+        expect(String(error.mock.calls[0][0])).toMatch(/the outcome is unknown/);
+        expect(String(error.mock.calls[0][0])).toMatch(
+            /check its status before deciding whether to retry/
+        );
+        expect(stationState.form.operator).toBe('op2'); // edits kept
+        expect(stationState.dirty).toBe(true);
+        expect(stationState.loaded).toBe(true);
+        expect(info).not.toHaveBeenCalledWith('Station settings saved.');
+    });
+
+    it('a NON-timeout save error still reports "Save failed" and does not re-read', async () => {
+        const error = vi.spyOn(toasts, 'error').mockImplementation(() => 0);
+        const spy = stubPutTimeoutGets(
+            [configBody({ operator: 'op1' })],
+            () => new TypeError('Failed to fetch') // generic network, NOT a timeout
+        );
+
+        await stationState.load();
+        const afterLoad = spy.mock.calls.length;
+        stationState.form.operator = 'op2';
+        await stationState.save();
+
+        expect(error).toHaveBeenCalledOnce();
+        expect(String(error.mock.calls[0][0])).toMatch(/Save failed/);
+        // Only the failed PUT beyond the load GET — NO reconcile re-read.
+        expect(spy.mock.calls.length).toBe(afterLoad + 1);
+    });
+});

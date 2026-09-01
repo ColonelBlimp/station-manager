@@ -164,3 +164,45 @@ describe('saveStation — F-01 strict response', () => {
         expect(res.kind).toBe('error');
     });
 });
+
+// F-04c (ADR 0078): a config PUT whose response was lost to a FIRED timeout is
+// AMBIGUOUS — the daemon may already have replaced the block — so saveStation
+// must carry that out as `timedOut` for the section to reconcile by re-reading,
+// rather than flattening it into a plain "failed". Only a fired timeout is
+// marked: an HTTP rejection IS a definite rejection (the daemon answered), while
+// a generic non-timeout transport failure is left unmarked too — it is not
+// proven to have committed OR failed, so it keeps its existing wording with no
+// new claim either way.
+describe('saveStation — timed-out write is ambiguous (F-04c)', () => {
+    it('marks a fired timeout as timedOut (outcome-unknown)', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() =>
+                Promise.reject(Object.assign(new Error('timed out'), { name: 'TimeoutError' }))
+            )
+        );
+        const res = await saveStation({ station: { station_callsign: '7Q5MLV' } });
+        expect(res.kind).toBe('error');
+        if (res.kind !== 'error') return;
+        expect(res.timedOut).toBe(true);
+    });
+
+    it('does NOT mark a non-timeout transport failure as timedOut', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => Promise.reject(new TypeError('Failed to fetch')))
+        );
+        const res = await saveStation({ station: { station_callsign: '7Q5MLV' } });
+        expect(res.kind).toBe('error');
+        if (res.kind !== 'error') return;
+        expect(res.timedOut).toBeFalsy();
+    });
+
+    it('does NOT mark an HTTP rejection as timedOut (the daemon answered — definite)', async () => {
+        mockJSON(400, { message: 'invalid' });
+        const res = await saveStation({ station: { station_callsign: 'X' } });
+        expect(res.kind).toBe('error');
+        if (res.kind !== 'error') return;
+        expect(res.timedOut).toBeFalsy();
+    });
+});

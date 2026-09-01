@@ -22,7 +22,8 @@ The operator-observable harm: guidance can contradict daemon state. A confirm-by
 an error toast while SSE then shows the requested state; a config save persists while the form still
 says it failed; a QSO edit or an upload enqueue that actually committed invites a retry that repeats
 non-idempotent work. The write surface is broad (~14 paths), so the fix is sliced; F-04a is the
-first slice (QSO PATCH + upload enqueue) and F-04b the second (session email / export + restart).
+first slice (QSO PATCH + upload enqueue), F-04b the second (session email / export + restart), and
+F-04c the third (the config-family saves — Station, Email, Forwarding, Enrichment).
 This ADR records the cross-cutting policy the whole of F-04 follows.
 
 ## Decision
@@ -33,9 +34,15 @@ ambiguous write; it tells the operator the outcome is unknown and how to check b
 
 Each write belongs to one reconciliation class, defined by the evidence available to confirm it:
 
-- **Re-readable** (config / setup blocks): re-read the authoritative block and compare the fields
-  the operator edited. A full match confirms the write; a difference leaves it unknown. Evidence: a
-  fresh authoritative GET of the same block.
+- **Re-readable** (config / setup blocks): re-read the authoritative block on a fresh GET. Where the
+  read exposes a reliably comparable representation of the edited fields, compare them — a full match
+  confirms the write, a difference leaves it unknown. The config family (Station, Email, Forwarding,
+  Enrichment — F-04c) mostly cannot be compared that way: secrets are masked to a flag on read and
+  the daemon normalises or re-derives fields (SMTP port/timeout, `my_lat`/`my_lon`), so instead of an
+  affirmative confirm it re-reads to refresh the untouched state and the baseline, lays the
+  operator's own edits back over it (a concurrent change to an untouched field is adopted, never
+  reverted; typed credentials and explicit clear intents are preserved), and reports the outcome as
+  unknown — never a false "saved". Evidence: a fresh authoritative GET of the same block.
 - **Confirm-by-push** (rig / FT8 commands): the daemon's own SSE state is the truth. Defer the final
   claim to the pushed state; if none arrives, say "acknowledgement unknown," never "failed."
   Evidence: the subsequent authoritative SSE frame.
@@ -73,6 +80,9 @@ recovery guidance appended:
 - Email: "The email may already have been sent; check before retrying."
 - Export: "Export again if you still need the file; another backup may be archived."
 - Restart: "Wait for Station Manager to reconnect or verify its status before trying again."
+- Config: "Your edits are kept — review and save again if needed." (If the reconciling re-read also
+  fails: "Station Manager could not be re-read; your edits are kept — check its status before
+  deciding whether to retry.")
 
 Ambiguity is represented by adding an optional `timedOut?: boolean` to each affected API outcome
 type, incrementally, per sub-slice — not by migrating the whole write surface to a shared outcome
