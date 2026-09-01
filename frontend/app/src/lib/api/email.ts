@@ -55,7 +55,12 @@ export interface SmtpPayload {
 
 export type SmtpOutcome =
     | { kind: 'ok'; smtp: SmtpEntry; durabilityUnconfirmed?: boolean }
-    | { kind: 'error'; message: string };
+    // `timedOut` marks the AMBIGUOUS write (F-04c, ADR 0078): the PUT reached the
+    // daemon and its response was lost, so the smtp block may already have been
+    // replaced. The section MUST reconcile by re-reading rather than declaring a
+    // definite failure. An HTTP status is an answer, so the `!response.ok` path
+    // below is a definite rejection and carries no marker.
+    | { kind: 'error'; message: string; timedOut?: boolean };
 
 function toEntry(v: unknown): SmtpEntry {
     const o = isPlainObject(v) ? v : {};
@@ -89,7 +94,14 @@ export async function saveEmail(payload: SmtpPayload, signal?: AbortSignal): Pro
         body: JSON.stringify({ smtp: payload }),
         signal,
     });
-    if (!fetched.ok) return { kind: 'error', message: fetched.message };
+    if (!fetched.ok) {
+        // Carry the ambiguity outward rather than flattening it into "failed".
+        return {
+            kind: 'error',
+            message: fetched.message,
+            timedOut: fetched.kind === 'network' && fetched.timedOut === true,
+        };
+    }
     const body = await readJsonBody(fetched.response);
     if (!fetched.response.ok) {
         const err = isPlainObject(body) ? (body as { message?: string }) : null;

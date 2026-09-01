@@ -26,6 +26,11 @@
 */
 import { fetchEmail, saveEmail, type SmtpEntry, type SmtpPayload } from '../api/email';
 import { noteConfigDurability } from './durability';
+import {
+    OUTCOME_UNKNOWN_LEAD,
+    CONFIG_TIMEOUT_TAIL_RECONCILED,
+    CONFIG_TIMEOUT_TAIL_REREAD_FAILED,
+} from '../api/_helpers';
 import { toasts } from '../ui/toasts.svelte';
 
 /** The form's view of the SMTP block, plus the two transient intents. */
@@ -84,6 +89,43 @@ function draftFrom(s: SmtpEntry): EmailDraft {
     };
 }
 
+// Lay the operator's OWN edits back over a freshly re-read smtp block after a
+// timed-out save (F-04c, ADR 0078). A value field is the operator's iff this
+// save changed it (sent ≠ before) or they edited it in flight (draft ≠ sent):
+// keep the draft; otherwise adopt `stored`, so a concurrent change to an
+// untouched field is not reverted. The masked secret is never in the re-read, so
+// the operator's typed password AND an explicit clear intent are kept as unsaved
+// work; `passwordSet` (the daemon's masked flag) is refreshed from stored.
+// Mirrors mergeGeneral (config/general.svelte.ts).
+function mergeEmailDraft(
+    before: EmailDraft,
+    sent: EmailDraft,
+    draft: EmailDraft,
+    stored: EmailDraft
+): EmailDraft {
+    const pick = <T>(b: T, s: T, d: T, st: T): T => (d !== s || s !== b ? d : st);
+    return {
+        enabled: pick(before.enabled, sent.enabled, draft.enabled, stored.enabled),
+        host: pick(before.host, sent.host, draft.host, stored.host),
+        port: pick(before.port, sent.port, draft.port, stored.port),
+        username: pick(before.username, sent.username, draft.username, stored.username),
+        from: pick(before.from, sent.from, draft.from, stored.from),
+        defaultRecipient: pick(
+            before.defaultRecipient,
+            sent.defaultRecipient,
+            draft.defaultRecipient,
+            stored.defaultRecipient
+        ),
+        starttls: pick(before.starttls, sent.starttls, draft.starttls, stored.starttls),
+        timeoutSec: pick(before.timeoutSec, sent.timeoutSec, draft.timeoutSec, stored.timeoutSec),
+        // Secret + intents: never in the re-read → keep the operator's draft.
+        password: draft.password,
+        passwordCleared: draft.passwordCleared,
+        // The daemon's masked flag — refresh from stored.
+        passwordSet: stored.passwordSet,
+    };
+}
+
 class EmailState {
     loading = $state(false);
     saving = $state(false);
@@ -136,11 +178,22 @@ class EmailState {
         // load, where the component's {:else} branch does show the form.
         if (this.saving || !this.loaded || !this.dirty) return;
         this.saving = true;
+        // Captured BEFORE the write: a timed-out save is judged against the saved
+        // baseline (`before`) and exactly what THIS save carried (`sent`), never a
+        // draft that may have moved while the PUT was in flight.
+        const before = JSON.parse(this.#pristine) as EmailDraft;
+        const sent: EmailDraft = { ...this.draft };
         try {
             const res = await saveEmail(this.buildPayload());
             if (res.kind === 'error') {
-                // The draft is left exactly as typed: a refused save is the
-                // operator's cue to fix one field, not to re-enter the form.
+                // A timed-out PUT is reconciled by re-reading, not declared a
+                // failure (F-04c, ADR 0078); every other error keeps its wording —
+                // the draft is left exactly as typed so the operator can fix one
+                // field, not re-enter the form.
+                if (res.timedOut) {
+                    await this.#reconcileAfterTimeout(before, sent);
+                    return;
+                }
                 toasts.error(`Save failed: ${res.message}`);
                 return;
             }
@@ -151,6 +204,33 @@ class EmailState {
         } finally {
             this.saving = false;
         }
+    }
+
+    /**
+     * Settle a save whose PUT timed out (F-04c, ADR 0078). The smtp block may
+     * already have been replaced, so re-read it and lay the operator's own edits
+     * back over the stored view — a concurrent change to an untouched field is
+     * adopted, never reverted. The masked secret is preserved: the re-read never
+     * carries the password, so the operator's typed value and an explicit clear
+     * intent stay as unsaved work, while `passwordSet` refreshes from stored.
+     * Rebaseline to stored (so `dirty` means "differs from the daemon") and warn
+     * outcome-unknown — never "saved".
+     */
+    async #reconcileAfterTimeout(before: EmailDraft, sent: EmailDraft): Promise<void> {
+        const out = await fetchEmail();
+        if (out.kind === 'error') {
+            // The re-read failed too — the whole-block state can't be refreshed
+            // here. Keep the draft dirty and enabled (no rebaseline); a later
+            // timed-out save re-reads again.
+            toasts.error(`${OUTCOME_UNKNOWN_LEAD} ${CONFIG_TIMEOUT_TAIL_REREAD_FAILED}`);
+            return;
+        }
+        // Compute the merged draft from the CURRENT draft BEFORE #apply overwrites
+        // it with the stored values.
+        const merged = mergeEmailDraft(before, sent, this.draft, draftFrom(out.smtp));
+        this.#apply(out.smtp); // baseline ← stored (draft temporarily too)
+        this.draft = merged; // restore the operator's merged edits over stored
+        toasts.warn(`${OUTCOME_UNKNOWN_LEAD} ${CONFIG_TIMEOUT_TAIL_RECONCILED}`);
     }
 
     /** Record a typed password; supersedes a pending removal. */

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { emailState } from './email.svelte';
+import { toasts } from '../ui/toasts.svelte';
 
 /*
     EMAIL SECTION — WHAT GOES ON THE WIRE.
@@ -365,5 +366,137 @@ describe('emailState wire behaviour', () => {
         expect(emailState.draft.host).toBe('');
         expect(emailState.draft.password).toBe('kept-pw');
         expect(emailState.dirty).toBe(true);
+    });
+});
+
+// F-04c (ADR 0078): an Email save whose PUT TIMED OUT is outcome-unknown, not
+// failed. save() re-reads the authoritative smtp block, overlays the operator's
+// OWN edits (so a concurrent change to an UNTOUCHED field is adopted, never
+// reverted), rebaselines to stored, and reports outcome-unknown — never "saved".
+// The masked secret is special: the re-read never carries the password, so the
+// operator's typed value AND an explicit clear intent are PRESERVED across the
+// merge (they are unsaved work); `passwordSet` (the daemon's masked flag) is
+// refreshed from stored. A re-read that also fails stays unknown with the
+// double-fault guidance; a NON-timeout error still says "Save failed".
+function timeoutError(): Error {
+    return Object.assign(new Error('timed out'), { name: 'TimeoutError' });
+}
+
+// The PUT rejects (timeout by default); each GET returns the next queued config
+// body (load first, reconcile re-read second).
+function stubPutTimeoutGets(getBodies: unknown[], putReject: () => Error = timeoutError) {
+    let get = 0;
+    const spy = vi.fn((_url: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.method === 'PUT') return Promise.reject(putReject());
+        const body = getBodies[Math.min(get, getBodies.length - 1)];
+        get++;
+        return Promise.resolve(
+            new Response(JSON.stringify(body), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+            })
+        );
+    });
+    vi.stubGlobal('fetch', spy);
+    return spy;
+}
+
+function configWithSmtp(overrides: Record<string, unknown>) {
+    return { ...CONFIG, smtp: { ...CONFIG.smtp, ...overrides } };
+}
+
+describe('emailState — timed-out reconciliation (F-04c)', () => {
+    it('re-reads, keeps the edit, adopts a concurrent untouched change, preserves the typed password, warns unknown', async () => {
+        const warn = vi.spyOn(toasts, 'warn').mockImplementation(() => 0);
+        const info = vi.spyOn(toasts, 'info').mockImplementation(() => 0);
+        const error = vi.spyOn(toasts, 'error').mockImplementation(() => 0);
+        // GET1 (load) = CONFIG; GET2 (re-read) = a second writer changed the
+        // UNTOUCHED default_recipient; host still the stored value.
+        stubPutTimeoutGets([CONFIG, configWithSmtp({ default_recipient: 'newqsl@example.org' })]);
+
+        await emailState.load();
+        emailState.draft.host = 'edited.example.org'; // owned edit
+        emailState.setPassword('typed-pw'); // unsaved secret; never in the re-read
+
+        await emailState.save();
+
+        expect(emailState.draft.host).toBe('edited.example.org'); // owned kept
+        expect(emailState.draft.defaultRecipient).toBe('newqsl@example.org'); // untouched adopts stored
+        expect(emailState.draft.password).toBe('typed-pw'); // PRESERVED
+        expect(warn).toHaveBeenCalledOnce();
+        expect(String(warn.mock.calls[0][0])).toMatch(/the outcome is unknown/);
+        expect(String(warn.mock.calls[0][0])).toMatch(/review and save again/);
+        expect(info).not.toHaveBeenCalled(); // no "Email settings saved."
+        expect(error).not.toHaveBeenCalled();
+        expect(emailState.dirty).toBe(true);
+    });
+
+    it('preserves an explicit password-clear intent across the reconcile', async () => {
+        const warn = vi.spyOn(toasts, 'warn').mockImplementation(() => 0);
+        const spy = stubPutTimeoutGets([CONFIG, CONFIG]); // re-read unchanged (clear's fate unknown)
+
+        await emailState.load();
+        emailState.clearPassword(); // passwordCleared = true
+
+        await emailState.save();
+
+        expect(spy.mock.calls.length).toBe(3); // load GET + timed-out PUT + reconcile GET
+        expect(emailState.draft.passwordCleared).toBe(true); // PRESERVED
+        expect(emailState.buildPayload().password_clear).toBe(true); // still on the wire on resave
+        expect(warn).toHaveBeenCalledOnce();
+        expect(String(warn.mock.calls[0][0])).toMatch(/the outcome is unknown/);
+        expect(emailState.dirty).toBe(true);
+    });
+
+    it('when the reconciling re-read ALSO fails, stays outcome-unknown, keeps edits and the typed password', async () => {
+        const error = vi.spyOn(toasts, 'error').mockImplementation(() => 0);
+        const info = vi.spyOn(toasts, 'info').mockImplementation(() => 0);
+        let get = 0;
+        vi.stubGlobal(
+            'fetch',
+            vi.fn((_url: RequestInfo | URL, init?: RequestInit) => {
+                if (init?.method === 'PUT') return Promise.reject(timeoutError());
+                get++;
+                if (get === 1) {
+                    return Promise.resolve(
+                        new Response(JSON.stringify(CONFIG), {
+                            status: 200,
+                            headers: { 'Content-Type': 'application/json' },
+                        })
+                    );
+                }
+                return Promise.resolve(new Response('nope', { status: 503 })); // re-read fails
+            })
+        );
+
+        await emailState.load();
+        emailState.draft.host = 'edited.example.org';
+        emailState.setPassword('typed-pw');
+        await emailState.save();
+
+        expect(error).toHaveBeenCalledOnce();
+        expect(String(error.mock.calls[0][0])).toMatch(/the outcome is unknown/);
+        expect(String(error.mock.calls[0][0])).toMatch(
+            /check its status before deciding whether to retry/
+        );
+        expect(emailState.draft.host).toBe('edited.example.org'); // kept
+        expect(emailState.draft.password).toBe('typed-pw'); // kept
+        expect(emailState.dirty).toBe(true);
+        expect(emailState.loaded).toBe(true);
+        expect(info).not.toHaveBeenCalled();
+    });
+
+    it('a NON-timeout save error still reports "Save failed" and does not re-read', async () => {
+        const error = vi.spyOn(toasts, 'error').mockImplementation(() => 0);
+        const spy = stubPutTimeoutGets([CONFIG], () => new TypeError('Failed to fetch'));
+
+        await emailState.load();
+        const afterLoad = spy.mock.calls.length;
+        emailState.draft.host = 'edited.example.org';
+        await emailState.save();
+
+        expect(error).toHaveBeenCalledOnce();
+        expect(String(error.mock.calls[0][0])).toMatch(/Save failed/);
+        expect(spy.mock.calls.length).toBe(afterLoad + 1); // only the failed PUT; no re-read
     });
 });
