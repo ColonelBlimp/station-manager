@@ -44,6 +44,19 @@
     // uses (a DIFFERENT /v1/version.instance): a new instance proves the restart;
     // none within the cap leaves the outcome unknown — never a definite "failed".
     async function reconcileRestartTimeout(before: string): Promise<void> {
+        // No baseline instance (the pre-restart /v1/version read failed) means
+        // there is nothing to diff against: waitForDaemonBack('') accepts ANY
+        // reachable instance — including the unchanged original that never
+        // restarted — as "back". The accepted path tolerates that because its
+        // 202 already proved the restart; a timed-out POST has no such proof, so
+        // with no baseline the outcome is simply unknown — never a false
+        // "Daemon restarted" (codex ca2ee9b8 P2).
+        if (before === '') {
+            toasts.warn(
+                `${OUTCOME_UNKNOWN_LEAD} Wait for Station Manager to reconnect or verify its status before trying again.`
+            );
+            return;
+        }
         toasts.info('Restarting the daemon…');
         const back = await waitForDaemonBack(before);
         if (back) {

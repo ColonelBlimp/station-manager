@@ -91,6 +91,32 @@ describe('Settings restart — timed-out reconciliation (F-04b)', () => {
         expect(hasToast('error', /Restart failed/)).toBe(false);
     });
 
+    it('a timed-out restart with NO baseline instance stays outcome-unknown, never false success', async () => {
+        // The pre-restart /v1/version read failed, so `before` is '' — there is
+        // no baseline id to diff against. waitForDaemonBack('') would count ANY
+        // reachable instance, including the UNCHANGED original that never
+        // restarted, as "back". A timed-out POST carries no 202 acceptance
+        // either, so with no baseline the outcome is simply unknown; the branch
+        // must NOT claim "Daemon restarted" (codex ca2ee9b8 P2).
+        vi.mocked(fetchDaemonInstance).mockResolvedValue('');
+        vi.mocked(restartDaemon).mockResolvedValue({
+            kind: 'error',
+            message: 'request timed out',
+            timedOut: true,
+        });
+        // Simulate the false-success trap: a reachable instance WOULD satisfy
+        // waitForDaemonBack('') and wrongly report success.
+        vi.mocked(waitForDaemonBack).mockResolvedValue(true);
+
+        await clickRestart();
+
+        expect(hasToast('warn', /the outcome is unknown/)).toBe(true);
+        expect(hasToast('info', /Daemon restarted/)).toBe(false);
+        // With no baseline there is nothing to confirm against, so the
+        // reconciler must not even attempt the new-instance poll.
+        expect(vi.mocked(waitForDaemonBack)).not.toHaveBeenCalled();
+    });
+
     it('a NON-timeout restart error still reports "Restart failed" and does not reconcile', async () => {
         vi.mocked(restartDaemon).mockResolvedValue({
             kind: 'error',

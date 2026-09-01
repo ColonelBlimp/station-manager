@@ -52,8 +52,11 @@ Each write belongs to one reconciliation class, defined by the evidence availabl
     POST so the still-shutting-down old daemon on a reused keep-alive is not mistaken for the
     replacement. Reconnection alone is insufficient. A new instance confirms the restart; none
     within the existing cap leaves it unknown; an explicit 409/503 is a definite failure with no
-    reconciliation. Applied on the timed-out POST as well as the accepted 202, since the daemon may
-    already be respawning when the response is lost.
+    reconciliation. If the baseline id could not be read before the POST, a timed-out restart also
+    stays unknown — with nothing to diff against, a reachable instance cannot be shown to be *new*,
+    so it is never counted as success. Applied on the timed-out POST as well as the accepted 202
+    (which needs no baseline, its acceptance already proven), since the daemon may already be
+    respawning when the response is lost.
 - **Non-reconcilable** (session email / export): there is no evidence that separates committed from
   not, so report the outcome as unknown rather than failed. Email warns against a blind retry (a real
   message is the worst write to double-fire). Export is lighter: its only side effect is a
