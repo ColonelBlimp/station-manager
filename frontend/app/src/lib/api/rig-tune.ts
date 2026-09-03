@@ -22,7 +22,12 @@ export type RigTuneOutcome =
     | { kind: 'validation'; code: string; message: string }
     | { kind: 'server'; code: string; message: string }
     | { kind: 'aborted'; message: string }
-    | { kind: 'network'; message: string };
+    // `timedOut` marks the AMBIGUOUS write (F-04 confirm-by-push, ADR 0078): the
+    // POST reached the daemon and its 202 was lost, so the carrier may already
+    // have keyed/dropped. The seam MUST reconcile against the tune-state SSE
+    // rather than declaring a failure. A non-timeout network error carries no
+    // marker (not proven to have committed OR failed).
+    | { kind: 'network'; message: string; timedOut?: boolean };
 
 interface DaemonError {
     code: string;
@@ -44,7 +49,10 @@ export async function sendRigTune(active: boolean, signal?: AbortSignal): Promis
         signal,
     });
     if (!fetched.ok) {
-        return { kind: fetched.kind, message: fetched.message };
+        // Carry the fired-timeout marker outward so the seam can reconcile it.
+        return fetched.kind === 'network'
+            ? { kind: 'network', message: fetched.message, timedOut: fetched.timedOut }
+            : { kind: 'aborted', message: fetched.message };
     }
 
     const { response } = fetched;

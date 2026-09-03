@@ -207,7 +207,28 @@ export function hasOp(op: string): boolean {
     the button's on/off state comes from the tune-state SSE, not this return.
 */
 export type RigWriteResult = { ok: boolean; message: string };
-export type TuneSender = (active: boolean) => Promise<RigWriteResult>;
+
+// F-04 confirm-by-push (ADR 0078): a timed-out tune command is reconciled against
+// the authoritative tune-state SSE, never declared a failure. main.ts normalises
+// the rig-tune client to a TuneSendOutcome; toggleTune maps it to a TuneResult
+// and, on a fired timeout, WATCHES the pushed carrier state. The widened result
+// is tune-specific for now — the command seam keeps {ok,message} (RigWriteResult)
+// until the command slice widens it the same way.
+export type TuneSendOutcome =
+    | { kind: 'accepted' } // 202 — the daemon accepted the request
+    | { kind: 'refused'; message: string } // 4xx/5xx — a definite rejection
+    | { kind: 'transport'; message: string } // non-timeout network failure
+    | { kind: 'timedOut'; message: string }; // fired timeout — reconcile via SSE
+
+export type TuneResult =
+    | { status: 'accepted' } // exact 202 (does NOT claim the carrier state)
+    | { status: 'observed' } // timed out, a matching push confirmed within grace
+    | { status: 'alreadySatisfied' } // baseline already == target (unreachable via toggle)
+    | { status: 'superseded' } // a newer toggle cancelled this one — silent
+    | { status: 'unknown'; message: string } // timed out, grace exhausted, no match
+    | { status: 'failed'; kind: 'refused' | 'transport'; message: string };
+
+export type TuneSender = (active: boolean) => Promise<TuneSendOutcome>;
 
 let tuneSender: TuneSender | null = null;
 
@@ -215,15 +236,102 @@ export function setTuneSender(fn: TuneSender): void {
     tuneSender = fn;
 }
 
+// The grace window (ms) after a fired timeout during which a matching tune-state
+// push still resolves the outcome as observed (operator-ratified 2026-09-02).
+const TUNE_GRACE_MS = 2000;
+
+// A pending tune confirmation, ARMED BEFORE the POST so a push arriving while the
+// POST is in flight is not missed. Single-flight: a newer toggle supersedes the
+// older; matchTuneWatch resolves it ONLY on the target value.
+type TuneWatch = {
+    target: boolean;
+    resolveMatch: () => void;
+    matched: Promise<void>;
+    superseded: boolean;
+};
+let tuneWatch: TuneWatch | null = null;
+
+function armTuneWatch(target: boolean): TuneWatch {
+    if (tuneWatch) tuneWatch.superseded = true; // a newer toggle wins
+    let resolveMatch!: () => void;
+    const matched = new Promise<void>((res) => (resolveMatch = res));
+    const w: TuneWatch = { target, resolveMatch, matched, superseded: false };
+    tuneWatch = w;
+    return w;
+}
+
+function clearTuneWatch(w: TuneWatch): void {
+    if (tuneWatch === w) tuneWatch = null;
+}
+
+// Called by onTuneState: resolve the current watch only when the pushed carrier
+// state reaches its target (stale / opposite-value frames never confirm).
+function matchTuneWatch(active: boolean): void {
+    if (tuneWatch !== null && !tuneWatch.superseded && active === tuneWatch.target) {
+        tuneWatch.resolveMatch();
+    }
+}
+
+// Race a matching push against the grace window. Every terminal path clears the
+// timer AND the watch (no leaks).
+function awaitTuneMatch(w: TuneWatch): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+        let done = false;
+        const timer = setTimeout(() => {
+            if (done) return;
+            done = true;
+            clearTuneWatch(w);
+            resolve(false);
+        }, TUNE_GRACE_MS);
+        void w.matched.then(() => {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            clearTuneWatch(w);
+            resolve(true);
+        });
+    });
+}
+
 /**
- * Toggle the tune carrier: send the OPPOSITE of the current pushed state. No
- * optimistic flip — the button reflects tuneActive, updated when the daemon's
- * tune-state event lands (confirm-by-push, matching the shipping SPA). Returns
- * the write outcome so the caller can surface a failure.
+ * Toggle the tune carrier: send the OPPOSITE of the current pushed state (no
+ * optimistic flip — the button mirrors tuneActive from the tune-state SSE). The
+ * watch is armed BEFORE the POST; a fired timeout is reconciled against the push
+ * (observed within the 2 s grace, else unknown), an HTTP rejection is a definite
+ * failure, and a newer toggle supersedes this one silently — never a false
+ * failure on a timeout.
  */
-export async function toggleTune(): Promise<RigWriteResult> {
-    if (tuneSender === null) return { ok: false, message: 'Tune control is unavailable.' };
-    return tuneSender(!rig.tuneActive);
+export async function toggleTune(): Promise<TuneResult> {
+    if (tuneSender === null) {
+        return { status: 'failed', kind: 'transport', message: 'Tune control is unavailable.' };
+    }
+    const target = !rig.tuneActive;
+    const watch = armTuneWatch(target); // armed BEFORE the POST (F-04)
+    const out = await tuneSender(target);
+    // A newer toggle superseded this one while the POST was in flight — resolve
+    // silently; a late HTTP/push completion must not overwrite the newer command.
+    if (watch.superseded) return { status: 'superseded' };
+    switch (out.kind) {
+        case 'accepted':
+            clearTuneWatch(watch);
+            return { status: 'accepted' };
+        case 'refused':
+            clearTuneWatch(watch);
+            return { status: 'failed', kind: 'refused', message: out.message };
+        case 'transport':
+            clearTuneWatch(watch);
+            return { status: 'failed', kind: 'transport', message: out.message };
+        case 'timedOut': {
+            const observed = await awaitTuneMatch(watch);
+            if (watch.superseded) return { status: 'superseded' };
+            return observed
+                ? { status: 'observed' }
+                : {
+                      status: 'unknown',
+                      message: "Couldn't confirm the tune request — check the rig.",
+                  };
+        }
+    }
 }
 
 /*
@@ -821,7 +929,8 @@ export const catLink = {
      *  operator didn't click still clears the button. Replayed to late
      *  subscribers, so a tab opened mid-tune sees the carrier is up. */
     onTuneState(p: TuneStatePayload): void {
-        rig.tuneActive = p.active;
+        rig.tuneActive = p.active; // display always mirrors the daemon push
+        matchTuneWatch(p.active); // resolve a pending tune watch only on its target (F-04)
     },
 
     /** Stuck-TX safety alarm (ADR 0051). A raise re-shows the banner even if a

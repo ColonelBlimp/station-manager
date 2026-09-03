@@ -109,8 +109,12 @@
     // non-live rig is impossible — the daemon refuses). A failed toggle toasts;
     // the on/off state still comes from the tune-state SSE, not this call.
     async function onTune(): Promise<void> {
+        // F-04 confirm-by-push: a timed-out tune is outcome-unknown, not a failure.
+        // Silent on a success (accepted/observed/alreadySatisfied/superseded), a
+        // WARN on unknown, a definite ERROR only on a real failure.
         const r = await toggleTune();
-        if (!r.ok) toasts.error(r.message);
+        if (r.status === 'unknown') toasts.warn(r.message);
+        else if (r.status === 'failed') toasts.error(r.message);
     }
 
     // Clickable VFO boxes (ADR 0026): a rig with select_vfo (FTdx10 VS) truly

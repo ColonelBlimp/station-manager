@@ -323,12 +323,12 @@ describe('tune carrier (ADR 0027)', () => {
         const sent: boolean[] = [];
         setTuneSender((active) => {
             sent.push(active);
-            return Promise.resolve({ ok: true, message: '' });
+            return Promise.resolve({ kind: 'accepted' });
         });
 
         // Carrier down → toggle asks to key it; state does NOT flip until a push.
         const r1 = await toggleTune();
-        expect(r1.ok).toBe(true);
+        expect(r1.status).toBe('accepted');
         expect(sent).toEqual([true]);
         expect(rig.tuneActive).toBe(false);
 
@@ -341,8 +341,91 @@ describe('tune carrier (ADR 0027)', () => {
     it('toggleTune fails soft when no sender is wired', async () => {
         // resetCatLink() in beforeEach clears the injected sender.
         const r = await toggleTune();
-        expect(r.ok).toBe(false);
+        expect(r.status).toBe('failed');
+        expect(r.status === 'failed' && r.message !== '').toBe(true);
+    });
+});
+
+// F-04 confirm-by-push (ADR 0078): a timed-out tune command is reconciled against
+// the authoritative tune-state SSE, not declared a failure. The watch is armed
+// BEFORE the POST (so a push arriving while the POST is pending is not missed),
+// resolves ONLY on the target value, and — on a fired timeout — is given a 2 s
+// grace before the outcome is called unknown. Semantic pins (operator-ratified):
+//   accepted        = an exact 202 (does NOT claim the target was observed)
+//   observed        = a fired timeout reconciled by a matching push within grace
+//   unknown         = a fired timeout with the grace exhausted and no match
+//   failed{refused} = an HTTP rejection; failed{transport} = non-timeout transport
+//   superseded      = a newer toggle cancelled this one (silent; a late push/HTTP
+//                     completion cannot overwrite it)
+// beforeEach installs fake timers, so the 2 s grace is driven deterministically.
+describe('tune confirm-by-push outcomes (F-04)', () => {
+    it('a 202 resolves accepted, without flipping the local state (only a push flips it)', async () => {
+        setTuneSender(() => Promise.resolve({ kind: 'accepted' }));
+        const r = await toggleTune(); // tuneActive false → target true
+        expect(r.status).toBe('accepted');
+        expect(rig.tuneActive).toBe(false); // accepted is not "observed"
+    });
+
+    it('a fired timeout reconciled by a matching push within the grace resolves observed', async () => {
+        setTuneSender(() => Promise.resolve({ kind: 'timedOut', message: 'request timed out' }));
+        const p = toggleTune(); // target true; watch armed synchronously, before the POST
+        catLink.onTuneState({ active: true }); // authoritative push == target
+        const r = await p;
+        expect(r.status).toBe('observed');
+        expect(vi.getTimerCount()).toBe(0); // grace timer cleared on the terminal path
+    });
+
+    it('a fired timeout with no matching push, grace exhausted, resolves unknown', async () => {
+        setTuneSender(() => Promise.resolve({ kind: 'timedOut', message: 'request timed out' }));
+        const p = toggleTune(); // target true
+        await vi.advanceTimersByTimeAsync(2000); // exhaust the 2 s grace
+        const r = await p;
+        expect(r.status).toBe('unknown');
+        if (r.status !== 'unknown') return;
         expect(r.message).not.toBe('');
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('an opposite-value push updates the display but does not resolve the watch (stays unknown)', async () => {
+        setTuneSender(() => Promise.resolve({ kind: 'timedOut', message: 'request timed out' }));
+        const p = toggleTune(); // target true (baseline false)
+        catLink.onTuneState({ active: false }); // opposite of target
+        expect(rig.tuneActive).toBe(false); // display still updated by the push
+        await vi.advanceTimersByTimeAsync(2000);
+        const r = await p;
+        expect(r.status).toBe('unknown'); // the non-target push never confirmed
+    });
+
+    it('an HTTP rejection resolves failed/refused', async () => {
+        setTuneSender(() =>
+            Promise.resolve({ kind: 'refused', message: 'rig identity unverified' })
+        );
+        const r = await toggleTune();
+        expect(r.status).toBe('failed');
+        if (r.status !== 'failed') return;
+        expect(r.kind).toBe('refused');
+        expect(r.message).toBe('rig identity unverified');
+    });
+
+    it('a non-timeout transport failure resolves failed/transport', async () => {
+        setTuneSender(() => Promise.resolve({ kind: 'transport', message: 'connection failed' }));
+        const r = await toggleTune();
+        expect(r.status).toBe('failed');
+        if (r.status !== 'failed') return;
+        expect(r.kind).toBe('transport');
+    });
+
+    it('a newer toggle supersedes the older; a late matching push cannot overwrite superseded', async () => {
+        setTuneSender(() => Promise.resolve({ kind: 'timedOut', message: 'request timed out' }));
+        const p1 = toggleTune(); // watch #1
+        const p2 = toggleTune(); // supersedes #1
+        const r1 = await p1;
+        expect(r1.status).toBe('superseded');
+        // A late push matching #1's target must not flip the already-terminal r1.
+        catLink.onTuneState({ active: true });
+        await vi.advanceTimersByTimeAsync(2000);
+        expect(r1.status).toBe('superseded');
+        await p2; // drain the survivor
     });
 });
 

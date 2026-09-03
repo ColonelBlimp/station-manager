@@ -347,11 +347,26 @@ function applyStationContext(c: StationContext): void {
     // Whether a Phone/CW ↔ FT8 switch returns a CAT-live rig to that mode's last
     // frequency and mode. Opt-out only: the default is ON.
     setRestoreOnModeSwitch(c.restoreRigOnModeSwitch);
-    // Tune-carrier write seam: adapt the rich rig-tune outcome to {ok,message}.
-    // The daemon owns keying + the guaranteed stop; the SPA sends only intent.
+    // Tune-carrier write seam: normalise the rich rig-tune outcome to the
+    // transport shape toggleTune reconciles (F-04 confirm-by-push). The daemon
+    // owns keying + the guaranteed stop; the SPA sends only intent. A fired
+    // timeout is AMBIGUOUS (reconcile via the tune-state SSE); an HTTP status is
+    // a definite answer; a non-timeout network error is neither a refusal nor
+    // proven done.
     setTuneSender(async (active) => {
         const o = await sendRigTune(active);
-        return o.kind === 'ok' ? { ok: true, message: '' } : { ok: false, message: o.message };
+        switch (o.kind) {
+            case 'ok':
+                return { kind: 'accepted' };
+            case 'network':
+                return o.timedOut
+                    ? { kind: 'timedOut', message: o.message }
+                    : { kind: 'transport', message: o.message };
+            case 'aborted':
+                return { kind: 'transport', message: o.message };
+            default: // validation | server — the daemon answered: a definite rejection
+                return { kind: 'refused', message: o.message };
+        }
     });
     // Rig command write seam (VFO swap now; band/freq/mode in later slices) —
     // adapt the rich command outcome to {ok,message}, same shape as tune.
