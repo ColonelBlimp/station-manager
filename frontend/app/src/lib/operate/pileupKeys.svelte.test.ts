@@ -540,7 +540,7 @@ describe('Phone/CW pile-up keyboard', () => {
         const sent: string[] = [];
         setCommandSender((op) => {
             sent.push(op);
-            return Promise.resolve({ ok: true, message: '' });
+            return Promise.resolve({ kind: 'accepted' });
         });
         setRigCaps({ ops: ['set_freq', 'set_freq_b'], tune: false, rigModes: [] });
         rig.cat = 'connected';

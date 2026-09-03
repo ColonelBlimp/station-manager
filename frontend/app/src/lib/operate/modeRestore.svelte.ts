@@ -40,7 +40,9 @@ import {
     selectVfo as rigSelectVfo,
     ft8FrequencyFor,
     ft8ModeLiteral,
+    writeSucceeded,
     type RigReportVersions,
+    type RigWriteResult,
 } from './rig.svelte';
 import { ft8State } from './ft8.svelte';
 import { toasts } from '../ui/toasts.svelte';
@@ -293,14 +295,14 @@ async function applyRestore(to: OpMode, incoming: OperatingSnapshot): Promise<vo
             );
         }
         const r = await rigSelectVfo(incoming.selectedVfo);
-        if (!r.ok) return abandon(to, r.message);
+        if (!writeSucceeded(r)) return abandon(to, resultMessage(r));
     }
     const selected = rig.selectedVfo;
     if (incoming.vfoA !== null && hasOp('set_freq') && incoming.vfoA !== effective().vfoA) {
         const hz = clampFreq(incoming.vfoA);
         const seq = rigReportVersions().vfoA;
         const r = await driveRig('set_freq', String(hz));
-        if (!r.ok) return abandon(to, r.message);
+        if (!writeSucceeded(r)) return abandon(to, resultMessage(r));
         held.vfoA = { value: hz, seq };
         if (selected === 'A') seedFreqTarget('A', hz);
     }
@@ -308,7 +310,7 @@ async function applyRestore(to: OpMode, incoming: OperatingSnapshot): Promise<vo
         const hz = clampFreq(incoming.vfoB);
         const seq = rigReportVersions().vfoB;
         const r = await driveRig('set_freq_b', String(hz));
-        if (!r.ok) return abandon(to, r.message);
+        if (!writeSucceeded(r)) return abandon(to, resultMessage(r));
         held.vfoB = { value: hz, seq };
         if (selected === 'B') seedFreqTarget('B', hz);
     }
@@ -325,7 +327,7 @@ async function applyRestore(to: OpMode, incoming: OperatingSnapshot): Promise<vo
         // error worth interrupting the operator over.
         const seq = rigReportVersions().mode;
         const r = await rigSetMode(incoming.liveMode);
-        if (!r.ok) return abandon(to, r.message);
+        if (!writeSucceeded(r)) return abandon(to, resultMessage(r));
         held.mode = { value: incoming.liveMode, seq };
     }
 }
@@ -370,9 +372,9 @@ async function seedFt8(): Promise<void> {
     if (target !== effective()[vfoField]) {
         const seq = rigReportVersions()[vfoField];
         const r = await driveRig(freqOp, String(target));
-        if (!r.ok) {
+        if (!writeSucceeded(r)) {
             seedRefusedAt = { fields: [vfoField, 'mode'], versions: rigReportVersions() };
-            toasts.error(`Could not tune for FT8: ${r.message}`);
+            toasts.error(`Could not tune for FT8: ${resultMessage(r)}`);
             return;
         }
         held[vfoField] = { value: target, seq };
@@ -382,7 +384,7 @@ async function seedFt8(): Promise<void> {
     if (literal !== '' && hasOp('set_mode') && literal !== effective().liveMode) {
         const seq = rigReportVersions().mode;
         const r = await rigSetMode(literal);
-        if (!r.ok) {
+        if (!writeSucceeded(r)) {
             // The dial landed and its hold is kept (that command really
             // happened); ONLY the mode is outstanding, so only the mode
             // counter is watched — the landed dial command will confirm and
@@ -390,7 +392,7 @@ async function seedFt8(): Promise<void> {
             // doing, not operator evidence (review c0df1c8a). The retry
             // re-enters with the dial already effective and sends mode alone.
             seedRefusedAt = { fields: ['mode'], versions: rigReportVersions() };
-            toasts.error(`Could not set the FT8 mode: ${r.message}`);
+            toasts.error(`Could not set the FT8 mode: ${resultMessage(r)}`);
             return;
         }
         held.mode = { value: literal, seq };
@@ -404,6 +406,13 @@ async function seedFt8(): Promise<void> {
     refusal this one is a fault: the operator asked for nothing and the rig said
     no to something they cannot see.
 */
+// The operator-facing reason a restore step did not succeed. unknown / failed
+// carry the daemon's message; a superseded step (a newer rig command took over
+// mid-restore) carries none, so name that.
+function resultMessage(r: RigWriteResult): string {
+    return 'message' in r ? r.message : 'a newer rig command took over';
+}
+
 function abandon(to: OpMode, message: string): void {
     unrestored = to;
     // Holds for fields that DID land are kept: those commands really happened,

@@ -206,29 +206,33 @@ export function hasOp(op: string): boolean {
     An outcome is {ok,message} — the caller (the Tune button) toasts on failure;
     the button's on/off state comes from the tune-state SSE, not this return.
 */
-export type RigWriteResult = { ok: boolean; message: string };
-
-// F-04 confirm-by-push (ADR 0078): a timed-out tune command is reconciled against
-// the authoritative tune-state SSE, never declared a failure. main.ts normalises
-// the rig-tune client to a TuneSendOutcome; toggleTune maps it to a TuneResult
-// and, on a fired timeout, WATCHES the pushed carrier state. The widened result
-// is tune-specific for now — the command seam keeps {ok,message} (RigWriteResult)
-// until the command slice widens it the same way.
-export type TuneSendOutcome =
+// The normalised transport outcome main.ts feeds the senders (adapting the
+// rig-tune / rig-command clients). Confirm-by-push maps it to a RigWriteResult.
+export type RigSendOutcome =
     | { kind: 'accepted' } // 202 — the daemon accepted the request
     | { kind: 'refused'; message: string } // 4xx/5xx — a definite rejection
     | { kind: 'transport'; message: string } // non-timeout network failure
     | { kind: 'timedOut'; message: string }; // fired timeout — reconcile via SSE
 
-export type TuneResult =
-    | { status: 'accepted' } // exact 202 (does NOT claim the carrier state)
+// F-04 confirm-by-push (ADR 0078): a timed-out rig/tune write is outcome-unknown
+// until the authoritative SSE confirms it, never a definite failure. This is the
+// SHARED rig/tune write result — bounded to rig/tune, NOT a repo-wide write
+// abstraction (see ADR 0078's revisit-trigger note). Value-setting commands watch
+// their SSE lane; contract-only ops resolve a timeout to unknown at once.
+export type RigWriteResult =
+    | { status: 'accepted' } // exact 202 (does NOT claim the resulting state)
     | { status: 'observed' } // timed out, a matching push confirmed within grace
-    | { status: 'alreadySatisfied' } // baseline already == target (unreachable via toggle)
-    | { status: 'superseded' } // a newer toggle cancelled this one — silent
+    | { status: 'alreadySatisfied' } // baseline already == target (idempotent setter)
+    | { status: 'superseded' } // a newer command on the same lane cancelled it — silent
     | { status: 'unknown'; message: string } // timed out, grace exhausted, no match
     | { status: 'failed'; kind: 'refused' | 'transport'; message: string };
 
-export type TuneSender = (active: boolean) => Promise<TuneSendOutcome>;
+// The chained callers (ft8SelectBand, modeRestore) continue ONLY on these.
+export function writeSucceeded(r: RigWriteResult): boolean {
+    return r.status === 'accepted' || r.status === 'observed' || r.status === 'alreadySatisfied';
+}
+
+export type TuneSender = (active: boolean) => Promise<RigSendOutcome>;
 
 let tuneSender: TuneSender | null = null;
 
@@ -236,61 +240,120 @@ export function setTuneSender(fn: TuneSender): void {
     tuneSender = fn;
 }
 
-// The grace window (ms) after a fired timeout during which a matching tune-state
-// push still resolves the outcome as observed (operator-ratified 2026-09-02).
-const TUNE_GRACE_MS = 2000;
+// The grace window (ms) after a fired timeout during which a matching SSE push
+// still resolves the outcome as observed (operator-ratified 2026-09-02).
+const CONFIRM_GRACE_MS = 2000;
+const CONFIRM_UNKNOWN_MSG = "Couldn't confirm the command — check the rig.";
 
-// A pending tune confirmation, ARMED BEFORE the POST so a push arriving while the
-// POST is in flight is not missed. Single-flight: a newer toggle supersedes the
-// older; matchTuneWatch resolves it ONLY on the target value.
-type TuneWatch = {
-    target: boolean;
+// Confirm-by-push watches, ARMED BEFORE the POST so a push arriving while the POST
+// is in flight is not missed. Single-flight PER LANE — a mode request must not
+// supersede an independent VFO request — and a watch matches only the EVIDENCE its
+// frame carries (the `matches` predicate), never merely the merged current state.
+type WatchLane = 'tune' | 'selectedVfo' | 'modeLiteral' | 'band';
+type Watch = {
+    matches: (p: never) => boolean;
     resolveMatch: () => void;
     matched: Promise<void>;
     superseded: boolean;
 };
-let tuneWatch: TuneWatch | null = null;
+const watches: Partial<Record<WatchLane, Watch>> = {};
 
-function armTuneWatch(target: boolean): TuneWatch {
-    if (tuneWatch) tuneWatch.superseded = true; // a newer toggle wins
+function armWatch(lane: WatchLane, matches: (p: never) => boolean): Watch {
+    const prev = watches[lane];
+    if (prev) prev.superseded = true; // a newer command on THIS lane wins
     let resolveMatch!: () => void;
     const matched = new Promise<void>((res) => (resolveMatch = res));
-    const w: TuneWatch = { target, resolveMatch, matched, superseded: false };
-    tuneWatch = w;
+    const w: Watch = { matches, resolveMatch, matched, superseded: false };
+    watches[lane] = w;
     return w;
 }
 
-function clearTuneWatch(w: TuneWatch): void {
-    if (tuneWatch === w) tuneWatch = null;
+function clearWatch(lane: WatchLane, w: Watch): void {
+    if (watches[lane] === w) delete watches[lane];
 }
 
-// Called by onTuneState: resolve the current watch only when the pushed carrier
-// state reaches its target (stale / opposite-value frames never confirm).
-function matchTuneWatch(active: boolean): void {
-    if (tuneWatch !== null && !tuneWatch.superseded && active === tuneWatch.target) {
-        tuneWatch.resolveMatch();
+// Called by the SSE handlers: resolve a lane's watch only when the NEW frame `p`
+// carries the evidence its predicate requires (stale / unrelated frames never
+// confirm).
+function matchWatch(lane: WatchLane, p: unknown): void {
+    const w = watches[lane];
+    if (w !== undefined && !w.superseded && (w.matches as (p: unknown) => boolean)(p)) {
+        w.resolveMatch();
     }
 }
 
 // Race a matching push against the grace window. Every terminal path clears the
 // timer AND the watch (no leaks).
-function awaitTuneMatch(w: TuneWatch): Promise<boolean> {
+function awaitMatch(lane: WatchLane, w: Watch): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
         let done = false;
         const timer = setTimeout(() => {
             if (done) return;
             done = true;
-            clearTuneWatch(w);
+            clearWatch(lane, w);
             resolve(false);
-        }, TUNE_GRACE_MS);
+        }, CONFIRM_GRACE_MS);
         void w.matched.then(() => {
             if (done) return;
             done = true;
             clearTimeout(timer);
-            clearTuneWatch(w);
+            clearWatch(lane, w);
             resolve(true);
         });
     });
+}
+
+// Send a WATCHED value-setting command: arm the lane BEFORE the POST, then map the
+// outcome — 202 → accepted; refusal → failed{refused} (+ onRefused rollback);
+// non-timeout network → failed{transport}; fired timeout → observed within the
+// grace, else unknown. A newer command on the lane resolves this one as superseded
+// (silent — a late HTTP/push completion must not overwrite the newer command).
+async function confirmWrite(
+    lane: WatchLane,
+    matches: (p: never) => boolean,
+    send: () => Promise<RigSendOutcome | null>,
+    unknownMsg: string,
+    onRefused?: () => void
+): Promise<RigWriteResult> {
+    const watch = armWatch(lane, matches);
+    const out = await send();
+    if (out === null) {
+        clearWatch(lane, watch);
+        return { status: 'failed', kind: 'transport', message: 'Rig control is unavailable.' };
+    }
+    if (watch.superseded) return { status: 'superseded' };
+    switch (out.kind) {
+        case 'accepted':
+            clearWatch(lane, watch);
+            return { status: 'accepted' };
+        case 'refused':
+            clearWatch(lane, watch);
+            onRefused?.();
+            return { status: 'failed', kind: 'refused', message: out.message };
+        case 'transport':
+            clearWatch(lane, watch);
+            return { status: 'failed', kind: 'transport', message: out.message };
+        case 'timedOut': {
+            const observed = await awaitMatch(lane, watch);
+            if (watch.superseded) return { status: 'superseded' };
+            return observed ? { status: 'observed' } : { status: 'unknown', message: unknownMsg };
+        }
+    }
+}
+
+// Map a CONTRACT-ONLY outcome (no watch): a fired timeout resolves to unknown
+// IMMEDIATELY — no grace, no unrelated-frame inference; the SSE still repaints.
+function mapContractOnly(out: RigSendOutcome): RigWriteResult {
+    switch (out.kind) {
+        case 'accepted':
+            return { status: 'accepted' };
+        case 'refused':
+            return { status: 'failed', kind: 'refused', message: out.message };
+        case 'transport':
+            return { status: 'failed', kind: 'transport', message: out.message };
+        case 'timedOut':
+            return { status: 'unknown', message: CONFIRM_UNKNOWN_MSG };
+    }
 }
 
 /**
@@ -301,37 +364,18 @@ function awaitTuneMatch(w: TuneWatch): Promise<boolean> {
  * failure, and a newer toggle supersedes this one silently — never a false
  * failure on a timeout.
  */
-export async function toggleTune(): Promise<TuneResult> {
+export async function toggleTune(): Promise<RigWriteResult> {
     if (tuneSender === null) {
         return { status: 'failed', kind: 'transport', message: 'Tune control is unavailable.' };
     }
     const target = !rig.tuneActive;
-    const watch = armTuneWatch(target); // armed BEFORE the POST (F-04)
-    const out = await tuneSender(target);
-    // A newer toggle superseded this one while the POST was in flight — resolve
-    // silently; a late HTTP/push completion must not overwrite the newer command.
-    if (watch.superseded) return { status: 'superseded' };
-    switch (out.kind) {
-        case 'accepted':
-            clearTuneWatch(watch);
-            return { status: 'accepted' };
-        case 'refused':
-            clearTuneWatch(watch);
-            return { status: 'failed', kind: 'refused', message: out.message };
-        case 'transport':
-            clearTuneWatch(watch);
-            return { status: 'failed', kind: 'transport', message: out.message };
-        case 'timedOut': {
-            const observed = await awaitTuneMatch(watch);
-            if (watch.superseded) return { status: 'superseded' };
-            return observed
-                ? { status: 'observed' }
-                : {
-                      status: 'unknown',
-                      message: "Couldn't confirm the tune request — check the rig.",
-                  };
-        }
-    }
+    const send = tuneSender;
+    return confirmWrite(
+        'tune',
+        (p: TuneStatePayload) => p.active === target,
+        () => send(target),
+        "Couldn't confirm the tune request — check the rig."
+    );
 }
 
 /*
@@ -340,7 +384,7 @@ export async function toggleTune(): Promise<TuneResult> {
     Actions return the outcome so the caller can toast a failure — matching the
     tune path — and so an optimistic write can roll back on a non-ok result.
 */
-export type CommandSender = (op: string, value?: string | number) => Promise<RigWriteResult>;
+export type CommandSender = (op: string, value?: string | number) => Promise<RigSendOutcome>;
 
 let commandSender: CommandSender | null = null;
 
@@ -348,16 +392,24 @@ export function setCommandSender(fn: CommandSender): void {
     commandSender = fn;
 }
 
+// Raw seam call — null when unwired (returns null so callers report it uniformly).
+function sendCommand(op: string, value?: string | number): Promise<RigSendOutcome | null> {
+    return commandSender === null ? Promise.resolve(null) : commandSender(op, value);
+}
+
 /*
-    Exported for modeRestore.svelte, which drives the per-physical-VFO ops
-    (set_freq/set_freq_b) that no action here wraps. Widening this is safe by
-    construction rather than by discipline: the op vocabulary is the daemon's
-    `exposed` list, and tx_on/tx_off are never on it (ADR 0026/0030), so no op
-    string reachable through here can key the transmitter.
+    CONTRACT-ONLY rig write (ADR 0026): one semantic op + optional scalar. Exported
+    for modeRestore + the relative/toggle ops. No confirm-by-push watch — a fired
+    timeout resolves to unknown at once (no target value to match; requirement #2).
+    Widening the op vocabulary is safe by construction: it is the daemon's `exposed`
+    list and tx_on/tx_off are never on it (ADR 0026/0030), so no op reachable here
+    can key the transmitter.
 */
 export async function driveRig(op: string, value?: string | number): Promise<RigWriteResult> {
-    if (commandSender === null) return { ok: false, message: 'Rig control is unavailable.' };
-    return commandSender(op, value);
+    const out = await sendCommand(op, value);
+    return out === null
+        ? { status: 'failed', kind: 'transport', message: 'Rig control is unavailable.' }
+        : mapContractOnly(out);
 }
 
 /**
@@ -385,15 +437,19 @@ export async function driveRig(op: string, value?: string | number): Promise<Rig
 export async function selectVfo(vfo: 'A' | 'B'): Promise<RigWriteResult> {
     if (rig.cat !== 'connected') {
         rig.selectedVfo = vfo;
-        return { ok: true, message: '' };
+        return { status: 'accepted' };
     }
-    if (vfo === rig.selectedVfo) return { ok: true, message: '' };
+    if (vfo === rig.selectedVfo) return { status: 'alreadySatisfied' };
     if (hasOp('select_vfo')) {
         const prev = rig.selectedVfo;
-        rig.selectedVfo = vfo;
-        const r = await driveRig('select_vfo', vfo === 'A' ? 'VFO-A' : 'VFO-B');
-        if (!r.ok) rig.selectedVfo = prev;
-        return r;
+        rig.selectedVfo = vfo; // optimistic
+        return confirmWrite(
+            'selectedVfo',
+            (p: RigStatePayload) => p.selectedVfo === vfo,
+            () => sendCommand('select_vfo', vfo === 'A' ? 'VFO-A' : 'VFO-B'),
+            "Couldn't confirm the VFO change — check the rig.",
+            () => (rig.selectedVfo = prev) // roll back ONLY on a refusal
+        );
     }
     return swapVfoLive();
 }
@@ -405,7 +461,7 @@ export async function selectVfo(vfo: 'A' | 'B'): Promise<RigWriteResult> {
 export async function swapVfo(): Promise<RigWriteResult> {
     if (rig.cat !== 'connected') {
         rig.selectedVfo = rig.selectedVfo === 'A' ? 'B' : 'A';
-        return { ok: true, message: '' };
+        return { status: 'accepted' };
     }
     return swapVfoLive();
 }
@@ -424,11 +480,13 @@ export async function swapVfo(): Promise<RigWriteResult> {
     non-ok outcome so a rejected command doesn't strand a false VFO-B on screen.
 */
 async function swapVfoLive(): Promise<RigWriteResult> {
-    if (!hasOp('swap_vfo')) return { ok: false, message: 'This rig cannot swap VFOs.' };
+    if (!hasOp('swap_vfo')) {
+        return { status: 'failed', kind: 'refused', message: 'This rig cannot swap VFOs.' };
+    }
     const prevVfoB = rig.vfoB;
-    rig.vfoB = rig.vfoA;
+    rig.vfoB = rig.vfoA; // optimistic mirror
     const r = await driveRig('swap_vfo');
-    if (!r.ok) rig.vfoB = prevVfoB;
+    if (r.status === 'failed' && r.kind === 'refused') rig.vfoB = prevVfoB; // rollback only on a refusal
     return r;
 }
 
@@ -443,19 +501,25 @@ async function swapVfoLive(): Promise<RigWriteResult> {
 export async function setMode(value: string): Promise<RigWriteResult> {
     if (rig.cat !== 'connected') {
         rig.mode = value;
-        return { ok: true, message: '' };
+        return { status: 'accepted' };
     }
-    if (!hasOp('set_mode')) return { ok: false, message: 'This rig cannot set the mode.' };
+    if (!hasOp('set_mode')) {
+        return { status: 'failed', kind: 'refused', message: 'This rig cannot set the mode.' };
+    }
     const prevLiteral = rig.modeLiteral;
     const prevFriendly = rig.mode;
-    rig.modeLiteral = value;
+    rig.modeLiteral = value; // optimistic
     rig.mode = friendlyMode(value);
-    const r = await driveRig('set_mode', value);
-    if (!r.ok) {
-        rig.modeLiteral = prevLiteral;
-        rig.mode = prevFriendly;
-    }
-    return r;
+    return confirmWrite(
+        'modeLiteral',
+        (p: RigStatePayload) => p.mode === value,
+        () => sendCommand('set_mode', value),
+        "Couldn't confirm the mode change — check the rig.",
+        () => {
+            rig.modeLiteral = prevLiteral;
+            rig.mode = prevFriendly;
+        }
+    );
 }
 
 // Representative default frequency per band (CAT-off), so picking a band can't
@@ -490,10 +554,23 @@ export async function selectBand(band: string): Promise<RigWriteResult> {
         rig.band = band;
         const hz = BAND_DEFAULT_HZ[band];
         if (hz !== undefined) rig.freq = formatFrequency(hz);
-        return { ok: true, message: '' };
+        return { status: 'accepted' };
     }
-    if (!hasOp('set_band')) return { ok: false, message: 'This rig cannot jump bands.' };
-    return driveRig('set_band', band);
+    if (!hasOp('set_band')) {
+        return { status: 'failed', kind: 'refused', message: 'This rig cannot jump bands.' };
+    }
+    // Confirm ONLY on a frame carrying the OPERATING VFO's new frequency whose
+    // derived band matches — a mode-only frame (or a non-selected-VFO freq) is not
+    // the evidence set_band's band recall produces (requirement #2).
+    return confirmWrite(
+        'band',
+        (p: RigStatePayload) => {
+            const selHz = rig.selectedVfo === 'A' ? p.vfoA : p.vfoB;
+            return selHz !== undefined && frequencyToBand(selHz) === band;
+        },
+        () => sendCommand('set_band', band),
+        "Couldn't confirm the band change — check the rig."
+    );
 }
 
 // Physical digit-key codes in the operator's finger order (1..9 then 0), mapped
@@ -536,8 +613,9 @@ export function bandDown(): Promise<RigWriteResult> {
 }
 
 async function stepBand(op: 'band_up' | 'band_down'): Promise<RigWriteResult> {
-    if (rig.cat !== 'connected') return { ok: true, message: '' }; // nothing to step off-CAT
-    if (!hasOp(op)) return { ok: false, message: 'This rig cannot step bands.' };
+    if (rig.cat !== 'connected') return { status: 'accepted' }; // nothing to step off-CAT
+    if (!hasOp(op))
+        return { status: 'failed', kind: 'refused', message: 'This rig cannot step bands.' };
     return driveRig(op);
 }
 
@@ -582,20 +660,20 @@ export async function nudgeFreq(deltaHz: number): Promise<RigWriteResult> {
 
     if (rig.cat !== 'connected') {
         const cur = parseFrequency(rig.freq);
-        if (cur === null) return { ok: true, message: '' }; // nothing to nudge
+        if (cur === null) return { status: 'accepted' }; // nothing to nudge
         rig.freq = formatFrequency(clampFreq(cur + deltaHz));
-        return { ok: true, message: '' };
+        return { status: 'accepted' };
     }
 
     const op = vfo === 'A' ? 'set_freq' : 'set_freq_b';
-    if (!hasOp(op)) return { ok: true, message: '' }; // rig can't tune this VFO — silent
+    if (!hasOp(op)) return { status: 'accepted' }; // rig can't tune this VFO — silent
 
     const now = Date.now();
     const prev = pendingFreqHz[vfo];
     const inBurst =
         prev !== null && lastFreqVfo === vfo && now - lastFreqNudgeAt <= FREQ_REPEAT_WINDOW_MS;
     const base = inBurst ? prev : vfo === 'A' ? rig.vfoA : rig.vfoB;
-    if (base === null) return { ok: true, message: '' }; // no known freq yet
+    if (base === null) return { status: 'accepted' }; // no known freq yet
 
     const target = clampFreq(base + deltaHz);
     pendingFreqHz[vfo] = target;
@@ -662,11 +740,13 @@ export async function setFreq(hz: number): Promise<RigWriteResult> {
         rig.freq = formatFrequency(target);
         const b = frequencyToBand(target);
         if (b !== '') rig.band = b;
-        return { ok: true, message: '' };
+        return { status: 'accepted' };
     }
     const vfo = rig.selectedVfo;
     const op = vfo === 'A' ? 'set_freq' : 'set_freq_b';
-    if (!hasOp(op)) return { ok: false, message: 'This rig cannot set the frequency.' };
+    if (!hasOp(op)) {
+        return { status: 'failed', kind: 'refused', message: 'This rig cannot set the frequency.' };
+    }
     pendingFreqHz[vfo] = target;
     lastFreqVfo = vfo;
     lastFreqNudgeAt = Date.now();
@@ -683,15 +763,19 @@ export async function setFreq(hz: number): Promise<RigWriteResult> {
 export async function ft8SelectBand(band: string): Promise<RigWriteResult> {
     const hz = ft8Frequencies[band];
     if (hz === undefined) {
-        return { ok: false, message: `No FT8 frequency configured for ${band}.` };
+        return {
+            status: 'failed',
+            kind: 'refused',
+            message: `No FT8 frequency configured for ${band}.`,
+        };
     }
     const tuned = await setFreq(hz);
     // FREQUENCY FIRST, then the mode. The dial move is the operator's primary
     // intent and was this function's entire behaviour until 2026-08-05, so a
-    // refused mode write must not cost them it. A failed dial move DOES stop
-    // here: asserting a data mode on a frequency we did not reach is not what
-    // was asked for.
-    if (!tuned.ok) return tuned;
+    // refused mode write must not cost them it. A dial move that did NOT succeed
+    // (refused, transport, unknown, or superseded) STOPS here: asserting a data
+    // mode on a frequency we did not confirm we reached is not what was asked for.
+    if (!writeSucceeded(tuned)) return tuned;
     // Why the mode needs asserting at all: a Phone/CW band pick sends set_band
     // and the RIG's own band-stack recall restores that band's last mode — which
     // is what makes SSB "just work". FT8 sends set_FREQ (the WSJT-X dial, not
@@ -898,6 +982,13 @@ export const catLink = {
         rig.cat = 'connected';
         rig.linkError = ''; // the rig is demonstrably working
         cancelPendingLost(); // a blip that recovered — no flip, no flicker
+
+        // Resolve any pending command watch on the EVIDENCE this frame carried
+        // (F-04): the selection change, the mode literal, or a selected-VFO freq
+        // whose band matches — each lane's predicate reads `p`, not merged state.
+        matchWatch('selectedVfo', p);
+        matchWatch('modeLiteral', p);
+        matchWatch('band', p);
     },
 
     onRigDisconnected(p: BridgeCodePayload): void {
@@ -930,7 +1021,7 @@ export const catLink = {
      *  subscribers, so a tab opened mid-tune sees the carrier is up. */
     onTuneState(p: TuneStatePayload): void {
         rig.tuneActive = p.active; // display always mirrors the daemon push
-        matchTuneWatch(p.active); // resolve a pending tune watch only on its target (F-04)
+        matchWatch('tune', p); // resolve a pending tune watch only on its target (F-04)
     },
 
     /** Stuck-TX safety alarm (ADR 0051). A raise re-shows the banner even if a

@@ -27,7 +27,7 @@ describe('RigPanel shared card', () => {
             props: {
                 pickBand: (band: string) => {
                     picked.push(band);
-                    return Promise.resolve({ ok: true, message: '' });
+                    return Promise.resolve({ status: 'accepted' });
                 },
             },
         });

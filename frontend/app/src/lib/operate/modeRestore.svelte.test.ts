@@ -146,7 +146,7 @@ beforeEach(() => {
     sent = [];
     setCommandSender((op, value) => {
         sent.push({ op, value });
-        return Promise.resolve({ ok: true, message: '' });
+        return Promise.resolve({ kind: 'accepted' });
     });
     setRigCaps({ ops: [...ALL_OPS], tune: false, rigModes: [] });
     // The R rules run with an UNCONFIGURED FT8 (no watering holes) — the
@@ -205,6 +205,48 @@ describe('operating-state restore across a mode switch', () => {
 
         expect(freqsSent()).toContain('14255000');
         expect(modesSent()).toContain('USB');
+    });
+
+    // F-04 confirm-by-push: the command seam now returns the normalized outcome
+    // (accepted | refused | transport | timedOut), which driveRig/setMode map to a
+    // status result. A dependent restore must CONTINUE past an accepted (202) step
+    // — the old `if (!r.ok)` abandons on the very first command once `.ok` is gone.
+    it('F-04a: an accepted (202) restore step lets the sequence complete, not abandon', async () => {
+        livePhone();
+        await onOperatingModeChange('phone', 'ft8');
+        moveToFt8();
+        sent = [];
+        const error = vi.spyOn(toasts, 'error').mockImplementation(() => 0);
+        setCommandSender((op, value) => {
+            sent.push({ op, value });
+            return Promise.resolve({ kind: 'accepted' }) as never;
+        });
+
+        await onOperatingModeChange('ft8', 'phone');
+
+        expect(freqsSent()).toContain('14255000'); // freq restore rode
+        expect(modesSent()).toContain('USB'); // AND the mode restore rode after it
+        expect(error).not.toHaveBeenCalled(); // not abandoned
+    });
+
+    // F-04 confirm-by-push: "do not roll back" does NOT mean "continue the
+    // sequence" — a timed-out (unknown) restore step must STOP the chain (abandon),
+    // so a data mode is never asserted on a frequency the rig may not have reached.
+    it('F-04b: a timed-out (unknown) restore step STOPS the sequence and reports', async () => {
+        livePhone();
+        await onOperatingModeChange('phone', 'ft8');
+        moveToFt8();
+        sent = [];
+        const error = vi.spyOn(toasts, 'error').mockImplementation(() => 0);
+        setCommandSender((op, value) => {
+            sent.push({ op, value });
+            return Promise.resolve({ kind: 'timedOut', message: 't/o' }) as never;
+        });
+
+        await onOperatingModeChange('ft8', 'phone');
+
+        expect(modesSent()).not.toContain('USB'); // stopped before the mode assert
+        expect(error).toHaveBeenCalled(); // abandoned + reported
     });
 
     // A2
@@ -477,7 +519,7 @@ describe('operating-state restore across a mode switch', () => {
         const gate: (() => void)[] = [];
         setCommandSender((op, value) => {
             sent.push({ op, value });
-            return new Promise((res) => gate.push(() => res({ ok: true, message: '' })));
+            return new Promise((res) => gate.push(() => res({ kind: 'accepted' })));
         });
         // Fixed number of turns, not "until the gate empties": a released
         // command's continuation queues the NEXT one a microtask later, so
@@ -538,8 +580,8 @@ describe('operating-state restore across a mode switch', () => {
             sent.push({ op, value });
             return Promise.resolve(
                 op === 'set_freq'
-                    ? { ok: false, message: 'rig said no' }
-                    : { ok: true, message: '' }
+                    ? { kind: 'refused', message: 'rig said no' }
+                    : { kind: 'accepted' }
             );
         });
         livePhone();
@@ -576,8 +618,8 @@ describe('operating-state restore across a mode switch', () => {
             sent.push({ op, value });
             return Promise.resolve(
                 op === 'set_freq'
-                    ? { ok: false, message: 'rig said no' }
-                    : { ok: true, message: '' }
+                    ? { kind: 'refused', message: 'rig said no' }
+                    : { kind: 'accepted' }
             );
         });
         livePhone();
@@ -595,7 +637,7 @@ describe('operating-state restore across a mode switch', () => {
     // A14
     it('R19: reports a rejected restore', async () => {
         const err = vi.spyOn(toasts, 'error');
-        setCommandSender(() => Promise.resolve({ ok: false, message: 'rig said no' }));
+        setCommandSender(() => Promise.resolve({ kind: 'refused', message: 'rig said no' }));
         livePhone();
         await onOperatingModeChange('phone', 'ft8');
         moveToFt8();
@@ -613,7 +655,7 @@ describe('operating-state restore across a mode switch', () => {
         setCommandSender((op, value) => {
             sent.push({ op, value });
             return Promise.resolve(
-                reject ? { ok: false, message: 'rig said no' } : { ok: true, message: '' }
+                reject ? { kind: 'refused', message: 'rig said no' } : { kind: 'accepted' }
             );
         });
         livePhone();
@@ -737,10 +779,10 @@ describe('operating-state restore across a mode switch', () => {
         let holdNext = true;
         setCommandSender((op, value) => {
             sent.push({ op, value });
-            if (!holdNext) return Promise.resolve({ ok: true, message: '' });
+            if (!holdNext) return Promise.resolve({ kind: 'accepted' });
             holdNext = false;
             return new Promise((res) => {
-                held.release = () => res({ ok: true, message: '' });
+                held.release = () => res({ kind: 'accepted' });
             });
         });
         const settle = async (): Promise<void> => {
@@ -787,10 +829,10 @@ describe('operating-state restore across a mode switch', () => {
         let holdNext = true;
         setCommandSender((op, value) => {
             sent.push({ op, value });
-            if (!holdNext) return Promise.resolve({ ok: true, message: '' });
+            if (!holdNext) return Promise.resolve({ kind: 'accepted' });
             holdNext = false;
             return new Promise((res) => {
-                held.release = () => res({ ok: true, message: '' });
+                held.release = () => res({ kind: 'accepted' });
             });
         });
         const settle = async (): Promise<void> => {
@@ -832,10 +874,10 @@ describe('operating-state restore across a mode switch', () => {
         let holdNext = true;
         setCommandSender((op, value) => {
             sent.push({ op, value });
-            if (!holdNext) return Promise.resolve({ ok: true, message: '' });
+            if (!holdNext) return Promise.resolve({ kind: 'accepted' });
             holdNext = false;
             return new Promise((res) => {
-                held.release = () => res({ ok: true, message: '' });
+                held.release = () => res({ kind: 'accepted' });
             });
         });
         const settle = async (): Promise<void> => {
@@ -869,8 +911,8 @@ describe('operating-state restore across a mode switch', () => {
             sent.push({ op, value });
             return Promise.resolve(
                 failB && op === 'set_freq_b'
-                    ? { ok: false, message: 'rig said no' }
-                    : { ok: true, message: '' }
+                    ? { kind: 'refused', message: 'rig said no' }
+                    : { kind: 'accepted' }
             );
         });
 
@@ -1038,8 +1080,8 @@ describe('operating-state restore across a mode switch', () => {
             sent.push({ op, value });
             return Promise.resolve(
                 refuse && op === 'set_freq'
-                    ? { ok: false, message: 'rig said no' }
-                    : { ok: true, message: '' }
+                    ? { kind: 'refused', message: 'rig said no' }
+                    : { kind: 'accepted' }
             );
         });
         livePhone();
@@ -1096,8 +1138,8 @@ describe('operating-state restore across a mode switch', () => {
             sent.push({ op, value });
             return Promise.resolve(
                 refuse && op === 'set_freq'
-                    ? { ok: false, message: 'rig said no' }
-                    : { ok: true, message: '' }
+                    ? { kind: 'refused', message: 'rig said no' }
+                    : { kind: 'accepted' }
             );
         });
         livePhone();
@@ -1190,8 +1232,8 @@ describe('operating-state restore across a mode switch', () => {
             sent.push({ op, value });
             return Promise.resolve(
                 refuse && op === 'set_mode'
-                    ? { ok: false, message: 'rig said no' }
-                    : { ok: true, message: '' }
+                    ? { kind: 'refused', message: 'rig said no' }
+                    : { kind: 'accepted' }
             );
         });
         livePhone();
@@ -1389,8 +1431,9 @@ describe('selection restore (codex ec2fd42d P1)', () => {
         sent = [];
         setCommandSender((op, value) => {
             sent.push({ op, value });
-            if (op === 'select_vfo') return Promise.resolve({ ok: false, message: 'refused' });
-            return Promise.resolve({ ok: true, message: '' });
+            if (op === 'select_vfo')
+                return Promise.resolve({ kind: 'refused', message: 'refused' });
+            return Promise.resolve({ kind: 'accepted' });
         });
 
         await onOperatingModeChange('ft8', 'phone');

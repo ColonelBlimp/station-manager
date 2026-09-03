@@ -87,8 +87,7 @@
     // (off-CAT default-freq jump vs live set_band) lives in the shared selectBand
     // action, so the grid and the Ctrl+Shift+digit keyboard jump behave the same.
     async function onPickBand(band: string): Promise<void> {
-        const r = await pickBand(band);
-        if (!r.ok) toasts.error(r.message);
+        handleRigWrite(await pickBand(band));
     }
 
     // #2 (region-AGNOSTIC) — the typed freq doesn't fall in the SELECTED band's
@@ -108,13 +107,17 @@
     // supports tune (rigCaps.tune); enabled only when CAT is live (tuning a
     // non-live rig is impossible — the daemon refuses). A failed toggle toasts;
     // the on/off state still comes from the tune-state SSE, not this call.
-    async function onTune(): Promise<void> {
-        // F-04 confirm-by-push: a timed-out tune is outcome-unknown, not a failure.
-        // Silent on a success (accepted/observed/alreadySatisfied/superseded), a
-        // WARN on unknown, a definite ERROR only on a real failure.
-        const r = await toggleTune();
+    // F-04 confirm-by-push: a rig/tune write is outcome-unknown on a timeout, not
+    // a failure. Silent on a success (accepted/observed/alreadySatisfied/
+    // superseded), a WARN on unknown, a definite ERROR only on a real failure. The
+    // live state always comes from the rig-state / tune-state SSE, not this return.
+    function handleRigWrite(r: RigWriteResult): void {
         if (r.status === 'unknown') toasts.warn(r.message);
         else if (r.status === 'failed') toasts.error(r.message);
+    }
+
+    async function onTune(): Promise<void> {
+        handleRigWrite(await toggleTune());
     }
 
     // Clickable VFO boxes (ADR 0026): a rig with select_vfo (FTdx10 VS) truly
@@ -126,16 +129,14 @@
     const canSwap = $derived(locked && (canSelect || hasOp('swap_vfo')));
 
     async function onSelectVfo(v: 'A' | 'B'): Promise<void> {
-        const r = await selectVfo(v);
-        if (!r.ok) toasts.error(r.message);
+        handleRigWrite(await selectVfo(v));
     }
 
     // Live mode pick (CAT connected) → drive the rig with the chosen literal;
     // confirm-by-push (optimistic in setMode) repaints. Manual mode uses a plain
     // bind:value select (no command).
     async function onModeSelect(e: Event): Promise<void> {
-        const r = await setMode((e.currentTarget as HTMLSelectElement).value);
-        if (!r.ok) toasts.error(r.message);
+        handleRigWrite(await setMode((e.currentTarget as HTMLSelectElement).value));
     }
 </script>
 

@@ -21,7 +21,11 @@ export type RigCommandOutcome =
     | { kind: 'validation'; code: string; message: string }
     | { kind: 'server'; code: string; message: string }
     | { kind: 'aborted'; message: string }
-    | { kind: 'network'; message: string };
+    // `timedOut` marks the AMBIGUOUS write (F-04 confirm-by-push, ADR 0078): the
+    // POST reached the daemon and its 202 was lost, so the rig may already have
+    // moved. The seam MUST reconcile against the rig-state SSE (watched ops) or
+    // resolve to unknown (contract-only ops) rather than declaring a failure.
+    | { kind: 'network'; message: string; timedOut?: boolean };
 
 interface DaemonError {
     code: string;
@@ -50,7 +54,10 @@ export async function sendRigCommand(
         signal,
     });
     if (!fetched.ok) {
-        return { kind: fetched.kind, message: fetched.message };
+        // Carry the fired-timeout marker outward so the seam can reconcile it.
+        return fetched.kind === 'network'
+            ? { kind: 'network', message: fetched.message, timedOut: fetched.timedOut }
+            : { kind: 'aborted', message: fetched.message };
     }
 
     const { response } = fetched;

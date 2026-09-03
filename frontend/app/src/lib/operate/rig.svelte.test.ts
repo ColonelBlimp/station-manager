@@ -25,6 +25,7 @@ import {
     swapVfo,
     setMode,
     selectBand,
+    setFreq,
     bandUp,
     bandDown,
     setOperatingBands,
@@ -429,6 +430,178 @@ describe('tune confirm-by-push outcomes (F-04)', () => {
     });
 });
 
+// F-04 confirm-by-push for rig commands (ADR 0078). Watched (value-setting)
+// commands — selectVfo's native-select branch (lane selectedVfo), setMode (lane
+// modeLiteral), selectBand (lane band) — reconcile a fired timeout against the
+// rig-state SSE, matching only the EVIDENCE the new frame carries and only on the
+// target value, single-flight PER LANE. Contract-only commands (swapVfo,
+// bandUp/down, nudgeFreq, setFreq, ft8SelectBand) resolve a timeout to unknown
+// IMMEDIATELY (no grace, no unrelated-frame inference). Optimistic state rolls
+// back ONLY on failed{refused}; timeout/unknown and transport keep it (the SSE
+// authoritatively repaints). alreadySatisfied is pinned to the select-current-VFO
+// path. beforeEach installs fake timers.
+describe('rig-command confirm-by-push (F-04)', () => {
+    function liveVfo(ops: string[], outcome: () => Promise<unknown>): { op: string }[] {
+        catLink.onRigState({ vfoA: 14_100_000, vfoB: 14_200_000, selectedVfo: 'A' });
+        setRigCaps({ ops, tune: false, rigModes: [] });
+        const sent: { op: string }[] = [];
+        setCommandSender((op) => {
+            sent.push({ op });
+            return outcome() as Promise<never>;
+        });
+        return sent;
+    }
+
+    it('selectVfo (native) resolves accepted on a 202 and keeps the optimistic selection', async () => {
+        liveVfo(['select_vfo'], () => Promise.resolve({ kind: 'accepted' }));
+        const r = await selectVfo('B');
+        expect(r.status).toBe('accepted');
+        expect(rig.selectedVfo).toBe('B');
+    });
+
+    it('selectVfo (native) times out then OBSERVES a matching selectedVfo push within grace', async () => {
+        liveVfo(['select_vfo'], () => Promise.resolve({ kind: 'timedOut', message: 't/o' }));
+        const p = selectVfo('B'); // optimistic B; watch on the selectedVfo lane
+        catLink.onRigState({ selectedVfo: 'B' }); // matching push
+        const r = await p;
+        expect(r.status).toBe('observed');
+    });
+
+    it('selectVfo (native) resolves unknown with no matching push, keeping the optimistic selection', async () => {
+        liveVfo(['select_vfo'], () => Promise.resolve({ kind: 'timedOut', message: 't/o' }));
+        const p = selectVfo('B');
+        await vi.advanceTimersByTimeAsync(2000);
+        const r = await p;
+        expect(r.status).toBe('unknown');
+        expect(rig.selectedVfo).toBe('B'); // timeout keeps the optimistic value
+    });
+
+    it('selectVfo (native) rolls back the optimistic selection ONLY on a refusal', async () => {
+        liveVfo(['select_vfo'], () =>
+            Promise.resolve({ kind: 'refused', message: 'rig_not_connected' })
+        );
+        const r = await selectVfo('B');
+        expect(r.status).toBe('failed');
+        if (r.status === 'failed') expect(r.kind).toBe('refused');
+        expect(rig.selectedVfo).toBe('A'); // rolled back
+    });
+
+    it('selectVfo (native) KEEPS the optimistic selection on a transport failure', async () => {
+        liveVfo(['select_vfo'], () =>
+            Promise.resolve({ kind: 'transport', message: 'connection failed' })
+        );
+        const r = await selectVfo('B');
+        expect(r.status).toBe('failed');
+        if (r.status === 'failed') expect(r.kind).toBe('transport');
+        expect(rig.selectedVfo).toBe('B'); // not proven failed — kept
+    });
+
+    it('selectVfo of the already-selected VFO resolves alreadySatisfied, no POST', async () => {
+        const sent = liveVfo(['select_vfo'], () => Promise.resolve({ kind: 'accepted' }));
+        const r = await selectVfo('A'); // already selected
+        expect(r.status).toBe('alreadySatisfied');
+        expect(sent).toEqual([]);
+    });
+
+    it('setMode times out then OBSERVES a matching mode push; rolls back only on a refusal', async () => {
+        catLink.onRigState({ mode: 'LSB' });
+        setRigCaps({ ops: ['set_mode'], tune: false, rigModes: [] });
+        setCommandSender(() => Promise.resolve({ kind: 'timedOut', message: 't/o' }));
+        const p = setMode('USB'); // optimistic modeLiteral = USB
+        catLink.onRigState({ mode: 'USB' }); // matching mode push
+        expect((await p).status).toBe('observed');
+
+        catLink.onRigState({ mode: 'LSB' });
+        setCommandSender(() => Promise.resolve({ kind: 'refused', message: 'x' }));
+        const r = await setMode('USB');
+        expect(r.status).toBe('failed');
+        expect(rig.modeLiteral).toBe('LSB'); // rolled back
+    });
+
+    it('selectBand OBSERVES only a selected-VFO freq frame whose band matches — a mode-only frame does not confirm', async () => {
+        catLink.onRigState({ vfoA: 14_100_000, selectedVfo: 'A' }); // 20m
+        setRigCaps({ ops: ['set_band'], tune: false, rigModes: [] });
+        setCommandSender(() => Promise.resolve({ kind: 'timedOut', message: 't/o' }));
+        const p = selectBand('40m'); // watch on the band lane
+        catLink.onRigState({ mode: 'USB' }); // mode-only — must NOT confirm the band
+        catLink.onRigState({ vfoA: 7_100_000 }); // selected-VFO freq → 40m: confirms
+        const r = await p;
+        expect(r.status).toBe('observed');
+        expect(rig.band).toBe('40m');
+    });
+
+    it('selectBand resolves unknown when only a mode-only frame arrives (band never re-derived)', async () => {
+        catLink.onRigState({ vfoA: 14_100_000, selectedVfo: 'A' });
+        setRigCaps({ ops: ['set_band'], tune: false, rigModes: [] });
+        setCommandSender(() => Promise.resolve({ kind: 'timedOut', message: 't/o' }));
+        const p = selectBand('40m');
+        catLink.onRigState({ mode: 'USB' });
+        await vi.advanceTimersByTimeAsync(2000);
+        expect((await p).status).toBe('unknown');
+    });
+
+    it('watches are single-flight PER LANE — a mode request does not supersede a VFO watch', async () => {
+        catLink.onRigState({ vfoA: 14_100_000, vfoB: 14_200_000, selectedVfo: 'A', mode: 'LSB' });
+        setRigCaps({ ops: ['select_vfo', 'set_mode'], tune: false, rigModes: [] });
+        setCommandSender(() => Promise.resolve({ kind: 'timedOut', message: 't/o' }));
+        const pVfo = selectVfo('B'); // selectedVfo lane
+        const pMode = setMode('USB'); // modeLiteral lane — independent
+        catLink.onRigState({ selectedVfo: 'B' });
+        catLink.onRigState({ mode: 'USB' });
+        expect((await pVfo).status).toBe('observed'); // NOT superseded by the mode request
+        expect((await pMode).status).toBe('observed');
+    });
+
+    it('swapVfo (contract-only) resolves unknown IMMEDIATELY on a timeout — no grace — and keeps the mirror', async () => {
+        const sent = liveVfo(['swap_vfo'], () =>
+            Promise.resolve({ kind: 'timedOut', message: 't/o' })
+        );
+        // Contract-only: a fired timeout maps STRAIGHT to unknown. We never
+        // advance the clock, so the immediacy is the assertion — a (wrong)
+        // watched routing would block on the 2 s grace timer here (which never
+        // fires under fake timers) instead of resolving, tripping this test's
+        // 1 s timeout. A timer-COUNT probe can't stand in: the framework's
+        // async scheduler arms an ambient timer on the first microtask turn,
+        // so getTimerCount() is not attributable to this op.
+        const r = await swapVfo();
+        expect(sent).toEqual([{ op: 'swap_vfo' }]);
+        expect(r.status).toBe('unknown');
+        expect(rig.vfoB).toBe(14_100_000); // optimistic mirror kept on a timeout
+    }, 1000);
+
+    it('swapVfo rolls back the optimistic mirror on a refusal', async () => {
+        liveVfo(['swap_vfo'], () =>
+            Promise.resolve({ kind: 'refused', message: 'rig_not_connected' })
+        );
+        const r = await swapVfo();
+        expect(r.status).toBe('failed');
+        expect(rig.vfoB).toBe(14_200_000); // rolled back
+    });
+
+    it('setFreq (contract-only) resolves unknown on a timeout', async () => {
+        catLink.onRigState({ vfoA: 14_100_000, selectedVfo: 'A' });
+        setRigCaps({ ops: ['set_freq'], tune: false, rigModes: [] });
+        setCommandSender(() => Promise.resolve({ kind: 'timedOut', message: 't/o' }));
+        const r = await setFreq(7_100_000);
+        expect(r.status).toBe('unknown');
+    });
+
+    it('ft8SelectBand (dependent) STOPS after a timed-out dial move — no mode assert', async () => {
+        catLink.onRigState({ vfoA: 14_100_000, selectedVfo: 'A' });
+        setRigCaps({ ops: ['set_freq', 'set_mode'], tune: false, rigModes: [] });
+        setFt8Frequencies({ '40m': 7_074_000 });
+        setFt8Mode('DATA-U');
+        const sent: string[] = [];
+        setCommandSender((op) => {
+            sent.push(op);
+            return Promise.resolve({ kind: 'timedOut', message: 't/o' }) as Promise<never>;
+        });
+        const r = await ft8SelectBand('40m');
+        expect(sent).toEqual(['set_freq']); // stopped — no set_mode after an unknown dial
+        expect(r.status).toBe('unknown');
+    });
+});
+
 describe('VFO swap / select (ADR 0026)', () => {
     // Put the rig live with a two-VFO snapshot + swap_vfo exposed.
     function live(): { sent: { op: string; value?: string | number }[] } {
@@ -437,7 +610,7 @@ describe('VFO swap / select (ADR 0026)', () => {
         const sent: { op: string; value?: string | number }[] = [];
         setCommandSender((op, value) => {
             sent.push({ op, value });
-            return Promise.resolve({ ok: true, message: '' });
+            return Promise.resolve({ kind: 'accepted' });
         });
         return { sent };
     }
@@ -446,7 +619,7 @@ describe('VFO swap / select (ADR 0026)', () => {
         const sent: unknown[] = [];
         setCommandSender((op) => {
             sent.push(op);
-            return Promise.resolve({ ok: true, message: '' });
+            return Promise.resolve({ kind: 'accepted' });
         });
         expect(rig.cat).toBe('off');
         rig.selectedVfo = 'A';
@@ -468,16 +641,16 @@ describe('VFO swap / select (ADR 0026)', () => {
     it('rolls the optimistic VFO-B back when the command is rejected', async () => {
         catLink.onRigState({ vfoA: 14_100_000, vfoB: 14_200_000, selectedVfo: 'A' });
         setRigCaps({ ops: ['swap_vfo'], tune: false, rigModes: [] });
-        setCommandSender(() => Promise.resolve({ ok: false, message: 'rig_not_connected' }));
+        setCommandSender(() => Promise.resolve({ kind: 'refused', message: 'rig_not_connected' }));
         const r = await swapVfo();
-        expect(r.ok).toBe(false);
+        expect(r.status).toBe('failed');
         expect(rig.vfoB).toBe(14_200_000); // restored, not left showing the false swap
     });
 
     it('selectVfo of the already-selected VFO is a no-op', async () => {
         const { sent } = live(); // selectedVfo A
         const r = await selectVfo('A');
-        expect(r.ok).toBe(true);
+        expect(r.status).toBe('alreadySatisfied');
         expect(sent).toEqual([]);
     });
 
@@ -513,7 +686,7 @@ describe('VFO swap / select (ADR 0026)', () => {
         const sent: { op: string; value?: string | number }[] = [];
         setCommandSender((op, value) => {
             sent.push({ op, value });
-            return Promise.resolve({ ok: true, message: '' });
+            return Promise.resolve({ kind: 'accepted' });
         });
         return { sent };
     }
@@ -521,7 +694,7 @@ describe('VFO swap / select (ADR 0026)', () => {
     it('SV1: selectVfo SELECTS when the rig can — the boxes keep their contents', async () => {
         const { sent } = liveSelect();
         const r = await selectVfo('B');
-        expect(r.ok).toBe(true);
+        expect(r.status).toBe('accepted');
         expect(sent).toEqual([{ op: 'select_vfo', value: 'VFO-B' }]);
         expect(rig.selectedVfo).toBe('B'); // optimistic dot; the VS push confirms
         expect(rig.vfoA).toBe(14_100_000); // NEITHER box changes value — the swap
@@ -531,16 +704,16 @@ describe('VFO swap / select (ADR 0026)', () => {
     it('SV2: a refused select rolls the dot back', async () => {
         catLink.onRigState({ vfoA: 14_100_000, vfoB: 14_200_000, selectedVfo: 'A' });
         setRigCaps({ ops: ['swap_vfo', 'select_vfo'], tune: false, rigModes: [] });
-        setCommandSender(() => Promise.resolve({ ok: false, message: 'refused' }));
+        setCommandSender(() => Promise.resolve({ kind: 'refused', message: 'refused' }));
         const r = await selectVfo('B');
-        expect(r.ok).toBe(false);
+        expect(r.status).toBe('failed');
         expect(rig.selectedVfo).toBe('A');
     });
 
     it('SV3: selecting the already-selected VFO stays a no-op', async () => {
         const { sent } = liveSelect();
         const r = await selectVfo('A');
-        expect(r.ok).toBe(true);
+        expect(r.status).toBe('alreadySatisfied');
         expect(sent).toEqual([]);
     });
 
@@ -556,10 +729,10 @@ describe('VFO swap / select (ADR 0026)', () => {
         const sent: unknown[] = [];
         setCommandSender((op) => {
             sent.push(op);
-            return Promise.resolve({ ok: true, message: '' });
+            return Promise.resolve({ kind: 'accepted' });
         });
         const r = await swapVfo();
-        expect(r.ok).toBe(false);
+        expect(r.status).toBe('failed');
         expect(sent).toEqual([]);
     });
 });
@@ -569,7 +742,7 @@ describe('band + mode control (ADR 0026)', () => {
         const sent: { op: string; value?: string | number }[] = [];
         setCommandSender((op, value) => {
             sent.push({ op, value });
-            return Promise.resolve({ ok: true, message: '' });
+            return Promise.resolve({ kind: 'accepted' });
         });
         return { sent };
     }
@@ -588,7 +761,7 @@ describe('band + mode control (ADR 0026)', () => {
         const { sent } = recorder();
 
         const r = await setMode('DATA-U');
-        expect(r.ok).toBe(true);
+        expect(r.status).toBe('accepted');
         expect(sent).toEqual([{ op: 'set_mode', value: 'DATA-U' }]);
         expect(rig.modeLiteral).toBe('DATA-U');
         expect(rig.mode).toBe('FT8'); // friendlyMode(DATA-U) via the mappings
@@ -598,10 +771,12 @@ describe('band + mode control (ADR 0026)', () => {
         setModeMappings(FTDX10_MAPPINGS);
         catLink.onRigState({ mode: 'USB' });
         setRigCaps({ ops: ['set_mode'], tune: false, rigModes: ['USB', 'DATA-U'] });
-        setCommandSender(() => Promise.resolve({ ok: false, message: 'rig_command_rejected' }));
+        setCommandSender(() =>
+            Promise.resolve({ kind: 'refused', message: 'rig_command_rejected' })
+        );
 
         const r = await setMode('DATA-U');
-        expect(r.ok).toBe(false);
+        expect(r.status).toBe('failed');
         expect(rig.modeLiteral).toBe('USB'); // restored
         expect(rig.mode).toBe('USB');
     });
@@ -627,7 +802,7 @@ describe('band + mode control (ADR 0026)', () => {
         // Off-CAT: silent no-op (ok, no command) so nothing toasts.
         const off = recorder();
         const r0 = await bandUp();
-        expect(r0.ok).toBe(true);
+        expect(r0.status).toBe('accepted');
         expect(off.sent).toEqual([]);
 
         catLink.onRigState({ vfoA: 14_100_000 });
@@ -645,9 +820,9 @@ describe('band + mode control (ADR 0026)', () => {
         catLink.onRigState({ vfoA: 14_100_000 });
         setRigCaps({ ops: [], tune: false, rigModes: [] });
         const { sent } = recorder();
-        expect((await selectBand('20m')).ok).toBe(false);
-        expect((await bandUp()).ok).toBe(false);
-        expect((await setMode('USB')).ok).toBe(false);
+        expect((await selectBand('20m')).status).toBe('failed');
+        expect((await bandUp()).status).toBe('failed');
+        expect((await setMode('USB')).status).toBe('failed');
         expect(sent).toEqual([]);
     });
 });
@@ -695,7 +870,7 @@ describe('frequency nudge (Ctrl+Shift arrows)', () => {
         const sent: { op: string; value?: string | number }[] = [];
         setCommandSender((op, value) => {
             sent.push({ op, value });
-            return Promise.resolve({ ok: true, message: '' });
+            return Promise.resolve({ kind: 'accepted' });
         });
         return { sent };
     }
@@ -738,7 +913,7 @@ describe('frequency nudge (Ctrl+Shift arrows)', () => {
         setRigCaps({ ops: [], tune: false, rigModes: [] }); // no set_freq
         const { sent } = recorder();
         const r = await nudgeFreqCoarse(1);
-        expect(r.ok).toBe(true);
+        expect(r.status).toBe('accepted');
         expect(sent).toEqual([]);
     });
 });
@@ -748,7 +923,7 @@ describe('ft8SelectBand — FT8 watering-hole band pick', () => {
         setFt8Frequencies({ '20m': 14074000, '40m': 7074000 });
         // rig.cat is off after resetCatLink()
         const r = await ft8SelectBand('40m');
-        expect(r.ok).toBe(true);
+        expect(r.status).toBe('accepted');
         expect(rig.freq).toBe('7.074.000');
         expect(rig.band).toBe('40m');
     });
@@ -760,18 +935,18 @@ describe('ft8SelectBand — FT8 watering-hole band pick', () => {
         const sent: { op: string; value?: string | number }[] = [];
         setCommandSender((op, value) => {
             sent.push({ op, value });
-            return Promise.resolve({ ok: true, message: '' });
+            return Promise.resolve({ kind: 'accepted' });
         });
 
         const r = await ft8SelectBand('40m');
-        expect(r.ok).toBe(true);
+        expect(r.status).toBe('accepted');
         expect(sent).toEqual([{ op: 'set_freq', value: '7074000' }]);
     });
 
     it('errors when the band has no configured FT8 frequency', async () => {
         setFt8Frequencies({ '20m': 14074000 });
         const r = await ft8SelectBand('6m');
-        expect(r.ok).toBe(false);
+        expect(r.status).toBe('failed');
     });
 
     /*
@@ -815,7 +990,7 @@ describe('ft8SelectBand — FT8 watering-hole band pick', () => {
         const sent: { op: string; value?: string | number }[] = [];
         setCommandSender((op, value) => {
             sent.push({ op, value });
-            return Promise.resolve({ ok: true, message: '' });
+            return Promise.resolve({ kind: 'accepted' });
         });
         return sent;
     }
@@ -827,7 +1002,7 @@ describe('ft8SelectBand — FT8 watering-hole band pick', () => {
 
         const r = await ft8SelectBand('40m');
 
-        expect(r.ok).toBe(true);
+        expect(r.status).toBe('accepted');
         // Both, and in this order — see the note above on B4.
         expect(sent).toEqual([
             { op: 'set_freq', value: '7074000' },
@@ -842,7 +1017,7 @@ describe('ft8SelectBand — FT8 watering-hole band pick', () => {
 
         const r = await ft8SelectBand('40m');
 
-        expect(r.ok).toBe(true);
+        expect(r.status).toBe('accepted');
         expect(sent).toEqual([{ op: 'set_freq', value: '7074000' }]);
     });
 
@@ -853,7 +1028,7 @@ describe('ft8SelectBand — FT8 watering-hole band pick', () => {
 
         const r = await ft8SelectBand('40m');
 
-        expect(r.ok).toBe(true);
+        expect(r.status).toBe('accepted');
         expect(rig.freq).toBe('7.074.000');
         expect(rig.mode).toBe('USB'); // untouched — a literal here is corruption
     });
@@ -869,15 +1044,15 @@ describe('ft8SelectBand — FT8 watering-hole band pick', () => {
             // The dial move succeeds; only the mode is refused.
             return Promise.resolve(
                 op === 'set_mode'
-                    ? { ok: false, message: 'rig refused the mode' }
-                    : { ok: true, message: '' }
+                    ? { kind: 'refused', message: 'rig refused the mode' }
+                    : { kind: 'accepted' }
             );
         });
 
         const r = await ft8SelectBand('40m');
 
         expect(sent.map((c) => c.op)).toEqual(['set_freq', 'set_mode']);
-        expect(r.ok).toBe(false);
-        expect(r.message).toContain('mode');
+        expect(r.status).toBe('failed');
+        if (r.status === 'failed') expect(r.message).toContain('mode');
     });
 });

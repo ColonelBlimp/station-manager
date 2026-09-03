@@ -36,11 +36,13 @@
         return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t.isContentEditable;
     }
 
-    // Surface a genuine command rejection; silent no-ops (off-CAT, not-exposed)
-    // return ok:true with no message, so key-repeat never spams toasts.
+    // F-04 confirm-by-push: WARN a timed-out command (outcome unknown), ERROR a
+    // definite rejection. Silent no-ops (off-CAT, not-exposed) resolve to accepted
+    // with no message, so key-repeat never spams toasts.
     function run(p: Promise<RigWriteResult>): void {
         void p.then((r) => {
-            if (!r.ok && r.message !== '') toasts.error(r.message);
+            if (r.status === 'unknown') toasts.warn(r.message);
+            else if (r.status === 'failed' && r.message !== '') toasts.error(r.message);
         });
     }
 

@@ -133,6 +133,13 @@ family established. Revisit once several sub-slices share the pattern.
 
 - If three or more outcome types carry `timedOut?` and start sharing reconciliation logic, migrate to
   a shared `WriteOutcome` type (the deferred alternative above).
+  - **2026-09-03 (rig/tune confirm-by-push, F-04):** this trigger fired for the rig/tune command
+    surface — the tune carrier and the rig commands share one confirm-by-push watcher and outcome. We
+    introduced a **shared `RigWriteResult`** (`accepted | observed | alreadySatisfied | superseded |
+    unknown | failed{refused|transport}`) scoped to **rig/tune actions only**, deliberately NOT the
+    repo-wide `WriteOutcome`. The config family keeps its incremental `timedOut?` per outcome type;
+    a repository-wide write abstraction is still not warranted (its consumers do not share
+    reconciliation logic with the rig/tune lane).
 - If the daemon gains a per-request idempotency key or an authoritative "did this commit?" query, the
   re-queryable classes can confirm precisely instead of comparing fields, and upload enqueue becomes
   reconcilable rather than non-reconcilable.
