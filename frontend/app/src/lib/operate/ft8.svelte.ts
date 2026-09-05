@@ -482,6 +482,46 @@ export function setFt8LoggedSink(fn: (p: LoggedPayload) => void): void {
 */
 export type Ft8TxResult = { ok: boolean; message: string };
 
+/*
+    FT8 ARM confirm-by-push (F-04, ADR 0078; operator-ratified 2026-09-05). Arming
+    grants permission to key and transmits nothing: internal/ft8 ArmTx opens the
+    playback device and pins the dial, and PTT is asserted only by a later
+    CQ/answer/work send. The POST is a bare 202; the authoritative armed state
+    arrives on the ft8-tx SSE. A FIRED timeout is therefore outcome-UNKNOWN —
+    reconciled against the next VALID ft8-tx frame matching the requested state,
+    else unknown — never a definite failure and never a claim of success.
+
+    The result is FT8-SPECIFIC on purpose (the rig family's RigWriteResult stays
+    scoped to rig/tune): there is no `alreadySatisfied` — the daemon 202s the
+    already-in-state no-op and the control only ever requests the OPPOSITE of
+    pushed state — and nothing optimistic to roll back, because the control renders
+    pushed state alone (so a timed-out disarm can never show TX as down). The
+    sequencer's other actions keep Ft8TxResult until their own slice.
+*/
+export type Ft8ArmSendOutcome =
+    | { kind: 'accepted' } // 202 seen
+    | { kind: 'refused'; message: string } // HTTP 4xx/5xx — the daemon answered
+    | { kind: 'transport'; message: string } // non-timeout network failure
+    | { kind: 'timedOut'; message: string }; // fired timeout — no response; may or may not have reached the daemon
+
+export type Ft8ArmResult =
+    | { status: 'accepted' } // the 202 — never a claim about the resulting state
+    | { status: 'observed' } // timed out, then a matching ft8-tx frame inside the grace
+    | { status: 'superseded' } // a newer opposite request took over (silent)
+    | { status: 'unknown'; message: string } // timed out, grace exhausted, no match
+    | { status: 'failed'; kind: 'refused' | 'transport'; message: string };
+
+/** Grace after a fired timeout in which a matching ft8-tx frame still confirms
+ *  the request (operator-chosen 2 s; FT8-local, not shared with the rig lane). */
+export const FT8_ARM_GRACE_MS = 2000;
+
+// Target-specific unknown wording (operator-ratified): the DAEMON reports the FT8
+// arm state, not the radio — so only the disable case asks for a look at the rig.
+export const FT8_ARM_UNKNOWN_ENABLE_MSG =
+    "Couldn't confirm that FT8 TX was enabled. The control will update when Station Manager reports its state.";
+export const FT8_ARM_UNKNOWN_DISABLE_MSG =
+    "Couldn't confirm that FT8 TX was disabled. Check the radio; the control will update when Station Manager reports its state.";
+
 // Stations the sequencer has engaged since this tab loaded. Deliberately keyed on
 // ENGAGEMENT, not on a completed QSO: an abandoned contact ends up in here too, and
 // that is the safe direction. The only consumer is the deliberate-repeat decision,
@@ -599,7 +639,9 @@ export interface Ft8WorkArgs {
 }
 
 export interface Ft8TxActions {
-    arm(armed: boolean): Promise<Ft8TxResult>;
+    /** The arm seam reports the TRANSPORT outcome; armTx below turns it into the
+     *  confirm-by-push Ft8ArmResult (the watch lives here, not in main.ts). */
+    arm(armed: boolean): Promise<Ft8ArmSendOutcome>;
     callCq(
         offsetHz: number,
         opFreqMHz: number,
@@ -644,9 +686,98 @@ export function setFt8SessionDefaults(answerMode: string): void {
 
 const txUnavailable: Ft8TxResult = { ok: false, message: 'FT8 transmit is unavailable.' };
 
-/** Arm (true) or disarm (false) the TX path — the operator's consent to key. */
-export function armTx(armed: boolean): Promise<Ft8TxResult> {
-    return txActions ? txActions.arm(armed) : Promise.resolve(txUnavailable);
+/*
+    The single-flight arm WATCH (F-04). Armed BEFORE the POST so a frame landing
+    while the request is in flight is not missed; resolved by onTx only on a NEW
+    frame whose `armed` equals the requested value — a hub-replayed pre-request
+    frame carries the old value and cannot satisfy it. A newer request supersedes
+    the older one at once. Every terminal path — a prompt 202, a refusal, a
+    transport failure, a match, the grace expiring, or supersession — clears the
+    watch and cancels its timer, so nothing lingers past the result.
+*/
+interface ArmWatch {
+    target: boolean;
+    superseded: boolean;
+    resolveMatch: () => void;
+    matched: Promise<void>;
+    /** Installed while the grace runs: cancels the timer and settles the wait. */
+    cancelGrace: (() => void) | null;
+}
+let armWatch: ArmWatch | null = null;
+
+function armArmWatch(target: boolean): ArmWatch {
+    const prev = armWatch;
+    if (prev !== null) {
+        prev.superseded = true;
+        prev.cancelGrace?.(); // the newer request wins now — no lingering grace timer
+    }
+    let resolveMatch!: () => void;
+    const matched = new Promise<void>((res) => (resolveMatch = res));
+    const w: ArmWatch = { target, superseded: false, resolveMatch, matched, cancelGrace: null };
+    armWatch = w;
+    return w;
+}
+
+function clearArmWatch(w: ArmWatch): void {
+    if (armWatch === w) armWatch = null;
+}
+
+/** Called by onTx: resolve the pending watch only on the evidence THIS frame carries. */
+function matchArmWatch(p: TxPayload): void {
+    const w = armWatch;
+    if (w !== null && !w.superseded && p.armed === w.target) w.resolveMatch();
+}
+
+// Race a matching frame against the grace window; true = observed.
+function awaitArmMatch(w: ArmWatch): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+        let done = false;
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        const finish = (observed: boolean): void => {
+            if (done) return;
+            done = true;
+            if (timer !== null) clearTimeout(timer);
+            w.cancelGrace = null;
+            clearArmWatch(w);
+            resolve(observed);
+        };
+        timer = setTimeout(() => finish(false), FT8_ARM_GRACE_MS);
+        w.cancelGrace = () => finish(false);
+        void w.matched.then(() => finish(true));
+    });
+}
+
+/** Arm (true) or disarm (false) the TX path — the operator's consent to key.
+ *  Confirm-by-push (F-04): 202 → accepted; refusal / transport → failed; a fired
+ *  timeout → observed on a matching ft8-tx frame inside the grace, else unknown
+ *  (wording names the requested direction); a newer request → superseded. */
+export async function armTx(armed: boolean): Promise<Ft8ArmResult> {
+    if (!txActions) {
+        return { status: 'failed', kind: 'transport', message: txUnavailable.message };
+    }
+    const watch = armArmWatch(armed);
+    const out = await txActions.arm(armed);
+    if (watch.superseded) return { status: 'superseded' };
+    switch (out.kind) {
+        case 'accepted':
+            clearArmWatch(watch);
+            return { status: 'accepted' };
+        case 'refused':
+            clearArmWatch(watch);
+            return { status: 'failed', kind: 'refused', message: out.message };
+        case 'transport':
+            clearArmWatch(watch);
+            return { status: 'failed', kind: 'transport', message: out.message };
+        case 'timedOut': {
+            const observed = await awaitArmMatch(watch);
+            if (watch.superseded) return { status: 'superseded' };
+            if (observed) return { status: 'observed' };
+            return {
+                status: 'unknown',
+                message: armed ? FT8_ARM_UNKNOWN_ENABLE_MSG : FT8_ARM_UNKNOWN_DISABLE_MSG,
+            };
+        }
+    }
 }
 
 /** Start a Call-CQ session on the given offset + dial frequency and slot parity. */
@@ -857,6 +988,7 @@ export const ft8Link: Ft8EventHandlers = {
             suppressDisarmNoticeFor = '';
             heldDisarmNotice = '';
         }
+        matchArmWatch(p); // F-04: a pending arm request confirms only on THIS frame's evidence
     },
 
     // BASELINE DEBT 2026-07-31 (complexity 32) — dispatch over the FT8 QSO status
@@ -1011,6 +1143,8 @@ export function resetFt8ForTests(): void {
     suppressDisarmNoticeFor = '';
     heldDisarmNotice = '';
     txActions = null;
+    armWatch?.cancelGrace?.(); // settle a pending grace so no timer leaks across cases
+    armWatch = null;
     operatorCall = '';
     myGrid = '';
     displayPrefs = {

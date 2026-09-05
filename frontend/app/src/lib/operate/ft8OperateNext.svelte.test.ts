@@ -42,7 +42,7 @@ interface Calls {
 function armReady(over: Partial<Ft8TxActions> = {}): Calls {
     const calls: Calls = { next: 0, abandon: 0, skip: [] };
     setFt8TxActions({
-        arm: okResult,
+        arm: () => Promise.resolve({ kind: 'accepted' as const }),
         callCq: okResult,
         answerCq: okResult,
         workCaller: okResult,

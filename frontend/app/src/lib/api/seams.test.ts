@@ -10,6 +10,7 @@ import {
     apiHistory,
     fetchStationContext,
     fetchLogbookCount,
+    normalizeFt8ArmSend,
 } from './seams';
 import type { ContactHistory } from './contact-history';
 
@@ -344,5 +345,52 @@ describe('fetchLogbookCount (stubbed fetch)', () => {
 
     it('skips the fetch for an unset logbook (id < 1)', async () => {
         expect(await fetchLogbookCount(0)).toBeNull();
+    });
+});
+
+// F-04 confirm-by-push: the FT8 ARM seam's PRODUCTION mapper (review P2,
+// 2026-09-05). The API tests prove armFt8Tx emits `timedOut` and the state tests
+// inject it directly, but nothing exercised the mapper between them — a wrong
+// branch here would make the real app skip reconciliation and show an immediate
+// error while every focused test stayed green. These pin each arm of it.
+describe('normalizeFt8ArmSend — arm seam transport mapping (F-04)', () => {
+    it('a 202 is accepted', () => {
+        expect(normalizeFt8ArmSend({ kind: 'ok' })).toEqual({ kind: 'accepted' });
+    });
+
+    it('a FIRED timeout passes through as timedOut — the watch reconciles it; the app must not fail it', () => {
+        expect(
+            normalizeFt8ArmSend({ kind: 'network', message: 'request timed out', timedOut: true })
+        ).toEqual({ kind: 'timedOut', message: 'request timed out' });
+    });
+
+    it('a non-timeout network failure is transport — neither timedOut nor refused', () => {
+        expect(normalizeFt8ArmSend({ kind: 'network', message: 'Failed to fetch' })).toEqual({
+            kind: 'transport',
+            message: 'Failed to fetch',
+        });
+        expect(normalizeFt8ArmSend({ kind: 'network', message: 'x', timedOut: false }).kind).toBe(
+            'transport'
+        );
+    });
+
+    it('an abort is transport', () => {
+        expect(normalizeFt8ArmSend({ kind: 'aborted', message: 'aborted' })).toEqual({
+            kind: 'transport',
+            message: 'aborted',
+        });
+    });
+
+    it('a 4xx / 5xx is a definite refusal carrying the daemon message', () => {
+        expect(
+            normalizeFt8ArmSend({
+                kind: 'validation',
+                code: 'ft8_rung_not_skippable',
+                message: 'not skippable',
+            })
+        ).toEqual({ kind: 'refused', message: 'not skippable' });
+        expect(
+            normalizeFt8ArmSend({ kind: 'server', code: 'rig_not_ready', message: 'rig not ready' })
+        ).toEqual({ kind: 'refused', message: 'rig not ready' });
     });
 });

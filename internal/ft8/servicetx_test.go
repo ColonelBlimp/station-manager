@@ -115,6 +115,7 @@ func (p *fakeTxPlayer) Play(s []int16) (<-chan struct{}, error) {
 func (p *fakeTxPlayer) Stop() error { p.mu.Lock(); defer p.mu.Unlock(); p.stopN++; return p.stopErr }
 func (p *fakeTxPlayer) inits() int  { p.mu.Lock(); defer p.mu.Unlock(); return p.initN }
 func (p *fakeTxPlayer) closes() int { p.mu.Lock(); defer p.mu.Unlock(); return p.closeN }
+func (p *fakeTxPlayer) plays() int  { p.mu.Lock(); defer p.mu.Unlock(); return p.playN }
 
 // newTxTestService builds an enabled Service with an injected keyer and a player
 // factory returning the given player (or playerErr). Not Started — these tests
@@ -341,19 +342,30 @@ func TestStartSession_DuplicateDuringRung_ReportsQsoInProgress(t *testing.T) {
 
 func TestArmTx_AcquiresAndReleasesDevice(t *testing.T) {
 	p := newFakeTxPlayer()
-	s := newTxTestService(&fakeKeyer{}, p, nil)
+	k := &fakeKeyer{}
+	s := newTxTestService(k, p, nil)
 	ch, unsub := s.hub.subscribe()
 	defer unsub()
 
 	require.NoError(t, s.ArmTx(true))
 	require.True(t, s.txArmed)
 	require.Equal(t, 1, p.inits(), "arming Init's the output device")
+	// Arming grants PERMISSION to key and nothing more: it asserts no PTT and plays
+	// no audio — both happen only on a later CQ/answer/work send. Pinned directly
+	// (operator-ratified 2026-09-05, F-04 ft8-arm) rather than left implied by the
+	// send-path tests, because the SPA's arm control now reconciles a timed-out
+	// arm request against pushed state and must be able to trust that "armed" is
+	// RF-silent.
+	require.Zero(t, k.keys(), "arming must not key the rig")
+	require.Zero(t, p.plays(), "arming must not play audio")
 	st := drainTxState(t, ch, func(st TxState) bool { return st.Armed })
 	require.True(t, st.Armed)
 
-	// Idempotent: arming again is a no-op, not a second device.
+	// Idempotent: arming again is a no-op, not a second device — and still RF-silent.
 	require.NoError(t, s.ArmTx(true))
 	require.Equal(t, 1, p.inits())
+	require.Zero(t, k.keys(), "a repeated arm keys nothing either")
+	require.Zero(t, p.plays(), "a repeated arm plays nothing either")
 
 	require.NoError(t, s.ArmTx(false))
 	require.False(t, s.txArmed)

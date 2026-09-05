@@ -165,9 +165,14 @@
         if (arming) return;
         arming = true;
         try {
+            // F-04 confirm-by-push: a fired timeout is outcome-unknown (no response —
+            // the request may or may not have reached the daemon), never a failure.
+            // Silent on a success (accepted / observed / superseded), a WARN on
+            // unknown, an ERROR only on a definite refusal or transport failure. The
+            // armed state itself arrives via the ft8-tx SSE — never from this result.
             const r = await armTx(!tx.armed);
-            if (!r.ok) toasts.error(r.message);
-            // The armed state itself arrives via the ft8-tx SSE (confirm-by-push).
+            if (r.status === 'unknown') toasts.warn(r.message);
+            else if (r.status === 'failed') toasts.error(r.message);
         } finally {
             arming = false;
         }

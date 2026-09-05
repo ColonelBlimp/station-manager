@@ -17,6 +17,8 @@ function numOr(v: unknown, fallback: number): number {
 import type { Enrichment } from '../operate/enrich.svelte';
 import type { WorkedQso } from '../operate/worked.svelte';
 import type { AdifModePair } from '../operate/rig.svelte';
+import type { Ft8ArmSendOutcome } from '../operate/ft8.svelte';
+import type { Ft8TxOutcome } from './ft8tx';
 
 /** Real enricher for setEnricher — GET /v1/enrich/callsign. The signal lets a
  *  superseded lookup cancel its in-flight daemon/upstream request. */
@@ -343,4 +345,30 @@ function toModeMappings(v: unknown): Record<string, AdifModePair> {
         };
     }
     return out;
+}
+
+/**
+ * FT8 ARM seam (F-04 confirm-by-push, ADR 0078): normalise armFt8Tx's outcome to
+ * the transport shape ft8.svelte's arm watch reconciles. A 202 is accepted; an
+ * HTTP status is a definite refusal (the daemon answered); a FIRED timeout is
+ * AMBIGUOUS — no response arrived, so the request may or may not have reached the
+ * daemon — and passes through as timedOut for the watch to reconcile against the
+ * ft8-tx SSE; a non-timeout network error or an abort is transport (proven
+ * neither committed nor refused). Deliberately its own small mapper, not the rig
+ * lane's — the FT8 result contract is FT8-specific. Pure and exported so the real
+ * composition path is tested, not only its inputs (review P2, 2026-09-05).
+ */
+export function normalizeFt8ArmSend(o: Ft8TxOutcome): Ft8ArmSendOutcome {
+    switch (o.kind) {
+        case 'ok':
+            return { kind: 'accepted' };
+        case 'network':
+            return o.timedOut
+                ? { kind: 'timedOut', message: o.message }
+                : { kind: 'transport', message: o.message };
+        case 'aborted':
+            return { kind: 'transport', message: o.message };
+        default: // validation | server — the daemon answered: a definite rejection
+            return { kind: 'refused', message: o.message };
+    }
 }

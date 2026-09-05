@@ -2,7 +2,7 @@
 // routing itself is covered in ft8-sse.test.ts). Decode feed accumulate/single/
 // cap, slot heartbeat, tx/qso mirrors, and the view-scoped lifecycle.
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
     ft8State,
     ft8Link,
@@ -287,7 +287,10 @@ describe('TX action wrappers', () => {
         return {
             calls,
             actions: {
-                arm: (a) => (calls.push(`arm:${a}`), ok),
+                arm: (a) => (
+                    calls.push(`arm:${a}`),
+                    Promise.resolve({ kind: 'accepted' as const })
+                ),
                 callCq: (o, f, p) => (calls.push(`cq:${o}:${f}:${p}`), ok),
                 answerCq: (a) => (calls.push(`answer:${a.theirCall}:${a.fd}`), ok),
                 workCaller: (a) => (calls.push(`work:${a.theirCall}`), ok),
@@ -337,8 +340,183 @@ describe('TX action wrappers', () => {
 
     it('return an unavailable result when no actions are wired', async () => {
         const r = await armTx(true); // resetFt8ForTests cleared the seam
-        expect(r.ok).toBe(false);
+        expect(r.status).toBe('failed');
+        if (r.status !== 'failed') return;
+        expect(r.kind).toBe('transport'); // nothing was sent — not a daemon refusal
         expect(r.message).toMatch(/unavailable/i);
+    });
+});
+
+/*
+    F-04 confirm-by-push for the FT8 arm (ADR 0078; operator-ratified 2026-09-05).
+    Arming grants permission to key but transmits nothing; the daemon 202s the
+    intent and the authoritative state arrives on the ft8-tx SSE. A fired timeout
+    is therefore outcome-UNKNOWN, reconciled against the next VALID ft8-tx frame
+    matching the requested state — never a definite failure, never a claim of
+    success. The control has NO optimistic state: it renders only pushed state,
+    so a timed-out disarm can never show TX as down.
+
+    Result (FT8-specific, deliberately smaller than the rig family's — no
+    alreadySatisfied, no rollback): accepted (a 202) | observed (timeout, then a
+    matching frame inside the 2 s grace) | unknown (grace exhausted) |
+    failed{refused|transport} | superseded (a newer opposite request, silent).
+    Every terminal result cancels the watch and its timer.
+
+    Fake timers: only a FIRED timeout ever enters the grace; a prompt 202,
+    refusal, transport failure or supersession resolves without the clock.
+*/
+describe('FT8 arm confirm-by-push (F-04)', () => {
+    const ENABLE_UNKNOWN =
+        "Couldn't confirm that FT8 TX was enabled. The control will update when Station Manager reports its state.";
+    const DISABLE_UNKNOWN =
+        "Couldn't confirm that FT8 TX was disabled. Check the radio; the control will update when Station Manager reports its state.";
+
+    beforeEach(() => {
+        vi.useFakeTimers();
+    });
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    /** Wire a seam whose arm returns `outcome`; EVERY other action records 'OTHER'
+     *  so the seam-isolation rule can assert arming touches no transmit path. */
+    function armSeam(outcome: () => Promise<unknown>): string[] {
+        const calls: string[] = [];
+        const other = (): Promise<{ ok: boolean; message: string }> => {
+            calls.push('OTHER');
+            return Promise.resolve({ ok: true, message: '' });
+        };
+        setFt8TxActions({
+            arm: (a) => {
+                calls.push(`arm:${a}`);
+                return outcome() as Promise<never>;
+            },
+            callCq: other,
+            answerCq: other,
+            workCaller: other,
+            abandon: other,
+            skip: other,
+            next: other,
+            stopAutoWork: other,
+            pickAnswerer: other,
+            bagAnswerer: other,
+            unbagAnswerer: other,
+            resumeDrain: other,
+        });
+        return calls;
+    }
+    const timedOut = () => Promise.resolve({ kind: 'timedOut', message: 'request timed out' });
+    const frame = (armed: boolean): void => ft8Link.onTx({ armed, transmitting: false });
+
+    it('a 202 resolves accepted without the clock, and the control stays pushed-state only', async () => {
+        armSeam(() => Promise.resolve({ kind: 'accepted' }));
+        const r = await armTx(true);
+        expect(r.status).toBe('accepted');
+        expect(ft8State.tx.armed).toBe(false); // no optimistic flip — the push decides
+        frame(true);
+        expect(ft8State.tx.armed).toBe(true);
+    });
+
+    it('a fired timeout reconciled by a matching ft8-tx frame inside the grace resolves observed', async () => {
+        armSeam(timedOut);
+        const p = armTx(true);
+        frame(true);
+        expect((await p).status).toBe('observed');
+    });
+
+    it('a timed-out ENABLE with no confirming frame resolves unknown with the enable wording', async () => {
+        armSeam(timedOut);
+        const p = armTx(true);
+        await vi.advanceTimersByTimeAsync(2000);
+        const r = await p;
+        expect(r.status).toBe('unknown');
+        if (r.status !== 'unknown') return;
+        expect(r.message).toBe(ENABLE_UNKNOWN);
+        expect(ft8State.tx.armed).toBe(false); // unknown never claims it armed
+    });
+
+    it('a timed-out DISABLE resolves unknown with the disable wording and never claims TX is down', async () => {
+        frame(true); // the daemon reported armed
+        armSeam(timedOut);
+        const p = armTx(false);
+        await vi.advanceTimersByTimeAsync(2000);
+        const r = await p;
+        expect(r.status).toBe('unknown');
+        if (r.status !== 'unknown') return;
+        expect(r.message).toBe(DISABLE_UNKNOWN);
+        expect(ft8State.tx.armed).toBe(true); // still armed until the daemon says otherwise
+    });
+
+    it('a replayed frame carrying the PRE-request state does not satisfy the watch', async () => {
+        armSeam(timedOut);
+        const p = armTx(true); // watching for armed:true
+        let settled = false;
+        void p.then(() => (settled = true));
+        frame(false); // a hub replay of the state before the request
+        await vi.advanceTimersByTimeAsync(1999);
+        expect(settled).toBe(false); // the stale value confirmed nothing
+        await vi.advanceTimersByTimeAsync(1);
+        expect((await p).status).toBe('unknown');
+    });
+
+    it('a daemon refusal is failed{refused} with its message; the control never shows armed', async () => {
+        armSeam(() => Promise.resolve({ kind: 'refused', message: 'rig not ready' }));
+        const r = await armTx(true);
+        expect(r.status).toBe('failed');
+        if (r.status !== 'failed') return;
+        expect(r.kind).toBe('refused');
+        expect(r.message).toBe('rig not ready');
+        expect(ft8State.tx.armed).toBe(false);
+    });
+
+    it('a non-timeout transport failure is failed{transport}, distinct from a refusal', async () => {
+        armSeam(() => Promise.resolve({ kind: 'transport', message: 'connection refused' }));
+        const r = await armTx(true);
+        expect(r.status).toBe('failed');
+        if (r.status !== 'failed') return;
+        expect(r.kind).toBe('transport');
+    });
+
+    it('an opposite request during the POST supersedes the older one, silently', async () => {
+        armSeam(timedOut);
+        const p1 = armTx(true);
+        const p2 = armTx(false); // before #1's POST even resolved
+        expect((await p1).status).toBe('superseded');
+        frame(false);
+        expect((await p2).status).toBe('observed');
+    });
+
+    it('an opposite request during the GRACE cancels the older wait at once — no clock, no late override', async () => {
+        armSeam(timedOut);
+        const p1 = armTx(true);
+        await Promise.resolve();
+        await Promise.resolve(); // #1's POST has timed out; it is now inside its grace
+        const p2 = armTx(false);
+        const r1 = await p1; // resolves WITHOUT advancing the clock: the grace wait was cancelled
+        expect(r1.status).toBe('superseded');
+        frame(true); // a late match for #1 — cannot revive it, cannot satisfy #2
+        let settled = false;
+        void p2.then(() => (settled = true));
+        await Promise.resolve();
+        expect(settled).toBe(false);
+        frame(false);
+        expect((await p2).status).toBe('observed');
+    });
+
+    it('a prompt 202 leaves no watch behind: the next timed-out request reconciles on its own frame', async () => {
+        armSeam(() => Promise.resolve({ kind: 'accepted' }));
+        expect((await armTx(true)).status).toBe('accepted');
+        armSeam(timedOut);
+        const p = armTx(true);
+        frame(true);
+        expect((await p).status).toBe('observed');
+    });
+
+    it('SEAM ISOLATION — arming issues only the arm intent and never a transmit-start action', async () => {
+        const calls = armSeam(() => Promise.resolve({ kind: 'accepted' }));
+        await armTx(true);
+        await armTx(false);
+        expect(calls).toEqual(['arm:true', 'arm:false']); // no callCq / answer / work / …
     });
 });
 

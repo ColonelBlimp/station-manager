@@ -22,7 +22,12 @@ export type Ft8TxOutcome =
     | { kind: 'validation'; code: string; message: string }
     | { kind: 'server'; code: string; message: string }
     | { kind: 'aborted'; message: string }
-    | { kind: 'network'; message: string };
+    // `timedOut` marks the AMBIGUOUS write (F-04 confirm-by-push, ADR 0078): no
+    // response arrived before the deadline, which proves only that — the request
+    // may or may not have reached the daemon, so TX may already be armed (or
+    // disarmed), or nothing may have happened. The seam reconciles it against the
+    // ft8-tx SSE rather than declaring a failure.
+    | { kind: 'network'; message: string; timedOut?: boolean };
 
 interface DaemonError {
     code: string;
@@ -39,7 +44,10 @@ export async function armFt8Tx(armed: boolean, signal?: AbortSignal): Promise<Ft
         signal,
     });
     if (!fetched.ok) {
-        return { kind: fetched.kind, message: fetched.message };
+        // Carry the fired-timeout marker outward so the seam can reconcile it.
+        return fetched.kind === 'network'
+            ? { kind: 'network', message: fetched.message, timedOut: fetched.timedOut }
+            : { kind: 'aborted', message: fetched.message };
     }
 
     const { response } = fetched;

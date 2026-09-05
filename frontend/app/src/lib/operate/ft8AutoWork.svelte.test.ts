@@ -32,7 +32,7 @@ const ok = (): Promise<{ ok: boolean; message: string }> =>
 
 function installActions(over: Partial<Ft8TxActions> = {}): void {
     setFt8TxActions({
-        arm: ok,
+        arm: () => Promise.resolve({ kind: 'accepted' as const }),
         callCq: ok,
         answerCq: ok,
         workCaller: ok,

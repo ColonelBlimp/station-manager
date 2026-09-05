@@ -26,7 +26,7 @@ const okResult = (): Promise<Ft8TxResult> => Promise.resolve({ ok: true, message
 
 function actions(over: Partial<Ft8TxActions> = {}): void {
     setFt8TxActions({
-        arm: okResult,
+        arm: () => Promise.resolve({ kind: 'accepted' as const }),
         callCq: okResult,
         answerCq: okResult,
         workCaller: okResult,

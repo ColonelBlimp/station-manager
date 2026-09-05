@@ -41,7 +41,7 @@ import { setFt8AudioWindow } from './lib/operate/audioLevel.svelte';
 import { setTxDriveConfig, onRigMeters } from './lib/operate/txDrive.svelte';
 import { setFt8Enricher, setFt8Dupe, ft8EnrichState } from './lib/operate/ft8Enrich.svelte';
 import { fetchContestDupe } from './lib/api/contest-dupe';
-import { armFt8Tx, type Ft8TxOutcome } from './lib/api/ft8tx';
+import { armFt8Tx } from './lib/api/ft8tx';
 import {
     startFt8Qso,
     startFt8WorkCaller,
@@ -72,6 +72,7 @@ import { sendRigCommand, type RigCommandOutcome } from './lib/api/rig-command';
 import {
     apiEnrich,
     apiHistory,
+    normalizeFt8ArmSend,
     fetchStationContext,
     fetchLogbookCount,
     type StationContext,
@@ -97,13 +98,15 @@ setFt8Transport(openFt8Events);
 
 // FT8 TX action seam (ADR 0029/0030/0031/0033) — the first RF path from this SPA.
 // The daemon owns arming + the guaranteed stop + the CQ→73 sequencing; the SPA
-// sends only intent, so these adapt the rich lib/api ft8tx/ft8qso outcomes to the
-// {ok,message} the control bar / Band Activity clicks expect. Confirm-by-push:
-// TX / QSO progress arrives over the ft8-tx / ft8-qso SSE, never these responses.
-const toTxResult = (o: Ft8TxOutcome | Ft8QsoOutcome): Ft8TxResult =>
+// sends only intent. Confirm-by-push: TX / QSO progress arrives over the ft8-tx /
+// ft8-qso SSE, never these responses. The ARM seam (F-04) normalises its outcome
+// via lib/api/seams normalizeFt8ArmSend (tested there) to the transport shape
+// ft8.svelte's watch reconciles; the sequencer ops still adapt to the
+// {ok,message} their callers expect.
+const toTxResult = (o: Ft8QsoOutcome): Ft8TxResult =>
     o.kind === 'ok' ? { ok: true, message: '' } : { ok: false, message: o.message };
 setFt8TxActions({
-    arm: (armed) => armFt8Tx(armed).then(toTxResult),
+    arm: async (armed) => normalizeFt8ArmSend(await armFt8Tx(armed)),
     callCq: (offsetHz, opFreqMHz, parity, answerMode) =>
         startFt8Cq(offsetHz, opFreqMHz, parity, answerMode).then(toTxResult),
     answerCq: (a) =>

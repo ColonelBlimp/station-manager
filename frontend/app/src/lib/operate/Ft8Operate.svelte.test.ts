@@ -28,7 +28,7 @@ const okResult = (): Promise<Ft8TxResult> => Promise.resolve({ ok: true, message
 // workCaller. Also puts the rig + TX state into a "ready to transmit" shape.
 function armReady(over: Partial<Ft8TxActions> = {}): void {
     setFt8TxActions({
-        arm: okResult,
+        arm: () => Promise.resolve({ kind: 'accepted' as const }),
         callCq: okResult,
         answerCq: okResult,
         workCaller: okResult,
