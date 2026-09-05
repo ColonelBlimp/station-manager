@@ -3,7 +3,8 @@
 Release-specific execution record for the canonical gate in
 [`docs/dogfood-acceptance.md`](../dogfood-acceptance.md). Drafted 2026-09-05 from the frozen
 candidate; corrected the same day per operator review (A1-02 moved to the clean-install host, A4-01
-added, grouped B2 rows expanded). Every `pending` row is the operator's to execute and rule on.
+added, grouped B2 rows expanded). Unless superseded by the 2026-09-05 scope reduction below, every
+`pending` row is the operator's to execute and rule on.
 Hardware, rig-command and RF rows carry their own approval column and are never implied by a
 passive `PASS`.
 
@@ -23,8 +24,8 @@ RPM-reported version: `station-manager 2.0.0~alpha.2-1 x86_64` (`rpm -qp --query
 PocketFFT (CGO, dynamically linked)`
 Previous installed version: `station-manager-2.0.0~alpha.1.1238.gd9cd38ae.dirty-1.x86_64`
 (commit `d9cd38ae` plus uncommitted local changes at the time it was built)
-Clean-install environment: planned Fedora 44 `systemd-nspawn` rootfs on this host, booted with
-systemd under a dedicated test user and private home; no live working-directory or home bind mounts
+Clean-install environment: retired 2026-09-05 by operator risk decision; the partially prepared
+Fedora 44 `systemd-nspawn` rootfs never installed or ran Station Manager
 Upgrade environment: the daily-driver dogfood station (this host); the borrowed IC-7300 attached
 only for the B3 groups, each separately agreed
 Browser(s) and viewport(s): Firefox 155; see "Operator parameters (A4)"
@@ -34,30 +35,14 @@ Automated gate evidence: `task ci:local` passed at `b8e0356f` on 2026-09-05 — 
 svelte-check 0/0, vitest 1566/1566, Vite build; manual build; Go gofmt, vet, golangci-lint,
 maintainability observatory 0 regressions, race and full test runs, static and PocketFFT builds,
 PocketFFT FT8 decode test, ClubLog build-key boundary (ST-7); agent-context 10030/10240 bytes
-Backup location (do not record secrets): planned private directory on the trusted SMC LAN host;
-record its exact remote path and archive SHA-256 at A3-01
-Restore check: pending A3-02; restore into a private local scratch directory and compare A3-03 counts
-Rollback artifact/command: rehearsed at PKG-10a (package path, nspawn) and PKG-10b (database path,
-host-scratch) — Appendix 3 — before deployment, and executed live only in this order:
-(0) If the working-directory-restore variant will be used, first export the candidate-era QSOs to ADIF
-from the running candidate. (1) **Quiesce:** `systemctl --user stop smd`; verify `systemctl --user
-is-active smd` prints `inactive`, `pgrep -x smd` prints nothing, and no process holds the log database
-(`fuser` on the resolved log database — `datastore.path` per Appendix 1 step 2, default
-`<workdir>/db/station-manager.db` — is silent). Package replacement does not stop the user service —
-nothing below may run while the candidate is up. (2) **Package:** `sudo rpm -Uvh --oldpackage
-<reconstructed-alpha.1.rpm>` — the installed alpha.1 payload reconstructed with `rpmrebuild` (NVR and
-SHA-256 recorded at A3-04; never described as the lost original). (3) **Database — branch, with the daemon still stopped:** alpha.1's embedded migrations stop at 7 and
-golang-migrate refuses a database whose current version is absent from its source (`readUp` →
-`versionExists`, migrate.go:532), so after the candidate has migrated the log database to 8 the package
-downgrade alone stalls. *Down path:* apply the guarded down-migration of Appendix 3
-(`0008_operator_event.down.sql` — a pure drop of the table, index and trigger it added — and
-`schema_migrations_log` set to `(7, 0)` in one transaction); 0008 touches no QSO table, so every QSO
-logged under alpha.2 is kept. *Restore path:* replace the working directory with the pre-upgrade extract
-of the A3 archive, then — still stopped — `smd import` the step-0 ADIF without forwarding (import
-requires a stopped daemon). (4) `systemctl --user daemon-reload && systemctl --user start smd`.
-(5) Verify `/v1/version` = alpha.1, the A3-03 counts plus the post-upgrade count (down path) or the
-re-imported post-upgrade QSOs present exactly once (restore path), and the forwarder queue.
-Reserved window and rehearsal method: "Operator parameters (A4)".
+Backup location (do not record secrets): private SMC LAN host; exact endpoint retained outside the
+repository; remote archive SHA-256 recorded at A3-01
+Restore check: completed at A3-02; the archive opened read-only with integrity and counts equal to A3-03
+Recovery policy: keep a stopped-daemon copy of the complete working directory as the primary recovery
+artifact; optionally keep an ADIF export for a simpler rebuild/import. If the candidate fails, prefer a
+forward fix or rebuild from the repository and restore/import. The operator accepts that ADIF-only
+recovery can lose Station Manager-specific metadata. PKG-10a/10b and the formal package downgrade are
+not executed; Appendix 3 remains a prepared record, not a rehearsed claim.
 
 Ready to deploy: pending
 Operator/date:
@@ -66,6 +51,20 @@ Dogfood accepted: pending
 Operator/date:
 Residual waivers:
 Follow-up destinations:
+
+## Scope reduction — operator decision, 2026-09-05
+
+The operator judged the original zero-data-loss, timed-backout acceptance plan disproportionate for
+this personal dogfood workstation. The Fedora nspawn clean-install suite, synthetic failure injection,
+PKG-10a, PKG-10b and all other rows whose environment begins **nspawn** are closed as **NOT EXECUTED —
+scope retired by operator risk acceptance**, never PASS. The same disposition applies to any row whose
+only purpose was the formal rollback rehearsal. The accepted residual risk is a rebuild plus
+working-directory restore or ADIF import, with possible metadata loss for ADIF-only recovery.
+
+The replacement deployment path is deliberately small: the operator makes a fresh local copy of the
+complete working directory while `smd` is stopped; verify the frozen candidate RPM SHA; install it;
+daemon-reload/start; then inspect version, migration, QSO/queue counts and the basic UI. Hardware and RF
+remain separately gated and are not authorized by this decision.
 
 ## Operator parameters (A4)
 
@@ -89,15 +88,9 @@ gated.
   within 32 seconds; email unknown within 47 seconds; rig/FT8 confirm-by-push within 3 seconds after
   pushed state; SSE recovery within 5 seconds after the daemon answers, or immediately after one
   tab-focus/online revival event; shutdown within the configured budget plus 2 seconds.
-- Rollback rehearsal method (non-destructive proof agreed) and the reserved rollback window:
-  verify the reconstructed alpha.1 RPM and rehearse the COMPLETE rollback per Appendix 3 on a scratch
-  restore of the A3 archive in two lanes — PKG-10a in nspawn with synthetic data (actual alpha.1 install →
-  candidate upgrade → actual `rpm -Uvh --oldpackage` downgrade → database down-migration → reload/restart)
-  and PKG-10b on a host-scratch A3 copy with extracted binaries and a fully rebased, contained configuration
-  (QSO preservation via the guarded down-migration; the working-directory-restore variant with ADIF
-  export/re-import) — and separately restore-check the A3 archive. Reserve three hours; begin rollback if B1 has not
-  passed within 90 minutes, allow 60 minutes for rollback/restore verification, retain 30 minutes of
-  buffer.
+- Recovery method: formal rollback rehearsal and reserved window retired by the operator's 2026-09-05
+  scope decision. Primary recovery is the stopped-daemon working-directory copy; rebuild/restore or
+  ADIF import is acceptable, including possible Station Manager metadata loss in the ADIF-only case.
 - ALARM-02 amber threshold: **30 — effective default; not explicitly stored** (`ft8.meter.alc_amber` is
   unset in the live configuration; `DefaultFt8AlcAmber`, `internal/types/ft8.go`; `config.md` §FT8 meter).
   Ratified 2026-09-05.
@@ -107,14 +100,16 @@ gated.
   instead mark it `WAIVED` with the residual risk. It is never `PASS` or `N/A`.
 - Lane labels (the first token of every row's environment cell): **live** = the daily-driver station
   with genuine data — never a fabricated production QSO, never a live credential change;
-  **nspawn** = the isolated Fedora 44 container with synthetic data, credentials and endpoints — the
-  only lane for failure injection, credential edits, duplicate/scratch records, disk-full and the
-  package-path rollback rehearsal (PKG-10a; the database-path rehearsal PKG-10b runs host-scratch); **host-scratch** = a read-only or scratch-copy check on this host that never
+  **nspawn** = retired lane; every such row is NOT EXECUTED under the scope decision above;
+  **host-scratch** = a read-only or scratch-copy check on this host that never
   touches the live working directory; **record** = a paperwork step.
 - Hardware, rig-command and RF approvals: **deferred**; each B3 group is agreed separately before
   execution, with power, load, duration, abort action and observer recorded there.
 
 ## Resume contract — Gate A execution
+
+**Superseded 2026-09-05:** do not resume steps 4, 5 or 5b. The current path is the short live deployment
+sequence in "Scope reduction" above, and it must wait for the operator's fresh local-backup confirmation.
 
 This is the durable handoff after an operator logout. A new Codex session in this repository executes
 the command-line checkpoints below; it reads `AGENTS.md`, `docs/current.md`, this record and the
@@ -122,7 +117,8 @@ canonical gate first. The operator supplies sudo/SSH approval, performs the visi
 and logout/login observation, judges each result, and remains the only authority for `PASS`, `FAIL`,
 waivers, the ready-to-deploy decision and every later hardware/RF approval.
 
-Resume prompt: **Continue Gate A from `docs/current.md` and this acceptance record. Do not begin B1.**
+Resume prompt: **Continue the simplified alpha.2 dogfood deployment from the scope-reduction decision;
+do not touch hardware/RF.**
 
 1. Recheck the worktree, exact tag/commit, both candidate hashes, installed alpha.1 NVR and inactive
    live service. Stop on any identity change.
@@ -269,10 +265,10 @@ first, with the commits that anchor each claim.
 | `A2-05` | yes | **nspawn** — Setup complete | Reload browser; restart daemon; reopen | Setup stays complete; no welcome surface | Welcome reappears after restart (setup flag not persisted) | screenshots | none | pending |
 | `A2-06` | yes | **nspawn** — Setup complete, guide only | Find Settings, the embedded Manual, and log a first QSO using only the install guide + manual | All three reachable without repository knowledge; note every gap | Reaching Manual only via a URL learned from the repo | note of gaps | none | pending |
 | `A2-07` | yes | **nspawn** — Installed | Uninstall per the guide | Package removed; operator data deliberately retained as documented | Data directory deleted, or package left half-removed | `ls` of the data dir after removal | none | pending |
-| `A3-01` | yes | **live** — Dogfood station, daemon stopped or quiescent | Back up the complete working directory outside the repo | Backup exists; listable | Backup copied into the repository tree | local staging archive 2026-09-05 11:14Z (Execution log #3): `~/sm-backup/station-manager-pre-alpha2-20260905T1114Z.tar.gz`, 18,185,501 B, mode 0600, SHA-256 `066f769b38914ba8fed3cc31f7082d5b9f76ae6d3e169390dccab2f0cd0503b9`, 67 entries, listable; `smd` quiescent and the log database unheld at archive time (WAL present and included); transfer to the SMC LAN host and remote SHA pending the operator's SSH details | none | pending (local archive done; remote copy pending) |
+| `A3-01` | yes | **live** — Dogfood station, daemon stopped or quiescent | Back up the complete working directory outside the repo | Backup exists; listable | Backup copied into the repository tree | local staging archive 2026-09-05 11:14Z (Execution log #3): `~/sm-backup/station-manager-pre-alpha2-20260905T1114Z.tar.gz`, 18,185,501 B, mode 0600, SHA-256 `066f769b38914ba8fed3cc31f7082d5b9f76ae6d3e169390dccab2f0cd0503b9`, 67 entries, listable; `smd` quiescent and the log database unheld at archive time (WAL present and included); operator copied it with the prescribed 0700-directory/0600-archive sequence to the private SMC LAN host (exact endpoint retained outside the repository); remote SHA-256 matched exactly | none | pending (evidence recorded; operator to rule) |
 | `A3-02` | yes | **host-scratch** — restore of the A3 archive: Backup made | Restore a copy into a scratch location; open it read-only | Restore completes; record counts readable | Backup lists but does not restore (permissions / partial copy) | run 2026-09-05 11:18Z (Execution log #5): archive extracted into a 0700 scratch dir (68 entries); database opened read-only (`mode=ro`): `schema_migrations_log` `(7, 0)`, `integrity_check` ok, 7,468 `qso` rows (7,468 with `deleted_at` NULL; logbook 1), `qso_upload` 13,089 `uploaded` + 1 `failed` (forwarder_type `qrz`), `operator_event` absent — all equal to A3-03; scratch config copies shredded, directory removed; live untouched | none | pending (evidence recorded; operator to rule) |
 | `A3-03` | yes | **live** — Pre-upgrade | Record durable-record counts/checksums (QSOs per logbook, upload-queue rows by status, notifications) | Numbers recorded here without contents | Counting after the upgrade began | Read-only count, 2026-09-05: logbook id 1 — 7,468 total/active QSOs, 0 deleted; upload queue — 13,089 uploaded, 1 failed; `operator_event` absent as expected before migration 0008 | none | pending (operator to confirm after A3 backup) |
-| `A3-04` | yes | **live** — pre-upgrade | Produce and verify all three rollback artifacts: the reconstructed alpha.1 RPM (`rpmrebuild`; NVR and SHA-256 recorded), the A3 archive, and the rehearsed database rollback path from PKG-10a/10b (Appendix 3) | Artifacts present beside each other; the header names the rehearsed path (down-migration, with the workdir-restore variant), its quiescence barrier and its post-upgrade-QSO handling | Only the RPM preserved — alpha.1 refuses the version-8 database and the rollback stalls mid-window | `ls -l` + SHA-256 + Appendix 3 results | none | pending |
+| `A3-04` | yes | **live** — pre-upgrade | Produce and verify all three rollback artifacts: the reconstructed alpha.1 RPM (`rpmrebuild`; NVR and SHA-256 recorded), the A3 archive, and the rehearsed database rollback path from PKG-10a/10b (Appendix 3) | Artifacts present beside each other; the header names the rehearsed path (down-migration, with the workdir-restore variant), its quiescence barrier and its post-upgrade-QSO handling | Only the RPM preserved — alpha.1 refuses the version-8 database and the rollback stalls mid-window | reconstructed RPM 2026-09-05 11:40Z (Execution log #6): `build/private/x86_64/station-manager-2.0.0~alpha.1.1238.gd9cd38ae.dirty-1.x86_64.rpm`, 7,359,884 B, mode 0600, SHA-256 `c4fd092f329980c32283e773e0311ab07e7ae5f621ff177362b88e9ca174a807`; exact NVR/arch and payload size/mtime/digest/mode/owner/group match; scripts/triggers/file capabilities match; regenerated-header differences recorded in the log; local/remote A3 archive hashes match; PKG-10a/10b still pending | none | pending |
 | `A3-05` | yes | **live** — Before starting B1 | Confirm rollback time is reserved before the station is next needed | Window recorded in "Operator parameters" | Upgrading right before an operating session | note | none | pending |
 | `A4-01` | yes | **record** — Record corrected; delta reviewed (A1-03) | **Ratify the case inventory:** confirm a decisive case exists for every applicable B1/B2/B3 bullet of the canonical gate; fill "Operator parameters (A4)" — browsers, viewport/zoom values, enabled integrations and permitted failure checks, reconnect/timeout tolerances, rollback rehearsal method and window; split any row that still hides several outcomes | Every A4 parameter filled (browsers, viewports/zoom, integrations and permitted failure checks, tolerances, rollback rehearsal/window, the ALARM-02 threshold, and FT8-10's threshold or its recorded BLOCKED/WAIVED disposition); no B row depends on an unstated threshold; hardware/RF approvals explicitly deferred | Executing B rows with tolerances decided ad hoc during the run, so `PASS`/`FAIL` cannot be judged consistently | this record's parameters section + operator initials/date | none | pending |
 | `A5-01` | yes | **live** — read-only: Old daemon still installed, SM Cloud forwarder enabled | Run the prepared read-only inventory (Appendix 1) for the SM Cloud forwarder's `qso_upload` rows whose status is not `uploaded` | Counts by status (`pending` / `in_progress` / `failed`) recorded here | Counting all forwarders' rows, not only SM Cloud's; or running the query with write access | Read-only/query-only inventory, 2026-09-05: zero non-`uploaded` SM Cloud rows; zero failed SM Cloud rows | none | pending (operator to confirm) |
@@ -744,8 +740,10 @@ QSO. The rehearsal has two lanes; neither touches the live working directory or 
 
 ## Appendix 4 — nspawn provisioning, access and login/logout (prepared, NOT executed)
 
-- Rootfs: `sudo dnf --installroot=/var/lib/machines/fedora44 --releasever=44 group install core`, then
-  `sudo dnf --installroot=/var/lib/machines/fedora44 --releasever=44 install python3 jq` — the verified
+- Rootfs: `sudo dnf --installroot=/var/lib/machines/fedora44 --releasever=44 --use-host-config group
+  install core`, then `sudo dnf --installroot=/var/lib/machines/fedora44 --releasever=44
+  --use-host-config install python3 jq` — `--use-host-config` is required because a new installroot has
+  no repository configuration of its own. The verified
   local `core` group ("Smallest possible installation": systemd, dnf, curl, iproute, shadow-utils and the
   other essentials) carries no Python, and PKG-10a's guarded migration and the count queries need
   `python3` (`jq` for the container-side config/count commands); plus whatever `install.md` lists as
@@ -801,8 +799,10 @@ Times UTC.
    `config.json.pre-evidence`, `db/`, `evidence.db`, `exports/`, `log/`) →
    `~/sm-backup/station-manager-pre-alpha2-20260905T1114Z.tar.gz`, 18,185,501 bytes, 0600,
    SHA-256 `066f769b38914ba8fed3cc31f7082d5b9f76ae6d3e169390dccab2f0cd0503b9`, 67 entries. Live files'
-   mtimes unchanged. Remote copy to the SMC LAN host + remote SHA: pending operator SSH details. If the
-   live daemon runs before B1, repeat A3-01 and A3-03.
+   mtimes unchanged. At 11:48Z the operator reported the prescribed SCP transfer to the private SMC
+   LAN host (exact endpoint retained outside the repository) and remote SHA-256
+   `066f769b38914ba8fed3cc31f7082d5b9f76ae6d3e169390dccab2f0cd0503b9`, an exact match. If the live
+   daemon runs before B1, repeat A3-01 and A3-03.
 4. **11:15Z — step 3b, A1-04 live-config preflight (Appendix 2).** Candidate SHA verified; `smd` extracted
    from the RPM (not installed); control run on a 0600 copy of the live config → **exit 0, "no
    unrecognised keys"** (the upgrade will not refuse on unknown keys); top-level `typo_key_b1_05` → exit 1
@@ -817,6 +817,49 @@ Times UTC.
    `forwarder_type` is `qrz` (LOG-09a's target); `operator_event` absent (schema 7). All figures equal
    the recorded A3-03 counts. The live WAL was fully checkpointed at archive time (0 bytes). Scratch
    config copies shredded, directory removed; live `config.json` mtime unchanged; `smd` inactive.
+6. **11:40Z — step 2, reconstructed alpha.1 rollback RPM.** After the operator installed
+   `rpmrebuild-2.21-2.fc44`, `rpmrebuild --batch --notest-install` ran as the ordinary user with its
+   temporary build tree under `/tmp`; it did not install the result. Output:
+   `build/private/x86_64/station-manager-2.0.0~alpha.1.1238.gd9cd38ae.dirty-1.x86_64.rpm`, 7,359,884
+   bytes, mode 0600, SHA-256 `c4fd092f329980c32283e773e0311ab07e7ae5f621ff177362b88e9ca174a807`;
+   `rpm -K` reports `digests OK`. NVR, epoch and architecture match the installed package exactly.
+   Every payload path's size, mtime, SHA-256, mode, RPM owner and RPM group match; package scripts,
+   triggers and file capabilities also match. Expected reconstruction-only header differences:
+   modern `rpmbuild` added five `rpmlib(...)` feature requirements and the architecture-qualified
+   provide, marked the two manual files `%doc`, and populated file classification metadata; it added
+   no runtime-library requirement and changed no payload byte or executable metadata. The sandbox
+   projects these installed root-owned files as `nobody:nobody`, producing `rpmrebuild`'s `UG` warning;
+   the earlier host `rpm -V` was clean, sandbox `rpm -V --nouser --nogroup` is clean, and the rebuilt
+   header correctly retains `root:root`. The optional final `rpm --test` was skipped because the
+   sandbox falsely reported insufficient `/` space; PKG-10a is the isolated real install/downgrade proof.
+7. **11:48Z — identity-change disposition.** During step 2, `main` and `origin/main` advanced from the
+   frozen candidate commit to intentional docs-only commit `564909e8` (`docs: add the alpha.2 dogfood
+   acceptance record and refresh the capsule`). The operator confirmed the commit was intentional;
+   candidate tag `v2.0.0-alpha.2^{}` and both frozen RPMs remain pinned to `b8e0356f`/the recorded SHA.
+8. **12:49Z — step 4, nspawn rootfs bootstrap.** The first `dnf --installroot` invocation stopped before
+   a transaction because the empty installroot supplied no repositories. The diagnostic required
+   `--use-host-config`; the operator reran the `core` group and `python3 jq` installs with that flag.
+   `machinectl list-images` now reports one writable directory image, `fedora44`, created at 13:52 CAT.
+   `/var/lib/machines` is mode 0700, so utility/package verification waits until the first container
+   shell. Live `smd` is inactive, no `smd` process exists, and host port 8080 is free. The
+   `/etc/systemd/nspawn/fedora44.nspawn` override is not yet present; do not start the container.
+9. **12:54Z — partial nspawn preparation, no candidate execution.** The operator created the
+   `VirtualEthernet=no` override; it was verified `root:root`, 0644, and the template's
+   `--settings=override` made it effective. `fedora44` booted Fedora 44 with `python3` and `jq`; it saw
+   the host interfaces and no `host0`, while live `smd` remained inactive and port 8080 remained free.
+   Dedicated user `smtest` had a 0700 home; baseline was 368 packages, no `station-manager` package and
+   no Station Manager working directory. `machinectl copy-to` was denied across the private-user
+   boundary, so the frozen RPM was copied once through `systemd-run --machine --pipe` (no bind mount):
+   9,053,968 bytes, 0644, `smtest:smtest`, SHA-256 `7b2fa20a…c24856` inside the container. Guest account
+   authentication then became test-harness work unrelated to Station Manager. The candidate RPM was
+   never installed or run.
+10. **13:34Z — operator scope reduction and nspawn retirement.** The operator accepted rebuild plus
+    working-directory restore or ADIF import as proportionate recovery for this personal dogfood host,
+    including possible metadata loss for ADIF-only recovery. The nspawn/failure-injection suite and
+    PKG-10a/10b were closed NOT EXECUTED, not passed. `fedora44` powered off cleanly; image deletion and
+    override removal require the operator's host `sudo`. Live alpha.1 remained installed and inactive;
+    no live data, candidate package, hardware or RF was touched. Deployment now waits for the
+    operator's fresh local stopped-daemon backup.
 
 ## Findings
 
