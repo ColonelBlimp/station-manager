@@ -277,7 +277,7 @@ first, with the commits that anchor each claim.
 | `A4-01` | yes | **record** — Record corrected; delta reviewed (A1-03) | **Ratify the case inventory:** confirm a decisive case exists for every applicable B1/B2/B3 bullet of the canonical gate; fill "Operator parameters (A4)" — browsers, viewport/zoom values, enabled integrations and permitted failure checks, reconnect/timeout tolerances, rollback rehearsal method and window; split any row that still hides several outcomes | Every A4 parameter filled (browsers, viewports/zoom, integrations and permitted failure checks, tolerances, rollback rehearsal/window, the ALARM-02 threshold, and FT8-10's threshold or its recorded BLOCKED/WAIVED disposition); no B row depends on an unstated threshold; hardware/RF approvals explicitly deferred | Executing B rows with tolerances decided ad hoc during the run, so `PASS`/`FAIL` cannot be judged consistently | this record's parameters section + operator initials/date | none | PASS — operator ratification 2026-09-05; the rollback-rehearsal and window parameters were retired the same day by the scope decision |
 | `A5-01` | yes | **live** — read-only: Old daemon still installed, SM Cloud forwarder enabled | Run the prepared read-only inventory (Appendix 1) for the SM Cloud forwarder's `qso_upload` rows whose status is not `uploaded` | Counts by status (`pending` / `in_progress` / `failed`) recorded here | Counting all forwarders' rows, not only SM Cloud's; or running the query with write access | Read-only/query-only inventory, 2026-09-05: zero non-`uploaded` SM Cloud rows; zero failed SM Cloud rows | none | PASS — operator ruling 2026-09-05 |
 | `A5-02` | yes | **live** — Non-uploaded rows exist | Let `pending`/`in_progress` drain under the **old** daemon; resolve each `failed` row individually | Zero non-uploaded SM Cloud rows before upgrading | Clearing the queue with the new Clear-queue action instead of draining | A5-01 found no applicable rows; no drain or queue mutation performed | none | N/A — no non-uploaded SM Cloud rows at A5-01, nothing to drain (operator ruling 2026-09-05) |
-| `A5-03` | yes | **live** — Zero non-uploaded rows | Proceed to B1; after upgrade confirm reconcile reports no `version_conflict` | No terminal failures attributable to the payload change | A `failed` row appearing right after upgrade (the false conflict A5 exists to prevent) | forwarder status view | none | pending |
+| `A5-03` | yes | **live** — Zero non-uploaded rows | Proceed to B1; after upgrade confirm reconcile reports no `version_conflict` | No terminal failures attributable to the payload change | A `failed` row appearing right after upgrade (the false conflict A5 exists to prevent) | pass 1: first periodic reconcile at 19:51:23 CAT (two minutes after boot, per `reconcileStartupDelay`): `in_sync: true`, local 7,468 = cloud 7,468, upserts 0, deletes 0, enqueued 0; `GET /v1/forwarder-queues` smcloud `clearable 0, in_flight 0` (qrz `clearable 1` is the pre-existing failed row); zero `version_conflict` records since the restart | none | pending (evidence recorded; operator to rule) |
 
 ## Gate B — deploy and accept
 
@@ -285,12 +285,12 @@ first, with the commits that anchor each claim.
 
 | ID | Required | Environment and starting state | Operator action | Expected visible result | Nearest confusable failure | Evidence | Extra approval | Result |
 |---|---|---|---|---|---|---|---|---|
-| `B1-01` | yes | **live** — old version running; A1-04, A3 and A5 done (PKG-10a/10b retired by the scope decision) | Upgrade per `install.md` §7: `sudo dnf install <candidate rpm>` over the existing install, then `systemctl --user daemon-reload`, then `systemctl --user restart smd` (no uninstall, no separate stop) | Package replaced while the old daemon runs; reload; restart observed; browser reconnects within the A4 tolerance | Install succeeds but the restart is skipped (old binary still serving); or a `dnf` scriptlet stops the service and leaves it stopped | transcript | none | pending — operator decision 2026-09-05: first pass with the old daemon **stopped** (install → daemon-reload → start), a recorded deviation from this row's running-daemon starting state; a second pass with the old daemon running is intended and must be defined before execution (Execution log #12) |
-| `B1-02` | yes | **live** — Upgraded dogfood station | **Repeat A1-02 here:** `/v1/version`, badge, startup log, `rpm -q`; then deliberately reload the open tab | All four read `2.0.0-alpha.2`; new UI; no old chunk served from cache | Old lazy-loaded chunk still executing in an unreloaded tab; badge from a cached tab | screenshot + log line | none | pending |
-| `B1-03` | yes | **live** — Upgraded | Confirm setup bypassed; config, rig, logbook, operator identity, theme/navigation, durable notifications retained | All present as before | First-run welcome shown (setup flag lost) or rig list empty | screenshots | none | pending |
-| `B1-04` | yes | **live** — Upgraded | Compare A3-03 counts; inspect startup/migration diagnostics for 0008 | Counts equal; migration to schema 8 logged once, no errors | Counts differ, or migration re-runs on every start | log excerpt + counts | none | pending |
-| `B1-05` | yes | **host-scratch** — immediately before B1-01, a fresh copy of the live `config.json` as it is at that moment | Re-run the A1-04 control check only (Appendix 2 steps 4–5) | Exit 0 | Non-zero: stop, fix the named key on the live file, re-run — a refusal cannot be waived because the candidate would not start | transcript | none | pending |
-| `B1-06` | yes | **live** — Upgraded | Controlled daemon restart | UI and event streams (rig/FT8/notifications SSE) recover without a manual reload, within the A4 reconnect tolerance | Streams stay dead until reload | screenshot of reconnected state | none | pending |
+| `B1-01` | yes | **live** — old version running; A1-04, A3 and A5 done (PKG-10a/10b retired by the scope decision) | Upgrade per `install.md` §7: `sudo dnf install <candidate rpm>` over the existing install, then `systemctl --user daemon-reload`, then `systemctl --user restart smd` (no uninstall, no separate stop) | Package replaced while the old daemon runs; reload; restart observed; browser reconnects within the A4 tolerance | Install succeeds but the restart is skipped (old binary still serving); or a `dnf` scriptlet stops the service and leaves it stopped | pass 1, 2026-09-05 17:40Z (Execution log #15): SHA verified by the operator; `sudo rpm -Uvh` replaced the package (`rpm -q` = `2.0.0~alpha.2-1`); `daemon-reload` + `start` issued with the old daemon stopped; the candidate then refused to start (B1-04, Finding #1) | none | pending — pass 1 mechanics done (deviation: old daemon stopped); the daemon-start refusal is ruled on B1-04; pass 2 per Appendix 5 after the config decision |
+| `B1-02` | yes | **live** — Upgraded dogfood station | **Repeat A1-02 here:** `/v1/version`, badge, startup log, `rpm -q`; then deliberately reload the open tab | All four read `2.0.0-alpha.2`; new UI; no old chunk served from cache | Old lazy-loaded chunk still executing in an unreloaded tab; badge from a cached tab | pass 1 after the operator's config fix (Execution log #16): `GET /v1/version` → `2.0.0-alpha.2`, `env` release, schema `{8, dirty:false}`; `rpm -q` = `2.0.0~alpha.2-1`; every daemon log record stamped `"version":"2.0.0-alpha.2"`; `/v1/healthz` 200 `database ok, logging ok`; sidebar badge read `2.0.0-alpha.2` and the deliberate tab reload served the new UI — operator, Firefox, 17:56Z | none | pending (all four evidenced; operator to rule) |
+| `B1-03` | yes | **live** — Upgraded | Confirm setup bypassed; config, rig, logbook, operator identity, theme/navigation, durable notifications retained | All present as before | First-run welcome shown (setup flag lost) or rig list empty | pass 1: `GET /v1/config` `setup_complete: true`, default logbook id 1 (`7Q5MLV`) retained, forwarders clublog/qrz/smcloud enabled and qrzcq disabled as before; `/v1/notifications` 0 items and `operator_event` 0 rows — the durable table is new at schema 8, so nothing pre-existing could be retained in it; operator walk in Firefox 18:05Z: dashboard, not first-run; General/Station identity, the FTdx10 rig entry, the four forwarder entries, the logbook, theme and navigation all as before (Findings #3 and #4 noted, neither a retention loss) | none | pending (all items evidenced; operator to rule) |
+| `B1-04` | yes | **live** — Upgraded | Compare A3-03 counts; inspect startup/migration diagnostics for 0008 | Counts equal; migration to schema 8 logged once, no errors | Counts differ, or migration re-runs on every start | pass 1 (Execution log #15/#16): migration 0008 applied at the first start 19:40 CAT — `schema_migrations_log` `(8, 0)`, `operator_event` present; later starts log `databases open and migrated` with nothing to apply; counts equal A3-03 (7,468 QSOs, 0 deleted; queue clublog 1,695 uploaded, qrz 2,010 uploaded + 1 failed, smcloud 9,384 uploaded); the first-start refusal (Finding #1) was cleared by the operator setting `allow_insecure_http` on the smcloud forwarder; after the 19:49 restart no error records, only the expected warnings (bridge RTS/DTR-at-open notice, the smcloud cleartext acknowledgement, rig quiet) | none | pending — FAIL at the first start (Finding #1), clean after the operator's config decision; operator to rule with the deviation |
+| `B1-05` | yes | **host-scratch** — immediately before B1-01, a fresh copy of the live `config.json` as it is at that moment | Re-run the A1-04 control check only (Appendix 2 steps 4–5) | Exit 0 | Non-zero: stop, fix the named key on the live file, re-run — a refusal cannot be waived because the candidate would not start | run 2026-09-05 17:31Z (Execution log #13): candidate SHA verified; `smd` extracted from the RPM, never installed; control on a fresh 0600 copy of the live `config.json` → exit 0 "no unrecognised keys"; `smd` inactive with no process before and after; live `config.json` mtime unchanged (2026-08-18 14:01:28); working-directory fingerprint (67 entries, paths/mtimes/sizes) unchanged; scratch held only the copy and the binary, shredded and removed | none | pending (evidence recorded; operator to rule) |
+| `B1-06` | yes | **live** — Upgraded | Controlled daemon restart | UI and event streams (rig/FT8/notifications SSE) recover without a manual reload, within the A4 reconnect tolerance | Streams stay dead until reload | pass 1, operator-run `systemctl --user restart smd` at 20:10:20 CAT (Execution log #17): daemon log shows `shutdown signal received` → `HTTP server draining` → bridge/refresher/ft8/evidence stopped → `smd stopped` → `smd starting` all within the same second; `HTTP server listening` 20:10:22; two `sse: subscriber connected` records and `ft8: subscriber present` at 20:10:25 — the open page's streams re-subscribed within about five seconds without a reload; no errors after the restart; `/v1/version`, `/v1/healthz` and `/v1/forwarder-queues` unchanged; operator confirmed 18:14Z: the page recovered on its own, no manual reload; streams back about three seconds after the daemon answered, within the ratified five-second SSE tolerance | none | pending (all evidenced; operator to rule) |
 
 ### B2 — surface inventory (one decisive row per outcome)
 
@@ -785,6 +785,77 @@ QSO. The rehearsal has two lanes; neither touches the live working directory or 
   transferring the frozen RPM in (`machinectl copy-to fedora44 <rpm> /home/smtest/`), then verify its
   SHA-256 inside the container before `sudo dnf install`.
 
+## Appendix 5 — B1-01 two-pass upgrade (operator decision 2026-09-05; prepared, NOT executed)
+
+The operator chose to install first with the old daemon **stopped**, then revert and upgrade again
+with the old daemon **running** (Execution log #14). Facts checked read-only beforehand: neither RPM
+carries scriptlets (`rpm -qp --scripts` is empty for the candidate and for the reconstructed
+alpha.1); the payload is `/usr/bin/smd`, `/usr/bin/smctl`, `/usr/lib/systemd/user/smd.service` and
+the manual; the unit sets `Restart=on-failure`, `SM_SELF_RESTART=1` and no `ExecStop`. A package
+swap therefore never stops or starts the service by itself, and a running process keeps the replaced
+binary's inode until `systemctl --user restart smd`. The revert is the rollback path the operator
+retired as a rehearsal, now executed live by operator decision on the operator's stopped-daemon
+copy; it is authorized for this purpose only.
+
+**Rule for the whole sequence:** log no QSO and change no setting between pass 1 and the revert —
+the revert discards everything written after the operator's copy. Hardware, rig commands and RF stay
+unauthorized throughout.
+
+### Pass 1 — old daemon stopped (B1-01 with the recorded deviation)
+
+1. Precondition: `smd` inactive and no process (true at 17:31Z); B1-05 exit 0 (Execution log #13);
+   the operator's copy of `~/.local/share/station-manager` in hand.
+
+2. `sha256sum build/private/station-manager-2.0.0~alpha.2-1.x86_64.rpm` → `7b2fa20a…c24856`.
+
+3. Operator sudo: `sudo rpm -Uvh build/private/station-manager-2.0.0~alpha.2-1.x86_64.rpm` — the
+   candidate NVR sorts after the installed one, so no `--oldpackage`.
+
+4. `systemctl --user daemon-reload && systemctl --user start smd`.
+
+5. Read-only smoke checks, recorded on B1-02..B1-04, B1-06 and A5-03: `rpm -q station-manager` =
+   `2.0.0~alpha.2-1`; `systemctl --user is-active smd`; the startup log line with version
+   `2.0.0-alpha.2` and the migration to schema 8; `GET /v1/version`; the Appendix 1 read-only counts
+   — 7,468 QSOs, upload queue 13,089 uploaded / 1 failed, `operator_event` now present; the sidebar
+   build badge in Firefox (operator); forwarder reconcile with no `version_conflict`.
+
+### Revert — restore the copy, reinstall alpha.1
+
+1. `systemctl --user stop smd`; verify `is-active` prints `inactive`, `pgrep -x smd` prints nothing,
+   and `fuser` on the log database is silent.
+
+2. Keep the pass-1 working directory: `mv ~/.local/share/station-manager
+   ~/sm-backup/station-manager-post-pass1-<UTC stamp>` (directory mode 0700).
+
+3. Restore: `cp -a <operator copy> ~/.local/share/station-manager`. Verify the path/mtime/size
+   fingerprint of the 67 entries equals the pre-upgrade `d73e4ad36b7934de` (Execution log #13) and
+   the log database SHA-256 equals the archived `0c7028a2…` (Execution log #11); `config.json` mode
+   0600.
+
+4. `sha256sum build/private/x86_64/station-manager-2.0.0~alpha.1.1238.gd9cd38ae.dirty-1.x86_64.rpm`
+   → `c4fd092f…4a807`; operator sudo: `sudo rpm -Uvh --oldpackage
+   build/private/x86_64/station-manager-2.0.0~alpha.1.1238.gd9cd38ae.dirty-1.x86_64.rpm`; `rpm -q
+   station-manager` = `2.0.0~alpha.1.1238.gd9cd38ae.dirty-1`.
+
+5. `systemctl --user daemon-reload && systemctl --user start smd`; verify version alpha.1, schema
+   `(7, 0)` and the A3-03 counts. Any failure in the revert: stop; the pass-1 directory moved aside
+   and the operator's copy both remain, and recovery follows the header policy.
+
+### Pass 2 — old daemon running (B1-01 exactly as written, `install.md` §7)
+
+1. alpha.1 active with the app open in Firefox (operator).
+
+2. Operator sudo: `sudo dnf install ./build/private/station-manager-2.0.0~alpha.2-1.x86_64.rpm` —
+   the documented command. `rpm -q` shows alpha.2 while the alpha.1 process keeps serving; that is
+   the expected state until the restart.
+
+3. `systemctl --user daemon-reload`, then `systemctl --user restart smd`; the browser reconnects
+   within the A4 tolerance.
+
+4. Repeat the pass-1 smoke checks; the migration 7→8 runs again on the restored database.
+
+5. B1-01 is ruled on pass 2; the pass-1 evidence stays on the row as the recorded deviation.
+
 ## Execution log — Gate A (ratified 2026-09-05 through A4-01; no Gate B, no hardware/RF)
 
 Command-line checkpoints run by the coder under the resume contract; the operator rules every result.
@@ -888,6 +959,67 @@ Times UTC.
     the reconstructed RPM — which is the retired rollback path executed live. The operator defines
     that pass before it runs; nothing beyond the first pass is authorized by this entry. Station
     unchanged: alpha.1 installed and inactive; no hardware or RF.
+13. **17:31Z — B1-05 live-config preflight (Appendix 2, control only).** Operator direction: run
+    B1-05 now. Scratch `~/sm-b1-05-scratch` created 0700; candidate RPM SHA-256
+    `7b2fa20a247ee0980667fe9b09e02a2a6c458b772c25f40d85e5cf48c7c24856` verified; `usr/bin/smd`
+    (22,509,600 bytes) extracted with `rpm2cpio | cpio`, not installed; a fresh copy of the live
+    `config.json` (6,919 bytes) taken with `cp -p` and set 0600. Control: `smd config-check
+    --config` → **exit 0, "no unrecognised keys; startup would not refuse for unknown keys"**.
+    Isolation: `smd` inactive and no process before and after; live `config.json` mtime unchanged
+    (2026-08-18 14:01:28); a path/mtime/size fingerprint of the whole working directory (67 entries)
+    identical before and after; the scratch area held only `config.live.json` and `usr/bin/smd`, the
+    copy shredded and the directory removed. The mutation checks were not repeated (proved at A1-04;
+    the candidate binary is unchanged). Nothing installed; no hardware or RF.
+14. **17:37Z — B1-01 two-pass decision.** The operator chose: install with the old daemon stopped,
+    then revert and try it with the old daemon running. Read-only facts gathered: no scriptlets in
+    either RPM; payload `/usr/bin/smd`, `/usr/bin/smctl`, the user unit and the manual; unit
+    `Restart=on-failure`, `SM_SELF_RESTART=1`, no `ExecStop`; reconstructed alpha.1 RPM SHA-256
+    re-verified `c4fd092f329980c32283e773e0311ab07e7ae5f621ff177362b88e9ca174a807`. Procedure
+    written as Appendix 5. The revert is the retired rollback path executed live by operator
+    decision on the operator's stopped-daemon copy, with no QSO logging or settings change between
+    pass 1 and the revert. Station still unchanged; pass-1 step 3 waits for the operator's sudo.
+15. **17:40Z — pass 1: package swap OK, candidate refused to start.** The operator verified the
+    candidate SHA and ran `sudo rpm -Uvh`, `daemon-reload` and `start` with the old daemon stopped;
+    `rpm -q` = `2.0.0~alpha.2-1`. Journal: `Started smd.service` 19:40:10 CAT, then every attempt
+    exited status 1 with `smcloud.New: credentials.url must use https, or http to a loopback host;
+    set allow_insecure_http to accept cleartext http to a remote host`; five attempts, then `Start
+    request repeated too quickly`; unit `ActiveState=failed`, `NRestarts=5`, no process. Read-only
+    inspection (`mode=ro`): `schema_migrations_log` `(8, 0)`, `operator_event` present, `qso` 7,468
+    / 0 deleted, `qso_upload` 13,089 uploaded / 1 failed — migration clean, counts equal A3-03. The
+    daemon log shows the clublog and qrz workers started before the smcloud build failed and the
+    subsystems stopped cleanly. Working directory now differs from the pre-upgrade fingerprint:
+    `config.json` rewritten (version 2 → 3, +20 key paths, Finding #2), `pskreporter.id` created,
+    `log/smd.log` and the databases touched. **The live log database is at schema 8, so alpha.1 can
+    no longer start on it; the operator's copy is now the only way back to alpha.1.** Forwarder
+    inventory (index/type only): 0 clublog, 1 qrz, 2 smcloud (url scheme http, `allow_insecure_http`
+    unset), 3 qrzcq (disabled). Nothing changed by me; no hardware or RF. Waiting for the operator's
+    config decision (Finding #1).
+16. **17:49Z–17:51Z — pass 1 completed after the operator's config decision.** The operator set
+    `allow_insecure_http: true` on the `smcloud` forwarder (config mode 0600 kept, mtime 19:49:16
+    CAT), reset the unit and started it at 19:49:22 CAT: `active (running)`, `NRestarts=0`, one
+    process, listener `127.0.0.1:8080` only (`ss -ltnp`). Startup: `databases open and migrated`,
+    clublog/qrz/smcloud workers started, `smcloud reconciler started`; the smcloud cleartext warning
+    logged once as designed. Read-only checks: `/v1/version` `2.0.0-alpha.2` schema 8 clean;
+    `/v1/healthz` ok; `/v1/config` `setup_complete` true with the default logbook and forwarders
+    retained; `/v1/notifications` empty (new durable table); `mode=ro` counts equal A3-03;
+    `/v1/forwarder-queues` smcloud 0/0; first reconcile `in_sync: true` 7,468 = 7,468 with zero
+    `version_conflict`. Passive observation: the bridge opened the configured CAT port for the
+    station's `yaesu-ftdx10` driver at boot as it always does and reported the rig quiet (liveness
+    strike 1); no rig command, keying or RF was initiated. Remaining pass-1 items are the operator's
+    Firefox checks (B1-02 badge + reload, B1-03 rig/theme/navigation) and the controlled restart
+    B1-06 with the UI open. No QSO logged, no setting changed beyond the acknowledgement.
+17. **18:10Z–18:12Z — B1-06 controlled restart (operator-run).** `systemctl --user restart smd` at
+    20:10:20 CAT with the app open in Firefox. Teardown and start completed within one second
+    (drain, subsystems stopped, `smd stopped`, `smd starting`, migrations nothing-to-apply,
+    `databases open and migrated`); `HTTP server listening` at 20:10:22; forwarder workers and the
+    smcloud reconciler restarted; `sse: subscriber connected` ×2 and `ft8: subscriber present` by
+    20:10:25, i.e. the page's event streams re-subscribed within about five seconds. Only the two
+    expected warnings after the restart. Endpoints unchanged: version `2.0.0-alpha.2` schema 8,
+    health ok, queues smcloud 0/0. Passive observations, no action taken: the bridge reports
+    `AUTO-mode CAT data flow active` on the configured FTdx10 port, and the FT8 subsystem started
+    audio capture and live decoding because the open page holds an FT8 event subscription — receive
+    only; nothing armed, keyed or transmitted. Pass 1 now has every B1 row evidenced; rulings are
+    the operator's.
 
 ## Findings
 
@@ -897,4 +1029,7 @@ durable work through the backlog.
 
 | # | Case | Observation (sanitized) | Triage | Destination |
 |---|---|---|---|---|
-| — | — | — | — | — |
+| 1 | B1-04 (pass 1) | The candidate exits at startup: the SM Cloud forwarder's `credentials.url` is cleartext http to a non-loopback host and `allow_insecure_http` is unset, so `smcloud.New` refuses (`securehttp.CheckCredentialedURL`, ST-4a, `cf269984`); the orchestrator fails the `workers` start and the process exits 1; systemd's start limit stops the loop after five tries. The delta named the policy ("SM Cloud LAN cleartext needs an explicit acknowledgement") but nobody mapped it onto this station's config, and `smd config-check` validates keys, not forwarder construction. | planned behaviour, unmapped at A1-03; remediation is an operator config decision (`allow_insecure_http: true` on the `smcloud` forwarder, file-only, or an https endpoint); follow-up candidate: make `config-check` run forwarder construction so a policy refusal surfaces at A1-04/B1-05 | operator: config decision now; backlog: config-check policy coverage |
+| 2 | B1-04 (pass 1) | Before failing, the candidate migrated the live `config.json` from `version` 2 to 3 (`currentConfigVersion` 2 → 3 between `d9cd38ae` and the candidate, `3c45fc48`) and rewrote it: +20 key paths (forwarder 3 overrides `action_filter`/`batch_size`/`endpoints.insert`/`tick_interval_sec`, `lookup.chain.*.priority`, a second `lookup.chain` entry with `url`/`view_url`/`username`/`password`/`timeout_sec`/`enabled`/`name`, `lookup.continue_if_blank`), size 6,919 → 7,472 bytes, mtime now 2026-09-05 19:40 CAT; a new 10-byte `pskreporter.id` appeared. The delta's "No config.json version migration was added" is wrong. | documentation correction (delta, Migrations section) + operator to inspect the added values before pass 2; the rewrite is expected crash-durable behaviour, the delta statement is not | record: correct the delta; operator: inspect values |
+| 3 | B1-03 (pass 1, Settings → Rigs) | The default rig profile shows an enabled Delete button (not pressed). Operator expectation: the default rig must not be deletable; the default must be changed first. Code, read-only: the SPA disables Delete only for the only rig (`RigsSection.svelte:42`, `rigs.svelte.ts:560`); deleting the default rig is deliberate — `deleteRig` repoints `default_rig_id` to the first surviving rig because the daemon refuses an unresolvable default (`config.Validate` re-checked under the config lock, `handler_config.go:758`), so no dangling-default or data-loss path exists; the delete is confirm-dialog-guarded and has no undo. | working-as-designed mechanically (auto-repoint, server validates); the operator's expectation is a UX-policy change — disable Delete on the default rig with a reason, require an explicit default change first | inbox note 2026-09-05 logged; operator to triage → backlog if the policy change is wanted |
+| 4 | B1-03 (pass 1, sidebar) | The sidebar Manual link (`Sidebar.svelte:169`, `href="/manual/"`) opens in the same tab, navigating away from the app; the operator expects a new tab. The sidebar already opens another link with `target="_blank"`, so the pattern exists in the file. | UX defect, low severity; fix is `target="_blank" rel="noopener"` on that anchor | inbox note 2026-09-05 logged; operator to triage → backlog |
