@@ -22,11 +22,12 @@ export type RigTuneOutcome =
     | { kind: 'validation'; code: string; message: string }
     | { kind: 'server'; code: string; message: string }
     | { kind: 'aborted'; message: string }
-    // `timedOut` marks the AMBIGUOUS write (F-04 confirm-by-push, ADR 0078): the
-    // POST reached the daemon and its 202 was lost, so the carrier may already
-    // have keyed/dropped. The seam MUST reconcile against the tune-state SSE
-    // rather than declaring a failure. A non-timeout network error carries no
-    // marker (not proven to have committed OR failed).
+    // `timedOut` marks the AMBIGUOUS write (F-04 confirm-by-push, ADR 0078): no
+    // response arrived before the deadline, which proves only that — the request
+    // may or may not have reached the daemon, so the carrier may already have
+    // keyed/dropped, or nothing may have happened. The seam MUST reconcile
+    // against the tune-state SSE rather than declaring a failure. A non-timeout
+    // network error carries no marker (not proven to have committed OR failed).
     | { kind: 'network'; message: string; timedOut?: boolean };
 
 interface DaemonError {

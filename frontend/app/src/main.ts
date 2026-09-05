@@ -15,7 +15,6 @@ import {
     setOperatingBands,
     setFt8Frequencies,
     setFt8Mode,
-    type RigSendOutcome,
 } from './lib/operate/rig.svelte';
 import { openRigEvents } from './lib/api/rig-sse';
 import {
@@ -67,12 +66,13 @@ import {
     noteRigReport,
 } from './lib/operate/modeRestore.svelte';
 import { completeSetup } from './lib/api/setup';
-import { sendRigTune, type RigTuneOutcome } from './lib/api/rig-tune';
-import { sendRigCommand, type RigCommandOutcome } from './lib/api/rig-command';
+import { sendRigTune } from './lib/api/rig-tune';
+import { sendRigCommand } from './lib/api/rig-command';
 import {
     apiEnrich,
     apiHistory,
     normalizeFt8ArmSend,
+    normalizeRigSend,
     fetchStationContext,
     fetchLogbookCount,
     type StationContext,
@@ -309,25 +309,6 @@ function applyStationIdentity(operator: string, grid: string, stationCallsign: s
     setMyGrid(grid); // enrichment bearing/distance display ('' hides the row)
     setFt8OperatorCall(stationCallsign); // Band Activity "calling us" flags
     setFt8MyGrid(grid); // Band Activity per-CQ bearing origin
-}
-
-// Normalise a rig-tune / rig-command client outcome to the transport shape the
-// confirm-by-push seams reconcile (F-04): a 202 is accepted; an HTTP status is a
-// definite refusal; a fired timeout is AMBIGUOUS (reconcile via SSE); a non-timeout
-// network error is neither a refusal nor proven done.
-function normalizeRigSend(o: RigTuneOutcome | RigCommandOutcome): RigSendOutcome {
-    switch (o.kind) {
-        case 'ok':
-            return { kind: 'accepted' };
-        case 'network':
-            return o.timedOut
-                ? { kind: 'timedOut', message: o.message }
-                : { kind: 'transport', message: o.message };
-        case 'aborted':
-            return { kind: 'transport', message: o.message };
-        default: // validation | server — the daemon answered: a definite rejection
-            return { kind: 'refused', message: o.message };
-    }
 }
 
 function applyStationContext(c: StationContext): void {

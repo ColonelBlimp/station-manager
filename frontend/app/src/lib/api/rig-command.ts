@@ -21,10 +21,12 @@ export type RigCommandOutcome =
     | { kind: 'validation'; code: string; message: string }
     | { kind: 'server'; code: string; message: string }
     | { kind: 'aborted'; message: string }
-    // `timedOut` marks the AMBIGUOUS write (F-04 confirm-by-push, ADR 0078): the
-    // POST reached the daemon and its 202 was lost, so the rig may already have
-    // moved. The seam MUST reconcile against the rig-state SSE (watched ops) or
-    // resolve to unknown (contract-only ops) rather than declaring a failure.
+    // `timedOut` marks the AMBIGUOUS write (F-04 confirm-by-push, ADR 0078): no
+    // response arrived before the deadline, which proves only that — the request
+    // may or may not have reached the daemon, so the rig may already have moved,
+    // or nothing may have happened. The seam MUST reconcile against the rig-state
+    // SSE (watched ops) or resolve to unknown (contract-only ops) rather than
+    // declaring a failure.
     | { kind: 'network'; message: string; timedOut?: boolean };
 
 interface DaemonError {

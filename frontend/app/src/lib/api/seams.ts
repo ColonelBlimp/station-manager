@@ -2,9 +2,17 @@
 // real counterparts of lib/dev/*Stub.ts, injected in main.ts (ADR 0045: the
 // state modules never import this layer).
 //
-// Mapping posture is fail-soft throughout: any non-ok outcome collapses to
-// null / '' and the UI shows its empty state — enrichment never blocks
-// logging, and a daemon hiccup is never an operator-facing error here.
+// Two mapping postures live here, by what the operator can lose:
+//
+// - READ adapters (enrichment, contact history, station context, logbook
+//   count) are fail-soft: any non-ok outcome collapses to null / '' / [] and
+//   the UI shows its empty state — enrichment never blocks logging, and a
+//   daemon hiccup is never an operator-facing error here.
+// - WRITE adapters (the normalize*Send mappers for the rig tune / command and
+//   FT8 arm seams) PRESERVE the outcome: a refusal stays refused, a network
+//   failure stays transport, and a fired timeout passes through as timedOut so
+//   the action module can reconcile it against pushed state (F-04, ADR 0078).
+//   A write must never collapse to "nothing happened" — it may have.
 
 import { enrichCallsign } from './enrichment';
 import { fetchContactHistory, type ContactHistory } from './contact-history';
@@ -16,9 +24,11 @@ function numOr(v: unknown, fallback: number): number {
 }
 import type { Enrichment } from '../operate/enrich.svelte';
 import type { WorkedQso } from '../operate/worked.svelte';
-import type { AdifModePair } from '../operate/rig.svelte';
+import type { AdifModePair, RigSendOutcome } from '../operate/rig.svelte';
 import type { Ft8ArmSendOutcome } from '../operate/ft8.svelte';
 import type { Ft8TxOutcome } from './ft8tx';
+import type { RigTuneOutcome } from './rig-tune';
+import type { RigCommandOutcome } from './rig-command';
 
 /** Real enricher for setEnricher — GET /v1/enrich/callsign. The signal lets a
  *  superseded lookup cancel its in-flight daemon/upstream request. */
@@ -359,6 +369,34 @@ function toModeMappings(v: unknown): Record<string, AdifModePair> {
  * composition path is tested, not only its inputs (review P2, 2026-09-05).
  */
 export function normalizeFt8ArmSend(o: Ft8TxOutcome): Ft8ArmSendOutcome {
+    switch (o.kind) {
+        case 'ok':
+            return { kind: 'accepted' };
+        case 'network':
+            return o.timedOut
+                ? { kind: 'timedOut', message: o.message }
+                : { kind: 'transport', message: o.message };
+        case 'aborted':
+            return { kind: 'transport', message: o.message };
+        default: // validation | server — the daemon answered: a definite rejection
+            return { kind: 'refused', message: o.message };
+    }
+}
+
+/**
+ * RIG TUNE / COMMAND seam (F-04 confirm-by-push, ADR 0078): normalise a rig-tune
+ * or rig-command client outcome to the transport shape rig.svelte's per-lane
+ * watch reconciles. A 202 is accepted; an HTTP status is a definite refusal (the
+ * daemon answered); a FIRED timeout is AMBIGUOUS — no response arrived, so the
+ * request may or may not have reached the daemon — and passes through as
+ * timedOut for the watch to reconcile against the tune-state / rig-state SSE (or
+ * resolve to unknown on a contract-only op); a non-timeout network error or an
+ * abort is transport (proven neither committed nor refused). Both rig senders
+ * route through it. Pure and exported so the real composition path is tested,
+ * not only its inputs — the same gap review P2 (2026-09-05) closed on the FT8
+ * arm seam.
+ */
+export function normalizeRigSend(o: RigTuneOutcome | RigCommandOutcome): RigSendOutcome {
     switch (o.kind) {
         case 'ok':
             return { kind: 'accepted' };

@@ -11,6 +11,7 @@ import {
     fetchStationContext,
     fetchLogbookCount,
     normalizeFt8ArmSend,
+    normalizeRigSend,
 } from './seams';
 import type { ContactHistory } from './contact-history';
 
@@ -392,5 +393,57 @@ describe('normalizeFt8ArmSend — arm seam transport mapping (F-04)', () => {
         expect(
             normalizeFt8ArmSend({ kind: 'server', code: 'rig_not_ready', message: 'rig not ready' })
         ).toEqual({ kind: 'refused', message: 'rig not ready' });
+    });
+});
+
+// F-04 confirm-by-push: the RIG tune / command seam's PRODUCTION mapper — the
+// same gap review P2 (2026-09-05) closed on the FT8 arm seam. The rig-tune /
+// rig-command API tests prove `timedOut` is emitted and rig.svelte's tests inject
+// it, but the mapper between them was untested: a wrong timeout branch would make
+// the real app skip reconciliation and toast an immediate error while every
+// focused test stayed green. Both senders route through this one function.
+describe('normalizeRigSend — rig tune/command seam transport mapping (F-04)', () => {
+    it('a 202 is accepted', () => {
+        expect(normalizeRigSend({ kind: 'ok' })).toEqual({ kind: 'accepted' });
+    });
+
+    it('a FIRED timeout passes through as timedOut — the lane watch reconciles it; the app must not fail it', () => {
+        expect(
+            normalizeRigSend({ kind: 'network', message: 'request timed out', timedOut: true })
+        ).toEqual({ kind: 'timedOut', message: 'request timed out' });
+    });
+
+    it('a non-timeout network failure is transport — neither timedOut nor refused', () => {
+        expect(normalizeRigSend({ kind: 'network', message: 'Failed to fetch' })).toEqual({
+            kind: 'transport',
+            message: 'Failed to fetch',
+        });
+        expect(normalizeRigSend({ kind: 'network', message: 'x', timedOut: false }).kind).toBe(
+            'transport'
+        );
+    });
+
+    it('an abort is transport', () => {
+        expect(normalizeRigSend({ kind: 'aborted', message: 'aborted' })).toEqual({
+            kind: 'transport',
+            message: 'aborted',
+        });
+    });
+
+    it('a 4xx / 5xx is a definite refusal carrying the daemon message', () => {
+        expect(
+            normalizeRigSend({
+                kind: 'validation',
+                code: 'rig_invalid_value',
+                message: 'bad value',
+            })
+        ).toEqual({ kind: 'refused', message: 'bad value' });
+        expect(
+            normalizeRigSend({
+                kind: 'server',
+                code: 'rig_not_connected',
+                message: 'rig not connected',
+            })
+        ).toEqual({ kind: 'refused', message: 'rig not connected' });
     });
 });

@@ -19,12 +19,13 @@ function mockJSON(status: number, body: unknown) {
     );
 }
 
-// F-04 confirm-by-push (ADR 0078): a rig-command POST whose 202 was lost to a
-// FIRED timeout is AMBIGUOUS — the rig may already have moved — so sendRigCommand
-// must carry `timedOut` on its network arm for the seam to reconcile against the
-// rig-state SSE (watched ops) or resolve to unknown (contract-only ops), never a
-// definite failure. An HTTP status is a definite answer; a non-timeout transport
-// failure is unmarked.
+// F-04 confirm-by-push (ADR 0078): a rig-command POST that hits a FIRED timeout is
+// AMBIGUOUS — no response arrived, and that proves only that: the request may or
+// may not have reached the daemon, and the rig may already have moved — so
+// sendRigCommand must carry `timedOut` on its network arm for the seam to
+// reconcile against the rig-state SSE (watched ops) or resolve to unknown
+// (contract-only ops), never a definite failure. An HTTP status is a definite
+// answer; a non-timeout transport failure is unmarked.
 describe('sendRigCommand — timed-out write is ambiguous (F-04 confirm-by-push)', () => {
     it('marks a fired timeout as timedOut', async () => {
         vi.stubGlobal(

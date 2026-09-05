@@ -19,8 +19,9 @@ function mockJSON(status: number, body: unknown) {
     );
 }
 
-// F-04 confirm-by-push (ADR 0078): a rig-tune POST whose response was lost to a
-// FIRED timeout is AMBIGUOUS — the daemon may already have keyed/dropped the
+// F-04 confirm-by-push (ADR 0078): a rig-tune POST that hits a FIRED timeout is
+// AMBIGUOUS — no response arrived, and that proves only that: the request may or
+// may not have reached the daemon, which may already have keyed/dropped the
 // carrier — so sendRigTune must carry `timedOut` on its `network` arm for the
 // seam to reconcile against the tune-state SSE, rather than flattening it into a
 // bare network error the caller renders as a definite failure. Only a fired
