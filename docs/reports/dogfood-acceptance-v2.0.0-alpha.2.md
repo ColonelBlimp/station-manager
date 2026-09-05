@@ -46,8 +46,9 @@ forward fix or rebuild from the repository and restore/import. The operator acce
 recovery can lose Station Manager-specific metadata. PKG-10a/10b and the formal package downgrade are
 not executed; Appendix 3 remains a prepared record, not a rehearsed claim.
 
-Ready to deploy: pending
-Operator/date:
+Ready to deploy: PASS — under the 2026-09-05 scope reduction (clean-install suite and rollback rehearsal
+NOT EXECUTED by operator risk acceptance; recovery is the stopped-daemon working-directory copy or ADIF import)
+Operator/date: 7Q5MLV, 2026-09-05
 
 Dogfood accepted: pending
 Operator/date:
@@ -284,7 +285,7 @@ first, with the commits that anchor each claim.
 
 | ID | Required | Environment and starting state | Operator action | Expected visible result | Nearest confusable failure | Evidence | Extra approval | Result |
 |---|---|---|---|---|---|---|---|---|
-| `B1-01` | yes | **live** — old version running; A1-04, A3 and A5 done (PKG-10a/10b retired by the scope decision) | Upgrade per `install.md` §7: `sudo dnf install <candidate rpm>` over the existing install, then `systemctl --user daemon-reload`, then `systemctl --user restart smd` (no uninstall, no separate stop) | Package replaced while the old daemon runs; reload; restart observed; browser reconnects within the A4 tolerance | Install succeeds but the restart is skipped (old binary still serving); or a `dnf` scriptlet stops the service and leaves it stopped | transcript | none | pending |
+| `B1-01` | yes | **live** — old version running; A1-04, A3 and A5 done (PKG-10a/10b retired by the scope decision) | Upgrade per `install.md` §7: `sudo dnf install <candidate rpm>` over the existing install, then `systemctl --user daemon-reload`, then `systemctl --user restart smd` (no uninstall, no separate stop) | Package replaced while the old daemon runs; reload; restart observed; browser reconnects within the A4 tolerance | Install succeeds but the restart is skipped (old binary still serving); or a `dnf` scriptlet stops the service and leaves it stopped | transcript | none | pending — operator decision 2026-09-05: first pass with the old daemon **stopped** (install → daemon-reload → start), a recorded deviation from this row's running-daemon starting state; a second pass with the old daemon running is intended and must be defined before execution (Execution log #12) |
 | `B1-02` | yes | **live** — Upgraded dogfood station | **Repeat A1-02 here:** `/v1/version`, badge, startup log, `rpm -q`; then deliberately reload the open tab | All four read `2.0.0-alpha.2`; new UI; no old chunk served from cache | Old lazy-loaded chunk still executing in an unreloaded tab; badge from a cached tab | screenshot + log line | none | pending |
 | `B1-03` | yes | **live** — Upgraded | Confirm setup bypassed; config, rig, logbook, operator identity, theme/navigation, durable notifications retained | All present as before | First-run welcome shown (setup flag lost) or rig list empty | screenshots | none | pending |
 | `B1-04` | yes | **live** — Upgraded | Compare A3-03 counts; inspect startup/migration diagnostics for 0008 | Counts equal; migration to schema 8 logged once, no errors | Counts differ, or migration re-runs on every start | log excerpt + counts | none | pending |
@@ -877,6 +878,16 @@ Times UTC.
     — scope retired by operator risk acceptance. FT8-10 keeps its ratified BLOCKED disposition
     rather than the nspawn closure. A5-03 and B1-05 stay pending until the upgrade. **Ready to
     deploy** is left `pending` for the operator's own entry. No install, hardware or RF.
+12. **17:23Z — Ready to deploy entered.** The operator ruled **Ready to deploy: PASS** under the
+    2026-09-05 scope reduction; the header carries the ruling and date. Deployment plan as stated by
+    the operator: upgrade first with the old daemon stopped (`rpm -Uvh` the frozen candidate →
+    `daemon-reload` → `start`), then test again with the old daemon started. Constraint recorded for
+    that second pass: alpha.1 refuses a log database already migrated to schema 8 (golang-migrate
+    `versionExists`, migrate.go:532), so a running-old-daemon upgrade can only happen before the
+    first pass, or on the pre-upgrade working-directory copy restored with alpha.1 reinstalled from
+    the reconstructed RPM — which is the retired rollback path executed live. The operator defines
+    that pass before it runs; nothing beyond the first pass is authorized by this entry. Station
+    unchanged: alpha.1 installed and inactive; no hardware or RF.
 
 ## Findings
 
