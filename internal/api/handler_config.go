@@ -715,8 +715,7 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	// lock and a failure aborts the write → 400, live config untouched.
 	var blocking *config.Finding
 	// forwarderCause is the constructor's raw error — logged, never sent to the
-	// client (the sanitised finding is the wire contract; the cause stays in the
-	// protected log as defense in depth). Captured here rather than logged
+	// client (the sanitised finding is the wire contract). Captured here rather than logged
 	// inside the closure so nothing writes to the log under the config lock.
 	var forwarderCause error
 	// before/after bracket the mutation for the save record (SHIP GATE (a)).
