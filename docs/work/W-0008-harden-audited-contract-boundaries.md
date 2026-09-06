@@ -33,8 +33,14 @@ audit reconciliation; [`docs/backlog.md`](../backlog.md) alone ranks this dossie
    claimed reason while the rejection pins 5 and 6 still passed; review round 1 tightened the
    matcher from set to ordered equality after the permutation pins (2b, 6b) went RED against the
    set matcher. CC-6 (Finding #1): `smd
-   config-check` runs the daemon's full startup validation and forwarder construction, so a policy or
-   validation refusal surfaces in the dogfood preflight rather than at the upgrade restart.
+   config-check` runs `config.Load` plus construction of every enabled forwarder — exactly that, not
+   the whole daemon start — so a policy or validation refusal surfaces in the dogfood preflight rather
+   than at the upgrade restart; the value-free finding helper is shared from `internal/config`
+   (`ForwarderStartupFinding`) by the PUT handler and the command, and the command discards the raw
+   constructor cause. Built 2026-09-06. Evidence: RED first (`config_check_test.go` pins 1–3 — the
+   two dogfood shapes passed the key-only check and the success text claimed nothing about
+   loading), GREEN, then a reversion proof with the two new stages reverted in place — pins 1–3 failed
+   for the claimed reason while the read-only and unknown-key pins held.
 3. **API wire:** AW-2 requires presence-aware command booleans; AW-3 gives genuine no-op QSO PATCH
    an operator-decided outcome; AW-5/AW-6 bound and sanitize SM Cloud ingest; AW-4 makes `/v1/`
    404/405 responses JSON; AW-1 is the separately designed integer-ID to UUID compatibility

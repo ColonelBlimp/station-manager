@@ -339,7 +339,15 @@ rejected while its mode-literal key is not. A malformed document, a
 newer-than-supported version, and an unknown key are three distinct diagnostics;
 none is reported as another. `smd config-check [--config <path>]` runs the same evaluation read-only —
 without starting the daemon — so a would-be startup refusal is diagnosable ahead of
-a deploy, reporting the same paths with values omitted.
+a deploy, reporting the same paths with values omitted. It then goes exactly as far as
+startup does before any runtime dependency: `Load` (defaulting, normalisation and §12
+validation, reporting the same `invalid config (<code>)` line) and construction of every
+enabled forwarder through the probe the PUT handler shares (`ForwarderStartupFinding`,
+which names the forwarder and the fault class only; the constructor's own text is
+discarded by contract — constructors must not embed credential values, and the stable
+finding is defense in depth on top of that rule). A passing check means the file loads,
+validates and its enabled forwarders construct; databases, listeners and other runtime
+dependencies are outside its scope, and its success text says so.
 
 ## 6. HTTP edit surface
 

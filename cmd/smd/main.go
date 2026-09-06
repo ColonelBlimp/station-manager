@@ -105,7 +105,7 @@ func main() {
 	//   smd --config <path>              → daemon with flag (run())
 	//   smd import [flags] <file.adi>    → one-shot import (runImport())
 	//   smd restore [flags]              → SM Cloud restore (runRestore())
-	//   smd config-check [--config p]    → read-only unknown-key preflight (runConfigCheck())
+	//   smd config-check [--config p]    → read-only preflight: unknown keys, Load, forwarder construction (runConfigCheck())
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "import":

@@ -1547,10 +1547,11 @@ func TestHandlePutConfig_RejectsUnstartableForwarder(t *testing.T) {
 }
 
 // TestHandlePutConfig_UnstartableForwarderDoesNotLeakCredentials guards the
-// disclosure path the startup probe opened. Constructors format the offending
-// value into their message — smcloud.New quotes credentials.url, which can carry
-// userinfo (a token in the URL) — so returning Build's error verbatim would hand
-// back, in a 400 and the access log, exactly the value GET /v1/config masks.
+// disclosure path the startup probe opened. The 400 carries the sanitised
+// finding only, by contract: constructors are bound never to embed a credential
+// value (forwarding.Build), and keeping Build's error out of the response is
+// defense in depth on top of that rule — a stored URL can carry userinfo (a
+// token), and GET /v1/config masks exactly that value.
 //
 // The route is the reviewer's: store the bad URL while DISABLED (allowed, startup
 // skips it), then enable without retyping credentials. The merge keeps the stored

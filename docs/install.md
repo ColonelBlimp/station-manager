@@ -364,9 +364,19 @@ and restart the daemon.
 
 ```
 sudo dnf install /path/to/station-manager-<newer-version>.x86_64.rpm
+smd config-check
 systemctl --user daemon-reload
 systemctl --user restart smd
 ```
+
+`smd config-check` runs the NEW binary against your live `config.json` while the
+old daemon is still serving: it reports unknown keys (paths only, values
+omitted), anything the new version's validation would refuse (these
+diagnostics can name ordinary configured values such as a forwarder name or
+an action), and any enabled forwarder it could not construct (forwarder name
+and fault code only; the constructor's own message is never printed). Fix
+whatever it names before the restart. A clean check does not test databases
+or listeners; the restart does.
 
 Your data directory survives the upgrade — `dnf` only manages the
 files it installed (the binary and the unit). Database schema

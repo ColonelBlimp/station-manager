@@ -57,7 +57,7 @@ func corruptCredServer(t *testing.T, creds string) (*Server, *strings.Builder) {
 // putForwarderDisable sends exactly what the Forwarding tab sends for an unrelated
 // change: name/type/enabled, NO credentials. This masked-on-GET default is the drop
 // trigger. Disabling the forwarder is also what lets the save COMMIT (an ENABLED
-// forwarder with dropped/corrupt creds would fail forwarderStartupFinding → 400).
+// forwarder with dropped/corrupt creds would fail config.ForwarderStartupFinding → 400).
 func putForwarderDisable(t *testing.T, srv *Server) *httptest.ResponseRecorder {
 	t.Helper()
 	body := `{"forwarders":[{"name":"clublog","type":"clublog","enabled":false}]}`

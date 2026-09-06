@@ -462,50 +462,6 @@ func (e *setupLogbookMismatchError) Error() string {
 	return "api: setup default logbook callsign mismatch (existing callsign " + e.existingCallsign + ")"
 }
 
-// forwarderStartupFinding rejects a forwarder list the daemon could not start
-// with. It mirrors spawnForwarderWorkers EXACTLY — skip disabled, Build each
-// enabled one — because that loop is precisely the failure it exists to pre-empt:
-// config.Validate never inspects credentials, so a bad value used to return 200
-// here and surface only at the next restart, as a daemon that refuses to come up
-// long after the operator believed the save had worked. Three separate review
-// findings (a blanked required credential, an unmarked clearable field,
-// whitespace persisted verbatim) were all instances of that one gap; validating
-// against the real constructors closes the family rather than the symptoms.
-//
-// Disabled forwarders are skipped because startup skips them — a destination must
-// stay saveable while half-configured, before the operator switches it on.
-//
-// Build is side-effect-free (the constructors assemble a struct and an
-// http.Client; no network, no files), so probing is cheap and safe.
-//
-// The returned Finding carries a STABLE, sanitised message; the constructor's own
-// error comes back separately as cause, for the server log only. It must never
-// reach the client: constructors format the offending value into their message
-// (smcloud.New quotes credentials.url, which can carry userinfo — a token in the
-// URL), and the stored value survives merging when an operator enables a
-// previously-disabled entry without retyping it. Echoing it would disclose,
-// through a 400 and the access log, exactly what GET /v1/config masks. Same split
-// the 5xx path already uses: generic on the wire, real cause in the log.
-func forwarderStartupFinding(fwds []types.ForwarderConfig) (*config.Finding, error) {
-	for _, fc := range fwds {
-		if !fc.Enabled {
-			continue
-		}
-		if _, err := forwarding.Build(fc); err != nil {
-			return &config.Finding{
-				Field: "forwarders",
-				Code:  "forwarder_unusable",
-				// Name only — operator-chosen and already on GET. No credential
-				// values, and no constructor text that might embed one.
-				Message: fmt.Sprintf(
-					"forwarder %q is enabled but its credentials are incomplete or invalid; "+
-						"check its settings (details in the daemon log)", fc.Name),
-			}, err
-		}
-	}
-	return nil, nil
-}
-
 // firstBlockingFinding returns the first non-warning (fatal) finding, or nil when
 // the config produced only advisories. A fatal finding is a 400 at PUT.
 func firstBlockingFinding(findings []config.Finding) *config.Finding {
@@ -727,7 +683,7 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		// and fail 409 default_logbook_callsign_mismatch, needing manual DB
 		// surgery. Gating here is what the dry run is for.
 		if req.Forwarders != nil {
-			if f, cause := forwarderStartupFinding(dry.Forwarders); f != nil {
+			if f, cause := config.ForwarderStartupFinding(dry.Forwarders); f != nil {
 				s.logger.WarnWith().Err(cause).Str("code", f.Code).
 					Msg("config PUT rejected during setup: enabled forwarder cannot be started")
 				s.writeError(w, http.StatusBadRequest, f.Code, f.Message, op)
@@ -759,7 +715,8 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	// lock and a failure aborts the write → 400, live config untouched.
 	var blocking *config.Finding
 	// forwarderCause is the constructor's raw error — logged, never sent to the
-	// client (it can embed a credential value). Captured here rather than logged
+	// client (the sanitised finding is the wire contract; the cause stays in the
+	// protected log as defense in depth). Captured here rather than logged
 	// inside the closure so nothing writes to the log under the config lock.
 	var forwarderCause error
 	// before/after bracket the mutation for the save record (SHIP GATE (a)).
@@ -786,7 +743,7 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		// unconditionally would let one pre-existing bad destination block every
 		// unrelated save (station identity, FT8 settings…) until it was fixed.
 		if req.Forwarders != nil {
-			if f, cause := forwarderStartupFinding(cfg.Forwarders); f != nil {
+			if f, cause := config.ForwarderStartupFinding(cfg.Forwarders); f != nil {
 				blocking, forwarderCause = f, cause
 				return errPutValidation
 			}
