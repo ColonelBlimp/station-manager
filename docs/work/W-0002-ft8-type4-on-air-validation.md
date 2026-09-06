@@ -4,6 +4,8 @@
 **Selected:** 2026-08-18
 **Outcome:** One operator-initiated contact with a real nonstandard station completes through the
 reduced type-4 ladder and is logged without fabricated exchange data.
+**Sighting:** 2026-09-05 — a real nonstandard station (VU24DX, hash-rendered `<VU24DX>`) was decoded on
+the dogfood station under alpha.2, the trigger named for this item; the attempt stays operator-initiated.
 
 `W-0002` is an immutable identity. Its status may change, while priority and ranked position live
 only in [`docs/backlog.md`](../backlog.md).

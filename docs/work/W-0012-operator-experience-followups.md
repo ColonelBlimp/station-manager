@@ -19,6 +19,9 @@ not compete with the app-shell, notification-history, or UI-cohesion dossiers.
 - **Maps and tables:** dogfood-validate shipped map catch-up/zoom behavior; decide solar-time overlay
   versus a world-time widget, map band-source policy, and session column resizing/sorting before
   implementation. The whole-log Dashboard map remains separate from the shipped time-window map.
+- **Settings and sidebar (alpha.2 dogfood Findings #3, #4):** disable Delete on the default rig with a
+  stated reason and require an explicit default change first (today the SPA silently repoints the
+  default to the first survivor); the sidebar Manual link opens in a new tab.
 - **Onboarding/preferences:** reduce non-Linux first-run friction; add download-site install content
   from the canonical install guide; keep beginner help, profiles, and `default_logbook.id` wiring
   deferred until their consuming workflow exists.

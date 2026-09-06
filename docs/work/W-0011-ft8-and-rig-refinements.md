@@ -19,6 +19,12 @@ single-flight keying, guaranteed stop, and operator-initiated session boundaries
   after thresholds and presentation are chosen.
 - **Rig state:** one owner for commanded-but-not-yet-reported rig position; no timeout substitute for
   per-field report sequence. Characterize every frequency/mode/VFO path before restructuring.
+- **Bridge-open TX alarm (alpha.2 dogfood Finding #7):** at the 2026-09-05 20:34:45 start the bridge
+  raised `TX ALARM` three seconds after opening the FTdx10 CAT port and cleared it within the same
+  second as idle; the operator was not transmitting. Acceptance outcome: opening the CAT port with an
+  idle rig never raises a TX alarm, while a rig genuinely keyed at open still raises one within the
+  existing latency. No settle duration or re-read mechanism is chosen yet. Passive reproduction at
+  port open (receive only, operator agreement for that occasion) promotes this to backlog P1 #2.
 - **Safety-adjacent deferred evidence:** rig TOT surfacing/clamp, FT-710 meter-selector verification,
   meter-tail semantics, output-sink logging, playback reopen after a reproduced collapse, and
   persistent TX-state escalation only after an operator duration threshold.

@@ -23,6 +23,9 @@ intent and converge without routine full-log churn or forbidden third-party API 
    [W-0007](W-0007-close-verified-p1-correctness-findings.md).
 7. Low-severity database/import cleanup and a second callsign provider are adjacent-work items, not
    standalone sweeps.
+8. SM Cloud is served over https even on the LAN (operator decision 2026-09-05, alpha.2 dogfood
+   Finding #1), so the `allow_insecure_http` cleartext acknowledgement can be removed from the live
+   station config; `docs/smcloud-deploy.md` owns the TLS steps.
 
 ## Verification boundary
 

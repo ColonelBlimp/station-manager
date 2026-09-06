@@ -372,6 +372,19 @@ Your data directory survives the upgrade — `dnf` only manages the
 files it installed (the binary and the unit). Database schema
 migrations are applied automatically on daemon startup.
 
+If the new version needs a file-only `config.json` key that the old
+daemon does not know (for example the SM Cloud `allow_insecure_http`
+acknowledgement), add it after the old daemon's last write — the old
+daemon ignores unknown keys on load and drops them the next time it
+writes the file (at start and on every Settings save). Add the key with
+the old daemon running and nothing saved afterwards, then restart.
+
+Known: upgrading from 2.0.0-alpha.1 to alpha.2 with a `qrzcq` forwarder
+in the config (enabled or not) refuses to start with `type "qrzcq" does
+not support action "update"`, because alpha.1 wrote the old all-actions
+default. Set that forwarder's `action_filter` to `["insert"]` (or remove
+the key) and start again; the next release reconciles this shape itself.
+
 ---
 
 ## 8. Live FT8 decode (optional)

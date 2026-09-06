@@ -20,6 +20,13 @@ audit reconciliation; [`docs/backlog.md`](../backlog.md) alone ranks this dossie
 2. **Configuration:** CC-3 extends semantic validation to `datastore` and `logging`; CC-4 makes the
    persistence primitives enforce the intended normalize-then-validate contract. CC-2 belongs to
    [W-0006](../archive/work/W-0006-reject-unknown-config-keys.md), not here.
+   CC-5 (alpha.2 dogfood Finding #6, backlog P1 #1): at load, reconcile only the identifiable
+   alpha.1-generated legacy shape — a `qrzcq` forwarder whose stored `action_filter` is exactly the
+   historical all-three default — to the registered supported set, logging once; an explicit
+   unsupported action in any other filter stays rejected (`RegisterSupportedActions` contract,
+   `TestValidateForwarders_RejectsUnsupportedAction`). Tests prove both. CC-6 (Finding #1): `smd
+   config-check` runs the daemon's full startup validation and forwarder construction, so a policy or
+   validation refusal surfaces in the dogfood preflight rather than at the upgrade restart.
 3. **API wire:** AW-2 requires presence-aware command booleans; AW-3 gives genuine no-op QSO PATCH
    an operator-decided outcome; AW-5/AW-6 bound and sanitize SM Cloud ingest; AW-4 makes `/v1/`
    404/405 responses JSON; AW-1 is the separately designed integer-ID to UUID compatibility
