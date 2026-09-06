@@ -21,10 +21,18 @@ audit reconciliation; [`docs/backlog.md`](../backlog.md) alone ranks this dossie
    persistence primitives enforce the intended normalize-then-validate contract. CC-2 belongs to
    [W-0006](../archive/work/W-0006-reject-unknown-config-keys.md), not here.
    CC-5 (alpha.2 dogfood Finding #6, backlog P1 #1): at load, reconcile only the identifiable
-   alpha.1-generated legacy shape — a `qrzcq` forwarder whose stored `action_filter` is exactly the
-   historical all-three default — to the registered supported set, logging once; an explicit
-   unsupported action in any other filter stays rejected (`RegisterSupportedActions` contract,
-   `TestValidateForwarders_RejectsUnsupportedAction`). Tests prove both. CC-6 (Finding #1): `smd
+   alpha.1-generated legacy shape — a pre-version-3 document whose `qrzcq` forwarder carries the
+   exact ordered slice `["insert","update","delete"]` alpha.1's omitted-filter path emitted — to
+   the literal `["insert"]`; any other explicit unsupported action, including a permutation of
+   those values or the same content in a version-3 document, stays rejected
+   (`RegisterSupportedActions` contract, `TestValidateForwarders_RejectsUnsupportedAction`). No
+   reconciliation-specific record; covered by the existing one-time schema-migration record.
+   Built 2026-09-06 as `migrateAlpha1QrzcqFilter` inside the v2→v3 migration. Evidence: RED first
+   (`migrate_v3_qrzcq_test.go` pins 1 and 4 failed with the filter unchanged and the exact dogfood
+   refusal), GREEN, then a reversion proof with the step stashed — pins 1 and 4 failed for the
+   claimed reason while the rejection pins 5 and 6 still passed; review round 1 tightened the
+   matcher from set to ordered equality after the permutation pins (2b, 6b) went RED against the
+   set matcher. CC-6 (Finding #1): `smd
    config-check` runs the daemon's full startup validation and forwarder construction, so a policy or
    validation refusal surfaces in the dogfood preflight rather than at the upgrade restart.
 3. **API wire:** AW-2 requires presence-aware command booleans; AW-3 gives genuine no-op QSO PATCH

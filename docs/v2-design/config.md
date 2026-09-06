@@ -135,7 +135,10 @@ configuration contract is:
 - `type` must name a registered implementation;
 - `label` is an optional file-only display label;
 - `credentials` is type-owned opaque JSON and may contain secrets;
-- `action_filter` accepts supported `insert`, `update`, and `delete` actions;
+- `action_filter` accepts supported `insert`, `update`, and `delete` actions; an
+  explicit unsupported action is rejected at load (the only exception is the
+  alpha.1-written `qrzcq` all-actions default, reconciled by the `2 -> 3` migration,
+  §13.2);
 - `tick_interval_sec`, `batch_size`, `retry`, and `endpoints` are persisted
   operator overrides; and
 - `allow_insecure_http` is valid only for the `smcloud` type and is file-only.
@@ -578,6 +581,17 @@ then deletes `device`; and moves `psk_reporter.antenna` into
 `logging_station.my_antenna` only when the canonical field is absent — otherwise the
 canonical value wins — then deletes the retired key. The step is idempotent, and it
 also consumes an `audio.device` that the `1 -> 2` step may have synthesized.
+
+The same step reconciles one filter shape the version-2 daemon wrote that this build
+refuses: a `qrzcq` forwarder whose `action_filter` is exactly the ordered slice
+`["insert", "update", "delete"]` — the all-actions default alpha.1 filled in for an
+omitted filter before the type registered its insert-only set — becomes the literal
+`["insert"]`. The match is deliberately narrow: any other explicit unsupported action,
+including a permutation of those three values or the same content in a version-3
+document, is still rejected by validation (§forwarders). The migration never consults
+the live registry, so a migrated document is a frozen record of the version-2 shape,
+and it emits no reconciliation-specific record — the existing one-time
+schema-migration `config saved` record (reason `schema_version`) covers the rewrite.
 
 ### 13.3 Pipeline placement
 

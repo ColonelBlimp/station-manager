@@ -42,7 +42,9 @@ type migration struct {
 //     ft8.tx.auto_work_callers (ADR 0067) and ft8.meter.alc_red (ADR 0064); folds
 //     rigs[].audio.device into audio.rx/audio.tx (when absent) then deletes it;
 //     moves psk_reporter.antenna into logging_station.my_antenna (only when the
-//     canonical field is absent — otherwise it wins) then deletes it.
+//     canonical field is absent — otherwise it wins) then deletes it. Also
+//     reconciles the alpha.1-generated qrzcq action_filter (W-0008 CC-5, see
+//     migrateAlpha1QrzcqFilter).
 var migrations = []migration{
 	{from: 1, apply: migrateV1toV2},
 	{from: 2, apply: migrateV2toV3},
@@ -286,7 +288,60 @@ func migrateV2toV3(doc map[string]any) error {
 			delete(psk, "antenna")
 		}
 	}
+
+	migrateAlpha1QrzcqFilter(doc)
 	return nil
+}
+
+// migrateAlpha1QrzcqFilter reconciles the one filter shape alpha.1 wrote that this
+// build refuses (alpha.2 dogfood Finding #6, W-0008 CC-5). alpha.1 (config version
+// 2) filled an OMITTED qrzcq action_filter with the historical all-three default
+// because that build registered no supported set for the type; this build
+// registers qrzcq insert-only, so validateForwarders would refuse the stored
+// filter and the upgraded daemon could not start. The match is deliberately
+// narrow — a pre-version-3 document (nothing after alpha.1 writes one), type
+// "qrzcq", and a filter that is exactly the ORDERED slice ["insert","update",
+// "delete"] alpha.1's omitted-filter path emitted — and the target is the literal
+// ["insert"] alpha.1's successors write for an omitted filter, not a registry
+// lookup: a migration is a frozen record of the v2 shape. Any other explicit
+// unsupported action — a hand-authored ["insert","update"], a permutation such as
+// ["delete","update","insert"], or this same content in a version-3 document —
+// stays for validateForwarders to reject (the RegisterSupportedActions contract):
+// it is a mistake to surface, not a legacy artefact. No reconciliation-specific
+// log record: the existing one-time schema-migration "config saved" record
+// (reason schema_version) covers the rewrite.
+// alpha1QrzcqFilter is the exact ordered slice alpha.1's applyDefaults wrote for an
+// omitted filter on a type with no registered supported set.
+var alpha1QrzcqFilter = []string{"insert", "update", "delete"}
+
+func migrateAlpha1QrzcqFilter(doc map[string]any) {
+	fwds, ok := doc["forwarders"].([]any)
+	if !ok {
+		return
+	}
+	for _, f := range fwds {
+		fc, ok := f.(map[string]any)
+		if !ok {
+			continue
+		}
+		if typ, _ := fc["type"].(string); typ != "qrzcq" {
+			continue
+		}
+		raw, ok := fc["action_filter"].([]any)
+		if !ok || len(raw) != len(alpha1QrzcqFilter) {
+			continue
+		}
+		exact := true
+		for i, v := range raw {
+			if s, ok := v.(string); !ok || s != alpha1QrzcqFilter[i] {
+				exact = false
+				break
+			}
+		}
+		if exact {
+			fc["action_filter"] = []any{"insert"}
+		}
+	}
 }
 
 // validateLegacyModeMappings validates the complete removed block before the
