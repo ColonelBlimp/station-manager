@@ -7,6 +7,9 @@ focused guards without creating speculative frameworks or broad cleanup commits.
 
 ## Routed residuals
 
+- **Packaging (alpha.2 dogfood Finding #17):** the nfpm spec declares the manual files but not their
+  directories, so `dnf remove` leaves `/usr/share/doc/station-manager/manual` behind, unowned; declare the
+  directories with the next packaging change.
 - **Package boundaries (PB-1..4):** add missing stdlib-only, FT8-direction, and cloud-independence
   guards; reduce lookup/smcloud leaf ownership only when a concrete change opens the boundary; drop
   the dead exported `utils.DXCCFromISO2` when its package is next touched.

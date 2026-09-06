@@ -298,6 +298,15 @@
       "summary": "W-0017 de-flakes two CI-observed environment-sensitive tests — the bridge streaming-startup barrier and the evidence concurrent-SQLite lock — with a deterministic barrier and busy handling/retry rather than larger timeouts."
     },
     {
+      "id": "work.w-0018",
+      "path": "docs/work/W-0018-bring-the-embedded-manual-to-release-readiness.md",
+      "class": "work-item",
+      "audiences": ["operator", "contributor", "agent"],
+      "topics": ["documentation", "manual", "dogfood"],
+      "scopes": ["manual/**", "docs/install.md"],
+      "summary": "W-0018 brings the embedded manual to release readiness: a page-by-page standing pass during dogfooding and a release gate before a public release."
+    },
+    {
       "id": "work.dogfood-inbox",
       "path": "docs/dogfood-inbox.md",
       "class": "work-item",
