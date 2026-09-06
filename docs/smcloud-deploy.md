@@ -17,6 +17,15 @@ the off-site half: a house-level event (lightning, fire, theft, a surge
 taking both machines) defeats the LAN copy. Nothing done in phase 1 commits
 you to anything — see "Moving to the VPS" below.
 
+**Transport ownership:** `allow_insecure_http` belongs to the station daemon's
+outbound `smcloud` forwarder; it is not a setting of the SM Cloud service. It is
+`false` when omitted, so `smd` refuses an enabled non-loopback `http://` destination
+unless the operator explicitly acknowledges it. The flag does not make
+`cmd/smcloud` serve HTTPS. The service itself serves HTTP; a reverse proxy supplies
+TLS where the deployment calls for HTTPS. A fresh `smd` configuration contains no
+SM Cloud forwarder because there is no canonical service URL; the operator adds the
+destination deliberately.
+
 ---
 
 ## Phase 1 — LAN staging deploy

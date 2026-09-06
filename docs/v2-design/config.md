@@ -140,6 +140,15 @@ configuration contract is:
   operator overrides; and
 - `allow_insecure_http` is valid only for the `smcloud` type and is file-only.
 
+For an `smcloud` forwarder, omitted `allow_insecure_http` means `false`. This is an
+outbound policy enforced by `smd`: an enabled `http://` destination on a non-loopback
+host is rejected unless the operator explicitly sets the acknowledgement. The field
+does not configure the `cmd/smcloud` listener and does not enable or disable TLS.
+
+SM Cloud has no canonical service URL, so it is not seeded into a fresh `smd`
+configuration, even as a disabled entry. The operator adds it explicitly; other
+registered forwarders with canonical endpoints may be seeded disabled.
+
 `lookup.hamnut` is the country/prefix source. `lookup.chain` is the callsign
 provider chain. Provider `priority`, not JSON array position, is authoritative;
 normalization sorts the chain and validation requires positive, unique,
