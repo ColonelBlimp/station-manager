@@ -18,3 +18,17 @@ describe('Sidebar map link', () => {
         expect(link.getAttribute('href')).toMatch(/map$/);
     });
 });
+
+// The Manual is a separate zero-JS site (ADR 0036). Opening it in the app's own
+// tab unmounts the SPA — the same hazard the Map pin above guards, seen on the
+// alpha.2 fresh deployment (dogfood Finding #4, W-0012): the operator lost the
+// Operate view to the manual twice. It must open in a new tab, like Map.
+describe('Sidebar manual link', () => {
+    it('opens the manual in a new tab without leaking the opener', () => {
+        render(Sidebar);
+        const link = screen.getByRole('link', { name: /Manual/ });
+        expect(link).toHaveAttribute('target', '_blank');
+        expect(link.getAttribute('rel')).toContain('noopener');
+        expect(link.getAttribute('href')).toBe('/manual/');
+    });
+});

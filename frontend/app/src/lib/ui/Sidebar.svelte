@@ -166,7 +166,13 @@
                         </span>
                     </a>
 
-                    <a href="/manual/" class="nav-item" title="Manual">
+                    <a
+                        href="/manual/"
+                        target="_blank"
+                        rel="noopener"
+                        class="nav-item"
+                        title="Open the manual in a new tab"
+                    >
                         <svg
                             class="size-6 shrink-0"
                             fill="none"
