@@ -7,7 +7,7 @@
     import Toasts from './lib/ui/Toasts.svelte';
     import NotificationRail from './lib/ui/NotificationRail.svelte';
     import SetupCard from './lib/ui/SetupCard.svelte';
-    import { setup } from './lib/setup.svelte';
+    import { setup, setupGateOpen } from './lib/setup.svelte';
     import Operate from './lib/operate/Operate.svelte';
     // Logbook and Settings are lazy (ADR 0044 code-splitting, AC6): each is its
     // own chunk, fetched only when the operator opens that view, so the eager
@@ -73,10 +73,14 @@
 
     // Browser-tab title: current view + build identity (W-0004 AC2). Central owner
     // for EVERY view, including the full-window Map (which no longer sets its own
-    // <title>). isDevDaemon() is false until identity loads and for any release or
-    // unavailable daemon, so the title stays the neutral release form until proven dev.
+    // <title>). While the first-run card owns the window the view router still
+    // says "dashboard", so the title follows the card's own gate and reads
+    // "Welcome" instead (dogfood Finding #8). isDevDaemon() is false until identity
+    // loads and for any release or unavailable daemon, so the title stays the
+    // neutral release form until proven dev.
     $effect(() => {
-        document.title = computeTitle(titles[router.view], isDevDaemon());
+        const view = setupGateOpen() ? 'Welcome' : titles[router.view];
+        document.title = computeTitle(view, isDevDaemon());
     });
 </script>
 
@@ -88,7 +92,7 @@
      to a false first-run greeting. -->
 {#if setup.status === 'loading'}
     <Toasts />
-{:else if setup.status === 'needed' || setup.justCompleted}
+{:else if setupGateOpen()}
     <SetupCard />
     <Toasts />
 {:else if router.view === 'map'}

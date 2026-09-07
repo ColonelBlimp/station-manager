@@ -5,6 +5,7 @@ import {
     saveSetup,
     dismissSetupDone,
     _resetSetupForTests,
+    setupGateOpen,
 } from './setup.svelte';
 
 beforeEach(() => {
@@ -52,5 +53,28 @@ describe('setup gate state', () => {
         dismissSetupDone();
         expect(setup.justCompleted).toBe(false);
         expect(setup.status).toBe('complete');
+    });
+});
+
+// The first-run gate is ONE predicate shared by the card and the tab title
+// (dogfood Finding #8): pin every state it must answer for.
+describe('setupGateOpen', () => {
+    beforeEach(() => {
+        _resetSetupForTests();
+    });
+
+    it('is closed while loading and after a completed setup', () => {
+        setup.status = 'loading';
+        expect(setupGateOpen()).toBe(false);
+        setup.status = 'complete';
+        expect(setupGateOpen()).toBe(false);
+    });
+
+    it('is open while setup is needed and on the just-completed hand-off', () => {
+        setup.status = 'needed';
+        expect(setupGateOpen()).toBe(true);
+        setup.status = 'complete';
+        setup.justCompleted = true;
+        expect(setupGateOpen()).toBe(true);
     });
 });

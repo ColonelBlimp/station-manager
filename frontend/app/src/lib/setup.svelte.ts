@@ -26,6 +26,16 @@ export const setup: { status: SetupStatus; justCompleted: boolean } = $state({
     justCompleted: false,
 });
 
+/**
+ * True while the first-run card owns the window: setup still needed, or just
+ * completed (the "Setup complete" hand-off). App uses this ONE predicate both to
+ * choose the card over the shell and to title the tab "Welcome" (dogfood Finding
+ * #8), so the two can never disagree about which surface the operator sees.
+ */
+export function setupGateOpen(): boolean {
+    return setup.status === 'needed' || setup.justCompleted;
+}
+
 export interface SetupSaveResult {
     ok: boolean;
     message: string;
