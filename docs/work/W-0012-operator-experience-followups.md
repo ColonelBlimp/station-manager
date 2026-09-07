@@ -24,7 +24,7 @@ not compete with the app-shell, notification-history, or UI-cohesion dossiers.
   default to the first survivor); the sidebar Manual link opens in a new tab (shipped `f0b8e6eb`, 2026-09-07,
   operator-verified on the station).
 - **First-run and no-rig defaults (alpha.2 dogfood Findings #8, #11, #12, #16):** the welcome surface's tab
-  title reads "Welcome · Station Manager"; the Rig Control card opened from Phone/CW or FT8 sets both
+  title reads "Welcome · Station Manager" (shipped `c1045efa`, 2026-09-07, deployed and accepted); the Rig Control card opened from Phone/CW or FT8 sets both
   frequency and mode for that context (no-rig operating-context policy); both rails default to expanded on
   a new install; the header's logbook count refreshes on reconnect after a daemon restart or import.
 - **Onboarding/preferences:** reduce non-Linux first-run friction; add download-site install content
