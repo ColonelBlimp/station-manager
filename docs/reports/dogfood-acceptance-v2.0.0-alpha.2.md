@@ -1177,6 +1177,21 @@ Times UTC.
     `2.0.0-alpha.2-16-gc1045efa` schema 8, health ok, setup complete, 7,468 QSOs with 13,089
     uploaded / 1 failed, both config keys present, no leftover directories, zero errors. The
     moved-aside copy was never written by a daemon; nothing was lost.
+29. **11:49Z–11:54Z — Finding #16 fix deployed; refresh observed, thirty seconds after the
+    reconnect.** `33e975bc` (ADR 0079: the shell opens `/v1/events` always-on; `onReconnect` on that
+    stream re-fetches the header count) deployed as `2.0.0~alpha.2.19.g33e975bc-1`; page reloaded
+    13:49:43 CAT with a fresh bundle (`/assets/index.js` 200, `Cache-Control: no-cache`) and the new
+    `/v1/events` subscriber present. Operator restarted the daemon at 13:51:11 with the page open
+    and untouched. Daemon log: both streams disconnected at 13:51:11 and reconnected at 13:51:16;
+    the rig stream's build-identity re-fetch (`/v1/version`) landed at 13:51:16; the count request
+    (`/v1/logbook/1/count`) landed at 13:51:46 — thirty seconds later, the events stream's keepalive
+    interval (`sseKeepAliveInterval`, `internal/api/handler_events.go`). The daemon commits and
+    flushes the headers immediately, so the delay is client-side: inferred, not cited, that Firefox
+    raises the EventSource `open` event only on the first body bytes, which the rig stream provides
+    at once (its initial state frame) and `/v1/events` provides only at its first keepalive. The fix
+    therefore works but lands late by one keepalive interval on that stream; a daemon-side initial
+    `: connected` comment after the headers would make the open immediate and is proposed as a
+    separate small change. Zero errors; 7,468 QSOs.
 
 ## Findings
 
@@ -1201,5 +1216,5 @@ durable work through the backlog.
 | 13 | A2-06 (fresh deployment, embedded manual) | In the manual chapter "Connecting Your Rig (CAT)" (`manual/content/chapters/cat.md:6`) the section heading reads "Important: keep data-mode PTT off the control lines", which the operator found unreadable as a heading. Operator: simplify the heading to "Important" and let the body carry the instruction. | documentation correction (operator ruling 2026-09-06) | W-0018 |
 | 14 | A2-06 (fresh deployment, embedded manual) | Operator assessment after the first-run journey: the whole embedded manual must be worked through and amended as dogfooding proceeds; it is not near a releasable state (17 pages; Findings #9 and #13 are its first concrete entries). | programme-level documentation work (operator ruling 2026-09-06) | W-0018 created: "Bring the embedded manual to release readiness" — a page-by-page standing pass during dogfooding and a release gate before a public release, not a blocker for the next internal candidate |
 | 15 | A2-07 (fresh deployment) | The embedded manual contains no uninstall section (repository search 2026-09-06: zero hits for uninstall or `dnf remove` under `manual/content`), and the install guide that holds §10 Uninstall is not in the RPM payload — it is reachable only from the repository README and the website. A2-07 therefore cannot be walked "per the guide" from the installed software alone. | documentation gap (operator ruling 2026-09-06) | W-0018: add update and uninstall guidance to the embedded manual |
-| 16 | PKG-03 (fresh deployment, §5 import) | After `smctl import` stored three QSOs (logbook total 4) the header still read "Logbook Default (1)" (operator screenshot 2026-09-06 11:48Z). `station.svelte.ts`: the count is seeded at boot and re-fetched only after a QSO logged from the app; neither the import nor the daemon restart / SSE revive refreshes it. | UX consistency defect (operator ruling 2026-09-06) | W-0012 |
+| 16 | PKG-03 (fresh deployment, §5 import) | After `smctl import` stored three QSOs (logbook total 4) the header still read "Logbook Default (1)" (operator screenshot 2026-09-06 11:48Z). `station.svelte.ts`: the count is seeded at boot and re-fetched only after a QSO logged from the app; neither the import nor the daemon restart / SSE revive refreshes it. | UX consistency defect (operator ruling 2026-09-06) | W-0012 — shipped `33e975bc` 2026-09-07 (ADR 0079: shell opens `/v1/events` always-on; count re-fetched on its reconnection; boundary-tested on the real `main.ts`); deployed as `2.0.0~alpha.2.19.g33e975bc-1`, refresh observed after a restart with the page untouched, thirty seconds late (keepalive-bound `open`, Execution log #29; daemon-side initial comment proposed) |
 | 17 | A2-07 (fresh deployment) | After `sudo dnf remove station-manager` the empty directories `/usr/share/doc/station-manager` and `…/manual` remain, unowned by any package (`rpm -qf` → not owned); every file was removed. | packaging residual (operator ruling 2026-09-06) | W-0009, with the next packaging change |
