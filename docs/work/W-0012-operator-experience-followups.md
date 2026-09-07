@@ -26,8 +26,8 @@ not compete with the app-shell, notification-history, or UI-cohesion dossiers.
 - **First-run and no-rig defaults (alpha.2 dogfood Findings #8, #11, #12, #16):** the welcome surface's tab
   title reads "Welcome · Station Manager" (shipped `c1045efa`, 2026-09-07, deployed and accepted); the Rig Control card opened from Phone/CW or FT8 sets both
   frequency and mode for that context (no-rig operating-context policy); the header's logbook count
-  refreshes on reconnect after a daemon restart or import (shipped `33e975bc`, ADR 0079, 2026-09-07; deployed
-  and observed, one keepalive interval late on the events stream — see the record's entry 29). Both rails already default to expanded:
+  refreshes on reconnect after a daemon restart or import (shipped `33e975bc`, ADR 0079, and `9b60b65e`, the initial `: connected` comment on every SSE
+  stream, 2026-09-07; deployed and verified immediate at the reconnect — the record's entries 29–30). Both rails already default to expanded:
   Finding #12 was closed working-as-designed on 2026-09-07 — the collapsed rail was the browser's
   remembered `sm-util` preference.
 - **Onboarding/preferences:** reduce non-Linux first-run friction; add download-site install content
