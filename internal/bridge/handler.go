@@ -82,6 +82,22 @@ func (s *Service) HTTPHandler(shutdownCh <-chan struct{}) http.Handler {
 		ch, unsub := s.Subscribe()
 		defer unsub()
 
+		// Initial comment. Contract: ": connected" is the first body bytes, available
+		// immediately after the headers, on every SSE stream the daemon serves.
+		// Observation (dogfood Firefox, 2026-09-07, acceptance record entry 29): a
+		// stream with no body bytes until its first keepalive saw its EventSource
+		// open 30 s after the reconnect; this stream's bootstrap frames made its open
+		// immediate. Inference, not an established browser fact: first body bytes
+		// appear to gate open in that environment. Written after Subscribe, so the
+		// client sees a stream that is genuinely subscribed, and before the bootstrap
+		// poll, so nothing else has been written and its frames follow unchanged. A
+		// failed write means the client is gone — return, and the defer unsubscribes.
+		armWrite()
+		if _, err := io.WriteString(w, ": connected\n\n"); err != nil {
+			return
+		}
+		flusher.Flush()
+
 		// Bootstrap poll: ask the rig for an identity + state
 		// snapshot so this freshly-connected SPA tab populates
 		// catState immediately rather than waiting for the

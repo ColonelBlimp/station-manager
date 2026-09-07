@@ -90,6 +90,22 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
+	// Initial comment. Contract: ": connected" is the first body bytes, available
+	// immediately after the headers. Observation (dogfood Firefox, 2026-09-07,
+	// acceptance record entry 29): with no body bytes until the first keepalive,
+	// the SPA's EventSource open — and everything hung on it — landed 30 s after
+	// the reconnect, while the rig stream, whose bootstrap frames arrive at once,
+	// opened immediately. Inference, not an established browser fact: first body
+	// bytes appear to gate open in that environment. Subscribe already precedes
+	// the headers, so the client sees a stream that is genuinely subscribed;
+	// nothing else has been written, so event ordering is untouched. A failed
+	// write means the client is gone — return, and the defer unsubscribes.
+	armWrite()
+	if _, err := io.WriteString(w, ": connected\n\n"); err != nil {
+		return
+	}
+	flusher.Flush()
+
 	keepalive := time.NewTicker(sseKeepAliveInterval)
 	defer keepalive.Stop()
 

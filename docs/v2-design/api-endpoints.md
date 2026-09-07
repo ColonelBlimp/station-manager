@@ -39,9 +39,15 @@ carry only a generic message (the real cause is logged server-side). Some subsys
 three SSE streams share one subscriber cap (**503 `server_busy`**).
 
 **SSE frame format.** `/v1/events` emits `id: <n>\nevent: <name>\ndata: <json>\n\n`;
-`/v1/rig/events` and `/v1/ft8/events` omit the `id:` line. All three send a `: keepalive`
-comment every 30s, clear/re-arm write deadlines so long-lived streams survive
-`WriteTimeout`, and return promptly on graceful shutdown.
+`/v1/rig/events` and `/v1/ft8/events` omit the `id:` line. All three begin with a
+`: connected` comment: the first body bytes, available immediately after the headers and
+written after the subscription exists; the rig stream's bootstrap and the FT8 stream's
+replay follow it unchanged. Why: on the dogfood station (Firefox, 2026-09-07) a stream that
+sent no body bytes until its first keepalive saw its `EventSource` `open` 30 s after the
+headers — an observation; that the first body bytes gate `open` in that environment is an
+inference, not an established browser fact. All three send a `: keepalive` comment every 30s,
+clear/re-arm write deadlines so long-lived streams survive `WriteTimeout`, and return promptly
+on graceful shutdown. Comment lines carry no event and are ignored by every consumer.
 
 **Event identity (AW-1).** The `qso.*` (`qso.stored`/`qso.updated`/`qso.deleted`) and
 `forward.*` (`forward.succeeded`/`forward.failed`) payloads on `/v1/events` carry
