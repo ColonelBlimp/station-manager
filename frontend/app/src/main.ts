@@ -23,6 +23,7 @@ import {
     noteStreamReopen,
 } from './lib/ui/buildIdentity.svelte';
 import { openFt8Events } from './lib/api/ft8-sse';
+import { openLogEvents } from './lib/api/log-events';
 import {
     setFt8Transport,
     setFt8OperatorCall,
@@ -588,6 +589,21 @@ setSubmit(async (q, opts) => {
         );
     }
     return refuse(`QSO not logged: ${out.message}`);
+});
+
+// The shell's always-on transport (ADR 0079). /v1/events is served with or without
+// a rig, so it — not the CAT-gated rig stream — carries the reconnection signal the
+// header "(n)" count needs after a daemon restart (`smctl import` restarts the
+// daemon; dogfood Finding #16, W-0012): a reconnecting client re-fetches its
+// baseline. The QSO events themselves are deliberately not consumed here, and
+// build identity keeps its own transition on the rig stream (W-0004 AC3). Never
+// closed: it lives as long as the page. Placed after the line-keyed
+// maintainability baseline on purpose.
+openLogEvents({
+    onOpen: () => {},
+    onTransportError: () => {},
+    onQsoChanged: () => {},
+    onReconnect: refreshLogbookCount,
 });
 
 const target = document.getElementById('app');

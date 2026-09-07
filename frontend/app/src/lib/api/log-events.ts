@@ -28,6 +28,13 @@ export interface LogEventHandlers {
     onOpen: () => void;
     /** Transport-level failure (stream down / browser reconnecting). */
     onTransportError: () => void;
+    /** The stream reopened after a transport error — once per reconnection
+     *  transition, never on the boot open. This is the moment a reconnecting
+     *  client must re-fetch its baseline (the stream keeps no backlog), and the
+     *  moment a restarted daemon — `smctl import` restarts it — is picked up
+     *  (ADR 0079, dogfood Finding #16). Transport-specific on purpose: build
+     *  identity keeps its own transition on the rig stream (W-0004 AC3). */
+    onReconnect?: () => void;
     /** Any of qso.stored / qso.updated / qso.deleted — consumers that only
      *  re-query don't care which mutation it was. */
     onQsoChanged: (event: string, payload: QsoEventPayload) => void;
@@ -72,9 +79,22 @@ const SSE_URL = '/v1/events';
  * it tears the EventSource down (the handlers see no further events).
  */
 export function openLogEvents(handlers: LogEventHandlers): () => void {
+    // A transport error seen since the last open. Lives in the subscription, not
+    // the wire closure, so an error on a stream openReviving later replaces still
+    // counts as the drop half of the transition when the replacement opens.
+    let sawError = false;
     return openReviving(SSE_URL, (src) => {
-        src.addEventListener('open', () => handlers.onOpen());
-        src.addEventListener('error', () => handlers.onTransportError());
+        src.addEventListener('open', () => {
+            handlers.onOpen();
+            if (sawError) {
+                sawError = false;
+                handlers.onReconnect?.();
+            }
+        });
+        src.addEventListener('error', () => {
+            sawError = true;
+            handlers.onTransportError();
+        });
 
         for (const name of QSO_EVENTS) {
             src.addEventListener(name, (ev: MessageEvent<string>) => {
