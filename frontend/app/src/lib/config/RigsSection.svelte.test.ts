@@ -130,4 +130,80 @@ describe('RigsSection advanced editors', () => {
         expect(screen.queryByTitle(/connects to at startup/i)).toBeNull();
         expect(screen.getByText('Set as default')).toBeTruthy();
     });
+
+    // alpha.2 dogfood Finding 3 (W-0012): the default rig must not be deletable;
+    // the operator changes the default first. Before this pin the SPA let the
+    // default be deleted and silently repointed default_rig_id to the first
+    // survivor — mechanically safe (the daemon refuses an unresolvable default),
+    // but a policy the operator rejected. The pin walks the whole ruling as the
+    // operator sees it: disabled with the reason on the default, enabled on a
+    // non-default rig, and enabled on the former default once "Set as default"
+    // has moved the badge — the explicit change the reason asks for.
+    it('Delete is disabled on the default rig with the reason, and enabled once the default moves', async () => {
+        mockCluster({
+            default_rig_id: 1,
+            rigs: [
+                { id: 1, model: 'ftdx10', port: '/dev/a' },
+                { id: 2, model: 'ftdx10', port: '/dev/b' },
+            ],
+            catalogue: [{ id: 'ftdx10', name: 'FTdx10', rig_modes: ['DATA-U'] }],
+        });
+        render(RigsSection);
+        await vi.waitFor(() => expect(rigsState.loaded).toBe(true));
+        flushSync();
+        expect(rigsState.selectedId).toBe(1); // load pre-selects the default
+
+        // On the default: disabled, and the reason names the action that unlocks it.
+        const del = screen.getByRole('button', { name: 'Delete' });
+        expect(del).toBeDisabled();
+        expect(del.title).toMatch(/default rig/i);
+        expect(del.title).toMatch(/set another rig as default/i);
+        // The reason is also stated in the panel, not only in a tooltip: whether a
+        // tooltip shows on a disabled control is browser behaviour this test does
+        // not vouch for.
+        expect(screen.getByText(/set another rig as default first/i)).toBeTruthy();
+
+        // A non-default rig deletes as before. Selected by position: both rigs are
+        // the same model, so nameFor() renders them identically.
+        const rigButtons = document.querySelectorAll('ul button');
+        await fireEvent.click(rigButtons[1]);
+        flushSync();
+        expect(rigsState.selectedId).toBe(2);
+        const del2 = screen.getByRole('button', { name: 'Delete' });
+        expect(del2).not.toBeDisabled();
+        expect(del2.title).toBe('Delete this rig');
+        expect(screen.queryByText(/set another rig as default first/i)).toBeNull();
+
+        // The explicit default change: rig 2 becomes the default, so rig 1 is now
+        // an ordinary rig and its Delete comes back.
+        await fireEvent.click(screen.getByText('Set as default'));
+        await vi.waitFor(() => expect(rigsState.defaultRigId).toBe(2));
+        flushSync();
+        const del2Now = screen.getByRole('button', { name: 'Delete' });
+        expect(del2Now).toBeDisabled(); // rig 2 is the default now
+        await fireEvent.click(rigButtons[0]);
+        flushSync();
+        expect(rigsState.selectedId).toBe(1);
+        const del1 = screen.getByRole('button', { name: 'Delete' });
+        expect(del1).not.toBeDisabled();
+        expect(del1.title).toBe('Delete this rig');
+    });
+
+    // The only rig is necessarily undeletable AND (normally) the default. The two
+    // reasons differ in what they ask the operator to do, and "set another rig as
+    // default" is impossible with one rig, so the only-rig reason must win.
+    it('the only rig keeps the only-rig reason, not the default-rig reason', async () => {
+        mockCluster({
+            default_rig_id: 1,
+            rigs: [{ id: 1, model: 'ftdx10', port: '/dev/a' }],
+            catalogue: [{ id: 'ftdx10', name: 'FTdx10', rig_modes: ['DATA-U'] }],
+        });
+        render(RigsSection);
+        await vi.waitFor(() => expect(rigsState.loaded).toBe(true));
+        flushSync();
+        const del = screen.getByRole('button', { name: 'Delete' });
+        expect(del).toBeDisabled();
+        expect(del.title).toBe('Cannot delete the only rig');
+        expect(screen.queryByText(/set another rig as default first/i)).toBeNull();
+    });
 });

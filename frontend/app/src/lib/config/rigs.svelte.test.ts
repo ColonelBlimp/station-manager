@@ -1052,7 +1052,12 @@ describe('rigsState', () => {
         expect(rigsState.rigs.map((r) => r.id)).toEqual([1]);
     });
 
-    it('deleting the DEFAULT rig repoints default_rig_id to a survivor in the same PUT', async () => {
+    // alpha.2 dogfood Finding 3 (W-0012): the default rig is never deleted; the
+    // operator sets another rig as default first. This replaces the earlier
+    // auto-repoint (delete the default → default_rig_id moved to the first
+    // survivor in the same PUT), which was mechanically safe but a policy the
+    // operator rejected. The button is disabled too; the store refuses regardless.
+    it('deleteRig refuses the DEFAULT rig (no PUT, list and default untouched)', async () => {
         const puts = mockCluster({
             default_rig_id: 1,
             rigs: [
@@ -1064,18 +1069,42 @@ describe('rigsState', () => {
         await rigsState.load();
         await rigsState.deleteRig(1); // rig 1 IS the default
 
-        const sent = JSON.parse(puts[0]) as {
-            rigs: Array<{ id: number }>;
-            default_rig_id?: number;
-        };
-        expect(sent.rigs.map((r) => r.id)).toEqual([2]);
-        expect(sent.default_rig_id).toBe(2); // repointed — the daemon 400s on an unresolvable default
-        expect(rigsState.defaultRigId).toBe(2);
-        // The deleted rig was the selected one and the ONLY drafted one (load drafts
-        // only the selection). The survivor must get both the selection AND a draft,
-        // or RigsSection hides the whole editor until it's re-clicked (clean-room 1e3a7bed P2).
-        expect(rigsState.selectedId).toBe(2);
-        expect(rigsState.draft).not.toBeNull();
+        expect(puts).toHaveLength(0);
+        expect(rigsState.rigs.map((r) => r.id)).toEqual([1, 2]);
+        expect(rigsState.defaultRigId).toBe(1);
+        expect(rigsState.saving).toBe(false);
+    });
+
+    // The refusal must hold on the FRESH state, not the mount snapshot: another
+    // client can make the target the default between the button press and the
+    // re-fetch. Without this check the PUT would drop the rig and omit
+    // default_rig_id, and the daemon would 400 on the now-unresolvable default —
+    // a confusing failure for a rule the SPA is supposed to state plainly.
+    it('deleteRig refuses when the FRESH default is the target (concurrent default change)', async () => {
+        let get = 0;
+        const puts = mockCluster(() => {
+            get++;
+            // load sees default 1; the delete re-fetch sees rig 2 made the default
+            return {
+                default_rig_id: get === 1 ? 1 : 2,
+                rigs: [
+                    { id: 1, model: 'ic7300', port: '/dev/a' },
+                    { id: 2, model: 'ftdx10', port: '/dev/b' },
+                ],
+                catalogue: [],
+            };
+        });
+        const err = vi.spyOn(toasts, 'error');
+        await rigsState.load();
+        await rigsState.deleteRig(2); // not the default at mount; the default on re-fetch
+
+        expect(puts).toHaveLength(0);
+        expect(err).toHaveBeenCalledTimes(1);
+        expect(err.mock.calls[0][0]).toMatch(/default rig/i);
+        expect(err.mock.calls[0][0]).toMatch(/set another rig as default/i);
+        expect(rigsState.defaultRigId).toBe(2); // adopts the fresh state
+        expect(rigsState.rigs.map((r) => r.id)).toEqual([1, 2]);
+        expect(rigsState.saving).toBe(false);
     });
 
     it('deleteRig removes from the FRESH list, preserving a concurrent edit on another rig', async () => {
@@ -1134,9 +1163,12 @@ describe('rigsState', () => {
 
     it('deleting the SELECTED rig that was concurrently removed drafts the survivor', async () => {
         // The reviewer's already-removed-while-selected case (clean-room 825983c2 P2):
-        // rig 1 is the default → selected + the only drafted rig on load. If it's gone
-        // on the fresh re-fetch, the early-return branch reconciles the selection to a
-        // survivor, which must be freshly drafted or the editor hides.
+        // the selected rig is gone on the fresh re-fetch, so the early-return branch
+        // reconciles the selection to a survivor, which must be freshly drafted or
+        // the editor hides. Load drafts only the pre-selected default (rig 1) and
+        // select() drafts rig 2; the fresh state also moves the default to rig 3,
+        // which nothing has drafted — the reconciliation lands there. (The default
+        // itself is never a delete target since Finding 3, so the target is rig 2.)
         let get = 0;
         const puts = mockCluster(() => {
             get++;
@@ -1145,16 +1177,22 @@ describe('rigsState', () => {
                     ? [
                           { id: 1, model: 'ic7300', port: '/dev/a' },
                           { id: 2, model: 'ftdx10', port: '/dev/b' },
+                          { id: 3, model: 'ftdx10', port: '/dev/c' },
                       ]
-                    : [{ id: 2, model: 'ftdx10', port: '/dev/b' }]; // rig 1 removed concurrently
-            return { default_rig_id: get === 1 ? 1 : 2, rigs, catalogue: [] };
+                    : [
+                          { id: 1, model: 'ic7300', port: '/dev/a' },
+                          { id: 3, model: 'ftdx10', port: '/dev/c' },
+                      ]; // rig 2 removed + rig 3 made the default, both concurrently
+            return { default_rig_id: get === 1 ? 1 : 3, rigs, catalogue: [] };
         });
         await rigsState.load();
         expect(rigsState.selectedId).toBe(1); // default pre-selected + drafted
-        await rigsState.deleteRig(1); // rig 1 already gone on the fresh fetch
+        rigsState.select(2);
+        expect(rigsState.drafts[3]).toBeUndefined(); // the eventual survivor is undrafted
+        await rigsState.deleteRig(2); // rig 2 already gone on the fresh fetch
 
         expect(puts).toHaveLength(0); // nothing to write (already removed)
-        expect(rigsState.selectedId).toBe(2); // reselected to the survivor
+        expect(rigsState.selectedId).toBe(3); // reselected to the (fresh) default
         expect(rigsState.draft).not.toBeNull(); // …and drafted, so the editor stays visible
     });
 

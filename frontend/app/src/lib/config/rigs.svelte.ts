@@ -552,12 +552,16 @@ class RigsState {
     // Delete a rig — an IMMEDIATE structural write, the mirror of addRig (operator
     // ruling 2026-08-19). RE-FETCH first and remove from the FRESH list so a
     // concurrent edit to another rig survives the whole-replace. Never deletes the
-    // only rig (the button is disabled too, matching the config SPA). Unlike Add,
-    // delete is IDEMPOTENT on retry (removing an already-gone rig is a no-op), so a
-    // timed-out delete needs no reconcile — a retry is safe.
+    // only rig, and never the default rig: the operator sets another rig as default
+    // first (alpha.2 dogfood Finding 3, W-0012 — this replaced the earlier
+    // auto-repoint of default_rig_id to the first survivor). The button is disabled
+    // for both; the store refuses regardless. Unlike Add, delete is IDEMPOTENT on
+    // retry (removing an already-gone rig is a no-op), so a timed-out delete needs
+    // no reconcile — a retry is safe.
     async deleteRig(id: number): Promise<void> {
         if (this.saving || this.settingDefault || !this.loaded) return;
         if (this.rigs.length <= 1) return; // never delete the only rig
+        if (id === this.defaultRigId) return; // never delete the default rig
         this.saving = true;
         const fresh = await fetchRigs();
         if (fresh.kind === 'error') {
@@ -578,16 +582,21 @@ class RigsState {
             toasts.error("Can't delete the only rig.");
             return;
         }
+        // Checked on the FRESH state too: a concurrent default change can make the
+        // target the default after the button was pressed. Sending the PUT anyway
+        // would omit default_rig_id and the daemon would 400 on the unresolvable
+        // default — the rule is stated here instead.
+        if (fresh.data.defaultRigId === id) {
+            this.saving = false;
+            this.#applyFetched(fresh.data);
+            toasts.error("Can't delete the default rig — set another rig as default first.");
+            return;
+        }
         const nextRigs = fresh.data.rigs.filter((r) => r.id !== id);
-        // Repoint the active default ONLY when deleting it: the daemon 400s on an
-        // unresolvable default_rig_id, and omitting it would keep the stale
-        // (now-deleted) one. Deleting a non-default rig leaves the default resolving
-        // → OMIT default_rig_id so a concurrent active-rig change isn't clobbered
-        // (presence-aware, like save()). delete is disabled at ≤1 rig, so nextRigs is
-        // non-empty here and nextRigs[0] always exists when repointing.
-        const deletingDefault = fresh.data.defaultRigId === id;
-        const nextDefault = deletingDefault ? (nextRigs[0]?.id ?? 0) : undefined;
-        const outcome = await saveRigs(nextRigs, nextDefault);
+        // The default is never the target here, so it keeps resolving → OMIT
+        // default_rig_id so a concurrent default change isn't clobbered
+        // (presence-aware, like save()).
+        const outcome = await saveRigs(nextRigs);
         this.saving = false;
         if (outcome.kind === 'error') {
             toasts.error(`Couldn't delete the rig: ${outcome.message}`);
@@ -601,7 +610,7 @@ class RigsState {
         // drafts the survivor (so the editor stays visible — see its note).
         this.#applyFetched({
             rigs: nextRigs,
-            defaultRigId: nextDefault ?? fresh.data.defaultRigId,
+            defaultRigId: fresh.data.defaultRigId,
             catalogue: fresh.data.catalogue,
         });
         announceRigSaved(outcome, 'Rig deleted.');

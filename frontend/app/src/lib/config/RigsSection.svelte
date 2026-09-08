@@ -5,7 +5,8 @@
     // audio RX/TX via /v1/hardware pickers) are editable, saved via a whole-catalogue
     // PUT (see rigs.svelte.ts data-safety note). Add and Delete are immediate
     // structural writes (Add creates a blank rig to configure; Delete is confirmed
-    // and removes it, repointing the active default when needed).
+    // and removes it). The default rig is never deletable: the operator sets
+    // another rig as default first (alpha.2 dogfood Finding 3, W-0012).
     import { onMount } from 'svelte';
     import { rigsState } from './rigs.svelte';
     import { bridgeEnabledState } from './bridgeEnabled.svelte';
@@ -39,7 +40,8 @@
 
     // Delete a rig — an immediate structural write with NO undo (unlike the config
     // SPA's pending-draft delete that a Cancel could discard), so confirm first. The
-    // button is disabled for the only rig; deleteRig also refuses it.
+    // button is disabled for the only rig and for the default rig; deleteRig also
+    // refuses both.
     async function onDeleteRig(id: number) {
         const rig = rigsState.rigs.find((r) => r.id === id);
         const name = rig ? rigsState.nameFor(rig) : 'this rig';
@@ -244,20 +246,34 @@
                                 {rigsState.settingDefault ? 'Setting…' : 'Set as default'}
                             </button>
                         {/if}
-                        <!-- Delete — immediate + confirmed. Disabled for the only rig
-                             (deleteRig refuses it too); ml-auto pushes it to the right. -->
+                        <!-- Delete — immediate + confirmed. Disabled for the only rig and
+                             for the default rig (deleteRig refuses both); ml-auto pushes it
+                             to the right. The only-rig reason wins: "set another rig as
+                             default" is impossible with one rig. -->
                         <button
                             class="ml-auto rounded-md px-2 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:text-muted disabled:hover:bg-transparent dark:text-red-400 dark:hover:bg-red-500/10"
                             disabled={rigsState.rigs.length <= 1 ||
+                                rig.id === rigsState.defaultRigId ||
                                 rigsState.saving ||
                                 rigsState.settingDefault}
                             title={rigsState.rigs.length <= 1
                                 ? 'Cannot delete the only rig'
-                                : 'Delete this rig'}
+                                : rig.id === rigsState.defaultRigId
+                                  ? 'Cannot delete the default rig — set another rig as default first'
+                                  : 'Delete this rig'}
                             onclick={() => onDeleteRig(rig.id)}
                         >
                             Delete
                         </button>
+                        {#if rigsState.rigs.length > 1 && rig.id === rigsState.defaultRigId}
+                            <!-- The reason stated in the panel, not only in the tooltip:
+                                 whether a tooltip shows on a disabled control is browser
+                                 behaviour this SPA does not rely on. basis-full wraps it
+                                 onto its own line under the header row. -->
+                            <p class="basis-full text-xs text-muted">
+                                The default rig can't be deleted — set another rig as default first.
+                            </p>
+                        {/if}
                     </div>
                     {#if def?.manufacturer || def?.model}
                         <p class="mt-0.5 text-sm text-muted">
