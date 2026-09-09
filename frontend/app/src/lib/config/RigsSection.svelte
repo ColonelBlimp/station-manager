@@ -249,7 +249,9 @@
                         <!-- Delete — immediate + confirmed. Disabled for the only rig and
                              for the default rig (deleteRig refuses both); ml-auto pushes it
                              to the right. The only-rig reason wins: "set another rig as
-                             default" is impossible with one rig. -->
+                             default" is impossible with one rig. The tooltip carries the
+                             reason alone — no panel line repeats it (operator ruling
+                             2026-09-09, alpha.2 record entry 32). -->
                         <button
                             class="ml-auto rounded-md px-2 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:text-muted disabled:hover:bg-transparent dark:text-red-400 dark:hover:bg-red-500/10"
                             disabled={rigsState.rigs.length <= 1 ||
@@ -265,15 +267,6 @@
                         >
                             Delete
                         </button>
-                        {#if rigsState.rigs.length > 1 && rig.id === rigsState.defaultRigId}
-                            <!-- The reason stated in the panel, not only in the tooltip:
-                                 whether a tooltip shows on a disabled control is browser
-                                 behaviour this SPA does not rely on. basis-full wraps it
-                                 onto its own line under the header row. -->
-                            <p class="basis-full text-xs text-muted">
-                                The default rig can't be deleted — set another rig as default first.
-                            </p>
-                        {/if}
                     </div>
                     <!-- No manufacturer · model subtitle and no description under the
                          heading: every rigdef's name is "<manufacturer> <model>" and the

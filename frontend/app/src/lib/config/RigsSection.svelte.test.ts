@@ -139,7 +139,7 @@ describe('RigsSection advanced editors', () => {
     // operator sees it: disabled with the reason on the default, enabled on a
     // non-default rig, and enabled on the former default once "Set as default"
     // has moved the badge — the explicit change the reason asks for.
-    it('Delete is disabled on the default rig with the reason, and enabled once the default moves', async () => {
+    it('Delete is disabled on the default rig with the reason in its tooltip only, and enabled once the default moves', async () => {
         mockCluster({
             default_rig_id: 1,
             rigs: [
@@ -158,10 +158,9 @@ describe('RigsSection advanced editors', () => {
         expect(del).toBeDisabled();
         expect(del.title).toMatch(/default rig/i);
         expect(del.title).toMatch(/set another rig as default/i);
-        // The reason is also stated in the panel, not only in a tooltip: whether a
-        // tooltip shows on a disabled control is browser behaviour this test does
-        // not vouch for.
-        expect(screen.getByText(/set another rig as default first/i)).toBeTruthy();
+        // The tooltip carries the reason alone (operator ruling 2026-09-09, record
+        // entry 32): no panel line under the header repeats it.
+        expect(screen.queryByText(/set another rig as default first/i)).toBeNull();
 
         // A non-default rig deletes as before. Selected by position: both rigs are
         // the same model, so nameFor() renders them identically.
