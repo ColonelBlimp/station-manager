@@ -1214,6 +1214,17 @@ Times UTC.
     and after "Set as default" on that rig the former default's Delete returns). The log holds one
     `PUT /v1/config` (200) at 06:51:42Z for the default change; `/v1/rigs` reads `default_rig_id`
     3 afterwards. Finding #3 is closed as deployed and accepted.
+32. **13:32Z–14:22Z — Finding #18 raised, fixed, deployed, accepted; Finding #3's panel line
+    ruled off.** On the `a364c21a` build the operator found the rig detail's manufacturer · model
+    subtitle redundant: every shipped rigdef's name is "<manufacturer> <model>" and the Model
+    select shows the name again, so the line repeated the heading under the default-rig reason.
+    Operator ruling: the subtitle goes and the rigdef description stays unsurfaced there — the
+    panel configures the rig, it does not describe it. `5e763dc8` removes the subtitle (pinned)
+    and was deployed as `2.0.0~alpha.2.27.g5e763dc8-1`, daemon started 16:09:48 CAT; verified
+    `/v1/version` `2.0.0-alpha.2-27-g5e763dc8`, schema 8, health ok, 7,468 QSOs, zero errors
+    since the restart; accepted 14:22Z. With the acceptance the operator ruled on Finding #3's
+    presentation: the "default rig can't be deleted" line under the header goes too, the Delete
+    button's tooltip carries the reason alone (a follow-up code commit).
 
 ## Findings
 
@@ -1240,3 +1251,4 @@ durable work through the backlog.
 | 15 | A2-07 (fresh deployment) | The embedded manual contains no uninstall section (repository search 2026-09-06: zero hits for uninstall or `dnf remove` under `manual/content`), and the install guide that holds §10 Uninstall is not in the RPM payload — it is reachable only from the repository README and the website. A2-07 therefore cannot be walked "per the guide" from the installed software alone. | documentation gap (operator ruling 2026-09-06) | W-0018: add update and uninstall guidance to the embedded manual |
 | 16 | PKG-03 (fresh deployment, §5 import) | After `smctl import` stored three QSOs (logbook total 4) the header still read "Logbook Default (1)" (operator screenshot 2026-09-06 11:48Z). `station.svelte.ts`: the count is seeded at boot and re-fetched only after a QSO logged from the app; neither the import nor the daemon restart / SSE revive refreshes it. | UX consistency defect (operator ruling 2026-09-06) | W-0012 — shipped `33e975bc` (ADR 0079) and `9b60b65e` (initial `: connected` comment on every SSE stream); deployed as `2.0.0~alpha.2.21.g9b60b65e-1`; verified 2026-09-07: the count request lands at the reconnect (Execution log #30) |
 | 17 | A2-07 (fresh deployment) | After `sudo dnf remove station-manager` the empty directories `/usr/share/doc/station-manager` and `…/manual` remain, unowned by any package (`rpm -qf` → not owned); every file was removed. | packaging residual (operator ruling 2026-09-06) | W-0009, with the next packaging change |
+| 18 | B1-03 (dev build `2.0.0-alpha.2-23-ga364c21a`, Settings → Rigs) | The rig detail shows a manufacturer · model subtitle under the heading (`RigsSection.svelte:278`); every shipped rigdef in `internal/cat/rigs/` names itself "<manufacturer> <model>" and the Model select repeats the name, so the line is redundant and takes a row. | UX layout defect, low severity (operator 2026-09-09); the rigdef description stays unsurfaced in this panel by ruling | W-0012 — shipped `5e763dc8` 2026-09-09 (subtitle removed, pinned); deployed as `2.0.0~alpha.2.27.g5e763dc8-1`, accepted 2026-09-09 (Execution log #32) |
