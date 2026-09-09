@@ -19,10 +19,11 @@ not compete with the app-shell, notification-history, or UI-cohesion dossiers.
 - **Maps and tables:** dogfood-validate shipped map catch-up/zoom behavior; decide solar-time overlay
   versus a world-time widget, map band-source policy, and session column resizing/sorting before
   implementation. The whole-log Dashboard map remains separate from the shipped time-window map.
-- **Settings and sidebar (alpha.2 dogfood Findings #3, #4):** disable Delete on the default rig with a
-  stated reason and require an explicit default change first (today the SPA silently repoints the
-  default to the first survivor); the sidebar Manual link opens in a new tab (shipped `f0b8e6eb`, 2026-09-07,
-  operator-verified on the station).
+- **Settings and sidebar (alpha.2 dogfood Findings #3, #4):** Delete is disabled on the default rig with
+  the reason stated in the panel and the tooltip, and the operator sets another rig as default first
+  (shipped `a364c21a`, 2026-09-08; deployed and accepted 2026-09-09 — the record's entry 31; the SPA's
+  earlier silent repoint of the default to the first survivor is gone); the sidebar Manual link opens
+  in a new tab (shipped `f0b8e6eb`, 2026-09-07, operator-verified on the station).
 - **First-run and no-rig defaults (alpha.2 dogfood Findings #8, #11, #12, #16):** the welcome surface's tab
   title reads "Welcome · Station Manager" (shipped `c1045efa`, 2026-09-07, deployed and accepted); the Rig Control card opened from Phone/CW or FT8 sets both
   frequency and mode for that context (no-rig operating-context policy); the header's logbook count
