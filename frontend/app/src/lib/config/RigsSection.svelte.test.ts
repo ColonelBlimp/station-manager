@@ -206,4 +206,31 @@ describe('RigsSection advanced editors', () => {
         expect(del.title).toBe('Cannot delete the only rig');
         expect(screen.queryByText(/set another rig as default first/i)).toBeNull();
     });
+
+    it('the detail names the rig once: no manufacturer · model subtitle, no description', async () => {
+        // alpha.2 dogfood Finding #18 (W-0012): every shipped rigdef's name IS
+        // "<manufacturer> <model>" and the Model select shows the name again, so
+        // the subtitle repeated the heading. The description stays unsurfaced
+        // here by ruling — this panel configures the rig, it doesn't describe it.
+        mockCluster({
+            default_rig_id: 1,
+            rigs: [{ id: 1, model: 'ftdx10', port: '/dev/a' }],
+            catalogue: [
+                {
+                    id: 'ftdx10',
+                    name: 'Yaesu FTdx10',
+                    manufacturer: 'Yaesu',
+                    model: 'FTdx10',
+                    description: 'HF/50 MHz SDR transceiver',
+                    rig_modes: ['DATA-U'],
+                },
+            ],
+        });
+        render(RigsSection);
+        await vi.waitFor(() => expect(rigsState.loaded).toBe(true));
+        flushSync();
+        expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('Yaesu FTdx10');
+        expect(screen.queryByText('Yaesu · FTdx10')).toBeNull();
+        expect(screen.queryByText('HF/50 MHz SDR transceiver')).toBeNull();
+    });
 });

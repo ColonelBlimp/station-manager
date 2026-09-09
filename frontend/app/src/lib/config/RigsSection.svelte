@@ -214,8 +214,8 @@
                     {@const rig = rigsState.selected}
                     {@const draft = rigsState.draft}
                     <!-- def / name follow the DRAFT's model (not the pristine rig) so a
-                         model change updates the heading, subtitle, inherit-placeholders,
-                         and the {#key draft} sub-editors' rigdef. -->
+                         model change updates the heading, inherit-placeholders, and the
+                         {#key draft} sub-editors' rigdef. -->
                     {@const def = rigsState.defFor(draft)}
                     <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
                         <h2 class="text-lg font-semibold text-ink">{rigsState.nameFor(draft)}</h2>
@@ -275,11 +275,10 @@
                             </p>
                         {/if}
                     </div>
-                    {#if def?.manufacturer || def?.model}
-                        <p class="mt-0.5 text-sm text-muted">
-                            {[def?.manufacturer, def?.model].filter(Boolean).join(' · ')}
-                        </p>
-                    {/if}
+                    <!-- No manufacturer · model subtitle and no description under the
+                         heading: every rigdef's name is "<manufacturer> <model>" and the
+                         Model select below shows the name again (alpha.2 dogfood
+                         Finding #18, W-0012). -->
 
                     <!-- Rig (editable): model + per-rig FT8-mode and MY_RIG overrides.
                          Ported from the config SPA's Rigs tab. Model is a rigdef id;
