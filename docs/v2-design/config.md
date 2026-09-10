@@ -230,6 +230,11 @@ PSK Reporter, evidence capture, and evidence synchronization remain opt-in.
   `40m 7074000`, `30m 10136000`, `20m 14074000`, `17m 18100000`,
   `15m 21074000`, `12m 24915000`, `10m 28074000`, and `6m 50313000`;
   positive per-band overrides replace or extend the map.
+- FT4 dial frequencies in hertz (`ft8.ft4_frequencies`, ADR 0080): `80m 3576000`,
+  `40m 7047500` and `20m 14080000` only — the three Africa FT4 DX Contest bands,
+  cited from the 2026 SARL Contest Manual (rule 5.4b, "the default FT4 frequencies
+  in WSJT-X"); no other band ships a default (operator ruling 2026-09-10), and a
+  positive per-band override replaces or extends the map.
 - FT8 RX audio window: `-60` to `-10 dBFS`.
 - FT8 transmit-meter amber threshold: raw ALC value `30`.
 - FT8 caller-answer mode: `operator_pick`.

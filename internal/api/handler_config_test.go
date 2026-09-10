@@ -1842,3 +1842,34 @@ func TestHandlePutConfig_RejectsBadRigCatalogue(t *testing.T) {
 		t.Fatalf("Rigs len = %d after rejected PUT, want 0 (no partial write)", len(cfg.Rigs))
 	}
 }
+
+// GET /v1/config serves the FT4 dial table resolved (ADR 0080): the three cited
+// contest bands by default, an operator override merged over them.
+func TestHandleGetConfig_ServesFt4Frequencies(t *testing.T) {
+	srv := testServer(t)
+	if _, err := srv.cfg.Update(func(c *config.Config) error {
+		c.Ft8.Ft4Frequencies = map[string]int{"15m": 21_140_000}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed override: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/v1/config", nil)
+	w := httptest.NewRecorder()
+	srv.handleGetConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var resp ConfigResponse
+	if err := unmarshalJSON(w.Body.String(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	want := map[string]int{"80m": 3_576_000, "40m": 7_047_500, "20m": 14_080_000, "15m": 21_140_000}
+	if len(resp.Ft4Frequencies) != len(want) {
+		t.Fatalf("ft4_frequencies = %v, want %v", resp.Ft4Frequencies, want)
+	}
+	for band, hz := range want {
+		if resp.Ft4Frequencies[band] != hz {
+			t.Errorf("ft4_frequencies[%s] = %d, want %d", band, resp.Ft4Frequencies[band], hz)
+		}
+	}
+}

@@ -77,6 +77,15 @@ type Ft8Config struct {
 	// so an untouched config carries no inert block.
 	Frequencies map[string]int `json:"frequencies,omitempty"`
 
+	// Ft4Frequencies is the FT4 counterpart of Frequencies (ADR 0080): band label
+	// → FT4 dial frequency in Hz, stored sparse and served resolved on /v1/config
+	// as `ft4_frequencies`. The built-in table carries ONLY the three Africa FT4
+	// DX Contest bands, cited from the 2026 SARL Contest Manual (rule 5.4b: "the
+	// default FT4 frequencies in WSJT-X"); every other band ships absent by
+	// operator ruling (2026-09-10) until a citation exists, and an operator
+	// override may add it.
+	Ft4Frequencies map[string]int `json:"ft4_frequencies,omitempty"`
+
 	// FieldDay holds the operator's ARRL Field Day exchange (class + ARRL/RAC
 	// section), sent when ANSWERING a CQ FD over FT8 — search & pounce only; SM
 	// does not call CQ FD. Pointer-typed for the same inert-block reason as
@@ -280,6 +289,32 @@ func DefaultFt8Frequencies() map[string]int {
 		"10m":  28_074_000,
 		"6m":   50_313_000,
 	}
+}
+
+// DefaultFt4Frequencies returns the built-in per-band FT4 dial frequencies (Hz):
+// only the three bands with a citation — 3576 kHz (80 m), 7047.5 kHz (40 m) and
+// 14080 kHz (20 m), "the default FT4 frequencies in WSJT-X" per the 2026 SARL
+// Contest Manual, The Africa FT4 DX Contest, rule 5.4b. No uncited defaults
+// (operator ruling 2026-09-10); operators add other bands in config.json.
+func DefaultFt4Frequencies() map[string]int {
+	return map[string]int{
+		"80m": 3_576_000,
+		"40m": 7_047_500,
+		"20m": 14_080_000,
+	}
+}
+
+// ResolveFt4Frequencies overlays sparse band→Hz overrides onto the FT4 defaults
+// with the same rule as ResolveFt8Frequencies: a positive override replaces or
+// adds a band; non-positive or absent entries keep the default. Fresh map.
+func ResolveFt4Frequencies(c map[string]int) map[string]int {
+	d := DefaultFt4Frequencies()
+	for band, hz := range c {
+		if hz > 0 {
+			d[band] = hz
+		}
+	}
+	return d
 }
 
 // ResolveFt8Frequencies overlays an operator's sparse band→Hz overrides onto the

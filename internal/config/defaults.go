@@ -18,7 +18,7 @@ package config
 //	     cosmetic gain — the DefaultConfig-seed is the standard Go idiom for a
 //	     default-true bool that must not be re-stomped each Load. Accepted as-is.]
 //	(b)  serve/read-time resolve — types/ft8.go: ResolveFt8Display,
-//	     ResolveFt8Frequencies, ResolveFt8CallerAnswerMode, ResolveFt8MaxRepeats
+//	     ResolveFt8Frequencies, ResolveFt4Frequencies, ResolveFt8CallerAnswerMode, ResolveFt8MaxRepeats
 //	     (defaults applied at /v1/config GET, keeping config.json sparse for SPA prefs).
 //	(c)  nil-pointer-means-default — Server.ServeSPA, Ft8.EnableOSD,
 //	     Ft8.TX.Occupancy.GuardMarginHz (*T distinguishes unset from explicit 0/false).

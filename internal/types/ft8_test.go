@@ -308,3 +308,33 @@ func TestResolveFt8Meter_LegacyRedKeyIgnored(t *testing.T) {
 		t.Fatalf("AlcAmber = %d, want 40", got.AlcAmber)
 	}
 }
+
+func TestResolveFt4Frequencies(t *testing.T) {
+	// nil → exactly the three cited contest bands (SARL 2026 rule 5.4b), nothing else.
+	d := ResolveFt4Frequencies(nil)
+	want := map[string]int{"80m": 3_576_000, "40m": 7_047_500, "20m": 14_080_000}
+	if len(d) != len(want) {
+		t.Fatalf("FT4 defaults = %v, want only the three cited bands %v", d, want)
+	}
+	for band, hz := range want {
+		if d[band] != hz {
+			t.Errorf("%s = %d, want %d", band, d[band], hz)
+		}
+	}
+	// Positive override replaces; non-positive is ignored; an uncited band is only
+	// ever added by the operator.
+	got := ResolveFt4Frequencies(map[string]int{"20m": 14_080_500, "40m": 0, "15m": 21_140_000})
+	if got["20m"] != 14_080_500 {
+		t.Errorf("20m override = %d, want 14080500", got["20m"])
+	}
+	if got["40m"] != 7_047_500 {
+		t.Errorf("40m (zero override ignored) = %d, want default 7047500", got["40m"])
+	}
+	if got["15m"] != 21_140_000 {
+		t.Errorf("15m (operator-added) = %d, want 21140000", got["15m"])
+	}
+	got["20m"] = 1
+	if DefaultFt4Frequencies()["20m"] != 14_080_000 {
+		t.Error("ResolveFt4Frequencies leaked into the package defaults")
+	}
+}

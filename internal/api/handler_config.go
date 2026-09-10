@@ -79,6 +79,9 @@ type ConfigResponse struct {
 	// (no Settings control yet) and a PUT never carries it, so it's left untouched on
 	// write (it survives in the in-memory cfg, rewritten with the rest).
 	Ft8Frequencies map[string]int `json:"ft8_frequencies,omitempty"`
+	// Ft4Frequencies is the FT4 dial table (ADR 0080), served resolved like
+	// Ft8Frequencies and read-only here for the same reason.
+	Ft4Frequencies map[string]int `json:"ft4_frequencies,omitempty"`
 	// Ft8Audio is the RX level meter's classification window (dBFS), always
 	// served RESOLVED on GET (defaults + operator overrides) for the FT8 view's
 	// level indicator. Read-only over /v1/config like Ft8Frequencies —
@@ -1038,6 +1041,7 @@ func (s *Server) buildConfigResponse(r *http.Request, cfg config.Config) (Config
 	// FT8 per-band dial frequencies, always resolved (defaults + overrides) for the
 	// SPA's Main-Freq band buttons.
 	resp.Ft8Frequencies = types.ResolveFt8Frequencies(cfg.Ft8.Frequencies)
+	resp.Ft4Frequencies = types.ResolveFt4Frequencies(cfg.Ft8.Ft4Frequencies)
 
 	// RX level meter window, resolved for the FT8 view's level indicator.
 	audio := types.ResolveFt8Audio(cfg.Ft8.Audio)
