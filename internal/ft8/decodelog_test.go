@@ -73,7 +73,7 @@ func TestDecodeLog_TxFormat(t *testing.T) {
 	// 14:08:45.104 UTC, dial 14.074 MHz, offset 2997 Hz. Matches the JTDX TX line:
 	//   20260618_140845.104 Transmitting 14.074 MHz + 2997Hz FT8: 7Q5MLV JM1ISX R-07
 	tx := time.Date(2026, 6, 18, 14, 8, 45, 104_000_000, time.UTC)
-	dl.WriteTx(tx, 14.074, 2997, "7Q5MLV JM1ISX R-07")
+	dl.WriteTx(tx, 14.074, 2997, "FT8", "7Q5MLV JM1ISX R-07")
 
 	lines := closeAndRead(t, dl, path)
 	require.Len(t, lines, 1)
@@ -86,7 +86,7 @@ func TestDecodeLog_TxOmitsDialWhenUnknown(t *testing.T) {
 
 	// Manual transmit (dial 0): the band clause is omitted, offset still recorded.
 	tx := time.Date(2026, 6, 18, 14, 8, 45, 0, time.UTC)
-	dl.WriteTx(tx, 0, 1500, "CQ 7Q5MLV KH78")
+	dl.WriteTx(tx, 0, 1500, "FT8", "CQ 7Q5MLV KH78")
 
 	lines := closeAndRead(t, dl, path)
 	require.Len(t, lines, 1)
@@ -116,7 +116,7 @@ func TestDecodeLog_NilAndClosedAreNoOps(t *testing.T) {
 	var dl *DecodeLog
 	require.NotPanics(t, func() {
 		dl.WriteRx(time.Now(), []goft8.DecodedMessage{{Text: "x"}})
-		dl.WriteTx(time.Now(), 14.074, 1500, "y")
+		dl.WriteTx(time.Now(), 14.074, 1500, "FT8", "y")
 		dl.Close()
 	})
 
@@ -134,8 +134,8 @@ func TestDecodeLog_NilAndClosedAreNoOps(t *testing.T) {
 func TestDecodeLog_EmptyDecodesWriteNothing(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "all.txt")
 	dl := openTestLog(t, path)
-	dl.WriteRx(time.Now(), nil)           // no decodes this slot
-	dl.WriteTx(time.Now(), 14.074, 0, "") // empty message
+	dl.WriteRx(time.Now(), nil)                  // no decodes this slot
+	dl.WriteTx(time.Now(), 14.074, 0, "FT8", "") // empty message
 	require.Empty(t, closeAndRead(t, dl, path))
 }
 
@@ -184,4 +184,17 @@ func TestOpenDecodeLog_TightensLegacyPermissionsAndRotates(t *testing.T) {
 	if !strings.Contains(string(b), "legacy line") {
 		t.Fatalf("existing content lost on open: %q", b)
 	}
+}
+
+func TestDecodeLog_TxLineNamesTheProfile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "all.txt")
+	dl := openTestLog(t, path)
+	tx := time.Date(2026, 9, 12, 15, 8, 45, 104_000_000, time.UTC)
+	dl.WriteTx(tx, 14.080, 1500, "FT4", "CQ 7Q5MLV KH78")
+	dl.WriteTx(tx, 14.074, 1500, "", "CQ 7Q5MLV KH78") // predating callers: FT8
+
+	lines := closeAndRead(t, dl, path)
+	require.Len(t, lines, 2)
+	require.Equal(t, "20260912_150845.104 Transmitting 14.080 MHz + 1500Hz FT4: CQ 7Q5MLV KH78", lines[0])
+	require.Equal(t, "20260912_150845.104 Transmitting 14.074 MHz + 1500Hz FT8: CQ 7Q5MLV KH78", lines[1])
 }

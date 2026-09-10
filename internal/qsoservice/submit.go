@@ -302,7 +302,7 @@ func (s *Service) prepareQso(rec adif.Record, logbookID int64, logbookCallsign s
 	}
 
 	// RST defaults (skipped for FT8, whose reports are dB SNR; see review M3).
-	if mode != "FT8" {
+	if !snrReportMode(mode) {
 		if strings.TrimSpace(qso.QsoDetails.RstSent) == "" {
 			qso.QsoDetails.RstSent = "59"
 		}

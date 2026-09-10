@@ -39,7 +39,11 @@ func BuildQso(c CompletedQso, station types.LoggingStation, logbookID int64, now
 	}
 	q.Call = c.TheirCall
 	q.Gridsquare = c.TheirGrid
-	q.Mode = "FT8"
+	// The exchange's profile (ADR 0080); FT8 for a snapshot predating the field.
+	q.Mode = c.Mode
+	if q.Mode == "" {
+		q.Mode = ProfileFT8.Name
+	}
 	q.Freq = freq
 	q.Band = utils.FrequencyToBand(freq)
 	// The run identity persists with the QSO (app_sm_run_id via additional_data,

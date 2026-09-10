@@ -278,7 +278,7 @@ func (s *Service) writeTxLogLine() {
 	s.txMu.Lock()
 	msg, offset, dial := s.txMessage, s.txOffsetHz, s.txDialMHz
 	s.txMu.Unlock()
-	s.decLog.Load().WriteTx(time.Now().UTC(), dial, offset, msg)
+	s.decLog.Load().WriteTx(time.Now().UTC(), dial, offset, s.modeName(), msg)
 }
 
 // wasTxSlot reports whether startUTC is one of the recent slots we transmitted in.

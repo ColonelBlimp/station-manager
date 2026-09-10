@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -421,4 +422,103 @@ func TestRequests_ValidateUnderTheClaimedProfile(t *testing.T) {
 	require.Equal(t, "FT4", s.Profile().Name)
 	require.ErrorIs(t, <-txDone, ErrTxBadOffset, "validated under FT4 after the barrier, not FT8 before it")
 	require.ErrorIs(t, <-cqDone, ErrTxBadOffset, "validated under FT4 after the barrier, not FT8 before it")
+}
+
+// capturing=false is not "every capture worker finished": onCaptureLoopExit
+// clears the flag when the scheduler dies and leaves the decoder to drain its
+// buffered slots. A claim in that state joins the outstanding workers before
+// switching, so the old profile's decoder cannot publish into the new one.
+func TestClaimProfile_JoinsOutstandingWorkersWhenCaptureIsAlreadyMarkedDown(t *testing.T) {
+	withShortLinger(t, 10*time.Second)
+	src := newFakeSource()
+	s := newService(types.Ft8Config{Enabled: true}, logging.Noop(), src)
+	require.NoError(t, s.Initialize())
+	require.NoError(t, s.Start(context.Background()))
+	t.Cleanup(func() { _ = s.Stop() })
+
+	// A worker of the (dead) capture session still running: tracked by s.wg,
+	// while capturing has already been cleared the way onCaptureLoopExit does.
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) }) // a failing assertion must not wedge Stop's drain
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		<-release
+	}()
+	s.mu.Lock()
+	s.setCapturingLocked(false)
+	s.mu.Unlock()
+
+	claimDone := make(chan error, 1)
+	go func() {
+		_, err := s.ClaimProfile("ft4")
+		claimDone <- err
+	}()
+	select {
+	case err := <-claimDone:
+		t.Fatalf("the claim returned (%v) with a capture worker still running; it must join it first", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+	require.Equal(t, "FT8", s.Profile().Name, "no switch while the old worker runs")
+
+	releaseOnce.Do(func() { close(release) })
+	require.NoError(t, <-claimDone)
+	require.Equal(t, "FT4", s.Profile().Name)
+}
+
+// A subscriber that reconnects WHILE the claim is joining a dead capture's
+// workers must not start a new session into the WaitGroup being waited on:
+// acquisition is deferred until the join completes, then the subscriber
+// re-acquires on the OLD profile and the claim is refused as busy — the same
+// tail releaseCaptureLocked has.
+func TestClaimProfile_ReconnectDuringDeadWorkerJoin_DefersAcquireAndRefuses(t *testing.T) {
+	withShortLinger(t, 10*time.Second)
+	src := newFakeSource()
+	s := newService(types.Ft8Config{Enabled: true}, logging.Noop(), src)
+	require.NoError(t, s.Initialize())
+	require.NoError(t, s.Start(context.Background()))
+	t.Cleanup(func() { _ = s.Stop() })
+
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		<-release
+	}()
+	s.mu.Lock()
+	s.setCapturingLocked(false) // the capture died; its worker is still draining
+	s.mu.Unlock()
+	require.Equal(t, 0, src.startCount())
+
+	claimDone := make(chan error, 1)
+	go func() {
+		_, err := s.ClaimProfile("ft4")
+		claimDone <- err
+	}()
+	select {
+	case err := <-claimDone:
+		t.Fatalf("the claim returned (%v) with a worker still running", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	// The operator's tab reconnects mid-join.
+	_, unsub := s.Subscribe()
+	defer unsub()
+	time.Sleep(50 * time.Millisecond)
+	require.Equal(t, 0, src.startCount(), "no new capture may start while the claim joins the dead one's workers")
+	select {
+	case err := <-claimDone:
+		t.Fatalf("the claim returned (%v) while the worker still runs", err)
+	default:
+	}
+
+	releaseOnce.Do(func() { close(release) })
+	err := <-claimDone
+	require.ErrorIs(t, err, ErrProfileBusy, "the subscriber that arrived wins; the claim is refused")
+	require.Equal(t, "FT8", s.Profile().Name, "no switch under the subscriber")
+	require.Equal(t, 1, src.startCount(), "the subscriber re-acquired once the join completed")
+	require.Equal(t, "FT8", s.captureProfileForTest().Name, "on the OLD profile")
 }

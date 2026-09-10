@@ -206,7 +206,7 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte, s
 	// leaves FT8 reports empty rather than fabricating "59", so Update must not
 	// reject an empty FT8 report either (otherwise a no-op or comment-only edit of
 	// a valid bare-roger FT8 QSO fails with a 400). Phone/CW keep the requirement.
-	if merged.QsoDetails.Mode != "FT8" {
+	if !snrReportMode(merged.QsoDetails.Mode) {
 		if merged.QsoDetails.RstSent == "" {
 			return types.Qso{}, &SubmitError{Code: "missing_required_field", Message: "rst_sent cannot be empty"}
 		}

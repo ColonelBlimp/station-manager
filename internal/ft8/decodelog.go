@@ -251,16 +251,19 @@ func (d *DecodeLog) WriteRx(slotStart time.Time, msgs []goft8.DecodedMessage) {
 // stamped when the transmission is committed; for a sequencer rung (current-slot)
 // that is within ~1 s of the on-air key, for a manual next-slot transmit it can be
 // up to a slot early — close enough for the diagnostic record.
-func (d *DecodeLog) WriteTx(t time.Time, dialMHz, offsetHz float64, message string) {
+func (d *DecodeLog) WriteTx(t time.Time, dialMHz, offsetHz float64, mode, message string) {
 	if d == nil || message == "" {
 		return
+	}
+	if mode == "" {
+		mode = ProfileFT8.Name
 	}
 	ts := t.UTC().Format("20060102_150405.000")
 	off := int(offsetHz + 0.5)
 	if dialMHz > 0 {
-		d.enqueue(fmt.Sprintf("%s Transmitting %.3f MHz + %dHz FT8: %s\n", ts, dialMHz, off, message))
+		d.enqueue(fmt.Sprintf("%s Transmitting %.3f MHz + %dHz %s: %s\n", ts, dialMHz, off, mode, message))
 	} else {
-		d.enqueue(fmt.Sprintf("%s Transmitting %dHz FT8: %s\n", ts, off, message))
+		d.enqueue(fmt.Sprintf("%s Transmitting %dHz %s: %s\n", ts, off, mode, message))
 	}
 }
 

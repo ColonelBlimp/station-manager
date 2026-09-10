@@ -28,6 +28,9 @@ type DecodeReport struct {
 	// postdates the capture window. Same attribution rule, and the same reason,
 	// as OccupancyReport.DialMHz (review P1, 2026-08-07).
 	DialMHz float64 `json:"dial_mhz,omitempty"`
+	// Mode is the profile the slot was captured and decoded on ("FT8" | "FT4",
+	// ADR 0080) — the ADIF MODE a spot built from these rows carries.
+	Mode string `json:"mode,omitempty"`
 }
 
 // DecodeLine is one decoded message in operator-facing form: the base-tone
@@ -69,12 +72,12 @@ func dropOwnTransmissions(msgs []goft8.DecodedMessage, ownCall string) []goft8.D
 // dialMHz is the slot's CAPTURED dial (Slot.DialMHz, 0 = unknown) — stamped
 // here so no consumer has to attribute the decodes against live rig state
 // (see DecodeReport.DialMHz).
-func newDecodeReport(slot SlotRef, dialMHz float64, msgs []goft8.DecodedMessage) DecodeReport {
+func newDecodeReport(slot SlotRef, dialMHz float64, msgs []goft8.DecodedMessage, mode string) DecodeReport {
 	lines := make([]DecodeLine, 0, len(msgs))
 	for _, m := range msgs {
 		lines = append(lines, DecodeLine{Text: m.Text, FreqHz: m.FreqHz, DTSec: m.DTSec, SNR: m.SNR})
 	}
-	return DecodeReport{Slot: slot, Decodes: lines, DialMHz: dialMHz}
+	return DecodeReport{Slot: slot, Decodes: lines, DialMHz: dialMHz, Mode: mode}
 }
 
 // DecodeSlot decodes one 15-second FT8 slot from 12 kHz mono signed-16-bit

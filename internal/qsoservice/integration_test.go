@@ -755,3 +755,30 @@ func TestUpdate_RejectsMalformedQsoDateOff(t *testing.T) {
 	require.ErrorAs(t, err, &se)
 	require.Equal(t, "invalid_field_value", se.Code)
 }
+
+// TestUpdate_FT4EmptyReportEditable: FT4 shares FT8's SNR-report rule (ADR
+// 0080) — a bare-roger FT4 contact submits with an empty report, gets no "59"
+// default, and a no-op edit still succeeds.
+func TestUpdate_FT4EmptyReportEditable(t *testing.T) {
+	s := newTestService(t)
+	lbID := seedLogbook(t, s, "Main", "M0ABC")
+	ctx := context.Background()
+
+	rec := adif.Record{
+		ContactedStation: types.ContactedStation{Call: "K1ABC"},
+		QsoDetails:       types.QsoDetails{Band: "20m", Mode: "FT4", Freq: "14.080", QsoDate: "20260912", TimeOn: "1530"},
+		LoggingStation:   types.LoggingStation{StationCallsign: "M0ABC"},
+	}
+	res, err := s.Submit(ctx, lbID, rec, false)
+	require.NoError(t, err)
+
+	existing, err := s.DB.FetchQsoByIdWithContext(ctx, res.ID)
+	require.NoError(t, err)
+	require.Equal(t, "FT4", existing.QsoDetails.Mode)
+	require.Empty(t, existing.QsoDetails.RstRcvd, "FT4 submit leaves rst_rcvd empty, no 59 default")
+	require.Empty(t, existing.QsoDetails.RstSent)
+
+	updated, err := s.Update(ctx, existing, []byte(`{}`), source.API)
+	require.NoError(t, err, "a no-op edit of a bare-roger FT4 QSO must succeed")
+	require.Empty(t, updated.QsoDetails.RstRcvd)
+}

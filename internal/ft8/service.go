@@ -104,13 +104,14 @@ type Service struct {
 	// the FT8 view, and frees it when they navigate away. Sessions never
 	// overlap — acquire/release are serialised under mu, and release drains the
 	// previous session's goroutines before mu is dropped.
-	subCount      int                // live /v1/ft8/events subscribers
-	capturing     bool               // a capture session is currently running
-	captureGen    uint64             // bumped per session start; loop-exit callbacks revalidate ownership against it (review ed13a9c6)
-	releasing     bool               // a release is draining s.wg with s.mu dropped (F2)
-	captureCancel context.CancelFunc // cancels the current capture run
-	lingerTimer   *time.Timer        // pending release after the last unsubscribe
-	wg            sync.WaitGroup     // scheduler + decoder of the current session
+	subCount       int                // live /v1/ft8/events subscribers
+	capturing      bool               // a capture session is currently running
+	captureGen     uint64             // bumped per session start; loop-exit callbacks revalidate ownership against it (review ed13a9c6)
+	releasing      bool               // a release is draining s.wg with s.mu dropped (F2)
+	joiningWorkers bool               // a profile claim is joining dead-capture workers with s.mu dropped; acquisition deferred
+	captureCancel  context.CancelFunc // cancels the current capture run
+	lingerTimer    *time.Timer        // pending release after the last unsubscribe
+	wg             sync.WaitGroup     // scheduler + decoder of the current session
 
 	// catLive gates capture acquisition on the rig/CAT being live: no live rig →
 	// no microphone, even with the FT8 view open (the boot-time mic-grab bug —
@@ -598,6 +599,13 @@ func (s *Service) startCaptureLocked() {
 	if s.capturing {
 		return
 	}
+	// A profile claim is joining the workers of a capture that died
+	// (capturing already false): starting a new session now would add
+	// long-lived workers to the WaitGroup the claim is waiting on. The claim
+	// re-acquires for any subscriber present once the join completes.
+	if s.joiningWorkers {
+		return
+	}
 	// CAT-liveness gate: never grab the microphone when the rig is off / CAT
 	// isn't live, even with a subscriber present. The catReconcile loop reacquires
 	// once CAT comes up. A nil gate (no CAT configured, or tests) means
@@ -1074,7 +1082,7 @@ func (s *Service) decodeLoop(slots <-chan Slot, sessionTail func() (time.Time, i
 		// Publish the decode feed every slot (empty on our TX slots) so the SPA's slot
 		// clock stays live; the decode + occupancy publish independent SSE events on
 		// one stream, order between them doesn't matter to the SPA.
-		report := newDecodeReport(ref, slot.DialMHz, msgs)
+		report := newDecodeReport(ref, slot.DialMHz, msgs, p.Name)
 		s.hub.publish(hubEvent{name: EventDecode, payload: report})
 		if s.decodeSink != nil {
 			s.decodeSink(report)

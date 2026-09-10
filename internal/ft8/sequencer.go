@@ -339,6 +339,10 @@ type CqAnswerer struct {
 // CompletedQso is captured when an exchange finishes (73 sent) — the data e4 maps
 // to a types.Qso (BuildQso) and submits via qsoservice.
 type CompletedQso struct {
+	// Mode is the profile the exchange ran on ("FT8" | "FT4", ADR 0080) — the
+	// ADIF MODE the QSO is logged and spotted under. Stamped from the
+	// sequencer's profile, which cannot change under a live session.
+	Mode string
 	// LogbookID is the logbook PINNED when the exchange was armed (ADR 0055) —
 	// the QSO is logged there, not to whatever the current default logbook is at
 	// completion, so a mid-exchange logbook switch can't relabel or misroute it.
@@ -1805,6 +1809,7 @@ func (s *Sequencer) onSlotAnsweringFd(ref SlotRef, msgs []goft8.DecodedMessage, 
 // fields — FD exchanges class+section, not an SNR report. Caller holds s.mu.
 func (s *Sequencer) completedQsoFdLocked() CompletedQso {
 	return CompletedQso{
+		Mode:           s.profile.Name,
 		LogbookID:      s.logbookID,
 		AllowDuplicate: s.allowDuplicate,
 		TheirCall:      s.fdEx.TheirCall,
@@ -1823,6 +1828,7 @@ func (s *Sequencer) completedQsoFdLocked() CompletedQso {
 // class/section came from the call we picked. Caller holds s.mu.
 func (s *Sequencer) completedFdWorkQsoLocked() CompletedQso {
 	return CompletedQso{
+		Mode:           s.profile.Name,
 		LogbookID:      s.logbookID,
 		AllowDuplicate: s.allowDuplicate,
 		TheirCall:      s.fdWork.TheirCall,
@@ -2225,6 +2231,7 @@ func (s *Sequencer) statusModeLocked() QsoStatus {
 // completedQsoLocked captures the finished exchange for logging. Caller holds s.mu.
 func (s *Sequencer) completedQsoLocked() CompletedQso {
 	return CompletedQso{
+		Mode:           s.profile.Name,
 		LogbookID:      s.logbookID,
 		AllowDuplicate: s.allowDuplicate,
 		// The pinned run (contactFlags.runID): the answer-a-CQ seed contact

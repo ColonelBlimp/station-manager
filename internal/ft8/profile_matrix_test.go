@@ -52,6 +52,7 @@ func TestSequencer_StandardAnswer_HappyPath_BothProfiles(t *testing.T) {
 			require.Equal(t, "FN42", r.completed[0].TheirGrid)
 			require.Equal(t, -10, r.completed[0].TheirReport)
 			require.Equal(t, -12, r.completed[0].OurReport)
+			require.Equal(t, p.Name, r.completed[0].Mode, "the completed exchange carries its profile")
 		})
 	}
 }
@@ -83,6 +84,7 @@ func TestCallerSequencer_CallCq_HappyPath_BothProfiles(t *testing.T) {
 			require.Len(t, r.completed, 1)
 			require.Equal(t, "DL9UW", r.completed[0].TheirCall)
 			require.Equal(t, "JO41", r.completed[0].TheirGrid)
+			require.Equal(t, p.Name, r.completed[0].Mode, "the completed exchange carries its profile")
 			require.True(t, s.Active(), "still calling CQ after the QSO")
 		})
 	}

@@ -234,3 +234,14 @@ func TestNewLoggedQso_MalformedFieldsDegrade(t *testing.T) {
 	require.Equal(t, "", l.TimeOn)
 	require.Equal(t, "", l.QsoDate)
 }
+
+// The logged MODE is the exchange's profile (ADR 0080): an FT4 contact is
+// filed as FT4, and a snapshot predating the field still files as FT8.
+func TestBuildQso_ModeFollowsTheExchangeProfile(t *testing.T) {
+	station := types.LoggingStation{StationCallsign: "7Q5MLV", Operator: "7Q5MLV", MyGridsquare: "KH78"}
+	now := time.Date(2026, 9, 12, 15, 30, 0, 0, time.UTC)
+	ft4 := BuildQso(CompletedQso{Mode: "FT4", TheirCall: "K1ABC", TheirGrid: "FN42", DialFreqMHz: 14.080, OffsetHz: 1500}, station, 1, now, nil)
+	require.Equal(t, "FT4", ft4.Mode)
+	legacy := BuildQso(CompletedQso{TheirCall: "K1ABC", TheirGrid: "FN42", DialFreqMHz: 14.074, OffsetHz: 1500}, station, 1, now, nil)
+	require.Equal(t, "FT8", legacy.Mode)
+}

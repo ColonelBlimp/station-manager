@@ -444,6 +444,7 @@ func (s *Sequencer) fireWorkT4(now time.Time) {
 // no grid (type-4 CQ carries none). Caller holds s.mu.
 func (s *Sequencer) completedQsoT4Locked() CompletedQso {
 	return CompletedQso{
+		Mode:           s.profile.Name,
 		LogbookID:      s.logbookID,
 		AllowDuplicate: s.allowDuplicate,
 		TheirCall:      s.t4Ex.TheirCall,
@@ -460,6 +461,7 @@ func (s *Sequencer) completedQsoT4Locked() CompletedQso {
 // degraded shape: our SNR → RST_SENT, blank RST_RCVD, no grid. Caller holds s.mu.
 func (s *Sequencer) completedT4WorkQsoLocked() CompletedQso {
 	return CompletedQso{
+		Mode:           s.profile.Name,
 		LogbookID:      s.logbookID,
 		AllowDuplicate: s.allowDuplicate,
 		TheirCall:      s.t4Work.TheirCall,

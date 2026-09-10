@@ -161,6 +161,25 @@ func (s *Service) ClaimProfile(name string) (Profile, error) {
 	}
 	if s.capturing {
 		s.releaseCaptureLocked() // drains with s.mu dropped; re-acquires only for a new subscriber
+	} else {
+		// capturing=false does not mean every capture worker has finished:
+		// onCaptureLoopExit clears the flag when the scheduler dies and returns
+		// without waiting for the decoder, which drains its buffered slots on
+		// its own. Join them before the switch so the old profile's decoder
+		// cannot publish into, or repopulate the replay cache of, the new one.
+		// Same s.mu-dropped wait as releaseCaptureLocked's drain — and the same
+		// tail: acquisition is suppressed while joining (a subscriber arriving
+		// now would otherwise start a new session and add its long-lived
+		// workers to the very WaitGroup being waited on), then any subscriber
+		// present re-acquires on the OLD profile and the claim is refused.
+		s.joiningWorkers = true
+		s.mu.Unlock()
+		s.wg.Wait()
+		s.mu.Lock()
+		s.joiningWorkers = false
+		if s.subCount > 0 && !s.stopped {
+			s.startCaptureLocked()
+		}
 	}
 	if s.subCount > 0 || s.capturing {
 		return refuse(ErrProfileBusy)

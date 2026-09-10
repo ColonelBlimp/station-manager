@@ -112,11 +112,13 @@ func TestDecodeLoop_FT4Profile_PublishesRowsOnItsLattice(t *testing.T) {
 	require.True(t, strings.HasSuffix(rep.Slot.StartUTC, ".500Z") || strings.HasSuffix(rep.Slot.StartUTC, ".000Z"),
 		"FT4 references carry milliseconds: %q", rep.Slot.StartUTC)
 	require.Equal(t, 14.080, rep.DialMHz)
+	require.Equal(t, "FT4", rep.Mode, "the report names the profile it was decoded on")
 	require.Equal(t, 1, occupancy)
 	if occ := s.LatestOccupancy(); occ != nil {
 		require.Equal(t, ProfileFT4.SignalWidthHz, occ.SignalWidthHz)
 	}
 	require.Len(t, sink.all(), 1, "the PSK-shaped sink sees the FT4 row too")
+	require.Equal(t, "FT4", sink.all()[0].Mode, "and spots it as FT4")
 }
 
 func BenchmarkDecodeSlotFT4(b *testing.B) {

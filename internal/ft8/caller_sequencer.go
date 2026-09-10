@@ -891,6 +891,7 @@ func (s *Sequencer) commitCqContactLocked(c *CallerExchange, now time.Time) {
 // Caller holds s.mu and s.caller is the just-completed exchange.
 func (s *Sequencer) completedCallerQsoLocked() CompletedQso {
 	return CompletedQso{
+		Mode:           s.profile.Name,
 		LogbookID:      s.logbookID,
 		AllowDuplicate: s.allowDuplicate,
 		// The contact's PINNED run (contactFlags.runID), never the live
