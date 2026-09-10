@@ -874,7 +874,7 @@ func (s *Service) decodeLoop(slots <-chan Slot, sessionTail func() (time.Time, i
 	// calls heard in earlier slots, and dies with the session so no stale
 	// context survives a release/re-acquire (see slotDecoder). Mid-session a
 	// QSY resets it (the dial-moved case below) and delivery gaps advance it.
-	dec := newSlotDecoder(s.osdEnabled(), s.log)
+	dec := newSlotDecoder(s.profile, s.osdEnabled(), s.log)
 	// Previous delivered slot's boundary + dial, for the omitted-slot advance
 	// and the dropped-QSY context check below. Zero until the session's first
 	// slot arrives.

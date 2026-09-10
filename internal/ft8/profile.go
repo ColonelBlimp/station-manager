@@ -77,6 +77,9 @@ type Profile struct {
 
 	// encode turns a standard message into the mode's tone sequence.
 	encode func(text string) ([]uint8, error)
+
+	// newDecoder builds the mode's stream-scoped go-ft8 decoder core (decode.go).
+	newDecoder func(enableOSD bool) decoderCore
 }
 
 // ProfileFT8 is the shipped FT8 geometry (QEX Table 4; ADR 0029/0032).
@@ -100,6 +103,7 @@ var ProfileFT8 = Profile{
 		}
 		return enc.Tones[:], nil
 	},
+	newDecoder: newFt8Core,
 }
 
 // ProfileFT4 is the FT4 geometry from go-ft8's exported constants (ADR 0080).
@@ -125,6 +129,7 @@ var ProfileFT4 = Profile{
 		}
 		return enc.Tones[:], nil
 	},
+	newDecoder: newFt4Core,
 }
 
 // slotStartFormat renders a boundary with millisecond precision. The FT8

@@ -3,7 +3,9 @@ package ft8
 import (
 	stderrors "errors"
 	"strings"
+	"time"
 
+	goft4 "github.com/ColonelBlimp/go-ft8/ft4"
 	goft8 "github.com/ColonelBlimp/go-ft8/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
@@ -95,7 +97,13 @@ func newDecodeReport(slot SlotRef, dialMHz float64, msgs []goft8.DecodedMessage)
 // misses) — measured ~1.1–1.7× slower for a real weak-signal recall gain. The
 // daemon passes this from ft8.enable_osd (default true).
 func DecodeSlot(samples []int16, enableOSD bool, log logging.Logger) []goft8.DecodedMessage {
-	msgs, _ := newSlotDecoder(enableOSD, log).decode(samples)
+	return DecodeSlotProfile(ProfileFT8, samples, enableOSD, log)
+}
+
+// DecodeSlotProfile is DecodeSlot on any profile: one FT4 slot is 7.5 s
+// (90 000 samples) and decodes with go-ft8's FT4 decoder, which has no OSD.
+func DecodeSlotProfile(p Profile, samples []int16, enableOSD bool, log logging.Logger) []goft8.DecodedMessage {
+	msgs, _ := newSlotDecoder(p, enableOSD, log).decode(samples)
 	return msgs
 }
 
@@ -114,54 +122,140 @@ func DecodeSlot(samples []int16, enableOSD bool, log logging.Logger) []goft8.Dec
 // silently drops would surface as "0 decodes" with a nil error — success — hiding
 // that the file simply isn't a decodable slot. So reject it up front instead.
 func DecodeFile(path string, enableOSD bool, log logging.Logger) ([]goft8.DecodedMessage, error) {
+	return DecodeFileProfile(ProfileFT8, path, enableOSD, log)
+}
+
+// DecodeFileProfile is DecodeFile on any profile; the WAV must be exactly one
+// of that profile's slots long.
+func DecodeFileProfile(p Profile, path string, enableOSD bool, log logging.Logger) ([]goft8.DecodedMessage, error) {
 	samples, err := readSlotWAV(path)
 	if err != nil {
 		return nil, errors.New(opDecodeFile).WithErr(err)
 	}
-	if len(samples) != ProfileFT8.SlotSamples {
+	if len(samples) != p.SlotSamples {
 		return nil, errors.New(opDecodeFile).WithMsgf(
-			"WAV is %d samples; an FT8 decode slot must be exactly %d (%v at %d Hz)",
-			len(samples), ProfileFT8.SlotSamples, ProfileFT8.Slot, goft8.SampleRate)
+			"WAV is %d samples; an %s decode slot must be exactly %d (%v at %d Hz)",
+			len(samples), p.Name, p.SlotSamples, p.Slot, goft8.SampleRate)
 	}
-	return DecodeSlot(samples, enableOSD, log), nil
+	return DecodeSlotProfile(p, samples, enableOSD, log), nil
 }
 
-// zeroSlot is the all-silence slot skip feeds the stateful decoder for every
-// physical slot SM refuses to decode. Shared and read-only.
-var zeroSlot = make([]int16, ProfileFT8.SlotSamples)
+// decoderCore is the per-profile go-ft8 decoder behind slotDecoder: FT8's
+// ft8.Decoder or FT4's ft4.Decoder, each scoped to one receiver stream. The
+// FT8 core is stateful across adjacent slots (hash table, A7 hints); the
+// v0.9.0 FT4 decoder is stateless by the library's own statement, so its
+// advance is a no-op in effect and reset merely rebuilds the instance — the
+// wrapper keeps the skip/reset contract identical for both so a later
+// stateful FT4 decoder slots in without touching the loop. The wrapper owns
+// the fail-soft, logging and skip/reset policy; the core owns only the
+// library call, so the two modes share one wrapper (ADR 0080).
+type decoderCore interface {
+	// decodeChecked decodes one slot with the checked-input contract: a
+	// malformed slot returns a typed error (the library's DecodeInputError or
+	// DecoderOptionError) without advancing state.
+	decodeChecked(samples []int16) ([]goft8.DecodedMessage, decodeDiag, error)
+	// advance decodes one slot of silence to move a stream-scoped decoder across
+	// a physical slot SM refused to decode (see slotDecoder.skip); a no-op in
+	// effect for a stateless core.
+	advance(zero []int16)
+}
 
-// slotDecoder wraps ONE stateful goft8.Decoder for one receiver stream — one
-// capture session's decode loop. go-ft8 retains callsign-hash and A7 hint
-// state across adjacent slots (its a7.go), which is what lets a "<...>" hash
-// reference resolve to a call heard two slots earlier; the instance is NOT
-// goroutine-safe, so it lives loop-local in decodeLoop (one goroutine per
-// capture session, sessions serialised by the Service). Freshness has two
-// mechanisms, and both are load-bearing: a fresh decoder per session covers
-// operator-length gaps, and the loop calls reset() on a dial-moved slot so a
-// MID-SESSION band change clears state too (review cd1757a7cda2 P1 — the
-// session boundary alone does not cover a QSY).
+// decodeDiag is the per-slot diagnostic subset both libraries report, for the
+// wrapper's debug record.
+type decodeDiag struct {
+	Duration           time.Duration
+	CandidatesFound    int
+	CandidatesAnalyzed int
+	LDPCAttempts       int
+	LDPCFailures       int
+	UnpackFailures     int
+	UniqueMessages     int
+}
+
+type ft8Core struct{ dec *goft8.Decoder }
+
+func newFt8Core(enableOSD bool) decoderCore {
+	return &ft8Core{dec: goft8.NewDecoderWithOptions(goft8.DecoderOptions{EnableOSD: enableOSD})}
+}
+
+func (c *ft8Core) decodeChecked(samples []int16) ([]goft8.DecodedMessage, decodeDiag, error) {
+	report, err := c.dec.DecodeMessagesChecked(samples)
+	if err != nil {
+		return nil, decodeDiag{}, err
+	}
+	d := report.Diagnostics
+	return report.Messages, decodeDiag{
+		Duration: d.Duration, CandidatesFound: d.CandidatesFound, CandidatesAnalyzed: d.CandidatesAnalyzed,
+		LDPCAttempts: d.LDPCAttempts, LDPCFailures: d.LDPCFailures, UnpackFailures: d.UnpackFailures,
+		UniqueMessages: d.UniqueMessages,
+	}, nil
+}
+
+func (c *ft8Core) advance(zero []int16) { c.dec.DecodeMessages(zero) }
+
+// ft4Core wraps go-ft8's FT4 decoder (v0.9.0: unassisted BP, no OSD, no AP,
+// and stateless — the library defers those). enableOSD is accepted for
+// signature symmetry and has no effect; the wrapper logs that once at
+// construction. advance still decodes a silent slot so the stream-scoped
+// contract holds unchanged if a later release retains state.
+type ft4Core struct{ dec *goft4.Decoder }
+
+func newFt4Core(bool) decoderCore { return &ft4Core{dec: goft4.NewDecoder()} }
+
+func (c *ft4Core) decodeChecked(samples []int16) ([]goft8.DecodedMessage, decodeDiag, error) {
+	report, err := c.dec.DecodeMessagesChecked(samples)
+	if err != nil {
+		return nil, decodeDiag{}, err
+	}
+	d := report.Diagnostics
+	return report.Messages, decodeDiag{
+		Duration: d.Duration, CandidatesFound: d.CandidatesFound, CandidatesAnalyzed: d.CandidatesAnalyzed,
+		LDPCAttempts: d.LDPCAttempts, LDPCFailures: d.LDPCFailures, UnpackFailures: d.UnpackFailures,
+		UniqueMessages: d.UniqueMessages,
+	}, nil
+}
+
+func (c *ft4Core) advance(zero []int16) { c.dec.DecodeMessages(zero) }
+
+// slotDecoder wraps ONE stream-scoped decoder core for one receiver stream —
+// one capture session's decode loop, on one profile. The FT8 core retains
+// callsign-hash and A7 hint state across adjacent slots (go-ft8's a7.go),
+// which is what lets a "<...>" hash reference resolve to a call heard two
+// slots earlier (the v0.9.0 FT4 core carries no such state yet); the
+// instance is NOT goroutine-safe, so it lives loop-local in decodeLoop (one
+// goroutine per capture session, sessions serialised by the Service).
+// Freshness has two mechanisms, and both are load-bearing: a fresh decoder per
+// session covers operator-length gaps, and the loop calls reset() on a
+// dial-moved slot so a MID-SESSION band change clears state too (review
+// cd1757a7cda2 P1 — the session boundary alone does not cover a QSY).
 //
 // decode returns the RICH result — every parse status, own-TX included. The
 // curated filters (curateDecodes) apply strictly downstream at the branch
 // point, so the future evidence branch can tap the rich result upstream of
 // them (design §4 prerequisite 2).
 type slotDecoder struct {
-	dec  *goft8.Decoder
-	opts goft8.DecoderOptions
-	log  logging.Logger
+	profile   Profile
+	enableOSD bool
+	core      decoderCore
+	zero      []int16 // one profile slot of silence, for skip
+	log       logging.Logger
 }
 
-// newSlotDecoder builds the per-stream decoder. enableOSD and the logging
-// policy match DecodeSlot's documentation; a nil logger is tolerated.
-func newSlotDecoder(enableOSD bool, log logging.Logger) *slotDecoder {
+// newSlotDecoder builds the per-stream decoder for a profile. enableOSD and the
+// logging policy match DecodeSlot's documentation; a nil logger is tolerated.
+func newSlotDecoder(p Profile, enableOSD bool, log logging.Logger) *slotDecoder {
 	if log == nil {
 		log = logging.Noop()
 	}
-	opts := goft8.DecoderOptions{EnableOSD: enableOSD}
+	if enableOSD && p.Name == ProfileFT4.Name {
+		log.DebugWith().Msg("ft4 decoder has no OSD fallback; enable_osd ignored for FT4")
+	}
 	return &slotDecoder{
-		dec:  goft8.NewDecoderWithOptions(opts),
-		opts: opts,
-		log:  log,
+		profile:   p,
+		enableOSD: enableOSD,
+		core:      p.newDecoder(enableOSD),
+		zero:      make([]int16, p.SlotSamples),
+		log:       log,
 	}
 }
 
@@ -183,17 +277,24 @@ func (d *slotDecoder) decode(samples []int16) (msgs []goft8.DecodedMessage, ok b
 		}
 	}()
 
-	report, err := d.dec.DecodeMessagesChecked(samples)
+	msgs, diag, err := d.core.decodeChecked(samples)
 	if err != nil {
-		ev := d.log.WarnWith().Err(err).Int("samples", len(samples))
-		// Surface the typed validation detail as queryable fields.
-		var inErr *goft8.DecodeInputError
-		var optErr *goft8.DecoderOptionError
+		ev := d.log.WarnWith().Err(err).Int("samples", len(samples)).Str("mode", d.profile.Name)
+		// Surface the typed validation detail as queryable fields — each
+		// library has its own error types.
+		var inErr8 *goft8.DecodeInputError
+		var optErr8 *goft8.DecoderOptionError
+		var inErr4 *goft4.DecodeInputError
+		var optErr4 *goft4.DecoderOptionError
 		switch {
-		case stderrors.As(err, &inErr):
-			ev = ev.Int("got_samples", inErr.GotSamples).Int("want_samples", inErr.WantSamples)
-		case stderrors.As(err, &optErr):
-			ev = ev.Str("option_field", optErr.Field).Str("option_reason", optErr.Reason)
+		case stderrors.As(err, &inErr8):
+			ev = ev.Int("got_samples", inErr8.GotSamples).Int("want_samples", inErr8.WantSamples)
+		case stderrors.As(err, &inErr4):
+			ev = ev.Int("got_samples", inErr4.GotSamples).Int("want_samples", inErr4.WantSamples)
+		case stderrors.As(err, &optErr8):
+			ev = ev.Str("option_field", optErr8.Field).Str("option_reason", optErr8.Reason)
+		case stderrors.As(err, &optErr4):
+			ev = ev.Str("option_field", optErr4.Field).Str("option_reason", optErr4.Reason)
 		}
 		ev.Msg("ft8 slot rejected; skipped")
 		return nil, false
@@ -205,7 +306,7 @@ func (d *slotDecoder) decode(samples []int16) (msgs []goft8.DecodedMessage, ok b
 	// near-free no-op; set the level to debug to recover the decode stream for
 	// on-air diagnosis. This logs the RICH stream — payload-only decodes
 	// included — matching what the evidence branch will capture.
-	for _, m := range report.Messages {
+	for _, m := range msgs {
 		d.log.DebugWith().
 			Str("text", m.Text).
 			Float64("freq_hz", m.FreqHz).
@@ -215,8 +316,8 @@ func (d *slotDecoder) decode(samples []int16) (msgs []goft8.DecodedMessage, ok b
 			Msg("ft8 decode")
 	}
 
-	diag := report.Diagnostics
 	d.log.DebugWith().
+		Str("mode", d.profile.Name).
 		Dur("duration", diag.Duration).
 		Int("candidates_found", diag.CandidatesFound).
 		Int("candidates_analyzed", diag.CandidatesAnalyzed).
@@ -226,7 +327,7 @@ func (d *slotDecoder) decode(samples []int16) (msgs []goft8.DecodedMessage, ok b
 		Int("unique_messages", diag.UniqueMessages).
 		Msg("ft8 slot decoded")
 
-	return report.Messages, true
+	return msgs, true
 }
 
 // skip advances decoder state across a physical slot SM refuses to decode
@@ -245,7 +346,7 @@ func (d *slotDecoder) skip() {
 			d.log.WarnWith().Interface("panic", r).Msg("ft8 skip-slot decode panicked")
 		}
 	}()
-	d.dec.DecodeMessages(zeroSlot)
+	d.core.advance(d.zero)
 	// The advance's only trace: the parity consequence is A7-internal and not
 	// otherwise observable, so this line is both the on-air diagnostic ("did
 	// the decoder advance over my TX slot?") and the executable guard the
@@ -262,7 +363,7 @@ func (d *slotDecoder) skip() {
 // slot keeps skip(): same receiver context, state must survive. The trace
 // line is this transition's only observable, mirroring skip's.
 func (d *slotDecoder) reset() {
-	d.dec = goft8.NewDecoderWithOptions(d.opts)
+	d.core = d.profile.newDecoder(d.enableOSD)
 	d.log.DebugWith().Msg("ft8 dial moved; decoder state reset")
 }
 

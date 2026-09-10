@@ -144,4 +144,7 @@ Operate view (the fallback in ADR 0080), and W-0019 continues afterwards without
   only; a-priori decoding and subtraction deferred by the library).
 - 2026-09-10 — v0.9.0 `ft4` benchmarks on the station host (3 runs each): synthesized single signal 10.6 ms,
   noisy 4.6 ms, busy 12-signal slot 13.2 ms per 7.5 s slot — synthetic fixtures, not AC7's live measurement.
+- 2026-09-10 — slice 2, SM's own decoder wrapper on the station host (`BenchmarkDecodeSlotFT4`, 5 runs): a busy
+  synthetic six-signal FT4 slot decodes in a mean 26.5 ms (FT8 wrapper on the 20 m fixture: 126 ms). Pre-G2
+  synthetic sizing evidence only — not AC7 evidence, which requires the live-slot p95 measured at gate G2.
 - Contest rules: 2026 SARL Contest Manual v1.1, "The Africa FT4 DX Contest", pp. 45–46.

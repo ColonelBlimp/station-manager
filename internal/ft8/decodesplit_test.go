@@ -682,13 +682,13 @@ func TestSlotDecoder_HashResolvesAcrossSlots(t *testing.T) {
 	ref := encodeSlotOrFatal(t, hashRefText, 1500)
 
 	// Control: statelessly, the hash cannot resolve.
-	control := newSlotDecoder(true, logging.Noop())
+	control := newSlotDecoder(ProfileFT8, true, logging.Noop())
 	if got, _ := control.decode(ref); !containsText(textsOf(got), hashUnresolved) {
 		t.Fatalf("fixture control: fresh decode = %v, want %q (fixture broken if absent)",
 			textsOf(got), hashUnresolved)
 	}
 
-	d := newSlotDecoder(true, logging.Noop())
+	d := newSlotDecoder(ProfileFT8, true, logging.Noop())
 	if got, _ := d.decode(teach); !containsText(textsOf(got), hashTeachText) {
 		t.Fatalf("teach slot decoded %v, want %q", textsOf(got), hashTeachText)
 	}
@@ -716,7 +716,7 @@ func TestSlotDecoder_SkipPreservesHashState(t *testing.T) {
 	if testing.Short() {
 		t.Skip("full FT8 decode is heavy; skipped under -short")
 	}
-	d := newSlotDecoder(true, logging.Noop())
+	d := newSlotDecoder(ProfileFT8, true, logging.Noop())
 
 	// skip on a fresh decoder must be harmless.
 	d.skip()

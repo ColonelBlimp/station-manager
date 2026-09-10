@@ -19,17 +19,27 @@ import (
 )
 
 func main() {
-	osd := flag.Bool("osd", true, "enable go-ft8's OSD-2/MRB fallback decode (matches the daemon default)")
+	osd := flag.Bool("osd", true, "enable go-ft8's OSD-2/MRB fallback decode (matches the daemon default; FT4 has none)")
+	mode := flag.String("mode", "ft8", "decode profile: ft8 (15 s slots) or ft4 (7.5 s slots)")
 	flag.Parse()
+	profile := ft8.ProfileFT8
+	switch *mode {
+	case "ft8":
+	case "ft4":
+		profile = ft8.ProfileFT4
+	default:
+		fmt.Fprintf(os.Stderr, "unknown -mode %q (ft8 | ft4)\n", *mode)
+		os.Exit(2)
+	}
 	paths := flag.Args()
 	if len(paths) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: ft8-decode-file [-osd=false] <file.wav> [<file.wav> ...]")
+		fmt.Fprintln(os.Stderr, "usage: ft8-decode-file [-mode=ft8|ft4] [-osd=false] <file.wav> [<file.wav> ...]")
 		os.Exit(2)
 	}
 
 	exit := 0
 	for _, path := range paths {
-		msgs, err := ft8.DecodeFile(path, *osd, logging.Noop())
+		msgs, err := ft8.DecodeFileProfile(profile, path, *osd, logging.Noop())
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "%s: %v\n", path, err)
 			exit = 1
