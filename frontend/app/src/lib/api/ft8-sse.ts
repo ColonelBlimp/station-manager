@@ -150,7 +150,9 @@ export interface LoggedPayload {
     band?: string;
     rst_sent?: string;
     rst_rcvd?: string;
+    /** ADIF pair the contact was filed under: FT8, or MFSK/FT4 for an FT4 exchange (ADR 0080). */
     mode?: string;
+    submode?: string;
     time_on?: string;
     qso_date?: string;
     gridsquare?: string;
@@ -294,6 +296,7 @@ function isLogged(v: unknown): v is LoggedPayload {
         optNum(v.freq_hz) &&
         optStr(v.band) &&
         optStr(v.mode) &&
+        optStr(v.submode) &&
         optStr(v.time_on) &&
         optStr(v.qso_date)
     );

@@ -3,7 +3,7 @@ import App from './App.svelte';
 import { enrich, prefs, setEnricher, setMyGrid } from './lib/operate/enrich.svelte';
 import { setHistory } from './lib/operate/worked.svelte';
 import { setSubmit } from './lib/operate/qso.svelte';
-import { addSessionQso, session } from './lib/operate/session.svelte';
+import { addSessionQso, session, sessionModeLiteral } from './lib/operate/session.svelte';
 import { setMailer } from './lib/operate/mailer.svelte';
 import {
     rig,
@@ -221,7 +221,10 @@ setFt8LoggedSink((p) => {
         callsign: call,
         timeOn: p.time_on ?? '',
         band,
-        mode: p.mode ?? 'FT8',
+        // The row shows the ADIF submode when the pair has one (an FT4 exchange is
+        // filed as MFSK/FT4 and reads "FT4"), the mode otherwise — sessionModeLiteral,
+        // the same rule the edit path applies when it writes the merged row back.
+        mode: sessionModeLiteral(p.mode ?? 'FT8', p.submode),
         rstSent: p.rst_sent ?? '',
         rstRcvd: p.rst_rcvd ?? '',
         name: p.name ?? '',

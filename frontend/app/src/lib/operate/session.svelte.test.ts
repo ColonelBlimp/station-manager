@@ -6,6 +6,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
     session,
+    sessionModeLiteral,
     addSessionQso,
     markSessionEmailed,
     _resetSessionForTests,
@@ -79,5 +80,17 @@ describe('markSessionEmailed', () => {
         markSessionEmailed(['nope']); // not in session → no-op
         markSessionEmailed([]); // empty → no-op
         expect(session.qsos[0].emailed).toBe(true);
+    });
+});
+
+describe('sessionModeLiteral', () => {
+    it('shows the submode when the record has one (an FT4 contact filed as MFSK/FT4 reads FT4)', () => {
+        expect(sessionModeLiteral('MFSK', 'FT4')).toBe('FT4');
+        expect(sessionModeLiteral('SSB', 'USB')).toBe('USB');
+    });
+    it('falls back to the mode without a submode', () => {
+        expect(sessionModeLiteral('FT8', '')).toBe('FT8');
+        expect(sessionModeLiteral('FT8', undefined)).toBe('FT8');
+        expect(sessionModeLiteral(undefined, undefined)).toBe('');
     });
 });

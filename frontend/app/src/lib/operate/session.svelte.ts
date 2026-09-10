@@ -68,6 +68,13 @@ function persist(): void {
 }
 
 // Newest first — the row just logged is the one the operator glances at.
+/** The operator-friendly mode literal a session row shows (USB, FT8, FT4): the
+ *  ADIF submode when the record has one, the mode otherwise — the same rule the
+ *  logbook renders pairs by, so an FT4 contact filed as MFSK/FT4 reads "FT4". */
+export function sessionModeLiteral(mode?: string, submode?: string): string {
+    return submode !== undefined && submode !== '' ? submode : (mode ?? '');
+}
+
 export function addSessionQso(q: Omit<SessionQso, 'id'>): void {
     session.qsos.unshift({ ...q, id: nextId++ });
     persist();

@@ -87,6 +87,14 @@ describe('openFt8Events', () => {
 
         src.emit('ft8-logged', '{"uuid":"u-1","callsign":"PJ4/NA2AA"}');
         expect(h.onLogged).toHaveBeenCalledWith({ uuid: 'u-1', callsign: 'PJ4/NA2AA' });
+        // An FT4 exchange is filed as its ADIF pair; the frame carries both halves.
+        src.emit('ft8-logged', '{"uuid":"u-2","callsign":"K1ABC","mode":"MFSK","submode":"FT4"}');
+        expect(h.onLogged).toHaveBeenCalledWith({
+            uuid: 'u-2',
+            callsign: 'K1ABC',
+            mode: 'MFSK',
+            submode: 'FT4',
+        });
 
         src.emit('error');
         expect(h.onError).toHaveBeenCalledOnce();
@@ -218,6 +226,13 @@ describe('openFt8Events — wrong-shape frames are dropped (F-03)', () => {
 
     // Whitespace-only is not usable: a blank uuid can't dedup a session row, a blank callsign
     // can't key one.
+    it('drops ft8-logged whose submode is not a string', () => {
+        expect(
+            emit('ft8-logged', '{"uuid":"u-3","callsign":"K1ABC","mode":"MFSK","submode":5}')
+                .onLogged
+        ).not.toHaveBeenCalled();
+    });
+
     it('drops ft8-logged whose uuid or callsign is whitespace-only', () => {
         expect(
             emit('ft8-logged', '{"uuid":"   ","callsign":"K1ABC"}').onLogged

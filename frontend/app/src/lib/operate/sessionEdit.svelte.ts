@@ -12,7 +12,7 @@
 
 import { fetchQso, patchQso, type QsoPatch } from '../api/qso-patch';
 import type { LogbookQso } from '../api/logbooks';
-import { updateSessionQso, type SessionQso } from './session.svelte';
+import { updateSessionQso, type SessionQso, sessionModeLiteral } from './session.svelte';
 
 /** ADIF HHMM[SS] → the session list's HH:MM[:SS] display shape. */
 function displayTime(t: string | undefined, fallback: string): string {
@@ -93,7 +93,7 @@ class SessionEditState {
         const overlay: Partial<Omit<SessionQso, 'id'>> = {
             callsign: q.call ?? '',
             band: q.band ?? '',
-            mode: q.submode !== undefined && q.submode !== '' ? q.submode : (q.mode ?? ''),
+            mode: sessionModeLiteral(q.mode, q.submode),
             rstSent: q.rst_sent ?? '',
             rstRcvd: q.rst_rcvd ?? '',
             name: q.name ?? '',
