@@ -65,13 +65,20 @@ together, so the operator-initiated session model carries over unchanged.
 FT4 becomes a second **profile** of the existing `internal/ft8` subsystem: one value that carries
 the slot length, sample counts, tone geometry, Gaussian pulse, Costas layout, nominal start, late
 window, occupancy signal width, encode and decode entry points, and the mode name stamped on QSOs,
-spots and the decode log. The operator selects the profile per capture session from the FT8 view
-through a new `POST /v1/ft8/mode` endpoint; the switch is refused while a session is active, TX is
-armed, or a transmission is in flight, and it rebuilds the scheduler and decoder pair the way the
-existing capture acquire/release already does. The sequencers, ladders, hub, invariants and the
-SPA's operating anchors are shared unchanged; the SPA reads the active profile from the status event
-and derives its countdown, parity and band frequencies from it. The FT4 decoder is consumed only
-from a tagged go-ft8 release, bumped in its own commit.
+spots and the decode log. In the SPA, FT4 is a **third Operate item** beside Phone / CW and FT8
+(operator ruling 2026-09-10): a new operating mode in the router (`/app/operate/ft4`), rendered by
+the same FT view component, labelled from the profile the daemon reports. The view is keyed on the
+operating mode so FT8 → FT4 destroys and remounts it; on mount it first **claims** the profile with
+`POST /v1/ft8/claim {"mode":"ft4"}`, which answers with a distinct code, and only then opens the
+event stream with the same `mode` query. The daemon selects the profile at the capture acquire the
+first subscriber already triggers and rebuilds the scheduler and decoder pair the way
+acquire/release already does. A claim for a different profile is refused while subscribers hold a
+capture, or while a session is active, TX is armed or a transmission is in flight; with zero
+subscribers and an idle subsystem it bypasses the capture linger and switches atomically. The
+sequencers, ladders, hub, invariants and the SPA's operating anchors are shared unchanged; the SPA
+reads the active profile from the status event and derives its countdown, parity and band
+frequencies from it. The FT4 decoder is consumed only from a tagged go-ft8 release, bumped in its
+own commit.
 
 ## Alternatives considered
 
@@ -102,6 +109,18 @@ FT4 as a mode, so SM Cloud and the forwarders still get exercised.
 Use go-ft8's shipped encoder now and let WSJT-X decode. Rejected: the sequencers act on the daemon's
 own decodes; a split pipeline cannot satisfy invariant 4 (every acted-on decode attributable to one
 known frequency) and invents an integration that has no other consumer.
+
+### A "Digital" Operate item with an in-view FT8/FT4 selector
+
+Rename the FT8 item to Digital and put a mode dropdown inside the view. Rejected (operator ruling
+2026-09-10): the sidebar is already where operating mode lives — `OperateNav.svelte` renders one
+item per `OpMode`, the router decides every Phone/CW ↔ FT8 switch through a single hook, and
+`modeRestore` snapshots each mode's dial per band and restores it on return. A third item inherits
+all of that: FT8 remembers 14.074 while FT4 remembers 14.080, the URL and Back/Forward carry the
+mode, and the profile switch lands on the view mount/leave transition that already opens and closes
+the event stream. The dropdown needs a new in-view control with its own refusal states, a second
+snapshot key, and loses the mode from the URL, to save one sidebar entry. A fourth FT-family mode
+would add a fourth item; if the list grows past that, group them then.
 
 ## Consequences
 
@@ -150,9 +169,36 @@ known frequency) and invents an integration that has no other consumer.
 - A second dial table, `ft8.ft4_frequencies`, with the same override semantics as `ft8.frequencies`.
   The three contest bands are cited (SARL rule 5.4b); every other band's default needs a citation
   from the WSJT-X frequency table before it ships, or it ships absent.
-- The event wire gains `mode` on the status event so the SPA never infers the profile from timing.
-  `docs/v2-design/api-endpoints.md`, `docs/v2-design/config.md` and `docs/ft8.md` change with the
-  code.
+- The SPA's `OpMode` becomes `'phone' | 'ft8' | 'ft4'`. The roughly thirty `'ft8'` mode gates across
+  `App.svelte`, `OperateNav.svelte`, `router.svelte.ts`, `Operate.svelte`, `UtilRail.svelte` and
+  `modeRestore.svelte.ts` become an "FT-family" predicate where they gate the shared view, and stay
+  mode-specific where they pick a dial table or a snapshot.
+- **The shared view must remount across FT8 ↔ FT4.** Both modes fall into the same `{:else}`
+  branch of `Operate.svelte:35`, and the stream opens only in `Ft8View.svelte`'s `onMount`, so a
+  bare mode change would leave the FT8 subscription open under an FT4 label. The branch wraps the
+  view in `{#key router.mode}`, so each transition runs stop → claim → start, and the enrichment
+  cache clears as it does on leave today. Sidebar clicks and browser Back/Forward both go through
+  the router's mode change, and both transitions are tested.
+- **A cross-profile claim during the capture linger does not reuse the old capture.** Today a
+  subscriber arriving inside the five-second linger cancels the pending release and keeps the live
+  scheduler (`service.go:367–393`). A claim for a different profile with zero subscribers instead
+  bypasses the linger: it stops the timer, drains and releases the old capture, clears the hub's
+  profile-dependent replay cache (the last decode, TX and QSO frames), then acquires the new profile
+  under the same lock, so no subscriber can observe a mixed state. The stream's own refusal of a
+  `mode` that differs from the acquired profile stays as the belt and braces behind the claim.
+- **Refusals are explained by the claim, not by the stream.** The stream is a native `EventSource`
+  (`ft8-sse.ts`), which exposes a rejected subscription only as an error and retries, so it cannot
+  surface a code. The claim is a plain request and answers with one of `ft8_profile_busy` (another
+  subscriber holds a capture on the other profile), `ft8_session_active`, `ft8_tx_armed` or
+  `ft8_tx_in_flight`, with `retry_after_ms` when the condition is the linger of a session the
+  operator just left. The FT4 view shows the refusal as a banner in place of Band Activity ("FT8 is
+  still winding down — the session you left ends when its capture releases in n s"), re-claims
+  when the interval elapses, and never opens the stream until a claim succeeds, so there is no
+  `EventSource` retry loop. Leaving FT8 mid-session keeps today's semantics: the linger's disarm
+  ends the session (invariant 5) and the FT4 claim succeeds on the retry.
+- The event wire gains `mode` on the claim, the subscription and the status event so the SPA never
+  infers the profile from timing. `docs/v2-design/api-endpoints.md`, `docs/v2-design/config.md`,
+  `docs/ft8.md` and the manual's operating chapter change with the code.
 - What does not change: operator-initiated sessions, the single guaranteed-stop TX controller, the
   rig data-mode literal (`ft8.tx.mode`, the same DATA-U for both), capture gating on the rig, the
   dial guard, and the type-4 and Field Day ladders (both encode identically for FT4, though only the

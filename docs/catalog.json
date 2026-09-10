@@ -312,7 +312,20 @@
       "class": "work-item",
       "audiences": ["operator", "contributor", "agent"],
       "topics": ["ft8", "ft4", "contest", "on-air-validation"],
-      "scopes": ["internal/ft8/**", "frontend/app/src/lib/operate/Ft8Operate.svelte", "frontend/app/src/lib/utils/ft8Parity.ts"],
+      "scopes": [
+        "internal/ft8/**",
+        "internal/api/handler_ft8_qso.go",
+        "frontend/app/src/App.svelte",
+        "frontend/app/src/lib/router.svelte.ts",
+        "frontend/app/src/lib/ui/OperateNav.svelte",
+        "frontend/app/src/lib/api/ft8-sse.ts",
+        "frontend/app/src/lib/operate/Operate.svelte",
+        "frontend/app/src/lib/operate/Ft8View.svelte",
+        "frontend/app/src/lib/operate/Ft8Operate.svelte",
+        "frontend/app/src/lib/operate/UtilRail.svelte",
+        "frontend/app/src/lib/operate/modeRestore.svelte.ts",
+        "frontend/app/src/lib/utils/ft8Parity.ts"
+      ],
       "summary": "W-0019 adds FT4 as a second profile of the FT8 subsystem for the Africa FT4 DX Contest (2026-09-12): slices, operator gates, the contest runbook, and evidence; design in ADR 0080."
     },
     {

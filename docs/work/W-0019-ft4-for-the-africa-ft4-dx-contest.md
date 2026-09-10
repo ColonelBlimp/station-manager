@@ -28,8 +28,12 @@ the decoder can be built ahead of it. ADR 0080 records the design and the altern
   QSO log and decode log.
 - Sub-second slot references: boundaries, parity and `SlotRef.StartUTC` in integer milliseconds on both sides of
   the wire.
-- `POST /v1/ft8/mode` and `mode` on the status event; the SPA's mode toggle, countdown, parity and band buttons
-  follow the active profile.
+- A third Operate item, FT4 (`OpMode 'ft4'`, `/app/operate/ft4`), rendered by the shared FT view keyed on the
+  mode so FT8 ↔ FT4 remounts it; on mount the view claims the profile (`POST /v1/ft8/claim`) and only then
+  subscribes with the same `mode` query; `mode` on the status event; the SPA's countdown, parity, labels and band
+  buttons follow the active profile; `modeRestore` keeps a per-mode dial snapshot for FT4 as it does for FT8.
+- A cross-profile claim with zero subscribers bypasses the capture linger (drain, release, clear replay, acquire,
+  atomically); the claim's refusal codes and the view's banner explain every refusal (ADR 0080).
 - `ft8.ft4_frequencies` with cited defaults; `MODE=FT4` logging; the QSO service's SNR-report predicate.
 - The go-ft8 bump to the tagged release carrying the FT4 decoder, as its own commit.
 - Canonical references updated with the code: `docs/ft8.md`, `docs/v2-design/api-endpoints.md`,
@@ -49,11 +53,11 @@ the decoder can be built ahead of it. ADR 0080 records the design and the altern
 | # | Criterion | Nearest confusable outcome it must be distinguished from |
 | --- | --- | --- |
 | AC1 | With the rig on 14.080 MHz USB-D and FT4 selected, Band Activity shows FT4 decodes with sensible SNR and DT, on a slot clock that flips every 7.5 s and alternates parity. | FT8 decodes of a 15 s window on an FT4 band (nothing decodes); a countdown that still runs to 15. |
-| AC2 | The mode switch is accepted only when idle: with an active session, armed TX or an in-flight transmission it is refused with a distinct code and nothing changes. | A switch that silently stops a session or leaves the scheduler on the old lattice. |
+| AC2 | The profile follows the Operate item: opening FT4 claims `ft4`, then subscribes, and the daemon acquires capture on the FT4 lattice — including when the click lands inside the five-second linger after leaving FT8, where the old capture is released, not reused. A claim while another subscriber holds a capture on the other profile, or while a session is active, TX is armed or a transmission is in flight, is refused with its distinct code and nothing changes; the FT4 view shows the reason as a banner with a countdown when the cause is the linger of the session just left, and re-claims when it elapses. Sidebar and Back/Forward transitions both remount the view. | A subscriber inside the linger keeping the FT8 scheduler under an FT4 label; an `EventSource` error loop instead of an explanation; two tabs on different profiles sharing one capture; a mode change that leaves the FT8 stream open because the view did not remount. |
 | AC3 | Answering a decoded FT4 CQ completes `<them> <us> <grid>` → `R-report` → `73` on consecutive opposite-parity 7.5 s slots, transmitting the synchronised remainder when the rung starts late. | A transmission that starts after the late window and spills into the partner's slot; an untruncated waveform shifted off the timebase. |
 | AC4 | A Call-CQ run on FT4 runs the standard ladder with the operator's grid in the CQ and the confirm-hold from ADR 0067. | The FT8 ladder timing (CQ repeated every 15 s). |
 | AC5 | Exactly one QSO row per completed exchange with `MODE=FT4`, the partner's grid, SNR reports, and the session-pinned frequency; one `ft8-logged` event; the PSK Reporter spot carries `FT4`. | `MODE=FT8` on an FT4 QSO; an RST default of `59` fabricated by the QSO service. |
-| AC6 | Switching back to FT8 restores the 15 s lattice and FT8 decodes without a daemon restart. | Stale FT4 references in the SPA's parity store after the switch. |
+| AC6 | Navigating back to the FT8 item restores the 15 s lattice and FT8 decodes without a daemon restart, and the rig returns to the dial FT8 left (the per-mode snapshot). | Stale FT4 references in the SPA's parity store after the switch; FT8 landing on the FT4 dial. |
 | AC7 | The measured p95 decode time of one live FT4 slot on the station host is at or under 1.0 s (the operator may waive with a recorded reason). | A benchmark on a synthetic single-signal slot standing in for a busy contest band. |
 
 ## Slices
@@ -77,15 +81,24 @@ not need the FT4 decoder and can land now; slice 2 waits for the tagged go-ft8 r
    interface with FT8 and FT4 implementations; keep the stateful-decoder skip/reset semantics. Tests: the FT4
    encode → modulate → decode round trip, the truncated-start round trip, and a decode benchmark on the
    station host recorded in this dossier (AC7).
-3. **Mode switch and wire.** `Service.SetMode` rebuilding the scheduler/decoder pair under the existing
-   acquire/release; `POST /v1/ft8/mode` with the refusal states enumerated (idle, active session, armed, in
-   flight, no capture); `mode` on the status event. Tests: each refusal state; a switch during a live capture
-   yields FT4 references on the next slot and no slot from the mixed window is acted on (invariant 4).
+3. **Profile claim and wire.** `POST /v1/ft8/claim` selects the capture profile with the refusal states
+   enumerated (`ft8_profile_busy`, `ft8_session_active`, `ft8_tx_armed`, `ft8_tx_in_flight`, each with
+   `retry_after_ms` where a linger is pending); a cross-profile claim with zero subscribers bypasses the linger
+   (stop the timer, drain and release the old capture, clear the hub's replay cache, acquire the new profile,
+   all under one lock); `GET /v1/ft8/events?mode=` refuses a mismatch as the belt and braces; `mode` on the
+   status event. Tests: each refusal state; a claim inside the linger yields FT4 references on the first slot
+   with no replayed FT8 frame and no slot from the mixed window acted on (invariant 4); a claim mid-linger of
+   a live session is refused with the remaining linger and succeeds once the disarm has ended it; what leaving
+   mid-session does today is characterised first.
 4. **Logging, frequencies, SPA.** `MODE` from the profile; the QSO service's SNR-report predicate for FT8 and FT4;
    `ft8.ft4_frequencies` (cited defaults 3 576 000 / 7 047 500 / 14 080 000 Hz; other bands only with a citation);
-   the SPA's mode toggle (disabled while active, like the band selector), countdown and parity from the profile,
-   band buttons using the FT4 table, mode-aware labels. Tests: Vitest for the toggle states, the 7.5 s countdown
-   and parity, and the frequency source; Go tests for the empty-report acceptance on FT4.
+   the third Operate item (`OpMode 'ft4'`, route, nav label, the FT-family predicate over the existing `'ft8'`
+   gates), the `{#key router.mode}` remount in `Operate.svelte`, the claim-then-subscribe mount in `Ft8View`,
+   the refusal banner with its countdown and re-claim, `modeRestore`'s FT4 snapshot and dial table, countdown
+   and parity from the profile, band buttons using the FT4 table, mode-aware labels. Tests: Vitest for the router
+   route and nav item, the remount on a sidebar click and on Back/Forward (stop → claim → start observed in
+   order, the old stream closed before the claim), each refusal banner, the restore snapshot per mode, the 7.5 s
+   countdown and parity, and the frequency source; Go tests for the empty-report acceptance on FT4.
 5. **Deploy and validate.** `task deploy:local:dev`, then the gates below; a record entry per gate.
 
 ## Gates (operator-controlled)
