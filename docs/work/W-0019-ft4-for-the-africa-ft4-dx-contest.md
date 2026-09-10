@@ -1,7 +1,7 @@
 # W-0019 — FT4 for the Africa FT4 DX Contest
 
-**Status:** Proposed — design in ADR 0080; awaiting the operator's go/no-go and the go-ft8 FT4 decoder
-**Selected:** not yet (planned 2026-09-10)
+**Status:** Open — selected for the 2026-09-12 contest; design in ADR 0080; go-ft8 v0.9.0 carries the FT4 decoder (gate G1)
+**Selected:** 2026-09-10
 **Outcome:** The operator works the Africa FT4 DX Contest (Saturday 2026-09-12, 15:00–18:00 UTC, 80/40/20 m)
 from Station Manager: FT4 decodes appear in Band Activity on the contest dial frequencies, an operator-initiated
 answer or Call-CQ run completes the standard report-and-grid exchange on 7.5 s slots, each completed QSO is
@@ -103,7 +103,7 @@ not need the FT4 decoder and can land now; slice 2 waits for the tagged go-ft8 r
 
 ## Gates (operator-controlled)
 
-- **G1 — library.** The FT4 decoder is in a tagged go-ft8 release and pinned; no `replace` directive ships.
+- **G1 — library.** The FT4 decoder is in a tagged go-ft8 release and pinned; no `replace` directive ships. **Met 2026-09-10:** go-ft8 v0.9.0 (`cb9e03f feat(ft4): add optimized receive decoder`) ships `ft4.DecodeMessages` and the exported timing constants (`SyncStartSeconds = 0.5`, `NominalStartSeconds = 0.452`, `GFSKBT = 1.0`, `WaveformSamples = 60480`); SM builds, vets and passes `internal/ft8` against it unchanged (scratch modfile check before the bump).
 - **G2 — passive RX.** At least 30 minutes of FT4 decodes on 14.080 MHz with DT clustered near zero (the
   nominal-start check from ADR 0080) and AC7 measured. RX only; no rig command beyond the operator's own tuning.
 - **G3 — keyed test.** One operator-agreed transmission into a dummy load, audio-only first, then RF; per-occasion
@@ -135,5 +135,8 @@ Operate view (the fallback in ADR 0080), and W-0019 continues afterwards without
 
 - 2026-09-10 — `BenchmarkDecodeSlot` (FT8, station host, Ryzen 9 9900X): 3 runs, ~124 ms per 15 s slot.
 - 2026-09-10 — go-ft8 `master` at `31d70fb`: `ft4/encode.go` and `ft4/ft4_params.go` present; README states FT4
-  receive-side decoding is not yet implemented.
+  receive-side decoding is not yet implemented. Superseded the same day by v0.9.0 (decoder present, unassisted BP
+  only; a-priori decoding and subtraction deferred by the library).
+- 2026-09-10 — v0.9.0 `ft4` benchmarks on the station host (3 runs each): synthesized single signal 10.6 ms,
+  noisy 4.6 ms, busy 12-signal slot 13.2 ms per 7.5 s slot — synthetic fixtures, not AC7's live measurement.
 - Contest rules: 2026 SARL Contest Manual v1.1, "The Africa FT4 DX Contest", pp. 45–46.

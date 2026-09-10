@@ -35,11 +35,12 @@ re-enrichment generation race) are all closed (2026-08-22).
 
 Open one workstream per active focus.
 
-1. **W-0002 · validation gate · OPEN — [Validate the reduced FT8 type-4 ladder on air](work/W-0002-ft8-type4-on-air-validation.md).** Confirm one operator-initiated completed exchange with a real nonstandard station; RF action always requires agreement for that occasion.
-2. **W-0008 · OPEN — [Harden audited contract boundaries](work/W-0008-harden-audited-contract-boundaries.md).** Ordered persistence, configuration, API-wire, and frontend-wire correctness slices.
-3. **W-0010 · OPEN — [Improve forwarding, data, and synchronization reliability](work/W-0010-forwarding-data-and-sync-reliability.md).** Token rotation, duplicate-QSO resolution, legal bulk backfill, idempotent outcomes, and bounded reconciliation.
-4. **W-0012 · OPEN — [Complete routed operator-experience follow-ups](work/W-0012-operator-experience-followups.md).** UI, map, onboarding, and diagnostic improvements not owned by W-0004.
-5. **W-0018 · OPEN — [Bring the embedded manual to release readiness](work/W-0018-bring-the-embedded-manual-to-release-readiness.md).** Page-by-page standing pass during dogfooding and a release gate before a public release; not a blocker for the next internal candidate (alpha.2 Findings #9, #10, #13, #14, #15).
+1. **W-0019 · OPEN — [FT4 for the Africa FT4 DX Contest](work/W-0019-ft4-for-the-africa-ft4-dx-contest.md).** Selected 2026-09-10 for Saturday 2026-09-12 15:00–18:00 UTC; ADR 0080; go-ft8 v0.9.0 met gate G1. Keyed testing and the first QSO stay per-occasion operator gates; the fallback is WSJT-X with manual entry.
+2. **W-0002 · validation gate · OPEN — [Validate the reduced FT8 type-4 ladder on air](work/W-0002-ft8-type4-on-air-validation.md).** Confirm one operator-initiated completed exchange with a real nonstandard station; RF action always requires agreement for that occasion.
+3. **W-0008 · OPEN — [Harden audited contract boundaries](work/W-0008-harden-audited-contract-boundaries.md).** Ordered persistence, configuration, API-wire, and frontend-wire correctness slices.
+4. **W-0010 · OPEN — [Improve forwarding, data, and synchronization reliability](work/W-0010-forwarding-data-and-sync-reliability.md).** Token rotation, duplicate-QSO resolution, legal bulk backfill, idempotent outcomes, and bounded reconciliation.
+5. **W-0012 · OPEN — [Complete routed operator-experience follow-ups](work/W-0012-operator-experience-followups.md).** UI, map, onboarding, and diagnostic improvements not owned by W-0004.
+6. **W-0018 · OPEN — [Bring the embedded manual to release readiness](work/W-0018-bring-the-embedded-manual-to-release-readiness.md).** Page-by-page standing pass during dogfooding and a release gate before a public release; not a blocker for the next internal candidate (alpha.2 Findings #9, #10, #13, #14, #15).
 
 ## P3 — deferred or trigger-bound
 
@@ -53,7 +54,6 @@ Open one workstream per active focus.
 ## Designed or parked — not queued
 
 - **W-0014 · PARKED — [Deferred product workstreams](work/W-0014-deferred-product-workstreams.md).** Discovery inventory only; each member needs go-ahead and its own design/dossier before implementation.
-- **W-0019 · PROPOSED — [FT4 for the Africa FT4 DX Contest](work/W-0019-ft4-for-the-africa-ft4-dx-contest.md).** Designed in ADR 0080 (2026-09-10); not queued until the operator's go/no-go and a tagged go-ft8 release with the FT4 decoder. Contest Saturday 2026-09-12 15:00–18:00 UTC; the fallback is WSJT-X with manual entry.
 - **FT8 Field Day UI:** blocked until the relevant contest; not a 7Q8AC ship concern.
 - **Daemon-initiated FT8 sequencing:** out of scope. Sessions remain operator-initiated; an open event subscription is the presence signal, not proof that a person remains at the desk.
 - **Design our own sequencing/timing:** future thinking, not selected work.
