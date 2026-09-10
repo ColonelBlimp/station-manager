@@ -20,10 +20,10 @@ not compete with the app-shell, notification-history, or UI-cohesion dossiers.
   versus a world-time widget, map band-source policy, and session column resizing/sorting before
   implementation. The whole-log Dashboard map remains separate from the shipped time-window map.
 - **Settings and sidebar (alpha.2 dogfood Findings #3, #4, #18):** Delete is disabled on the default rig with
-  the reason stated in the panel and the tooltip, and the operator sets another rig as default first
+  the reason in its tooltip alone, and the operator sets another rig as default first
   (shipped `a364c21a`, 2026-09-08; deployed and accepted 2026-09-09 — the record's entry 31; the SPA's
-  earlier silent repoint of the default to the first survivor is gone; ruled 2026-09-09: the panel line
-  goes, the tooltip carries the reason alone — follow-up pending); the rig detail's redundant
+  earlier silent repoint of the default to the first survivor is gone; the panel line under the header
+  removed by ruling in `17fc6a7e`, deployed and accepted 2026-09-09, entry 33); the rig detail's redundant
   manufacturer · model subtitle is gone (shipped `5e763dc8`, deployed and accepted 2026-09-09, entry 32);
   the sidebar Manual link opens in a new tab (shipped `f0b8e6eb`, 2026-09-07, operator-verified on the
   station).
