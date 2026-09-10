@@ -235,13 +235,20 @@ func TestNewLoggedQso_MalformedFieldsDegrade(t *testing.T) {
 	require.Equal(t, "", l.QsoDate)
 }
 
-// The logged MODE is the exchange's profile (ADR 0080): an FT4 contact is
-// filed as FT4, and a snapshot predating the field still files as FT8.
+// The logged MODE/SUBMODE is the exchange's profile as its ADIF pair (ADR 0080,
+// ADIF 3.1.5): an FT4 contact files as MFSK/FT4, an FT8 one as FT8, and a
+// snapshot predating the field still files as FT8.
 func TestBuildQso_ModeFollowsTheExchangeProfile(t *testing.T) {
 	station := types.LoggingStation{StationCallsign: "7Q5MLV", Operator: "7Q5MLV", MyGridsquare: "KH78"}
 	now := time.Date(2026, 9, 12, 15, 30, 0, 0, time.UTC)
 	ft4 := BuildQso(CompletedQso{Mode: "FT4", TheirCall: "K1ABC", TheirGrid: "FN42", DialFreqMHz: 14.080, OffsetHz: 1500}, station, 1, now, nil)
-	require.Equal(t, "FT4", ft4.Mode)
+	require.Equal(t, "MFSK", ft4.Mode, "ADIF 3.1.5: FT4 is a submode of MFSK")
+	require.Equal(t, "FT4", ft4.Submode)
+	ft8 := BuildQso(CompletedQso{Mode: "FT8", TheirCall: "K1ABC", TheirGrid: "FN42", DialFreqMHz: 14.074, OffsetHz: 1500}, station, 1, now, nil)
+	require.Equal(t, "FT8", ft8.Mode)
+	require.Empty(t, ft8.Submode)
 	legacy := BuildQso(CompletedQso{TheirCall: "K1ABC", TheirGrid: "FN42", DialFreqMHz: 14.074, OffsetHz: 1500}, station, 1, now, nil)
 	require.Equal(t, "FT8", legacy.Mode)
+	require.Empty(t, legacy.Submode)
+	require.Equal(t, "FT4", NewLoggedQso(ft4, "u", nil).Submode, "the ft8-logged frame carries the submode")
 }

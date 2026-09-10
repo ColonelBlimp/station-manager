@@ -55,7 +55,7 @@ type Spot struct {
 	Grid     string // sender locator; "" when unknown (sent as an empty string)
 	FreqHz   uint32 // absolute frequency in Hz (dial + audio offset)
 	SNR      int8   // signal-to-noise ratio, dB
-	Mode     string // ADIF MODE, e.g. "FT8"
+	Mode     string // PSK Reporter mode name, e.g. "FT8", "FT4" (WSJT-X's names, not ADIF's MFSK/FT4 pair — inference, see ft8.Profile.Name)
 	TimeUnix uint32 // transmission time, unix seconds (flowStartSeconds)
 }
 

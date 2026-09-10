@@ -466,7 +466,9 @@ func (d *daemon) pskDecodeSink() func(ft8.DecodeReport) {
 		dialHz := uint32(dialMHz * 1e6)
 		unix := uint32(t.Unix())
 		// The report's own mode (the profile the slot was decoded on, ADR
-		// 0080); FT8 for a daemon predating the field.
+		// 0080): PSK Reporter's mode names follow WSJT-X's (FT8, FT4), not the
+		// ADIF pair a QSO is logged under (MFSK/FT4). FT8 for a daemon
+		// predating the field.
 		mode := r.Mode
 		if mode == "" {
 			mode = ft8.ProfileFT8.Name

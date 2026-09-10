@@ -782,3 +782,31 @@ func TestUpdate_FT4EmptyReportEditable(t *testing.T) {
 	require.NoError(t, err, "a no-op edit of a bare-roger FT4 QSO must succeed")
 	require.Empty(t, updated.QsoDetails.RstRcvd)
 }
+
+// TestUpdate_MfskFt4EmptyReportEditable: the ADIF pair the FT8 subsystem
+// logs an FT4 contact under (MODE=MFSK SUBMODE=FT4, ADIF 3.1.5) is an
+// SNR-report record too — no "59" default, empty reports editable.
+func TestUpdate_MfskFt4EmptyReportEditable(t *testing.T) {
+	s := newTestService(t)
+	lbID := seedLogbook(t, s, "Main", "M0ABC")
+	ctx := context.Background()
+
+	rec := adif.Record{
+		ContactedStation: types.ContactedStation{Call: "K1ABC"},
+		QsoDetails:       types.QsoDetails{Band: "20m", Mode: "MFSK", Submode: "FT4", Freq: "14.080", QsoDate: "20260912", TimeOn: "1530"},
+		LoggingStation:   types.LoggingStation{StationCallsign: "M0ABC"},
+	}
+	res, err := s.Submit(ctx, lbID, rec, false)
+	require.NoError(t, err)
+
+	existing, err := s.DB.FetchQsoByIdWithContext(ctx, res.ID)
+	require.NoError(t, err)
+	require.Equal(t, "MFSK", existing.QsoDetails.Mode)
+	require.Equal(t, "FT4", existing.QsoDetails.Submode)
+	require.Empty(t, existing.QsoDetails.RstRcvd, "no 59 default for an MFSK/FT4 record")
+	require.Empty(t, existing.QsoDetails.RstSent)
+
+	updated, err := s.Update(ctx, existing, []byte(`{}`), source.API)
+	require.NoError(t, err, "a no-op edit of a bare-roger MFSK/FT4 QSO must succeed")
+	require.Empty(t, updated.QsoDetails.RstRcvd)
+}

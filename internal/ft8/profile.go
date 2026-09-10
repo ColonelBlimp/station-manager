@@ -14,9 +14,18 @@ import (
 // they differ only in what this value carries. Everything below the sequencer
 // that used to hard-code the FT8 numbers reads them from the profile instead.
 type Profile struct {
-	// Name is the ADIF mode stamped on a logged QSO, its PSK Reporter spot and
-	// the decode log's transmit line.
+	// Name is the mode's wire name: the profile a client claims, the label
+	// on the decode log's transmit line, and the PSK Reporter spot mode (whose
+	// names follow WSJT-X's — FT8, FT4 — not ADIF's mode/submode pair; an
+	// inference from pskreporter.info listing FT4 as a mode, the developer
+	// page being unreachable at the time of writing).
 	Name string
+
+	// AdifMode / AdifSubmode is the pair a completed exchange is logged and
+	// exported under. ADIF 3.1.5 (2024-11-28) lists FT8 as a Mode and FT4 as
+	// a Submode of MFSK, so FT4 contacts file as MODE=MFSK SUBMODE=FT4.
+	AdifMode    string
+	AdifSubmode string
 
 	// Slot is the transmit / receive period. Boundaries fall on multiples of
 	// Slot from the Unix epoch (which is itself a boundary for both modes):
@@ -85,6 +94,7 @@ type Profile struct {
 // ProfileFT8 is the shipped FT8 geometry (QEX Table 4; ADR 0029/0032).
 var ProfileFT8 = Profile{
 	Name:             "FT8",
+	AdifMode:         "FT8",
 	Slot:             15 * time.Second,
 	SlotSamples:      goft8.SampleRate * 15,
 	SamplesPerSymbol: 1920,
@@ -111,6 +121,8 @@ var ProfileFT8 = Profile{
 // window is the +2.000 s admission policy the operator ratified 2026-09-10.
 var ProfileFT4 = Profile{
 	Name:             "FT4",
+	AdifMode:         "MFSK",
+	AdifSubmode:      "FT4",
 	Slot:             7500 * time.Millisecond,
 	SlotSamples:      goft4.SlotSamples,
 	SamplesPerSymbol: goft4.SamplesPerSymbol,

@@ -39,11 +39,15 @@ func BuildQso(c CompletedQso, station types.LoggingStation, logbookID int64, now
 	}
 	q.Call = c.TheirCall
 	q.Gridsquare = c.TheirGrid
-	// The exchange's profile (ADR 0080); FT8 for a snapshot predating the field.
-	q.Mode = c.Mode
-	if q.Mode == "" {
-		q.Mode = ProfileFT8.Name
+	// The exchange's profile (ADR 0080) as its ADIF pair — FT4 is a submode of
+	// MFSK in ADIF 3.1.5 (Profile.AdifMode / AdifSubmode); FT8 for a snapshot
+	// predating the field.
+	p, ok := profileByName(c.Mode)
+	if !ok {
+		p = ProfileFT8
 	}
+	q.Mode = p.AdifMode
+	q.Submode = p.AdifSubmode
 	q.Freq = freq
 	q.Band = utils.FrequencyToBand(freq)
 	// The run identity persists with the QSO (app_sm_run_id via additional_data,
@@ -140,8 +144,9 @@ type LoggedQso struct {
 	RstSent    string `json:"rst_sent"`
 	RstRcvd    string `json:"rst_rcvd"`
 	Mode       string `json:"mode"`
-	TimeOn     string `json:"time_on"`  // UTC "HH:MM:SS" ("HH:MM" if the record has no seconds)
-	QsoDate    string `json:"qso_date"` // "YYYY-MM-DD"
+	Submode    string `json:"submode,omitempty"` // ADIF SUBMODE when the mode has one (FT4 → MFSK/FT4)
+	TimeOn     string `json:"time_on"`           // UTC "HH:MM:SS" ("HH:MM" if the record has no seconds)
+	QsoDate    string `json:"qso_date"`          // "YYYY-MM-DD"
 	Gridsquare string `json:"gridsquare"`
 	Country    string `json:"country"` // contacted station's country (enriched at log time)
 	Name       string `json:"name"`    // contacted operator's name (enriched at log time)
@@ -201,6 +206,7 @@ func NewLoggedQso(q types.Qso, uuid string, log logging.Logger) LoggedQso {
 		RstSent:    q.RstSent,
 		RstRcvd:    q.RstRcvd,
 		Mode:       q.Mode,
+		Submode:    q.Submode,
 		TimeOn:     timeOn,
 		QsoDate:    qsoDate,
 		Gridsquare: q.Gridsquare,

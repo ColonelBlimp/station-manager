@@ -839,8 +839,9 @@ one-shot notification and deliberately **not** cached (replaying it to a late
 subscriber would duplicate a session-list row):
 
 - **`ft8-decode`** → `DecodeReport{ slot, decodes:[{text, freq_hz, dt_s, snr}], mode }` —
-  `mode` is the profile the slot was decoded on (`FT8` | `FT4`); logged QSOs and PSK
-  Reporter spots carry the same mode (ADR 0080)
+  `mode` is the profile the slot was decoded on (`FT8` | `FT4`); PSK Reporter spots carry
+  that name, while a logged FT4 QSO files as its ADIF 3.1.5 pair `MODE=MFSK SUBMODE=FT4`
+  (ADR 0080)
 - **`ft8-occupancy`** → `OccupancyReport{ slot, passband, signal_width_hz,
   occupied:[{low_hz, high_hz, source, level}], suggested:[hz…] }`
 - **`ft8-tx`** → `TxState{ armed, transmitting, message, offset_hz, error, mode }` — the
