@@ -53,6 +53,7 @@ Open one workstream per active focus.
 ## Designed or parked — not queued
 
 - **W-0014 · PARKED — [Deferred product workstreams](work/W-0014-deferred-product-workstreams.md).** Discovery inventory only; each member needs go-ahead and its own design/dossier before implementation.
+- **W-0019 · PROPOSED — [FT4 for the Africa FT4 DX Contest](work/W-0019-ft4-for-the-africa-ft4-dx-contest.md).** Designed in ADR 0080 (2026-09-10); not queued until the operator's go/no-go and a tagged go-ft8 release with the FT4 decoder. Contest Saturday 2026-09-12 15:00–18:00 UTC; the fallback is WSJT-X with manual entry.
 - **FT8 Field Day UI:** blocked until the relevant contest; not a 7Q8AC ship concern.
 - **Daemon-initiated FT8 sequencing:** out of scope. Sessions remain operator-initiated; an open event subscription is the presence signal, not proof that a person remains at the desk.
 - **Design our own sequencing/timing:** future thinking, not selected work.

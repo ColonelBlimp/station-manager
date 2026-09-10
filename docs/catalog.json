@@ -307,6 +307,15 @@
       "summary": "W-0018 brings the embedded manual to release readiness: a page-by-page standing pass during dogfooding and a release gate before a public release."
     },
     {
+      "id": "work.w-0019",
+      "path": "docs/work/W-0019-ft4-for-the-africa-ft4-dx-contest.md",
+      "class": "work-item",
+      "audiences": ["operator", "contributor", "agent"],
+      "topics": ["ft8", "ft4", "contest", "on-air-validation"],
+      "scopes": ["internal/ft8/**", "frontend/app/src/lib/operate/Ft8Operate.svelte", "frontend/app/src/lib/utils/ft8Parity.ts"],
+      "summary": "W-0019 adds FT4 as a second profile of the FT8 subsystem for the Africa FT4 DX Contest (2026-09-12): slices, operator gates, the contest runbook, and evidence; design in ADR 0080."
+    },
+    {
       "id": "work.dogfood-inbox",
       "path": "docs/dogfood-inbox.md",
       "class": "work-item",
