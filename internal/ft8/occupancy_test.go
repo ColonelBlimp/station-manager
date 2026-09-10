@@ -18,7 +18,7 @@ import (
 // zero-noise floor would make the threshold meaningless). seed fixes the noise
 // for reproducibility.
 func toneSlot(amp float64, noiseAmp float64, seed int64, freqs ...float64) []int16 {
-	out := make([]int16, SlotSamples)
+	out := make([]int16, ProfileFT8.SlotSamples)
 	rng := rand.New(rand.NewSource(seed))
 	sr := float64(goft8.SampleRate)
 	for i := range out {
@@ -32,7 +32,7 @@ func toneSlot(amp float64, noiseAmp float64, seed int64, freqs ...float64) []int
 	return out
 }
 
-// signalSlot synthesises a slot containing one FT8-width (~signalWidthHz)
+// signalSlot synthesises a slot containing one FT8-width (~ProfileFT8.SignalWidthHz)
 // energy occupant whose base tone is at `base` — eight tones at 6.25 Hz spacing,
 // the footprint of a real FT8 signal — so it reads as a signal to the detector
 // rather than a single-bin spike the min-width gate would drop. Use this (not a
@@ -53,7 +53,7 @@ func overlaps(aLo, aHi, bLo, bHi int) bool { return aLo < bHi && bLo < aHi }
 
 func TestOccupancy_SilentSlot_NoBands(t *testing.T) {
 	cfg := DefaultOccupancyConfig()
-	rep := Occupancy(SlotRef{}, make([]int16, SlotSamples), nil, cfg)
+	rep := Occupancy(SlotRef{}, make([]int16, ProfileFT8.SlotSamples), nil, cfg, ProfileFT8.SignalWidthHz)
 
 	if len(rep.Occupied) != 0 {
 		t.Fatalf("silent slot should have no occupied bands, got %+v", rep.Occupied)
@@ -61,14 +61,14 @@ func TestOccupancy_SilentSlot_NoBands(t *testing.T) {
 	if len(rep.Suggested) == 0 {
 		t.Fatal("silent slot should still suggest clear offsets")
 	}
-	if rep.SignalWidthHz != signalWidthHz {
-		t.Fatalf("SignalWidthHz = %d, want %d", rep.SignalWidthHz, signalWidthHz)
+	if rep.SignalWidthHz != ProfileFT8.SignalWidthHz {
+		t.Fatalf("SignalWidthHz = %d, want %d", rep.SignalWidthHz, ProfileFT8.SignalWidthHz)
 	}
 	if rep.Passband.LowHz != cfg.PassbandLowHz || rep.Passband.HighHz != cfg.PassbandHighHz {
 		t.Fatalf("passband = %+v, want [%d,%d]", rep.Passband, cfg.PassbandLowHz, cfg.PassbandHighHz)
 	}
 	for _, off := range rep.Suggested {
-		if off < cfg.PassbandLowHz || off+signalWidthHz > cfg.PassbandHighHz {
+		if off < cfg.PassbandLowHz || off+ProfileFT8.SignalWidthHz > cfg.PassbandHighHz {
 			t.Fatalf("suggested offset %d does not fit in passband", off)
 		}
 	}
@@ -77,7 +77,7 @@ func TestOccupancy_SilentSlot_NoBands(t *testing.T) {
 func TestOccupancy_SingleTone_MarksBandAndAvoidsIt(t *testing.T) {
 	cfg := DefaultOccupancyConfig()
 	const tone = 1500
-	rep := Occupancy(SlotRef{}, signalSlot(8000, 200, 1, tone), nil, cfg)
+	rep := Occupancy(SlotRef{}, signalSlot(8000, 200, 1, tone), nil, cfg, ProfileFT8.SignalWidthHz)
 
 	var hit *Band
 	for i := range rep.Occupied {
@@ -99,7 +99,7 @@ func TestOccupancy_SingleTone_MarksBandAndAvoidsIt(t *testing.T) {
 	// No suggested offset may place a 50 Hz signal over any occupied band.
 	for _, off := range rep.Suggested {
 		for _, b := range rep.Occupied {
-			if overlaps(off, off+signalWidthHz, b.LowHz, b.HighHz) {
+			if overlaps(off, off+ProfileFT8.SignalWidthHz, b.LowHz, b.HighHz) {
 				t.Fatalf("suggested offset %d collides with occupied band %+v", off, b)
 			}
 		}
@@ -113,7 +113,7 @@ func TestOccupancy_SingleTone_MarksBandAndAvoidsIt(t *testing.T) {
 // that decodes, and live single-bin noise spikes no longer leak in.)
 func TestOccupancy_NarrowEnergyGated(t *testing.T) {
 	cfg := DefaultOccupancyConfig()
-	rep := Occupancy(SlotRef{}, toneSlot(8000, 200, 3, 1500), nil, cfg)
+	rep := Occupancy(SlotRef{}, toneSlot(8000, 200, 3, 1500), nil, cfg, ProfileFT8.SignalWidthHz)
 	for _, b := range rep.Occupied {
 		if b.Source == sourceEnergy {
 			t.Fatalf("narrow pure tone should be gated out of energy detection, got %+v", b)
@@ -125,7 +125,7 @@ func TestOccupancy_DecodeOnly_MarksUpwardSpan(t *testing.T) {
 	cfg := DefaultOccupancyConfig()
 	// Silent audio, one decode at 1000.4 Hz → base 1000, occupies [1000,1050].
 	decodes := []goft8.DecodedMessage{{Text: "CQ K1ABC FN42", FreqHz: 1000.4}}
-	rep := Occupancy(SlotRef{}, make([]int16, SlotSamples), decodes, cfg)
+	rep := Occupancy(SlotRef{}, make([]int16, ProfileFT8.SlotSamples), decodes, cfg, ProfileFT8.SignalWidthHz)
 
 	if len(rep.Occupied) != 1 {
 		t.Fatalf("want exactly one occupied band, got %+v", rep.Occupied)
@@ -134,8 +134,8 @@ func TestOccupancy_DecodeOnly_MarksUpwardSpan(t *testing.T) {
 	if b.Source != sourceDecode {
 		t.Fatalf("source = %q, want %q", b.Source, sourceDecode)
 	}
-	if b.LowHz != 1000 || b.HighHz != 1000+signalWidthHz {
-		t.Fatalf("decode band = [%d,%d], want [1000,%d] (span extends upward)", b.LowHz, b.HighHz, 1000+signalWidthHz)
+	if b.LowHz != 1000 || b.HighHz != 1000+ProfileFT8.SignalWidthHz {
+		t.Fatalf("decode band = [%d,%d], want [1000,%d] (span extends upward)", b.LowHz, b.HighHz, 1000+ProfileFT8.SignalWidthHz)
 	}
 }
 
@@ -144,7 +144,7 @@ func TestOccupancy_EnergyAndDecodeOverlap_SourceBoth(t *testing.T) {
 	const tone = 1500
 	// Decode base 1480 → [1480,1530], overlapping the tone's energy band.
 	decodes := []goft8.DecodedMessage{{FreqHz: 1480}}
-	rep := Occupancy(SlotRef{}, signalSlot(8000, 200, 2, tone), decodes, cfg)
+	rep := Occupancy(SlotRef{}, signalSlot(8000, 200, 2, tone), decodes, cfg, ProfileFT8.SignalWidthHz)
 
 	var hit *Band
 	for i := range rep.Occupied {
@@ -170,7 +170,7 @@ func TestOccupancy_DecodeOutsidePassband_Dropped(t *testing.T) {
 		{FreqHz: 50},   // wholly below passband
 		{FreqHz: 5000}, // wholly above passband
 	}
-	rep := Occupancy(SlotRef{}, make([]int16, SlotSamples), decodes, cfg)
+	rep := Occupancy(SlotRef{}, make([]int16, ProfileFT8.SlotSamples), decodes, cfg, ProfileFT8.SignalWidthHz)
 	if len(rep.Occupied) != 0 {
 		t.Fatalf("out-of-passband decodes should be dropped, got %+v", rep.Occupied)
 	}
@@ -180,7 +180,7 @@ func TestOccupancy_DecodeClampedToPassband(t *testing.T) {
 	cfg := DefaultOccupancyConfig()
 	// Base 180 → [180,230]; clamps to [200,230].
 	decodes := []goft8.DecodedMessage{{FreqHz: 180}}
-	rep := Occupancy(SlotRef{}, make([]int16, SlotSamples), decodes, cfg)
+	rep := Occupancy(SlotRef{}, make([]int16, ProfileFT8.SlotSamples), decodes, cfg, ProfileFT8.SignalWidthHz)
 	if len(rep.Occupied) != 1 {
 		t.Fatalf("want one band, got %+v", rep.Occupied)
 	}
@@ -191,7 +191,7 @@ func TestOccupancy_DecodeClampedToPassband(t *testing.T) {
 
 func TestOccupancy_SuggestedCapped(t *testing.T) {
 	cfg := DefaultOccupancyConfig()
-	rep := Occupancy(SlotRef{}, make([]int16, SlotSamples), nil, cfg)
+	rep := Occupancy(SlotRef{}, make([]int16, ProfileFT8.SlotSamples), nil, cfg, ProfileFT8.SignalWidthHz)
 	if len(rep.Suggested) > maxSuggested {
 		t.Fatalf("suggested count %d exceeds cap %d", len(rep.Suggested), maxSuggested)
 	}
@@ -200,8 +200,8 @@ func TestOccupancy_SuggestedCapped(t *testing.T) {
 func TestOccupancy_Deterministic(t *testing.T) {
 	cfg := DefaultOccupancyConfig()
 	s := toneSlot(8000, 200, 7, 800, 1900)
-	a := Occupancy(SlotRef{}, s, nil, cfg)
-	b := Occupancy(SlotRef{}, s, nil, cfg)
+	a := Occupancy(SlotRef{}, s, nil, cfg, ProfileFT8.SignalWidthHz)
+	b := Occupancy(SlotRef{}, s, nil, cfg, ProfileFT8.SignalWidthHz)
 	if len(a.Suggested) != len(b.Suggested) {
 		t.Fatal("suggested length not deterministic")
 	}
@@ -250,12 +250,12 @@ func TestSuggestOffsets_NeverOverlapOccupied(t *testing.T) {
 		{LowHz: 1400, HighHz: 1600},
 		{LowHz: 2400, HighHz: 2450},
 	}
-	for _, off := range suggestOffsets(occupied, cfg) {
-		if off < cfg.PassbandLowHz || off+signalWidthHz > cfg.PassbandHighHz {
+	for _, off := range suggestOffsets(occupied, cfg, ProfileFT8.SignalWidthHz) {
+		if off < cfg.PassbandLowHz || off+ProfileFT8.SignalWidthHz > cfg.PassbandHighHz {
 			t.Fatalf("offset %d outside passband", off)
 		}
 		for _, b := range occupied {
-			if overlaps(off, off+signalWidthHz, b.LowHz, b.HighHz) {
+			if overlaps(off, off+ProfileFT8.SignalWidthHz, b.LowHz, b.HighHz) {
 				t.Fatalf("offset %d collides with %+v", off, b)
 			}
 		}
@@ -265,7 +265,7 @@ func TestSuggestOffsets_NeverOverlapOccupied(t *testing.T) {
 func TestSuggestOffsets_FullyOccupied_NoSuggestions(t *testing.T) {
 	cfg := DefaultOccupancyConfig()
 	occupied := []Band{{LowHz: cfg.PassbandLowHz, HighHz: cfg.PassbandHighHz}}
-	if got := suggestOffsets(occupied, cfg); len(got) != 0 {
+	if got := suggestOffsets(occupied, cfg, ProfileFT8.SignalWidthHz); len(got) != 0 {
 		t.Fatalf("fully occupied passband should yield no suggestions, got %v", got)
 	}
 }
@@ -277,8 +277,8 @@ func TestSuggestOffsets_GuardMarginKeepsClearance(t *testing.T) {
 		{LowHz: 1400, HighHz: 1600},
 		{LowHz: 2400, HighHz: 2450},
 	}
-	for _, off := range suggestOffsets(occupied, cfg) {
-		sigLo, sigHi := off, off+signalWidthHz
+	for _, off := range suggestOffsets(occupied, cfg, ProfileFT8.SignalWidthHz) {
+		sigLo, sigHi := off, off+ProfileFT8.SignalWidthHz
 		for _, b := range occupied {
 			if sigLo < b.HighHz && b.LowHz < sigHi {
 				t.Fatalf("offset %d overlaps %+v", off, b)
@@ -295,9 +295,9 @@ func TestSuggestOffsets_GuardMarginKeepsClearance(t *testing.T) {
 
 func TestSuggestOffsets_GuardOnRejectsTightGap(t *testing.T) {
 	cfg := DefaultOccupancyConfig() // guard on
-	// One exactly-signalWidthHz (50 Hz) gap [1000,1050]: fits flush but not with a guard.
+	// One exactly-ProfileFT8.SignalWidthHz (50 Hz) gap [1000,1050]: fits flush but not with a guard.
 	occupied := []Band{{LowHz: 200, HighHz: 1000}, {LowHz: 1050, HighHz: 3000}}
-	if got := suggestOffsets(occupied, cfg); len(got) != 0 {
+	if got := suggestOffsets(occupied, cfg, ProfileFT8.SignalWidthHz); len(got) != 0 {
 		t.Fatalf("guard on should reject a flush-only 50 Hz gap, got %v", got)
 	}
 }
@@ -308,7 +308,7 @@ func TestSuggestOffsets_GuardOffAllowsFlush(t *testing.T) {
 	cfg.GuardMarginHz = &zero // guard off
 	occupied := []Band{{LowHz: 200, HighHz: 1000}, {LowHz: 1050, HighHz: 3000}}
 	found := false
-	for _, o := range suggestOffsets(occupied, cfg) {
+	for _, o := range suggestOffsets(occupied, cfg, ProfileFT8.SignalWidthHz) {
 		if o == 1000 { // flush against the band ending at 1000
 			found = true
 		}
@@ -323,16 +323,16 @@ func TestOffsetClear(t *testing.T) {
 	occupied := []Band{{LowHz: 600, HighHz: 700}, {LowHz: 1400, HighHz: 1600}}
 
 	// 1000 sits in the wide 700–1400 gap with room for signal + guard each side.
-	if !offsetClear(occupied, cfg, 1000) {
+	if !offsetClear(occupied, cfg, ProfileFT8.SignalWidthHz, 1000) {
 		t.Error("1000 should be clear in the 700–1400 gap")
 	}
 	// An offset whose signal lands inside an occupied band is not clear.
-	if offsetClear(occupied, cfg, 620) {
+	if offsetClear(occupied, cfg, ProfileFT8.SignalWidthHz, 620) {
 		t.Error("620 overlaps the 600–700 band; should not be clear")
 	}
 	// Flush against a neighbour fails the guard margin: 700 + 50 = 750, but the
 	// gap starts at 700 so the low guard (10 Hz) isn't satisfied.
-	if offsetClear(occupied, cfg, 700) {
+	if offsetClear(occupied, cfg, ProfileFT8.SignalWidthHz, 700) {
 		t.Error("700 sits flush against the band ending at 700; guard should reject it")
 	}
 }
@@ -343,7 +343,7 @@ func TestStickySuggested(t *testing.T) {
 
 	t.Run("no previous pick returns the fresh ranking", func(t *testing.T) {
 		fresh := []int{2000, 1000, 800}
-		got := stickySuggested(fresh, occupied, cfg, 0)
+		got := stickySuggested(fresh, occupied, cfg, ProfileFT8.SignalWidthHz, 0)
 		if !equalInts(got, fresh) {
 			t.Fatalf("prev=0 should be untouched: got %v", got)
 		}
@@ -351,7 +351,7 @@ func TestStickySuggested(t *testing.T) {
 
 	t.Run("a still-clear previous pick is floated to the front", func(t *testing.T) {
 		fresh := []int{2000, 1000, 800} // 800 ranks last this slot
-		got := stickySuggested(fresh, occupied, cfg, 800)
+		got := stickySuggested(fresh, occupied, cfg, ProfileFT8.SignalWidthHz, 800)
 		if len(got) == 0 || got[0] != 800 {
 			t.Fatalf("clear prev 800 should lead, got %v", got)
 		}
@@ -363,7 +363,7 @@ func TestStickySuggested(t *testing.T) {
 
 	t.Run("a previous pick that is now occupied is dropped", func(t *testing.T) {
 		fresh := []int{2000, 1000}
-		got := stickySuggested(fresh, occupied, cfg, 620) // 620 now overlaps 600–700
+		got := stickySuggested(fresh, occupied, cfg, ProfileFT8.SignalWidthHz, 620) // 620 now overlaps 600–700
 		if !equalInts(got, fresh) {
 			t.Fatalf("occupied prev should not be floated: got %v", got)
 		}
@@ -371,7 +371,7 @@ func TestStickySuggested(t *testing.T) {
 
 	t.Run("a clear prev absent from the fresh list is still prepended", func(t *testing.T) {
 		fresh := []int{2000, 1000} // 900 isn't a generated candidate this slot
-		got := stickySuggested(fresh, occupied, cfg, 900)
+		got := stickySuggested(fresh, occupied, cfg, ProfileFT8.SignalWidthHz, 900)
 		if len(got) == 0 || got[0] != 900 {
 			t.Fatalf("clear prev 900 should lead even when absent, got %v", got)
 		}
@@ -382,7 +382,7 @@ func TestStickySuggested(t *testing.T) {
 		for i := range fresh {
 			fresh[i] = 1000 + i // all clear in the 700–1400 gap region is irrelevant; cap check only
 		}
-		got := stickySuggested(fresh, occupied, cfg, 1000) // 1000 is in fresh, moved to front
+		got := stickySuggested(fresh, occupied, cfg, ProfileFT8.SignalWidthHz, 1000) // 1000 is in fresh, moved to front
 		if len(got) > maxSuggested {
 			t.Fatalf("result exceeds cap: len=%d", len(got))
 		}
@@ -435,7 +435,7 @@ func TestOccupancy_RealSlot(t *testing.T) {
 		t.Fatal("expected decodes from the corpus slot")
 	}
 
-	rep := Occupancy(SlotRefFromTime(time.Unix(0, 0)), samples, decodes, cfg)
+	rep := Occupancy(ProfileFT8.SlotRefFromTime(time.Unix(0, 0)), samples, decodes, cfg, ProfileFT8.SignalWidthHz)
 	if len(rep.Occupied) == 0 {
 		t.Fatal("a busy 20m slot should report occupied bands")
 	}
@@ -472,7 +472,7 @@ func TestOccupancy_RealSlot(t *testing.T) {
 
 	for _, off := range rep.Suggested {
 		for _, b := range rep.Occupied {
-			if overlaps(off, off+signalWidthHz, b.LowHz, b.HighHz) {
+			if overlaps(off, off+ProfileFT8.SignalWidthHz, b.LowHz, b.HighHz) {
 				t.Errorf("suggested offset %d collides with occupied band %+v", off, b)
 			}
 		}
@@ -488,7 +488,7 @@ func TestSlotRefFromTime_EvenOdd(t *testing.T) {
 	}
 	for _, c := range cases {
 		ts := time.Date(2026, 6, 7, 14, 30, c.sec, 0, time.UTC)
-		got := SlotRefFromTime(ts)
+		got := ProfileFT8.SlotRefFromTime(ts)
 		if got.Period != c.want {
 			t.Fatalf(":%02d → period %q, want %q", c.sec, got.Period, c.want)
 		}
@@ -505,7 +505,7 @@ func TestSlotRefFromTime_EvenOdd(t *testing.T) {
 // components are dropped too.
 func TestSlotRefFromTime_FloorsToLattice(t *testing.T) {
 	boundary := time.Date(2026, 7, 5, 14, 30, 30, 0, time.UTC) // :30 → even slot start
-	want := SlotRefFromTime(boundary)
+	want := ProfileFT8.SlotRefFromTime(boundary)
 
 	// Any instant within the slot [30s, 45s) floors to the same boundary.
 	for _, off := range []time.Duration{
@@ -513,14 +513,14 @@ func TestSlotRefFromTime_FloorsToLattice(t *testing.T) {
 		7*time.Second + 500*time.Millisecond,
 		14*time.Second + 999*time.Millisecond,
 	} {
-		got := SlotRefFromTime(boundary.Add(off))
+		got := ProfileFT8.SlotRefFromTime(boundary.Add(off))
 		if got.StartUTC != want.StartUTC || got.Period != want.Period {
 			t.Fatalf("+%s → {%q,%q}, want {%q,%q}",
 				off, got.StartUTC, got.Period, want.StartUTC, want.Period)
 		}
 	}
 	// The next slot's start (:45) must NOT collapse into this one.
-	if next := SlotRefFromTime(boundary.Add(SlotDuration)); next.StartUTC == want.StartUTC {
+	if next := ProfileFT8.SlotRefFromTime(boundary.Add(ProfileFT8.Slot)); next.StartUTC == want.StartUTC {
 		t.Fatalf("next slot floored into this one: both %q", want.StartUTC)
 	}
 }
@@ -678,7 +678,7 @@ func TestDecodeLoop_MovedSlotPublishesNoDecodes(t *testing.T) {
 		t.Skip("full FT8 decode is heavy; skipped under -short")
 	}
 
-	audio, err := EncodeToSlot("CQ K1ABC FN42", 1500, 0.5)
+	audio, err := ProfileFT8.EncodeToSlot("CQ K1ABC FN42", 1500, 0.5)
 	if err != nil {
 		t.Fatalf("EncodeToSlot: %v", err)
 	}

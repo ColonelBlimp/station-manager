@@ -34,11 +34,10 @@ import (
 // this is the fallback when unset.
 const defaultSeqMaxRepeats = types.DefaultFt8MaxRepeats
 
-// txLateWindowSec is the latest into our slot we will START a rung. Past this,
-// too few symbols / Costas sync words survive the head-truncation (ADR 0032) for
-// a reliable decode, so we skip and retry on our next cycle. The truncation
-// itself lives in the TxController. Package var so tests can dial it.
-var txLateWindowSec = 4.5
+// The late-window ADMISSION policy (Profile.LateWindow / admitsRung) is the
+// latest into our slot we will START a rung: FT8 4.5 s, FT4 2.0 s (ADR 0080).
+// Past it we skip and retry on our next cycle. It is not a decodability
+// guarantee — the TxController's post-key maxDecodableSkip check is.
 
 // logTxDeferral records why a qualifying slot passed without RF (ship-gate
 // finding 11, ft8-logging-gaps): every sequencer family shared one silent
@@ -58,7 +57,7 @@ func (s *Sequencer) logTxDeferral(path string, dt float64) {
 		return
 	}
 	s.log.InfoWith().Str("path", path).Float64("dt_sec", dt).
-		Float64("window_sec", txLateWindowSec).
+		Float64("window_sec", s.profile.LateWindow.Seconds()).
 		Msg("ft8 seq: rung deferred — decode landed too late to transmit this slot")
 }
 
@@ -479,6 +478,11 @@ type Sequencer struct {
 	mu   sync.Mutex
 	mode seqMode
 
+	// profile is the timebase every rung is scheduled against (slot length,
+	// parity lattice, late window). Set at construction; changed only between
+	// sessions (ADR 0080 — the profile claim, slice 3).
+	profile Profile
+
 	// Answering a CQ (seqAnswering): ex is the active exchange; theirGrid is the
 	// worked station's grid from the CQ we answered.
 	ex        *Exchange
@@ -688,6 +692,7 @@ func newSequencer(transmit func(string, float64, float64, uint64, func(ok bool))
 		maxRepeats = defaultSeqMaxRepeats
 	}
 	return &Sequencer{
+		profile:    ProfileFT8,
 		maxRepeats: maxRepeats,
 		transmit:   transmit,
 		publish:    publish,
@@ -794,7 +799,7 @@ func (s *Sequencer) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUT
 	s.logbookID = s.pendingLogbookID                    // pin the staged logbook atomically with activation
 	s.allowDuplicate = s.consumePendingAllowDuplicate() // one-shot: consumed + cleared with activation
 	s.ex = &ex
-	s.theirPeriod = SlotRefFromTime(t).Period
+	s.theirPeriod = s.profile.SlotRefFromTime(t).Period
 	s.theirGrid = theirGrid
 	s.offsetHz = offsetHz
 	s.dialFreqMHz = dialFreqMHz
@@ -859,7 +864,7 @@ func (s *Sequencer) StartQsoFd(ourCall, ourClass, ourSection, theirCall, theirGr
 	s.logbookID = s.pendingLogbookID                    // pin the staged logbook atomically with activation
 	s.allowDuplicate = s.consumePendingAllowDuplicate() // one-shot: consumed + cleared with activation
 	s.fdEx = &ex
-	s.theirPeriod = SlotRefFromTime(t).Period
+	s.theirPeriod = s.profile.SlotRefFromTime(t).Period
 	s.offsetHz = offsetHz
 	s.dialFreqMHz = dialFreqMHz
 	s.startedAt = now.UTC()
@@ -1510,7 +1515,7 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 	}
 	rung := s.ex.State.label()
 
-	// Late-window guard: the current (our) slot started at ref.start + SlotDuration.
+	// Late-window guard: the current (our) slot started one slot after ref.start.
 	// Too late into it and too few symbols survive head-truncation to decode — skip
 	// and retry next cycle (ADR 0032).
 	curStart, perr := time.Parse(time.RFC3339, ref.StartUTC)
@@ -1518,8 +1523,8 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 		s.mu.Unlock()
 		return
 	}
-	dt := now.Sub(curStart.Add(SlotDuration)).Seconds()
-	if dt < 0 || dt > txLateWindowSec {
+	dt := now.Sub(curStart.Add(s.profile.Slot)).Seconds()
+	if !s.profile.admitsRung(dt) {
 		s.logTxDeferral("answer", dt)
 		st := s.statusLocked()
 		s.publish(st)
@@ -1531,8 +1536,8 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 	// consume a repeat or key again; the next cycle drives the exchange. The
 	// dedup is per physical slot, not per session — two transmissions in one
 	// slot are impossible regardless of session identity.
-	if s.lastTxSlot.Equal(curStart.Add(SlotDuration)) {
-		s.logSameSlotDedup("answer", curStart.Add(SlotDuration))
+	if s.lastTxSlot.Equal(curStart.Add(s.profile.Slot)) {
+		s.logSameSlotDedup("answer", curStart.Add(s.profile.Slot))
 		st := s.statusLocked()
 		s.publish(st)
 		s.mu.Unlock()
@@ -1560,7 +1565,7 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 		s.contact.repeats++
 	}
 
-	s.lastTxSlot = curStart.Add(SlotDuration)
+	s.lastTxSlot = curStart.Add(s.profile.Slot)
 	transmit, gen := s.transmitLocked()
 	offset, dial := s.offsetHz, s.dialFreqMHz
 	repeats := s.contact.repeats
@@ -1674,8 +1679,8 @@ func (s *Sequencer) onSlotAnsweringFd(ref SlotRef, msgs []goft8.DecodedMessage, 
 		s.mu.Unlock()
 		return
 	}
-	dt := now.Sub(curStart.Add(SlotDuration)).Seconds()
-	if dt < 0 || dt > txLateWindowSec {
+	dt := now.Sub(curStart.Add(s.profile.Slot)).Seconds()
+	if !s.profile.admitsRung(dt) {
 		s.logTxDeferral("answer_fd", dt)
 		st := s.statusLocked()
 		s.publish(st)
@@ -1684,8 +1689,8 @@ func (s *Sequencer) onSlotAnsweringFd(ref SlotRef, msgs []goft8.DecodedMessage, 
 	}
 	// Slot already fired (immediate fireOpening vs this slot's pending OnSlot —
 	// review 2026-07-20 #2); see onSlotAnswering.
-	if s.lastTxSlot.Equal(curStart.Add(SlotDuration)) {
-		s.logSameSlotDedup("answer_fd", curStart.Add(SlotDuration))
+	if s.lastTxSlot.Equal(curStart.Add(s.profile.Slot)) {
+		s.logSameSlotDedup("answer_fd", curStart.Add(s.profile.Slot))
 		st := s.statusLocked()
 		s.publish(st)
 		s.mu.Unlock()
@@ -1724,7 +1729,7 @@ func (s *Sequencer) onSlotAnsweringFd(ref SlotRef, msgs []goft8.DecodedMessage, 
 	}
 	s.contact.repeats++
 
-	s.lastTxSlot = curStart.Add(SlotDuration)
+	s.lastTxSlot = curStart.Add(s.profile.Slot)
 	transmit, gen := s.transmitLocked()
 	offset, dial := s.offsetHz, s.dialFreqMHz
 	repeats := s.contact.repeats
@@ -1819,13 +1824,6 @@ func (s *Sequencer) completedFdWorkQsoLocked() CompletedQso {
 	}
 }
 
-// slotStart returns the UTC 15-second slot boundary containing t, epoch-aligned to
-// match SlotRefFromTime's parity convention (:00/:15/:30/:45).
-func slotStart(t time.Time) time.Time {
-	u := t.Unix()
-	return time.Unix(u-u%slotSeconds, 0).UTC()
-}
-
 // fireOpening transmits the opening rung IMMEDIATELY if, at start time, we are
 // already inside our own TX slot (parity opposite the partner's) and early enough
 // that head-truncation still leaves a decodable signal (ADR 0032). Without this,
@@ -1908,13 +1906,13 @@ func (s *Sequencer) fireOpening(now time.Time) {
 
 	// Only the current slot of OUR parity (opposite the partner's) is transmittable,
 	// and only within the late window (else too few symbols survive truncation).
-	curStart := slotStart(now)
-	if SlotRefFromTime(curStart).Period == s.theirPeriod {
+	curStart := s.profile.slotStart(now)
+	if s.profile.SlotRefFromTime(curStart).Period == s.theirPeriod {
 		s.mu.Unlock()
 		return // current slot is the partner's parity — leave it to OnSlot
 	}
 	dt := now.Sub(curStart).Seconds()
-	if dt < 0 || dt > txLateWindowSec {
+	if !s.profile.admitsRung(dt) {
 		s.logTxDeferral("fire_opening", dt)
 		s.mu.Unlock()
 		return

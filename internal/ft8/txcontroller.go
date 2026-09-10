@@ -20,9 +20,10 @@ import (
 // step (d) only the gated cmd/ft8-tx-probe constructs and drives it, so no SPA
 // or daemon path can transmit. Step (e) wires it to the sequencer + SPA.
 
-// TX timing (ADR 0032). FT8 rides a slot-synchronised timebase: symbol 0 of the
-// waveform belongs at the slot boundary + txNominalDtSec — the nominal 0.5 s
-// start WSJT-X uses (DT ≈ 0 at the receiver). When a rung is initiated after
+// TX timing (ADR 0032). FT8 and FT4 ride a slot-synchronised timebase: sample 0
+// of the waveform belongs at the slot boundary + Profile.WaveformOrigin — FT8's
+// nominal 0.5 s start, FT4's 0.452 s (one ramp symbol before the 0.5 s sync
+// reference; ADR 0080). When a rung is initiated after
 // that point (the answer-a-CQ case: the partner's decode lands ~0.7 s into our
 // slot), the controller drops the already-elapsed head and transmits the
 // synchronised remainder in place — "truncate, don't shift" — so the receiver
@@ -30,29 +31,29 @@ import (
 // PTT slightly before audio so the transmitter is fully up before RF; txPlayTail
 // lets the device buffer drain before PTT drops. Lead/tail are package vars so
 // tests dial them to zero; ADR 0030 makes them config if real hardware needs it.
-const txNominalDtSec = 0.5
-
-// txAudioBudget is how long audio may run from the nominal symbol-0 time before it
-// spills into the next slot — the slot's remaining 14.5 s, against a 12.96 s
-// waveform, so ~1.54 s of slack absorbs normal device-start latency. A
-// transmission that would exceed it has been shifted so far off the synchronised
-// timebase that it cannot be decoded, and would QRM the following period as well.
-// Package var so tests can dial it, like txPreKeyLead / txLateWindowSec.
-var txAudioBudget = SlotDuration - time.Duration(txNominalDtSec*float64(time.Second))
+// audioBudget (TxController field) is how long audio may run from the waveform
+// origin before it spills into the next slot — the slot's remainder against the
+// waveform (FT8: 14.5 s against 12.96 s, ~1.54 s of slack; FT4: 7.05 s against
+// 5.04 s, ~2.0 s) — absorbing normal device-start latency. A transmission that
+// would exceed it has been shifted so far off the synchronised timebase that it
+// cannot be decoded, and would QRM the following period as well. Tests dial it
+// per controller, like txPreKeyLead / the sequencers' late window.
 
 var (
 	txPreKeyLead = 200 * time.Millisecond
 	txPlayTail   = 250 * time.Millisecond
 )
 
-// TxController transmits standard FT8 messages. One transmission at a time —
-// the underlying keyer + player are each single-shot, and the bridge's
-// single-flight enforces it at the hardware level.
+// TxController transmits standard FT-family messages on one profile's timebase.
+// One transmission at a time — the underlying keyer + player are each
+// single-shot, and the bridge's single-flight enforces it at the hardware level.
 type TxController struct {
-	keyer  TxKeyer
-	player slotPlayer
-	mode   string // rig data-mode literal to switch to before keying; "" = leave as-is
-	log    logging.Logger
+	profile     Profile
+	audioBudget time.Duration
+	keyer       TxKeyer
+	player      slotPlayer
+	mode        string // rig data-mode literal to switch to before keying; "" = leave as-is
+	log         logging.Logger
 
 	// onTransmit, when set, is invoked with the slot boundary immediately after PTT
 	// keys successfully (not before — a failed key must not mark the slot). The FT8
@@ -72,14 +73,22 @@ type TxController struct {
 	preKey func() error
 }
 
-// NewTxController builds the controller from an injected keyer (PTT) and player
-// (audio out). mode is the rig data-mode literal (ft8.tx.mode); empty leaves the
-// rig's current mode untouched.
-func NewTxController(keyer TxKeyer, player slotPlayer, mode string, log logging.Logger) *TxController {
+// NewTxController builds the controller for one profile's timebase from an
+// injected keyer (PTT) and player (audio out). mode is the rig data-mode literal
+// (ft8.tx.mode, the same DATA-U for FT8 and FT4); empty leaves the rig's current
+// mode untouched.
+func NewTxController(p Profile, keyer TxKeyer, player slotPlayer, mode string, log logging.Logger) *TxController {
 	if log == nil {
 		log = logging.Noop()
 	}
-	return &TxController{keyer: keyer, player: player, mode: mode, log: log}
+	return &TxController{
+		profile:     p,
+		audioBudget: p.Slot - p.WaveformOrigin,
+		keyer:       keyer,
+		player:      player,
+		mode:        mode,
+		log:         log,
+	}
 }
 
 // SetPreKeyCheck installs the final pre-PTT gate (see TxController.preKey). Call
@@ -88,20 +97,20 @@ func NewTxController(keyer TxKeyer, player slotPlayer, mode string, log logging.
 // callback — so refusing here cannot discard a contact that already happened.
 func (c *TxController) SetPreKeyCheck(fn func() error) { c.preKey = fn }
 
-// TransmitSlot encodes a standard FT8 message at the given base offset and
-// transmits it on the next UTC slot, on the synchronised timebase (symbol 0 at
-// boundary + txNominalDtSec). Blocks until the transmission completes (or ctx is
+// TransmitSlot encodes a standard message at the given base offset and
+// transmits it on the next slot, on the synchronised timebase (sample 0 at
+// boundary + WaveformOrigin). Blocks until the transmission completes (or ctx is
 // cancelled); PTT is guaranteed dropped before it returns. Errors if the message
 // isn't an encodable standard message. Used for a manually-initiated CQ, where we
 // pick our own slot/parity and start on time (no truncation).
 func (c *TxController) TransmitSlot(ctx context.Context, text string, offsetHz float64) error {
 	const op errors.Op = "ft8.TxController.TransmitSlot"
 
-	wave, err := EncodeWaveform(text, offsetHz)
+	wave, err := c.profile.EncodeWaveform(text, offsetHz)
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsgf("encode %q", text)
 	}
-	boundary := nextSlotBoundary(time.Now().UTC())
+	boundary := c.profile.nextSlotBoundary(time.Now().UTC())
 	c.log.InfoWith().
 		Str("text", text).
 		Float64("offset_hz", offsetHz).
@@ -110,7 +119,7 @@ func (c *TxController) TransmitSlot(ctx context.Context, text string, offsetHz f
 	return c.transmitAligned(ctx, wave, boundary)
 }
 
-// TransmitCurrentSlot encodes a standard FT8 message and transmits it in the
+// TransmitCurrentSlot encodes a standard message and transmits it in the
 // CURRENT UTC slot on the synchronised timebase (ADR 0032). Answering a CQ must
 // land in the slot opposite the worked station's, which is only known after
 // decoding their slot (~0.7 s into ours) — so by the time this is called the
@@ -120,18 +129,18 @@ func (c *TxController) TransmitSlot(ctx context.Context, text string, offsetHz f
 // TransmitSlot.
 func (c *TxController) TransmitCurrentSlot(ctx context.Context, text string, offsetHz float64) error {
 	const op errors.Op = "ft8.TxController.TransmitCurrentSlot"
-	wave, err := EncodeWaveform(text, offsetHz)
+	wave, err := c.profile.EncodeWaveform(text, offsetHz)
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsgf("encode %q", text)
 	}
 	// Current slot start = the next boundary minus one slot.
-	boundary := nextSlotBoundary(time.Now().UTC()).Add(-SlotDuration)
+	boundary := c.profile.nextSlotBoundary(time.Now().UTC()).Add(-c.profile.Slot)
 	return c.transmitAligned(ctx, wave, boundary)
 }
 
 // transmitAligned transmits waveform on the synchronised timebase for the given
-// slot boundary (ADR 0032). The waveform's symbol 0 belongs at boundary +
-// txNominalDtSec; if that nominal start is still ahead we wait and send the full
+// slot boundary (ADR 0032). The waveform's sample 0 belongs at boundary +
+// WaveformOrigin; if that nominal start is still ahead we wait and send the full
 // waveform (DT ≈ 0), and if it has already passed (a late rung) we drop the
 // elapsed head and send the synchronised remainder, re-ramped to suppress the
 // click at the new leading edge. PTT is keyed only ~txPreKeyLead before audio
@@ -140,7 +149,7 @@ func (c *TxController) TransmitCurrentSlot(ctx context.Context, text string, off
 func (c *TxController) transmitAligned(ctx context.Context, waveform []int16, boundary time.Time) error {
 	const op errors.Op = "ft8.TxController.transmitAligned"
 
-	nominal := boundary.Add(time.Duration(txNominalDtSec * float64(time.Second)))
+	nominal := boundary.Add(c.profile.WaveformOrigin)
 	// Audio begins at the nominal start, or as soon as PTT can settle if we're
 	// already past it (a late rung).
 	audioStart := nominal
@@ -162,7 +171,7 @@ func (c *TxController) transmitAligned(ctx context.Context, waveform []int16, bo
 	// lateness (the clock has moved on by the time transmit() truncates), so
 	// applying the same decodability floor here is safe: anything it rejects would
 	// have been rejected after keying too, just with a pointless PTT blip first.
-	if skip := int(audioStart.Sub(nominal).Seconds() * float64(goft8.SampleRate)); skip > maxDecodableSkip(len(waveform)) {
+	if skip := int(audioStart.Sub(nominal).Seconds() * float64(goft8.SampleRate)); skip > c.profile.maxDecodableSkip(len(waveform)) {
 		return errors.New(op).WithMsg("too late in slot; too little of the waveform would survive truncation")
 	}
 	// Record this slot ONLY after PTT keys successfully (onKeyed, below) — not here.
@@ -277,7 +286,7 @@ func (c *TxController) transmit(ctx context.Context, waveform []int16, nominal t
 	wave := waveform
 	if !nominal.IsZero() {
 		if late := time.Since(nominal); late > 0 {
-			wave = truncateHead(waveform, int(late.Seconds()*float64(goft8.SampleRate)))
+			wave = truncateHead(waveform, int(late.Seconds()*float64(goft8.SampleRate)), c.profile.rampSamples)
 		}
 		// The sequencer's late-window guard runs BEFORE this — before the encode, the
 		// CAT key (mode switch + serial round-trip, bounded only by the daemon ctx)
@@ -289,11 +298,11 @@ func (c *TxController) transmit(ctx context.Context, waveform []int16, nominal t
 		// and success is what logs the QSO — so an undecodable fragment could book a
 		// contact the other station never heard, and forward it to QRZ/ClubLog.
 		// Failing here instead leaves the exchange in txConfirming to retry.
-		if skipped := len(waveform) - len(wave); len(wave) == 0 || skipped > maxDecodableSkip(len(waveform)) {
+		if skipped := len(waveform) - len(wave); len(wave) == 0 || skipped > c.profile.maxDecodableSkip(len(waveform)) {
 			return errors.New(op).WithMsgf(
 				"too late after keying; %.2f s of head lost, past the %.2f s that keeps the sync arrays intact",
 				float64(skipped)/float64(goft8.SampleRate),
-				float64(maxDecodableSkip(len(waveform)))/float64(goft8.SampleRate))
+				float64(c.profile.maxDecodableSkip(len(waveform)))/float64(goft8.SampleRate))
 		}
 	}
 
@@ -331,7 +340,7 @@ func (c *TxController) transmit(ctx context.Context, waveform []int16, nominal t
 	// real hardware (ADR 0030), the budget follows it.
 	if !nominal.IsZero() {
 		audioDur := time.Duration(float64(len(wave)) / float64(goft8.SampleRate) * float64(time.Second))
-		if overrun := time.Since(nominal) + audioDur + txPlayTail - txAudioBudget; overrun > 0 {
+		if overrun := time.Since(nominal) + audioDur + txPlayTail - c.audioBudget; overrun > 0 {
 			_ = c.player.Stop()
 			// A cancel landing during a slow device start is a NORMAL stop (disarm,
 			// shutdown), not a transmission failure. Before this guard existed the

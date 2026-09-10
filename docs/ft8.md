@@ -1033,7 +1033,7 @@ audio-only / offline.
 output mirror of `internal/audio/capture`: a malgo/miniaudio **S16, 12 kHz, mono**
 playback device behind `//go:build cgo` (the static build excludes it; only the
 pure `fillFrame`/`bytesAsInt16` helpers compile CGO-free, and they carry the
-package's CGO-free unit tests). The int16 waveform from `ft8.EncodeToSlot` streams
+package's CGO-free unit tests). The int16 waveform from `Profile.EncodeToSlot` streams
 straight to the device with no float conversion. Lifecycle `New → Init →
 Play(samples) → <done> → Stop / Close`: `Play` is non-blocking and returns a channel
 closed when the whole waveform has been handed to the device; **the caller owns the
@@ -1167,8 +1167,9 @@ read by the e2 resolver. Step (e) breaks into increments:
   controller drops the elapsed head and transmits the **synchronised remainder**
   (truncate-don't-shift, ADR 0032); the receiver re-syncs on the Costas arrays
   (QEX §8 — a reply up to ~5 s late, ~8 s with AP-mycall, still decodes). Off-ramps
-  (ADR 0031): late-window guard — `txLateWindowSec` (~4.5 s into the slot) skips a
-  rung only when too few symbols would survive truncation; plus
+  (ADR 0031): late-window admission — `Profile.LateWindow` (FT8 4.5 s, FT4 2.0 s into
+  the slot; ADR 0080) defers a rung past it, and the controller's `maxDecodableSkip`
+  refuses one whose truncated remainder would not decode; plus
   N-unanswered-repeats → abandon, abort on Disarm/Abandon, never auto-switch
   targets. **Controller-side decodability guards (2026-07-25, two review rounds).**
   The sequencer's window is checked *before* the encode, the CAT key and the pre-key
@@ -1198,7 +1199,7 @@ read by the e2 resolver. Step (e) breaks into increments:
      **untruncated** rung: a manual next-slot CQ drops no head at all, so no
      head-loss test can see a slow device start shift the whole waveform off DT. **First-rung immediate-fire (2026-06-12):** `StartQso` takes `now` and a
   `fireOpening(now)` helper sends the opening call in the click's *current* TX slot
-  when it's the opposite parity within `txLateWindowSec` — otherwise the opening rung
+  when it's the opposite parity within the profile's late window — otherwise the opening rung
   waits for the next qualifying `OnSlot`, which lands at a boundary, so a click just
   after one stalled a full ~30 s cycle. (Caller-side Call CQ is unchanged — it picks
   its CQ parity as the *next* slot, so its first CQ is already ≤ ~15 s.) **PocketFFT
@@ -1391,9 +1392,11 @@ GFSK audio → output → PTT → timing.
   publish; capture is **subscriber-driven** — acquired on the first
   `/v1/ft8/events` subscriber, released after a short linger when the last
   leaves, so the device is only held while an FT8 view is open),
+  `profile.go` (the FT8/FT4 timing + modulation geometry, ADR 0080: slot lattice,
+  slot references, GFSK modulator, waveform origin, late window),
   `scheduler.go` + `ring.go` (UTC slots), `decode.go` (go-ft8 wrapper +
   `DecodeReport`), `occupancy.go` (detector + ranking + guard), `modulate.go`
-  (GFSK + offline round-trip), `qsolog.go` (`BuildQso` + the `LoggedQso` payload /
+  (shared GFSK constants + head truncation), `qsolog.go` (`BuildQso` + the `LoggedQso` payload /
   `NewLoggedQso` mapper for the `ft8-logged` event), `hub.go` + `handler.go` (SSE). Capture seam:
   `source_cgo.go` / `source_nocgo.go`, `internal/audio/capture`. Output device:
   `internal/audio/playback` (S16 mono playback, `//go:build cgo`). TX (ADR 0030):

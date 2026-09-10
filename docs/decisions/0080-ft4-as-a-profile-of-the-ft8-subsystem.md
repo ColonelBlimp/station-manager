@@ -141,8 +141,10 @@ would add a fourth item; if the list grows past that, group them then.
   (operator's citation: `lib/ft4/ft4sim.f90:85`), and go-ft8's oracle mirrors it by placing the
   waveform at `SampleRate/2 − SamplesPerSymbol` (`go-ft8/ft4/oracle_test.go:98`). The profile
   therefore carries both values, and slice 1 asserts offline that a waveform placed at + 0.452 s
-  decodes with DT near zero. (FT8 keeps its existing 0.5 s convention; whether its own ramp symbol
-  is placed the same way is checked, not assumed, in the same slice.)
+  decodes with DT near zero. FT8 keeps its existing 0.5 s convention, checked rather than assumed:
+  slice 1 measured DT ≈ +0.155 s on SM's own FT8 waveform, so its first Costas array lands at
+  +0.660 s and the profile records that as FT8's sync start (operator ruling 2026-09-10: no FT8
+  timing change during W-0019; moving FT8's origin is a separate post-contest change).
 - The **late window** is an admission policy, not a decodability guarantee (operator ruling
   2026-09-10). The proposal keeps + 2.000 s into the 7.5 s slot as the latest a rung may be
   admitted, with explicit refusals at the edges. It must not be described as preserving three of

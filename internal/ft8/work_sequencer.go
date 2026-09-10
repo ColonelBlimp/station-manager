@@ -67,7 +67,7 @@ func (s *Sequencer) StartWorkCaller(ourCall, theirCall, theirGrid string, theirS
 	// operator-started session is what arms a run (ADR 0059) — the policy alone
 	// never does, which keeps every run headed by an operator action (W5).
 	s.armAutoWorkLocked(call, offsetHz, dialFreqMHz, now)
-	s.commitWorkCallerLocked(&c, call, SlotRefFromTime(t).Period, offsetHz, dialFreqMHz, now)
+	s.commitWorkCallerLocked(&c, call, s.profile.SlotRefFromTime(t).Period, offsetHz, dialFreqMHz, now)
 	theirPeriod := s.theirPeriod // capture under s.mu; the log below runs after Unlock
 	s.mu.Unlock()
 
@@ -146,8 +146,8 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		s.mu.Unlock()
 		return
 	}
-	dt := now.Sub(curStart.Add(SlotDuration)).Seconds()
-	if dt < 0 || dt > txLateWindowSec {
+	dt := now.Sub(curStart.Add(s.profile.Slot)).Seconds()
+	if !s.profile.admitsRung(dt) {
 		s.logTxDeferral("work", dt)
 		st := s.statusLocked()
 		s.publish(st)
@@ -156,8 +156,8 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	}
 	// Slot already fired (immediate fireOpening vs this slot's pending OnSlot —
 	// review 2026-07-20 #2); see onSlotAnswering.
-	if s.lastTxSlot.Equal(curStart.Add(SlotDuration)) {
-		s.logSameSlotDedup("work", curStart.Add(SlotDuration))
+	if s.lastTxSlot.Equal(curStart.Add(s.profile.Slot)) {
+		s.logSameSlotDedup("work", curStart.Add(s.profile.Slot))
 		st := s.statusLocked()
 		s.publish(st)
 		s.mu.Unlock()
@@ -214,7 +214,7 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	}
 	s.contact.repeats++
 
-	s.lastTxSlot = curStart.Add(SlotDuration)
+	s.lastTxSlot = curStart.Add(s.profile.Slot)
 	transmit, gen := s.transmitLocked()
 	offset, dial := s.offsetHz, s.dialFreqMHz
 	repeats := s.contact.repeats
@@ -325,7 +325,7 @@ func (s *Sequencer) StartWorkCallerFd(ourCall, ourClass, ourSection, theirCall, 
 	s.allowDuplicate = s.consumePendingAllowDuplicate() // one-shot: consumed + cleared with activation
 	s.fdWork = &c
 	s.ourCall = call
-	s.theirPeriod = SlotRefFromTime(t).Period
+	s.theirPeriod = s.profile.SlotRefFromTime(t).Period
 	s.offsetHz = offsetHz
 	s.dialFreqMHz = dialFreqMHz
 	s.startedAt = now.UTC()
@@ -395,8 +395,8 @@ func (s *Sequencer) onSlotWorkingFd(ref SlotRef, msgs []goft8.DecodedMessage, no
 		s.mu.Unlock()
 		return
 	}
-	dt := now.Sub(curStart.Add(SlotDuration)).Seconds()
-	if dt < 0 || dt > txLateWindowSec {
+	dt := now.Sub(curStart.Add(s.profile.Slot)).Seconds()
+	if !s.profile.admitsRung(dt) {
 		s.logTxDeferral("work_fd", dt)
 		st := s.statusLocked()
 		s.publish(st)
@@ -405,8 +405,8 @@ func (s *Sequencer) onSlotWorkingFd(ref SlotRef, msgs []goft8.DecodedMessage, no
 	}
 	// Slot already fired (immediate fireOpening vs this slot's pending OnSlot —
 	// review 2026-07-20 #2); see onSlotAnswering.
-	if s.lastTxSlot.Equal(curStart.Add(SlotDuration)) {
-		s.logSameSlotDedup("work_fd", curStart.Add(SlotDuration))
+	if s.lastTxSlot.Equal(curStart.Add(s.profile.Slot)) {
+		s.logSameSlotDedup("work_fd", curStart.Add(s.profile.Slot))
 		st := s.statusLocked()
 		s.publish(st)
 		s.mu.Unlock()
@@ -431,7 +431,7 @@ func (s *Sequencer) onSlotWorkingFd(ref SlotRef, msgs []goft8.DecodedMessage, no
 		s.contact.repeats++
 	}
 
-	s.lastTxSlot = curStart.Add(SlotDuration)
+	s.lastTxSlot = curStart.Add(s.profile.Slot)
 	transmit, gen := s.transmitLocked()
 	offset, dial := s.offsetHz, s.dialFreqMHz
 	repeats := s.contact.repeats
@@ -511,7 +511,7 @@ func (s *Sequencer) commitWorkCallerLocked(c *CallerExchange, call, theirPeriod 
 // not a derived one.
 //
 // Slots rather than seconds because FT8 time is slots, matching confirmHoldSlotLimit
-// — but applied as a DEADLINE (5 x SlotDuration from the stall) rather than a
+// — but applied as a DEADLINE (5 slots from the stall) rather than a
 // per-slot countdown, so a capture gap that stops slots arriving cannot freeze the
 // exclusion open while the clock runs on.
 const stallCooloffSlots = 5
@@ -522,7 +522,7 @@ func (s *Sequencer) coolOffStalledCallerLocked(call string, now time.Time) {
 	if s.stallCooloff == nil {
 		s.stallCooloff = make(map[string]time.Time, 2)
 	}
-	until := now.Add(stallCooloffSlots * SlotDuration)
+	until := now.Add(stallCooloffSlots * s.profile.Slot)
 	s.stallCooloff[call] = until
 	// Ship-gate finding 5 (ft8-logging-gaps): the STALL was logged but the
 	// exclusion it causes was not — "SM ignored a caller it can hear" and

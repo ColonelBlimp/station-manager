@@ -97,7 +97,7 @@ func runListDevices(p *playback.Player) {
 }
 
 func runPlay(p *playback.Player, cfg playback.Config, msg string, offset, dt float64, wavOut string) {
-	slot, err := ft8.EncodeToSlot(msg, offset, dt)
+	slot, err := ft8.ProfileFT8.EncodeToSlot(msg, offset, dt)
 	if err != nil {
 		fatal("encode %q: %v", msg, err)
 	}
@@ -129,7 +129,7 @@ func runPlay(p *playback.Player, cfg playback.Config, msg string, offset, dt flo
 		fmt.Println("waveform finished.")
 	case <-sigCh:
 		fmt.Fprintln(os.Stderr, "\nsignal received — stopping…")
-	case <-time.After(ft8.SlotDuration + 5*time.Second):
+	case <-time.After(ft8.ProfileFT8.Slot + 5*time.Second):
 		fmt.Fprintln(os.Stderr, "timeout — stopping…")
 	}
 
@@ -206,7 +206,7 @@ func runKeyedTx(configPath string, deviceIndex int, msg string, offset float64) 
 		cancel()
 	}()
 
-	ctrl := ft8.NewTxController(ft8Keyer{br}, player, mode, logger)
+	ctrl := ft8.NewTxController(ft8.ProfileFT8, ft8Keyer{br}, player, mode, logger)
 	fmt.Fprintf(os.Stderr, "transmitting %q at %.0f Hz on the next UTC slot (mode=%q)…\n", msg, offset, mode)
 	if err := ctrl.TransmitSlot(ctx, msg, offset); err != nil {
 		fatal("transmit: %v", err)

@@ -120,17 +120,17 @@ import (
 // offsets, each at ~45% amplitude so the sum never clips.
 func mixSlot(t *testing.T, msgs map[string]float64) []int16 {
 	t.Helper()
-	sum := make([]int32, SlotSamples)
+	sum := make([]int32, ProfileFT8.SlotSamples)
 	for text, offset := range msgs {
-		slot, err := EncodeToSlot(text, offset, 0.5)
+		slot, err := ProfileFT8.EncodeToSlot(text, offset, 0.5)
 		if err != nil {
-			t.Fatalf("EncodeToSlot(%q): %v", text, err)
+			t.Fatalf("ProfileFT8.EncodeToSlot(%q): %v", text, err)
 		}
 		for i, v := range slot {
 			sum[i] += int32(float64(v) * 0.45)
 		}
 	}
-	out := make([]int16, SlotSamples)
+	out := make([]int16, ProfileFT8.SlotSamples)
 	for i, v := range sum {
 		if v > 32767 {
 			v = 32767
@@ -324,7 +324,7 @@ func TestDecodeLoop_SkippedSlots_EmptySurfaces_Frozen(t *testing.T) {
 	}
 	s, sink, events, logPath := newSplitHarness(t)
 
-	audible, err := EncodeToSlot("CQ W1AW FN31", 1500, 0.5)
+	audible, err := ProfileFT8.EncodeToSlot("CQ W1AW FN31", 1500, 0.5)
 	if err != nil {
 		t.Fatalf("EncodeToSlot: %v", err)
 	}
@@ -365,7 +365,7 @@ func TestDecodeLoop_SkippedSlots_EmptySurfaces_Frozen(t *testing.T) {
 
 // TestDecodeLoop_StarvedSlot_SuppressedAsCaptureLoss pins the starved-window
 // rule (package review, 2026-08-10): when the capture ring received fewer than
-// minLiveWindowSamples fresh samples for a window, its Samples are mostly the
+// ProfileFT8.minLiveWindowSamples() fresh samples for a window, its Samples are mostly the
 // PRIOR slot's audio. Decoding that surfaces prior-slot messages as current and
 // drives the sequencer off them, recording a false `decoded` coverage. A
 // starved slot must be suppressed like a dial-moved slot: no decode of the
@@ -380,7 +380,7 @@ func TestDecodeLoop_StarvedSlot_SuppressedAsCaptureLoss(t *testing.T) {
 	var evOutcomes []string
 	s.SetEvidenceSink(func(e EvidenceSlot) { evOutcomes = append(evOutcomes, e.Outcome) })
 
-	audible, err := EncodeToSlot("CQ W1AW FN31", 1500, 0.5)
+	audible, err := ProfileFT8.EncodeToSlot("CQ W1AW FN31", 1500, 0.5)
 	if err != nil {
 		t.Fatalf("EncodeToSlot: %v", err)
 	}
@@ -434,9 +434,9 @@ const (
 
 func encodeSlotOrFatal(t *testing.T, text string, offsetHz float64) []int16 {
 	t.Helper()
-	slot, err := EncodeToSlot(text, offsetHz, 0.5)
+	slot, err := ProfileFT8.EncodeToSlot(text, offsetHz, 0.5)
 	if err != nil {
-		t.Fatalf("EncodeToSlot(%q): %v", text, err)
+		t.Fatalf("ProfileFT8.EncodeToSlot(%q): %v", text, err)
 	}
 	return slot
 }
@@ -863,7 +863,7 @@ func TestDecodeLoop_EvidenceOutcomesPerPhysicalSlot(t *testing.T) {
 	// decoder_error: a malformed short slot is REJECTED by the checked API
 	ch <- Slot{StartUTC: start.Add(75 * time.Second), Samples: make([]int16, 1000), DialTracked: true, DialMHz: 14.074}
 	// no_decode: a full-length silent slot decodes cleanly to nothing
-	ch <- Slot{StartUTC: start.Add(90 * time.Second), Samples: make([]int16, SlotSamples), DialTracked: true, DialMHz: 14.074}
+	ch <- Slot{StartUTC: start.Add(90 * time.Second), Samples: make([]int16, ProfileFT8.SlotSamples), DialTracked: true, DialMHz: 14.074}
 	close(ch)
 	s.decodeLoop(ch, nil)
 
@@ -917,9 +917,9 @@ func TestDecodeLoop_EvidenceOutcomesPerPhysicalSlot(t *testing.T) {
 // delivered slot as OmittedBefore and resets it, so the tail left when a
 // session ends is exactly the run no later slot could ever report.
 func TestScheduler_TracksUndeliveredRun(t *testing.T) {
-	sch := NewScheduler(nil, logging.Noop())
-	ring := newSampleRing(SlotSamples)
-	ring.Append(make([]int16, SlotSamples)) // full ring: emitSlot won't cold-start skip
+	sch := NewScheduler(ProfileFT8, nil, logging.Noop())
+	ring := newSampleRing(ProfileFT8.SlotSamples)
+	ring.Append(make([]int16, ProfileFT8.SlotSamples)) // full ring: emitSlot won't cold-start skip
 
 	// Occupy the (capacity 1) channel so emits drop.
 	sch.out <- Slot{}
@@ -1027,9 +1027,9 @@ func TestDecodeLoop_EmitsSessionTailAfterLastSlot(t *testing.T) {
 // undelivered run. Mid-session the gap inference would mask this; at
 // session boundaries nothing would.
 func TestScheduler_LateStallCountsEveryBoundary(t *testing.T) {
-	sch := NewScheduler(nil, logging.Noop())
-	ring := newSampleRing(SlotSamples)
-	ring.Append(make([]int16, SlotSamples))
+	sch := NewScheduler(ProfileFT8, nil, logging.Noop())
+	ring := newSampleRing(ProfileFT8.SlotSamples)
+	ring.Append(make([]int16, ProfileFT8.SlotSamples))
 
 	target := time.Date(2026, 8, 10, 12, 0, 15, 0, time.UTC)
 	sch.noteLateBoundaries(ring, target, target.Add(32*time.Second)) // serviced at 12:00:47
@@ -1042,8 +1042,8 @@ func TestScheduler_LateStallCountsEveryBoundary(t *testing.T) {
 
 	// A cold-start stall (ring never filled) is not loss — no complete slot
 	// of session audio existed.
-	cold := NewScheduler(nil, logging.Noop())
-	cold.noteLateBoundaries(newSampleRing(SlotSamples), target, target.Add(32*time.Second))
+	cold := NewScheduler(ProfileFT8, nil, logging.Noop())
+	cold.noteLateBoundaries(newSampleRing(ProfileFT8.SlotSamples), target, target.Add(32*time.Second))
 	if _, n := cold.UndeliveredTail(); n != 0 {
 		t.Fatalf("cold-start stall counted %d, want 0", n)
 	}

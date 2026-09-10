@@ -16,7 +16,7 @@ package ft8
 
    FINDING 11 — three distinct reasons a qualifying slot passes without RF,
    all previously silent and indistinguishable:
-     - the decode landed TOO LATE (dt > txLateWindowSec): expected, the thing
+     - the decode landed TOO LATE (dt past the profile's late window): expected, the thing
        ADR 0032's truncation budget exists for → Info;
      - dt < 0, "our slot has not started yet": a CLOCK or SLOT-REF fault, a
        completely different problem sharing the same silent branch → Warn;
@@ -145,8 +145,8 @@ func TestSeqSilence_LateDeferralLoggedTimelySlotSilent(t *testing.T) {
 	require.Positive(t, sentAfterTimely, "fixture: the timely slot must transmit")
 
 	// 6 s into our slot > txLateWindowSec 4.5 → deferred, no RF.
-	ref := SlotRefFromTime(time.Unix(60, 0).UTC())
-	s.OnSlot(ref, nil, time.Unix(60+slotSeconds+6, 0).UTC())
+	ref := ProfileFT8.SlotRefFromTime(time.Unix(60, 0).UTC())
+	s.OnSlot(ref, nil, time.Unix(60+int64(ProfileFT8.Slot/time.Second)+6, 0).UTC())
 	require.Len(t, r.sentMsgs(), sentAfterTimely, "the late slot must not transmit")
 
 	lines := logLines(buf, "ft8 seq: rung deferred — decode landed too late to transmit this slot")
@@ -170,8 +170,8 @@ func TestSeqSilence_NegativeOffsetWarnsDistinctly(t *testing.T) {
 		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
 
 	// now is BEFORE our tx slot's start (75 s): dt < 0.
-	ref := SlotRefFromTime(time.Unix(60, 0).UTC())
-	s.OnSlot(ref, nil, time.Unix(60+slotSeconds-1, 0).UTC())
+	ref := ProfileFT8.SlotRefFromTime(time.Unix(60, 0).UTC())
+	s.OnSlot(ref, nil, time.Unix(60+int64(ProfileFT8.Slot/time.Second)-1, 0).UTC())
 	require.Empty(t, r.sentMsgs())
 
 	warn := logLines(buf, "ft8 seq: rung skipped — slot offset negative (clock or slot-ref fault?)")
@@ -198,7 +198,7 @@ func TestSeqSilence_SameSlotDedupLogsAtDebug(t *testing.T) {
 
 	// The same their-slot delivered again inside the same physical tx slot —
 	// the double-drive the dedup exists for (2026-07-20).
-	s.OnSlot(SlotRefFromTime(time.Unix(30, 0).UTC()), nil, time.Unix(47, 0).UTC())
+	s.OnSlot(ProfileFT8.SlotRefFromTime(time.Unix(30, 0).UTC()), nil, time.Unix(47, 0).UTC())
 	require.Len(t, r.sentMsgs(), sent, "the dedup must hold: one rung per physical slot")
 
 	lines := logLines(buf, "ft8 seq: rung dedup — already transmitted in this slot")

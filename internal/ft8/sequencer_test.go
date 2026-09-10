@@ -144,8 +144,8 @@ func dm(text string, snr int) goft8.DecodedMessage {
 // `sec` (which must be an even slot — the worked station's parity here), firing
 // OnSlot ~1 s into our following slot (a valid late-start dt).
 func driveTheir(s *Sequencer, sec int64, msgs []goft8.DecodedMessage) {
-	ref := SlotRefFromTime(time.Unix(sec, 0).UTC())
-	now := time.Unix(sec+slotSeconds+1, 0).UTC() // 1 s into the current (our) slot
+	ref := ProfileFT8.SlotRefFromTime(time.Unix(sec, 0).UTC())
+	now := time.Unix(sec+int64(ProfileFT8.Slot/time.Second)+1, 0).UTC() // 1 s into the current (our) slot
 	s.OnSlot(ref, msgs, now)
 }
 
@@ -216,8 +216,8 @@ func TestSequencer_OnlyTransmitsOppositeParity(t *testing.T) {
 	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "", time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
 
 	// A slot of OUR parity (odd, sec=15) just decoded → nothing to send.
-	ref := SlotRefFromTime(time.Unix(15, 0).UTC())
-	s.OnSlot(ref, nil, time.Unix(15+slotSeconds+1, 0).UTC())
+	ref := ProfileFT8.SlotRefFromTime(time.Unix(15, 0).UTC())
+	s.OnSlot(ref, nil, time.Unix(15+int64(ProfileFT8.Slot/time.Second)+1, 0).UTC())
 	require.Empty(t, r.sentMsgs(), "must not transmit off a our-parity slot")
 
 	// A their-parity slot does trigger our call.
@@ -259,8 +259,8 @@ func TestSequencer_LateStartGuardSkips(t *testing.T) {
 	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "", time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
 
 	// Fire OnSlot too late into our slot (6 s in > txLateWindowSec 4.5 s) → skip.
-	ref := SlotRefFromTime(time.Unix(30, 0).UTC())
-	s.OnSlot(ref, nil, time.Unix(30+slotSeconds+6, 0).UTC())
+	ref := ProfileFT8.SlotRefFromTime(time.Unix(30, 0).UTC())
+	s.OnSlot(ref, nil, time.Unix(30+int64(ProfileFT8.Slot/time.Second)+6, 0).UTC())
 	require.Empty(t, r.sentMsgs(), "a too-late slot must be skipped")
 	require.True(t, s.Active(), "skipping a slot does not end the QSO")
 }
@@ -468,7 +468,7 @@ func TestSequencer_ImmediateOpeningNotDoubleDriven(t *testing.T) {
 
 	// The same slot's OnSlot was still pending when the session started (its
 	// decode had just been published): identical slot, no reply from them yet.
-	s.OnSlot(SlotRefFromTime(time.Unix(0, 0).UTC()),
+	s.OnSlot(ProfileFT8.SlotRefFromTime(time.Unix(0, 0).UTC()),
 		[]goft8.DecodedMessage{dm("CQ K1ABC FN42", -1)}, time.Unix(16, 0).UTC())
 	require.True(t, s.Active(),
 		"same-slot OnSlot must not consume a second repeat and abandon (review 2026-07-20 #2)")
@@ -559,7 +559,7 @@ func TestFireOpening_PublishesCurrentTruthNotAStaleSnapshot(t *testing.T) {
 	// StartQso fires the opening rung immediately when the parity/timing allow.
 	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42",
 		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074,
-		time.Unix(slotSeconds+1, 0).UTC()))
+		time.Unix(int64(ProfileFT8.Slot/time.Second)+1, 0).UTC()))
 
 	last := r.lastStatus()
 	require.False(t, last.Active,

@@ -300,9 +300,9 @@ func TestCallerSequencer_OnlyActsInAnswerersParity(t *testing.T) {
 	r := &seqRecorder{}
 	s := newTestSeq(r)
 	startCq(t, s) // theirPeriod = even
-	ref := SlotRefFromTime(time.Unix(45, 0).UTC())
+	ref := ProfileFT8.SlotRefFromTime(time.Unix(45, 0).UTC())
 	require.Equal(t, "odd", ref.Period) // our CQ parity
-	s.OnSlot(ref, []goft8.DecodedMessage{dm("7Q5MLV DL9UW JO41", -8)}, time.Unix(45+slotSeconds+1, 0).UTC())
+	s.OnSlot(ref, []goft8.DecodedMessage{dm("7Q5MLV DL9UW JO41", -8)}, time.Unix(45+int64(ProfileFT8.Slot/time.Second)+1, 0).UTC())
 	require.Empty(t, r.sentMsgs(), "must not transmit on our own parity slot")
 	require.Nil(t, s.caller)
 }

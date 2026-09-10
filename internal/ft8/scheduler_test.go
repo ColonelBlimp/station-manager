@@ -39,7 +39,7 @@ func TestNextSlotBoundary_TableDriven(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.now, func(t *testing.T) {
-			got := nextSlotBoundary(mk(tc.now))
+			got := ProfileFT8.nextSlotBoundary(mk(tc.now))
 			require.Equal(t, mk(tc.want), got)
 			require.Equal(t, time.UTC, got.Location(), "boundary must be UTC")
 			require.True(t, got.After(mk(tc.now)),
@@ -51,29 +51,29 @@ func TestNextSlotBoundary_TableDriven(t *testing.T) {
 // --- Scheduler integration --------------------------------------------------
 
 // TestScheduler_EmitsSlotWithCorrectShape verifies that once the ring has
-// accumulated a full SlotSamples of audio, the next boundary fire produces
+// accumulated a full ProfileFT8.SlotSamples of audio, the next boundary fire produces
 // exactly one Slot with the right size and a sane offset.
 //
 // The test pre-fills the ring, then lets the real timer fire at the next UTC
-// boundary. Worst-case wait is just under SlotDuration (15s), so it skips
-// under -short and runs with a 2×SlotDuration budget otherwise.
+// boundary. Worst-case wait is just under ProfileFT8.Slot (15s), so it skips
+// under -short and runs with a 2×ProfileFT8.Slot budget otherwise.
 func TestScheduler_EmitsSlotWithCorrectShape(t *testing.T) {
 	if testing.Short() {
 		t.Skip("scheduler integration test waits for a real UTC boundary; skip in -short")
 	}
 
 	source := make(chan []int16, 4)
-	sch := NewScheduler(source, nil)
+	sch := NewScheduler(ProfileFT8, source, nil)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*SlotDuration+5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*ProfileFT8.Slot+5*time.Second)
 	defer cancel()
 
 	runDone := make(chan error, 1)
 	go func() { runDone <- sch.Run(ctx) }()
 
-	// Pre-fill the ring with SlotSamples samples so the first boundary fires
+	// Pre-fill the ring with ProfileFT8.SlotSamples samples so the first boundary fires
 	// a real slot (not a cold-start skip).
-	full := make([]int16, SlotSamples)
+	full := make([]int16, ProfileFT8.SlotSamples)
 	for i := range full {
 		full[i] = int16(i % 1000) // arbitrary distinguishable pattern
 	}
@@ -82,17 +82,17 @@ func TestScheduler_EmitsSlotWithCorrectShape(t *testing.T) {
 	select {
 	case slot, ok := <-sch.Slots():
 		require.True(t, ok, "slot channel closed before any slot emitted")
-		require.Len(t, slot.Samples, SlotSamples)
+		require.Len(t, slot.Samples, ProfileFT8.SlotSamples)
 		require.Equal(t, time.UTC, slot.StartUTC.Location())
 		// Offset is the firing-late budget. Allow up to 500 ms — generous
 		// for CI; healthy on a laptop is well under 50 ms.
 		require.LessOrEqual(t, slot.OffsetMs, int64(500),
 			"OffsetMs unhealthy: %d ms", slot.OffsetMs)
 		// The slot should align to a 15-second boundary on UTC.
-		require.Equal(t, 0, int(slot.StartUTC.UnixNano()%int64(SlotDuration)),
-			"StartUTC not aligned to %v: %v", SlotDuration, slot.StartUTC)
+		require.Equal(t, 0, int(slot.StartUTC.UnixNano()%int64(ProfileFT8.Slot)),
+			"StartUTC not aligned to %v: %v", ProfileFT8.Slot, slot.StartUTC)
 	case <-ctx.Done():
-		t.Fatalf("no slot emitted within %v: %v", 2*SlotDuration, ctx.Err())
+		t.Fatalf("no slot emitted within %v: %v", 2*ProfileFT8.Slot, ctx.Err())
 	}
 
 	cancel()
@@ -101,7 +101,7 @@ func TestScheduler_EmitsSlotWithCorrectShape(t *testing.T) {
 
 func TestScheduler_ColdStartSkipsUntilRingFull(t *testing.T) {
 	source := make(chan []int16, 4)
-	sch := NewScheduler(source, nil)
+	sch := NewScheduler(ProfileFT8, source, nil)
 
 	// Drive Run by stuffing a few small batches that don't fill the ring,
 	// then cancelling. emitSlot should be a no-op in this period — confirmed
@@ -129,7 +129,7 @@ func TestScheduler_ColdStartSkipsUntilRingFull(t *testing.T) {
 
 func TestScheduler_SourceCloseEndsRun(t *testing.T) {
 	source := make(chan []int16, 1)
-	sch := NewScheduler(source, nil)
+	sch := NewScheduler(ProfileFT8, source, nil)
 
 	runDone := make(chan error, 1)
 	go func() { runDone <- sch.Run(context.Background()) }()
@@ -154,15 +154,15 @@ func TestScheduler_DroppedSlot_WhenConsumerStalls(t *testing.T) {
 	}
 
 	source := make(chan []int16, 4)
-	sch := NewScheduler(source, nil)
+	sch := NewScheduler(ProfileFT8, source, nil)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*SlotDuration+5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*ProfileFT8.Slot+5*time.Second)
 	defer cancel()
 
 	runDone := make(chan error, 1)
 	go func() { runDone <- sch.Run(ctx) }()
 
-	full := make([]int16, SlotSamples)
+	full := make([]int16, ProfileFT8.SlotSamples)
 	source <- full
 
 	// Intentionally do NOT drain Slots; the channel capacity is
@@ -170,7 +170,7 @@ func TestScheduler_DroppedSlot_WhenConsumerStalls(t *testing.T) {
 	// increment the dropped counter.
 	require.Eventually(t, func() bool {
 		return sch.Dropped() > 0
-	}, 3*SlotDuration, 100*time.Millisecond, "expected at least one dropped slot")
+	}, 3*ProfileFT8.Slot, 100*time.Millisecond, "expected at least one dropped slot")
 
 	cancel()
 	<-runDone
@@ -183,7 +183,7 @@ func TestScheduler_DroppedSlot_WhenConsumerStalls(t *testing.T) {
 // comparison gets wrong: band-stack recall returns to exactly the frequency you
 // left, so both ends read A while most of the window was captured on B.
 func TestScheduler_AttributesSlotOnlyWhenDialHeldSteady(t *testing.T) {
-	full := make([]int16, SlotSamples)
+	full := make([]int16, ProfileFT8.SlotSamples)
 	target := time.Date(2026, 7, 27, 12, 0, 15, 0, time.UTC)
 
 	type reading struct {
@@ -230,7 +230,7 @@ func TestScheduler_AttributesSlotOnlyWhenDialHeldSteady(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			next := 0
-			sch := NewScheduler(make(chan []int16), nil)
+			sch := NewScheduler(ProfileFT8, make(chan []int16), nil)
 			sch.SetDialSource(func() (float64, bool) {
 				r := tc.readings[next]
 				if next < len(tc.readings)-1 {
@@ -241,7 +241,7 @@ func TestScheduler_AttributesSlotOnlyWhenDialHeldSteady(t *testing.T) {
 			for range tc.readings {
 				sch.observeDial()
 			}
-			ring := newSampleRing(SlotSamples)
+			ring := newSampleRing(ProfileFT8.SlotSamples)
 			ring.Append(full)
 
 			sch.emitSlot(ring, target, target, false)
@@ -259,27 +259,27 @@ func TestScheduler_AttributesSlotOnlyWhenDialHeldSteady(t *testing.T) {
 }
 
 // Package review (2026-08-10): the scheduler flags a window whose fresh-sample
-// delta fell below minLiveWindowSamples as starved, and a full window as not —
+// delta fell below ProfileFT8.minLiveWindowSamples() as starved, and a full window as not —
 // the per-boundary delta, not the lifetime Filled() count, is what
 // distinguishes them. The boundary before it primes the baseline.
 func TestScheduler_FlagsStarvedWindowsByDelta(t *testing.T) {
-	sch := NewScheduler(make(chan []int16), nil)
-	full := int64(SlotSamples)
+	sch := NewScheduler(ProfileFT8, make(chan []int16), nil)
+	full := int64(ProfileFT8.SlotSamples)
 
 	// Two full windows in a row: each delta is a whole slot — never starved.
 	require.False(t, sch.boundaryStarved(full), "the first full window is not starved")
 	require.False(t, sch.boundaryStarved(2*full), "a second full window is not starved")
 
-	// A starved window: only a trickle (< minLiveWindowSamples) arrived since.
-	require.True(t, sch.boundaryStarved(2*full+minLiveWindowSamples-1),
-		"a window with fewer than minLiveWindowSamples fresh samples is starved")
+	// A starved window: only a trickle (< ProfileFT8.minLiveWindowSamples()) arrived since.
+	require.True(t, sch.boundaryStarved(2*full+ProfileFT8.minLiveWindowSamples()-1),
+		"a window with fewer than ProfileFT8.minLiveWindowSamples() fresh samples is starved")
 
 	// Exactly at the floor is NOT starved (the comparison is strict).
-	require.False(t, sch.boundaryStarved(2*full+2*minLiveWindowSamples),
+	require.False(t, sch.boundaryStarved(2*full+2*ProfileFT8.minLiveWindowSamples()),
 		"a window at the floor is not starved")
 
 	// Recovery: a full window again clears it.
-	require.False(t, sch.boundaryStarved(3*full+2*minLiveWindowSamples),
+	require.False(t, sch.boundaryStarved(3*full+2*ProfileFT8.minLiveWindowSamples()),
 		"a recovered full window is not starved")
 }
 
@@ -292,10 +292,10 @@ func TestScheduler_FlagsStarvedWindowsByDelta(t *testing.T) {
 // decoding a stalled window as current (the P1 this exists to prevent). The
 // baseline re-primes so the FOLLOWING window measures normally.
 func TestScheduler_ResyncSlotIsSuppressedAsUnverifiable(t *testing.T) {
-	full := int64(SlotSamples)
+	full := int64(ProfileFT8.SlotSamples)
 
 	t.Run("source stalled during the gap — the stale window must be suppressed", func(t *testing.T) {
-		sch := NewScheduler(make(chan []int16), nil)
+		sch := NewScheduler(ProfileFT8, make(chan []int16), nil)
 		require.False(t, sch.boundaryStarved(full))
 		require.False(t, sch.boundaryStarved(2*full))
 		sch.starveResync = true
@@ -305,7 +305,7 @@ func TestScheduler_ResyncSlotIsSuppressedAsUnverifiable(t *testing.T) {
 	})
 
 	t.Run("source kept flowing — still suppressed, unverifiable is capture loss", func(t *testing.T) {
-		sch := NewScheduler(make(chan []int16), nil)
+		sch := NewScheduler(ProfileFT8, make(chan []int16), nil)
 		require.False(t, sch.boundaryStarved(full))
 		require.False(t, sch.boundaryStarved(2*full))
 		sch.starveResync = true
@@ -317,12 +317,12 @@ func TestScheduler_ResyncSlotIsSuppressedAsUnverifiable(t *testing.T) {
 	})
 
 	t.Run("the window AFTER the resync measures normally against the re-primed baseline", func(t *testing.T) {
-		sch := NewScheduler(make(chan []int16), nil)
+		sch := NewScheduler(ProfileFT8, make(chan []int16), nil)
 		require.False(t, sch.boundaryStarved(full))
 		sch.starveResync = true
 		require.True(t, sch.boundaryStarved(2*full)) // resync slot suppressed, baseline re-primed to 2*full
 		require.False(t, sch.boundaryStarved(3*full), "a full window after the resync is healthy")
-		require.True(t, sch.boundaryStarved(3*full+minLiveWindowSamples/2), "a starved window after the resync is flagged")
+		require.True(t, sch.boundaryStarved(3*full+ProfileFT8.minLiveWindowSamples()/2), "a starved window after the resync is flagged")
 	})
 }
 
@@ -330,10 +330,10 @@ func TestScheduler_ResyncSlotIsSuppressedAsUnverifiable(t *testing.T) {
 // unattributed: the consumer publishes it (that deployment cannot transmit)
 // instead of skipping it.
 func TestScheduler_NoDialSourceLeavesSlotUntracked(t *testing.T) {
-	sch := NewScheduler(make(chan []int16), nil)
+	sch := NewScheduler(ProfileFT8, make(chan []int16), nil)
 	sch.observeDial()
-	ring := newSampleRing(SlotSamples)
-	ring.Append(make([]int16, SlotSamples))
+	ring := newSampleRing(ProfileFT8.SlotSamples)
+	ring.Append(make([]int16, ProfileFT8.SlotSamples))
 
 	sch.emitSlot(ring, time.Date(2026, 7, 27, 12, 0, 15, 0, time.UTC), time.Date(2026, 7, 27, 12, 0, 15, 0, time.UTC), false)
 
@@ -346,7 +346,7 @@ func TestScheduler_NoDialSourceLeavesSlotUntracked(t *testing.T) {
 // An unset dial source is the no-CAT deployment, not an error: every slot is
 // simply unattributed and the SPA falls back to its own view of the band.
 func TestScheduler_ReadDial_UnsetSourceReportsUnknown(t *testing.T) {
-	sch := NewScheduler(make(chan []int16), nil)
+	sch := NewScheduler(ProfileFT8, make(chan []int16), nil)
 	_, ok := sch.readDial()
 	require.False(t, ok, "nil dial source must report unknown, not zero-as-truth")
 

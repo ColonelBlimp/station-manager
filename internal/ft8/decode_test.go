@@ -132,7 +132,7 @@ func TestDecodeFile_RejectsWrongDuration(t *testing.T) {
 		return
 	}
 	fullPath := filepath.Join(t.TempDir(), "full.wav")
-	writeTestWAV(t, fullPath, uint32(goft8.SampleRate), 1, 16, make([]byte, SlotSamples*2))
+	writeTestWAV(t, fullPath, uint32(goft8.SampleRate), 1, 16, make([]byte, ProfileFT8.SlotSamples*2))
 	msgs, err := DecodeFile(fullPath, false, logging.Noop())
 	if err != nil {
 		t.Fatalf("full-length silent slot: unexpected error %v", err)

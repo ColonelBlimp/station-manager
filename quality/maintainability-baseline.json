@@ -194,7 +194,7 @@
       "path": "internal/ft8/caller_sequencer.go",
       "function": "(*Sequencer).onSlotCalling",
       "direction": "maximum",
-      "value": 79
+      "value": 78
     },
     {
       "language": "go",
@@ -314,7 +314,7 @@
       "path": "internal/ft8/caller_sequencer.go",
       "function": "(*Sequencer).onSlotCalling",
       "direction": "maximum",
-      "value": 51
+      "value": 50
     },
     {
       "language": "go",

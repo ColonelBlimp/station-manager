@@ -118,17 +118,17 @@ func DecodeFile(path string, enableOSD bool, log logging.Logger) ([]goft8.Decode
 	if err != nil {
 		return nil, errors.New(opDecodeFile).WithErr(err)
 	}
-	if len(samples) != SlotSamples {
+	if len(samples) != ProfileFT8.SlotSamples {
 		return nil, errors.New(opDecodeFile).WithMsgf(
-			"WAV is %d samples; a decode slot must be exactly %d (%d s at %d Hz)",
-			len(samples), SlotSamples, slotSeconds, goft8.SampleRate)
+			"WAV is %d samples; an FT8 decode slot must be exactly %d (%v at %d Hz)",
+			len(samples), ProfileFT8.SlotSamples, ProfileFT8.Slot, goft8.SampleRate)
 	}
 	return DecodeSlot(samples, enableOSD, log), nil
 }
 
 // zeroSlot is the all-silence slot skip feeds the stateful decoder for every
 // physical slot SM refuses to decode. Shared and read-only.
-var zeroSlot = make([]int16, SlotSamples)
+var zeroSlot = make([]int16, ProfileFT8.SlotSamples)
 
 // slotDecoder wraps ONE stateful goft8.Decoder for one receiver stream — one
 // capture session's decode loop. go-ft8 retains callsign-hash and A7 hint

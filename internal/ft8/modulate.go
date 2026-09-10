@@ -1,210 +1,33 @@
 package ft8
 
-import (
-	"math"
+import "math"
 
-	goft8 "github.com/ColonelBlimp/go-ft8/ft8"
-	"github.com/ColonelBlimp/station-manager/internal/errors"
-)
-
-// FT8 GFSK modulator (ADR 0029 step b). go-ft8's EncodeStandardMessage stops at
-// the 79-symbol tone sequence; this turns those tones into audio. The whole
-// encode→modulate chain is offline round-trip-verifiable — feed the generated
-// audio straight back through the shipped decoder (see modulate_test.go) — so
-// the TX waveform is proven correct with ZERO RF before any audio device or PTT
-// exists.
-//
-// Modulation is continuous-phase GFSK (Gaussian Frequency Shift Keying), the
-// same scheme WSJT-X uses: each of the 8 tones is a frequency
-// `offset + tone*6.25 Hz`, and transitions between symbols are smoothed by a
-// Gaussian pulse (BT=2.0) rather than hard-switched, keeping the signal inside
-// its ~50 Hz envelope. Phase is integrated sample-by-sample so the waveform is
-// phase-continuous (no clicks at symbol boundaries), with a short raised-cosine
-// ramp at the very start and end to suppress key clicks.
+// GFSK modulation constants shared by every profile (ADR 0029 step b). The
+// per-mode geometry — symbol length, tone count, Gaussian BT, edge ramp — lives
+// on Profile (profile.go), which also owns Modulate / EncodeToSlot /
+// EncodeWaveform. The whole encode→modulate chain is offline round-trip
+// verifiable — the generated audio goes straight back through the shipped
+// decoder (modulate_test.go, profile_test.go) — so a TX waveform is proven
+// correct with ZERO RF before any audio device or PTT exists.
 
 const (
-	// txSamplesPerSymbol is the FT8 symbol length in 12 kHz samples. With
-	// SampleRate=12000 this gives a 6.25 Hz tone spacing (= SampleRate/1920)
-	// and a 0.16 s symbol. Mirrors go-ft8's internal ft8SamplesPerSymbol
-	// (unexported); ADR 0029 notes go-ft8 should export the tone geometry so
-	// RX occupancy + TX modulation share one source instead of both hardcoding.
-	txSamplesPerSymbol = 1920
-
-	// txGfskBT is the Gaussian pulse bandwidth-time product. 2.0 is the FT8
-	// value (WSJT-X gen_ft8wave) — wider than the 0.3 of classic GFSK, chosen
-	// for FT8's tight tone spacing.
-	txGfskBT = 2.0
-
-	// txModIndex is the modulation index h. FT8 uses h=1 (tone spacing equals
-	// the symbol rate), so one tone step is exactly one 6.25 Hz bin.
+	// txModIndex is the modulation index h. FT8 and FT4 both use h=1 (tone
+	// spacing equals the symbol rate), so one tone step is exactly one bin.
 	txModIndex = 1.0
 
 	// txAmplitude scales the normalised [-1,1] waveform into int16, with
 	// headroom below full scale so the ramped edges and any downstream mixing
 	// don't clip.
 	txAmplitude = 0.5
-
-	// ft8ToneCount is the standard FT8 message tone-sequence length (Costas +
-	// data symbols). EncodeStandardMessage returns exactly this many.
-	ft8ToneCount = 79
-
-	// txWaveformSamples is the bare GFSK waveform length: the Gaussian pulse adds
-	// one symbol of overhang at each end, so (tones+2) symbols.
-	txWaveformSamples = (ft8ToneCount + 2) * txSamplesPerSymbol
 )
 
-// txWaveformSec is the bare waveform duration (~12.96 s) — the room a full
-// transmission occupies inside the 15 s slot. (The sequencer's late-window guard
-// is a fixed tolerance now, not derived from this; see ADR 0032.)
-const txWaveformSec = float64(txWaveformSamples) / float64(goft8.SampleRate)
-
-// Modulate turns an FT8 tone sequence (each value 0..7) into a normalised
-// GFSK waveform in [-1, 1] at the given audio offset, sampled at
-// goft8.SampleRate. The returned length is (len(tones)+2)*txSamplesPerSymbol:
-// the Gaussian pulse spans three symbols, so the smoothed signal runs one
-// symbol-width past each end of the nominal tone sequence.
-//
-// Pure and deterministic. offsetHz is the audio frequency of tone 0 (the base
-// tone) — the same reference the decoder reports as FreqHz, so an offset chosen
-// from the clear-offset picker round-trips back as the decoded frequency.
-func Modulate(tones []uint8, offsetHz float64) []float32 {
-	nsps := txSamplesPerSymbol
-	nsym := len(tones)
-	if nsym == 0 {
-		return nil
-	}
-	nwave := (nsym + 2) * nsps
-	fs := float64(goft8.SampleRate)
-
-	// GFSK frequency pulse over three symbols. For a run of equal symbols the
-	// overlapping pulses sum to unity, so a steady tone produces a constant
-	// frequency offset; at transitions the sum slews smoothly between tones.
-	pulse := make([]float64, 3*nsps)
-	c := math.Pi * math.Sqrt(2.0/math.Ln2)
-	for i := range pulse {
-		tt := (float64(i) - 1.5*float64(nsps)) / float64(nsps)
-		pulse[i] = 0.5 * (math.Erf(c*txGfskBT*(tt+0.5)) - math.Erf(c*txGfskBT*(tt-0.5)))
-	}
-
-	// Per-sample angular frequency: the carrier plus each symbol's pulse-shaped
-	// tone contribution. dphiPeak is one tone-step of phase advance per sample.
-	dphi := make([]float64, nwave)
-	base := 2 * math.Pi * offsetHz / fs
-	for k := range dphi {
-		dphi[k] = base
-	}
-	dphiPeak := 2 * math.Pi * txModIndex / float64(nsps)
-	for j := 0; j < nsym; j++ {
-		ib := j * nsps
-		tone := float64(tones[j])
-		for i := 0; i < 3*nsps; i++ {
-			dphi[ib+i] += dphiPeak * pulse[i] * tone
-		}
-	}
-
-	// Integrate phase → samples.
-	wave := make([]float32, nwave)
-	phi := 0.0
-	for k := 0; k < nwave; k++ {
-		wave[k] = float32(math.Sin(phi))
-		phi += dphi[k]
-		if phi > 2*math.Pi {
-			phi -= 2 * math.Pi
-		}
-	}
-
-	// Raised-cosine ramp on the leading/trailing edges to suppress key clicks.
-	nramp := nsps / 8
-	for i := 0; i < nramp; i++ {
-		w := float32(0.5 * (1 - math.Cos(math.Pi*float64(i)/float64(nramp))))
-		wave[i] *= w
-		wave[nwave-1-i] *= w
-	}
-	return wave
-}
-
-// EncodeToSlot encodes a standard FT8 message and lays its modulated waveform
-// into a full 15-second slot buffer (SlotSamples int16 at goft8.SampleRate),
-// starting dtSec into the slot with silence before and after. This is the
-// offline building block the round-trip test uses and the shape the live TX
-// path (steps c/d) will stream; offsetHz is the base-tone audio frequency.
-//
-// Errors only if the message isn't an encodable standard message.
-// goft8 (v0.5.0) encodes standard messages, /P and /R suffix calls, ARRL
-// Field Day exchanges, and type-4 compound/nonstandard calls — but a type-4
-// message carries only CQ/RR73/73 with the partner call hashed, so a
-// prefix-compound directed message that needs a grid or report (e.g.
-// "PJ4/NA2AA 7Q5MLV KH53") is still rejected. Free text is rejected too. Note
-// a /R message encodes here but goft8 does not yet DECODE it, so it won't pass
-// the offline round-trip gate — don't transmit /R until that lands.
-func EncodeToSlot(text string, offsetHz, dtSec float64) ([]int16, error) {
-	const op errors.Op = "ft8.EncodeToSlot"
-	enc, err := goft8.EncodeStandardMessage(text)
-	if err != nil {
-		return nil, errors.New(op).WithErr(err).WithMsgf("encode %q", text)
-	}
-	wave := Modulate(enc.Tones[:], offsetHz)
-
-	slot := make([]int16, SlotSamples)
-	start := int(dtSec * float64(goft8.SampleRate))
-	if start < 0 {
-		start = 0
-	}
-	for i, v := range wave {
-		k := start + i
-		if k >= len(slot) {
-			break // waveform runs past the slot end — truncate the silent tail
-		}
-		slot[k] = int16(float64(v) * txAmplitude * math.MaxInt16)
-	}
-	return slot, nil
-}
-
-// EncodeWaveform encodes a standard FT8 message to the BARE GFSK waveform as
-// int16 PCM (no slot padding, ~12.96 s). This is the shape the sequencer
-// transmits when answering a CQ in the CURRENT slot started late (ADR 0031): the
-// tones must come out at the moment of the call, not after dtSec of leading
-// silence, and there is no trailing silence to hold PTT into the next slot.
-// Errors only on an unencodable standard message.
-func EncodeWaveform(text string, offsetHz float64) ([]int16, error) {
-	const op errors.Op = "ft8.EncodeWaveform"
-	enc, err := goft8.EncodeStandardMessage(text)
-	if err != nil {
-		return nil, errors.New(op).WithErr(err).WithMsgf("encode %q", text)
-	}
-	wave := Modulate(enc.Tones[:], offsetHz)
-	out := make([]int16, len(wave))
-	for i, v := range wave {
-		out[i] = int16(float64(v) * txAmplitude * math.MaxInt16)
-	}
-	return out, nil
-}
-
-// ft8CostasMidTone is the tone index of the SECOND of FT8's three 7-symbol Costas
-// sync arrays (they sit at tone indices 0-6, 36-42 and 72-78). Head-truncating a
-// late start (ADR 0032) always costs the FIRST array, and the receiver re-syncs on
-// the remaining two (QEX §8) — that is what makes truncate-don't-shift work. Once
-// the truncation reaches THIS array only one sync word and a fragment of the data
-// field would go out, which is past any plausible decode: the point where "late"
-// stops meaning "degraded" and starts meaning "not actually transmitted".
-const ft8CostasMidTone = 36
-
-// maxDecodableSkip is the largest head-truncation, in samples, that still leaves a
-// transmission worth calling sent — everything from the middle Costas array onward.
-// Scaled off the waveform's own length rather than assuming a standard 79-tone
-// message, so it holds for any tone sequence. Modulate prepends one symbol of
-// Gaussian overhang, hence tone N begins at waveform symbol N+1.
-func maxDecodableSkip(waveLen int) int {
-	return waveLen * (ft8CostasMidTone + 1) / (ft8ToneCount + 2)
-}
-
 // truncateHead drops the first skip samples of a synchronised waveform — a late
-// start (ADR 0032) — and re-ramps the new leading edge to suppress the key click
-// a hard sample step would cause. skip ≤ 0 returns the waveform unchanged; skip
-// at or past the end returns nil (nothing left to send). It mutates the returned
-// slice's backing array, which the caller owns (a freshly-encoded per-transmission
-// waveform).
-func truncateHead(wave []int16, skip int) []int16 {
+// start (ADR 0032) — and re-ramps the new leading edge over nramp samples to
+// suppress the key click a hard sample step would cause. skip ≤ 0 returns the
+// waveform unchanged; skip at or past the end returns nil (nothing left to
+// send). It mutates the returned slice's backing array, which the caller owns
+// (a freshly-encoded per-transmission waveform).
+func truncateHead(wave []int16, skip, nramp int) []int16 {
 	if skip <= 0 {
 		return wave
 	}
@@ -212,15 +35,14 @@ func truncateHead(wave []int16, skip int) []int16 {
 		return nil
 	}
 	out := wave[skip:]
-	applyLeadingRamp(out)
+	applyLeadingRamp(out, nramp)
 	return out
 }
 
-// applyLeadingRamp fades in the first symbol-eighth of s with a raised cosine —
+// applyLeadingRamp fades in the first nramp samples of s with a raised cosine —
 // the same edge taper Modulate applies to a full waveform — so a head-truncated
 // transmission doesn't begin on a hard sample step.
-func applyLeadingRamp(s []int16) {
-	nramp := txSamplesPerSymbol / 8
+func applyLeadingRamp(s []int16, nramp int) {
 	if nramp > len(s) {
 		nramp = len(s)
 	}

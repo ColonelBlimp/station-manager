@@ -42,9 +42,9 @@ func TestFieldDay_RoundTrip(t *testing.T) {
 			if err != nil {
 				t.Fatalf("EncodeStandardMessage(%q): %v", c.text, err)
 			}
-			slot, err := EncodeToSlot(c.text, c.offset, 0.5)
+			slot, err := ProfileFT8.EncodeToSlot(c.text, c.offset, 0.5)
 			if err != nil {
-				t.Fatalf("EncodeToSlot(%q): %v", c.text, err)
+				t.Fatalf("ProfileFT8.EncodeToSlot(%q): %v", c.text, err)
 			}
 			msgs := DecodeSlot(slot, true, logging.Noop())
 			found := false

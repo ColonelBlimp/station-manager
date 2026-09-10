@@ -308,6 +308,6 @@ func TestSlotTooLate(t *testing.T) {
 
 	// Beyond the budget → skip (a large sub-slot delay AND a multi-slot delay).
 	require.True(t, slotTooLate(target.Add(5*time.Second), target))
-	require.True(t, slotTooLate(target.Add(SlotDuration), target))
-	require.True(t, slotTooLate(target.Add(3*SlotDuration+2*time.Second), target))
+	require.True(t, slotTooLate(target.Add(ProfileFT8.Slot), target))
+	require.True(t, slotTooLate(target.Add(3*ProfileFT8.Slot+2*time.Second), target))
 }

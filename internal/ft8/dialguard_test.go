@@ -179,7 +179,7 @@ func TestDialGuard_EndsOnObservationNotAtTheNextRung(t *testing.T) {
 func TestDialGuard_SchedulerReportsAMoveAsSoonAsItSeesOne(t *testing.T) {
 	readings := []float64{14.074, 14.074, 14.075}
 	n := 0
-	sch := NewScheduler(make(chan []int16), nil)
+	sch := NewScheduler(ProfileFT8, make(chan []int16), nil)
 	sch.SetDialSource(func() (float64, bool) {
 		r := readings[n]
 		if n < len(readings)-1 {
@@ -355,7 +355,7 @@ func TestDialGuard_CaptureSessionWiresTheSchedulerToTheService(t *testing.T) {
 	startGuardCq(t, s)
 
 	// Stand up the scheduler exactly as startCaptureLocked does.
-	sch := NewScheduler(make(chan []int16), nil)
+	sch := NewScheduler(ProfileFT8, make(chan []int16), nil)
 	sch.SetDialSource(s.dialSource)
 	sch.SetOnDialMoved(s.onDialMoved)
 
@@ -506,7 +506,7 @@ func TestDialGuard_KnownnessBlinkIsNotAMove(t *testing.T) {
 	}
 	readings := []reading{{14.074, true}, {0, false}, {14.074, true}}
 	n := 0
-	sch := NewScheduler(make(chan []int16), nil)
+	sch := NewScheduler(ProfileFT8, make(chan []int16), nil)
 	sch.SetDialSource(func() (float64, bool) {
 		r := readings[n]
 		if n < len(readings)-1 {
@@ -582,7 +582,7 @@ func TestDialGuard_MoveAcrossAnUnreadableInterval(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			n := 0
-			sch := NewScheduler(make(chan []int16), nil)
+			sch := NewScheduler(ProfileFT8, make(chan []int16), nil)
 			sch.SetDialSource(func() (float64, bool) {
 				r := tc.readings[n]
 				if n < len(tc.readings)-1 {

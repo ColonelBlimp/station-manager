@@ -40,7 +40,7 @@ func TestDeadSource_SilentWindowsFire(t *testing.T) {
 	filled := int64(0)
 	window := func(batch []int16) {
 		m.observeBatch(batch)
-		filled += SlotSamples // full delivery every window
+		filled += int64(ProfileFT8.SlotSamples) // full delivery every window
 		m.onBoundary(filled)
 	}
 	window(make([]int16, 64)) // baseline
@@ -60,10 +60,10 @@ func TestDeadSource_HealthyWindowResetsStrikes(t *testing.T) {
 		filled += delta
 		m.onBoundary(filled)
 	}
-	window(true, SlotSamples) // baseline
-	window(false, 0)          // strike 1
-	window(true, SlotSamples) // healthy → reset
-	window(false, 0)          // strike 1 again
+	window(true, int64(ProfileFT8.SlotSamples)) // baseline
+	window(false, 0)                            // strike 1
+	window(true, int64(ProfileFT8.SlotSamples)) // healthy → reset
+	window(false, 0)                            // strike 1 again
 	require.Empty(t, *fired, "a healthy window between dead ones must reset the count")
 	window(false, 0) // strike 2 → fire
 	require.Equal(t, []string{"starved"}, *fired)
@@ -86,9 +86,9 @@ func TestDeadSource_StarvedBelowQuarterSlot(t *testing.T) {
 		filled += delta
 		m.onBoundary(filled)
 	}
-	window(SlotSamples)              // baseline
-	window(minLiveWindowSamples - 1) // under the floor → strike 1
-	window(minLiveWindowSamples - 1) // strike 2 → fire
+	window(int64(ProfileFT8.SlotSamples))         // baseline
+	window(ProfileFT8.minLiveWindowSamples() - 1) // under the floor → strike 1
+	window(ProfileFT8.minLiveWindowSamples() - 1) // strike 2 → fire
 	require.Equal(t, []string{"starved"}, *fired)
 
 	// At-or-above the floor with live audio is healthy.
@@ -97,7 +97,7 @@ func TestDeadSource_StarvedBelowQuarterSlot(t *testing.T) {
 	m2.onBoundary(0)
 	for i := 0; i < 5; i++ {
 		m2.observeBatch(liveBatch)
-		filled += minLiveWindowSamples
+		filled += ProfileFT8.minLiveWindowSamples()
 		m2.onBoundary(filled)
 	}
 	require.Empty(t, *fired2)

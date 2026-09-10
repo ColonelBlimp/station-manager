@@ -64,6 +64,11 @@ type Service struct {
 	log    logging.Logger
 	src    captureSource
 
+	// profile is the FT-family timebase every capture session, transmission
+	// and slot reference is built on (ADR 0080). FT8 until the profile claim
+	// (W-0019 slice 3) lets the operator select FT4 between sessions.
+	profile Profile
+
 	// hub fans each slot's decode + occupancy events out to /v1/ft8/events SSE
 	// subscribers and caches the latest of each for late-subscriber replay.
 	// Owned by the Service; closed on Stop.
@@ -249,6 +254,7 @@ func newService(cfg types.Ft8Config, log logging.Logger, src captureSource) *Ser
 		occOverride = cfg.TX.Occupancy
 	}
 	s := &Service{
+		profile:   ProfileFT8,
 		cfg:       cfg,
 		occCfg:    resolveOccupancyConfig(occOverride),
 		log:       log,
@@ -606,7 +612,7 @@ func (s *Service) startCaptureLocked() {
 	// is still live (a safego-recovered panic, or an unexpected early return), the
 	// subsystem is marked not-capturing + a terminal error logged, so the operator
 	// isn't left with a live-looking but dead capture (review 2026-06-19 M2).
-	sch := NewScheduler(samples, s.log)
+	sch := NewScheduler(s.profile, samples, s.log)
 	// Dead-stream watchdog (deadsource.go): a desktop audio reshuffle can leave
 	// the capture stream dangling with no error anywhere — the watchdog turns
 	// that into an automatic release + reacquire.
@@ -884,7 +890,7 @@ func (s *Service) decodeLoop(slots <-chan Slot, sessionTail func() (time.Time, i
 	// changes and so never resets — matching the pre-attribution behaviour.
 	prevDial := 0.0
 	for slot := range slots {
-		ref := SlotRefFromTime(slot.StartUTC)
+		ref := s.profile.SlotRefFromTime(slot.StartUTC)
 		txSlot := s.wasTxSlot(ref.StartUTC)
 
 		// A slot whose dial MOVED spans two frequencies, so its decodes cannot be
@@ -1066,11 +1072,11 @@ func (s *Service) decodeLoop(slots <-chan Slot, sessionTail func() (time.Time, i
 
 		var rep OccupancyReport
 		if !txSlot && !unplaceable && !starved {
-			rep = Occupancy(ref, slot.Samples, msgs, s.occCfg)
+			rep = Occupancy(ref, slot.Samples, msgs, s.occCfg, s.profile.SignalWidthHz)
 			// Stamp the frequency the audio was actually captured on, so the
 			// report is attributable no matter how late it is consumed.
 			rep.DialMHz = slot.DialMHz
-			rep.Suggested = stickySuggested(rep.Suggested, rep.Occupied, s.occCfg, prevTop)
+			rep.Suggested = stickySuggested(rep.Suggested, rep.Occupied, s.occCfg, s.profile.SignalWidthHz, prevTop)
 			if len(rep.Suggested) > 0 {
 				prevTop = rep.Suggested[0]
 			} else {
@@ -1144,7 +1150,7 @@ func (s *Service) emitSessionTail(sessionTail func() (time.Time, int)) {
 	start, n := sessionTail()
 	for i := 0; i < n; i++ {
 		s.evidenceSink(EvidenceSlot{
-			Slot:    SlotRefFromTime(start.Add(time.Duration(i) * SlotDuration)),
+			Slot:    s.profile.SlotRefFromTime(start.Add(time.Duration(i) * s.profile.Slot)),
 			Outcome: EvidenceCaptureDropped,
 		})
 	}
@@ -1167,21 +1173,21 @@ func (s *Service) emitOmittedEvidence(prevSlotStart time.Time, slot Slot) (misse
 		if s.evidenceSink != nil {
 			for i := slot.OmittedBefore; i >= 1; i-- {
 				s.evidenceSink(EvidenceSlot{
-					Slot:    SlotRefFromTime(slot.StartUTC.Add(time.Duration(-i) * SlotDuration)),
+					Slot:    s.profile.SlotRefFromTime(slot.StartUTC.Add(time.Duration(-i) * s.profile.Slot)),
 					Outcome: EvidenceCaptureDropped,
 				})
 			}
 		}
 		return 0
 	}
-	missed = int(slot.StartUTC.Sub(prevSlotStart).Round(SlotDuration)/SlotDuration) - 1
+	missed = int(slot.StartUTC.Sub(prevSlotStart).Round(s.profile.Slot)/s.profile.Slot) - 1
 	if missed < 0 {
 		missed = 0
 	}
 	if s.evidenceSink != nil {
 		for i := 1; i <= missed; i++ {
 			s.evidenceSink(EvidenceSlot{
-				Slot:    SlotRefFromTime(prevSlotStart.Add(time.Duration(i) * SlotDuration)),
+				Slot:    s.profile.SlotRefFromTime(prevSlotStart.Add(time.Duration(i) * s.profile.Slot)),
 				Outcome: EvidenceCaptureDropped,
 			})
 		}

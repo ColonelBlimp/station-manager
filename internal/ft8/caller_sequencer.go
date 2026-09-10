@@ -92,7 +92,7 @@ func (s *Sequencer) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz f
 	// fires the CQ in our parity. A non-even/odd value (e.g. "") keeps the fire-ASAP
 	// default. Choosing a parity can delay the first CQ by one extra slot when the next
 	// boundary is the other parity — expected (it's the point of the choice).
-	ourPeriod := nextSlotPeriod(nowUTC)
+	ourPeriod := s.profile.nextSlotPeriod(nowUTC)
 	switch strings.ToLower(strings.TrimSpace(txParity)) {
 	case "even":
 		ourPeriod = "even"
@@ -234,8 +234,8 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		s.mu.Unlock()
 		return
 	}
-	dt := now.Sub(curStart.Add(SlotDuration)).Seconds()
-	if dt < 0 || dt > txLateWindowSec {
+	dt := now.Sub(curStart.Add(s.profile.Slot)).Seconds()
+	if !s.profile.admitsRung(dt) {
 		s.logTxDeferral("call_cq", dt)
 		st := s.statusLocked()
 		s.publish(st)
@@ -244,8 +244,8 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	}
 	// Slot already fired (immediate fireOpening vs this slot's pending OnSlot —
 	// review 2026-07-20 #2); see onSlotAnswering.
-	if s.lastTxSlot.Equal(curStart.Add(SlotDuration)) {
-		s.logSameSlotDedup("call_cq", curStart.Add(SlotDuration))
+	if s.lastTxSlot.Equal(curStart.Add(s.profile.Slot)) {
+		s.logSameSlotDedup("call_cq", curStart.Add(s.profile.Slot))
 		st := s.statusLocked()
 		s.publish(st)
 		s.mu.Unlock()
@@ -309,7 +309,7 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		}
 	}
 
-	s.lastTxSlot = curStart.Add(SlotDuration)
+	s.lastTxSlot = curStart.Add(s.profile.Slot)
 	transmit, gen := s.transmitLocked()
 	offset, dial := s.offsetHz, s.dialFreqMHz
 	repeats := s.contact.repeats
@@ -909,13 +909,10 @@ func (s *Sequencer) completedCallerQsoLocked() CompletedQso {
 	}
 }
 
-// nextSlotPeriod is the FT8 even/odd parity of the slot AFTER nowUTC, matching the
-// daemon convention (SlotRefFromTime): (unix / slotSeconds) % 2 == 0 → "even".
-func nextSlotPeriod(nowUTC time.Time) string {
-	if (nowUTC.UTC().Unix()/slotSeconds+1)%2 == 0 {
-		return "even"
-	}
-	return "odd"
+// nextSlotPeriod is the even/odd parity of the slot AFTER nowUTC on the
+// profile's lattice, matching the daemon convention (Profile.SlotRefFromTime).
+func (p Profile) nextSlotPeriod(nowUTC time.Time) string {
+	return p.SlotRefFromTime(nowUTC.Add(p.Slot)).Period
 }
 
 // oppositePeriod returns the other FT8 slot parity.

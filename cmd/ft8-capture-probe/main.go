@@ -142,7 +142,7 @@ func runSchedulerMode(c *capture.Capture, cfg capture.Config, slotsToRun int, ou
 
 	// Cold start can lose up to one slot before the ring fills, then N slots
 	// of 15 s, plus headroom.
-	budget := time.Duration(slotsToRun+2) * ft8.SlotDuration
+	budget := time.Duration(slotsToRun+2) * ft8.ProfileFT8.Slot
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 
@@ -176,7 +176,7 @@ func runSchedulerMode(c *capture.Capture, cfg capture.Config, slotsToRun int, ou
 		}
 	}()
 
-	sch := ft8.NewScheduler(int16ch, nil)
+	sch := ft8.NewScheduler(ft8.ProfileFT8, int16ch, nil)
 	runDone := make(chan error, 1)
 	go func() { runDone <- sch.Run(ctx) }()
 

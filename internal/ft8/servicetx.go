@@ -184,7 +184,7 @@ func (s *Service) armTx() error {
 	}
 
 	s.txDevice = player
-	s.txCtrl = NewTxController(s.keyer, player, s.txMode(), s.log)
+	s.txCtrl = NewTxController(s.profile, s.keyer, player, s.txMode(), s.log)
 	s.txCtrl.SetPreKeyCheck(s.preKeyDialCheck)
 	// Record each keyed slot so decodeLoop skips occupancy for it (the slot's
 	// captured audio is our own TX — see markTxSlot / the self-decode filter),
@@ -258,7 +258,7 @@ func (s *Service) armTx() error {
 // captured audio is our own signal. A ring so a second TX keyed close behind
 // can't evict the first before decodeLoop processes it.
 func (s *Service) markTxSlot(boundary time.Time) {
-	utc := SlotRefFromTime(boundary).StartUTC
+	utc := s.profile.SlotRefFromTime(boundary).StartUTC
 	s.txSlotMu.Lock()
 	s.txSlots[s.txSlotIx] = utc
 	s.txSlotIx = (s.txSlotIx + 1) % len(s.txSlots)
@@ -431,7 +431,7 @@ func (s *Service) disarmTxLocked(cause string) {
 // starts) — the SPA's localStorage value is NOT a sufficient guard for a
 // hardware-facing API (review 2026-06-19 M1). offset 0 stays ErrNoOffset
 // ("operator hasn't picked one"); a non-finite value or one whose signal
-// (offset..offset+signalWidthHz) doesn't fit inside the resolved occupancy
+// (offset..offset+SignalWidthHz) doesn't fit inside the resolved occupancy
 // passband is ErrTxBadOffset. The passband is config-validated to <= Nyquist
 // (M3), so fitting inside it also keeps the modulator below the alias limit.
 func (s *Service) validateTxOffset(op errors.Op, offsetHz float64) error {
@@ -447,10 +447,10 @@ func (s *Service) validateTxOffset(op errors.Op, offsetHz float64) error {
 	}
 	occ := resolveOccupancyConfig(occCfg)
 	low, high := float64(occ.PassbandLowHz), float64(occ.PassbandHighHz)
-	if offsetHz < low || offsetHz+float64(signalWidthHz) > high {
+	if offsetHz < low || offsetHz+float64(s.profile.SignalWidthHz) > high {
 		return errors.New(op).WithErr(ErrTxBadOffset).WithMsgf(
 			"offset_hz %.0f outside usable passband [%d, %d] (signal width %d Hz)",
-			offsetHz, occ.PassbandLowHz, occ.PassbandHighHz, signalWidthHz)
+			offsetHz, occ.PassbandLowHz, occ.PassbandHighHz, s.profile.SignalWidthHz)
 	}
 	return nil
 }
@@ -469,7 +469,7 @@ func (s *Service) TransmitNext(message string, offsetHz float64) error {
 	}
 	// Validate encodability synchronously so a bad message is an immediate
 	// error, not an async failure after the (up to 15 s) slot wait.
-	if _, err := EncodeToSlot(message, offsetHz, txNominalDtSec); err != nil {
+	if _, err := s.profile.EncodeToSlot(message, offsetHz, s.profile.WaveformOrigin.Seconds()); err != nil {
 		return errors.New(op).WithErr(ErrTxBadMessage).WithMsg(err.Error())
 	}
 	// A manual send and a sequenced session must be mutually exclusive. They share
@@ -510,7 +510,7 @@ func (s *Service) TransmitNext(message string, offsetHz float64) error {
 // rung truly transmitted — never on "queued" alone (review H1).
 func (s *Service) seqTransmit(message string, offsetHz, dialMHz float64, gen uint64, onDone func(ok bool)) error {
 	const op errors.Op = "ft8.Service.seqTransmit"
-	if _, err := EncodeWaveform(message, offsetHz); err != nil {
+	if _, err := s.profile.EncodeWaveform(message, offsetHz); err != nil {
 		return errors.New(op).WithErr(ErrTxBadMessage).WithMsg(err.Error())
 	}
 	// THE INVARIANT: an FT8 exchange lives on one dial frequency. The session

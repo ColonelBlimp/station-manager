@@ -45,17 +45,14 @@ package ft8
 // transient hiccup, two in a row is a dead stream.
 const deadSourceStrikeLimit = 2
 
-// minLiveWindowSamples is the per-window delivery floor below which the
-// source counts as starved. A quarter slot — far below the healthy 180 000,
-// far above trickle-from-a-dead-stream.
-const minLiveWindowSamples = SlotSamples / 4
-
 // deadSourceMonitor accumulates per-window liveness between slot boundaries.
 // Owned and driven by the scheduler goroutine (no locking, like sampleRing);
 // inert when onDead is nil. Pure bookkeeping — timers stay in the scheduler —
 // so the strike policy is unit-testable without wall-clock slots.
 type deadSourceMonitor struct {
-	onDead     func(reason string)
+	onDead  func(reason string)
+	minLive int64 // per-window delivery floor (Profile.minLiveWindowSamples); 0 = FT8's
+
 	primed     bool  // first boundary seen (baseline only — partial window)
 	lastFilled int64 // ring fill count at the previous boundary
 	windowLive bool  // any non-zero sample seen this window
@@ -92,7 +89,7 @@ func (m *deadSourceMonitor) onBoundary(filled int64) {
 		return
 	}
 	delta := filled - m.lastFilled
-	starved := delta < minLiveWindowSamples
+	starved := delta < m.minLiveFloor()
 	dead := starved || !m.windowLive
 	m.lastFilled = filled
 	m.windowLive = false
@@ -110,4 +107,13 @@ func (m *deadSourceMonitor) onBoundary(filled int64) {
 		reason = "starved"
 	}
 	m.onDead(reason)
+}
+
+// minLiveFloor is the starvation floor, defaulting to the FT8 profile's for a
+// monitor built without one (tests that construct the struct directly).
+func (m *deadSourceMonitor) minLiveFloor() int64 {
+	if m.minLive > 0 {
+		return m.minLive
+	}
+	return ProfileFT8.minLiveWindowSamples()
 }

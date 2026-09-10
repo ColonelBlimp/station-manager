@@ -17,9 +17,9 @@ func TestModulate_Shape(t *testing.T) {
 	for i := range tones {
 		tones[i] = uint8(i % 8)
 	}
-	wave := Modulate(tones, 1500)
+	wave := ProfileFT8.Modulate(tones, 1500)
 
-	want := (79 + 2) * txSamplesPerSymbol
+	want := (79 + 2) * ProfileFT8.SamplesPerSymbol
 	if len(wave) != want {
 		t.Fatalf("len(wave) = %d, want %d", len(wave), want)
 	}
@@ -35,24 +35,24 @@ func TestModulate_Shape(t *testing.T) {
 }
 
 func TestModulate_EmptyTones(t *testing.T) {
-	if got := Modulate(nil, 1500); got != nil {
+	if got := ProfileFT8.Modulate(nil, 1500); got != nil {
 		t.Fatalf("empty tones = %v, want nil", got)
 	}
 }
 
 func TestEncodeToSlot_FullSlotLength(t *testing.T) {
-	slot, err := EncodeToSlot("CQ K1ABC FN42", 1500, 0.5)
+	slot, err := ProfileFT8.EncodeToSlot("CQ K1ABC FN42", 1500, 0.5)
 	if err != nil {
 		t.Fatalf("EncodeToSlot: %v", err)
 	}
-	if len(slot) != SlotSamples {
-		t.Fatalf("slot length = %d, want %d", len(slot), SlotSamples)
+	if len(slot) != ProfileFT8.SlotSamples {
+		t.Fatalf("slot length = %d, want %d", len(slot), ProfileFT8.SlotSamples)
 	}
 }
 
 func TestEncodeToSlot_RejectsUnsupported(t *testing.T) {
 	// Free text is not an encodable standard message.
-	if _, err := EncodeToSlot("HELLO BRAVE NEW WORLD", 1500, 0.5); err == nil {
+	if _, err := ProfileFT8.EncodeToSlot("HELLO BRAVE NEW WORLD", 1500, 0.5); err == nil {
 		t.Fatal("expected an error for an unsupported message, got nil")
 	}
 }
@@ -117,9 +117,9 @@ func TestModulate_RoundTrip_Portable(t *testing.T) {
 			if err != nil {
 				t.Fatalf("EncodeStandardMessage(%q): %v", c.text, err)
 			}
-			slot, err := EncodeToSlot(c.text, c.offset, 0.5)
+			slot, err := ProfileFT8.EncodeToSlot(c.text, c.offset, 0.5)
 			if err != nil {
-				t.Fatalf("EncodeToSlot(%q): %v", c.text, err)
+				t.Fatalf("ProfileFT8.EncodeToSlot(%q): %v", c.text, err)
 			}
 			msgs := DecodeSlot(slot, true, logging.Noop())
 			found := false
@@ -171,9 +171,9 @@ func TestModulate_RoundTrip(t *testing.T) {
 				t.Fatalf("EncodeStandardMessage(%q): %v", c.text, err)
 			}
 
-			slot, err := EncodeToSlot(c.text, c.offset, 0.5)
+			slot, err := ProfileFT8.EncodeToSlot(c.text, c.offset, 0.5)
 			if err != nil {
-				t.Fatalf("EncodeToSlot(%q): %v", c.text, err)
+				t.Fatalf("ProfileFT8.EncodeToSlot(%q): %v", c.text, err)
 			}
 
 			msgs := DecodeSlot(slot, true, logging.Noop())
@@ -222,7 +222,7 @@ func TestModulate_TruncatedDecodes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeStandardMessage: %v", err)
 	}
-	slot, err := EncodeToSlot(text, offset, 0.5) // waveform at the nominal +0.5 s
+	slot, err := ProfileFT8.EncodeToSlot(text, offset, 0.5) // waveform at the nominal +0.5 s
 	if err != nil {
 		t.Fatalf("EncodeToSlot: %v", err)
 	}
@@ -258,12 +258,12 @@ func TestModulate_RoundTripOccupancy(t *testing.T) {
 		t.Skip("full FT8 decode is heavy; skipped under -short")
 	}
 	const offset = 1500
-	slot, err := EncodeToSlot("CQ K1ABC FN42", offset, 0.5)
+	slot, err := ProfileFT8.EncodeToSlot("CQ K1ABC FN42", offset, 0.5)
 	if err != nil {
 		t.Fatalf("EncodeToSlot: %v", err)
 	}
 	decodes := DecodeSlot(slot, true, logging.Noop())
-	rep := Occupancy(SlotRef{}, slot, decodes, DefaultOccupancyConfig())
+	rep := Occupancy(SlotRef{}, slot, decodes, DefaultOccupancyConfig(), ProfileFT8.SignalWidthHz)
 
 	covered := false
 	for _, b := range rep.Occupied {
@@ -277,7 +277,7 @@ func TestModulate_RoundTripOccupancy(t *testing.T) {
 	}
 	// And no suggested clear offset should collide with our own transmission.
 	for _, off := range rep.Suggested {
-		if off < offset+signalWidthHz && offset < off+signalWidthHz {
+		if off < offset+ProfileFT8.SignalWidthHz && offset < off+ProfileFT8.SignalWidthHz {
 			t.Errorf("suggested offset %d overlaps the transmitted signal at %d", off, offset)
 		}
 	}

@@ -17,9 +17,9 @@ func roundTrips(t *testing.T, text string, offset float64) (canonical string, ok
 	if err != nil {
 		t.Fatalf("EncodeStandardMessage(%q): %v", text, err)
 	}
-	slot, err := EncodeToSlot(text, offset, 0.5)
+	slot, err := ProfileFT8.EncodeToSlot(text, offset, 0.5)
 	if err != nil {
-		t.Fatalf("EncodeToSlot(%q): %v", text, err)
+		t.Fatalf("ProfileFT8.EncodeToSlot(%q): %v", text, err)
 	}
 	for _, m := range DecodeSlot(slot, true, logging.Noop()) {
 		if strings.EqualFold(strings.TrimSpace(m.Text), enc.Text) {

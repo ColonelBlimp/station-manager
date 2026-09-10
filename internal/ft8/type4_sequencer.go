@@ -64,7 +64,7 @@ func (s *Sequencer) StartQsoT4(ourCall, theirCall, theirGrid string, theirSnr in
 	s.logbookID = s.pendingLogbookID                    // pin the staged logbook atomically with activation
 	s.allowDuplicate = s.consumePendingAllowDuplicate() // one-shot: consumed + cleared with activation
 	s.t4Ex = &ex
-	s.theirPeriod = SlotRefFromTime(t).Period
+	s.theirPeriod = s.profile.SlotRefFromTime(t).Period
 	s.offsetHz = offsetHz
 	s.dialFreqMHz = dialFreqMHz
 	s.startedAt = now.UTC()
@@ -130,8 +130,8 @@ func (s *Sequencer) onSlotAnsweringT4(ref SlotRef, msgs []goft8.DecodedMessage, 
 		s.mu.Unlock()
 		return
 	}
-	dt := now.Sub(curStart.Add(SlotDuration)).Seconds()
-	if dt < 0 || dt > txLateWindowSec {
+	dt := now.Sub(curStart.Add(s.profile.Slot)).Seconds()
+	if !s.profile.admitsRung(dt) {
 		s.logTxDeferral("type4_answer", dt)
 		st := s.statusLocked()
 		s.publish(st)
@@ -140,8 +140,8 @@ func (s *Sequencer) onSlotAnsweringT4(ref SlotRef, msgs []goft8.DecodedMessage, 
 	}
 	// Slot already fired (immediate fireOpening vs this slot's pending OnSlot —
 	// review 2026-07-20 #2); see onSlotAnswering.
-	if s.lastTxSlot.Equal(curStart.Add(SlotDuration)) {
-		s.logSameSlotDedup("type4_answer", curStart.Add(SlotDuration))
+	if s.lastTxSlot.Equal(curStart.Add(s.profile.Slot)) {
+		s.logSameSlotDedup("type4_answer", curStart.Add(s.profile.Slot))
 		st := s.statusLocked()
 		s.publish(st)
 		s.mu.Unlock()
@@ -166,7 +166,7 @@ func (s *Sequencer) onSlotAnsweringT4(ref SlotRef, msgs []goft8.DecodedMessage, 
 		s.contact.repeats++
 	}
 
-	s.lastTxSlot = curStart.Add(SlotDuration)
+	s.lastTxSlot = curStart.Add(s.profile.Slot)
 	transmit, gen := s.transmitLocked()
 	offset, dial := s.offsetHz, s.dialFreqMHz
 	repeats := s.contact.repeats
@@ -252,7 +252,7 @@ func (s *Sequencer) StartWorkCallerT4(ourCall, theirCall, theirGrid string, thei
 	s.allowDuplicate = s.consumePendingAllowDuplicate() // one-shot: consumed + cleared with activation
 	s.t4Work = &c
 	s.ourCall = c.OurCall
-	s.theirPeriod = SlotRefFromTime(t).Period
+	s.theirPeriod = s.profile.SlotRefFromTime(t).Period
 	s.offsetHz = offsetHz
 	s.dialFreqMHz = dialFreqMHz
 	s.startedAt = now.UTC()
@@ -315,7 +315,7 @@ func (s *Sequencer) onSlotWorkingT4(ref SlotRef, msgs []goft8.DecodedMessage, no
 		return
 	}
 	// ref is the caller's slot (their parity); our RR73 goes out in the NEXT slot.
-	txSlot := curStart.Add(SlotDuration)
+	txSlot := curStart.Add(s.profile.Slot)
 	s.fireWorkT4RungLocked(msg, rung, txSlot, now.Sub(txSlot).Seconds()) // fires or defers; UNLOCKS s.mu
 }
 
@@ -332,7 +332,7 @@ func (s *Sequencer) fireWorkT4RungLocked(msg, rung string, txSlot time.Time, dt 
 	// Too early/late in the slot, or this exact slot already fired (an immediate
 	// fire vs its own pending OnSlot — review 2026-07-20 #2): leave it for the next
 	// qualifying slot; the session stays active.
-	if dt < 0 || dt > txLateWindowSec {
+	if !s.profile.admitsRung(dt) {
 		s.logTxDeferral("type4_work", dt)
 		st := s.statusLocked()
 		s.publish(st)
@@ -431,8 +431,8 @@ func (s *Sequencer) fireWorkT4(now time.Time) {
 		return
 	}
 	rung := s.t4Work.State.label()
-	curStart := slotStart(now)
-	if SlotRefFromTime(curStart).Period == s.theirPeriod {
+	curStart := s.profile.slotStart(now)
+	if s.profile.SlotRefFromTime(curStart).Period == s.theirPeriod {
 		s.mu.Unlock()
 		return // current slot is the caller's parity — leave it to OnSlot
 	}

@@ -3,7 +3,6 @@ package ft8
 import (
 	"math"
 	"sort"
-	"time"
 
 	goft8 "github.com/ColonelBlimp/go-ft8/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/audio"
@@ -29,18 +28,6 @@ import (
 // intent (a handful of busy bands + ranked clear offsets), never raw spectrum.
 
 const (
-	// signalWidthHz is the audio bandwidth one FT8 signal occupies, measured
-	// upward from its base (sync) tone: 8 FSK tones at 6.25 Hz spacing span
-	// ~50 Hz. A clear TX slot needs at least this much contiguous room, and a
-	// decode at base frequency f occupies [f, f+signalWidthHz].
-	//
-	// Hardcoded here for now. The authoritative geometry (tone spacing × tone
-	// count) lives inside go-ft8; when the TX modulator lands (ADR 0029 step b)
-	// that geometry should be exported as public consts so RX occupancy and TX
-	// modulation derive the same number from one source instead of both
-	// hardcoding 50.
-	signalWidthHz = 50
-
 	// occupancyFFTSize is the per-window FFT length for the slot energy
 	// spectrum. 3840 = go-ft8's spectrogram NFFT1, giving 12000/3840 = 3.125 Hz
 	// bins — half an FT8 tone, fine enough to resolve adjacent signals.
@@ -52,14 +39,14 @@ const (
 	// more.
 	maxSuggested = 8
 
-	// minEnergyBandHz gates ENERGY-only detection: an undecoded over-threshold
-	// run narrower than this is treated as a noise/leakage spike, not an
-	// occupant, and dropped. A real FT8 signal is signalWidthHz (~50 Hz) wide,
-	// so a quarter of that sits comfortably below any real signal yet above the
-	// single-bin spikes seen on live audio (e.g. a stray 3 Hz energy 0.08 mark).
+	// minEnergyBandDiv gates ENERGY-only detection: an undecoded over-threshold
+	// run narrower than a quarter of the profile's signal width is treated as a
+	// noise/leakage spike, not an occupant, and dropped. A quarter sits
+	// comfortably below any real signal yet above the single-bin spikes seen on
+	// live audio (e.g. a stray 3 Hz energy 0.08 mark).
 	// Decode-derived bands are never gated — a CRC-verified decode is a real
 	// signal regardless of how wide its averaged energy reads.
-	minEnergyBandHz = signalWidthHz / 4 // 12 Hz ≈ 4 bins at the 3.125 Hz resolution
+	minEnergyBandDiv = 4 // FT8: 12 Hz ≈ 4 bins at the 3.125 Hz resolution
 
 	// defaultGuardMarginHz is the default clearance a suggested offset keeps
 	// from adjacent occupied bands (config: ft8.tx.occupancy.guard_margin_hz,
@@ -162,34 +149,20 @@ func resolveOccupancyConfig(c *types.Ft8OccupancyConfig) types.Ft8OccupancyConfi
 // Occupancy computes the per-slot occupancy report from a slot's raw samples
 // and the decodes go-ft8 produced for the same slot. Pure and deterministic.
 // cfg should be a resolved config (see resolveOccupancyConfig) — all fields
-// meaningful, not the operator's sparse overrides.
-func Occupancy(slot SlotRef, samples []int16, decodes []goft8.DecodedMessage, cfg types.Ft8OccupancyConfig) OccupancyReport {
+// meaningful, not the operator's sparse overrides. widthHz is the profile's
+// signal width (Profile.SignalWidthHz): the room one transmission needs.
+func Occupancy(slot SlotRef, samples []int16, decodes []goft8.DecodedMessage, cfg types.Ft8OccupancyConfig, widthHz int) OccupancyReport {
 	power := averagePowerSpectrum(samples, occupancyFFTSize)
-	bands := detectEnergyBands(power, cfg)
-	bands = append(bands, decodeBands(decodes, cfg)...)
+	bands := detectEnergyBands(power, cfg, widthHz)
+	bands = append(bands, decodeBands(decodes, cfg, widthHz)...)
 	occupied := mergeBands(bands)
 	return OccupancyReport{
 		Slot:          slot,
 		Passband:      Band{LowHz: cfg.PassbandLowHz, HighHz: cfg.PassbandHighHz},
-		SignalWidthHz: signalWidthHz,
+		SignalWidthHz: widthHz,
 		Occupied:      occupied,
-		Suggested:     suggestOffsets(occupied, cfg),
+		Suggested:     suggestOffsets(occupied, cfg, widthHz),
 	}
-}
-
-// SlotRefFromTime builds a SlotRef from a slot boundary. Period is the FT8
-// even/odd 15-second alternation aligned to the UTC minute: :00 and :30 are
-// "even", :15 and :45 are "odd" (the WSJT-X convention).
-func SlotRefFromTime(start time.Time) SlotRef {
-	// Floor to the 15 s slot lattice so a mid-slot time yields the same StartUTC as
-	// its boundary. Every producer today already passes an aligned boundary; this
-	// only hardens against misuse and keeps wasTxSlot's exact-string match robust.
-	start = start.UTC().Truncate(SlotDuration)
-	period := "even"
-	if (start.Unix()/slotSeconds)%2 != 0 {
-		period = "odd"
-	}
-	return SlotRef{StartUTC: start.Format(time.RFC3339), Period: period}
 }
 
 // averagePowerSpectrum computes a Hann-windowed, 50%-overlap Welch power
@@ -245,7 +218,7 @@ func hann(n int) []float32 {
 // (the median passband bin) and returns contiguous over-threshold runs as
 // energy-source bands, each carrying its peak level normalised against the
 // loudest passband bin.
-func detectEnergyBands(power []float64, cfg types.Ft8OccupancyConfig) []Band {
+func detectEnergyBands(power []float64, cfg types.Ft8OccupancyConfig, widthHz int) []Band {
 	binHz := float64(goft8.SampleRate) / float64(occupancyFFTSize)
 	binLo := int(math.Round(float64(cfg.PassbandLowHz) / binHz))
 	binHi := int(math.Round(float64(cfg.PassbandHighHz) / binHz))
@@ -269,7 +242,7 @@ func detectEnergyBands(power []float64, cfg types.Ft8OccupancyConfig) []Band {
 		}
 	}
 
-	minEnergyBins := int(math.Round(minEnergyBandHz / binHz))
+	minEnergyBins := int(math.Round(float64(widthHz/minEnergyBandDiv) / binHz))
 	if minEnergyBins < 1 {
 		minEnergyBins = 1
 	}
@@ -306,14 +279,14 @@ func detectEnergyBands(power []float64, cfg types.Ft8OccupancyConfig) []Band {
 	return bands
 }
 
-// decodeBands marks the [FreqHz, FreqHz+signalWidthHz] span each decode
+// decodeBands marks the [FreqHz, FreqHz+widthHz] span each decode
 // occupies (go-ft8 reports the base/sync tone; the signal extends upward),
 // clamped to the passband. Decodes wholly outside the passband are dropped.
-func decodeBands(decodes []goft8.DecodedMessage, cfg types.Ft8OccupancyConfig) []Band {
+func decodeBands(decodes []goft8.DecodedMessage, cfg types.Ft8OccupancyConfig, widthHz int) []Band {
 	var bands []Band
 	for _, m := range decodes {
 		base := int(math.Round(m.FreqHz))
-		low, high := base, base+signalWidthHz
+		low, high := base, base+widthHz
 		if high <= cfg.PassbandLowHz || low >= cfg.PassbandHighHz {
 			continue
 		}
@@ -407,14 +380,14 @@ func resolveGuard(cfg types.Ft8OccupancyConfig) int {
 }
 
 // offsetClear reports whether a base offset is still usable for TX this slot:
-// its signal [off, off+signalWidthHz] plus the guard margin on each side fits
+// its signal [off, off+widthHz] plus the guard margin on each side fits
 // entirely within one clear gap. This is the same admission bar suggestOffsets
 // applies to candidates, used by stickySuggested to decide if the previous
 // recommendation remains "reasonably clear".
-func offsetClear(occupied []Band, cfg types.Ft8OccupancyConfig, off int) bool {
+func offsetClear(occupied []Band, cfg types.Ft8OccupancyConfig, widthHz, off int) bool {
 	guard := resolveGuard(cfg)
 	for _, g := range clearGaps(occupied, cfg.PassbandLowHz, cfg.PassbandHighHz) {
-		if off >= g.lo+guard && off+signalWidthHz <= g.hi-guard {
+		if off >= g.lo+guard && off+widthHz <= g.hi-guard {
 			return true
 		}
 	}
@@ -425,7 +398,7 @@ func offsetClear(occupied []Band, cfg types.Ft8OccupancyConfig, off int) bool {
 // gaps wide enough for a signal, and scores candidate base offsets (stepped one
 // signal-width apart through each gap) by the configured weights. Returns the
 // best-first offsets, capped at maxSuggested.
-func suggestOffsets(occupied []Band, cfg types.Ft8OccupancyConfig) []int {
+func suggestOffsets(occupied []Band, cfg types.Ft8OccupancyConfig, widthHz int) []int {
 	lo, hi := cfg.PassbandLowHz, cfg.PassbandHighHz
 	gaps := clearGaps(occupied, lo, hi)
 	guard := resolveGuard(cfg)
@@ -433,7 +406,7 @@ func suggestOffsets(occupied []Band, cfg types.Ft8OccupancyConfig) []int {
 	// Derived scoring references (not magic numbers — keyed to the geometry):
 	// a gap four signals wide saturates the margin score; edge distance is
 	// scored against half the passband.
-	marginRef := float64(4 * signalWidthHz)
+	marginRef := float64(4 * widthHz)
 	edgeRef := float64(hi-lo) / 2.0
 	if edgeRef <= 0 {
 		edgeRef = 1
@@ -446,14 +419,14 @@ func suggestOffsets(occupied []Band, cfg types.Ft8OccupancyConfig) []int {
 	var cands []scored
 	for _, g := range gaps {
 		w := g.hi - g.lo
-		if w < signalWidthHz+2*guard { // can't fit the signal plus a guard band each side
+		if w < widthHz+2*guard { // can't fit the signal plus a guard band each side
 			continue
 		}
 		gapCenter := float64(g.lo+g.hi) / 2.0
 		gapHalf := float64(w) / 2.0
 		marginScore := clamp01(float64(w) / marginRef)
-		for off := g.lo + guard; off <= g.hi-guard-signalWidthHz; off += signalWidthHz {
-			sigCenter := float64(off) + float64(signalWidthHz)/2.0
+		for off := g.lo + guard; off <= g.hi-guard-widthHz; off += widthHz {
+			sigCenter := float64(off) + float64(widthHz)/2.0
 			centeredScore := clamp01(1 - math.Abs(sigCenter-gapCenter)/gapHalf)
 			edgeScore := clamp01(math.Min(sigCenter-float64(lo), float64(hi)-sigCenter) / edgeRef)
 			score := cfg.WeightMargin*marginScore +
@@ -491,8 +464,8 @@ func suggestOffsets(occupied []Band, cfg types.Ft8OccupancyConfig) []int {
 // prev == 0 (no previous pick) or a prev that has since become occupied returns
 // the fresh ranking untouched — stickiness never keeps a spot a signal has
 // moved into. "Still clear" is offsetClear's guard-margin bar.
-func stickySuggested(suggested []int, occupied []Band, cfg types.Ft8OccupancyConfig, prev int) []int {
-	if prev == 0 || !offsetClear(occupied, cfg, prev) {
+func stickySuggested(suggested []int, occupied []Band, cfg types.Ft8OccupancyConfig, widthHz, prev int) []int {
+	if prev == 0 || !offsetClear(occupied, cfg, widthHz, prev) {
 		return suggested
 	}
 	// prev may not be among this slot's freshly-generated candidates (gap

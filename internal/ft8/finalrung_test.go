@@ -402,9 +402,9 @@ func TestCallerSequencer_ConfirmHoldResendsAreBounded(t *testing.T) {
 // driveTheirLate fires OnSlot past the late window, so the rung is deferred rather
 // than transmitted.
 func driveTheirLate(s *Sequencer, sec int64, msgs []goft8.DecodedMessage) {
-	ref := SlotRefFromTime(time.Unix(sec, 0).UTC())
-	now := time.Unix(sec+slotSeconds, 0).UTC().
-		Add(time.Duration(txLateWindowSec+1) * time.Second)
+	ref := ProfileFT8.SlotRefFromTime(time.Unix(sec, 0).UTC())
+	now := time.Unix(sec+int64(ProfileFT8.Slot/time.Second), 0).UTC().
+		Add(ProfileFT8.LateWindow + time.Second)
 	s.OnSlot(ref, msgs, now)
 }
 

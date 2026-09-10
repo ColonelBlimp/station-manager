@@ -74,8 +74,10 @@ not need the FT4 decoder and can land now; slice 2 waits for the tagged go-ft8 r
    parity under both profiles, the `wasTxSlot` string match, the FT4 waveform length of 60 480 samples with a
    measured 20.833 Hz tone spacing, a waveform placed at + 0.452 s decoding with DT near zero (offline, once the
    decoder lands; until then the `jt9` oracle), the + 2.000 s admission edge refusals, the re-derived
-   `maxDecodableSkip` refusing a start past the FT4 Costas rule, and the whole existing `internal/ft8` suite run
-   table-driven over both profiles to prove the ladders are mode-independent.
+   `maxDecodableSkip` refusing a start past the FT4 Costas rule, and the **profile-sensitive matrix** (operator
+   ruling 2026-09-10, in place of parameterising the whole suite): the standard answer and Call-CQ happy paths
+   complete under both profiles, `markTxSlot`/`wasTxSlot` preserve an FT4 `.500` slot reference, and the
+   controller (fake keyer/player) uses FT4's origin and budget and refuses a start beyond its Costas skip limit.
    Offline oracle: `WSJTX_JT9=… ` decodes SM's FT4 waveform (local evidence only; CI has no `jt9`).
 2. **Decoder adapter.** Bump go-ft8 to the tagged release with the FT4 decoder (own commit). Make `slotDecoder` an
    interface with FT8 and FT4 implementations; keep the stateful-decoder skip/reset semantics. Tests: the FT4
@@ -126,6 +128,9 @@ Operate view (the fallback in ADR 0080), and W-0019 continues afterwards without
 
 - Ratified 2026-09-10: the DT reference is the first Costas array at slot + 0.500 s with PCM sample zero at
   + 0.452 s; + 2.000 s is an admission policy with edge refusals, and `maxDecodableSkip` remains authoritative.
+- Ratified 2026-09-10 (FT8 timing): keep FT8's `WaveformOrigin` at + 0.500 s and record its `SyncStart` as
+  + 0.660 s (the slice 1 round trip measured DT ≈ + 0.155 s). FT8 is not moved to + 0.340 s during W-0019; that is a
+  separate post-contest behaviour change requiring its own evidence.
 - AC7's 1.0 s decode budget is accepted as the initial gate; the keyed latency recorded at G3 may tighten or relax
   the admission edge.
 - Whether FT4 is a boot default later (`ft8.mode`), or stays runtime-only.

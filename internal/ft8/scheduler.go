@@ -5,26 +5,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	goft8 "github.com/ColonelBlimp/go-ft8/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 )
 
 const (
-	// slotSeconds is the FT8 slot length in whole seconds. FT4 uses 7.5 s
-	// slots; SM is FT8-only, so this is a const.
-	slotSeconds = 15
-
-	// SlotDuration is the FT8 transmit / decode window length. A new slot
-	// boundary lands every SlotDuration seconds on UTC: …14:30:00,
-	// …14:30:15, …14:30:30, …14:30:45, …14:31:00, etc.
-	SlotDuration = slotSeconds * time.Second
-
-	// SlotSamples is the number of 12 kHz mono samples in one FT8 slot
-	// (slotSeconds × go-ft8's SampleRate = 180000). This is exactly the
-	// frame length go-ft8's checked decode API requires, and the ring
-	// capacity the scheduler snapshots on each boundary.
-	SlotSamples = goft8.SampleRate * slotSeconds
-
 	// SchedulerSlotChannelBufferSize is the capacity of the Slots channel.
 	// One pending slot is enough headroom for the decode worker to be busy
 	// when the next boundary fires; extra capacity just delays back-
@@ -32,11 +16,11 @@ const (
 	SchedulerSlotChannelBufferSize = 1
 )
 
-// Slot is one completed 15-second window of audio ready for decode.
+// Slot is one completed slot window of audio ready for decode.
 type Slot struct {
-	// StartUTC is the boundary at which this slot started — i.e. the UTC
-	// second that was a multiple of 15 immediately before the scheduler
-	// fired. The slot's samples cover [StartUTC, StartUTC+SlotDuration).
+	// StartUTC is the boundary at which this slot started — the lattice point
+	// (a multiple of the profile's Slot from the epoch) immediately before the
+	// scheduler fired. The slot's samples cover [StartUTC, StartUTC+Slot).
 	StartUTC time.Time
 
 	// OffsetMs is how late the slot boundary timer actually fired relative
@@ -45,8 +29,8 @@ type Slot struct {
 	// scheduling pressure or a stalled consumer.
 	OffsetMs int64
 
-	// Samples is a fresh copy of the SlotSamples int16 samples that
-	// preceded StartUTC + SlotDuration. The slot owns the slice — the
+	// Samples is a fresh copy of the profile's SlotSamples int16 samples that
+	// preceded StartUTC + Slot. The slot owns the slice — the
 	// scheduler does not retain or mutate it after delivery — so the
 	// decode worker can hand it straight to DecodeSlot.
 	Samples []int16
@@ -108,12 +92,12 @@ type Slot struct {
 }
 
 // Scheduler drains a continuous audio source (typically the capture
-// layer's samples channel) into a ring buffer and emits one Slot per UTC
-// 15-second boundary.
+// layer's samples channel) into a ring buffer and emits one Slot per boundary
+// of its profile's lattice (15 s for FT8, 7.5 s for FT4).
 //
 // Usage:
 //
-//	sch := ft8.NewScheduler(capture.Samples(), logging.Noop())
+//	sch := ft8.NewScheduler(ft8.ProfileFT8, capture.Samples(), logging.Noop())
 //	go func() {
 //	    if err := sch.Run(ctx); err != nil { ... }
 //	}()
@@ -124,9 +108,10 @@ type Slot struct {
 // Concurrency: Run owns its goroutine. Slots is safe to read from any
 // goroutine. Dropped is a lock-free counter.
 type Scheduler struct {
-	source <-chan []int16
-	log    logging.Logger
-	out    chan Slot
+	profile Profile
+	source  <-chan []int16
+	log     logging.Logger
+	out     chan Slot
 
 	// dead is the dead-capture-stream watchdog (see deadsource.go): driven at
 	// batch arrival + every boundary, inert unless SetOnDeadSource installed a
@@ -180,16 +165,18 @@ type Scheduler struct {
 	starveResync bool
 }
 
-// NewScheduler constructs a Scheduler reading from source. nil logger →
-// logging.Noop().
-func NewScheduler(source <-chan []int16, log logging.Logger) *Scheduler {
+// NewScheduler constructs a Scheduler reading from source on the profile's
+// slot lattice. nil logger → logging.Noop().
+func NewScheduler(p Profile, source <-chan []int16, log logging.Logger) *Scheduler {
 	if log == nil {
 		log = logging.Noop()
 	}
 	return &Scheduler{
-		source: source,
-		log:    log,
-		out:    make(chan Slot, SchedulerSlotChannelBufferSize),
+		profile: p,
+		source:  source,
+		log:     log,
+		out:     make(chan Slot, SchedulerSlotChannelBufferSize),
+		dead:    deadSourceMonitor{minLive: p.minLiveWindowSamples()},
 	}
 }
 
@@ -285,7 +272,7 @@ func (s *Scheduler) UndeliveredTail() (time.Time, int) {
 // boundaries (the timer is reset only after servicing), and Run then resyncs
 // to nextSlotBoundary(now), so each boundary in [target, now] is a slot that
 // will never emit: counting one per FIRING under-reported the rest (review
-// c76818a8 P1). Boundary b's lost slot starts at b−SlotDuration. Only once
+// c76818a8 P1). Boundary b's lost slot starts at b−Slot. Only once
 // the ring is full: a cold-start stall lost no session audio (emitSlot's own
 // early return mirrors this — and a ring never shrinks once filled, so one
 // check covers the whole stall).
@@ -293,8 +280,8 @@ func (s *Scheduler) noteLateBoundaries(ring *sampleRing, target, now time.Time) 
 	if ring.Filled() < int64(ring.Cap()) {
 		return
 	}
-	for b := target; !b.After(now); b = b.Add(SlotDuration) {
-		s.noteUndelivered(b.Add(-SlotDuration))
+	for b := target; !b.After(now); b = b.Add(s.profile.Slot) {
+		s.noteUndelivered(b.Add(-s.profile.Slot))
 	}
 }
 
@@ -314,14 +301,14 @@ func (s *Scheduler) noteUndelivered(start time.Time) {
 func (s *Scheduler) Dropped() int64 { return s.dropped.Load() }
 
 // Run blocks until ctx is cancelled or the source channel closes. Drains
-// source into the ring buffer continuously; on every UTC 15-second
-// boundary, snapshots the ring and emits a Slot.
+// source into the ring buffer continuously; on every boundary of the
+// profile's lattice, snapshots the ring and emits a Slot.
 func (s *Scheduler) Run(ctx context.Context) error {
 	defer close(s.out)
 
-	ring := newSampleRing(SlotSamples)
+	ring := newSampleRing(s.profile.SlotSamples)
 
-	target := nextSlotBoundary(time.Now().UTC())
+	target := s.profile.nextSlotBoundary(time.Now().UTC())
 	timer := time.NewTimer(time.Until(target))
 	defer timer.Stop()
 
@@ -358,7 +345,7 @@ func (s *Scheduler) Run(ctx context.Context) error {
 			s.observeDial()
 			// Normal: the timer fired ~at target (sub-50 ms); emit the slot that
 			// ended there. If the goroutine was delayed more than maxSlotLateness,
-			// the ring no longer represents [target-SlotDuration, target) — it has
+			// the ring no longer represents [target-Slot, target) — it has
 			// shed the front of the slot and gained samples from after target — so a
 			// target-stamped emit would carry a shifted window and a stale
 			// StartUTC/parity (which the sequencer keys rung timing off). Skip and
@@ -381,7 +368,7 @@ func (s *Scheduler) Run(ctx context.Context) error {
 			// A new slot begins at this same boundary: its dial window starts
 			// clean, anchored on the reading just taken.
 			s.slotDialMoved = false
-			target = nextSlotBoundary(now)
+			target = s.profile.nextSlotBoundary(now)
 			timer.Reset(time.Until(target))
 		}
 	}
@@ -392,7 +379,7 @@ func (s *Scheduler) Run(ctx context.Context) error {
 // snapshot no longer matches the target slot, so we skip+resync rather than feed
 // decode/occupancy a mis-stamped slot (review follow-up M2). Default 2 s: far
 // above normal jitter (sub-50 ms) and a generous GC pause, far below a full
-// 15 s slot. Package var so tests can dial it.
+// slot of either profile. Package var so tests can dial it.
 var maxSlotLateness = 2 * time.Second
 
 // slotTooLate reports whether the goroutine serviced the boundary later than
@@ -425,13 +412,13 @@ func (s *Scheduler) boundaryStarved(filled int64) bool {
 		s.prevBoundaryFilled = filled
 		return true
 	}
-	starved := filled-s.prevBoundaryFilled < minLiveWindowSamples
+	starved := filled-s.prevBoundaryFilled < s.profile.minLiveWindowSamples()
 	s.prevBoundaryFilled = filled
 	return starved
 }
 
 // emitSlot snapshots the ring and tries to publish the slot. If the ring
-// has not yet seen a full SlotDuration of audio (cold start), the slot is
+// has not yet seen a full Slot of audio (cold start), the slot is
 // silently skipped — emitting a half-filled buffer would produce
 // false-decode noise. Once enough samples have accumulated, every
 // subsequent boundary fires a slot. now is the actual service time (not the
@@ -441,7 +428,7 @@ func (s *Scheduler) emitSlot(ring *sampleRing, target, now time.Time, starved bo
 		return
 	}
 	slot := Slot{
-		StartUTC: target.Add(-SlotDuration),
+		StartUTC: target.Add(-s.profile.Slot),
 		OffsetMs: now.Sub(target).Milliseconds(),
 		Samples:  ring.Snapshot(),
 		Starved:  starved,
@@ -471,27 +458,4 @@ func (s *Scheduler) emitSlot(ring *sampleRing, target, now time.Time, starved bo
 			Int64("total_dropped", s.dropped.Load()).
 			Msg("ft8.scheduler slot dropped (consumer backpressure)")
 	}
-}
-
-// nextSlotBoundary returns the next time strictly after now whose
-// .Second() is a multiple of SlotDuration/time.Second and whose
-// sub-second component is zero. The returned time is in UTC.
-//
-// Examples (now → next):
-//
-//	14:30:07.4 → 14:30:15.000
-//	14:30:14.999 → 14:30:15.000
-//	14:30:15.000 → 14:30:30.000  (strictly after)
-//	14:30:59.000 → 14:31:00.000
-func nextSlotBoundary(now time.Time) time.Time {
-	now = now.UTC()
-	slotSecs := int(SlotDuration / time.Second)
-	// Round down to the current slot start, then add one slot.
-	currentSlotStart := time.Date(
-		now.Year(), now.Month(), now.Day(),
-		now.Hour(), now.Minute(),
-		(now.Second()/slotSecs)*slotSecs,
-		0, time.UTC,
-	)
-	return currentSlotStart.Add(SlotDuration)
 }

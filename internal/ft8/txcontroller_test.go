@@ -102,7 +102,7 @@ func TestTransmit_HappyPath(t *testing.T) {
 	zeroTiming(t)
 	k := &fakeKeyer{}
 	p := newFakePlayer()
-	c := NewTxController(k, p, "DATA-U", logging.Noop())
+	c := NewTxController(ProfileFT8, k, p, "DATA-U", logging.Noop())
 
 	wave := []int16{1, 2, 3}
 	go p.finishPlayback() // playback completes promptly
@@ -122,7 +122,7 @@ func TestTransmit_KeyError(t *testing.T) {
 	zeroTiming(t)
 	k := &fakeKeyer{keyErr: stderrors.New("no rig")}
 	p := newFakePlayer()
-	c := NewTxController(k, p, "", logging.Noop())
+	c := NewTxController(ProfileFT8, k, p, "", logging.Noop())
 
 	require.Error(t, c.transmit(context.Background(), []int16{1}, time.Time{}, nil))
 	require.Equal(t, 0, p.plays(), "must not play after a failed key")
@@ -135,7 +135,7 @@ func TestTransmit_PlayError(t *testing.T) {
 	zeroTiming(t)
 	k := &fakeKeyer{}
 	p := &fakePlayer{playErr: stderrors.New("device busy")}
-	c := NewTxController(k, p, "", logging.Noop())
+	c := NewTxController(ProfileFT8, k, p, "", logging.Noop())
 
 	require.Error(t, c.transmit(context.Background(), []int16{1}, time.Time{}, nil))
 	require.Equal(t, 1, k.keys())
@@ -153,7 +153,7 @@ func TestTransmit_PanicInOnKeyedStillUnkeys(t *testing.T) {
 	zeroTiming(t)
 	k := &fakeKeyer{}
 	p := newFakePlayer()
-	c := NewTxController(k, p, "", logging.Noop())
+	c := NewTxController(ProfileFT8, k, p, "", logging.Noop())
 
 	require.PanicsWithValue(t, "boom", func() {
 		_ = c.transmit(context.Background(), []int16{1}, time.Time{}, func() { panic("boom") })
@@ -168,7 +168,7 @@ func TestTransmit_ContextCancel(t *testing.T) {
 	zeroTiming(t)
 	k := &fakeKeyer{}
 	p := newFakePlayer() // done never closes
-	c := NewTxController(k, p, "", logging.Noop())
+	c := NewTxController(ProfileFT8, k, p, "", logging.Noop())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { time.Sleep(20 * time.Millisecond); cancel() }()
@@ -193,7 +193,7 @@ func TestTransmit_CancelDuringDrainReportsFailure(t *testing.T) {
 
 	k := &fakeKeyer{}
 	p := newFakePlayer()
-	c := NewTxController(k, p, "", logging.Noop())
+	c := NewTxController(ProfileFT8, k, p, "", logging.Noop())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -221,7 +221,7 @@ func TestTransmit_CancelDuringDrainReportsFailure(t *testing.T) {
 func TestTransmitSlot_EncodeError(t *testing.T) {
 	k := &fakeKeyer{}
 	p := newFakePlayer()
-	c := NewTxController(k, p, "", logging.Noop())
+	c := NewTxController(ProfileFT8, k, p, "", logging.Noop())
 
 	// Free text isn't an encodable standard message.
 	err := c.TransmitSlot(context.Background(), "this is not a standard ft8 message", 1500)
@@ -238,17 +238,17 @@ func TestTruncateHead(t *testing.T) {
 		full[i] = 5000 // a flat non-zero signal so the ramp is observable
 	}
 
-	require.Equal(t, full, truncateHead(full, 0), "skip 0 is a no-op")
-	require.Equal(t, full, truncateHead(full, -3), "negative skip is a no-op")
-	require.Nil(t, truncateHead(make([]int16, 100), 100), "skip == len → nil")
-	require.Nil(t, truncateHead(make([]int16, 100), 250), "skip past end → nil")
+	require.Equal(t, full, truncateHead(full, 0, ProfileFT8.rampSamples), "skip 0 is a no-op")
+	require.Equal(t, full, truncateHead(full, -3, ProfileFT8.rampSamples), "negative skip is a no-op")
+	require.Nil(t, truncateHead(make([]int16, 100), 100, ProfileFT8.rampSamples), "skip == len → nil")
+	require.Nil(t, truncateHead(make([]int16, 100), 250, ProfileFT8.rampSamples), "skip past end → nil")
 
 	// Fresh copy: truncateHead mutates the backing array (re-ramps the edge).
 	src := make([]int16, 1000)
 	for i := range src {
 		src[i] = 5000
 	}
-	out := truncateHead(src, 400)
+	out := truncateHead(src, 400, ProfileFT8.rampSamples)
 	require.Len(t, out, 600)
 	require.InDelta(t, 0, out[0], 1, "new leading edge is ramped to ~0")
 	require.EqualValues(t, 5000, out[len(out)-1], "the tail past the ramp is untouched")
@@ -257,12 +257,12 @@ func TestTruncateHead(t *testing.T) {
 // TestApplyLeadingRamp: the first symbol-eighth fades in monotonically from ~0 to
 // full scale; samples past the ramp are untouched. Guards the short-slice case.
 func TestApplyLeadingRamp(t *testing.T) {
-	nramp := txSamplesPerSymbol / 8
+	nramp := ProfileFT8.rampSamples
 	s := make([]int16, nramp*3)
 	for i := range s {
 		s[i] = 8000
 	}
-	applyLeadingRamp(s)
+	applyLeadingRamp(s, ProfileFT8.rampSamples)
 
 	require.InDelta(t, 0, s[0], 1, "ramp starts at ~0")
 	require.Less(t, s[1], s[nramp/2], "ramp rises monotonically")
@@ -271,7 +271,7 @@ func TestApplyLeadingRamp(t *testing.T) {
 
 	// Shorter than a full ramp: clamps, no panic.
 	short := []int16{9000, 9000}
-	applyLeadingRamp(short)
+	applyLeadingRamp(short, ProfileFT8.rampSamples)
 	require.InDelta(t, 0, short[0], 1)
 }
 
@@ -282,7 +282,7 @@ func TestTransmitAligned_LateTruncates(t *testing.T) {
 	zeroTiming(t) // preKeyLead = 0, so audioStart = now for a past boundary
 	k := &fakeKeyer{}
 	p := newFakePlayer()
-	c := NewTxController(k, p, "", logging.Noop())
+	c := NewTxController(ProfileFT8, k, p, "", logging.Noop())
 
 	wave := make([]int16, 100_000)
 	for i := range wave {
@@ -327,7 +327,7 @@ func TestTransmit_TruncatesForKeyLatency(t *testing.T) {
 	zeroTiming(t)
 	k := &delayKeyer{delay: 50 * time.Millisecond}
 	p := newFakePlayer()
-	c := NewTxController(k, p, "DATA-U", logging.Noop())
+	c := NewTxController(ProfileFT8, k, p, "DATA-U", logging.Noop())
 
 	const rate = 12000 // goft8.SampleRate
 	wave := make([]int16, rate)
@@ -363,7 +363,7 @@ func (p *slowStartPlayer) Play(samples []int16) (<-chan struct{}, error) {
 // fullTxWaveform is a synthetic waveform of the real standard-message length, so
 // the decodability floor under test is the one live transmissions face.
 func fullTxWaveform() []int16 {
-	wave := make([]int16, txWaveformSamples)
+	wave := make([]int16, ProfileFT8.waveformSamples())
 	for i := range wave {
 		wave[i] = 1000
 	}
@@ -379,7 +379,7 @@ func TestTransmit_RejectsUndecodablyLateFragment(t *testing.T) {
 	zeroTiming(t)
 	k := &fakeKeyer{}
 	p := newFakePlayer()
-	c := NewTxController(k, p, "", logging.Noop())
+	c := NewTxController(ProfileFT8, k, p, "", logging.Noop())
 
 	// Symbol 0 was due 7 s ago — the head loss reaches past FT8's middle Costas
 	// array (5.92 s), so what is left cannot carry a decode even though it is a
@@ -404,10 +404,10 @@ func TestTransmit_KeyLatencyPushesRungPastTheLimit(t *testing.T) {
 	zeroTiming(t)
 	k := &delayKeyer{delay: 300 * time.Millisecond}
 	p := newFakePlayer()
-	c := NewTxController(k, p, "", logging.Noop())
+	c := NewTxController(ProfileFT8, k, p, "", logging.Noop())
 
 	wave := fullTxWaveform()
-	limitSec := float64(maxDecodableSkip(len(wave))) / float64(goft8.SampleRate)
+	limitSec := float64(ProfileFT8.maxDecodableSkip(len(wave))) / float64(goft8.SampleRate)
 	// 100 ms inside the limit at decision time; the 300 ms key delay crosses it.
 	nominal := time.Now().UTC().Add(-time.Duration((limitSec - 0.1) * float64(time.Second)))
 
@@ -418,16 +418,11 @@ func TestTransmit_KeyLatencyPushesRungPastTheLimit(t *testing.T) {
 	require.Equal(t, 1, k.unkeys(), "PTT drops on the reject path")
 }
 
-// setAudioBudget dials the slot audio budget down for a test (restoring it after)
-// so a short, fast device-start delay stands in for the seconds a real USB codec or
+// setAudioBudget dials the controller's slot audio budget down for a test so a
+// short, fast device-start delay stands in for the seconds a real USB codec or
 // contended PipeWire can take. The live budget leaves ~1.54 s of slack over the
 // waveform, which would otherwise mean a >1.5 s sleep per test.
-func setAudioBudget(t *testing.T, d time.Duration) {
-	t.Helper()
-	prev := txAudioBudget
-	txAudioBudget = d
-	t.Cleanup(func() { txAudioBudget = prev })
-}
+func setAudioBudget(c *TxController, d time.Duration) { c.audioBudget = d }
 
 // TestTransmit_RejectsWhenDeviceStartsTooLate pins the follow-up review finding on
 // the decodability floor: the floor was evaluated immediately BEFORE Play, but the
@@ -435,10 +430,10 @@ func setAudioBudget(t *testing.T, d time.Duration) {
 // rung can clear the head check and still have its audio begin seconds later.
 func TestTransmit_RejectsWhenDeviceStartsTooLate(t *testing.T) {
 	zeroTiming(t)
-	setAudioBudget(t, 13*time.Second) // 12.96 s waveform → ~0.04 s of slack
 	k := &fakeKeyer{}
 	p := &slowStartPlayer{fakePlayer: newFakePlayer(), startDelay: 200 * time.Millisecond}
-	c := NewTxController(k, p, "", logging.Noop())
+	c := NewTxController(ProfileFT8, k, p, "", logging.Noop())
+	setAudioBudget(c, 13*time.Second) // 12.96 s waveform → ~0.04 s of slack
 
 	// 4 s late: well inside the head-truncation floor, so only the device-start
 	// delay can fail this.
@@ -455,10 +450,10 @@ func TestTransmit_RejectsWhenDeviceStartsTooLate(t *testing.T) {
 // start — yet the shift puts every symbol off its DT just the same.
 func TestTransmit_RejectsLateDeviceStartOnAnUntruncatedRung(t *testing.T) {
 	zeroTiming(t)
-	setAudioBudget(t, 13*time.Second)
 	k := &fakeKeyer{}
 	p := &slowStartPlayer{fakePlayer: newFakePlayer(), startDelay: 200 * time.Millisecond}
-	c := NewTxController(k, p, "", logging.Noop())
+	c := NewTxController(ProfileFT8, k, p, "", logging.Noop())
+	setAudioBudget(c, 13*time.Second)
 
 	wave := fullTxWaveform()
 	go p.finishPlayback()
@@ -477,10 +472,10 @@ func TestTransmit_RejectsLateDeviceStartOnAnUntruncatedRung(t *testing.T) {
 // live budget leaves ~1.54 s of slack over the waveform, so ordinary device-start
 // latency must not fail a rung.
 func TestTransmit_ToleratesNormalDeviceStartLatency(t *testing.T) {
-	zeroTiming(t) // real txAudioBudget (14.5 s)
+	zeroTiming(t) // real audio budget (14.5 s)
 	k := &fakeKeyer{}
 	p := &slowStartPlayer{fakePlayer: newFakePlayer(), startDelay: 150 * time.Millisecond}
-	c := NewTxController(k, p, "", logging.Noop())
+	c := NewTxController(ProfileFT8, k, p, "", logging.Noop())
 
 	go p.finishPlayback()
 	require.NoError(t, c.transmit(context.Background(), fullTxWaveform(), time.Now().UTC(), nil),
@@ -498,11 +493,11 @@ func TestTransmit_ReservesDeviceDrainInSlotBudget(t *testing.T) {
 	lead, tail := txPreKeyLead, txPlayTail
 	txPreKeyLead, txPlayTail = 0, 200*time.Millisecond
 	t.Cleanup(func() { txPreKeyLead, txPlayTail = lead, tail })
-	setAudioBudget(t, 13*time.Second) // 12.96 s waveform → 40 ms of slack
 
 	k := &fakeKeyer{}
 	p := newFakePlayer() // instant start: only the unbudgeted drain can fail this
-	c := NewTxController(k, p, "", logging.Noop())
+	c := NewTxController(ProfileFT8, k, p, "", logging.Noop())
+	setAudioBudget(c, 13*time.Second) // 12.96 s waveform → 40 ms of slack
 
 	go p.finishPlayback()
 	err := c.transmit(context.Background(), fullTxWaveform(), time.Now().UTC(), nil)
@@ -518,10 +513,10 @@ func TestTransmit_ReservesDeviceDrainInSlotBudget(t *testing.T) {
 // operator action as ft8_tx_failed and warns.
 func TestTransmit_SlowDeviceStartCancelStaysACancel(t *testing.T) {
 	zeroTiming(t)
-	setAudioBudget(t, 13*time.Second)
 	k := &fakeKeyer{}
 	p := &slowStartPlayer{fakePlayer: newFakePlayer(), startDelay: 200 * time.Millisecond}
-	c := NewTxController(k, p, "", logging.Noop())
+	c := NewTxController(ProfileFT8, k, p, "", logging.Noop())
+	setAudioBudget(c, 13*time.Second)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancelled before the (slow) device start completes
@@ -542,7 +537,7 @@ func TestTransmit_StillSendsALateButDecodableRemainder(t *testing.T) {
 	zeroTiming(t)
 	k := &fakeKeyer{}
 	p := newFakePlayer()
-	c := NewTxController(k, p, "", logging.Noop())
+	c := NewTxController(ProfileFT8, k, p, "", logging.Noop())
 
 	wave := fullTxWaveform()
 	go p.finishPlayback()
@@ -565,7 +560,7 @@ func TestTransmit_PreKeyCheckRefusesWithoutKeying(t *testing.T) {
 	t.Run("a refusing check aborts before PTT", func(t *testing.T) {
 		k := &fakeKeyer{}
 		p := newFakePlayer()
-		c := NewTxController(k, p, "DATA-U", logging.Noop())
+		c := NewTxController(ProfileFT8, k, p, "DATA-U", logging.Noop())
 		c.SetPreKeyCheck(func() error { return ErrTxDialUnknown })
 
 		// Let playback complete if the gate is (wrongly) skipped, so this fails on
@@ -582,7 +577,7 @@ func TestTransmit_PreKeyCheckRefusesWithoutKeying(t *testing.T) {
 	t.Run("a passing check keys as normal", func(t *testing.T) {
 		k := &fakeKeyer{}
 		p := newFakePlayer()
-		c := NewTxController(k, p, "DATA-U", logging.Noop())
+		c := NewTxController(ProfileFT8, k, p, "DATA-U", logging.Noop())
 		c.SetPreKeyCheck(func() error { return nil })
 
 		go p.finishPlayback()
@@ -630,7 +625,7 @@ func TestTxEvidence_T1_ASuccessfulTransmissionRecordsBothWitnesses(t *testing.T)
 	sink, log := newLogSink()
 	k := &fakeKeyer{}
 	p := newFakePlayer()
-	c := NewTxController(k, p, "", log)
+	c := NewTxController(ProfileFT8, k, p, "", log)
 
 	wave := make([]int16, 4096)
 	go func() { p.finishPlayback() }()
@@ -661,7 +656,7 @@ func TestTxEvidence_T2_TheKeyedTimeIsTheREALPttDownDuration(t *testing.T) {
 	sink, log := newLogSink()
 	k := &fakeKeyer{}
 	p := newFakePlayer()
-	c := NewTxController(k, p, "", log)
+	c := NewTxController(ProfileFT8, k, p, "", log)
 
 	go func() {
 		time.Sleep(30 * time.Millisecond)
@@ -683,7 +678,7 @@ func TestTxEvidence_T3_AFailedTransmissionClaimsNothing(t *testing.T) {
 	k := &fakeKeyer{}
 	p := newFakePlayer()
 	p.playErr = stderrors.New("device gone")
-	c := NewTxController(k, p, "", log)
+	c := NewTxController(ProfileFT8, k, p, "", log)
 
 	if err := c.transmit(context.Background(), make([]int16, 4096), time.Time{}, nil); err == nil {
 		t.Fatal("fixture: the play was supposed to fail")
