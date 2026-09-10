@@ -228,6 +228,18 @@ func (h *hub) clearActivity() {
 	h.audioSession++
 }
 
+// clearReplay drops EVERY replay-cached frame — the activity cache plus the
+// tx and qso frames — for a profile switch (ADR 0080): the previous profile's
+// last slot, tx state or session must not be replayed to a subscriber of the
+// new one. The caller republishes what the new profile has to say.
+func (h *hub) clearReplay() {
+	h.clearActivity()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.lastTx = nil
+	h.lastQso = nil
+}
+
 // close disconnects all subscribers and marks the hub closed. Idempotent.
 func (h *hub) close() {
 	h.mu.Lock()

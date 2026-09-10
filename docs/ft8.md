@@ -841,8 +841,9 @@ subscriber would duplicate a session-list row):
 - **`ft8-decode`** → `DecodeReport{ slot, decodes:[{text, freq_hz, dt_s, snr}] }`
 - **`ft8-occupancy`** → `OccupancyReport{ slot, passband, signal_width_hz,
   occupied:[{low_hz, high_hz, source, level}], suggested:[hz…] }`
-- **`ft8-tx`** → `TxState{ armed, transmitting, message, offset_hz, error }` — the
-  transmit arm/in-flight status (step e1).
+- **`ft8-tx`** → `TxState{ armed, transmitting, message, offset_hz, error, mode }` — the
+  transmit arm/in-flight status (step e1); `mode` (`FT8` | `FT4`) names the active
+  profile the view claimed with `POST /v1/ft8/claim` before subscribing (ADR 0080).
 - **`ft8-qso`** → `QsoStatus{ active, role, their_call, their_grid, state, next_message,
   repeats, max_repeats, our_report, their_report, their_period }` —
   `our_report`/`their_report` are the exchanged signal reports (e.g. `-12`), empty until

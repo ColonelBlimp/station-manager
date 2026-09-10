@@ -24,6 +24,11 @@ type fakeSource struct {
 	ch       chan []int16
 	startN   int
 	stopN    int
+	// stopEntered / stopRelease, when set, make Stop signal its entry and then
+	// block until released — a deterministic hold inside a capture release
+	// (the profile-claim interleaving tests).
+	stopEntered chan struct{}
+	stopRelease chan struct{}
 }
 
 func newFakeSource() *fakeSource { return &fakeSource{} }
@@ -40,6 +45,10 @@ func (f *fakeSource) Start(_ context.Context) (<-chan []int16, error) {
 }
 
 func (f *fakeSource) Stop() error {
+	if f.stopEntered != nil {
+		f.stopEntered <- struct{}{}
+		<-f.stopRelease
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.stopN++

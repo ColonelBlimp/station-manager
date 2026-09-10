@@ -700,6 +700,19 @@ func newSequencer(transmit func(string, float64, float64, uint64, func(ok bool))
 	}
 }
 
+// setProfile switches the timebase between sessions (ADR 0080). Refused while a
+// session is active: every rung of a session is scheduled on the lattice it
+// started on. Comparison-only on the idle mode, per the structural rule.
+func (s *Sequencer) setProfile(p Profile) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.mode != seqIdle {
+		return ErrProfileSessionActive
+	}
+	s.profile = p
+	return nil
+}
+
 // SetMaxRepeats retunes the unanswered-rung repeat cap while the sequencer runs
 // (ft8.tx.max_repeats, edited from the FT8 Settings tab). Takes s.mu because
 // maxRepeats is read on the slot goroutine; the next OnSlot rung check uses the new

@@ -92,7 +92,8 @@ func TestCallerSequencer_CallCq_HappyPath_BothProfiles(t *testing.T) {
 // own-TX skip) compare StartUTC strings exactly, so an FT4 half-second boundary
 // must survive the trip in its millisecond form.
 func TestTxSlotTracking_FT4HalfSecondReference(t *testing.T) {
-	s := &Service{profile: ProfileFT4}
+	s := &Service{}
+	s.setProfileForTest(ProfileFT4)
 	b := time.Date(2026, 9, 12, 15, 5, 37, 500_000_000, time.UTC)
 	s.markTxSlot(b)
 

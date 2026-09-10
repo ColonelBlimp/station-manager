@@ -59,8 +59,14 @@ var sseWriteTimeout = 10 * time.Second
 func (s *Service) Subscribe() (<-chan hubEvent, func()) {
 	ch, unsub := s.hub.subscribe()
 	s.onSubscriberAdded()
+	return ch, s.onceUnsubscribe(unsub)
+}
+
+// onceUnsubscribe wraps a hub unsubscribe so the subscriber count is decremented
+// exactly once however many times the returned func is called.
+func (s *Service) onceUnsubscribe(unsub func()) func() {
 	var once sync.Once
-	return ch, func() {
+	return func() {
 		once.Do(func() {
 			s.onSubscriberRemoved()
 			unsub()
@@ -105,6 +111,23 @@ func (s *Service) HTTPHandler(shutdownCh <-chan struct{}) http.Handler {
 			}
 		}
 
+		// Belt and braces behind the profile claim (ADR 0080): a subscription
+		// naming a profile other than the active one is refused, and the check,
+		// the hub subscription and the subscriber count are one admission under
+		// s.mu (SubscribeMode) — so a claim cannot switch between the check and
+		// the count and leave an FT8-labelled stream holding an FT4 capture. The
+		// view claims first, so this is never the primary explanation — an
+		// EventSource sees only an error here. Admitted BEFORE the 200 and the
+		// headers, which the refusal path must not have sent.
+		ch, unsub, err := s.SubscribeMode(r.URL.Query().Get("mode"))
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			_, _ = io.WriteString(w, `{"code":"ft8_profile_mismatch","message":"the active profile is `+s.modeName()+`; claim first"}`)
+			return
+		}
+		defer unsub()
+
 		h := w.Header()
 		h.Set("Content-Type", "text/event-stream")
 		h.Set("Cache-Control", "no-cache")
@@ -113,9 +136,6 @@ func (s *Service) HTTPHandler(shutdownCh <-chan struct{}) http.Handler {
 		armWrite()
 		w.WriteHeader(http.StatusOK)
 		flusher.Flush()
-
-		ch, unsub := s.Subscribe()
-		defer unsub()
 
 		// Initial comment. Contract: ": connected" is the first body bytes, available
 		// immediately after the headers, on every SSE stream the daemon serves.

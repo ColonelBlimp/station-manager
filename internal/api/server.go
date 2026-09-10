@@ -355,6 +355,10 @@ func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *l
 		// normal (not long-lived) requests, so the global limitConcurrent
 		// middleware covers them. The daemon owns the guaranteed stop, and
 		// arming is refused unless a rig is connected — neither can strand RF.
+		// Profile claim (ADR 0080): the FT view names FT8 or FT4 before it
+		// subscribes; refused with a distinct code while the other profile has
+		// anything live. Same enablement gate.
+		apiMux.HandleFunc("POST /v1/ft8/claim", s.handleFt8Claim)
 		apiMux.HandleFunc("POST /v1/ft8/tx/arm", s.handleFt8TxArm)
 		apiMux.HandleFunc("POST /v1/ft8/tx/send", s.handleFt8TxSend)
 		// Manual sequencer (ADR 0031 step e3) — start/abandon an answer-a-CQ

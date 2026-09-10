@@ -93,8 +93,7 @@ func TestSlotDecoder_FT4_SkipAndResetKeepDecoding(t *testing.T) {
 // report sized to FT4's signal width.
 func TestDecodeLoop_FT4Profile_PublishesRowsOnItsLattice(t *testing.T) {
 	s, sink, events, _ := newSplitHarness(t)
-	s.profile = ProfileFT4
-	s.seq.profile = ProfileFT4
+	s.setProfileForTest(ProfileFT4)
 
 	samples := mixSlotOn(t, ProfileFT4, map[string]float64{"CQ A61DI LL64": 2200})
 	start := ProfileFT4.slotStart(time.Now().UTC().Add(-time.Minute)).Add(7500 * time.Millisecond)

@@ -65,9 +65,27 @@ type Service struct {
 	src    captureSource
 
 	// profile is the FT-family timebase every capture session, transmission
-	// and slot reference is built on (ADR 0080). FT8 until the profile claim
-	// (W-0019 slice 3) lets the operator select FT4 between sessions.
+	// and slot reference is built on (ADR 0080). Written only by ClaimProfile,
+	// under s.mu, with zero subscribers, no capture, no session and TX
+	// disarmed — so every hot-path reader (the decode loop, the TX goroutine,
+	// markTxSlot) runs in a state the claim refuses to change under.
 	profile Profile
+	// captureProfile is the profile the LIVE capture session was built on
+	// (zero when none): the claim's observable, since a scheduler's lattice is
+	// not otherwise visible until its first slot.
+	captureProfile Profile
+	// profileSnap mirrors profile for readers that hold none of the gates the
+	// claim serialises on — the tx publisher, offset validation, the decode
+	// loop, the rung preflight. Written only by ClaimProfile together with
+	// profile; a lock-free load is a consistent snapshot, never a torn read.
+	profileSnap atomic.Pointer[Profile]
+	// lingerDeadline is when the pending lingerTimer fires, for the claim's
+	// RetryAfter; meaningful only while lingerTimer != nil.
+	lingerDeadline time.Time
+	// lingerWindingDown is true from the moment onLingerExpired consumes the
+	// timer until its teardown (unattended disarm, capture release) completes,
+	// so a claim refused in that window still advertises a retry.
+	lingerWindingDown bool
 
 	// hub fans each slot's decode + occupancy events out to /v1/ft8/events SSE
 	// subscribers and caches the latest of each for late-subscriber replay.
@@ -263,6 +281,8 @@ func newService(cfg types.Ft8Config, log logging.Logger, src captureSource) *Ser
 		stopDone:  make(chan struct{}),
 		newPlayer: newTxPlayer, // build-tagged; CGO-free build returns ErrTxUnavailable
 	}
+	initial := ProfileFT8
+	s.profileSnap.Store(&initial)
 	// The sequencer transmits via seqTransmit (current-slot late-dt) and fans its
 	// state out on the ft8-qso SSE; both reference s, so wire it after s exists.
 	s.seq = newSequencer(
@@ -378,6 +398,12 @@ func (s *Service) Start(ctx context.Context) error {
 func (s *Service) onSubscriberAdded() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.onSubscriberAddedLocked()
+}
+
+// onSubscriberAddedLocked is onSubscriberAdded with s.mu held, so SubscribeMode
+// can make profile validation, hub subscription and the count one admission.
+func (s *Service) onSubscriberAddedLocked() {
 	s.subCount++
 	if !s.started || s.stopped || !s.cfg.Enabled || s.subCount != 1 {
 		return
@@ -424,6 +450,7 @@ func (s *Service) onSubscriberRemoved() {
 	if s.subCount != 0 || s.stopped || s.lingerTimer != nil {
 		return
 	}
+	s.lingerDeadline = time.Now().Add(captureLinger)
 	s.lingerTimer = time.AfterFunc(captureLinger, s.onLingerExpired)
 }
 
@@ -434,6 +461,12 @@ func (s *Service) onSubscriberRemoved() {
 func (s *Service) onLingerExpired() {
 	s.mu.Lock()
 	s.lingerTimer = nil
+	s.lingerWindingDown = true
+	defer func() {
+		s.mu.Lock()
+		s.lingerWindingDown = false
+		s.mu.Unlock()
+	}()
 	// No !s.capturing check (2026-07-25 review): the disarm below is the
 	// attended-only guarantee and must run even with capture already down —
 	// otherwise a session whose capture loop died (onCaptureLoopExit clears
@@ -583,6 +616,7 @@ func (s *Service) startCaptureLocked() {
 	}
 	s.captureCancel = cancel
 	s.setCapturingLocked(true)
+	s.captureProfile = s.profile
 	s.captureGen++
 	gen := s.captureGen
 
@@ -874,7 +908,10 @@ func (s *Service) decodeLoop(slots <-chan Slot, sessionTail func() (time.Time, i
 	// calls heard in earlier slots, and dies with the session so no stale
 	// context survives a release/re-acquire (see slotDecoder). Mid-session a
 	// QSY resets it (the dial-moved case below) and delivery gaps advance it.
-	dec := newSlotDecoder(s.profile, s.osdEnabled(), s.log)
+	// The session's profile: a claim cannot change it under a live loop (it
+	// drains this loop first), so one snapshot serves the whole session.
+	p := s.activeProfile()
+	dec := newSlotDecoder(p, s.osdEnabled(), s.log)
 	// Previous delivered slot's boundary + dial, for the omitted-slot advance
 	// and the dropped-QSY context check below. Zero until the session's first
 	// slot arrives.
@@ -890,7 +927,7 @@ func (s *Service) decodeLoop(slots <-chan Slot, sessionTail func() (time.Time, i
 	// changes and so never resets — matching the pre-attribution behaviour.
 	prevDial := 0.0
 	for slot := range slots {
-		ref := s.profile.SlotRefFromTime(slot.StartUTC)
+		ref := p.SlotRefFromTime(slot.StartUTC)
 		txSlot := s.wasTxSlot(ref.StartUTC)
 
 		// A slot whose dial MOVED spans two frequencies, so its decodes cannot be
@@ -1072,11 +1109,11 @@ func (s *Service) decodeLoop(slots <-chan Slot, sessionTail func() (time.Time, i
 
 		var rep OccupancyReport
 		if !txSlot && !unplaceable && !starved {
-			rep = Occupancy(ref, slot.Samples, msgs, s.occCfg, s.profile.SignalWidthHz)
+			rep = Occupancy(ref, slot.Samples, msgs, s.occCfg, p.SignalWidthHz)
 			// Stamp the frequency the audio was actually captured on, so the
 			// report is attributable no matter how late it is consumed.
 			rep.DialMHz = slot.DialMHz
-			rep.Suggested = stickySuggested(rep.Suggested, rep.Occupied, s.occCfg, s.profile.SignalWidthHz, prevTop)
+			rep.Suggested = stickySuggested(rep.Suggested, rep.Occupied, s.occCfg, p.SignalWidthHz, prevTop)
 			if len(rep.Suggested) > 0 {
 				prevTop = rep.Suggested[0]
 			} else {
@@ -1148,9 +1185,10 @@ func (s *Service) emitSessionTail(sessionTail func() (time.Time, int)) {
 		return
 	}
 	start, n := sessionTail()
+	p := s.activeProfile()
 	for i := 0; i < n; i++ {
 		s.evidenceSink(EvidenceSlot{
-			Slot:    s.profile.SlotRefFromTime(start.Add(time.Duration(i) * s.profile.Slot)),
+			Slot:    p.SlotRefFromTime(start.Add(time.Duration(i) * p.Slot)),
 			Outcome: EvidenceCaptureDropped,
 		})
 	}
@@ -1169,25 +1207,26 @@ func (s *Service) emitSessionTail(sessionTail func() (time.Time, int)) {
 // slot's DialTracked would assert a tracking state for an interval nobody
 // measured (review 68514620 P2; dial 0 is the established unknown sentinel).
 func (s *Service) emitOmittedEvidence(prevSlotStart time.Time, slot Slot) (missed int) {
+	p := s.activeProfile()
 	if prevSlotStart.IsZero() {
 		if s.evidenceSink != nil {
 			for i := slot.OmittedBefore; i >= 1; i-- {
 				s.evidenceSink(EvidenceSlot{
-					Slot:    s.profile.SlotRefFromTime(slot.StartUTC.Add(time.Duration(-i) * s.profile.Slot)),
+					Slot:    p.SlotRefFromTime(slot.StartUTC.Add(time.Duration(-i) * p.Slot)),
 					Outcome: EvidenceCaptureDropped,
 				})
 			}
 		}
 		return 0
 	}
-	missed = int(slot.StartUTC.Sub(prevSlotStart).Round(s.profile.Slot)/s.profile.Slot) - 1
+	missed = int(slot.StartUTC.Sub(prevSlotStart).Round(p.Slot)/p.Slot) - 1
 	if missed < 0 {
 		missed = 0
 	}
 	if s.evidenceSink != nil {
 		for i := 1; i <= missed; i++ {
 			s.evidenceSink(EvidenceSlot{
-				Slot:    s.profile.SlotRefFromTime(prevSlotStart.Add(time.Duration(i) * s.profile.Slot)),
+				Slot:    p.SlotRefFromTime(prevSlotStart.Add(time.Duration(i) * p.Slot)),
 				Outcome: EvidenceCaptureDropped,
 			})
 		}
