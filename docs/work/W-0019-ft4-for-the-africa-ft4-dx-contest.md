@@ -1,6 +1,6 @@
 # W-0019 — FT4 for the Africa FT4 DX Contest
 
-**Status:** Open — slices 1–4 shipped 2026-09-10/11 (evidence below); gate G1 met; slice 5 (deploy) and gates G2–G4 pending
+**Status:** Open — slices 1–5 shipped and deployed; gates G1, G2 (AC7 waived for the contest) and G4 met 2026-09-11; G3 waived for the contest, instrumented dummy-load measurement scheduled after the weekend; contest Saturday
 **Selected:** 2026-09-10
 **Outcome:** The operator works the Africa FT4 DX Contest (Saturday 2026-09-12, 15:00–18:00 UTC, 80/40/20 m)
 from Station Manager: FT4 decodes appear in Band Activity on the contest dial frequencies, an operator-initiated
@@ -118,10 +118,21 @@ not need the FT4 decoder and can land now; slice 2 waits for the tagged go-ft8 r
 - **G1 — library.** The FT4 decoder is in a tagged go-ft8 release and pinned; no `replace` directive ships. **Met 2026-09-10:** go-ft8 v0.9.0 (`cb9e03f feat(ft4): add optimized receive decoder`) ships `ft4.DecodeMessages` and the exported timing constants (`SyncStartSeconds = 0.5`, `NominalStartSeconds = 0.452`, `GFSKBT = 1.0`, `WaveformSamples = 60480`); SM builds, vets and passes `internal/ft8` against it unchanged (scratch modfile check before the bump).
 - **G2 — passive RX.** At least 30 minutes of FT4 decodes on 14.080 MHz with DT clustered near zero (the
   nominal-start check from ADR 0080) and AC7 measured. RX only; no rig command beyond the operator's own tuning.
+  **Met 2026-09-11 with AC7 waived** (record entry 34: 1,574 decodes over 166 slots in 30 min, DT median +0.1 s /
+  p95 +0.6 s, 94 % within ±0.5 s, no skipped slot). AC7 **waived for this contest** (operator ruling 2026-09-11):
+  residual risk is the unmeasured live decode p95 (logged only at debug level); the waiver expires with the
+  post-contest instrumentation window that measures it.
 - **G3 — keyed test.** One operator-agreed transmission into a dummy load, audio-only first, then RF; per-occasion
   agreement as always. Records the slot-close-to-first-audio latency (sequencer decision → PTT → first PCM sample),
-  which the admission policy depends on, alongside the decode time from AC7.
-- **G4 — first QSO.** Operator-initiated; the record entry names the partner, band and slot parity.
+  which the admission policy depends on, alongside the decode time from AC7. **Waived for this contest, not
+  passed** (operator ruling 2026-09-11): the run went straight to air (record entry 35: 127 successful live
+  rungs, keyed 5,439–5,472 ms for a 5,039 ms waveform, 0 failures, two transient TX alarms cleared within the
+  second) — strong functional evidence, but the dummy-load / audio-first procedure and the decision → PTT →
+  first-PCM-sample latency remain outstanding; the instrumented dummy-load measurement is scheduled after the
+  weekend.
+- **G4 — first QSO.** Operator-initiated; the record entry names the partner, band and slot parity. **Met
+  2026-09-11:** HB9AKE, 20 m, odd parity, 17:40:22Z — the first of 43 in the run (record entry 35), each filed
+  `MODE=MFSK SUBMODE=FT4` and forwarded to ClubLog, QRZ and SM Cloud without a failure.
 
 If G1 is not met by the evening of Friday 2026-09-11, the contest is worked in WSJT-X with manual entry in the
 Operate view (the fallback in ADR 0080), and W-0019 continues afterwards without the date pressure.
@@ -143,6 +154,9 @@ Operate view (the fallback in ADR 0080), and W-0019 continues afterwards without
   separate post-contest behaviour change requiring its own evidence.
 - AC7's 1.0 s decode budget is accepted as the initial gate; the keyed latency recorded at G3 may tighten or relax
   the admission edge.
+- Ruled 2026-09-11: AC7 and G3 are WAIVED for this contest, not passed — AC7's residual risk is the unmeasured
+  live decode p95, G3's the unmeasured decision → PTT → first-PCM latency and the untaken dummy-load / audio-first
+  procedure; both expire with the instrumented measurements scheduled after the weekend.
 - Ruled 2026-09-10: an FT4 exchange is filed as ADIF's `MODE=MFSK SUBMODE=FT4` pair (ADIF 3.1.5 Submode
   Enumeration); the embedded catalogue, which had promoted FT4, FST4, FST4W, JS8 and Q65 to main modes, was
   corrected as a separate commit before the contest gates (`8701a6de`).
@@ -184,4 +198,8 @@ Operate view (the fallback in ADR 0080), and W-0019 continues afterwards without
   names keeps the daemon bootable) and at QSO submit and update (a contact stored as `MODE=FT4` stays editable
   and heals to the pair on its next edit); the SNR-report rule mirrors the SPA's set, so FST4, FST4W, JS8 and
   Q65 keep empty reports like FT4 and FT8 (a submit matrix over the five, bare and as pairs, plus FT8 and JT65).
+- 2026-09-11 — on air (record entries 34–36): deployed `2.0.0-alpha.2-54-g94506823`; G2 30-minute window
+  1,574 decodes / 166 slots, DT median +0.1 s; first FT4 Call-CQ run 43 QSOs in 30 minutes, 127 rungs, all
+  forwarded; request starvation with a second SPA tab open (consistent with connection-budget exhaustion —
+  one tab for the contest) and the transient TX-alarm timing logged to the inbox for post-contest triage.
 - Contest rules: 2026 SARL Contest Manual v1.1, "The Africa FT4 DX Contest", pp. 45–46.

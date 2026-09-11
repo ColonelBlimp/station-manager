@@ -1235,6 +1235,54 @@ Times UTC.
     zero errors since the restart (re-checked 2026-09-10 09:32Z: still zero across a later boot of
     the same build). Accepted 14:31Z. Finding #3 is closed in full: the guard from entry 31 and
     the presentation ruled in entry 32.
+34. **17:25Z–17:57Z — W-0019 gate G2: passive FT4 reception on 20 m.** Operator deployed
+    `2.0.0-alpha.2-54-g94506823` at 17:25Z (slices 1–4, their review fixes and the day's four SPA fixes:
+    claim gate, label lifetime, greyed-out dial buttons, Operate heading) and opened FT4 on 14.080 MHz.
+    First 52 s: 56 decodes, DT median +0.1 s. Thirty-minute window 17:26:46Z–17:56:46Z, read passively from
+    the decode log: 1,574 decodes over 166 slots (9.5 per slot), all eight FT4 slot-second buckets present
+    (the odd buckets a third of the even ones once the CQ run below began transmitting on odd slots), DT min
+    −0.5 / median +0.1 / p95 +0.6 / max +1.0 s, 1,483 of 1,574 within ±0.5 s, 171 distinct callsigns; no
+    skipped or rejected slot in `smd.log` across the window. PSK Reporter uploaded FT4-labelled batches
+    throughout (label follows WSJT-X practice — an inference, not verified against PSK Reporter). AC7 (live
+    decode p95) is logged only at debug level and was not measured. Decodes landed in 166 of the window's 240
+    slots — the rest were quiet slots or, once the run below began, our own TX slots — and no unexpected
+    scheduler skip or decoder rejection was logged across the window. **AC7 WAIVED for this contest (operator
+    ruling 2026-09-11):** the operator accepts the unmeasured-p95 risk on the strength of the successful live
+    QSO run (entry 35); the waiver expires with the post-contest debug-level instrumentation window. **G2 met
+    on DT and duration, with AC7 waived.**
+35. **17:35Z–18:12Z — W-0019 gates G3 and G4: the first FT4 Call-CQ run, operator-initiated for this
+    occasion.** Operator set the `ft8_display` knobs and restarted `smd` (17:35Z); SM Cloud came up and the
+    evidence sync recovered at 17:39:31Z. The run went straight to air on 14.080 MHz by the operator's
+    decision (the dossier's dummy-load step was not taken), transmitting on the odd FT4 slots
+    (:07.5/:22.5/:37.5/:52.5): 127 rungs transmitted, keyed 5,439–5,472 ms (median 5,455) for a 5,039 ms
+    waveform, truncation 0–1 ms, 0 failed rungs, PO ≈152–160 and ALC 5–9 raw on the meters. 43 QSOs stored
+    17:40:22Z (HB9AKE) to 18:10:07Z (JA3FYC), each filed `MODE=MFSK SUBMODE=FT4` with SNR reports and grid
+    (the last row read back over the API: −4/−9, PM85); forwarded ClubLog 43/43, QRZ 43/43, SM Cloud 86/86
+    (inserts plus stamp-sync updates), 7 PSK Reporter batches. Three answerers fell silent after the six-repeat
+    cap and the sequencer moved to the next live answerer each time. Two transient TX alarms (17:41:28Z,
+    17:53:43Z): the post-unkey check saw the rig still keyed, the backstop re-sent `tx_off`, and the rig
+    reported idle within the same second — one on a first-attempt rung, one on a sixth repeat, so not tied
+    to repeats; inbox note for triage of the confirmation window. Run stopped by the operator 18:11:53Z, TX
+    disarmed 18:11:59Z. The slot-close-to-first-audio latency the dossier asks G3 to record was not
+    instrumented, and nothing here stands in for it: `keyed_ms` measures key-to-unkey duration and the
+    sequencer's `dt_s` ends at the decision point, so neither measures decision → PTT → first PCM sample.
+    **G3 WAIVED for this contest (operator ruling 2026-09-11), not passed:** the 127 successful live rungs are
+    strong functional evidence, while the dummy-load / audio-first procedure and the exact latency remain
+    outstanding; the instrumented dummy-load measurement is scheduled after the weekend. **G4 met: first QSO
+    HB9AKE, 20 m, odd parity.**
+36. **17:45Z–17:50Z — live diagnosis: request starvation with a second SPA tab open, consistent with
+    connection-budget exhaustion.**
+    With a Map tab open beside Operate, `smd.log` showed the daemon's SSE subscriber count — global across its
+    event endpoints — reach six, with stream lifetimes of 11–27 s; the map reported "cannot reach the daemon"
+    exactly when a QSO logged (its refetch) and Band Activity looked unable to keep up with 7.5 s slots. The
+    two tabs together held six streams: the shell's log and rig streams in each tab, the FT8 stream in the
+    Operate tab, and the Map view's own second log stream. The explanation — that six long-lived streams fill a
+    per-host connection cap of about six in the browser on plain HTTP/1.1, so ordinary requests (the map's
+    fetch, enrichment — 23 first-sight lookups in the first minute at 1.5–2.5 s each daemon-side, worked-before,
+    the count) queue behind them — is an inference from this measured incident, not a cited limit; that
+    closing the extra tab restored the map at once is the measured part. Inbox note with four follow-ups: the
+    map reusing the shell's always-on stream, an enrichment concurrency cap, HTTP/2 over TLS (which would lift
+    such a cap — inference, to be verified) longer term, and one-tab guidance until then.
 
 ## Findings
 
