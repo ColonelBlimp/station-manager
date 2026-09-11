@@ -17,9 +17,13 @@
     SEED: the current band's configured FT8 dial plus the data-mode literal,
     the same operating point the FT8 band buttons establish. Derived from
     config, never from a stale snapshot, so the reload rationale stands. The
-    phone direction stays a no-op — phone has no canonical home to establish —
-    and an UNCONFIGURED FT8 (no watering hole for the band) stays the
-    pre-seed no-op too, silently: it is a steady state, not a fault.
+    phone direction stays a no-op — phone has no canonical home to establish.
+    An UNCONFIGURED FT band (no watering hole for the band the rig is on)
+    moves nothing either, but SAYS SO on every entry, naming the bands the
+    table does carry (operator ruling 2026-09-11, replacing the earlier
+    silent no-op; the Rig panel greys those bands out for the same reason),
+    and the exit does not record the phone position as that mode's — the
+    next entry asks again.
 
     Ported from the retired logging SPA (`rigControl.ts` snapshot/restore,
     driven by a LoggingCard $effect). Two things changed in the move:
@@ -44,6 +48,8 @@ import {
     writeSucceeded,
     type RigReportVersions,
     type RigWriteResult,
+    ftBandsWithDial,
+    ftDialBands,
 } from './rig.svelte';
 import { ft8State } from './ft8.svelte';
 import { toasts } from '../ui/toasts.svelte';
@@ -130,6 +136,23 @@ function transmitting(): boolean {
 */
 let unrestored: OpMode | null = null;
 
+// An FT entry that found no dial for the band established nothing: the rig
+// stayed where phone left it. Remembered with the position at that moment so
+// the exit can tell an untouched rig (no snapshot — the next entry asks again,
+// notice included) from one the operator hand-tuned meanwhile (a snapshot,
+// like S10). By VALUE, not by report counter: a hand-tune is what changed the
+// operating point, however it reached the state (operator review 2026-09-11).
+let unestablished: { mode: FtMode; at: OperatingSnapshot } | null = null;
+
+function sameOperatingPoint(a: OperatingSnapshot, b: OperatingSnapshot): boolean {
+    return (
+        a.vfoA === b.vfoA &&
+        a.vfoB === b.vfoB &&
+        a.selectedVfo === b.selectedVfo &&
+        a.liveMode === b.liveMode
+    );
+}
+
 /*
     The seed's sibling of `unrestored`, protecting NULL-ness rather than a
     snapshot: after a seed that could not run (rig refusal, TX in flight), FT8
@@ -212,7 +235,12 @@ async function applySwitch(from: OpMode, to: OpMode): Promise<void> {
     // already where it was about to be sent.
     const here = effective();
 
-    const foreign = from === unrestored || seedNeverRan(from);
+    const untouched =
+        unestablished !== null &&
+        unestablished.mode === from &&
+        sameOperatingPoint(here, unestablished.at);
+    unestablished = null;
+    const foreign = from === unrestored || seedNeverRan(from) || untouched;
     unrestored = null;
     seedRefusedAt = null;
     // Taken FIRST, before anything below moves the rig — and taken even when
@@ -346,10 +374,6 @@ async function applyRestore(to: OpMode, incoming: OperatingSnapshot): Promise<vo
 */
 async function seedFt(mode: FtMode): Promise<void> {
     if (rig.cat !== 'connected') return; // CAT-off FT8 cannot work at all — nothing to establish (operator, 2026-08-06)
-    if (!restoreOnSwitch) return; // the knob's promise: no switch moves a live rig
-    const hz = ftFrequencyFor(mode, rig.band); // the entered mode's own table (ADR 0080)
-    if (hz === undefined) return; // unconfigured: nothing to establish, and no nagging
-
     // FT8 operates on the SELECTED VFO — rig.band derives from it and
     // ft8SelectBand/setFreq route the dial move by it (review c0df1c8a:
     // seeding VFO A under a B selection tunes the wrong dial and then asserts
@@ -359,6 +383,27 @@ async function seedFt(mode: FtMode): Promise<void> {
     const selected = rig.selectedVfo;
     const vfoField = selected === 'B' ? 'vfoB' : ('vfoA' as const);
     const freqOp = selected === 'B' ? 'set_freq_b' : 'set_freq';
+
+    const hz = ftFrequencyFor(mode, rig.band); // the entered mode's own table (ADR 0080)
+    if (hz === undefined) {
+        // Unconfigured: nothing to establish, and the rig is left where it is —
+        // said on EVERY entry, naming the bands that do carry a dial (operator
+        // ruling 2026-09-11, replacing the earlier silent no-op: the greyed-out
+        // band buttons are the other half of the same rule). A notice, never a
+        // jump to a default band the operator did not choose. Recorded as
+        // unestablished: the exit must not snapshot the phone position as this
+        // mode's — that would make the next entry a silent restore, and the
+        // notice a one-off (operator review 2026-09-11); a hand-tune meanwhile
+        // still earns a snapshot (see `unestablished`).
+        unestablished = { mode, at: effective() };
+        toasts.info(unconfiguredNotice(mode));
+        return;
+    }
+    // The knob's promise: no switch moves a live rig. Checked AFTER the dial
+    // lookup, because the notice is about what the table lacks, not about a
+    // move — with the knob off an unsupported band still says so on every
+    // entry, and still leaves no snapshot behind (operator review 2026-09-11).
+    if (!restoreOnSwitch) return;
     // No dial op for the operating VFO means no dial to establish — and
     // without the dial, the mode assert alone would be exactly the
     // wrong-frequency data mode.
@@ -400,6 +445,23 @@ async function seedFt(mode: FtMode): Promise<void> {
         }
         held.mode = { value: literal, seq };
     }
+}
+
+// The entry notice for a band with no dial in the mode's table. Three truths,
+// told apart (operator review 2026-09-11): the table carries bands the station
+// operates (name them); it carries bands the station does not list (say so —
+// the band buttons cannot offer them); it is empty.
+function unconfiguredNotice(mode: FtMode): string {
+    const name = mode.toUpperCase();
+    const all = ftDialBands(mode);
+    if (all.length === 0) {
+        return `No ${name} frequencies are configured — the rig was left where it is.`;
+    }
+    const usable = ftBandsWithDial(mode);
+    if (usable.length > 0) {
+        return `No ${name} frequency configured for ${rig.band} — ${name} is set up on ${usable.join(', ')}; pick one of those.`;
+    }
+    return `No ${name} frequency configured for ${rig.band} — ${name} is set up on ${all.join(', ')}, none of them among this station's operating bands.`;
 }
 
 /*
@@ -449,6 +511,7 @@ function effective(): OperatingSnapshot {
 
 /** Test seam — drop both snapshots and re-arm the knob. */
 export function resetModeRestore(): void {
+    unestablished = null;
     snapshots.phone = null;
     snapshots.ft8 = null;
     snapshots.ft4 = null;

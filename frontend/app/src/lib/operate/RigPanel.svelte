@@ -17,6 +17,8 @@
         hasOp,
         type RigWriteResult,
         modeOptionLabel,
+        ftFrequencyFor,
+        type FtMode,
     } from './rig.svelte';
     import { hideTile } from './layout.svelte';
     import { focusCallsign } from './state.svelte';
@@ -35,8 +37,24 @@
         requiresCat?: boolean;
         /** The mode named in the CAT-required notice (FT8 or FT4, ADR 0080). */
         modeLabel?: string;
+        /** The FT profile whose dial table gates the band buttons: a band with
+         *  no dial in it is disabled with a tooltip rather than offered to fail
+         *  (operator ruling 2026-09-11). Absent for Phone/CW — every band stays
+         *  selectable there (the rig's band stack recalls it). */
+        ftMode?: FtMode;
     }
-    let { pickBand = selectBand, requiresCat = false, modeLabel = 'FT8' }: Props = $props();
+    let {
+        pickBand = selectBand,
+        requiresCat = false,
+        modeLabel = 'FT8',
+        ftMode = undefined,
+    }: Props = $props();
+
+    // No dial for this band in the FT mode's table: the button is disabled and
+    // says why. Phone/CW (no ftMode) never disables a band for this reason.
+    function noDialFor(band: string): boolean {
+        return ftMode !== undefined && ftFrequencyFor(ftMode, band) === undefined;
+    }
 
     // Operator-friendly mode names (sidebands, not families — matches the
     // shipping SPA's baseModes). resolveModeAndSubmode maps them to canonical
@@ -202,6 +220,7 @@
         <span class="mb-1 block text-sm font-medium text-ink">Band</span>
         <div class="flex flex-wrap gap-1">
             {#each bandOptions as b (b)}
+                {@const noDial = noDialFor(b)}
                 <button
                     type="button"
                     class="min-w-11 cursor-pointer rounded-md border px-2 py-1 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 {rig.band ===
@@ -209,7 +228,8 @@
                         ? 'border-focus bg-focus text-white'
                         : 'border-line text-ink hover:bg-surface-muted'}"
                     aria-pressed={rig.band === b}
-                    disabled={catMissing}
+                    disabled={catMissing || noDial}
+                    title={noDial ? `No ${modeLabel} frequency configured for ${b}` : undefined}
                     onclick={() => onPickBand(b)}
                 >
                     {b}

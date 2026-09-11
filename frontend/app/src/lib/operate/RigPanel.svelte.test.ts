@@ -14,6 +14,8 @@ import {
     setModeMappings,
     setRigCaps,
     setFtProfileLabel,
+    setFt4Frequencies,
+    setFt8Frequencies,
 } from './rig.svelte';
 import { toasts } from '../ui/toasts.svelte';
 
@@ -175,5 +177,50 @@ describe('live Mode select labels', () => {
         setFtProfileLabel('');
         await vi.waitFor(() => expect(option('DATA-U · FT8')).toHaveProperty('value', 'DATA-U'));
         expect(screen.queryByRole('option', { name: 'DATA-U · FT4' })).toBeNull();
+    });
+});
+
+// Operator ruling 2026-09-11: in an FT mode a band with no dial in that mode's
+// table is greyed out with a tooltip — never offered to fail with a toast —
+// while Phone/CW keeps every band (the rig's band stack recalls it).
+describe('band buttons and the FT dial tables', () => {
+    beforeEach(() => {
+        rig.cat = 'connected';
+        setFt8Frequencies({ '20m': 14_074_000, '40m': 7_074_000, '17m': 18_100_000 });
+        setFt4Frequencies({ '20m': 14_080_000, '40m': 7_047_500, '80m': 3_576_000 });
+    });
+
+    it('FT4: greys out a band with no FT4 dial and says why; a band with one stays live', () => {
+        render(RigPanel, { props: { requiresCat: true, modeLabel: 'FT4', ftMode: 'ft4' } });
+        const b17 = screen.getByRole('button', { name: '17m' });
+        expect(b17).toBeDisabled();
+        expect(b17).toHaveAttribute('title', 'No FT4 frequency configured for 17m');
+        expect(screen.getByRole('button', { name: '20m' })).toBeEnabled();
+        expect(screen.getByRole('button', { name: '80m' })).toBeEnabled();
+    });
+
+    it('FT8: gates on its own table', () => {
+        render(RigPanel, { props: { requiresCat: true, modeLabel: 'FT8', ftMode: 'ft8' } });
+        expect(screen.getByRole('button', { name: '17m' })).toBeEnabled();
+        const b80 = screen.getByRole('button', { name: '80m' });
+        expect(b80).toBeDisabled();
+        expect(b80).toHaveAttribute('title', 'No FT8 frequency configured for 80m');
+    });
+
+    it('a dial table that arrives after the panel mounted enables its bands (config lands after boot)', async () => {
+        setFt4Frequencies({});
+        render(RigPanel, { props: { requiresCat: true, modeLabel: 'FT4', ftMode: 'ft4' } });
+        expect(screen.getByRole('button', { name: '20m' })).toBeDisabled();
+
+        setFt4Frequencies({ '20m': 14_080_000 });
+        await vi.waitFor(() => expect(screen.getByRole('button', { name: '20m' })).toBeEnabled());
+        expect(screen.getByRole('button', { name: '17m' })).toBeDisabled();
+    });
+
+    it('Phone/CW: every band stays selectable', () => {
+        render(RigPanel, { props: {} });
+        for (const band of ['80m', '17m', '20m']) {
+            expect(screen.getByRole('button', { name: band })).toBeEnabled();
+        }
     });
 });

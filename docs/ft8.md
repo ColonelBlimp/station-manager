@@ -239,8 +239,11 @@ CAT-live re-tune is opt-out** via the daemon config `restore_rig_on_mode_switch`
 `manualState` restore is unaffected). Editable on the **config SPA's General tab**
 (2026-06-26); the daemon only stores/serves the flag, the behaviour is SPA-side.
 
-- **Main-Freq band buttons** — one button per configured FT8 band; clicking
-  tunes the operating VFO to that band's dial freq and, **when CAT is live, also
+- **Main-Freq band buttons** — one button per operating band; in an FT mode a band
+  with no dial in that profile's table is **disabled with a tooltip** rather than
+  offered (operator ruling 2026-09-11; Phone/CW keeps every band), and entering the
+  mode on such a band moves nothing and shows a notice naming the configured bands.
+  Clicking a live button tunes the operating VFO to that band's dial freq and, **when CAT is live, also
   asserts the rig's FT8 mode** (`setFreq` + `setMode(configState.bridge.ft8Mode)`),
   so picking a band guarantees data mode (e.g. `USB-D` on the IC-7300, `DATA-U`
   on the FTdx10) rather than leaving the rig in whatever mode it was. `ft8Mode`

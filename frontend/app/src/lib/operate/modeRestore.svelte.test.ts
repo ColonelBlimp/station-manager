@@ -41,9 +41,10 @@
           seed the rig refused or TX blocked says so, and never lets the
           phone position masquerade as FT8's state — the next entry tries
           again, unless I really operated FT8 in between (then THAT state is
-          kept). A band with no configured FT8 frequency stays the
-          pre-feature no-op, silently — an unconfigured FT8 is a steady
-          state, not a fault to nag about.
+          kept). A band with no configured FT8 frequency moves nothing
+          and SAYS SO once per entry, naming the bands that carry a dial
+          (operator ruling 2026-09-11, replacing the earlier silent no-op:
+          the Rig panel greys those bands out for the same reason).
           AMENDS A3/A4: their "first switch re-tunes nothing" now covers the
           phone direction (no canonical home to establish) and an
           unconfigured FT8 only. The reload rationale survives — a seed goes
@@ -118,6 +119,7 @@ import {
     setFt8Frequencies,
     setFt4Frequencies,
     setFt8Mode,
+    setOperatingBands,
 } from './rig.svelte';
 import { ft8State, resetFt8ForTests } from './ft8.svelte';
 import { toasts } from '../ui/toasts.svelte';
@@ -151,8 +153,9 @@ beforeEach(() => {
     });
     setRigCaps({ ops: [...ALL_OPS], tune: false, rigModes: [] });
     // The R rules run with an UNCONFIGURED FT8 (no watering holes) — the
-    // no-freq seed path is a designed no-op, so their fixtures see exactly the
-    // pre-A25 behaviour. The S rules configure FT8 per test via configureFt8().
+    // no-freq seed path moves nothing (it only raises the entry notice, which
+    // the R rules do not assert on), so their fixtures see exactly the
+    // pre-A25 commands. The S rules configure FT8 per test via configureFt8().
     setFt8Frequencies({});
     setFt4Frequencies({});
     setFt8Mode('');
@@ -271,8 +274,9 @@ describe('operating-state restore across a mode switch', () => {
     // A3 — and A4, which is the same rule seen after a reload: the module
     // starts with no snapshots, exactly as resetModeRestore leaves it.
     // Since A25 this holds only because the harness leaves FT8 UNCONFIGURED
-    // (no watering holes to seed); a configured boot seeds instead — S1. The
-    // phone direction stays a no-op either way — S3b.
+    // (no watering holes to seed — nothing is commanded, only the entry notice
+    // fires); a configured boot seeds instead — S1. The phone direction stays
+    // a no-op either way — S3b.
     it('R3: commands nothing on the first switch into a mode this session', async () => {
         livePhone();
 
@@ -989,23 +993,98 @@ describe('operating-state restore across a mode switch', () => {
         expect(freqsSent()).not.toContain('14074000');
     });
 
-    // S3 — NO CONFIGURED FREQUENCY = THE PRE-A25 NO-OP, silently and stably:
-    // no commands, no toast (an unconfigured FT8 is a steady state, and a
-    // nag on every entry would train the operator to ignore toasts), and no
-    // retry loop — the exit snapshot takes over exactly as before A25.
-    it('S3: stays the silent pre-feature no-op when the band has no FT8 frequency', async () => {
+    // S3 — NO CONFIGURED FREQUENCY FOR THE BAND: no commands, one NOTICE per
+    // entry naming the bands the table carries, and no snapshot taken on the
+    // exit (the entry established nothing), so the next entry asks again —
+    // operator ruling 2026-09-11, replacing the earlier silent no-op.
+    it('S3: moves nothing on a band with no FT8 frequency, and says so naming the configured bands', async () => {
         const info = vi.spyOn(toasts, 'info');
         const err = vi.spyOn(toasts, 'error');
-        livePhone(); // harness leaves FT8 unconfigured
-        await onOperatingModeChange('phone', 'ft8');
-        await onOperatingModeChange('ft8', 'phone');
-        sent = [];
+        setFt8Frequencies({ '40m': 7_074_000, '80m': 3_573_000 }); // 20m deliberately absent
+        livePhone(); // on 20m
 
         await onOperatingModeChange('phone', 'ft8');
 
         expect(sent).toEqual([]);
-        expect(info).not.toHaveBeenCalled();
+        expect(info).toHaveBeenCalledTimes(1);
+        expect(info).toHaveBeenCalledWith(
+            'No FT8 frequency configured for 20m — FT8 is set up on 80m, 40m; pick one of those.'
+        );
         expect(err).not.toHaveBeenCalled();
+    });
+
+    it('S3-FT4: the same notice for FT4, naming the bands its own table carries', async () => {
+        const info = vi.spyOn(toasts, 'info');
+        setFt4Frequencies({ '20m': 14_080_000 });
+        livePhone();
+        rig.band = '17m';
+
+        await onOperatingModeChange('phone', 'ft4');
+
+        expect(sent).toEqual([]);
+        expect(info).toHaveBeenCalledWith(
+            'No FT4 frequency configured for 17m — FT4 is set up on 20m; pick one of those.'
+        );
+    });
+
+    it('S3c: the notice returns on every entry — enter, leave, re-enter: two notices, no commands', async () => {
+        const info = vi.spyOn(toasts, 'info');
+        setFt4Frequencies({ '20m': 14_080_000 });
+        livePhone();
+        rig.band = '17m';
+
+        await onOperatingModeChange('phone', 'ft4');
+        await onOperatingModeChange('ft4', 'phone');
+        await onOperatingModeChange('phone', 'ft4');
+
+        expect(sent).toEqual([]);
+        expect(info).toHaveBeenCalledTimes(2);
+    });
+
+    it('S3e: the restore opt-out does not silence the notice — knob off, enter, leave, re-enter: two notices, no commands', async () => {
+        const info = vi.spyOn(toasts, 'info');
+        setFt4Frequencies({ '20m': 14_080_000 });
+        setRestoreOnModeSwitch(false);
+        livePhone();
+        rig.band = '17m';
+
+        await onOperatingModeChange('phone', 'ft4');
+        await onOperatingModeChange('ft4', 'phone');
+        await onOperatingModeChange('phone', 'ft4');
+
+        expect(sent).toEqual([]);
+        expect(info).toHaveBeenCalledTimes(2);
+        expect(info).toHaveBeenLastCalledWith(
+            'No FT4 frequency configured for 17m — FT4 is set up on 20m; pick one of those.'
+        );
+    });
+
+    it("S3d: dials the station does not operate are not 'none configured'", async () => {
+        const info = vi.spyOn(toasts, 'info');
+        setFt4Frequencies({ '20m': 14_080_000, '40m': 7_047_500 });
+        setOperatingBands(['17m', '15m']);
+        livePhone();
+        rig.band = '17m';
+
+        await onOperatingModeChange('phone', 'ft4');
+
+        expect(sent).toEqual([]);
+        expect(info).toHaveBeenCalledWith(
+            "No FT4 frequency configured for 17m — FT4 is set up on 40m, 20m, none of them among this station's operating bands."
+        );
+    });
+
+    it('S3-FT4b: a plain notice when no FT4 dial is configured at all', async () => {
+        const info = vi.spyOn(toasts, 'info');
+        setFt4Frequencies({});
+        livePhone();
+
+        await onOperatingModeChange('phone', 'ft4');
+
+        expect(sent).toEqual([]);
+        expect(info).toHaveBeenCalledWith(
+            'No FT4 frequencies are configured — the rig was left where it is.'
+        );
     });
 
     // S3b — THE PHONE DIRECTION HAS NO SEED: there is no canonical phone home

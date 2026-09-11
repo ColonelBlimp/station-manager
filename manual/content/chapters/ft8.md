@@ -28,7 +28,9 @@ headed **Operate · FT8** or **Operate · FT4** for the mode you chose.
 The daemon runs one of the two at a time. If you leave FT8 in the middle of a contact and open FT4 straight
 away, a notice explains that FT8 is still winding down and counts down to the retry; it clears by itself
 once the earlier session has ended. FT4 band buttons carry only the frequencies Station Manager has a
-citation for (80, 40 and 20 m); add others under `ft8.ft4_frequencies` in `config.json`.
+citation for (80, 40 and 20 m); the other bands are greyed out, with the reason as a tooltip, and opening
+FT4 while the rig sits on one of them leaves the rig where it is and tells you which bands are set up.
+Add others under `ft8.ft4_frequencies` in `config.json`; FT8 works the same way from `ft8.ft8_frequencies`.
 
 ### Before you transmit: set your rig's time-out timer
 

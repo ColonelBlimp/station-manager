@@ -95,6 +95,7 @@
                     pickBand={(band: string) =>
                         ft8SelectBand(band, router.mode === 'ft4' ? 'ft4' : 'ft8')}
                     modeLabel={router.mode === 'ft4' ? 'FT4' : 'FT8'}
+                    ftMode={router.mode === 'ft4' ? 'ft4' : 'ft8'}
                     requiresCat
                 />
             {/if}

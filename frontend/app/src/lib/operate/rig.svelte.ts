@@ -700,7 +700,7 @@ export function nudgeFreqJump(dir: 1 | -1): Promise<RigWriteResult> {
 // FT8 watering-hole frequencies (config ft8_frequencies, band→Hz — the WSJT-X FT8
 // dial freqs plus operator overrides, merged daemon-side). Injected once at boot;
 // the FT8 rig card's band buttons jump straight to these.
-let ft8Frequencies: Record<string, number> = {};
+let ft8Frequencies: Record<string, number> = $state({});
 
 export function setFt8Frequencies(f: Record<string, number>): void {
     ft8Frequencies = f;
@@ -709,7 +709,7 @@ export function setFt8Frequencies(f: Record<string, number>): void {
 // FT4's own dial table (config ft4_frequencies, ADR 0080): the daemon ships only
 // the three cited Africa FT4 DX Contest bands and the operator may add more. Read
 // through the mode, never mixed with the FT8 table.
-let ft4Frequencies: Record<string, number> = {};
+let ft4Frequencies: Record<string, number> = $state({});
 
 export function setFt4Frequencies(f: Record<string, number>): void {
     ft4Frequencies = f;
@@ -726,6 +726,27 @@ function ftTable(mode: FtMode): Record<string, number> {
  *  reads it by the mode being entered. */
 export function ftFrequencyFor(mode: FtMode, band: string): number | undefined {
     return ftTable(mode)[band];
+}
+
+// The operator's bands that carry a dial in the mode's table, in the band
+// list's order — what the Rig panel enables in that mode and what the entry
+// notice names when the current band is not among them (operator ruling
+// 2026-09-11: a band with no dial is greyed out, never offered to fail).
+export function ftBandsWithDial(mode: FtMode): string[] {
+    return operatingBands().filter((b) => ftFrequencyFor(mode, b) !== undefined);
+}
+
+// Every band the mode's dial table carries, whether or not the station operates
+// it, in the canonical band order (unknown names last, as entered). The entry
+// notice tells the two apart: a table with dials the station does not list is
+// not an empty table (operator review 2026-09-11).
+export function ftDialBands(mode: FtMode): string[] {
+    const table = mode === 'ft4' ? ft4Frequencies : ft8Frequencies;
+    const rank = (b: string) => {
+        const i = DEFAULT_BANDS.indexOf(b);
+        return i === -1 ? DEFAULT_BANDS.length : i;
+    };
+    return Object.keys(table).sort((a, b) => rank(a) - rank(b));
 }
 
 // The rig's own mode literal for FT8 (config bridge.ft8_mode — rigdef default,
