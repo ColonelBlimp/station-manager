@@ -709,12 +709,26 @@ export function setFt8SessionDefaults(answerMode: string): void {
 
 const txUnavailable: Ft8TxResult = { ok: false, message: 'FT transmit is unavailable.' };
 
-/** The refusal every TX-starting intent gets until the profile claim stands. */
-function notClaimed(): Ft8TxResult {
-    return {
-        ok: false,
-        message: `${ft8State.profile} is not claimed yet — wait for the view to connect.`,
-    };
+/** The refusal a TX-starting intent gets until the claimed profile's stream is
+ *  OPEN, or null when it may proceed: before the claim, and again while the
+ *  stream is down. The daemon knows one profile and arms whichever it is on;
+ *  a restart puts it back on FT8, and only a stream it admitted on our
+ *  `?mode=` proves it has not moved (a claim is refused busy while that
+ *  stream is subscribed). Disarm and abandon never wait (codex 67cc1b96 P1). */
+function txStartRefusal(): Ft8TxResult | null {
+    if (!ft8State.claimed) {
+        return {
+            ok: false,
+            message: `${ft8State.profile} is not claimed yet — wait for the view to connect.`,
+        };
+    }
+    if (!ft8State.connected) {
+        return {
+            ok: false,
+            message: `${ft8State.profile} stream is reconnecting — wait for it before transmitting.`,
+        };
+    }
+    return null;
 }
 
 /*
@@ -788,8 +802,10 @@ export async function armTx(armed: boolean): Promise<Ft8ArmResult> {
     }
     // Arming starts TX; disarming never does, and must stay available after an
     // established claim even while the stream is down (ADR 0080).
-    if (armed && !ft8State.claimed) {
-        return { status: 'failed', kind: 'refused', message: notClaimed().message };
+    if (armed) {
+        const refusal = txStartRefusal();
+        if (refusal !== null)
+            return { status: 'failed', kind: 'refused', message: refusal.message };
     }
     const watch = armArmWatch(armed);
     const out = await txActions.arm(armed);
@@ -822,7 +838,8 @@ export function callCq(
     opFreqMHz: number,
     parity: 'next' | 'even' | 'odd'
 ): Promise<Ft8TxResult> {
-    if (!ft8State.claimed) return Promise.resolve(notClaimed());
+    const refusal = txStartRefusal();
+    if (refusal !== null) return Promise.resolve(refusal);
     return txActions
         ? txActions.callCq(offsetHz, opFreqMHz, parity, ft8State.answerMode)
         : Promise.resolve(txUnavailable);
@@ -836,14 +853,16 @@ export function callCq(
  *  whether a run follows and how it selects. */
 export function answerCq(a: Ft8AnswerArgs): Promise<Ft8TxResult> {
     if (!txActions) return Promise.resolve(txUnavailable);
-    if (!ft8State.claimed) return Promise.resolve(notClaimed());
+    const refusal = txStartRefusal();
+    if (refusal !== null) return Promise.resolve(refusal);
     return txActions.answerCq({ ...a, answerMode: ft8State.answerMode });
 }
 
 /** Start working a station calling us from a clicked directed-at-me decode. */
 export function workCaller(a: Ft8WorkArgs): Promise<Ft8TxResult> {
     if (!txActions) return Promise.resolve(txUnavailable);
-    if (!ft8State.claimed) return Promise.resolve(notClaimed());
+    const refusal = txStartRefusal();
+    if (refusal !== null) return Promise.resolve(refusal);
     return txActions.workCaller({ ...a, answerMode: ft8State.answerMode });
 }
 
@@ -912,8 +931,22 @@ export const ft8Link: Ft8EventHandlers = {
     // EventSource fires `error` on transient drops (browser auto-retries) and on
     // terminal failure; either way frames aren't flowing. The latest data stays
     // on screen — stale beats blank, and the next slot refreshes on reconnect.
-    onError(): void {
+    // A TERMINAL error is different (codex 67cc1b96 P1): the browser will not
+    // retry, and the one non-200 this stream can meet is the daemon refusing
+    // `?mode=` — it is on the other profile now (a restart puts it back on FT8;
+    // another claim won while we were down). Repeating the URL cannot recover
+    // that; the claim can. So the stream is closed, the claim dropped, and the
+    // profile claimed again: a grant reopens the stream, a refusal shows the
+    // banner. Two tabs contending for different profiles converge through the
+    // busy refusal (the first subscription to land holds the capture).
+    onError(terminal: boolean): void {
         ft8State.connected = false;
+        if (!terminal || closeFn === null) return;
+        closeFn();
+        closeFn = null;
+        claimAwaitingOpen = false;
+        ft8State.claimed = false;
+        void startFt8(activeMode);
     },
 
     onOccupancy(p: OccupancyPayload): void {
@@ -1170,6 +1203,8 @@ let startGen = 0;
 let reclaimTimer: ReturnType<typeof setTimeout> | null = null;
 // A stream was just opened on a claim; its first open event establishes the claim.
 let claimAwaitingOpen = false;
+// The profile the view last asked for — what a terminal stream error re-claims.
+let activeMode: FtProfileName = 'ft8';
 
 export function setFt8Claimer(fn: Claimer | null): void {
     claimer = fn;
@@ -1188,6 +1223,7 @@ function clearReclaim(): void {
  *  one (tests, older wiring) the stream opens directly on the FT8 profile. */
 export async function startFt8(mode: FtProfileName = 'ft8'): Promise<void> {
     if (closeFn !== null || opener === null) return;
+    activeMode = mode;
     const gen = ++startGen;
     if (claimer === null) {
         // No claim seam wired (tests, older wiring): the stream opens directly and
@@ -1279,8 +1315,10 @@ export function resetFt8ForTests(): void {
     startGen++;
     clearReclaim();
     claimAwaitingOpen = false;
+    activeMode = 'ft8';
     ft8State.claimRefusal = null;
     ft8State.claimed = false;
+    ft8State.connected = false;
     ft8State.profile = 'FT8';
     loggedSink = null;
     sessionEndedSink = null;

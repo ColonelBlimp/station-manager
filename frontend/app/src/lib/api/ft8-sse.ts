@@ -171,8 +171,10 @@ export interface AudioLevelPayload {
 
 export interface Ft8EventHandlers {
     onOpen: () => void;
-    /** Transient drop (browser auto-retries) or terminal — either way, not carrying frames. */
-    onError: () => void;
+    /** Not carrying frames. `terminal` is true when the browser has given the
+     *  stream up (readyState CLOSED — a non-200 answer such as the daemon
+     *  refusing `?mode=`), false on a transient drop it retries itself. */
+    onError: (terminal: boolean) => void;
     onOccupancy: (p: OccupancyPayload) => void;
     onDecode: (p: DecodeReport) => void;
     onTx: (p: TxPayload) => void;
@@ -310,6 +312,9 @@ const isAudioLevel = (v: unknown): v is AudioLevelPayload =>
     isPlainObject(v) && typeof v.peak_dbfs === 'number' && typeof v.rms_dbfs === 'number';
 
 const SSE_URL = '/v1/ft8/events';
+// EventSource.CLOSED, spelled out: the constant lives on the constructor and a
+// stubbed EventSource need not carry it (same as sse-reviving.ts).
+const CLOSED = 2;
 
 /**
  * Open the FT8 event stream and wire the handlers. Returns a close function;
@@ -327,7 +332,9 @@ export function openFt8Events(handlers: Ft8EventHandlers, mode?: string): () => 
     const url = mode ? `${SSE_URL}?mode=${encodeURIComponent(mode)}` : SSE_URL;
     return openReviving(url, (src) => {
         src.addEventListener('open', () => handlers.onOpen());
-        src.addEventListener('error', () => handlers.onError());
+        // CLOSED at the error means the browser will not retry (ADR 0080: the
+        // daemon answered the subscription with a refusal); CONNECTING means it will.
+        src.addEventListener('error', () => handlers.onError(src.readyState === CLOSED));
 
         src.addEventListener('ft8-occupancy', (ev: MessageEvent<string>) => {
             const p = decodeFrame(ev.data, 'ft8-occupancy', isOccupancy, warn);

@@ -58,6 +58,7 @@ function armReady(over: Partial<Ft8TxActions> = {}): void {
 beforeEach(() => {
     resetFt8ForTests();
     ft8State.claimed = true; // the profile claim stands (ADR 0080); the gate is pinned in ft8.svelte.test.ts
+    ft8State.connected = true; // …and its stream is open (TX-starting intents need both)
     resetFt8EnrichForTests();
     resetToasts();
     _resetDaemonClockForTests();

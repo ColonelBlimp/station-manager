@@ -28,6 +28,7 @@ beforeEach(() => {
     rig.freq = '14.074.000';
     ft8State.tx.armed = false; // → "Enable TX"
     ft8State.claimed = true; // …and only once the profile claim stands (ADR 0080)
+    ft8State.connected = true; // …with its stream open (a claim alone can be stale)
 });
 
 async function clickEnable(): Promise<void> {
@@ -111,6 +112,19 @@ describe('Enable TX waits for the profile claim (ADR 0080)', () => {
         ft8State.claimed = false;
         ft8State.tx.armed = true;
         render(Ft8Operate);
+        flushSync();
+        expect(screen.getByRole('button', { name: 'Disable TX' })).toBeEnabled();
+    });
+
+    // codex 67cc1b96 P1: a claim outlives its stream, but the daemon may be on
+    // the other profile by the time the stream is back — Enable waits for it.
+    it('is disabled while the claimed stream is down; Disable TX stays enabled while armed', () => {
+        ft8State.claimed = true;
+        ft8State.connected = false;
+        render(Ft8Operate);
+        flushSync();
+        expect(screen.getByRole('button', { name: 'Enable TX' })).toBeDisabled();
+        ft8State.tx.armed = true;
         flushSync();
         expect(screen.getByRole('button', { name: 'Disable TX' })).toBeEnabled();
     });

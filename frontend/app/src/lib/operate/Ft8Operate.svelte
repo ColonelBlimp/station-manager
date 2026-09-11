@@ -114,7 +114,10 @@
     // armed, claim or no claim — a transient SSE loss must not trap TX armed. Call
     // CQ needs armed + idle + a known offset & dial freq + our callsign. Abandon
     // drops any active sequenced session.
-    const canArm = $derived(catLive && (ft8State.claimed || tx.armed));
+    // Enable needs the claimed profile's stream OPEN — a claim alone can be stale
+    // once the stream is down (the daemon may be on the other profile again);
+    // Disable stays available while armed regardless (codex 67cc1b96 P1).
+    const canArm = $derived(catLive && ((ft8State.claimed && ft8State.connected) || tx.armed));
     const canSend = $derived(
         tx.armed &&
             !tx.transmitting &&

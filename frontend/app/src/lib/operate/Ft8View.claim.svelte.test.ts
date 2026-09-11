@@ -201,6 +201,48 @@ describe('Ft8View — stop paths through a refused claim', () => {
         expect(ft8State.claimed).toBe(false);
     });
 
+    it('a stop action resolving after the view is gone re-claims nothing (codex 67cc1b96 P2)', async () => {
+        const d: Daemon = { busy: false, inFlight: false, session: false, armed: true };
+        wireDaemon(d, log);
+        let release: (() => void) | null = null;
+        setFt8TxActions({
+            arm: (armed) => {
+                log.push(`arm:${armed}`);
+                return new Promise((resolve) => {
+                    release = () => {
+                        d.armed = armed;
+                        resolve({ kind: 'accepted' });
+                    };
+                });
+            },
+            callCq: () => Promise.resolve({ ok: true, message: '' }),
+            answerCq: () => Promise.resolve({ ok: true, message: '' }),
+            workCaller: () => Promise.resolve({ ok: true, message: '' }),
+            stopAutoWork: () => Promise.resolve({ ok: true, message: '' }),
+            bagAnswerer: () => Promise.resolve({ ok: true, message: '' }),
+            unbagAnswerer: () => Promise.resolve({ ok: true, message: '' }),
+            resumeDrain: () => Promise.resolve({ ok: true, message: '' }),
+            pickAnswerer: () => Promise.resolve({ ok: true, message: '' }),
+            abandon: () => Promise.resolve({ ok: true, message: '' }),
+            skip: () => Promise.resolve({ ok: true, message: '' }),
+            next: () => Promise.resolve({ ok: true, message: '' }),
+        });
+        const view = render(Ft8View);
+
+        const banner = await screen.findByTestId('ft8-claim-banner');
+        await fireEvent.click(within(banner).getByRole('button', { name: 'Disable TX' }));
+        await vi.waitFor(() => expect(release).not.toBeNull());
+
+        view.unmount(); // the operator left for Phone/CW while the daemon was disarming
+        release!();
+        await Promise.resolve();
+        await Promise.resolve();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(log).toEqual(['claim:ft4', 'arm:false']);
+        expect(opened).toEqual([]);
+        expect(ft8State.claimed).toBe(false);
+    });
+
     it('ft8_profile_busy: no stop path — another subscriber holds the capture', async () => {
         wireDaemon({ busy: true, inFlight: false, session: false, armed: false }, log);
         render(Ft8View);

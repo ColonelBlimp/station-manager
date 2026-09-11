@@ -20,9 +20,14 @@
     // The mount claims the router's profile first (ADR 0080): the view is keyed
     // on router.mode, so FT8 ↔ FT4 remounts through this exact stop → claim →
     // start sequence.
+    // `alive` gates the banner's stop-then-reclaim continuation: a daemon action
+    // that resolves after this view is gone must not claim and open a stream
+    // nobody will close (codex 67cc1b96 P2).
+    let alive = true;
     onMount(() => {
         void startFt8(router.mode === 'ft4' ? 'ft4' : 'ft8');
         return () => {
+            alive = false;
             stopFt8();
             ft8EnrichState.clear();
         };
@@ -81,6 +86,7 @@
                 toasts.error(r.message);
                 return;
             }
+            if (!alive) return; // the view left while the daemon acted: nothing to re-open
             await reclaimFt8(claimMode);
         } finally {
             acting = false;

@@ -199,6 +199,14 @@ release uses gonum.
 > active (the daemon's abandon leaves TX armed, so the abandon path disarms too), each
 > acting on the daemon and re-claiming at once — and reads the slot clock (15 s / 7.5 s),
 > parity and dial table (`ft8_frequencies` / `ft4_frequencies`) from the active profile.
+> The claim is established by the stream's first open and outlives a transient drop, but
+> TX-starting intents (Enable TX, Call CQ, answer, work) need that stream **open**: the
+> daemon knows one profile and arms whichever it is on, and only a stream it admitted on
+> our `?mode=` proves it has not moved (disarm and abandon never wait). A stream the
+> browser gives up on — the daemon refusing `?mode=` after a restart put it back on FT8,
+> or after another claim won while we were down — is closed and the profile claimed
+> again rather than its URL repeated: a grant reopens the stream, a refusal shows the
+> banner.
 
 The sidebar's **Operate** item chooses Phone/CW, FT8 or FT4; the choice is
 persisted to `localStorage` (survives reload). The two FT modes render `Ft8View`,

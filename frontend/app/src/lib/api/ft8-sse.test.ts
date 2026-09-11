@@ -9,6 +9,7 @@ class FakeEventSource {
     static instances: FakeEventSource[] = [];
     listeners = new Map<string, ((ev: MessageEvent<string>) => void)[]>();
     closed = false;
+    readyState = 0; // CONNECTING, as a real one starts
 
     constructor(public url: string) {
         FakeEventSource.instances.push(this);
@@ -98,6 +99,16 @@ describe('openFt8Events', () => {
 
         src.emit('error');
         expect(h.onError).toHaveBeenCalledOnce();
+        expect(h.onError).toHaveBeenCalledWith(false); // CONNECTING: the browser retries
+    });
+
+    it('reports a terminal error — the browser gave the stream up — as such', () => {
+        const h = makeHandlers();
+        openFt8Events(h, 'ft4');
+        const src = FakeEventSource.instances[0];
+        src.readyState = 2; // CLOSED: a non-200 such as the daemon refusing ?mode=
+        src.emit('error');
+        expect(h.onError).toHaveBeenCalledWith(true);
     });
 
     it('drops malformed JSON without calling the handler', () => {

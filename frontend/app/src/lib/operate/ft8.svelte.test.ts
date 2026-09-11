@@ -18,6 +18,7 @@ import {
     workCaller,
     abandonQso,
     startFt8,
+    type ClaimResult,
     stopFt8,
     resetFt8ForTests,
     type Ft8TxActions,
@@ -30,6 +31,7 @@ beforeEach(() => {
     // The profile claim stands for every case not about the claim itself: the
     // TX-intent gate (ADR 0080) is pinned in its own describe below.
     ft8State.claimed = true;
+    ft8State.connected = true;
 });
 
 function decodeSlot(
@@ -550,6 +552,7 @@ describe('view-scoped lifecycle', () => {
     });
 
     it('startFt8 is a no-op with no transport injected', () => {
+        ft8State.connected = false; // the shared setup models an open stream
         void startFt8();
         expect(ft8State.connected).toBe(false);
     });
@@ -839,9 +842,10 @@ describe('TX intents wait for the profile claim (ADR 0080)', () => {
         expect(calls).toEqual(['arm:false', 'abandon']);
     });
 
-    it('passes them through once the claim stands, and a stream error does not revoke it', async () => {
+    it('passes them through once the claimed stream is open; a transient drop withholds TX starts, not disarm, and keeps the claim', async () => {
         const calls = wired();
         ft8State.claimed = false;
+        ft8State.connected = false;
         setFt8Transport((h) => {
             h.onOpen();
             return () => undefined;
@@ -849,11 +853,26 @@ describe('TX intents wait for the profile claim (ADR 0080)', () => {
         setFt8Claimer(() => Promise.resolve({ kind: 'ok', mode: 'FT4' }));
         await startFt8('ft4');
         expect(ft8State.claimed).toBe(true);
-        ft8Link.onError(); // transient SSE loss
-        expect(ft8State.claimed).toBe(true);
         await armTx(true);
         await callCq(1500, 14.08, 'next');
         expect(calls).toEqual(['arm:true', 'callCq']);
+
+        // codex 67cc1b96 P1: while the stream is down the daemon may have moved
+        // to the other profile (a restart puts it on FT8) — an arm now would arm
+        // that one. The claim stands (no banner, disarm passes), TX starts wait.
+        ft8Link.onError(false); // transient SSE loss: the browser retries
+        expect(ft8State.claimed).toBe(true);
+        expect(ft8State.claimRefusal).toBeNull();
+        const arm = await armTx(true);
+        expect(arm.status).toBe('failed');
+        expect(arm.status === 'failed' && arm.message).toContain('reconnecting');
+        expect((await callCq(1500, 14.08, 'next')).ok).toBe(false);
+        await armTx(false);
+        expect(calls).toEqual(['arm:true', 'callCq', 'arm:false']);
+
+        ft8Link.onOpen(); // the browser's retry landed on our profile
+        await armTx(true);
+        expect(calls).toEqual(['arm:true', 'callCq', 'arm:false', 'arm:true']);
         stopFt8();
         expect(ft8State.claimed).toBe(false);
     });
@@ -889,13 +908,13 @@ describe("the claim is established by the stream's first open", () => {
 
         await startFt8('ft4');
         expect(ft8State.claimed).toBe(false);
-        handlers!.onError(); // the daemon refused the subscription
+        handlers!.onError(false); // the daemon refused the subscription
         expect(ft8State.claimed).toBe(false);
         expect((await armTx(true)).status).toBe('failed');
 
         handlers!.onOpen();
         expect(ft8State.claimed).toBe(true);
-        handlers!.onError(); // a transient drop after the open keeps the claim
+        handlers!.onError(false); // a transient drop after the open keeps the claim
         expect(ft8State.claimed).toBe(true);
     });
 
@@ -923,5 +942,90 @@ describe("the claim is established by the stream's first open", () => {
         expect(opened).toEqual(['ft4']);
         expect(ft8State.claimRefusal).toBeNull();
         expect(ft8State.claimed).toBe(true);
+    });
+});
+
+// codex 67cc1b96 P1: a stream the browser has given up on (a non-200 — the
+// daemon refusing `?mode=` because it is on the other profile: a restart put it
+// back on FT8, or another claim won while we were down) is not recovered by
+// repeating its URL. The state module closes it, drops the claim and claims the
+// profile again: a grant reopens the stream, a refusal shows the banner.
+describe('a terminal stream error re-claims the profile', () => {
+    function harness(grants: ClaimResult[]) {
+        const opened: (string | undefined)[] = [];
+        let closes = 0;
+        let handlers: Ft8EventHandlers | null = null;
+        setFt8Transport((h, mode) => {
+            handlers = h;
+            opened.push(mode);
+            return () => {
+                closes++;
+            };
+        });
+        const claims: string[] = [];
+        setFt8Claimer((mode) => {
+            claims.push(mode);
+            return Promise.resolve(
+                grants[claims.length - 1] ?? { kind: 'ok', mode: mode.toUpperCase() }
+            );
+        });
+        return { opened, claims, closes: () => closes, handlers: () => handlers! };
+    }
+
+    it('closes the stream, drops the claim, claims again and reopens on the grant', async () => {
+        ft8State.claimed = false;
+        ft8State.connected = false;
+        const h = harness([]);
+        await startFt8('ft4');
+        h.handlers().onOpen();
+        expect(ft8State.claimed).toBe(true);
+        expect(h.opened).toEqual(['ft4']);
+
+        h.handlers().onError(true); // CLOSED: the daemon refused ?mode=ft4
+        expect(h.closes()).toBe(1);
+        expect(ft8State.claimed).toBe(false);
+        expect(ft8State.connected).toBe(false);
+        expect((await armTx(true)).status).toBe('failed');
+
+        await vi.waitFor(() => expect(h.opened).toEqual(['ft4', 'ft4']));
+        expect(h.claims).toEqual(['ft4', 'ft4']);
+        expect(ft8State.claimed).toBe(false); // until the NEW stream opens
+        h.handlers().onOpen();
+        expect(ft8State.claimed).toBe(true);
+        expect(ft8State.connected).toBe(true);
+        stopFt8();
+        expect(h.closes()).toBe(2);
+    });
+
+    it('shows the refusal banner when the re-claim is refused, and opens nothing', async () => {
+        ft8State.claimed = false;
+        ft8State.connected = false;
+        const h = harness([
+            { kind: 'ok', mode: 'FT4' },
+            { kind: 'refused', code: 'ft8_profile_busy', message: 'busy', retryAfterMs: 0 },
+        ]);
+        await startFt8('ft4');
+        h.handlers().onOpen();
+
+        h.handlers().onError(true);
+        await vi.waitFor(() => expect(h.claims).toEqual(['ft4', 'ft4']));
+        expect(h.opened).toEqual(['ft4']);
+        expect(ft8State.claimed).toBe(false);
+        expect(ft8State.claimRefusal?.code).toBe('ft8_profile_busy');
+        stopFt8();
+    });
+
+    it('a transient error re-claims nothing', async () => {
+        ft8State.claimed = false;
+        ft8State.connected = false;
+        const h = harness([]);
+        await startFt8('ft4');
+        h.handlers().onOpen();
+        h.handlers().onError(false);
+        await Promise.resolve();
+        expect(h.closes()).toBe(0);
+        expect(h.claims).toEqual(['ft4']);
+        expect(ft8State.claimed).toBe(true);
+        stopFt8();
     });
 });
