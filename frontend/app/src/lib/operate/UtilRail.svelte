@@ -5,7 +5,7 @@
     // Collapsible full↔narrow like the left nav (data-util); shown only in
     // Operate → Phone/CW (render gate in Operate; visibility on data-rail).
     import { toggleUtil } from '../ui/state.svelte';
-    import { router } from '../router.svelte';
+    import { router, isFtMode } from '../router.svelte';
     import { setPileup, setCallStack, focusCallsign } from './state.svelte';
     import { operate } from './state.svelte';
     import { ft8State } from './ft8.svelte';
@@ -21,7 +21,7 @@
     // badge rising is the ratified discovery mechanism for a new answerer
     // ("badge only" — no toast, no auto-open), so it must count them.
     const pileupCount = $derived(
-        router.mode === 'ft8'
+        isFtMode(router.mode)
             ? ft8State.qso.answerers.length + ft8State.qso.queue.length
             : callsignStack.count
     );
@@ -129,7 +129,7 @@
             <button
                 class="rail-item relative disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
                 title={offHere
-                    ? 'Worked — not available in FT8'
+                    ? `Worked — not available in ${router.mode === 'ft4' ? 'FT4' : 'FT8'}`
                     : `${labels[key]} — ${isVisible(key) ? 'hide' : 'show'}`}
                 data-active={!offHere && isVisible(key) ? 'true' : 'false'}
                 disabled={offHere}
@@ -154,11 +154,11 @@
             <button
                 class="rail-item relative"
                 title="Pile-up"
-                data-active={(router.mode === 'ft8' ? operate.pileup : operate.callStack)
+                data-active={(isFtMode(router.mode) ? operate.pileup : operate.callStack)
                     ? 'true'
                     : 'false'}
                 onclick={() =>
-                    router.mode === 'ft8'
+                    isFtMode(router.mode)
                         ? setPileup(!operate.pileup)
                         : setCallStack(!operate.callStack)}
             >
@@ -180,7 +180,7 @@
                 {#if pileupCount > 0}
                     {@render countBadge(
                         pileupCount,
-                        `${pileupCount} ${router.mode === 'ft8' ? 'caller' : 'call'}${pileupCount === 1 ? '' : 's'} ${router.mode === 'ft8' ? 'queued' : 'stacked'}`
+                        `${pileupCount} ${isFtMode(router.mode) ? 'caller' : 'call'}${pileupCount === 1 ? '' : 's'} ${isFtMode(router.mode) ? 'queued' : 'stacked'}`
                     )}
                 {/if}
             </button>

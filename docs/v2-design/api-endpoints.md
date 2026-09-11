@@ -187,7 +187,7 @@ items return a QSO through a boundary projection of `types.Qso`: the canonical *
 ### `GET /v1/contest-dupe`
 - **Purpose:** "Worked this call on this band (and mode) in this logbook?" — hot-path contest/FT8 dupe check.
 - **Gating:** Always-on.
-- **Request:** Query `logbook` (int, **req**), `call` (**req**, validated), `band` (**req**, validated), `mode` (optional, validated).
+- **Request:** Query `logbook` (int, **req**), `call` (**req**, validated), `band` (**req**, validated), `mode` (optional, validated), `submode` (optional, ADR 0080 — narrows a mode match to one ADIF SUBMODE, exact match on the stored value, not enumeration-checked: an FT4 contact is filed `MFSK`/`FT4`, and "worked on FT4" must not answer for JS8).
 - **Response:** **200** `{"duplicate": bool}`.
 - **Errors:** 400 `missing_required_param`/`invalid_id`/`invalid_field_value`; 404 `logbook_not_found`; 500 `db_error`.
 

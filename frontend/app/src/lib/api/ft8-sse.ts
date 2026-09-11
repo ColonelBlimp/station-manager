@@ -86,6 +86,8 @@ export interface TxPayload {
      *  constants: operator | unattended | cat_lost | shutdown | band_change |
      *  dial_moved). "" while armed, and absent from daemons predating it. */
     disarm_cause?: string;
+    /** The active profile ("FT8" | "FT4", ADR 0080) on every frame, replay included. */
+    mode?: string;
 }
 
 /** ft8-qso — internal/ft8.QsoStatus (the active manual-sequencer contact;
@@ -238,6 +240,9 @@ function isTx(v: unknown): v is TxPayload {
         optNum(v.offset_hz) &&
         optStr(v.message) &&
         optStr(v.error) &&
+        // mode now drives the slot clock (ADR 0080): absent is fine (an older
+        // daemon), anything but the two profile names is a malformed frame.
+        (v.mode === undefined || v.mode === 'FT8' || v.mode === 'FT4') &&
         optStr(v.disarm_cause)
     );
 }
@@ -312,11 +317,15 @@ const SSE_URL = '/v1/ft8/events';
  * device once the last subscriber is gone). Idempotent from the caller's side —
  * each call opens one source and hands back its own closer.
  */
-export function openFt8Events(handlers: Ft8EventHandlers): () => void {
+export function openFt8Events(handlers: Ft8EventHandlers, mode?: string): () => void {
     // One throttled warn per subscription (survives openReviving's internal revives; a fresh
     // openFt8Events after close resets it — F-03, ADR 0077).
     const warn = makeSseWarn('ft8-sse');
-    return openReviving(SSE_URL, (src) => {
+    // `mode` names the profile the view claimed (ADR 0080): the daemon refuses a
+    // mismatch before it counts as a subscriber — the belt and braces behind the
+    // claim, never the explanation (an EventSource sees only an error here).
+    const url = mode ? `${SSE_URL}?mode=${encodeURIComponent(mode)}` : SSE_URL;
+    return openReviving(url, (src) => {
         src.addEventListener('open', () => handlers.onOpen());
         src.addEventListener('error', () => handlers.onError());
 

@@ -21,7 +21,7 @@
         effectiveNav,
         effectiveUtil,
     } from './lib/ui/state.svelte';
-    import { router, type View } from './lib/router.svelte';
+    import { router, type View, isFtMode } from './lib/router.svelte';
     import { operate } from './lib/operate/state.svelte';
     import { storageSet } from './lib/utils/storage';
     import { onMount } from 'svelte';
@@ -59,7 +59,7 @@
         document.documentElement.dataset.rail = railOn ? 'on' : '';
         // Either workspace's pile-up drawer offsets the content: FT8's caller
         // queue or Phone/CW's callsign stack. They are never both mounted.
-        const drawerOpen = router.mode === 'ft8' ? operate.pileup : operate.callStack;
+        const drawerOpen = isFtMode(router.mode) ? operate.pileup : operate.callStack;
         document.documentElement.dataset.drawer = railOn && drawerOpen ? 'open' : '';
     });
 

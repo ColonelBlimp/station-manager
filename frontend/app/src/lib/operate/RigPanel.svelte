@@ -32,8 +32,10 @@
     interface Props {
         pickBand?: (band: string) => Promise<RigWriteResult>;
         requiresCat?: boolean;
+        /** The mode named in the CAT-required notice (FT8 or FT4, ADR 0080). */
+        modeLabel?: string;
     }
-    let { pickBand = selectBand, requiresCat = false }: Props = $props();
+    let { pickBand = selectBand, requiresCat = false, modeLabel = 'FT8' }: Props = $props();
 
     // Operator-friendly mode names (sidebands, not families — matches the
     // shipping SPA's baseModes). resolveModeAndSubmode maps them to canonical
@@ -334,7 +336,7 @@
             {/if}
             {#if catMissing}
                 <p class="max-w-56 text-right text-xs text-muted">
-                    FT8 needs a live CAT connection — controls are disabled until the rig connects.
+                    {modeLabel} needs a live CAT connection — controls are disabled until the rig connects.
                 </p>
             {:else if rigGate() === 'unconfirmed' || rigGate() === 'lost'}
                 <!-- Confirm (ADR 0044): the operator asserts the QSO settings

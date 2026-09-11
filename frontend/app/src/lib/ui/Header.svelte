@@ -47,7 +47,7 @@
             : rigGate() === 'lost'
               ? 'CAT link lost'
               : catRequired
-                ? 'FT8 needs a live CAT connection'
+                ? `${router.mode === 'ft4' ? 'FT4' : 'FT8'} needs a live CAT connection`
                 : rigGate() === 'manual'
                   ? 'Manual — confirmed'
                   : 'Waiting for confirmation'

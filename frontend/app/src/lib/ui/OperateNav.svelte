@@ -1,5 +1,6 @@
 <script lang="ts">
-    // Expandable Operate nav item: Phone/CW ↔ FT8 as sub-routes. In the full rail
+    // Expandable Operate nav item: Phone/CW, FT8 and FT4 as sub-routes (FT4 is a
+    // third item, not a selector inside the FT view — ADR 0080). In the full rail
     // it discloses inline sub-items; in the narrow rail the sub-items move to a
     // hover flyout (CSS, gated on [data-nav='narrow']). Parent is never
     // highlighted — the active sub-mode carries the highlight (TWP convention).
@@ -17,6 +18,7 @@
     const modes: { mode: OpMode; label: string }[] = [
         { mode: 'phone', label: 'Phone / CW' },
         { mode: 'ft8', label: 'FT8' },
+        { mode: 'ft4', label: 'FT4' },
     ];
 
     function isActive(mode: OpMode): boolean {

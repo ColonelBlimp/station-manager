@@ -14,6 +14,19 @@ the [PSK reporter online service](https://pskreporter.info/) is also built-in.
 To use FT8 your transmitter must support CAT and be connected to the hardware where SM is installed and running.
 See [Enabling CAT](#cat) for details.
 
+### FT8 or FT4
+
+The **Operate** entry in the sidebar lists three modes: **Phone / CW**, **FT8** and **FT4**. FT8 and FT4 share
+the same view and the same exchange; they differ in the clock the daemon runs on — 15-second slots for FT8,
+7.5-second slots for FT4 — and in the dial frequencies the band buttons jump to. Pick the mode you want to
+operate from the sidebar; switching between FT8 and FT4 re-opens the view on the other clock, and each mode
+remembers the dial you left it on.
+
+The daemon runs one of the two at a time. If you leave FT8 in the middle of a contact and open FT4 straight
+away, a notice explains that FT8 is still winding down and counts down to the retry; it clears by itself
+once the earlier session has ended. FT4 band buttons carry only the frequencies Station Manager has a
+citation for (80, 40 and 20 m); add others under `ft8.ft4_frequencies` in `config.json`.
+
 ### Before you transmit: set your rig's time-out timer
 
 Do this once, before using any Station Manager feature that transmits (FT8 or

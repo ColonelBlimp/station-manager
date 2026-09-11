@@ -116,6 +116,7 @@ import {
     nudgeFreqCoarse,
     catLink,
     setFt8Frequencies,
+    setFt4Frequencies,
     setFt8Mode,
 } from './rig.svelte';
 import { ft8State, resetFt8ForTests } from './ft8.svelte';
@@ -153,6 +154,7 @@ beforeEach(() => {
     // no-freq seed path is a designed no-op, so their fixtures see exactly the
     // pre-A25 behaviour. The S rules configure FT8 per test via configureFt8().
     setFt8Frequencies({});
+    setFt4Frequencies({});
     setFt8Mode('');
 });
 
@@ -1504,5 +1506,63 @@ describe('selection restore (codex ec2fd42d P1)', () => {
         await onOperatingModeChange('ft8', 'phone');
         expect(freqsSent()).toContain('14255000');
         expect(modesSent()).toContain('USB');
+    });
+});
+
+// W-0019 slice 4 (ADR 0080): FT4 is a third mode with its own snapshot slot and
+// its own dial table. Entering it seeds the FT4 watering hole (FT8's rule,
+// FT4's numbers); each FT mode restores its OWN last position, so FT8 remembers
+// 14.074 while FT4 remembers 14.080.
+describe('FT4 as a third mode in the restore', () => {
+    it('S-FT4: the first entry into FT4 seeds the FT4 dial and the data mode', async () => {
+        configureFt8();
+        setFt4Frequencies({ '20m': 14_080_000 });
+        livePhone();
+
+        await onOperatingModeChange('phone', 'ft4');
+
+        expect(freqsSent()).toContain('14080000');
+        expect(freqsSent()).not.toContain('14074000');
+        expect(modesSent()).toContain('DATA-U');
+    });
+
+    it('R2-FT4: FT8 and FT4 each return to their own last dial', async () => {
+        configureFt8();
+        setFt4Frequencies({ '20m': 14_080_000 });
+        livePhone();
+
+        await onOperatingModeChange('phone', 'ft8');
+        catLink.onRigState({ vfoA: 14_075_500, mode: 'DATA-U' }); // the seed confirmed, then a nudge
+        await onOperatingModeChange('ft8', 'ft4');
+        catLink.onRigState({ vfoA: 14_081_000, mode: 'DATA-U' }); // FT4 seeded, then a nudge
+        sent = [];
+
+        await onOperatingModeChange('ft4', 'ft8');
+        expect(freqsSent()).toContain('14075500'); // FT8's own last dial, not its watering hole
+        expect(freqsSent()).not.toContain('14074000');
+        catLink.onRigState({ vfoA: 14_075_500, mode: 'DATA-U' });
+        sent = [];
+
+        await onOperatingModeChange('ft8', 'ft4');
+        expect(freqsSent()).toContain('14081000'); // FT4's own last dial, not its watering hole
+        expect(freqsSent()).not.toContain('14080000');
+    });
+
+    it('resetModeRestore clears the FT4 snapshot too (no order-dependent leakage)', async () => {
+        configureFt8();
+        setFt4Frequencies({ '20m': 14_080_000 });
+        livePhone();
+        await onOperatingModeChange('phone', 'ft4');
+        // The rig confirms the seed, then the operator QSYs within FT4 (S2's shape).
+        catLink.onRigState({ vfoA: 14_081_000, mode: 'DATA-U' });
+        await onOperatingModeChange('ft4', 'phone'); // snapshots FT4 at 14.081
+        catLink.onRigState({ vfoA: 14_255_000, mode: 'USB' });
+
+        resetModeRestore();
+        livePhone();
+        sent = [];
+        await onOperatingModeChange('phone', 'ft4');
+        expect(freqsSent()).toContain('14080000'); // seeded from the table…
+        expect(freqsSent()).not.toContain('14081000'); // …not restored from a leaked snapshot
     });
 });

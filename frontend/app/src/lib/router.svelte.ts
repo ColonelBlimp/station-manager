@@ -1,18 +1,26 @@
 // Client-side router — History-API real paths (ADR 0044 sub-decision). A tiny
-// hand-rolled router, no dependency. Operate has two sub-routes for its modes
-// (/operate/phone, /operate/ft8) so they deep-link; a bare /operate normalises to
-// the last-used mode. Deep links + refresh work because both Vite's dev server
+// hand-rolled router, no dependency. Operate has three sub-routes for its modes
+// (/operate/phone, /operate/ft8, /operate/ft4 — ADR 0080) so they deep-link; a bare
+// /operate normalises to the last-used mode. Deep links + refresh work because both Vite's dev server
 // and the daemon's spaHandler index-fall-back unknown paths to index.html.
 
 export type View = 'dashboard' | 'operate' | 'logbook' | 'config' | 'map';
-export type OpMode = 'phone' | 'ft8';
+export type OpMode = 'phone' | 'ft8' | 'ft4';
+
+/** The FT-family modes the shared FT view serves (ADR 0080): FT8 and FT4 differ
+ *  only in the daemon profile the view claims, so every gate that means "the FT
+ *  workspace is up" (queue drawer, util rail, pile-up) reads this, not 'ft8'. */
+export function isFtMode(mode: OpMode): boolean {
+    return mode === 'ft8' || mode === 'ft4';
+}
 
 const MODE_KEY = 'sm-op-mode';
 
 import { storageGet, storageSet } from './utils/storage';
 
 function storedMode(): OpMode {
-    return storageGet(MODE_KEY) === 'ft8' ? 'ft8' : 'phone';
+    const m = storageGet(MODE_KEY);
+    return m === 'ft8' || m === 'ft4' ? m : 'phone';
 }
 
 interface Loc {
@@ -24,6 +32,8 @@ function parse(path: string, fallbackMode: OpMode): Loc {
     switch (path) {
         case '/operate/ft8':
             return { view: 'operate', mode: 'ft8' };
+        case '/operate/ft4':
+            return { view: 'operate', mode: 'ft4' };
         case '/operate/phone':
         case '/operate':
             return { view: 'operate', mode: path === '/operate' ? fallbackMode : 'phone' };

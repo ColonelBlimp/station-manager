@@ -127,5 +127,5 @@ func (s *Service) UpdateLogbook(logbook types.Logbook) error {
  **********************************************************************************************************************/
 
 func (s *Service) IsContestDuplicateByLogbookID(id int64, callsign, band, mode string) (bool, error) {
-	return s.IsContestDuplicateByLogbookIDWithContext(context.Background(), id, callsign, band, mode)
+	return s.IsContestDuplicateByLogbookIDWithContext(context.Background(), id, callsign, band, mode, "")
 }

@@ -30,7 +30,11 @@
         isNonstandardCall,
     } from '../utils/ft8Message';
     import { daemonNowMs as readDaemonNowMs, daemonClockTrusted } from '../api/daemonClock.svelte';
-    import { slotParity } from '../utils/ft8Parity';
+    import { slotParity, slotMsFor } from '../utils/ft8Parity';
+    import type { FtProfile } from './ft8Enrich.svelte';
+
+    // Lookups are asked on the ACTIVE profile (ADR 0080): FT4's worked-before is MFSK/FT4.
+    const ftProfile: FtProfile = $derived(ft8State.profile === 'FT4' ? 'FT4' : 'FT8');
     import { pathInfo } from '../utils/bearing';
     import { parseFrequency } from '../validators/frequency';
     import { toasts } from '../ui/toasts.svelte';
@@ -124,7 +128,7 @@
                 cur = {
                     key,
                     time: clock(row.d.startUtc),
-                    parity: slotParity(row.d.startUtc),
+                    parity: slotParity(row.d.startUtc, slotMsFor(ft8State.profile)),
                     decodes: [],
                 };
                 out.push(cur);
@@ -142,7 +146,8 @@
         const band = rig.band;
         for (const g of groups) {
             for (const row of g.decodes) {
-                if (row.kind !== '' && row.call !== '') ft8EnrichState.observe(row.call, band);
+                if (row.kind !== '' && row.call !== '')
+                    ft8EnrichState.observe(row.call, band, ftProfile);
             }
         }
     });
@@ -514,7 +519,7 @@
                         {#each g.decodes as row (row.d.id)}
                             {@const info =
                                 row.kind !== ''
-                                    ? ft8EnrichState.info(row.call, rig.band)
+                                    ? ft8EnrichState.info(row.call, rig.band, ftProfile)
                                     : undefined}
                             {@const hover = enrichHover(info)}
                             <tr class="text-ink {rowClass(row.kind, info?.worked, isStale(row))}">

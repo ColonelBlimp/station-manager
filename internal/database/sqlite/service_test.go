@@ -2425,3 +2425,29 @@ func TestMarkUploadSuccessWithAdifStamp_MissingQso_RollsBack(t *testing.T) {
 		t.Fatal("qso_upload reached uploaded despite failed qso stamp — rollback broken")
 	}
 }
+
+// ADR 0080: an FT4 contact is filed MODE=MFSK SUBMODE=FT4; the submode narrows a
+// mode match so "worked on FT4" does not answer for JS8 (MFSK too), and an
+// empty submode keeps the plain mode match.
+func TestIsContestDuplicate_SubmodeNarrowsTheModeMatch(t *testing.T) {
+	svc := testService(t)
+	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "Contest", Callsign: "G4ABC"})
+	qso := validTestQso(lbID, "K1ABC", "20m", "MFSK", "20260912", "1530")
+	qso.QsoDetails.Submode = "FT4"
+	if _, err := svc.InsertQso(qso); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	ctx := context.Background()
+	hit, err := svc.IsContestDuplicateByLogbookIDWithContext(ctx, lbID, "K1ABC", "20m", "MFSK", "FT4")
+	if err != nil || !hit {
+		t.Fatalf("MFSK/FT4 = (%v, %v), want a hit", hit, err)
+	}
+	miss, err := svc.IsContestDuplicateByLogbookIDWithContext(ctx, lbID, "K1ABC", "20m", "MFSK", "JS8")
+	if err != nil || miss {
+		t.Fatalf("MFSK/JS8 = (%v, %v), want a miss", miss, err)
+	}
+	any, err := svc.IsContestDuplicateByLogbookIDWithContext(ctx, lbID, "K1ABC", "20m", "MFSK", "")
+	if err != nil || !any {
+		t.Fatalf("MFSK/any = (%v, %v), want a hit", any, err)
+	}
+}

@@ -31,11 +31,20 @@ export interface Ft8CallInfo {
     grid?: string;
 }
 
-// FT8 is itself an ADIF main mode, so the dupe axis is band + "FT8".
-const FT8_MODE = 'FT8';
+/** The FT-family profile a lookup is made for (ADR 0080). */
+export type FtProfile = 'FT8' | 'FT4';
 
-function cacheKey(call: string, band: string): string {
-    return `${call}|${band}`;
+/** The ADIF axis "worked before" is asked on: FT8 is a mode of its own; FT4 is
+ *  filed as MODE=MFSK SUBMODE=FT4 (ADIF 3.1.5), so its dupe is the pair. */
+export function dupeAxis(profile: FtProfile): { mode: string; submode: string } {
+    return profile === 'FT4' ? { mode: 'MFSK', submode: 'FT4' } : { mode: 'FT8', submode: '' };
+}
+
+// The cache is keyed by profile as well: an FT4 "worked" answer is a different
+// fact from an FT8 one, and a lookup started under FT8 that resolves after the
+// view remounted on FT4 lands in the FT8 bucket, never in FT4's.
+function cacheKey(profile: FtProfile, call: string, band: string): string {
+    return `${profile}|${call}|${band}`;
 }
 
 /*
@@ -44,7 +53,12 @@ function cacheKey(call: string, band: string): string {
     wired in main.ts; unwired = no decoration (fail-soft).
 */
 export type Ft8Enricher = (call: string) => Promise<Enrichment | null>;
-export type Ft8Dupe = (call: string, band: string, mode: string) => Promise<boolean | null>;
+export type Ft8Dupe = (
+    call: string,
+    band: string,
+    mode: string,
+    submode: string
+) => Promise<boolean | null>;
 
 let enricher: Ft8Enricher | null = null;
 let dupe: Ft8Dupe | null = null;
@@ -58,17 +72,17 @@ export function setFt8Dupe(fn: Ft8Dupe): void {
 }
 
 class Ft8EnrichState {
-    /** Decoration cache keyed by `call|band`. Reassigned (not mutated) on each
-     *  resolution so $state notifies template reads of info(...). */
+    /** Decoration cache keyed by `profile|call|band`. Reassigned (not mutated) on
+     *  each resolution so $state notifies template reads of info(...). */
     cache: Record<string, Ft8CallInfo> = $state({});
 
     // Keys with a lookup in flight — dedupes concurrent observes for the same
     // call+band. Non-reactive plumbing; gates work, never rendered.
     #inFlight = new Set<string>();
 
-    /** Decoration for a CQ call on a band, or undefined if not yet looked up. */
-    info(call: string, band: string): Ft8CallInfo | undefined {
-        return this.cache[cacheKey(call, band)];
+    /** Decoration for a CQ call on a band under a profile, or undefined if not yet looked up. */
+    info(call: string, band: string, profile: FtProfile = 'FT8'): Ft8CallInfo | undefined {
+        return this.cache[cacheKey(profile, call, band)];
     }
 
     /**
@@ -76,8 +90,8 @@ class Ft8EnrichState {
      * cached or in-flight key is a no-op, so the panel can call it for every
      * visible CQ row each slot without re-fetching.
      */
-    observe(call: string, band: string): void {
-        const key = cacheKey(call, band);
+    observe(call: string, band: string, profile: FtProfile = 'FT8'): void {
+        const key = cacheKey(profile, call, band);
         if (this.cache[key] !== undefined || this.#inFlight.has(key)) return;
         this.#inFlight.add(key);
 
@@ -105,9 +119,11 @@ class Ft8EnrichState {
             : Promise.resolve();
 
         // Worked-before needs a real band; a blank band would 400 the daemon.
+        // Asked on the profile's ADIF axis (FT8, or MFSK/FT4 for FT4).
+        const axis = dupeAxis(profile);
         const dupeLookup =
             dupe && band !== ''
-                ? dupe(call, band, FT8_MODE)
+                ? dupe(call, band, axis.mode, axis.submode)
                       .then((w) => {
                           if (w !== null) merge({ worked: w });
                       })
@@ -128,11 +144,11 @@ class Ft8EnrichState {
      * observe() so a station worked without ever showing as a CQ row still gets
      * its flag; the worked:true merge wins.
      */
-    markWorked(call: string, band: string): void {
+    markWorked(call: string, band: string, profile: FtProfile = 'FT8'): void {
         const c = call.trim().toUpperCase();
         if (c === '' || band === '') return;
-        this.observe(c, band);
-        const key = cacheKey(c, band);
+        this.observe(c, band, profile);
+        const key = cacheKey(profile, c, band);
         const prev = this.cache[key] ?? {};
         this.cache = { ...this.cache, [key]: { ...prev, worked: true, isNewEntity: false } };
         // A worked new-entity is new no longer — the ★ must drop from EVERY

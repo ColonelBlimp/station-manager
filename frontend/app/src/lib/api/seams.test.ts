@@ -222,6 +222,20 @@ describe('fetchStationContext bridge block (stubbed fetch)', () => {
         expect(ctx.ft8Frequencies).toEqual({ '20m': 14074000, '40m': 7074000 });
     });
 
+    it('reads ft4_frequencies (band→Hz) beside the FT8 table (ADR 0080)', async () => {
+        mockConfig({
+            logging_station: { station_callsign: '7Q5MLV' },
+            ft4_frequencies: { '20m': 14080000, '40m': 7047500, '80m': 3576000 },
+        });
+        const ctx = await fetchStationContext();
+        expect(ctx.ft4Frequencies).toEqual({ '20m': 14080000, '40m': 7047500, '80m': 3576000 });
+    });
+
+    it('defaults ft4_frequencies to an empty map when absent (an older daemon)', async () => {
+        mockConfig({ logging_station: { station_callsign: '7Q5MLV' } });
+        expect((await fetchStationContext()).ft4Frequencies).toEqual({});
+    });
+
     it('defaults ft8_frequencies to an empty map when absent', async () => {
         mockConfig({ logging_station: { station_callsign: '7Q5MLV' } });
         expect((await fetchStationContext()).ft8Frequencies).toEqual({});

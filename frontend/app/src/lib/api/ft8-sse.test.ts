@@ -226,6 +226,23 @@ describe('openFt8Events — wrong-shape frames are dropped (F-03)', () => {
 
     // Whitespace-only is not usable: a blank uuid can't dedup a session row, a blank callsign
     // can't key one.
+    it('drops ft8-tx whose mode is not a profile name; absence is fine (ADR 0080)', () => {
+        expect(
+            emit('ft8-tx', '{"armed":false,"transmitting":false,"mode":"XX"}').onTx
+        ).not.toHaveBeenCalled();
+        expect(
+            emit('ft8-tx', '{"armed":false,"transmitting":false,"mode":5}').onTx
+        ).not.toHaveBeenCalled();
+        expect(
+            emit('ft8-tx', '{"armed":false,"transmitting":false,"mode":"FT4"}').onTx
+        ).toHaveBeenCalledWith({
+            armed: false,
+            transmitting: false,
+            mode: 'FT4',
+        });
+        expect(emit('ft8-tx', '{"armed":false,"transmitting":false}').onTx).toHaveBeenCalled();
+    });
+
     it('drops ft8-logged whose submode is not a string', () => {
         expect(
             emit('ft8-logged', '{"uuid":"u-3","callsign":"K1ABC","mode":"MFSK","submode":5}')

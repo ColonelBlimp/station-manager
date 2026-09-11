@@ -706,6 +706,28 @@ export function setFt8Frequencies(f: Record<string, number>): void {
     ft8Frequencies = f;
 }
 
+// FT4's own dial table (config ft4_frequencies, ADR 0080): the daemon ships only
+// the three cited Africa FT4 DX Contest bands and the operator may add more. Read
+// through the mode, never mixed with the FT8 table.
+let ft4Frequencies: Record<string, number> = {};
+
+export function setFt4Frequencies(f: Record<string, number>): void {
+    ft4Frequencies = f;
+}
+
+/** The FT-family modes that own a dial table. */
+export type FtMode = 'ft8' | 'ft4';
+
+function ftTable(mode: FtMode): Record<string, number> {
+    return mode === 'ft4' ? ft4Frequencies : ft8Frequencies;
+}
+
+/** The configured dial for a band in the given FT mode — modeRestore's seed
+ *  reads it by the mode being entered. */
+export function ftFrequencyFor(mode: FtMode, band: string): number | undefined {
+    return ftTable(mode)[band];
+}
+
 // The rig's own mode literal for FT8 (config bridge.ft8_mode — rigdef default,
 // overridable per rig: "DATA-U" on the FTdx10/FT-710, "USB-D" on the IC-7300).
 // Injected once at boot beside the frequencies. Empty means the operator chose
@@ -720,7 +742,7 @@ export function setFt8Mode(m: string): void {
  *  seed, which needs the value (not the ft8SelectBand command bundle) so it
  *  can date each command against the rig-report counters it keeps. */
 export function ft8FrequencyFor(band: string): number | undefined {
-    return ft8Frequencies[band];
+    return ftFrequencyFor('ft8', band);
 }
 
 /** The configured FT8 rig-mode literal ('' = leave the mode alone). */
@@ -760,13 +782,13 @@ export async function setFreq(hz: number): Promise<RigWriteResult> {
  * (typically the phone freq); FT8 wants the WSJT-X dial freq instead. The FT8 rig
  * card passes this as its `pickBand`.
  */
-export async function ft8SelectBand(band: string): Promise<RigWriteResult> {
-    const hz = ft8Frequencies[band];
+export async function ft8SelectBand(band: string, mode: FtMode = 'ft8'): Promise<RigWriteResult> {
+    const hz = ftFrequencyFor(mode, band);
     if (hz === undefined) {
         return {
             status: 'failed',
             kind: 'refused',
-            message: `No FT8 frequency configured for ${band}.`,
+            message: `No ${mode.toUpperCase()} frequency configured for ${band}.`,
         };
     }
     const tuned = await setFreq(hz);

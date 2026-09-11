@@ -191,9 +191,19 @@ release uses gonum.
 
 ## 3. The SPA (FT8 view)
 
-The header **Operating Mode** switch chooses Phone/CW vs FT8; the choice is
-persisted to `localStorage` (survives reload). FT8 mode renders `Ft8Panel`,
-which opens the `/v1/ft8/events` stream on mount and closes it on leave.
+> **FT4 (ADR 0080, W-0019):** the same view serves FT8 and FT4. FT4 is a third Operate
+> item in the sidebar; the view is keyed on the mode, claims its profile with
+> `POST /v1/ft8/claim` before opening the stream (`?mode=`), shows a refusal as a banner
+> with the daemon's retry hint — offering **Disable TX** when the other profile's TX is
+> armed or in flight, and **Abandon session and disable TX** as well while its session is
+> active (the daemon's abandon leaves TX armed, so the abandon path disarms too), each
+> acting on the daemon and re-claiming at once — and reads the slot clock (15 s / 7.5 s),
+> parity and dial table (`ft8_frequencies` / `ft4_frequencies`) from the active profile.
+
+The sidebar's **Operate** item chooses Phone/CW, FT8 or FT4; the choice is
+persisted to `localStorage` (survives reload). The two FT modes render `Ft8View`,
+which claims its profile, then opens the `/v1/ft8/events` stream on mount and
+closes it on leave.
 
 **Operating state is remembered across a mode switch — BOTH ways** (`LoggingCard` +
 `rigControl.snapshotOperatingState`/`restoreOperatingState`): on every Phone/CW ↔ FT8

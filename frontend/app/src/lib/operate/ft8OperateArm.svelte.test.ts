@@ -27,6 +27,7 @@ beforeEach(() => {
     rig.cat = 'connected'; // the arm control is enabled only with CAT live
     rig.freq = '14.074.000';
     ft8State.tx.armed = false; // → "Enable TX"
+    ft8State.claimed = true; // …and only once the profile claim stands (ADR 0080)
 });
 
 async function clickEnable(): Promise<void> {
@@ -84,5 +85,33 @@ describe('Enable TX — confirm-by-push outcomes (F-04)', () => {
 
         expect(error).toHaveBeenCalledExactlyOnceWith('rig not ready');
         expect(ft8State.tx.armed).toBe(false); // a refused arm is never shown as armed
+    });
+});
+
+// ADR 0080: arming is a TX-starting intent, so it waits for the profile claim —
+// an FT4-labelled view must not arm the still-active FT8 profile. Disarm stays
+// available once armed even without the claim (a transient SSE loss must not
+// trap TX armed).
+describe('Enable TX waits for the profile claim (ADR 0080)', () => {
+    it('is disabled with CAT live but no claim standing', () => {
+        ft8State.claimed = false;
+        render(Ft8Operate);
+        flushSync();
+        expect(screen.getByRole('button', { name: 'Enable TX' })).toBeDisabled();
+    });
+
+    it('is enabled once the claim stands', () => {
+        ft8State.claimed = true;
+        render(Ft8Operate);
+        flushSync();
+        expect(screen.getByRole('button', { name: 'Enable TX' })).toBeEnabled();
+    });
+
+    it('keeps Disable TX enabled while armed even if the claim is gone', () => {
+        ft8State.claimed = false;
+        ft8State.tx.armed = true;
+        render(Ft8Operate);
+        flushSync();
+        expect(screen.getByRole('button', { name: 'Disable TX' })).toBeEnabled();
     });
 });

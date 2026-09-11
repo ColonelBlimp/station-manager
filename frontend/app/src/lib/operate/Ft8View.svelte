@@ -3,7 +3,9 @@
     // Activity + Operate side-by-side up top, Occupancy (TX-offset picker) full-
     // width across the bottom.
     import { onMount } from 'svelte';
-    import { ft8State, startFt8, stopFt8 } from './ft8.svelte';
+    import { router } from '../router.svelte';
+    import { ft8State, startFt8, stopFt8, reclaimFt8, armTx, abandonQso } from './ft8.svelte';
+    import { toasts } from '../ui/toasts.svelte';
     import { ft8EnrichState } from './ft8Enrich.svelte';
     import { rig } from './rig.svelte';
     import Ft8BandActivity from './Ft8BandActivity.svelte';
@@ -15,13 +17,75 @@
     // View-scoped stream lifecycle: open on mount, close on destroy, so the
     // daemon holds the capture device only while the FT8 view is shown. The
     // enrichment cache clears too, so a re-open starts clean.
+    // The mount claims the router's profile first (ADR 0080): the view is keyed
+    // on router.mode, so FT8 ↔ FT4 remounts through this exact stop → claim →
+    // start sequence.
     onMount(() => {
-        startFt8();
+        void startFt8(router.mode === 'ft4' ? 'ft4' : 'ft8');
         return () => {
             stopFt8();
             ft8EnrichState.clear();
         };
     });
+
+    // The refusal banner's countdown (whole seconds to the scheduled re-claim).
+    let now = $state(Date.now());
+    $effect(() => {
+        if (ft8State.claimRefusal === null) return;
+        const t = setInterval(() => (now = Date.now()), 250);
+        return () => clearInterval(t);
+    });
+    const retryIn = $derived(
+        ft8State.claimRefusal !== null && ft8State.claimRefusal.retryAt > 0
+            ? Math.max(0, Math.ceil((ft8State.claimRefusal.retryAt - now) / 1000))
+            : null
+    );
+    const profileLabel = $derived(router.mode === 'ft4' ? 'FT4' : 'FT8');
+    const claimMode = $derived(router.mode === 'ft4' ? 'ft4' : 'ft8');
+
+    // The stop paths stay reachable through a refusal (ADR 0080): when the other
+    // profile's TX is armed (or in flight) the banner offers Disable TX, and when
+    // its session is active it offers Abandon too. Both act on the daemon, which
+    // knows only one armed state and one session, then the view re-claims at once
+    // rather than waiting out the hint. The daemon's disarm cancels the rung on
+    // the air, waits for it, ends the session and closes the device, so a claim
+    // after it is not refused for TX. Its abandon drops the contact NOW but
+    // deliberately leaves TX ARMED (servicetx.go AbandonQso) — a claim after an
+    // abandon alone is refused ft8_tx_armed, or ft8_tx_in_flight while the
+    // cancelled rung is still returning — so the abandon path disarms as well,
+    // and its label says so. What separates the two is the contact in progress:
+    // abandon retires it before the cancel, so a rung completing on the cancel
+    // path does not log; disarm lets that completion log first. stopFt8 cleared
+    // the old tx/qso frames, so the Operate anchor's own controls cannot offer
+    // these here.
+    const refusalCode = $derived(ft8State.claimRefusal?.code ?? '');
+    const offersDisarm = $derived(
+        refusalCode === 'ft8_tx_armed' ||
+            refusalCode === 'ft8_tx_in_flight' ||
+            refusalCode === 'ft8_session_active'
+    );
+    const offersAbandon = $derived(refusalCode === 'ft8_session_active');
+    let acting = $state(false);
+    async function stopThenReclaim(action: 'disarm' | 'abandon'): Promise<void> {
+        acting = true;
+        try {
+            if (action === 'abandon') {
+                const r = await abandonQso();
+                if (!r.ok) {
+                    toasts.error(r.message);
+                    return;
+                }
+            }
+            const r = await armTx(false);
+            if (r.status === 'failed') {
+                toasts.error(r.message);
+                return;
+            }
+            await reclaimFt8(claimMode);
+        } finally {
+            acting = false;
+        }
+    }
 
     // Band-change watcher (dogfood niggle 2026-07-19): crossing a band boundary
     // clears the Band Activity feed (and, on a genuine band-to-band change, the
@@ -31,7 +95,48 @@
 </script>
 
 <div class="ft8-grid relative">
-    <div style="grid-area:ba; min-height:0"><Ft8BandActivity /></div>
+    {#if ft8State.claimRefusal !== null}
+        <!-- A refused profile claim explains itself here, in place of Band Activity,
+             and the view re-claims when the daemon's hint elapses (ADR 0080). -->
+        <div
+            style="grid-area:ba; min-height:0"
+            class="rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 text-sm"
+            role="status"
+            data-testid="ft8-claim-banner"
+        >
+            <p class="font-medium">{profileLabel} is not available yet</p>
+            <p class="mt-1 text-muted">{ft8State.claimRefusal.message}</p>
+            {#if retryIn !== null}
+                <p class="mt-1 text-muted">Retrying in {retryIn}s.</p>
+            {:else if !offersDisarm}
+                <p class="mt-1 text-muted">Leave and re-enter this view to try again.</p>
+            {/if}
+            {#if offersDisarm}
+                <div class="mt-3 flex flex-wrap gap-2">
+                    {#if offersAbandon}
+                        <button
+                            type="button"
+                            class="rounded-md border border-line px-3 py-1 text-sm hover:bg-black/5 dark:hover:bg-white/5"
+                            disabled={acting}
+                            onclick={() => void stopThenReclaim('abandon')}
+                        >
+                            Abandon session and disable TX
+                        </button>
+                    {/if}
+                    <button
+                        type="button"
+                        class="rounded-md border border-line px-3 py-1 text-sm hover:bg-black/5 dark:hover:bg-white/5"
+                        disabled={acting}
+                        onclick={() => void stopThenReclaim('disarm')}
+                    >
+                        Disable TX
+                    </button>
+                </div>
+            {/if}
+        </div>
+    {:else}
+        <div style="grid-area:ba; min-height:0"><Ft8BandActivity /></div>
+    {/if}
     <div style="grid-area:op; min-height:0"><Ft8Operate /></div>
     <div style="grid-area:occ; min-height:0"><Ft8Occupancy /></div>
 

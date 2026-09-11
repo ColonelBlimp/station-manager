@@ -5,7 +5,7 @@
 // missing strip reverted '/app/…' to '/' (a different SPA) and the URL jumped off.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { subPathOf, urlOf, router, setMode, setModeChangeHook } from './router.svelte';
+import { subPathOf, urlOf, router, setMode, setModeChangeHook, isFtMode } from './router.svelte';
 
 describe('router base-path handling', () => {
     it('strips a non-empty base before parsing (the former /app mount)', () => {
@@ -87,5 +87,56 @@ describe('operating-mode change notification', () => {
         window.dispatchEvent(new PopStateEvent('popstate'));
         expect(seen).toEqual([]);
         expect(router.view).toBe('logbook');
+    });
+});
+
+// W-0019 slice 4 (ADR 0080): FT4 is a third operating mode beside Phone/CW and
+// FT8 — its own path, its own stored-mode value, the same single mode-change
+// hook, and an FT-family predicate for the gates the shared FT view relies on.
+describe('FT4 as a third operating mode', () => {
+    let seen: { from: string; to: string }[] = [];
+
+    beforeEach(() => {
+        seen = [];
+        setModeChangeHook((from, to) => seen.push({ from, to }));
+        setMode('phone');
+        seen = [];
+    });
+
+    afterEach(() => {
+        setModeChangeHook(null);
+    });
+
+    it('routes /operate/ft4 and builds the same path back', () => {
+        expect(urlOf('operate', 'ft4', '')).toBe('/operate/ft4');
+        window.history.pushState({}, '', '/operate/ft4');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+        expect(router.view).toBe('operate');
+        expect(router.mode).toBe('ft4');
+        expect(seen).toEqual([{ from: 'phone', to: 'ft4' }]);
+    });
+
+    it('notifies FT8 → FT4 and FT4 → FT8 as real mode changes (the FT view remounts on them)', () => {
+        setMode('ft8');
+        setMode('ft4');
+        setMode('ft8');
+        expect(seen).toEqual([
+            { from: 'phone', to: 'ft8' },
+            { from: 'ft8', to: 'ft4' },
+            { from: 'ft4', to: 'ft8' },
+        ]);
+    });
+
+    it('remembers ft4 as the last-used mode for a bare /operate', () => {
+        setMode('ft4');
+        window.history.pushState({}, '', '/operate');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+        expect(router.mode).toBe('ft4');
+    });
+
+    it('isFtMode names the FT-family modes the shared FT view serves', () => {
+        expect(isFtMode('ft8')).toBe(true);
+        expect(isFtMode('ft4')).toBe(true);
+        expect(isFtMode('phone')).toBe(false);
     });
 });

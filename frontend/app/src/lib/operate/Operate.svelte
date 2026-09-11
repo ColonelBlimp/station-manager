@@ -8,7 +8,7 @@
     // that did appear was CONSISTENCY between workspaces — answered by the ambient
     // host below, not by tiling — and with Rig and Session ambient the board was
     // arranging two tiles.
-    import { router } from '../router.svelte';
+    import { router, isFtMode } from '../router.svelte';
     import UtilRail from './UtilRail.svelte';
     import PileupDrawer from './PileupDrawer.svelte';
     import CallsignStackPanel from './CallsignStackPanel.svelte';
@@ -37,8 +37,15 @@
          FT8 subtree is fetched only when the operator switches to FT8, so a
          Phone/CW load never carries it. The ambient host, rail, drawer and
          RigKeys below render regardless of which workspace is up. -->
+    <!-- Keyed on the mode: FT8 ↔ FT4 must DESTROY and REMOUNT the view, because
+         the stream opens in its onMount and each mount claims its own profile
+         (ADR 0080) — a bare mode change would leave the FT8 subscription open
+         under an FT4 label. Sidebar clicks and Back/Forward both change
+         router.mode, so both transitions remount. -->
     {#await import('./Ft8View.svelte') then ft8}
-        <ft8.default />
+        {#key router.mode}
+            <ft8.default />
+        {/key}
     {/await}
 {/if}
 
@@ -48,7 +55,7 @@
      nothing can add to that queue outside Band Activity — and while it was
      mounted there, opening it disabled Ctrl+Enter and Esc on the logging card.
      Phone/CW has its own pile-up (CallsignStackPanel), which needs no toggle. -->
-{#if router.mode === 'ft8'}
+{#if isFtMode(router.mode)}
     <PileupDrawer />
 {:else}
     <CallsignStackPanel />
@@ -84,7 +91,12 @@
             {#if router.mode === 'phone'}
                 <RigPanel />
             {:else}
-                <RigPanel pickBand={ft8SelectBand} requiresCat />
+                <RigPanel
+                    pickBand={(band: string) =>
+                        ft8SelectBand(band, router.mode === 'ft4' ? 'ft4' : 'ft8')}
+                    modeLabel={router.mode === 'ft4' ? 'FT4' : 'FT8'}
+                    requiresCat
+                />
             {/if}
         {/if}
         {#if isVisible('session')}<SessionPanel />{/if}

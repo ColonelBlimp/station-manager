@@ -65,6 +65,12 @@ func (s *Server) handleContestDupe(w http.ResponseWriter, r *http.Request) {
 			"mode is not a recognised mode", op)
 		return
 	}
+	// submode narrows a mode match to one ADIF SUBMODE (ADR 0080: an FT4 contact
+	// is MODE=MFSK SUBMODE=FT4, and "worked on FT4" must not match other MFSK
+	// submodes). Not checked against the submode enumeration: the embedded
+	// baseline lags the specification (it still lists FT4 as a mode), and the
+	// predicate is an exact match — an unknown value simply never matches.
+	submode := strings.ToUpper(strings.TrimSpace(q.Get("submode")))
 
 	// Verify the logbook exists, same rationale as the list endpoint: a
 	// bogus id silently returning "not a dupe" would be misleading.
@@ -82,7 +88,7 @@ func (s *Server) handleContestDupe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	dupe, err := s.db.IsContestDuplicateByLogbookIDWithContext(
-		r.Context(), logbookID, callsign, band, mode,
+		r.Context(), logbookID, callsign, band, mode, submode,
 	)
 	if err != nil {
 		s.writeServerError(w, op, err, "db_error", "database operation failed")

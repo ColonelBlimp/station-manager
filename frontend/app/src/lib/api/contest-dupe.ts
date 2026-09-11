@@ -35,6 +35,8 @@ export interface ContestDupeQuery {
     call: string;
     band: string;
     mode?: string;
+    /** Narrows the mode match to one ADIF SUBMODE (an FT4 contact is MFSK/FT4, ADR 0080). */
+    submode?: string;
 }
 
 export async function fetchContestDupe(
@@ -47,6 +49,7 @@ export async function fetchContestDupe(
         band: q.band,
     });
     if (q.mode) params.set('mode', q.mode);
+    if (q.submode) params.set('submode', q.submode);
 
     const fetched = await safeFetch(`/v1/contest-dupe?${params.toString()}`, {
         method: 'GET',

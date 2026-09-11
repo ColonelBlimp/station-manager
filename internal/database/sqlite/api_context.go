@@ -1991,7 +1991,13 @@ func (s *Service) UpdateLogbookFieldsWithContext(ctx context.Context, id int64, 
 // Pass mode="" for band-only contests (ARRL DX, etc.). Pass mode="SSB"
 // (or similar) for band+mode contests (CQ WW, etc.). The client owns the
 // contest rule; the daemon just answers the filtered existence question.
-func (s *Service) IsContestDuplicateByLogbookIDWithContext(ctx context.Context, id int64, callsign, band, mode string) (bool, error) {
+//
+// submode narrows a mode match to one ADIF SUBMODE (ADR 0080: an FT4 contact is
+// filed MODE=MFSK SUBMODE=FT4, and "worked on FT4" must not match JS8 or FST4,
+// which are MFSK too). SUBMODE is not a column; it lives in the additional_data
+// blob, matched with the same json_extract predicate the upload-status filters
+// use. Empty = any submode of the mode.
+func (s *Service) IsContestDuplicateByLogbookIDWithContext(ctx context.Context, id int64, callsign, band, mode, submode string) (bool, error) {
 	const op errors.Op = "sqlite.Service.IsContestDuplicateByLogbookIDWithContext"
 	if err := checkService(op, s); err != nil {
 		return false, err
@@ -2027,6 +2033,9 @@ func (s *Service) IsContestDuplicateByLogbookIDWithContext(ctx context.Context, 
 	}
 	if mode != "" {
 		mods = append(mods, models.QsoWhere.Mode.EQ(mode))
+	}
+	if submode = strings.TrimSpace(submode); submode != "" {
+		mods = append(mods, qm.Where("COALESCE(json_extract(additional_data, '$.submode'), '') = ?", submode))
 	}
 
 	exists, err := models.Qsos(mods...).Exists(ctx, h)

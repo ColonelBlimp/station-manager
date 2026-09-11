@@ -236,3 +236,24 @@ func TestContestDupe_LogbookNotFound(t *testing.T) {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusNotFound)
 	}
 }
+
+// ADR 0080: `submode` narrows a mode match — an FT4 contact (MFSK/FT4) answers
+// "worked on FT4" but not "worked on JS8".
+func TestContestDupe_SubmodeNarrowsMode(t *testing.T) {
+	srv := testServer(t)
+	lbID := createTestLogbook(t, srv, "Contest", "G4ABC")
+	submitQso(t, srv, lbID, `<CALL:5>K1ABC<BAND:3>20m<MODE:4>MFSK<SUBMODE:3>FT4<FREQ:6>14.080<QSO_DATE:8>20260912<TIME_ON:4>1530<RST_SENT:3>-10<RST_RCVD:3>-12<STATION_CALLSIGN:5>G4ABC<COUNTRY:13>United States<EOR>`, false)
+
+	for _, tc := range []struct {
+		submode string
+		want    string
+	}{{"FT4", `"duplicate":true`}, {"JS8", `"duplicate":false`}, {"", `"duplicate":true`}} {
+		w := contestDupe(t, srv, fmt.Sprintf("%d", lbID), "K1ABC", "20m", "MFSK&submode="+tc.submode)
+		if w.Code != http.StatusOK {
+			t.Fatalf("submode %q: status = %d; body = %s", tc.submode, w.Code, w.Body.String())
+		}
+		if !strings.Contains(w.Body.String(), tc.want) {
+			t.Fatalf("submode %q: body = %q, want %s", tc.submode, w.Body.String(), tc.want)
+		}
+	}
+}

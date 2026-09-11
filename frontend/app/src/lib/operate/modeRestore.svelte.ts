@@ -28,7 +28,7 @@
     single band + mode + freq, so that is what a CAT-off snapshot holds.
 */
 
-import type { OpMode } from '../router.svelte';
+import { isFtMode, type OpMode } from '../router.svelte';
 import {
     rig,
     hasOp,
@@ -38,7 +38,8 @@ import {
     rigReportVersions,
     setMode as rigSetMode,
     selectVfo as rigSelectVfo,
-    ft8FrequencyFor,
+    ftFrequencyFor,
+    type FtMode,
     ft8ModeLiteral,
     writeSucceeded,
     type RigReportVersions,
@@ -69,7 +70,7 @@ export function setRestoreOnModeSwitch(on: boolean): void {
     restoreOnSwitch = on;
 }
 
-const snapshots: Record<OpMode, OperatingSnapshot | null> = { phone: null, ft8: null };
+const snapshots: Record<OpMode, OperatingSnapshot | null> = { phone: null, ft8: null, ft4: null };
 
 /*
     Boot-into-FT8 phone fallback (A26, 2026-08-07 dogfood report). A session
@@ -96,7 +97,7 @@ let bootWindowClosed = false;
 
 /** Called on every rig-state report (main.ts) with the router's current mode. */
 export function noteRigReport(mode: OpMode): void {
-    if (bootWindowClosed || mode !== 'ft8') return;
+    if (bootWindowClosed || !isFtMode(mode)) return;
     if (rig.vfoA === null || rig.modeLiteral === '') return; // wait for a full report
     if (snapshots.phone === null) snapshots.phone = snapshotOperating();
     bootWindowClosed = true;
@@ -152,7 +153,7 @@ let seedRefusedAt: { fields: ('vfoA' | 'vfoB' | 'mode')[]; versions: RigReportVe
     null;
 
 function seedNeverRan(from: OpMode): boolean {
-    if (from !== 'ft8' || seedRefusedAt === null) return false;
+    if (!isFtMode(from) || seedRefusedAt === null) return false;
     const at = seedRefusedAt;
     const now = rigReportVersions();
     return at.fields.every((f) => now[f] === at.versions[f]);
@@ -223,7 +224,7 @@ async function applySwitch(from: OpMode, to: OpMode): Promise<void> {
     if (incoming === null) {
         // Never operated this mode: nothing to RESTORE — but FT8 has a
         // canonical home to ESTABLISH (A25). Phone does not; it stays a no-op.
-        if (to === 'ft8') await seedFt8();
+        if (isFtMode(to)) await seedFt(to as FtMode);
         return;
     }
 
@@ -343,10 +344,10 @@ async function applyRestore(to: OpMode, incoming: OperatingSnapshot): Promise<vo
     actually on its way to the watering hole, and the exit snapshot records
     the phone position as FT8's.
 */
-async function seedFt8(): Promise<void> {
+async function seedFt(mode: FtMode): Promise<void> {
     if (rig.cat !== 'connected') return; // CAT-off FT8 cannot work at all — nothing to establish (operator, 2026-08-06)
     if (!restoreOnSwitch) return; // the knob's promise: no switch moves a live rig
-    const hz = ft8FrequencyFor(rig.band);
+    const hz = ftFrequencyFor(mode, rig.band); // the entered mode's own table (ADR 0080)
     if (hz === undefined) return; // unconfigured: nothing to establish, and no nagging
 
     // FT8 operates on the SELECTED VFO — rig.band derives from it and
@@ -364,7 +365,9 @@ async function seedFt8(): Promise<void> {
     if (!hasOp(freqOp)) return;
     if (transmitting()) {
         seedRefusedAt = { fields: [vfoField, 'mode'], versions: rigReportVersions() };
-        toasts.info('Transmitting — the rig was left where it is, not tuned for FT8.');
+        toasts.info(
+            `Transmitting — the rig was left where it is, not tuned for ${mode.toUpperCase()}.`
+        );
         return;
     }
 
@@ -374,7 +377,7 @@ async function seedFt8(): Promise<void> {
         const r = await driveRig(freqOp, String(target));
         if (!writeSucceeded(r)) {
             seedRefusedAt = { fields: [vfoField, 'mode'], versions: rigReportVersions() };
-            toasts.error(`Could not tune for FT8: ${resultMessage(r)}`);
+            toasts.error(`Could not tune for ${mode.toUpperCase()}: ${resultMessage(r)}`);
             return;
         }
         held[vfoField] = { value: target, seq };
@@ -392,7 +395,7 @@ async function seedFt8(): Promise<void> {
             // doing, not operator evidence (review c0df1c8a). The retry
             // re-enters with the dial already effective and sends mode alone.
             seedRefusedAt = { fields: ['mode'], versions: rigReportVersions() };
-            toasts.error(`Could not set the FT8 mode: ${resultMessage(r)}`);
+            toasts.error(`Could not set the ${mode.toUpperCase()} mode: ${resultMessage(r)}`);
             return;
         }
         held.mode = { value: literal, seq };
@@ -448,6 +451,7 @@ function effective(): OperatingSnapshot {
 export function resetModeRestore(): void {
     snapshots.phone = null;
     snapshots.ft8 = null;
+    snapshots.ft4 = null;
     bootWindowClosed = false;
     restoreOnSwitch = true;
     unrestored = null;

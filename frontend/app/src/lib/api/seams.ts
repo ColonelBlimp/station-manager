@@ -175,6 +175,10 @@ export interface StationContext {
      *  defaults + operator overrides, merged daemon-side). Drives the FT8 rig card's
      *  band buttons (jump to the watering-hole, not the rig's band-stack freq). */
     ft8Frequencies: Record<string, number>;
+    /** Per-band FT4 dial frequencies (config `ft4_frequencies`, ADR 0080 — the three
+     *  cited contest bands plus operator overrides, merged daemon-side). Drives the
+     *  FT rig card's band buttons while the FT4 item is up. */
+    ft4Frequencies: Record<string, number>;
     /** The rig's OWN mode literal for FT8 (config `bridge.ft8_mode` — rigdef
      *  default, overridable per rig: "DATA-U" on the FTdx10, "USB-D" on the
      *  IC-7300). An FT8 band pick asserts it so the dial move also puts the rig
@@ -232,6 +236,7 @@ export async function fetchStationContext(): Promise<StationContext> {
         ft8CqToTop: false,
         ft8HideHashed: false,
         ft8Frequencies: {},
+        ft4Frequencies: {},
         ft8Mode: '',
         ft8CallerAnswerMode: 'operator_pick',
         ft8AudioLowDbfs: -60,
@@ -282,6 +287,7 @@ export async function fetchStationContext(): Promise<StationContext> {
         ft8CqToTop: fd.cq_to_top === true,
         ft8HideHashed: fd.hide_hashed_calls === true,
         ft8Frequencies: toNumberMap(body.ft8_frequencies),
+        ft4Frequencies: toNumberMap(body.ft4_frequencies),
         // In the BRIDGE block beside ops/rig_modes — it is rig-driver data.
         ft8Mode: str(br.ft8_mode),
         ft8CallerAnswerMode: str(body.ft8_caller_answer_mode) || 'operator_pick',

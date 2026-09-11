@@ -14,6 +14,7 @@ import {
     setCommandSender,
     setOperatingBands,
     setFt8Frequencies,
+    setFt4Frequencies,
     setFt8Mode,
 } from './lib/operate/rig.svelte';
 import { openRigEvents } from './lib/api/rig-sse';
@@ -23,6 +24,7 @@ import {
     noteStreamReopen,
 } from './lib/ui/buildIdentity.svelte';
 import { openFt8Events } from './lib/api/ft8-sse';
+import { claimFt8Profile } from './lib/api/ft8claim';
 import { openLogEvents } from './lib/api/log-events';
 import {
     setFt8Transport,
@@ -35,6 +37,7 @@ import {
     setFt8TxDisarmedSink,
     setFt8DisplayPrefs,
     type Ft8TxResult,
+    setFt8Claimer,
 } from './lib/operate/ft8.svelte';
 import { setStationInfo, setLogbookCount } from './lib/operate/station.svelte';
 import { setFt8AudioWindow } from './lib/operate/audioLevel.svelte';
@@ -96,6 +99,7 @@ setHistory(apiHistory);
 // FT8 view opens/closes it view-scoped via startFt8/stopFt8 — this only injects
 // the opener.
 setFt8Transport(openFt8Events);
+setFt8Claimer(claimFt8Profile); // the view claims its profile before it subscribes (ADR 0080)
 
 // FT8 TX action seam (ADR 0029/0030/0031/0033) — the first RF path from this SPA.
 // The daemon owns arming + the guaranteed stop + the CQ→73 sequencing; the SPA
@@ -231,7 +235,8 @@ setFt8LoggedSink((p) => {
         country: p.country ?? '',
         comment: '',
     });
-    if (call !== '') ft8EnrichState.markWorked(call, band);
+    // Mark it worked under the profile it was filed on (MFSK/FT4 is FT4's bucket).
+    if (call !== '') ft8EnrichState.markWorked(call, band, p.submode === 'FT4' ? 'FT4' : 'FT8');
     toasts.info(call !== '' ? `QSO logged — ${call}${band ? ` (${band})` : ''}` : 'QSO logged');
     refreshLogbookCount(); // header "(n)" ticks up on each logged FT8 QSO
 });
@@ -265,6 +270,7 @@ const ctx: StationContext = {
     ft8CqToTop: false,
     ft8HideHashed: false,
     ft8Frequencies: {},
+    ft4Frequencies: {},
     ft8Mode: '',
     ft8CallerAnswerMode: 'operator_pick',
     ft8AudioLowDbfs: -60,
@@ -291,9 +297,9 @@ function refreshLogbookCount(): void {
 
 // Worked-before dupe seam (/v1/contest-dupe), closing over ctx so it reads the
 // resolved default-logbook id at lookup time. No logbook → unknown (skip).
-setFt8Dupe((call, band, mode) => {
+setFt8Dupe((call, band, mode, submode) => {
     if (ctx.logbookId < 1) return Promise.resolve(null);
-    return fetchContestDupe({ logbook: ctx.logbookId, call, band, mode })
+    return fetchContestDupe({ logbook: ctx.logbookId, call, band, mode, submode })
         .then((o) => (o.kind === 'ok' ? o.duplicate : null))
         .catch(() => null);
 });
@@ -334,6 +340,7 @@ function applyStationContext(c: StationContext): void {
     // Per-band FT8 watering-hole freqs → the FT8 rig card's band buttons jump to the
     // configured dial freq (set_freq) instead of the rig's band-stack freq.
     setFt8Frequencies(c.ft8Frequencies);
+    setFt4Frequencies(c.ft4Frequencies); // FT4's own table (ADR 0080), read through the mode
     // …and the rig's own FT8 mode literal, which those same band buttons assert
     // alongside the dial move. A Phone/CW band pick gets its mode for free from
     // the rig's band-stack recall (set_band); FT8 uses set_freq, which triggers

@@ -9,6 +9,8 @@ import {
     setFt8DisplayPrefs,
     setFt8LoggedSink,
     setFt8Transport,
+    setFt8Claimer,
+    reclaimFt8,
     setFt8TxActions,
     armTx,
     callCq,
@@ -21,10 +23,13 @@ import {
     type Ft8TxActions,
     setFt8SessionEndedSink,
 } from './ft8.svelte';
-import type { DecodeReport } from '../api/ft8-sse';
+import type { DecodeReport, Ft8EventHandlers } from '../api/ft8-sse';
 
 beforeEach(() => {
     resetFt8ForTests();
+    // The profile claim stands for every case not about the claim itself: the
+    // TX-intent gate (ADR 0080) is pinned in its own describe below.
+    ft8State.claimed = true;
 });
 
 function decodeSlot(
@@ -367,9 +372,9 @@ describe('TX action wrappers', () => {
 */
 describe('FT8 arm confirm-by-push (F-04)', () => {
     const ENABLE_UNKNOWN =
-        "Couldn't confirm that FT8 TX was enabled. The control will update when Station Manager reports its state.";
+        "Couldn't confirm that TX was enabled. The control will update when Station Manager reports its state.";
     const DISABLE_UNKNOWN =
-        "Couldn't confirm that FT8 TX was disabled. Check the radio; the control will update when Station Manager reports its state.";
+        "Couldn't confirm that TX was disabled. Check the radio; the control will update when Station Manager reports its state.";
 
     beforeEach(() => {
         vi.useFakeTimers();
@@ -530,8 +535,8 @@ describe('view-scoped lifecycle', () => {
             return () => closed++;
         });
 
-        startFt8();
-        startFt8(); // idempotent — no second open
+        void startFt8();
+        void startFt8(); // idempotent — no second open
         expect(opened).toBe(1);
         expect(ft8State.connected).toBe(true);
 
@@ -545,7 +550,7 @@ describe('view-scoped lifecycle', () => {
     });
 
     it('startFt8 is a no-op with no transport injected', () => {
-        startFt8();
+        void startFt8();
         expect(ft8State.connected).toBe(false);
     });
 });
@@ -633,5 +638,290 @@ describe('session-ended notice (dogfood 2026-07-27, on air)', () => {
         ft8Link.onQso({ active: false, end_reason: 'dial_unknown' });
 
         expect(seen).toEqual([]);
+    });
+});
+
+// W-0019 slice 4 (ADR 0080): the view claims its profile BEFORE the stream
+// opens. A refusal never opens the stream and shows as ft8State.claimRefusal
+// (the banner), re-claiming on the daemon's hint; a stop while a claim is in
+// flight must not be followed by an open; the TX frame's mode drives the profile.
+describe('profile claim before subscribe (ADR 0080)', () => {
+    beforeEach(() => {
+        vi.useFakeTimers();
+    });
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it('a granted claim opens the stream on the claimed profile', async () => {
+        const opened: (string | undefined)[] = [];
+        setFt8Transport((_h, mode) => {
+            opened.push(mode);
+            return () => undefined;
+        });
+        setFt8Claimer(() => Promise.resolve({ kind: 'ok', mode: 'FT4' }));
+
+        await startFt8('ft4');
+        expect(opened).toEqual(['ft4']);
+        expect(ft8State.profile).toBe('FT4');
+        expect(ft8State.claimRefusal).toBeNull();
+    });
+
+    it('a refusal shows the banner, opens nothing, and re-claims when the hint elapses', async () => {
+        const opened: (string | undefined)[] = [];
+        setFt8Transport((_h, mode) => {
+            opened.push(mode);
+            return () => undefined;
+        });
+        let claims = 0;
+        setFt8Claimer(() => {
+            claims++;
+            return Promise.resolve(
+                claims === 1
+                    ? {
+                          kind: 'refused',
+                          code: 'ft8_session_active',
+                          message: 'winding down',
+                          retryAfterMs: 4000,
+                      }
+                    : { kind: 'ok', mode: 'FT4' }
+            );
+        });
+
+        await startFt8('ft4');
+        expect(opened).toEqual([]);
+        expect(ft8State.claimRefusal).toMatchObject({
+            code: 'ft8_session_active',
+            message: 'winding down',
+        });
+        expect(ft8State.claimRefusal?.retryAt).toBeGreaterThan(Date.now());
+
+        await vi.advanceTimersByTimeAsync(4000);
+        expect(claims).toBe(2);
+        expect(opened).toEqual(['ft4']);
+        expect(ft8State.claimRefusal).toBeNull();
+    });
+
+    it('a refusal without a hint schedules nothing (the operator acts)', async () => {
+        setFt8Transport(() => () => undefined);
+        let claims = 0;
+        setFt8Claimer(() => {
+            claims++;
+            return Promise.resolve({
+                kind: 'refused',
+                code: 'ft8_profile_busy',
+                message: 'busy',
+                retryAfterMs: 0,
+            });
+        });
+        await startFt8('ft4');
+        expect(ft8State.claimRefusal?.retryAt).toBe(0);
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(claims).toBe(1);
+    });
+
+    it('a stop while the claim is in flight cancels the open', async () => {
+        const opened: (string | undefined)[] = [];
+        setFt8Transport((_h, mode) => {
+            opened.push(mode);
+            return () => undefined;
+        });
+        let resolve!: (r: { kind: 'ok'; mode: string }) => void;
+        setFt8Claimer(() => new Promise((r) => (resolve = r)));
+
+        const started = startFt8('ft4');
+        stopFt8(); // the operator left before the daemon answered
+        resolve({ kind: 'ok', mode: 'FT4' });
+        await started;
+        expect(opened).toEqual([]);
+    });
+
+    it('a stop cancels a pending re-claim and clears the banner', async () => {
+        setFt8Transport(() => () => undefined);
+        let claims = 0;
+        setFt8Claimer(() => {
+            claims++;
+            return Promise.resolve({
+                kind: 'refused',
+                code: 'ft8_session_active',
+                message: 'x',
+                retryAfterMs: 1000,
+            });
+        });
+        await startFt8('ft4');
+        stopFt8();
+        expect(ft8State.claimRefusal).toBeNull();
+        await vi.advanceTimersByTimeAsync(5000);
+        expect(claims).toBe(1);
+    });
+
+    it('the ft8-tx frame names the profile the slot clock follows', () => {
+        ft8Link.onTx({ armed: false, transmitting: false, mode: 'FT4' });
+        expect(ft8State.tx.mode).toBe('FT4');
+        expect(ft8State.profile).toBe('FT4');
+        ft8Link.onTx({ armed: false, transmitting: false, mode: 'FT8' });
+        expect(ft8State.profile).toBe('FT8');
+    });
+});
+
+// ADR 0080: every TX-STARTING intent waits for the profile claim; disarm never
+// does; a transient SSE loss keeps an established claim; a 200 that names the
+// other profile is a contradiction, not a grant.
+describe('TX intents wait for the profile claim (ADR 0080)', () => {
+    const wired = () => {
+        const calls: string[] = [];
+        setFt8TxActions({
+            arm: (armed) => {
+                calls.push(`arm:${armed}`);
+                return Promise.resolve({ kind: 'accepted' });
+            },
+            callCq: () => {
+                calls.push('callCq');
+                return Promise.resolve({ ok: true, message: '' });
+            },
+            answerCq: () => {
+                calls.push('answerCq');
+                return Promise.resolve({ ok: true, message: '' });
+            },
+            workCaller: () => {
+                calls.push('workCaller');
+                return Promise.resolve({ ok: true, message: '' });
+            },
+            stopAutoWork: () => Promise.resolve({ ok: true, message: '' }),
+            bagAnswerer: () => Promise.resolve({ ok: true, message: '' }),
+            unbagAnswerer: () => Promise.resolve({ ok: true, message: '' }),
+            resumeDrain: () => Promise.resolve({ ok: true, message: '' }),
+            pickAnswerer: () => Promise.resolve({ ok: true, message: '' }),
+            abandon: () => {
+                calls.push('abandon');
+                return Promise.resolve({ ok: true, message: '' });
+            },
+            skip: () => Promise.resolve({ ok: true, message: '' }),
+            next: () => Promise.resolve({ ok: true, message: '' }),
+        });
+        return calls;
+    };
+
+    it('refuses arm, Call CQ, answer and work before the claim; disarm and abandon pass', async () => {
+        const calls = wired();
+        ft8State.claimed = false; // the view has not claimed yet
+        expect(ft8State.claimed).toBe(false);
+        expect((await armTx(true)).status).toBe('failed');
+        expect((await callCq(1500, 14.08, 'next')).ok).toBe(false);
+        expect(
+            (
+                await answerCq({
+                    theirCall: 'K1ABC',
+                    theirGrid: 'FN42',
+                    slotUtc: 'x',
+                    offsetHz: 1500,
+                    opFreqMHz: 14.08,
+                    fd: false,
+                    theirSnr: -5,
+                })
+            ).ok
+        ).toBe(false);
+        expect(
+            (
+                await workCaller({
+                    theirCall: 'K1ABC',
+                    theirGrid: 'FN42',
+                    theirSnr: -5,
+                    slotUtc: 'x',
+                    offsetHz: 1500,
+                    opFreqMHz: 14.08,
+                })
+            ).ok
+        ).toBe(false);
+        expect(calls).toEqual([]);
+        await armTx(false);
+        await abandonQso();
+        expect(calls).toEqual(['arm:false', 'abandon']);
+    });
+
+    it('passes them through once the claim stands, and a stream error does not revoke it', async () => {
+        const calls = wired();
+        ft8State.claimed = false;
+        setFt8Transport((h) => {
+            h.onOpen();
+            return () => undefined;
+        });
+        setFt8Claimer(() => Promise.resolve({ kind: 'ok', mode: 'FT4' }));
+        await startFt8('ft4');
+        expect(ft8State.claimed).toBe(true);
+        ft8Link.onError(); // transient SSE loss
+        expect(ft8State.claimed).toBe(true);
+        await armTx(true);
+        await callCq(1500, 14.08, 'next');
+        expect(calls).toEqual(['arm:true', 'callCq']);
+        stopFt8();
+        expect(ft8State.claimed).toBe(false);
+    });
+
+    it('a 200 naming the other profile opens nothing and shows a malformed-claim refusal', async () => {
+        ft8State.claimed = false;
+        const opened: (string | undefined)[] = [];
+        setFt8Transport((_h, mode) => {
+            opened.push(mode);
+            return () => undefined;
+        });
+        setFt8Claimer(() => Promise.resolve({ kind: 'ok', mode: 'FT8' }));
+        await startFt8('ft4');
+        expect(opened).toEqual([]);
+        expect(ft8State.claimed).toBe(false);
+        expect(ft8State.claimRefusal?.code).toBe('ft8_claim_malformed');
+        expect(ft8State.claimRefusal?.retryAt).toBe(0);
+    });
+});
+
+// ADR 0080: the claim stands only once the CURRENT stream has opened — between
+// the subscription and its open event another claim can still win and the
+// daemon refuses the stream; from the first open onward an error keeps it.
+describe("the claim is established by the stream's first open", () => {
+    it('is not claimed at construction, nor after an error before the open', async () => {
+        let handlers: Ft8EventHandlers | null = null;
+        setFt8Transport((h, _mode) => {
+            handlers = h; // opens LATER, like a real EventSource
+            return () => undefined;
+        });
+        setFt8Claimer(() => Promise.resolve({ kind: 'ok', mode: 'FT4' }));
+        ft8State.claimed = false;
+
+        await startFt8('ft4');
+        expect(ft8State.claimed).toBe(false);
+        handlers!.onError(); // the daemon refused the subscription
+        expect(ft8State.claimed).toBe(false);
+        expect((await armTx(true)).status).toBe('failed');
+
+        handlers!.onOpen();
+        expect(ft8State.claimed).toBe(true);
+        handlers!.onError(); // a transient drop after the open keeps the claim
+        expect(ft8State.claimed).toBe(true);
+    });
+
+    it('reclaimFt8 drops the refusal and claims again at once', async () => {
+        const opened: (string | undefined)[] = [];
+        setFt8Transport((h, mode) => {
+            opened.push(mode);
+            h.onOpen();
+            return () => undefined;
+        });
+        let claims = 0;
+        setFt8Claimer(() => {
+            claims++;
+            return Promise.resolve(
+                claims === 1
+                    ? { kind: 'refused', code: 'ft8_tx_armed', message: 'armed', retryAfterMs: 0 }
+                    : { kind: 'ok', mode: 'FT4' }
+            );
+        });
+        ft8State.claimed = false;
+        await startFt8('ft4');
+        expect(ft8State.claimRefusal?.code).toBe('ft8_tx_armed');
+        await reclaimFt8('ft4');
+        expect(claims).toBe(2);
+        expect(opened).toEqual(['ft4']);
+        expect(ft8State.claimRefusal).toBeNull();
+        expect(ft8State.claimed).toBe(true);
     });
 });

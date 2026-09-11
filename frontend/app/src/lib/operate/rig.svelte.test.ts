@@ -37,6 +37,8 @@ import {
     setFt8Frequencies,
     setFt8Mode,
     ft8SelectBand,
+    setFt4Frequencies,
+    ftFrequencyFor,
 } from './rig.svelte';
 
 beforeEach(() => {
@@ -1054,5 +1056,33 @@ describe('ft8SelectBand — FT8 watering-hole band pick', () => {
         expect(sent.map((c) => c.op)).toEqual(['set_freq', 'set_mode']);
         expect(r.status).toBe('failed');
         if (r.status === 'failed') expect(r.message).toContain('mode');
+    });
+});
+
+// W-0019 slice 4 (ADR 0080): FT4 has its own dial table (config ft4_frequencies —
+// the three cited contest bands unless the operator adds more), read by the
+// shared FT rig card's band buttons and by modeRestore's seed through the mode.
+describe('FT4 dial table', () => {
+    it('ftFrequencyFor reads the table of the mode asked for', () => {
+        setFt8Frequencies({ '20m': 14074000 });
+        setFt4Frequencies({ '20m': 14080000 });
+        expect(ftFrequencyFor('ft8', '20m')).toBe(14074000);
+        expect(ftFrequencyFor('ft4', '20m')).toBe(14080000);
+        expect(ftFrequencyFor('ft4', '40m')).toBeUndefined();
+    });
+
+    it('a band pick in FT4 jumps to the FT4 dial, not the FT8 one (CAT-off)', async () => {
+        setFt8Frequencies({ '20m': 14074000 });
+        setFt4Frequencies({ '20m': 14080000 });
+        const r = await ft8SelectBand('20m', 'ft4');
+        expect(r.status).toBe('accepted');
+        expect(rig.freq).toBe('14.080.000');
+    });
+
+    it('a band with no FT4 dial is refused by name', async () => {
+        setFt4Frequencies({ '20m': 14080000 });
+        const r = await ft8SelectBand('15m', 'ft4');
+        expect(r.status).toBe('failed');
+        expect(r.status === 'failed' && r.message).toMatch(/No FT4 frequency configured for 15m/);
     });
 });

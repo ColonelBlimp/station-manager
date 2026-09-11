@@ -18,6 +18,7 @@
     import { rig } from './rig.svelte';
     import { buildLadder } from './ft8Ladder';
     import { parseFrequency } from '../validators/frequency';
+    import { slotClock, slotMsFor } from '../utils/ft8Parity';
     import { toasts } from '../ui/toasts.svelte';
     import EnrichmentCard from './EnrichmentCard.svelte';
 
@@ -56,16 +57,17 @@
         const t = setInterval(() => (now = Date.now()), 250);
         return () => clearInterval(t);
     });
-    // Whole seconds until the next slot boundary (1–15), off the UTC-aligned 15 s grid.
-    const secsLeft = $derived.by(() => {
-        const boundary = Math.floor(now / 15_000) * 15_000;
-        return Math.max(1, Math.min(15, Math.ceil((boundary + 15_000 - now) / 1000)));
-    });
+    // The slot clock follows the active profile (ADR 0080): 15 s for FT8, 7.5 s
+    // for FT4 — whole seconds to the next boundary and the parity in progress,
+    // both pure functions of NOW on the UTC-aligned lattice.
+    const slotMs = $derived(slotMsFor(ft8State.profile));
+    const clock = $derived(slotClock(now, slotMs));
+    const secsLeft = $derived(clock.secsLeft);
     // 'tx' = transmitting this slot; 'rx' = active but receiving; 'idle' = no session.
     const pillMode = $derived(tx.transmitting ? 'tx' : qso.active ? 'rx' : 'idle');
     // Parity of the slot currently in progress — same 15 s grid as slotParity / the
     // daemon (:00/:30 even, :15/:45 odd). Live off `now`, so it flips at the boundary.
-    const nowParity = $derived(Math.floor(now / 15_000) % 2 === 0 ? 'even' : 'odd');
+    const nowParity = $derived(clock.parity);
     const pillText = $derived(
         !ft8State.connected
             ? 'Waiting for slot…'
@@ -107,9 +109,12 @@
         offset === null ? 'no clear channel yet' : `${offset} Hz${offsetAuto ? ' · auto' : ''}`
     );
 
-    // Arm whenever CAT is live. Call CQ needs armed + idle + a known offset & dial
-    // freq + our callsign. Abandon drops any active sequenced session.
-    const canArm = $derived(catLive);
+    // Arm needs CAT live AND the profile claim standing (ADR 0080): an FT4-labelled
+    // view must not arm the still-active FT8 profile. Disarm stays available once
+    // armed, claim or no claim — a transient SSE loss must not trap TX armed. Call
+    // CQ needs armed + idle + a known offset & dial freq + our callsign. Abandon
+    // drops any active sequenced session.
+    const canArm = $derived(catLive && (ft8State.claimed || tx.armed));
     const canSend = $derived(
         tx.armed &&
             !tx.transmitting &&

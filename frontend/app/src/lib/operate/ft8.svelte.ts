@@ -47,6 +47,8 @@ export interface Ft8TxStatus {
     error: string;
     /** Stable cause code for the disarm the frame reports ("" while armed). */
     disarmCause: string;
+    /** The daemon's active profile ("FT8" | "FT4"; '' until a frame arrives) — ADR 0080. */
+    mode: string;
 }
 
 const emptyTxStatus = (): Ft8TxStatus => ({
@@ -56,7 +58,17 @@ const emptyTxStatus = (): Ft8TxStatus => ({
     offsetHz: 0,
     error: '',
     disarmCause: '',
+    mode: '',
 });
+
+/** A refused profile claim, shown as a banner in place of Band Activity until the
+ *  re-claim succeeds (ADR 0080). `retryAt` is the wall-clock time of the next
+ *  attempt (0 = none scheduled: the daemon gave no hint, the operator must act). */
+export interface Ft8ClaimRefusal {
+    code: string;
+    message: string;
+    retryAt: number;
+}
 
 /** Manual sequencer status (ft8-qso) — the active contact the Operate ladder renders. */
 export interface Ft8QsoStatus {
@@ -173,6 +185,17 @@ function saveSelectedOffset(hz: number | null): void {
 class Ft8State {
     /** Transport OPEN — says nothing about whether slots are flowing. */
     connected = $state(false);
+    /** The profile this view claimed and runs on ('FT8' | 'FT4', ADR 0080): set by
+     *  the claim, confirmed by every ft8-tx frame. Drives the slot clock. */
+    profile: string = $state('FT8');
+    /** The pending profile refusal, or null while the claim stands. */
+    claimRefusal: Ft8ClaimRefusal | null = $state(null);
+    /** The profile claim stands and the stream was opened on it (ADR 0080). Every
+     *  TX-STARTING intent is refused until then — an FT4-labelled view must not arm
+     *  the still-active FT8 profile. It survives a transient SSE loss (only a stop
+     *  or a refusal clears it), so DISARM stays available while the daemon's
+     *  stream is reconnecting. */
+    claimed = $state(false);
     /** Latest slot any event covered, or null before the first / after leaving. */
     slot: Ft8SlotRef | null = $state(null);
     /** Rolling decode history for Band Activity — newest slot on top, freq-ascending within a slot. */
@@ -518,9 +541,9 @@ export const FT8_ARM_GRACE_MS = 2000;
 // Target-specific unknown wording (operator-ratified): the DAEMON reports the FT8
 // arm state, not the radio — so only the disable case asks for a look at the rig.
 export const FT8_ARM_UNKNOWN_ENABLE_MSG =
-    "Couldn't confirm that FT8 TX was enabled. The control will update when Station Manager reports its state.";
+    "Couldn't confirm that TX was enabled. The control will update when Station Manager reports its state.";
 export const FT8_ARM_UNKNOWN_DISABLE_MSG =
-    "Couldn't confirm that FT8 TX was disabled. Check the radio; the control will update when Station Manager reports its state.";
+    "Couldn't confirm that TX was disabled. Check the radio; the control will update when Station Manager reports its state.";
 
 // Stations the sequencer has engaged since this tab loaded. Deliberately keyed on
 // ENGAGEMENT, not on a completed QSO: an abandoned contact ends up in here too, and
@@ -684,7 +707,15 @@ export function setFt8SessionDefaults(answerMode: string): void {
     }
 }
 
-const txUnavailable: Ft8TxResult = { ok: false, message: 'FT8 transmit is unavailable.' };
+const txUnavailable: Ft8TxResult = { ok: false, message: 'FT transmit is unavailable.' };
+
+/** The refusal every TX-starting intent gets until the profile claim stands. */
+function notClaimed(): Ft8TxResult {
+    return {
+        ok: false,
+        message: `${ft8State.profile} is not claimed yet — wait for the view to connect.`,
+    };
+}
 
 /*
     The single-flight arm WATCH (F-04). Armed BEFORE the POST so a frame landing
@@ -755,6 +786,11 @@ export async function armTx(armed: boolean): Promise<Ft8ArmResult> {
     if (!txActions) {
         return { status: 'failed', kind: 'transport', message: txUnavailable.message };
     }
+    // Arming starts TX; disarming never does, and must stay available after an
+    // established claim even while the stream is down (ADR 0080).
+    if (armed && !ft8State.claimed) {
+        return { status: 'failed', kind: 'refused', message: notClaimed().message };
+    }
     const watch = armArmWatch(armed);
     const out = await txActions.arm(armed);
     if (watch.superseded) return { status: 'superseded' };
@@ -786,6 +822,7 @@ export function callCq(
     opFreqMHz: number,
     parity: 'next' | 'even' | 'odd'
 ): Promise<Ft8TxResult> {
+    if (!ft8State.claimed) return Promise.resolve(notClaimed());
     return txActions
         ? txActions.callCq(offsetHz, opFreqMHz, parity, ft8State.answerMode)
         : Promise.resolve(txUnavailable);
@@ -799,12 +836,14 @@ export function callCq(
  *  whether a run follows and how it selects. */
 export function answerCq(a: Ft8AnswerArgs): Promise<Ft8TxResult> {
     if (!txActions) return Promise.resolve(txUnavailable);
+    if (!ft8State.claimed) return Promise.resolve(notClaimed());
     return txActions.answerCq({ ...a, answerMode: ft8State.answerMode });
 }
 
 /** Start working a station calling us from a clicked directed-at-me decode. */
 export function workCaller(a: Ft8WorkArgs): Promise<Ft8TxResult> {
     if (!txActions) return Promise.resolve(txUnavailable);
+    if (!ft8State.claimed) return Promise.resolve(notClaimed());
     return txActions.workCaller({ ...a, answerMode: ft8State.answerMode });
 }
 
@@ -860,6 +899,14 @@ export function nextAnswerer(): Promise<Ft8TxResult> {
 export const ft8Link: Ft8EventHandlers = {
     onOpen(): void {
         ft8State.connected = true;
+        // The claim stands only once THIS stream has opened (ADR 0080): between
+        // the subscription and its open event another claim can still win and
+        // the daemon refuses the stream, so a claim marked at construction could
+        // arm the wrong profile. From this open onward a transient error keeps it.
+        if (claimAwaitingOpen) {
+            claimAwaitingOpen = false;
+            ft8State.claimed = true;
+        }
     },
 
     // EventSource fires `error` on transient drops (browser auto-retries) and on
@@ -962,7 +1009,9 @@ export const ft8Link: Ft8EventHandlers = {
             offsetHz: p.offset_hz ?? 0,
             error: p.error ?? '',
             disarmCause: p.disarm_cause ?? '',
+            mode: p.mode ?? '',
         };
+        if (p.mode === 'FT8' || p.mode === 'FT4') ft8State.profile = p.mode;
         // Announce a disarm only on an OBSERVED armed→disarmed edge: a replayed
         // frame after a reconnect starts from armed=false and is not a disarm
         // happening now. "operator" is silent (they pressed the button), and so
@@ -1093,7 +1142,7 @@ export const ft8Link: Ft8EventHandlers = {
     this module never imports lib/api — startFt8() opens via it and keeps the
     close fn; stopFt8() closes and clears the volatile per-session state.
 */
-type Opener = (handlers: Ft8EventHandlers) => () => void;
+type Opener = (handlers: Ft8EventHandlers, mode?: string) => () => void;
 let opener: Opener | null = null;
 let closeFn: (() => void) | null = null;
 
@@ -1101,16 +1150,105 @@ export function setFt8Transport(fn: Opener): void {
     opener = fn;
 }
 
-/** Open the FT8 stream (idempotent). Called on FT8-view mount. No-op until the
- *  transport is injected (main.ts) or if already open. */
-export function startFt8(): void {
+/*
+    Profile claim (ADR 0080). The claimer is injected like the transport; the
+    view claims its profile BEFORE the stream opens because a native EventSource
+    cannot surface a refusal code. A refusal becomes ft8State.claimRefusal (the
+    banner) and, when the daemon gave a retry hint, a re-claim on that timer; a
+    stop in the meantime cancels both. `startGen` guards the async gap: a stop
+    that lands while a claim is in flight must not be followed by an open.
+*/
+export type FtProfileName = 'ft8' | 'ft4';
+export type ClaimResult =
+    | { kind: 'ok'; mode: string }
+    | { kind: 'refused'; code: string; message: string; retryAfterMs: number }
+    | { kind: 'validation' | 'server'; code: string; message: string }
+    | { kind: 'aborted' | 'network'; message: string };
+type Claimer = (mode: FtProfileName) => Promise<ClaimResult>;
+let claimer: Claimer | null = null;
+let startGen = 0;
+let reclaimTimer: ReturnType<typeof setTimeout> | null = null;
+// A stream was just opened on a claim; its first open event establishes the claim.
+let claimAwaitingOpen = false;
+
+export function setFt8Claimer(fn: Claimer | null): void {
+    claimer = fn;
+}
+
+function clearReclaim(): void {
+    if (reclaimTimer !== null) {
+        clearTimeout(reclaimTimer);
+        reclaimTimer = null;
+    }
+}
+
+/** Open the FT stream for a profile (idempotent). Called on FT-view mount with
+ *  the router's mode. No-op until the transport is injected (main.ts) or if
+ *  already open. With a claimer injected the profile is claimed first; without
+ *  one (tests, older wiring) the stream opens directly on the FT8 profile. */
+export async function startFt8(mode: FtProfileName = 'ft8'): Promise<void> {
     if (closeFn !== null || opener === null) return;
-    closeFn = opener(ft8Link);
+    const gen = ++startGen;
+    if (claimer === null) {
+        // No claim seam wired (tests, older wiring): the stream opens directly and
+        // the FT8 profile stands once it opens.
+        claimAwaitingOpen = true; // before the opener: a transport may open synchronously
+        closeFn = opener(ft8Link);
+        return;
+    }
+    const result = await claimer(mode);
+    if (gen !== startGen || closeFn !== null) return; // stopped (or re-started) meanwhile
+    if (result.kind === 'ok' && result.mode === mode.toUpperCase()) {
+        ft8State.claimRefusal = null;
+        ft8State.profile = result.mode === 'FT4' ? 'FT4' : 'FT8';
+        claimAwaitingOpen = true; // established by this stream's first open, not here
+        closeFn = opener(ft8Link, mode);
+        return;
+    }
+    if (result.kind === 'ok') {
+        // A 200 naming another profile is a contradiction, not a grant: opening
+        // ?mode= on it would be exactly the EventSource error loop the claim
+        // exists to prevent. Refused, no retry — the operator acts.
+        ft8State.claimRefusal = {
+            code: 'ft8_claim_malformed',
+            message: `Station Manager reported ${result.mode || 'no profile'} for a ${mode.toUpperCase()} claim.`,
+            retryAt: 0,
+        };
+        return;
+    }
+    const message = result.message || 'The profile could not be claimed.';
+    let code: string = result.kind;
+    if (result.kind === 'refused' || result.kind === 'validation' || result.kind === 'server')
+        code = result.code;
+    const retryMs = result.kind === 'refused' ? result.retryAfterMs : 0;
+    ft8State.claimRefusal = { code, message, retryAt: retryMs > 0 ? Date.now() + retryMs : 0 };
+    clearReclaim();
+    if (retryMs > 0) {
+        reclaimTimer = setTimeout(() => {
+            reclaimTimer = null;
+            if (gen !== startGen) return;
+            startGen--; // let the retry take the same generation slot
+            void startFt8(mode);
+        }, retryMs);
+    }
+}
+
+/** Re-claim now — after the operator acted on a refusal (disarmed the other
+ *  profile's TX, abandoned its session) rather than waiting for the hint. */
+export function reclaimFt8(mode: FtProfileName): Promise<void> {
+    clearReclaim();
+    ft8State.claimRefusal = null;
+    return startFt8(mode);
 }
 
 /** Close the FT8 stream + clear volatile state (idempotent). Called on FT8-view
  *  destroy — this is what lets the daemon release the capture device. */
 export function stopFt8(): void {
+    startGen++; // a claim in flight must not open after this
+    clearReclaim();
+    claimAwaitingOpen = false;
+    ft8State.claimRefusal = null;
+    ft8State.claimed = false;
     if (closeFn !== null) {
         closeFn();
         closeFn = null;
@@ -1137,6 +1275,13 @@ export function resetFt8ForTests(): void {
     resetFt8EngagedThisSession();
     opener = null;
     closeFn = null;
+    claimer = null;
+    startGen++;
+    clearReclaim();
+    claimAwaitingOpen = false;
+    ft8State.claimRefusal = null;
+    ft8State.claimed = false;
+    ft8State.profile = 'FT8';
     loggedSink = null;
     sessionEndedSink = null;
     txDisarmedSink = null;
