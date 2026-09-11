@@ -16,6 +16,7 @@
         nextAnswerer,
     } from './ft8.svelte';
     import { rig } from './rig.svelte';
+    import { router } from '../router.svelte';
     import { buildLadder } from './ft8Ladder';
     import { parseFrequency } from '../validators/frequency';
     import { slotClock, slotMsFor } from '../utils/ft8Parity';
@@ -289,7 +290,13 @@
     <!-- h-10: fixed header height shared with Band Activity (see its header
          comment) so the two cards' header rules align. -->
     <div class="flex h-10 shrink-0 items-center gap-x-3 border-b border-line px-4">
-        <h3 class="text-sm font-semibold text-ink">Operate</h3>
+        <!-- The VIEW's profile in the heading (dogfood 2026-09-11) — the item the
+             operator chose, like the sidebar; the chip names the rig's mode and
+             follows the standing claim instead. Not ft8State.profile: that is the
+             last GRANTED profile and outlives a stop or a refusal (codex). -->
+        <h3 class="text-sm font-semibold text-ink">
+            Operate · {router.mode === 'ft4' ? 'FT4' : 'FT8'}
+        </h3>
         <span class="ml-auto text-xs font-semibold text-muted">{roleLabel}</span>
     </div>
 

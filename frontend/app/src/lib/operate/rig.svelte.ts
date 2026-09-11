@@ -925,13 +925,42 @@ export function setModeMappings(m: Record<string, AdifModePair>): void {
     modeMappings = m;
 }
 
+// The FT data literal's label follows the claimed profile (ADR 0080; dogfood
+// 2026-09-11): a mapping names DATA-U "FT8" for the whole FT family, and while
+// the FT4 view holds its claim that literal IS FT4 — on the header chip, in
+// the Rig panel's Mode select and in the ADIF pair the log form resolves from
+// rig.mode (FT4 → MFSK/FT4). '' outside an FT view: the mapping's own name
+// stands, which is the truth about a rig left in its data mode on Phone/CW.
+// Set by the FT view for the life of its mount; never by the rig state itself,
+// which knows nothing of profiles.
+// $state: the live Mode select's option labels read it from a template.
+let ftProfileLabel: '' | 'FT8' | 'FT4' = $state('');
+export function setFtProfileLabel(label: '' | 'FT8' | 'FT4'): void {
+    ftProfileLabel = label;
+    // Re-derive from the literal the rig last reported: the label changes what
+    // the SAME literal is called, and a chip must not wait for the next push.
+    if (rig.modeLiteral !== '') rig.mode = friendlyMode(rig.modeLiteral);
+}
+
+// The live Mode select's label for a rig literal: the literal itself, with the
+// friendly name it maps to when that differs ("DATA-U · FT8", "DATA-U · FT4"
+// while FT4 is claimed; "USB" stays "USB"). The option's VALUE stays the raw
+// literal — that is what set_mode sends (Option A) — only what the operator
+// reads changes (codex review 2026-09-11).
+export function modeOptionLabel(literal: string): string {
+    const name = friendlyMode(literal);
+    return name === literal ? literal : `${literal} · ${name}`;
+}
+
 // Rig literal → the operator-friendly single string the rest of the surface
 // uses (subMode || mode of the mapped ADIF pair — e.g. USB→"USB", DATA-U→
-// "FT8"). resolveModeAndSubmode round-trips it to the (MODE, SUBMODE) pair at
-// submit, so the CAT-live and manual paths converge on one representation.
+// "FT8", or "FT4" while that profile is claimed). resolveModeAndSubmode
+// round-trips it to the (MODE, SUBMODE) pair at submit, so the CAT-live and
+// manual paths converge on one representation.
 function friendlyMode(literal: string): string {
     const mapped = modeMappings[literal];
-    return mapped ? mapped.submode || mapped.mode : literal;
+    const name = mapped ? mapped.submode || mapped.mode : literal;
+    return name === 'FT8' && ftProfileLabel === 'FT4' ? 'FT4' : name;
 }
 
 /*
@@ -1108,6 +1137,7 @@ export function dismissDriveAlarm(): void {
 export function resetCatLink(): void {
     cancelPendingLost();
     modeMappings = {};
+    ftProfileLabel = '';
     tuneSender = null;
     commandSender = null;
     rigCaps.ops = [];

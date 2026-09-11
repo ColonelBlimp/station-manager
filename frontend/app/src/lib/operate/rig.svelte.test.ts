@@ -39,6 +39,7 @@ import {
     ft8SelectBand,
     setFt4Frequencies,
     ftFrequencyFor,
+    setFtProfileLabel,
 } from './rig.svelte';
 
 beforeEach(() => {
@@ -1084,5 +1085,44 @@ describe('FT4 dial table', () => {
         const r = await ft8SelectBand('15m', 'ft4');
         expect(r.status).toBe('failed');
         expect(r.status === 'failed' && r.message).toMatch(/No FT4 frequency configured for 15m/);
+    });
+});
+
+// ADR 0080 / dogfood 2026-09-11: the rig chip said FT8 whichever FT profile
+// the daemon ran, because the mapping names the one data literal for the
+// family. While the FT4 view holds its claim, that literal is called FT4 — and
+// only that literal: a rig on USB is still USB, and the name reverts when the
+// label clears (the view closed, the rig still in its data mode).
+describe('the FT data literal is named by the claimed profile', () => {
+    const mappings = {
+        USB: { mode: 'SSB', submode: 'USB' },
+        'DATA-U': { mode: 'FT8', submode: '' },
+    };
+
+    it('renames DATA-U to FT4 while FT4 is claimed, re-deriving at once, and reverts', () => {
+        setModeMappings(mappings);
+        catLink.onRigState({ vfoA: 14_080_000, mode: 'DATA-U' });
+        expect(rig.mode).toBe('FT8');
+
+        setFtProfileLabel('FT4');
+        expect(rig.mode).toBe('FT4'); // no rig push needed
+        catLink.onRigState({ mode: 'DATA-U' });
+        expect(rig.mode).toBe('FT4');
+        expect(rig.modeLiteral).toBe('DATA-U');
+
+        catLink.onRigState({ mode: 'USB' });
+        expect(rig.mode).toBe('USB'); // only the data literal is relabelled
+        catLink.onRigState({ mode: 'DATA-U' });
+        expect(rig.mode).toBe('FT4');
+
+        setFtProfileLabel('');
+        expect(rig.mode).toBe('FT8'); // the mapping's own name again
+    });
+
+    it('an FT8 label leaves the mapping name as it is', () => {
+        setModeMappings(mappings);
+        catLink.onRigState({ vfoA: 14_074_000, mode: 'DATA-U' });
+        setFtProfileLabel('FT8');
+        expect(rig.mode).toBe('FT8');
     });
 });

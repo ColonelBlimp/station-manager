@@ -14,8 +14,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, fireEvent, within, cleanup } from '@testing-library/svelte';
 import Ft8View from './Ft8View.svelte';
+import type { Ft8EventHandlers } from '../api/ft8-sse';
 import { router, setMode } from '../router.svelte';
-import { rig } from './rig.svelte';
+import { rig, catLink, resetCatLink, setModeMappings } from './rig.svelte';
 import {
     ft8State,
     resetFt8ForTests,
@@ -242,6 +243,58 @@ describe('Ft8View — stop paths through a refused claim', () => {
         expect(log).toEqual(['claim:ft4', 'arm:false']);
         expect(opened).toEqual([]);
         expect(ft8State.claimed).toBe(false);
+    });
+
+    // dogfood 2026-09-11: the rig chip names the data literal by the claimed
+    // profile for the life of the view — FT4 once granted, FT8 again once the
+    // view is gone (the rig is still in DATA-U; that is the mapping's name).
+    it('names the data literal FT4 while the FT4 claim stands, and FT8 again after the view closes', async () => {
+        resetCatLink();
+        setModeMappings({ 'DATA-U': { mode: 'FT8', submode: '' } });
+        rig.cat = 'connected';
+        catLink.onRigState({ vfoA: 14_080_000, mode: 'DATA-U' });
+        expect(rig.mode).toBe('FT8');
+
+        wireDaemon({ busy: false, inFlight: false, session: false, armed: false }, log);
+        const view = render(Ft8View);
+        await vi.waitFor(() => expect(opened).toEqual(['ft4']));
+        await vi.waitFor(() => expect(rig.mode).toBe('FT4'));
+        expect(screen.getByRole('heading', { name: 'Operate · FT4' })).toBeTruthy();
+
+        view.unmount();
+        expect(rig.mode).toBe('FT8');
+
+        // Codex: a stop keeps the last profile (FT4) but clears the claim. Enter
+        // FT8 next and have its claim REFUSED — nothing may still read FT4.
+        cleanup();
+        setMode('ft8');
+        wireDaemon({ busy: true, inFlight: false, session: false, armed: false }, log);
+        render(Ft8View);
+        await screen.findByTestId('ft8-claim-banner');
+        expect(ft8State.claimed).toBe(false);
+        expect(ft8State.profile).toBe('FT4'); // the remembered grant …
+        expect(rig.mode).toBe('FT8'); // … does not label the chip
+        expect(screen.getByRole('heading', { name: 'Operate · FT8' })).toBeTruthy();
+    });
+
+    it('a granted claim whose stream has not opened yet does not label the chip', async () => {
+        resetCatLink();
+        setModeMappings({ 'DATA-U': { mode: 'FT8', submode: '' } });
+        rig.cat = 'connected';
+        catLink.onRigState({ vfoA: 14_080_000, mode: 'DATA-U' });
+        let handlers: Ft8EventHandlers | null = null;
+        setFt8Transport((h, mode) => {
+            handlers = h; // opens LATER, like a real EventSource
+            opened.push(mode);
+            return () => undefined;
+        });
+        wireDaemon({ busy: false, inFlight: false, session: false, armed: false }, log);
+        render(Ft8View);
+        await vi.waitFor(() => expect(opened).toEqual(['ft4']));
+        expect(ft8State.profile).toBe('FT4');
+        expect(rig.mode).toBe('FT8'); // granted, not yet standing
+        handlers!.onOpen();
+        await vi.waitFor(() => expect(rig.mode).toBe('FT4'));
     });
 
     it('ft8_profile_busy: no stop path — another subscriber holds the capture; Try again re-claims', async () => {

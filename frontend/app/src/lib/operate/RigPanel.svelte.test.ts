@@ -5,7 +5,16 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/svelte';
 import RigPanel from './RigPanel.svelte';
-import { rig, rigCaps, toggleTune } from './rig.svelte';
+import {
+    rig,
+    rigCaps,
+    toggleTune,
+    catLink,
+    resetCatLink,
+    setModeMappings,
+    setRigCaps,
+    setFtProfileLabel,
+} from './rig.svelte';
 import { toasts } from '../ui/toasts.svelte';
 
 // Mock only toggleTune so the Tune button's outcome handling can be driven
@@ -134,5 +143,37 @@ describe('Tune button — confirm-by-push outcomes (F-04)', () => {
         await fireEvent.click(screen.getByRole('button', { name: 'Tune' }));
 
         expect(error).toHaveBeenCalled();
+    });
+});
+
+// dogfood 2026-09-11 (codex): the live Mode select lists the rig's OWN literals
+// and sends them as-is; its LABEL for a mapped literal carries the friendly
+// name, which follows the claimed profile — so the option the rig is on reads
+// "DATA-U · FT4" while FT4 is claimed, "DATA-U · FT8" otherwise, and its value
+// is still the DATA-U that set_mode needs.
+describe('live Mode select labels', () => {
+    it('labels the data literal by the claimed profile and keeps the raw value', async () => {
+        resetCatLink();
+        setModeMappings({
+            USB: { mode: 'SSB', submode: 'USB' },
+            'DATA-U': { mode: 'FT8', submode: '' },
+        });
+        setRigCaps({
+            ops: ['set_mode', 'set_band', 'set_freq'],
+            tune: false,
+            rigModes: ['USB', 'DATA-U'],
+        });
+        rig.cat = 'connected';
+        catLink.onRigState({ vfoA: 14_080_000, mode: 'DATA-U' });
+        setFtProfileLabel('FT4');
+        render(RigPanel, { props: {} });
+
+        const option = (label: string) => screen.getByRole('option', { name: label });
+        expect(option('DATA-U · FT4')).toHaveProperty('value', 'DATA-U');
+        expect(option('USB')).toHaveProperty('value', 'USB');
+
+        setFtProfileLabel('');
+        await vi.waitFor(() => expect(option('DATA-U · FT8')).toHaveProperty('value', 'DATA-U'));
+        expect(screen.queryByRole('option', { name: 'DATA-U · FT4' })).toBeNull();
     });
 });

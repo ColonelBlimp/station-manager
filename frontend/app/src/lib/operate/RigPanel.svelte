@@ -16,6 +16,7 @@
         operatingBands,
         hasOp,
         type RigWriteResult,
+        modeOptionLabel,
     } from './rig.svelte';
     import { hideTile } from './layout.svelte';
     import { focusCallsign } from './state.svelte';
@@ -231,7 +232,7 @@
                     onchange={onModeSelect}
                 >
                     {#each liveModeOptions as m (m)}
-                        <option value={m}>{m}</option>
+                        <option value={m}>{modeOptionLabel(m)}</option>
                     {/each}
                 </select>
             {:else}

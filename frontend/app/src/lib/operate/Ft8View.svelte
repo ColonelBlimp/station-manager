@@ -2,12 +2,12 @@
     // FT8 operating surface (ADR 0047) — the three-anchor fixed layout: Band
     // Activity + Operate side-by-side up top, Occupancy (TX-offset picker) full-
     // width across the bottom.
-    import { onMount } from 'svelte';
+    import { onMount, untrack } from 'svelte';
     import { router } from '../router.svelte';
     import { ft8State, startFt8, stopFt8, reclaimFt8, armTx, abandonQso } from './ft8.svelte';
     import { toasts } from '../ui/toasts.svelte';
     import { ft8EnrichState } from './ft8Enrich.svelte';
-    import { rig } from './rig.svelte';
+    import { rig, setFtProfileLabel } from './rig.svelte';
     import Ft8BandActivity from './Ft8BandActivity.svelte';
     import Ft8Operate from './Ft8Operate.svelte';
     import Ft8Occupancy from './Ft8Occupancy.svelte';
@@ -92,6 +92,23 @@
             acting = false;
         }
     }
+
+    // The rig chip (and the Rig panel's Mode select) call the data literal by
+    // the STANDING claim while this view is open — FT4 once the daemon has
+    // granted FT4 and the stream opened, the mapping's name (FT8) otherwise and
+    // after the view closes (rig.svelte.ts setFtProfileLabel; dogfood
+    // 2026-09-11). Gated on `claimed`, not on the remembered profile: a stop or
+    // a refused claim clears the claim but keeps the last profile, so a refused
+    // FT8 claim after an FT4 session would otherwise still read FT4 (codex).
+    // untrack: the setter re-derives rig.mode through the label it just wrote,
+    // and an effect that reads what it writes re-runs forever — this one
+    // depends on the claim state only.
+    $effect(() => {
+        const profile = ft8State.profile === 'FT4' ? 'FT4' : 'FT8';
+        const label = ft8State.claimed ? profile : '';
+        untrack(() => setFtProfileLabel(label));
+        return () => untrack(() => setFtProfileLabel(''));
+    });
 
     // Band-change watcher (dogfood niggle 2026-07-19): crossing a band boundary
     // clears the Band Activity feed (and, on a genuine band-to-band change, the

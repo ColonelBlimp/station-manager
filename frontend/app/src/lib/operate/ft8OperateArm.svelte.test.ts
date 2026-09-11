@@ -11,6 +11,7 @@ import { flushSync } from 'svelte';
 import Ft8Operate from './Ft8Operate.svelte';
 import { ft8State, resetFt8ForTests, armTx } from './ft8.svelte';
 import { rig } from './rig.svelte';
+import { setMode as setRouterMode } from '../router.svelte';
 import { toasts, _resetForTests as resetToasts } from '../ui/toasts.svelte';
 
 // Mock only armTx so the button's outcome handling can be driven directly; the
@@ -93,6 +94,20 @@ describe('Enable TX — confirm-by-push outcomes (F-04)', () => {
 // an FT4-labelled view must not arm the still-active FT8 profile. Disarm stays
 // available once armed even without the claim (a transient SSE loss must not
 // trap TX armed).
+describe("the Operate heading names the view's profile (dogfood 2026-09-11)", () => {
+    it('reads Operate · FT8 on the FT8 view and Operate · FT4 on the FT4 view, whatever was last granted', () => {
+        setRouterMode('ft8');
+        ft8State.profile = 'FT4'; // a remembered grant from an earlier FT4 session
+        render(Ft8Operate);
+        flushSync();
+        expect(screen.getByRole('heading', { name: 'Operate · FT8' })).toBeTruthy();
+        setRouterMode('ft4');
+        flushSync();
+        expect(screen.getByRole('heading', { name: 'Operate · FT4' })).toBeTruthy();
+        setRouterMode('phone');
+    });
+});
+
 describe('Enable TX waits for the profile claim (ADR 0080)', () => {
     it('is disabled with CAT live but no claim standing', () => {
         ft8State.claimed = false;
