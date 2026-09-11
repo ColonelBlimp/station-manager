@@ -1,12 +1,12 @@
 # W-0019 — FT4 for the Africa FT4 DX Contest
 
-**Status:** Open — selected for the 2026-09-12 contest; design in ADR 0080; go-ft8 v0.9.0 carries the FT4 decoder (gate G1)
+**Status:** Open — slices 1–4 shipped 2026-09-10/11 (evidence below); gate G1 met; slice 5 (deploy) and gates G2–G4 pending
 **Selected:** 2026-09-10
 **Outcome:** The operator works the Africa FT4 DX Contest (Saturday 2026-09-12, 15:00–18:00 UTC, 80/40/20 m)
 from Station Manager: FT4 decodes appear in Band Activity on the contest dial frequencies, an operator-initiated
 answer or Call-CQ run completes the standard report-and-grid exchange on 7.5 s slots, each completed QSO is
-logged once with `MODE=FT4`, the grid and SNR reports, and the QSOs reach the forwarders and SM Cloud through the
-existing paths. The daemon returns to FT8 without a restart.
+logged once as ADIF's `MODE=MFSK SUBMODE=FT4` pair (ruling 2026-09-10), with the grid and SNR reports, and the QSOs
+reach the forwarders and SM Cloud through the existing paths. The daemon returns to FT8 without a restart.
 
 `W-0019` is an immutable identity. Its status may change, while priority and ranked position live only in
 [`docs/backlog.md`](../backlog.md).
@@ -34,7 +34,9 @@ the decoder can be built ahead of it. ADR 0080 records the design and the altern
   buttons follow the active profile; `modeRestore` keeps a per-mode dial snapshot for FT4 as it does for FT8.
 - A cross-profile claim with zero subscribers bypasses the capture linger (drain, release, clear replay, acquire,
   atomically); the claim's refusal codes and the view's banner explain every refusal (ADR 0080).
-- `ft8.ft4_frequencies` with cited defaults; `MODE=FT4` logging; the QSO service's SNR-report predicate.
+- `ft8.ft4_frequencies` with cited defaults; `MODE=MFSK SUBMODE=FT4` logging (ADIF 3.1.5 lists FT4 under MFSK —
+  ruling 2026-09-10, with the embedded mode catalogue corrected as its own commit); the QSO service's SNR-report
+  predicate on the pair.
 - The go-ft8 bump to the tagged release carrying the FT4 decoder, as its own commit.
 - Canonical references updated with the code: `docs/ft8.md`, `docs/v2-design/api-endpoints.md`,
   `docs/v2-design/config.md`, and the manual's FT8 chapter.
@@ -56,7 +58,7 @@ the decoder can be built ahead of it. ADR 0080 records the design and the altern
 | AC2 | The profile follows the Operate item: opening FT4 claims `ft4`, then subscribes, and the daemon acquires capture on the FT4 lattice — including when the click lands inside the five-second linger after leaving FT8, where the old capture is released, not reused. A claim while another subscriber holds a capture on the other profile, or while a session is active, TX is armed or a transmission is in flight, is refused with its distinct code and nothing changes; the FT4 view shows the reason as a banner with a countdown when the cause is the linger of the session just left, and re-claims when it elapses. Sidebar and Back/Forward transitions both remount the view. | A subscriber inside the linger keeping the FT8 scheduler under an FT4 label; an `EventSource` error loop instead of an explanation; two tabs on different profiles sharing one capture; a mode change that leaves the FT8 stream open because the view did not remount. |
 | AC3 | Answering a decoded FT4 CQ completes `<them> <us> <grid>` → `R-report` → `73` on consecutive opposite-parity 7.5 s slots, transmitting the synchronised remainder when the rung starts late. | A transmission that starts after the late window and spills into the partner's slot; an untruncated waveform shifted off the timebase. |
 | AC4 | A Call-CQ run on FT4 runs the standard ladder with the operator's grid in the CQ and the confirm-hold from ADR 0067. | The FT8 ladder timing (CQ repeated every 15 s). |
-| AC5 | Exactly one QSO row per completed exchange with `MODE=FT4`, the partner's grid, SNR reports, and the session-pinned frequency; one `ft8-logged` event; the PSK Reporter spot carries `FT4`. | `MODE=FT8` on an FT4 QSO; an RST default of `59` fabricated by the QSO service. |
+| AC5 | Exactly one QSO row per completed exchange filed `MODE=MFSK SUBMODE=FT4` (ADIF 3.1.5; ruling 2026-09-10), the partner's grid, SNR reports, and the session-pinned frequency; one `ft8-logged` event carrying the pair; the PSK Reporter spot carries `FT4`. | `MODE=FT8` on an FT4 QSO; a bare `MODE=FT4` stored as such (the QSO service canonicalises it to the pair); an RST default of `59` fabricated by the QSO service. |
 | AC6 | Navigating back to the FT8 item restores the 15 s lattice and FT8 decodes without a daemon restart, and the rig returns to the dial FT8 left (the per-mode snapshot). | Stale FT4 references in the SPA's parity store after the switch; FT8 landing on the FT4 dial. |
 | AC7 | The measured p95 decode time of one live FT4 slot on the station host is at or under 1.0 s (the operator may waive with a recorded reason). | A benchmark on a synthetic single-signal slot standing in for a busy contest band. |
 
@@ -101,6 +103,14 @@ not need the FT4 decoder and can land now; slice 2 waits for the tagged go-ft8 r
    route and nav item, the remount on a sidebar click and on Back/Forward (stop → claim → start observed in
    order, the old stream closed before the claim), each refusal banner, the restore snapshot per mode, the 7.5 s
    countdown and parity, and the frequency source; Go tests for the empty-report acceptance on FT4.
+   *Shipped* as 4a (`ad20add3`) and 4b (`67cc1b96`) with review fixes (`aa31b612`, `17b17f0e`) that hardened the
+   claim: it stands only on the stream's first open; TX-starting intents need that stream open (a claim alone can
+   be stale once the stream is down — the daemon knows one profile); a stream the browser gives up on is closed
+   and re-claimed rather than its URL repeated; a claim that cannot reach the daemon retries on the stream's own
+   recovery signals; the banner offers Disable TX, "Abandon session and disable TX" (the daemon's abandon leaves
+   TX armed) and Try again; worked-before and the contest-dupe endpoint (`submode`) take the ADIF pair; the frame
+   guard validates `mode`. The mode catalogue correction followed as its own commit (`8701a6de`), and its review's
+   canonicalisation fix (`40238d47`) keeps existing rig mappings and records filed under the old names valid.
 5. **Deploy and validate.** `task deploy:local:dev`, then the gates below; a record entry per gate.
 
 ## Gates (operator-controlled)
@@ -133,6 +143,9 @@ Operate view (the fallback in ADR 0080), and W-0019 continues afterwards without
   separate post-contest behaviour change requiring its own evidence.
 - AC7's 1.0 s decode budget is accepted as the initial gate; the keyed latency recorded at G3 may tighten or relax
   the admission edge.
+- Ruled 2026-09-10: an FT4 exchange is filed as ADIF's `MODE=MFSK SUBMODE=FT4` pair (ADIF 3.1.5 Submode
+  Enumeration); the embedded catalogue, which had promoted FT4, FST4, FST4W, JS8 and Q65 to main modes, was
+  corrected as a separate commit before the contest gates (`8701a6de`).
 - Whether FT4 is a boot default later (`ft8.mode`), or stays runtime-only.
 - Which non-contest bands get an FT4 default dial, and from which citation.
 
@@ -147,4 +160,28 @@ Operate view (the fallback in ADR 0080), and W-0019 continues afterwards without
 - 2026-09-10 — slice 2, SM's own decoder wrapper on the station host (`BenchmarkDecodeSlotFT4`, 5 runs): a busy
   synthetic six-signal FT4 slot decodes in a mean 26.5 ms (FT8 wrapper on the 20 m fixture: 126 ms). Pre-G2
   synthetic sizing evidence only — not AC7 evidence, which requires the live-slot p95 measured at gate G2.
+- 2026-09-10 — slice 1 `57853f94` (after `37f0ca2d` pinned go-ft8 v0.9.0): `Profile` with FT8 at origin +0.500 s /
+  sync +0.660 s (recorded, not moved) and FT4 at +0.452 s / +0.500 s, the 2.0 s late window as admission policy
+  with `maxDecodableSkip` authoritative; the profile-sensitive matrix (standard answer and Call-CQ under both
+  profiles, `markTxSlot`/`wasTxSlot` on a `.500` reference, the controller on FT4's origin, budget and Costas
+  skip limit) passed five race-enabled runs.
+- 2026-09-10 — slice 3 `fb6480a7` + review fixes `7d58daf5`, `4d66baa7`, `f7bd87d1`: `ClaimProfile` serialised
+  `seqGate → txMu → s.mu` and held across the drain, `SubscribeMode` as one atomic admission, retry hints never
+  lost while winding down (≥ 1 ms), offset validation under `seqGate` on a profile snapshot, dead capture workers
+  joined before a switch with acquisition suppressed meanwhile; the profile carried into logged QSOs, decode
+  reports, the decode log and PSK spots; an FT4 exchange filed as `MODE=MFSK SUBMODE=FT4`, shown as FT4 in the
+  session row.
+- 2026-09-11 — slice 4: 4a `ad20add3` (`ft8.ft4_frequencies`, three cited bands), 4b `67cc1b96` (44 paths) with
+  review fixes `aa31b612` and `17b17f0e`; rendered transition tests prove sidebar and Back/Forward both run
+  close → claim → open; the banner's stop paths are tested on a stateful fake daemon with the claim's real
+  refusal precedence; every operator and Codex finding ended fixed with a reversion proof. Frontend gates: lint,
+  Prettier, svelte-check, 1,644 Vitest tests; Go: whole-tree tests, lint, observatory at 0 regressions.
+- 2026-09-11 — mode catalogue `8701a6de`: FT4, FST4, FST4W, JS8 and Q65 moved under MFSK per ADIF 3.1.5; at that
+  commit a bare `MODE=FT4` was refused and `SUBMODE=FT4` alone derived MFSK; the station's config has no mode
+  mapping affected.
+- 2026-09-11 — canonicalisation `40238d47` (Codex review of `8701a6de`, two P2s): a MODE naming a submode is stored
+  as its parent/submode pair instead of refused — at config load and PUT (a rig mapping saved under the old
+  names keeps the daemon bootable) and at QSO submit and update (a contact stored as `MODE=FT4` stays editable
+  and heals to the pair on its next edit); the SNR-report rule mirrors the SPA's set, so FST4, FST4W, JS8 and
+  Q65 keep empty reports like FT4 and FT8 (a submit matrix over the five, bare and as pairs, plus FT8 and JT65).
 - Contest rules: 2026 SARL Contest Manual v1.1, "The Africa FT4 DX Contest", pp. 45–46.

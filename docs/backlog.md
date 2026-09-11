@@ -35,7 +35,7 @@ re-enrichment generation race) are all closed (2026-08-22).
 
 Open one workstream per active focus.
 
-1. **W-0019 · OPEN — [FT4 for the Africa FT4 DX Contest](work/W-0019-ft4-for-the-africa-ft4-dx-contest.md).** Selected 2026-09-10 for Saturday 2026-09-12 15:00–18:00 UTC; ADR 0080; go-ft8 v0.9.0 met gate G1. Keyed testing and the first QSO stay per-occasion operator gates; the fallback is WSJT-X with manual entry.
+1. **W-0019 · OPEN — [FT4 for the Africa FT4 DX Contest](work/W-0019-ft4-for-the-africa-ft4-dx-contest.md).** Selected 2026-09-10 for Saturday 2026-09-12 15:00–18:00 UTC; ADR 0080; go-ft8 v0.9.0 met gate G1; slices 1–4 shipped 2026-09-11 (`57853f94`…`8701a6de`), deploy and gates G2–G4 next. Keyed testing and the first QSO stay per-occasion operator gates; the fallback is WSJT-X with manual entry.
 2. **W-0002 · validation gate · OPEN — [Validate the reduced FT8 type-4 ladder on air](work/W-0002-ft8-type4-on-air-validation.md).** Confirm one operator-initiated completed exchange with a real nonstandard station; RF action always requires agreement for that occasion.
 3. **W-0008 · OPEN — [Harden audited contract boundaries](work/W-0008-harden-audited-contract-boundaries.md).** Ordered persistence, configuration, API-wire, and frontend-wire correctness slices.
 4. **W-0010 · OPEN — [Improve forwarding, data, and synchronization reliability](work/W-0010-forwarding-data-and-sync-reliability.md).** Token rotation, duplicate-QSO resolution, legal bulk backfill, idempotent outcomes, and bounded reconciliation.
