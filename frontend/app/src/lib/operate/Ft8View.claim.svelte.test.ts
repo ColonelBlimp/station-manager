@@ -245,10 +245,12 @@ describe('Ft8View — stop paths through a refused claim', () => {
         expect(ft8State.claimed).toBe(false);
     });
 
-    // dogfood 2026-09-11: the rig chip names the data literal by the claimed
-    // profile for the life of the view — FT4 once granted, FT8 again once the
-    // view is gone (the rig is still in DATA-U; that is the mapping's name).
-    it('names the data literal FT4 while the FT4 claim stands, and FT8 again after the view closes', async () => {
+    // Operator ruling 2026-09-11: the rig chip names the data literal by the
+    // LAST PROFILE WHOSE STREAM OPENED — kept across a trip to the Dashboard
+    // (the view unmounts, the daemon's claim lingers out; the rig is still in
+    // DATA-U), cleared by a refused claim, replaced when the other profile's
+    // stream opens.
+    it('keeps FT4 across a Dashboard round trip, drops it on a refused FT8 claim, and takes FT8 once FT8 opens', async () => {
         resetCatLink();
         setModeMappings({ 'DATA-U': { mode: 'FT8', submode: '' } });
         rig.cat = 'connected';
@@ -256,45 +258,72 @@ describe('Ft8View — stop paths through a refused claim', () => {
         expect(rig.mode).toBe('FT8');
 
         wireDaemon({ busy: false, inFlight: false, session: false, armed: false }, log);
-        const view = render(Ft8View);
+        let view = render(Ft8View);
         await vi.waitFor(() => expect(opened).toEqual(['ft4']));
         await vi.waitFor(() => expect(rig.mode).toBe('FT4'));
         expect(screen.getByRole('heading', { name: 'Operate · FT4' })).toBeTruthy();
 
-        view.unmount();
-        expect(rig.mode).toBe('FT8');
-
-        // Codex: a stop keeps the last profile (FT4) but clears the claim. Enter
-        // FT8 next and have its claim REFUSED — nothing may still read FT4.
+        view.unmount(); // Dashboard
+        expect(rig.mode).toBe('FT4'); // the rig is still in its data mode, last opened as FT4
         cleanup();
+        view = render(Ft8View); // back to Operate → FT4
+        await vi.waitFor(() => expect(opened).toEqual(['ft4', 'ft4']));
+        expect(rig.mode).toBe('FT4');
+        view.unmount();
+        cleanup();
+
+        // Enter FT8 and have its claim REFUSED: what the daemon runs is unknown.
         setMode('ft8');
         wireDaemon({ busy: true, inFlight: false, session: false, armed: false }, log);
-        render(Ft8View);
+        view = render(Ft8View);
         await screen.findByTestId('ft8-claim-banner');
-        expect(ft8State.claimed).toBe(false);
         expect(ft8State.profile).toBe('FT4'); // the remembered grant …
-        expect(rig.mode).toBe('FT8'); // … does not label the chip
+        expect(rig.mode).toBe('FT8'); // … is not the label any more
         expect(screen.getByRole('heading', { name: 'Operate · FT8' })).toBeTruthy();
+        view.unmount();
+        cleanup();
+
+        // FT4 opens again, then FT8's stream opens: replaced, not cleared.
+        setMode('ft4');
+        wireDaemon({ busy: false, inFlight: false, session: false, armed: false }, log);
+        view = render(Ft8View);
+        await vi.waitFor(() => expect(rig.mode).toBe('FT4'));
+        view.unmount();
+        cleanup();
+        setMode('ft8');
+        wireDaemon({ busy: false, inFlight: false, session: false, armed: false }, log);
+        render(Ft8View);
+        await vi.waitFor(() => expect(opened.at(-1)).toBe('ft8'));
+        await vi.waitFor(() => expect(rig.mode).toBe('FT8'));
+        expect(ft8State.claimed).toBe(true);
     });
 
-    it('a granted claim whose stream has not opened yet does not label the chip', async () => {
+    it('a granted claim whose stream has not opened yet leaves the label as it was', async () => {
         resetCatLink();
         setModeMappings({ 'DATA-U': { mode: 'FT8', submode: '' } });
         rig.cat = 'connected';
         catLink.onRigState({ vfoA: 14_080_000, mode: 'DATA-U' });
+
+        // FT4 opened earlier; the operator now enters FT8.
+        wireDaemon({ busy: false, inFlight: false, session: false, armed: false }, log);
+        const earlier = render(Ft8View);
+        await vi.waitFor(() => expect(rig.mode).toBe('FT4'));
+        earlier.unmount();
+        cleanup();
+
+        setMode('ft8');
         let handlers: Ft8EventHandlers | null = null;
         setFt8Transport((h, mode) => {
             handlers = h; // opens LATER, like a real EventSource
             opened.push(mode);
             return () => undefined;
         });
-        wireDaemon({ busy: false, inFlight: false, session: false, armed: false }, log);
         render(Ft8View);
-        await vi.waitFor(() => expect(opened).toEqual(['ft4']));
-        expect(ft8State.profile).toBe('FT4');
-        expect(rig.mode).toBe('FT8'); // granted, not yet standing
+        await vi.waitFor(() => expect(opened.at(-1)).toBe('ft8'));
+        expect(ft8State.profile).toBe('FT8'); // granted …
+        expect(rig.mode).toBe('FT4'); // … but not open: the last OPENED profile stands
         handlers!.onOpen();
-        await vi.waitFor(() => expect(rig.mode).toBe('FT4'));
+        await vi.waitFor(() => expect(rig.mode).toBe('FT8'));
     });
 
     it('ft8_profile_busy: no stop path — another subscriber holds the capture; Try again re-claims', async () => {

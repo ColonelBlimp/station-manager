@@ -1090,10 +1090,12 @@ describe('FT4 dial table', () => {
 
 // ADR 0080 / dogfood 2026-09-11: the rig chip said FT8 whichever FT profile
 // the daemon ran, because the mapping names the one data literal for the
-// family. While the FT4 view holds its claim, that literal is called FT4 — and
-// only that literal: a rig on USB is still USB, and the name reverts when the
-// label clears (the view closed, the rig still in its data mode).
-describe('the FT data literal is named by the claimed profile', () => {
+// family. Once the FT4 stream has opened, that literal is called FT4 — the
+// LAST PROFILE WHOSE STREAM OPENED, retained across the view's destruction —
+// and only that literal: a rig on USB is still USB, and the name reverts when
+// the label clears (a refused claim, or CAT confirming the rig left the data
+// mode).
+describe('the FT data literal is named by the last opened profile', () => {
     const mappings = {
         USB: { mode: 'SSB', submode: 'USB' },
         'DATA-U': { mode: 'FT8', submode: '' },
@@ -1109,11 +1111,6 @@ describe('the FT data literal is named by the claimed profile', () => {
         catLink.onRigState({ mode: 'DATA-U' });
         expect(rig.mode).toBe('FT4');
         expect(rig.modeLiteral).toBe('DATA-U');
-
-        catLink.onRigState({ mode: 'USB' });
-        expect(rig.mode).toBe('USB'); // only the data literal is relabelled
-        catLink.onRigState({ mode: 'DATA-U' });
-        expect(rig.mode).toBe('FT4');
 
         setFtProfileLabel('');
         expect(rig.mode).toBe('FT8'); // the mapping's own name again
@@ -1131,6 +1128,20 @@ describe('the FT data literal is named by the claimed profile', () => {
         expect(rig.mode).toBe('CW');
         setFtProfileLabel('');
         expect(rig.mode).toBe('CW');
+    });
+
+    it('CAT confirming the rig has left the data literal ends the label (operator ruling 2026-09-11)', () => {
+        setModeMappings(mappings);
+        catLink.onRigState({ vfoA: 14_080_000, mode: 'DATA-U' });
+        setFtProfileLabel('FT4');
+        expect(rig.mode).toBe('FT4');
+        catLink.onRigState({ mode: 'DATA-U' }); // still in the data mode: the label holds
+        expect(rig.mode).toBe('FT4');
+
+        catLink.onRigState({ mode: 'USB' }); // the rig left it
+        expect(rig.mode).toBe('USB');
+        catLink.onRigState({ mode: 'DATA-U' }); // back in the data mode: the mapping's name, no label
+        expect(rig.mode).toBe('FT8');
     });
 
     it('an FT8 label leaves the mapping name as it is', () => {

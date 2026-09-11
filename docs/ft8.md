@@ -208,12 +208,14 @@ release uses gonum.
 > again rather than its URL repeated: a grant reopens the stream, a refusal shows the
 > banner. A claim that cannot reach the daemon is retried when the window comes back
 > online or the tab is shown (the stream's own revival signals), and a banner with no
-> countdown and nothing to stop offers **Try again**. While the view is open and its
-> claim **stands** (granted and the stream open), the rig chip, the live Mode select's
-> label (`DATA-U · FT4`; the option's value stays the literal `set_mode` sends) and the
-> log form's ADIF resolution name the rig's data literal by that profile
-> (`setFtProfileLabel`); the mapping's own name returns on a stop, a refusal or the
-> view closing. The Operate anchor's heading names the **view**, `Operate · FT8` /
+> countdown and nothing to stop offers **Try again**. The rig chip, the live Mode
+> select's label (`DATA-U · FT4`; the option's value stays the literal `set_mode`
+> sends) and the log form's ADIF resolution name the rig's data literal by the **last
+> profile whose stream opened** (`setFtProfileLabel`): a grant alone does not count,
+> the name survives a trip to the Dashboard or Logbook (the daemon's claim does not —
+> it releases after the linger), and it ends when a claim is refused, when CAT
+> confirms the rig has left the data literal, or when the other profile's stream
+> opens. The Operate anchor's heading names the **view**, `Operate · FT8` /
 > `Operate · FT4`, like the sidebar item.
 
 The sidebar's **Operate** item chooses Phone/CW, FT8 or FT4; the choice is

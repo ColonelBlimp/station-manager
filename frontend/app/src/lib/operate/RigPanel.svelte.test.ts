@@ -148,11 +148,11 @@ describe('Tune button — confirm-by-push outcomes (F-04)', () => {
 
 // dogfood 2026-09-11 (codex): the live Mode select lists the rig's OWN literals
 // and sends them as-is; its LABEL for a mapped literal carries the friendly
-// name, which follows the claimed profile — so the option the rig is on reads
-// "DATA-U · FT4" while FT4 is claimed, "DATA-U · FT8" otherwise, and its value
+// name, which follows the last profile whose stream opened — so the option the
+// rig is on reads "DATA-U · FT4" after FT4 opened, "DATA-U · FT8" otherwise, and its value
 // is still the DATA-U that set_mode needs.
 describe('live Mode select labels', () => {
-    it('labels the data literal by the claimed profile and keeps the raw value', async () => {
+    it('labels the data literal by the last opened profile and keeps the raw value', async () => {
         resetCatLink();
         setModeMappings({
             USB: { mode: 'SSB', submode: 'USB' },

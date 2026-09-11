@@ -21,8 +21,9 @@ the same view and the same exchange; they differ in the clock the daemon runs on
 7.5-second slots for FT4 — and in the dial frequencies the band buttons jump to. Pick the mode you want to
 operate from the sidebar; switching between FT8 and FT4 re-opens the view on the other clock, and each mode
 remembers the dial you left it on. The rig chip in the header, and the Rig panel's Mode list, name the
-rig's data mode after the profile the daemon has granted — **FT4** while FT4 is open and granted, **FT8**
-otherwise — and the Operate panel is headed **Operate · FT8** or **Operate · FT4** for the mode you chose.
+rig's data mode after the FT mode you last opened — **FT4** from the moment the FT4 view connects, on every
+page, until the rig leaves its data mode, a claim is refused, or FT8 connects — and the Operate panel is
+headed **Operate · FT8** or **Operate · FT4** for the mode you chose.
 
 The daemon runs one of the two at a time. If you leave FT8 in the middle of a contact and open FT4 straight
 away, a notice explains that FT8 is still winding down and counts down to the retry; it clears by itself

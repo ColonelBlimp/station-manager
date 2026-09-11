@@ -292,8 +292,9 @@
     <div class="flex h-10 shrink-0 items-center gap-x-3 border-b border-line px-4">
         <!-- The VIEW's profile in the heading (dogfood 2026-09-11) — the item the
              operator chose, like the sidebar; the chip names the rig's mode and
-             follows the standing claim instead. Not ft8State.profile: that is the
-             last GRANTED profile and outlives a stop or a refusal (codex). -->
+             follows the last profile whose stream OPENED instead, retained across
+             the view's destruction. Not ft8State.profile: that is the last GRANTED
+             profile and outlives a stop or a refusal (codex). -->
         <h3 class="text-sm font-semibold text-ink">
             Operate · {router.mode === 'ft4' ? 'FT4' : 'FT8'}
         </h3>

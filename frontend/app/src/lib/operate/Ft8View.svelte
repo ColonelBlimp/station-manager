@@ -94,20 +94,25 @@
     }
 
     // The rig chip (and the Rig panel's Mode select) call the data literal by
-    // the STANDING claim while this view is open — FT4 once the daemon has
-    // granted FT4 and the stream opened, the mapping's name (FT8) otherwise and
-    // after the view closes (rig.svelte.ts setFtProfileLabel; dogfood
-    // 2026-09-11). Gated on `claimed`, not on the remembered profile: a stop or
-    // a refused claim clears the claim but keeps the last profile, so a refused
-    // FT8 claim after an FT4 session would otherwise still read FT4 (codex).
-    // untrack: the setter re-derives rig.mode through the label it just wrote,
-    // and an effect that reads what it writes re-runs forever — this one
-    // depends on the claim state only.
+    // the last profile whose stream OPENED (rig.svelte.ts setFtProfileLabel;
+    // operator ruling 2026-09-11): set once this view's stream opens on its
+    // profile — a grant alone does not count, the daemon can still refuse the
+    // subscription — cleared when a claim is refused, and otherwise left alone:
+    // no cleanup on destroy, so a trip to the Dashboard keeps it, and the rig
+    // state clears it itself when CAT confirms the rig left the data literal.
+    // Not the remembered profile: a stop or a refused claim keeps the last
+    // profile, so a refused FT8 claim after an FT4 session would otherwise
+    // still read FT4 (codex). untrack: the setter re-derives rig.mode through
+    // the label it writes, and an effect that reads what it writes re-runs
+    // forever — this one depends on the claim state only.
     $effect(() => {
         const profile = ft8State.profile === 'FT4' ? 'FT4' : 'FT8';
-        const label = ft8State.claimed ? profile : '';
-        untrack(() => setFtProfileLabel(label));
-        return () => untrack(() => setFtProfileLabel(''));
+        const opened = ft8State.claimed;
+        const refused = ft8State.claimRefusal !== null;
+        untrack(() => {
+            if (opened) setFtProfileLabel(profile);
+            else if (refused) setFtProfileLabel('');
+        });
     });
 
     // Band-change watcher (dogfood niggle 2026-07-19): crossing a band boundary

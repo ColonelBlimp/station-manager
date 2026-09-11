@@ -925,15 +925,18 @@ export function setModeMappings(m: Record<string, AdifModePair>): void {
     modeMappings = m;
 }
 
-// The FT data literal's label follows the claimed profile (ADR 0080; dogfood
-// 2026-09-11): a mapping names DATA-U "FT8" for the whole FT family, and while
-// the FT4 view holds its claim that literal IS FT4 — on the header chip, in
-// the Rig panel's Mode select and in the ADIF pair the log form resolves from
-// rig.mode (FT4 → MFSK/FT4). '' outside an FT view: the mapping's own name
-// stands, which is the truth about a rig left in its data mode on Phone/CW.
-// Set by the FT view for the life of its mount; never by the rig state itself,
-// which knows nothing of profiles.
-// $state: the live Mode select's option labels read it from a template.
+// The FT data literal's label is the LAST PROFILE WHOSE STREAM OPENED while the
+// rig still reports the mapped data literal (ADR 0080; dogfood + operator
+// ruling 2026-09-11): a mapping names DATA-U "FT8" for the whole FT family,
+// and once the FT4 stream has opened that literal IS FT4 — on the header chip,
+// in the Rig panel's Mode select and in the ADIF pair the log form resolves
+// from rig.mode (FT4 → MFSK/FT4). It is not a standing claim (the daemon
+// releases that after its linger once the view closes): it survives a trip to
+// the Dashboard or the Logbook, and ends only when a claim is refused (the FT
+// view clears it — what the daemon runs is then unknown), when CAT confirms
+// the rig has left the data literal (onRigState clears it), or when the other
+// profile's stream opens (the FT view replaces it). '' means the mapping's
+// own name stands. $state: the live Mode select's option labels read it.
 let ftProfileLabel: '' | 'FT8' | 'FT4' = $state('');
 export function setFtProfileLabel(label: '' | 'FT8' | 'FT4'): void {
     ftProfileLabel = label;
@@ -963,9 +966,15 @@ export function modeOptionLabel(literal: string): string {
 // round-trips it to the (MODE, SUBMODE) pair at submit, so the CAT-live and
 // manual paths converge on one representation.
 function friendlyMode(literal: string): string {
-    const mapped = modeMappings[literal];
-    const name = mapped ? mapped.submode || mapped.mode : literal;
+    const name = mappedName(literal);
     return name === 'FT8' && ftProfileLabel === 'FT4' ? 'FT4' : name;
+}
+
+// The mapping's own name for a literal, before any profile label: "FT8" is
+// how a mapping marks the FT family's data literal.
+function mappedName(literal: string): string {
+    const mapped = modeMappings[literal];
+    return mapped ? mapped.submode || mapped.mode : literal;
 }
 
 /*
@@ -1024,6 +1033,10 @@ export const catLink = {
             if (band !== '') rig.band = band;
         }
         if (p.mode !== undefined) {
+            // The rig confirming a literal outside the FT data mode ends the
+            // profile label: the data literal it named is no longer what the
+            // rig is in (operator ruling 2026-09-11).
+            if (ftProfileLabel !== '' && mappedName(p.mode) !== 'FT8') ftProfileLabel = '';
             rig.modeLiteral = p.mode; // raw literal drives the live Option-A dropdown
             rig.mode = friendlyMode(p.mode);
             rigReports.mode++;
