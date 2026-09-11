@@ -67,9 +67,10 @@ func (s *Server) handleContestDupe(w http.ResponseWriter, r *http.Request) {
 	}
 	// submode narrows a mode match to one ADIF SUBMODE (ADR 0080: an FT4 contact
 	// is MODE=MFSK SUBMODE=FT4, and "worked on FT4" must not match other MFSK
-	// submodes). Not checked against the submode enumeration: the embedded
-	// baseline lags the specification (it still lists FT4 as a mode), and the
-	// predicate is an exact match — an unknown value simply never matches.
+	// submodes). Not checked against the submode enumeration: the predicate is
+	// an exact match on the stored value, so an unknown value simply never
+	// matches, and the catalogue is operator-extensible (modes.json), so a check
+	// here could only refuse a submode a record was legitimately filed under.
 	submode := strings.ToUpper(strings.TrimSpace(q.Get("submode")))
 
 	// Verify the logbook exists, same rationale as the list endpoint: a

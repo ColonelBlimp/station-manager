@@ -45,8 +45,15 @@ describe('resolveModeAndSubmode', () => {
         expect(resolveModeAndSubmode('FT8')).toEqual({ mode: 'FT8', subMode: '' });
     });
 
-    it('passes FT4 through as a main mode (ADIF 3.x same as FT8)', () => {
-        expect(resolveModeAndSubmode('FT4')).toEqual({ mode: 'FT4', subMode: '' });
+    it('maps FT4 → MODE=MFSK, SUBMODE=FT4 (ADIF 3.1.5 keeps FT4 a submode of MFSK, unlike FT8)', () => {
+        expect(resolveModeAndSubmode('FT4')).toEqual({ mode: 'MFSK', subMode: 'FT4' });
+        expect(resolveModeAndSubmode(' ft4 ')).toEqual({ mode: 'MFSK', subMode: 'FT4' });
+    });
+
+    it('maps FST4, FST4W, JS8 and Q65 under MFSK too (ADIF 3.1.5 Submode Enumeration)', () => {
+        for (const sub of ['FST4', 'FST4W', 'JS8', 'Q65']) {
+            expect(resolveModeAndSubmode(sub)).toEqual({ mode: 'MFSK', subMode: sub });
+        }
     });
 
     it('maps PSK31 → MODE=PSK, SUBMODE=PSK31', () => {

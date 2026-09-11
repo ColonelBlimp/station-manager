@@ -87,9 +87,9 @@ func TestLoadOverride_BoundsModeLength(t *testing.T) {
 func TestIsValidMode(t *testing.T) {
 	valid := []string{
 		"AM", "cw", "  fm  ", "RTTY", "ssb", "digitalvoice", "MFSK", "PSK", "hell", "packet",
-		// ADIF 3.x main modes that used to be submodes of MFSK are now
-		// first-class main modes per the embedded catalogue.
-		"FT8", "ft4", "JS8", "FST4", "JT65",
+		// FT8 and the JT family are main modes in ADIF 3.x (FT8 used to be an
+		// MFSK submode under v1's catalogue).
+		"FT8", "JT65", "MSK144",
 	}
 	for _, in := range valid {
 		if !IsValidMode(in) {
@@ -97,7 +97,10 @@ func TestIsValidMode(t *testing.T) {
 		}
 	}
 
-	invalid := []string{"", "foo", "lsb", "usb"}
+	// FT4, FST4, FST4W, JS8 and Q65 are NOT: ADIF 3.1.5's Submode Enumeration
+	// lists them under MFSK, so a bare MODE=FT4 is as invalid as MODE=USB
+	// (W-0019 baseline fix).
+	invalid := []string{"", "foo", "lsb", "usb", "FT4", "FST4", "FST4W", "JS8", "Q65"}
 	for _, in := range invalid {
 		if IsValidMode(in) {
 			t.Fatalf("expected %q to be invalid", in)
@@ -106,17 +109,18 @@ func TestIsValidMode(t *testing.T) {
 }
 
 func TestIsValidSubMode(t *testing.T) {
-	valid := []string{"PSK31", "psk63", " dmr ", "USB", "lsb", "aprs", "C4FM"}
+	valid := []string{"PSK31", "psk63", " dmr ", "USB", "lsb", "aprs", "C4FM", "ft4", "FST4", "fst4w", "JS8", "Q65"}
 	for _, in := range valid {
 		if !IsValidSubMode(in) {
 			t.Fatalf("expected %q to be valid", in)
 		}
 	}
 
-	// FT8 / FT4 / FST4 etc. used to live here under v1 (MFSK submodes)
-	// — they're main modes in the ADIF 3.x catalogue, so they no
-	// longer count as submodes. Test pinned so we catch regressions.
-	invalid := []string{"", "AM", "CW", "foo", "FT8", "FT4", "FST4"}
+	// FT8 used to live here under v1 (an MFSK submode) — it is a main mode in
+	// the ADIF 3.x catalogue, so it no longer counts as a submode; FT4, FST4,
+	// FST4W, JS8 and Q65 stay submodes of MFSK per ADIF 3.1.5. Test pinned so
+	// we catch regressions either way.
+	invalid := []string{"", "AM", "CW", "foo", "FT8", "JT65"}
 	for _, in := range invalid {
 		if IsValidSubMode(in) {
 			t.Fatalf("expected %q to be invalid", in)
@@ -135,6 +139,11 @@ func TestGetModeBySubmode(t *testing.T) {
 		{in: "APRS", want: PACKET},
 		{in: "USB", want: SSB},
 		{in: "lsb", want: SSB},
+		{in: "ft4", want: MFSK}, // ADIF 3.1.5: the pair is MODE=MFSK SUBMODE=FT4
+		{in: "FST4", want: MFSK},
+		{in: "fst4w", want: MFSK},
+		{in: "JS8", want: MFSK},
+		{in: "Q65", want: MFSK},
 	}
 
 	for _, tc := range cases {

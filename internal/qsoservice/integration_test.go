@@ -756,31 +756,45 @@ func TestUpdate_RejectsMalformedQsoDateOff(t *testing.T) {
 	require.Equal(t, "invalid_field_value", se.Code)
 }
 
-// TestUpdate_FT4EmptyReportEditable: FT4 shares FT8's SNR-report rule (ADR
-// 0080) — a bare-roger FT4 contact submits with an empty report, gets no "59"
-// default, and a no-op edit still succeeds.
-func TestUpdate_FT4EmptyReportEditable(t *testing.T) {
+// TestSubmit_BareFt4ModeRefused: ADIF 3.1.5 lists FT4 as a submode of MFSK,
+// not a main mode, and the embedded catalogue follows it (W-0019 baseline fix)
+// — a bare MODE=FT4 is refused like MODE=USB. The pair is the record (below).
+func TestSubmit_BareFt4ModeRefused(t *testing.T) {
 	s := newTestService(t)
 	lbID := seedLogbook(t, s, "Main", "M0ABC")
-	ctx := context.Background()
 
 	rec := adif.Record{
 		ContactedStation: types.ContactedStation{Call: "K1ABC"},
 		QsoDetails:       types.QsoDetails{Band: "20m", Mode: "FT4", Freq: "14.080", QsoDate: "20260912", TimeOn: "1530"},
 		LoggingStation:   types.LoggingStation{StationCallsign: "M0ABC"},
 	}
+	_, err := s.Submit(context.Background(), lbID, rec, false)
+	require.Error(t, err)
+	var se *SubmitError
+	require.ErrorAs(t, err, &se)
+	require.Equal(t, "invalid_field_value", se.Code)
+	require.Contains(t, se.Message, `MODE "FT4"`)
+}
+
+// TestSubmit_Ft4SubmodeDerivesMfsk: a record naming only SUBMODE=FT4 (the
+// WSJT-X shape) derives MODE=MFSK from the catalogue, as USB derives SSB.
+func TestSubmit_Ft4SubmodeDerivesMfsk(t *testing.T) {
+	s := newTestService(t)
+	lbID := seedLogbook(t, s, "Main", "M0ABC")
+	ctx := context.Background()
+
+	rec := adif.Record{
+		ContactedStation: types.ContactedStation{Call: "K1ABC"},
+		QsoDetails:       types.QsoDetails{Band: "20m", Submode: "FT4", Freq: "14.080", QsoDate: "20260912", TimeOn: "1530"},
+		LoggingStation:   types.LoggingStation{StationCallsign: "M0ABC"},
+	}
 	res, err := s.Submit(ctx, lbID, rec, false)
 	require.NoError(t, err)
-
 	existing, err := s.DB.FetchQsoByIdWithContext(ctx, res.ID)
 	require.NoError(t, err)
-	require.Equal(t, "FT4", existing.QsoDetails.Mode)
-	require.Empty(t, existing.QsoDetails.RstRcvd, "FT4 submit leaves rst_rcvd empty, no 59 default")
-	require.Empty(t, existing.QsoDetails.RstSent)
-
-	updated, err := s.Update(ctx, existing, []byte(`{}`), source.API)
-	require.NoError(t, err, "a no-op edit of a bare-roger FT4 QSO must succeed")
-	require.Empty(t, updated.QsoDetails.RstRcvd)
+	require.Equal(t, "MFSK", existing.QsoDetails.Mode)
+	require.Equal(t, "FT4", existing.QsoDetails.Submode)
+	require.Empty(t, existing.QsoDetails.RstRcvd, "an SNR-report record: no 59 default")
 }
 
 // TestUpdate_MfskFt4EmptyReportEditable: the ADIF pair the FT8 subsystem

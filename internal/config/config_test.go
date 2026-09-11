@@ -1169,7 +1169,7 @@ func TestLoad_MigratesGlobalModeMappingsToRig(t *testing.T) {
 		"data_dir": "/tmp/d",
 		"rigs": [{"id": 1, "model": "yaesu-ftdx10"}],
 		"default_rig_id": 1,
-		"bridge": {"mode_mappings": {"yaesu-ftdx10": {"DATA-U": {"mode": "FT4"}}}}
+		"bridge": {"mode_mappings": {"yaesu-ftdx10": {"DATA-U": {"mode": "MFSK", "submode": "FT4"}}}}
 	}`
 	if err := os.WriteFile(cfgFile, []byte(content), 0o644); err != nil {
 		t.Fatalf("writing test config: %v", err)
@@ -1182,8 +1182,8 @@ func TestLoad_MigratesGlobalModeMappingsToRig(t *testing.T) {
 		t.Fatalf("Version = %d, want %d (migrated)", cfg.Version, currentConfigVersion)
 	}
 	rc := cfg.RigByID(1)
-	if rc == nil || rc.ModeMappings["DATA-U"].Mode != "FT4" {
-		t.Fatalf("rig ModeMappings = %v, want DATA-U→FT4 folded from the global block", rc.ModeMappings)
+	if rc == nil || rc.ModeMappings["DATA-U"].Mode != "MFSK" || rc.ModeMappings["DATA-U"].SubMode != "FT4" {
+		t.Fatalf("rig ModeMappings = %v, want DATA-U→MFSK/FT4 folded from the global block", rc.ModeMappings)
 	}
 }
 

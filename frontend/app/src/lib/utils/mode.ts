@@ -7,8 +7,9 @@
 
       - **MODE** is the parent family (SSB, MFSK, PSK, CW, FM, AM, RTTY,
         DIGITALVOICE, HELL, PACKET).
-      - **SUBMODE** is the specific variant (USB/LSB under SSB; FT8/FT4
-        under MFSK; PSK31 under PSK; CW-N for narrow CW under CW; etc).
+      - **SUBMODE** is the specific variant (USB/LSB under SSB; FT4 under
+        MFSK; PSK31 under PSK; CW-N for narrow CW under CW; etc). FT8 is a
+        main mode of its own.
 
     The daemon's `internal/enums/modes/modes.go` enforces ADIF MODE
     membership strictly — submitting `MODE=USB` returns `400
@@ -23,11 +24,13 @@
 
 /*
     Mirrors the daemon's embedded `adif-modes.json` submodes section.
-    Entries that ADIF 3.x promotes to main modes (FT8, FT4, FST4, Q65,
-    JS8, JT*, MSK144, MT63, OLIVIA, etc.) live in the daemon's
-    main_modes list and are NOT in this table — they pass through
-    `resolveModeAndSubmode` as MODE=value SUBMODE='' (the
-    pass-through branch below).
+    ADIF 3.x main modes (FT8, JT*, MSK144, MT63, OLIVIA, etc.) live in
+    the daemon's main_modes list and are NOT in this table — they pass
+    through `resolveModeAndSubmode` as MODE=value SUBMODE='' (the
+    pass-through branch below). FT4, FST4, FST4W, JS8 and Q65 are NOT
+    among them: ADIF 3.1.5's Submode Enumeration lists them under MFSK,
+    so they map below — FT4 to the same pair the FT8 subsystem files an
+    FT4 exchange under (ADR 0080).
 */
 const SUBMODE_TO_MODE: Record<string, string> = {
     // SSB sidebands
@@ -35,7 +38,12 @@ const SUBMODE_TO_MODE: Record<string, string> = {
     LSB: 'SSB',
 
     // MFSK family (WSJT-X et al.) — only the ones that ARE submodes
-    // of MFSK in ADIF 3.x.
+    // of MFSK in ADIF 3.1.5.
+    FT4: 'MFSK',
+    FST4: 'MFSK',
+    FST4W: 'MFSK',
+    JS8: 'MFSK',
+    Q65: 'MFSK',
     MFSK16: 'MFSK',
     MFSK8: 'MFSK',
 

@@ -1036,7 +1036,7 @@ func TestHandleGetConfig_DefaultRigNarrowShape(t *testing.T) {
 				BaudRate:      38400,
 				LineDelimiter: "0xFD",
 			},
-			ModeMappings: map[string]types.ModeMapping{"DATA-U": {Mode: "FT4"}},
+			ModeMappings: map[string]types.ModeMapping{"DATA-U": {Mode: "MFSK", SubMode: "FT4"}},
 			Ft8Mode:      &ft8Mode,
 			MyRig:        &myRig,
 		}}
@@ -1108,9 +1108,10 @@ func TestHandlePutConfig_ModeMappingsOverride_RoundTrip(t *testing.T) {
 		cfg.DefaultRigID = 1
 	})
 
-	// Override DATA-U → FT4 (the FTdx10 rigdef ships DATA-U → FT8, so this is a
-	// genuine operator deviation that must persist).
-	body := `{"bridge": {"driver": "yaesu-ftdx10", "mode_mappings": {"DATA-U": {"mode": "FT4"}}}}`
+	// Override DATA-U → MFSK/FT4 (the FTdx10 rigdef ships DATA-U → FT8, so this
+	// is a genuine operator deviation that must persist; FT4 is a submode of
+	// MFSK in ADIF 3.1.5, so the pair is what an operator would enter).
+	body := `{"bridge": {"driver": "yaesu-ftdx10", "mode_mappings": {"DATA-U": {"mode": "MFSK", "submode": "FT4"}}}}`
 	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -1121,8 +1122,8 @@ func TestHandlePutConfig_ModeMappingsOverride_RoundTrip(t *testing.T) {
 
 	// Stored on the active rig, not a global block.
 	rc := srv.cfg.Snapshot().RigByID(1)
-	if rc == nil || rc.ModeMappings["DATA-U"].Mode != "FT4" {
-		t.Fatalf("active rig ModeMappings = %v, want DATA-U→FT4 stored on the rig", rc.ModeMappings)
+	if rc == nil || rc.ModeMappings["DATA-U"].Mode != "MFSK" || rc.ModeMappings["DATA-U"].SubMode != "FT4" {
+		t.Fatalf("active rig ModeMappings = %v, want DATA-U→MFSK/FT4 stored on the rig", rc.ModeMappings)
 	}
 
 	// GET returns the merged view: the override on top of rigdef defaults.
@@ -1136,8 +1137,8 @@ func TestHandlePutConfig_ModeMappingsOverride_RoundTrip(t *testing.T) {
 	if err := unmarshalJSON(getW.Body.String(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if got := resp.Bridge.ModeMappings["DATA-U"].Mode; got != "FT4" {
-		t.Fatalf("merged DATA-U mode = %q, want FT4 (operator override wins)", got)
+	if got := resp.Bridge.ModeMappings["DATA-U"]; got.Mode != "MFSK" || got.SubMode != "FT4" {
+		t.Fatalf("merged DATA-U mapping = %+v, want MFSK/FT4 (operator override wins)", got)
 	}
 	if got := resp.Bridge.ModeMappings["USB"].Mode; got != "SSB" {
 		t.Fatalf("merged USB mode = %q, want SSB (untouched rigdef default preserved)", got)
