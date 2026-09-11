@@ -168,17 +168,22 @@ func (s *Service) importBatch(
 			batchDup++
 			continue
 		}
-		if _, derr := s.DB.FetchQsoByDedupeKeyWithContext(ctx, logbookID, key); derr == nil {
+		// Committed rows under any of the record's keys — the legacy key included,
+		// since the CLI has already converted a bare MODE=FT4 to its pair by here
+		// (findStored, shared with the single submit).
+		_, found, derr := s.findStored(ctx, logbookID, qso)
+		if derr != nil {
+			// A lookup error is an infrastructure fault (context cancellation, DB
+			// failure), NOT a per-record validation problem. Recording it as an
+			// errored record and continuing would silently skip this record — and
+			// every later one — while returning a nil service error, so the import
+			// reports success when it actually aborted midway. Fail the whole import
+			// instead (2026-07-21 review finding 5).
+			return errors.New(op).WithErr(derr).WithMsgf("dedupe lookup for record %d (%s)", idx, rec.Call)
+		}
+		if found {
 			batchDup++
 			continue
-		} else if !stderr.Is(derr, errors.ErrNotFound) {
-			// A non-ErrNotFound error is an infrastructure fault (context
-			// cancellation, DB failure), NOT a per-record validation problem.
-			// Recording it as an errored record and continuing would silently skip
-			// this record — and every later one — while returning a nil service error,
-			// so the import reports success when it actually aborted midway. Fail the
-			// whole import instead (2026-07-21 review finding 5).
-			return errors.New(op).WithErr(derr).WithMsgf("dedupe lookup for record %d (%s)", idx, rec.Call)
 		}
 		batchKeys[key] = struct{}{}
 		toInsert = append(toInsert, prepared{qso: qso, idx: idx})

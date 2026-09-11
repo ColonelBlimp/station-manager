@@ -357,15 +357,21 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	call := qso.ContactedStation.Call
 
 	// ---- Dedupe ----
+	// Every key the record may already be stored under (dedupeKeysFor): its own,
+	// and the legacy one for a pair such as MFSK/FT4 — a contact stored as
+	// MODE=FT4 before the catalogue moved FT4 under MFSK keeps its old key until
+	// an edit recomputes it, and a re-import must find it rather than add a copy
+	// that then blocks the original's next edit (codex 40238d47 P2). The bulk
+	// import shares findStored.
 	if !force {
-		existing, derr := s.DB.FetchQsoByDedupeKeyWithContext(ctx, logbookID, dedupeKey)
-		if derr == nil {
+		existing, found, derr := s.findStored(ctx, logbookID, qso)
+		if derr != nil {
+			return SubmitResult{}, errors.New(op).WithErr(derr).WithMsg("dedupe check failed")
+		}
+		if found {
 			s.logDuplicateRefused(logbookID, call, qso.QsoDetails.QsoDate,
 				qso.QsoDetails.TimeOn, existing.UUID, existing.ID)
 			return SubmitResult{Status: "duplicate", UUID: existing.UUID, ID: existing.ID}, nil
-		}
-		if !stderr.Is(derr, errors.ErrNotFound) {
-			return SubmitResult{}, errors.New(op).WithErr(derr).WithMsg("dedupe check failed")
 		}
 	}
 

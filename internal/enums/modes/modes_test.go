@@ -187,6 +187,19 @@ func TestCanonical(t *testing.T) {
 	}
 }
 
+func TestWasListedAsMainMode(t *testing.T) {
+	for _, s := range []string{"FT4", " ft4 ", "FST4", "FST4W", "JS8", "q65"} {
+		if !WasListedAsMainMode(s) {
+			t.Fatalf("%q: was a main mode until 2026-09-11", s)
+		}
+	}
+	for _, s := range []string{"", "FT8", "MFSK16", "USB", "JT65", "MFSK"} {
+		if WasListedAsMainMode(s) {
+			t.Fatalf("%q: never a promoted MFSK submode", s)
+		}
+	}
+}
+
 func TestStringMethods(t *testing.T) {
 	if got := AM.String(); got != "AM" {
 		t.Fatalf("AM.String() = %q, want %q", got, "AM")

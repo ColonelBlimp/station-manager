@@ -256,6 +256,21 @@ func GetModeBySubmode(s string) (Mode, bool) {
 	return Mode(parent), true
 }
 
+// formerMainModes are the submodes the embedded catalogue listed as MAIN modes
+// until 2026-09-11 (8701a6de moved them under MFSK per ADIF 3.1.5). History,
+// not catalogue: an operator override cannot change what earlier daemons stored.
+var formerMainModes = map[string]struct{}{"FT4": {}, "FST4": {}, "FST4W": {}, "JS8": {}, "Q65": {}}
+
+// WasListedAsMainMode reports whether s is a submode the embedded catalogue
+// listed as a main mode before 2026-09-11. Records and rig mappings from
+// before then may carry the bare name — and a QSO's dedupe key hashed under
+// it — so code that canonicalises such data must also recognise its old
+// identity (qsoservice's legacy dedupe key). Case-insensitive, trimmed.
+func WasListedAsMainMode(s string) bool {
+	_, ok := formerMainModes[strings.ToUpper(strings.TrimSpace(s))]
+	return ok
+}
+
 // Canonical resolves a (mode, submode) pair to the form ADIF stores. A MODE
 // that names a known submode — the operator-facing literal (USB, FT4), or a
 // record or rig mapping filed before the catalogue moved that name under its

@@ -834,6 +834,70 @@ func TestSubmit_SnrReportModes_NoRstDefault(t *testing.T) {
 	}
 }
 
+// TestSubmit_LegacyModeRowRecognisedAsDuplicate: the dedupe key hashes the
+// MODE, so a contact stored as MODE=FT4 before the catalogue moved FT4 under
+// MFSK sits under a key the canonical MFSK form cannot compute. A re-import of
+// that record must be a duplicate, not a copy — which would then block the
+// original's next edit with duplicate_key (codex 40238d47 P2). After the edit
+// heals the row to the pair, the same re-import is a duplicate by the
+// canonical key.
+func TestSubmit_LegacyModeRowRecognisedAsDuplicate(t *testing.T) {
+	s := newTestService(t)
+	lbID := seedLogbook(t, s, "Main", "M0ABC")
+	ctx := context.Background()
+
+	rec := adif.Record{
+		ContactedStation: types.ContactedStation{Call: "K1ABC"},
+		QsoDetails:       types.QsoDetails{Band: "20m", Mode: "MFSK", Submode: "FT4", Freq: "14.080", QsoDate: "20260912", TimeOn: "1530"},
+		LoggingStation:   types.LoggingStation{StationCallsign: "M0ABC"},
+	}
+	first, err := s.Submit(ctx, lbID, rec, false)
+	require.NoError(t, err)
+	require.Equal(t, "stored", first.Status)
+	// Rewrite the row to the shape the old Submit stored: bare MODE=FT4, no
+	// submode, and the dedupe key hashed under FT4.
+	legacyKey := ComputeDedupeKey("K1ABC", "20m", "FT4", "14080", "20260912", "1530")
+	tx, cancel, err := s.DB.BeginTxContext(ctx)
+	require.NoError(t, err)
+	defer cancel()
+	_, err = tx.ExecContext(ctx, "UPDATE qso SET mode = 'FT4', additional_data = json_remove(additional_data, '$.submode'), dedupe_key = ? WHERE id = ?", legacyKey, first.ID)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
+
+	// The same contact re-imported as its legacy record (bare MODE=FT4, no UUID).
+	legacy := rec
+	legacy.QsoDetails.Mode, legacy.QsoDetails.Submode = "FT4", ""
+	again, err := s.Submit(ctx, lbID, legacy, false)
+	require.NoError(t, err)
+	require.Equal(t, "duplicate", again.Status, "the legacy row must be recognised under its legacy key")
+	require.Equal(t, first.UUID, again.UUID)
+
+	// The bulk import path too, in both shapes it can meet: the pair the CLI
+	// has already converted the record to, and the bare form (operator review
+	// 2026-09-11: the CLI converts before the service, so the legacy key must
+	// derive from the canonical pair).
+	converted := rec
+	batch, err := s.SubmitImportBatch(ctx, lbID, []adif.Record{converted, legacy}, nil, 10, nil)
+	require.NoError(t, err)
+	require.Equal(t, 0, batch.Stored, "no copy of the legacy row")
+	require.Equal(t, 2, batch.Duplicate)
+	require.Empty(t, batch.Errors)
+
+	// The original stays editable and heals to the pair with the canonical key.
+	existing, err := s.DB.FetchQsoByIdWithContext(ctx, first.ID)
+	require.NoError(t, err)
+	updated, err := s.Update(ctx, existing, []byte(`{"comment":"edited"}`), source.API)
+	require.NoError(t, err, "no copy was inserted, so the healed key collides with nothing")
+	require.Equal(t, "MFSK", updated.QsoDetails.Mode)
+	require.Equal(t, ComputeDedupeKey("K1ABC", "20m", "MFSK", "14080", "20260912", "1530"), updated.DedupeKey)
+
+	// Now the canonical key finds it.
+	third, err := s.Submit(ctx, lbID, legacy, false)
+	require.NoError(t, err)
+	require.Equal(t, "duplicate", third.Status)
+	require.Equal(t, first.UUID, third.UUID)
+}
+
 // TestUpdate_LegacyFt4RecordEditableAndHealed: a contact stored as MODE=FT4
 // while the catalogue still listed FT4 as a main mode stays editable after the
 // correction — an unrelated edit succeeds and files the record under its ADIF
