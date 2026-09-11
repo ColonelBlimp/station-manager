@@ -161,6 +161,32 @@ func TestGetModeBySubmode(t *testing.T) {
 	}
 }
 
+func TestCanonical(t *testing.T) {
+	cases := []struct {
+		mode, submode string
+		wantMode      string
+		wantSub       string
+		ok            bool
+	}{
+		{"FT4", "", "MFSK", "FT4", true},      // the bare form the old catalogue accepted
+		{" ft4 ", "ft4", "MFSK", "FT4", true}, // both halves naming the submode
+		{"usb", "", "SSB", "USB", true},       // the operator-facing literal
+		{"JS8", "", "MFSK", "JS8", true},
+		{"MFSK", "FT4", "MFSK", "FT4", true}, // already canonical
+		{"CW", "", "CW", "", true},
+		{"CW", "CW-N", "CW", "CW-N", true},  // an unknown submode passes through
+		{"", "FT4", "", "FT4", true},        // MODE absent: Submit derives it
+		{"FT4", "JS8", "FT4", "JS8", false}, // a contradiction is refused, not guessed
+	}
+	for _, tc := range cases {
+		m, s, ok := Canonical(tc.mode, tc.submode)
+		if m != tc.wantMode || s != tc.wantSub || ok != tc.ok {
+			t.Fatalf("Canonical(%q, %q) = (%q, %q, %v), want (%q, %q, %v)",
+				tc.mode, tc.submode, m, s, ok, tc.wantMode, tc.wantSub, tc.ok)
+		}
+	}
+}
+
 func TestStringMethods(t *testing.T) {
 	if got := AM.String(); got != "AM" {
 		t.Fatalf("AM.String() = %q, want %q", got, "AM")

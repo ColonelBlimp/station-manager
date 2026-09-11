@@ -1187,6 +1187,43 @@ func TestLoad_MigratesGlobalModeMappingsToRig(t *testing.T) {
 	}
 }
 
+// A mapping persisted while the catalogue still listed FT4 (or FST4, FST4W,
+// JS8, Q65) as a main mode must not refuse startup after the correction: it is
+// rewritten to its ADIF pair before validation (codex 8701a6de P1).
+func TestLoad_CanonicalisesSubmodeNamedRigModeMapping(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.json")
+	content := `{
+		"data_dir": "/tmp/d",
+		"rigs": [{"id": 1, "model": "yaesu-ftdx10", "mode_mappings": {
+			"DATA-U": {"mode": "FT4"},
+			"DATA-L": {"mode": "js8", "submode": "JS8"},
+			"USB": {"mode": "SSB", "submode": "USB"}
+		}}],
+		"default_rig_id": 1
+	}`
+	if err := os.WriteFile(cfgFile, []byte(content), 0o644); err != nil {
+		t.Fatalf("writing test config: %v", err)
+	}
+	cfg, err := Load(cfgFile)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	rc := cfg.RigByID(1)
+	if rc == nil {
+		t.Fatal("rig 1 missing")
+	}
+	for lit, want := range map[string]types.ModeMapping{
+		"DATA-U": {Mode: "MFSK", SubMode: "FT4"},
+		"DATA-L": {Mode: "MFSK", SubMode: "JS8"},
+		"USB":    {Mode: "SSB", SubMode: "USB"},
+	} {
+		if got := rc.ModeMappings[lit]; got != want {
+			t.Fatalf("mode_mappings[%s] = %+v, want %+v", lit, got, want)
+		}
+	}
+}
+
 func TestLoad_RejectsInvalidRigModeMapping(t *testing.T) {
 	dir := t.TempDir()
 	cfgFile := filepath.Join(dir, "config.json")

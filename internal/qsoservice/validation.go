@@ -10,6 +10,41 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
 
+// resolveModePair turns a record's MODE/SUBMODE into the pair Submit stores:
+// MODE absent derives from a known SUBMODE (USB → SSB; FT4 → MFSK), else is
+// required; MODE present is canonicalised the way Update canonicalises the
+// merged record — see canonicalModePair. Membership is the caller's check.
+func resolveModePair(recMode, recSubmode string) (mode, submode string, err error) {
+	mode = strings.ToUpper(strings.TrimSpace(recMode))
+	submode = strings.ToUpper(strings.TrimSpace(recSubmode))
+	if mode != "" {
+		return canonicalModePair(mode, submode)
+	}
+	if parent, ok := modes.GetModeBySubmode(submode); ok {
+		return parent.String(), submode, nil
+	}
+	return "", "", &SubmitError{Code: "missing_required_field", Message: "MODE is required"}
+}
+
+// canonicalModePair is the one place Submit and Update turn a (MODE, SUBMODE)
+// pair into the form that is stored: a MODE naming a submode (FT4, USB — or a
+// record filed under FT4, FST4, FST4W, JS8 or Q65 before the catalogue moved
+// them under MFSK on 2026-09-11) becomes its parent/submode pair, so a
+// catalogue correction never refuses data the previous catalogue accepted and
+// an edit of such a record heals it (codex 8701a6de P2). A SUBMODE that
+// contradicts such a MODE is refused. Inputs may be raw; outputs are trimmed
+// and upper-cased. Membership is checked by the callers afterwards.
+func canonicalModePair(mode, submode string) (string, string, error) {
+	m, s, ok := modes.Canonical(mode, submode)
+	if !ok {
+		return "", "", &SubmitError{
+			Code:    "invalid_field_value",
+			Message: fmt.Sprintf("SUBMODE %q contradicts MODE %q, which is itself a submode", s, m),
+		}
+	}
+	return m, s, validateSubmodeMatchesMode(m, s)
+}
+
 // validateSubmodeMatchesMode rejects a SUBMODE that is KNOWN to belong to a
 // different main mode: an inconsistent pair (MODE=CW, SUBMODE=USB) would
 // otherwise be stored and forwarded to QRZ/ClubLog as contradictory ADIF. An

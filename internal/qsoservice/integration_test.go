@@ -2,6 +2,7 @@ package qsoservice
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/ColonelBlimp/station-manager/internal/adif"
@@ -756,24 +757,124 @@ func TestUpdate_RejectsMalformedQsoDateOff(t *testing.T) {
 	require.Equal(t, "invalid_field_value", se.Code)
 }
 
-// TestSubmit_BareFt4ModeRefused: ADIF 3.1.5 lists FT4 as a submode of MFSK,
-// not a main mode, and the embedded catalogue follows it (W-0019 baseline fix)
-// — a bare MODE=FT4 is refused like MODE=USB. The pair is the record (below).
-func TestSubmit_BareFt4ModeRefused(t *testing.T) {
+// TestSubmit_BareFt4ModeCanonicalised: ADIF 3.1.5 lists FT4 as a submode of
+// MFSK, not a main mode, and the embedded catalogue follows it (W-0019 baseline
+// fix) — a bare MODE=FT4 (the form the old catalogue accepted, and what a
+// logger that has not caught up writes) is stored as the pair, like MODE=USB
+// is stored as SSB/USB. A SUBMODE contradicting it is refused.
+func TestSubmit_BareFt4ModeCanonicalised(t *testing.T) {
 	s := newTestService(t)
 	lbID := seedLogbook(t, s, "Main", "M0ABC")
+	ctx := context.Background()
 
 	rec := adif.Record{
 		ContactedStation: types.ContactedStation{Call: "K1ABC"},
 		QsoDetails:       types.QsoDetails{Band: "20m", Mode: "FT4", Freq: "14.080", QsoDate: "20260912", TimeOn: "1530"},
 		LoggingStation:   types.LoggingStation{StationCallsign: "M0ABC"},
 	}
-	_, err := s.Submit(context.Background(), lbID, rec, false)
-	require.Error(t, err)
+	res, err := s.Submit(ctx, lbID, rec, false)
+	require.NoError(t, err)
+	existing, err := s.DB.FetchQsoByIdWithContext(ctx, res.ID)
+	require.NoError(t, err)
+	require.Equal(t, "MFSK", existing.QsoDetails.Mode)
+	require.Equal(t, "FT4", existing.QsoDetails.Submode)
+	require.Empty(t, existing.QsoDetails.RstRcvd, "an SNR-report record: no 59 default")
+
+	rec.QsoDetails.Submode = "JS8"
+	rec.QsoDetails.TimeOn = "1531"
+	_, err = s.Submit(ctx, lbID, rec, false)
 	var se *SubmitError
 	require.ErrorAs(t, err, &se)
 	require.Equal(t, "invalid_field_value", se.Code)
-	require.Contains(t, se.Message, `MODE "FT4"`)
+}
+
+// TestSubmit_SnrReportModes_NoRstDefault: every SNR-report mode the SPA
+// classifies keeps an empty report on submit and on a no-op edit — the four
+// MFSK submodes Change C canonicalises alongside FT4 (codex review P2:
+// snrReportMode recognised only MFSK/FT4, so FST4, FST4W, JS8 and Q65 had "59"
+// fabricated at submit), submitted both bare and as the pair, plus a main mode.
+func TestSubmit_SnrReportModes_NoRstDefault(t *testing.T) {
+	cases := []struct {
+		name, mode, submode string
+		wantMode, wantSub   string
+	}{
+		{"bare FT4", "FT4", "", "MFSK", "FT4"},
+		{"bare FST4", "FST4", "", "MFSK", "FST4"},
+		{"bare FST4W", "FST4W", "", "MFSK", "FST4W"},
+		{"bare JS8", "JS8", "", "MFSK", "JS8"},
+		{"bare Q65", "Q65", "", "MFSK", "Q65"},
+		{"pair MFSK/JS8", "MFSK", "JS8", "MFSK", "JS8"},
+		{"pair MFSK/Q65", "MFSK", "Q65", "MFSK", "Q65"},
+		{"main JT65", "JT65", "", "JT65", ""},
+		{"main FT8", "FT8", "", "FT8", ""},
+	}
+	s := newTestService(t)
+	lbID := seedLogbook(t, s, "Main", "M0ABC")
+	ctx := context.Background()
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := adif.Record{
+				ContactedStation: types.ContactedStation{Call: "K1ABC"},
+				QsoDetails: types.QsoDetails{Band: "20m", Mode: tc.mode, Submode: tc.submode, Freq: "14.080",
+					QsoDate: "20260912", TimeOn: fmt.Sprintf("15%02d", i)},
+				LoggingStation: types.LoggingStation{StationCallsign: "M0ABC"},
+			}
+			res, err := s.Submit(ctx, lbID, rec, false)
+			require.NoError(t, err)
+			existing, err := s.DB.FetchQsoByIdWithContext(ctx, res.ID)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantMode, existing.QsoDetails.Mode)
+			require.Equal(t, tc.wantSub, existing.QsoDetails.Submode)
+			require.Empty(t, existing.QsoDetails.RstRcvd, "no 59 fabricated for an SNR-report mode")
+			require.Empty(t, existing.QsoDetails.RstSent)
+			updated, err := s.Update(ctx, existing, []byte(`{}`), source.API)
+			require.NoError(t, err, "a no-op edit must not demand RST either")
+			require.Empty(t, updated.QsoDetails.RstRcvd)
+		})
+	}
+}
+
+// TestUpdate_LegacyFt4RecordEditableAndHealed: a contact stored as MODE=FT4
+// while the catalogue still listed FT4 as a main mode stays editable after the
+// correction — an unrelated edit succeeds and files the record under its ADIF
+// pair (codex 8701a6de P2). The row is rewritten below the service to exactly
+// what the old Submit left.
+func TestUpdate_LegacyFt4RecordEditableAndHealed(t *testing.T) {
+	s := newTestService(t)
+	lbID := seedLogbook(t, s, "Main", "M0ABC")
+	ctx := context.Background()
+
+	rec := adif.Record{
+		ContactedStation: types.ContactedStation{Call: "K1ABC"},
+		QsoDetails:       types.QsoDetails{Band: "20m", Mode: "MFSK", Submode: "FT4", Freq: "14.080", QsoDate: "20260912", TimeOn: "1530"},
+		LoggingStation:   types.LoggingStation{StationCallsign: "M0ABC"},
+	}
+	res, err := s.Submit(ctx, lbID, rec, false)
+	require.NoError(t, err)
+	id := res.ID
+	// Rewrite the row to the shape the old Submit stored (dedupe key and the
+	// rest untouched — only the pair differs).
+	tx, cancel, err := s.DB.BeginTxContext(ctx)
+	require.NoError(t, err)
+	defer cancel()
+	_, err = tx.ExecContext(ctx, "UPDATE qso SET mode = 'FT4', additional_data = json_remove(additional_data, '$.submode') WHERE id = ?", id)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
+	existing, err := s.DB.FetchQsoByIdWithContext(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, "FT4", existing.QsoDetails.Mode, "stored in the legacy form")
+	require.Empty(t, existing.QsoDetails.Submode)
+
+	updated, err := s.Update(ctx, existing, []byte(`{"comment":"still editable"}`), source.API)
+	require.NoError(t, err, "an unrelated edit of a legacy FT4 record must succeed")
+	require.Equal(t, "MFSK", updated.QsoDetails.Mode)
+	require.Equal(t, "FT4", updated.QsoDetails.Submode)
+	require.Empty(t, updated.QsoDetails.RstRcvd, "an SNR-report record: no 59 demanded")
+
+	stored, err := s.DB.FetchQsoByIdWithContext(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, "MFSK", stored.QsoDetails.Mode, "healed on disk")
+	require.Equal(t, "FT4", stored.QsoDetails.Submode)
 }
 
 // TestSubmit_Ft4SubmodeDerivesMfsk: a record naming only SUBMODE=FT4 (the

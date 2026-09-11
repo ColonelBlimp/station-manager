@@ -454,7 +454,10 @@ make one profile the owner of another.
   timeout, RTS, and DTR;
 - name-based `audio.rx` and `audio.tx` device selections;
 - optional `ft8_mode` override;
-- per-rig rig-literal to ADIF `mode_mappings`; and
+- per-rig rig-literal to ADIF `mode_mappings` — a mapping whose `mode` names an ADIF
+  submode (`FT4`, `USB`) is canonicalised to its parent/submode pair (`MFSK`/`FT4`) at
+  load and on PUT, so a mapping persisted while the catalogue still listed FT4, FST4,
+  FST4W, JS8 or Q65 as main modes (before 2026-09-11) keeps the daemon bootable; and
 - optional `my_rig` override.
 
 `default_rig_id` selects the active instance. `Config.ActiveBridge()` projects its

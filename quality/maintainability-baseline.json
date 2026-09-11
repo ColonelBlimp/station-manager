@@ -226,7 +226,7 @@
       "path": "internal/qsoservice/submit.go",
       "function": "(*Service).prepareQso",
       "direction": "maximum",
-      "value": 60
+      "value": 52
     },
     {
       "language": "go",
@@ -346,7 +346,7 @@
       "path": "internal/qsoservice/submit.go",
       "function": "(*Service).prepareQso",
       "direction": "maximum",
-      "value": 44
+      "value": 40
     },
     {
       "language": "go",
@@ -490,7 +490,7 @@
       "path": "internal/qsoservice/submit.go",
       "function": "(*Service).prepareQso",
       "direction": "minimum",
-      "value": 15
+      "value": 16
     },
     {
       "language": "go",

@@ -173,14 +173,19 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte, s
 	if merged.QsoDetails.Mode == "" {
 		return types.Qso{}, &SubmitError{Code: "missing_required_field", Message: "mode cannot be empty"}
 	}
+	// Symmetric with Submit: the stored or patched MODE is canonicalised (a record
+	// filed under FT4 before the catalogue moved it under MFSK heals here on its
+	// next edit — codex 8701a6de P2), and a patch that names only MODE leaves the
+	// stored SUBMODE behind, so the pair rejected at creation would otherwise
+	// re-form here and be persisted + enqueued to update-capable forwarders
+	// (codex fcd45c45 P2). canonicalModePair covers both.
+	canonMode, canonSub, err := canonicalModePair(merged.QsoDetails.Mode, merged.QsoDetails.Submode)
+	if err != nil {
+		return types.Qso{}, err
+	}
+	merged.QsoDetails.Mode, merged.QsoDetails.Submode = canonMode, canonSub
 	if !modes.IsValidMode(merged.QsoDetails.Mode) {
 		return types.Qso{}, &SubmitError{Code: "invalid_field_value", Message: fmt.Sprintf("mode %q is not a recognised mode", merged.QsoDetails.Mode)}
-	}
-	// Symmetric with Submit: a patch that names only MODE leaves the stored SUBMODE
-	// behind, so the pair rejected at creation would otherwise re-form here and be
-	// persisted + enqueued to update-capable forwarders (codex fcd45c45 P2).
-	if err := validateSubmodeMatchesMode(merged.QsoDetails.Mode, merged.QsoDetails.Submode); err != nil {
-		return types.Qso{}, err
 	}
 	// FREQ is required, mirroring Submit. A PATCH with an empty/whitespace freq
 	// skips the normalization above and would otherwise reach the dedupe-key

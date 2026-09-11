@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/cat"
+	"github.com/ColonelBlimp/station-manager/internal/enums/modes"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	"github.com/ColonelBlimp/station-manager/internal/lookupdef"
@@ -939,6 +940,7 @@ func Normalize(cfg *Config) {
 	cfg.DefaultOperator = strings.ToUpper(strings.TrimSpace(cfg.DefaultOperator))
 
 	normalizeRigOverrides(cfg)
+	normalizeRigModeMappings(cfg)
 
 	// Drop vestigial empty loose serial/cat blocks (config.md §10): serial port +
 	// CAT driver are per-rig now (RigConfig.Port + Model), so an empty stored block
@@ -1182,6 +1184,28 @@ func normalizeRigOverrides(cfg *Config) {
 		}
 		if rc.MyRig != nil && *rc.MyRig == def.Name {
 			rc.MyRig = nil
+		}
+	}
+}
+
+// normalizeRigModeMappings rewrites a per-rig mapping whose `mode` names an
+// ADIF submode as its parent/submode pair (`{"mode":"FT4"}` →
+// `{"mode":"MFSK","submode":"FT4"}`). MIGRATION, and load-bearing like the
+// MY_LAT one above: the catalogue accepted and persisted FT4, FST4, FST4W, JS8
+// and Q65 as main modes until 2026-09-11, and validate.go now refuses them as
+// modes — without this, a catalogue correction would turn an existing install
+// into a daemon that will not boot (codex 8701a6de P1). Also absorbs a client
+// that PUTs the operator-facing literal (USB) as the mode. A mapping whose
+// submode contradicts such a mode is left for validation to refuse by name.
+func normalizeRigModeMappings(cfg *Config) {
+	for i := range cfg.Rigs {
+		for lit, mm := range cfg.Rigs[i].ModeMappings {
+			m, s, ok := modes.Canonical(mm.Mode, mm.SubMode)
+			if !ok || (m == mm.Mode && s == mm.SubMode) {
+				continue
+			}
+			mm.Mode, mm.SubMode = m, s
+			cfg.Rigs[i].ModeMappings[lit] = mm
 		}
 	}
 }

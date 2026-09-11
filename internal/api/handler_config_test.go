@@ -1108,10 +1108,11 @@ func TestHandlePutConfig_ModeMappingsOverride_RoundTrip(t *testing.T) {
 		cfg.DefaultRigID = 1
 	})
 
-	// Override DATA-U → MFSK/FT4 (the FTdx10 rigdef ships DATA-U → FT8, so this
-	// is a genuine operator deviation that must persist; FT4 is a submode of
-	// MFSK in ADIF 3.1.5, so the pair is what an operator would enter).
-	body := `{"bridge": {"driver": "yaesu-ftdx10", "mode_mappings": {"DATA-U": {"mode": "MFSK", "submode": "FT4"}}}}`
+	// Override DATA-U → FT4 (the FTdx10 rigdef ships DATA-U → FT8, so this is a
+	// genuine operator deviation that must persist). Sent as the operator-facing
+	// literal: FT4 is a submode of MFSK in ADIF 3.1.5, and PUT canonicalises the
+	// mapping to the pair the way Load does (codex 8701a6de P1).
+	body := `{"bridge": {"driver": "yaesu-ftdx10", "mode_mappings": {"DATA-U": {"mode": "FT4"}}}}`
 	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()

@@ -256,6 +256,29 @@ func GetModeBySubmode(s string) (Mode, bool) {
 	return Mode(parent), true
 }
 
+// Canonical resolves a (mode, submode) pair to the form ADIF stores. A MODE
+// that names a known submode — the operator-facing literal (USB, FT4), or a
+// record or rig mapping filed before the catalogue moved that name under its
+// parent (FT4, FST4, FST4W, JS8, Q65 on 2026-09-11) — becomes its parent with
+// itself as the SUBMODE; any other pair passes through trimmed and upper-cased.
+// ok is false when a SUBMODE was supplied that contradicts such a MODE
+// (MODE=FT4 SUBMODE=JS8): that is a refusal, not a guess. Membership of the
+// result is not checked here — IsValidMode does that, on the canonical form,
+// which is what keeps a catalogue correction from refusing data the previous
+// catalogue accepted.
+func Canonical(mode, submode string) (m, s string, ok bool) {
+	m = strings.ToUpper(strings.TrimSpace(mode))
+	s = strings.ToUpper(strings.TrimSpace(submode))
+	parent, isSubmode := GetModeBySubmode(m)
+	if !isSubmode {
+		return m, s, true
+	}
+	if s != "" && s != m {
+		return m, s, false
+	}
+	return parent.String(), m, true
+}
+
 // MainModes returns a sorted snapshot of the loaded main-mode set.
 // Useful for the /v1/config response so the SPA can populate the
 // Mode Mappings sub-tab's MODE dropdown.

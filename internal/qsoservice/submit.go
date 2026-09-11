@@ -120,21 +120,8 @@ func (s *Service) prepareQso(rec adif.Record, logbookID int64, logbookCallsign s
 		return types.Qso{}, "", &SubmitError{Code: "missing_required_field", Message: "BAND is required"}
 	}
 
-	mode := strings.ToUpper(strings.TrimSpace(rec.Mode))
-	submode := strings.ToUpper(strings.TrimSpace(rec.Submode))
-	if mode == "" {
-		// MODE absent: derive it from a known SUBMODE when we can.
-		if submode != "" {
-			if resolved, ok := modes.GetModeBySubmode(submode); ok {
-				mode = resolved.String()
-			}
-		}
-		if mode == "" {
-			return types.Qso{}, "", &SubmitError{Code: "missing_required_field", Message: "MODE is required"}
-		}
-	} else if err := validateSubmodeMatchesMode(mode, submode); err != nil {
-		// MODE supplied: any SUBMODE alongside it must belong to it. Shared with
-		// Update so the two paths can't drift — see validateSubmodeMatchesMode.
+	mode, submode, err := resolveModePair(rec.Mode, rec.Submode)
+	if err != nil {
 		return types.Qso{}, "", err
 	}
 
