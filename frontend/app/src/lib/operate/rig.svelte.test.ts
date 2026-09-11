@@ -1119,6 +1119,20 @@ describe('the FT data literal is named by the claimed profile', () => {
         expect(rig.mode).toBe('FT8'); // the mapping's own name again
     });
 
+    it('does not overwrite a manual mode from a stale literal when CAT is off (codex 795d1790)', async () => {
+        setModeMappings(mappings);
+        catLink.onRigState({ vfoA: 14_255_000, mode: 'USB' });
+        expect(rig.mode).toBe('USB');
+        rig.cat = 'off'; // the operator went manual; the literal USB survives
+        await setMode('CW'); // …and picked CW by hand
+        expect(rig.mode).toBe('CW');
+
+        setFtProfileLabel('FT4');
+        expect(rig.mode).toBe('CW');
+        setFtProfileLabel('');
+        expect(rig.mode).toBe('CW');
+    });
+
     it('an FT8 label leaves the mapping name as it is', () => {
         setModeMappings(mappings);
         catLink.onRigState({ vfoA: 14_074_000, mode: 'DATA-U' });

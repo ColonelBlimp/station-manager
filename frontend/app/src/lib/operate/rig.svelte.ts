@@ -939,7 +939,12 @@ export function setFtProfileLabel(label: '' | 'FT8' | 'FT4'): void {
     ftProfileLabel = label;
     // Re-derive from the literal the rig last reported: the label changes what
     // the SAME literal is called, and a chip must not wait for the next push.
-    if (rig.modeLiteral !== '') rig.mode = friendlyMode(rig.modeLiteral);
+    // Live link only: off-CAT the literal is stale (it survives a disconnect
+    // and a manual confirmation) while rig.mode is the operator's own manual
+    // pick, which the label must not overwrite (codex 795d1790 P2).
+    if (rig.cat === 'connected' && rig.modeLiteral !== '') {
+        rig.mode = friendlyMode(rig.modeLiteral);
+    }
 }
 
 // The live Mode select's label for a rig literal: the literal itself, with the
