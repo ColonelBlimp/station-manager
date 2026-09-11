@@ -206,7 +206,9 @@ release uses gonum.
 > browser gives up on — the daemon refusing `?mode=` after a restart put it back on FT8,
 > or after another claim won while we were down — is closed and the profile claimed
 > again rather than its URL repeated: a grant reopens the stream, a refusal shows the
-> banner.
+> banner. A claim that cannot reach the daemon is retried when the window comes back
+> online or the tab is shown (the stream's own revival signals), and a banner with no
+> countdown and nothing to stop offers **Try again**.
 
 The sidebar's **Operate** item chooses Phone/CW, FT8 or FT4; the choice is
 persisted to `localStorage` (survives reload). The two FT modes render `Ft8View`,

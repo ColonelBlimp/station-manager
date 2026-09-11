@@ -114,8 +114,21 @@
             <p class="mt-1 text-muted">{ft8State.claimRefusal.message}</p>
             {#if retryIn !== null}
                 <p class="mt-1 text-muted">Retrying in {retryIn}s.</p>
-            {:else if !offersDisarm}
-                <p class="mt-1 text-muted">Leave and re-enter this view to try again.</p>
+            {:else if ft8State.claimRefusal.transport}
+                <p class="mt-1 text-muted">Retrying when the connection returns.</p>
+            {/if}
+            {#if !offersDisarm && retryIn === null}
+                <!-- No countdown and nothing to stop: the operator can still ask now
+                     rather than leave and re-enter the view. -->
+                <div class="mt-3">
+                    <button
+                        type="button"
+                        class="rounded-md border border-line px-3 py-1 text-sm hover:bg-black/5 dark:hover:bg-white/5"
+                        onclick={() => void reclaimFt8(claimMode)}
+                    >
+                        Try again
+                    </button>
+                </div>
             {/if}
             {#if offersDisarm}
                 <div class="mt-3 flex flex-wrap gap-2">

@@ -68,6 +68,10 @@ export interface Ft8ClaimRefusal {
     code: string;
     message: string;
     retryAt: number;
+    /** The daemon could not be reached (or answered 5xx — a proxy while it
+     *  restarts): the claim is retried when the window comes back online or the
+     *  tab is shown, the same signals the stream's own revival uses. */
+    transport: boolean;
 }
 
 /** Manual sequencer status (ft8-qso) — the active contact the Operate ladder renders. */
@@ -1215,6 +1219,35 @@ function clearReclaim(): void {
         clearTimeout(reclaimTimer);
         reclaimTimer = null;
     }
+    disarmRecovery();
+}
+
+// A claim that failed because the daemon could not be reached is retried on
+// the two signals the reviving transport uses for a dead stream
+// (sse-reviving.ts): the window coming back online, and the tab becoming
+// visible — only while visible, for the same reason (a hidden FT tab must not
+// re-grab the capture in the background). No schedule: this restores the
+// recovery the stream had before a terminal error closed its wrapper, and
+// adds none (codex aa31b612 P2). One-shot: the re-claim re-arms it if it
+// fails the same way again.
+let recoveryOff: (() => void) | null = null;
+function armRecovery(mode: FtProfileName): void {
+    disarmRecovery();
+    const fire = (): void => {
+        if (document.visibilityState !== 'visible') return;
+        disarmRecovery();
+        void reclaimFt8(mode);
+    };
+    document.addEventListener('visibilitychange', fire);
+    window.addEventListener('online', fire);
+    recoveryOff = () => {
+        document.removeEventListener('visibilitychange', fire);
+        window.removeEventListener('online', fire);
+    };
+}
+function disarmRecovery(): void {
+    recoveryOff?.();
+    recoveryOff = null;
 }
 
 /** Open the FT stream for a profile (idempotent). Called on FT-view mount with
@@ -1241,6 +1274,14 @@ export async function startFt8(mode: FtProfileName = 'ft8'): Promise<void> {
         closeFn = opener(ft8Link, mode);
         return;
     }
+    noteClaimFailure(result, mode, gen);
+}
+
+/** A claim that did not grant `mode`: record the refusal for the banner and
+ *  arrange the retry it deserves — the daemon's hint on a timer, the recovery
+ *  signals for a transport failure, nothing for a contradiction or a hint-less
+ *  refusal (the operator acts: a stop path, Try again, or leaving the view). */
+function noteClaimFailure(result: ClaimResult, mode: FtProfileName, gen: number): void {
     if (result.kind === 'ok') {
         // A 200 naming another profile is a contradiction, not a grant: opening
         // ?mode= on it would be exactly the EventSource error loop the claim
@@ -1249,6 +1290,7 @@ export async function startFt8(mode: FtProfileName = 'ft8'): Promise<void> {
             code: 'ft8_claim_malformed',
             message: `Station Manager reported ${result.mode || 'no profile'} for a ${mode.toUpperCase()} claim.`,
             retryAt: 0,
+            transport: false,
         };
         return;
     }
@@ -1257,8 +1299,15 @@ export async function startFt8(mode: FtProfileName = 'ft8'): Promise<void> {
     if (result.kind === 'refused' || result.kind === 'validation' || result.kind === 'server')
         code = result.code;
     const retryMs = result.kind === 'refused' ? result.retryAfterMs : 0;
-    ft8State.claimRefusal = { code, message, retryAt: retryMs > 0 ? Date.now() + retryMs : 0 };
+    const transport = result.kind === 'network' || result.kind === 'server';
+    ft8State.claimRefusal = {
+        code,
+        message,
+        retryAt: retryMs > 0 ? Date.now() + retryMs : 0,
+        transport,
+    };
     clearReclaim();
+    if (transport) armRecovery(mode);
     if (retryMs > 0) {
         reclaimTimer = setTimeout(() => {
             reclaimTimer = null;

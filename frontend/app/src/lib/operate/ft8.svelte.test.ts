@@ -1029,3 +1029,119 @@ describe('a terminal stream error re-claims the profile', () => {
         stopFt8();
     });
 });
+
+// codex aa31b612 P2: a terminal error closes the reviving wrapper, so a re-claim
+// that then cannot reach the daemon (or meets a 5xx — a proxy while it
+// restarts) must keep a recovery trigger of its own, or the view is stuck until
+// the operator leaves and re-enters. The claim is retried on the wrapper's two
+// signals — the window coming back online, the tab becoming visible — and only
+// while visible.
+describe('a claim that could not reach the daemon is retried on the recovery signals', () => {
+    let visibility = 'visible';
+    beforeEach(() => {
+        visibility = 'visible';
+        Object.defineProperty(document, 'visibilityState', {
+            configurable: true,
+            get: () => visibility,
+        });
+    });
+    afterEach(() => {
+        Reflect.deleteProperty(document, 'visibilityState');
+    });
+
+    function harness(results: ClaimResult[]) {
+        const opened: (string | undefined)[] = [];
+        let handlers: Ft8EventHandlers | null = null;
+        setFt8Transport((h, mode) => {
+            handlers = h;
+            opened.push(mode);
+            return () => undefined;
+        });
+        const claims: string[] = [];
+        setFt8Claimer((mode) => {
+            claims.push(mode);
+            return Promise.resolve(
+                results[claims.length - 1] ?? { kind: 'ok', mode: mode.toUpperCase() }
+            );
+        });
+        return { opened, claims, handlers: () => handlers! };
+    }
+
+    it("retries on 'online' while visible, opens on the grant, and is disarmed by a stop", async () => {
+        ft8State.claimed = false;
+        ft8State.connected = false;
+        const h = harness([{ kind: 'network', message: 'unreachable' }]);
+        await startFt8('ft4');
+        expect(h.opened).toEqual([]);
+        expect(ft8State.claimRefusal?.code).toBe('network');
+        expect(ft8State.claimRefusal?.transport).toBe(true);
+        expect(ft8State.claimRefusal?.retryAt).toBe(0);
+
+        visibility = 'hidden';
+        window.dispatchEvent(new Event('online')); // hidden: deliberately nothing
+        await Promise.resolve();
+        expect(h.claims).toEqual(['ft4']);
+
+        visibility = 'visible';
+        document.dispatchEvent(new Event('visibilitychange'));
+        await vi.waitFor(() => expect(h.opened).toEqual(['ft4']));
+        expect(h.claims).toEqual(['ft4', 'ft4']);
+        expect(ft8State.claimRefusal).toBeNull();
+
+        stopFt8();
+        window.dispatchEvent(new Event('online'));
+        document.dispatchEvent(new Event('visibilitychange'));
+        await Promise.resolve();
+        expect(h.claims).toEqual(['ft4', 'ft4']); // a stopped view claims nothing
+    });
+
+    it('a 5xx on the claim (a proxy while the daemon restarts) is a transport failure too', async () => {
+        ft8State.claimed = false;
+        ft8State.connected = false;
+        const h = harness([{ kind: 'server', code: 'http_502', message: 'bad gateway' }]);
+        await startFt8('ft4');
+        expect(ft8State.claimRefusal?.transport).toBe(true);
+        window.dispatchEvent(new Event('online'));
+        await vi.waitFor(() => expect(h.opened).toEqual(['ft4']));
+        stopFt8();
+    });
+
+    it('a daemon refusal is not retried on those signals — the hint or the operator decides', async () => {
+        ft8State.claimed = false;
+        ft8State.connected = false;
+        const h = harness([
+            { kind: 'refused', code: 'ft8_profile_busy', message: 'busy', retryAfterMs: 0 },
+        ]);
+        await startFt8('ft4');
+        expect(ft8State.claimRefusal?.transport).toBe(false);
+        window.dispatchEvent(new Event('online'));
+        document.dispatchEvent(new Event('visibilitychange'));
+        await Promise.resolve();
+        expect(h.claims).toEqual(['ft4']);
+        stopFt8();
+    });
+
+    it('the full chain: terminal error → re-claim fails on the network → online → claimed and open again', async () => {
+        ft8State.claimed = false;
+        ft8State.connected = false;
+        const h = harness([
+            { kind: 'ok', mode: 'FT4' },
+            { kind: 'network', message: 'unreachable' },
+        ]);
+        await startFt8('ft4');
+        h.handlers().onOpen();
+        expect(ft8State.claimed).toBe(true);
+
+        h.handlers().onError(true); // the wrapper is closed with the stream
+        await vi.waitFor(() => expect(h.claims).toEqual(['ft4', 'ft4']));
+        expect(h.opened).toEqual(['ft4']);
+        expect(ft8State.claimRefusal?.transport).toBe(true);
+
+        window.dispatchEvent(new Event('online'));
+        await vi.waitFor(() => expect(h.opened).toEqual(['ft4', 'ft4']));
+        expect(h.claims).toEqual(['ft4', 'ft4', 'ft4']);
+        h.handlers().onOpen();
+        expect(ft8State.claimed).toBe(true);
+        stopFt8();
+    });
+});

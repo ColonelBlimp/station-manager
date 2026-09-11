@@ -196,7 +196,8 @@ describe('Ft8View — stop paths through a refused claim', () => {
         await vi.waitFor(() =>
             expect(within(again).getByText(MESSAGES.ft8_profile_busy)).toBeTruthy()
         );
-        expect(within(again).queryByRole('button')).toBeNull();
+        expect(within(again).queryByRole('button', { name: 'Disable TX' })).toBeNull();
+        expect(within(again).queryByRole('button', { name: ABANDON_LABEL })).toBeNull();
         expect(opened).toEqual([]);
         expect(ft8State.claimed).toBe(false);
     });
@@ -243,13 +244,23 @@ describe('Ft8View — stop paths through a refused claim', () => {
         expect(ft8State.claimed).toBe(false);
     });
 
-    it('ft8_profile_busy: no stop path — another subscriber holds the capture', async () => {
-        wireDaemon({ busy: true, inFlight: false, session: false, armed: false }, log);
+    it('ft8_profile_busy: no stop path — another subscriber holds the capture; Try again re-claims', async () => {
+        const d: Daemon = { busy: true, inFlight: false, session: false, armed: false };
+        wireDaemon(d, log);
         render(Ft8View);
 
         const banner = await screen.findByTestId('ft8-claim-banner');
-        expect(within(banner).queryByRole('button')).toBeNull();
+        expect(within(banner).queryByRole('button', { name: 'Disable TX' })).toBeNull();
+        expect(within(banner).queryByRole('button', { name: ABANDON_LABEL })).toBeNull();
         expect(opened).toEqual([]);
         expect(log).toEqual(['claim:ft4']);
+
+        // The other subscriber left; the operator asks again rather than leaving
+        // and re-entering the view (codex aa31b612 P2).
+        d.busy = false;
+        await fireEvent.click(within(banner).getByRole('button', { name: 'Try again' }));
+        await vi.waitFor(() => expect(opened).toEqual(['ft4']));
+        expect(log).toEqual(['claim:ft4', 'claim:ft4']);
+        expect(ft8State.claimRefusal).toBeNull();
     });
 });
