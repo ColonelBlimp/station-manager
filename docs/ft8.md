@@ -532,9 +532,12 @@ CAT-live re-tune is opt-out** via the daemon config `restore_rig_on_mode_switch`
   payload for all roles, so the opening row shows the real grid rather than a `<GRID>`
   placeholder.)
 - **TX Offset strip** (in the Occupancy tab, shipped 2026-06-09) — a horizontal, per-slot
-  *spatial* view of the passband, **channelised** into uniform ~50 Hz slots
-  (≈56 across 200–3000). FT8 has no standard offset grid — a signal is ~50 Hz
-  wide and sits at any continuous offset — so this grid is an SM picker
+  *spatial* view of the passband, **channelised** into uniform cells one signal width
+  wide, starting at the passband floor. The width is the active profile's
+  (`signal_width_hz` on the report, ADR 0080): FT8 50 Hz (8 tones × 6.25 Hz; ≈56 cells
+  across 200–3000), FT4 84 Hz (4 tones × 20.833 Hz, rounded up; 33 cells at 200 + 84k —
+  hence 452, 2720, 2804 Hz). Neither mode has a standard offset grid — a signal sits at
+  any continuous offset — so this grid is an SM picker
   convention: one slot = one signal width, so a pick can't half-overlap. **Each
   cell is coloured from the daemon's occupancy: green = clear, red = busy** (any
   occupied band overlapping the cell's span); the **selected slot keeps its
@@ -559,7 +562,7 @@ CAT-live re-tune is opt-out** via the daemon config `restore_rig_on_mode_switch`
   - **Spectrum view (switchable, shipped 2026-06-26).** A second presentation of the
     SAME per-slot occupancy snapshot, toggled by a **Channels | Spectrum** control
     (operating state, `ft8State.occupancyView`, localStorage `sm.ft8.occupancy.view`;
-    default Channels). Where the channelised strip discretises into ~50 Hz cells —
+    default Channels). Where the channelised strip discretises into signal-width cells —
     which makes a band *look* fuller than it is and turns a pick **binary-red** when a
     neighbour merely touches its span — the Spectrum view (`Ft8OccupancySpectrum.svelte`)
     shows the **continuous** truth: signals as soft neutral shading at their true
@@ -938,10 +941,11 @@ busy/clear readout no longer flickers in lockstep with TX/RX.
    size 3840 (3.125 Hz bins, half an FT8 tone).
 2. **Two occupancy tiers**, merged into one `occupied` list:
    - **energy** — contiguous bins above `median × threshold_factor`. Gated: a run
-     narrower than ~12 Hz (`minEnergyBandHz`, ¼ of a signal width) is dropped as a
-     noise/leakage spike, not an occupant.
-   - **decode** — each decode's `[FreqHz, FreqHz + 50]` (go-ft8 reports the
-     base/sync tone, WSJT-X convention; the signal extends *upward* ~50 Hz).
+     narrower than a quarter of the profile's signal width (`minEnergyBandDiv`; ~12 Hz
+     FT8, ~21 Hz FT4) is dropped as a noise/leakage spike, not an occupant.
+   - **decode** — each decode's `[FreqHz, FreqHz + width]`, width = the profile's
+     signal width (go-ft8 reports the base/sync tone, WSJT-X convention; the signal
+     extends *upward* 50 Hz in FT8, 84 Hz in FT4).
      CRC+LDPC-verified, so a decode is a real signal — **never gated**, at any
      energy level. This is how weak stations the waterfall barely shows still get
      marked.
@@ -996,7 +1000,8 @@ options; stickiness only governs which clear offset leads.
 
 All omittable (zero/absent → default); `guard_margin_hz` is pointer-typed so an
 explicit `0` (off) is distinct from "unset". Structural constants (FFT size,
-50 Hz signal width, ~12 Hz energy gate, cap of 8 suggestions) live in code, not
+the per-profile signal width — FT8 50 Hz, FT4 84 Hz — the quarter-width energy gate,
+cap of 8 suggestions) live in code, not
 config.
 
 ### Config — `ft8.display.*` (Band Activity preferences)
@@ -1145,7 +1150,8 @@ No SPA can transmit yet — the sequencer + TX controls are step (e).
 occupancy strip** — a *static* per-slot view, **not** a scrolling waterfall —
 alongside the existing ranked **Clear Slots** list. **The strip + selection are now
 built** (`Ft8OccupancyStrip.svelte`, `ft8State.selectedOffset`). It is
-**channelised**: the passband is split into uniform ~50 Hz slots (≈56), each one
+**channelised**: the passband is split into uniform ~50 Hz slots (≈56; FT8 — since ADR
+0080 the cell is the active profile's signal width, see the TX Offset strip above), each one
 signal wide, and **any** slot is clickable — the grid keeps every pick
 signal-aligned (no half-overlap), so there's no need for "vetted markers only." Per
 cell: green = clear, red = busy (derived from the daemon's `occupied` ranges), the

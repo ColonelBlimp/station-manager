@@ -104,6 +104,32 @@ not compete with the app-shell, notification-history, or UI-cohesion dossiers.
   the background — a decode-frame contract change. Neither raises the connection budget: with the
   Map reuse (follow-up (a), ADR 0079) a second tab still leaves one spare connection, so one tab
   stands until HTTP/2 over TLS (follow-up (c), to verify).
+- **Show the picked station's own offset on the Occupancy panel (inbox 2026-09-12; not selected):**
+  trigger: FT4 before the contest, A61DD calling CQ at 874 Hz in every odd slot, plain in Band
+  Activity and absent from the Spectrum view — read as a missing signal. Not a defect: the panel
+  (Channels and Spectrum alike) is the occupancy of the slot the operator TRANSMITS in — idle, the
+  Even/Odd "TX slot" toggle; in a QSO, the opposite of the worked station — so the station being
+  answered is never in it by construction, and decode-derived bands are never gated (`occupancy.go`
+  `decodeBands`). The confusable is real: "Spectrum" reads as a waterfall of the band. The feature,
+  SPA-only: when a Band Activity row is picked (an answer, a work, or the active QSO's station), draw
+  its footprint `[freqHz, freqHz + width]` on both views as a hollow outline labelled "their signal ·
+  other slot" — distinct from the shaded occupants (which are in OUR slot) and from our own tinted
+  footprint; in Channels, an outline on the nearest cell. Their offset lives only on the row
+  (`DecodeEntry.freqHz`): the answer request carries OUR `offset_hz`, the sequencer does not track
+  their audio frequency and the `ft8-qso` frame does not echo it — so the SPA remembers the picked
+  row's offset with the pick, or the frame gains `their_freq_hz` (a daemon change, durable across
+  tabs and reloads; the `cq_message` precedent). Operator-observable acceptance: with a station
+  picked, both views show its outline at its decoded offset while the QSO is active; the outline
+  changes no clear/near/sharing grading and no ★ ranking (their signal occupies the other slot —
+  answering on their frequency is normal); it disappears when the QSO ends or the pick is cleared,
+  and it is not drawn when the panel's snapshot is stale for the band. Nearest confusable outcomes:
+  the outline read as an occupant, so a clear offset is avoided; the outline outliving the QSO or
+  surviving a band change; a station calling in OUR slot drawn twice (it is a genuine occupant and
+  already shaded — same-parity rows get no outline, or the outline sits on the shading and says so);
+  the outline drawn from a row that has since moved frequency. Decisions for the operator: which pick
+  drives it (the active QSO only, recommended, or any clicked or hovered row); the label; whether the
+  Channels view gets it too. Smaller alternative: a one-line cue in the panel header when idle — "the
+  slot you transmit in; the station you answer is in the other slot" — and no marker.
 - **Maps and tables:** dogfood-validate shipped map catch-up/zoom behavior; decide solar-time overlay
   versus a world-time widget, map band-source policy, and session column resizing/sorting before
   implementation. The whole-log Dashboard map remains separate from the shipped time-window map.
