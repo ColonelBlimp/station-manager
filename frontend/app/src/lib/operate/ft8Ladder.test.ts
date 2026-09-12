@@ -157,3 +157,48 @@ describe('buildLadder', () => {
         expect(l.step).toBe(1); // rogering (our RR73)
     });
 });
+
+// W-0011: the CQ token between CQ and the call. The only editable content in the
+// whole ladder; every other rung's fields are fixed by the protocol.
+describe('CQ modifier', () => {
+    it('rides between CQ and the call on the idle preview, trimmed and upper-cased', () => {
+        const l = buildLadder(qso(), false, '7Q5MLV', 'KH78', ' af ');
+        expect(l.rungs[0].text).toBe('CQ AF 7Q5MLV KH78');
+        expect(l.rungs[0].cq).toEqual({ call: '7Q5MLV', grid: 'KH78' });
+    });
+    it('an empty token is the standard CQ, and so is the legacy four-argument call', () => {
+        expect(buildLadder(qso(), false, '7Q5MLV', 'KH78', '').rungs[0].text).toBe(
+            'CQ 7Q5MLV KH78'
+        );
+        expect(buildLadder(qso(), false, '7Q5MLV', 'KH78').rungs[0].text).toBe('CQ 7Q5MLV KH78');
+    });
+    it("a live Call-CQ run shows the daemon's own CQ text, not the typed token", () => {
+        const live = qso({
+            active: true,
+            role: 'caller',
+            state: 'calling',
+            nextMessage: 'CQ AF 7Q5MLV KH78',
+        });
+        expect(buildLadder(live, false, '7Q5MLV', 'KH78', 'DX').rungs[0].text).toBe(
+            'CQ AF 7Q5MLV KH78'
+        );
+    });
+    it('while the run works an answerer the CQ rung keeps the composed CQ', () => {
+        const live = qso({
+            active: true,
+            role: 'caller',
+            state: 'reporting',
+            theirCall: 'DL9UW',
+            nextMessage: 'DL9UW 7Q5MLV -08',
+        });
+        expect(buildLadder(live, false, '7Q5MLV', 'KH78', 'AF').rungs[0].text).toBe(
+            'CQ AF 7Q5MLV KH78'
+        );
+    });
+    it('only the caller ladder carries the editable parts', () => {
+        const answering = qso({ active: true, role: 'answerer', theirCall: 'DL9UW' });
+        const l = buildLadder(answering, false, '7Q5MLV', 'KH78', 'AF');
+        expect(l.rungs.every((r) => r.cq === undefined)).toBe(true);
+        expect(l.rungs.map((r) => r.text).join(' | ')).not.toContain('AF');
+    });
+});

@@ -77,7 +77,7 @@ func TestClaimProfile_MidLingerOfALiveSession_RefusedThenSucceeds(t *testing.T) 
 	withShortLinger(t, 300*time.Millisecond)
 	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
 	require.NoError(t, s.ArmTx(true))
-	require.NoError(t, s.StartCallCq("7Q5MLV", "KH78", 1500, 14.074, "operator_pick", "", 1))
+	require.NoError(t, s.StartCallCq("7Q5MLV", "KH78", 1500, 14.074, "operator_pick", "", 1, ""))
 	require.True(t, s.seq.Active())
 
 	// The operator was attending (a subscriber), then left: linger pending.
@@ -233,7 +233,7 @@ func TestClaimProfile_RefusalPrecedence(t *testing.T) {
 		s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
 		require.NoError(t, s.ArmTx(true))
 		t.Cleanup(func() { _ = s.ArmTx(false) })
-		require.NoError(t, s.StartCallCq("7Q5MLV", "KH78", 1500, 14.074, "operator_pick", "", 1))
+		require.NoError(t, s.StartCallCq("7Q5MLV", "KH78", 1500, 14.074, "operator_pick", "", 1, ""))
 		_, err := s.ClaimProfile("ft4")
 		require.ErrorIs(t, err, ErrProfileSessionActive)
 		require.NotErrorIs(t, err, ErrProfileTxArmed)
@@ -408,7 +408,7 @@ func TestRequests_ValidateUnderTheClaimedProfile(t *testing.T) {
 	txDone := make(chan error, 1)
 	go func() { txDone <- s.TransmitNext("CQ K1ABC FN42", offset) }()
 	cqDone := make(chan error, 1)
-	go func() { cqDone <- s.StartCallCq("7Q5MLV", "KH78", offset, 14.080, "operator_pick", "", 1) }()
+	go func() { cqDone <- s.StartCallCq("7Q5MLV", "KH78", offset, 14.080, "operator_pick", "", 1, "") }()
 	select {
 	case err := <-txDone:
 		t.Fatalf("TransmitNext returned (%v) while the claim held seqGate; it must wait", err)

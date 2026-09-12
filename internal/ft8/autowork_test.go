@@ -559,7 +559,7 @@ func TestAutoWork_StartingCallCqStopsTheRun(t *testing.T) {
 		"fixture: a run must be armed before the CQ starts, or this rule proves nothing")
 
 	require.NoError(t, s.StartCallCq("G0XYZ", "IO91", 1200, 14.074, "auto_first", "",
-		time.Unix(90, 0).UTC()))
+		time.Unix(90, 0).UTC(), ""))
 
 	require.False(t, s.AutoWorkArmed(),
 		"a Call-CQ run is a new operator-started session; the previous run must not survive it")
@@ -582,7 +582,7 @@ func TestAutoWork_CallCqFrameReportsTheStoppedRun(t *testing.T) {
 	require.True(t, r.lastStatus().AutoWorkArmed, "fixture: the pre-CQ frame must claim the armed run")
 
 	require.NoError(t, s.StartCallCq("G0XYZ", "IO91", 1200, 14.074, "auto_first", "",
-		time.Unix(90, 0).UTC()))
+		time.Unix(90, 0).UTC(), ""))
 
 	st := r.lastStatus()
 	require.Equal(t, "calling-cq", st.State, "fixture: this must be the frame the CQ start published")

@@ -95,7 +95,7 @@ import (
 func startCqPick(t *testing.T, s *Sequencer) {
 	t.Helper()
 	require.NoError(t, s.StartCallCq("7Q5MLV", "KH78", 2700, 28.074,
-		types.Ft8CallerAnswerOperatorPick, "", time.Unix(0, 0).UTC()))
+		types.Ft8CallerAnswerOperatorPick, "", time.Unix(0, 0).UTC(), ""))
 	require.Equal(t, "even", s.theirPeriod)
 }
 
@@ -107,7 +107,7 @@ func TestOperatorPick_StartCallCqIsAccepted(t *testing.T) {
 	require.NoError(t, s.ArmTx(true))
 	defer func() { _ = s.ArmTx(false) }()
 
-	require.NoError(t, s.StartCallCq("G0XYZ", "IO91", 1500, 14.074, "", "", 1),
+	require.NoError(t, s.StartCallCq("G0XYZ", "IO91", 1500, 14.074, "", "", 1, ""),
 		"operator_pick is implemented; the H2 rejection must be gone")
 	require.True(t, s.seq.Active(), "the run starts and calls CQ")
 	require.Equal(t, types.Ft8CallerAnswerOperatorPick, s.seq.statusForTest().AnswerMode,

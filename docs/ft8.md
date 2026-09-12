@@ -892,6 +892,37 @@ subscriber would duplicate a session-list row):
   `country` is the enriched country the sink resolved before submit (so the Session-tab
   Country column matches Phone/CW).
 
+### Message formats — what a rung may contain, and the CQ token
+
+Every rung the sequencer transmits is a **standard message** (protocol type 1, or type 2 for a
+`/P` own call): two 28-bit callsign fields, then one of a 4-character grid, a signed report in
+−30…+49 with the `R` flag, or one of `RRR` / `RR73` / `73`. Nothing in the answer, the report or the
+sign-off is operator-editable; free text (type 0.0, 13 characters from a 42-symbol alphabet) is
+neither in the ladder nor in the encoder (go-ft8 v0.9.0 `EncodeStandardMessage` rejects it), and a
+compound/nonstandard own call goes out as a type-4 message that carries neither a token nor a grid
+(ADR 0048).
+
+The one editable message is the **CQ**, and in it one token — the **CQ modifier** (W-0011, shipped
+2026-09-12): `CQ [token] <call> [grid]`, e.g. `CQ AF 7Q5MLV KH78`, `CQ DX …`, `CQ TEST …`,
+`CQ 590 …`. The token is exactly three digits (000–999) or one to four letters A–Z — the two
+shapes go-ft8's `pack28` packs into the first 28-bit field — trimmed and upper-cased; the protocol
+attaches no meaning to it (a convention other operators may or may not honour), and our own
+`parseMessage` skips leading modifiers on incoming CQs, so answering someone's `CQ DX` needs
+nothing. Validation runs twice: `POST /v1/ft8/cq/start` checks the shape at the wire
+(`invalid_field_value` 400 naming `cq_modifier`), and `Sequencer.StartCallCq` round-trips the
+composed CQ through the encoder before the session commits (`ft8_tx_bad_message` 400, nothing
+transmitted). The daemon composes the text once and repeats it every CQ slot (`cqMessage`), so a
+change applies at the next **Call CQ**, never mid-run; `next_message` on the `ft8-qso` frame
+carries the exact text on air.
+
+In the SPA the token is typed **into the ladder's CQ rung** behind a per-session **custom**
+enable: off (the default, and again after any reload or new tab — operator ruling 2026-09-12)
+means the standard `CQ <call> <grid>`; on reveals a four-character field between `CQ` and the call
+with a preset list (DX, AF, EU, NA, SA, AS, OC, TEST, POTA), the token remembered per browser
+(`sm.ft8.cqModifier`) so re-enabling restores it. An unpackable token disables **Call CQ** with
+the rule in the button's title. Sources: the QEX July/August 2020 protocol paper (spec), the WSJT-X
+User Guide's message formats, and go-ft8's README and `ft8/pack.go` for what we ship.
+
 ## 4. How occupancy works
 
 Per completed slot, the detector turns audio + that slot's decodes into the

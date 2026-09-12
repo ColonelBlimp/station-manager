@@ -16,6 +16,23 @@ import type { Ft8QsoStatus } from './ft8.svelte';
 export interface Rung {
     dir: 'tx' | 'rx';
     text: string;
+    /** Present on the caller ladder's CQ rung only — the parts around the operator's
+     *  CQ token (W-0011), so the view can render the token field between "CQ" and
+     *  the call while no session is active. `text` stays the whole message. */
+    cq?: { call: string; grid: string };
+}
+
+/** The CQ rung's text: the operator's token between CQ and the call ("CQ AF 7Q5MLV
+ *  KH78"). Once a Call-CQ run is live and calling, the daemon's own next message wins,
+ *  so the ladder reads exactly what goes on air (the token typed here need not be the
+ *  one the run started with — another tab, a change after the start). */
+function cqRungText(qso: Ft8QsoStatus, me: string, grid: string, cqModifier: string): string {
+    if (qso.active && qso.role === 'caller' && qso.nextMessage.startsWith('CQ ')) {
+        return qso.nextMessage;
+    }
+    if (!me) return 'CQ';
+    const token = cqModifier.trim().toUpperCase();
+    return `CQ ${token ? `${token} ` : ''}${me}${grid ? ` ${grid}` : ''}`;
 }
 export interface Ladder {
     rungs: Rung[];
@@ -30,7 +47,8 @@ export function buildLadder(
     qso: Ft8QsoStatus,
     transmitting: boolean,
     myCall: string,
-    myGrid: string
+    myGrid: string,
+    cqModifier = ''
 ): Ladder {
     const me = myCall.trim().toUpperCase();
     const grid = myGrid.trim().toUpperCase().slice(0, 4); // FT8 messages carry only the 4-char field
@@ -38,7 +56,7 @@ export function buildLadder(
     const dxGrid = qso.theirGrid || '<GRID>';
     const ourRst = qso.ourReport || '<RST>';
     const theirRst = qso.theirReport || '<RST>';
-    const cqMessage = me ? `CQ ${me}${grid ? ` ${grid}` : ''}` : 'CQ';
+    const cqMessage = cqRungText(qso, me, grid, cqModifier);
 
     // The highlighted row for a TX rung at index txRow. While transmitting — OR
     // before this rung has been sent at all (repeats === 0) — the TX rung is
@@ -119,7 +137,7 @@ export function buildLadder(
 
     // Caller ladder — live while calling CQ, else a static preview (CQ row current).
     const rungs: Rung[] = [
-        { dir: 'tx', text: cqMessage },
+        { dir: 'tx', text: cqMessage, cq: { call: me, grid } },
         { dir: 'rx', text: `${me} ${dxCall} ${dxGrid}` },
         { dir: 'tx', text: `${dxCall} ${me} ${ourRst}` },
         { dir: 'rx', text: `${me} ${dxCall} R${theirRst}` },

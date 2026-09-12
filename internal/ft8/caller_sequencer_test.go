@@ -13,7 +13,7 @@ import (
 // even slot → the next slot is odd (our CQ parity) → answerers' parity is even.
 func startCq(t *testing.T, s *Sequencer) {
 	t.Helper()
-	require.NoError(t, s.StartCallCq("7q5mlv", "kh78", 2700, 28.074, "auto_first", "", time.Unix(0, 0).UTC()))
+	require.NoError(t, s.StartCallCq("7q5mlv", "kh78", 2700, 28.074, "auto_first", "", time.Unix(0, 0).UTC(), ""))
 	require.Equal(t, "even", s.theirPeriod)
 }
 
@@ -52,7 +52,7 @@ func TestCallerSequencer_AutoStrongestPicksHighestSnr(t *testing.T) {
 	r := &seqRecorder{}
 	s := newTestSeq(r)
 	require.NoError(t,
-		s.StartCallCq("7Q5MLV", "KH78", 2700, 28.074, "auto_strongest", "", time.Unix(0, 0).UTC()))
+		s.StartCallCq("7Q5MLV", "KH78", 2700, 28.074, "auto_strongest", "", time.Unix(0, 0).UTC(), ""))
 	require.Equal(t, "even", s.theirPeriod)
 
 	driveTheir(s, 60, []goft8.DecodedMessage{
@@ -74,7 +74,7 @@ func TestCallerSequencer_AutoFirstPicksFirstByOrder(t *testing.T) {
 	r := &seqRecorder{}
 	s := newTestSeq(r)
 	require.NoError(t,
-		s.StartCallCq("7Q5MLV", "KH78", 2700, 28.074, "auto_first", "", time.Unix(0, 0).UTC()))
+		s.StartCallCq("7Q5MLV", "KH78", 2700, 28.074, "auto_first", "", time.Unix(0, 0).UTC(), ""))
 
 	driveTheir(s, 60, []goft8.DecodedMessage{
 		dm("7Q5MLV K1ABC FN42", -18), // first by order, weakest
@@ -88,11 +88,11 @@ func TestCallerSequencer_StartErrors(t *testing.T) {
 	r := &seqRecorder{}
 	s := newTestSeq(r)
 	now := time.Unix(0, 0).UTC()
-	require.ErrorIs(t, s.StartCallCq("7Q5MLV", "KH78", 0, 28.074, "auto_first", "", now), ErrNoOffset)
-	require.ErrorIs(t, s.StartCallCq("", "KH78", 2700, 28.074, "auto_first", "", now), ErrNoCall)
-	require.NoError(t, s.StartCallCq("7Q5MLV", "KH78", 2700, 28.074, "auto_first", "", now))
+	require.ErrorIs(t, s.StartCallCq("7Q5MLV", "KH78", 0, 28.074, "auto_first", "", now, ""), ErrNoOffset)
+	require.ErrorIs(t, s.StartCallCq("", "KH78", 2700, 28.074, "auto_first", "", now, ""), ErrNoCall)
+	require.NoError(t, s.StartCallCq("7Q5MLV", "KH78", 2700, 28.074, "auto_first", "", now, ""))
 	// One session at a time — a second call-CQ OR an answer-a-CQ is refused.
-	require.ErrorIs(t, s.StartCallCq("7Q5MLV", "KH78", 2700, 28.074, "auto_first", "", now), ErrQsoInProgress)
+	require.ErrorIs(t, s.StartCallCq("7Q5MLV", "KH78", 2700, 28.074, "auto_first", "", now, ""), ErrQsoInProgress)
 	require.ErrorIs(t,
 		s.StartQso("7Q5MLV", "KH78", "K1ABC", "", now.Format(time.RFC3339), 2700, 28.074, now),
 		ErrQsoInProgress)
@@ -114,7 +114,7 @@ func TestCallerSequencer_TxParityChoice(t *testing.T) {
 	for _, c := range cases {
 		s := newTestSeq(&seqRecorder{})
 		require.NoErrorf(t,
-			s.StartCallCq("7Q5MLV", "KH78", 2700, 28.074, "auto_first", c.parity, now),
+			s.StartCallCq("7Q5MLV", "KH78", 2700, 28.074, "auto_first", c.parity, now, ""),
 			"parity=%q", c.parity)
 		require.Equalf(t, c.wantTheir, s.theirPeriod, "parity=%q", c.parity)
 	}
@@ -139,7 +139,7 @@ func TestCallerSequencer_DoesNotFireTheCqImmediately(t *testing.T) {
 	// Slot 15 is odd; txParity "odd" makes it ours, and now is 1 s in — well inside
 	// the late window fireOpening honours.
 	require.NoError(t, s.StartCallCq("7Q5MLV", "KH78", 2700, 28.074, "auto_first", "odd",
-		time.Unix(16, 0).UTC()))
+		time.Unix(16, 0).UTC(), ""))
 	require.Equal(t, "even", s.theirPeriod, "fixture: slot 15 is OURS")
 
 	require.Empty(t, r.sentMsgs(),
@@ -317,4 +317,39 @@ func TestCallerSequencer_Abandon(t *testing.T) {
 	require.False(t, s.Active())
 	driveTheir(s, 30, []goft8.DecodedMessage{dm("7Q5MLV DL9UW JO41", -8)})
 	require.Empty(t, r.sentMsgs(), "no transmit after Abandon")
+}
+
+// TestCallerSequencer_CqModifier pins the CQ token (W-0011, 2026-09-12): the
+// modifier rides between CQ and our call in every CQ we transmit, trimmed and
+// upper-cased; an answerer's reply is unaffected by it; and a token the protocol
+// cannot pack (five letters, mixed letters and digits, two digits) is refused
+// before the session commits, so nothing is left calling a CQ that never encodes.
+func TestCallerSequencer_CqModifier(t *testing.T) {
+	now := time.Unix(0, 0).UTC()
+	cases := []struct{ name, token, want string }{
+		{"letters, padded and lower-case", " af ", "CQ AF 7Q5MLV KH78"},
+		{"three digits", "590", "CQ 590 7Q5MLV KH78"},
+		{"empty is the standard CQ", "", "CQ 7Q5MLV KH78"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &seqRecorder{}
+			s := newTestSeq(r)
+			require.NoError(t, s.StartCallCq("7Q5MLV", "KH78", 2700, 28.074, "auto_first", "", now, tc.token))
+			driveTheir(s, 30, nil)                                                 // our CQ slot
+			driveTheir(s, 60, []goft8.DecodedMessage{dm("7Q5MLV DL9UW JO41", -8)}) // an answer → our report
+			require.Equal(t, []string{tc.want, "DL9UW 7Q5MLV -08"}, r.sentMsgs())
+		})
+	}
+	t.Run("unpackable token refused before the session commits", func(t *testing.T) {
+		for _, bad := range []string{"AFRICA", "AF1", "A-F", "59"} {
+			r := &seqRecorder{}
+			s := newTestSeq(r)
+			require.ErrorIs(t, s.StartCallCq("7Q5MLV", "KH78", 2700, 28.074, "auto_first", "", now, bad),
+				ErrTxBadMessage, "token %q", bad)
+			require.False(t, s.Active(), "token %q must not leave a session behind", bad)
+			driveTheir(s, 30, nil)
+			require.Empty(t, r.sentMsgs(), "token %q must transmit nothing", bad)
+		}
+	})
 }

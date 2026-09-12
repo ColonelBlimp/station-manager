@@ -216,7 +216,7 @@ func TestSequencer_StartQsoRejectsUnencodableCall(t *testing.T) {
 func TestCallerSequencer_StartCallCqRejectsUnencodableCq(t *testing.T) {
 	r := &seqRecorder{}
 	s := newTestSeq(r)
-	err := s.StartCallCq("PJ4/K1ABC", "FN42", 2700, 28.074, "auto_first", "", time.Unix(0, 0).UTC())
+	err := s.StartCallCq("PJ4/K1ABC", "FN42", 2700, 28.074, "auto_first", "", time.Unix(0, 0).UTC(), "")
 	require.ErrorIs(t, err, ErrTxBadMessage)
 	require.False(t, s.Active(), "no CQ session committed for an unencodable CQ (review M1)")
 	require.Empty(t, r.sentMsgs())

@@ -396,3 +396,35 @@ func TestHandleFt8CqPick_MissingCallIs400(t *testing.T) {
 		t.Fatalf("code=%q, want invalid_field_value (body %s)", got, w.Body.String())
 	}
 }
+
+// TestHandleFt8CqStart_CqModifier: the optional cq_modifier is checked at the wire
+// before anything else happens (400 invalid_field_value naming the field), and a
+// legal one — any case, padded, digits — passes the wire check and reaches the
+// sequencer path, here the arm gate (409 ft8_tx_not_armed is the deepest point a
+// keyer-less test server can reach). The CQ text itself is pinned in
+// internal/ft8 (TestCallerSequencer_CqModifier); the pass-through is one argument.
+func TestHandleFt8CqStart_CqModifier(t *testing.T) {
+	for _, bad := range []string{"AFRICA", "AF1", "A-F", "59"} {
+		t.Run("rejects "+bad, func(t *testing.T) {
+			srv := ft8QsoTestServer(t, "G0TST")
+			w := postFt8Qso(t, srv, "/v1/ft8/cq/start",
+				`{"offset_hz":1500,"operating_freq_mhz":14.074,"cq_modifier":"`+bad+`"}`, srv.handleFt8CqStart)
+			if w.Code != http.StatusBadRequest || decodeErrCode(t, w) != "invalid_field_value" {
+				t.Fatalf("status=%d code=%q, want 400 invalid_field_value (body %s)", w.Code, decodeErrCode(t, w), w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), "cq_modifier") {
+				t.Errorf("message should name cq_modifier; got %s", w.Body.String())
+			}
+		})
+	}
+	for _, good := range []string{"AF", " af ", "590", "TEST", ""} {
+		t.Run("accepts "+strings.TrimSpace(good), func(t *testing.T) {
+			srv := ft8QsoTestServer(t, "G0TST")
+			w := postFt8Qso(t, srv, "/v1/ft8/cq/start",
+				`{"offset_hz":1500,"operating_freq_mhz":14.074,"cq_modifier":"`+good+`"}`, srv.handleFt8CqStart)
+			if w.Code != http.StatusConflict || decodeErrCode(t, w) != "ft8_tx_not_armed" {
+				t.Fatalf("status=%d code=%q, want 409 ft8_tx_not_armed past the wire check (body %s)", w.Code, decodeErrCode(t, w), w.Body.String())
+			}
+		})
+	}
+}

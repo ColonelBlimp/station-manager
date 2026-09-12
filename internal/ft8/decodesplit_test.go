@@ -252,7 +252,7 @@ func TestDecodeLoop_CuratedSurfaces_Frozen(t *testing.T) {
 	if err := s.ArmTx(true); err != nil {
 		t.Fatalf("ArmTx: %v", err)
 	}
-	if err := s.StartCallCq("K1ABC", "FN42", 1500, 14.074, "", "odd", 1); err != nil {
+	if err := s.StartCallCq("K1ABC", "FN42", 1500, 14.074, "", "odd", 1, ""); err != nil {
 		t.Fatalf("StartCallCq: %v", err)
 	}
 
@@ -803,7 +803,7 @@ func TestDecodeLoop_EvidenceSinkReceivesRichUnfiltered(t *testing.T) {
 	if err := s.ArmTx(true); err != nil {
 		t.Fatalf("ArmTx: %v", err)
 	}
-	if err := s.StartCallCq("K1ABC", "FN42", 1500, 14.074, "", "odd", 1); err != nil {
+	if err := s.StartCallCq("K1ABC", "FN42", 1500, 14.074, "", "odd", 1, ""); err != nil {
 		t.Fatalf("StartCallCq: %v", err)
 	}
 

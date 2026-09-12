@@ -160,7 +160,7 @@ func TestStallCooloff_AbandonClearsIt(t *testing.T) {
 
 	// A fresh Call-CQ round, still well inside the five slots. DL9UW answers it.
 	require.NoError(t, s.StartCallCq("G0XYZ", "IO91", 1500, 14.074, "auto_first", "odd",
-		time.Unix(160, 0).UTC()))
+		time.Unix(160, 0).UTC(), ""))
 	driveTheir(s, 180, []goft8.DecodedMessage{dm("G0XYZ DL9UW JO41", -8)})
 
 	require.NotNil(t, s.caller, "Abandon must clear the cool-off")
@@ -179,7 +179,7 @@ func TestStallCooloff_SurvivesANewSessionWithoutAbandon(t *testing.T) {
 	// No Abandon — straight into a fresh Call-CQ round, as an operator picking the
 	// run back up would.
 	require.NoError(t, s.StartCallCq("G0XYZ", "IO91", 1500, 14.074, "auto_first", "odd",
-		time.Unix(160, 0).UTC()))
+		time.Unix(160, 0).UTC(), ""))
 	driveTheir(s, 180, []goft8.DecodedMessage{dm("G0XYZ DL9UW JO41", -8)})
 
 	require.Nil(t, s.caller,
@@ -215,7 +215,7 @@ func TestStallCooloff_NotRecordedWhenNoRunIsArmed(t *testing.T) {
 
 	// Straight into a CQ round with no Abandon — the workflow named above.
 	require.NoError(t, s.StartCallCq("G0XYZ", "IO91", 1500, 14.074, "auto_first", "odd",
-		time.Unix(100, 0).UTC()))
+		time.Unix(100, 0).UTC(), ""))
 	driveTheir(s, 120, []goft8.DecodedMessage{dm("G0XYZ DL9UW JO41", -8)})
 
 	require.NotNil(t, s.caller,

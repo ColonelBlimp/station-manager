@@ -63,7 +63,7 @@ func TestRunIdentity_CqRun_StableAcrossContactsAndTerminals(t *testing.T) {
 
 	start := time.Unix(0, 0).UTC()
 	require.NoError(t,
-		s.StartCallCq("G0XYZ", "KH78", 2700, 28.074, "operator_pick", "", start))
+		s.StartCallCq("G0XYZ", "KH78", 2700, 28.074, "operator_pick", "", start, ""))
 
 	st := r.lastStatus()
 	require.NotEmpty(t, st.RunID, "RI1: the start frame must carry the run id")
@@ -155,7 +155,7 @@ func TestRunIdentity_AbandonEndsRun_FreshStartFreshId(t *testing.T) {
 
 	start := time.Unix(0, 0).UTC()
 	require.NoError(t,
-		s.StartCallCq("G0XYZ", "KH78", 2700, 28.074, "operator_pick", "", start))
+		s.StartCallCq("G0XYZ", "KH78", 2700, 28.074, "operator_pick", "", start, ""))
 	first := r.lastStatus().RunID
 	require.NotEmpty(t, first)
 
@@ -165,7 +165,7 @@ func TestRunIdentity_AbandonEndsRun_FreshStartFreshId(t *testing.T) {
 	require.Zero(t, st.RunStartedAt, "RI4: nor a start time")
 
 	require.NoError(t,
-		s.StartCallCq("G0XYZ", "KH78", 2700, 28.074, "operator_pick", "", time.Unix(300, 0).UTC()))
+		s.StartCallCq("G0XYZ", "KH78", 2700, 28.074, "operator_pick", "", time.Unix(300, 0).UTC(), ""))
 	second := r.lastStatus().RunID
 	require.NotEmpty(t, second)
 	require.NotEqual(t, first, second, "RI4: a new run must mint a new id — never reuse")

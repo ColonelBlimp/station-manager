@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -257,6 +258,26 @@ type ft8CqStartRequest struct {
 	// pre-0066 behaviour); any other junk is a 400. Operating state, like
 	// TxParity — config.json holds only the default that seeds the selector.
 	AnswerMode string `json:"answer_mode,omitempty"`
+	// CqModifier is the optional CQ token that rides between CQ and our call —
+	// "CQ AF 7Q5MLV KH78" (W-0011, 2026-09-12): one to four letters or three digits,
+	// the shapes the protocol packs into the first 28-bit field. Operating state per
+	// Call-CQ session, like TxParity; the app keeps it behind a per-session enable.
+	CqModifier string `json:"cq_modifier,omitempty"`
+}
+
+// ft8CqModifierRe is the CQ-token grammar go-ft8's pack28 accepts after CQ:
+// one to four letters ("DX", "AF", "TEST", "POTA") or exactly three digits
+// ("000"–"999"). Checked at the wire so the operator reads the rule, rather
+// than the sequencer's generic bad-message refusal; the encoder round trip in
+// the sequencer stays the authority for whatever passes here.
+var ft8CqModifierRe = regexp.MustCompile(`^([A-Z]{1,4}|[0-9]{3})$`)
+
+// validFt8CqModifier accepts an ABSENT modifier (the standard CQ) or one the
+// protocol can pack, after trim and upper-casing (the sequencer normalises the
+// same way, so " af " is "CQ AF").
+func validFt8CqModifier(m string) bool {
+	m = strings.ToUpper(strings.TrimSpace(m))
+	return m == "" || ft8CqModifierRe.MatchString(m)
 }
 
 // validFt8AnswerMode accepts an ABSENT session answer mode (empty — the config
@@ -290,6 +311,11 @@ func (s *Server) handleFt8CqStart(w http.ResponseWriter, r *http.Request) {
 			"answer_mode must be auto_first, auto_strongest or operator_pick", op)
 		return
 	}
+	if !validFt8CqModifier(req.CqModifier) {
+		s.writeError(w, http.StatusBadRequest, "invalid_field_value",
+			"cq_modifier must be one to four letters or three digits (CQ DX, CQ AF, CQ 590)", op)
+		return
+	}
 
 	ls := s.cfg.Snapshot().LoggingStation
 	ourCall, logbookID, idErr := s.currentStationIdentity(r.Context())
@@ -303,7 +329,7 @@ func (s *Server) handleFt8CqStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.ft8.StartCallCq(ourCall, ls.MyGridsquare, req.OffsetHz, req.OperatingFreqMHz, req.AnswerMode, req.TxParity, logbookID); err != nil {
+	if err := s.ft8.StartCallCq(ourCall, ls.MyGridsquare, req.OffsetHz, req.OperatingFreqMHz, req.AnswerMode, req.TxParity, logbookID, req.CqModifier); err != nil {
 		s.writeFt8QsoError(w, op, err)
 		return
 	}

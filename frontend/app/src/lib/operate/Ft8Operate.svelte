@@ -14,6 +14,8 @@
         abandonQso,
         skipQso,
         nextAnswerer,
+        setCqModifier,
+        cqModifierValid,
     } from './ft8.svelte';
     import { rig } from './rig.svelte';
     import { router } from '../router.svelte';
@@ -21,6 +23,7 @@
     import { parseFrequency } from '../validators/frequency';
     import { slotClock, slotMsFor } from '../utils/ft8Parity';
     import { toasts } from '../ui/toasts.svelte';
+    import { tick } from 'svelte';
     import EnrichmentCard from './EnrichmentCard.svelte';
 
     const qso = $derived(ft8State.qso);
@@ -46,7 +49,37 @@
                   : 'Active'
     );
 
-    const ladder = $derived(buildLadder(qso, tx.transmitting, ft8OperatorCall(), ft8MyGrid()));
+    // The CQ token rides the ladder only while the per-session enable is on (W-0011).
+    const ladder = $derived(
+        buildLadder(
+            qso,
+            tx.transmitting,
+            ft8OperatorCall(),
+            ft8MyGrid(),
+            ft8State.cqCustom ? ft8State.cqModifier : ''
+        )
+    );
+    // Custom CQ: an unpackable token blocks Call CQ with the rule in the title, the
+    // same rule the daemon enforces at the wire and through its encoder. An EMPTY
+    // field with custom on is simply the standard CQ (blank = plain, by design).
+    const cqModifierOk = $derived(
+        !ft8State.cqCustom || ft8State.cqModifier === '' || cqModifierValid(ft8State.cqModifier)
+    );
+    const CQ_PRESETS = ['DX', 'AF', 'EU', 'NA', 'SA', 'AS', 'OC', 'TEST', 'POTA'];
+    // Enabling custom lands the caret in the token field at once; the field itself
+    // reads like the rest of the rung when it is not focused (no box, fitted to its
+    // content), and the button carries the active state (dogfood 2026-09-12).
+    let cqInput = $state<HTMLInputElement | null>(null);
+    async function toggleCqCustom(): Promise<void> {
+        ft8State.cqCustom = !ft8State.cqCustom;
+        if (ft8State.cqCustom) {
+            await tick();
+            cqInput?.focus();
+        }
+    }
+    function onCqModifierInput(e: Event): void {
+        setCqModifier((e.currentTarget as HTMLInputElement).value);
+    }
 
     // ---- Slot-timing pill: a live countdown to the next 15 s UTC boundary. ----
     // FT8 slots are wall-clock aligned (:00/:15/:30/:45 UTC), so the countdown is a
@@ -126,7 +159,8 @@
             offset !== null &&
             opFreqHz !== null &&
             myCall !== '' &&
-            catLive
+            catLive &&
+            cqModifierOk
     );
     // Abandon stops a CONTACT or a RUN, and the armed-and-idle state has no contact.
     // Gating on qso.active alone disabled the button precisely where the auto-work
@@ -341,7 +375,7 @@
         <ul class="space-y-0.5 font-mono text-sm">
             {#each ladder.rungs as rung, i (i)}
                 <li
-                    class="flex items-center justify-between rounded-md border border-transparent px-2.5 py-1.5 {i ===
+                    class="flex items-center justify-between rounded-md border border-transparent px-2.5 py-[5px] {i ===
                     ladder.step
                         ? 'border-focus bg-nav-accent-bg font-bold text-nav-accent-fg'
                         : i < ladder.step
@@ -351,7 +385,41 @@
                     <span class="overflow-hidden text-nowrap text-ellipsis">
                         <span class="mr-1.5 text-[10px] font-bold text-muted uppercase"
                             >{rung.dir}</span
-                        >{rung.text}
+                        >{#if rung.cq && !qso.active && ft8State.cqCustom}
+                            <!-- The one editable message (W-0011): the CQ token between
+                                 CQ and our call, shown only while the per-session enable
+                                 is on. Off = the standard format, rendered as rung.text. -->
+                            CQ
+                            <input
+                                bind:this={cqInput}
+                                class="mx-0.5 rounded border bg-transparent px-0 py-0 text-center focus:bg-surface focus:px-1 focus:outline-none {cqModifierOk
+                                    ? 'border-transparent focus:border-line'
+                                    : 'border-red-500'}"
+                                style="font: inherit; color: inherit;"
+                                size={Math.max(2, ft8State.cqModifier.length)}
+                                value={ft8State.cqModifier}
+                                oninput={onCqModifierInput}
+                                maxlength="4"
+                                list="ft8-cq-modifier-presets"
+                                aria-label="CQ modifier"
+                                aria-invalid={!cqModifierOk}
+                                placeholder="AF"
+                                spellcheck="false"
+                            />
+                            {rung.cq.call}{rung.cq.grid ? ` ${rung.cq.grid}` : ''}
+                        {:else}{rung.text}{/if}{#if rung.cq && !qso.active}
+                            <button
+                                type="button"
+                                class="ml-2 rounded border px-1.5 text-[10px] font-normal {ft8State.cqCustom
+                                    ? 'border-focus bg-focus text-surface'
+                                    : 'border-line text-muted hover:bg-surface-muted'}"
+                                onclick={toggleCqCustom}
+                                aria-pressed={ft8State.cqCustom}
+                                title="Custom CQ — a token between CQ and your call (DX, AF, TEST…). Per session: a reload returns to the standard CQ."
+                            >
+                                custom
+                            </button>
+                        {/if}
                     </span>
                     {#if i < ladder.step}
                         <span class="text-logged">✓</span>
@@ -363,6 +431,11 @@
                 </li>
             {/each}
         </ul>
+        <datalist id="ft8-cq-modifier-presets">
+            {#each CQ_PRESETS as preset (preset)}
+                <option value={preset}></option>
+            {/each}
+        </datalist>
     </div>
 
     <!-- TX control bar (ADR 0029/0030/0031/0033) — first RF from this SPA. Call CQ /
@@ -397,9 +470,11 @@
                     : 'bg-focus text-surface hover:opacity-90'}"
                 onclick={onCallCq}
                 disabled={!canSend || sending}
-                title={offset === null
-                    ? 'No clear channel yet — the occupancy scan picks the TX offset'
-                    : `TX offset ${offsetLabel}`}
+                title={!cqModifierOk
+                    ? 'CQ token must be one to four letters or three digits (DX, AF, TEST, 590)'
+                    : offset === null
+                      ? 'No clear channel yet — the occupancy scan picks the TX offset'
+                      : `TX offset ${offsetLabel}`}
             >
                 {callerActive ? 'Calling CQ…' : 'Call CQ'}
             </button>

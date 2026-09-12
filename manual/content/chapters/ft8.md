@@ -196,6 +196,24 @@ where you are. If you just want to get on the air quickly, leave it on **Next**.
 > the next slot of the chosen parity arrives. A short quiet gap before the first
 > transmission is normal — Station Manager is waiting for your slot, not stalling.
 
+### Custom CQ — "CQ AF", "CQ DX", "CQ TEST"
+
+The first rung of the message ladder is your CQ, and it is the one message you can
+shape. Click **custom** on that rung and a small field appears between **CQ** and your
+callsign: type a token such as `AF`, `DX`, `EU` or `TEST` (one to four letters, or
+exactly three digits), or pick one from the list. The rung then reads exactly what
+will go on air — for example `CQ AF 7Q5MLV KH78` — and every CQ of the run carries it.
+Leave the field empty, or switch **custom** off, and you are back to the standard
+`CQ <call> <grid>`.
+
+Two things to know. The token is a convention: the protocol attaches no meaning to
+it, so a station outside Africa can still answer a `CQ AF`. And **custom** is
+per session — a page reload or a new tab returns you to the standard CQ, so a
+contest-day token never follows you into an ordinary evening unnoticed. The token
+itself is remembered, so switching **custom** back on restores it. A token the
+protocol cannot carry (five letters, letters mixed with digits) greys out **Call CQ**
+and the button's tooltip says why.
+
 ## ARRL Field Day
 
 Station Manager can make **ARRL Field Day** contacts over FT8 in both directions —

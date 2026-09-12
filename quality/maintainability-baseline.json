@@ -90,7 +90,7 @@
       "path": "frontend/app/src/lib/operate/ft8Ladder.ts",
       "function": "buildLadder",
       "direction": "maximum",
-      "value": 37
+      "value": 36
     },
     {
       "language": "frontend",

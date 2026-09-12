@@ -242,7 +242,7 @@ func TestStartSession_RefusesWhenRigBecomesUnready(t *testing.T) {
 	k.setNotReady(true) // rig disconnects / loses identity after arming
 	now := time.Now().UTC().Format(time.RFC3339)
 	require.ErrorIs(t, s.StartQso("7Q5MLV", "KH78", "K1ABC", "FN42", now, 1500, 14.074, 1, false, ""), ErrTxNotReady)
-	require.ErrorIs(t, s.StartCallCq("7Q5MLV", "KH78", 1500, 14.074, "", "", 1), ErrTxNotReady)
+	require.ErrorIs(t, s.StartCallCq("7Q5MLV", "KH78", 1500, 14.074, "", "", 1, ""), ErrTxNotReady)
 	require.ErrorIs(t, s.StartWorkCaller("7Q5MLV", "K1ABC", "FN42", -12, now, 1500, 14.074, 1, false, ""), ErrTxNotReady)
 }
 
@@ -273,7 +273,7 @@ func TestTransmitNext_RefusedWhileSessionActive(t *testing.T) {
 	require.NoError(t, s.ArmTx(true))
 	defer func() { _ = s.ArmTx(false) }()
 
-	require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", "", 1))
+	require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", "", 1, ""))
 	require.True(t, s.seq.Active(), "the Call-CQ session is active")
 	require.False(t, s.txInFlightNow(), "the caller's CQ has not keyed yet (next slot)")
 
@@ -296,7 +296,7 @@ func TestStartSession_RefusedWhileManualSendInFlight(t *testing.T) {
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	require.ErrorIs(t, s.StartQso("7Q5MLV", "IO91", "K1ABC", "FN42", now, 1600, 14.074, 1, false, ""), ErrTxInFlight)
-	require.ErrorIs(t, s.StartCallCq("7Q5MLV", "IO91", 1600, 14.074, "", "", 1), ErrTxInFlight)
+	require.ErrorIs(t, s.StartCallCq("7Q5MLV", "IO91", 1600, 14.074, "", "", 1, ""), ErrTxInFlight)
 	require.ErrorIs(t, s.StartWorkCaller("7Q5MLV", "K1ABC", "FN42", -12, now, 1600, 14.074, 1, false, ""), ErrTxInFlight)
 	require.False(t, s.seq.Active(), "no session may commit while a manual send is in flight")
 }
@@ -315,7 +315,7 @@ func TestStartSession_DuplicateDuringRung_ReportsQsoInProgress(t *testing.T) {
 	defer func() { _ = s.ArmTx(false) }()
 
 	// An active session (its CQ has not keyed yet — the caller CQ goes out next slot).
-	require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", "", 1))
+	require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", "", 1, ""))
 	require.True(t, s.seq.Active())
 
 	// Model the session's rung KEYING: txInFlight true AND — crucially, like the real
@@ -826,7 +826,7 @@ func TestSeqTransmit_RefusesWhenTheRigLeftTheSessionsDial(t *testing.T) {
 	t.Run("rig moved off the pinned dial: refuse and end the session", func(t *testing.T) {
 		dial := 14.074
 		s, k := newServiceOnDial(t, &dial)
-		require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", "", 1))
+		require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", "", 1, ""))
 		require.True(t, s.seq.Active())
 		gen := s.seq.currentGen()
 		stopKeying(k)
@@ -843,7 +843,7 @@ func TestSeqTransmit_RefusesWhenTheRigLeftTheSessionsDial(t *testing.T) {
 	t.Run("rig still on the pinned dial: the rung proceeds", func(t *testing.T) {
 		dial := 14.074
 		s, k := newServiceOnDial(t, &dial)
-		require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", "", 1))
+		require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", "", 1, ""))
 		gen := s.seq.currentGen()
 		stopKeying(k)
 
@@ -869,7 +869,7 @@ func TestSeqTransmit_RefusesWhenTheRigLeftTheSessionsDial(t *testing.T) {
 		// armed-on-A-while-the-rig-is-on-B.
 		require.NoError(t, s.ArmTx(false))
 		require.NoError(t, s.ArmTx(true))
-		require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 7.074, "", "", 1))
+		require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 7.074, "", "", 1, ""))
 		gen := s.seq.currentGen()
 		stopKeying(k)
 
@@ -907,7 +907,7 @@ func TestSeqTransmit_DialGuardPreservesCompletedQso(t *testing.T) {
 	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
 	s.SetDialSource(func() (float64, bool) { return dial, true })
 	require.NoError(t, s.ArmTx(true))
-	require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", "", 1))
+	require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", "", 1, ""))
 	gen := s.seq.currentGen()
 
 	// Stand in for a Group A final rung: a completion callback that records the
@@ -951,7 +951,7 @@ func TestSeqTransmit_RefusesWhenTheDialCannotBeRead(t *testing.T) {
 		s.SetDialSource(func() (float64, bool) { return 0, false })
 
 		require.ErrorIs(t, s.ArmTx(true), ErrTxDialUnknown)
-		require.ErrorIs(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", "", 1), ErrTxNotArmed,
+		require.ErrorIs(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", "", 1, ""), ErrTxNotArmed,
 			"and with no arm there is nothing for a start to bind to either")
 		require.False(t, s.seq.Active())
 	})
@@ -961,7 +961,7 @@ func TestSeqTransmit_RefusesWhenTheDialCannotBeRead(t *testing.T) {
 		s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
 		s.SetDialSource(func() (float64, bool) { return 14.074, known })
 		require.NoError(t, s.ArmTx(true))
-		require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", "", 1))
+		require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", "", 1, ""))
 		gen := s.seq.currentGen()
 
 		known = false // CAT still connected; the VFO reading is gone
@@ -1074,7 +1074,7 @@ func TestPreKeyDialCheck(t *testing.T) {
 		s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
 		s.SetDialSource(func() (float64, bool) { return dial, true })
 		require.NoError(t, s.ArmTx(true))
-		require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", "", 1))
+		require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", "", 1, ""))
 		s.AbandonQso()
 
 		require.NoError(t, s.preKeyDialCheck(),
@@ -1090,7 +1090,7 @@ func TestPreKeyDialCheck(t *testing.T) {
 		s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
 		s.SetDialSource(func() (float64, bool) { return dial, true })
 		require.NoError(t, s.ArmTx(true))
-		require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", "", 1))
+		require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", "", 1, ""))
 
 		dial = 7.074
 		require.ErrorIs(t, s.preKeyDialCheck(), ErrTxSuperseded)
@@ -1101,7 +1101,7 @@ func TestPreKeyDialCheck(t *testing.T) {
 		s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
 		s.SetDialSource(func() (float64, bool) { return 14.074, true })
 		require.NoError(t, s.ArmTx(true))
-		require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", "", 1))
+		require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", "", 1, ""))
 
 		require.NoError(t, s.preKeyDialCheck())
 		s.AbandonQso()
@@ -1138,7 +1138,7 @@ func TestStartTransmission_DialRefusalRetiresTheSession(t *testing.T) {
 		s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
 		s.SetDialSource(func() (float64, bool) { return 14.074, true })
 		require.NoError(t, s.ArmTx(true))
-		require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", "", 1))
+		require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", "", 1, ""))
 		require.True(t, s.seq.Active())
 		return s
 	}

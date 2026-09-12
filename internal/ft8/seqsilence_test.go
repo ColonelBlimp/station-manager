@@ -84,7 +84,7 @@ func TestSeqSilence_CooloffSkipNamesCallAndReason(t *testing.T) {
 	r := &seqRecorder{}
 	s := newTestSeqLogged(r, logging.NewForWriter(buf))
 	require.NoError(t, s.StartCallCq("7q5mlv", "kh78", 2700, 28.074, "auto_first", "",
-		time.Unix(0, 0).UTC()))
+		time.Unix(0, 0).UTC(), ""))
 
 	s.mu.Lock()
 	s.coolOffStalledCallerLocked("DL9UW", time.Unix(40, 0).UTC()) // until 115 s
@@ -113,7 +113,7 @@ func TestSeqSilence_RoundExclusionSkipNamesItsOwnReason(t *testing.T) {
 	r := &seqRecorder{}
 	s := newTestSeqLogged(r, logging.NewForWriter(buf))
 	require.NoError(t, s.StartCallCq("7q5mlv", "kh78", 2700, 28.074, "auto_first", "",
-		time.Unix(0, 0).UTC()))
+		time.Unix(0, 0).UTC(), ""))
 
 	s.mu.Lock()
 	s.stalledCalls = []string{"DL9UW"}

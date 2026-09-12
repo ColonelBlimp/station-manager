@@ -948,8 +948,9 @@ func (s *Service) effectiveAnswerMode(answerMode string) string {
 // Requires TX **armed** — the sequencer keys through the armed controller. The
 // answerer-selection mode is read from ft8.tx.caller_answer_mode (default auto_first).
 // ourCall/ourGrid are the station identity the api layer resolved from config;
-// offsetHz is our TX offset; dialFreqMHz is the rig dial for the logged QSO frequency.
-func (s *Service) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz float64, answerMode, txParity string, logbookID int64) error {
+// offsetHz is our TX offset; dialFreqMHz is the rig dial for the logged QSO frequency;
+// cqModifier is the optional CQ token (see Sequencer.StartCallCq).
+func (s *Service) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz float64, answerMode, txParity string, logbookID int64, cqModifier string) error {
 	const op errors.Op = "ft8.Service.StartCallCq"
 	// All three modes are implemented (operator_pick since ADR 0065 decision 3).
 	// The SESSION's carried mode wins (ADR 0066); empty or invalid falls back to
@@ -974,7 +975,7 @@ func (s *Service) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz flo
 	// previous per-station start cannot leak into this session.
 	s.seq.setPendingAllowDuplicate(false)
 	s.seq.setPendingAnswerMode(mode)
-	if err := s.seq.StartCallCq(ourCall, ourGrid, offsetHz, dialFreqMHz, mode, txParity, time.Now().UTC()); err != nil {
+	if err := s.seq.StartCallCq(ourCall, ourGrid, offsetHz, dialFreqMHz, mode, txParity, time.Now().UTC(), cqModifier); err != nil {
 		s.restoreExchangePath(prevPath, prevGen)
 		return err
 	}

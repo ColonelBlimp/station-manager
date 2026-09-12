@@ -22,8 +22,12 @@ import (
 // the per-contact exchanges; offsetHz is our TX offset; dialFreqMHz is the rig dial
 // for the logged QSO frequency; answerMode selects answerer picking; nowUTC fixes our
 // TX parity (we call in the next slot). Requires armed TX (Service.StartCallCq checks
-// the arm gate). One session at a time (ErrQsoInProgress).
-func (s *Sequencer) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz float64, answerMode, txParity string, nowUTC time.Time) error {
+// the arm gate). One session at a time (ErrQsoInProgress). cqModifier is the optional
+// CQ token that rides between CQ and our call ("CQ AF 7Q5MLV KH78"): one to four
+// letters or three digits, the shapes go-ft8 packs into the first 28-bit field;
+// trimmed and upper-cased here, and anything the packer refuses fails the encode
+// check below like a malformed callsign would (W-0011, 2026-09-12).
+func (s *Sequencer) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz float64, answerMode, txParity string, nowUTC time.Time, cqModifier string) error {
 	if offsetHz <= 0 {
 		return ErrNoOffset
 	}
@@ -36,6 +40,9 @@ func (s *Sequencer) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz f
 		grid = grid[:4]
 	}
 	cq := "CQ " + call
+	if mod := strings.ToUpper(strings.TrimSpace(cqModifier)); mod != "" {
+		cq = "CQ " + mod + " " + call
+	}
 	if grid != "" {
 		cq += " " + grid
 	}

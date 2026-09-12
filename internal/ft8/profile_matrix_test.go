@@ -66,7 +66,7 @@ func TestCallerSequencer_CallCq_HappyPath_BothProfiles(t *testing.T) {
 
 			// Started at the epoch boundary: our CQ parity is the NEXT slot on the
 			// profile's lattice (odd on both), so answers arrive in even slots.
-			require.NoError(t, s.StartCallCq("7q5mlv", "kh78", 2700, 14.080, "auto_first", "", time.Unix(0, 0).UTC()))
+			require.NoError(t, s.StartCallCq("7q5mlv", "kh78", 2700, 14.080, "auto_first", "", time.Unix(0, 0).UTC(), ""))
 			require.Equal(t, "even", s.theirPeriod)
 			require.True(t, s.Active())
 

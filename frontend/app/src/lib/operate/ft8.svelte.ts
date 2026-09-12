@@ -21,7 +21,14 @@ import type {
     Ft8EventHandlers,
 } from '../api/ft8-sse';
 import { onAudioLevel as audioLevelReceive } from './audioLevel.svelte';
-import { sessionGet, sessionSet, sessionRemove } from '../utils/storage';
+import {
+    sessionGet,
+    sessionSet,
+    sessionRemove,
+    storageGet,
+    storageSet,
+    storageRemove,
+} from '../utils/storage';
 import { frequencyToBand } from '../utils/frequency';
 import { rig } from './rig.svelte';
 
@@ -186,6 +193,31 @@ function saveSelectedOffset(hz: number | null): void {
     }
 }
 
+// The CQ token the operator types into the ladder's CQ rung ("CQ AF 7Q5MLV KH78",
+// W-0011). The TOKEN is remembered per browser (localStorage) so re-enabling restores
+// it; whether it is IN USE is the per-session `cqCustom` enable on the state below —
+// plain state by ruling (operator, 2026-09-12), so a reload or a new tab returns the
+// rung to the standard CQ and a contest-day "CQ AF" never leaks into an ordinary
+// session unnoticed.
+const CQ_MODIFIER_KEY = 'sm.ft8.cqModifier';
+
+/** The CQ-token grammar the protocol packs after CQ (go-ft8 pack28): one to four
+ *  letters or exactly three digits, after trim + upper-case. Mirrors the daemon's
+ *  wire check; the daemon stays the authority through its encoder round trip. */
+export const CQ_MODIFIER_RE = /^([A-Z]{1,4}|[0-9]{3})$/;
+
+export function normalizeCqModifier(raw: string): string {
+    return raw.trim().toUpperCase();
+}
+
+export function cqModifierValid(raw: string): boolean {
+    return CQ_MODIFIER_RE.test(normalizeCqModifier(raw));
+}
+
+function loadCqModifier(): string {
+    return normalizeCqModifier(storageGet(CQ_MODIFIER_KEY) ?? '');
+}
+
 class Ft8State {
     /** Transport OPEN — says nothing about whether slots are flowing. */
     connected = $state(false);
@@ -250,6 +282,12 @@ class Ft8State {
     selectedOffset: number | null = $state(loadSelectedOffset());
     /** Call-CQ slot parity (WSJT-X "Tx even/1st"). 'next' = fire next slot regardless. */
     txParity: 'next' | 'even' | 'odd' = $state('next');
+    /** Custom-CQ enable (W-0011) — per SESSION by ruling (2026-09-12): plain state,
+     *  never persisted, so a reload or a new tab returns to the standard CQ. */
+    cqCustom = $state(false);
+    /** The CQ token ("AF", "DX", "590"), remembered per browser; it rides the CQ
+     *  only while cqCustom is on. Always normalised (trimmed, upper-case). */
+    cqModifier = $state(loadCqModifier());
     /** The SESSION's answerer-selection mode (ADR 0066) — the Answer selector
      *  in the TX control bar. Seeded from the config default at boot
      *  (setFt8SessionDefaults); plain state, so a reload reasserts the
@@ -665,6 +703,15 @@ export interface Ft8WorkArgs {
     allowDuplicate?: boolean;
 }
 
+/** Set the CQ token from the ladder's field: normalised, and remembered per browser
+ *  (empty forgets it). Validity is the caller's question (cqModifierValid). */
+export function setCqModifier(raw: string): void {
+    const token = normalizeCqModifier(raw);
+    ft8State.cqModifier = token;
+    if (token === '') storageRemove(CQ_MODIFIER_KEY);
+    else storageSet(CQ_MODIFIER_KEY, token);
+}
+
 export interface Ft8TxActions {
     /** The arm seam reports the TRANSPORT outcome; armTx below turns it into the
      *  confirm-by-push Ft8ArmResult (the watch lives here, not in main.ts). */
@@ -673,7 +720,8 @@ export interface Ft8TxActions {
         offsetHz: number,
         opFreqMHz: number,
         parity: 'next' | 'even' | 'odd',
-        answerMode: string
+        answerMode: string,
+        cqModifier: string
     ): Promise<Ft8TxResult>;
     answerCq(a: Ft8AnswerArgs): Promise<Ft8TxResult>;
     workCaller(a: Ft8WorkArgs): Promise<Ft8TxResult>;
@@ -844,8 +892,18 @@ export function callCq(
 ): Promise<Ft8TxResult> {
     const refusal = txStartRefusal();
     if (refusal !== null) return Promise.resolve(refusal);
+    // The token rides only while the per-session enable is on; an unpackable one is
+    // refused here as well as at the button, so no client path can start a CQ the
+    // daemon would reject (the daemon re-checks regardless).
+    const cqModifier = ft8State.cqCustom ? ft8State.cqModifier : '';
+    if (cqModifier !== '' && !cqModifierValid(cqModifier)) {
+        return Promise.resolve({
+            ok: false,
+            message: 'CQ token must be one to four letters or three digits.',
+        });
+    }
     return txActions
-        ? txActions.callCq(offsetHz, opFreqMHz, parity, ft8State.answerMode)
+        ? txActions.callCq(offsetHz, opFreqMHz, parity, ft8State.answerMode, cqModifier)
         : Promise.resolve(txUnavailable);
 }
 
@@ -1369,6 +1427,9 @@ export function resetFt8ForTests(): void {
     ft8State.claimed = false;
     ft8State.connected = false;
     ft8State.profile = 'FT8';
+    ft8State.cqCustom = false;
+    ft8State.cqModifier = '';
+    storageRemove(CQ_MODIFIER_KEY);
     loggedSink = null;
     sessionEndedSink = null;
     txDisarmedSink = null;

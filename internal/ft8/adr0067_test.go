@@ -320,7 +320,7 @@ func TestAdr0067_CqRunDrainsQueue(t *testing.T) {
 	r := &seqRecorder{}
 	s := newTestSeq(r)
 	require.NoError(t,
-		s.StartCallCq("G0XYZ", "KH78", 2700, 28.074, "operator_pick", "", time.Unix(0, 0).UTC()))
+		s.StartCallCq("G0XYZ", "KH78", 2700, 28.074, "operator_pick", "", time.Unix(0, 0).UTC(), ""))
 	driveTheir(s, 30, []goft8.DecodedMessage{dm("G0XYZ DL9UW JO41", -8)})
 	require.NotEmpty(t, r.lastStatus().Answerers, "fixture: an answerer is listed")
 

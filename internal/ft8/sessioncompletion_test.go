@@ -146,7 +146,7 @@ func TestIdleCompletion_CallCqIsNotAnIdleCompletion(t *testing.T) {
 	s := newTestSeq(r)
 
 	require.NoError(t, s.StartCallCq("G0XYZ", "IO91", 1500, 14.074, "auto_first", "",
-		time.Unix(0, 0).UTC()))
+		time.Unix(0, 0).UTC(), ""))
 	require.True(t, s.Active())
 
 	s.setPendingEndReason(EndReasonDialMoved)
@@ -236,7 +236,7 @@ func TestSkip_RefusedWhenTheRungHasNoSkipPath(t *testing.T) {
 		// Next is an immediate takeover (the SPA abandons instead), so the rung has
 		// no skip path, and the accurate refusal is the new one.
 		s := newTestSeq(&seqRecorder{})
-		require.NoError(t, s.StartCallCq("G0XYZ", "IO91", 1500, 14.074, "auto_first", "", now))
+		require.NoError(t, s.StartCallCq("G0XYZ", "IO91", 1500, 14.074, "auto_first", "", now, ""))
 		require.True(t, s.Active())
 
 		require.ErrorIs(t, s.SetSkipIfSilent(true), ErrRungNotSkippable)

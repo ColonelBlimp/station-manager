@@ -51,7 +51,7 @@ func startCqWithMode(t *testing.T, s *Service, mode string) {
 	t.Helper()
 	require.NoError(t, s.ArmTx(true))
 	t.Cleanup(func() { _ = s.ArmTx(false) })
-	require.NoError(t, s.StartCallCq("G0XYZ", "IO91", 1500, 14.074, mode, "", 1))
+	require.NoError(t, s.StartCallCq("G0XYZ", "IO91", 1500, 14.074, mode, "", 1, ""))
 }
 
 // R1 — the session's mode wins over config.
@@ -132,7 +132,7 @@ func TestAdr0066_StagedModeDoesNotLeakBetweenStarts(t *testing.T) {
 	startCqWithMode(t, s, types.Ft8CallerAnswerOperatorPick)
 	require.Equal(t, types.Ft8CallerAnswerOperatorPick, s.seq.statusForTest().AnswerMode)
 	s.AbandonQso()
-	require.NoError(t, s.StartCallCq("G0XYZ", "IO91", 1500, 14.074, "", "", 1))
+	require.NoError(t, s.StartCallCq("G0XYZ", "IO91", 1500, 14.074, "", "", 1, ""))
 	require.Equal(t, types.Ft8CallerAnswerAutoFirst, s.seq.statusForTest().AnswerMode,
 		"the second start's empty mode must resolve to config, not inherit the first's")
 }

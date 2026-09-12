@@ -112,8 +112,8 @@ const toTxResult = (o: Ft8QsoOutcome): Ft8TxResult =>
     o.kind === 'ok' ? { ok: true, message: '' } : { ok: false, message: o.message };
 setFt8TxActions({
     arm: async (armed) => normalizeFt8ArmSend(await armFt8Tx(armed)),
-    callCq: (offsetHz, opFreqMHz, parity, answerMode) =>
-        startFt8Cq(offsetHz, opFreqMHz, parity, answerMode).then(toTxResult),
+    callCq: (offsetHz, opFreqMHz, parity, answerMode, cqModifier) =>
+        startFt8Cq(offsetHz, opFreqMHz, parity, answerMode, cqModifier).then(toTxResult),
     answerCq: (a) =>
         startFt8Qso(
             a.theirCall,

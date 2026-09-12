@@ -81,7 +81,7 @@ func TestOperatorCommands_PublishTheirTransitionUnderTheLock(t *testing.T) {
 
 	t.Run("NextAnswerer", func(t *testing.T) {
 		s, p := newProbedSeq(t)
-		require.NoError(t, s.StartCallCq("7Q5MLV", "KH78", 2700, 28.074, "auto_first", "", now))
+		require.NoError(t, s.StartCallCq("7Q5MLV", "KH78", 2700, 28.074, "auto_first", "", now, ""))
 		driveTheir(s, 30, []goft8.DecodedMessage{dm("7Q5MLV DL9UW JO41", -8)})
 		require.NotNil(t, s.caller, "fixture: a contact to move on from")
 

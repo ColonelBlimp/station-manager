@@ -224,3 +224,148 @@ describe('Ft8Operate Abandon', () => {
         expect(ft8State.qso.queue.length).toBe(1); // SPA state untouched — SSE owns it
     });
 });
+
+// W-0011: the CQ token field on the ladder's CQ rung, behind the per-session
+// "custom" enable. Off = the standard format; on = the token rides the CQ.
+describe('Ft8Operate custom CQ', () => {
+    // callCq refuses until the profile is claimed and its stream open (ADR 0080),
+    // so the recorder also puts the claim in the "ready" shape.
+    function recordingCq(seen: string[]): void {
+        armReady({
+            callCq: (_o, _f, _p, _a, cq) => {
+                seen.push(cq);
+                return okResult();
+            },
+        });
+        ft8State.claimed = true;
+        ft8State.connected = true;
+    }
+
+    it('standard CQ by default: no token field, and Call CQ sends no modifier', async () => {
+        const seen: string[] = [];
+        recordingCq(seen);
+        const { container } = render(Ft8Operate);
+        flushSync();
+        expect(container.textContent).toContain('CQ 7Q5MLV KH33');
+        expect(screen.queryByLabelText('CQ modifier')).toBeNull();
+        await fireEvent.click(screen.getByRole('button', { name: 'Call CQ' }));
+        await flush();
+        expect(seen).toEqual(['']);
+    });
+
+    it('enabling custom reveals the field; the token rides the CQ and is remembered', async () => {
+        const seen: string[] = [];
+        recordingCq(seen);
+        const { container } = render(Ft8Operate);
+        flushSync();
+        await fireEvent.click(screen.getByRole('button', { name: 'custom' }));
+        flushSync();
+        const field = screen.getByLabelText('CQ modifier');
+        await fireEvent.input(field, { target: { value: ' af ' } });
+        flushSync();
+        expect(ft8State.cqModifier).toBe('AF');
+        expect(localStorage.getItem('sm.ft8.cqModifier')).toBe('AF');
+        expect(container.textContent).toContain('7Q5MLV KH33');
+        await fireEvent.click(screen.getByRole('button', { name: 'Call CQ' }));
+        await flush();
+        expect(seen).toEqual(['AF']);
+    });
+
+    it('custom on with an empty field is the standard CQ, and Call CQ stays enabled', async () => {
+        const seen: string[] = [];
+        recordingCq(seen);
+        const { container } = render(Ft8Operate);
+        flushSync();
+        await fireEvent.click(screen.getByRole('button', { name: 'custom' }));
+        flushSync();
+        expect(screen.getByLabelText('CQ modifier')).toHaveProperty('value', '');
+        expect(container.textContent).toContain('7Q5MLV KH33');
+        const btn = screen.getByRole('button', { name: 'Call CQ' });
+        expect(btn).toHaveProperty('disabled', false);
+        await fireEvent.click(btn);
+        await flush();
+        expect(seen).toEqual(['']);
+    });
+
+    it('an unpackable token disables Call CQ and the title says the rule', async () => {
+        armReady();
+        render(Ft8Operate);
+        flushSync();
+        await fireEvent.click(screen.getByRole('button', { name: 'custom' }));
+        flushSync();
+        await fireEvent.input(screen.getByLabelText('CQ modifier'), { target: { value: 'AF1' } });
+        flushSync();
+        const btn = screen.getByRole('button', { name: 'Call CQ' });
+        expect(btn).toHaveProperty('disabled', true);
+        expect(btn.getAttribute('title')).toContain('one to four letters or three digits');
+    });
+
+    it('disabling custom keeps the token remembered but sends the standard CQ', async () => {
+        const seen: string[] = [];
+        recordingCq(seen);
+        const { container } = render(Ft8Operate);
+        flushSync();
+        const custom = screen.getByRole('button', { name: 'custom' });
+        await fireEvent.click(custom);
+        flushSync();
+        await fireEvent.input(screen.getByLabelText('CQ modifier'), { target: { value: 'AF' } });
+        flushSync();
+        await fireEvent.click(custom);
+        flushSync();
+        expect(screen.queryByLabelText('CQ modifier')).toBeNull();
+        expect(container.textContent).toContain('CQ 7Q5MLV KH33');
+        expect(ft8State.cqModifier).toBe('AF');
+        await fireEvent.click(screen.getByRole('button', { name: 'Call CQ' }));
+        await flush();
+        expect(seen).toEqual(['']);
+    });
+
+    it('the enable is per session: only the token is persisted, never the enable', async () => {
+        armReady();
+        render(Ft8Operate);
+        flushSync();
+        await fireEvent.click(screen.getByRole('button', { name: 'custom' }));
+        flushSync();
+        await fireEvent.input(screen.getByLabelText('CQ modifier'), { target: { value: 'AF' } });
+        flushSync();
+        expect(ft8State.cqCustom).toBe(true);
+        const ft8Keys = Object.keys(localStorage).filter((k) => k.startsWith('sm.ft8.'));
+        expect(ft8Keys).toEqual(['sm.ft8.cqModifier']);
+    });
+
+    it('enabling custom focuses the field; it fits its content and the button shows active', async () => {
+        armReady();
+        render(Ft8Operate);
+        flushSync();
+        const custom = screen.getByRole('button', { name: 'custom' });
+        expect(custom.getAttribute('aria-pressed')).toBe('false');
+        await fireEvent.click(custom);
+        await flush();
+        const field = screen.getByLabelText('CQ modifier');
+        expect(document.activeElement).toBe(field);
+        expect(custom.getAttribute('aria-pressed')).toBe('true');
+        // Fitted to the token: two characters minimum (the placeholder), then the length.
+        expect(field.getAttribute('size')).toBe('2');
+        await fireEvent.input(field, { target: { value: 'TEST' } });
+        flushSync();
+        expect(field.getAttribute('size')).toBe('4');
+        await fireEvent.input(field, { target: { value: 'AF' } });
+        flushSync();
+        expect(field.getAttribute('size')).toBe('2');
+    });
+
+    it('the field and the enable disappear while a session is active', () => {
+        armReady();
+        ft8State.cqCustom = true;
+        render(Ft8Operate);
+        flushSync();
+        expect(screen.getByLabelText('CQ modifier')).toBeTruthy();
+        ft8State.qso.active = true;
+        ft8State.qso.role = 'caller';
+        ft8State.qso.state = 'calling';
+        ft8State.qso.nextMessage = 'CQ AF 7Q5MLV KH33';
+        flushSync();
+        expect(screen.queryByLabelText('CQ modifier')).toBeNull();
+        expect(screen.queryByRole('button', { name: 'custom' })).toBeNull();
+    });
+});

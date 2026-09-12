@@ -146,12 +146,15 @@ export function startFt8WorkCaller(
 /** Start calling CQ (ADR 0033): the daemon calls CQ on offsetHz and works the
  *  stations that answer, one at a time, until abandoned. txParity picks the CQ slot
  *  parity (WSJT-X "Tx even/1st"); 'next' fires on the next slot (the daemon default).
- *  Our callsign/grid resolve server-side. operatingFreqMHz is the rig dial frequency. */
+ *  Our callsign/grid resolve server-side. operatingFreqMHz is the rig dial frequency.
+ *  cqModifier is the optional CQ token between CQ and our call ("AF" → "CQ AF …",
+ *  W-0011); empty = the standard CQ. */
 export function startFt8Cq(
     offsetHz: number,
     operatingFreqMHz: number,
     txParity: 'next' | 'even' | 'odd' = 'next',
     answerMode = '',
+    cqModifier = '',
     signal?: AbortSignal
 ): Promise<Ft8QsoOutcome> {
     return postFt8Qso(
@@ -163,6 +166,7 @@ export function startFt8Cq(
             // The SESSION's answerer-selection mode (ADR 0066) — the run obeys
             // this, not config. Empty = let the daemon apply the config default.
             ...(answerMode ? { answer_mode: answerMode } : {}),
+            ...(cqModifier ? { cq_modifier: cqModifier } : {}),
         },
         signal
     );
