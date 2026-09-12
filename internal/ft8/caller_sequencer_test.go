@@ -353,3 +353,29 @@ func TestCallerSequencer_CqModifier(t *testing.T) {
 		}
 	})
 }
+
+// TestCallerSequencer_CqMessageOnEveryCallerFrame pins the wire fix for codex
+// bf472ba6 P2: every caller frame carries the run's CQ text — while plain calling
+// (where next_message is that same CQ) AND while an answerer is worked (where
+// next_message is the report) — so a client that did not start the run renders
+// the CQ rung from the daemon's text, never from its own token preference.
+func TestCallerSequencer_CqMessageOnEveryCallerFrame(t *testing.T) {
+	last := func(r *seqRecorder) QsoStatus {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		require.NotEmpty(t, r.statuses)
+		return r.statuses[len(r.statuses)-1]
+	}
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	require.NoError(t, s.StartCallCq("7Q5MLV", "KH78", 2700, 28.074, "auto_first", "", time.Unix(0, 0).UTC(), "AF"))
+	driveTheir(s, 30, nil) // our CQ slot
+	st := last(r)
+	require.Equal(t, "calling-cq", st.State)
+	require.Equal(t, "CQ AF 7Q5MLV KH78", st.CqMessage)
+	driveTheir(s, 60, []goft8.DecodedMessage{dm("7Q5MLV DL9UW JO41", -8)}) // an answer → our report
+	st = last(r)
+	require.Equal(t, "DL9UW", st.TheirCall)
+	require.Equal(t, "DL9UW 7Q5MLV -08", st.NextMessage, "the next message is the report now")
+	require.Equal(t, "CQ AF 7Q5MLV KH78", st.CqMessage, "the run's CQ text stays on the frame while working")
+}

@@ -89,6 +89,10 @@ export interface Ft8QsoStatus {
     theirGrid: string;
     state: string;
     nextMessage: string;
+    /** The run's CQ text as the daemon transmits it (caller frames, both phases —
+     *  W-0011): the ladder's CQ rung source while a run is live, whichever tab
+     *  started it. '' from an older daemon. */
+    cqMessage: string;
     repeats: number;
     maxRepeats: number;
     /** Daemon-armed skip-if-silent (deferred Next): a silent cycle ends the
@@ -142,6 +146,7 @@ const emptyQsoStatus = (): Ft8QsoStatus => ({
     theirGrid: '',
     state: '',
     nextMessage: '',
+    cqMessage: '',
     repeats: 0,
     maxRepeats: 0,
     skipArmed: false,
@@ -216,6 +221,12 @@ export function cqModifierValid(raw: string): boolean {
 
 function loadCqModifier(): string {
     return normalizeCqModifier(storageGet(CQ_MODIFIER_KEY) ?? '');
+}
+
+/** An optional wire string as the store's '' default — kept out of onQso's own
+ *  branch count (that mapper sits at its complexity baseline). */
+function strField(v: string | undefined): string {
+    return v === undefined ? '' : v;
 }
 
 class Ft8State {
@@ -1200,6 +1211,7 @@ export const ft8Link: Ft8EventHandlers = {
             theirGrid: p.their_grid ?? '',
             state: p.state ?? '',
             nextMessage: p.next_message ?? '',
+            cqMessage: strField(p.cq_message),
             repeats: p.repeats ?? 0,
             skipArmed: p.skip_armed ?? false,
             nextArmed: p.next_armed ?? false,

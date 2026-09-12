@@ -99,6 +99,8 @@ export interface QsoPayload {
     their_grid?: string;
     state?: string;
     next_message?: string;
+    /** The run's CQ text as transmitted (caller frames, both phases — W-0011). */
+    cq_message?: string;
     repeats?: number;
     max_repeats?: number;
     skip_armed?: boolean;
@@ -266,6 +268,7 @@ const QSO_STR_FIELDS = [
     'their_grid',
     'state',
     'next_message',
+    'cq_message',
     'our_report',
     'their_report',
     'their_period',

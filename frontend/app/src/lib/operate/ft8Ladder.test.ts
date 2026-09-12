@@ -12,6 +12,7 @@ function qso(over: Partial<Ft8QsoStatus> = {}): Ft8QsoStatus {
         theirGrid: '',
         state: '',
         nextMessage: '',
+        cqMessage: '',
         repeats: 0,
         maxRepeats: 0,
         skipArmed: false,
@@ -183,6 +184,26 @@ describe('CQ modifier', () => {
             'CQ AF 7Q5MLV KH78'
         );
     });
+    it("a tab that did not start the run shows the run's CQ from the frame while an answerer is worked", () => {
+        // Second tab, or this tab after a reload: no local token, and next_message is
+        // the report — the frame's cq_message is the only truthful source.
+        const live = qso({
+            active: true,
+            role: 'caller',
+            state: 'reporting',
+            theirCall: 'DL9UW',
+            nextMessage: 'DL9UW 7Q5MLV -08',
+            cqMessage: 'CQ AF 7Q5MLV KH78',
+        });
+        expect(buildLadder(live, false, '7Q5MLV', 'KH78', '').rungs[0].text).toBe(
+            'CQ AF 7Q5MLV KH78'
+        );
+        // And the frame wins over a DIFFERENT local token, both phases.
+        expect(buildLadder(live, false, '7Q5MLV', 'KH78', 'DX').rungs[0].text).toBe(
+            'CQ AF 7Q5MLV KH78'
+        );
+    });
+
     it('while the run works an answerer the CQ rung keeps the composed CQ', () => {
         const live = qso({
             active: true,

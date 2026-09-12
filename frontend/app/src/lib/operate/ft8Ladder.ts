@@ -23,12 +23,14 @@ export interface Rung {
 }
 
 /** The CQ rung's text: the operator's token between CQ and the call ("CQ AF 7Q5MLV
- *  KH78"). Once a Call-CQ run is live and calling, the daemon's own next message wins,
- *  so the ladder reads exactly what goes on air (the token typed here need not be the
- *  one the run started with — another tab, a change after the start). */
+ *  KH78"). Once a Call-CQ run is live the daemon's own CQ text wins — carried on every
+ *  caller frame, calling or working an answerer — so the ladder reads exactly what goes
+ *  on air whichever tab started the run (codex bf472ba6 P2). An older daemon without
+ *  the field still shows its next message while it IS the CQ. */
 function cqRungText(qso: Ft8QsoStatus, me: string, grid: string, cqModifier: string): string {
-    if (qso.active && qso.role === 'caller' && qso.nextMessage.startsWith('CQ ')) {
-        return qso.nextMessage;
+    if (qso.active && qso.role === 'caller') {
+        if (qso.cqMessage !== '') return qso.cqMessage;
+        if (qso.nextMessage.startsWith('CQ ')) return qso.nextMessage;
     }
     if (!me) return 'CQ';
     const token = cqModifier.trim().toUpperCase();

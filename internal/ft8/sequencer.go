@@ -244,7 +244,13 @@ type QsoStatus struct {
 	// State — answerer: calling|reporting|confirming; caller: calling-cq|reporting|rogering.
 	State       string `json:"state,omitempty"`
 	NextMessage string `json:"next_message,omitempty"`
-	Repeats     int    `json:"repeats,omitempty"`
+	// CqMessage — the run's CQ text exactly as transmitted (caller frames only,
+	// W-0011): carried while calling AND while an answerer is worked, so a client
+	// that did not start the run (a second tab, a reload mid-run) renders the CQ
+	// rung from the daemon's text and never from its own CQ-token preference
+	// (codex bf472ba6 P2).
+	CqMessage string `json:"cq_message,omitempty"`
+	Repeats   int    `json:"repeats,omitempty"`
 	// SkipArmed — the operator armed skip-if-silent on this session (deferred
 	// Next): a silent cycle ends the session instead of keying the repeat.
 	SkipArmed bool `json:"skip_armed,omitempty"`
@@ -2172,6 +2178,7 @@ func (s *Sequencer) statusModeLocked() QsoStatus {
 		// operator_pick run carries its candidate list — in BOTH phases, so the
 		// drawer stays live while a popped contact is worked (rule 9).
 		st.AnswerMode = s.answerMode
+		st.CqMessage = s.cqMessage // both phases: the rung must not fall back to a client guess
 		for _, a := range s.answerers {
 			st.Answerers = append(st.Answerers, CqAnswerer{Call: a.call, Snr: a.snr})
 		}
