@@ -89,6 +89,37 @@ func TestRecord_String(t *testing.T) {
 	}
 }
 
+// TestComposeToAdifString_FT4IsMfskWithSubmode pins ADR 0080 at the export
+// boundary: an FT4 contact stored as the ADIF 3.1.5 pair (MODE=MFSK,
+// SUBMODE=FT4) leaves the session email and download exports as exactly that
+// pair. The nearest confusable outputs are a writer that drops SUBMODE (the
+// contact would read as generic MFSK) and one that flattens the submode into
+// MODE (<MODE:3>FT4, the pre-ADR shape the SARL converter does not expect).
+func TestComposeToAdifString_FT4IsMfskWithSubmode(t *testing.T) {
+	q := types.Qso{
+		QsoDetails: types.QsoDetails{
+			Band: "20m", Mode: "MFSK", Submode: "FT4", Freq: "14080000",
+			QsoDate: "20260911", TimeOn: "1817", TimeOff: "1818",
+			RstSent: "-3", RstRcvd: "23",
+		},
+		ContactedStation: types.ContactedStation{Call: "M0CMC", Country: "England"},
+		LoggingStation:   types.LoggingStation{StationCallsign: "G4ABC"},
+	}
+
+	out, err := ComposeToAdifString(types.QsoSlice{q})
+	if err != nil {
+		t.Fatalf("ComposeToAdifString: %v", err)
+	}
+	for _, want := range []string{"<MODE:4>MFSK", "<SUBMODE:3>FT4"} {
+		if n := strings.Count(out, want); n != 1 {
+			t.Errorf("ADIF output has %d of %q, want exactly 1\nGot:\n%s", n, want, out)
+		}
+	}
+	if strings.Contains(out, "<MODE:3>FT4") {
+		t.Errorf("ADIF output carries FT4 as a main mode; ADIF 3.1.5 files it under MFSK\nGot:\n%s", out)
+	}
+}
+
 // TestQsoToRecord_EmitsAppSmQsoID pins ADR 0016 phase 2: when a QSO
 // has a UUID, the daemon's ADIF emission carries it as
 // APP_SM_QSO_ID so re-imports and forwarder uploads round-trip the
