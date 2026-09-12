@@ -250,7 +250,7 @@ it('the Answer mode selector renders, and locks while a run is active', () => {
 // SP4b — codex d7fbf935 P1: idle-and-ARMED locks it too. An armed auto-work
 // run holds its pinned selection mode past each completed contact
 // (qso.active false, autoWorkArmed true); an editable selector there lets
-// the UI claim "I pick" while the run keeps auto-working with the old mode.
+// the UI claim "Operator pick" while the run keeps auto-working with the old mode.
 // Changing the mode legitimately means stopping the run first (Stop run).
 it('the Answer mode selector stays locked while an auto-work run is armed', () => {
     ft8Link.onQso({ active: false, auto_work_armed: true });

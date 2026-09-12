@@ -743,7 +743,7 @@ pile-up rather than chasing weak-path CQs — **press Call CQ** and the session'
 answerers: **First answerer** (`auto_first`, by decode order) or **Strongest
 signal** (`auto_strongest`, highest SNR in the slot) run hands-off — CQ, work
 one through RR73, log, resume, until you Abandon. To choose *which* callers to
-work and in what order yourself, run **I pick** (`operator_pick`, the default):
+work and in what order yourself, run **Operator pick** (`operator_pick`, the default; labelled "I pick" until 2026-09-12):
 answerers are listed in the drawer, and you **Work** one now or **Bag** several
 (Ctrl/Cmd+click on Band Activity bags too) for the daemon to work in bag order
 — hands-off throughput with every station your own choice.

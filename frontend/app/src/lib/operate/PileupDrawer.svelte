@@ -95,8 +95,8 @@
             </h3>
             {#if qso.answerers.length === 0}
                 <p class="mt-1 text-sm text-muted">
-                    Nobody yet — with the Answer mode on “I pick”, stations calling you are listed
-                    here. Work one now, or bag several and they are worked in order.
+                    Nobody yet — with the Answer mode on “Operator pick”, stations calling you are
+                    listed here. Work one now, or bag several and they are worked in order.
                 </p>
             {:else}
                 <ul class="mt-1 flex flex-col divide-y divide-line">

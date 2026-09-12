@@ -10,7 +10,7 @@
                Locked while a run is active OR armed (the parity precedent:
                changes apply to the next run; d7fbf935 P1 pinned the armed
                half — an editable selector under an armed run lets the UI
-               claim "I pick" while the run auto-works with its pinned mode).
+               claim "Operator pick" while the run auto-works with its pinned mode).
         Row 2: state dot + the ratified state line. Click-to-open the drawer
                when there is a caller list (operator-initiated — the 0065
                badge-only rule stays for unprompted surfacing).
@@ -80,7 +80,7 @@
         >
             <option value="auto_first">First answerer</option>
             <option value="auto_strongest">Strongest</option>
-            <option value="operator_pick">I pick</option>
+            <option value="operator_pick">Operator pick</option>
         </select>
     </label>
     <button
