@@ -1,7 +1,7 @@
 # W-0012 — Complete routed operator-experience follow-ups
 
 **Status:** Open — staged after release correctness gates
-**Selected:** Not selected
+**Selected:** 2026-09-12 — the "Rig Control mode control in the FT views" slice only; the rest stays staged
 **Outcome:** Remaining UI, map, onboarding, and diagnostic improvements have one routed home and do
 not compete with the app-shell, notification-history, or UI-cohesion dossiers.
 
@@ -16,6 +16,24 @@ not compete with the app-shell, notification-history, or UI-cohesion dossiers.
 - **Operate workflow:** reorganize the contact view; decide whether QTH belongs on the Phone/CW
   card; surface active-versus-configured rig state; revive only dead SSE clients on visibility
   changes; retain focused fixes for session email/filter/toolbar feedback and card layout.
+- **Start a new session (operator idea, 2026-09-12; not selected):** the session is a per-tab browser
+  list, not a daemon entity (ADR 0049 rejected daemon-owned sessions): `session.svelte.ts` keeps
+  `session.qsos` in `sessionStorage` under `sm.session.qsos`, fed by the Phone/CW submit response and
+  the FT8 logged event; the timer keeps its own `sm.session.startedAt`; the email and export routes
+  take the SPA's UUID list. A new tab therefore starts a fresh session and a daemon restart does not
+  end one. Today's operator path: open a brand-new tab by typing the URL (not a link from the app, and
+  not a reopened tab — Firefox restores `sessionStorage` on undo-close and session restore), confirm
+  the Session panel count is 0 and the timer reads 00:00:00, then close the old tab (one tab only).
+  The feature: a "New session" action in the Session panel that clears the list and the timer in
+  place, SPA-only, no daemon change, no data-derivable-from-QSOs trigger for ADR 0049's revisit.
+  Acceptance: the list, its rail badge and the timer reset together and stay reset across a reload
+  (the stored copy is removed, as `_resetSessionForTests` does); the logbook is untouched and the
+  wording says so; a session holding not-yet-emailed QSOs asks first (email or start anyway) — the
+  nearest confusable outcomes are a reset that reads as deleting QSOs, a reload that resurrects the
+  old list, a timer that keeps counting because it read its start once at mount, and the FT8 Band
+  Activity "worked this session" mute silently emptying (`Ft8BandActivity.svelte` reads
+  `session.qsos`; expected, and to be stated). Explicit operator action only — no idle or day-change
+  rollover. The unwritten session-log manual chapter (W-0018) must carry the per-tab rule.
 - **Maps and tables:** dogfood-validate shipped map catch-up/zoom behavior; decide solar-time overlay
   versus a world-time widget, map band-source policy, and session column resizing/sorting before
   implementation. The whole-log Dashboard map remains separate from the shipped time-window map.
@@ -37,6 +55,55 @@ not compete with the app-shell, notification-history, or UI-cohesion dossiers.
 - **Onboarding/preferences:** reduce non-Linux first-run friction; add download-site install content
   from the canonical install guide; keep beginner help, profiles, and `default_logbook.id` wiring
   deferred until their consuming workflow exists.
+
+## Slice — Rig Control mode control in the FT views
+
+**Selected:** 2026-09-12, build after the Africa FT4 DX Contest (ends 2026-09-12 18:00Z); no deploy before.
+**Origin:** dogfood inbox 2026-09-11 ("the mode selector is polluted") and the operator's screenshot of
+2026-09-12 08:26: the FTdx10's fifteen literals in CAT-code order, eleven carrying a "· mapped name"
+suffix, DATA-L and DATA-U both labelled FT4 during the FT4 run, the closed control truncated to
+"DATA-U · F".
+
+**Rulings (operator, 2026-09-12):**
+
+- In the FT8 and FT4 views the mode is owned by the profile. The bridge switches the rig to the per-rig
+  `ft8_mode` literal before every keyed rung and restores the prior mode after unkey
+  (`internal/bridge/ft8tx.go`); first entry and every FT band button assert dial then data mode
+  (`modeRestore.svelte.ts` seed, `ft8SelectBand`); no arm gate on the rig's reported literal was found in
+  the SPA (search 2026-09-12). A live selector there can only fight the profile, so the Rig Control's
+  Mode control becomes a readout in those views.
+- FT4 uses the FT8 data literal. No separate FT4 literal and no `DIGI` mapping sentinel: mapping values
+  are validated as ADIF modes (`config/validate.go`), the daemon never consults the mapping for an FT
+  contact (the profile carries FT8, or MFSK/FT4, into the QSO — `ft8/qsolog.go`), and a sentinel would
+  need validation, editor, rigdef-default and config-migration work plus a rule for the no-profile case.
+  Declined.
+- Settings → Rigs → Advanced → Mode Mappings is untouched by this slice.
+
+**Operator-observable acceptance:**
+
+| | Outcome | Nearest confusable outcome |
+|---|---|---|
+| AC1 | FT8 or FT4 view, CAT connected, the rig reporting the configured data literal: Mode shows the profile with the literal, e.g. "DATA-U · FT4", in full; nothing opens on click. | A disabled select still reading "DATA-U · F"; a readout naming the mapping's FT8 while FT4 is open. |
+| AC2 | Same view, the rig reporting any other literal (seed refused while transmitting, the no-move knob off, a hand change on the rig): the readout shows the reported literal and says it is not the profile's data mode; clicking the current band's button puts the rig on that band's dial and the data mode. | A readout that says FT4 while the rig reports USB; a band button that is a no-op on the band already selected (read-verified 2026-09-12: `setFreq` always writes and `ft8SelectBand` then asserts the mode — pin it with a test). |
+| AC3 | The per-rig `ft8_mode` set to `""` (leave the rig's mode alone, config.md §10): the FT views keep the live selector. | A readout everywhere, leaving no in-view way to set the mode for that configuration. |
+| AC4 | CAT off or lost in an FT view: the readout names the profile; an FT contact's logged mode is unchanged (it comes from the daemon's profile). | The manual nine-mode select shown as if it drove the FT log's mode. |
+| AC5 | The Phone/CW view is unchanged by this slice: live and manual selectors as shipped. | The readout leaking into Phone/CW because the FT profile label persists across navigation. |
+
+**Mechanism (for the builder):** `RigPanel.svelte` already receives `ftMode` and `modeLabel` from
+`Operate.svelte`; render the readout when `ftMode` is set, `rig.cat === 'connected'` and
+`ft8ModeLiteral() !== ''`, comparing `rig.modeLiteral` with `ft8ModeLiteral()`. Rendered tests in
+`RigPanel.svelte.test.ts` for every row above, each with a reversion proof; no daemon change; deploy
+with `task deploy:local:dev` when the operator directs.
+
+**Follow-on, awaiting rulings (Phone/CW selector tidy, a separate slice):** the list is the rigdef's
+MAINMODE table in CAT-code order (`cat.RigModes`) and `modeOptionLabel` suffixes every literal whose
+mapped name differs. Open choices: (1) suffix only on the data literal (recommended) or only when
+neither string prefixes the other; (2) group by family (SSB, CW, RTTY, DATA, FM, AM, PSK) in the SPA;
+(3) a closed control wide enough for its label; (4) whether the FT4 relabel of the data literal
+persists into Phone/CW after an FT4 session (ruled 2026-09-11, `c12a8901`) or is confined to the FT
+readout and the header chip; (5) showing the data literal as "FT8/FT4" in Phone/CW when no profile
+label stands — recommended hold. Hiding rarely used variants would need a per-rig configured mode
+list, like operating bands, and is not proposed.
 
 ## Verification boundary
 
