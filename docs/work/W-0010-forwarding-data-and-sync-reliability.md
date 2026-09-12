@@ -27,6 +27,24 @@ intent and converge without routine full-log churn or forbidden third-party API 
    Finding #1), so the `allow_insecure_http` cleartext acknowledgement can be removed from the live
    station config; `docs/smcloud-deploy.md` owns the TLS steps.
 
+9. A credential rejection at any forwarder does not strand its rows as terminal failures that read as a
+   live backlog (alpha.2 dogfood Finding #19, 2026-09-12: one QRZ insert failed on 2026-08-06 during an
+   invalid-key window, never retried after the key was corrected, and sat on the Forwarding card as
+   "1 queued" for five weeks). Operator-observable outcomes: the Settings → Forwarding card shows failed
+   rows apart from rows waiting to send and names the QSOs or links to the logbook's missing-from filter;
+   a row failed for an authentication reason is re-armed when that forwarder's credential is changed via
+   `PUT /v1/config` (or the card offers "retry failed"), sharing outcome 1's mechanism rather than an
+   SM Cloud-only one; a terminal forwarding failure lands in the durable notification history (verify
+   the category exists — unconfirmed 2026-09-12); and `qrz.classifyResponse` redacts the key QRZ echoes
+   before the message reaches `last_error`, `smd.log` or the wire. Nearest confusable outcomes: a card
+   that still counts `clearable` as "queued"; a blanket retry that re-sends rows QRZ rejected for a
+   station-callsign mismatch (terminal for a different reason); a redaction that also strips the
+   operator-readable reason. Same family, seen while planning the test row's removal: a delete-forward for
+   a QSO whose insert never succeeded at an id-keyed destination (QRZ needs the prior `upstream_id`,
+   `qrz.buildForm`) is today a NEW terminal failure rather than a no-op — the worker passes the empty id
+   through by design so field-keyed deletes (ClubLog) stay reachable, so the skip belongs in the id-keyed
+   forwarder, or at enqueue when that forwarder holds no successful insert for the QSO.
+
 ## Verification boundary
 
 Fixtures must make retry, historical backfill, deliberate repeat, accidental duplicate, stale

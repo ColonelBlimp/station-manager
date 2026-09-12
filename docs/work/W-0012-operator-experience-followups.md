@@ -34,6 +34,46 @@ not compete with the app-shell, notification-history, or UI-cohesion dossiers.
   Activity "worked this session" mute silently emptying (`Ft8BandActivity.svelte` reads
   `session.qsos`; expected, and to be stated). Explicit operator action only — no idle or day-change
   rollover. The unwritten session-log manual chapter (W-0018) must carry the per-tab rule.
+- **Selectable and creatable data files — physical log databases on disk (operator requirement,
+  2026-09-12; not selected):** trigger: a UI test on the live station logged a real contact (7Q7EB,
+  2026-08-06, alpha.2 Finding #19) into the only log and mirrored it to SM Cloud. The operator wants to
+  create separate database files and choose which one is open — a test file, a contest file, the
+  everyday log — the way v1's data files worked; logical logbooks inside one file are not the ask.
+  Baseline: one log database at `<data_dir>/db/station-manager.db` holding QSOs, logbooks, the upload
+  queue and the audit history, beside a shared `reference.db` for the enrichment caches (the split
+  already exists, `sqlite/bootstrap.go`); `datastore` is a restart-required setting (config.md §11.4)
+  and hot-swap is unimplemented even for rigs, where ADR 0028's catalogue-plus-active shape is the
+  precedent; the handle is held by the API server, `qsoservice`, the forwarder worker, the SM Cloud
+  reconciler and the notification history. Inside a file the logical layer is already there: logbook
+  CRUD on `/v1/logbook` (name and callsign required, delete refused while it holds QSOs or is the
+  default), `logbook_id` on every QSO, ADR 0055's callsign-per-logbook, `smd import`/`restore
+  --logbook`; what that layer lacks is a UI, a writable active logbook (`default_logbook.id` is a hand
+  edit plus restart) and the ADR 0056 per-logbook forwarder bindings, designed but unbuilt.
+  Operator-observable outcomes for files: Settings → Data files lists the files under `<data_dir>/db/`
+  and marks the open one; "New" creates an empty file from a validated name, migrated to the current
+  schema and seeded with its default logbook and callsign by the first-run rules; "Open" switches the
+  daemon to it, refused while FT8 is armed, a session is active or a transmission is in flight, and
+  while uploads are in flight; after the switch the header names the file, its active logbook and
+  count, the tab starts a new session (see the new-session entry), the upload queues are the file's
+  own, and forwarding for the new file is OFF until the operator binds it — SM Cloud in particular must
+  name its own cloud logbook or stay disabled, never inherit the everyday binding (the reconciler
+  treats cloud rows unknown locally as a retentive superset and warns every tick; a later restore
+  would pull the everyday log into the test file); backups, `restore` and `import` address a named
+  file; the enrichment cache stays shared in `reference.db`. Mechanism, two alternatives for the ADR:
+  (A) write `datastore.path` through the config PUT and restart the daemon under systemd — the
+  restart-required class the setting already has, the reconnect path every deploy exercises (ADR
+  0079); (B) an in-process swap through the ADR 0070 lifecycle graph — drain the dependents, close,
+  open and migrate, restart them — which makes W-0009's LC-5 (concurrent SQLite open/close) live.
+  Recommended: A first; a switch is rare and B is a lifecycle framework change for a convenience.
+  Nearest confusable outcomes: a switch mid-FT8-run filing a contact into the wrong file; a new file
+  silently bound to the everyday SM Cloud logbook; per-file copies of the enrichment cache; a file
+  deleted or renamed while open; `config-check` validating a path that is not the open file; two
+  writers on one file (`smd import` against the open file is already possible today). Decisions for
+  the operator: A or B; files confined to `<data_dir>/db/` with validated names (recommended) versus
+  arbitrary paths; whether a new file copies the current station identity; forwarding off by default
+  for a new file (recommended); whether the logical-logbook UI is still wanted inside a file (files
+  give isolation and portability, logbooks give callsign identity — both, files first). Its own
+  dossier and an ADR when selected; W-0013 carries the datastore-swap pointer.
 - **Maps and tables:** dogfood-validate shipped map catch-up/zoom behavior; decide solar-time overlay
   versus a world-time widget, map band-source policy, and session column resizing/sorting before
   implementation. The whole-log Dashboard map remains separate from the shipped time-window map.

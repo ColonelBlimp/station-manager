@@ -17,6 +17,9 @@ bounded resource use and no accidental hardware, credential, or network dependen
   the recipient/filtering contract is verified from authoritative protocol documentation;
 - spot-submitter registry only when a second destination exists;
 - config hot reload only as a deliberately scoped lifecycle consumer;
+- datastore switch at runtime (open another log database file) only as the mechanism for the
+  operator's data-files requirement recorded in W-0012 (2026-09-12); the restart path is the first
+  candidate, an in-process swap the second and the trigger for W-0009's LC-5;
 - before multi-instance SM Cloud: explicit migrate-only/serve-only operation and verification of
   concurrent migration locking. The single-instance boot migration remains current behavior.
 
