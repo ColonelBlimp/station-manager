@@ -66,7 +66,16 @@ single-flight keying, guaranteed stop, and operator-initiated session boundaries
   `docs/research-pipeline.md` and ADR 0021, not checked into the repository; the WSJT-X User Guide's
   message-format section for the operator-facing rules; go-ft8's README type table and packer source
   for what we ship. Gap: `docs/ft8.md` has no message-format section — add one in the same change as
-  this feature.
+  this feature. **BUILT and on air 2026-09-12:** `bf472ba6` (feature, tests, api-endpoints.md, the
+  new `docs/ft8.md` message-format section, the manual's FT8 chapter) + `77d5453c` (codex P2: the
+  run's CQ text rides every caller frame as `cq_message`, so the rung is truthful in a tab that did
+  not start the run); deployed as `2.0.0-alpha.2-64-g77d5453c`. Evidence (`smd.log`, local +02:00):
+  14:00:15 `CQ AS 7Q5MLV KH78` transmitted on 17 m FT8, 14:01:15 BA4IAW answered and was reported,
+  14:02:28 QSO stored, 14:02:45 the run resumed `CQ AS …` — the token rides every CQ of the run and
+  the exchange is unaffected. 14:04:29 second contact stored, RA6OY (European Russia, not Asia —
+  the token is a convention, not a filter, as this entry says; operator 2026-09-12: for the contest,
+  thinning is enough — the continent preference stays unselected). The dev-server check (FT4 and
+  FT8 views) preceded it.
 - **Contest continent preference for answerer selection (operator idea, 2026-09-12; not selected):**
   the operator's concrete problem: under an auto mode a rest-of-the-world pile-up is worked first-come or
   strongest-first and the 6-point African callers starve behind it. Raised for the Africa FT4 DX Contest
