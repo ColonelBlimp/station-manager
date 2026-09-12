@@ -55,6 +55,37 @@ single-flight keying, guaranteed stop, and operator-initiated session boundaries
   needs an ADR 0067 amendment weighed on its own. Nearest confusable outcome: a strict filter silently
   skipping a 6-point caller whose prefix the cache has not seen. Hamnut's continent versus the ARRL
   AF list is an unverified equivalence for the islands 6.2 names.
+- **Contest dupes (operator design question, 2026-09-12; not selected):** rule 6.4 of the Africa FT4
+  DX Contest scores each station once per band; a repeat is zero points, not a penalty, but it costs
+  a run several 7.5 s slots. What the system does today: Band Activity greys a row on two signals —
+  the daemon's worked-before check (`GET /v1/contest-dupe`: call + band + mode/submode in the logbook,
+  no time window, so a station worked on 20 m FT4 the day before shows grey during the contest though
+  it is a valid contest QSO) and the tab's own session evidence (`session.qsos` and the engaged set,
+  call + band); a click on a grey row informs ("already worked this session — working again") and
+  proceeds with `allow_duplicate`, never refuses (XE1GM repair, 2026-07-26). Runs are blind: the auto
+  modes' `pickAnswererLocked` skips only stalled, cooling-off and unencodable answerers, so a station
+  that calls again is worked again and logged again; the pick listing and the pile-up drawer carry no
+  worked mark at all. FT8/FT4 contacts get no `CONTEST_ID` (only Field Day sets one), so the ADIF the
+  SARL converter receives cannot be filtered to the contest and carries every repeat as a row. Three
+  layers if selected: (1) visibility — the dupe check gains an optional `since` (date and time) so the
+  grey-out inside a declared window means "worked in this contest", the lifetime answer staying the
+  default outside one; the drawer marks listed answerers from the same client-side evidence, no daemon
+  change; (2) runs — the sequencer keeps a worked-this-session set (call + band, filled by its own
+  completed contacts) and, when the window is declared, the auto modes skip those answerers with a
+  logged reason as they do for stalled ones, and the `answerers` frame carries `worked` so the drawer
+  can show it; pick stays the manual override, so a repair for a partner who never copied the RR73 is
+  still one click — an exclusion rule like stall cool-off, not a second answer mode under ADR 0067;
+  (3) logging — contacts logged inside the window are stamped with the declared `CONTEST_ID` (ADIF
+  field already on `types.QsoDetails`) so the session export and email can be filtered to the contest
+  and the Session panel can count in-window repeats. Nearest confusable outcomes: a window that greys
+  a pre-contest contact as a dupe; an auto run that skips a partner asking for the repair; a repeat
+  refused rather than informed; a stamp applied to a non-contest QSO logged during the window (the
+  operator declares the window, so that is by their choice). Decisions for the operator: how the
+  window is declared — the tab's session start automatically, or an explicit contest mode with id
+  and start/end (recommended: explicit, since the session is per tab and resets on a new tab);
+  whether auto runs skip in-window repeats (recommended: yes, only inside a declared window); whether
+  the lifetime grey-out stays outside a window (recommended: yes). Sibling: the continent preference
+  entry above shares the answerer-annotation plumbing.
 - **Band Activity defect:** stale decode fading must be visually distinct from the worked mute. The
   2026-08-10 report was diagnosed as a visual collision, not a false worked state; implementation
   awaits an operator-chosen presentation.

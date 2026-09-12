@@ -74,6 +74,36 @@ not compete with the app-shell, notification-history, or UI-cohesion dossiers.
   for a new file (recommended); whether the logical-logbook UI is still wanted inside a file (files
   give isolation and portability, logbooks give callsign identity — both, files first). Its own
   dossier and an ADR when selected; W-0013 carries the datastore-swap pointer.
+- **Cap Band Activity's enrichment lookup concurrency (inbox 2026-09-11 follow-up (b); written up
+  2026-09-12; not selected):** the incident: two SPA tabs held six event streams (log and rig per tab,
+  the FT8 stream, the Map view's own second log stream), which is the browsers' default of six
+  persistent HTTP/1.1 connections per host (the daemon serves plain HTTP, so no HTTP/2), and every
+  ordinary request queued behind them — inference from the incident, with instant recovery once a tab
+  closed. Today `ft8Enrich.svelte.ts` fires TWO requests the moment a callsign is first seen on a
+  band under a profile — `GET /v1/enrich/callsign` (a country-cache hit is local; a station-cache miss
+  goes upstream to hamnut or QRZ, over a second each in the 2026-09-11 log) and the worked-before
+  `GET /v1/contest-dupe` (a local read) — deduplicated per key but with no queue and no limit, so a
+  busy FT4 slot with fifteen new calls fires thirty requests at once and occupies whatever connections
+  the streams left. The change, SPA-only: a scheduler in that module with at most N lookups in
+  flight; newest slot first, stations calling us or listed as answerers ahead of plain CQ rows, and a
+  lookup for a row that has scrolled off unheard is dropped; the pending queue is aborted when the FT
+  view closes, the profile switches or the tab closes (the route already honours the browser's abort
+  signal); the worked-before check stays outside the budget (cheap, and it drives the grey-out); the
+  Phone/CW card's own Tab-out lookup never routes through the limiter. Operator-observable acceptance:
+  during a busy slot an operator action (answer, work, map, count) is not delayed by decoration; the
+  daemon access log shows no more than N concurrent enrich requests from the tab; flags fill for the
+  current slot before older ones; no enrich request lands after the FT stream closed; the grey-out
+  still appears within the slot. Nearest confusable outcomes: a cap that also throttles the
+  worked-before check; a queue that never drops, so stale rows still consume budget minutes later;
+  lookups continuing after the view closed; the logging card's lookup queued behind decoration.
+  Decisions for the operator: N (suggested 2); the queue cap before old entries drop; whether
+  answerers jump the queue. Tests on a fake enricher with controllable promises in the module's
+  existing test file: never more than N in flight, the order, abort on close. Alternative, larger:
+  the daemon stamps the cached country onto each decode line as it publishes the slot (cache read
+  only, never upstream) so Band Activity makes no per-decode request and only misses are warmed in
+  the background — a decode-frame contract change. Neither raises the connection budget: with the
+  Map reuse (follow-up (a), ADR 0079) a second tab still leaves one spare connection, so one tab
+  stands until HTTP/2 over TLS (follow-up (c), to verify).
 - **Maps and tables:** dogfood-validate shipped map catch-up/zoom behavior; decide solar-time overlay
   versus a world-time widget, map band-source policy, and session column resizing/sorting before
   implementation. The whole-log Dashboard map remains separate from the shipped time-window map.
