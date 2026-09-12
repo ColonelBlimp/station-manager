@@ -80,11 +80,14 @@ single-flight keying, guaranteed stop, and operator-initiated session boundaries
   and the Session panel can count in-window repeats. Nearest confusable outcomes: a window that greys
   a pre-contest contact as a dupe; an auto run that skips a partner asking for the repair; a repeat
   refused rather than informed; a stamp applied to a non-contest QSO logged during the window (the
-  operator declares the window, so that is by their choice). Decisions for the operator: how the
-  window is declared — the tab's session start automatically, or an explicit contest mode with id
-  and start/end (recommended: explicit, since the session is per tab and resets on a new tab);
-  whether auto runs skip in-window repeats (recommended: yes, only inside a declared window); whether
-  the lifetime grey-out stays outside a window (recommended: yes). Sibling: the continent preference
+  operator declares the window, so that is by their choice). Ruled 2026-09-12: an explicit contest mode
+  with an id and a start/end window, not the tab's session start — the id gives the log a historical
+  perspective (contests stay queryable by `CONTEST_ID` afterwards, as ADR 0049 anticipated), and the
+  Logbook view gains a contest filter when this ships; the id is the ADIF Contest ID enumeration value
+  where one exists and a custom string otherwise (the enumeration is recommended, not exclusive — my
+  reading of ADIF 3.1.5, to verify at build time). Still open: whether auto runs skip in-window repeats
+  (recommended: yes, only inside a declared window); whether the lifetime grey-out stays outside a
+  window (recommended: yes). Sibling: the continent preference
   entry above shares the answerer-annotation plumbing.
 - **Band Activity defect:** stale decode fading must be visually distinct from the worked mute. The
   2026-08-10 report was diagnosed as a visual collision, not a false worked state; implementation
