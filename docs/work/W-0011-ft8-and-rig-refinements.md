@@ -28,7 +28,45 @@ single-flight keying, guaranteed stop, and operator-initiated session boundaries
   value lives (per session, browser-remembered — recommended — or an `ft8.tx` default like
   `caller_answer_mode`); presets versus free entry; a mid-run change means restarting the run.
   Free-form messages such as "TNX 73 GL" are a separate, larger design: a go-ft8 free-text encoder
-  plus a decision on which rung carries it.
+  plus a decision on which rung carries it. Use case named 2026-09-12: "CQ AF 7Q5MLV KH78" to thin a
+  rest-of-the-world pile-up in the Africa FT4 DX Contest — a convention other operators may or may not
+  honour, pairing with the continent-preference entry below; not available for the 2026-09-12 contest.
+  UI proposed 2026-09-12 (operator's placement, not yet ruled): the modifier is typed INTO the ladder's CQ
+  rung — `buildLadder` composes that rung client-side from the operator's call and grid
+  (`ft8Ladder.ts`), so the idle rung renders "CQ [ ] 7Q5MLV KH78" with a four-character token field
+  between CQ and the call: uppercase, letters (one to four) or three digits, validated live by the
+  protocol rule with the daemon the authority, a datalist of presets (DX, AF, EU, NA, SA, AS, OC, TEST,
+  POTA), blank = plain CQ, remembered in localStorage, and inert to the FT view's shortcuts while
+  focused. Read-only while a session is active: the sequencer repeats one string, so a change applies
+  at the next Call CQ (v1); a live change mid-run needs a daemon setter that swaps the CQ text under
+  the sequencer lock at the next slot evaluation after re-validating the encode (v2, only if the
+  operator wants it without losing the run's answerer list). Once a run is calling, the rung shows the
+  daemon's `next_message` rather than the client-composed text, so the ladder reads exactly what goes
+  on air. The control bar keeps only the CQ-slot parity beside Call CQ. Nearest confusable outcomes: a
+  rung that shows a modifier the running CQ is not sending; a field that swallows the view's keyboard
+  shortcuts; a lowercase or five-character token accepted client-side and refused by the daemon at
+  start. Refined by the operator 2026-09-12: editing is behind an explicit enable on the rung (a
+  "custom CQ" toggle); disabled means the standard format, "CQ <call> <grid>", with no field shown,
+  and the rung's text is the message either way. Ruled 2026-09-12: the enable is per
+  session — a reload or a new tab returns the rung to the standard format, the token itself remembered
+  so re-enabling restores it — so a contest-day "CQ AF" never leaks into an ordinary session
+  unnoticed; a remembered enable can be revisited if there is pressure for it later.
+  Validation (asked 2026-09-12): only the CQ rung has operator-editable content, and only its one token;
+  every other rung — grid answer, report, R-report, RR73, 73 — is a type-1 message whose fields the
+  protocol fixes (two callsigns, then a 4-character grid, a report in −30…+49 with the R flag, or one of
+  RRR/RR73/73), and free text (type 0.0, 13 characters from a 42-symbol alphabet) is neither in the
+  ladder nor in the encoder. The CQ rung's grammar: `CQ` [token] <standard call>[/P|/R] [grid4];
+  the token is exactly three digits (000–999) or one to four letters A–Z, uppercase, nothing mixed, no
+  punctuation (`pack28` in go-ft8 v0.9.0 `ft8/pack.go`; client mirror `^([A-Z]{1,4}|[0-9]{3})$` after
+  trim and uppercase); `DE` and `QRZ` are the other legal first tokens and could be offered later; a
+  compound or nonstandard own call (type 4) can carry neither a token nor a grid. The daemon is the
+  authority through the existing `EncodeStandardMessage` round trip in `StartCallCq`, which rejects
+  anything the packer refuses before the session commits. Sources: the QEX July/August 2020 paper
+  (Franke, Somerville, Taylor, "The FT4 and FT8 Communication Protocols") named as the spec source in
+  `docs/research-pipeline.md` and ADR 0021, not checked into the repository; the WSJT-X User Guide's
+  message-format section for the operator-facing rules; go-ft8's README type table and packer source
+  for what we ship. Gap: `docs/ft8.md` has no message-format section — add one in the same change as
+  this feature.
 - **Contest continent preference for answerer selection (operator idea, 2026-09-12; not selected):**
   the operator's concrete problem: under an auto mode a rest-of-the-world pile-up is worked first-come or
   strongest-first and the 6-point African callers starve behind it. Raised for the Africa FT4 DX Contest
