@@ -191,6 +191,17 @@ suffix, DATA-L and DATA-U both labelled FT4 during the FT4 run, the closed contr
 `RigPanel.svelte.test.ts` for every row above, each with a reversion proof; no daemon change; deploy
 with `task deploy:local:dev` when the operator directs.
 
+**Built 2026-09-13** (`RigPanel.svelte`, `rig.svelte.ts`): `ftReadout = ftMode set && (CAT not live ||
+ft8_mode literal configured)` renders a `role="status"` readout in place of the select — CAT live on the
+literal: "DATA-U · FT4" from the VIEW's label (never the mapping's FT8 while FT4 is open); another literal:
+the literal plus "not the FT4 data mode (DATA-U) — pick the band to set it" on an amber border; CAT off or
+lost: the profile name; `ft8_mode` "" keeps the live selector. The configured literal became `$state` so
+config landing after mount flips the selector into the readout. Tests: AC1–AC5 rows plus the late-config
+case in `RigPanel.svelte.test.ts`; the same-band pin in `rig.svelte.test.ts` (`ft8SelectBand` on the band
+already selected still writes set_freq then set_mode); `ambientPanels.test.ts` FT8/CAT-off case updated to
+the readout. Reversion proof: component change stashed, AC1/AC2/AC4 and the late-config test fail. Frontend
+gates: lint, Prettier, svelte-check, full Vitest. Not yet deployed (one deploy with the W-0011 change).
+
 **Follow-on, awaiting rulings (Phone/CW selector tidy, a separate slice):** the list is the rigdef's
 MAINMODE table in CAT-code order (`cat.RigModes`) and `modeOptionLabel` suffixes every literal whose
 mapped name differs. Open choices: (1) suffix only on the data literal (recommended) or only when

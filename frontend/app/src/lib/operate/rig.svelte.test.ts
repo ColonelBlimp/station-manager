@@ -946,6 +946,26 @@ describe('ft8SelectBand — FT8 watering-hole band pick', () => {
         expect(sent).toEqual([{ op: 'set_freq', value: '7074000' }]);
     });
 
+    it('the band already selected is not a no-op: set_freq then set_mode go out again (W-0012 AC2)', async () => {
+        setFt8Frequencies({ '40m': 7074000 });
+        setFt8Mode('DATA-U');
+        setRigCaps({ ops: ['set_freq', 'set_mode'], tune: false, rigModes: ['USB', 'DATA-U'] });
+        catLink.onRigState({ vfoA: 7074000, selectedVfo: 'A', mode: 'USB' }); // already on 40m, wrong mode
+        expect(rig.band).toBe('40m');
+        const sent: { op: string; value?: string | number }[] = [];
+        setCommandSender((op, value) => {
+            sent.push({ op, value });
+            return Promise.resolve({ kind: 'accepted' });
+        });
+
+        const r = await ft8SelectBand('40m');
+        expect(r.status).toBe('accepted');
+        expect(sent).toEqual([
+            { op: 'set_freq', value: '7074000' },
+            { op: 'set_mode', value: 'DATA-U' },
+        ]);
+    });
+
     it('errors when the band has no configured FT8 frequency', async () => {
         setFt8Frequencies({ '20m': 14074000 });
         const r = await ft8SelectBand('6m');

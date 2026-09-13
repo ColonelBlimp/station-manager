@@ -16,6 +16,7 @@ import {
     setFtProfileLabel,
     setFt4Frequencies,
     setFt8Frequencies,
+    setFt8Mode,
 } from './rig.svelte';
 import { toasts } from '../ui/toasts.svelte';
 
@@ -222,5 +223,114 @@ describe('band buttons and the FT dial tables', () => {
         for (const band of ['80m', '17m', '20m']) {
             expect(screen.getByRole('button', { name: band })).toBeEnabled();
         }
+    });
+});
+
+// W-0012 slice "Rig Control mode control in the FT views" (operator rulings
+// 2026-09-12): in the FT8/FT4 views the mode is owned by the profile — the
+// bridge asserts the per-rig ft8_mode literal before every keyed rung — so a
+// live selector there can only fight it. Mode becomes a READOUT in those views
+// whenever a data literal is configured; Phone/CW is untouched (AC5).
+describe('FT views: Mode is a readout owned by the profile', () => {
+    const liveFt4 = () => {
+        resetCatLink();
+        setModeMappings({
+            USB: { mode: 'SSB', submode: 'USB' },
+            'DATA-U': { mode: 'FT8', submode: '' },
+        });
+        setRigCaps({
+            ops: ['set_mode', 'set_band', 'set_freq'],
+            tune: false,
+            rigModes: ['USB', 'DATA-U'],
+        });
+        setFt4Frequencies({ '20m': 14_080_000, '40m': 7_047_500 });
+        setFt8Mode('DATA-U');
+        rig.cat = 'connected';
+    };
+
+    it('AC1: the rig on the configured data literal — the readout names the literal AND the open profile, in full, with nothing to open', () => {
+        liveFt4();
+        catLink.onRigState({ vfoA: 14_080_000, mode: 'DATA-U' });
+        setFtProfileLabel(''); // the confusable: a readout naming the mapping's FT8 while FT4 is open
+        render(RigPanel, { props: { requiresCat: true, modeLabel: 'FT4', ftMode: 'ft4' } });
+
+        expect(screen.getByRole('status', { name: 'Mode' })).toHaveTextContent('DATA-U · FT4');
+        expect(screen.queryByRole('combobox')).toBeNull();
+    });
+
+    it('AC2: the rig on another literal — the readout shows it, says it is not the profile mode, and the current band button still re-asserts', async () => {
+        liveFt4();
+        catLink.onRigState({ vfoA: 14_080_000, mode: 'USB' });
+        const picked: string[] = [];
+        render(RigPanel, {
+            props: {
+                requiresCat: true,
+                modeLabel: 'FT4',
+                ftMode: 'ft4',
+                pickBand: (band: string) => {
+                    picked.push(band);
+                    return Promise.resolve({ status: 'accepted' });
+                },
+            },
+        });
+
+        const readout = screen.getByRole('status', { name: 'Mode' });
+        expect(readout).toHaveTextContent('USB');
+        expect(readout).toHaveTextContent(/not the FT4 data mode/);
+        expect(readout).toHaveTextContent('DATA-U');
+        expect(screen.queryByRole('combobox')).toBeNull();
+
+        // The band already selected is not a no-op: its button is live and the
+        // pick re-asserts dial + data mode (ft8SelectBand always writes).
+        const current = screen.getByRole('button', { name: '20m' });
+        expect(current).toBeEnabled();
+        await fireEvent.click(current);
+        expect(picked).toEqual(['20m']);
+    });
+
+    it('AC3: ft8_mode configured as "" (leave the mode alone) — the FT view keeps the live selector', () => {
+        liveFt4();
+        setFt8Mode('');
+        catLink.onRigState({ vfoA: 14_080_000, mode: 'DATA-U' });
+        render(RigPanel, { props: { requiresCat: true, modeLabel: 'FT4', ftMode: 'ft4' } });
+
+        expect(screen.getByRole('combobox')).toHaveValue('DATA-U');
+        expect(screen.queryByRole('status', { name: 'Mode' })).toBeNull();
+    });
+
+    it('AC4: CAT off in an FT view — the readout names the profile and the manual mode is untouched', () => {
+        liveFt4();
+        rig.cat = 'off';
+        rig.mode = 'USB'; // the operator's manual pick from Phone/CW
+        render(RigPanel, { props: { requiresCat: true, modeLabel: 'FT4', ftMode: 'ft4' } });
+
+        const readout = screen.getByRole('status', { name: 'Mode' });
+        expect(readout).toHaveTextContent('FT4');
+        expect(screen.queryByRole('combobox')).toBeNull();
+        expect(rig.mode).toBe('USB');
+    });
+
+    it('AC5: Phone/CW keeps its live selector under the same rig state', () => {
+        liveFt4();
+        catLink.onRigState({ vfoA: 14_080_000, mode: 'DATA-U' });
+        setFtProfileLabel('FT4'); // a label left over from an FT4 session must not leak a readout
+        render(RigPanel, { props: {} });
+
+        expect(screen.getByRole('combobox')).toHaveValue('DATA-U');
+        expect(screen.queryByRole('status', { name: 'Mode' })).toBeNull();
+    });
+
+    it('a data literal that arrives after the panel mounted turns the selector into the readout (config lands after boot)', async () => {
+        liveFt4();
+        setFt8Mode('');
+        catLink.onRigState({ vfoA: 14_080_000, mode: 'DATA-U' });
+        render(RigPanel, { props: { requiresCat: true, modeLabel: 'FT4', ftMode: 'ft4' } });
+        expect(screen.getByRole('combobox')).toBeInTheDocument();
+
+        setFt8Mode('DATA-U');
+        await vi.waitFor(() =>
+            expect(screen.getByRole('status', { name: 'Mode' })).toHaveTextContent('DATA-U · FT4')
+        );
+        expect(screen.queryByRole('combobox')).toBeNull();
     });
 });

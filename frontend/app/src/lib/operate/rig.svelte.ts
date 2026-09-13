@@ -753,7 +753,9 @@ export function ftDialBands(mode: FtMode): string[] {
 // overridable per rig: "DATA-U" on the FTdx10/FT-710, "USB-D" on the IC-7300).
 // Injected once at boot beside the frequencies. Empty means the operator chose
 // "leave current mode", or no driver is configured — either way, don't touch it.
-let ft8Mode = '';
+// $state: the FT views' Mode readout is gated on it (W-0012), and config can
+// land after the panel mounted, like the dial tables above.
+let ft8Mode = $state('');
 
 export function setFt8Mode(m: string): void {
     ft8Mode = m;

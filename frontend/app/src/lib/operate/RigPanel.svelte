@@ -18,6 +18,7 @@
         type RigWriteResult,
         modeOptionLabel,
         ftFrequencyFor,
+        ft8ModeLiteral,
         type FtMode,
     } from './rig.svelte';
     import { hideTile } from './layout.svelte';
@@ -93,6 +94,23 @@
             ? rigCaps.rigModes
             : [...rigCaps.rigModes, rig.modeLiteral]
     );
+
+    // FT views (W-0012, operator rulings 2026-09-12): the mode is OWNED by the
+    // profile — the bridge asserts the per-rig ft8_mode literal before every
+    // keyed rung and restores the prior mode after unkey, and every FT band
+    // button asserts dial then data mode — so a live selector here can only
+    // fight it. Mode is a READOUT in the FT views: with CAT live and a data
+    // literal configured it shows the literal with the OPEN profile's name
+    // ("DATA-U · FT4" — the view's own label, never the mapping's FT8 while FT4
+    // is open); a rig reporting any other literal is shown as such with a note,
+    // and the current band's button re-asserts dial + mode (ft8SelectBand
+    // always writes). CAT off/lost it names the profile: the logged mode of an
+    // FT contact comes from the daemon's profile, not this card. ft8_mode
+    // configured as "" (leave the mode alone) keeps the live selector — that
+    // configuration has no other in-view way to set the mode. Phone/CW
+    // (no ftMode) is untouched.
+    const ftReadout = $derived(ftMode !== undefined && (!locked || ft8ModeLiteral() !== ''));
+    const ftOnDataMode = $derived(locked && rig.modeLiteral === ft8ModeLiteral());
 
     // Band follows the frequency (IARU allocations) so the two can't disagree
     // on the logged QSO; the select stays usable for an out-of-band/odd value.
@@ -240,7 +258,34 @@
 
     <div class="flex items-end gap-x-4">
         <div>
-            {#if locked}
+            {#if ftReadout}
+                <span class="block text-sm font-medium text-ink">Mode</span>
+                <div
+                    role="status"
+                    aria-label="Mode"
+                    class="flex min-h-9 flex-col justify-center rounded-md border px-2 py-1 text-sm text-ink {locked &&
+                    !ftOnDataMode
+                        ? 'border-amber-500'
+                        : 'border-line'}"
+                    title={!locked
+                        ? `The ${modeLabel} profile sets the rig's data mode once CAT connects`
+                        : ftOnDataMode
+                          ? `Set by the ${modeLabel} profile`
+                          : `The rig is not on the ${modeLabel} data mode`}
+                >
+                    {#if !locked}
+                        <span>{modeLabel}</span>
+                    {:else if ftOnDataMode}
+                        <span>{rig.modeLiteral} · {modeLabel}</span>
+                    {:else}
+                        <span>{rig.modeLiteral === '' ? '—' : rig.modeLiteral}</span>
+                        <span class="text-xs text-amber-700">
+                            not the {modeLabel} data mode ({ft8ModeLiteral()}) — pick the band to
+                            set it
+                        </span>
+                    {/if}
+                </div>
+            {:else if locked}
                 <!-- Live: Option A — the rig's OWN mode literals; a pick sends
                      set_mode with the literal (one-way value; setMode is
                      optimistic so there's no snap-back on the push). -->

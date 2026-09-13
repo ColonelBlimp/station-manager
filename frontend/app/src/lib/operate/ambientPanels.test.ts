@@ -213,7 +213,10 @@ describe('a shared host is not shared behaviour', () => {
         render(Operate);
         flushSync();
 
-        const mode = screen.getByLabelText<HTMLSelectElement>('Mode');
-        expect(mode.disabled).toBe(true);
+        // W-0012 (2026-09-12 rulings): in the FT views Mode is a readout owned
+        // by the profile — no selector to disable; CAT off, it names the profile.
+        expect(screen.queryByRole('combobox', { name: 'Mode' })).toBeNull();
+        expect(screen.getByRole('status', { name: 'Mode' })).toHaveTextContent('FT8');
+        expect(screen.getByRole('button', { name: '20m' })).toBeDisabled();
     });
 });
