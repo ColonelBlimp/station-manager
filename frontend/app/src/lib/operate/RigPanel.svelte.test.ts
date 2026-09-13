@@ -288,6 +288,25 @@ describe('FT views: Mode is a readout owned by the profile', () => {
         expect(picked).toEqual(['20m']);
     });
 
+    // Inbox 2026-09-13: during the daemon's own tune carrier (RTTY-U, restored on
+    // stop) the readout said "not the FT8 data mode — pick the band" — true, but
+    // the wrong advice for that moment (a band pick would write freq + mode under
+    // a keyed carrier). The tune is named as such, with no hint and no alarm tint.
+    it('AC2b: while the tune carrier is keyed, the readout names the tune, not a mismatch', () => {
+        liveFt4();
+        catLink.onRigState({ vfoA: 14_080_000, mode: 'RTTY-U' });
+        rig.tuneActive = true;
+        render(RigPanel, { props: { requiresCat: true, modeLabel: 'FT4', ftMode: 'ft4' } });
+
+        const readout = screen.getByRole('status', { name: 'Mode' });
+        expect(readout).toHaveTextContent('RTTY-U');
+        expect(readout).toHaveTextContent(/tune carrier/);
+        expect(readout).toHaveTextContent('DATA-U'); // what comes back when it stops
+        expect(readout).not.toHaveTextContent(/pick the band/);
+        expect(readout).not.toHaveTextContent(/not the FT4 data mode/);
+        expect(readout.className).not.toContain('border-amber-500');
+    });
+
     it('AC3: ft8_mode configured as "" (leave the mode alone) — the FT view keeps the live selector', () => {
         liveFt4();
         setFt8Mode('');

@@ -111,6 +111,11 @@
     // (no ftMode) is untouched.
     const ftReadout = $derived(ftMode !== undefined && (!locked || ft8ModeLiteral() !== ''));
     const ftOnDataMode = $derived(locked && rig.modeLiteral === ft8ModeLiteral());
+    // The daemon's own tune carrier keys RTTY and restores the data mode when it
+    // stops (ADR 0027): while it is up the rig reports RTTY-U, which is not a
+    // mismatch to act on — a band pick then would write freq + mode under a
+    // keyed carrier (inbox 2026-09-13). Named as the tune, no hint, no tint.
+    const ftTuning = $derived(locked && rig.tuneActive);
 
     // Band follows the frequency (IARU allocations) so the two can't disagree
     // on the logged QSO; the select stays usable for an out-of-band/odd value.
@@ -264,17 +269,25 @@
                     role="status"
                     aria-label="Mode"
                     class="flex min-h-9 flex-col justify-center rounded-md border px-2 py-1 text-sm text-ink {locked &&
-                    !ftOnDataMode
+                    !ftOnDataMode &&
+                    !ftTuning
                         ? 'border-amber-500'
                         : 'border-line'}"
                     title={!locked
                         ? `The ${modeLabel} profile sets the rig's data mode once CAT connects`
-                        : ftOnDataMode
-                          ? `Set by the ${modeLabel} profile`
-                          : `The rig is not on the ${modeLabel} data mode`}
+                        : ftTuning
+                          ? `The tune carrier keys ${rig.modeLiteral}; ${ft8ModeLiteral()} returns when it stops`
+                          : ftOnDataMode
+                            ? `Set by the ${modeLabel} profile`
+                            : `The rig is not on the ${modeLabel} data mode`}
                 >
                     {#if !locked}
                         <span>{modeLabel}</span>
+                    {:else if ftTuning}
+                        <span>{rig.modeLiteral === '' ? '—' : rig.modeLiteral} · tune carrier</span>
+                        <span class="text-xs text-muted">
+                            {ft8ModeLiteral()} returns when the tune stops
+                        </span>
                     {:else if ftOnDataMode}
                         <span>{rig.modeLiteral} · {modeLabel}</span>
                     {:else}
