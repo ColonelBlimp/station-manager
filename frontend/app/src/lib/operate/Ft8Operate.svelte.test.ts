@@ -376,6 +376,20 @@ describe('Ft8Operate custom CQ', () => {
 // for the run; the daemon's Next intent, relabelled 2026-09-13 because the run
 // moves on by itself and what the button adds is memory). Never auto-answered,
 // never auto-skipped.
+// Operator ruling 2026-09-13: the role label lives on the header bar only; the
+// copy under the worked call was a second "Calling CQ" a few lines apart.
+describe('Ft8Operate role label appears once', () => {
+    it('renders the role on the header bar and not again under the call', () => {
+        armReady();
+        ft8State.qso.active = true;
+        ft8State.qso.role = 'caller';
+        ft8State.qso.theirCall = 'K1ABC';
+        render(Ft8Operate);
+        flushSync();
+        expect(screen.getAllByText('Calling CQ')).toHaveLength(1);
+    });
+});
+
 describe('Ft8Operate repeat hold', () => {
     const hold = () => {
         ft8State.qso.active = false;

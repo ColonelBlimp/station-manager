@@ -117,16 +117,21 @@ describe('RunSurface state line — pick mode (the session default)', () => {
 });
 
 describe('RunSurface state line — auto modes', () => {
-    it('idle, no run: the mode explains what the next contact does, with the order word', () => {
+    // Operator ruling 2026-09-13: the idle auto-mode line ("Your next contact
+    // starts a run — callers worked …") is retired — the Answer mode selector
+    // already says it and the row was wasted space. The row itself stays (dot +
+    // held height) so the fixed structure never reflows.
+    it('idle, no run: no state text, but the row and its dot remain', () => {
         ft8State.answerMode = 'auto_first';
         render(RunSurface);
-        expect(stateLine()).toBe('Your next contact starts a run — callers worked first come');
+        expect(stateLine()).toBe('');
+        expect(document.querySelector('[data-run-state]')).not.toBeNull();
     });
 
-    it('auto_strongest carries its own order word — the two modes must read differently', () => {
+    it('auto_strongest idle reads the same empty line — the order word lives on the selector', () => {
         ft8State.answerMode = 'auto_strongest';
         render(RunSurface);
-        expect(stateLine()).toBe('Your next contact starts a run — callers worked strongest first');
+        expect(stateLine()).toBe('');
     });
 
     it('armed and idle: run live, waiting', () => {

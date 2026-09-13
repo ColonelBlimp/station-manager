@@ -52,7 +52,11 @@
         if (qso.autoWorkArmed && qso.active)
             return `Run live — working ${qso.theirCall} (${orderWord})`;
         if (qso.autoWorkArmed) return `Run live — waiting for callers (${orderWord})`;
-        return `Your next contact starts a run — callers worked ${orderWord}`;
+        // auto · no run: no text (operator ruling 2026-09-13 — the ADR 0067 line
+        // "Your next contact starts a run — callers worked …" repeated what the
+        // Answer mode selector above already says and cost a row of space). The
+        // row keeps its height (min-h below) so the surface never reflows.
+        return '';
     });
 
     async function onStop(): Promise<void> {
@@ -95,7 +99,7 @@
         }}
     >
         <span class="size-1.5 shrink-0 rounded-full {dot()}"></span>
-        <span>{line()}</span>
+        <span class="min-h-4">{line()}</span>
     </button>
     <div class="mt-1 h-5">
         {#if pickLive && qso.drainPaused}

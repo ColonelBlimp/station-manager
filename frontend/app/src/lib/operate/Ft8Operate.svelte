@@ -376,10 +376,12 @@
             </div>
             <div class="min-w-0 flex-1">
                 {#if qso.active && qso.theirCall !== ''}
+                    <!-- The role ("Calling CQ", "Working a caller") is on the header bar
+                         only — a second copy under the call was wasted space
+                         (operator ruling 2026-09-13). -->
                     <div class="font-mono text-lg font-extrabold tracking-wide text-ink">
                         {qso.theirCall}
                     </div>
-                    <div class="mt-0.5 text-xs text-muted">{roleLabel}</div>
                 {:else}
                     <div class="text-sm text-muted">No active contact</div>
                 {/if}

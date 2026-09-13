@@ -160,6 +160,17 @@ not compete with the app-shell, notification-history, or UI-cohesion dossiers.
   from the canonical install guide; keep beginner help, profiles, and `default_logbook.id` wiring
   deferred until their consuming workflow exists.
 
+## Built follow-up — run surface idle line retired (operator ruling 2026-09-13, on air)
+
+ADR 0067's ratified table gave the auto-mode idle state the line "Your next contact starts a run —
+callers worked first come / strongest first". The operator, operating on the deployed build, ruled it
+wasted space: the Answer mode selector in the row above already states the mode. The idle auto state now
+renders no text; the row keeps its dot and a held height so the fixed three-row structure never reflows.
+Every other ratified string is unchanged. `RunSurface.svelte`, tests updated.
+The same session: the role label ("Calling CQ", "Working a caller") under the worked call in the
+enrichment column duplicated the one on the panel's header bar a few lines above — removed; the header
+bar keeps it (`Ft8Operate.svelte`, test pins a single occurrence).
+
 ## Built follow-up — Phone/CW draft kept across a mode switch, age shown (inbox 2026-09-12, ruled and built 2026-09-13)
 
 Ruling: keep the draft across mode switches and show its age; preserve the original Time On; never
