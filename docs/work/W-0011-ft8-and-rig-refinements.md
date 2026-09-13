@@ -219,6 +219,18 @@ single-flight keying, guaranteed stop, and operator-initiated session boundaries
     frames are ~1 ms at 38,400 baud, so port speed alone is unlikely; the rig's own processing order — whether
     its firmware acts on `TX0;` before answering a `TX;` that arrives right behind it — is exactly what
     separates (A) from (B), and the millisecond stamps are what will show it. Not yet deployed.
+  - *Codex review of `02823278`, P2 fixed 2026-09-13:* the re-send worker wrote outside `keyMu`, so a worker that
+    passed its checks and was descheduled could write its stop AFTER a later key (cutting the new carrier), and a
+    delayed write failure could alarm and start a retry burst against a later cycle or client. Fix: the worker
+    publishes `txReassertDone` while in flight and both key paths (`KeyFt8Tx`, `StartTune`) wait on it under
+    `keyMu` before writing tx_on (`awaitReassertedStop`, bounded by the serial write watchdog, free when nothing
+    is in flight); every worker result is gated on the confirm generation and client it was started for
+    (`sameCycle`), so a stale failure is logged and discarded. Tests: a gated client holds the re-sent stop
+    mid-write while the rig confirms RX — `StartTune` must not write TX1 until the stop lands and the writes
+    must be ordered stop → key; a stale failure must raise no alarm, event or burst. Reversion proof: fix
+    stashed, both fail at those assertions. The keyMu exception itself is accepted by operator ruling
+    2026-09-13: the retry is an idempotent stop, bound to the current client, and avoids deadlocking the
+    confirmation path.
 - **Safety-adjacent deferred evidence:** rig TOT surfacing/clamp, FT-710 meter-selector verification,
   meter-tail semantics, output-sink logging, playback reopen after a reproduced collapse, and
   persistent TX-state escalation only after an operator duration threshold.

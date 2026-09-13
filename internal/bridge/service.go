@@ -473,6 +473,13 @@ type Service struct {
 	// "1" in the same cycle, or the cycle's original confirm timeout, alarms as
 	// before. Reset when a cycle begins and when the rig confirms idle.
 	txStopReasserted bool
+	// txReassertDone (mu-guarded) is non-nil while a pre-alarm re-sent stop is
+	// in flight on its tracked goroutine and is closed when that write has
+	// landed (or failed). The key paths wait on it under keyMu before writing
+	// tx_on, so a stop that passed its checks and was then descheduled cannot
+	// overtake a later key and cut the new carrier (02823278 review P2). The
+	// wait is bounded by the serial write watchdog like every other write.
+	txReassertDone chan struct{}
 
 	// txAlarmProbeGen gates the alarm re-probe loop the way txConfirmGen gates
 	// the confirm timeout: the loop reads it before every probe and exits when

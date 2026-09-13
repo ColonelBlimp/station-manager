@@ -397,11 +397,13 @@ func (s *Service) reassertStopBeforeAlarm() bool {
 
 	s.mu.Lock()
 	cl := s.activeClient
+	gen := s.txConfirmGen // the cycle this re-send answers for
 	eligible := !s.txAlarmActive && !s.txStopReasserted && !s.stopped &&
 		s.runCtx != nil && cl != nil
 	if eligible {
 		s.txStopReasserted = true
-		s.wg.Add(1) // under s.mu with the stopped check, like startAlarmProbes
+		s.txReassertDone = make(chan struct{}) // key paths wait on this
+		s.wg.Add(1)                            // under s.mu with the stopped check, like startAlarmProbes
 	}
 	s.mu.Unlock()
 	if !eligible {
@@ -410,14 +412,36 @@ func (s *Service) reassertStopBeforeAlarm() bool {
 	s.logger.WarnWith().
 		Msg("bridge: rig reports CAT TX still keyed after unkey — re-sending the stop and asking again before alarming")
 
-	body := func() {
+	// sameCycle: this worker's evidence belongs to the cycle (generation) it
+	// was started for, on the client it answers for. confirmTxIdle and a new
+	// cycle both bump the generation, so a result landing after either is
+	// stale and must neither alarm nor start a retry burst against whatever
+	// client is active now (02823278 review P2).
+	sameCycle := func() bool {
 		s.mu.Lock()
-		current := s.activeClient == cl && s.txUncertain && !s.txAlarmActive
-		s.mu.Unlock()
-		if !current {
+		defer s.mu.Unlock()
+		return s.activeClient == cl && s.txConfirmGen == gen && s.txUncertain && !s.txAlarmActive
+	}
+	body := func() {
+		defer func() {
+			// Release any key waiting on this stop — on every exit, including
+			// a panic unwinding through here.
+			s.mu.Lock()
+			if s.txReassertDone != nil {
+				close(s.txReassertDone)
+				s.txReassertDone = nil
+			}
+			s.mu.Unlock()
+		}()
+		if !sameCycle() {
 			return // reconnected, confirmed or alarmed meanwhile — nothing to re-send
 		}
 		if werr := s.writeKeyedLine(context.Background(), def, cl, off, "still-keyed re-unkey"); werr != nil {
+			if !sameCycle() {
+				s.logger.InfoWith().Err(werr).
+					Msg("bridge: re-sent stop failed after its cycle had already resolved — result discarded")
+				return
+			}
 			s.logger.ErrorWith().Err(werr).
 				Msg("bridge: re-sent stop could not be written — alarming now")
 			s.raiseTxAlarm(TxAlarmStillKeyed)
@@ -439,6 +463,28 @@ func (s *Service) reassertStopBeforeAlarm() bool {
 	safego.GoTrackedPreAdded("bridge.stillKeyedReassert", s.onPanic, body,
 		func() { s.raiseTxAlarm(TxAlarmStillKeyed) }, &s.wg)
 	return true
+}
+
+// awaitReassertedStop blocks a key path — the caller holds keyMu — until a
+// pre-alarm re-sent stop still in flight has landed or failed, so the stop
+// can never be written AFTER the key it would otherwise cut short. The
+// re-send runs outside keyMu by necessity (the release paths hold keyMu across
+// waitTxConfirm); this is the ordering guarantee it gives up in return, and
+// it costs a key nothing in the common case (no stop in flight → returns at
+// once). Bounded: the write is under the serial write watchdog.
+func (s *Service) awaitReassertedStop(ctx context.Context) error {
+	s.mu.Lock()
+	ch := s.txReassertDone
+	s.mu.Unlock()
+	if ch == nil {
+		return nil
+	}
+	select {
+	case <-ch:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // observeRigData is the deliberately weak liveness-fallback confirmation for a

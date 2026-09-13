@@ -2,7 +2,9 @@ package bridge
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -191,4 +193,124 @@ func TestStillKeyed_NoReassertWhileAlreadyAlarmed(t *testing.T) {
 		t.Fatal("a still-keyed answer while alarmed must leave the alarm standing")
 	}
 	waitFor(t, func() bool { return countUnkeys(fake) > before }, "no stop re-sent to a rig still keyed under a standing alarm")
+}
+
+// gatedStopClient holds the FIRST "TX0;" write open until gate closes, then
+// either fails it (failAfterGate) or lets it through. It forces the interleaving
+// from the 02823278 review: the reassert worker is mid-write while the rig's
+// RX answer lands and the next key starts.
+type gatedStopClient struct {
+	*fakeSerial
+	gate          chan struct{}
+	failAfterGate error
+	held          bool
+	returned      chan struct{} // closed once the held write has returned
+	releaseOnce   sync.Once
+	mu            sync.Mutex
+}
+
+// release opens the gate once; safe to call after the test already did.
+func (g *gatedStopClient) release() {
+	g.releaseOnce.Do(func() { close(g.gate) })
+}
+
+func (g *gatedStopClient) WriteCommandBytes(ctx context.Context, cmd []byte) error {
+	g.mu.Lock()
+	first := bytes.Equal(cmd, []byte("TX0;")) && !g.held
+	if first {
+		g.held = true
+	}
+	g.mu.Unlock()
+	if first {
+		<-g.gate
+		defer close(g.returned)
+		if g.failAfterGate != nil {
+			return g.failAfterGate
+		}
+	}
+	return g.fakeSerial.WriteCommandBytes(ctx, cmd)
+}
+
+func newGatedReassertService(t *testing.T, failAfterGate error) (*Service, *fakeSerial, *gatedStopClient) {
+	t.Helper()
+	s, fake := newAlarmProbeService(t, 1)
+	gated := &gatedStopClient{fakeSerial: fake, gate: make(chan struct{}), returned: make(chan struct{}), failAfterGate: failAfterGate}
+	// Registered AFTER newAlarmProbeService's cleanup, so it runs BEFORE that
+	// cleanup's wg.Wait (LIFO): a test that fails while the gate is still shut
+	// must not leave the worker blocked in its write and hang the suite.
+	t.Cleanup(func() { gated.release() })
+	s.mu.Lock()
+	s.activeClient = gated
+	s.lastMode = "USB"
+	s.lastPower = 100
+	s.tuneMaxDuration = time.Hour
+	s.tuneRestoreSettle = 5 * time.Millisecond
+	s.mu.Unlock()
+	def, _ := cat.Lookup("yaesu-ftdx10")
+	s.beginTxConfirm(def, gated)
+	s.observeTxStatus("1") // worker starts and blocks inside its TX0 write
+	waitFor(t, func() bool { gated.mu.Lock(); defer gated.mu.Unlock(); return gated.held },
+		"the re-sent stop never reached the client")
+	return s, fake, gated
+}
+
+// indexOfWrite finds the first write CONTAINING want: the tune key goes out as
+// one batched line ("MD09;PC020;TX1;"), so an exact match would miss it.
+func indexOfWrite(writes [][]byte, want string) int {
+	for i, w := range writes {
+		if bytes.Contains(w, []byte(want)) {
+			return i
+		}
+	}
+	return -1
+}
+
+// A key must not overtake a re-sent stop still in flight: the worker passed
+// its checks, the rig's RX answer then cleared uncertainty, the release
+// finished and a new key started — the stale TX0 would cut the new carrier.
+func TestStillKeyed_KeyWaitsForTheInFlightReassertedStop(t *testing.T) {
+	s, fake, gated := newGatedReassertService(t, nil)
+	s.observeTxStatus("0") // RX confirmed while the stop is still mid-write
+	if s.TxUncertain() {
+		t.Fatal("precondition: the RX answer must clear uncertainty")
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- s.StartTune(context.Background()) }()
+	time.Sleep(40 * time.Millisecond)
+	if indexOfWrite(fake.recordedWrites(), "TX1;") >= 0 {
+		t.Fatal("a key was written while the re-sent stop was still in flight — the stale TX0 would cut the new carrier")
+	}
+	gated.release()
+	if err := <-done; err != nil {
+		t.Fatalf("StartTune after the stop landed: %v", err)
+	}
+	writes := fake.recordedWrites()
+	stop, key := indexOfWrite(writes, "TX0;"), indexOfWrite(writes, "TX1;")
+	if stop < 0 || key < 0 || stop > key {
+		t.Fatalf("want the re-sent stop before the key, got writes %q", writes)
+	}
+}
+
+// A delayed failure of the re-sent stop belongs to the cycle that sent it: once
+// the rig has confirmed RX (or a new cycle began) it must not raise an alarm
+// or start a retry burst against whatever client is active now.
+func TestStillKeyed_StaleReassertFailureDoesNotAlarm(t *testing.T) {
+	s, fake, gated := newGatedReassertService(t, errors.New("port gone"))
+	ch, unsub := s.Subscribe()
+	defer unsub()
+	s.observeTxStatus("0") // cycle resolved before the write fails
+	gated.release()
+	<-gated.returned                  // the failed write has returned to the worker
+	time.Sleep(30 * time.Millisecond) // and the worker has had time to react to it
+
+	if s.TxAlarmActive() || s.TxUncertain() {
+		t.Fatal("a stale re-send failure alarmed a cycle the rig had already confirmed idle")
+	}
+	if got := drainTxAlarms(ch); len(got) != 0 {
+		t.Fatalf("alarm events from a stale re-send failure: %+v", got)
+	}
+	if n := countUnkeys(fake); n != 0 {
+		t.Fatalf("a stale re-send failure started a retry burst (%d stops written)", n)
+	}
 }

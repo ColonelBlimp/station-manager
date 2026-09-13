@@ -51,6 +51,11 @@ func (s *Service) KeyFt8Tx(ctx context.Context, mode string) error {
 	// whole key so a release that's still settling can't be raced by a new key.
 	s.keyMu.Lock()
 	defer s.keyMu.Unlock()
+	// A pre-alarm re-sent stop still in flight lands before this key goes out
+	// (txconfirm.go awaitReassertedStop) — otherwise it could cut the new carrier.
+	if err := s.awaitReassertedStop(ctx); err != nil {
+		return errors.New(errOp).WithErr(err).WithMsg("waiting for a re-sent stop still in flight")
+	}
 
 	def, ok := cat.Lookup(s.cfg.Cat.Driver)
 	if !ok {
