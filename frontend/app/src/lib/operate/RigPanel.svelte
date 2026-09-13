@@ -114,7 +114,11 @@
     // The daemon's own tune carrier keys RTTY and restores the data mode when it
     // stops (ADR 0027): while it is up the rig reports RTTY-U, which is not a
     // mismatch to act on — a band pick then would write freq + mode under a
-    // keyed carrier (inbox 2026-09-13). Named as the tune, no hint, no tint.
+    // keyed carrier (inbox 2026-09-13). Named as the tune, no hint, no tint. The
+    // restore target is the daemon's pre-tune snapshot, which the SPA does not
+    // see, so the note promises only that the prior mode returns — if that was
+    // not the data mode, the mismatch shows again once the tune stops (codex
+    // 13d95084 P2).
     const ftTuning = $derived(locked && rig.tuneActive);
 
     // Band follows the frequency (IARU allocations) so the two can't disagree
@@ -276,7 +280,7 @@
                     title={!locked
                         ? `The ${modeLabel} profile sets the rig's data mode once CAT connects`
                         : ftTuning
-                          ? `The tune carrier keys ${rig.modeLiteral}; ${ft8ModeLiteral()} returns when it stops`
+                          ? `The tune carrier keys ${rig.modeLiteral}; the mode from before the tune returns when it stops`
                           : ftOnDataMode
                             ? `Set by the ${modeLabel} profile`
                             : `The rig is not on the ${modeLabel} data mode`}
@@ -286,7 +290,7 @@
                     {:else if ftTuning}
                         <span>{rig.modeLiteral === '' ? '—' : rig.modeLiteral} · tune carrier</span>
                         <span class="text-xs text-muted">
-                            {ft8ModeLiteral()} returns when the tune stops
+                            the mode from before the tune returns when it stops
                         </span>
                     {:else if ftOnDataMode}
                         <span>{rig.modeLiteral} · {modeLabel}</span>

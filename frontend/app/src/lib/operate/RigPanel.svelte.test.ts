@@ -301,7 +301,10 @@ describe('FT views: Mode is a readout owned by the profile', () => {
         const readout = screen.getByRole('status', { name: 'Mode' });
         expect(readout).toHaveTextContent('RTTY-U');
         expect(readout).toHaveTextContent(/tune carrier/);
-        expect(readout).toHaveTextContent('DATA-U'); // what comes back when it stops
+        // The tune restores the daemon's PRE-TUNE snapshot, which the SPA cannot see:
+        // no promise of a specific mode, only that the prior one returns (codex P2).
+        expect(readout).toHaveTextContent(/mode from before the tune returns/);
+        expect(readout).not.toHaveTextContent(/DATA-U returns/);
         expect(readout).not.toHaveTextContent(/pick the band/);
         expect(readout).not.toHaveTextContent(/not the FT4 data mode/);
         expect(readout.className).not.toContain('border-amber-500');

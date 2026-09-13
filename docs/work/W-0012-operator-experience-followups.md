@@ -226,7 +226,7 @@ suffix, DATA-L and DATA-U both labelled FT4 during the FT4 run, the closed contr
 | AC3 | The per-rig `ft8_mode` set to `""` (leave the rig's mode alone, config.md §10): the FT views keep the live selector. | A readout everywhere, leaving no in-view way to set the mode for that configuration. |
 | AC4 | CAT off or lost in an FT view: the readout names the profile; an FT contact's logged mode is unchanged (it comes from the daemon's profile). | The manual nine-mode select shown as if it drove the FT log's mode. |
 | AC5 | The Phone/CW view is unchanged by this slice: live and manual selectors as shipped. | The readout leaking into Phone/CW because the FT profile label persists across navigation. |
-| AC2b | The daemon's own tune carrier is keyed (rig reports RTTY-U): the readout reads "RTTY-U · tune carrier — DATA-U returns when the tune stops", neutral border, no band-pick hint (inbox 2026-09-13, built the same day). | The mismatch wording and hint during a tune, inviting a freq + mode write under a keyed carrier. |
+| AC2b | The daemon's own tune carrier is keyed (rig reports RTTY-U): the readout reads "RTTY-U · tune carrier — the mode from before the tune returns when it stops", neutral border, no band-pick hint (inbox 2026-09-13, built the same day; codex 13d95084 P2: the tune restores the daemon's pre-tune snapshot, not necessarily the data mode, so no specific mode is promised). | The mismatch wording and hint during a tune, inviting a freq + mode write under a keyed carrier. |
 
 **Mechanism (for the builder):** `RigPanel.svelte` already receives `ftMode` and `modeLabel` from
 `Operate.svelte`; render the readout when `ftMode` is set, `rig.cat === 'connected'` and
