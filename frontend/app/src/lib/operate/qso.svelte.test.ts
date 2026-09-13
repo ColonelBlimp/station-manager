@@ -4,7 +4,7 @@
 // operator essentially never drives by hand (FT8 QSOs arrive via the FT8
 // surface), so these tests are the only thing exercising it routinely.
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { flushSync } from 'svelte';
 import {
     draft,
@@ -16,6 +16,10 @@ import {
     submitState,
     dismissDuplicate,
     rstDefaultFor,
+    startQso,
+    qsoClock,
+    noteModeSwitchForDraft,
+    draftAgeText,
     DEFAULT_RST_VOICE,
     DEFAULT_RST_CW,
     type QsoDraft,
@@ -274,5 +278,61 @@ describe('RX_PWR validation', () => {
         expect(canLog()).toBe(false);
         draft.rxPwr = '2.5';
         expect(canLog()).toBe(true);
+    });
+});
+
+// Operator ruling 2026-09-13 (inbox 2026-09-12): the Phone/CW draft KEEPS its
+// original Time On across a mode switch — never silently cleared or
+// retimestamped — and once it has survived a switch the card shows its age,
+// with no expiry threshold. The nearest confusable outcome this guards: a
+// draft committed an hour earlier logged with a stale Time On the operator
+// never noticed.
+describe('draft survives a mode switch: original Time On kept, age shown', () => {
+    beforeEach(() => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-09-13T14:30:00Z'));
+    });
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it('a switch away from Phone/CW marks a started draft as survived; Time On is untouched', () => {
+        draft.callsign = 'ZS6BOS';
+        startQso();
+        expect(draft.timeOn).toBe('14:30:00');
+        expect(qsoClock.survivedSwitch).toBe(false);
+
+        noteModeSwitchForDraft('phone', 'ft8');
+        vi.advanceTimersByTime(5 * 60_000);
+        noteModeSwitchForDraft('ft8', 'phone'); // coming back changes nothing
+
+        expect(qsoClock.survivedSwitch).toBe(true);
+        expect(draft.timeOn).toBe('14:30:00');
+        expect(draft.callsign).toBe('ZS6BOS');
+        expect(draftAgeText(Date.now())).toBe('5 min');
+    });
+
+    it('formats the age without a threshold: seconds, minutes, hours', () => {
+        draft.callsign = 'ZS6BOS';
+        startQso();
+        noteModeSwitchForDraft('phone', 'ft4');
+        const t0 = Date.now();
+        expect(draftAgeText(t0 + 20_000)).toBe('under a minute');
+        expect(draftAgeText(t0 + 61 * 60_000)).toBe('1 h 1 min');
+        expect(draftAgeText(t0 + 26 * 3_600_000)).toBe('26 h 0 min');
+    });
+
+    it('an uncommitted draft (no Time On yet) has no age, and a clear forgets the switch', () => {
+        draft.callsign = 'ZS6BOS'; // typed, not committed — no QSO clock
+        noteModeSwitchForDraft('phone', 'ft8');
+        expect(qsoClock.survivedSwitch).toBe(false);
+        expect(draftAgeText(Date.now())).toBe('');
+
+        startQso();
+        noteModeSwitchForDraft('phone', 'ft8');
+        expect(qsoClock.survivedSwitch).toBe(true);
+        clearDraft();
+        expect(qsoClock.survivedSwitch).toBe(false);
+        expect(draftAgeText(Date.now())).toBe('');
     });
 });

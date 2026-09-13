@@ -84,7 +84,17 @@ export function stampOn(): void {
 // TIME_ON.
 
 let ticker: ReturnType<typeof setInterval> | undefined;
-export const qsoClock = $state({ started: false, ticking: false });
+// startedAtMs: when the QSO clock started (the moment Time On was stamped).
+// survivedSwitch: the operator left Phone/CW with this draft in progress and
+// it was kept — the card then shows its age beside the ORIGINAL Time On
+// (operator ruling 2026-09-13: never silently clear or retimestamp a draft
+// on a mode switch; announce its age instead, with no expiry threshold).
+export const qsoClock = $state({
+    started: false,
+    ticking: false,
+    startedAtMs: 0,
+    survivedSwitch: false,
+});
 
 function tickOff(): void {
     const { date, time } = nowUtc();
@@ -96,6 +106,7 @@ export function startQso(): void {
     if (qsoClock.started) return; // typo-fix re-Tab: the QSO already began
     qsoClock.started = true;
     qsoClock.ticking = true;
+    qsoClock.startedAtMs = Date.now();
     stampOn();
     tickOff();
     ticker = setInterval(tickOff, 1_000);
@@ -112,6 +123,27 @@ function resetClock(): void {
     clearInterval(ticker);
     qsoClock.started = false;
     qsoClock.ticking = false;
+    qsoClock.startedAtMs = 0;
+    qsoClock.survivedSwitch = false;
+}
+
+/** The operating mode changed (router hook): a STARTED draft left behind on
+ *  Phone/CW is kept as it is and marked as having survived, so the card can
+ *  show its age. An uncommitted draft (no QSO clock, no Time On) has nothing
+ *  to age. Coming back to Phone/CW changes nothing. */
+export function noteModeSwitchForDraft(from: string, to: string): void {
+    if (from === 'phone' && to !== 'phone' && qsoClock.started) qsoClock.survivedSwitch = true;
+}
+
+/** Age of a draft that survived a mode switch, for the card: '' when there is
+ *  none; otherwise "under a minute", "N min", or "H h M min" — no threshold,
+ *  an hours-old draft is exactly what the operator must see. */
+export function draftAgeText(nowMs: number): string {
+    if (!qsoClock.started || !qsoClock.survivedSwitch) return '';
+    const minutes = Math.floor(Math.max(0, nowMs - qsoClock.startedAtMs) / 60_000);
+    if (minutes < 1) return 'under a minute';
+    if (minutes < 60) return `${minutes} min`;
+    return `${Math.floor(minutes / 60)} h ${minutes % 60} min`;
 }
 
 // Fill-if-empty: a manually entered off date/time (backlogging, correcting an

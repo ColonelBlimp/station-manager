@@ -33,6 +33,7 @@
 */
 
 import { isFtMode, type OpMode } from '../router.svelte';
+import { noteModeSwitchForDraft } from './qso.svelte';
 import {
     rig,
     hasOp,
@@ -215,6 +216,10 @@ const held: { vfoA: Hold<number>; vfoB: Hold<number>; mode: Hold<string> } = {
 let queue: Promise<void> = Promise.resolve();
 
 export function onOperatingModeChange(from: OpMode, to: OpMode): Promise<void> {
+    // The Phone/CW draft is kept across the switch and, once it has survived
+    // one, shows its age (qso.svelte). Synchronous and before the rig work: it
+    // must hold even if the rig switch below is refused or throws.
+    noteModeSwitchForDraft(from, to);
     const run = queue.then(() => applySwitch(from, to));
     // The chain must survive a rejected link, or one thrown error wedges every
     // later switch.

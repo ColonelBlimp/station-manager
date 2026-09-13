@@ -26,6 +26,7 @@
         submitState,
         draftProblems,
         qsoClock,
+        draftAgeText,
     } from './qso.svelte';
     import DuplicateDialog from './DuplicateDialog.svelte';
     import { observeWorked, openWorkedForQso } from './worked.svelte';
@@ -76,6 +77,19 @@
     function upperCall(): void {
         draft.callsign = draft.callsign.toUpperCase();
     }
+
+    // A draft that survived a mode switch announces its age beside the ORIGINAL
+    // Time On (operator ruling 2026-09-13): ticks once a second while shown,
+    // so an hour-old draft never reads as a fresh one.
+    let ageNow = $state(Date.now());
+    const showAge = $derived(qsoClock.started && qsoClock.survivedSwitch);
+    $effect(() => {
+        if (!showAge) return;
+        ageNow = Date.now();
+        const id = setInterval(() => (ageNow = Date.now()), 1_000);
+        return () => clearInterval(id);
+    });
+    const ageText = $derived(showAge ? draftAgeText(ageNow) : '');
 
     // Keyboard fast path (card-scoped: the svelte:window listener lives and
     // dies with this card, so the shortcuts exist only on Phone/CW):
@@ -406,6 +420,12 @@
                         />
                     </div>
                 </div>
+                {#if showAge}
+                    <p role="status" aria-label="Draft age" class="mt-1 text-xs text-amber-700">
+                        Draft started {ageText} ago — Time On {draft.timeOn}Z kept across the mode
+                        switch.
+                    </p>
+                {/if}
                 <div class="mt-2 flex items-end gap-2">
                     <div>
                         <label for="lc-date-off" class="block text-sm font-medium text-ink"
