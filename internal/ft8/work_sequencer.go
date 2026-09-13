@@ -487,6 +487,7 @@ func (s *Sequencer) onSlotWorkingFd(ref SlotRef, msgs []goft8.DecodedMessage, no
 // the unlock lets a replacement session publish ACTIVE first and be overwritten by this
 // frame.
 func (s *Sequencer) commitWorkCallerLocked(c *CallerExchange, call, theirPeriod string, offsetHz, dialFreqMHz float64, now time.Time) {
+	s.repeatHold = nil // a contact commits: the operator's attention has moved on
 	s.mode = seqWorking
 	s.contact = contactFlags{}
 	// Pin the run onto the contact (contactFlags.runID doc; runidentity_test.go
@@ -596,10 +597,11 @@ func (s *Sequencer) onSlotIdleArmed(ref SlotRef, msgs []goft8.DecodedMessage, no
 		s.mu.Unlock()
 		return
 	}
-	pick, text := s.pickAnswererLocked(msgs, now)
+	s.expireRepeatHoldLocked(now)
+	pick, text := s.pickAnswererLocked(msgs, ref.Period, now)
 	if pick == nil {
 		s.mu.Unlock()
-		return // armed and waiting — nobody is calling this slot
+		return // armed and waiting — nobody is calling this slot (or only a held repeat)
 	}
 	s.commitWorkCallerLocked(pick, s.autoWork.call, ref.Period, s.autoWork.offsetHz, s.autoWork.dialMHz, now)
 	theirCall := pick.TheirCall

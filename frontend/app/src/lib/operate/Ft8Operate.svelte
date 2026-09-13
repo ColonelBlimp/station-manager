@@ -14,6 +14,7 @@
         abandonQso,
         skipQso,
         nextAnswerer,
+        pickAnswerer,
         setCqModifier,
         cqModifierValid,
     } from './ft8.svelte';
@@ -272,6 +273,32 @@
         void setSkip(true);
     }
 
+    // Repeat hold controls: Answer anyway is the pick intent naming the held call
+    // (accepted in any run shape while the hold stands); Next declines it for the
+    // run. Both confirm by push — the hold leaves the next ft8-qso frame.
+    let holdActing = $state(false);
+    async function onHoldAnswer(): Promise<void> {
+        const call = qso.held?.call ?? '';
+        if (holdActing || call === '') return;
+        holdActing = true;
+        try {
+            const r = await pickAnswerer(call);
+            if (!r.ok) toasts.error(r.message);
+        } finally {
+            holdActing = false;
+        }
+    }
+    async function onHoldNext(): Promise<void> {
+        if (holdActing) return;
+        holdActing = true;
+        try {
+            const r = await nextAnswerer();
+            if (!r.ok) toasts.error(r.message);
+        } finally {
+            holdActing = false;
+        }
+    }
+
     // Call-CQ Next. Posts the park verb and nothing else: an ancestor of this
     // used to abandon the run and hand over to the SPA drain, which quietly
     // switched the operator from calling CQ to working their curated queue. The
@@ -357,6 +384,39 @@
                 <!-- The RUN SURFACE (ADR 0067) — one home for the run lifecycle,
                      replacing the checkbox/chip morph that used to live here. -->
                 <RunSurface />
+                {#if qso.held}
+                    <!-- Repeat hold (operator ruling 2026-09-13, W-0019): the run is
+                         holding this station — already worked on this band and
+                         mode — and never answers or skips it on its own. -->
+                    <div
+                        role="status"
+                        aria-label="Repeat held"
+                        class="mt-2 rounded-md border border-amber-500 bg-amber-500/10 px-2 py-1.5 text-xs text-ink"
+                    >
+                        <span class="font-mono font-bold">{qso.held.call}</span> is calling —
+                        already worked on {qso.held.band}
+                        {qso.held.submode !== '' ? qso.held.submode : qso.held.mode}. Held, not
+                        answered.
+                        <div class="mt-1.5 flex gap-2">
+                            <button
+                                type="button"
+                                class="rounded-md border border-line px-2 py-1 text-xs font-semibold text-ink hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-50"
+                                onclick={onHoldAnswer}
+                                disabled={holdActing}
+                            >
+                                Answer anyway
+                            </button>
+                            <button
+                                type="button"
+                                class="rounded-md border border-line px-2 py-1 text-xs font-semibold text-ink hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-50"
+                                onclick={onHoldNext}
+                                disabled={holdActing}
+                            >
+                                Next
+                            </button>
+                        </div>
+                    </div>
+                {/if}
             </div>
         </div>
 
@@ -486,7 +546,7 @@
             >
                 Abandon
             </button>
-            {#if canNext || skipArmed || qso.nextArmed}
+            {#if !qso.held && (canNext || skipArmed || qso.nextArmed)}
                 <button
                     type="button"
                     class="flex-1 rounded-md border px-3 py-1.5 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50 {skipArmed

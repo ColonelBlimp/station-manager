@@ -334,6 +334,12 @@ CAT-live re-tune is opt-out** via the daemon config `restore_rig_on_mode_switch`
   renders immediately and the decorations appear when the lookups resolve, so a
   slow/absent hamnut or DB answer never stalls the feed. Results are cached per
   `call|band` for the session (CQ stations recur, so steady-state lookups ≈ 0).
+  The flag lookups run under a **cap of 2 in flight per tab** (operator ruling
+  2026-09-13, after a busy FT4 slot fired fifteen at once and queued the operator's
+  own requests behind them): a station calling you goes first, then newer slots
+  before older, and a pending lookup for a row that has scrolled off is dropped;
+  closing the FT view aborts what is in flight. The worked-before check is outside
+  the cap — a local read, wanted within the slot for the grey-out.
   Only CQ messages are decorated today (one unambiguous callsign); reply/report
   lines stay plain. Worked-vs-new is shown with the app's own **theme-aware
   palette** — amber tint = not worked on this band, muted text = worked before
@@ -397,8 +403,15 @@ CAT-live re-tune is opt-out** via the daemon config `restore_rig_on_mode_switch`
   re-working a station you hold in the **durable logbook from a *prior* session is fine**
   (left freely workable, only the existing worked-before *tint* applies); only a repeat
   **within this session** is the dupe. Cross-band is not a dupe (you'd want them on the new
-  band). NB the guard is on the **SPA Band Activity clicks** only — the daemon auto-workers
-  (Call-CQ `auto_first`, the pile-up drain) don't yet honour the session-dupe rule (backlog).
+  band). The guard on **SPA Band Activity clicks** is session-scoped as above; the daemon's
+  **runs** ask the LOGBOOK instead (operator ruling 2026-09-13, W-0019, after the contest worked
+  ZS6BOS twice per band): before an auto mode answers a station, the run asks "worked on this band
+  and ADIF mode/submode in this logbook?" through an injected read (`ft8/repeathold.go`), and a
+  repeat is **held** — announced on the `ft8-qso` frame as `held` and in the Operate panel with
+  **Answer anyway** / **Next** — never auto-answered and never auto-skipped. The run carries on
+  around the hold (the CQ keeps going; other callers are worked); the hold ends on the operator's
+  choice, when a contact commits, when the station falls silent past the 3-min staleness bound,
+  or when the run ends. A failed or unknown lookup answers as usual.
 - **Clear Offsets** — the daemon's ranked clear base offsets, shown
   frequency-sorted with **★** marking the daemon's top pick. **Click a chip to
   select it as the TX base offset**; the selected chip is marked with a **darker
@@ -812,11 +825,12 @@ re-sending it` and `partner confirmed the contact; releasing hold`.
 
 **It narrows the window, it does not close it.** Once the budget is spent the call is
 forgotten, so a partner who heard none of our `RR73`s and later restarts with a grid
-answer is worked as a fresh contact and logged again. That is deliberate: by then
-they genuinely never received the roger, so working them again is correct on air and
-is the only way they get their contact. The residual defect is the second ROW, and
-the fix for that is duplicate detection/merge at log level — suppressing the re-work
-would deny a station its contact to keep our log tidy.
+answer is heard as a fresh answerer. Since 2026-09-13 that restart is no longer worked
+automatically: the logged contact makes them a same-band/profile repeat, so the run
+**holds** them (see the repeat hold above) and the operator decides — Answer anyway
+gives a partner who never got the roger their contact; Next declines a station that
+merely wants a second row. The residual defect of a second ROW, when the operator does
+answer, is duplicate detection/merge at log level, unchanged.
 
 *Known cosmetic gap:* during a re-send slot the ladder still reads `calling-cq`
 (the contact is cleared), so the SPA shows CQ while an `RR73` is keyed. The daemon

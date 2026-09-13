@@ -171,6 +171,18 @@ Outcome 2026-09-12 (record entry 37): steps 1–3 and 5 done — 51 QSOs 15:00:4
   Options: keep answering (a repeat costs one exchange and harms nothing outside a contest); skip flagged
   callers only while a contest flag is set; or surface the repeat in the ladder and let the operator press
   Next. Nearest confusable outcome: a station legitimately re-worked after a band or mode change.
+  **Ruled 2026-09-13:** surface same-band/profile repeats in the ladder; never auto-skip and never
+  auto-answer them. The run HOLDS before TX, marks the caller as already worked, and the operator chooses
+  Answer anyway or Next. A failed or unknown dupe lookup must not block operation (treated as not a
+  repeat). **Built 2026-09-13** (`internal/ft8/repeathold.go`; `WorkedBeforeFunc` seam set by cmd/smd to the
+  storage contest-dupe read; `pickAnswererLocked` consults it per candidate with a 500 ms lookup budget under the
+  slot lock — an implementation bound, not a policy): a repeat opens ONE hold (`QsoStatus.held`), is skipped by
+  the scan so the run works everyone else, and ends on `PickAnswerer(call)` (commits with the operator's explicit
+  allow-duplicate — `pendingAllowDuplicate` for a work-caller commit, `contact.allowDuplicate` for a CQ contact),
+  on `NextAnswerer()` (the call joins `declinedRepeats` for the run), on any contact commit, on the answerer
+  staleness bound, or with the run. Tests `repeathold_test.go` H1–H7 (auto-work and Call-CQ shapes, Answer anyway,
+  Next, lookup failure, no seam, carry-on and expiry); reversion proof: pick-path files stashed, five fail.
+  The Operate panel renders the hold with Answer anyway / Next; `docs/ft8.md` and `api-endpoints.md` updated.
 - Whether FT4 is a boot default later (`ft8.mode`), or stays runtime-only.
 - Which non-contest bands get an FT4 default dial, and from which citation.
 

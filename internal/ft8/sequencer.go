@@ -281,6 +281,10 @@ type QsoStatus struct {
 	// DrainPaused: Stop on a pick run pauses the drain (queue kept; Resume
 	// continues) rather than clearing the run — the ratified stack semantics.
 	DrainPaused bool `json:"drain_paused,omitempty"`
+	// Held — a station the run is HOLDING instead of answering (repeathold.go):
+	// already worked on this band and mode. The operator answers anyway
+	// (POST /v1/ft8/cq/pick with the call) or presses Next (POST /v1/ft8/qso/next).
+	Held *HeldRepeat `json:"held,omitempty"`
 	// RunID identifies the live run (spot-network design §6.2): one UUIDv7 per
 	// operator-started run, stable across every contact the run works and across
 	// a pick pause, replaced on a fresh start, gone when the run ends. Carried on
@@ -444,6 +448,11 @@ type contactFlags struct {
 	// Cleared when the contact advances (the rung was not stuck after all), when it
 	// is consumed by a park, on completion, on Abandon, and at session start.
 	nextArmed bool
+	// allowDuplicate — the operator answered a HELD repeat anyway on a Call-CQ
+	// contact: this one contact reaches the sink as an explicit repeat. The
+	// per-station starts carry the intent on s.allowDuplicate instead; a CQ run
+	// has no per-station start, hence the per-contact flag (repeathold.go).
+	allowDuplicate bool
 	// runID pins the run this CONTACT belongs to, copied from the live s.runID
 	// at contact commit — the ADR 0055 pin-at-arm discipline applied to run
 	// identity. Completions read THIS, never the live field: an auto run
@@ -543,6 +552,12 @@ type Sequencer struct {
 	// preferred stallers ping-pong forever). Reset when a fresh CQ round starts — a
 	// completed contact, the rescan exhausting the live answerers, and StartCallCq.
 	stalledCalls []string
+	// repeatHold / declinedRepeats / workedBefore — the same-band/profile repeat
+	// hold (repeathold.go): one station held out of selection until the operator
+	// decides, the stations they declined this run, and the injected logbook view.
+	repeatHold      *repeatHold
+	declinedRepeats []string
+	workedBefore    WorkedBeforeFunc
 	// stallCooloff excludes a station from selection until the recorded instant,
 	// after a WORK-A-CALLER contact stalled at the repeat cap. Separate from
 	// stalledCalls because the two have opposite lifetimes: stalledCalls is a
@@ -987,6 +1002,7 @@ func (s *Sequencer) finishAbandonLocked(frameReason, logFallback string) {
 // whether a session was actually active, so the caller can decide about logging
 // and the idle publish (which must happen with s.mu released).
 func (s *Sequencer) abandonLocked() (bool, string) {
+	s.resetRepeatStateLocked() // the run ends with the session; a hold or a declined list cannot outlive it
 	was := s.mode != seqIdle
 	reason := s.pendingEndReason
 	s.pendingEndReason = ""
@@ -1032,6 +1048,14 @@ func (s *Sequencer) statusForTest() QsoStatus {
 // CQ. Specified in nextanswerer_test.go.
 func (s *Sequencer) NextAnswerer() error {
 	s.mu.Lock()
+	// A held repeat takes Next first: decline the station for the run and carry
+	// on. The run itself was never paused, so there is nothing else to move.
+	if s.repeatHold != nil {
+		s.declineRepeatLocked()
+		s.publish(s.statusLocked())
+		s.mu.Unlock()
+		return nil
+	}
 	// A CQ run that is merely CALLING has no contact to move on from, and neither
 	// does an answer/work session (whose Next is skip). Both are ErrNoAnswerer rather
 	// than ErrNoActiveQso: a Call-CQ run IS active.
@@ -1422,6 +1446,7 @@ func (s *Sequencer) StopAutoWorkRun() {
 		s.log.InfoWith().Msg("ft8 seq: pick-queue drain paused (operator stop)")
 		return
 	}
+	s.resetRepeatStateLocked()
 	hadRun := s.autoWork.armed
 	s.autoWork = autoWorkState{}
 	s.clearPickQueueLocked()
@@ -1993,6 +2018,7 @@ func (s *Sequencer) statusLocked() QsoStatus {
 		// Session-pinned, not live rig state — see QsoStatus.DialFreqMHz.
 		st.DialFreqMHz = s.dialFreqMHz
 	}
+	st.Held = s.heldStatusLocked()
 	return s.applyRunStateLocked(st)
 }
 
@@ -2286,6 +2312,7 @@ func (s *Sequencer) AutoWorkArmed() bool {
 // (the StartCallCq clear's sibling; adr0067_test.go A6). FD/type-4 starts
 // never reach this (ADR 0059 scope note).
 func (s *Sequencer) armAutoWorkLocked(call string, offsetHz, dialFreqMHz float64, now time.Time) {
+	s.resetRepeatStateLocked() // a fresh run starts with no hold and nobody declined
 	if !types.Ft8CallerAnswerModeValid(s.pendingAnswerMode) {
 		s.autoWork = autoWorkState{}
 		s.clearPickQueueLocked()

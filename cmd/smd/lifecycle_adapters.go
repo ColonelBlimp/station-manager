@@ -424,6 +424,9 @@ func (d *daemon) initFt8() error {
 		d.ft8.SetCaptureListener(d.bridge.SetFt8CaptureLive)
 	}
 	d.ft8.SetQsoLogger(d.ft8QsoLogger())
+	// The runs' view of the logbook for the same-band/profile repeat hold
+	// (ft8/repeathold.go): the storage contest-dupe read, one-way import.
+	d.ft8.SetWorkedBefore(d.db.IsContestDuplicateByLogbookIDWithContext)
 	if d.evidenceReady && d.cfg.Evidence.Capture {
 		d.ft8.SetEvidenceSink(d.evidenceSink())
 	}

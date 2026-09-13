@@ -65,7 +65,8 @@ func (s *Sequencer) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz f
 	s.allowDuplicate = s.consumePendingAllowDuplicate() // one-shot: consumed + cleared with activation
 	s.caller = nil
 	s.stalledCalls = nil // fresh session — no abandoned answerers to exclude yet
-	s.answerers = nil    // fresh session — the previous run's pick list must not resurrect (rule 10)
+	s.resetRepeatStateLocked()
+	s.answerers = nil // fresh session — the previous run's pick list must not resurrect (rule 10)
 	s.clearPickQueueLocked()
 	s.confirmHold = nil
 	// A Call-CQ run is itself an operator-started session and pins its own callsign,
@@ -167,7 +168,8 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		// or by the QUEUE DRAIN (ADR 0067 slice B): a bagged head, still
 		// fresh, is worked next, the CQ resuming when the queue empties.
 		if resendRR73 == "" && s.answerMode != types.Ft8CallerAnswerOperatorPick {
-			if pick, text := s.pickAnswererLocked(msgs, now); pick != nil {
+			s.expireRepeatHoldLocked(now)
+			if pick, text := s.pickAnswererLocked(msgs, ref.Period, now); pick != nil {
 				s.commitCqContactLocked(pick, now)
 				heard = text
 				advanced = true
@@ -449,6 +451,37 @@ type cqAnswerer struct {
 // whose reply encodes. Specified in operatorpick_test.go.
 func (s *Sequencer) PickAnswerer(call string, now time.Time) error {
 	s.mu.Lock() // first statement — the publish below stays under the lock (invariant 3)
+	// Answer anyway (repeathold.go): the pick names the HELD station. Commits
+	// the contact the hold was withholding, with the operator's explicit
+	// allow-duplicate, in whichever run shape is live. Refused mid-contact like
+	// every other pop — Next parks first.
+	if h := s.repeatHold; h != nil && strings.EqualFold(strings.TrimSpace(call), h.Call) {
+		if s.caller != nil {
+			s.mu.Unlock()
+			return ErrCqContactInFlight
+		}
+		switch {
+		case s.mode == seqIdle && s.autoWork.armed:
+			c := NewCallerExchange(s.autoWork.call, h.Call, h.Grid, h.Snr)
+			s.pendingAllowDuplicate = true // consumed by the commit below
+			s.commitWorkCallerLocked(&c, s.autoWork.call, h.period, s.autoWork.offsetHz, s.autoWork.dialMHz, now)
+			s.mu.Unlock()
+			s.log.InfoWith().Str("call", h.Call).Msg("ft8 seq: operator answered a held repeat anyway; working them")
+			s.fireOpening(now)
+			return nil
+		case s.mode == seqCalling:
+			c := NewCallerExchange(s.ourCall, h.Call, h.Grid, h.Snr)
+			s.commitCqContactLocked(&c, now)
+			s.contact.allowDuplicate = true
+			s.publish(s.statusLocked())
+			s.mu.Unlock()
+			s.log.InfoWith().Str("call", h.Call).Msg("ft8 seq: operator answered a held repeat anyway; working them")
+			return nil
+		default:
+			s.mu.Unlock()
+			return ErrNoCqPickRun
+		}
+	}
 	// ADR 0067: the pop serves TWO run shapes — the pick CQ run (as since ADR
 	// 0065) and the idle LISTING run any pick session leaves behind. A pop
 	// during an active contact is refused in both (the ratified
@@ -616,8 +649,14 @@ func (s *Sequencer) collectAnswerersLocked(period string, msgs []goft8.DecodedMe
 // A caller inside its stalled-caller cool-off is skipped too — see
 // stallCooloffSlots. `now` is the slot's time, taken from the caller rather than
 // read here so the whole selection is decided against one instant.
-func (s *Sequencer) pickAnswererLocked(msgs []goft8.DecodedMessage, now time.Time) (*CallerExchange, string) {
+func (s *Sequencer) pickAnswererLocked(msgs []goft8.DecodedMessage, period string, now time.Time) (*CallerExchange, string) {
 	strongest := s.answerMode == types.Ft8CallerAnswerAutoStrongest
+	// The dial the next contact would log on: the CQ run's pinned dial, or the
+	// armed auto-work run's between contacts.
+	dialMHz := s.dialFreqMHz
+	if s.mode == seqIdle {
+		dialMHz = s.autoWork.dialMHz
+	}
 	var pick *CallerExchange
 	var pickText string
 	var pickSnr int
@@ -641,6 +680,26 @@ func (s *Sequencer) pickAnswererLocked(msgs []goft8.DecodedMessage, now time.Tim
 				Str("reason", "stall_cooloff").
 				Msg("ft8 seq: skipping answerer — excluded")
 			continue // stalled a work-a-caller ladder moments ago — let them settle
+		}
+		// Repeat hold (repeathold.go): a declined repeat stays out for the run; the
+		// held station is refreshed (still calling) and skipped; an unheld repeat
+		// opens the hold — announced, not answered — and the scan moves on so the
+		// run keeps working everyone else.
+		if slices.Contains(s.declinedRepeats, c.TheirCall) {
+			s.log.InfoWith().Str("answerer", c.TheirCall).
+				Str("reason", "declined_repeat").
+				Msg("ft8 seq: skipping answerer — excluded")
+			continue
+		}
+		if h := s.repeatHold; h != nil && h.Call == c.TheirCall {
+			h.lastHeard = now
+			continue
+		}
+		if s.repeatHold == nil {
+			if worked, band := s.isWorkedRepeatLocked(c.TheirCall, dialMHz); worked {
+				s.holdRepeatLocked(&c, band, period, now)
+				continue
+			}
 		}
 		reply, ok := c.TxMessage()
 		if !ok {
@@ -855,7 +914,8 @@ func (s *Sequencer) parkAnswererLocked(msgs []goft8.DecodedMessage, now time.Tim
 	s.stalledCalls = append(s.stalledCalls, s.caller.TheirCall)
 	s.caller = nil
 	s.contact.repeats = 0
-	if pick, _ := s.pickAnswererLocked(msgs, now); pick != nil {
+	if pick, _ := s.pickAnswererLocked(msgs, s.theirPeriod, now); pick != nil {
+		s.repeatHold = nil // a contact commits: the operator's attention has moved on
 		s.caller = pick
 		s.startedAt = now.UTC()
 		// Count the rung we are about to transmit. The replacement is handed straight
@@ -888,6 +948,8 @@ func (s *Sequencer) parkAnswererLocked(msgs []goft8.DecodedMessage, now time.Tim
 // cannot be present in two of them and missing from the third. Caller holds
 // s.mu; the CQ session's mode stays seqCalling throughout.
 func (s *Sequencer) commitCqContactLocked(c *CallerExchange, now time.Time) {
+	s.repeatHold = nil // a contact commits: the operator's attention has moved on
+	s.contact.allowDuplicate = false
 	s.caller = c
 	s.startedAt = now.UTC()
 	s.contact.repeats = 0
@@ -900,7 +962,7 @@ func (s *Sequencer) completedCallerQsoLocked() CompletedQso {
 	return CompletedQso{
 		Mode:           s.profile.Name,
 		LogbookID:      s.logbookID,
-		AllowDuplicate: s.allowDuplicate,
+		AllowDuplicate: s.allowDuplicate || s.contact.allowDuplicate,
 		// The contact's PINNED run (contactFlags.runID), never the live
 		// s.runID: a run stopped mid-contact must not strip the in-flight
 		// contact's association (codex P1b on f3043e80, runidentity RI9).

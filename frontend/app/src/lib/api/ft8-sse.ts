@@ -90,6 +90,18 @@ export interface TxPayload {
     mode?: string;
 }
 
+/** ft8-qso `held` — internal/ft8.HeldRepeat. */
+export interface HeldRepeatPayload {
+    call: string;
+    grid?: string;
+    snr: number;
+    band: string;
+    mode: string;
+    submode?: string;
+    /** Stable code; `worked_before` today. */
+    reason: string;
+}
+
 /** ft8-qso — internal/ft8.QsoStatus (the active manual-sequencer contact;
  *  hub-cached so a reconnect replays it). */
 export interface QsoPayload {
@@ -143,6 +155,10 @@ export interface QsoPayload {
     queue?: { call: string; snr: number }[];
     /** Stop paused the drain (queue kept); Resume continues (ADR 0067). */
     drain_paused?: boolean;
+    /** A station the run is HOLDING instead of answering — already worked on this
+     *  band and ADIF mode/submode (operator ruling 2026-09-13, W-0019). The
+     *  operator answers anyway (cq/pick with this call) or presses Next. */
+    held?: HeldRepeatPayload;
 }
 
 /** ft8-logged — internal/ft8.LoggedQso (a completed exchange the daemon stored).
@@ -262,6 +278,14 @@ const QSO_BOOL_FIELDS = [
     'type4',
 ] as const;
 const QSO_NUM_FIELDS = ['repeats', 'max_repeats', 'dial_freq_mhz'] as const;
+// held is an object; its call is consumed via .trim() in the panel, so it must be a
+// string when present (the numeric/optional members are rendered with defaults).
+function isHeld(v: unknown): boolean {
+    return (
+        v === undefined ||
+        (isPlainObject(v) && typeof v.call === 'string' && typeof v.reason === 'string')
+    );
+}
 const QSO_STR_FIELDS = [
     'role',
     'their_call',
@@ -290,7 +314,8 @@ function isQso(v: unknown): v is QsoPayload {
         QSO_NUM_FIELDS.every((k) => optNum(v[k])) &&
         QSO_STR_FIELDS.every((k) => optStr(v[k])) &&
         (v.answerers === undefined || isArrayOf(v.answerers, isCallSnr)) &&
-        (v.queue === undefined || isArrayOf(v.queue, isCallSnr))
+        (v.queue === undefined || isArrayOf(v.queue, isCallSnr)) &&
+        isHeld(v.held)
     );
 }
 function isLogged(v: unknown): v is LoggedPayload {

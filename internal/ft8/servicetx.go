@@ -1112,6 +1112,18 @@ func (s *Service) StartWorkCallerT4(ourCall, theirCall, theirGrid string, theirS
 	return nil
 }
 
+// SetWorkedBefore injects the logbook view the runs consult before answering a
+// station (the same-band/profile repeat hold, repeathold.go). Call before Start;
+// nil leaves every station answerable as before.
+func (s *Service) SetWorkedBefore(fn WorkedBeforeFunc) {
+	s.workedBefore = fn
+	if s.seq != nil {
+		s.seq.mu.Lock()
+		s.seq.workedBefore = fn
+		s.seq.mu.Unlock()
+	}
+}
+
 // SetQsoLogger injects the sink that logs a completed FT8 exchange (ADR 0029
 // step e4) — the daemon (cmd/smd) wires it to qsoservice. Called once during
 // wiring, before Start. A nil logger (e.g. tests) means completed exchanges are

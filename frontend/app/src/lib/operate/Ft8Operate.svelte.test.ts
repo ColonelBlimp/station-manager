@@ -369,3 +369,65 @@ describe('Ft8Operate custom CQ', () => {
         expect(screen.queryByRole('button', { name: 'custom' })).toBeNull();
     });
 });
+
+// Repeat hold (operator ruling 2026-09-13, W-0019): a station the run is holding
+// as already worked on this band/profile is announced with the operator's two
+// choices — Answer anyway (the pick intent on that call) or Next (declines it for
+// the run). Never auto-answered, never auto-skipped.
+describe('Ft8Operate repeat hold', () => {
+    const hold = () => {
+        ft8State.qso.active = false;
+        ft8State.qso.autoWorkArmed = true;
+        ft8State.qso.held = {
+            call: 'ZS6BOS',
+            grid: 'KG33',
+            snr: -6,
+            band: '20m',
+            mode: 'MFSK',
+            submode: 'FT4',
+            reason: 'worked_before',
+        };
+    };
+
+    it('names the held station, the band and mode, and offers Answer anyway / Next', async () => {
+        const picked: string[] = [];
+        let nexts = 0;
+        armReady({
+            pickAnswerer: (call) => {
+                picked.push(call);
+                return okResult();
+            },
+            next: () => {
+                nexts++;
+                return okResult();
+            },
+        });
+        hold();
+        render(Ft8Operate);
+        flushSync();
+
+        const box = screen.getByRole('status', { name: 'Repeat held' });
+        expect(box).toHaveTextContent('ZS6BOS');
+        expect(box).toHaveTextContent(/already worked/);
+        expect(box).toHaveTextContent('20m');
+        expect(box).toHaveTextContent('FT4');
+
+        await fireEvent.click(screen.getByRole('button', { name: 'Answer anyway' }));
+        await flush();
+        expect(picked).toEqual(['ZS6BOS']);
+
+        expect(screen.getAllByRole('button', { name: 'Next' })).toHaveLength(1); // the hold's own, no twin
+        await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+        await flush();
+        expect(nexts).toBe(1);
+    });
+
+    it('shows nothing when no station is held', () => {
+        armReady();
+        ft8State.qso.autoWorkArmed = true;
+        render(Ft8Operate);
+        flushSync();
+        expect(screen.queryByRole('status', { name: 'Repeat held' })).toBeNull();
+        expect(screen.queryByRole('button', { name: 'Answer anyway' })).toBeNull();
+    });
+});

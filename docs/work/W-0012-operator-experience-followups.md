@@ -97,7 +97,12 @@ not compete with the app-shell, notification-history, or UI-cohesion dossiers.
   worked-before check; a queue that never drops, so stale rows still consume budget minutes later;
   lookups continuing after the view closed; the logging card's lookup queued behind decoration.
   Decisions for the operator: N (suggested 2); the queue cap before old entries drop; whether
-  answerers jump the queue. Tests on a fake enricher with controllable promises in the module's
+  answerers jump the queue. **Ruled and built 2026-09-13:** N = 2 (`FT8_ENRICH_CONCURRENCY`); no
+  numeric queue cap — a pending lookup not observed in the next Band Activity pass has scrolled off and
+  is dropped; stations calling us jump the queue, then newer slots; the worked-before check stays
+  outside the budget; `clear()` on view close aborts in-flight lookups (AbortSignal through
+  `apiEnrich`) and discards late answers. `ft8Enrich.svelte.ts` scheduler + `Ft8BandActivity.svelte`
+  pass brackets; tests on a controllable enricher (cap, priority, drop, abort). Tests on a fake enricher with controllable promises in the module's
   existing test file: never more than N in flight, the order, abort on close. Alternative, larger:
   the daemon stamps the cached country onto each decode line as it publishes the slot (cache read
   only, never upstream) so Band Activity makes no per-decode request and only misses are warmed in
@@ -151,6 +156,22 @@ not compete with the app-shell, notification-history, or UI-cohesion dossiers.
 - **Onboarding/preferences:** reduce non-Linux first-run friction; add download-site install content
   from the canonical install guide; keep beginner help, profiles, and `default_logbook.id` wiring
   deferred until their consuming workflow exists.
+
+## Built follow-up — Phone/CW draft kept across a mode switch, age shown (inbox 2026-09-12, ruled and built 2026-09-13)
+
+Ruling: keep the draft across mode switches and show its age; preserve the original Time On; never
+silently clear or retimestamp; show the age whenever the draft survives a switch; no expiry threshold.
+
+| | Outcome | Nearest confusable outcome |
+|---|---|---|
+| AC1 | A draft whose callsign was committed (QSO clock started) survives a trip to FT8/FT4 and back with every field and its original Time On; the card shows "Draft started N min ago — Time On HH:MM:SSZ kept across the mode switch", ticking, however old. | The draft silently cleared, or Time On re-stamped on return. |
+| AC2 | A typed but uncommitted callsign (no Time On) survives too and shows no age line — there is nothing to age. | An age line with no Time On behind it. |
+| AC3 | Log or Clear ends the draft and the age line with it. | A stale age line on the next QSO. |
+
+`qso.svelte.ts` (`qsoClock.startedAtMs`, `survivedSwitch`, `noteModeSwitchForDraft`, `draftAgeText`),
+`modeRestore.svelte.ts` (the router's single mode-change hook calls it, synchronously, before the rig
+work), `LoggingCard.svelte` (the age line under Time On). Tests: `qso.svelte.test.ts`,
+`LoggingCard.svelte.test.ts` (fake timers).
 
 ## Built follow-up — Band Activity typed filter announced (inbox 2026-09-12, built 2026-09-13)
 

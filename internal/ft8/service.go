@@ -228,6 +228,10 @@ type Service struct {
 	// logged. Read only in the seq.onComplete callback (decodeLoop goroutine,
 	// created after wiring — happens-before holds).
 	qsoLogger func(ctx context.Context, c CompletedQso)
+	// workedBefore (repeathold.go) is the logbook view the runs consult before
+	// answering a station — injected via SetWorkedBefore before Start (cmd/smd
+	// wires it to the storage contest-dupe read). nil = nothing is ever held.
+	workedBefore WorkedBeforeFunc
 
 	// evidenceSink observes every PHYSICAL slot's rich evidence (§4 prereq 2
 	// branch point); injected via SetEvidenceSink before Start (cmd/smd wires

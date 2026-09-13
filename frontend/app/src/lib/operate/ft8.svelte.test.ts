@@ -1145,3 +1145,35 @@ describe('a claim that could not reach the daemon is retried on the recovery sig
         stopFt8();
     });
 });
+
+// Repeat hold (operator ruling 2026-09-13, W-0019): the ft8-qso frame's `held`
+// names a station the run is holding instead of answering; absent = no hold.
+describe('ft8-qso held (same-band/profile repeat hold)', () => {
+    it('maps held onto the store and clears it when the frame drops it', () => {
+        ft8Link.onQso({
+            active: false,
+            auto_work_armed: true,
+            held: {
+                call: 'ZS6BOS',
+                grid: 'KG33',
+                snr: -6,
+                band: '20m',
+                mode: 'MFSK',
+                submode: 'FT4',
+                reason: 'worked_before',
+            },
+        });
+        expect(ft8State.qso.held).toEqual({
+            call: 'ZS6BOS',
+            grid: 'KG33',
+            snr: -6,
+            band: '20m',
+            mode: 'MFSK',
+            submode: 'FT4',
+            reason: 'worked_before',
+        });
+
+        ft8Link.onQso({ active: false, auto_work_armed: true });
+        expect(ft8State.qso.held).toBeNull();
+    });
+});

@@ -16,6 +16,7 @@ import type {
     OccupancyPayload,
     TxPayload,
     QsoPayload,
+    HeldRepeatPayload,
     LoggedPayload,
     AudioLevelPayload,
     Ft8EventHandlers,
@@ -130,6 +131,20 @@ export interface Ft8QsoStatus {
     queue: Ft8CqAnswerer[];
     /** Stop paused the drain; Resume continues (ADR 0067). */
     drainPaused: boolean;
+    /** A station the run is HOLDING instead of answering: already worked on this
+     *  band and mode (operator ruling 2026-09-13). null = no hold. */
+    held: Ft8HeldRepeat | null;
+}
+
+/** The held station off the ft8-qso frame (internal/ft8.HeldRepeat). */
+export interface Ft8HeldRepeat {
+    call: string;
+    grid: string;
+    snr: number;
+    band: string;
+    mode: string;
+    submode: string;
+    reason: string;
 }
 
 /** One operator_pick candidate off the ft8-qso frame — snr is our measurement of
@@ -137,6 +152,21 @@ export interface Ft8QsoStatus {
 export interface Ft8CqAnswerer {
     call: string;
     snr: number;
+}
+
+// The wire's `held` as store state; kept out of onQso so its defaults do not
+// add to that handler's branch count (observatory baseline).
+function heldFromWire(h: HeldRepeatPayload | undefined): Ft8HeldRepeat | null {
+    if (!h) return null;
+    return {
+        call: h.call,
+        grid: h.grid ?? '',
+        snr: h.snr ?? 0,
+        band: h.band ?? '',
+        mode: h.mode ?? '',
+        submode: h.submode ?? '',
+        reason: h.reason,
+    };
 }
 
 const emptyQsoStatus = (): Ft8QsoStatus => ({
@@ -165,6 +195,7 @@ const emptyQsoStatus = (): Ft8QsoStatus => ({
     answerers: [],
     queue: [],
     drainPaused: false,
+    held: null,
 });
 
 // Monotonic key source for decode rows. Never reset — uniqueness is all that
@@ -1230,6 +1261,7 @@ export const ft8Link: Ft8EventHandlers = {
             answerers: p.answerers ?? [],
             queue: p.queue ?? [],
             drainPaused: p.drain_paused ?? false,
+            held: heldFromWire(p.held),
         };
     },
 
