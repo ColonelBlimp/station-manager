@@ -172,14 +172,22 @@
     // row on the current band (idempotent — cached/in-flight is a no-op), so a
     // station calling us also gets a flag + country + DXCC. A side effect, so it
     // lives here, not in the pure derived above.
+    // One PASS per run: the scheduler drops a pending lookup for a row that is
+    // no longer on screen, and orders the rest — a station calling us first,
+    // then newer slots (groups are newest-first) — under its concurrency cap.
     $effect(() => {
         const band = rig.band;
+        ft8EnrichState.beginPass();
         for (const g of groups) {
             for (const row of g.decodes) {
                 if (row.kind !== '' && row.call !== '')
-                    ft8EnrichState.observe(row.call, band, ftProfile);
+                    ft8EnrichState.observe(row.call, band, ftProfile, {
+                        kind: row.kind,
+                        slot: row.d.startUtc,
+                    });
             }
         }
+        ft8EnrichState.endPass();
     });
 
     // Country (+ DXCC entity, once resolved) for the hover tooltip on the flag and

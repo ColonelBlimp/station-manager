@@ -7,6 +7,7 @@ import {
     setFt8Enricher,
     setFt8Dupe,
     resetFt8EnrichForTests,
+    FT8_ENRICH_CONCURRENCY,
 } from './ft8Enrich.svelte';
 import type { Enrichment } from './enrich.svelte';
 
@@ -164,5 +165,123 @@ describe('profile-aware worked-before (ADR 0080)', () => {
         ft8EnrichState.markWorked('K1ABC', '20m', 'FT4');
         expect(ft8EnrichState.info('K1ABC', '20m', 'FT4')?.worked).toBe(true);
         expect(ft8EnrichState.info('K1ABC', '20m', 'FT8')?.worked).toBeUndefined();
+    });
+});
+
+// Operator ruling 2026-09-13 (W-0012 enrichment cap, inbox 2026-09-11 (b)): at
+// most FT8_ENRICH_CONCURRENCY (2) /v1/enrich/callsign lookups in flight per
+// tab; the worked-before check stays OUTSIDE that budget; stations calling us
+// go ahead of plain CQ rows and newer slots ahead of older; a pending lookup
+// for a row that has scrolled off (not observed in the next pass) is dropped;
+// clear() aborts what is in flight and drops what is pending.
+describe('enrichment scheduler: cap, priority, stale-work drop, cancellation', () => {
+    type Pending = { call: string; resolve: () => void; signal?: AbortSignal };
+    let started: Pending[];
+    function controllableEnricher(): void {
+        started = [];
+        setFt8Enricher(
+            (call, signal) =>
+                new Promise((resolve) => {
+                    started.push({ call, resolve: () => resolve(enrichment()), signal });
+                })
+        );
+    }
+    const inFlight = () => started.map((p) => p.call);
+
+    it('holds at most 2 enrich lookups in flight, starts the next as one lands, and never queues the worked-before check', async () => {
+        controllableEnricher();
+        const dupeCalls: string[] = [];
+        setFt8Dupe((call) => {
+            dupeCalls.push(call);
+            return Promise.resolve(false);
+        });
+
+        ft8EnrichState.beginPass();
+        for (const c of ['A1AA', 'B1BB', 'C1CC', 'D1DD'])
+            ft8EnrichState.observe(c, '20m', 'FT8', { kind: 'cq', slot: 't1' });
+        ft8EnrichState.endPass();
+        await flush();
+
+        expect(inFlight()).toHaveLength(FT8_ENRICH_CONCURRENCY);
+        expect(FT8_ENRICH_CONCURRENCY).toBe(2);
+        expect(dupeCalls.sort()).toEqual(['A1AA', 'B1BB', 'C1CC', 'D1DD']); // outside the budget: all at once
+
+        started[0].resolve();
+        await flush();
+        expect(inFlight()).toHaveLength(3); // one landed, one more started
+        started[1].resolve();
+        started[2].resolve();
+        await flush();
+        expect(inFlight()).toHaveLength(4);
+        expect(ft8EnrichState.info('A1AA', '20m')?.flag).toBe('🇺🇸');
+    });
+
+    it('a station calling us jumps the queue, and a newer slot goes before an older one', async () => {
+        controllableEnricher();
+        ft8EnrichState.beginPass();
+        ft8EnrichState.observe('X1XX', '20m', 'FT8', { kind: 'cq', slot: 't9' }); // fills the cap
+        ft8EnrichState.observe('Y1YY', '20m', 'FT8', { kind: 'cq', slot: 't9' });
+        ft8EnrichState.observe('OLD1', '20m', 'FT8', { kind: 'cq', slot: 't1' });
+        ft8EnrichState.observe('NEW1', '20m', 'FT8', { kind: 'cq', slot: 't5' });
+        ft8EnrichState.observe('CALL', '20m', 'FT8', { kind: 'call', slot: 't1' }); // calling us, old slot
+        ft8EnrichState.endPass();
+        await flush();
+        expect(inFlight()).toEqual(['X1XX', 'Y1YY']);
+
+        started[0].resolve();
+        await flush();
+        expect(inFlight()[2]).toBe('CALL'); // the caller first, though its slot is the oldest
+        started[1].resolve();
+        await flush();
+        expect(inFlight()[3]).toBe('NEW1'); // then the newer slot
+        started[2].resolve();
+        started[3].resolve();
+        await flush();
+        expect(inFlight()[4]).toBe('OLD1');
+    });
+
+    it('a pending lookup for a row that scrolled off is dropped; one still visible survives', async () => {
+        controllableEnricher();
+        ft8EnrichState.beginPass();
+        ft8EnrichState.observe('X1XX', '20m', 'FT8', { kind: 'cq', slot: 't9' });
+        ft8EnrichState.observe('Y1YY', '20m', 'FT8', { kind: 'cq', slot: 't9' });
+        ft8EnrichState.observe('GONE', '20m', 'FT8', { kind: 'cq', slot: 't1' });
+        ft8EnrichState.observe('STAY', '20m', 'FT8', { kind: 'cq', slot: 't2' });
+        ft8EnrichState.endPass();
+        await flush();
+
+        ft8EnrichState.beginPass(); // next slot: GONE has scrolled off, STAY is still on screen
+        ft8EnrichState.observe('X1XX', '20m', 'FT8', { kind: 'cq', slot: 't9' });
+        ft8EnrichState.observe('Y1YY', '20m', 'FT8', { kind: 'cq', slot: 't9' });
+        ft8EnrichState.observe('STAY', '20m', 'FT8', { kind: 'cq', slot: 't2' });
+        ft8EnrichState.endPass();
+
+        started[0].resolve();
+        started[1].resolve();
+        await flush();
+        expect(inFlight()).toEqual(['X1XX', 'Y1YY', 'STAY']);
+        started[2].resolve();
+        await flush();
+        expect(inFlight()).toHaveLength(3); // GONE never fetched
+        expect(ft8EnrichState.info('GONE', '20m')).toBeUndefined();
+    });
+
+    it('clear() aborts the lookups in flight and drops the pending ones', async () => {
+        controllableEnricher();
+        ft8EnrichState.beginPass();
+        for (const c of ['A1AA', 'B1BB', 'C1CC'])
+            ft8EnrichState.observe(c, '20m', 'FT8', { kind: 'cq', slot: 't1' });
+        ft8EnrichState.endPass();
+        await flush();
+        expect(inFlight()).toHaveLength(2);
+
+        ft8EnrichState.clear();
+        expect(started[0].signal?.aborted).toBe(true);
+        expect(started[1].signal?.aborted).toBe(true);
+        started[0].resolve();
+        started[1].resolve();
+        await flush();
+        expect(inFlight()).toHaveLength(2); // C1CC never started
+        expect(ft8EnrichState.info('A1AA', '20m')).toBeUndefined(); // a late answer after clear is not cached
     });
 });
