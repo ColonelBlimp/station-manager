@@ -274,8 +274,10 @@
     }
 
     // Repeat hold controls: Answer anyway is the pick intent naming the held call
-    // (accepted in any run shape while the hold stands); Next declines it for the
-    // run. Both confirm by push — the hold leaves the next ft8-qso frame.
+    // (accepted in any run shape while the hold stands); Ignore (the daemon's Next
+    // intent — relabelled 2026-09-13: the run moves on by itself, what the button
+    // adds is memory) declines it for the run. Both confirm by push — the hold
+    // leaves the next ft8-qso frame.
     let holdActing = $state(false);
     async function onHoldAnswer(): Promise<void> {
         const call = qso.held?.call ?? '';
@@ -384,43 +386,49 @@
                 <!-- The RUN SURFACE (ADR 0067) — one home for the run lifecycle,
                      replacing the checkbox/chip morph that used to live here. -->
                 <RunSurface />
-                {#if qso.held}
-                    <!-- Repeat hold (operator ruling 2026-09-13, W-0019): the run is
-                         holding this station — already worked on this band and
-                         mode — and never answers or skips it on its own. -->
-                    <div
-                        role="status"
-                        aria-label="Repeat held"
-                        class="mt-2 rounded-md border border-amber-500 bg-amber-500/10 px-2 py-1.5 text-xs text-ink"
-                    >
-                        <span class="font-mono font-bold">{qso.held.call}</span> is calling —
-                        already worked on {qso.held.band}
-                        {qso.held.submode !== '' ? qso.held.submode : qso.held.mode}. Held, not
-                        answered.
-                        <div class="mt-1.5 flex gap-2">
-                            <button
-                                type="button"
-                                class="rounded-md border border-line px-2 py-1 text-xs font-semibold text-ink hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-50"
-                                onclick={onHoldAnswer}
-                                disabled={holdActing}
-                            >
-                                Answer anyway
-                            </button>
-                            <button
-                                type="button"
-                                class="rounded-md border border-line px-2 py-1 text-xs font-semibold text-ink hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-50"
-                                onclick={onHoldNext}
-                                disabled={holdActing}
-                            >
-                                Next
-                            </button>
-                        </div>
-                    </div>
-                {/if}
             </div>
         </div>
 
         <hr class="my-3 border-line" />
+
+        {#if qso.held}
+            <!-- Repeat hold (operator ruling 2026-09-13, W-0019): the run is
+                 holding this station — already worked on this band and
+                 mode — and never answers or skips it on its own. Its OWN
+                 full-width block below the rule, not inside the fixed-height
+                 enrichment zone above (it overflowed past the rule there,
+                 inbox 2026-09-13): the ladder shifts down only while a hold
+                 stands, an occasional state, not the per-slot jitter that
+                 fixed height guards against. -->
+            <div
+                role="status"
+                aria-label="Repeat held"
+                class="mt-2 rounded-md border border-amber-500 bg-amber-500/10 px-2 py-1.5 text-xs text-ink"
+            >
+                <span class="font-mono font-bold">{qso.held.call}</span> is calling — already worked
+                on {qso.held.band}
+                {qso.held.submode !== '' ? qso.held.submode : qso.held.mode}. Held, not answered.
+                <div class="mt-1.5 flex gap-2">
+                    <button
+                        type="button"
+                        class="rounded-md border border-line px-2 py-1 text-xs font-semibold text-ink hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-50"
+                        onclick={onHoldAnswer}
+                        disabled={holdActing}
+                    >
+                        Answer anyway
+                    </button>
+                    <button
+                        type="button"
+                        class="rounded-md border border-line px-2 py-1 text-xs font-semibold text-ink hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-50"
+                        onclick={onHoldNext}
+                        title="Skip for this run"
+                        disabled={holdActing}
+                    >
+                        Ignore
+                    </button>
+                </div>
+            </div>
+        {/if}
 
         <!-- Slot-timing pill, directly above the rungs (the rungs are the slots) -->
         <div class="mb-3 text-center">

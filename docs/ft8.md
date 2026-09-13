@@ -408,7 +408,10 @@ CAT-live re-tune is opt-out** via the daemon config `restore_rig_on_mode_switch`
   ZS6BOS twice per band): before an auto mode answers a station, the run asks "worked on this band
   and ADIF mode/submode in this logbook?" through an injected read (`ft8/repeathold.go`), and a
   repeat is **held** — announced on the `ft8-qso` frame as `held` and in the Operate panel with
-  **Answer anyway** / **Next** — never auto-answered and never auto-skipped. The run carries on
+  **Answer anyway** / **Ignore** (the daemon's Next intent; ignored for the rest of the run) — never
+  auto-answered and never auto-skipped; doing nothing never answers them either (the hold clears when
+  another contact commits, after 3 min of silence, or with the run, and a station still calling is
+  held again). The run carries on
   around the hold (the CQ keeps going; other callers are worked); the hold ends on the operator's
   choice, when a contact commits, when the station falls silent past the 3-min staleness bound,
   or when the run ends. A failed or unknown lookup answers as usual.

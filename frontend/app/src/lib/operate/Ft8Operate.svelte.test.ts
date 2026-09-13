@@ -372,8 +372,10 @@ describe('Ft8Operate custom CQ', () => {
 
 // Repeat hold (operator ruling 2026-09-13, W-0019): a station the run is holding
 // as already worked on this band/profile is announced with the operator's two
-// choices — Answer anyway (the pick intent on that call) or Next (declines it for
-// the run). Never auto-answered, never auto-skipped.
+// choices — Answer anyway (the pick intent on that call) or Ignore (declines it
+// for the run; the daemon's Next intent, relabelled 2026-09-13 because the run
+// moves on by itself and what the button adds is memory). Never auto-answered,
+// never auto-skipped.
 describe('Ft8Operate repeat hold', () => {
     const hold = () => {
         ft8State.qso.active = false;
@@ -389,7 +391,7 @@ describe('Ft8Operate repeat hold', () => {
         };
     };
 
-    it('names the held station, the band and mode, and offers Answer anyway / Next', async () => {
+    it('names the held station, the band and mode, and offers Answer anyway / Ignore', async () => {
         const picked: string[] = [];
         let nexts = 0;
         armReady({
@@ -416,8 +418,8 @@ describe('Ft8Operate repeat hold', () => {
         await flush();
         expect(picked).toEqual(['ZS6BOS']);
 
-        expect(screen.getAllByRole('button', { name: 'Next' })).toHaveLength(1); // the hold's own, no twin
-        await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+        expect(screen.queryByRole('button', { name: 'Next' })).toBeNull(); // the generic Next hides while held
+        await fireEvent.click(screen.getByRole('button', { name: 'Ignore' })); // the daemon's Next intent, relabelled
         await flush();
         expect(nexts).toBe(1);
     });

@@ -190,7 +190,9 @@ operator's pCloud Documents. **Submitted by the operator 2026-09-13** by e-mail 
   on `NextAnswerer()` (the call joins `declinedRepeats` for the run), on any contact commit, on the answerer
   staleness bound, or with the run. Tests `repeathold_test.go` H1–H7 (auto-work and Call-CQ shapes, Answer anyway,
   Next, lookup failure, no seam, carry-on and expiry); reversion proof: pick-path files stashed, five fail.
-  The Operate panel renders the hold with Answer anyway / Next; `docs/ft8.md` and `api-endpoints.md` updated.
+  The Operate panel renders the hold with Answer anyway / Ignore ("Next" relabelled 2026-09-13 on the operator's
+  ruling: the run moves on by itself, the button adds memory; the box moved to its own block below the rule after
+  it overflowed the fixed-height enrichment zone on air); `docs/ft8.md` and `api-endpoints.md` updated.
   Codex review of `76e28cb7` (P1, fixed 2026-09-13): the lookup was gated on "no hold yet", so a SECOND worked
   station reached selection while one was held; every candidate is now classified and a further repeat is
   skipped (`repeat_while_another_held`) until the hold resolves — test H8 (two repeats in one batch, a repeat in
