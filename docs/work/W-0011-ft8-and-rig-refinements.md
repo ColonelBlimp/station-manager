@@ -231,6 +231,19 @@ single-flight keying, guaranteed stop, and operator-initiated session boundaries
     stashed, both fail at those assertions. The keyMu exception itself is accepted by operator ruling
     2026-09-13: the retry is an idempotent stop, bound to the current client, and avoids deadlocking the
     confirmation path.
+  - *Codex review of `ae8cb9a5`, P2 fixed 2026-09-13:* a fresh cycle (defensive recovery's
+    `beginTxConfirmIfUncertain` resets the per-cycle flag) plus another `1` could start a second worker while the
+    first was mid-write; the first's cleanup then closed the second's channel and a key waiting on the orphaned
+    first channel would block under `keyMu`. Fix: at most one re-send worker in flight (eligibility requires no
+    channel set), so the channel has exactly one owner; a `1` while a re-sent stop has not even landed takes the
+    alarm path. Test: worker A held mid-write, a fresh cycle, another `1` — the channel identity is unchanged,
+    the alarm path ran, and only A's exit closes it. Reversion proof: fix stashed, fails at the identity check.
+  - *Operator ruling 2026-09-13 (TX tolerance):* a rig transmitting when it should not for up to about 10 s is
+    generally acceptable — modern rigs and linear amplifiers protect themselves — so TX-alarm tolerances and
+    timeouts MAY be relaxed where that genuinely prevents false alarms. Not applied yet: the re-sent stop removes
+    the `tx_still_keyed` false alarm without moving the 3 s confirm bound. Candidate if the millisecond stamps
+    show slow status answers behind the four `tx_unconfirmed` occurrences: lengthen `txConfirmTimeout` (3 s
+    today) within that 10 s envelope — a threshold for the operator to set on evidence, not invented.
 - **Safety-adjacent deferred evidence:** rig TOT surfacing/clamp, FT-710 meter-selector verification,
   meter-tail semantics, output-sink logging, playback reopen after a reproduced collapse, and
   persistent TX-state escalation only after an operator duration threshold.

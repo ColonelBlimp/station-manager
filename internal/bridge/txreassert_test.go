@@ -314,3 +314,50 @@ func TestStillKeyed_StaleReassertFailureDoesNotAlarm(t *testing.T) {
 		t.Fatalf("a stale re-send failure started a retry burst (%d stops written)", n)
 	}
 }
+
+// At most one re-send worker is in flight, so the completion channel always
+// has one owner (ae8cb9a5 review P2): a NEW cycle (defensive recovery's
+// beginTxConfirmIfUncertain resets the per-cycle flag) followed by another "1"
+// while the first worker is still mid-write must not start a second worker
+// that overwrites the channel — the first worker's cleanup would then close
+// the wrong channel and a key waiting on the orphaned one would hang under
+// keyMu. The second "1" takes the alarm path instead.
+func TestStillKeyed_OneReassertWorkerInFlight(t *testing.T) {
+	s, _, gated := newGatedReassertService(t, nil)
+	s.mu.Lock()
+	first := s.txReassertDone
+	s.mu.Unlock()
+	if first == nil {
+		t.Fatal("precondition: a worker is in flight")
+	}
+
+	def, _ := cat.Lookup("yaesu-ftdx10")
+	s.beginTxConfirm(def, gated) // a fresh cycle while worker A is still mid-write
+	s.observeTxStatus("1")       // would start worker B before the fix
+
+	s.mu.Lock()
+	current := s.txReassertDone
+	s.mu.Unlock()
+	if current != first {
+		t.Fatal("a second re-send worker replaced the in-flight worker's completion channel")
+	}
+	if !s.TxAlarmActive() {
+		t.Fatal("a still-keyed answer while a re-sent stop is already in flight must take the alarm path")
+	}
+
+	// A key that waited on the first channel is released by worker A's exit —
+	// and by nothing else.
+	released := make(chan struct{})
+	go func() { <-first; close(released) }()
+	select {
+	case <-released:
+		t.Fatal("the completion channel closed before the in-flight stop landed")
+	case <-time.After(30 * time.Millisecond):
+	}
+	gated.release()
+	select {
+	case <-released:
+	case <-time.After(time.Second):
+		t.Fatal("worker A's exit did not close its own completion channel")
+	}
+}

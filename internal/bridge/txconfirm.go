@@ -398,11 +398,19 @@ func (s *Service) reassertStopBeforeAlarm() bool {
 	s.mu.Lock()
 	cl := s.activeClient
 	gen := s.txConfirmGen // the cycle this re-send answers for
-	eligible := !s.txAlarmActive && !s.txStopReasserted && !s.stopped &&
-		s.runCtx != nil && cl != nil
+	// One worker in flight at a time: txReassertDone has exactly one owner, so
+	// the worker's cleanup can only ever close its own channel. Without this a
+	// fresh cycle (defensive recovery's beginTxConfirmIfUncertain resets the
+	// per-cycle flag) plus another "1" could start a second worker mid-write,
+	// whose channel the first worker's exit would then close — leaving a key
+	// waiting on the orphaned first channel blocked under keyMu (ae8cb9a5
+	// review P2). A "1" while a re-sent stop has not even landed is the alarm
+	// path, which is also the right reading of it.
+	eligible := !s.txAlarmActive && !s.txStopReasserted && s.txReassertDone == nil &&
+		!s.stopped && s.runCtx != nil && cl != nil
 	if eligible {
 		s.txStopReasserted = true
-		s.txReassertDone = make(chan struct{}) // key paths wait on this
+		s.txReassertDone = make(chan struct{}) // key paths wait on this; owned by this worker
 		s.wg.Add(1)                            // under s.mu with the stopped check, like startAlarmProbes
 	}
 	s.mu.Unlock()
@@ -425,7 +433,8 @@ func (s *Service) reassertStopBeforeAlarm() bool {
 	body := func() {
 		defer func() {
 			// Release any key waiting on this stop — on every exit, including
-			// a panic unwinding through here.
+			// a panic unwinding through here. The channel is this worker's own:
+			// no other worker can start while it is set (eligibility above).
 			s.mu.Lock()
 			if s.txReassertDone != nil {
 				close(s.txReassertDone)
