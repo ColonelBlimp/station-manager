@@ -150,18 +150,49 @@ single-flight keying, guaranteed stop, and operator-initiated session boundaries
   idle rig never raises a TX alarm, while a rig genuinely keyed at open still raises one within the
   existing latency. No settle duration or re-read mechanism is chosen yet. Passive reproduction at
   port open (receive only, operator agreement for that occasion) promotes this to backlog P1 #2.
-- **Transient post-unkey TX alarm (inbox 2026-09-11/12; SELECTED 2026-09-13, backlog P1 #2):** four
-  occurrences in about 600 FT4 rungs over two days (2026-09-11 17:41:28Z and 17:53:43Z; 2026-09-12 15:34:20Z
-  and 16:00:05Z): the post-unkey check saw CAT TX still keyed, the bridge skipped the ft8 mode restore and
-  re-sent `tx_off`, and the rig's tx-status 2 → 0 reports landed within the same second — after the check
-  instead of before it as on every other rung. Not tied to repeats, band or rung kind (a first attempt, a
-  sixth repeat, two CQ rungs, one answer). Operator ruling 2026-09-13: a false alarm makes the operator doubt
-  the rig or the software, so this goes ahead of every other post-contest item. Acceptance outcome to refine
-  before building: a rung whose rig reports idle within the normal post-unkey latency never raises TX ALARM,
-  while a rig still keyed past that latency raises one within the existing bound. The confirmation window
-  against the poll cadence is the suspect; the bound is the operator's to set, because the nearest confusable
-  outcome is hiding a real stuck PTT behind a wider window. Evidence: `internal/bridge/drivealarm.go`,
-  `internal/bridge/meterpoll.go`, acceptance record entries 35 and 37, the inbox notes.
+- **Transient post-unkey TX alarm (inbox 2026-09-11/12; SELECTED 2026-09-13, backlog P1 #2):** the
+  `tx_still_keyed` alarm that self-clears within a second. Operator ruling 2026-09-13: a false alarm makes
+  the operator doubt the rig or the software, so this goes ahead of every other post-contest item.
+  **Investigation 2026-09-13 (passive: code + `smd.log`):**
+  - *Mechanism (`internal/bridge/txconfirm.go`, `txrecheck.go`, `ft8tx.go`):* the unkey writes `TX0;` and
+    at once sends the status query `TX;`. The rig's answer decides: `0` confirms idle, `2` (TX by other
+    means, the normal ~1 s TX→RX tail on the FTdx10) stays inconclusive, `1` (CAT TX still on) raises
+    `tx_still_keyed` immediately, starts the alarm probes (first re-query after 250 ms) and the stop retry
+    (re-sends `TX0;` after 400 ms, up to 4 times). The 3 s confirm timeout is NOT involved — that path is
+    `tx_unconfirmed` (4 occurrences, separate). The SPA banner shows the alarm the instant it is published
+    and retires it on the clear event, with no hold-down.
+  - *Every occurrence has one shape* (14 since 2026-07-21, on FT8 rungs, tune releases and FT4 alike —
+    not an FT4 effect; about 0.6 % of 2,124 FT8/FT4 rungs, plus tune releases not counted, the last four 2026-09-11 17:41:28Z
+    and 17:53:43Z, 2026-09-12 15:34:20Z and 16:00:05Z): `TX0;` written → query answered `1` → alarm →
+    the 250 ms re-probe answered `1` AGAIN → `TX0;` re-sent at 400 ms → the rig then reports `2` and
+    `0`, in the second AFTER the alarm → cleared. On a normal rung the `2` and `0` land in the same second
+    as the unkey. The rung's own mode restore is skipped (`skipping ft8 mode restore`); the next rung keys
+    normally. Under `AI1;` (auto-information, the rigdef's INIT) the FTdx10 pushes status transitions
+    unsolicited, so an accepted first `TX0;` should have produced the `2` push before the 400 ms retry.
+  - *Two hypotheses, not yet separable at second-resolution timestamps:* **(A)** the rig did not act on
+    the first `TX0;` — it answered `1` twice over ~250 ms and only unkeyed on the re-sent stop, so the
+    alarm was TRUE for ~0.4–1 s and the retry did its job (consistent with the empirical "drops commands
+    around the TX→RX transition" observation in ADR 0057/0064, here dropping the stop itself); **(B)** the
+    rig answers `TX;` from a stale internal state for some hundreds of ms after accepting `TX0;`, the
+    tail was coming anyway, and the retry is coincidental (a false alarm). The "2" arriving only after the
+    retry in every case favours (A), but the log's `time` field is whole seconds (zerolog default,
+    `internal/logging`), so the order of `TX0;` write → `1` answer → re-sent `TX0;` → `2` push is
+    inferred from line order, not measured. PO meter readings stop at the unkey write (the meter-gap
+    window is sealed there), so no post-unkey power evidence exists either.
+  - *Acceptance outcome (operator-observable):* a stop that the rig obeys on the first or the automatic
+    second attempt never shows the operator a red "STILL transmitting" banner; a rig still keyed after
+    the automatic retries raises the banner within the existing bound (400 ms × retries + confirm
+    timeout). Nearest confusable outcome: hiding a genuinely stuck PTT for the retry burst — bounded,
+    because the daemon re-sends the stop during that burst regardless of what the operator sees.
+  - *Options for the ruling (mechanism not chosen):* **(1)** evidence first — millisecond log timestamps
+    (one logger setting; changes every line's `time` field) so the next occurrence settles A vs B before
+    any behaviour change; **(2)** daemon: on a `1` answer, re-send `TX0;` at once and re-query, and only
+    raise `tx_still_keyed` if the second answer is also `1` or the confirm timeout elapses — keeps the
+    detection, delays the banner by one retry (a change to a TX-safety mechanism; ADR 0057 rule 5 admits
+    it because this is an observed event, and it removes no stop attempt); **(3)** SPA-only hold-down
+    (show `tx_still_keyed` only if still active after N ms) — cheapest, but the daemon would still log
+    an error and skip the mode restore, and the operator would never learn the rig needed a second stop.
+    Threshold/retry values are the operator's; (1)+(2) together is the recommended pairing.
 - **Safety-adjacent deferred evidence:** rig TOT surfacing/clamp, FT-710 meter-selector verification,
   meter-tail semantics, output-sink logging, playback reopen after a reproduced collapse, and
   persistent TX-state escalation only after an operator duration threshold.
