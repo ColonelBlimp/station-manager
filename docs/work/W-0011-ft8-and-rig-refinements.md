@@ -150,6 +150,18 @@ single-flight keying, guaranteed stop, and operator-initiated session boundaries
   idle rig never raises a TX alarm, while a rig genuinely keyed at open still raises one within the
   existing latency. No settle duration or re-read mechanism is chosen yet. Passive reproduction at
   port open (receive only, operator agreement for that occasion) promotes this to backlog P1 #2.
+- **Transient post-unkey TX alarm (inbox 2026-09-11/12; SELECTED 2026-09-13, backlog P1 #2):** four
+  occurrences in about 600 FT4 rungs over two days (2026-09-11 17:41:28Z and 17:53:43Z; 2026-09-12 15:34:20Z
+  and 16:00:05Z): the post-unkey check saw CAT TX still keyed, the bridge skipped the ft8 mode restore and
+  re-sent `tx_off`, and the rig's tx-status 2 → 0 reports landed within the same second — after the check
+  instead of before it as on every other rung. Not tied to repeats, band or rung kind (a first attempt, a
+  sixth repeat, two CQ rungs, one answer). Operator ruling 2026-09-13: a false alarm makes the operator doubt
+  the rig or the software, so this goes ahead of every other post-contest item. Acceptance outcome to refine
+  before building: a rung whose rig reports idle within the normal post-unkey latency never raises TX ALARM,
+  while a rig still keyed past that latency raises one within the existing bound. The confirmation window
+  against the poll cadence is the suspect; the bound is the operator's to set, because the nearest confusable
+  outcome is hiding a real stuck PTT behind a wider window. Evidence: `internal/bridge/drivealarm.go`,
+  `internal/bridge/meterpoll.go`, acceptance record entries 35 and 37, the inbox notes.
 - **Safety-adjacent deferred evidence:** rig TOT surfacing/clamp, FT-710 meter-selector verification,
   meter-tail semantics, output-sink logging, playback reopen after a reproduced collapse, and
   persistent TX-state escalation only after an operator duration threshold.

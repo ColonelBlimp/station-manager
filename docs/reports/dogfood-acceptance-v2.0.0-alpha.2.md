@@ -1284,6 +1284,40 @@ Times UTC.
     map reusing the shell's always-on stream, an enrichment concurrency cap, HTTP/2 over TLS (which would lift
     such a cap — inference, to be verified) longer term, and one-tab guidance until then.
 
+37. **2026-09-12 15:00Z–17:26Z — W-0019: the Africa FT4 DX Contest worked on the station (operator-initiated
+    Call-CQ and answer runs).** Station on `2.0.0-alpha.2-65-gba2abec7` (started 14:12Z after the day's W-0011
+    CQ-modifier builds), one SPA tab per entry 36, mains off 15:00–19:00Z with the station on a generator. The
+    operator ran `CQ AF` and answered CQs on the three cited dials: 14.080 MHz for most of the run, 7.0475 MHz
+    on six visits, 3.576 MHz on six short looks that produced no QSO (19 rungs). 51 QSOs stored 15:00:45Z
+    (ZS6PVT) to 17:13:47Z (G1WOV) — 40 on 20 m, 11 on 40 m, 41 distinct callsigns, 14 DXCC entities (AF 24,
+    EU 24, AS 2, OC 1), 10/12/12/13 per half hour then 4 in the last quarter; every row `MODE=MFSK SUBMODE=FT4`
+    with both SNR reports, grid, DXCC, continent and both zones; forwarded ClubLog 51/51, QRZ 51/51, SM Cloud
+    51 inserts + 51 stamp-sync updates, each on its first attempt, no `last_error`; 28 PSK Reporter batches
+    (670 spots). ZS6BOS was worked twice on each band (full exchanges an hour apart, answering our CQ each
+    time): the run has no same-band dupe gate — the SPA's worked-before flag comes from `/v1/contest-dupe`
+    (153 lookups during the run) but the daemon-side sequencer never consults it, and under the FT8 isolation
+    rule it cannot read the logbook without an injected seam; ruling recorded in W-0019. Rungs: 458 keyed,
+    5,439–5,472 ms (median 5,456) for the 5,039 ms waveform, 0 failed; one CQ rung cancelled at 271 ms when
+    the run switched to answering a station. Two opening answers were admitted late and head-truncated (the
+    TxController skips the head of the waveform so the surviving symbols keep their DT, up to FT4's second
+    Costas array): 15:47:16Z to ZR6LO, 1,408 ms cut, keyed 4,048 ms, right after that cancelled CQ rung;
+    15:49:09Z to ZS6FY, 1,614 ms cut, keyed 3,845 ms, a pick landing 1.9 s into the slot. Neither station
+    answered the truncated rung or the five full-length repeats that followed, so the exchange says nothing
+    either way about a head-cut rung's decodability — that stays with the G3/AC7 window. 17 opening rungs
+    were deferred to the next cycle because the fire request landed 2.35–6.61 s into our slot, past the 2.0 s
+    admission window (five between 2.35 and 2.57 s, twelve later); the log line does not say whether each was
+    an operator pick or a decode arriving late, which the AC7 window will need. 17 slot suppressions, all
+    `dial_moved` on an operator band change; the 17:20:13Z dial-guard trip (7.0475 → 7.0474 MHz) was the
+    operator's own VFO step (confirmed 2026-09-13); drive detection went dark at 16:12:22Z because the operator
+    switched the rig's meter to SWR. Two transient TX alarms (15:34:20Z on a CQ rung, 16:00:05Z answering
+    ZS6KBS), the entry-35 shape, each cleared within the second — four over the two FT4 days, now backlog P1 #2
+    (W-0011). Decodes 15:00Z–17:26Z: 2,943 over 595 slots, DT median +0.1 / p95 +0.5 / max +1.0 s, 95 % within
+    ±0.5 s, 399 distinct callsigns, 255 addressed to us. Requests over 1 s: 70 enrichment lookups (upstream
+    latency, the inbox's concurrency-cap item), nothing else. The operator stopped the run 17:24:14Z and
+    disarmed 17:24:20Z; the rig went quiet 17:25:37Z; the session email archived and sent the 51-QSO ADIF
+    17:25:48–55Z; the tab closed 17:26:28Z; no warning or error after that. The G3/AC7 waivers stand: neither
+    the decision → PTT → first-PCM latency nor the live decode p95 was measured. **W-0019's contest goal met.**
+
 ## Findings
 
 Record surprises in [`dogfood-inbox.md`](../dogfood-inbox.md) as they happen; triage each here as

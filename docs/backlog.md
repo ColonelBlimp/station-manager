@@ -27,6 +27,11 @@ on-air validation gate in W-0002.
    `["insert"]`; explicit unsupported actions stay rejected. Tests prove both cases. Built 2026-09-06;
    ships with the next candidate, which retires the B1-01 waiver. Evidence in the W-0008 dossier.
 
+2. **W-0011 · SELECTED 2026-09-13 — transient post-unkey TX alarm** (inbox 2026-09-11/12: four occurrences in
+   about 600 FT4 rungs, each cleared within the second after a re-sent `tx_off`; reproduced passively in the
+   logs). Operator ruling: a false alarm makes the operator doubt the rig or the software, so it precedes every
+   other post-contest item. Acceptance outcome and mechanism are stated in the W-0011 dossier before building.
+
 Conditional: alpha.2 Finding #7 (false TX alarm at bridge open, W-0011) becomes P1 #2 once passively reproduced.
 W-0007's four findings (equal-version SM Cloud conflict, partial station baseline, concurrent QSO delete,
 re-enrichment generation race) are all closed (2026-08-22).
@@ -35,7 +40,7 @@ re-enrichment generation race) are all closed (2026-08-22).
 
 Open one workstream per active focus.
 
-1. **W-0019 · OPEN — [FT4 for the Africa FT4 DX Contest](work/W-0019-ft4-for-the-africa-ft4-dx-contest.md).** Selected 2026-09-10 for Saturday 2026-09-12 15:00–18:00 UTC; ADR 0080; go-ft8 v0.9.0 met gate G1; slices 1–4 shipped 2026-09-11 (`57853f94`…`8701a6de`), deploy and gates G2–G4 next. Keyed testing and the first QSO stay per-occasion operator gates; the fallback is WSJT-X with manual entry.
+1. **W-0019 · OPEN — [FT4 for the Africa FT4 DX Contest](work/W-0019-ft4-for-the-africa-ft4-dx-contest.md).** Selected 2026-09-10 for Saturday 2026-09-12 15:00–18:00 UTC; ADR 0080; go-ft8 v0.9.0 met gate G1; slices 1–5 shipped 2026-09-11; contest worked 2026-09-12 (51 QSOs, record entry 37); G2/G4 met, AC7/G3 waived until the post-contest measurements; close-out awaits those and the same-band dupe ruling. Keyed testing and the first QSO stay per-occasion operator gates; the fallback is WSJT-X with manual entry.
 2. **W-0002 · validation gate · OPEN — [Validate the reduced FT8 type-4 ladder on air](work/W-0002-ft8-type4-on-air-validation.md).** Confirm one operator-initiated completed exchange with a real nonstandard station; RF action always requires agreement for that occasion.
 3. **W-0008 · OPEN — [Harden audited contract boundaries](work/W-0008-harden-audited-contract-boundaries.md).** Ordered persistence, configuration, API-wire, and frontend-wire correctness slices.
 4. **W-0010 · OPEN — [Improve forwarding, data, and synchronization reliability](work/W-0010-forwarding-data-and-sync-reliability.md).** Token rotation, duplicate-QSO resolution, legal bulk backfill, idempotent outcomes, and bounded reconciliation.

@@ -145,6 +145,10 @@ Operate view (the fallback in ADR 0080), and W-0019 continues afterwards without
 4. After the contest: export ADIF from the logbook, run SARL's converter, submit by Thursday 2026-09-17 21:59 UTC.
 5. Record the session in the dogfood record: QSO count, any stalls, decode times, forwarder and SM Cloud outcomes.
 
+Outcome 2026-09-12 (record entry 37): steps 1–3 and 5 done — 51 QSOs 15:00:45Z–17:13:47Z, 40 on 20 m and 11 on
+40 m, all forwarded first attempt. Step 4 is the operator's: export, convert and submit by Thursday
+2026-09-17 21:59 UTC.
+
 ## Open rulings for the operator
 
 - Ratified 2026-09-10: the DT reference is the first Costas array at slot + 0.500 s with PCM sample zero at
@@ -160,6 +164,13 @@ Operate view (the fallback in ADR 0080), and W-0019 continues afterwards without
 - Ruled 2026-09-10: an FT4 exchange is filed as ADIF's `MODE=MFSK SUBMODE=FT4` pair (ADIF 3.1.5 Submode
   Enumeration); the embedded catalogue, which had promoted FT4, FST4, FST4W, JS8 and Q65 to main modes, was
   corrected as a separate commit before the contest gates (`8701a6de`).
+- Whether the Call-CQ run should refuse a same-band dupe during a contest. 2026-09-12: ZS6BOS was worked
+  twice on 20 m and twice on 40 m, full exchanges an hour apart, answering our CQ each time. The SPA's
+  worked-before flag (`/v1/contest-dupe`, band + mode + submode) is informational; the daemon-side sequencer
+  never consults it and, under the FT8 isolation rule, cannot read the logbook without an injected seam.
+  Options: keep answering (a repeat costs one exchange and harms nothing outside a contest); skip flagged
+  callers only while a contest flag is set; or surface the repeat in the ladder and let the operator press
+  Next. Nearest confusable outcome: a station legitimately re-worked after a band or mode change.
 - Whether FT4 is a boot default later (`ft8.mode`), or stays runtime-only.
 - Which non-contest bands get an FT4 default dial, and from which citation.
 
@@ -202,4 +213,10 @@ Operate view (the fallback in ADR 0080), and W-0019 continues afterwards without
   1,574 decodes / 166 slots, DT median +0.1 s; first FT4 Call-CQ run 43 QSOs in 30 minutes, 127 rungs, all
   forwarded; request starvation with a second SPA tab open (consistent with connection-budget exhaustion —
   one tab for the contest) and the transient TX-alarm timing logged to the inbox for post-contest triage.
+- 2026-09-12 — the contest (record entry 37): station `2.0.0-alpha.2-65-gba2abec7`, 51 QSOs 15:00:45Z–17:13:47Z
+  (40 on 20 m, 11 on 40 m, 14 DXCC entities), every upload first attempt; 458 rungs keyed 5,439–5,472 ms, two
+  late-admitted opening answers head-truncated 1,408 and 1,614 ms (inconclusive on decodability — no reply to
+  them or to their full-length repeats), 17 opening rungs deferred past the 2.0 s window (fire request 2.35–6.61 s
+  into our slot); two transient TX alarms; decodes 2,943 over 595 slots, DT median +0.1 / p95 +0.5 s. Same-band
+  dupe gate absent (ruling above). G3/AC7 still unmeasured.
 - Contest rules: 2026 SARL Contest Manual v1.1, "The Africa FT4 DX Contest", pp. 45–46.
