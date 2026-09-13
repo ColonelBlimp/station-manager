@@ -98,6 +98,7 @@ func (s *Service) beginTxConfirmCycle(def cat.RigDefinition, cl serial.Client, r
 		return false
 	}
 	s.txUncertain = true
+	s.txStopReasserted = false // a fresh cycle gets one pre-alarm re-sent stop
 	s.txConfirmGen++
 	gen := s.txConfirmGen
 	// The any-data fallback is valid only after a successfully written unkey on
@@ -220,6 +221,8 @@ func (s *Service) confirmTxIdle(how string) {
 	s.mu.Lock()
 	wasUncertain := s.txUncertain
 	wasAlarmed := s.txAlarmActive
+	reasserted := s.txStopReasserted
+	s.txStopReasserted = false
 	s.txUncertain = false
 	s.txAlarmActive = false
 	s.txConfirmViaRigData = false
@@ -234,8 +237,14 @@ func (s *Service) confirmTxIdle(how string) {
 	if wasAlarmed {
 		s.publishTxAlarm(false, "")
 	}
-	if wasUncertain {
-		s.logger.InfoWith().Str("how", how).Msg("bridge: tx state confirmed idle")
+	if wasUncertain && reasserted && !wasAlarmed {
+		// The operator-facing record of the event the alarm used to announce:
+		// the rig obeyed the second stop, not the first. Warn, not error — no
+		// alarm was raised and nothing is left keyed.
+		s.logger.WarnWith().Str("how", how).Bool("stop_reasserted", true).
+			Msg("bridge: tx state confirmed idle after the re-sent stop — the rig did not obey the first stop; no alarm raised")
+	} else if wasUncertain {
+		s.logger.InfoWith().Str("how", how).Bool("stop_reasserted", reasserted).Msg("bridge: tx state confirmed idle")
 	}
 }
 
@@ -332,12 +341,104 @@ func (s *Service) resolveTxStatusWhileUncertain(v string) {
 		// REMOVES an unsound confirmation rather than adding a layer, which is
 		// why ADR 0057's "no new TX-safety mechanism" rule does not bar it.
 	case "1":
-		s.logger.ErrorWith().Msg("bridge: rig reports CAT TX still keyed after unkey — CHECK YOUR RADIO")
+		if s.reassertStopBeforeAlarm() {
+			return // stop re-sent and the rig asked again; the NEXT answer decides
+		}
+		s.mu.Lock()
+		reasserted := s.txStopReasserted
+		s.mu.Unlock()
+		s.logger.ErrorWith().Bool("stop_reasserted", reasserted).
+			Msg("bridge: rig reports CAT TX still keyed after unkey — CHECK YOUR RADIO")
 		s.raiseTxAlarm(TxAlarmStillKeyed)
 		// Positive evidence the transmitter is up when it should be down — keep
 		// trying to stop it, don't just report it (see retryUnkeyStillKeyed).
 		s.retryUnkeyStillKeyed()
 	}
+}
+
+// reassertStopBeforeAlarm handles the FIRST "still keyed" answer of a
+// confirmation cycle: re-send the stop at once and ask the rig again, and let
+// the next answer decide — a "0" confirms idle with no alarm ever shown, a
+// second "1" alarms through the case above, and silence leaves the cycle's
+// ORIGINAL confirm timeout to alarm (the timer is deliberately not re-armed,
+// so the bound "alarm at latest txConfirmTimeout after the unkey" is
+// unchanged). Evidence for the shape: W-0011 — 14 occurrences 2026-07-21 to
+// 2026-09-12, every one "1", "1" again 250 ms later, then the normal 2 → 0
+// tail only after the re-sent stop.
+//
+// Returns false when the alarm path must run now instead: the cycle already
+// spent its re-send, an alarm is standing (the probe loop's own re-queries
+// land here too), the service is stopping, or no client/rigdef can carry the
+// stop. A re-send WRITE failure alarms from the goroutine.
+//
+// The write runs on a tracked goroutine, not inline and not under keyMu:
+// this is called from the readLoop, and the FT8/tune release paths hold keyMu
+// across waitTxConfirm — a keyMu-bound write here would deadlock until the
+// confirm timeout, which is the opposite of the point. The stop is the safe,
+// idempotent command; it needs no single-flight, only binding to the client
+// it answers for (checked again under mu before the write).
+func (s *Service) reassertStopBeforeAlarm() bool {
+	driver := ""
+	if s.cfg.Cat != nil {
+		driver = s.cfg.Cat.Driver
+	}
+	def, ok := cat.Lookup(driver)
+	if !ok {
+		return false
+	}
+	off, err := encodeTuneUnkey(def)
+	if err != nil {
+		return false
+	}
+	query, err := cat.Encode(def, readTxStatusCommand)
+	if err != nil {
+		return false
+	}
+
+	s.mu.Lock()
+	cl := s.activeClient
+	eligible := !s.txAlarmActive && !s.txStopReasserted && !s.stopped &&
+		s.runCtx != nil && cl != nil
+	if eligible {
+		s.txStopReasserted = true
+		s.wg.Add(1) // under s.mu with the stopped check, like startAlarmProbes
+	}
+	s.mu.Unlock()
+	if !eligible {
+		return false
+	}
+	s.logger.WarnWith().
+		Msg("bridge: rig reports CAT TX still keyed after unkey — re-sending the stop and asking again before alarming")
+
+	body := func() {
+		s.mu.Lock()
+		current := s.activeClient == cl && s.txUncertain && !s.txAlarmActive
+		s.mu.Unlock()
+		if !current {
+			return // reconnected, confirmed or alarmed meanwhile — nothing to re-send
+		}
+		if werr := s.writeKeyedLine(context.Background(), def, cl, off, "still-keyed re-unkey"); werr != nil {
+			s.logger.ErrorWith().Err(werr).
+				Msg("bridge: re-sent stop could not be written — alarming now")
+			s.raiseTxAlarm(TxAlarmStillKeyed)
+			s.retryUnkeyStillKeyed()
+			return
+		}
+		if def.Protocol == cat.ProtocolIcomCIV {
+			s.confirmTxIdle("civ ack (still-keyed re-unkey)") // the awaited ACK is positive evidence
+			return
+		}
+		if qerr := cl.WriteCommandBytes(context.Background(), query); qerr != nil {
+			s.logger.WarnWith().Err(qerr).
+				Msg("bridge: tx-status re-query after the re-sent stop failed to write; the confirm timeout decides")
+			return
+		}
+		s.logger.InfoWith().
+			Msg("bridge: stop re-sent and rig asked again — alarm deferred to a second still-keyed answer or the confirm timeout")
+	}
+	safego.GoTrackedPreAdded("bridge.stillKeyedReassert", s.onPanic, body,
+		func() { s.raiseTxAlarm(TxAlarmStillKeyed) }, &s.wg)
+	return true
 }
 
 // observeRigData is the deliberately weak liveness-fallback confirmation for a

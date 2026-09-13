@@ -193,6 +193,32 @@ single-flight keying, guaranteed stop, and operator-initiated session boundaries
     (show `tx_still_keyed` only if still active after N ms) — cheapest, but the daemon would still log
     an error and skip the mode restore, and the operator would never learn the rig needed a second stop.
     Threshold/retry values are the operator's; (1)+(2) together is the recommended pairing.
+  - *Ruled 2026-09-13:* (1) and (2) built; (3) declined. Acceptance criterion accepted as written; the existing
+    safety bound is preserved and the sequence is recorded in the log.
+  - *Built 2026-09-13 (`internal/bridge/txconfirm.go` `reassertStopBeforeAlarm`, `internal/logging/service.go`):*
+    the first `1` answer of a confirmation cycle now re-sends `TX0;` and re-queries `TX;` at once on a tracked
+    goroutine (not under `keyMu` — the FT8/tune release holds it across `waitTxConfirm`, so an inline
+    keyMu-bound write would deadlock until the timeout), bound to the client it answers for; the cycle's
+    generation and confirm timer are untouched, so the alarm still comes at latest `txConfirmTimeout` after
+    the original unkey. The next answer decides: `0` confirms idle (log **warn** `tx state confirmed idle
+    after the re-sent stop — the rig did not obey the first stop; no alarm raised`, `stop_reasserted: true`);
+    a second `1` raises `tx_still_keyed` exactly as before (error line now carries `stop_reasserted`) and
+    starts the stuck-TX burst and probes; silence lets the original timeout raise `tx_unconfirmed`; a re-send
+    write failure alarms at once. A `1` under a standing alarm (the probe loop's own re-queries) never enters
+    the gentle path. Log sequence per event: warn `still keyed … re-sending the stop and asking again before
+    alarming` → info `stop re-sent and rig asked again — alarm deferred …` → the deciding line above. Every
+    record's `time` now carries milliseconds (`2006-01-02T15:04:05.000Z07:00`, process-global zerolog format
+    set in the logging initialiser), so the next occurrence orders stop write → answer → re-sent stop → tail
+    and settles (A) vs (B). Tests: `txreassert_test.go` (first answer re-sends without alarming and keeps the
+    cycle; second answer alarms with one `tx_still_keyed` event and the burst; the original timeout still
+    fires; write failure alarms; no reassert while alarmed), the three `TestStillKeyed_*` retry tests now
+    answer `1` twice, `TestStopTune_StillKeyedAnswerSkipsRestore` unchanged (answers every query);
+    `logging/timestamp_test.go`. Reversion proof: with the implementation stashed the three new tests fail at
+    the first-answer-alarms assertions. ADR 0051's "`1` alarms" line is superseded by this ruling (recorded
+    here, the ADR stays a record). Operator question 2026-09-13, whether CAT/serial speed is a factor: the
+    frames are ~1 ms at 38,400 baud, so port speed alone is unlikely; the rig's own processing order — whether
+    its firmware acts on `TX0;` before answering a `TX;` that arrives right behind it — is exactly what
+    separates (A) from (B), and the millisecond stamps are what will show it. Not yet deployed.
 - **Safety-adjacent deferred evidence:** rig TOT surfacing/clamp, FT-710 meter-selector verification,
   meter-tail semantics, output-sink logging, playback reopen after a reproduced collapse, and
   persistent TX-state escalation only after an operator duration threshold.

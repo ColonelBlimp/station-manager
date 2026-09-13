@@ -209,11 +209,12 @@ func TestAlarmProbes_SingleLoopPerRaise(t *testing.T) {
 func TestStillKeyed_ReAssertsTheStop(t *testing.T) {
 	s, fake := newAlarmProbeService(t, 1)
 
-	// The rig answers the post-unkey query with "still transmitting".
+	// The rig answers the post-unkey query with "still transmitting" — and
+	// again after the pre-alarm re-sent stop.
 	s.mu.Lock()
 	s.txUncertain = true
 	s.mu.Unlock()
-	s.observeTxStatus("1")
+	answerStillKeyedTwice(t, s, fake) // first answer re-sends the stop; the second alarms
 
 	waitFor(t, func() bool {
 		for _, w := range fake.recordedWrites() {
@@ -248,7 +249,7 @@ func TestStillKeyed_StopsOnceTheRigObeys(t *testing.T) {
 	s.mu.Lock()
 	s.txUncertain = true
 	s.mu.Unlock()
-	s.observeTxStatus("1")
+	answerStillKeyedTwice(t, s, fake) // first answer re-sends the stop; the second alarms
 
 	waitFor(t, func() bool {
 		for _, w := range fake.recordedWrites() {
@@ -293,7 +294,7 @@ func TestStillKeyed_StopsWhenTheClientGoesAway(t *testing.T) {
 	s.mu.Lock()
 	s.txUncertain = true
 	s.mu.Unlock()
-	s.observeTxStatus("1")
+	answerStillKeyedTwice(t, s, fake) // first answer re-sends the stop; the second alarms
 
 	waitFor(t, func() bool {
 		for _, w := range fake.recordedWrites() {

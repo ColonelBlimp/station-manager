@@ -17,6 +17,10 @@ import (
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
+// fileTimeFieldFormat is the `time` field layout of every log record: RFC 3339
+// with millisecond precision and the local offset (Go layout, not strftime).
+const fileTimeFieldFormat = "2006-01-02T15:04:05.000Z07:00"
+
 // Service is the primary logging facility for the application.
 //
 // It wraps rs/zerolog with:
@@ -134,6 +138,12 @@ func (s *Service) Initialize() error {
 		// single carrier; "dev" when unstamped — the FIELD is always present, but
 		// "dev" says only that the build was unstamped, not WHICH build wrote the
 		// record. Exact attribution needs a stamped build.
+		// Millisecond timestamps on every record (W-0011, operator ruling
+		// 2026-09-13): the CAT stop → status answer → re-sent stop sequence
+		// resolves inside one second and whole-second stamps could not order
+		// it. Process-global in zerolog, set here because this is the one
+		// initialiser; RFC 3339 shape kept so RFC 3339 readers still parse it.
+		zerolog.TimeFieldFormat = fileTimeFieldFormat
 		logger := zerolog.New(hw).With().Str("version", buildinfo.Version).Logger()
 
 		level, levelErr := zerolog.ParseLevel(s.LoggingConfig.Level)

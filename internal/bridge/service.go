@@ -465,6 +465,15 @@ type Service struct {
 	// could stack retry goroutines.
 	txStopRetrying bool
 
+	// txStopReasserted (mu-guarded) marks that the CURRENT confirmation cycle has
+	// already answered one "still keyed" (TXSTATUS=1) with an immediate re-sent
+	// stop and re-query instead of an alarm (W-0011, operator ruling 2026-09-13:
+	// every logged occurrence cleared on that second stop within a second, and
+	// the red banner for that second cost more trust than it bought). A second
+	// "1" in the same cycle, or the cycle's original confirm timeout, alarms as
+	// before. Reset when a cycle begins and when the rig confirms idle.
+	txStopReasserted bool
+
 	// txAlarmProbeGen gates the alarm re-probe loop the way txConfirmGen gates
 	// the confirm timeout: the loop reads it before every probe and exits when
 	// it no longer matches, so a cleared-then-re-raised alarm never leaves two
