@@ -34,6 +34,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -268,7 +269,10 @@ func (f *Forwarder) Submit(
 		}
 	}
 
-	if tr, ok := classifyHTTPStatus(resp.StatusCode, body); ok {
+	// Anything QRZ says about a request can echo the key it rejected, and the
+	// classified error is stored verbatim in qso_upload.last_error (→ smd.log,
+	// GET /v1/qso/{uuid}/uploads). Redact before any text is classified.
+	if tr, ok := classifyHTTPStatus(resp.StatusCode, []byte(redactKey(string(body), f.apiKey))); ok {
 		return tr
 	}
 
@@ -282,7 +286,29 @@ func (f *Forwarder) Submit(
 		}
 	}
 
+	parsed.Reason = redactKey(parsed.Reason, f.apiKey)
 	return classifyResponse(act, parsed)
+}
+
+// redactKey replaces every occurrence of the API key in upstream text with
+// "[REDACTED]" — the configured form and QRZ's own echo of it (the AUTH reason
+// "invalid api key <key>" carries it with the dashes stripped, case not
+// guaranteed; dogfood inbox 2026-09-12). Case-insensitive on purpose: a key is
+// hex, and a stored last_error that leaks it in either case is the same leak
+// (diagnostics-can-leak-secrets). Empty key: nothing to redact.
+func redactKey(value, apiKey string) string {
+	if apiKey == "" {
+		return value
+	}
+	forms := []string{apiKey}
+	if stripped := strings.ReplaceAll(apiKey, "-", ""); stripped != apiKey && stripped != "" {
+		forms = append(forms, stripped)
+	}
+	for _, form := range forms {
+		re := regexp.MustCompile("(?i)" + regexp.QuoteMeta(form))
+		value = re.ReplaceAllLiteralString(value, "[REDACTED]")
+	}
+	return value
 }
 
 // buildForm assembles the x-www-form-urlencoded request body for the

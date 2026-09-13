@@ -466,3 +466,52 @@ func TestNew_UsesConfigEndpoint(t *testing.T) {
 		t.Fatalf("test server saw method %q, want POST — config endpoint not used?", rec.method)
 	}
 }
+
+// The AUTH reason QRZ returns can echo the rejected key ("invalid api key
+// <key>"), and forwarding.Result.Err is stored verbatim in qso_upload.last_error,
+// from where it reaches smd.log and GET /v1/qso/{uuid}/uploads (dogfood inbox
+// 2026-09-12; diagnostics-can-leak-secrets). QRZ echoes the key in its own
+// shape — dashes stripped, case not guaranteed — so both the configured form
+// and the stripped form are redacted, case-insensitively.
+func TestSubmit_AUTH_ReasonNeverEchoesTheAPIKey(t *testing.T) {
+	const key = "abcd-1234-ef56-7890"
+	for _, echoed := range []string{"abcd-1234-ef56-7890", "ABCD1234EF567890", "abcd1234ef567890"} {
+		var rec captured
+		srv := newTestServer(t, http.StatusOK, "RESULT=AUTH&REASON="+url.QueryEscape("invalid api key "+echoed), &rec)
+		fwd := fwdAt(srv.URL, key)
+
+		res := fwd.Submit(context.Background(), sampleQso(), action.Insert, "")
+		if res.Outcome != forwarding.OutcomeTerminal || res.Err == nil {
+			t.Fatalf("echo %q: outcome = %q, err = %v; want terminal with an error", echoed, res.Outcome, res.Err)
+		}
+		msg := res.Err.Error()
+		lower := strings.ToLower(msg)
+		if strings.Contains(lower, "abcd1234ef567890") || strings.Contains(lower, "abcd-1234-ef56-7890") {
+			t.Fatalf("echo %q: the stored error text carries the API key: %q", echoed, msg)
+		}
+		if !strings.Contains(msg, "authentication rejected") || !strings.Contains(msg, "[REDACTED]") {
+			t.Fatalf("echo %q: err = %q, want the rejection kept with the key replaced by [REDACTED]", echoed, msg)
+		}
+		srv.Close()
+	}
+}
+
+func TestSubmit_HTTPErrorBodyNeverEchoesTheAPIKey(t *testing.T) {
+	const key = "abcd-1234-ef56-7890"
+	var rec captured
+	srv := newTestServer(t, http.StatusBadRequest, "bad key ABCD1234EF567890 for this request", &rec)
+	t.Cleanup(srv.Close)
+	fwd := fwdAt(srv.URL, key)
+
+	res := fwd.Submit(context.Background(), sampleQso(), action.Insert, "")
+	if res.Err == nil {
+		t.Fatal("want an error on HTTP 400")
+	}
+	msg := strings.ToLower(res.Err.Error())
+	if strings.Contains(msg, "abcd1234ef567890") {
+		t.Fatalf("the HTTP error text carries the API key: %q", res.Err.Error())
+	}
+	if !strings.Contains(res.Err.Error(), "[REDACTED]") {
+		t.Fatalf("err = %q, want the key replaced by [REDACTED]", res.Err.Error())
+	}
+}
