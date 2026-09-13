@@ -183,6 +183,10 @@ Outcome 2026-09-12 (record entry 37): steps 1–3 and 5 done — 51 QSOs 15:00:4
   staleness bound, or with the run. Tests `repeathold_test.go` H1–H7 (auto-work and Call-CQ shapes, Answer anyway,
   Next, lookup failure, no seam, carry-on and expiry); reversion proof: pick-path files stashed, five fail.
   The Operate panel renders the hold with Answer anyway / Next; `docs/ft8.md` and `api-endpoints.md` updated.
+  Codex review of `76e28cb7` (P1, fixed 2026-09-13): the lookup was gated on "no hold yet", so a SECOND worked
+  station reached selection while one was held; every candidate is now classified and a further repeat is
+  skipped (`repeat_while_another_held`) until the hold resolves — test H8 (two repeats in one batch, a repeat in
+  a later slot, an unworked station still through).
 - Whether FT4 is a boot default later (`ft8.mode`), or stays runtime-only.
 - Which non-contest bands get an FT4 default dial, and from which citation.
 

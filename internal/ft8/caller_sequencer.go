@@ -695,11 +695,19 @@ func (s *Sequencer) pickAnswererLocked(msgs []goft8.DecodedMessage, period strin
 			h.lastHeard = now
 			continue
 		}
-		if s.repeatHold == nil {
-			if worked, band := s.isWorkedRepeatLocked(c.TheirCall, dialMHz); worked {
+		// Every candidate is classified, hold or no hold (codex 76e28cb7 P1: a
+		// lookup gated on "no hold yet" let a SECOND repeat through to selection).
+		// One hold at a time: a further repeat is skipped this slot and gets its
+		// own hold once the first resolves.
+		if worked, band := s.isWorkedRepeatLocked(c.TheirCall, dialMHz); worked {
+			if s.repeatHold == nil {
 				s.holdRepeatLocked(&c, band, period, now)
-				continue
+			} else {
+				s.log.InfoWith().Str("answerer", c.TheirCall).
+					Str("reason", "repeat_while_another_held").
+					Msg("ft8 seq: skipping answerer — excluded")
 			}
+			continue
 		}
 		reply, ok := c.TxMessage()
 		if !ok {

@@ -226,18 +226,38 @@ describe('enrichment scheduler: cap, priority, stale-work drop, cancellation', (
         ft8EnrichState.observe('CALL', '20m', 'FT8', { kind: 'call', slot: 't1' }); // calling us, old slot
         ft8EnrichState.endPass();
         await flush();
-        expect(inFlight()).toEqual(['X1XX', 'Y1YY']);
+        // Whole-pass dispatch: the caller goes first though its slot is the oldest,
+        // then the newest slot's first row; the rest wait in priority order.
+        expect(inFlight()).toEqual(['CALL', 'X1XX']);
 
         started[0].resolve();
         await flush();
-        expect(inFlight()[2]).toBe('CALL'); // the caller first, though its slot is the oldest
+        expect(inFlight()[2]).toBe('Y1YY'); // the other t9 row
         started[1].resolve();
         await flush();
-        expect(inFlight()[3]).toBe('NEW1'); // then the newer slot
+        expect(inFlight()[3]).toBe('NEW1'); // then the newer of the older slots
         started[2].resolve();
         started[3].resolve();
         await flush();
         expect(inFlight()[4]).toBe('OLD1');
+    });
+
+    // codex 1fe16e2b P2: dispatch waited for nobody — the first rows observed in a
+    // pass filled the cap before a caller later in the same pass (cq_to_top lists
+    // CQ rows first) was even seen. A pass enqueues; endPass() dispatches.
+    it('dispatch waits for the whole pass, so a caller observed last still goes first', async () => {
+        controllableEnricher();
+        ft8EnrichState.beginPass();
+        ft8EnrichState.observe('CQ1AA', '20m', 'FT8', { kind: 'cq', slot: 't9' });
+        ft8EnrichState.observe('CQ2BB', '20m', 'FT8', { kind: 'cq', slot: 't9' });
+        expect(inFlight()).toHaveLength(0); // nothing starts mid-pass
+        ft8EnrichState.observe('CALLR', '20m', 'FT8', { kind: 'call', slot: 't1' });
+        ft8EnrichState.endPass();
+        await flush();
+
+        expect(inFlight()).toHaveLength(2);
+        expect(inFlight()).toContain('CALLR');
+        expect(inFlight()[0]).toBe('CALLR');
     });
 
     it('a pending lookup for a row that scrolled off is dropped; one still visible survives', async () => {

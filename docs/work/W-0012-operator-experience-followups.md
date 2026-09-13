@@ -102,7 +102,10 @@ not compete with the app-shell, notification-history, or UI-cohesion dossiers.
   is dropped; stations calling us jump the queue, then newer slots; the worked-before check stays
   outside the budget; `clear()` on view close aborts in-flight lookups (AbortSignal through
   `apiEnrich`) and discards late answers. `ft8Enrich.svelte.ts` scheduler + `Ft8BandActivity.svelte`
-  pass brackets; tests on a controllable enricher (cap, priority, drop, abort). Tests on a fake enricher with controllable promises in the module's
+  pass brackets; tests on a controllable enricher (cap, priority, drop, abort). Codex review of `1fe16e2b` (P2,
+  fixed 2026-09-13): dispatch ran mid-pass, so the first rows observed filled the cap before a caller later in
+  the same pass (cq_to_top lists CQ rows first) was seen — a pass now only enqueues and `endPass()` dispatches
+  over the whole of it; outside a pass (markWorked's re-kick) dispatch is immediate. Tests on a fake enricher with controllable promises in the module's
   existing test file: never more than N in flight, the order, abort on close. Alternative, larger:
   the daemon stamps the cached country onto each decode line as it publishes the slot (cache read
   only, never upstream) so Band Activity makes no per-decode request and only misses are warmed in

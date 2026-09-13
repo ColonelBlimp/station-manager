@@ -156,7 +156,11 @@ class Ft8EnrichState {
             return;
         }
         this.#pending.set(key, { key, call, prio, slot, seq: this.#seq++ });
-        this.#pump();
+        // Inside a pass, dispatch waits for endPass(): the first rows observed
+        // must not fill the cap before a caller later in the same pass is seen
+        // (cq_to_top lists CQ rows first; codex 1fe16e2b P2). Outside a pass
+        // (markWorked's re-kick) there is nothing to wait for.
+        if (this.#passSeen === null) this.#pump();
     }
 
     /** A Band Activity pass brackets the observes of every row on screen: what
@@ -174,6 +178,7 @@ class Ft8EnrichState {
         for (const key of [...this.#pending.keys()]) {
             if (!seen.has(key)) this.#pending.delete(key);
         }
+        this.#pump(); // the whole pass is known: priority runs over all of it
     }
 
     #merge(key: string, patch: Ft8CallInfo): void {

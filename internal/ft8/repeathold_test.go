@@ -215,3 +215,34 @@ func TestRepeatHold_NoSeamMeansNoHold(t *testing.T) {
 	require.NotNil(t, s.caller)
 	require.Nil(t, r.lastStatus().Held)
 }
+
+// H8 (codex 76e28cb7 P1) — a second repeat is not answered while another is held:
+// every candidate is classified; a known repeat is skipped when the one hold is
+// taken, an unworked station still goes through. And a worked station arriving in
+// a LATER slot while the hold stands is skipped, not committed.
+func TestRepeatHold_SecondRepeatIsNeverAutoAnsweredWhileOneIsHeld(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	workedOnly(s, "W9XYZ", "W8REP")
+	autoWorkRun(t, s, "auto_first")
+	before := len(r.sentMsgs())
+
+	driveTheir(s, 90, []goft8.DecodedMessage{
+		dm("G0XYZ W9XYZ EM12", -8), // repeat → held
+		dm("G0XYZ W8REP EM13", -9), // repeat too → skipped, never committed
+	})
+	require.Nil(t, s.caller, "a second repeat must not be answered while another is held")
+	require.Len(t, r.sentMsgs(), before)
+	require.Equal(t, "W9XYZ", r.lastStatus().Held.Call)
+
+	driveTheir(s, 120, []goft8.DecodedMessage{dm("G0XYZ W8REP EM13", -9)}) // later slot, hold still on W9XYZ
+	require.Nil(t, s.caller, "a worked station in a later slot is skipped while the hold stands")
+	require.Equal(t, "W9XYZ", r.lastStatus().Held.Call, "the hold stays on the first repeat")
+
+	driveTheir(s, 150, []goft8.DecodedMessage{
+		dm("G0XYZ W8REP EM13", -9),
+		dm("G0XYZ DL9UW JO41", -7), // not worked before
+	})
+	require.NotNil(t, s.caller)
+	require.Equal(t, "DL9UW", s.caller.TheirCall, "an unworked station still goes through")
+}
