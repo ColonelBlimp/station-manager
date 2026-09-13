@@ -152,6 +152,18 @@ not compete with the app-shell, notification-history, or UI-cohesion dossiers.
   from the canonical install guide; keep beginner help, profiles, and `default_logbook.id` wiring
   deferred until their consuming workflow exists.
 
+## Built follow-up — Band Activity typed filter announced (inbox 2026-09-12, built 2026-09-13)
+
+| | Outcome | Nearest confusable outcome |
+|---|---|---|
+| AC1 | Typed filter set: the header shows "Filter: ZS · N hidden" beside the funnel with its own clear (×); clearing it restores every row without opening the popover. | The funnel's tint as the only cue (what shipped). |
+| AC2 | The filter hides every decode: the empty state reads "No decodes match “ZS” — N hidden by the filter". | The quiet-band text "Decodes appear here as slots are received" — which stays for a band with no decodes at all. |
+| AC3 | A station calling you is never hidden and never counted. | A caller counted as hidden while it is on screen. |
+
+`Ft8BandActivity.svelte`: the funnel predicate now yields `{rows, hidden}`; the chip and the empty state
+read it. Tests in `Ft8BandActivity.svelte.test.ts` (chip + count + clear; all-hidden vs quiet band).
+Hide-hashed alone (config) keeps the tint; the chip is for the typed narrowing the operator set.
+
 ## Slice — Rig Control mode control in the FT views
 
 **Selected:** 2026-09-12, build after the Africa FT4 DX Contest (ends 2026-09-12 18:00Z); no deploy before.

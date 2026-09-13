@@ -296,8 +296,13 @@ CAT-live re-tune is opt-out** via the daemon config `restore_rig_on_mode_switch`
 
   **Band Activity filters — the funnel popover.** A **funnel icon** sits to the right
   of the "Band Activity" header; it opens a small popover holding the two controls that
-  **hide rows** (the funnel shows an active tint whenever either is narrowing the feed —
-  the only cue that rows are hidden while the popover is closed). A station **calling you**
+  **hide rows** (the funnel shows an active tint whenever either is narrowing the feed).
+  A **typed** filter is also announced beside the funnel as a chip — "Filter: ZS · 12
+  hidden" — with its own clear (×), and when it hides every decode the empty state reads
+  "No decodes match “ZS” — N hidden by the filter" instead of the quiet-band text, so an
+  empty feed under a filter is never mistaken for a dead band (inbox 2026-09-12; the
+  hidden count is rows the funnel removed — a caller is never hidden, so never counted).
+  Hide-hashed alone keeps the tint as its only cue. A station **calling you**
   (toMe) **always shows through** both filters, so you never miss a caller.
   - **typed filter** (`ft8State.bandFilter`): **token-prefix** — a decode shows when any
     whitespace token starts with the typed text, case-insensitive ("show calls starting

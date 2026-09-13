@@ -230,6 +230,55 @@ describe('Ft8BandActivity renderer', () => {
         expect(screen.getByText('7Q5MLV DL1XYZ JO31')).toBeInTheDocument(); // caller bypasses the filter
     });
 
+    // Inbox 2026-09-12: with a filter set and nothing matching, the operator sat
+    // wondering why Band Activity was empty — the funnel's colour was the only cue.
+    it('an active typed filter is announced in the header with the hidden count, and can be cleared from there', async () => {
+        setFt8OperatorCall('7Q5MLV');
+        render(Ft8BandActivity);
+        ft8Link.onDecode(
+            decode('t1', [
+                { text: 'CQ VK3ABC QF22', freq_hz: 1500, snr: -5 },
+                { text: 'CQ W1ABC FN42', freq_hz: 1200, snr: -8 },
+                { text: 'CQ W2DEF FN31', freq_hz: 1100, snr: -9 },
+                { text: '7Q5MLV DL1XYZ JO31', freq_hz: 800, snr: 2 }, // calling us — never hidden, never counted
+            ])
+        );
+        flushSync();
+        expect(screen.queryByRole('status', { name: 'Active filter' })).toBeNull(); // no filter, no chip
+
+        ft8State.bandFilter = 'VK';
+        flushSync();
+        const chip = screen.getByRole('status', { name: 'Active filter' });
+        expect(chip).toHaveTextContent('Filter: VK');
+        expect(chip).toHaveTextContent('2 hidden');
+
+        await fireEvent.click(screen.getByRole('button', { name: 'Clear Band Activity filter' }));
+        flushSync();
+        expect(ft8State.bandFilter).toBe('');
+        expect(screen.queryByRole('status', { name: 'Active filter' })).toBeNull();
+        expect(screen.getByText('CQ W1ABC FN42')).toBeInTheDocument();
+    });
+
+    it('a filter hiding every decode says so in the empty state; a quiet band keeps the waiting text', () => {
+        setFt8OperatorCall('7Q5MLV');
+        render(Ft8BandActivity);
+        expect(screen.getByText('Decodes appear here as slots are received.')).toBeInTheDocument();
+
+        ft8Link.onDecode(
+            decode('t1', [
+                { text: 'CQ W1ABC FN42', freq_hz: 1200, snr: -8 },
+                { text: 'CQ W2DEF FN31', freq_hz: 1100, snr: -9 },
+            ])
+        );
+        ft8State.bandFilter = 'ZS';
+        flushSync();
+
+        expect(screen.queryByText('Decodes appear here as slots are received.')).toBeNull();
+        const empty = screen.getByText(/No decodes match/);
+        expect(empty).toHaveTextContent('ZS');
+        expect(empty).toHaveTextContent('2 hidden');
+    });
+
     it('hide-hashed (config) drops <...> decodes but keeps identifiable ones', () => {
         setFt8OperatorCall('7Q5MLV');
         setFt8DisplayPrefs({ hideHashedCalls: true });
