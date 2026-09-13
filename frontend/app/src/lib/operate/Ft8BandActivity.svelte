@@ -103,29 +103,48 @@
     // matching, the operator sat wondering why the feed was empty — the funnel's tint
     // was the only cue. So the header carries a chip naming the filter with the
     // hidden count (and its own clear), and the empty state says the filter is
-    // hiding everything rather than that the band is quiet. `hidden` counts rows
-    // the funnel filters removed; a caller is never hidden, so never counted.
+    // hiding everything rather than that the band is quiet. Each exclusion is
+    // counted against the filter that made it (codex 5cbc6be2 P2: a row the
+    // typed prefix MATCHED but hide-hashed removed must not be blamed on the
+    // prefix — clearing the chip would then leave it hidden, unexplained). A
+    // caller is never hidden, so never counted.
     const filterText = $derived(ft8State.bandFilter.trim().toUpperCase());
-    const filtered = $derived.by<{ rows: DecodeRow[]; hidden: number }>(() => {
+    const filtered = $derived.by<{
+        rows: DecodeRow[];
+        hiddenByFilter: number;
+        hiddenHashed: number;
+    }>(() => {
         const me = ft8OperatorCall();
         const filter = filterText;
         const hideHashed = ft8HideHashed();
-        const all = ft8State.decodes.map((d) => classify(d, me));
-        const rows = all.filter((r) => {
-            if (r.kind === 'call') return true; // calling us — always show
-            if (hideHashed && r.d.text.includes('<...>')) return false;
-            return !(
-                filter !== '' &&
-                !r.d.text
-                    .toUpperCase()
-                    .split(/\s+/)
-                    .some((t) => t.startsWith(filter))
-            );
-        });
-        return { rows, hidden: all.length - rows.length };
+        let hiddenByFilter = 0;
+        let hiddenHashed = 0;
+        const rows = ft8State.decodes
+            .map((d) => classify(d, me))
+            .filter((r) => {
+                if (r.kind === 'call') return true; // calling us — always show
+                if (hideHashed && r.d.text.includes('<...>')) {
+                    hiddenHashed++;
+                    return false;
+                }
+                const matches =
+                    filter === '' ||
+                    r.d.text
+                        .toUpperCase()
+                        .split(/\s+/)
+                        .some((t) => t.startsWith(filter));
+                if (!matches) hiddenByFilter++;
+                return matches;
+            });
+        return { rows, hiddenByFilter, hiddenHashed };
     });
+    // The empty state keys on VISIBLE rows, not on groups: cq_to_top always
+    // yields one group, empty or not (codex 5cbc6be2 P2), so an all-filtered
+    // feed in that mode rendered a bare table instead of the explanation.
+    const nothingVisible = $derived(filtered.rows.length === 0);
     const groups = $derived.by<SlotGroup[]>(() => {
         const rows = filtered.rows;
+        if (rows.length === 0) return [];
         if (ft8CqToTop()) {
             const cq = rows.filter((r) => r.kind === 'cq');
             const rest = rows.filter((r) => r.kind !== 'cq');
@@ -484,7 +503,9 @@
                 aria-label="Active filter"
                 class="flex items-center gap-1 rounded-full bg-focus/10 px-2 py-0.5 text-xs font-medium text-focus"
             >
-                Filter: {filterText}{filtered.hidden > 0 ? ` · ${filtered.hidden} hidden` : ''}
+                Filter: {filterText}{filtered.hiddenByFilter > 0
+                    ? ` · ${filtered.hiddenByFilter} hidden`
+                    : ''}
                 <button
                     type="button"
                     onclick={() => (ft8State.bandFilter = '')}
@@ -496,10 +517,17 @@
         {/if}
     </div>
 
-    {#if groups.length === 0}
+    {#if nothingVisible}
         <div class="flex flex-1 items-center justify-center text-sm text-muted">
-            {#if filterText !== '' && filtered.hidden > 0}
-                No decodes match “{filterText}” — {filtered.hidden} hidden by the filter.
+            {#if filterText !== '' && filtered.hiddenByFilter > 0}
+                No decodes match “{filterText}” — {filtered.hiddenByFilter} hidden by the filter{filtered.hiddenHashed >
+                0
+                    ? `, ${filtered.hiddenHashed} unidentifiable hidden`
+                    : ''}.
+            {:else if filtered.hiddenHashed > 0}
+                {filtered.hiddenHashed} unidentifiable decode{filtered.hiddenHashed === 1
+                    ? ''
+                    : 's'} hidden (hide hashed calls).
             {:else}
                 Decodes appear here as slots are received.
             {/if}

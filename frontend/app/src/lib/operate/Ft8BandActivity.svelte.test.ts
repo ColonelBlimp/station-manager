@@ -279,6 +279,44 @@ describe('Ft8BandActivity renderer', () => {
         expect(empty).toHaveTextContent('2 hidden');
     });
 
+    // Codex review of 5cbc6be2, P2: cq_to_top always yielded one (possibly empty)
+    // group, so the filter explanation was unreachable in that display mode.
+    it('with cq_to_top on, a filter hiding every decode still shows the explanation', () => {
+        setFt8OperatorCall('7Q5MLV');
+        setFt8DisplayPrefs({ cqToTop: true });
+        render(Ft8BandActivity);
+        ft8Link.onDecode(decode('t1', [{ text: 'CQ W1ABC FN42', freq_hz: 1200, snr: -8 }]));
+        ft8State.bandFilter = 'ZS';
+        flushSync();
+
+        expect(screen.getByText(/No decodes match/)).toHaveTextContent('1 hidden');
+        expect(screen.queryByRole('table')).toBeNull();
+    });
+
+    // Codex review of 5cbc6be2, P2: a row the TYPED filter matched but hide-hashed
+    // removed was counted against the typed filter, so the pane blamed a prefix
+    // that had matched — and clearing the chip left the row hidden unexplained.
+    it('hide-hashed removals are attributed to hide-hashed, never to the typed filter', () => {
+        setFt8OperatorCall('7Q5MLV');
+        setFt8DisplayPrefs({ hideHashedCalls: true });
+        render(Ft8BandActivity);
+        ft8Link.onDecode(decode('t1', [{ text: '<...> W1ABC -07', freq_hz: 1200, snr: -8 }]));
+        ft8State.bandFilter = 'W1'; // matches the row hide-hashed removed
+        flushSync();
+
+        const chip = screen.getByRole('status', { name: 'Active filter' });
+        expect(chip).toHaveTextContent('Filter: W1');
+        expect(chip).not.toHaveTextContent('hidden'); // the typed filter hid nothing
+        const empty = screen.getByText(/hidden/);
+        expect(empty).not.toHaveTextContent(/No decodes match/);
+        expect(empty).toHaveTextContent(/1 unidentifiable/);
+
+        ft8State.bandFilter = '';
+        flushSync();
+        expect(screen.queryByText('Decodes appear here as slots are received.')).toBeNull();
+        expect(screen.getByText(/1 unidentifiable/)).toBeInTheDocument();
+    });
+
     it('hide-hashed (config) drops <...> decodes but keeps identifiable ones', () => {
         setFt8OperatorCall('7Q5MLV');
         setFt8DisplayPrefs({ hideHashedCalls: true });

@@ -163,6 +163,12 @@ not compete with the app-shell, notification-history, or UI-cohesion dossiers.
 `Ft8BandActivity.svelte`: the funnel predicate now yields `{rows, hidden}`; the chip and the empty state
 read it. Tests in `Ft8BandActivity.svelte.test.ts` (chip + count + clear; all-hidden vs quiet band).
 Hide-hashed alone (config) keeps the tint; the chip is for the typed narrowing the operator set.
+Codex review of `5cbc6be2` (two P2s, fixed 2026-09-13): the empty state keyed on `groups.length`, which
+`cq_to_top` never empties, so the explanation was unreachable there — it now keys on visible rows and the
+cq-top branch yields no group for none; and the hidden count conflated hide-hashed removals with the typed
+filter — each exclusion is now counted against the filter that made it, the chip carries only the typed
+count, and hide-hashed removals are named separately ("N unidentifiable hidden"), also when they alone
+empty the feed. Tests for both; reversion proof: fix stashed, both fail.
 
 ## Slice — Rig Control mode control in the FT views
 

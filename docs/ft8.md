@@ -300,9 +300,12 @@ CAT-live re-tune is opt-out** via the daemon config `restore_rig_on_mode_switch`
   A **typed** filter is also announced beside the funnel as a chip — "Filter: ZS · 12
   hidden" — with its own clear (×), and when it hides every decode the empty state reads
   "No decodes match “ZS” — N hidden by the filter" instead of the quiet-band text, so an
-  empty feed under a filter is never mistaken for a dead band (inbox 2026-09-12; the
-  hidden count is rows the funnel removed — a caller is never hidden, so never counted).
-  Hide-hashed alone keeps the tint as its only cue. A station **calling you**
+  empty feed under a filter is never mistaken for a dead band (inbox 2026-09-12). Each
+  hidden row is counted against the filter that removed it: the chip's count is the typed
+  prefix's own; rows hide-hashed removed are reported separately ("N unidentifiable
+  hidden"), also when hide-hashed alone empties the feed — a caller is never hidden, so
+  never counted. Hide-hashed with rows still showing keeps the tint as its only cue. A
+  station **calling you**
   (toMe) **always shows through** both filters, so you never miss a caller.
   - **typed filter** (`ft8State.bandFilter`): **token-prefix** — a decode shows when any
     whitespace token starts with the typed text, case-insensitive ("show calls starting
