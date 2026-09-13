@@ -146,8 +146,16 @@ Operate view (the fallback in ADR 0080), and W-0019 continues afterwards without
 5. Record the session in the dogfood record: QSO count, any stalls, decode times, forwarder and SM Cloud outcomes.
 
 Outcome 2026-09-12 (record entry 37): steps 1–3 and 5 done — 51 QSOs 15:00:45Z–17:13:47Z, 40 on 20 m and 11 on
-40 m, all forwarded first attempt. Step 4 is the operator's: export, convert and submit by Thursday
-2026-09-17 21:59 UTC.
+40 m, all forwarded first attempt. Step 4 — the log sheet — prepared 2026-09-13: the official
+`2026-Africa-FT4-DX-log-sheet.xlsx` (contest.sarl.org.za) filled from the session ADIF
+(`session-20260912-172548.adi`) by script, not SARL's converter: September Log rows 4–52, sorted 20 m then
+40 m, the two same-band ZS6BOS repeats removed as the sheet instructs (49 rows), reports as exchanged
+(`+09`/`-12`), grids 4-char, 6 points per African QSO (22, all South Africa), 1 per non-African (27 logged,
+the sheet's default cap credits half the African count, 11 — operator ruling 2026-09-13: the rule says 1/3 of
+the total log items submitted, so cell P8 was changed to a third of the 49 submitted items, 16, with a note
+beside the matrix saying so); claimed score 148, verified by a LibreOffice headless recalculation. Saved as `7Q5MLV-2026-Africa-FT4-DX-Contest.xlsx` beside the 2025 SARL logs in the
+operator's pCloud Documents. **Submitted by the operator 2026-09-13** by e-mail to contest@zs6wr.co.za
+(rule 7.3 deadline Thursday 2026-09-17 21:59 UTC). Runbook complete.
 
 ## Open rulings for the operator
 
