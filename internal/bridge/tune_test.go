@@ -78,8 +78,9 @@ func lastWrite(f *fakeSerial) string {
 }
 
 // awaitTuneState blocks until a tune-state event with the wanted Active value
-// arrives on ch, or the timeout elapses. Other event kinds are skipped.
-func awaitTuneState(t *testing.T, ch <-chan Event, want bool, timeout time.Duration) {
+// arrives on ch, or the timeout elapses. Other event kinds are skipped. Returns
+// the matched payload so callers can check the rest of the wire shape.
+func awaitTuneState(t *testing.T, ch <-chan Event, want bool, timeout time.Duration) TuneStatePayload {
 	t.Helper()
 	deadline := time.After(timeout)
 	for {
@@ -96,7 +97,7 @@ func awaitTuneState(t *testing.T, ch <-chan Event, want bool, timeout time.Durat
 				t.Fatalf("tune-state payload type = %T, want TuneStatePayload", evt.Payload)
 			}
 			if p.Active == want {
-				return
+				return p
 			}
 		case <-deadline:
 			t.Fatalf("timed out waiting for tune-state active=%v", want)
@@ -306,7 +307,13 @@ func TestStartTune_Happy(t *testing.T) {
 	if !active {
 		t.Error("tuneActive = false after StartTune")
 	}
-	awaitTuneState(t, ch, true, time.Second)
+	// The active push names the mode the stop will restore (the pre-tune
+	// snapshot) so the SPA's Mode field can hold that literal for the whole
+	// tune instead of repainting the carrier's RTTY (operator ruling 2026-09-14:
+	// nothing in the Mode field changes during a tune).
+	if p := awaitTuneState(t, ch, true, time.Second); p.RestoreMode != "USB" {
+		t.Errorf("tune-state active payload RestoreMode = %q, want %q (the pre-tune snapshot)", p.RestoreMode, "USB")
+	}
 }
 
 func TestStartTune_RefusesUnknownState(t *testing.T) {
@@ -434,7 +441,9 @@ func TestStopTune_RestoresAndUnkeys(t *testing.T) {
 	if active {
 		t.Error("tuneActive = true after StopTune")
 	}
-	awaitTuneState(t, ch, false, time.Second)
+	if p := awaitTuneState(t, ch, false, time.Second); p.RestoreMode != "" {
+		t.Errorf("tune-state inactive payload RestoreMode = %q, want empty (nothing to hold once the tune is down)", p.RestoreMode)
+	}
 }
 
 // TestReleaseTune_ConcurrentStopsReleaseOnce (review 2026-06-16 #3): two stops

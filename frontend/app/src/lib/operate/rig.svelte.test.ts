@@ -323,6 +323,30 @@ describe('tune carrier (ADR 0027)', () => {
         expect(rig.tuneActive).toBe(false);
     });
 
+    // Operator ruling 2026-09-14: nothing in the Mode field changes during a
+    // tune. The daemon names the pre-tune literal on the active push; the store
+    // keeps it for the readout and forgets it with the carrier.
+    it('onTuneState keeps the daemon-named restore mode while the carrier is up, and drops it after', () => {
+        catLink.onTuneState({ active: true, restore_mode: 'DATA-U' });
+        expect(rig.tuneRestoreMode).toBe('DATA-U');
+        catLink.onRigState({ mode: 'RTTY-U' }); // the carrier's own mode push
+        expect(rig.modeLiteral).toBe('RTTY-U');
+        expect(rig.tuneRestoreMode).toBe('DATA-U'); // unmoved by the rig-state push
+        catLink.onTuneState({ active: false });
+        expect(rig.tuneRestoreMode).toBe('');
+        // An active push without the field (older daemon) holds nothing.
+        catLink.onTuneState({ active: true });
+        expect(rig.tuneRestoreMode).toBe('');
+        catLink.onTuneState({ active: false });
+    });
+
+    it('resetCatLink forgets the restore mode with the rest of the link state', () => {
+        catLink.onTuneState({ active: true, restore_mode: 'USB' });
+        resetCatLink();
+        expect(rig.tuneRestoreMode).toBe('');
+        expect(rig.tuneActive).toBe(false);
+    });
+
     it('toggleTune sends the OPPOSITE of the pushed state, never an optimistic flip', async () => {
         const sent: boolean[] = [];
         setTuneSender((active) => {

@@ -65,6 +65,23 @@
 
     const locked = $derived(rig.cat === 'connected');
 
+    // The mode literal the Mode field shows. During the daemon's own tune
+    // carrier (ADR 0027) the rig reports RTTY while the daemon holds the
+    // pre-tune snapshot it will restore; the field shows that snapshot, named
+    // on the tune-state push, so NOTHING in it changes for the duration of a
+    // tune — nothing added, nothing taken away (operator ruling 2026-09-14: a
+    // two-line carrier note reflowed the row and moved the Tune button out from
+    // under the click that started the tune). The daemon names the mode rather
+    // than the SPA remembering it because the rig-state push of the carrier
+    // mode and the tune-state push are separate events with no ordering
+    // guarantee, and a tab opened mid-tune has no "before" to remember. An
+    // older daemon that names none falls back to the live literal. The daemon
+    // refuses every generic rig write while a tune is up, so a held mismatch
+    // note cannot invite a write under the carrier.
+    const shownLiteral = $derived(
+        rig.tuneActive && rig.tuneRestoreMode !== '' ? rig.tuneRestoreMode : rig.modeLiteral
+    );
+
     // FT8 cannot operate without CAT (capture is gated daemon-side on the rig
     // being connected), so the manual-entry/confirm path is a dead end there.
     // The FT8 host sets requiresCat: with the rig away, every control disables
@@ -90,9 +107,9 @@
     // e.g. LSB/USB/CW-U/DATA-U). Join the current literal if the caps list
     // somehow omits it, so the select never renders blank.
     const liveModeOptions = $derived(
-        rig.modeLiteral === '' || rigCaps.rigModes.includes(rig.modeLiteral)
+        shownLiteral === '' || rigCaps.rigModes.includes(shownLiteral)
             ? rigCaps.rigModes
-            : [...rigCaps.rigModes, rig.modeLiteral]
+            : [...rigCaps.rigModes, shownLiteral]
     );
 
     // FT views (W-0012, operator rulings 2026-09-12): the mode is OWNED by the
@@ -110,15 +127,7 @@
     // configuration has no other in-view way to set the mode. Phone/CW
     // (no ftMode) is untouched.
     const ftReadout = $derived(ftMode !== undefined && (!locked || ft8ModeLiteral() !== ''));
-    const ftOnDataMode = $derived(locked && rig.modeLiteral === ft8ModeLiteral());
-    // The daemon's own tune carrier keys RTTY and restores the data mode when it
-    // stops (ADR 0027): while it is up the rig reports RTTY-U, which is not a
-    // mismatch to act on — a band pick then would write freq + mode under a
-    // keyed carrier (inbox 2026-09-13). Named as the tune, no hint, no tint. The
-    // restore target is the daemon's pre-tune snapshot, which the SPA does not
-    // see, so the note promises only that the prior mode returns — if that was
-    // not the data mode, the mismatch shows again once the tune stops (codex
-    // 13d95084 P2).
+    const ftOnDataMode = $derived(locked && shownLiteral === ft8ModeLiteral());
     const ftTuning = $derived(locked && rig.tuneActive);
 
     // Band follows the frequency (IARU allocations) so the two can't disagree
@@ -273,29 +282,23 @@
                     role="status"
                     aria-label="Mode"
                     class="flex min-h-9 flex-col justify-center rounded-md border px-2 py-1 text-sm text-ink {locked &&
-                    !ftOnDataMode &&
-                    !ftTuning
+                    !ftOnDataMode
                         ? 'border-amber-500'
                         : 'border-line'}"
                     title={!locked
                         ? `The ${modeLabel} profile sets the rig's data mode once CAT connects`
                         : ftTuning
-                          ? `The tune carrier keys ${rig.modeLiteral}; the mode from before the tune returns when it stops`
+                          ? `Tune carrier keyed; ${shownLiteral} returns when it stops`
                           : ftOnDataMode
                             ? `Set by the ${modeLabel} profile`
                             : `The rig is not on the ${modeLabel} data mode`}
                 >
                     {#if !locked}
                         <span>{modeLabel}</span>
-                    {:else if ftTuning}
-                        <span>{rig.modeLiteral === '' ? '—' : rig.modeLiteral} · tune carrier</span>
-                        <span class="text-xs text-muted">
-                            the mode from before the tune returns when it stops
-                        </span>
                     {:else if ftOnDataMode}
-                        <span>{rig.modeLiteral} · {modeLabel}</span>
+                        <span>{shownLiteral} · {modeLabel}</span>
                     {:else}
-                        <span>{rig.modeLiteral === '' ? '—' : rig.modeLiteral}</span>
+                        <span>{shownLiteral === '' ? '—' : shownLiteral}</span>
                         <span class="text-xs text-amber-700">
                             not the {modeLabel} data mode ({ft8ModeLiteral()}) — pick the band to
                             set it
@@ -310,7 +313,7 @@
                 <select
                     class="input w-24"
                     disabled={!hasOp('set_mode')}
-                    value={rig.modeLiteral}
+                    value={shownLiteral}
                     onchange={onModeSelect}
                 >
                     {#each liveModeOptions as m (m)}

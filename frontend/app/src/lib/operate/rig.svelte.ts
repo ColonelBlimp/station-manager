@@ -61,6 +61,11 @@ export const rig: {
     confirmedBand: string | null;
     linkError: string;
     tuneActive: boolean;
+    /** The pre-tune mode literal the daemon will restore, named on the active
+     *  tune-state push; '' when no tune is up (or an older daemon named none).
+     *  The Rig panel's Mode field shows this instead of the carrier's RTTY so
+     *  nothing in it changes during a tune (operator ruling 2026-09-14). */
+    tuneRestoreMode: string;
     /** Stuck-TX safety alarm (ADR 0051): the daemon cannot confirm the
      *  transmitter is unkeyed. Persistent until the daemon clears it
      *  (positive RX confirmation) or the operator dismisses. */
@@ -117,6 +122,7 @@ export const rig: {
     // tune-state SSE (confirm-by-push), never an optimistic local flip — so an
     // auto-off the operator didn't trigger still clears the button.
     tuneActive: false,
+    tuneRestoreMode: '',
     txAlarmActive: false,
     txAlarmCode: '',
     txAlarmDismissed: false,
@@ -1113,6 +1119,7 @@ export const catLink = {
      *  subscribers, so a tab opened mid-tune sees the carrier is up. */
     onTuneState(p: TuneStatePayload): void {
         rig.tuneActive = p.active; // display always mirrors the daemon push
+        rig.tuneRestoreMode = p.active ? (p.restore_mode ?? '') : '';
         matchWatch('tune', p); // resolve a pending tune watch only on its target (F-04)
     },
 
@@ -1195,6 +1202,7 @@ export function resetCatLink(): void {
     rig.identity = '';
     rig.linkError = '';
     rig.tuneActive = false;
+    rig.tuneRestoreMode = '';
     rig.txAlarmActive = false;
     rig.txAlarmCode = '';
     rig.txAlarmDismissed = false;

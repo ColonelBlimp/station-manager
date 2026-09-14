@@ -4,6 +4,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/svelte';
+import { flushSync } from 'svelte';
 import RigPanel from './RigPanel.svelte';
 import {
     rig,
@@ -288,26 +289,94 @@ describe('FT views: Mode is a readout owned by the profile', () => {
         expect(picked).toEqual(['20m']);
     });
 
-    // Inbox 2026-09-13: during the daemon's own tune carrier (RTTY-U, restored on
-    // stop) the readout said "not the FT8 data mode — pick the band" — true, but
-    // the wrong advice for that moment (a band pick would write freq + mode under
-    // a keyed carrier). The tune is named as such, with no hint and no alarm tint.
-    it('AC2b: while the tune carrier is keyed, the readout names the tune, not a mismatch', () => {
-        liveFt4();
-        catLink.onRigState({ vfoA: 14_080_000, mode: 'RTTY-U' });
-        rig.tuneActive = true;
-        render(RigPanel, { props: { requiresCat: true, modeLabel: 'FT4', ftMode: 'ft4' } });
+    // Inbox 2026-09-13 named the daemon's tune carrier in the readout; the
+    // 2026-09-14 ruling replaced that: nothing in the Mode field changes during
+    // a tune — nothing added, nothing taken away — because the two-line note
+    // reflowed the row and moved the Tune button out from under the operator's
+    // finger. The daemon names the pre-tune literal on the tune-state push and
+    // the readout holds it while the rig reports the carrier's RTTY-U. The
+    // carrier survives only in the tooltip. The rig-state and tune-state pushes
+    // are separate events with no ordering guarantee, so the hold must not
+    // depend on which lands first.
+    describe('AC2b: the Mode readout is identical before, during and after a tune', () => {
+        const snapshot = () => {
+            const readout = screen.getByRole('status', { name: 'Mode' });
+            return { text: readout.textContent, cls: readout.className };
+        };
 
-        const readout = screen.getByRole('status', { name: 'Mode' });
-        expect(readout).toHaveTextContent('RTTY-U');
-        expect(readout).toHaveTextContent(/tune carrier/);
-        // The tune restores the daemon's PRE-TUNE snapshot, which the SPA cannot see:
-        // no promise of a specific mode, only that the prior one returns (codex P2).
-        expect(readout).toHaveTextContent(/mode from before the tune returns/);
-        expect(readout).not.toHaveTextContent(/DATA-U returns/);
-        expect(readout).not.toHaveTextContent(/pick the band/);
-        expect(readout).not.toHaveTextContent(/not the FT4 data mode/);
-        expect(readout.className).not.toContain('border-amber-500');
+        it('on the data mode: held through the carrier, whichever push lands first', () => {
+            liveFt4();
+            catLink.onRigState({ vfoA: 14_080_000, mode: 'DATA-U' });
+            render(RigPanel, { props: { requiresCat: true, modeLabel: 'FT4', ftMode: 'ft4' } });
+            const before = snapshot();
+            expect(before.text).toContain('DATA-U · FT4');
+
+            // Tune-state first, then the rig's mode push.
+            catLink.onTuneState({ active: true, restore_mode: 'DATA-U' });
+            flushSync();
+            expect(snapshot()).toEqual(before);
+            catLink.onRigState({ mode: 'RTTY-U' });
+            flushSync();
+            expect(snapshot()).toEqual(before);
+            const readout = screen.getByRole('status', { name: 'Mode' });
+            expect(readout).not.toHaveTextContent(/RTTY/);
+            expect(readout).not.toHaveTextContent(/tune carrier/);
+            expect(readout.title).toMatch(/tune carrier/i); // the fact lives in the tooltip only
+
+            // Stop: the daemon restores the data mode.
+            catLink.onTuneState({ active: false });
+            catLink.onRigState({ mode: 'DATA-U' });
+            flushSync();
+            expect(snapshot()).toEqual(before);
+        });
+
+        it('rig mode push before the tune-state push: still held', () => {
+            liveFt4();
+            catLink.onRigState({ vfoA: 14_080_000, mode: 'DATA-U' });
+            render(RigPanel, { props: { requiresCat: true, modeLabel: 'FT4', ftMode: 'ft4' } });
+            const before = snapshot();
+
+            catLink.onRigState({ mode: 'RTTY-U' }); // the carrier's push lands first
+            catLink.onTuneState({ active: true, restore_mode: 'DATA-U' });
+            flushSync();
+            expect(snapshot()).toEqual(before);
+        });
+
+        it('off the data mode before the tune: the mismatch note is held too, unchanged', () => {
+            liveFt4();
+            catLink.onRigState({ vfoA: 14_080_000, mode: 'USB' });
+            render(RigPanel, { props: { requiresCat: true, modeLabel: 'FT4', ftMode: 'ft4' } });
+            const before = snapshot();
+            expect(before.text).toMatch(/not the FT4 data mode/);
+            expect(before.cls).toContain('border-amber-500');
+
+            catLink.onTuneState({ active: true, restore_mode: 'USB' });
+            catLink.onRigState({ mode: 'RTTY-U' });
+            flushSync();
+            expect(snapshot()).toEqual(before); // nothing added, nothing taken away
+        });
+
+        it('a tab opened mid-tune shows the restore mode, not the carrier', () => {
+            liveFt4();
+            catLink.onRigState({ vfoA: 14_080_000, mode: 'RTTY-U' });
+            catLink.onTuneState({ active: true, restore_mode: 'DATA-U' }); // hub replay
+            render(RigPanel, { props: { requiresCat: true, modeLabel: 'FT4', ftMode: 'ft4' } });
+
+            expect(screen.getByRole('status', { name: 'Mode' })).toHaveTextContent('DATA-U · FT4');
+        });
+
+        it('the live selector (Phone/CW, or ft8_mode "") holds the restore mode as its value', () => {
+            liveFt4();
+            setFt8Mode('');
+            catLink.onRigState({ vfoA: 14_080_000, mode: 'DATA-U' });
+            render(RigPanel, { props: { requiresCat: true, modeLabel: 'FT4', ftMode: 'ft4' } });
+            expect(screen.getByRole('combobox')).toHaveValue('DATA-U');
+
+            catLink.onTuneState({ active: true, restore_mode: 'DATA-U' });
+            catLink.onRigState({ mode: 'RTTY-U' });
+            flushSync();
+            expect(screen.getByRole('combobox')).toHaveValue('DATA-U');
+        });
     });
 
     it('AC3: ft8_mode configured as "" (leave the mode alone) — the FT view keeps the live selector', () => {

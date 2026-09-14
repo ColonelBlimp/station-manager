@@ -77,6 +77,20 @@ already down before the settle, so the guarantee is unaffected — the settle on
 gates the best-effort restore (and is skipped if the context cancels mid-pause).
 This is a refinement of the unkey-and-restore path, not a change to the decision.
 
+## Implementation note (2026-09-14) — the active `tune-state` push names the restore mode
+
+The SPA showed the rig's own mode push during a tune (RTTY-U) and, from 2026-09-13,
+a two-line note naming it as the carrier; the note reflowed the Rig panel's row and
+moved the Tune button out from under the click that started the tune. Operator
+ruling 2026-09-14: nothing in the Mode field changes during a tune — nothing added,
+nothing taken away. The `tune-state` event therefore carries `restore_mode` on the
+`active: true` push: the pre-tune snapshot `StartTune` took, i.e. exactly what the
+stop restores. The SPA shows that literal while the tune is up. Carried on the wire
+rather than remembered browser-side because the rig-state push of the carrier mode
+and the tune-state push are separate events with no ordering guarantee, and a tab
+opened mid-tune (hub replay) has no "before" to remember. The inactive push carries
+nothing. Same decision, one more field on its event; ADR 0010's shape rule holds.
+
 ## Triggers to revisit
 
 - **RTTY carrier proves unsuitable** — the amp/ATU dislikes the ~2 kHz RTTY offset, or RTTY keying behaves oddly on the FTdx10 → reopen the carrier mode (FM/AM/CW-keying), per the provisional note.

@@ -322,7 +322,7 @@ items return a QSO through a boundary projection of `types.Qso`: the canonical *
   - `rig-state` → `RigStatePayload` `{rigIdentity?, vfoA?, vfoB?, mode?, subMode?, selectedVfo?, splitOverride? (*bool), power?}` — omitted fields leave SPA state untouched; first event after connect is a full snapshot.
   - `rig-disconnected` → `{code: "rig_no_data"|"serial_port_error", details?}`.
   - `bridge-error` → `{code: "unknown_driver"|"serial_config_invalid"|"missing_init_command"|"missing_read_command"|"serial_open_failed"|"init_write_failed"|"identity_unrecognised"|"identity_mismatch", details?}`.
-  - `tune-state` → `{active: bool}`.
+  - `tune-state` → `{active: bool, restore_mode?: string}` — `restore_mode` rides `active: true` only: the pre-tune mode literal the stop restores (the daemon's snapshot), so the SPA's Mode field can hold it for the whole tune while the rig reports the carrier's RTTY. Absent on the inactive push.
   - `rig-meters` → `{meter: "ALC"|"PO", value: 0-255}` (ADR 0064) — one decoded `RM4;`/`RM5;` poll answer, raw rig scale (the SPA owns thresholds/rendering). Flows only while an FT8 capture session is live AND the rigdef declares a `METERPOLL` command (FTdx10 today); deliberately NOT replay-cached — a stale reading is worse than none, and the next answer is ≤ one poll interval (default 250 ms) away. Clients infer "no meter data" from staleness, distinct from a zero reading.
 - **Errors:** 503 `server_busy`.
 - **Notes:** Hub one-slot replay cache for `bridge-error`/`rig-disconnected`/`tune-state`; disconnect cache cleared on next `rig-state`. Codes carry `{code, details}` for SPA i18n (no human strings on the wire).

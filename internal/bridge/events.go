@@ -269,8 +269,17 @@ type BridgeErrorPayload struct {
 // tune starts and false when it ends — operator stop, hard auto-off, and
 // disconnect-release all produce false. The hub caches the latest so a late
 // SSE subscriber learns an in-progress tune.
+//
+// RestoreMode rides with active=true only: the pre-tune mode literal the stop
+// will restore (the snapshot StartTune took). The rig reports the carrier's
+// RTTY while keyed, and the SPA's Mode field holds this literal instead so
+// nothing in it changes for the duration of a tune (operator ruling
+// 2026-09-14). Carried on the wire rather than remembered browser-side because
+// the rig-state push of the carrier mode and this event are separate events
+// with no ordering guarantee, and a tab opened mid-tune has no "before" at all.
 type TuneStatePayload struct {
-	Active bool `json:"active"`
+	Active      bool   `json:"active"`
+	RestoreMode string `json:"restore_mode,omitempty"`
 }
 
 // RigClientsPayload is the shape under EventRigClients: how many browser tabs are

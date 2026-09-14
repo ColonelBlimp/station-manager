@@ -259,6 +259,22 @@ stream opens). P3 refuted in a code comment: build identity rides the rig stream
 ratified placement, so a Map tab is now the no-CAT case for it — the tab title's DEV marker
 refreshes on the next reload, the accepted AC3 behaviour; routing it through the log stream would
 widen ADR 0079 without a ruling. Baseline rekeyed again (`line@494` → `line@500`).
+On air 2026-09-14 (`2.0.0-alpha.2-90-g7126ab64`, 15 m FT8 Call-CQ run, Map tab open beside the
+FT8 view): the operator reports the map working — the passive check the build was waiting on.
+
+**AC2c build (2026-09-14):** daemon `TuneStatePayload.RestoreMode` (`restore_mode`, active push only,
+the `StartTune` snapshot read under `mu`); `tune_test.go` pins it on the active push and its absence on
+the inactive one. SPA: `rig-sse.ts` accepts an optional string (a non-string drops the frame),
+`rig.tuneRestoreMode` set from the push and cleared with the carrier and on `resetCatLink`;
+`RigPanel.svelte` derives `shownLiteral` (restore mode while `tuneActive`, else the live literal) and
+feeds it to the readout, the border, the live selector and its option list; the `ftTuning` two-line
+branch is gone, the tooltip alone names the carrier. Rendered tests (`RigPanel.svelte.test.ts`
+AC2c, five cases): identical readout snapshot before/during/after with tune-state first and with the
+rig's mode push first; the off-data-mode note held unchanged; a mid-tune mount shows the restore
+mode; the live selector's value held. Reversion proof: the Go assertions fail to compile without the
+field; the eight SPA assertions fail on the previous panel and store. jsdom cannot measure layout, so
+the "same rectangle" criterion is pinned structurally (identical text and class) rather than by
+geometry. Awaiting operator "commit".
 
 ## Built follow-up — run surface idle line retired (operator ruling 2026-09-13, on air)
 
@@ -343,7 +359,8 @@ suffix, DATA-L and DATA-U both labelled FT4 during the FT4 run, the closed contr
 | AC3 | The per-rig `ft8_mode` set to `""` (leave the rig's mode alone, config.md §10): the FT views keep the live selector. | A readout everywhere, leaving no in-view way to set the mode for that configuration. |
 | AC4 | CAT off or lost in an FT view: the readout names the profile; an FT contact's logged mode is unchanged (it comes from the daemon's profile). | The manual nine-mode select shown as if it drove the FT log's mode. |
 | AC5 | The Phone/CW view is unchanged by this slice: live and manual selectors as shipped. | The readout leaking into Phone/CW because the FT profile label persists across navigation. |
-| AC2b | The daemon's own tune carrier is keyed (rig reports RTTY-U): the readout reads "RTTY-U · tune carrier — the mode from before the tune returns when it stops", neutral border, no band-pick hint (inbox 2026-09-13, built the same day; codex 13d95084 P2: the tune restores the daemon's pre-tune snapshot, not necessarily the data mode, so no specific mode is promised). | The mismatch wording and hint during a tune, inviting a freq + mode write under a keyed carrier. |
+| AC2b | *Superseded 2026-09-14 by AC2c.* Was: the daemon's own tune carrier keyed (rig reports RTTY-U) → the readout named the carrier on two lines, neutral border, no band-pick hint (inbox 2026-09-13; codex 13d95084 P2). | — |
+| AC2c | The daemon's own tune carrier is keyed: the Mode field is identical before, during and after the tune — text, border and width — nothing added, nothing taken away (operator ruling 2026-09-14). The readout and the live selector show the pre-tune literal the daemon names on the `tune-state` push (`restore_mode`); the carrier is named only in the tooltip. The Tune button keeps its rectangle from the click that starts a tune to the click that stops it. | The two-line carrier note of AC2b, which widened the readout and moved the Tune button; a readout that captures the carrier's RTTY-U because the rig-state push landed before the tune-state push; a tab opened mid-tune showing RTTY-U. |
 
 **Mechanism (for the builder):** `RigPanel.svelte` already receives `ftMode` and `modeLabel` from
 `Operate.svelte`; render the readout when `ftMode` is set, `rig.cat === 'connected'` and

@@ -163,6 +163,7 @@ func (s *Service) StartTune(ctx context.Context) error {
 	// own RTTY/tune-power pushes can't overwrite what we'll restore to.
 	s.tuneRestoreMode = s.lastMode
 	s.tuneRestorePower = s.lastPower
+	restoreMode := s.tuneRestoreMode // for the active push, read under mu
 	s.tuneActive = true
 	s.tuneStart = time.Now() // L4: duration baseline for the stop record
 	// Arm the backstop together with tuneActive (atomic under mu) so the
@@ -228,7 +229,7 @@ func (s *Service) StartTune(ctx context.Context) error {
 		s.beginTxConfirm(def, cl)
 		return errors.New(errOp).WithErr(err).WithMsg("write tune-on")
 	}
-	s.publishTuneState(true)
+	s.publishTuneState(true, restoreMode)
 	// L4 durable start record: the normal operator path published SSE only, leaving no
 	// log while the auto-off/disconnect teardowns did. reason/power/mode/auto-off match
 	// the stop record (finishTune) so the whole tune lifecycle is uniform.
@@ -413,7 +414,7 @@ func (s *Service) finishTune(reason string) {
 	dur := time.Since(s.tuneStart)
 	s.mu.Unlock()
 	s.logTuneStopped(reason, dur)
-	s.publishTuneState(false)
+	s.publishTuneState(false, "")
 }
 
 // logTuneStopped is the L4 durable stop record, shared by every teardown path
@@ -486,7 +487,7 @@ func (s *Service) clearTuneOnDisconnect() {
 		// L4 uniform stop record (reason=disconnect) — the carrier physically dropped
 		// with the rig, so there is nothing to unkey; this is the durable teardown log.
 		s.logTuneStopped("disconnect", dur)
-		s.publishTuneState(false)
+		s.publishTuneState(false, "")
 	}
 }
 
@@ -624,9 +625,10 @@ func (s *Service) CurrentDialMHz() (float64, bool) {
 // publishTuneState fans a tune-state event to subscribers (and the hub's
 // one-slot cache, so a SPA tab opening mid-tune still learns the carrier is
 // up). Daemon-authoritative: an auto-off the operator didn't trigger reaches
-// the SPA the same way an operator stop does.
-func (s *Service) publishTuneState(active bool) {
-	s.hub.publish(Event{Name: EventTuneState, Payload: TuneStatePayload{Active: active}})
+// the SPA the same way an operator stop does. restoreMode is the pre-tune
+// snapshot named on the active push (empty on the inactive one).
+func (s *Service) publishTuneState(active bool, restoreMode string) {
+	s.hub.publish(Event{Name: EventTuneState, Payload: TuneStatePayload{Active: active, RestoreMode: restoreMode}})
 }
 
 // encodeTuneOn builds the atomic tune-on CAT line: set the carrier mode, set

@@ -43,6 +43,10 @@ export interface BridgeCodePayload {
  *  tune-carrier state. The Tune button reflects this, never an optimistic flip. */
 export interface TuneStatePayload {
     active: boolean;
+    /** With active=true: the pre-tune mode literal the stop restores. The Mode
+     *  field holds it for the whole tune (operator ruling 2026-09-14) while
+     *  the rig itself reports the carrier's RTTY. Absent on the inactive push. */
+    restore_mode?: string;
 }
 
 /** Mirrors internal/bridge.TxAlarmPayload (ADR 0051) — the stuck-TX safety
@@ -131,7 +135,7 @@ function isBridgeCode(v: unknown): v is BridgeCodePayload {
     );
 }
 function isTuneState(v: unknown): v is TuneStatePayload {
-    return isPlainObject(v) && typeof v.active === 'boolean';
+    return isPlainObject(v) && typeof v.active === 'boolean' && optStr(v.restore_mode);
 }
 function isTxAlarm(v: unknown): v is TxAlarmPayload {
     return isPlainObject(v) && typeof v.active === 'boolean' && optStr(v.code);

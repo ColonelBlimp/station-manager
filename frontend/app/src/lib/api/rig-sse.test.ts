@@ -80,6 +80,10 @@ describe('openRigEvents', () => {
 
         src.emit('tune-state', '{"active":true}');
         expect(h.onTuneState).toHaveBeenCalledWith({ active: true });
+        // The active push names the pre-tune mode the stop restores (operator
+        // ruling 2026-09-14: the Mode field holds it for the whole tune).
+        src.emit('tune-state', '{"active":true,"restore_mode":"DATA-U"}');
+        expect(h.onTuneState).toHaveBeenCalledWith({ active: true, restore_mode: 'DATA-U' });
 
         src.emit('tx-alarm', '{"active":true,"code":"tx_unconfirmed"}');
         expect(h.onTxAlarm).toHaveBeenCalledWith({ active: true, code: 'tx_unconfirmed' });
@@ -134,6 +138,12 @@ describe('openRigEvents — wrong-shape frames are dropped (F-03)', () => {
 
     it('drops a tune-state whose active is not a boolean (tune state unchanged)', () => {
         expect(emit('tune-state', '{"active":"true"}').onTuneState).not.toHaveBeenCalled();
+    });
+
+    it('drops a tune-state whose restore_mode is not a string (a held Mode field must hold a literal)', () => {
+        expect(
+            emit('tune-state', '{"active":true,"restore_mode":5}').onTuneState
+        ).not.toHaveBeenCalled();
     });
 
     it('drops a tx-alarm whose active is not a boolean (the safety alarm is never falsely set/cleared)', () => {
