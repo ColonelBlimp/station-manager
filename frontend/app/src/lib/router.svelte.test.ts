@@ -21,14 +21,39 @@ describe('router base-path handling', () => {
         expect(urlOf('logbook', 'phone', '/app')).toBe('/app/logbook');
         expect(urlOf('config', 'phone', '/app')).toBe('/app/config');
         expect(urlOf('map', 'phone', '/app')).toBe('/app/map'); // contacts-map tab
-        expect(urlOf('dashboard', 'phone', '/app')).toBe('/app/'); // default → base root
     });
 
     it('is base-agnostic — works unchanged when served at the root', () => {
         expect(subPathOf('/operate/ft8', '')).toBe('/operate/ft8');
         expect(subPathOf('/', '')).toBe('/');
         expect(urlOf('operate', 'ft8', '')).toBe('/operate/ft8');
-        expect(urlOf('dashboard', 'phone', '')).toBe('/');
+    });
+});
+
+// The Dashboard is retired (ADR 0044 amendment 2026-09-14): every tile it was to
+// carry already lives in the header, the rail, the Logbook or Settings, and its
+// one real job — a landing view that starts nothing — Phone/CW does as well. The
+// bare root now lands on the last-used Operate mode, and so does any path the
+// router does not know; a configurable landing view is a later slice.
+describe('landing without a Dashboard', () => {
+    afterEach(() => {
+        setModeChangeHook(null);
+    });
+
+    it('the bare root lands on the last-used Operate mode', () => {
+        setMode('ft4');
+        window.history.pushState({}, '', '/');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+        expect(router.view).toBe('operate');
+        expect(router.mode).toBe('ft4');
+    });
+
+    it('an unknown path lands on Operate too, not on a blank view', () => {
+        setMode('phone');
+        window.history.pushState({}, '', '/nothing-here');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+        expect(router.view).toBe('operate');
+        expect(router.mode).toBe('phone');
     });
 });
 

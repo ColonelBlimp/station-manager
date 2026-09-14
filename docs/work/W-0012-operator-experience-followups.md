@@ -142,7 +142,43 @@ not compete with the app-shell, notification-history, or UI-cohesion dossiers.
   non-FT view; no manual page, no daemon surface, nothing in `config.json`. Recommendation: retire
   the Dashboard (dated update to ADR 0044, which endorsed it "in principle"), land a bare `/app/` on
   the last-used Operate mode (Phone/CW on first use), and reduce the landing-preference option set to
-  Phone/CW, FT8, FT4 and last-used. Not a ruling yet — the operator's call.
+  Phone/CW, FT8, FT4 and last-used. Not a ruling yet — the operator's call. **Ruled 2026-09-14:
+  retire the Dashboard; land on the last-used Operate mode for now.** Built the same day: ADR 0044
+  amendment (2026-09-14); `router.svelte.ts` (no `dashboard` view; the bare root and unknown paths
+  parse to Operate with the remembered mode, URL normalised), `Sidebar.svelte` (entry and icon gone),
+  `App.svelte` (placeholder branch and title gone); comments and `docs/ft8.md` that used "a trip to
+  the Dashboard" as the leave-the-workspace example now say the Logbook. Tests: router landing (bare
+  root → last-used mode; unknown path → Operate), sidebar nav without a Dashboard; the boot boundary
+  and first-run title tests unchanged and green. Reversion proof: the three new tests fail on the
+  previous router and sidebar. The landing-view preference (option set Phone/CW, FT8, FT4,
+  last-used; config versus browser) stays open.
+- **The contacts map inside the shell, with a pop-out (operator question, 2026-09-14; not
+  selected):** "can the map be a part of the SPA rather than its own tab and allow FT8, FT4 to
+  continue working — indeed, Phone/CW to retain its settings — i.e. the Op is running Phone/CW,
+  checks the map, and comes back and continues; and could it be forked off into a tab should the Op
+  want to operate and view the map at the same time?" Facts: Phone/CW already keeps its draft and
+  QSO clock across any view change (module state in `qso.svelte.ts`, the 2026-09-13 draft-age
+  build). FT8/FT4 do NOT survive leaving the Operate view: `Ft8View.svelte` closes its stream on
+  unmount (`stopFt8` in the mount cleanup), and the daemon disarms TX and abandons any active QSO
+  when the last `/v1/ft8/events` subscriber is gone for `captureLinger` (5 s,
+  `internal/ft8/service.go`), so an in-shell Map that REPLACES the Operate view in the content area
+  would end a run after five seconds, exactly as the Logbook does today. Design that meets the ask:
+  a Map entry in the sidebar that renders the map in the shell's content area while the Operate
+  workspace stays MOUNTED but hidden (`hidden`, not unmounted), so the FT stream, capture and run
+  continue — the presence signal keeps its meaning, the operator is at the same visible tab — and
+  the shell-level TX alarm banner and toasts stay visible over the map; plus a pop-out control on the
+  in-shell map that opens the existing full-window `/app/map` in a new tab for the second-monitor
+  case (that tab now holds two streams after the 2026-09-14 transport change). Nearest confusable
+  outcome: an FT8 run continuing unseen behind the map — the header rig chip and the alarm banner
+  are the visible signals; the hold, queue and decode surfaces are not. Rulings wanted: (1) keep the
+  FT run alive while the Map is shown in-shell (a change to what "leaving the FT view" means, for
+  the Map only or for the Logbook and Settings too); (2) the pop-out stays as the second-monitor
+  path; (3) whether the sidebar's "Map ↗" becomes the in-shell entry with the pop-out inside the
+  map, or both remain side by side. **Ruled 2026-09-14, DECLINED:** "leave the map as a separate tab
+  and manage the internal browser connections. I don't want to disturb the FT side of things — it
+  works well and this idea may cause more issues." The map stays the full-window second tab; the
+  stream budget is the lever (the 2026-09-14 shared `/v1/events` per tab, and proposal (e) on the rig
+  stream still awaiting its ruling). Not to be reopened without a new operator ask.
 - **Show the picked station's own offset on the Occupancy panel (inbox 2026-09-12; not selected):**
   trigger: FT4 before the contest, A61DD calling CQ at 874 Hz in every odd slot, plain in Band
   Activity and absent from the Spectrum view — read as a missing signal. Not a defect: the panel

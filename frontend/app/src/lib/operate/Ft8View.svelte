@@ -98,7 +98,7 @@
     // operator ruling 2026-09-11): set once this view's stream opens on its
     // profile — a grant alone does not count, the daemon can still refuse the
     // subscription — cleared when a claim is refused, and otherwise left alone:
-    // no cleanup on destroy, so a trip to the Dashboard keeps it, and the rig
+    // no cleanup on destroy, so a trip to the Logbook keeps it, and the rig
     // state clears it itself when CAT confirms the rig left the data literal.
     // Not the remembered profile: a stop or a refused claim keeps the last
     // profile, so a refused FT8 claim after an FT4 session would otherwise

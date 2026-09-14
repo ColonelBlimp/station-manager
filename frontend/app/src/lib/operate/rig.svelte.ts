@@ -955,7 +955,7 @@ export function setModeMappings(m: Record<string, AdifModePair>): void {
 // in the Rig panel's Mode select and in the ADIF pair the log form resolves
 // from rig.mode (FT4 → MFSK/FT4). It is not a standing claim (the daemon
 // releases that after its linger once the view closes): it survives a trip to
-// the Dashboard or the Logbook, and ends only when a claim is refused (the FT
+// the Logbook or Settings, and ends only when a claim is refused (the FT
 // view clears it — what the daemon runs is then unknown), when CAT confirms
 // the rig has left the data literal (onRigState clears it), or when the other
 // profile's stream opens (the FT view replaces it). '' means the mapping's

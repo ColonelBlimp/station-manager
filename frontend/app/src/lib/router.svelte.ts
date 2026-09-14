@@ -1,10 +1,12 @@
 // Client-side router — History-API real paths (ADR 0044 sub-decision). A tiny
 // hand-rolled router, no dependency. Operate has three sub-routes for its modes
 // (/operate/phone, /operate/ft8, /operate/ft4 — ADR 0080) so they deep-link; a bare
-// /operate normalises to the last-used mode. Deep links + refresh work because both Vite's dev server
+// /operate normalises to the last-used mode, and so do the bare root and any unknown
+// path (the Dashboard is retired — ADR 0044 amendment 2026-09-14; a configurable
+// landing view is a later slice). Deep links + refresh work because both Vite's dev server
 // and the daemon's spaHandler index-fall-back unknown paths to index.html.
 
-export type View = 'dashboard' | 'operate' | 'logbook' | 'config' | 'map';
+export type View = 'operate' | 'logbook' | 'config' | 'map';
 export type OpMode = 'phone' | 'ft8' | 'ft4';
 
 /** The FT-family modes the shared FT view serves (ADR 0080): FT8 and FT4 differ
@@ -44,7 +46,7 @@ function parse(path: string, fallbackMode: OpMode): Loc {
         case '/map':
             return { view: 'map', mode: fallbackMode };
         default:
-            return { view: 'dashboard', mode: fallbackMode };
+            return { view: 'operate', mode: fallbackMode };
     }
 }
 
@@ -58,8 +60,6 @@ function pathFor(view: View, mode: OpMode): string {
             return '/config';
         case 'map':
             return '/map';
-        default:
-            return '/';
     }
 }
 

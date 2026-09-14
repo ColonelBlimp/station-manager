@@ -361,3 +361,29 @@ SP-LP bearing+distance/destination clock), Worked (auto-open), Session (submit
 sink), Details (QTH/grid), Rig (band/mode/freq + CAT link) — every backend
 touchpoint is one injected `set*()` in `main.ts`; the `/v1` wiring is the next
 arc.
+
+## Amendment (2026-09-14) — the Dashboard is retired; the bare root lands on the last-used Operate mode
+
+The Dashboard was endorsed above "in principle" as a lean status home and never built: the shell
+rendered a dashed placeholder under that nav entry from the first build to this date. Reviewing it
+on 2026-09-14 the operator challenged its existence, and the assessment held: every tile it was to
+carry already lives where the operator looks more often — rig connection state and dial in the
+header chip, the logbook count in the header, forwarding-queue health under Settings → Forwarding
+with terminal failures in the notification rail (ADR 0076), today's QSOs in the Logbook, quick-nav
+in the sidebar. Its one remaining job, a landing view that starts nothing (no FT profile claim, no
+FT8 stream, no audio capture), Phone/CW does equally well.
+
+Decision: the `dashboard` view is removed from the router, the sidebar and the shell. The bare root
+(`/app/`) and any path the router does not know land on the **last-used Operate mode** — the
+browser-remembered mode a bare `/operate` already used (Phone/CW on first use) — and the URL is
+normalised to that mode's path. `GET /v1/dashboard` stays unminted. The `startup_view` finer point
+above is narrowed, not dropped: the option set becomes Phone/CW, FT8, FT4 and last-used, and whether
+it lives in `config.json` or as a browser preference is an open ruling recorded in W-0012.
+
+Alternatives weighed: keep the placeholder until a tile set is designed (rejected: dead chrome in the
+nav for a view with no scheduled content); make the Dashboard the contacts map's home (not
+foreclosed — the map's in-shell future is a separate W-0012 item, and a map view needs no Dashboard
+to exist). Consequences: one fewer nav entry; the first-run title logic keys on the setup gate, not
+on the view, so it is unaffected; the FT view's comments that used "a trip to the Dashboard" as the
+example of leaving the workspace now say the Logbook.
+

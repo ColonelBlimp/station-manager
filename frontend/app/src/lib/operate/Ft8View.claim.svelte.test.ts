@@ -246,11 +246,11 @@ describe('Ft8View — stop paths through a refused claim', () => {
     });
 
     // Operator ruling 2026-09-11: the rig chip names the data literal by the
-    // LAST PROFILE WHOSE STREAM OPENED — kept across a trip to the Dashboard
+    // LAST PROFILE WHOSE STREAM OPENED — kept across a trip to the Logbook
     // (the view unmounts, the daemon's claim lingers out; the rig is still in
     // DATA-U), cleared by a refused claim, replaced when the other profile's
     // stream opens.
-    it('keeps FT4 across a Dashboard round trip, drops it on a refused FT8 claim, and takes FT8 once FT8 opens', async () => {
+    it('keeps FT4 across a Logbook round trip, drops it on a refused FT8 claim, and takes FT8 once FT8 opens', async () => {
         resetCatLink();
         setModeMappings({ 'DATA-U': { mode: 'FT8', submode: '' } });
         rig.cat = 'connected';
@@ -263,7 +263,7 @@ describe('Ft8View — stop paths through a refused claim', () => {
         await vi.waitFor(() => expect(rig.mode).toBe('FT4'));
         expect(screen.getByRole('heading', { name: 'Operate · FT4' })).toBeTruthy();
 
-        view.unmount(); // Dashboard
+        view.unmount(); // Logbook
         expect(rig.mode).toBe('FT4'); // the rig is still in its data mode, last opened as FT4
         cleanup();
         view = render(Ft8View); // back to Operate → FT4

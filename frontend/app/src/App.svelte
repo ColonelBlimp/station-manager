@@ -64,7 +64,6 @@
     });
 
     const titles: Record<View, string> = {
-        dashboard: 'Dashboard',
         operate: 'Operate',
         logbook: 'Logbook',
         config: 'Settings',
@@ -74,8 +73,9 @@
     // Browser-tab title: current view + build identity (W-0004 AC2). Central owner
     // for EVERY view, including the full-window Map (which no longer sets its own
     // <title>). While the first-run card owns the window the view router still
-    // says "dashboard", so the title follows the card's own gate and reads
-    // "Welcome" instead (dogfood Finding #8). isDevDaemon() is false until identity
+    // names a view (Operate, since the Dashboard's retirement), so the title
+    // follows the card's own gate and reads "Welcome" instead (dogfood Finding
+    // #8). isDevDaemon() is false until identity
     // loads and for any release or unavailable daemon, so the title stays the
     // neutral release form until proven dev.
     $effect(() => {
@@ -134,10 +134,6 @@
                     {#await import('./lib/config/Settings.svelte') then settingsModule}
                         <settingsModule.default />
                     {/await}
-                {:else}
-                    <!-- Placeholder for views not yet built (dashboard). -->
-                    <h1 class="text-2xl font-semibold text-ink">{titles[router.view]}</h1>
-                    <div class="mt-6 h-[60vh] rounded-xl border border-dashed border-line"></div>
                 {/if}
             </div>
         </main>

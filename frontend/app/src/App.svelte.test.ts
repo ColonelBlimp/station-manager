@@ -1,5 +1,5 @@
 // The browser-tab title is owned by App (W-0004 AC2). On the first-run surface the
-// view router still says "dashboard", so the tab read "Dashboard · Station Manager"
+// view router still named a view (then "dashboard"), so the tab read "Dashboard · Station Manager"
 // over the welcome card (alpha.2 dogfood Finding #8, W-0012). The title must follow
 // the same gate that chooses the welcome card: setup needed, or just completed.
 import { describe, it, expect, beforeEach } from 'vitest';

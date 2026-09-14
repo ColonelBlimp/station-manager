@@ -212,7 +212,7 @@ release uses gonum.
 > select's label (`DATA-U · FT4`; the option's value stays the literal `set_mode`
 > sends) and the log form's ADIF resolution name the rig's data literal by the **last
 > profile whose stream opened** (`setFtProfileLabel`): a grant alone does not count,
-> the name survives a trip to the Dashboard or Logbook (the daemon's claim does not —
+> the name survives a trip to the Logbook or Settings (the daemon's claim does not —
 > it releases after the linger), and it ends when a claim is refused, when CAT
 > confirms the rig has left the data literal, or when the other profile's stream
 > opens. The Operate anchor's heading names the **view**, `Operate · FT8` /

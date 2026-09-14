@@ -32,3 +32,14 @@ describe('Sidebar manual link', () => {
         expect(link.getAttribute('href')).toBe('/manual/');
     });
 });
+
+// ADR 0044 amendment 2026-09-14: the Dashboard is retired, so the nav offers
+// Operate, Logbook and Settings only — no dead entry that lands on a placeholder.
+describe('Sidebar nav without a Dashboard', () => {
+    it('offers no Dashboard entry; Logbook and Settings remain', () => {
+        render(Sidebar);
+        expect(screen.queryByTitle('Dashboard')).toBeNull();
+        expect(screen.getByTitle('Logbook')).toBeTruthy();
+        expect(screen.getByTitle('Settings')).toBeTruthy();
+    });
+});
