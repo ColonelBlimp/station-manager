@@ -1,7 +1,7 @@
 # W-0020 — Station Events: a full-page event section replacing the notification slide-over
 
-**Status:** Selected — dossier and ADR 0061 dated update under operator review before code (revised
-2026-09-14 after the second designer's review; one ruling outstanding: the recorder's overflow policy)
+**Status:** Selected — review package approved 2026-09-14 (revised after the second designer's review;
+all rulings recorded); slice 1 next on operator direction
 **Selected:** 2026-09-14
 **Outcome:** The header's "Notification history" slide-over is replaced by a **Station Events** section that
 takes the whole content area like the Logbook. It shows, newest first and filterable by category and
@@ -47,7 +47,12 @@ gives the whole store a surface worth its place in the navigation.
    question.
 7. **Severity per kind:** raised alarms `error`; clears and recoveries `info`; automatic disarms and
    abnormal terminations `warn`.
-8. From the converged design (operator + second designer): full-page section named **Station Events**,
+8. **Recorder queue:** capacity 64; overflow is non-blocking, drop newest; each drop logs one warning
+   carrying the allowlisted event kind and the recorder-owned cumulative drop count; no retry or
+   persistence work ever occurs on the producer's thread. Preserves the beginning and cause of a burst
+   while keeping every safety path independent of storage latency. Revisit only if a future
+   higher-frequency category joins the recorder.
+9. From the converged design (operator + second designer): full-page section named **Station Events**,
    not "Logs"; the alarm family plus the two existing kinds only; nothing routine added to make the page
    look busy; the "warn/error/fatal from the logging health writer" sketch is rejected; generic daemon
    diagnostics and the SM Cloud surface stay Proposed in ADR 0061; own dossier.
@@ -105,10 +110,10 @@ would hold the sequencing gates. So assembly owns a **bounded, lifecycle-managed
 node, started after the store, stopped before it): producers hand it a fact with the **occurrence time
 captured before enqueue**; a worker goroutine converts facts to `OperatorEventInput` (category, kind,
 severity per ruling 7, build, typed detail) and calls `RecordOperatorEvent`. The enqueue never blocks a
-safety path. A dropped fact (queue full) and a failed write are both **logged with the kind and a dropped
-counter, never retried on the caller's thread**. Queue capacity and the overflow policy are the operator's
-ruling (below); the proposal is capacity 64 and drop-newest — the alarm probe cadence bounds any burst far
-below that, and drop-newest keeps the earlier rows that explain a burst.
+safety path. Capacity 64, drop-newest on overflow, one `warn` line per drop with the kind and the recorder's
+cumulative drop count, a failed write logged the same way — never retried on the producer's thread
+(ruling 8). The alarm probe cadence bounds any burst far below 64, and drop-newest keeps the earlier rows
+that explain a burst.
 
 ### API
 
@@ -181,10 +186,9 @@ are read on the page, which is the acceptance evidence for AC2. A keyed test rem
 
 ## Open rulings for the operator
 
-- **Recorder queue capacity and overflow policy.** Proposed: capacity 64; on overflow drop the newest fact
-  and log one `warn` line with the kind and a running dropped counter; a failed write is logged the same
-  way and never retried on the producer's thread. Alternatives: drop-oldest (keeps the latest state, loses
-  the onset), or block with a short timeout (rejected: reintroduces the stall on a safety path).
+None. The recorder overflow policy was ruled 2026-09-14 (ruling 8); the alternatives weighed were
+drop-oldest (keeps the latest state, loses the onset) and blocking with a short timeout (rejected: it
+reintroduces the stall on a safety path).
 
 ## Evidence
 
@@ -193,7 +197,9 @@ are read on the page, which is the acceptance evidence for AC2. A keyed test rem
   boundary with `tx_bad_message` added; "active exchange" defined as an actual partner exchange; typed
   facts through narrow observers instead of a generic record callback; a non-blocking bounded recorder;
   migration pairs, down-migration policy and the full head-test list; drive alarm in AC2; the TX clear's
-  empty code and missing raised-at named as work; severities pinned. Inbox thread 2026-09-13/14 under
+  empty code and missing raised-at named as work; severities pinned. Recorder overflow ruled the same day
+  (capacity 64, drop newest, one warning per drop with kind and cumulative count); review package approved
+  and committed (`7c10308a`, this ruling recorded in the follow-up). Inbox thread 2026-09-13/14 under
   "Nothing listed in the Notifications section".
 
 ## References

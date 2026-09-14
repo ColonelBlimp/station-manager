@@ -48,8 +48,9 @@ Open one workstream per active focus.
 6. **W-0020 · SELECTED 2026-09-14 — [Station Events](work/W-0020-station-events.md).** Replace the header
    notification slide-over with a full-page Station Events section; the alarm family (TX/drive alarm
    raised and cleared, non-operator disarm, abnormal exchange termination) joins the `operator_event`
-   store under ADR 0076's typed-metadata rule; retention 500 per category. Dossier and ADR 0061 dated
-   update under operator review before code.
+   store under ADR 0076's typed-metadata rule; retention 500 per category; typed facts through a
+   non-blocking bounded recorder (64, drop newest). Review package approved 2026-09-14; slice 1 (store +
+   version head) next on direction.
 7. **W-0018 · OPEN — [Bring the embedded manual to release readiness](work/W-0018-bring-the-embedded-manual-to-release-readiness.md).** Page-by-page standing pass during dogfooding and a release gate before a public release; not a blocker for the next internal candidate (alpha.2 Findings #9, #10, #13, #14, #15).
 
 ## P3 — deferred or trigger-bound
