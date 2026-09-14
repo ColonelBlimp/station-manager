@@ -112,6 +112,37 @@ not compete with the app-shell, notification-history, or UI-cohesion dossiers.
   the background — a decode-frame contract change. Neither raises the connection budget: with the
   Map reuse (follow-up (a), ADR 0079) a second tab still leaves one spare connection, so one tab
   stands until HTTP/2 over TLS (follow-up (c), to verify).
+- **Dashboard review and a configurable landing view (operator, 2026-09-14; not selected):** the
+  operator: "review the Dashboard and what is the SPA's default landing page — Phone/CW, FT8, FT4,
+  maybe even make this configurable — different users default to different modes of operating and we
+  should accommodate that." Today: a bare `/app/` lands on the Dashboard, which is the unbuilt dashed
+  placeholder (`App.svelte`); ADR 0044 endorsed it as a lean status home (rig state, forwarding-queue
+  health, today's QSO count, quick-nav cards, no `GET /v1/dashboard`) and left `startup_view` as an
+  open finer point (`dashboard` | `operate-ft8` | `operate-phone` | `last-used`). The router
+  (`router.svelte.ts`) already remembers the last-used Operate mode in browser storage for a bare
+  `/operate`, and the sidebar's rail choice is a browser preference (`sm-util`), so "last-used" is
+  half built. Acceptance criterion to ratify: opening `/app/` lands on the view the operator chose in
+  Settings; a deep link or bookmark still wins; a first run lands on the welcome gate regardless.
+  Nearest confusable outcome: a landing preference that fights the remembered last-used mode (two
+  memories, one URL) — one of them must own the bare path. Rulings wanted: (1) the option set —
+  Dashboard, Phone/CW, FT8, FT4, last-used; (2) where it lives — `config.json` (daemon-owned, follows
+  the station across browsers, the ADR 0044 sketch) or a browser preference like the rail (per device,
+  no config schema change); (3) whether the Dashboard is built first, stays a placeholder, or gains
+  the map as its centrepiece (the 2026-09-14 inbox exchange). Own slice when selected; the Dashboard
+  itself may warrant a short ADR update to 0044 with the tile set decided. Same day the operator
+  challenged the Dashboard's existence and usefulness. Assessment: every tile ADR 0044 sketched is
+  already surfaced somewhere the operator sees more often — rig connection state and dial in the
+  header chip, the logbook count in the header, forwarding-queue health under Settings → Forwarding
+  with terminal failures in the notification rail, today's QSOs in the Logbook, quick-nav in the
+  sidebar — so a status home would restate the shell. What the Dashboard uniquely provides today is a
+  landing view that starts nothing: no FT profile claim, no FT8 stream, no audio capture. Phone/CW is
+  equally inert, so that role does not need a dedicated view. Footprint if retired: the `View` union
+  and the bare-path fallback in `router.svelte.ts`, the sidebar entry and its icon, the placeholder
+  branch and title in `App.svelte`, three tests, two code comments that use it as an example of a
+  non-FT view; no manual page, no daemon surface, nothing in `config.json`. Recommendation: retire
+  the Dashboard (dated update to ADR 0044, which endorsed it "in principle"), land a bare `/app/` on
+  the last-used Operate mode (Phone/CW on first use), and reduce the landing-preference option set to
+  Phone/CW, FT8, FT4 and last-used. Not a ruling yet — the operator's call.
 - **Show the picked station's own offset on the Occupancy panel (inbox 2026-09-12; not selected):**
   trigger: FT4 before the contest, A61DD calling CQ at 874 Hz in every odd slot, plain in Band
   Activity and absent from the Spectrum view — read as a missing signal. Not a defect: the panel
@@ -159,6 +190,24 @@ not compete with the app-shell, notification-history, or UI-cohesion dossiers.
 - **Onboarding/preferences:** reduce non-Linux first-run friction; add download-site install content
   from the canonical install guide; keep beginner help, profiles, and `default_logbook.id` wiring
   deferred until their consuming workflow exists.
+
+## Built follow-up — the contacts map rides the shell's event stream (inbox 2026-09-11 follow-up (a), built 2026-09-14)
+
+Acceptance criterion: with the Operate tab on FT8 and the map open in a second tab, the map loads
+and stays live, and the daemon's SSE subscriber count reads five on opening the Map tab, not six
+(the log shows the count per subscribe). Nearest confusable outcome: a map that loads only because
+the Operate tab is idle — the count is the observable, not the load. Mechanism: `openLogEvents`
+(`frontend/app/src/lib/api/log-events.ts`) shares one `/v1/events` connection per tab behind a
+ref-counted subscriber list; the shell opens it at boot and never closes it, the Map view joins it
+and leaves it on unmount, and only the last subscriber closes the connection. Joining an open stream
+fires `onOpen` at once so the map's stream-then-fetch contract and its catch-up refetch are
+unchanged; the reconnection transition is tracked per subscriber (the shell that saw the drop
+re-fetches its count, a newcomer that did not is not told to). No call-site change in `main.ts` or
+`mapData.svelte.ts`. ADR 0079 carries the dated update with the alternatives weighed. Tests:
+`log-events.test.ts` (one EventSource for two subscribers, fan-out, late join open/down, ref-counted
+close); `main.boot.test.ts` and the MapView tests unchanged and green. Reversion proof: the four new
+tests fail on the previous transport (a second EventSource per subscriber). Proposal (e) — no rig
+stream in a Map tab — awaits its ruling (header rig chip would read unknown there).
 
 ## Built follow-up — run surface idle line retired (operator ruling 2026-09-13, on air)
 

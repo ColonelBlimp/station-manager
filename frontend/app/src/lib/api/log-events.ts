@@ -11,6 +11,15 @@
 // on return, and one killed by a network bounce with the tab visible is
 // recreated on the window 'online' event. Both ONLY when dead (a healthy one
 // is never torn down).
+//
+// ONE CONNECTION PER TAB (ADR 0079 dated update 2026-09-14). Every subscriber
+// in a tab rides the same EventSource: the shell opens it at boot and never
+// closes it, and a view that subscribes later (the contacts map) joins the live
+// connection instead of opening a second one. The Map view's own /v1/events
+// was the sixth long-lived connection across two tabs — the browser's per-host
+// cap — and the map's data request never reached the daemon (dogfood
+// 2026-09-11, recurred 2026-09-13). Subscribers are ref-counted so a tab with
+// no shell (tests) still opens on the first and closes on the last.
 
 /** Mirrors internal/events.QsoStoredPayload (and updated/deleted — same
  *  minimal shape by design: clients re-query for details). */
@@ -74,33 +83,81 @@ const QSO_EVENTS = ['qso.stored', 'qso.updated', 'qso.deleted'] as const;
 
 const SSE_URL = '/v1/events';
 
-/**
- * Open the stream and wire the handlers. Returns a close function; calling
- * it tears the EventSource down (the handlers see no further events).
- */
-export function openLogEvents(handlers: LogEventHandlers): () => void {
-    // A transport error seen since the last open. Lives in the subscription, not
-    // the wire closure, so an error on a stream openReviving later replaces still
-    // counts as the drop half of the transition when the replacement opens.
-    let sawError = false;
-    return openReviving(SSE_URL, (src) => {
+interface Subscription {
+    handlers: LogEventHandlers;
+    // A transport error seen by THIS subscriber since its last open. Per
+    // subscriber, not per stream: a newcomer that joins during an outage saw no
+    // drop, so the reopen is its boot open, while the shell that did see it
+    // re-fetches its baseline. Lives in the subscription, not the wire closure,
+    // so a drop on a stream openReviving later replaces still counts as the drop
+    // half of the transition when the replacement opens.
+    sawError: boolean;
+}
+
+interface SharedStream {
+    subs: Subscription[];
+    /** The connection is open right now — a late subscriber is told at once. */
+    isOpen: boolean;
+    close: () => void;
+}
+
+let shared: SharedStream | null = null;
+
+function connect(): SharedStream {
+    const s: SharedStream = { subs: [], isOpen: false, close: () => {} };
+    // Fan-out iterates a copy: a handler may unsubscribe mid-delivery.
+    const each = (fn: (sub: Subscription) => void): void => {
+        for (const sub of [...s.subs]) fn(sub);
+    };
+    s.close = openReviving(SSE_URL, (src) => {
         src.addEventListener('open', () => {
-            handlers.onOpen();
-            if (sawError) {
-                sawError = false;
-                handlers.onReconnect?.();
-            }
+            s.isOpen = true;
+            each((sub) => {
+                sub.handlers.onOpen();
+                if (sub.sawError) {
+                    sub.sawError = false;
+                    sub.handlers.onReconnect?.();
+                }
+            });
         });
         src.addEventListener('error', () => {
-            sawError = true;
-            handlers.onTransportError();
+            s.isOpen = false;
+            each((sub) => {
+                sub.sawError = true;
+                sub.handlers.onTransportError();
+            });
         });
 
         for (const name of QSO_EVENTS) {
             src.addEventListener(name, (ev: MessageEvent<string>) => {
                 const p = parse(ev, name);
-                if (p !== null) handlers.onQsoChanged(name, p);
+                if (p !== null) each((sub) => sub.handlers.onQsoChanged(name, p));
             });
         }
     });
+    return s;
+}
+
+/**
+ * Subscribe to the tab's shared stream, opening it if this is the first
+ * subscriber. Returns a close function; calling it detaches the handlers (they
+ * see no further events) and tears the EventSource down only when no
+ * subscriber remains. Joining an already-open stream fires onOpen at once, so
+ * a consumer's "open first, then fetch the baseline" contract holds unchanged.
+ */
+export function openLogEvents(handlers: LogEventHandlers): () => void {
+    if (shared === null) shared = connect();
+    const s = shared;
+    const sub: Subscription = { handlers, sawError: false };
+    s.subs.push(sub);
+    if (s.isOpen) handlers.onOpen();
+    return () => {
+        const i = s.subs.indexOf(sub);
+        if (i < 0) return; // already closed
+        s.subs.splice(i, 1);
+        if (s.subs.length === 0 && shared === s) {
+            shared = null;
+            s.close();
+        }
+    };
 }

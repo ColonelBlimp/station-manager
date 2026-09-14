@@ -7,6 +7,22 @@ date: 2026-09-07
 
 # 0079 — Open the general events stream from the shell so reconnection is CAT-independent
 
+> **Update 2026-09-14:** the first trigger below fired. With the Operate tab on FT8 and the map in
+> a second tab, the two tabs held six long-lived streams (log and rig per tab, the FT8 stream, and
+> the Map view's own second `/v1/events`) — the browser's per-host connection cap for the daemon's
+> plain-HTTP origin (inference from two incidents, 2026-09-11 and 2026-09-13; recovery was
+> immediate on closing a tab) — and the map's data request never reached the daemon ("Cannot reach
+> the daemon"). `openLogEvents` now multiplexes: one `/v1/events` connection per tab with a
+> ref-counted subscriber list, so the map joins the shell's stream instead of opening its own, and
+> the "map tab holds two" consequence below no longer applies. A subscriber joining an open stream is
+> told `onOpen` at once (its open-then-fetch contract holds); the reconnection transition stays per
+> subscriber, so a newcomer that saw no drop is not told to re-fetch. Alternatives weighed: a
+> separate hub module the shell and map both import (rejected: the same registry with a second
+> import path, and `main.ts` is line-keyed by the observatory); skipping streams in the Map tab
+> altogether and polling (rejected: the map's live arcs are the reason the stream exists). The rig
+> stream in a Map tab (proposal (e), inbox 2026-09-11) is a separate ruling. The other streams stay
+> per view by W-0013's trigger-bound entry.
+
 ## Context
 
 The header's "Logbook (n)" count is seeded at boot and re-fetched after each QSO logged from the

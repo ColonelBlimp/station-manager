@@ -6,8 +6,9 @@
  * the last N minutes".
  *
  * Data path: page GET /v1/logbook/{id}/qso newest-first and stop at the
- * window edge; subscribe /v1/events FIRST (stream, then fetch — the
- * documented reconnect contract) and re-run the windowed fetch on any
+ * window edge; subscribe to the tab's shared /v1/events FIRST (stream, then
+ * fetch — the documented reconnect contract; the shell already holds the
+ * connection, so this adds a subscriber, not a stream) and re-run the windowed fetch on any
  * qso.* event for our logbook (the payload is minimal by design; a
  * head-refetch is cheap and idempotent). Coordinates prefer the
  * enrichment's decimal lat/lon and fall back to the gridsquare's cell
@@ -309,7 +310,9 @@ export function startMapData(): () => void {
         // so a burst of tab switches costs one in-flight fetch at most.
         document.addEventListener('visibilitychange', onVisibilityCatchUp);
         // Stream first, then fetch — events for rows the fetch already
-        // returns are idempotent (the refetch is the idempotency).
+        // returns are idempotent (the refetch is the idempotency). This joins
+        // the shell's always-on connection (one per tab, ADR 0079 update
+        // 2026-09-14): a Map tab used to hold a second /v1/events of its own.
         closeEvents = openLogEvents({
             onOpen: () => {
                 mapData.live = true;
