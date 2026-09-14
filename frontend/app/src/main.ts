@@ -394,12 +394,18 @@ function applyStationContext(c: StationContext): void {
         cqToTop: c.ft8CqToTop,
         hideHashedCalls: c.ft8HideHashed,
     });
-    // Not in a Map tab: the full-window map renders no header chip, Rig panel or
-    // alarm banner, so the rig stream there held a browser connection for nothing
-    // (dogfood 2026-09-11/13: six streams across two tabs hit the per-host cap;
-    // operator ruling 2026-09-14, W-0012). A Map tab boots on /map and never
-    // routes elsewhere without a reload, so the boot-time view is the whole test.
-    if (c.catEnabled && !rigEventsOpen && router.view !== 'map') {
+    // Not in a settled Map tab: the full-window map renders no header chip, Rig
+    // panel or alarm banner, so the rig stream there held a browser connection
+    // for nothing (dogfood 2026-09-11/13: six streams across two tabs hit the
+    // per-host cap; operator ruling 2026-09-14, W-0012). A Map tab boots on /map
+    // and never routes elsewhere without a reload — EXCEPT while first-run setup
+    // is still needed: the welcome card covers the route and its "Open Settings"
+    // exit renders the shell in place (7126ab64 review P2), so the skip waits
+    // for setup_complete. Build identity (W-0004 AC3) rides the rig stream by
+    // ratified placement; a Map tab is now the no-CAT case for it — the tab
+    // title's DEV marker refreshes on the next reload, accepted (review P3).
+    const settledMapTab = router.view === 'map' && c.setupComplete;
+    if (c.catEnabled && !rigEventsOpen && !settledMapTab) {
         rigEventsOpen = true;
         // rig-meters routes to the TX-drive store here (ADR 0045: coupling in
         // main.ts); everything else is catLink's. The rig-state interpose feeds

@@ -250,7 +250,15 @@ stream, Operate on FT8 three, four across both against the cap of six. Tests: `m
 (CAT on, map route → log stream only) with `main.rigboot.test.ts` as the positive control (CAT on,
 Operate route → both), each importing the real `main.ts`; reversion proof: the map-route pin fails
 on the previous shell while the control still passes. The observatory's line-keyed `main.ts`
-baseline moved with the comment (`line@489` → `line@494`) in the same commit.
+baseline moved with the comment (`line@489` → `line@494`) in the same commit. Deployed 2026-09-14
+(`2.0.0-alpha.2-90-g7126ab64`). Review of that commit: P2 fixed — a tab that boots on `/map` while
+first-run setup is still needed is not a settled Map tab (the welcome card covers the route and its
+"Open Settings" exit renders the shell without a reload), so the skip now waits for
+`setup_complete`; `main.mapsetupboot.test.ts` pins it (map route, setup needed, CAT on → the rig
+stream opens). P3 refuted in a code comment: build identity rides the rig stream by W-0004 AC3's
+ratified placement, so a Map tab is now the no-CAT case for it — the tab title's DEV marker
+refreshes on the next reload, the accepted AC3 behaviour; routing it through the log stream would
+widen ADR 0079 without a ruling. Baseline rekeyed again (`line@494` → `line@500`).
 
 ## Built follow-up — run surface idle line retired (operator ruling 2026-09-13, on air)
 
