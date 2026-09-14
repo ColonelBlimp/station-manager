@@ -98,7 +98,11 @@
             if (pickLive) setPileup(true);
         }}
     >
-        <span class="size-1.5 shrink-0 rounded-full {dot()}"></span>
+        <!-- The dot annotates the text; beside an empty line it read as a
+             stray bullet (operator, 2026-09-14), so it goes with the text. -->
+        {#if line() !== ''}
+            <span data-run-dot class="size-1.5 shrink-0 rounded-full {dot()}"></span>
+        {/if}
         <span class="min-h-4">{line()}</span>
     </button>
     <div class="mt-1 h-5">

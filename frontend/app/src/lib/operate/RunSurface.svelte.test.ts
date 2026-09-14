@@ -52,6 +52,7 @@ function installActions(over: Partial<Ft8TxActions> = {}): void {
 
 const stateLine = (): string =>
     document.querySelector('[data-run-state]')?.textContent?.trim() ?? '';
+const runDot = (): Element | null => document.querySelector('[data-run-dot]');
 
 beforeEach(() => {
     resetFt8ForTests();
@@ -119,13 +120,16 @@ describe('RunSurface state line — pick mode (the session default)', () => {
 describe('RunSurface state line — auto modes', () => {
     // Operator ruling 2026-09-13: the idle auto-mode line ("Your next contact
     // starts a run — callers worked …") is retired — the Answer mode selector
-    // already says it and the row was wasted space. The row itself stays (dot +
-    // held height) so the fixed structure never reflows.
-    it('idle, no run: no state text, but the row and its dot remain', () => {
+    // already says it and the row was wasted space. The row itself stays (held
+    // height) so the fixed structure never reflows — but WITHOUT the state dot:
+    // a dot beside an empty line read as a stray bullet on air (operator,
+    // 2026-09-14). The dot returns with the text it annotates.
+    it('idle, no run: no state text and no dot, but the row remains', () => {
         ft8State.answerMode = 'auto_first';
         render(RunSurface);
         expect(stateLine()).toBe('');
         expect(document.querySelector('[data-run-state]')).not.toBeNull();
+        expect(runDot()).toBeNull();
     });
 
     it('auto_strongest idle reads the same empty line — the order word lives on the selector', () => {
@@ -134,11 +138,12 @@ describe('RunSurface state line — auto modes', () => {
         expect(stateLine()).toBe('');
     });
 
-    it('armed and idle: run live, waiting', () => {
+    it('armed and idle: run live, waiting — and the dot is back beside the text', () => {
         ft8State.answerMode = 'auto_first';
         ft8Link.onQso({ active: false, auto_work_armed: true });
         render(RunSurface);
         expect(stateLine()).toBe('Run live — waiting for callers (first come)');
+        expect(runDot()).not.toBeNull();
     });
 
     it('armed and working: run live, naming the station', () => {

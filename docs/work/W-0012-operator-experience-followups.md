@@ -171,6 +171,12 @@ The same session: the role label ("Calling CQ", "Working a caller") under the wo
 enrichment column duplicated the one on the panel's header bar a few lines above — removed; the header
 bar keeps it (`Ft8Operate.svelte`, test pins a single occurrence).
 
+Follow-up 2026-09-14, on the deployed build: with the idle text gone, the row's grey state dot stood
+alone and read as a stray bullet in the enrichment section. The dot now renders only beside a state
+line (the idle auto state shows neither), so the row still holds its height and the dot returns with
+the text it annotates. Test: idle asserts no dot, an armed run asserts it is back; reversion proof by
+removing the guard alone (idle test fails on the dot being present).
+
 ## Built follow-up — Phone/CW draft kept across a mode switch, age shown (inbox 2026-09-12, ruled and built 2026-09-13)
 
 Ruling: keep the draft across mode switches and show its age; preserve the original Time On; never
