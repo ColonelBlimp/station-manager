@@ -329,6 +329,25 @@
       "summary": "W-0019 adds FT4 as a second profile of the FT8 subsystem for the Africa FT4 DX Contest (2026-09-12): slices, operator gates, the contest runbook, and evidence; design in ADR 0080."
     },
     {
+      "id": "work.w-0020",
+      "path": "docs/work/W-0020-station-events.md",
+      "class": "work-item",
+      "audiences": ["operator", "contributor", "agent"],
+      "topics": ["notifications", "alarms", "operator-events", "spa"],
+      "scopes": [
+        "internal/database/sqlite/operator_event.go",
+        "internal/database/sqlite/migrations/log/**",
+        "internal/api/handler_record_notification.go",
+        "internal/bridge/txconfirm.go",
+        "internal/bridge/drivealarm.go",
+        "internal/ft8/servicetx.go",
+        "frontend/app/src/lib/ui/NotificationRail.svelte",
+        "frontend/app/src/lib/ui/Header.svelte",
+        "frontend/app/src/lib/api/notifications.ts"
+      ],
+      "summary": "W-0020 replaces the header notification slide-over with a full-page Station Events section and adds the alarm family (TX/drive alarms, non-operator disarms, abnormal exchange terminations) to the operator_event store under ADR 0076's typed-metadata rule."
+    },
+    {
       "id": "work.dogfood-inbox",
       "path": "docs/dogfood-inbox.md",
       "class": "work-item",

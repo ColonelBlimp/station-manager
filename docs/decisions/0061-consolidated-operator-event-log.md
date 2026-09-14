@@ -1,7 +1,7 @@
 ---
 number: 0061
 title: A categorised operator event store fed from published events, with smd.log retained as the diagnostic sink; alarms ship first
-status: Proposed; partially superseded by ADR 0076 (2026-08-22) for the local-store shape and pilot order
+status: Proposed; partially superseded by ADR 0076 (2026-08-22) for the local-store shape and pilot order; alarm category ratified narrowly by W-0020 (2026-09-14)
 date: 2026-07-31
 ---
 
@@ -13,6 +13,21 @@ date: 2026-07-31
 > **`notification`** (W-0001), not alarms. Everything else here — the alarm pilot's acknowledgement
 > semantics, `daemon` diagnostics, and the SM Cloud tenant store / admin surface — remains Proposed
 > and unsettled.
+
+> **Dated update (2026-09-14, W-0020 selected).** The operator ratified the **alarm category** into the
+> `operator_event` table — narrowly, not this ADR wholesale: TX alarm raised/cleared, drive alarm
+> raised/cleared, a safety disarm the operator did not initiate (`cat_lost`, the dial guard) while
+> idle, and an actual partner exchange terminated abnormally (one row at the sequencer's teardown
+> boundary, cause `unattended`/`cat_lost`/`dial_moved`/`dial_unknown`/`tx_not_armed`/`tx_bad_message`;
+> a routine linger disarm on an idle session — an armed Call-CQ run between contacts included — is
+> lifecycle and is never recorded). Producers emit narrow typed facts through injected observers and an
+> assembly-owned, non-blocking, bounded recorder writes the rows, so no safety path waits on SQLite.
+> Retention is the newest 500 rows per category, the ADR 0076 precedent. The surface is a full-page **Station Events**
+> section replacing the header slide-over, not a log viewer. A sketch of feeding warn/error/fatal
+> records from the logging health writer into the store was **rejected** as a log mirror at a different
+> seam — this ADR's own trigger ("if the event table is ever proposed to be fed from `smd.log`") applies
+> to it. Still Proposed and unsettled: acknowledgement semantics, the `daemon` category, `qso` surfacing,
+> and the SM Cloud tenant store and admin surface. Dossier: [W-0020](../work/W-0020-station-events.md).
 
 ## Context
 

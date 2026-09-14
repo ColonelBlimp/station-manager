@@ -45,7 +45,12 @@ Open one workstream per active focus.
 3. **W-0008 · OPEN — [Harden audited contract boundaries](work/W-0008-harden-audited-contract-boundaries.md).** Ordered persistence, configuration, API-wire, and frontend-wire correctness slices.
 4. **W-0010 · OPEN — [Improve forwarding, data, and synchronization reliability](work/W-0010-forwarding-data-and-sync-reliability.md).** Token rotation, duplicate-QSO resolution, legal bulk backfill, idempotent outcomes, and bounded reconciliation.
 5. **W-0012 · OPEN — [Complete routed operator-experience follow-ups](work/W-0012-operator-experience-followups.md).** UI, map, onboarding, and diagnostic improvements not owned by W-0004.
-6. **W-0018 · OPEN — [Bring the embedded manual to release readiness](work/W-0018-bring-the-embedded-manual-to-release-readiness.md).** Page-by-page standing pass during dogfooding and a release gate before a public release; not a blocker for the next internal candidate (alpha.2 Findings #9, #10, #13, #14, #15).
+6. **W-0020 · SELECTED 2026-09-14 — [Station Events](work/W-0020-station-events.md).** Replace the header
+   notification slide-over with a full-page Station Events section; the alarm family (TX/drive alarm
+   raised and cleared, non-operator disarm, abnormal exchange termination) joins the `operator_event`
+   store under ADR 0076's typed-metadata rule; retention 500 per category. Dossier and ADR 0061 dated
+   update under operator review before code.
+7. **W-0018 · OPEN — [Bring the embedded manual to release readiness](work/W-0018-bring-the-embedded-manual-to-release-readiness.md).** Page-by-page standing pass during dogfooding and a release gate before a public release; not a blocker for the next internal candidate (alpha.2 Findings #9, #10, #13, #14, #15).
 
 ## P3 — deferred or trigger-bound
 
