@@ -332,12 +332,31 @@ describe('tune carrier (ADR 0027)', () => {
         catLink.onRigState({ mode: 'RTTY-U' }); // the carrier's own mode push
         expect(rig.modeLiteral).toBe('RTTY-U');
         expect(rig.tuneRestoreMode).toBe('DATA-U'); // unmoved by the rig-state push
+        // The daemon publishes inactive right after WRITING the restore; the rig
+        // reports the restored mode later. The hold outlives the inactive push
+        // until that report lands (codex 2544b3da P2), so the field never shows
+        // the cached RTTY in between.
         catLink.onTuneState({ active: false });
+        expect(rig.tuneRestoreMode).toBe('DATA-U');
+        catLink.onRigState({ vfoA: 14_080_000 }); // a push without a mode does not end it
+        expect(rig.tuneRestoreMode).toBe('DATA-U');
+        catLink.onRigState({ mode: 'DATA-U' });
         expect(rig.tuneRestoreMode).toBe('');
         // An active push without the field (older daemon) holds nothing.
         catLink.onTuneState({ active: true });
         expect(rig.tuneRestoreMode).toBe('');
         catLink.onTuneState({ active: false });
+    });
+
+    it('an operator mode pick after the tune ends the hold at once (the optimistic literal shows)', async () => {
+        setRigCaps({ ops: ['set_mode'], tune: true, rigModes: ['USB', 'DATA-U'] });
+        rig.cat = 'connected';
+        catLink.onTuneState({ active: true, restore_mode: 'DATA-U' });
+        catLink.onTuneState({ active: false });
+        expect(rig.tuneRestoreMode).toBe('DATA-U');
+        void setMode('USB');
+        expect(rig.tuneRestoreMode).toBe('');
+        expect(rig.modeLiteral).toBe('USB');
     });
 
     it('resetCatLink forgets the restore mode with the rest of the link state', () => {

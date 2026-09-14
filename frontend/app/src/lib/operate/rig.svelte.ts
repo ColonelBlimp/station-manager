@@ -62,9 +62,13 @@ export const rig: {
     linkError: string;
     tuneActive: boolean;
     /** The pre-tune mode literal the daemon will restore, named on the active
-     *  tune-state push; '' when no tune is up (or an older daemon named none).
+     *  tune-state push; '' when nothing is held (or an older daemon named none).
      *  The Rig panel's Mode field shows this instead of the carrier's RTTY so
-     *  nothing in it changes during a tune (operator ruling 2026-09-14). */
+     *  nothing in it changes during a tune (operator ruling 2026-09-14). It
+     *  OUTLIVES the inactive push: the daemon publishes that right after
+     *  writing the restore, and the rig reports the restored mode a moment
+     *  later — the hold ends on the first mode report after the tune (or an
+     *  operator mode pick), never on the inactive push itself. */
     tuneRestoreMode: string;
     /** Stuck-TX safety alarm (ADR 0051): the daemon cannot confirm the
      *  transmitter is unkeyed. Persistent until the daemon clears it
@@ -516,6 +520,7 @@ export async function setMode(value: string): Promise<RigWriteResult> {
     const prevFriendly = rig.mode;
     rig.modeLiteral = value; // optimistic
     rig.mode = friendlyMode(value);
+    rig.tuneRestoreMode = ''; // an operator pick outranks a post-tune hold
     return confirmWrite(
         'modeLiteral',
         (p: RigStatePayload) => p.mode === value,
@@ -1062,6 +1067,11 @@ export const catLink = {
             if (band !== '') rig.band = band;
         }
         if (p.mode !== undefined) {
+            // The first mode report after a tune ends the restore hold: this is
+            // the rig's own word on what the restore left it in (see
+            // tuneRestoreMode). A report DURING the tune is the carrier's mode
+            // and leaves the hold alone.
+            if (!rig.tuneActive) rig.tuneRestoreMode = '';
             // The rig confirming a literal outside the FT data mode ends the
             // profile label: the data literal it named is no longer what the
             // rig is in (operator ruling 2026-09-11).
@@ -1119,7 +1129,11 @@ export const catLink = {
      *  subscribers, so a tab opened mid-tune sees the carrier is up. */
     onTuneState(p: TuneStatePayload): void {
         rig.tuneActive = p.active; // display always mirrors the daemon push
-        rig.tuneRestoreMode = p.active ? (p.restore_mode ?? '') : '';
+        // The hold is taken on the active push and RELEASED by the next mode
+        // report (onRigState) or operator pick (setMode), not here: the inactive
+        // push precedes the rig's report of the restored mode, and clearing on
+        // it would show the cached carrier mode in between (codex 2544b3da P2).
+        if (p.active) rig.tuneRestoreMode = p.restore_mode ?? '';
         matchWatch('tune', p); // resolve a pending tune watch only on its target (F-04)
     },
 

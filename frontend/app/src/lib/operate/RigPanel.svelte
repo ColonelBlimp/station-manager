@@ -77,9 +77,12 @@
     // guarantee, and a tab opened mid-tune has no "before" to remember. An
     // older daemon that names none falls back to the live literal. The daemon
     // refuses every generic rig write while a tune is up, so a held mismatch
-    // note cannot invite a write under the carrier.
+    // note cannot invite a write under the carrier. The hold is the store's
+    // (rig.tuneRestoreMode): taken on the active push, released by the first
+    // mode report after the tune — not by the inactive push, which the daemon
+    // sends before the rig has reported the restored mode.
     const shownLiteral = $derived(
-        rig.tuneActive && rig.tuneRestoreMode !== '' ? rig.tuneRestoreMode : rig.modeLiteral
+        rig.tuneRestoreMode !== '' ? rig.tuneRestoreMode : rig.modeLiteral
     );
 
     // FT8 cannot operate without CAT (capture is gated daemon-side on the rig

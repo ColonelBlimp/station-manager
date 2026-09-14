@@ -274,7 +274,17 @@ rig's mode push first; the off-data-mode note held unchanged; a mid-tune mount s
 mode; the live selector's value held. Reversion proof: the Go assertions fail to compile without the
 field; the eight SPA assertions fail on the previous panel and store. jsdom cannot measure layout, so
 the "same rectangle" criterion is pinned structurally (identical text and class) rather than by
-geometry. Awaiting operator "commit".
+geometry. Committed `2544b3da`. Review of that commit, P2 fixed: the daemon publishes the inactive
+push right after WRITING the restore and the rig reports the restored mode a moment later, so
+clearing the hold on the inactive push showed the cached RTTY-U in between. The hold now outlives
+the inactive push and is released by the first mode report after the tune (or an operator mode
+pick, which outranks it); a report during the tune is the carrier's and leaves it alone. Rendered
+between the inactive push and the report, the field is identical; a restore that did not take
+(the rig still answering RTTY-U) shows honestly once reported. The start side's other order (mode
+report before the active push) has no SPA-side cover and none is built: `StartTune` publishes
+tune-state straight after the tune-on write returns, before the rig can answer over serial — a
+reading of the daemon's code, not a measurement — so the rendered test for that order pins the
+settled state only and says so.
 
 ## Built follow-up — run surface idle line retired (operator ruling 2026-09-13, on air)
 

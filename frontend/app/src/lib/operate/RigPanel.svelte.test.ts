@@ -323,14 +323,38 @@ describe('FT views: Mode is a readout owned by the profile', () => {
             expect(readout).not.toHaveTextContent(/tune carrier/);
             expect(readout.title).toMatch(/tune carrier/i); // the fact lives in the tooltip only
 
-            // Stop: the daemon restores the data mode.
+            // Stop: the daemon publishes inactive right after WRITING the restore;
+            // the rig reports the restored mode a moment later. Rendered between
+            // the two, the field is still identical (codex 2544b3da P2).
             catLink.onTuneState({ active: false });
+            flushSync();
+            expect(snapshot()).toEqual(before);
             catLink.onRigState({ mode: 'DATA-U' });
             flushSync();
             expect(snapshot()).toEqual(before);
         });
 
-        it('rig mode push before the tune-state push: still held', () => {
+        it('after the stop, the first mode report ends the hold — a restore that did not take shows honestly', () => {
+            liveFt4();
+            catLink.onRigState({ vfoA: 14_080_000, mode: 'DATA-U' });
+            render(RigPanel, { props: { requiresCat: true, modeLabel: 'FT4', ftMode: 'ft4' } });
+            catLink.onTuneState({ active: true, restore_mode: 'DATA-U' });
+            catLink.onRigState({ mode: 'RTTY-U' });
+            catLink.onTuneState({ active: false });
+            catLink.onRigState({ mode: 'RTTY-U' }); // the rig answers still in RTTY
+            flushSync();
+            const readout = screen.getByRole('status', { name: 'Mode' });
+            expect(readout).toHaveTextContent('RTTY-U');
+            expect(readout).toHaveTextContent(/not the FT4 data mode/);
+        });
+
+        // The start side has no SPA-side cover for the other order: the daemon
+        // publishes tune-state straight after the tune-on write returns, before
+        // the rig can answer over serial and the read loop can publish its mode
+        // (bridge/tune.go StartTune → publishTuneState; a reading of the code, not
+        // a measurement). This case pins only that the END state is held whichever
+        // order lands.
+        it('rig mode push before the tune-state push: the settled state is held', () => {
             liveFt4();
             catLink.onRigState({ vfoA: 14_080_000, mode: 'DATA-U' });
             render(RigPanel, { props: { requiresCat: true, modeLabel: 'FT4', ftMode: 'ft4' } });
