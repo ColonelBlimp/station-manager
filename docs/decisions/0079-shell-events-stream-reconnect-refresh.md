@@ -20,8 +20,10 @@ date: 2026-09-07
 > separate hub module the shell and map both import (rejected: the same registry with a second
 > import path, and `main.ts` is line-keyed by the observatory); skipping streams in the Map tab
 > altogether and polling (rejected: the map's live arcs are the reason the stream exists). The rig
-> stream in a Map tab (proposal (e), inbox 2026-09-11) is a separate ruling. The other streams stay
-> per view by W-0013's trigger-bound entry.
+> stream in a Map tab (proposal (e), inbox 2026-09-11) was ruled the same day: a tab that boots on
+> the map route does not open `/v1/rig/events` — the full-window map renders nothing that reads it —
+> so a Map tab holds one stream and Operate on FT8 three, four across both tabs against a cap of
+> six. The other streams stay per view by W-0013's trigger-bound entry.
 
 ## Context
 

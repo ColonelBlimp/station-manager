@@ -394,7 +394,12 @@ function applyStationContext(c: StationContext): void {
         cqToTop: c.ft8CqToTop,
         hideHashedCalls: c.ft8HideHashed,
     });
-    if (c.catEnabled && !rigEventsOpen) {
+    // Not in a Map tab: the full-window map renders no header chip, Rig panel or
+    // alarm banner, so the rig stream there held a browser connection for nothing
+    // (dogfood 2026-09-11/13: six streams across two tabs hit the per-host cap;
+    // operator ruling 2026-09-14, W-0012). A Map tab boots on /map and never
+    // routes elsewhere without a reload, so the boot-time view is the whole test.
+    if (c.catEnabled && !rigEventsOpen && router.view !== 'map') {
         rigEventsOpen = true;
         // rig-meters routes to the TX-drive store here (ADR 0045: coupling in
         // main.ts); everything else is catLink's. The rig-state interpose feeds

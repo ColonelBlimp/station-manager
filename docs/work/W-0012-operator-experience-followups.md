@@ -243,7 +243,14 @@ re-fetches its count, a newcomer that did not is not told to). No call-site chan
 `log-events.test.ts` (one EventSource for two subscribers, fan-out, late join open/down, ref-counted
 close); `main.boot.test.ts` and the MapView tests unchanged and green. Reversion proof: the four new
 tests fail on the previous transport (a second EventSource per subscriber). Proposal (e) — no rig
-stream in a Map tab — awaits its ruling (header rig chip would read unknown there).
+stream in a Map tab — was ruled and built the same day: `main.ts` opens `/v1/rig/events` only when
+the tab did not boot on the map route (the full-window map renders no header chip, Rig panel or
+alarm banner, and a Map tab never routes elsewhere without a reload). Budget now: Map tab one
+stream, Operate on FT8 three, four across both against the cap of six. Tests: `main.mapboot.test.ts`
+(CAT on, map route → log stream only) with `main.rigboot.test.ts` as the positive control (CAT on,
+Operate route → both), each importing the real `main.ts`; reversion proof: the map-route pin fails
+on the previous shell while the control still passes. The observatory's line-keyed `main.ts`
+baseline moved with the comment (`line@489` → `line@494`) in the same commit.
 
 ## Built follow-up — run surface idle line retired (operator ruling 2026-09-13, on air)
 
