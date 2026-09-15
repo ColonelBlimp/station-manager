@@ -260,7 +260,9 @@ ratified placement, so a Map tab is now the no-CAT case for it — the tab title
 refreshes on the next reload, the accepted AC3 behaviour; routing it through the log stream would
 widen ADR 0079 without a ruling. Baseline rekeyed again (`line@494` → `line@500`).
 On air 2026-09-14 (`2.0.0-alpha.2-90-g7126ab64`, 15 m FT8 Call-CQ run, Map tab open beside the
-FT8 view): the operator reports the map working — the passive check the build was waiting on.
+FT8 view): the operator reports the map working — the passive check the build was waiting on. The
+log agrees: the Map tab took the daemon's global subscriber count to four (entry 36 had six), no
+request starved, and the map stayed up for the 88-QSO session (acceptance record entry 38).
 
 **AC2c build (2026-09-14):** daemon `TuneStatePayload.RestoreMode` (`restore_mode`, active push only,
 the `StartTune` snapshot read under `mu`); `tune_test.go` pins it on the active push and its absence on
@@ -292,6 +294,10 @@ release — including the skipped restore of an unconfirmed unkey, where the fie
 have shown the data mode over a rig still in RTTY; (2) a mode pick DURING the tune no longer drops
 the hold (the daemon refuses the write and the rollback keeps the literal); losing the rig drops
 the hold with the link. Go tests pin the READ after the restored and the skipped-restore stops.
+Committed by the operator as `c0bbd80a`, with the auto-off test waiting for the fake serial's READ
+before it inspects the stop sequence (the inactive push precedes the READ, a flake the first version
+had); review clean. **Deployed 2026-09-15 as `2.0.0-alpha.2-97-gc0bbd80a`.** Open: the operator's
+on-screen check — start a tune from the FT8 view and stop it without looking at the screen.
 
 ## Built follow-up — run surface idle line retired (operator ruling 2026-09-13, on air)
 

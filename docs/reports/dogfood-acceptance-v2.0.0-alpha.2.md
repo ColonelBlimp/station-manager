@@ -1318,6 +1318,39 @@ Times UTC.
     17:25:48–55Z; the tab closed 17:26:28Z; no warning or error after that. The G3/AC7 waivers stand: neither
     the decision → PTT → first-PCM latency nor the live decode p95 was measured. **W-0019's contest goal met.**
 
+38. **2026-09-14 12:11Z–13:50Z — a long FT8 Call-CQ session on 15 m and 12 m with a Map tab open beside the
+    FT8 view (entry 36's follow-up, the passive check the map-stream fixes were waiting on).** Station on
+    `2.0.0-alpha.2-90-g7126ab64` (started 12:01Z; one `/v1/events` per tab, no rig stream in a Map tab).
+    The Map tab opened 12:39:53Z and took the daemon's global subscriber count to four — the Operate tab's
+    log, rig and FT8 streams plus the Map tab's one log stream — where entry 36's two tabs had held six;
+    the operator reports the map working for the whole run, and no request starved. The Operate tab's close
+    at 13:50:43Z left one stream (the Map tab's), gone at 14:25:29Z. **Passive check met.** Before the run
+    the operator tuned the amplifier: eight tune carriers 12:06:19Z–12:09:31Z and 12:37:39Z, seven stopped
+    by the operator and one by the 15 s auto-off (12:06:51Z–12:07:06Z); this is the session in which the
+    AC2b readout moved the Tune button (inbox 2026-09-14, ruled and built as W-0012 AC2c the same day,
+    deployed 2026-09-15 as `2.0.0-alpha.2-97-gc0bbd80a`, the operator's on-screen check open). Runs: 15 m
+    12:11:20Z–12:37:25Z (17 QSOs), 12 m 12:38:17Z–13:50:14Z (71). 88 QSOs stored 12:12:44Z (F5UKW) to
+    13:50:13Z (EI5KO), 87 distinct callsigns — HB9ACA on both bands (12:14Z, 13:06Z), which the per-band
+    repeat hold rightly let through — 34 DXCC entities, every row `MODE=FT8` with both reports, grid, DXCC
+    and both zones; forwarded ClubLog 88/88 and QRZ 88/88 on the first attempt; SM Cloud 265 inserts and
+    stamp-sync updates, one on its second attempt because the cloud host answered "no route to host" at
+    12:03Z (reconcile tick) and 12:12:49Z (the first QSO's insert) and was back for the retry; queue 0
+    pending, 0 failed at close; 28 PSK Reporter batches (1,307 spots). Rungs: 196 keyed, 13,331–13,366 ms
+    (median 13,348) for the 12.959 s waveform, 0 failed, 0 truncated, 0 cancelled, no TX alarm of any kind
+    and no re-sent stop (W-0011's P1 #2 fix in the build). Sequencer: 79 partners confirmed on the first
+    RR73; three exchanges needed the confirm hold's two RR73 re-sends each (12:15Z–12:21Z) — during those
+    the header still said "Calling CQ" (the run role) while Band Activity showed other callers, which the
+    operator read as the run ignoring them; recorded in the inbox as the RR73 resend policy, ruling wanted,
+    and `history_max` (40 in this browser) is display-only and not a factor. One answerer silent after the
+    maximum repeats (12:27:00Z, CQ resumed). Five repeat holds, none answered anyway: JH2QMT four times on
+    15 m 12:28Z–12:33Z, ON5TTT once on 12 m 13:34Z. Decodes 12:11Z–13:51Z: 6,365 over 396 slots, DT median
+    +0.2 / p95 +1.0 s, 85 % within ±0.5 s, 1,528 addressed to us. Requests over 1 s: 181 enrichment
+    lookups (upstream latency, the inbox's concurrency-cap item), nothing else beyond the long-lived
+    streams and the session email. The operator stopped the run 13:50:14Z and switched the rig off (meter
+    polls unanswered 13:50:22Z, rig quiet 13:50:25Z); the session email archived and sent the 88-QSO ADIF
+    13:50:27–36Z; no error after that. Whether this session is W-0011's remaining long-session check is
+    the operator's call.
+
 ## Findings
 
 Record surprises in [`dogfood-inbox.md`](../dogfood-inbox.md) as they happen; triage each here as
