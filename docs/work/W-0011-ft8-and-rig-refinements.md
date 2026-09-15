@@ -264,6 +264,10 @@ single-flight keying, guaranteed stop, and operator-initiated session boundaries
     millisecond precision; (ii) the warn line's clause "the rig did not obey the first stop" asserts (A);
     neutral wording ("answered still-keyed to the first query; idle after the re-sent stop") would not
     claim what the evidence leans against.
+  - *Second occurrence, same run, 2026-09-15 11:32:58Z (17 m, an RR73 re-send rung, `keyed_ms` 13,343):* the
+    identical shape to the millisecond — `1` at 58.650, re-sent and re-asked in the same millisecond, `2` at
+    58.654 (4 ms), `0` at 58.670 (16 ms after the `2`), no alarm, rung logged as transmitted, next rung keyed
+    normally. Two for two absorbed; the same normal-length tail again favours (B). Rate today: 2 in 733 rungs.
 - **Safety-adjacent deferred evidence:** rig TOT surfacing/clamp, FT-710 meter-selector verification,
   meter-tail semantics, output-sink logging, playback reopen after a reproduced collapse, and
   persistent TX-state escalation only after an operator duration threshold.
