@@ -1,7 +1,7 @@
 # W-0011 — Refine operator-initiated FT8 and rig behavior
 
 **Status:** Deferred — choose a recognized operator problem, not the whole inventory
-**Selected:** Not selected
+**Selected:** the transient post-unkey TX alarm (2026-09-13) — **CLOSED 2026-09-15** on soak evidence; the rest of the inventory stays deferred
 **Outcome:** Selected FT8 or rig refinements improve a concrete operating workflow while preserving
 single-flight keying, guaranteed stop, and operator-initiated session boundaries.
 
@@ -150,7 +150,7 @@ single-flight keying, guaranteed stop, and operator-initiated session boundaries
   idle rig never raises a TX alarm, while a rig genuinely keyed at open still raises one within the
   existing latency. No settle duration or re-read mechanism is chosen yet. Passive reproduction at
   port open (receive only, operator agreement for that occasion) promotes this to backlog P1 #2.
-- **Transient post-unkey TX alarm (inbox 2026-09-11/12; SELECTED 2026-09-13, backlog P1 #2):** the
+- **Transient post-unkey TX alarm (inbox 2026-09-11/12; SELECTED 2026-09-13, backlog P1 #2; CLOSED 2026-09-15):** the
   `tx_still_keyed` alarm that self-clears within a second. Operator ruling 2026-09-13: a false alarm makes
   the operator doubt the rig or the software, so this goes ahead of every other post-contest item.
   **Investigation 2026-09-13 (passive: code + `smd.log`):**
@@ -268,6 +268,18 @@ single-flight keying, guaranteed stop, and operator-initiated session boundaries
     identical shape to the millisecond — `1` at 58.650, re-sent and re-asked in the same millisecond, `2` at
     58.654 (4 ms), `0` at 58.670 (16 ms after the `2`), no alarm, rung logged as transmitted, next rung keyed
     normally. Two for two absorbed; the same normal-length tail again favours (B). Rate today: 2 in 733 rungs.
+  - *CLOSED 2026-09-15 — soak requirement met, operator accepted:* the 2026-09-15 FT8 soak test
+    (7 h 12 min, 20 m / 15 m / 17 m, build `2.0.0-alpha.2-97-gc0bbd80a`) keyed 835 rungs with 0
+    failures and 0 TX alarms of any kind; the two still-keyed answers were absorbed without a banner,
+    each preserved the mode restore and let the next rung key normally. The two earlier long sessions
+    on the fix (2026-09-13, 150 QSOs; 2026-09-14, 88 QSOs and 196 rungs) also raised none. The
+    acceptance outcome — a stop the rig obeys on the first or the automatic second attempt never
+    shows the operator the red banner — has held for three sessions. The millisecond timing favours a
+    stale status answer (B) but does not establish the cause; that uncertainty does not undermine the
+    observed recovery and needs no further soak. Backlog P1 entry removed. Still open as separate
+    follow-ups, none blocking: the two ruling candidates above (stamp the unkey write; neutral warn
+    wording), the `txConfirmTimeout` candidate for the four `tx_unconfirmed` occurrences, and Finding
+    #7 (false alarm at bridge open) which stays conditional on a passive reproduction.
 - **Safety-adjacent deferred evidence:** rig TOT surfacing/clamp, FT-710 meter-selector verification,
   meter-tail semantics, output-sink logging, playback reopen after a reproduced collapse, and
   persistent TX-state escalation only after an operator duration threshold.

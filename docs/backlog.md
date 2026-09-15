@@ -27,11 +27,6 @@ on-air validation gate in W-0002.
    `["insert"]`; explicit unsupported actions stay rejected. Tests prove both cases. Built 2026-09-06;
    ships with the next candidate, which retires the B1-01 waiver. Evidence in the W-0008 dossier.
 
-2. **W-0011 · SELECTED 2026-09-13 — transient post-unkey TX alarm** (inbox 2026-09-11/12: four occurrences in
-   about 600 FT4 rungs, each cleared within the second after a re-sent `tx_off`; reproduced passively in the
-   logs). Operator ruling: a false alarm makes the operator doubt the rig or the software, so it precedes every
-   other post-contest item. Acceptance outcome and mechanism are stated in the W-0011 dossier before building.
-
 Conditional: alpha.2 Finding #7 (false TX alarm at bridge open, W-0011) becomes P1 #2 once passively reproduced.
 W-0007's four findings (equal-version SM Cloud conflict, partial station baseline, concurrent QSO delete,
 re-enrichment generation race) are all closed (2026-08-22).
