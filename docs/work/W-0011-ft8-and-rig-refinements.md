@@ -244,6 +244,26 @@ single-flight keying, guaranteed stop, and operator-initiated session boundaries
     the `tx_still_keyed` false alarm without moving the 3 s confirm bound. Candidate if the millisecond stamps
     show slow status answers behind the four `tx_unconfirmed` occurrences: lengthen `txConfirmTimeout` (3 s
     today) within that 10 s envelope — a threshold for the operator to set on evidence, not invented.
+  - *First on-air occurrence after the fix — 2026-09-15 07:47:13Z, build `2.0.0-alpha.2-97-gc0bbd80a`, FT8
+    Call-CQ soak run, a working-caller rung (`keyed_ms` 13,351):* the first `TX;` answer was `1` at 13.658;
+    the stop was re-sent and the rig re-asked in the same millisecond; the `2` push landed at 13.662 (4 ms
+    later) and `0` at 13.678; confirmed idle with `stop_reasserted: true`, **no alarm, no banner, the mode
+    restore ran, the rung logged as transmitted at 13.828 and the next rung keyed normally.** The
+    acceptance outcome held on its first test. What the millisecond stamps add, read against the
+    preceding normal rung (`1` push at 09:46:30.323 local, `keyed_ms` 13,334 → unkey written ≈ 43.65;
+    `2` at 43.638, `0` at 43.657): on a normal rung the `2` lands within ~10 ms of the `TX0;` write and
+    `0` about 19 ms after the `2`; on this rung (key push 00.323, unkey written ≈ 13.66) the `2` landed
+    within the same ~10 ms of the FIRST stop and `0` 16 ms after it — the tail is the normal tail, not a
+    tail that waited for the re-sent stop. That favours **(B)**: the rig accepted the first `TX0;` and
+    answered the `TX;` that followed it from its pre-stop state, so the `1` was stale and the event was a
+    false alarm of the class the fix now absorbs. It does not settle it: under (A) the re-sent stop would
+    have to be obeyed within ~4 ms, which the frames' ~1 ms serial time does not exclude, and the unkey
+    write itself is not stamped (its time above is `keyed_ms` added to the key push). Two follow-ups for
+    ruling, neither built: (i) stamp the unkey write — carry `unkey_written_at` (or the write→answer and
+    write→`2` deltas) on the still-keyed warn line, so the next occurrence separates A from B at
+    millisecond precision; (ii) the warn line's clause "the rig did not obey the first stop" asserts (A);
+    neutral wording ("answered still-keyed to the first query; idle after the re-sent stop") would not
+    claim what the evidence leans against.
 - **Safety-adjacent deferred evidence:** rig TOT surfacing/clamp, FT-710 meter-selector verification,
   meter-tail semantics, output-sink logging, playback reopen after a reproduced collapse, and
   persistent TX-state escalation only after an operator duration threshold.
