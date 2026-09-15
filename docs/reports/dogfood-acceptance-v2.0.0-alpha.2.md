@@ -1389,6 +1389,38 @@ Times UTC.
     has no Settings control; Settings must be a second tab during a run; the Occupancy panel is empty for
     a whole Call-CQ run; the ALC pill wording; 30 m's USB/serial interference untested on an empty band.
 
+40. **2026-09-13 11:12Z–16:14Z (recorded 2026-09-15, out of order) — the first long session on the transient
+    TX-alarm fix and the first on-air repeat holds: 150 FT8 QSOs on 17 m.** The fix (W-0011: a first
+    "still keyed" answer re-sends the stop and re-asks before any alarm, `02823278` + its two review fixes)
+    was committed 05:17Z–05:33Z and deployed as `2.0.0-alpha.2-82-gd8b3c51f` at 11:09Z, after two morning
+    restarts on `alpha.2-65` (04:24Z, 07:43Z) and one on a dirty `alpha.2-81` (10:51Z) while the day's Band
+    Activity and repeat-hold work landed. The rig came up at 09:43Z with the daemon already running; from
+    09:50Z to 11:09Z the log carried 333 pairs of `rig went quiet` / `rig data resumed` in the same second —
+    the FTdx10 idle past the 5 s liveness window with no FT8 capture polling it, recovered by the read-probe
+    each time, the known false-positive the SPA suppresses behind its 800 ms window, so nothing reached the
+    operator; it stopped for good once the FT8 view's capture opened at 11:09:26Z (inbox: log noise). Runs,
+    all 17 m: a Call-CQ run (auto-strongest) 11:12:57Z–11:20:21Z, 16 rungs, no answer taken (759 decodes in
+    the window, 6 addressed to us); four amplifier tunes 11:24Z–11:25Z and one 11:33Z, each stopped by the
+    operator; two short CQ runs 11:32Z–11:42Z; then the session — a hand-answered CQ 13:25Z (head-truncated
+    on late admission, 3,489 ms cut, keyed 9,853 ms, abandoned), two tunes 13:25Z, a Call-CQ run
+    (auto-strongest) 13:26:15Z–13:38:45Z and a Call-CQ run (auto-first) 13:38:50Z–16:13:15Z. 150 QSOs stored
+    13:27:13Z (6K5BXQ) to 16:13:13Z (R4WQ), 150 distinct callsigns, 41 DXCC entities, every row `MODE=FT8`
+    with both reports, grid, DXCC and both zones; forwarded ClubLog 150/150, QRZ 150/150, SM Cloud 450/450,
+    each on its first attempt; 153 PSK Reporter batches (7,272 spots). Rungs: 366 keyed, 13,332–13,365 ms for
+    the 12.959 s waveform apart from the truncated opener and one 89 ms cut at 16:04Z, 0 failed, **0 TX
+    alarms and 0 re-sent stops** — the fix armed for the whole session and never needed. Sequencer: the
+    repeat hold's first on-air day, 24 holds (SQ3F and SP6FCQ first, inbox 2026-09-13), 6 RR73 re-sends, 1
+    answerer silent after the maximum repeats, 6 excluded-answerer skips; 7 slot suppressions, all
+    `dial_moved`. At 14:24:45Z a Map tab opened beside Operate and took the daemon's stream count to six
+    for 101 s — entry 36's shape, the incident the 2026-09-14 map-stream fixes answered — with one
+    enrichment lookup over a second in the window and no starvation in the log. Decodes for the day:
+    26,857 over 839 slots, DT median +0.2 / p95 +0.8 s, 87 % within ±0.5 s. Requests over 1 s: 324
+    enrichment lookups, nothing else beyond the streams and the session email. The operator stopped the run
+    16:13:15Z and disarmed 16:13:17Z; the session email archived and sent the 150-QSO ADIF 16:13:28–36Z;
+    the tab closed 16:13:53Z; the rig went quiet 16:14:15Z; `alpha.2-86` (the repeat hold's Ignore control,
+    the idle line retired) started 16:16Z after the session. Counted with entries 38 and 39 as the three
+    alarm-free sessions behind the W-0011 closure.
+
 ## Findings
 
 Record surprises in [`dogfood-inbox.md`](../dogfood-inbox.md) as they happen; triage each here as
