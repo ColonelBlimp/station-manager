@@ -90,6 +90,11 @@ rather than remembered browser-side because the rig-state push of the carrier mo
 and the tune-state push are separate events with no ordering guarantee, and a tab
 opened mid-tune (hub replay) has no "before" to remember. The inactive push carries
 nothing. Same decision, one more field on its event; ADR 0010's shape rule holds.
+Every stop the rig is still connected for now ends with the rigdef READ snapshot
+(`reconcileAfterTune` → `TriggerBootstrap`), so the rig itself reports the mode
+and power the stop left it in — the SPA's hold is released by that report, on the
+restored path and on the skipped-restore path alike. This is the "query-at-stop"
+half of the "restore snapshot proves stale" trigger below, adopted early.
 
 ## Triggers to revisit
 

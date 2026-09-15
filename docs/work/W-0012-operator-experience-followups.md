@@ -284,7 +284,14 @@ between the inactive push and the report, the field is identical; a restore that
 report before the active push) has no SPA-side cover and none is built: `StartTune` publishes
 tune-state straight after the tune-on write returns, before the rig can answer over serial — a
 reading of the daemon's code, not a measurement — so the rendered test for that order pins the
-settled state only and says so.
+settled state only and says so. Committed `f4c46e81`; CI red on it (an `async` test with no
+`await`, masked locally by piping lint through `tail`) and its review's two P2s fixed together:
+(1) the daemon now closes every stop the rig is connected for with the rigdef READ snapshot
+(`reconcileAfterTune`), so the rig reports the mode the stop left it in and the hold always has a
+release — including the skipped restore of an unconfirmed unkey, where the field would otherwise
+have shown the data mode over a rig still in RTTY; (2) a mode pick DURING the tune no longer drops
+the hold (the daemon refuses the write and the rollback keeps the literal); losing the rig drops
+the hold with the link. Go tests pin the READ after the restored and the skipped-restore stops.
 
 ## Built follow-up — run surface idle line retired (operator ruling 2026-09-13, on air)
 

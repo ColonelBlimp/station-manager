@@ -520,7 +520,11 @@ export async function setMode(value: string): Promise<RigWriteResult> {
     const prevFriendly = rig.mode;
     rig.modeLiteral = value; // optimistic
     rig.mode = friendlyMode(value);
-    rig.tuneRestoreMode = ''; // an operator pick outranks a post-tune hold
+    // An operator pick outranks a POST-tune hold. During the tune the daemon
+    // refuses the write (TX owns the rig) and the rollback below restores the
+    // literal; the hold must survive that or the field shows the carrier's
+    // RTTY for the rest of the tune (f4c46e81 review P2).
+    if (!rig.tuneActive) rig.tuneRestoreMode = '';
     return confirmWrite(
         'modeLiteral',
         (p: RigStatePayload) => p.mode === value,
@@ -1107,6 +1111,7 @@ export const catLink = {
         pendingLostTimer = setTimeout(() => {
             pendingLostTimer = null;
             rig.cat = 'lost';
+            rig.tuneRestoreMode = ''; // the hold dies with the link; the post-INIT READ re-reports the mode
             // Surface the friendly reason ONLY once we actually flip to 'lost':
             // a blip that recovers inside the window clears via onRigState and so
             // never flashes it. Rendered as the panel's "Bridge:" line, above the

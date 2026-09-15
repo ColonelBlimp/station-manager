@@ -354,6 +354,7 @@ func (s *Service) releaseTuneChecked(ctx context.Context, reason string, wantGen
 			Msg("bridge: skipping tune mode/power restore — unkey unconfirmed (rig may still be keyed)")
 		s.invalidateTuneSnapshot() // rig is still at tune mode/power; the snapshot now lies
 		s.finishTune(reason)
+		s.reconcileAfterTune()
 		return nil
 	}
 
@@ -397,7 +398,23 @@ func (s *Service) releaseTuneChecked(ctx context.Context, reason string, wantGen
 		}
 	}
 	s.finishTune(reason)
+	s.reconcileAfterTune()
 	return nil
+}
+
+// reconcileAfterTune closes every stop the rig is still connected for with the
+// rigdef READ snapshot, so the rig itself reports the mode and power the stop
+// left it in. The SPA's Mode field holds the pre-tune literal from the active
+// tune-state push until the first mode report after the tune (operator ruling
+// 2026-09-14); without this query a rig that pushes no auto-information, a
+// restore the rig dropped, or the skipped restore of an unconfirmed unkey would
+// leave that hold with nothing to release it (f4c46e81 review P2). A query is
+// never a state write, so it is safe on the unconfirmed path too. Best-effort:
+// a failed READ is logged and the next bootstrap or poll fills the gap.
+func (s *Service) reconcileAfterTune() {
+	if err := s.TriggerBootstrap(context.Background()); err != nil {
+		s.logger.WarnWith().Err(err).Msg("bridge: post-tune READ snapshot failed; mode/power report waits for the next poll")
+	}
 }
 
 // finishTune clears active tune state, cancels the backstop, and tells

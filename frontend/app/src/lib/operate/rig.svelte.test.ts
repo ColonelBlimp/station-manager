@@ -348,7 +348,7 @@ describe('tune carrier (ADR 0027)', () => {
         catLink.onTuneState({ active: false });
     });
 
-    it('an operator mode pick after the tune ends the hold at once (the optimistic literal shows)', async () => {
+    it('an operator mode pick after the tune ends the hold at once (the optimistic literal shows)', () => {
         setRigCaps({ ops: ['set_mode'], tune: true, rigModes: ['USB', 'DATA-U'] });
         rig.cat = 'connected';
         catLink.onTuneState({ active: true, restore_mode: 'DATA-U' });
@@ -357,6 +357,33 @@ describe('tune carrier (ADR 0027)', () => {
         void setMode('USB');
         expect(rig.tuneRestoreMode).toBe('');
         expect(rig.modeLiteral).toBe('USB');
+    });
+
+    // The live selector stays enabled during a tune; the daemon refuses the
+    // write (TX owns the rig) and the rollback restores the literal — the hold
+    // must survive too, or the field shows the carrier's RTTY for the rest of
+    // the tune (f4c46e81 review P2).
+    it('a mode pick DURING the tune leaves the hold in place', () => {
+        setRigCaps({ ops: ['set_mode'], tune: true, rigModes: ['USB', 'DATA-U'] });
+        rig.cat = 'connected';
+        catLink.onTuneState({ active: true, restore_mode: 'DATA-U' });
+        catLink.onRigState({ mode: 'RTTY-U' });
+        void setMode('USB');
+        expect(rig.tuneRestoreMode).toBe('DATA-U');
+    });
+
+    it('losing the rig drops the hold with the link (the post-INIT READ re-reports the mode)', () => {
+        vi.useFakeTimers();
+        try {
+            rig.cat = 'connected';
+            catLink.onTuneState({ active: true, restore_mode: 'DATA-U' });
+            catLink.onRigDisconnected({ code: 'rig_no_data' });
+            vi.runAllTimers();
+            expect(rig.cat).toBe('lost');
+            expect(rig.tuneRestoreMode).toBe('');
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it('resetCatLink forgets the restore mode with the rest of the link state', () => {

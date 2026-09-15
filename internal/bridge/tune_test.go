@@ -32,6 +32,9 @@ func tuneTestService(t *testing.T) (*Service, *fakeSerial) {
 	// Small but non-zero settle so the unkey→restore split is exercised (two
 	// writes) without slowing the tests (task #270).
 	s.tuneRestoreSettle = 5 * time.Millisecond
+	// The pipeline stashes the rigdef READ for on-demand snapshots; a stop
+	// ends with one so the rig reports its post-restore state.
+	s.bootstrapBytes = []byte(ftdx10ReadLine)
 	return s, f
 }
 
@@ -104,6 +107,9 @@ func awaitTuneState(t *testing.T, ch <-chan Event, want bool, timeout time.Durat
 		}
 	}
 }
+
+// ftdx10ReadLine is the yaesu-ftdx10 rigdef's READ snapshot command.
+const ftdx10ReadLine = "ID;FA;FB;ST;VS;MD0;MD1;PC;MS;"
 
 func TestTuneSupported(t *testing.T) {
 	ftdx10, ok := cat.Lookup("yaesu-ftdx10")
@@ -423,17 +429,24 @@ func TestStopTune_RestoresAndUnkeys(t *testing.T) {
 	// drops it during the transition tail.
 	writes := f.recordedWrites()
 	// tune-on, unkey, the ADR 0051 status query, then the restore.
-	if len(writes) < 4 {
-		t.Fatalf("got %d writes, want 4 (tune-on, unkey, tx-status query, restore); writes=%q", len(writes), writes)
+	if len(writes) < 5 {
+		t.Fatalf("got %d writes, want 5 (tune-on, unkey, tx-status query, restore, READ); writes=%q", len(writes), writes)
 	}
-	if got := string(writes[len(writes)-3]); got != "TX0;" {
+	if got := string(writes[len(writes)-4]); got != "TX0;" {
 		t.Errorf("unkey write = %q, want %q (tx_off alone)", got, "TX0;")
 	}
-	if got := string(writes[len(writes)-2]); got != "TX;" {
+	if got := string(writes[len(writes)-3]); got != "TX;" {
 		t.Errorf("post-unkey write = %q, want %q (ADR 0051 confirmation query)", got, "TX;")
 	}
-	if got := string(writes[len(writes)-1]); got != "PC100;MD02;" {
+	if got := string(writes[len(writes)-2]); got != "PC100;MD02;" {
 		t.Errorf("restore write = %q, want %q (power + mode after settle)", got, "PC100;MD02;")
+	}
+	// The stop ends with the rigdef READ so the rig reports what the restore
+	// actually left it in — the SPA's Mode field holds the pre-tune literal
+	// until that report, and a rig without auto-information (or a restore the
+	// rig dropped) would otherwise never release it (f4c46e81 review P2).
+	if got := string(writes[len(writes)-1]); got != ftdx10ReadLine {
+		t.Errorf("post-stop write = %q, want the READ snapshot %q", got, ftdx10ReadLine)
 	}
 	s.mu.Lock()
 	active := s.tuneActive
@@ -551,14 +564,17 @@ func TestStopTune_CtxCancelDuringSettleStillRestores(t *testing.T) {
 	}
 
 	writes := f.recordedWrites()
-	if len(writes) < 3 {
-		t.Fatalf("want unkey + query + restore writes, got %d: %q", len(writes), writes)
+	if len(writes) < 4 {
+		t.Fatalf("want unkey + query + restore + READ writes, got %d: %q", len(writes), writes)
 	}
-	if got := string(writes[len(writes)-3]); got != "TX0;" {
+	if got := string(writes[len(writes)-4]); got != "TX0;" {
 		t.Errorf("unkey write = %q, want %q", got, "TX0;")
 	}
-	if got := string(writes[len(writes)-1]); got != "PC100;MD02;" {
+	if got := string(writes[len(writes)-2]); got != "PC100;MD02;" {
 		t.Errorf("restore skipped on a cancelled ctx = %q, want %q (F3: restore is detached)", got, "PC100;MD02;")
+	}
+	if got := string(writes[len(writes)-1]); got != ftdx10ReadLine {
+		t.Errorf("post-stop write = %q, want the READ snapshot", got)
 	}
 
 	s.mu.Lock()
@@ -589,11 +605,15 @@ func TestStopTune_UnconfirmedSkipsRestore(t *testing.T) {
 		t.Fatalf("StopTune: %v", err)
 	}
 
-	// The unkey and the status query went out; the restore must NOT have.
-	if w := lastWrite(f); w != "TX;" {
-		t.Fatalf("last write = %q, want the TX; query (restore must be skipped while unconfirmed)", w)
+	// The unkey and the status query went out; the restore must NOT have. The
+	// READ that closes every stop still does (a query, never a state write): on
+	// this path the rig sits in the carrier's mode and the SPA's held Mode
+	// field must learn that from the rig itself (f4c46e81 review P2).
+	writes := f.recordedWrites()
+	if len(writes) < 2 || string(writes[len(writes)-2]) != "TX;" || string(writes[len(writes)-1]) != ftdx10ReadLine {
+		t.Fatalf("last writes = %q, want the TX; query then the READ snapshot (restore skipped while unconfirmed)", writes)
 	}
-	for _, w := range f.recordedWrites() {
+	for _, w := range writes {
 		if string(w) == "PC100;MD02;" {
 			t.Fatal("power/mode restore written without positive RX confirmation")
 		}
@@ -661,6 +681,13 @@ func TestStopTune_StillKeyedAnswerSkipsRestore(t *testing.T) {
 func TestTuneAutoOff(t *testing.T) {
 	s, f := tuneTestService(t)
 	s.tuneMaxDuration = 30 * time.Millisecond
+	readSnapshot := make(chan struct{})
+	f.onWrite = func(written []byte) []byte {
+		if string(written) == ftdx10ReadLine {
+			close(readSnapshot)
+		}
+		return nil
+	}
 	t.Cleanup(answerTxStatusQueries(s, f)) // healthy rig: confirm-gate passes
 	ch, unsub := s.Subscribe()
 	defer unsub()
@@ -670,6 +697,13 @@ func TestTuneAutoOff(t *testing.T) {
 	}
 	// The hard backstop must drop the carrier on its own.
 	awaitTuneState(t, ch, false, 2*time.Second)
+	// The inactive event precedes the READ; wait for the serial write itself
+	// before inspecting the complete stop sequence.
+	select {
+	case <-readSnapshot:
+	case <-time.After(2 * time.Second):
+		t.Fatal("auto-off ended without the post-stop READ snapshot")
+	}
 	s.mu.Lock()
 	active := s.tuneActive
 	s.mu.Unlock()
@@ -677,16 +711,19 @@ func TestTuneAutoOff(t *testing.T) {
 		t.Error("tuneActive = true after auto-off")
 	}
 	// Auto-off uses the same release: unkey alone, the ADR 0051 status query,
-	// then the restore.
+	// the restore, then the READ snapshot.
 	writes := f.recordedWrites()
-	if len(writes) < 4 {
-		t.Fatalf("got %d writes, want 4 (tune-on, unkey, query, restore); writes=%q", len(writes), writes)
+	if len(writes) < 5 {
+		t.Fatalf("got %d writes, want 5 (tune-on, unkey, query, restore, READ); writes=%q", len(writes), writes)
 	}
-	if got := string(writes[len(writes)-3]); got != "TX0;" {
+	if got := string(writes[len(writes)-4]); got != "TX0;" {
 		t.Errorf("auto-off unkey write = %q, want %q", got, "TX0;")
 	}
-	if got := string(writes[len(writes)-1]); got != "PC100;MD02;" {
+	if got := string(writes[len(writes)-2]); got != "PC100;MD02;" {
 		t.Errorf("auto-off restore write = %q, want %q", got, "PC100;MD02;")
+	}
+	if got := string(writes[len(writes)-1]); got != ftdx10ReadLine {
+		t.Errorf("auto-off post-stop write = %q, want the READ snapshot", got)
 	}
 }
 
