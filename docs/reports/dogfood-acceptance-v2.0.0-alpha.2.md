@@ -1351,6 +1351,44 @@ Times UTC.
     13:50:27–36Z; no error after that. Whether this session is W-0011's remaining long-session check is
     the operator's call.
 
+39. **2026-09-15 05:06Z–12:20Z — the FT8 soak test that closed W-0011's transient TX-alarm item: 7 h 12 min
+    on 20 m, 15 m, 30 m and 17 m, mixing Call-CQ runs and ADR 0059 auto-work runs, on the first day of
+    the tune Mode-field fix.** Station on `2.0.0-alpha.2-97-gc0bbd80a` (deployed 04:59Z; one tab, the
+    Operate view, its three streams open 05:04:02Z). The operator tuned at 05:04Z, 06:30Z (twice), 09:30Z
+    (twice) and 09:32Z — six carriers, four stopped by the operator at 5–11 s and two by the 15 s auto-off —
+    and every stop confirmed idle within 21 ms and ended with the new rigdef READ, no warning; the on-screen
+    Mode-field check (W-0012 AC2c) is the operator's to call. Runs: 20 m — two hand-answered CQs 05:06Z–05:08Z
+    (both rungs head-truncated on late admission, 1,450 ms and 2,944 ms cut, neither answered), then an
+    auto-work run 05:08Z–05:17Z, three hand answers (two deferred as too late for the slot), and a Call-CQ run
+    (auto-strongest) 05:19Z–06:29Z; 15 m — a Call-CQ run 06:31Z–06:34Z that the operator turned into an
+    auto-work run 06:34Z–09:29Z; 30 m 09:31Z–09:32Z, abandoned after not one decode; 17 m — a Call-CQ run
+    (auto-first) 09:33Z–12:18Z and a last auto-work minute. 309 QSOs stored 05:08:58Z (JS2LGN, 20 m) to
+    12:19:28Z (JA8EPO, 17 m) — 20 m 50, 15 m 154, 17 m 105 — 299 distinct callsigns, 44 DXCC entities, every
+    row `MODE=FT8` with both reports, grid, DXCC and both zones; forwarded ClubLog 308/309 and QRZ 308/309 on
+    the first attempt with the last row still queued at the closing summary, SM Cloud 926/926; 168 PSK
+    Reporter batches (8,693 spots); the evidence archive fully synced with no backlog, no quarantine and
+    no loss interval, 33 MB of a 500 MB cap. Rungs: 835 keyed, 13,331–13,364 ms for the 12.959 s waveform
+    apart from the two truncated openers, 0 failed, 0 cancelled, **0 TX alarms of any kind**. The W-0011
+    re-sent stop had its first two on-air tests, 07:47:13Z and 11:32:58Z, and absorbed both: the rig
+    answered the first status query "still keyed", the daemon re-sent the stop and asked again in the same
+    millisecond, the transition push landed 4 ms later and idle 16 ms after that, no banner, the mode
+    restore ran, the next rung keyed normally — the same tail as a normal rung, which favours a stale
+    answer over a dropped stop without settling it (W-0011). **Operator accepted 2026-09-15: the soak
+    requirement is met and the item is closed.** One rung at 09:37:15Z ran without drive-collapse detection
+    because no meter push had arrived in the 16.6 s since the previous unkey (log-only, restored on the
+    rung after; inbox). Sequencer: 159 callers picked up by the auto-work runs, 35 repeat holds, 11 RR73
+    re-sends, 11 answerers silent after the maximum repeats, 3 stalled callers cooled off and skipped 12
+    times, one Next press; three bag requests refused 409 in the auto-first run (the Ctrl+click chord is
+    pick-run only — ruled 2026-09-15: instructions must not be shown where they cannot be actioned; inbox).
+    7 slot suppressions, all `dial_moved` on band changes. Decodes 05:00Z–12:20Z: 32,991 over 887 slots,
+    DT median +0.2 / p95 +0.8 s, 89 % within ±0.5 s. Requests over 1 s: 474 enrichment lookups (upstream
+    latency), nothing else beyond the long-lived streams and the session email. A second tab opened for 26 s
+    at 06:10Z (four streams, no starvation). The operator stopped the last run 12:19:36Z and disarmed
+    12:20:42Z; the session email archived and sent the 309-QSO ADIF 12:20:02–13Z; the tab closed 12:20:37Z;
+    the rig went quiet 12:42:03Z. Observations for ruling from the day (all inbox 2026-09-15): the repeat cap
+    has no Settings control; Settings must be a second tab during a run; the Occupancy panel is empty for
+    a whole Call-CQ run; the ALC pill wording; 30 m's USB/serial interference untested on an empty band.
+
 ## Findings
 
 Record surprises in [`dogfood-inbox.md`](../dogfood-inbox.md) as they happen; triage each here as
