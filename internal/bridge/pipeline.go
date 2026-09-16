@@ -703,6 +703,7 @@ func (s *Service) runSupervisor(ctx context.Context) {
 // them without re-encoding.
 func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.RigDefinition, initBytes, readBytes []byte) pipelineExitClass {
 	announcedDisconnect := false
+	live := &livenessLog{logger: s.logger, driver: def.ID}
 	identityVerified := false
 	// unrecognisedPublished rate-limits the identity-unrecognised bridge-error
 	// to once per pipeline instance now that an unrecognised ID no longer
@@ -770,13 +771,14 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 					if keyedish {
 						s.raiseTxAlarm(TxAlarmLivenessLost)
 					}
+					live.limitReached(strikes)
 				}
 				if !announcedDisconnect {
 					// The SSE announce carries no strike count and no log line;
 					// without this the quiet→unreachable transition can't be joined
-					// to its later recovery in smd.log (B11).
-					s.logger.WarnWith().Str("driver", def.ID).Int32("strikes", strikes).
-						Msg("bridge: rig went quiet; no data within liveness window")
+					// to its later recovery in smd.log (B11). Level policy in
+					// livenessLog (first flap at warn, later flaps at debug).
+					live.quiet(strikes)
 					s.publishDisconnect(RigCodeNoData, nil)
 					announcedDisconnect = true
 				}
@@ -836,9 +838,8 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 			if announcedDisconnect {
 				// Recovery edge (quiet→alive): log once with the strike count
 				// reached, BEFORE it's cleared below, so the outage span is
-				// reconstructable from smd.log (B11).
-				s.logger.InfoWith().Str("driver", def.ID).Int32("strikes", s.noDataStrikes.Load()).
-					Msg("bridge: rig data resumed; liveness restored")
+				// reconstructable from smd.log (B11). Level policy in livenessLog.
+				live.resumed(s.noDataStrikes.Load())
 			}
 			announcedDisconnect = false
 			livenessDeadline = time.Now().Add(s.livenessTimeout)

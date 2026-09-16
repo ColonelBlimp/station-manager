@@ -187,3 +187,118 @@ func TestReadLoop_LivenessTransitions_LogLostAndRestored(t *testing.T) {
 		t.Errorf("restored line has no strikes field: %v", restored[0])
 	}
 }
+
+// startLivenessLoop runs readLoop on a silent fake with a short liveness window
+// and returns the fake, the buffer and a stop function that freezes the log.
+func startLivenessLoop(t *testing.T) (*fakeSerial, *syncBuf, func()) {
+	t.Helper()
+	s, buf := newIdentityLogTestService(t, "yaesu-ft710")
+	s.livenessTimeout = 20 * time.Millisecond
+	def, ok := cat.Lookup("yaesu-ft710")
+	if !ok {
+		t.Fatal("rigdef yaesu-ft710 not found")
+	}
+	initBytes, err := cat.Encode(def, initCommandName)
+	if err != nil {
+		t.Fatalf("encode INIT: %v", err)
+	}
+	readBytes, err := cat.Encode(def, readCommandName)
+	if err != nil {
+		t.Fatalf("encode READ: %v", err)
+	}
+	fake := newFakeSerial()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); _ = s.readLoop(ctx, fake, def, initBytes, readBytes) }()
+	return fake, buf, func() { cancel(); <-done }
+}
+
+func levelOf(rec map[string]any) string {
+	lvl, _ := rec["level"].(string)
+	return lvl
+}
+
+// Operator ruling 2026-09-16 (inbox, 2026-09-13 log: 333 quiet/resumed pairs
+// in 80 min from an idle FTdx10 recovered by the probe within the second):
+// the FIRST quiet-but-alive flap keeps its warn/info pair; further flaps go to
+// debug, each carrying the count of flaps since the last warned event, so a
+// long idle session no longer buries real warnings. No serial traffic added.
+func TestReadLoop_LivenessFlaps_FirstAtWarnThenDebugWithCount(t *testing.T) {
+	fake, buf, stop := startLivenessLoop(t)
+
+	// Flap 1: quiet → probe → a frame answers.
+	waitFor(t, func() bool { return countLines(buf, "rig went quiet") >= 1 }, "no first went-quiet line")
+	if !fake.feedLine([]byte("FA014250000")) {
+		t.Fatal("feedLine rejected")
+	}
+	waitFor(t, func() bool { return countLines(buf, "liveness restored") >= 1 }, "no first restored line")
+	// Flap 2: the rig falls silent again (no frames), then answers again.
+	waitFor(t, func() bool { return countLines(buf, "rig went quiet") >= 2 }, "no second went-quiet line")
+	if !fake.feedLine([]byte("FA014250000")) {
+		t.Fatal("feedLine rejected")
+	}
+	waitFor(t, func() bool { return countLines(buf, "liveness restored") >= 2 }, "no second restored line")
+	stop()
+
+	quiet := matching(t, buf, "rig went quiet")
+	restored := matching(t, buf, "liveness restored")
+	if len(quiet) < 2 || len(restored) < 2 {
+		t.Fatalf("quiet=%d restored=%d, want >= 2 each; log:\n%s", len(quiet), len(restored), buf.String())
+	}
+	if levelOf(quiet[0]) != "warn" || levelOf(restored[0]) != "info" {
+		t.Errorf("first flap levels = %s/%s, want warn/info", levelOf(quiet[0]), levelOf(restored[0]))
+	}
+	if levelOf(quiet[1]) != "debug" || levelOf(restored[1]) != "debug" {
+		t.Errorf("second flap levels = %s/%s, want debug/debug (log noise, not a warning)", levelOf(quiet[1]), levelOf(restored[1]))
+	}
+	if flaps, _ := quiet[1]["flaps"].(float64); flaps != 1 {
+		t.Errorf("second went-quiet flaps = %v, want 1 (one flap since the last warned event)", quiet[1]["flaps"])
+	}
+	if flaps, _ := restored[1]["flaps"].(float64); flaps != 1 {
+		t.Errorf("second restored flaps = %v, want 1", restored[1]["flaps"])
+	}
+}
+
+// A REAL loss stays loud whatever preceded it: when the strikes reach the
+// disconnect limit one warn line names it and carries the flap count, and the
+// recovery after it is an info line with the strikes reached. Both reset the
+// flap count, so the next quiet-but-alive flap is warned again.
+func TestReadLoop_LivenessRealLoss_WarnsWithFlapCountAndRestoresAtInfo(t *testing.T) {
+	fake, buf, stop := startLivenessLoop(t)
+
+	// One flap first, so the count is observable on the loss line.
+	waitFor(t, func() bool { return countLines(buf, "rig went quiet") >= 1 }, "no first went-quiet line")
+	if !fake.feedLine([]byte("FA014250000")) {
+		t.Fatal("feedLine rejected")
+	}
+	waitFor(t, func() bool { return countLines(buf, "liveness restored") >= 1 }, "no first restored line")
+	// Then silence past the strike limit: no frames until the loss is named.
+	waitFor(t, func() bool { return countLines(buf, "rig unreachable") >= 1 }, "no unreachable line at the strike limit")
+	if !fake.feedLine([]byte("FA014250000")) {
+		t.Fatal("feedLine rejected")
+	}
+	waitFor(t, func() bool { return countLines(buf, "liveness restored") >= 2 }, "no restored line after the real loss")
+	stop()
+
+	lost := matching(t, buf, "rig unreachable")
+	if len(lost) != 1 {
+		t.Fatalf("unreachable lines = %d, want exactly 1 (one edge per outage); log:\n%s", len(lost), buf.String())
+	}
+	if levelOf(lost[0]) != "warn" {
+		t.Errorf("unreachable level = %s, want warn", levelOf(lost[0]))
+	}
+	if strikes, _ := lost[0]["strikes"].(float64); strikes != float64(noDataStrikeLimit) {
+		t.Errorf("unreachable strikes = %v, want the limit %d", lost[0]["strikes"], noDataStrikeLimit)
+	}
+	if flaps, _ := lost[0]["flaps"].(float64); flaps != 1 {
+		t.Errorf("unreachable flaps = %v, want 1 (the flap before the loss)", lost[0]["flaps"])
+	}
+	restored := matching(t, buf, "liveness restored")
+	last := restored[len(restored)-1]
+	if levelOf(last) != "info" {
+		t.Errorf("recovery-after-loss level = %s, want info", levelOf(last))
+	}
+	if strikes, _ := last["strikes"].(float64); strikes < float64(noDataStrikeLimit) {
+		t.Errorf("recovery-after-loss strikes = %v, want >= %d", last["strikes"], noDataStrikeLimit)
+	}
+}
