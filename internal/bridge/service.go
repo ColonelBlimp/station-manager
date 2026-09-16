@@ -473,6 +473,19 @@ type Service struct {
 	// "1" in the same cycle, or the cycle's original confirm timeout, alarms as
 	// before. Reset when a cycle begins and when the rig confirms idle.
 	txStopReasserted bool
+	// Evidence for the record an absorbed still-keyed answer leaves (W-0011,
+	// operator ruling 2026-09-16): the tx_off write's RETURN as captured at
+	// each unkey call site and handed to beginTxConfirmAfterUnkey /
+	// beginTxConfirmIfUncertain (zero when a cycle opened without an unkey
+	// write), the moment the first "1" was handled, and the re-sent stop's
+	// write return as stamped by its worker under mu (zero until then — an
+	// idle answer can be handled first). The 2026-09-15 occurrences
+	// could not be read at millisecond precision because the unkey write was
+	// never stamped; these let the next one be, without claiming which stop
+	// the rig obeyed. All mu-guarded; reset per cycle.
+	txUnkeyWrittenAt     time.Time
+	txStillKeyedAnswerAt time.Time
+	txStopResentAt       time.Time
 	// txReassertDone (mu-guarded) is non-nil while a pre-alarm re-sent stop is
 	// in flight on its tracked goroutine and is closed when that write has
 	// landed (or failed). The key paths wait on it under keyMu before writing

@@ -204,7 +204,9 @@ func (s *Service) StartTune(ctx context.Context) error {
 			// applied, and with no read_tx_status in the rigdef the confirm cycle
 			// would otherwise let the next decoded frame "confirm" a lost stop
 			// (2026-07-23 review P1).
-			if werr := s.writeKeyedLine(context.Background(), def, cl, off, "post-failed-key defensive tx_off"); werr != nil {
+			werr := s.writeKeyedLine(context.Background(), def, cl, off, "post-failed-key defensive tx_off")
+			offReturnedAt := time.Now()
+			if werr != nil {
 				s.logger.ErrorWith().Err(werr).
 					Msg("bridge: post-failed-key defensive tx_off failed — rig may be keyed; TX stays blocked")
 				s.raiseTxAlarm(TxAlarmKeyWriteFailed)
@@ -219,7 +221,7 @@ func (s *Service) StartTune(ctx context.Context) error {
 			if def.Protocol == cat.ProtocolIcomCIV {
 				s.confirmTxIdle("civ ack (post-failed-key defensive tx_off)")
 			} else {
-				s.beginTxConfirm(def, cl)
+				s.beginTxConfirmAfterUnkey(def, cl, offReturnedAt)
 			}
 			return errors.New(errOp).WithErr(err).WithMsg("write tune-on")
 		}
@@ -329,16 +331,18 @@ func (s *Service) releaseTuneChecked(ctx context.Context, reason string, wantGen
 	// reported as unkeyed (that would cancel the auto-off backstop and strand the
 	// carrier) — the error keeps tune armed so the backstop retries. Yaesu/Kenwood
 	// is the unchanged fire-and-forget write.
-	if err := s.writeKeyedLine(ctx, def, cl, unkey, "tune-off"); err != nil {
-		s.logger.ErrorWith().Err(err).Str("reason", reason).
+	werr := s.writeKeyedLine(ctx, def, cl, unkey, "tune-off")
+	unkeyReturnedAt := time.Now() // the stamp the absorbed-event record reports (W-0011)
+	if werr != nil {
+		s.logger.ErrorWith().Err(werr).Str("reason", reason).
 			Msg("bridge: tune unkey write failed; backstop will retry")
-		return errors.New(errOp).WithErr(err).WithMsg("write tune-off")
+		return errors.New(errOp).WithErr(werr).WithMsg("write tune-off")
 	}
 	// ADR 0051 confirm-or-alarm — see releaseFt8Tx's twin note.
 	if def.Protocol == cat.ProtocolIcomCIV {
 		s.confirmTxIdle("civ ack")
 	} else {
-		s.beginTxConfirm(def, cl)
+		s.beginTxConfirmAfterUnkey(def, cl, unkeyReturnedAt)
 	}
 
 	// Step 2 gate (2026-07-19 review P1): the restore raises power from the

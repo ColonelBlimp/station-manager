@@ -270,6 +270,30 @@ single-flight keying, guaranteed stop, and operator-initiated session boundaries
     either stop caused the unkey. The `txConfirmTimeout` candidate is DEFERRED: in the current code the
     timeout sets the alarm deadline and the first status query is sent at once (`txconfirm.go:93`), so
     delaying that query would be a separate TX-safety change needing explicit approval for an on-air test.
+  - *Built 2026-09-16 (i + ii):* the absorbed event's warn line now reads "the rig answered still-keyed to
+    the first query and idle to a later one; no alarm raised" — it asserts only the two status answers
+    observed. Field provenance, exactly as the code establishes it (two operator review rounds tightened
+    this): `unkey_written_at` is the tx_off write's RETURN captured at each unkey call site (the FT8 and
+    tune releases, both post-failed-key defensive unkeys, the stuck-TX re-unkey burst and the defensive
+    unkey on connect) and handed in via `beginTxConfirmAfterUnkey` / `beginTxConfirmIfUncertain`; a cycle
+    opened without an unkey write (the encode-failure paths, plain `beginTxConfirm`) leaves it EMPTY with
+    −1 spans rather than substituting the cycle's opening. `still_keyed_answer_at` is the "1" being
+    handled. `stop_resent_at` is the re-sent stop's write return as stamped by its worker under the
+    service lock, and `resend_stamped_before_idle` says whether that stamp existed when the idle answer
+    was handled — false also covers a write that had returned but was not yet stamped, so it is NOT
+    proof the stop had not reached the rig (the name says "stamped", not "landed"). Spans
+    `answer_after_unkey_ms`, `resend_after_answer_ms`, `idle_after_unkey_ms`, `idle_after_resend_ms`
+    (−1 when a stamp is missing); stamps in the record's own layout (`logging.TimeFieldFormat`, now
+    exported). Tests (buffer-backed logger): the re-send landed and stamped; the idle answer handled
+    while the re-send is held mid-write (gated client: flag false, empty stamp, −1 spans, no "after the
+    re-sent stop" clause); a cycle without an unkey write (empty unkey stamp); and a real tune keyed and
+    released through `StartTune`/`StopTune` whose record's `unkey_written_at` lies between the release
+    call and the still-keyed answer. Reversion proofs: old wording fails on "did not obey"; a zero
+    unkey stamp at the tune release fails the timestamp parse; the "after the re-sent stop" clause fails
+    the mid-write test. While measuring, `TestStillKeyed_ReassertKeepsTheOriginalConfirmTimeout` failed
+    1 in 30 runs under `-race` WITH and WITHOUT this change (it drains the alarm channel after seeing the
+    alarm FLAG, which is set under the lock before the event is published) — a latent test race, held
+    for a separate de-flake. No on-air test; the next on-air occurrence supplies the timings.
   - *Second occurrence, same run, 2026-09-15 11:32:58Z (17 m, an RR73 re-send rung, `keyed_ms` 13,343):* the
     identical shape to the millisecond — `1` at 58.650, re-sent and re-asked in the same millisecond, `2` at
     58.654 (4 ms), `0` at 58.670 (16 ms after the `2`), no alarm, rung logged as transmitted, next rung keyed

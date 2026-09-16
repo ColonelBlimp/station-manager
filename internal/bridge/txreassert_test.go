@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/cat"
+	"github.com/ColonelBlimp/station-manager/internal/logging"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 // The first "still keyed" answer of a confirmation cycle re-sends the stop and
@@ -359,5 +361,228 @@ func TestStillKeyed_OneReassertWorkerInFlight(t *testing.T) {
 	case <-released:
 	case <-time.After(time.Second):
 		t.Fatal("worker A's exit did not close its own completion channel")
+	}
+}
+
+// newReassertLogService is newAlarmProbeService with a REAL logger writing to a
+// buffer, so the record the absorbed event leaves in smd.log can be asserted on.
+func newReassertLogService(t *testing.T) (*Service, *fakeSerial, *syncBuf) {
+	t.Helper()
+	buf := &syncBuf{}
+	s := New(types.BridgeConfig{
+		Enabled: true,
+		Serial:  &types.BridgeSerialConfig{Port: "fake"},
+		Cat:     &types.BridgeCatConfig{Driver: "yaesu-ftdx10"},
+	}, logging.NewForWriter(buf))
+	fake := newFakeSerial()
+	ctx, cancel := context.WithCancel(context.Background())
+	s.mu.Lock()
+	s.activeClient = fake
+	s.identityConfirmed = true
+	s.runCtx = ctx
+	s.mu.Unlock()
+	t.Cleanup(func() {
+		cancel()
+		s.wg.Wait()
+	})
+	return s, fake, buf
+}
+
+// The absorbed event's record (operator ruling 2026-09-16, W-0011): the two
+// on-air occurrences could not tell whether the rig obeyed the FIRST stop late
+// or the RE-SENT one, and the old wording asserted the first — a causal claim
+// the evidence does not establish. The line now describes what was observed and
+// carries the three timestamps that were missing from the analysis (unkey
+// written, still-keyed answer, stop re-sent) with the millisecond spans between
+// them and the idle confirmation, so the next occurrence is read straight from
+// the log. The stamps narrow the two explanations; they are not proof of either.
+func TestStillKeyed_AbsorbedEventIsLoggedNeutrallyWithTimings(t *testing.T) {
+	s, fake, buf := newReassertLogService(t)
+	def, _ := cat.Lookup("yaesu-ftdx10")
+	before := time.Now()
+	s.beginTxConfirmAfterUnkey(def, fake, time.Now())
+	s.observeTxStatus("1")
+	waitForReassert(t, fake)
+	s.observeTxStatus("0")
+	after := time.Now()
+
+	recs := matching(t, buf, "confirmed idle")
+	if len(recs) != 1 {
+		t.Fatalf("want exactly one confirmed-idle record, got %d: %v", len(recs), recs)
+	}
+	rec := recs[0]
+	msg, _ := rec["message"].(string)
+	if rec["level"] != "warn" || rec["stop_reasserted"] != true {
+		t.Fatalf("the absorbed event must stay a warn with stop_reasserted=true: %v", rec)
+	}
+	if bytes.Contains([]byte(msg), []byte("did not obey")) {
+		t.Fatalf("the record asserts the rig ignored the first stop, which the evidence does not establish: %q", msg)
+	}
+	for _, want := range []string{"still-keyed to the first query", "idle to a later one", "no alarm"} {
+		if !bytes.Contains([]byte(msg), []byte(want)) {
+			t.Fatalf("record %q does not describe the observation %q", msg, want)
+		}
+	}
+	// Whether the re-sent stop's write-return STAMP existed when the idle
+	// answer was handled is a field, not a clause of the message: the idle
+	// answer can be handled before the stamp lands (next test).
+	if rec["resend_stamped_before_idle"] != true {
+		t.Fatalf("the re-send was stamped before the idle answer here; want resend_stamped_before_idle=true: %v", rec)
+	}
+
+	// The three stamps, in order, all inside the test's own window.
+	stamps := []string{"unkey_written_at", "still_keyed_answer_at", "stop_resent_at"}
+	var prev time.Time
+	for i, key := range stamps {
+		raw, _ := rec[key].(string)
+		ts, err := time.Parse(logging.TimeFieldFormat, raw)
+		if err != nil {
+			t.Fatalf("%s = %q is not a log timestamp: %v", key, raw, err)
+		}
+		if ts.Before(before.Truncate(time.Millisecond)) || ts.After(after) {
+			t.Fatalf("%s = %s lies outside the test window [%s, %s]", key, ts, before, after)
+		}
+		if i > 0 && ts.Before(prev) {
+			t.Fatalf("%s (%s) precedes %s (%s)", key, ts, stamps[i-1], prev)
+		}
+		prev = ts
+	}
+	// The spans a reader would otherwise compute by hand, all non-negative.
+	for _, key := range []string{"answer_after_unkey_ms", "resend_after_answer_ms", "idle_after_unkey_ms", "idle_after_resend_ms"} {
+		v, ok := rec[key].(float64)
+		if !ok || v < 0 {
+			t.Fatalf("%s missing or negative on the record: %v", key, rec[key])
+		}
+	}
+}
+
+// The idle answer can be handled while the re-sent stop is still MID-WRITE (the
+// interleaving TestStillKeyed_KeyWaitsForTheInFlightReassertedStop guards for
+// the key path). The record must then not read as "idle after the re-sent
+// stop": the re-send stamp is absent, its spans are -1, and the flag says the
+// stamp did not exist yet — the two status answers are all that was observed.
+// (The flag is about the STAMP: a write that returned but was not yet stamped
+// reads the same way, which is why it is not named "landed".)
+func TestStillKeyed_IdleBeforeTheResentStopIsStampedIsRecordedAsSuch(t *testing.T) {
+	s, fake, buf := newReassertLogService(t)
+	gated := &gatedStopClient{fakeSerial: fake, gate: make(chan struct{}), returned: make(chan struct{})}
+	t.Cleanup(func() { gated.release() }) // LIFO: before the service cleanup's wg.Wait
+	s.mu.Lock()
+	s.activeClient = gated
+	s.mu.Unlock()
+	def, _ := cat.Lookup("yaesu-ftdx10")
+	s.beginTxConfirmAfterUnkey(def, gated, time.Now())
+	s.observeTxStatus("1") // the worker starts and blocks inside its TX0 write
+	waitFor(t, func() bool { gated.mu.Lock(); defer gated.mu.Unlock(); return gated.held },
+		"the re-sent stop never reached the client")
+	s.observeTxStatus("0") // idle while the stop is still mid-write
+	gated.release()
+	<-gated.returned
+
+	recs := matching(t, buf, "confirmed idle")
+	if len(recs) != 1 {
+		t.Fatalf("want exactly one confirmed-idle record, got %d: %v", len(recs), recs)
+	}
+	rec := recs[0]
+	msg, _ := rec["message"].(string)
+	if rec["level"] != "warn" || rec["stop_reasserted"] != true {
+		t.Fatalf("still the absorbed event's warn: %v", rec)
+	}
+	if bytes.Contains([]byte(msg), []byte("after the re-sent stop")) {
+		t.Fatalf("the record claims idle followed the re-sent stop, which had not been stamped: %q", msg)
+	}
+	if rec["resend_stamped_before_idle"] != false {
+		t.Fatalf("want resend_stamped_before_idle=false: %v", rec)
+	}
+	if rec["stop_resent_at"] != "" {
+		t.Fatalf("want an empty stop_resent_at, got %v", rec["stop_resent_at"])
+	}
+	for _, key := range []string{"resend_after_answer_ms", "idle_after_resend_ms"} {
+		if v, _ := rec[key].(float64); v != -1 {
+			t.Fatalf("%s = %v, want -1 (no re-send stamp)", key, rec[key])
+		}
+	}
+	// The stamps that WERE observed are still there.
+	for _, key := range []string{"unkey_written_at", "still_keyed_answer_at"} {
+		if raw, _ := rec[key].(string); raw == "" {
+			t.Fatalf("%s missing on the record: %v", key, rec)
+		}
+	}
+}
+
+// unkey_written_at is the tx_off write's RETURN, captured at the call site and
+// handed in with the cycle. A cycle opened WITHOUT an unkey write (the encode
+// failure paths; here, the bare beginTxConfirm) has no such moment, and the
+// record must say so — an empty stamp and -1 spans — rather than substitute the
+// cycle's own opening for it.
+func TestStillKeyed_CycleWithoutAnUnkeyWriteCarriesNoUnkeyStamp(t *testing.T) {
+	s, fake, buf := newReassertLogService(t)
+	def, _ := cat.Lookup("yaesu-ftdx10")
+	s.beginTxConfirm(def, fake)
+	s.observeTxStatus("1")
+	waitForReassert(t, fake)
+	s.observeTxStatus("0")
+
+	recs := matching(t, buf, "confirmed idle")
+	if len(recs) != 1 {
+		t.Fatalf("want exactly one confirmed-idle record, got %d: %v", len(recs), recs)
+	}
+	rec := recs[0]
+	if rec["unkey_written_at"] != "" {
+		t.Fatalf("no unkey was written, yet unkey_written_at = %v", rec["unkey_written_at"])
+	}
+	for _, key := range []string{"answer_after_unkey_ms", "idle_after_unkey_ms"} {
+		if v, _ := rec[key].(float64); v != -1 {
+			t.Fatalf("%s = %v, want -1 (no unkey stamp)", key, rec[key])
+		}
+	}
+}
+
+// The production tune release hands the cycle the write's return: a tune keyed
+// and released through the real path, whose rig answers still-keyed once, leaves
+// a record whose unkey_written_at lies between the release call and the
+// still-keyed answer.
+func TestStillKeyed_TuneReleaseStampsTheUnkeyWriteReturn(t *testing.T) {
+	s, fake, buf := newReassertLogService(t)
+	s.mu.Lock()
+	s.lastMode = "USB"
+	s.lastPower = 100
+	s.tuneMaxDuration = time.Hour
+	s.tuneRestoreSettle = 5 * time.Millisecond
+	s.mu.Unlock()
+	if err := s.StartTune(context.Background()); err != nil {
+		t.Fatalf("StartTune: %v", err)
+	}
+	beforeRelease := time.Now()
+	released := make(chan error, 1)
+	go func() { released <- s.StopTune(context.Background()) }() // holds keyMu across waitTxConfirm
+	// Wait for the cycle to be ARMED, not merely for the unkey to appear in the
+	// fake's writes: the unkey write returns to the fake before the cycle sets
+	// txUncertain, and a "1" injected in that gap is ignored. The status query
+	// ("TX;") is written only after the cycle armed under the lock, so its
+	// appearance is the barrier.
+	waitFor(t, func() bool { return indexOfWrite(fake.recordedWrites(), "TX;") >= 0 && s.TxUncertain() },
+		"the release never armed its confirmation cycle")
+	s.observeTxStatus("1")
+	waitForReassert(t, fake)
+	s.observeTxStatus("0")
+	if err := <-released; err != nil {
+		t.Fatalf("StopTune: %v", err)
+	}
+
+	recs := matching(t, buf, "confirmed idle")
+	if len(recs) != 1 {
+		t.Fatalf("want exactly one confirmed-idle record, got %d: %v", len(recs), recs)
+	}
+	rec := recs[0]
+	raw, _ := rec["unkey_written_at"].(string)
+	ts, err := time.Parse(logging.TimeFieldFormat, raw)
+	if err != nil {
+		t.Fatalf("unkey_written_at = %q is not a log timestamp: %v", raw, err)
+	}
+	answerRaw, _ := rec["still_keyed_answer_at"].(string)
+	answerAt, _ := time.Parse(logging.TimeFieldFormat, answerRaw)
+	if ts.Before(beforeRelease.Truncate(time.Millisecond)) || ts.After(answerAt) {
+		t.Fatalf("unkey_written_at %s is not between the release call %s and the still-keyed answer %s", ts, beforeRelease, answerAt)
 	}
 }

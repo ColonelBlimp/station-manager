@@ -17,9 +17,9 @@ import (
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
-// fileTimeFieldFormat is the `time` field layout of every log record: RFC 3339
+// TimeFieldFormat is the `time` field layout of every log record: RFC 3339
 // with millisecond precision and the local offset (Go layout, not strftime).
-const fileTimeFieldFormat = "2006-01-02T15:04:05.000Z07:00"
+const TimeFieldFormat = "2006-01-02T15:04:05.000Z07:00"
 
 // Service is the primary logging facility for the application.
 //
@@ -143,7 +143,7 @@ func (s *Service) Initialize() error {
 		// resolves inside one second and whole-second stamps could not order
 		// it. Process-global in zerolog, set here because this is the one
 		// initialiser; RFC 3339 shape kept so RFC 3339 readers still parse it.
-		zerolog.TimeFieldFormat = fileTimeFieldFormat
+		zerolog.TimeFieldFormat = TimeFieldFormat
 		logger := zerolog.New(hw).With().Str("version", buildinfo.Version).Logger()
 
 		level, levelErr := zerolog.ParseLevel(s.LoggingConfig.Level)

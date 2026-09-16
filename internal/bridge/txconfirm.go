@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/cat"
+	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/safego"
 	"github.com/ColonelBlimp/station-manager/internal/serial"
 )
@@ -79,18 +80,28 @@ const (
 // leaves the state unconfirmed — escalating to the alarm at the timeout,
 // which is the correct reading of a write path that can't even carry a query.
 func (s *Service) beginTxConfirm(def cat.RigDefinition, cl serial.Client) {
-	s.beginTxConfirmCycle(def, cl, false)
+	s.beginTxConfirmCycle(def, cl, false, time.Time{})
+}
+
+// beginTxConfirmAfterUnkey is beginTxConfirm for a cycle that follows an unkey
+// write, carrying the moment that write RETURNED on the writing goroutine
+// (captured at the call site, the statement after the write) — the stamp the
+// absorbed-event record reports as unkey_written_at. beginTxConfirm itself
+// leaves it empty: nothing was written, or the caller cannot say when.
+func (s *Service) beginTxConfirmAfterUnkey(def cat.RigDefinition, cl serial.Client, unkeyReturnedAt time.Time) {
+	s.beginTxConfirmCycle(def, cl, false, unkeyReturnedAt)
 }
 
 // beginTxConfirmIfUncertain starts a fresh confirmation cycle only if no
 // positive RX evidence has already cleared uncertainty. Retry paths use this
 // after writing tx_off: a TXSTATUS=RX can arrive concurrently with that write,
 // and a later unconditional beginTxConfirm must not overwrite the all-clear.
-func (s *Service) beginTxConfirmIfUncertain(def cat.RigDefinition, cl serial.Client) bool {
-	return s.beginTxConfirmCycle(def, cl, true)
+// unkeyReturnedAt is the tx_off write's return as captured at the call site.
+func (s *Service) beginTxConfirmIfUncertain(def cat.RigDefinition, cl serial.Client, unkeyReturnedAt time.Time) bool {
+	return s.beginTxConfirmCycle(def, cl, true, unkeyReturnedAt)
 }
 
-func (s *Service) beginTxConfirmCycle(def cat.RigDefinition, cl serial.Client, requireUncertain bool) bool {
+func (s *Service) beginTxConfirmCycle(def cat.RigDefinition, cl serial.Client, requireUncertain bool, unkeyReturnedAt time.Time) bool {
 	hasStatusQuery := cat.HasCommand(def, readTxStatusCommand)
 	s.mu.Lock()
 	if requireUncertain && !s.txUncertain {
@@ -99,6 +110,9 @@ func (s *Service) beginTxConfirmCycle(def cat.RigDefinition, cl serial.Client, r
 	}
 	s.txUncertain = true
 	s.txStopReasserted = false // a fresh cycle gets one pre-alarm re-sent stop
+	s.txUnkeyWrittenAt = unkeyReturnedAt
+	s.txStillKeyedAnswerAt = time.Time{}
+	s.txStopResentAt = time.Time{}
 	s.txConfirmGen++
 	gen := s.txConfirmGen
 	// The any-data fallback is valid only after a successfully written unkey on
@@ -222,6 +236,7 @@ func (s *Service) confirmTxIdle(how string) {
 	wasUncertain := s.txUncertain
 	wasAlarmed := s.txAlarmActive
 	reasserted := s.txStopReasserted
+	unkeyAt, answerAt, resentAt := s.txUnkeyWrittenAt, s.txStillKeyedAnswerAt, s.txStopResentAt
 	s.txStopReasserted = false
 	s.txUncertain = false
 	s.txAlarmActive = false
@@ -238,11 +253,50 @@ func (s *Service) confirmTxIdle(how string) {
 		s.publishTxAlarm(false, "")
 	}
 	if wasUncertain && reasserted && !wasAlarmed {
-		// The operator-facing record of the event the alarm used to announce:
-		// the rig obeyed the second stop, not the first. Warn, not error — no
-		// alarm was raised and nothing is left keyed.
+		// The operator-facing record of the event the alarm used to announce.
+		// Warn, not error — no alarm was raised and nothing is left keyed. The
+		// wording asserts only the two status answers OBSERVED (still-keyed,
+		// then idle) and not which stop the rig obeyed: the 2026-09-15 on-air
+		// occurrences showed the normal-length TX→RX tail against the FIRST
+		// stop, consistent with a stale answer. The stamps let the next
+		// occurrence be read at millisecond precision (W-0011, operator ruling
+		// 2026-09-16); they narrow the two readings, they do not prove either.
+		// Provenance, exactly: unkey_written_at is the tx_off write's RETURN as
+		// captured at the call site (empty when the cycle opened without one);
+		// still_keyed_answer_at is the "1" being handled; stop_resent_at is the
+		// re-sent stop's write return as stamped by its worker, and
+		// resend_stamped_before_idle says whether that stamp existed when the
+		// idle answer was handled — false also covers a write that had returned
+		// but was not yet stamped (the worker stamps under s.mu after the write;
+		// the idle answer can land in between, the interleaving
+		// awaitReassertedStop exists for), so it is not proof the stop had not
+		// reached the rig.
+		now := time.Now()
+		ms := func(from, to time.Time) int64 {
+			if from.IsZero() || to.IsZero() {
+				return -1
+			}
+			return to.Sub(from).Milliseconds()
+		}
+		// Stamped as strings in the record's own time layout (millisecond
+		// precision), not via Time(): that would follow zerolog's global
+		// layout, which only the file logger sets.
+		stamp := func(t time.Time) string {
+			if t.IsZero() {
+				return ""
+			}
+			return t.Format(logging.TimeFieldFormat)
+		}
 		s.logger.WarnWith().Str("how", how).Bool("stop_reasserted", true).
-			Msg("bridge: tx state confirmed idle after the re-sent stop — the rig did not obey the first stop; no alarm raised")
+			Bool("resend_stamped_before_idle", !resentAt.IsZero()).
+			Str("unkey_written_at", stamp(unkeyAt)).
+			Str("still_keyed_answer_at", stamp(answerAt)).
+			Str("stop_resent_at", stamp(resentAt)).
+			Int64("answer_after_unkey_ms", ms(unkeyAt, answerAt)).
+			Int64("resend_after_answer_ms", ms(answerAt, resentAt)).
+			Int64("idle_after_unkey_ms", ms(unkeyAt, now)).
+			Int64("idle_after_resend_ms", ms(resentAt, now)).
+			Msg("bridge: tx state confirmed idle — the rig answered still-keyed to the first query and idle to a later one; no alarm raised")
 	} else if wasUncertain {
 		s.logger.InfoWith().Str("how", how).Bool("stop_reasserted", reasserted).Msg("bridge: tx state confirmed idle")
 	}
@@ -410,6 +464,7 @@ func (s *Service) reassertStopBeforeAlarm() bool {
 		!s.stopped && s.runCtx != nil && cl != nil
 	if eligible {
 		s.txStopReasserted = true
+		s.txStillKeyedAnswerAt = time.Now()
 		s.txReassertDone = make(chan struct{}) // key paths wait on this; owned by this worker
 		s.wg.Add(1)                            // under s.mu with the stopped check, like startAlarmProbes
 	}
@@ -457,6 +512,11 @@ func (s *Service) reassertStopBeforeAlarm() bool {
 			s.retryUnkeyStillKeyed()
 			return
 		}
+		s.mu.Lock()
+		if s.txConfirmGen == gen { // stamp the cycle it answers for, never a successor's
+			s.txStopResentAt = time.Now()
+		}
+		s.mu.Unlock()
 		if def.Protocol == cat.ProtocolIcomCIV {
 			s.confirmTxIdle("civ ack (still-keyed re-unkey)") // the awaited ACK is positive evidence
 			return
@@ -613,6 +673,7 @@ func (s *Service) beginDefensiveRecovery(def cat.RigDefinition, client serial.Cl
 			s.keyMu.Lock()
 			defer s.keyMu.Unlock()
 			werr := s.writeKeyedLine(context.Background(), def, client, txOff, "defensive unkey")
+			offReturnedAt := time.Now()
 			if werr != nil {
 				s.logger.ErrorWith().Err(werr).
 					Msg("bridge: defensive unkey write failed — rig may be keyed from a prior life; TX stays blocked")
@@ -625,7 +686,7 @@ func (s *Service) beginDefensiveRecovery(def cat.RigDefinition, client serial.Cl
 				return false
 			}
 			s.logger.InfoWith().Msg("bridge: sent defensive tx_off on confirmed connection (ADR 0051)")
-			s.beginTxConfirmIfUncertain(def, client)
+			s.beginTxConfirmIfUncertain(def, client, offReturnedAt)
 			return false
 		}()
 		if needRetry {

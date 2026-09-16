@@ -174,7 +174,9 @@ func (s *Service) KeyFt8Tx(ctx context.Context, mode string) error {
 			// rejected unkey looked like it landed. Awaiting the ACK is the only
 			// evidence CI-V offers that the stop actually applied (2026-07-23
 			// review P1).
-			if werr := s.writeKeyedLine(context.Background(), def, cl, off, "post-failed-key defensive tx_off"); werr != nil {
+			werr := s.writeKeyedLine(context.Background(), def, cl, off, "post-failed-key defensive tx_off")
+			offReturnedAt := time.Now()
+			if werr != nil {
 				s.logger.ErrorWith().Err(werr).
 					Msg("bridge: post-failed-key defensive tx_off failed — rig may be keyed; TX stays blocked")
 				// Alarm rather than confirm: a key that may have landed followed
@@ -194,7 +196,7 @@ func (s *Service) KeyFt8Tx(ctx context.Context, mode string) error {
 			if def.Protocol == cat.ProtocolIcomCIV {
 				s.confirmTxIdle("civ ack (post-failed-key defensive tx_off)")
 			} else {
-				s.beginTxConfirm(def, cl)
+				s.beginTxConfirmAfterUnkey(def, cl, offReturnedAt)
 			}
 			return errors.New(errOp).WithErr(err).WithMsg("write ft8 tx-on")
 		}
@@ -312,14 +314,16 @@ func (s *Service) releaseFt8TxChecked(ctx context.Context, reason string, wantGe
 	s.mu.Lock()
 	s.sealMeterGapWindow(unkeyAt)
 	s.mu.Unlock()
-	if err := s.writeKeyedLine(ctx, def, cl, unkey, "ft8 tx-off"); err != nil {
+	werr := s.writeKeyedLine(ctx, def, cl, unkey, "ft8 tx-off")
+	unkeyReturnedAt := time.Now() // the stamp the absorbed-event record reports (W-0011)
+	if werr != nil {
 		s.mu.Lock()
 		s.unsealMeterGapWindow()
 		s.mu.Unlock()
 		s.flushDriveWatchLog()
-		s.logger.ErrorWith().Err(err).Str("reason", reason).
+		s.logger.ErrorWith().Err(werr).Str("reason", reason).
 			Msg("bridge: ft8 tx-off write failed; backstop will retry")
-		return errors.New(errOp).WithErr(err).WithMsg("write ft8 tx-off")
+		return errors.New(errOp).WithErr(werr).WithMsg("write ft8 tx-off")
 	}
 	// ADR 0051 confirm-or-alarm: CI-V's awaited ACK above IS positive
 	// confirmation; a fire-and-forget write is only write-acceptance, so enter
@@ -327,7 +331,7 @@ func (s *Service) releaseFt8TxChecked(ctx context.Context, reason string, wantGe
 	if def.Protocol == cat.ProtocolIcomCIV {
 		s.confirmTxIdle("civ ack")
 	} else {
-		s.beginTxConfirm(def, cl)
+		s.beginTxConfirmAfterUnkey(def, cl, unkeyReturnedAt)
 	}
 
 	// Step 2 gate (2026-07-19 review P1, twin of releaseTune): the mode restore

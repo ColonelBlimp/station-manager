@@ -409,6 +409,7 @@ func (s *Service) retryUnkeyStillKeyed() {
 					return true
 				}
 				werr := s.writeKeyedLine(context.Background(), def, cl, off, "stuck-tx re-unkey")
+				offReturnedAt := time.Now()
 				if werr != nil {
 					s.logger.ErrorWith().Err(werr).Int("attempt", attempt).
 						Msg("bridge: safety re-unkey write failed; rig may still be keyed")
@@ -430,7 +431,7 @@ func (s *Service) retryUnkeyStillKeyed() {
 				// releasing keyMu for the same connection-lifetime guarantee. If an
 				// RX answer landed during the write, do not overwrite that all-clear
 				// with a fresh uncertain cycle.
-				s.beginTxConfirmIfUncertain(def, cl)
+				s.beginTxConfirmIfUncertain(def, cl, offReturnedAt)
 				return false // continue to the next attempt
 			}()
 			if finished {
