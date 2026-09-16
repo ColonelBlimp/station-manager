@@ -236,6 +236,23 @@
     // plain row (kind '') is never clickable.
     const canStart = $derived(ft8State.tx.armed && catLive && !ft8State.qso.active);
 
+    // The row tooltip names the bag chord only where the daemon would ACCEPT a
+    // bag (ruling 2026-09-16: an instruction that cannot be actioned is not
+    // shown). BagAnswerer accepts a station LISTED in a live pick context, and
+    // qso.answerers is exactly that list on the wire — empty outside a pick
+    // context (auto-first/strongest runs, no run), minus the station being
+    // worked (never listed) and any already bagged (moved to the queue).
+    function rowTitle(row: DecodeRow, hover: string): string {
+        let base = 'Answer this CQ';
+        if (row.kind !== 'cq') {
+            const listed = ft8State.qso.answerers.some((a) => a.call === row.call);
+            base = listed
+                ? 'Work this station calling you (Ctrl+click to queue)'
+                : 'Work this station calling you';
+        }
+        return base + (hover ? ` — ${hover}` : '');
+    }
+
     // DECODE STALENESS (operator's number, 2026-07-31: three minutes). Band Activity
     // retains by COUNT (historyMax), never by age, so on a quiet band a station that
     // left the air minutes ago keeps a clickable row — UA4FKT's did for 5m31s, and
@@ -613,10 +630,7 @@
                                             class="text-left {canStart
                                                 ? 'cursor-pointer hover:underline'
                                                 : 'cursor-default'}"
-                                            title={(row.kind === 'cq'
-                                                ? 'Answer this CQ'
-                                                : 'Work this station calling you (Ctrl+click to queue)') +
-                                                (hover ? ` — ${hover}` : '')}
+                                            title={rowTitle(row, hover)}
                                             onclick={(e) => onRowClick(e, row)}>{row.d.text}</button
                                         >{:else if row.dx !== null}<button
                                             type="button"

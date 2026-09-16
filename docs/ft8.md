@@ -365,7 +365,9 @@ CAT-live re-tune is opt-out** via the daemon config `restore_rig_on_mode_switch`
   because a calling-you row is only *clickable* when armed + idle, callers you
   spot mid-QSO are gone before you can act. **Ctrl/Cmd+click** a calling-you
   decode to **bag** it into the DAEMON's pick queue (`POST /v1/ft8/cq/bag` —
-  pure capture, no TX; a **Q** badge marks a bagged row). Bagging needs a live
+  pure capture, no TX; a **Q** badge marks a bagged row; the row's tooltip names
+  the chord only while the daemon lists that station as an answerer — ruling
+  2026-09-16, an instruction is not shown where it cannot be actioned). Bagging needs a live
   pick context — an `operator_pick` CQ run or the listing run every pick
   session leaves behind — because the queue is run state; outside one the
   daemon refuses and the toast explains. The daemon **drains** the queue in

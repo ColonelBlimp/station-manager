@@ -510,6 +510,39 @@ describe('Ft8BandActivity ctrl+click bags daemon-side (ADR 0067)', () => {
     });
 });
 
+describe('Ft8BandActivity bag chord hint (ruling 2026-09-16)', () => {
+    // "Instructions should not be seen if they cannot be actioned": the daemon
+    // accepts a bag only for a station LISTED in a live pick context
+    // (BagAnswerer: pickContextLocked + s.answerers), and the SPA sees exactly
+    // that set as qso.answerers. So the row tooltip names the chord only for a
+    // listed station — never in an auto-first run, never for a station already
+    // bagged (it left the list for the queue) or being worked (never listed).
+    it('names Ctrl+click only while the daemon lists the station as an answerer', () => {
+        setFt8OperatorCall('7Q5MLV');
+        render(Ft8BandActivity);
+        ft8Link.onDecode(
+            decode(freshSlot('even'), [{ text: '7Q5MLV PA3KUS JO21', freq_hz: 800, snr: 2 }])
+        );
+        flushSync();
+        const row = () => screen.getByText('7Q5MLV PA3KUS JO21');
+
+        // No pick context (auto-first run or no run): the base hint only.
+        expect(row().title).toContain('Work this station calling you');
+        expect(row().title).not.toContain('Ctrl+click');
+
+        // The daemon lists PA3KUS → a bag would be accepted → the chord is named.
+        ft8State.qso.answerers = [{ call: 'PA3KUS', snr: 2 }];
+        flushSync();
+        expect(row().title).toContain('(Ctrl+click to queue)');
+
+        // Bagged: it moved from answerers to queue → the chord goes again.
+        ft8State.qso.answerers = [];
+        ft8State.qso.queue = [{ call: 'PA3KUS', snr: 2 }];
+        flushSync();
+        expect(row().title).not.toContain('Ctrl+click');
+    });
+});
+
 describe('Ft8BandActivity row markers', () => {
     // The Q badge follows the DAEMON's bagged queue (ADR 0067) — a ctrl+click
     // alone marks nothing, because the bag is confirm-by-push; the badge
