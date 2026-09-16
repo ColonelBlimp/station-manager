@@ -95,6 +95,27 @@ describe('TxDriveChip', () => {
         expect(card()!.textContent).toContain('no poll answers');
     });
 
+    // Operator ruling 2026-09-16: the healthy state has NO label — the
+    // green dot is the whole statement ("drive right" read as nonsense on
+    // air). The tooltip ends at the instrument description and the card's
+    // second line is empty; the amber action text and the stale dash stay.
+    it('good state carries no label in the tooltip or on the card', () => {
+        render(TxDriveChip);
+        onRigMeters({ meter: 'ALC', value: 20 }, Date.now());
+        flushSync();
+        expect(chip()!.title).toBe('TX drive — rig ALC (0–255) polled live.');
+        chip()!.click();
+        flushSync();
+        const lines = card()!.querySelectorAll('[data-meter-line]');
+        expect(lines[0].textContent).toContain('ALC 20 of 255');
+        expect(lines[1].textContent?.trim()).toBe('');
+
+        onRigMeters({ meter: 'ALC', value: 62 }, Date.now());
+        flushSync();
+        expect(card()!.dataset.state).toBe('warn');
+        expect(lines[1].textContent).toContain('reduce the audio level');
+    });
+
     it('the marker stays visible at the maximum valid threshold (255)', () => {
         setTxDriveConfig({ amber: 255, intervalMs: 250 });
         render(TxDriveChip);

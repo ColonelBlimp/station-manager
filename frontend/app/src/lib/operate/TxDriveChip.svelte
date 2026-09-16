@@ -48,7 +48,9 @@
     const labelByState: Record<Exclude<TxDriveStatus, 'hidden'>, string> = {
         // Green is the HEALTHY band, not "ALC at zero" (ratified 2026-08-07:
         // healthy FT8 drive measures ALC 15–18 here, never zero while keyed).
-        good: 'drive right',
+        // It carries NO text (operator ruling 2026-09-16 — the former "drive
+        // right" read as nonsense on air): the dot is the whole statement.
+        good: '',
         // Terminal: the instrument cannot say how far over (RM ALC saturates
         // at the zone edge), so the message is the action, not a severity.
         warn: 'ALC high — reduce the audio level',
@@ -60,6 +62,13 @@
     // "no data" must never render like a healthy label.
     const chipText: () => string = $derived(() => (status() === 'stale' ? 'ALC —' : 'ALC'));
 
+    // Tooltip: the instrument description, plus the state's text only when
+    // the state has one (good has none — no dangling space).
+    const chipTitle: () => string = $derived(() => {
+        const label = labelByState[status() as Exclude<TxDriveStatus, 'hidden'>];
+        return `TX drive — rig ALC (0–255) polled live.${label ? ` ${label}` : ''}`;
+    });
+
     const pct = (v: number): number => Math.min(100, Math.max(0, (v / 255) * 100));
 </script>
 
@@ -70,9 +79,7 @@
             data-txdrive-chip
             data-state={status()}
             class="flex cursor-pointer items-center gap-x-1.5 rounded-full border border-line bg-surface px-2.5 py-1.5 shadow-md"
-            title="TX drive — rig ALC (0–255) polled live. {labelByState[
-                status() as Exclude<TxDriveStatus, 'hidden'>
-            ]}"
+            title={chipTitle()}
             aria-label="Open the TX drive (ALC) meter"
             onclick={() => setTxDriveOpen(true)}
         >
