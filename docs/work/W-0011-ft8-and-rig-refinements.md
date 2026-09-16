@@ -264,6 +264,12 @@ single-flight keying, guaranteed stop, and operator-initiated session boundaries
     millisecond precision; (ii) the warn line's clause "the rig did not obey the first stop" asserts (A);
     neutral wording ("answered still-keyed to the first query; idle after the re-sent stop") would not
     claim what the evidence leans against.
+  - *Ruled 2026-09-16:* build (i) and (ii) together — the neutral wording removes a causal claim the two
+    on-air occurrences do not establish, and `unkey_written_at` supplies the missing timing evidence for
+    the next occurrence. The stamp may narrow (A) against (B); it is not to be presented as proof that
+    either stop caused the unkey. The `txConfirmTimeout` candidate is DEFERRED: in the current code the
+    timeout sets the alarm deadline and the first status query is sent at once (`txconfirm.go:93`), so
+    delaying that query would be a separate TX-safety change needing explicit approval for an on-air test.
   - *Second occurrence, same run, 2026-09-15 11:32:58Z (17 m, an RR73 re-send rung, `keyed_ms` 13,343):* the
     identical shape to the millisecond — `1` at 58.650, re-sent and re-asked in the same millisecond, `2` at
     58.654 (4 ms), `0` at 58.670 (16 ms after the `2`), no alarm, rung logged as transmitted, next rung keyed
