@@ -457,7 +457,7 @@ CAT-live re-tune is opt-out** via the daemon config `restore_rig_on_mode_switch`
   surfaces that **before** the next transmission keys rather than after. Purely
   SPA-side, RX-safe — no daemon change. The banner also carries a **per-rung
   attempts-remaining countdown** (`· N calls left`) while the current rung is subject
-  to the auto-abandon cap (`ft8.tx.max_repeats`, default 6): it counts down each
+  to the auto-abandon cap (`ft8.tx.max_repeats`, default 5): it counts down each
   unanswered slot and reaches 0 on the slot before the sequencer abandons (or, on the
   caller side, works another live answerer / resumes CQ). The daemon advertises the cap (`max_repeats`) on the
   `ft8-qso` payload **only on the rungs it governs**, so the countdown shows iff

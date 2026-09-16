@@ -104,7 +104,7 @@ type ConfigResponse struct {
 	// Ft8MaxRepeats is the FT8 sequencer's unanswered-rung repeat cap
 	// (ft8.tx.max_repeats): how many times an unanswered rung is re-sent before the
 	// exchange gives up so the operator's Next can advance — the "N calls" readout.
-	// Always served RESOLVED on GET (default 6, clamped [1, Ft8MaxRepeatsCeiling]) for
+	// Always served RESOLVED on GET (default 5, clamped [1, Ft8MaxRepeatsCeiling]) for
 	// the logging SPA's FT8 Settings tab. Operator-writable and applied LIVE: a PUT
 	// persists it AND pushes it into the running sequencer (Service.SetMaxRepeats), so
 	// lowering it drops a dead contact sooner mid-pile-up without a restart. This is
@@ -1023,7 +1023,7 @@ func (s *Server) buildConfigResponse(r *http.Request, cfg config.Config) (Config
 	// 2026-08-08) — the seed for the session's Answer selector (ADR 0066).
 	callerMode := types.ResolveFt8CallerAnswerMode(cfg.Ft8.TX)
 	resp.Ft8CallerAnswerMode = &callerMode
-	// FT8 unanswered-rung repeat cap, resolved (default 6, clamp [1, Ft8MaxRepeatsCeiling])
+	// FT8 unanswered-rung repeat cap, resolved (default 5, clamp [1, Ft8MaxRepeatsCeiling])
 	// so the Settings-tab field shows the effective value even on a fresh config.
 	maxRepeats := types.ResolveFt8MaxRepeats(cfg.Ft8.TX)
 	resp.Ft8MaxRepeats = &maxRepeats

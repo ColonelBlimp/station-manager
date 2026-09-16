@@ -30,7 +30,7 @@ package config
 //	  bridge.Service construction (internal/bridge).
 //	- FT8 TX hard auto-off ft8TxMaxDuration = 18 s — internal/bridge/ft8tx.go.
 //	- FT8 sequencer unanswered-rung repeat cap ≤ Ft8MaxRepeatsCeiling = 10 —
-//	  clamped in types.ResolveFt8MaxRepeats (ft8.tx.max_repeats; default 6).
+//	  clamped in types.ResolveFt8MaxRepeats (ft8.tx.max_repeats; default 5).
 //	- band-activity history_max clamp [10, 2000] — types.ResolveFt8Display.
 //	- bridge timeout sane range [50 ms, 1 h] — validateBridge (typo guard; rejects).
 //

@@ -161,6 +161,12 @@ func TestResolveFt8MaxRepeats(t *testing.T) {
 	if Ft8MaxRepeatsCeiling != 10 {
 		t.Errorf("ceiling = %d, want 10", Ft8MaxRepeatsCeiling)
 	}
+	// Operator ruling 2026-09-16: five re-sends (~75 s of calling) is the fallback.
+	// Pinned literally so a drift in the constant is caught, not absorbed by the
+	// symbolic cases above.
+	if DefaultFt8MaxRepeats != 5 {
+		t.Errorf("default = %d, want 5 (operator ruling 2026-09-16)", DefaultFt8MaxRepeats)
+	}
 }
 
 func TestResolveFt8Frequencies(t *testing.T) {

@@ -29,7 +29,7 @@ import (
 // OnSlot is the single trigger: the decode loop calls it once per completed slot.
 
 // defaultSeqMaxRepeats caps consecutive unanswered transmissions of a rung before
-// the QSO is abandoned (ADR 0031 off-ramp). ~6 of our slots ≈ 90 s of calling. The
+// the QSO is abandoned (ADR 0031 off-ramp). ~5 of our slots ≈ 75 s of calling. The
 // operator can override it via ft8.tx.max_repeats (clamped ≤ Ft8MaxRepeatsCeiling);
 // this is the fallback when unset.
 const defaultSeqMaxRepeats = types.DefaultFt8MaxRepeats

@@ -427,8 +427,9 @@ func Ft8CallerAnswerModeValid(s string) bool {
 
 // Unanswered-rung repeat cap (ADR 0031 off-ramp) for Ft8TXConfig.MaxRepeats.
 const (
-	// DefaultFt8MaxRepeats is the resolve fallback — ~6 of our slots ≈ 90 s of calling.
-	DefaultFt8MaxRepeats = 6
+	// DefaultFt8MaxRepeats is the resolve fallback — ~5 of our slots ≈ 75 s of calling
+	// (6 until the operator ruling of 2026-09-16).
+	DefaultFt8MaxRepeats = 5
 	// Ft8MaxRepeatsCeiling is the hard internal ceiling the config can never exceed.
 	Ft8MaxRepeatsCeiling = 10
 )

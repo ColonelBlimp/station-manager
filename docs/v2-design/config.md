@@ -238,7 +238,7 @@ PSK Reporter, evidence capture, and evidence synchronization remain opt-in.
 - FT8 RX audio window: `-60` to `-10 dBFS`.
 - FT8 transmit-meter amber threshold: raw ALC value `30`.
 - FT8 caller-answer mode: `operator_pick`.
-- FT8 maximum repeats: `6`, clamped to `[1,10]`.
+- FT8 maximum repeats: `5`, clamped to `[1,10]` (6 until 2026-09-16).
 - FT8 occupancy idle-inhibit: true; OSD fallback decoding: true unless explicitly
   disabled.
 - FT8 occupancy: passband `200..3000 Hz`, threshold factor `4.0`, ranking weights
