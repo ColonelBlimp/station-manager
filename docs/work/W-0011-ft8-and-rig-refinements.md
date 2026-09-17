@@ -293,7 +293,7 @@ single-flight keying, guaranteed stop, and operator-initiated session boundaries
     the mid-write test. While measuring, `TestStillKeyed_ReassertKeepsTheOriginalConfirmTimeout` failed
     1 in 30 runs under `-race` WITH and WITHOUT this change (it drains the alarm channel after seeing the
     alarm FLAG, which is set under the lock before the event is published) — a latent test race, held
-    for a separate de-flake. No on-air test; the next on-air occurrence supplies the timings.
+    for a separate de-flake — done 2026-09-17: `waitForTxAlarm` blocks on the tx-alarm EVENT (published after the flag is set under the lock), used by the timeout test and the reassert-write-failure test; 15/150 failures under -race before (all "got []"); after: one failure in the first 300 runs whose text was not captured, then 3,000/3,000 clean — the 190 ms elapsed bound is the one timing-sensitive assertion left. No on-air test; the next on-air occurrence supplies the timings.
   - *Second occurrence, same run, 2026-09-15 11:32:58Z (17 m, an RR73 re-send rung, `keyed_ms` 13,343):* the
     identical shape to the millisecond — `1` at 58.650, re-sent and re-asked in the same millisecond, `2` at
     58.654 (4 ms), `0` at 58.670 (16 ms after the `2`), no alarm, rung logged as transmitted, next rung keyed

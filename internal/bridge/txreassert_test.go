@@ -35,6 +35,31 @@ func drainTxAlarms(ch <-chan Event) []TxAlarmPayload {
 	}
 }
 
+// waitForTxAlarm blocks until the next tx-alarm EVENT arrives, or fails after a
+// second. This is the barrier for an alarm raised on another goroutine (the
+// confirm timer, the reassert worker): the alarm FLAG is set under s.mu and the
+// event is published after the lock is released, so a test that polls the flag
+// and then drains the channel non-blockingly can observe the flag before the
+// event has landed (15 failures in 150 runs under -race, 2026-09-17). The event
+// is published only after the flag, so receiving it proves both.
+func waitForTxAlarm(t *testing.T, ch <-chan Event, msg string) TxAlarmPayload {
+	t.Helper()
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				t.Fatal("event subscription closed before a tx-alarm event arrived")
+			}
+			if ev.Name == EventTxAlarm {
+				return ev.Payload.(TxAlarmPayload)
+			}
+		case <-deadline:
+			t.Fatal(msg)
+		}
+	}
+}
+
 // waitForReassert waits until the daemon has re-sent the stop AND re-asked the
 // rig, in that order, after a first "still keyed" answer.
 func waitForReassert(t *testing.T, fake *fakeSerial) {
@@ -152,14 +177,20 @@ func TestStillKeyed_ReassertKeepsTheOriginalConfirmTimeout(t *testing.T) {
 	s.observeTxStatus("1")
 	waitForReassert(t, fake)
 	// Silence after the re-sent stop: the ORIGINAL cycle's timeout must still
-	// raise tx_unconfirmed — the re-send bought no extra time.
-	waitFor(t, s.TxAlarmActive, "no alarm after the confirm timeout elapsed with the rig silent")
+	// raise tx_unconfirmed — the re-send bought no extra time. Wait for the
+	// EVENT, which the timer publishes after setting the flag (see waitForTxAlarm).
+	got := waitForTxAlarm(t, ch, "no alarm after the confirm timeout elapsed with the rig silent")
 	if elapsed := time.Since(armed); elapsed > s.confirmTimeout+150*time.Millisecond {
 		t.Fatalf("alarm took %v; the re-sent stop must not extend the %v confirm bound", elapsed, s.confirmTimeout)
 	}
-	got := drainTxAlarms(ch)
-	if len(got) != 1 || got[0].Code != TxAlarmUnconfirmed {
-		t.Fatalf("want one tx_unconfirmed alarm from the original timeout, got %+v", got)
+	if !got.Active || got.Code != TxAlarmUnconfirmed {
+		t.Fatalf("want an active tx_unconfirmed alarm from the original timeout, got %+v", got)
+	}
+	if !s.TxAlarmActive() {
+		t.Fatal("the alarm event was published but the alarm flag is not set")
+	}
+	if extra := drainTxAlarms(ch); len(extra) != 0 {
+		t.Fatalf("want exactly one alarm event, got another after it: %+v", extra)
 	}
 }
 
@@ -172,10 +203,16 @@ func TestStillKeyed_ReassertWriteFailureAlarmsAtOnce(t *testing.T) {
 	fake.setWriteErr(errors.New("port gone"))
 
 	s.observeTxStatus("1")
-	waitFor(t, s.TxAlarmActive, "a still-keyed rig whose re-sent stop cannot be written must alarm now")
-	got := drainTxAlarms(ch)
-	if len(got) != 1 || got[0].Code != TxAlarmStillKeyed {
-		t.Fatalf("want one tx_still_keyed alarm when the re-sent stop cannot be written, got %+v", got)
+	// Raised on the reassert worker's goroutine: wait for the event, not the flag.
+	got := waitForTxAlarm(t, ch, "a still-keyed rig whose re-sent stop cannot be written must alarm now")
+	if !got.Active || got.Code != TxAlarmStillKeyed {
+		t.Fatalf("want an active tx_still_keyed alarm when the re-sent stop cannot be written, got %+v", got)
+	}
+	if !s.TxAlarmActive() {
+		t.Fatal("the alarm event was published but the alarm flag is not set")
+	}
+	if extra := drainTxAlarms(ch); len(extra) != 0 {
+		t.Fatalf("want exactly one alarm event, got another after it: %+v", extra)
 	}
 }
 
