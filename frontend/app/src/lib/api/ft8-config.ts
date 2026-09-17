@@ -119,6 +119,13 @@ function toSettings(body: Record<string, unknown>): Ft8Settings {
         display: toDisplay(body.ft8_display),
         psk: toPsk(body.psk_reporter),
         decodeLog: toDecodeLog(body.ft8_decode_log),
+        // The 0 fallback is type narrowing, not a supported state: every daemon
+        // that can serve this SPA (it is embedded in the same binary) has served
+        // ft8_max_repeats RESOLVED on GET since db13a4cd (2026-07-03), a month
+        // before this section existed. A blank cap therefore never comes from
+        // the daemon, and the form's 1..10 gate is the right answer to one — it
+        // is not a lenient "omit the key" path for a daemon that does not exist
+        // (codex review 42cff385, refuted).
         maxRepeats: typeof body.ft8_max_repeats === 'number' ? body.ft8_max_repeats : 0,
     };
 }
