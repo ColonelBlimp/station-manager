@@ -42,3 +42,12 @@ export function slotClock(nowMs: number, slotMs: number): { secsLeft: number; pa
     const parity: SlotParity = Math.floor(nowMs / slotMs) % 2 === 0 ? 'even' : 'odd';
     return { secsLeft, parity };
 }
+
+/** Coarse, operator-readable age of a reading: seconds under a minute, then whole
+ *  minutes, then whole hours. Never negative — a clock behind the slot stamp reads 0. */
+export function ageLabel(ms: number): string {
+    const secs = Math.max(0, Math.floor(ms / 1000));
+    if (secs < 60) return `${secs} s`;
+    if (secs < 3600) return `${Math.floor(secs / 60)} min`;
+    return `${Math.floor(secs / 3600)} h`;
+}

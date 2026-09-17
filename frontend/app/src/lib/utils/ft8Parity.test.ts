@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { slotClock, slotMsFor, slotParity } from './ft8Parity';
+import { ageLabel, slotClock, slotMsFor, slotParity } from './ft8Parity';
 
 // W-0019 slice 4 (ADR 0080): the slot clock follows the active profile —
 // 15 s for FT8, 7.5 s for FT4 — for parity and for the countdown pill.
@@ -28,5 +28,23 @@ describe('profile slot clock', () => {
             parity: 'even',
         });
         expect(slotClock(Date.UTC(2026, 8, 12, 14, 30, 22, 400), 7_500).secsLeft).toBe(1);
+    });
+});
+
+// The Occupancy panel's "last reading N ago" cue (ruling 2026-09-16): coarse,
+// operator-readable units — seconds under a minute, then minutes, then hours.
+describe('ageLabel', () => {
+    it('renders seconds, minutes and hours coarsely', () => {
+        expect(ageLabel(0)).toBe('0 s');
+        expect(ageLabel(47_000)).toBe('47 s');
+        expect(ageLabel(59_999)).toBe('59 s');
+        expect(ageLabel(60_000)).toBe('1 min');
+        expect(ageLabel(150_000)).toBe('2 min');
+        expect(ageLabel(3_600_000)).toBe('1 h');
+        expect(ageLabel(7_500_000)).toBe('2 h');
+    });
+
+    it('never goes negative when the clock is behind the slot stamp', () => {
+        expect(ageLabel(-5_000)).toBe('0 s');
     });
 });

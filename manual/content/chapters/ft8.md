@@ -134,7 +134,10 @@ Two things need to be in place first:
   strip of frequency slots: busy slots are shaded, clear slots show as green markers,
   and a ★ marks Station Manager's top pick. Click a clear marker (or the **Clear
   Offsets** chip) to choose where your signal goes out, so you're not transmitting on
-  top of another station.
+  top of another station. Station Manager can't listen in a slot it transmits in, so
+  while you call CQ the panel keeps the last reading of your transmit slot and labels
+  it with its age (**last reading 2 min ago**); it refreshes the next time that slot
+  goes out unkeyed.
 
 Both settings stay put between contacts, so you normally do this once at the start of
 a session.

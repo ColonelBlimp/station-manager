@@ -962,7 +962,16 @@ A slot the daemon **transmitted in is skipped entirely** — no decode, no
 `ft8-occupancy` event — because its captured audio is our own signal (rig TX-audio
 bleed). The SPA holds the prior RX-slot occupancy report and keeps its slot clock
 ticking from the (empty) `ft8-decode` event that still fires; this is why the
-busy/clear readout no longer flickers in lockstep with TX/RX.
+busy/clear readout no longer flickers in lockstep with TX/RX. Because that heartbeat
+carries the slot's parity, the SPA also knows when a parity's reading is **behind**
+its own slot clock (a later slot of that parity arrived with no report — every slot
+of a Call-CQ run's parity, for one). It keeps that last reading on show, since the
+TX offset is fixed for the run, and labels it in the panel header
+(`· last reading 47 s ago`, wall-clock age, shown only while behind; ruling
+2026-09-16). With no reading at all for the transmit parity the panel states the
+fact — "SM can't listen while it transmits" — and gives no instruction, because a
+run offers no way to pause for a slot. A reading from another band is discarded,
+never aged.
 
 1. **Spectrum** — Hann-windowed, 50 %-overlap Welch average over the slot, FFT
    size 3840 (3.125 Hz bins, half an FT8 tone).

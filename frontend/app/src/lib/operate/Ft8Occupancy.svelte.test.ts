@@ -4,7 +4,7 @@
 // Channels/Spectrum toggle must switch views without disturbing the pick. The pure
 // grading/mapping maths is covered in ft8Spectrum.test.ts.
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/svelte';
 import { flushSync } from 'svelte';
 import Ft8Occupancy from './Ft8Occupancy.svelte';
@@ -105,7 +105,9 @@ describe('Ft8Occupancy empty states', () => {
         render(Ft8Occupancy);
 
         expect(screen.getByText(/can't listen while it transmits/)).toBeInTheDocument();
-        expect(screen.getByText(/Pause TX for one slot/)).toBeInTheDocument();
+        // Ruling 2026-09-16: "Pause TX for one slot and this fills" was an instruction
+        // a Call-CQ run gives no way to follow, so the empty state states the fact only.
+        expect(screen.queryByText(/Pause TX/)).toBeNull();
         expect(screen.queryByText(/Waiting for slot/)).toBeNull();
         expect(ft8State.occupancyEmptyReason).toBe('tx-parity');
     });
@@ -255,5 +257,95 @@ describe('Ft8Occupancy band attribution (dial_mhz)', () => {
             star.parentElement!.classList.contains('isolate'),
             'in-panel z must stay in-panel'
         ).toBe(true);
+    });
+});
+
+// Ruling 2026-09-16 (a): during a run the transmit parity's LAST reading stays on
+// show, labelled with its age. The daemon skips occupancy for a slot we keyed but
+// still heartbeats it on ft8-decode, so "a later slot of this parity arrived with
+// no reading" is the fact the label reports — no wall-clock threshold to invent.
+describe('Ft8Occupancy reading age', () => {
+    beforeEach(() => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-07-10T12:00:47Z'));
+    });
+    afterEach(() => vi.useRealTimers());
+
+    function heartbeat(startUtc: string, period: 'even' | 'odd'): void {
+        ft8Link.onDecode({ slot: { start_utc: startUtc, period }, decodes: null });
+    }
+
+    it("keeps the transmit parity's last reading on show during a run, labelled with its age", () => {
+        ft8Link.onOccupancy(occupancy()); // even, 12:00:00
+        heartbeat('2026-07-10T12:00:30Z', 'even'); // our keyed slot: no reading, clock ticks
+        ft8Link.onQso({ active: true, role: 'caller', their_call: 'W1ABC', their_period: 'odd' });
+        flushSync();
+        render(Ft8Occupancy);
+
+        expect(ft8State.hasOccupancy).toBe(true);
+        expect(ft8State.occupancyBehind).toBe(true);
+        expect(screen.getByText(/last reading 47 s ago/)).toBeInTheDocument();
+        expect(screen.queryByText(/can't listen while it transmits/)).toBeNull();
+        expect(screen.getByText(/even · TX/)).toBeInTheDocument();
+    });
+
+    it('ages with the clock while the reading stands', () => {
+        ft8Link.onOccupancy(occupancy());
+        heartbeat('2026-07-10T12:00:30Z', 'even');
+        flushSync();
+        render(Ft8Occupancy);
+        expect(screen.getByText(/last reading 47 s ago/)).toBeInTheDocument();
+
+        vi.advanceTimersByTime(60_000);
+        flushSync();
+        expect(screen.getByText(/last reading 1 min ago/)).toBeInTheDocument();
+    });
+
+    it("a heartbeat for the OTHER parity does not age this parity's reading", () => {
+        ft8Link.onOccupancy(occupancy()); // even
+        heartbeat('2026-07-10T12:00:15Z', 'odd');
+        flushSync();
+        render(Ft8Occupancy);
+
+        expect(ft8State.occupancyBehind).toBe(false);
+        expect(screen.queryByText(/last reading/)).toBeNull();
+    });
+
+    it('drops the label as soon as that parity is read again', () => {
+        ft8Link.onOccupancy(occupancy());
+        heartbeat('2026-07-10T12:00:30Z', 'even');
+        flushSync();
+        render(Ft8Occupancy);
+        expect(screen.getByText(/last reading/)).toBeInTheDocument();
+
+        ft8Link.onOccupancy({
+            ...occupancy(),
+            slot: { start_utc: '2026-07-10T12:01:00Z', period: 'even' },
+        });
+        flushSync();
+        expect(ft8State.occupancyBehind).toBe(false);
+        expect(screen.queryByText(/last reading/)).toBeNull();
+    });
+
+    it('a late or replayed slot never moves the parity clock backwards', () => {
+        ft8Link.onOccupancy(occupancy()); // even, 12:00:00
+        heartbeat('2026-07-10T12:00:30Z', 'even');
+        heartbeat('2026-07-10T12:00:00Z', 'even'); // replayed: older than what was seen
+        flushSync();
+        expect(ft8State.slotSeenByParity.even).toBe('2026-07-10T12:00:30Z');
+        expect(ft8State.occupancyBehind).toBe(true);
+    });
+
+    it('a reading from another band is stale, not aged', () => {
+        rig.band = '15m';
+        ft8Link.onOccupancy(occupancy());
+        heartbeat('2026-07-10T12:00:30Z', 'even');
+        rig.band = '12m';
+        flushSync();
+        render(Ft8Occupancy);
+
+        expect(ft8State.hasOccupancy).toBe(false);
+        expect(ft8State.occupancyBehind).toBe(false);
+        expect(screen.queryByText(/last reading/)).toBeNull();
     });
 });

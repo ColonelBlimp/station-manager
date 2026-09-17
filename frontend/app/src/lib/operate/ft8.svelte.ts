@@ -310,6 +310,15 @@ class Ft8State {
      *  (the daemon skips our own TX slots), so it is exactly the parity that would
      *  keep serving pre-QSY data. */
     occupancyBandByParity: { even: string; odd: string } = $state({ even: '', odd: '' });
+    /** Slot start (RFC3339 UTC) each parity's snapshot was captured in ('' = none),
+     *  and the latest slot start SEEN per parity on any event — the ft8-decode
+     *  heartbeat fires for every slot, including the ones we keyed, which carry no
+     *  occupancy. Together they tell whether a parity's reading is BEHIND its slot
+     *  clock: a later slot of that parity arrived with no reading (a Call-CQ run keys
+     *  every slot of its parity, so its snapshot stays the pre-run one). Ruling
+     *  2026-09-16 (a): keep that last reading on show, labelled with its age. */
+    occupancySlotByParity: { even: string; odd: string } = $state({ even: '', odd: '' });
+    slotSeenByParity: { even: string; odd: string } = $state({ even: '', odd: '' });
     /** Audio passband the picker spans (Hz); daemon standard 200–3000 until the first report. */
     passbandLow = $state(200);
     passbandHigh = $state(3000);
@@ -407,6 +416,24 @@ class Ft8State {
     get occupancyEmptyReason(): '' | 'waiting' | 'tx-parity' {
         if (this.hasOccupancy) return '';
         return this.occupancyParityLocked ? 'tx-parity' : 'waiting';
+    }
+
+    /** Slot start (RFC3339 UTC) of the reading on show, '' when there is none. */
+    get occupancyReadingAt(): string {
+        if (!this.hasOccupancy) return '';
+        return this.occupancySlotByParity[this.shownParity];
+    }
+
+    /** True when the reading on show is older than the latest slot of its parity —
+     *  a slot of that parity has passed with no reading (we keyed it, or the daemon
+     *  could not place it). The panel then labels the reading with its age instead
+     *  of presenting it as current. Never true without a usable reading: a
+     *  cross-band snapshot is discarded (occupancyStale), not aged. */
+    get occupancyBehind(): boolean {
+        const at = this.occupancyReadingAt;
+        if (at === '') return false;
+        const seen = this.slotSeenByParity[this.shownParity];
+        return seen !== '' && Date.parse(seen) > Date.parse(at);
     }
 
     /** Commit the operator's TX-offset pick (Hz). One mutation point so both
@@ -1019,6 +1046,15 @@ export function nextAnswerer(): Promise<Ft8TxResult> {
     Transport handlers — the object handed to the injected opener (openFt8Events).
     Pure state transitions; the transport does the EventSource + JSON parse.
 */
+/** Advance a parity's latest-seen slot (occupancy age bookkeeping). Monotonic: a
+ *  replayed or late event never moves it backwards. */
+function noteSlotSeen(period: string, startUtc: string): void {
+    if ((period !== 'even' && period !== 'odd') || startUtc === '') return;
+    const prev = ft8State.slotSeenByParity[period];
+    if (prev !== '' && Date.parse(prev) >= Date.parse(startUtc)) return;
+    ft8State.slotSeenByParity[period] = startUtc;
+}
+
 export const ft8Link: Ft8EventHandlers = {
     onOpen(): void {
         ft8State.connected = true;
@@ -1061,12 +1097,16 @@ export const ft8Link: Ft8EventHandlers = {
         const occ = p.occupied ?? [];
         const sug = p.suggested ?? [];
         const period = p.slot?.period;
+        const at = p.slot?.start_utc ?? '';
         if (period === 'even' || period === 'odd') {
             ft8State.occupiedByParity[period] = occ;
             ft8State.suggestedByParity[period] = sug;
+            ft8State.occupancySlotByParity[period] = at;
+            noteSlotSeen(period, at);
         } else {
             ft8State.occupiedByParity = { even: occ, odd: occ };
             ft8State.suggestedByParity = { even: sug, odd: sug };
+            ft8State.occupancySlotByParity = { even: at, odd: at };
         }
         if (p.passband) {
             ft8State.passbandLow = p.passband.low_hz;
@@ -1101,7 +1141,10 @@ export const ft8Link: Ft8EventHandlers = {
         // Slot heartbeat: ft8-decode fires EVERY slot (the daemon skips
         // ft8-occupancy on our own TX slots), so advance the slot clock here too —
         // before the empty-slot return, so a silent / own-TX slot still ticks.
-        if (p.slot) ft8State.slot = p.slot;
+        if (p.slot) {
+            ft8State.slot = p.slot;
+            noteSlotSeen(p.slot.period, p.slot.start_utc);
+        }
 
         const lines = p.decodes ?? [];
         if (lines.length === 0) return; // silent slot — nothing to add
@@ -1448,6 +1491,8 @@ export function stopFt8(): void {
     ft8State.occupiedByParity = { even: null, odd: null };
     ft8State.suggestedByParity = { even: null, odd: null };
     ft8State.occupancyBandByParity = { even: '', odd: '' };
+    ft8State.occupancySlotByParity = { even: '', odd: '' };
+    ft8State.slotSeenByParity = { even: '', odd: '' };
     ft8State.decodes = [];
     // Keep selectedOffset across a re-open — it's an operator pick, not stream data;
     // clearing it would silently drop the chosen TX channel on a view toggle.
@@ -1495,6 +1540,8 @@ export function resetFt8ForTests(): void {
     ft8State.occupiedByParity = { even: null, odd: null };
     ft8State.suggestedByParity = { even: null, odd: null };
     ft8State.occupancyBandByParity = { even: '', odd: '' };
+    ft8State.occupancySlotByParity = { even: '', odd: '' };
+    ft8State.slotSeenByParity = { even: '', odd: '' };
     ft8State.occupancyParity = 'even';
     ft8State.decodes = [];
     ft8State.bandFilter = '';

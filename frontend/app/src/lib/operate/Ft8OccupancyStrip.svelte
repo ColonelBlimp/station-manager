@@ -142,11 +142,12 @@
         <!-- The trap this replaced: a bare "Waiting for slot…" here implied data was
              imminent, but the panel is locked to the parity we TRANSMIT in and the
              daemon skips occupancy for a slot we transmitted in — so during a CQ run
-             it would never arrive and the operator waits forever (dogfood 2026-07-26). -->
+             it would never arrive and the operator waits forever (dogfood 2026-07-26).
+             Fact only: "Pause TX for one slot and this fills" was an instruction a run
+             gives no way to follow (ruling 2026-09-16). -->
         <p class="mt-1 text-xs text-muted">
-            No reading for your <span class="text-ink">transmit</span> slot — SM can't listen while
-            it transmits.
-            <br />Pause TX for one slot and this fills.
+            No reading for your <span class="text-ink">transmit</span> slot — SM can't listen while it
+            transmits.
         </p>
     {:else}
         <p class="mt-1 text-xs text-muted">Waiting for slot…</p>

@@ -7,6 +7,7 @@
     // (ft8State.effectiveOffset's auto fallback), whose recommendation marker hops
     // slot-to-slot on a busy band — deliberately kept visible so it can be judged.
     import { ft8State } from './ft8.svelte';
+    import { ageLabel } from '../utils/ft8Parity';
     import Ft8OccupancyStrip from './Ft8OccupancyStrip.svelte';
     import Ft8OccupancySpectrum from './Ft8OccupancySpectrum.svelte';
 
@@ -19,6 +20,23 @@
     // during a QSO — occupancyParityLocked — else the operator's manual Even/Odd pick.
     const shown = $derived(ft8State.shownParity);
     const locked = $derived(ft8State.occupancyParityLocked);
+
+    // Reading-age cue (ruling 2026-09-16 (a)). SM can't listen in a slot it keys, so
+    // during a Call-CQ run the transmit parity's reading is the last one before the
+    // run (or from a slot that went out unkeyed); it stays on show — the TX offset is
+    // fixed for the run anyway — labelled with its age rather than passed off as
+    // current. Shown only while the reading is BEHIND its parity's slot clock; the
+    // age itself follows the wall clock, ticked once a second while the cue is up.
+    let now = $state(Date.now());
+    $effect(() => {
+        if (!ft8State.occupancyBehind) return;
+        now = Date.now();
+        const t = setInterval(() => (now = Date.now()), 1000);
+        return () => clearInterval(t);
+    });
+    const readingAge = $derived(
+        ft8State.occupancyBehind ? ageLabel(now - Date.parse(ft8State.occupancyReadingAt)) : ''
+    );
 </script>
 
 <section class="flex h-full flex-col overflow-hidden rounded-xl border border-line bg-surface">
@@ -64,6 +82,13 @@
                         onclick={() => ft8State.setOccupancyParity('odd')}>Odd</button
                     >
                 </div>
+            {/if}
+            {#if readingAge !== ''}
+                <span
+                    class="text-xs text-muted"
+                    title="SM can't listen in a slot it transmits in, so this is the newest reading of the {shown} slot. It refreshes the next time a {shown} slot goes out unkeyed."
+                    >· last reading {readingAge} ago</span
+                >
             {/if}
         </div>
         <div class="inline-flex overflow-hidden rounded-md border border-line text-xs">
