@@ -57,6 +57,7 @@ const CONFIG = {
     },
     psk_reporter: { enabled: true, host: 'report.example.org', port: 2525 },
     ft8_decode_log: { enabled: true, path: 'log/ft8-custom.txt' },
+    ft8_max_repeats: 7, // non-default (5), so "shows the daemon's value" is provable
 };
 
 function mockDaemon(body: unknown = CONFIG, status = 200): void {
@@ -94,6 +95,7 @@ describe('Ft8Section', () => {
         expect(screen.getByLabelText<HTMLInputElement>('Decode log file path').value).toBe(
             'log/ft8-custom.txt'
         );
+        expect(screen.getByLabelText<HTMLInputElement>('Repeat cap').value).toBe('7');
     });
 
     it('U2: the restart notice marks restart-only edits, and only those (A3)', async () => {
@@ -103,6 +105,10 @@ describe('Ft8Section', () => {
         // A display pref — applied to the running view on save.
         await fireEvent.input(screen.getByLabelText('Row cap'), { target: { value: '500' } });
         expect(ft8SettingsState.dirty).toBe(true);
+        expect(screen.queryByText(/restart/i)).toBeNull();
+
+        // The repeat cap — applied live to the running sequencer (ruling 2026-09-16).
+        await fireEvent.input(screen.getByLabelText('Repeat cap'), { target: { value: '3' } });
         expect(screen.queryByText(/restart/i)).toBeNull();
 
         // A startup-only block — the daemon reads it when it binds.
@@ -127,6 +133,21 @@ describe('Ft8Section', () => {
         await waitFor(() => expect(ft8SettingsState.error).not.toBe(''));
         expect(screen.queryByLabelText('Row cap')).toBeNull();
         expect(screen.getByText(/couldn’t load/i)).toBeTruthy();
+    });
+
+    it('U6: an out-of-range repeat cap disables Save and says why, in place', async () => {
+        mockDaemon();
+        await renderLoaded();
+
+        await fireEvent.input(screen.getByLabelText('Repeat cap'), { target: { value: '11' } });
+        expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save' }).disabled).toBe(true);
+        expect(screen.getByText(/Enter a whole number from 1 to 10/)).toBeTruthy();
+
+        await fireEvent.input(screen.getByLabelText('Repeat cap'), { target: { value: '10' } });
+        expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save' }).disabled).toBe(
+            false
+        );
+        expect(screen.queryByText(/Enter a whole number from 1 to 10/)).toBeNull();
     });
 
     it('U5: Save and Cancel are inert until something is edited', async () => {

@@ -3,14 +3,21 @@
     standalone config SPA's FT8 tab, and one of the last two surfaces keeping
     that SPA alive.
 
-    FOUR BLOCKS, ONE SAVE. The subsystem master switch, the Band Activity
-    display prefs, PSK Reporter and the decode log are one page to the operator
-    and go out as one PUT. They differ in WHEN they take effect, which is the
-    distinction `restartRequired` exists to make visible: the display prefs are
-    pure SPA presentation and are applied to the running view the moment they
-    save, while the other three are read at daemon startup and need a restart.
-    A section that said "restart required" for every edit would make the one
-    that genuinely needs it unremarkable.
+    FOUR BLOCKS AND ONE FIELD, ONE SAVE. The subsystem master switch, the Band
+    Activity display prefs, PSK Reporter, the decode log and the repeat cap are
+    one page to the operator and go out as one PUT. They differ in WHEN they
+    take effect, which is the distinction `restartRequired` exists to make
+    visible: the display prefs are pure SPA presentation and are applied to the
+    running view the moment they save, the repeat cap is pushed into the running
+    sequencer by the daemon itself (ruling 2026-09-16), while the other three
+    are read at daemon startup and need a restart. A section that said "restart
+    required" for every edit would make the one that genuinely needs it
+    unremarkable.
+
+    THE REPEAT CAP HAS NO BLANK. Unlike the row cap and the PSK port, the
+    daemon validates `ft8_max_repeats` 1..10 with no "0 = default" reading, and
+    a rejected value fails the WHOLE save. So `maxRepeatsError` gates Save
+    client-side; the daemon's 400 stays as the backstop, never the first line.
 
     NUMBERS ARE HELD AS STRINGS (row cap, PSK port) so blank survives as blank —
     it is what asks the daemon for its default, and as a number it would collapse
@@ -79,7 +86,15 @@ export interface Ft8Draft {
     pskPort: string;
     decodeLogEnabled: boolean;
     decodeLogPath: string;
+    /** The repeat cap as typed (digits); valid only as 1..10 — see maxRepeatsError. */
+    maxRepeats: string;
 }
+
+/** Inclusive bounds the daemon enforces on ft8_max_repeats (types.Ft8MaxRepeatsCeiling).
+ *  A DISPLAY duplicate: the daemon still validates, so drift here misinforms but
+ *  cannot misconfigure. */
+const MAX_REPEATS_MIN = 1;
+const MAX_REPEATS_MAX = 10;
 
 const BLANK: Ft8Settings = {
     enabled: false,
@@ -94,6 +109,7 @@ const BLANK: Ft8Settings = {
     },
     psk: { enabled: false, host: '', port: 0 },
     decodeLog: { enabled: false, path: '' },
+    maxRepeats: 0,
 };
 
 /** 0 on the wire means "use the default"; the box shows that as empty, so the
@@ -117,6 +133,7 @@ function draftFrom(s: Ft8Settings): Ft8Draft {
         pskPort: num(s.psk.port),
         decodeLogEnabled: s.decodeLog.enabled,
         decodeLogPath: s.decodeLog.path,
+        maxRepeats: num(s.maxRepeats),
     };
 }
 
@@ -133,13 +150,27 @@ class Ft8SettingsState {
 
     dirty = $derived(JSON.stringify(this.draft) !== this.#pristine);
 
+    /** Why the repeat cap as typed cannot be saved, or '' when it can. Blank is
+     *  an error here, not "use the default": the daemon accepts only 1..10. */
+    maxRepeatsError = $derived.by(() => {
+        const n = Number(this.draft.maxRepeats);
+        const ok =
+            this.draft.maxRepeats !== '' &&
+            Number.isInteger(n) &&
+            n >= MAX_REPEATS_MIN &&
+            n <= MAX_REPEATS_MAX;
+        return ok ? '' : `Enter a whole number from ${MAX_REPEATS_MIN} to ${MAX_REPEATS_MAX}.`;
+    });
+
     /**
      * Whether the pending edits include one the daemon only reads at startup.
      *
      * The display prefs are excluded deliberately: they are applied to the
      * running view on save (see onPrefsSaved), so telling the operator to
      * restart for them would be false — and would drain the meaning out of the
-     * notice on the edits that genuinely need it.
+     * notice on the edits that genuinely need it. The repeat cap is excluded
+     * for the same reason: the daemon pushes it into the running sequencer on
+     * the PUT itself (handler_config.go applyCommittedFt8MaxRepeats).
      */
     restartRequired = $derived.by(() => {
         const base = JSON.parse(this.#pristine) as Ft8Draft;
@@ -178,6 +209,10 @@ class Ft8SettingsState {
         // blocks are whole-block replaces, so a PUT built from a draft we never
         // filled would wipe the operator's FT8 configuration.
         if (this.saving || !this.loaded || !this.dirty) return;
+        // A bad cap is a 400 for the WHOLE payload — nothing else would land
+        // either — so it never goes out. Save is disabled on screen for the
+        // same reason; this is the guard behind the button.
+        if (this.maxRepeatsError !== '') return;
         this.saving = true;
         // Captured BEFORE the write. #apply rebaselines the draft against the
         // response, so restartRequired is false by the time the confirmation is
@@ -357,6 +392,8 @@ class Ft8SettingsState {
                 port: Number(d.pskPort) || 0,
             },
             decodeLog: { enabled: d.decodeLogEnabled, path: d.decodeLogPath.trim() },
+            // Guarded by maxRepeatsError before any save, so this is 1..10 here.
+            maxRepeats: Number(d.maxRepeats),
         };
     }
 

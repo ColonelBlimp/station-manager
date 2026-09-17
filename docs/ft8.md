@@ -139,6 +139,12 @@ on any PUT):
   silent contact and, since 2026-07-17, first re-scans that slot's decodes for
   another live answerer — the pile-up kept calling while we worked the silent one —
   working them immediately and only resuming CQ when nobody else is calling).
+  Edited from **Settings → FT8 → Contacts → Repeat cap** (`Ft8Section.svelte`, ruling
+  2026-09-16): a whole number 1–10 with no blank-means-default — the form refuses
+  to save a blank or out-of-range value, since the daemon's 400 would reject the
+  whole FT8 save — sent as `ft8_max_repeats` beside the four FT8 blocks and
+  **applied live** to the running sequencer by the PUT itself, so it never raises
+  the section's restart notice.
   Default **6** (~90 s of calling); `0`/absent → default.
   **Hard-clamped to ≤ 10** (`Ft8MaxRepeatsCeiling`) — a safety bound like the
   tune-power / auto-off clamps, so no config value can leave the rig calling a dead

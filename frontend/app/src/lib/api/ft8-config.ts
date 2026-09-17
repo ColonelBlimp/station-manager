@@ -21,7 +21,12 @@
         the save response is what is actually on disk, not what we sent.
       - `psk_reporter` and `ft8_decode_log` are served RAW (sparse overrides),
         so an unset field arrives absent and means "the daemon's default".
-      - NOTHING but these four keys is sent. Echoing logging_station or station
+      - `ft8_max_repeats` (the repeat cap, ruling 2026-09-16) rides beside them
+        as a plain presence-aware int: served RESOLVED on GET (default 5,
+        clamped 1..10), validated 1..10 on PUT with NO blank-means-default —
+        an out-of-range value is a 400 that rejects the whole save — and the
+        one /v1/config field the daemon applies LIVE to the running sequencer.
+      - NOTHING but these five keys is sent. Echoing logging_station or station
         would clobber a concurrent identity or power change made between our GET
         and our PUT — the trap review 2026-07-20 #3 removed from the Station
         section, and which the standalone config SPA still carries.
@@ -61,6 +66,10 @@ export interface Ft8Settings {
     display: Ft8DisplayEntry;
     psk: PskEntry;
     decodeLog: DecodeLogEntry;
+    /** The unanswered-rung repeat cap (config ft8.tx.max_repeats), 1..10 —
+     *  served resolved, applied live on save. 0 only when an older daemon
+     *  served no value. */
+    maxRepeats: number;
 }
 
 export type Ft8SettingsOutcome =
@@ -110,6 +119,7 @@ function toSettings(body: Record<string, unknown>): Ft8Settings {
         display: toDisplay(body.ft8_display),
         psk: toPsk(body.psk_reporter),
         decodeLog: toDecodeLog(body.ft8_decode_log),
+        maxRepeats: typeof body.ft8_max_repeats === 'number' ? body.ft8_max_repeats : 0,
     };
 }
 
@@ -129,12 +139,13 @@ export async function saveFt8Settings(
     const fetched = await safeFetch('/v1/config', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        // Only the four FT8 keys — see the clobber note in the module header.
+        // Only the five FT8 keys — see the clobber note in the module header.
         body: JSON.stringify({
             ft8_enabled: s.enabled,
             ft8_display: s.display,
             psk_reporter: s.psk,
             ft8_decode_log: s.decodeLog,
+            ft8_max_repeats: s.maxRepeats,
         }),
         signal,
     });

@@ -153,7 +153,9 @@ a session.
 3. From there it runs itself. The **Operate** tab shows the message ladder — your
    transmissions interleaved with the other station's — with the current step
    highlighted. The standard exchange advances automatically through the signal reports
-   to the closing **RR73 / 73**.
+   to the closing **RR73 / 73**. If the other station stops answering, Station Manager
+   re-sends the current message up to the **repeat cap** (Settings → FT8 → Contacts;
+   5 by default) and then gives up on the contact.
 4. When the exchange completes, the contact is **logged** and appears in the **Session**
    tab (shared with your Phone/CW session log, ready for email-out).
 
@@ -166,6 +168,11 @@ returns you to listening, still armed and ready for the next one.
 > **Your reply may not go out the instant you click.** FT8 only transmits on slot
 > boundaries, so there can be a short wait before your signal is sent. The **ON AIR**
 > indicator lights while you are actually transmitting.
+
+> **Changing settings during a session: use a second browser tab.** Switching this
+> tab away from the FT8 view ends the session — transmit disarms and a contact in
+> progress is abandoned. Open **Settings** in a second tab instead; a change to the
+> repeat cap takes effect at once, with no restart.
 
 ## Calling CQ: choosing your slot
 

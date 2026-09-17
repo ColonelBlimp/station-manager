@@ -101,6 +101,9 @@ const CONFIG = {
     },
     psk_reporter: { enabled: true, host: 'report.example.org', port: 2525 },
     ft8_decode_log: { enabled: false, path: '' },
+    // NON-default on purpose (the code default is 5): "shows what the daemon
+    // holds" and "invents the default" must not agree.
+    ft8_max_repeats: 7,
 };
 
 type Body = Record<string, unknown>;
@@ -212,6 +215,7 @@ describe('ft8 settings — the save payload', () => {
             'ft8_decode_log',
             'ft8_display',
             'ft8_enabled',
+            'ft8_max_repeats',
             'psk_reporter',
         ]);
     });
@@ -912,5 +916,59 @@ describe('ft8 settings — live apply (A2)', () => {
         await ft8SettingsState.save();
 
         expect(seen).toHaveLength(0);
+    });
+});
+
+/*
+    THE REPEAT CAP (ruling 2026-09-16). `ft8_max_repeats` is the one /v1/config
+    field the daemon applies LIVE (it pushes the committed value into the running
+    sequencer), and it is validated 1–10 with no blank-means-default: a blank or
+    out-of-range value is a 400 that rejects the WHOLE save, four blocks included.
+    So the form refuses to send one, and a cap edit must never raise the restart
+    notice — that would be false, and it is the distinction A3 exists to make.
+*/
+describe('ft8 settings — the repeat cap (applied live)', () => {
+    it('R1: loads the cap the daemon holds and sends it back as an integer', async () => {
+        const fetchMock = mockDaemon();
+        await ft8SettingsState.load();
+        expect(ft8SettingsState.draft.maxRepeats).toBe('7');
+
+        ft8SettingsState.draft.maxRepeats = '3';
+        await ft8SettingsState.save();
+
+        expect(putBody(fetchMock).ft8_max_repeats).toBe(3);
+    });
+
+    it('R2: a blank or out-of-range cap blocks the save and says why; the bounds are inclusive', async () => {
+        const fetchMock = mockDaemon();
+        await ft8SettingsState.load();
+
+        for (const bad of ['', '0', '11']) {
+            ft8SettingsState.draft.maxRepeats = bad;
+            expect(ft8SettingsState.dirty).toBe(true);
+            expect(ft8SettingsState.maxRepeatsError).not.toBe('');
+            await ft8SettingsState.save();
+            expect(
+                fetchMock.mock.calls.some((c) => (c[1] as RequestInit)?.method === 'PUT'),
+                `a cap of "${bad}" must not reach the wire`
+            ).toBe(false);
+        }
+        for (const ok of ['1', '10']) {
+            ft8SettingsState.draft.maxRepeats = ok;
+            expect(ft8SettingsState.maxRepeatsError).toBe('');
+        }
+    });
+
+    it('R3: a cap edit does NOT ask for a restart, and the confirmation does not either', async () => {
+        mockDaemon(undefined, { ...CONFIG, ft8_max_repeats: 4 });
+        await ft8SettingsState.load();
+
+        ft8SettingsState.draft.maxRepeats = '4';
+        expect(ft8SettingsState.restartRequired).toBe(false);
+        await ft8SettingsState.save();
+
+        expect(lastToast()).toBe('FT8 settings saved.');
+        expect(ft8SettingsState.draft.maxRepeats).toBe('4');
+        expect(ft8SettingsState.dirty).toBe(false);
     });
 });

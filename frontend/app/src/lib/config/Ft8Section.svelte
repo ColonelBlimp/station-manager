@@ -1,9 +1,10 @@
 <script lang="ts">
     // FT8 section — the FT8 subsystem's operator-facing settings, ported from
-    // the standalone config SPA's FT8 tab (ADR 0044). Four blocks share one
-    // Save because they are one page to the operator; they differ in WHEN they
-    // take effect, which is what the restart notice at the bottom exists to
-    // say. See ft8.svelte.ts for why there are no colour pickers here.
+    // the standalone config SPA's FT8 tab (ADR 0044). Four blocks and the
+    // repeat cap share one Save because they are one page to the operator; they
+    // differ in WHEN they take effect, which is what the restart notice at the
+    // bottom exists to say. See ft8.svelte.ts for why there are no colour
+    // pickers here.
     import { onMount } from 'svelte';
     import { ft8SettingsState } from './ft8.svelte';
 
@@ -41,7 +42,8 @@
         <div class="space-y-8">
             <p class="text-sm text-muted">
                 The FT8 subsystem: whether it runs at all, how the Band Activity feed is presented,
-                and two optional outputs — reception spots to PSK Reporter and a local decode log.
+                how long a contact keeps calling an unanswered station, and two optional outputs —
+                reception spots to PSK Reporter and a local decode log.
             </p>
 
             <section>
@@ -113,6 +115,31 @@
                 <p class="text-xs text-muted">
                     A hashed callsign is one the decoder could not resolve to a full call, so it
                     cannot be worked or logged from the feed.
+                </p>
+            </section>
+
+            <section class="space-y-3">
+                <h2 class="text-base font-semibold text-ink">Contacts</h2>
+                <label class="flex w-28 flex-col gap-1">
+                    <span class="text-sm font-medium text-ink">Repeat cap</span>
+                    <!-- No placeholder: unlike the row cap, blank is not "the
+                         daemon's default" here — the daemon accepts only 1–10,
+                         so blank is an error the line below names. -->
+                    <input
+                        class="input"
+                        inputmode="numeric"
+                        value={ft8SettingsState.draft.maxRepeats}
+                        oninput={(e) =>
+                            digitsOnly(e, (v) => (ft8SettingsState.draft.maxRepeats = v))}
+                    />
+                </label>
+                {#if ft8SettingsState.maxRepeatsError}
+                    <p class="text-xs text-warning">{ft8SettingsState.maxRepeatsError}</p>
+                {/if}
+                <p class="text-xs text-muted">
+                    How many times a message is re-sent unanswered before Station Manager gives up
+                    on the contact and moves on — 1 to 10; 5 is the default, about 75 seconds of
+                    calling. Takes effect at once, including for a contact in progress.
                 </p>
             </section>
 
@@ -212,7 +239,9 @@
             <div class="flex items-center gap-3 border-t border-line pt-4">
                 <button
                     class="btn btn-primary"
-                    disabled={!ft8SettingsState.dirty || ft8SettingsState.saving}
+                    disabled={!ft8SettingsState.dirty ||
+                        ft8SettingsState.saving ||
+                        ft8SettingsState.maxRepeatsError !== ''}
                     onclick={() => ft8SettingsState.save()}
                 >
                     {ft8SettingsState.saving ? 'Saving…' : 'Save'}
