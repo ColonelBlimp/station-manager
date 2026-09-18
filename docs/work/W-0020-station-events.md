@@ -1,8 +1,8 @@
 # W-0020 — Station Events: a full-page event section replacing the notification slide-over
 
 **Status:** Selected — review package approved 2026-09-14 (revised after the second designer's review;
-all rulings recorded); slices 1 (store + version head), 2 (recorder), 3 (producing boundaries), 4
-(API) and 5 (SPA) built 2026-09-18; slice 6 (docs and manual) next on operator direction
+all rulings recorded); all six slices built 2026-09-18; close-out awaits the passive AC2 evidence — the
+first real alarm rows read on the page — and the operator's acceptance
 **Selected:** 2026-09-14
 **Outcome:** The header's "Notification history" slide-over is replaced by a **Station Events** section that
 takes the whole content area like the Logbook. It shows, newest first and filterable by category and
@@ -303,6 +303,16 @@ reintroduces the stall on a safety path).
   malformed details and a superseded filter response; the singular wording and full-ring query
   were red before the fixes.
   The page width now matches the Logbook's content width. No RF.
+- 2026-09-18 — **slice 6 built.** Manual chapter *Station Events* (`manual/content/chapters/
+  station-events.md`, weight 105 between the session log and troubleshooting): what is recorded in
+  operator words per kind, what deliberately is not (routine activity, the operator's own actions,
+  the idle linger disarm), the chips and the count line, *Details unavailable*, retention, "a record,
+  not an inbox"; the troubleshooting TX-alarm section gains an *Afterwards* pointer to the page.
+  ADR 0076 gains the dated note that the `alarm` category joined the table on the 2026-09-14 rulings
+  (the schema, vocabulary, recorder, endpoint and page named; its "notification only" statements
+  marked as the record). `docs/architecture.md` gains the ownership row for `internal/stationevents`
+  + the recorder and the state row for the durable `operator_event` table. Backlog entry and capsule
+  updated. No code; no RF.
 
 ## References
 
@@ -314,4 +324,5 @@ reintroduces the stall on a safety path).
   write pattern), `internal/bridge/txconfirm.go` (`confirmTxIdle`, `publishTxAlarm`),
   `internal/bridge/drivealarm.go`, `internal/ft8/sequencer.go` (`finishAbandonLocked`, end reasons),
   `internal/ft8/servicetx.go` (`disarmTxLocked`, `endReasonForRefusal`),
-  `frontend/app/src/lib/ui/NotificationRail.svelte`, `Header.svelte`, `lib/api/notifications.ts`.
+  `frontend/app/src/lib/events/` (the page; the rail it replaced is gone), `lib/api/stationEvents.ts`,
+  `lib/api/notifications.ts` (the surviving POST).

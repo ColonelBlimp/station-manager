@@ -7,6 +7,20 @@ date: 2026-08-22
 
 # 0076 — Notification-history pilot: the local operator_event store, notification first
 
+> **Dated update (2026-09-18, W-0020 slices 1–6 built).** The **`alarm` category joined the
+> `operator_event` table** on the operator's rulings of 2026-09-14 (recorded in
+> [W-0020](../work/W-0020-station-events.md) and ADR 0061's dated update): migration 0009 rebuilt the
+> table with one CHECK over the valid (category, kind) pairs — `notification` × {`export.adif_failed`,
+> `forward.failed`}, `alarm` × {`tx_alarm.raised`, `tx_alarm.cleared`, `drive_alarm.raised`,
+> `drive_alarm.cleared`, `tx.disarmed`, `session.terminated`} — the vocabulary now lives in
+> `internal/stationevents`, the bridge and FT8 boundaries report typed facts through injected
+> observers to an assembly-owned non-blocking recorder (capacity 64, drop newest), the read surface is
+> `GET /v1/station-events` across categories (`GET /v1/notifications` retired), and the SPA's header
+> slide-over became the full-page **Station Events** section. Every statement below that only the
+> `notification` category is wired is the record of this decision as taken; decisions 2, 4, 5, 6 and
+> 7 apply to the alarm rows unchanged. Acknowledgement, `daemon` diagnostics and the SM Cloud surface
+> remain Proposed under ADR 0061.
+
 ## Context
 
 [W-0001](../archive/work/W-0001-durable-notifications.md) closes the one remaining ship-gate

@@ -75,6 +75,10 @@ the banner; it does not claim the rig is safe. If the rig genuinely cannot be
 reached, restarting Station Manager re-establishes the connection and resets
 the state.
 
+**Afterwards.** [Station Events](#station-events) shows when the alarm rose. If
+the rig later confirms receive, a clear row shows how long it stood — including
+an alarm that came and went while you were away from the desk.
+
 ---
 
 ## CAT connects but no frequency ever appears (Yaesu)
