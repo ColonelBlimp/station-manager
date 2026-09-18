@@ -1,8 +1,8 @@
 # W-0020 — Station Events: a full-page event section replacing the notification slide-over
 
 **Status:** Selected — review package approved 2026-09-14 (revised after the second designer's review;
-all rulings recorded); slices 1 (store + version head), 2 (recorder), 3 (producing boundaries) and
-4 (API) built 2026-09-18; slice 5 (SPA) next on operator direction
+all rulings recorded); slices 1 (store + version head), 2 (recorder), 3 (producing boundaries), 4
+(API) and 5 (SPA) built 2026-09-18; slice 6 (docs and manual) next on operator direction
 **Selected:** 2026-09-14
 **Outcome:** The header's "Notification history" slide-over is replaced by a **Station Events** section that
 takes the whole content area like the Logbook. It shows, newest first and filterable by category and
@@ -278,6 +278,31 @@ reintroduces the stall on a safety path).
   store ignoring severity fails its test; the old route left in place fails the retirement test;
   removing the POST route fails the router test with 404.
   Frontend gates green (1,736 tests). No RF.
+- 2026-09-18 — **slice 5 built.** `lib/events/StationEvents.svelte` — a full-page section (lazy chunk
+  like the Logbook) at `/events`, nav item **Station Events** between Logbook and Settings, tab title
+  "Station Events"; rows newest first across categories with a category chip on each, a severity
+  dot, the client wording per kind (`lib/events/wording.ts`, ADR 0010: labels for all eight kinds,
+  summaries built only from each kind's typed fields, `Details unavailable` for anything else — the
+  raw detail is never rendered), the occurrence time and the build. Category chips (All /
+  Notifications / Alarms) and severity chips (Any / Info / Warn / Error) refetch from the daemon —
+  the narrowing is the daemon's answer, never a client slice — and the count line names the filter
+  ("2 alarm events at severity error", "No events at severity warn.") so an empty filtered list reads
+  as a filter (AC6); an error shows Retry. State in `lib/events/stationEvents.svelte.ts` (generation
+  guard against out-of-order responses); client `lib/api/stationEvents.ts`. Removed: the header's
+  notification button, `NotificationRail.svelte` and its tests, `ui.notificationsOpen` +
+  `toggleNotifications`/`closeNotifications`, `fetchNotifications`; `recordExportFailed` (the POST)
+  stays. `keyboard-shortcuts.md` had no rail binding. Tests: page (mount + wording + malformed
+  detail, chips refetch with the exact query, empty filtered state, error + Retry), wording (every
+  kind; unknown/malformed → placeholder), client (query building, error and malformed body), router
+  (`/events`), sidebar order. Reversion proofs: stringifying an unknown detail fails two tests; a
+  category chip filtering client-side fails the chip test (its assertion was strengthened when the
+  first run of that proof passed); Station Events after Settings fails the order test. The page asks
+  for the whole retained 1000-row ring because it has no pagination. Review found and fixed stale
+  rows carrying a newly selected filter's count during a pending fetch, singular count wording,
+  and malformed typed values receiving a normal summary. Reversion proofs fail on stale rows and
+  malformed details and a superseded filter response; the singular wording and full-ring query
+  were red before the fixes.
+  The page width now matches the Logbook's content width. No RF.
 
 ## References
 

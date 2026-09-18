@@ -43,3 +43,16 @@ describe('Sidebar nav without a Dashboard', () => {
         expect(screen.getByTitle('Settings')).toBeTruthy();
     });
 });
+
+// W-0020 AC1: Station Events sits between Logbook and Settings — a full page,
+// the replacement for the header's notification slide-over.
+describe('Sidebar Station Events entry', () => {
+    it('lists Station Events between Logbook and Settings', () => {
+        render(Sidebar);
+        const titles = screen
+            .getAllByRole('button')
+            .map((b) => b.getAttribute('title'))
+            .filter((t) => t === 'Logbook' || t === 'Station Events' || t === 'Settings');
+        expect(titles).toEqual(['Logbook', 'Station Events', 'Settings']);
+    });
+});

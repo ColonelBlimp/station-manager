@@ -8,55 +8,11 @@
 // failure here — including an unreachable daemon (the 'network' outcome itself,
 // which cannot be recorded when the daemon is the thing that's unreachable) —
 // can never disturb the caller's own error handling (e.g. the toast it shows).
-import { daemonErrorMessage, isPlainObject, readJsonBody, safeFetch } from './_helpers';
+import { safeFetch } from './_helpers';
 
 // The export-failure outcomes worth persisting. 'aborted' (operator cancel) and
 // 'ok' are deliberately excluded — they are not failures.
 export type ExportFailureOutcome = 'no_qsos' | 'invalid' | 'server' | 'network';
-
-// One durable operator event as served by GET /v1/station-events (W-0020 slice
-// 4 moved the read there; the rail reads its notification category). `detail`
-// is the typed metadata the daemon stored (export.adif_failed: {count, outcome};
-// forward.failed: {qso_uuid, qso_id, forwarder, action, attempts}); it is `unknown` here so
-// the UI narrows it defensively and degrades unknown/future shapes rather than
-// stringifying raw content.
-export interface NotificationEvent {
-    id: number;
-    category: string;
-    kind: string;
-    severity: string;
-    occurred_at: string;
-    build: string;
-    detail: unknown;
-}
-
-export type NotificationsOutcome =
-    { kind: 'ok'; items: NotificationEvent[] } | { kind: 'error'; message: string };
-
-const transportMessage = (kind: string): string =>
-    kind === 'aborted' ? 'Request was cancelled.' : 'Could not reach the daemon.';
-
-// fetchNotifications reads the newest durable notifications (default 50). A fresh
-// call on each rail open is the reload path W-0001 must survive. The read lives
-// on the Station Events surface since W-0020 slice 4 (GET /v1/notifications is
-// retired); slice 5 replaces this rail with the full page.
-export async function fetchNotifications(
-    limit = 50,
-    signal?: AbortSignal
-): Promise<NotificationsOutcome> {
-    const fetched = await safeFetch(`/v1/station-events?category=notification&limit=${limit}`, {
-        signal,
-    });
-    if (!fetched.ok) return { kind: 'error', message: transportMessage(fetched.kind) };
-    const body = await readJsonBody(fetched.response);
-    if (!fetched.response.ok) {
-        return { kind: 'error', message: daemonErrorMessage(fetched.response.status, body) };
-    }
-    if (!isPlainObject(body) || !Array.isArray(body.items)) {
-        return { kind: 'error', message: 'Unexpected notifications response.' };
-    }
-    return { kind: 'ok', items: body.items as NotificationEvent[] };
-}
 
 // count is the number of QSO UUIDs the browser actually submitted for export.
 export async function recordExportFailed(

@@ -208,7 +208,7 @@ install guide, embedded manual, and release delta.
 - First-run welcome and setup-complete interstitial.
 - Dashboard placeholder, Operate Phone/CW, Operate FT8, Logbook, Settings, Contacts Map, and Manual.
 - Direct/deep links, browser back/forward, reload, lazy-loaded views, and separate Map tab.
-- Header station/rig state, notification history, toasts, TX/drive alarms, connection/offline states,
+- Header station/rig state, Station Events page, toasts, TX/drive alarms, connection/offline states,
   build identity, browser title, light/dark theme, collapsed navigation, and utility rail.
 - Keyboard-only operation, shortcuts, focus, modal Escape behavior, unsaved-Settings navigation guard,
   readable narrow/wide layouts, and zoom at operator-selected representative sizes.

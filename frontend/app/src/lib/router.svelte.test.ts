@@ -11,6 +11,7 @@ describe('router base-path handling', () => {
     it('strips a non-empty base before parsing (the former /app mount)', () => {
         expect(subPathOf('/app/operate/ft8', '/app')).toBe('/operate/ft8');
         expect(subPathOf('/app/logbook', '/app')).toBe('/logbook');
+        expect(subPathOf('/app/events', '/app')).toBe('/events');
         expect(subPathOf('/app/', '/app')).toBe('/'); // default view
         expect(subPathOf('/app', '/app')).toBe('/'); // no trailing slash
     });
@@ -19,6 +20,7 @@ describe('router base-path handling', () => {
         expect(urlOf('operate', 'ft8', '/app')).toBe('/app/operate/ft8');
         expect(urlOf('operate', 'phone', '/app')).toBe('/app/operate/phone');
         expect(urlOf('logbook', 'phone', '/app')).toBe('/app/logbook');
+        expect(urlOf('events', 'phone', '/app')).toBe('/app/events'); // Station Events (W-0020)
         expect(urlOf('config', 'phone', '/app')).toBe('/app/config');
         expect(urlOf('map', 'phone', '/app')).toBe('/app/map'); // contacts-map tab
     });

@@ -8,6 +8,9 @@
     const nav: { view: View; label: string }[] = [
         { view: 'operate', label: 'Operate' },
         { view: 'logbook', label: 'Logbook' },
+        // Station Events (W-0020): the durable operator-event history, a full page
+        // like the Logbook — it replaced the header's notification slide-over.
+        { view: 'events', label: 'Station Events' },
         { view: 'config', label: 'Settings' },
     ];
 </script>
@@ -44,6 +47,22 @@
                 stroke-linecap="round"
                 stroke-linejoin="round"
                 d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25"
+            />
+        </svg>
+    {:else if view === 'events'}
+        <svg
+            class="size-6 shrink-0"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke-width="1.5"
+            stroke="currentColor"
+            aria-hidden="true"
+        >
+            <!-- Heroicons list-bullet — the icon the header's rail button carried. -->
+            <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="M8.25 6.75h12M8.25 12h12m-12 5.25h12M3.75 6.75h.007v.008H3.75V6.75Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0ZM3.75 12h.007v.008H3.75V12Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm-.375 5.25h.007v.008H3.75v-.008Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z"
             />
         </svg>
     {:else if view === 'config'}

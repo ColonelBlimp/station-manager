@@ -341,8 +341,11 @@
         "internal/bridge/txconfirm.go",
         "internal/bridge/drivealarm.go",
         "internal/ft8/servicetx.go",
-        "frontend/app/src/lib/ui/NotificationRail.svelte",
-        "frontend/app/src/lib/ui/Header.svelte",
+        "internal/ft8/sequencer.go",
+        "internal/stationevents/**",
+        "internal/api/handler_list_station_events.go",
+        "frontend/app/src/lib/events/**",
+        "frontend/app/src/lib/api/stationEvents.ts",
         "frontend/app/src/lib/api/notifications.ts"
       ],
       "summary": "W-0020 replaces the header notification slide-over with a full-page Station Events section and adds the alarm family (TX/drive alarms, non-operator disarms, abnormal exchange terminations) to the operator_event store under ADR 0076's typed-metadata rule."

@@ -5,7 +5,6 @@
     import DriveAlarmBanner from './lib/ui/DriveAlarmBanner.svelte';
     import DriveMonitorNotice from './lib/ui/DriveMonitorNotice.svelte';
     import Toasts from './lib/ui/Toasts.svelte';
-    import NotificationRail from './lib/ui/NotificationRail.svelte';
     import SetupCard from './lib/ui/SetupCard.svelte';
     import { setup, setupGateOpen } from './lib/setup.svelte';
     import Operate from './lib/operate/Operate.svelte';
@@ -66,6 +65,7 @@
     const titles: Record<View, string> = {
         operate: 'Operate',
         logbook: 'Logbook',
+        events: 'Station Events',
         config: 'Settings',
         map: 'Contacts Map',
     };
@@ -110,10 +110,6 @@
          reflows the working surface. Pushed via lib/ui/toasts.svelte.ts. -->
     <Toasts />
 
-    <!-- Durable notification history (W-0001) — a global slide-over opened from
-         the header; overlays the shell, below the toast layer. -->
-    <NotificationRail />
-
     <div class="content-wrap flex h-screen flex-col pl-[var(--sidebar-w)]">
         <Header />
         <TxAlarmBanner />
@@ -129,6 +125,12 @@
                 {:else if router.view === 'logbook'}
                     {#await import('./lib/logbook/Logbook.svelte') then logbookModule}
                         <logbookModule.default />
+                    {/await}
+                {:else if router.view === 'events'}
+                    <!-- Station Events (W-0020): its own chunk like the Logbook; the
+                         durable history the header's slide-over used to show. -->
+                    {#await import('./lib/events/StationEvents.svelte') then eventsModule}
+                        <eventsModule.default />
                     {/await}
                 {:else if router.view === 'config'}
                     {#await import('./lib/config/Settings.svelte') then settingsModule}

@@ -6,7 +6,7 @@
 // landing view is a later slice). Deep links + refresh work because both Vite's dev server
 // and the daemon's spaHandler index-fall-back unknown paths to index.html.
 
-export type View = 'operate' | 'logbook' | 'config' | 'map';
+export type View = 'operate' | 'logbook' | 'events' | 'config' | 'map';
 export type OpMode = 'phone' | 'ft8' | 'ft4';
 
 /** The FT-family modes the shared FT view serves (ADR 0080): FT8 and FT4 differ
@@ -41,6 +41,8 @@ function parse(path: string, fallbackMode: OpMode): Loc {
             return { view: 'operate', mode: path === '/operate' ? fallbackMode : 'phone' };
         case '/logbook':
             return { view: 'logbook', mode: fallbackMode };
+        case '/events':
+            return { view: 'events', mode: fallbackMode };
         case '/config':
             return { view: 'config', mode: fallbackMode };
         case '/map':
@@ -56,6 +58,8 @@ function pathFor(view: View, mode: OpMode): string {
             return `/operate/${mode}`;
         case 'logbook':
             return '/logbook';
+        case 'events':
+            return '/events';
         case 'config':
             return '/config';
         case 'map':
