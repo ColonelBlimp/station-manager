@@ -89,9 +89,19 @@ var frozenInternalImports = map[string]struct{}{
 	"internal/lookupdef":  {},
 	"internal/lookup":     {},
 	"internal/qsoservice": {},
-	"internal/types":      {},
-	"internal/utils":      {},
-	"manual":              {},
+	// Added 2026-09-18 with intent (W-0020 slice 4). GET /v1/station-events
+	// validates ?category= and ?severity= against the operator-event vocabulary
+	// — the same closed pair table migration 0009's CHECK and the recorder's
+	// conversion table are written from — so a typo is a 400 and not an empty
+	// page. Duplicating the literals here would be the drift the vocabulary
+	// package exists to prevent.
+	//
+	// A LEAF like lookupdef: constants and six value types, standard library
+	// only, no behaviour and no further module imports.
+	"internal/stationevents": {},
+	"internal/types":         {},
+	"internal/utils":         {},
+	"manual":                 {},
 }
 
 // TestPackageBoundary_ApiImportsAreFrozen freezes internal/api's module-internal

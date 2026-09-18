@@ -267,11 +267,13 @@ func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *l
 	apiMux.HandleFunc("POST /v1/session/email", s.handleSessionEmail)
 	apiMux.HandleFunc("POST /v1/session/export", s.handleSessionExport)
 
-	// Durable operator notifications (W-0001 / ADR 0076) — the browser records
-	// an allowlisted, typed failure event that must survive toast expiry. Any
-	// POST here is same-origin/CSRF protected by the mux-wide gate.
+	// Durable operator events (W-0001 / ADR 0076; W-0020). The browser records
+	// an allowlisted, typed failure event that must survive toast expiry (the
+	// POST is same-origin/CSRF protected by the mux-wide gate); the Station
+	// Events page reads every category through one surface. GET
+	// /v1/notifications was retired with it (W-0020 ruling 4).
 	apiMux.HandleFunc("POST /v1/notifications", s.handleRecordNotification)
-	apiMux.HandleFunc("GET /v1/notifications", s.handleListNotifications)
+	apiMux.HandleFunc("GET /v1/station-events", s.handleListStationEvents)
 
 	// Event stream (SSE firehose — see docs/v2-design/api.md §4.5).
 	// Wrapped with its own subscriber cap (NOT counted against the

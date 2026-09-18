@@ -14,9 +14,10 @@ import { daemonErrorMessage, isPlainObject, readJsonBody, safeFetch } from './_h
 // 'ok' are deliberately excluded — they are not failures.
 export type ExportFailureOutcome = 'no_qsos' | 'invalid' | 'server' | 'network';
 
-// One durable operator notification as served by GET /v1/notifications. `detail`
+// One durable operator event as served by GET /v1/station-events (W-0020 slice
+// 4 moved the read there; the rail reads its notification category). `detail`
 // is the typed metadata the daemon stored (export.adif_failed: {count, outcome};
-// forward.failed: {qso_id, forwarder, action, attempts}); it is `unknown` here so
+// forward.failed: {qso_uuid, qso_id, forwarder, action, attempts}); it is `unknown` here so
 // the UI narrows it defensively and degrades unknown/future shapes rather than
 // stringifying raw content.
 export interface NotificationEvent {
@@ -36,12 +37,16 @@ const transportMessage = (kind: string): string =>
     kind === 'aborted' ? 'Request was cancelled.' : 'Could not reach the daemon.';
 
 // fetchNotifications reads the newest durable notifications (default 50). A fresh
-// call on each rail open is the reload path W-0001 must survive.
+// call on each rail open is the reload path W-0001 must survive. The read lives
+// on the Station Events surface since W-0020 slice 4 (GET /v1/notifications is
+// retired); slice 5 replaces this rail with the full page.
 export async function fetchNotifications(
     limit = 50,
     signal?: AbortSignal
 ): Promise<NotificationsOutcome> {
-    const fetched = await safeFetch(`/v1/notifications?limit=${limit}`, { signal });
+    const fetched = await safeFetch(`/v1/station-events?category=notification&limit=${limit}`, {
+        signal,
+    });
     if (!fetched.ok) return { kind: 'error', message: transportMessage(fetched.kind) };
     const body = await readJsonBody(fetched.response);
     if (!fetched.response.ok) {

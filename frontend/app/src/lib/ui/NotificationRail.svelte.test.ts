@@ -1,5 +1,5 @@
 // The notification rail is the durable counterpart to the transient toasts
-// (W-0001 / ADR 0076): a global slide-over that reads GET /v1/notifications so a
+// (W-0001 / ADR 0076): a global slide-over that reads GET /v1/station-events so a
 // failure survives its toast expiry and a page reload.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -38,13 +38,13 @@ const daemonEvent = {
     detail: { qso_id: 7, forwarder: 'qrz', action: 'insert', attempts: 2 },
 };
 
-// stubNotifications routes GET /v1/notifications to `items` and counts the calls.
+// stubNotifications routes GET /v1/station-events (notification category) to `items` and counts the calls.
 function stubNotifications(items: unknown[]): { calls: () => number } {
     let calls = 0;
     vi.stubGlobal(
         'fetch',
         vi.fn((input: RequestInfo | URL) => {
-            if (urlOf(input).startsWith('/v1/notifications')) {
+            if (urlOf(input).startsWith('/v1/station-events')) {
                 calls++;
                 return Promise.resolve(
                     new Response(JSON.stringify({ items }), {
@@ -67,7 +67,7 @@ function deferredNotifications(): { resolvers: Array<(items: unknown[]) => void>
     vi.stubGlobal(
         'fetch',
         vi.fn((input: RequestInfo | URL) => {
-            if (urlOf(input).startsWith('/v1/notifications')) {
+            if (urlOf(input).startsWith('/v1/station-events')) {
                 return new Promise<Response>((resolve) => {
                     resolvers.push((items) =>
                         resolve(

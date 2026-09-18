@@ -225,13 +225,21 @@ items return a QSO through a boundary projection of `types.Qso`: the canonical *
 - **Errors:** 400 `invalid_json`/`missing_required_field`/`invalid_field_value`/`no_qsos`; 500 `fetch_failed`/`adif_compose_failed`.
 - **Notes:** Daemon rebuilds via `adif.ComposeToAdifString(FetchQsoByUUID…)` and archives a backup under `<workingDir>/exports/sent-adif/` (best-effort, same dir as email — backup-on-export, exclusive-create with a `-N` collision suffix). Unknown UUIDs are skipped with a warning. `uuids` is capped at 10000 per request (`invalid_field_value` 400). Does **not** stamp rows (only an email marks "forwarded"). Fetch loop shared with `email` via `Server.fetchSessionQsos`.
 
-### `GET /v1/notifications`
-- **Purpose:** Read the durable operator notification history — the newest events the SPA rail shows so a failure survives its transient toast and a page reload (W-0001 / ADR 0076).
+### `GET /v1/station-events`
+- **Purpose:** Read the durable operator event history across categories — the Station Events page (W-0020; ADR 0076 shape, ADR 0061's alarm pilot). Replaced `GET /v1/notifications` on 2026-09-18 (W-0020 ruling 4); the browser-ingestion `POST /v1/notifications` below is unchanged.
 - **Gating:** Always-on.
-- **Request:** Query `?limit=N` (optional; default 50) — must be an integer in `[1,500]` (the per-category retention ceiling).
-- **Response:** **200** `{"items": [OperatorEvent…]}`, newest first. Each `OperatorEvent` = `{id, category, kind, severity, occurred_at (RFC3339), build, detail (embedded JSON object)}`. Empty history is `{"items": []}` (never null).
-- **Errors:** 400 `invalid_field_value` (limit non-integral or out of range); 500 `db_error`.
-- **Notes:** Reads the `notification` category via `FetchOperatorEventsByCategoryWithContext`; `detail` is the stored typed metadata verbatim (never raw provider text). Only the `notification` category is exposed today. The daemon-originated `forward.failed` detail carries **`qso_uuid`** (canonical) alongside the **DEPRECATED** `qso_id` (retained through `v2.0.0-alpha.2`, removed in `v2.0.0-alpha.3`) — matching the `forward.*` SSE payloads (AW-1).
+- **Request:** Query `?category=notification|alarm` (optional; omit for all), `?severity=info|warn|error` (optional), `?limit=N` (optional; default 50) — an integer in `[1,1000]` (the whole ring: 500 per category × the two categories). An **unknown** category or severity is a 400, never an empty list, so an empty filtered page reads as a filter and not as a fault.
+- **Response:** **200** `{"items": [OperatorEvent…]}`, newest first by arrival across categories. Each `OperatorEvent` = `{id, category, kind, severity, occurred_at (RFC3339), build, detail (embedded JSON object)}`. Empty history is `{"items": []}` (never null).
+- **Errors:** 400 `invalid_field_value` (unknown category/severity; limit non-integral or out of range); 500 `db_error`.
+- **Notes:** Reads via `FetchOperatorEventsWithContext`; `detail` is the stored typed metadata verbatim (never raw provider or rig text — ADR 0076 §2, pinned per kind by the recorder's conversion test). `occurred_at` is the producing boundary's stamp for the alarm kinds (captured before the recorder's queue) and the write time for the notification kinds. Detail shapes per kind:
+  - `notification` / `export.adif_failed` — `{count, outcome}` (browser-originated, see POST below).
+  - `notification` / `forward.failed` — `{qso_uuid, qso_id (DEPRECATED, removed v2.0.0-alpha.3), forwarder, action, attempts}` (AW-1).
+  - `alarm` / `tx_alarm.raised` (`error`) — `{code}`; codes are ADR 0051's (`tx_unconfirmed`, `tx_still_keyed`, `tx_liveness_lost`, `tx_teardown_unconfirmed`, `tx_key_write_failed`).
+  - `alarm` / `tx_alarm.cleared` (`info`) — `{code, active_ms?}`; `active_ms` is how long the alarm stood, from the raise stamp the bridge retained to the clear; omitted (never 0) when no raise stamp was held.
+  - `alarm` / `drive_alarm.raised` (`error`) / `drive_alarm.cleared` (`info`) — `{code}` (`drive_no_output`).
+  - `alarm` / `tx.disarmed` (`warn`) — `{cause}`: `cat_lost` | `dial_moved`, an automatic disarm while no partner exchange was in progress (the routine unattended linger disarm is never recorded — ruling 2).
+  - `alarm` / `session.terminated` (`warn`) — `{cause, partner_call, rung}`: `cause` ∈ `unattended` | `cat_lost` | `dial_moved` | `dial_unknown` | `tx_not_armed` | `tx_bad_message` (operator stop/abandon/band change/shutdown and the repeat cap record nothing); `partner_call` trimmed, upper-cased, printable ASCII, ≤ 32 (ruling 5); `rung` is the ladder state the exchange was on (`calling` | `reporting` | `confirming` | `rogering` | `done`).
+  The recorder re-checks alarm `code`, `cause` and `rung` against `[a-z0-9_.]{1,32}` and replaces an invalid value with the literal `invalid`. Retention: newest 500 rows per category, oldest-first eviction.
 
 ### `POST /v1/notifications`
 - **Purpose:** Record a durable, browser-originated operator notification that must survive its transient toast and a page reload (W-0001 / ADR 0076). The only wired kind is a failed ADIF export (Export dialog).

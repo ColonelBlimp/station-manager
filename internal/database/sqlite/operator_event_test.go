@@ -190,3 +190,60 @@ func TestRecordOperatorEvent_StoresTheSuppliedOccurrenceTimeOrDefaultsToNow(t *t
 		t.Errorf("occurred_at = %v, want the write time (after %v) when none is supplied", rows[0].OccurredAt, before)
 	}
 }
+
+// W-0020 slice 4: the cross-category read. Newest first by id across
+// categories; category and severity narrow; the limit is bounded by the whole
+// ring (retention × categories), and out of range is an error, never a clamp.
+func TestFetchOperatorEvents_CrossCategoryNewestFirstWithFilters(t *testing.T) {
+	svc := testService(t)
+	rec := func(category, kind, severity string) {
+		t.Helper()
+		if err := svc.RecordOperatorEvent(context.Background(), OperatorEventInput{
+			Category: category, Kind: kind, Severity: severity, Build: "v-test", Detail: json.RawMessage(`{}`),
+		}); err != nil {
+			t.Fatalf("record %s/%s: %v", category, kind, err)
+		}
+	}
+	rec("notification", "forward.failed", "warn")
+	rec("alarm", "tx_alarm.raised", "error")
+	rec("alarm", "tx_alarm.cleared", "info")
+	rec("notification", "export.adif_failed", "error")
+
+	all, err := svc.FetchOperatorEventsWithContext(context.Background(), OperatorEventFilter{}, 10)
+	if err != nil {
+		t.Fatalf("fetch all: %v", err)
+	}
+	kinds := func(evs []types.OperatorEvent) []string {
+		out := make([]string, 0, len(evs))
+		for _, e := range evs {
+			out = append(out, e.Kind)
+		}
+		return out
+	}
+	if got := kinds(all); strings.Join(got, ",") != "export.adif_failed,tx_alarm.cleared,tx_alarm.raised,forward.failed" {
+		t.Errorf("all = %v, want newest first across categories", got)
+	}
+	alarms, _ := svc.FetchOperatorEventsWithContext(context.Background(), OperatorEventFilter{Category: "alarm"}, 10)
+	if got := kinds(alarms); strings.Join(got, ",") != "tx_alarm.cleared,tx_alarm.raised" {
+		t.Errorf("alarm = %v", got)
+	}
+	errs, _ := svc.FetchOperatorEventsWithContext(context.Background(), OperatorEventFilter{Severity: "error"}, 10)
+	if got := kinds(errs); strings.Join(got, ",") != "export.adif_failed,tx_alarm.raised" {
+		t.Errorf("severity=error = %v", got)
+	}
+	both, _ := svc.FetchOperatorEventsWithContext(context.Background(), OperatorEventFilter{Category: "alarm", Severity: "info"}, 10)
+	if got := kinds(both); strings.Join(got, ",") != "tx_alarm.cleared" {
+		t.Errorf("alarm+info = %v", got)
+	}
+	if two, _ := svc.FetchOperatorEventsWithContext(context.Background(), OperatorEventFilter{}, 2); len(two) != 2 {
+		t.Errorf("limit 2 returned %d", len(two))
+	}
+	if OperatorEventFetchLimitMax != operatorEventRetentionPerCategory*2 {
+		t.Errorf("fetch limit max = %d, want retention × the two categories = %d", OperatorEventFetchLimitMax, operatorEventRetentionPerCategory*2)
+	}
+	for _, bad := range []int{0, -1, OperatorEventFetchLimitMax + 1} {
+		if _, err := svc.FetchOperatorEventsWithContext(context.Background(), OperatorEventFilter{}, bad); err == nil {
+			t.Errorf("limit %d must be an error, not a clamp", bad)
+		}
+	}
+}

@@ -56,6 +56,24 @@ describe('recordExportFailed', () => {
 });
 
 describe('fetchNotifications', () => {
+    it('reads the notification category from the Station Events surface (W-0020 slice 4)', async () => {
+        let url: string | undefined;
+        vi.stubGlobal(
+            'fetch',
+            vi.fn((input: RequestInfo | URL) => {
+                url = urlOf(input);
+                return Promise.resolve(
+                    new Response(JSON.stringify({ items: [] }), {
+                        status: 200,
+                        headers: { 'Content-Type': 'application/json' },
+                    })
+                );
+            })
+        );
+        await fetchNotifications(25);
+        expect(url).toBe('/v1/station-events?category=notification&limit=25');
+    });
+
     it('returns the items on a 200 envelope', async () => {
         stubJson(200, {
             items: [

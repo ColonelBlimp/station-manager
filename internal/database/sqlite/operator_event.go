@@ -121,10 +121,67 @@ WHERE  category = ?
 	return nil
 }
 
+// OperatorEventFilter narrows FetchOperatorEventsWithContext. Empty fields match
+// everything; the API layer validates the vocabulary (a typo must be a 400, not
+// an empty page that reads as "nothing happened"), so the store takes the
+// strings as given.
+type OperatorEventFilter struct {
+	Category string
+	Severity string
+}
+
+// OperatorEventFetchLimitMax bounds a cross-category read at the whole ring:
+// the per-category retention times the categories the store holds (W-0020,
+// migration 0009: notification + alarm). A caller asking for more has a bug.
+const OperatorEventFetchLimitMax = operatorEventRetentionPerCategory * 2
+
+// FetchOperatorEventsWithContext returns the newest `limit` operator_event rows
+// across categories, newest first (by id, the monotonic arrival order),
+// narrowed by the filter — the Station Events page's read (W-0020). limit must
+// be in [1, OperatorEventFetchLimitMax]; out of range is an operation-tagged
+// error, never a silent clamp, for the reason the per-category read gives.
+func (s *Service) FetchOperatorEventsWithContext(ctx context.Context, f OperatorEventFilter, limit int) ([]types.OperatorEvent, error) {
+	const op errors.Op = "sqlite.Service.FetchOperatorEventsWithContext"
+	if err := checkService(op, s); err != nil {
+		return nil, err
+	}
+	if limit < 1 || limit > OperatorEventFetchLimitMax {
+		return nil, errors.New(op).WithMsgf("limit %d out of range [1, %d]", limit, OperatorEventFetchLimitMax)
+	}
+
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+
+	mods := []qm.QueryMod{qm.OrderBy("id DESC"), qm.Limit(limit)}
+	if f.Category != "" {
+		mods = append(mods, models.OperatorEventWhere.Category.EQ(f.Category))
+	}
+	if f.Severity != "" {
+		mods = append(mods, models.OperatorEventWhere.Severity.EQ(f.Severity))
+	}
+	rows, err := models.OperatorEvents(mods...).All(ctx, h)
+	if err != nil {
+		return nil, errors.New(op).WithErr(err).WithMsg("fetch operator_event")
+	}
+	out := make([]types.OperatorEvent, 0, len(rows))
+	for _, r := range rows {
+		ev, er := adapters.OperatorEventModelToType(r)
+		if er != nil {
+			return nil, errors.New(op).WithErr(er)
+		}
+		out = append(out, ev)
+	}
+	return out, nil
+}
+
 // FetchOperatorEventsByCategoryWithContext returns the newest `limit`
 // operator_event rows for a category, newest first (by id, the monotonic
-// arrival order). Read half of the W-0001 notification-history surface; it
-// performs no writes.
+// arrival order). Kept for internal category-scoped callers; it performs no
+// writes.
 //
 // limit must be in [1, operatorEventRetentionPerCategory]. A limit outside that
 // range is an operation-tagged error, never a silent clamp: a caller asking for

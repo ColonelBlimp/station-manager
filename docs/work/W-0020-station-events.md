@@ -1,8 +1,8 @@
 # W-0020 — Station Events: a full-page event section replacing the notification slide-over
 
 **Status:** Selected — review package approved 2026-09-14 (revised after the second designer's review;
-all rulings recorded); slices 1 (store + version head), 2 (recorder) and 3 (producing boundaries)
-built 2026-09-18; slice 4 (API) next on operator direction
+all rulings recorded); slices 1 (store + version head), 2 (recorder), 3 (producing boundaries) and
+4 (API) built 2026-09-18; slice 5 (SPA) next on operator direction
 **Selected:** 2026-09-14
 **Outcome:** The header's "Notification history" slide-over is replaced by a **Station Events** section that
 takes the whole content area like the Logbook. It shows, newest first and filterable by category and
@@ -119,7 +119,7 @@ that explain a burst.
 ### API
 
 `GET /v1/station-events?category=&severity=&limit=` returns `{items: [OperatorEvent…]}` newest first
-across categories (or one when given), the DTO `GET /v1/notifications` serves today. `GET
+across categories (or one when given), using the established OperatorEvent DTO. `GET
 /v1/notifications` is retired in the same slice (ruling 4); `POST /v1/notifications` stays. Detail shapes
 per kind are enumerated in `docs/v2-design/api-endpoints.md`.
 
@@ -263,6 +263,21 @@ reintroduces the stall on a safety path).
   wait lets in-flight facts outlive bridge; dropping the report
   from `finishAbandonLocked` fails the rung-driven and unattended tests. AC3, AC4 and the daemon
   half of AC2 are now testable offline; AC2's on-air evidence stays passive. No RF.
+- 2026-09-18 — **slice 4 built.** `GET /v1/station-events?category=&severity=&limit=` →
+  `{items}` newest first across categories (`handler_list_station_events.go`), backed by the new
+  `sqlite.FetchOperatorEventsWithContext(filter, limit)` with `OperatorEventFilter{Category,
+  Severity}` and `OperatorEventFetchLimitMax` = 500 × 2 categories; an unknown category or severity
+  is a 400, never an empty page (AC6); limit out of `[1,1000]` is a 400, never a clamp. `GET
+  /v1/notifications` retired at the router (ruling 4); `POST /v1/notifications` unchanged. To keep
+  main releasable between slices, the SPA's `fetchNotifications` now reads
+  `/v1/station-events?category=notification&limit=N` (the rail itself goes in slice 5).
+  `api-endpoints.md` gains the section with the detail shapes per kind. Tests: empty → `[]`, both
+  categories newest first with fields, category/severity filters + unknown values → 400, POST then
+  GET, limit bounds, old GET route 404/405 and POST 204 via the router; store test for the
+  cross-category read. Reversion proofs: unknown category passing through fails the filter test; the
+  store ignoring severity fails its test; the old route left in place fails the retirement test;
+  removing the POST route fails the router test with 404.
+  Frontend gates green (1,736 tests). No RF.
 
 ## References
 
