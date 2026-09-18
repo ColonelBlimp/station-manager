@@ -473,6 +473,9 @@ type Service struct {
 	// "1" in the same cycle, or the cycle's original confirm timeout, alarms as
 	// before. Reset when a cycle begins and when the rig confirms idle.
 	txStopReasserted bool
+	// alarmObserver is the Station Events seam (alarmobserver.go); nil records
+	// nothing. Set once at wiring, read under s.mu, called without it.
+	alarmObserver AlarmObserver
 	// Evidence for the record an absorbed still-keyed answer leaves (W-0011,
 	// operator ruling 2026-09-16): the tx_off write's RETURN as captured at
 	// each unkey call site and handed to beginTxConfirmAfterUnkey /

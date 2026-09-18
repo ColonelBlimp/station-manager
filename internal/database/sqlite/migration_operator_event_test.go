@@ -15,10 +15,13 @@ import (
 // Shape (ADR 0076): a categorised operator-facing event store in the log DB,
 // following qso_history's JSON-detail pattern but BOUNDED rather than
 // append-only — retention prunes the oldest rows per category, so DELETE is
-// permitted and only UPDATE is refused. Only the `notification` category and
-// exactly two durable kinds are wired now; both CHECKs are CLOSED so an
-// unplanned category/kind fails loudly. severity/occurred_at/build are stamped
-// daemon-side; `detail` carries only typed JSON, never raw provider text.
+// permitted and only UPDATE is refused. 0008 wired only the `notification`
+// category and exactly two durable kinds, with both CHECKs CLOSED so an
+// unplanned category/kind fails loudly; 0009 (W-0020) added the `alarm`
+// category as a joint (category, kind) pair CHECK — see
+// migration_operator_event_alarm_test.go. The rules pinned here still hold at
+// head. severity/occurred_at/build are stamped daemon-side; `detail` carries
+// only typed JSON, never raw provider text.
 
 // insertOperatorEvent is a raw-SQL writer so the schema proofs exercise the
 // column CHECKs directly, not a Go-side guard that does not exist yet.
@@ -58,7 +61,8 @@ func TestMigrate0008_OperatorEventClosesCategoryKindAndSeverity(t *testing.T) {
 		t.Fatalf("a wired row must insert, or the rejections below prove nothing: %v", err)
 	}
 
-	// Categories left Proposed by ADR 0076 (alarm/daemon/qso) are not wired.
+	// Categories still Proposed by ADR 0076 (daemon/qso) are not wired; alarm
+	// joined in 0009 and is pinned in its own file.
 	if err := insertOperatorEvent(t, svc,
 		"daemon", "export.adif_failed", "error", "v", `{}`); err == nil {
 		t.Error("category outside {'notification'} must violate the CHECK")
@@ -143,8 +147,11 @@ func TestMigrate0008_OperatorEventHasPerCategoryIndex(t *testing.T) {
 func TestMigrate0008_DownDropsTableUpRestoresIt(t *testing.T) {
 	svc := testService(t)
 
-	if v := schemaVersion(t, svc); v != 8 {
-		t.Fatalf("schema version = %d, want 8 — 0008 must be head for the step-back to target it", v)
+	// 0009 (the alarm pairs, a rebuild that keeps the table) sits above 0008
+	// since W-0020 slice 1, so reaching "no table" is two steps down and the
+	// restore two steps up. The version pin keeps the counts honest.
+	if v := schemaVersion(t, svc); v != 9 {
+		t.Fatalf("schema version = %d, want 9 — 0009 must be head for the two-step step-back to target 0008", v)
 	}
 	assertTable := func(when string, want bool) {
 		t.Helper()
@@ -157,8 +164,8 @@ func TestMigrate0008_DownDropsTableUpRestoresIt(t *testing.T) {
 		}
 	}
 	assertTable("after up", true)
-	applyMigrationSteps(t, svc, -1)
+	applyMigrationSteps(t, svc, -2) // 0009 down (table kept), then 0008 down (table dropped)
 	assertTable("after down", false)
-	applyMigrationSteps(t, svc, 1)
+	applyMigrationSteps(t, svc, 2)
 	assertTable("after re-up", true)
 }

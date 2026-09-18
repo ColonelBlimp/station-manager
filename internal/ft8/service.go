@@ -168,15 +168,18 @@ type Service struct {
 	// while an inhibition is held, so it doubles as the "held" flag — one
 	// variable, so the two cannot disagree.
 	idleInhibitor IdleInhibitor
-	idleRelease   func() error
-	keyer         TxKeyer
-	txArmed       bool
-	txDisarmCause string // cause of the last real teardown ("" while armed); rides TxState
-	txInFlight    bool
-	txClosed      bool   // set on Stop; refuses further arming
-	txMessage     string // message of the in-flight transmission ("" = none)
-	txOffsetHz    float64
-	txDialMHz     float64 // dial of the in-flight transmission, for the keyed-time decode-log TX line
+	// sessionObserver is the Station Events seam (sessionobserver.go); nil
+	// records nothing. Set once at wiring, read under txMu, called without it.
+	sessionObserver SessionObserver
+	idleRelease     func() error
+	keyer           TxKeyer
+	txArmed         bool
+	txDisarmCause   string // cause of the last real teardown ("" while armed); rides TxState
+	txInFlight      bool
+	txClosed        bool   // set on Stop; refuses further arming
+	txMessage       string // message of the in-flight transmission ("" = none)
+	txOffsetHz      float64
+	txDialMHz       float64 // dial of the in-flight transmission, for the keyed-time decode-log TX line
 	// armDialMHz is the dial the daemon read when TX was ARMED (0 = unknown). The
 	// pre-key gate compares against it, so the frequency binding holds on every
 	// keying path — including with no session and no capture running. Distinct from

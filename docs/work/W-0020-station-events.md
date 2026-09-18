@@ -1,7 +1,8 @@
 # W-0020 — Station Events: a full-page event section replacing the notification slide-over
 
 **Status:** Selected — review package approved 2026-09-14 (revised after the second designer's review;
-all rulings recorded); slice 1 next on operator direction
+all rulings recorded); slice 1 (store + version head) built 2026-09-18; slice 2 (recorder) next on
+operator direction
 **Selected:** 2026-09-14
 **Outcome:** The header's "Notification history" slide-over is replaced by a **Station Events** section that
 takes the whole content area like the Logbook. It shows, newest first and filterable by category and
@@ -201,6 +202,18 @@ reintroduces the stall on a safety path).
   (capacity 64, drop newest, one warning per drop with kind and cumulative count); review package approved
   and committed (`7c10308a`, this ruling recorded in the follow-up). Inbox thread 2026-09-13/14 under
   "Nothing listed in the Notifications section".
+- 2026-09-18 — **slice 1 built.** Migration `0009_operator_event_alarm` rebuilds `operator_event` with
+  one joint CHECK over the (category, kind) pairs — `notification` × {export.adif_failed,
+  forward.failed}, `alarm` × the six kinds — and carries the AUTOINCREMENT high-water mark so a
+  round-trip never reissues an evicted id; the down restores 0008's CHECKs, keeps every
+  `notification` row and discards `alarm` rows (stated in its header). New `internal/stationevents`
+  (standard library only) holds the categories, kinds, severities, `PartnerCallMaxLen` = 32, the pair
+  table `KindsByCategory` the schema test enumerates in both directions, and the six sealed fact types
+  the recorder will carry. Seams: `bridge.AlarmObserver` + `SetAlarmObserver` (under `s.mu`),
+  `ft8.SessionObserver` + `SetSessionObserver` (under `txMu`), both nil-safe and unwired until slice 3.
+  Head-9 pins moved in `handler_version_test`, `migration_origin_test` (−2/+2 → −3/+3) and the 0008
+  drop test (−1/+1 → −2/+2). Reversion proofs: two independent allowlists fail the pair test on every
+  cross pair; removing the high-water carry reissues id 1. No RF.
 
 ## References
 
