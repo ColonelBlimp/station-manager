@@ -67,7 +67,7 @@ function alarmCodeLabel(code: string): string {
 function causeLabel(cause: string): string {
     switch (cause) {
         case 'unattended':
-            return 'browser closed, nobody attending';
+            return 'FT8 view disconnected';
         case 'cat_lost':
             return 'CAT connection lost';
         case 'dial_moved':

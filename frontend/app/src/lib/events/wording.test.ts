@@ -68,7 +68,7 @@ describe('station event wording', () => {
                     rung: 'calling',
                 })
             )
-        ).toBe('K1ABC · browser closed, nobody attending · at calling');
+        ).toBe('K1ABC · FT8 view disconnected · at calling');
     });
 
     it('never stringifies an unknown or malformed detail', () => {
