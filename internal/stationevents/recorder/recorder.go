@@ -147,6 +147,10 @@ func (r *Recorder) enqueue(f stationevents.Fact) {
 // dropped logs one warning per dropped fact with the kind and the cumulative
 // drop count (ruling 8). The counter's mutex guards an increment only, so a
 // producer can never wait on it for long.
+//
+// Ruling 8 requires one warning for each lost fact. This log write runs on the
+// producer's goroutine and can wait on the logger; the queue handoff itself
+// never waits on SQLite, and no database work or retry runs on that goroutine.
 func (r *Recorder) dropped(f stationevents.Fact, why string) {
 	r.droppedWithErr(f, why, nil)
 }
