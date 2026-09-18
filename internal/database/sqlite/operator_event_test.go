@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
@@ -155,4 +156,37 @@ func lastN(xs []int, n int) []int {
 		return xs
 	}
 	return xs[len(xs)-n:]
+}
+
+// W-0020: a producer-supplied occurrence time is stored as given (UTC), and a
+// zero one keeps the column default — the write time. The recorder queues
+// facts asynchronously, so without this a row would date an alarm at the write,
+// not at the event.
+func TestRecordOperatorEvent_StoresTheSuppliedOccurrenceTimeOrDefaultsToNow(t *testing.T) {
+	svc := testService(t)
+	at := time.Date(2026, 9, 18, 7, 30, 15, 0, time.UTC)
+	if err := svc.RecordOperatorEvent(context.Background(), OperatorEventInput{
+		Category: "alarm", Kind: "tx_alarm.raised", Severity: "error", Build: "v-test",
+		Detail: json.RawMessage(`{"code":"tx_unconfirmed"}`), OccurredAt: at,
+	}); err != nil {
+		t.Fatalf("record with occurrence time: %v", err)
+	}
+	before := time.Now().UTC().Add(-2 * time.Second)
+	if err := recordNotification(t, svc, 1); err != nil { // zero OccurredAt
+		t.Fatalf("record without occurrence time: %v", err)
+	}
+	rows, err := svc.FetchOperatorEventsByCategoryWithContext(context.Background(), "alarm", 10)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("fetch alarm rows: %v, n=%d", err, len(rows))
+	}
+	if !rows[0].OccurredAt.Equal(at) {
+		t.Errorf("occurred_at = %v, want the supplied %v", rows[0].OccurredAt, at)
+	}
+	rows, err = svc.FetchOperatorEventsByCategoryWithContext(context.Background(), "notification", 10)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("fetch notification rows: %v, n=%d", err, len(rows))
+	}
+	if rows[0].OccurredAt.Before(before) {
+		t.Errorf("occurred_at = %v, want the write time (after %v) when none is supplied", rows[0].OccurredAt, before)
+	}
 }

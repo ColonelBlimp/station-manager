@@ -146,6 +146,9 @@ func TestLifecycleGraph_StartOrderHonoursDependencies(t *testing.T) {
 	before(nodeMailer, nodeHTTP)
 	before(nodeBridge, nodeFt8)
 	before(nodeEvidence, nodeFt8)
+	// The Station Events recorder needs the log DB and the logger up before it starts.
+	before(nodeLogDB, nodeEvents)
+	before(nodeLogging, nodeEvents)
 
 	// http is the front door — after every service it composes.
 	for _, dep := range []string{nodeEnrichment, nodeMailer, nodeBridge, nodeFt8, nodeEvidence, nodeQso} {
@@ -182,6 +185,9 @@ func TestLifecycleGraph_StartOrderIsEdgeEnforced(t *testing.T) {
 	before(nodeMailer, nodeHTTP)
 	before(nodeBridge, nodeFt8)
 	before(nodeEvidence, nodeFt8)
+	// The Station Events recorder needs the log DB and the logger up before it starts.
+	before(nodeLogDB, nodeEvents)
+	before(nodeLogging, nodeEvents)
 	before(nodeLogDB, nodeRefDB)
 	before(nodeConfig, nodeLogging)
 }

@@ -114,7 +114,7 @@ func TestLifecycleShutdown_RealGraphHappyPartialOrder(t *testing.T) {
 
 	for _, n := range []string{
 		nodeBridge, nodeFt8, nodeEvidence, nodeQsoLog, nodeHub, nodeHTTP,
-		nodeWorkers, nodePsk, nodeEnrichment, nodeMailer, nodeLogDB, nodeRefDB, nodeLogging,
+		nodeWorkers, nodePsk, nodeEvents, nodeEnrichment, nodeMailer, nodeLogDB, nodeRefDB, nodeLogging,
 	} {
 		if oc := outcomeOf(rep, n); oc.Result != orchestrator.Drained {
 			t.Errorf("%s outcome = %+v, want Drained", n, oc)
@@ -132,6 +132,10 @@ func TestLifecycleShutdown_RealGraphHappyPartialOrder(t *testing.T) {
 	before(nodeFt8, nodeEvidence)
 	before(nodeFt8, nodeQsoLog)
 	before(nodeFt8, nodePsk) // psk flushes after ft8's decode loop stops
+	// The Station Events recorder drains after BOTH producers and before the DB it writes.
+	before(nodeBridge, nodeEvents)
+	before(nodeFt8, nodeEvents)
+	before(nodeEvents, nodeLogDB)
 	before(nodeHTTP, nodeHub)
 	before(nodeWorkers, nodeHub)
 	before(nodeQsoLog, nodeHub)

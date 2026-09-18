@@ -33,15 +33,16 @@ const (
 	nodeQso     = qsoservice.ServiceName       // "qsoservice"
 
 	// Non-bean fleet + promoted infra nodes.
-	nodeBridge     = "bridge"     // CAT/RF bridge — the RF-critical fence
-	nodeEnrichment = "enrichment" // lookup.Orchestrator runtime (promoted: ft8 + http depend on it)
-	nodeMailer     = "mailer"     // email.Service (promoted: http depends on it)
-	nodeEvidence   = "evidence"   // FT8 evidence writer
-	nodePsk        = "psk"        // PSK Reporter uploader
-	nodeFt8        = "ft8"        // FT8 decode subsystem (sole producer for evidence/qso-log)
-	nodeWorkers    = "workers"    // forwarder workers + the smcloud reconciler that rides them
-	nodeQsoLog     = "qso-log"    // FT8 completed-QSO log goroutines (launched by ft8's decode loop)
-	nodeHTTP       = "http"       // the HTTP API server (the front door)
+	nodeBridge     = "bridge"         // CAT/RF bridge — the RF-critical fence
+	nodeEnrichment = "enrichment"     // lookup.Orchestrator runtime (promoted: ft8 + http depend on it)
+	nodeMailer     = "mailer"         // email.Service (promoted: http depends on it)
+	nodeEvidence   = "evidence"       // FT8 evidence writer
+	nodePsk        = "psk"            // PSK Reporter uploader
+	nodeEvents     = "station-events" // Station Events recorder (W-0020): alarm-family rows, non-blocking
+	nodeFt8        = "ft8"            // FT8 decode subsystem (sole producer for evidence/qso-log)
+	nodeWorkers    = "workers"        // forwarder workers + the smcloud reconciler that rides them
+	nodeQsoLog     = "qso-log"        // FT8 completed-QSO log goroutines (launched by ft8's decode loop)
+	nodeHTTP       = "http"           // the HTTP API server (the front door)
 )
 
 // lifecycleNodes declares the daemon graph. Registration order is the deterministic shutdown
@@ -65,7 +66,7 @@ func lifecycleNodes() []iocdi.Node {
 		// the hub), plus the enrichment refresher — so they DrainAfter {hub, enrichment}. If a consumer
 		// does not drain (e.g. a hung ft8), the hub is Skipped and the DB is Skipped too: left open for
 		// process reclamation rather than closed under a live writer (safer than the old deferred close).
-		{Name: nodeLogDB, DrainAfter: []string{nodeHub, nodeEnrichment}},
+		{Name: nodeLogDB, DrainAfter: []string{nodeHub, nodeEnrichment, nodeEvents}},
 		{Name: nodeRefDB, StartAfter: []string{nodeLogDB}, DrainAfter: []string{nodeHub, nodeEnrichment}},
 		{Name: nodeQso},
 
@@ -83,6 +84,10 @@ func lifecycleNodes() []iocdi.Node {
 		// PSK Reporter drains AFTER ft8: the decode loop calls psk.AddSpot until ft8.Stop completes, so
 		// psk must seal + do its final flush only once ft8 has stopped, or the last reception reports drop.
 		{Name: nodePsk, StartAfter: []string{nodeLogging}, DrainAfter: []string{nodeFt8}},
+		// The Station Events recorder writes the log DB from facts the bridge and ft8 report
+		// (W-0020). It needs the DB open and stays up until both producers have stopped, so its
+		// final drain lands every fact their teardown reports; the DB in turn drains after it.
+		{Name: nodeEvents, StartAfter: []string{nodeLogging, nodeLogDB}, DrainAfter: []string{nodeBridge, nodeFt8}},
 		{Name: nodeFt8, StartAfter: []string{nodeBridge, nodeEnrichment, nodeEvidence, nodePsk}},
 
 		// Forwarder workers (need db + qso + hub). qso-log rides ft8's decode loop; it drains after ft8.

@@ -49,6 +49,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/pskreporter"
 	"github.com/ColonelBlimp/station-manager/internal/qsoservice"
 	"github.com/ColonelBlimp/station-manager/internal/safego"
+	"github.com/ColonelBlimp/station-manager/internal/stationevents/recorder"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
@@ -79,6 +80,7 @@ type daemon struct {
 	ft8           *ft8.Service
 	evidence      *evidence.Service
 	psk           *pskreporter.Service
+	events        *recorder.Recorder // Station Events recorder (W-0020), constructed in-node
 	pskRxCall     string
 	evidenceInit  bool // evidence.Initialize succeeded
 	evidenceReady bool // evidence.Initialize AND Start both succeeded (⇒ capture sink may be wired)
@@ -155,6 +157,7 @@ func (d *daemon) registerLifecycle(c *iocdi.Container) (*orchestrator.Orchestrat
 		{NodeID: nodeMailer, Initialize: d.initMailer},
 		{NodeID: nodeEvidence, Initialize: d.initEvidence, Start: d.startEvidence, Stop: stopVoid(d.stopEvidenceSvc)},
 		{NodeID: nodePsk, Initialize: d.initPsk, Start: d.startPsk, Stop: stopErr(d.stopPskSvc)},
+		{NodeID: nodeEvents, Initialize: d.initEvents, Start: d.startEvents, Stop: stopErr(d.stopEvents)},
 		{NodeID: nodeFt8, Active: d.ft8.Enabled, Initialize: d.initFt8, Start: d.ft8.Start, Stop: stopErr(d.ft8.Stop)},
 		{NodeID: nodeWorkers, Start: d.startWorkers, PrepareStop: d.workerPrepareStop,
 			Stop: stopVoid(d.workerWG.Wait), Rollback: rollbackVia(d.drainWorkers)},
@@ -406,6 +409,24 @@ func (d *daemon) stopPskSvc() error {
 		return nil
 	}
 	return d.psk.Stop()
+}
+
+// ---- station events (W-0020) ----
+
+// initEvents constructs the recorder against the open log DB. Its producer seams (the bridge's
+// alarm observer, ft8's session observer) are wired by slice 3; until then it records nothing.
+func (d *daemon) initEvents() error {
+	d.events = recorder.New(d.db, d.logger, buildinfo.Version)
+	return nil
+}
+
+func (d *daemon) startEvents(ctx context.Context) error { return d.events.Start(ctx) }
+
+func (d *daemon) stopEvents() error {
+	if d.events == nil {
+		return nil
+	}
+	return d.events.Stop()
 }
 
 // ---- ft8 ----

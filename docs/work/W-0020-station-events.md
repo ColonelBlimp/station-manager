@@ -1,8 +1,8 @@
 # W-0020 — Station Events: a full-page event section replacing the notification slide-over
 
 **Status:** Selected — review package approved 2026-09-14 (revised after the second designer's review;
-all rulings recorded); slice 1 (store + version head) built 2026-09-18; slice 2 (recorder) next on
-operator direction
+all rulings recorded); slices 1 (store + version head) and 2 (recorder) built 2026-09-18; slice 3
+(producing boundaries) next on operator direction
 **Selected:** 2026-09-14
 **Outcome:** The header's "Notification history" slide-over is replaced by a **Station Events** section that
 takes the whole content area like the Logbook. It shows, newest first and filterable by category and
@@ -214,6 +214,25 @@ reintroduces the stall on a safety path).
   Head-9 pins moved in `handler_version_test`, `migration_origin_test` (−2/+2 → −3/+3) and the 0008
   drop test (−1/+1 → −2/+2). Reversion proofs: two independent allowlists fail the pair test on every
   cross pair; removing the high-water carry reissues id 1. No RF.
+- 2026-09-18 — **slice 2 built.** `internal/stationevents/recorder`: `Recorder` (New → Start → Stop,
+  ADR 0070 supervisor) takes typed facts through the method sets of `bridge.AlarmObserver` and
+  `ft8.SessionObserver` (compile-time asserted in its tests) and ENQUEUES only — capacity 64,
+  drop-newest on overflow, one `warn` per drop with `kind`, `reason` and the cumulative `drops`
+  (ruling 8); a worker writes each row through `Store.RecordOperatorEvent` with an uncancelled
+  per-write context (bounded by the store's own timeout), a failed write is logged once with the kind
+  and never retried; Stop seals admission, lets the write in flight finish, then drains the queue and
+  stops at the first failure, naming every fact that never landed. Conversion table (`convert.go`):
+  category `alarm`; severities per ruling 7; `active_ms` on the cleared row from the two stamps
+  (omitted, never zeroed, without a raise stamp); identifiers re-checked against `[a-z0-9_.]{1,32}`
+  else the constant `invalid`; `partner_call` trimmed, upper-cased, printable ASCII, ≤ 32 (ruling 5).
+  `sqlite.OperatorEventInput` gained optional `OccurredAt` so a row dates the event, not the write.
+  Node `station-events` in `cmd/smd`: StartAfter {logging, log-db}, DrainAfter {bridge, ft8}, and the
+  log DB drains after it; constructed in-node against the open log DB with `buildinfo.Version`; its
+  seams stay unwired until slice 3. Tests: conversion totality with exact detail keys per kind (AC7),
+  the stalled store (AC8: producers return at once, 3 of 67 dropped with counts 1–3, the 64 earliest
+  land in order), Stop drains, before-Start/after-Stop drops, failed write not retried, failing store
+  at shutdown; 30× under -race. Reversion proofs: drop-oldest fails the order check; no teardown drain
+  leaves 1 of 11 rows; a raised alarm at warn fails the table. No RF.
 
 ## References
 

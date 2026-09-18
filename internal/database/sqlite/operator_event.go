@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite/adapters"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite/models"
@@ -31,6 +32,12 @@ type OperatorEventInput struct {
 	Severity string
 	Build    string
 	Detail   json.RawMessage
+	// OccurredAt is the occurrence time the producing boundary captured (W-0020:
+	// a fact is stamped BEFORE it is queued for the asynchronous recorder, so a
+	// row says when the alarm fired, not when the write landed). Zero keeps the
+	// column default — the write time — which is what the synchronous
+	// notification producers want.
+	OccurredAt time.Time
 }
 
 // RecordOperatorEvent appends one event and prunes its category to the newest
@@ -82,6 +89,11 @@ func (s *Service) RecordOperatorEvent(ctx context.Context, ev OperatorEventInput
 		Severity: ev.Severity,
 		Build:    ev.Build,
 		Detail:   boiltypes.JSON(ev.Detail),
+	}
+	// boil.Infer omits a zero-valued defaulted column, so the DB stamps
+	// occurred_at unless the producer supplied one (stored UTC, like the default).
+	if !ev.OccurredAt.IsZero() {
+		row.OccurredAt = ev.OccurredAt.UTC()
 	}
 	if err = row.Insert(ctx, tx, boil.Infer()); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("insert operator_event")
