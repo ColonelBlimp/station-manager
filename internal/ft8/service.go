@@ -305,6 +305,9 @@ func newService(cfg types.Ft8Config, log logging.Logger, src captureSource) *Ser
 	// rung succeeds. Keeping the stamp on the QSO (rather than in a Service
 	// singleton) prevents overlapping completion callbacks from stealing it.
 	s.seq.prepareComplete = s.stampCompletionPath
+	// A partner exchange the daemon ended reaches the Station Events seam
+	// through the service, which filters the causes (W-0020).
+	s.seq.onTerminated = s.noteExchangeTerminated
 	// On a completed exchange, hand it to the injected logger (e4). Reads
 	// s.qsoLogger at call time (set via SetQsoLogger before Start), so the
 	// daemon wires logging after construction.

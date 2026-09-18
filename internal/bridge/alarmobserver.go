@@ -42,3 +42,31 @@ func (s *Service) alarmObserverSnapshot() AlarmObserver {
 	defer s.mu.Unlock()
 	return s.alarmObserver
 }
+
+// notifyTxAlarmRaised / notifyTxAlarmCleared / notifyDriveAlarmRaised /
+// notifyDriveAlarmRecovered hand one fact to the observer, if any. Each is
+// called OUTSIDE s.mu at the publish site, after the hub publish, so the seam
+// can never extend the critical section the read loop shares.
+func (s *Service) notifyTxAlarmRaised(code string, at time.Time) {
+	if o := s.alarmObserverSnapshot(); o != nil {
+		o.TxAlarmRaised(code, at)
+	}
+}
+
+func (s *Service) notifyTxAlarmCleared(code string, raisedAt, at time.Time) {
+	if o := s.alarmObserverSnapshot(); o != nil {
+		o.TxAlarmCleared(code, raisedAt, at)
+	}
+}
+
+func (s *Service) notifyDriveAlarmRaised(code string, at time.Time) {
+	if o := s.alarmObserverSnapshot(); o != nil {
+		o.DriveAlarmRaised(code, at)
+	}
+}
+
+func (s *Service) notifyDriveAlarmRecovered(code string, at time.Time) {
+	if o := s.alarmObserverSnapshot(); o != nil {
+		o.DriveAlarmRecovered(code, at)
+	}
+}

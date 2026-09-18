@@ -440,8 +440,19 @@ type Service struct {
 	// written unkey on a non-ACK protocol whose rigdef has no TX-status query.
 	// It prevents unrelated state from clearing uncertainty raised by a failed
 	// CI-V unkey, liveness loss, or another alarm source.
-	txUncertain         bool
-	txAlarmActive       bool
+	txUncertain   bool
+	txAlarmActive bool
+	// txAlarmCode + txAlarmRaisedAt (mu-guarded) are the standing alarm's
+	// identity, retained from raise to clear for the Station Events seam: the
+	// hub's clear carries no code, so without these the record could not say
+	// which alarm cleared or how long it stood (W-0020). Zero while no alarm
+	// stands.
+	txAlarmCode     string
+	txAlarmRaisedAt time.Time
+	// alarmEmitDone chains after-unlock alarm publishes in the order their
+	// state transitions took s.mu. A clear or recovery must not overtake a
+	// raise that has latched but has not reached the observer yet.
+	alarmEmitDone       chan struct{}
 	txConfirmGen        uint64
 	txConfirmTimer      *time.Timer
 	txConfirmViaRigData bool
@@ -843,6 +854,17 @@ func (s *Service) Stop() error {
 			cancel()
 		}
 		s.wg.Wait()
+		// Timer callbacks that latched an alarm before stopped was set may
+		// still be in their after-lock publish/observer call. All tracked
+		// producers have finished now, and stopped excludes new timer alarms,
+		// so the tail is final. Wait without s.mu: the Station Events recorder
+		// drains after Stop and must see every admitted alarm fact.
+		s.mu.Lock()
+		alarmEmitted := s.alarmEmitDone
+		s.mu.Unlock()
+		if alarmEmitted != nil {
+			<-alarmEmitted
+		}
 		// Flush any pending coalesced freq-step run so a trailing VFO-step summary
 		// (L4) is not lost at shutdown.
 		s.cmdLog.flush()

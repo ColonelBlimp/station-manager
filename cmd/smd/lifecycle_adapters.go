@@ -413,10 +413,13 @@ func (d *daemon) stopPskSvc() error {
 
 // ---- station events (W-0020) ----
 
-// initEvents constructs the recorder against the open log DB. Its producer seams (the bridge's
-// alarm observer, ft8's session observer) are wired by slice 3; until then it records nothing.
+// initEvents constructs the recorder against the open log DB and wires the two producer seams.
+// Both services are constructed pre-orchestrator, and the graph starts this node before either of
+// them (lifecycle.go), so no alarm or session end can fire before the recorder is listening.
 func (d *daemon) initEvents() error {
 	d.events = recorder.New(d.db, d.logger, buildinfo.Version)
+	d.bridge.SetAlarmObserver(d.events)
+	d.ft8.SetSessionObserver(d.events)
 	return nil
 }
 

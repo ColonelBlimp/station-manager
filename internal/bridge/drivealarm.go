@@ -500,7 +500,7 @@ func (s *Service) checkDriveSilence(gen uint64) {
 	s.mu.Lock()
 	// Stale: the transmission ended, a newer one owns the PTT, or this
 	// transmission has already alarmed.
-	if !s.ft8TxActive || s.ft8TxGen != gen || s.driveAlarmed {
+	if s.stopped || !s.ft8TxActive || s.ft8TxGen != gen || s.driveAlarmed {
 		s.mu.Unlock()
 		return
 	}
@@ -580,10 +580,16 @@ func (s *Service) checkDriveSilence(gen uint64) {
 		gapMax = sinceLast
 	}
 	meterSel := s.meterSel
+	at := time.Now() // the decision's stamp, taken with the evidence
+	previous, emitted := s.reserveAlarmEmissionLocked()
 	s.mu.Unlock()
 
 	// Outside the lock — the log write and the fan-out to every subscriber must
 	// not block the read loop that feeds this detector.
+	if previous != nil {
+		<-previous
+	}
+	defer close(emitted)
 	s.logger.ErrorWith().Str("code", DriveAlarmNoOutput).
 		Str("meter_sel", meterSel).
 		Int("meter_n", meterN).
@@ -596,6 +602,7 @@ func (s *Service) checkDriveSilence(gen uint64) {
 		Name:    EventDriveAlarm,
 		Payload: DriveAlarmPayload{Active: true, Code: DriveAlarmNoOutput},
 	})
+	s.notifyDriveAlarmRaised(DriveAlarmNoOutput, at)
 }
 
 // driveMeterEvidenceLocked summarises what the meter stream has said about the
@@ -678,11 +685,16 @@ func (s *Service) takeDriveRecoveryLocked() bool {
 // Deliberately not a clear: the SPA keeps the banner up and adds the recovery to
 // it, because the operator asked to be told the rig is fine now without losing the
 // record that it was not.
-func (s *Service) publishDriveRecovery() {
+func (s *Service) publishDriveRecovery(previous <-chan struct{}, emitted chan struct{}, at time.Time) {
+	if previous != nil {
+		<-previous
+	}
+	defer close(emitted)
 	s.logger.InfoWith().Str("code", DriveAlarmNoOutput).
 		Msg("bridge: rig output confirmed normal on a later transmission; the drive alarm is no longer current")
 	s.hub.publish(Event{
 		Name:    EventDriveAlarm,
 		Payload: DriveAlarmPayload{Active: false, Code: DriveAlarmNoOutput},
 	})
+	s.notifyDriveAlarmRecovered(DriveAlarmNoOutput, at)
 }

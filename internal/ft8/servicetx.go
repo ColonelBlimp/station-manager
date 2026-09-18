@@ -360,6 +360,7 @@ func (s *Service) disarmTxLocked(cause string) {
 	// (cat drop after an operator disarm) cannot rewrite which teardown the
 	// cached frame reports.
 	s.txDisarmCause = cause
+	disarmedAt := time.Now() // the decision's stamp (W-0020), taken under the gate
 	if s.txCancel != nil {
 		s.txCancel() // abort in-flight; controller drops PTT on the cancel path
 	}
@@ -394,8 +395,15 @@ func (s *Service) disarmTxLocked(cause string) {
 
 	// Armed state is false (under the gate); abandon whatever survived the
 	// completion. A start blocked on seqGate will observe txArmed=false and refuse.
+	// The abandon reports whether a PARTNER exchange ended: if so the sequencer
+	// boundary has recorded the termination, and this disarm records nothing
+	// more — one row per event (W-0020 ruling 2).
+	terminated := false
 	if s.seq != nil {
-		s.seq.abandonNamed("", cause)
+		terminated = s.seq.abandonNamed("", cause)
+	}
+	if !terminated {
+		s.noteTxDisarmed(cause, disarmedAt)
 	}
 
 	// The device errors were discarded and `disarmed` logged unconditionally, so a

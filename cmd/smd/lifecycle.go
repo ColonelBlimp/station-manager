@@ -71,7 +71,7 @@ func lifecycleNodes() []iocdi.Node {
 		{Name: nodeQso},
 
 		// The RF fence. Needs the logger + config; keys TX exclusively at shutdown.
-		{Name: nodeBridge, StartAfter: []string{nodeLogging, nodeConfig}, StopPriority: iocdi.RFCritical},
+		{Name: nodeBridge, StartAfter: []string{nodeLogging, nodeConfig, nodeEvents}, StopPriority: iocdi.RFCritical},
 
 		// Promoted infra. Enrichment is the shared lookup runtime consumed by ft8's completed-QSO
 		// logger AND http; mailer is consumed by http. Both activate independently of ft8.
@@ -85,10 +85,11 @@ func lifecycleNodes() []iocdi.Node {
 		// psk must seal + do its final flush only once ft8 has stopped, or the last reception reports drop.
 		{Name: nodePsk, StartAfter: []string{nodeLogging}, DrainAfter: []string{nodeFt8}},
 		// The Station Events recorder writes the log DB from facts the bridge and ft8 report
-		// (W-0020). It needs the DB open and stays up until both producers have stopped, so its
+		// (W-0020). It needs the DB open, starts BEFORE both producers (they StartAfter it, so no
+		// alarm or session end can fire unobserved) and stays up until both have stopped, so its
 		// final drain lands every fact their teardown reports; the DB in turn drains after it.
 		{Name: nodeEvents, StartAfter: []string{nodeLogging, nodeLogDB}, DrainAfter: []string{nodeBridge, nodeFt8}},
-		{Name: nodeFt8, StartAfter: []string{nodeBridge, nodeEnrichment, nodeEvidence, nodePsk}},
+		{Name: nodeFt8, StartAfter: []string{nodeBridge, nodeEnrichment, nodeEvidence, nodePsk, nodeEvents}},
 
 		// Forwarder workers (need db + qso + hub). qso-log rides ft8's decode loop; it drains after ft8.
 		{Name: nodeWorkers, StartAfter: []string{nodeLogDB, nodeQso, nodeHub, nodeLogging}},

@@ -156,13 +156,19 @@ func (s *Service) txConfirmTimeout(gen uint64) {
 	// releases s.mu, and must not mutate alarm state after Stop returned
 	// (codex 2026-08-09 P3). Same pattern as startAlarmProbes.
 	fire := !s.stopped && s.txUncertain && s.txConfirmGen == gen && !s.txAlarmActive
+	var raisedAt time.Time
+	var previous <-chan struct{}
+	var emitted chan struct{}
 	if fire {
 		s.txAlarmActive = true
+		raisedAt = time.Now()
+		s.txAlarmCode, s.txAlarmRaisedAt = TxAlarmUnconfirmed, raisedAt
+		previous, emitted = s.reserveAlarmEmissionLocked()
 		s.closeTxConfirmDoneLocked() // cycle resolved (alarmed): wake waiters
 	}
 	s.mu.Unlock()
 	if fire {
-		s.publishTxAlarm(true, TxAlarmUnconfirmed)
+		s.emitTxAlarm(previous, emitted, true, TxAlarmUnconfirmed, time.Time{}, raisedAt)
 		// Ask again. This is the commonest false alarm — a busy bus swallowed
 		// the answer on a rig that is actually in RX — and without a re-probe
 		// nothing would ever ask a second time (see txrecheck.go).
@@ -177,6 +183,30 @@ func (s *Service) closeTxConfirmDoneLocked() {
 		close(s.txConfirmDone)
 		s.txConfirmDone = nil
 	}
+}
+
+// reserveAlarmEmissionLocked captures the predecessor while s.mu still orders
+// TX and drive alarm state transitions. Publishing and observer calls remain
+// outside s.mu; waiting there keeps a fast clear or recovery behind its raise.
+func (s *Service) reserveAlarmEmissionLocked() (<-chan struct{}, chan struct{}) {
+	previous := s.alarmEmitDone
+	emitted := make(chan struct{})
+	s.alarmEmitDone = emitted
+	return previous, emitted
+}
+
+func (s *Service) emitTxAlarm(previous <-chan struct{}, emitted chan struct{}, active bool, code string, raisedAt, at time.Time) {
+	if previous != nil {
+		<-previous
+	}
+	defer close(emitted)
+	if active {
+		s.publishTxAlarm(true, code)
+		s.notifyTxAlarmRaised(code, at)
+		return
+	}
+	s.publishTxAlarm(false, "")
+	s.notifyTxAlarmCleared(code, raisedAt, at)
 }
 
 // waitTxConfirm blocks until the pending confirmation cycle resolves and
@@ -214,6 +244,16 @@ func (s *Service) raiseTxAlarm(code string) {
 	already := s.txAlarmActive
 	s.txAlarmActive = true
 	s.txUncertain = true
+	var raisedAt time.Time
+	var previous <-chan struct{}
+	var emitted chan struct{}
+	if !already {
+		// The false→true edge is the alarm's identity; a re-raise while alarmed
+		// keeps the code and stamp of the alarm that actually stood.
+		raisedAt = time.Now()
+		s.txAlarmCode, s.txAlarmRaisedAt = code, raisedAt
+		previous, emitted = s.reserveAlarmEmissionLocked()
+	}
 	// A directly raised alarm is not evidence that a write-accepted unkey is
 	// awaiting the weak no-query fallback. Disarm it; a later successful re-unkey
 	// explicitly starts a fresh confirmation cycle.
@@ -221,7 +261,7 @@ func (s *Service) raiseTxAlarm(code string) {
 	s.closeTxConfirmDoneLocked() // cycle resolved (alarmed): wake waiters
 	s.mu.Unlock()
 	if !already {
-		s.publishTxAlarm(true, code)
+		s.emitTxAlarm(previous, emitted, true, code, time.Time{}, raisedAt)
 		// Only on the false→true edge: a re-raise while already alarmed must
 		// not stack a second probe loop (the generation gate would retire the
 		// older one anyway, but not starting it is cheaper and clearer).
@@ -237,6 +277,15 @@ func (s *Service) confirmTxIdle(how string) {
 	wasAlarmed := s.txAlarmActive
 	reasserted := s.txStopReasserted
 	unkeyAt, answerAt, resentAt := s.txUnkeyWrittenAt, s.txStillKeyedAnswerAt, s.txStopResentAt
+	alarmCode, alarmRaisedAt := s.txAlarmCode, s.txAlarmRaisedAt
+	var previous <-chan struct{}
+	var emitted chan struct{}
+	var clearedAt time.Time
+	if wasAlarmed {
+		clearedAt = time.Now()
+		previous, emitted = s.reserveAlarmEmissionLocked()
+	}
+	s.txAlarmCode, s.txAlarmRaisedAt = "", time.Time{}
 	s.txStopReasserted = false
 	s.txUncertain = false
 	s.txAlarmActive = false
@@ -250,7 +299,7 @@ func (s *Service) confirmTxIdle(how string) {
 	s.closeTxConfirmDoneLocked() // cycle resolved (idle): wake waiters
 	s.mu.Unlock()
 	if wasAlarmed {
-		s.publishTxAlarm(false, "")
+		s.emitTxAlarm(previous, emitted, false, alarmCode, alarmRaisedAt, clearedAt)
 	}
 	if wasUncertain && reasserted && !wasAlarmed {
 		// The operator-facing record of the event the alarm used to announce.

@@ -1,8 +1,8 @@
 # W-0020 — Station Events: a full-page event section replacing the notification slide-over
 
 **Status:** Selected — review package approved 2026-09-14 (revised after the second designer's review;
-all rulings recorded); slices 1 (store + version head) and 2 (recorder) built 2026-09-18; slice 3
-(producing boundaries) next on operator direction
+all rulings recorded); slices 1 (store + version head), 2 (recorder) and 3 (producing boundaries)
+built 2026-09-18; slice 4 (API) next on operator direction
 **Selected:** 2026-09-14
 **Outcome:** The header's "Notification history" slide-over is replaced by a **Station Events** section that
 takes the whole content area like the Logbook. It shows, newest first and filterable by category and
@@ -233,6 +233,36 @@ reintroduces the stall on a safety path).
   land in order), Stop drains, before-Start/after-Stop drops, failed write not retried, failing store
   at shutdown; 30× under -race. Reversion proofs: drop-oldest fails the order check; no teardown drain
   leaves 1 of 11 rows; a raised alarm at warn fails the table. No RF.
+- 2026-09-18 — **slice 3 built.** Bridge: the service retains the standing TX alarm's identity
+  (`txAlarmCode`, `txAlarmRaisedAt`, set on the false→true edge in `txConfirmTimeout` and
+  `raiseTxAlarm`, cleared in `confirmTxIdle`) and reports `TxAlarmRaised` / `TxAlarmCleared(code,
+  raisedAt, at)` outside `s.mu` after each hub publish — the hub payloads are unchanged. The
+  after-lock alarm publishes are chained in transition order, so a fast RX clear or drive recovery
+  cannot record before its raise; the clear stamp is captured at the RX decision, and bridge Stop
+  waits for the last admitted report before the recorder drains. The drive detector reports
+  `DriveAlarmRaised` at its decision and `DriveAlarmRecovered` from `publishDriveRecovery`. FT8:
+  both sequencer teardown paths (`finishAbandonLocked`, reached by
+  `abandonNamed` and every rung-driven `abandonNamedIfCurrent`; and `AbandonIfCurrent`, the dial
+  refusals) read the partner, the rung (`statusModeLocked().State`) and the stamp under the lock and
+  call `noteTerminated` after it — only with a partner and a daemon cause (unattended, cat_lost,
+  dial_moved, dial_unknown, tx_not_armed, tx_bad_message); `abandonNamed` now returns whether a
+  partner exchange ended, and `disarmTxLocked` reports `TxDisarmed(cat_lost|dial_moved)` only when
+  it did not — one row per event (ruling 2); operator causes, band change, shutdown, the repeat cap
+  and an idle re-disarm record nothing. `cmd/smd`: `initEvents` wires both seams; bridge and ft8
+  StartAfter `station-events`. Tests: bridge — timeout raise + RX clear with the retained code and
+  raise stamp, re-raise while alarmed is silent and the clear names the first code, overlapping
+  raise/clear and drive raise/recovery stay ordered, Stop awaits both in-flight reports; FT8 —
+  rung-driven retirements name partner and
+  rung, operator Abandon silent vs dial
+  refusal, a run without a partner is not an exchange, unattended mid-exchange = one termination
+  and no disarm row, unattended idle / between contacts = nothing, cat_lost and dial_moved as
+  disarm when idle and termination mid-exchange, operator causes and idle re-disarm silent; both
+  packages under -race. Reversion proofs: ignoring the abandon's verdict double-records cat_lost
+  and dial_moved; a clear without the retained identity fails both bridge tests; removing the
+  after-lock predecessor wait reverses overlapping TX or drive alarm rows, and removing Stop's
+  wait lets in-flight facts outlive bridge; dropping the report
+  from `finishAbandonLocked` fails the rung-driven and unattended tests. AC3, AC4 and the daemon
+  half of AC2 are now testable offline; AC2's on-air evidence stays passive. No RF.
 
 ## References
 

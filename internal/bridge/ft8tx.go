@@ -399,12 +399,19 @@ func (s *Service) finishFt8Tx() {
 	// The recovery decision is taken BEFORE the disarm, which clears the
 	// per-transmission flags it reads.
 	recovered := s.takeDriveRecoveryLocked()
+	var previous <-chan struct{}
+	var emitted chan struct{}
+	var recoveredAt time.Time
+	if recovered {
+		recoveredAt = time.Now()
+		previous, emitted = s.reserveAlarmEmissionLocked()
+	}
 	s.disarmDriveWatch()
 	s.mu.Unlock()
 	// Outside the lock — a stalled log write must not block the read loop.
 	s.logFt8TxMeters(sum)
 	if recovered {
-		s.publishDriveRecovery()
+		s.publishDriveRecovery(previous, emitted, recoveredAt)
 	}
 }
 

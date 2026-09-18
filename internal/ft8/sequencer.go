@@ -679,8 +679,13 @@ type Sequencer struct {
 	// attempt that just transmitted, and reading them later would read whatever
 	// replaced it.
 	prepareComplete func(*CompletedQso)
-	onComplete      func(CompletedQso)
-	log             logging.Logger
+	// onTerminated reports a PARTNER exchange the daemon ended (W-0020): every
+	// teardown path calls it outside s.mu with the cause the log line carries,
+	// the partner and the rung; nil records nothing. The Service filters the
+	// causes (noteExchangeTerminated), so this stays cause-agnostic.
+	onTerminated func(cause, partnerCall, rung string, at time.Time)
+	onComplete   func(CompletedQso)
+	log          logging.Logger
 }
 
 // transmitLocked binds the CURRENT session generation into a rung-shaped
@@ -936,9 +941,9 @@ func (s *Sequencer) Abandon() { s.abandonNamed("", causeOperator) }
 // The two carriers still diverge on purpose. The FRAME gets only a reason that
 // is NOT the operator's own doing; the LOG always gets something, because "" was
 // indistinguishable from a session that DIED — the defect this closes.
-func (s *Sequencer) abandonNamed(frameReason, logFallback string) {
+func (s *Sequencer) abandonNamed(frameReason, logFallback string) (terminated bool) {
 	s.mu.Lock()
-	s.finishAbandonLocked(frameReason, logFallback)
+	return s.finishAbandonLocked(frameReason, logFallback)
 }
 
 // abandonNamedIfCurrent is abandonNamed scoped to ONE session generation: a no-op
@@ -958,12 +963,14 @@ func (s *Sequencer) abandonNamedIfCurrent(gen uint64, frameReason, logFallback s
 // finishAbandonLocked performs the teardown. The CALLER holds s.mu; this releases
 // it (the terminal publish must happen while the lock still excludes a replacement
 // Start* — invariant 3).
-func (s *Sequencer) finishAbandonLocked(frameReason, logFallback string) {
+func (s *Sequencer) finishAbandonLocked(frameReason, logFallback string) (terminated bool) {
 	// Read the partner BEFORE abandonLocked clears the exchange pointers: the
 	// line said a session ended and never which contact was lost, so four
 	// different operator actions produced one indistinguishable record
-	// (ft8-logging-gaps finding 2).
+	// (ft8-logging-gaps finding 2). The rung and the stamp are read here for the
+	// same reason, for the Station Events record.
 	call := s.partnerCallLocked()
+	rung, at := s.statusModeLocked().State, time.Now()
 	// An armed auto-work run is a thing Abandon STOPS even with no contact in
 	// progress, and stopping it has to be published or it happens invisibly: the
 	// operator presses Abandon between contacts, no frame changes, and the indicator
@@ -993,9 +1000,24 @@ func (s *Sequencer) finishAbandonLocked(frameReason, logFallback string) {
 		}
 		s.log.InfoWith().Str("reason", cause).Str("their_call", call).
 			Msg("ft8 seq: session abandoned")
+		terminated = s.noteTerminated(cause, call, rung, at)
 	} else if hadRun {
 		s.log.InfoWith().Msg("ft8 seq: auto-work run stopped")
 	}
+	return terminated
+}
+
+// noteTerminated reports a partner exchange's end to the Service (W-0020).
+// Called OUTSIDE s.mu. A session with no partner — a Call-CQ run still calling —
+// is not an exchange and reports nothing; an operator cause is filtered by
+// the Service. Returns whether a report was made, so the service's disarm can
+// tell "an exchange ended" from "only the arm ended".
+func (s *Sequencer) noteTerminated(cause, call, rung string, at time.Time) bool {
+	if call == "" || s.onTerminated == nil || !daemonEndedCauses[cause] {
+		return false
+	}
+	s.onTerminated(cause, call, rung, at)
+	return true
 }
 
 // abandonLocked clears the session state and retires its generation. Returns
@@ -1152,6 +1174,8 @@ func (s *Sequencer) AbandonIfCurrent(gen uint64, reason string) bool {
 		s.mu.Unlock()
 		return false
 	}
+	call := s.partnerCallLocked() // before abandonLocked clears it (W-0020)
+	rung, at := s.statusModeLocked().State, time.Now()
 	was, staged := s.abandonLocked()
 	if staged != "" {
 		reason = staged // an explicitly staged reason wins over the caller's label
@@ -1169,6 +1193,7 @@ func (s *Sequencer) AbandonIfCurrent(gen uint64, reason string) bool {
 	s.mu.Unlock()
 	if was {
 		s.log.InfoWith().Str("reason", reason).Msg("ft8 seq: session abandoned")
+		s.noteTerminated(reason, call, rung, at)
 	}
 	return was
 }
