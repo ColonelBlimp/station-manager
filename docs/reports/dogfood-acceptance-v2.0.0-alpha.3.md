@@ -263,6 +263,23 @@ Command-line checkpoints run by the coder; the operator rules every result. Time
    `build/private/station-manager-2.0.0~alpha.3-1.x86_64.rpm` (0600), SHA re-verified after the copy; the
    worktree (with its `.env` copy and the dirty build) removed and pruned. The build again rewrote the
    tracked `dist/index.html` afterwards, as expected from Finding #1; the version had been fixed before it.
+5. **09:27Z — a deliberate dev deploy, not the candidate install (operator statement, 2026-09-19).** After
+   committing the freeze package (`be613793`, Markdown only) the operator ran the one-command dogfood deploy,
+   which built a dev RPM from the working tree at `be613793` — one commit past the tag, same source — and
+   installed it: `rpm -q` `station-manager-2.0.0~alpha.3.1.gbe613793-1`, `GET /v1/version`
+   `2.0.0-alpha.3-1-gbe613793`, schema 9 not dirty, health ok, unit active with `NRestarts=0`; the log shows
+   a clean start (`databases open and migrated`, nothing to apply, listening 09:27:31Z, no error record).
+   The operator's statement: this was a local install only, for an on-air run later; the clean package
+   install of the frozen artifact (`2.0.0~alpha.3-1`, SHA `23335ff6…`) is deferred to another time. Until
+   then no Gate A or B1 row has candidate evidence — the gate requires the same identified artifact on the
+   clean lane and the station (A1-02; B1-02's confusable failure is exactly "a dev-build version string").
+   When the station moves to the frozen RPM it is a package **downgrade** by RPM ordering
+   (`2.0.0~alpha.3.1.gbe613793` sorts after `2.0.0~alpha.3`, `rpm.labelCompare` = −1): `sudo rpm -Uvh
+   --oldpackage build/private/station-manager-2.0.0~alpha.3-1.x86_64.rpm` after verifying the SHA, then
+   `smd config-check`, `systemctl --user daemon-reload`, `systemctl --user restart smd`; B1-01 is then
+   ruled with that deviation on the row (a downgrade from a same-source dev build, not the upgrade from
+   `alpha.2.124` the row describes). On-air observations on the dev build go to the dogfood inbox as usual;
+   they are standing evidence for the surfaces, not candidate rows.
 
 ## Findings
 
