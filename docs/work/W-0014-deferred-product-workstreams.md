@@ -52,6 +52,51 @@ implementation commitment.
   selected: no per-logbook or per-contest database files; if a "start a fresh log" affordance is
   wanted, it is the Settings → Logbooks create action above, and contest logs are the W-0011 contest
   mode.
+  Same day, operator: where does the management page go, and can two or more logbooks share a
+  callsign? Facts: `logbook.name` is UNIQUE (409 `duplicate_name`); `callsign` is only validated
+  (3–32 chars, one digit, uppercased) and the schema comment defines it as ADIF `STATION_CALLSIGN`
+  — so **yes, several logbooks may carry the same callsign today**, and that is the ordinary way to
+  run a contest or a season under one call. The QSO dedupe index is per logbook. Forwarders are
+  station-global in `config.json`, so every logbook uploads to the same QRZ/ClubLog/SM Cloud accounts
+  — right for logbooks sharing the operator's call, and the hazard for a logbook under a *different*
+  call (club, /P): the per-logbook service bindings ADR 0056 describes are not something found built.
+  Recommendation recorded: a **Settings → Logbooks** section mirroring Settings → Rigs (list; Add with
+  name, callsign, description; Edit name/description; Set as default; Delete with the daemon's
+  `has_qsos` / `default_logbook` refusals shown as reasons, the default undeletable exactly as the
+  default rig is since the 2026-09-09 ruling), because it is lifecycle configuration with the same
+  shape as rigs and the Logbook view stays the QSO browsing/editing surface; the header keeps naming
+  the selected logbook (a switcher there is a separate ADR 0055 follow-up). Nearest confusable
+  outcomes: two similarly named logbooks under one call and a session logging into the wrong one; a
+  different-call logbook forwarding into the personal accounts. Awaiting the operator's ruling on the
+  placement and on whether a different-call logbook needs the ADR 0056 bindings first.
+  **Ruled 2026-09-19:** placement accepted — Settings → Logbooks mirroring Settings → Rigs; the
+  Logbook view remains the QSO surface; a header switcher stays separate under ADR 0055.
+  Different-call logbooks are OUT of the first slice: ADR 0056's per-logbook bindings must land before
+  the UI can create or select one. First slice: **Add uses the normalised callsign of the current
+  default logbook**; existing different-call rows may remain visible but cannot be set as default, with
+  the explanation that service bindings are required. **Correction (operator):** shared callsigns make
+  QRZ and ClubLog routing safe, but SM Cloud has ONE configured cloud-logbook name
+  (`smcloud.CloudLogbookName`, `internal/forwarding/smcloud/smcloud.go`) and its reconciler is built at
+  boot for `default_logbook_id` only (`cmd/smd/lifecycle_adapters.go`, `smcloud.NewReconciler(fc,
+  d.cfg.DefaultLogbookID, …)`) — so **Set as default cannot be copied mechanically from rigs** and must
+  not claim independent cloud backup for a non-default logbook; the dossier resolves that ADR 0056
+  dependency before implementation.
+  Same day, operator: how would a user run a different callsign for a contest, given contesting is not
+  implemented, and contesting is another design thread. Facts: under ADR 0055 the logbook IS the
+  station identity — `STATION_CALLSIGN` comes from the logbook, never per QSO — so a different call
+  means a different logbook; the W-0011 contest mode (ruled 2026-09-12) stamps `CONTEST_ID` inside a
+  window but changes no callsign; forwarders are station-global, so a different-call logbook's live
+  submits would upload under the operator's personal QRZ/ClubLog accounts (imports alone carry an
+  explicit `forwardTo`, `qsoservice.SubmitImport`), and SM Cloud would neither back it up nor reconcile
+  it. Today's only path is manual and fragile: create the logbook by API, make it the default and
+  restart, disable QRZ/ClubLog for the duration, export ADIF afterwards. Assessment: the contest-under-
+  another-call case is exactly the ADR 0056 bindings plus a **per-logbook forwarding policy** (which
+  destinations, or none, a logbook feeds — the club/portable call typically forwards nowhere or to its
+  own accounts) plus SM Cloud's one-logbook limit; it should be designed as one thread with the W-0011
+  contest mode (contest id and window, dupe scope, scoring/export already in this inventory) rather
+  than bolted onto the Logbooks section. Recorded as the **contesting design thread**: W-0011 owns the
+  contest-mode ruling, this inventory owns definitions/scoring/export, and the different-call case
+  binds the two through ADR 0056. Not selected; needs its own dossier or ADR before code.
 
 ## Gates
 
