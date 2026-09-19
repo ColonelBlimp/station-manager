@@ -7,6 +7,14 @@ date: 2026-07-22
 
 # 0056 — Per-logbook config lives in the database; station-global config stays in config.json
 
+> **Dated update (2026-09-19, operator ruling).** The per-logbook service bindings this ADR describes
+> are still unbuilt and are to be implemented in the **archive-aware shape** of
+> [ADR 0071](0071-first-class-qso-archives.md) (Accepted the same day, files first): a binding belongs
+> to a logical logbook *within an archive*, SM Cloud addresses stable archive and logbook UUIDs rather
+> than the configured cloud-logbook name and the boot-time `default_logbook_id`, and a new archive
+> inherits no forwarding bindings. The bindings precede any different-call logbook in the UI and any
+> contest operation under another call (W-0014 design exchange, 2026-09-19).
+
 ## Context
 
 `config.json` is the daemon's single global config file. Forwarding destinations

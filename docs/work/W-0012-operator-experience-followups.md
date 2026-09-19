@@ -73,7 +73,11 @@ not compete with the app-shell, notification-history, or UI-cohesion dossiers.
   arbitrary paths; whether a new file copies the current station identity; forwarding off by default
   for a new file (recommended); whether the logical-logbook UI is still wanted inside a file (files
   give isolation and portability, logbooks give callsign identity — both, files first). Its own
-  dossier and an ADR when selected; W-0013 carries the datastore-swap pointer.
+  dossier and an ADR when selected; W-0013 carries the datastore-swap pointer. **Ruled 2026-09-19:
+  files first** — ADR 0071 Accepted (dated decision); the archive programme is step 3 of the
+  execution order recorded in W-0014 and the backlog, after alpha.3 acceptance and W-0010 outcome 9;
+  it opens its own dossier when selected. Settings → Logbooks (logical logbooks inside the active
+  archive) follows it as step 4.
 - **Cap Band Activity's enrichment lookup concurrency (inbox 2026-09-11 follow-up (b); written up
   2026-09-12; not selected):** the incident: two SPA tabs held six event streams (log and rig per tab,
   the FT8 stream, the Map view's own second log stream), which is the browsers' default of six

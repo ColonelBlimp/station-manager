@@ -1,11 +1,26 @@
 ---
 number: 0071
 title: Manage physical QSO databases as first-class archives
-status: Proposed
+status: Accepted (operator-ratified 2026-09-19, files first)
 date: 2026-08-17
 ---
 
 # 0071 — Manage physical QSO databases as first-class archives
+
+> **Dated decision (2026-09-19, operator ruling: files first).** Accepted as the data-model direction:
+> physical QSO archives with stable archive and logbook identities come **before** the Settings →
+> Logbooks implementation (W-0014 design exchange of 2026-09-19), so that `default_logbook_id`, the SM
+> Cloud identity and the ADR 0056 bindings are built once against the archive model rather than against
+> the global, name-keyed model and migrated later. Acceptance does not itself select implementation.
+> Companion rulings: ADR 0056 is implemented in the archive-aware shape — bindings belong to logical
+> logbooks within an archive, SM Cloud addresses stable archive and logbook UUIDs, and a new archive
+> inherits no forwarding bindings; Settings → Logbooks then manages logical logbooks inside the active
+> archive, with different-call creation gated by ADR 0056; contesting gets its own ADR after those
+> identities and routing boundaries are settled. Execution order ruled the same day: alpha.3 acceptance
+> (retire B1-01) → W-0010 outcome 9 → the archive programme (identity/adoption, safe catalogue and
+> provisioning, attended restart activation) → Settings → Logbooks on the active-archive model →
+> contest mode, scoring, export and different-call operation. The three ruled W-0012 slices stay
+> independent of this chain.
 
 ## Context
 

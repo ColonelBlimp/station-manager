@@ -97,6 +97,37 @@ implementation commitment.
   than bolted onto the Logbooks section. Recorded as the **contesting design thread**: W-0011 owns the
   contest-mode ruling, this inventory owns definitions/scoring/export, and the different-call case
   binds the two through ADR 0056. Not selected; needs its own dossier or ADR before code.
+  **Correction, same day (coder):** the morning assessment "no per-logbook or per-contest database
+  files" was written without two records that exist: **ADR 0071** (Proposed, 2026-08-17: physical
+  QSO archives, one SQLite file each, UUID-identified, catalogued in `config.json`, create online,
+  restart-to-switch through `POST /v1/restart`, forwarding decided per archive) and the **operator
+  requirement of 2026-09-12 in W-0012** ("selectable and creatable data files … logical logbooks
+  inside one file are not the ask"; forwarding OFF for a new file, SM Cloud must name its own cloud
+  logbook or stay disabled, enrichment cache shared in `reference.db`, alternatives A restart-switch /
+  B in-process swap, A recommended). Those records answer the objections raised here (queue and
+  transaction integrity are per file, not split; the cache is shared). What the operator conceded
+  today — history is lost to a new file — is the trade ADR 0071 makes deliberately for isolation and
+  portability, and W-0012's entry notes "files give isolation and portability, logbooks give callsign
+  identity — both, files first". The 2026-09-19 rulings above (Settings → Logbooks first slice) stand
+  as ruled, but the operator should re-decide the ORDER with ADR 0071 in view: files first as the
+  2026-09-12 entry recommends, or logbooks first as ruled today. Unresolved; flagged to the operator.
+  **Ruled 2026-09-19 (operator, correction accepted): FILES FIRST.** ADR 0071 moved to Accepted with a
+  dated files-first decision (acceptance does not select implementation). Physical archives and stable
+  archive/logbook identity precede the Settings → Logbooks implementation, so `default_logbook_id`,
+  the SM Cloud identity and the ADR 0056 bindings are built once against the archive model. The
+  earlier Logbooks rulings stand: when built, Settings → Logbooks manages logical logbooks inside the
+  active archive; different-call creation stays gated by ADR 0056, which is implemented in the
+  archive-aware shape (bindings on logical logbooks within an archive; SM Cloud addressing stable
+  archive and logbook UUIDs; a new archive inherits no bindings — ADR 0056 dated update). Contesting
+  gets its own ADR after those identities and routing boundaries are settled. **Execution order:**
+  (1) complete alpha.3 acceptance and retire B1-01; (2) W-0010 outcome 9 — its failed-versus-waiting
+  behaviour and the preserved QRZ fixture remain valid within an archive-local queue; (3) the ADR
+  0071 archive programme — identity/adoption, safe catalogue and provisioning, then attended restart
+  activation; (4) Settings → Logbooks against the active-archive model; (5) contest mode, scoring,
+  export and different-call operation on that foundation. The three ruled W-0012 slices (landing
+  preference, "CQ run" header, Excel export) remain independent post-freeze commits outside the
+  archive/data-model chain; W-0002 and W-0020 remain validation-only. `docs/backlog.md` carries the
+  order; each of (3)–(5) opens its own dossier when selected.
 
 ## Gates
 
