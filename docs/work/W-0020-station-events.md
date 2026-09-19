@@ -313,6 +313,9 @@ reintroduces the stall on a safety path).
   marked as the record). `docs/architecture.md` gains the ownership row for `internal/stationevents`
   + the recorder and the state row for the durable `operator_event` table. Backlog entry and capsule
   updated. No code; no RF.
+- 2026-09-19 — **deployed.** Station on `2.0.0-alpha.2-124-gd90815c6`; `GET /v1/version` reports schema
+  version 9, not dirty — migration 0009 applied on the daemon's first start. AC2 evidence (the first real
+  alarm rows read on the page) now gathers passively. No RF.
 
 ## References
 
