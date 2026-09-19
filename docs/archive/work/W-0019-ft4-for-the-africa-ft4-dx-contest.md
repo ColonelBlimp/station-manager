@@ -1,6 +1,6 @@
 # W-0019 — FT4 for the Africa FT4 DX Contest
 
-**Status:** Open — slices 1–5 shipped and deployed; gates G1, G2 (AC7 waived for the contest) and G4 met 2026-09-11; G3 waived for the contest, instrumented dummy-load measurement scheduled after the weekend; contest Saturday
+**Status:** Completed 2026-09-19 — the contest was worked from Station Manager (51 QSOs, log submitted); gates G1, G2 and G4 met; G3 and AC7 **waived for closure, not passed** (operator ruling 2026-09-19, recorded under Open rulings); the same-band/profile repeat ruling built 2026-09-13.
 **Selected:** 2026-09-10
 **Outcome:** The operator works the Africa FT4 DX Contest (Saturday 2026-09-12, 15:00–18:00 UTC, 80/40/20 m)
 from Station Manager: FT4 decodes appear in Band Activity on the contest dial frequencies, an operator-initiated
@@ -9,7 +9,12 @@ logged once as ADIF's `MODE=MFSK SUBMODE=FT4` pair (ruling 2026-09-10), with the
 reach the forwarders and SM Cloud through the existing paths. The daemon returns to FT8 without a restart.
 
 `W-0019` is an immutable identity. Its status may change, while priority and ranked position live only in
-[`docs/backlog.md`](../backlog.md).
+[`docs/backlog.md`](../../backlog.md).
+
+Closed 2026-09-19. AC1–AC6 were met on air (record entries 34–37); AC7 and G3 end waived with the operator's
+recorded reason below, and the dummy-load measurement is **not scheduled**. Every gate outcome, the contest runbook
+and the repeat-hold ruling stand in this record; the two unruled finer points (an FT4 boot default; non-contest FT4
+dial defaults) re-enter through the dogfood inbox if ever wanted. Archived from `docs/work/` on closure.
 
 ## Why this item exists
 
@@ -120,16 +125,16 @@ not need the FT4 decoder and can land now; slice 2 waits for the tagged go-ft8 r
   nominal-start check from ADR 0080) and AC7 measured. RX only; no rig command beyond the operator's own tuning.
   **Met 2026-09-11 with AC7 waived** (record entry 34: 1,574 decodes over 166 slots in 30 min, DT median +0.1 s /
   p95 +0.6 s, 94 % within ±0.5 s, no skipped slot). AC7 **waived for this contest** (operator ruling 2026-09-11):
-  residual risk is the unmeasured live decode p95 (logged only at debug level); the waiver expires with the
-  post-contest instrumentation window that measures it.
+  residual risk is the unmeasured live decode p95 (logged only at debug level); that instrumentation window was
+  never opened — **waived for closure 2026-09-19**, not passed (ruling under Open rulings).
 - **G3 — keyed test.** One operator-agreed transmission into a dummy load, audio-only first, then RF; per-occasion
   agreement as always. Records the slot-close-to-first-audio latency (sequencer decision → PTT → first PCM sample),
   which the admission policy depends on, alongside the decode time from AC7. **Waived for this contest, not
   passed** (operator ruling 2026-09-11): the run went straight to air (record entry 35: 127 successful live
   rungs, keyed 5,439–5,472 ms for a 5,039 ms waveform, 0 failures, two transient TX alarms cleared within the
   second) — strong functional evidence, but the dummy-load / audio-first procedure and the decision → PTT →
-  first-PCM-sample latency remain outstanding; the instrumented dummy-load measurement is scheduled after the
-  weekend.
+  first-PCM-sample latency remain unmeasured. The instrumented dummy-load measurement was **not scheduled**:
+  **waived for closure 2026-09-19**, not passed (ruling under Open rulings).
 - **G4 — first QSO.** Operator-initiated; the record entry names the partner, band and slot parity. **Met
   2026-09-11:** HB9AKE, 20 m, odd parity, 17:40:22Z — the first of 43 in the run (record entry 35), each filed
   `MODE=MFSK SUBMODE=FT4` and forwarded to ClubLog, QRZ and SM Cloud without a failure.
@@ -165,10 +170,24 @@ operator's pCloud Documents. **Submitted by the operator 2026-09-13** by e-mail 
   + 0.660 s (the slice 1 round trip measured DT ≈ + 0.155 s). FT8 is not moved to + 0.340 s during W-0019; that is a
   separate post-contest behaviour change requiring its own evidence.
 - AC7's 1.0 s decode budget is accepted as the initial gate; the keyed latency recorded at G3 may tighten or relax
-  the admission edge.
+  the admission edge. Moot at closure: G3 was never measured, and the 2026-09-19 waiver below forbids citing it for
+  any admission-edge or timing change.
 - Ruled 2026-09-11: AC7 and G3 are WAIVED for this contest, not passed — AC7's residual risk is the unmeasured
   live decode p95, G3's the unmeasured decision → PTT → first-PCM latency and the untaken dummy-load / audio-first
-  procedure; both expire with the instrumented measurements scheduled after the weekend.
+  procedure; both expire with the instrumented measurements scheduled after the weekend. Superseded 2026-09-19:
+  the measurements were not taken and are not scheduled.
+- **Ruled 2026-09-19 (closure): G3 and AC7 waived for closure, not passed; the dummy-load measurement is not
+  scheduled.** The operator's recorded reason, verbatim:
+
+  > 2026-09-19 — G3 and AC7 waived for closure, not passed. Their remaining measurements would now be diagnostic
+  > rather than release-protective: live operation produced 1,574 decodes over 166 slots before the contest and
+  > 2,943 over 595 slots during it, plus 585 successful keyed rungs across the validation and contest runs, 94
+  > completed FT4 QSOs, stable keyed durations, and no TX failures. The synthetic six-signal decoder result of
+  > 26.5 ms also shows substantial—but non-live—headroom against AC7's 1.0 s budget. A post-contest dummy-load
+  > run cannot restore G3's original audio-first-before-RF purpose after extensive successful on-air use.
+  > Residual uncertainty remains: live decode-runtime p95 and decision→PTT→first-PCM latency were not directly
+  > measured. This waiver must not be cited to change the +2.0 s admission edge or other FT timing; any such
+  > change, or a timing-related field defect, requires fresh instrumentation and evidence.
 - Ruled 2026-09-10: an FT4 exchange is filed as ADIF's `MODE=MFSK SUBMODE=FT4` pair (ADIF 3.1.5 Submode
   Enumeration); the embedded catalogue, which had promoted FT4, FST4, FST4W, JS8 and Q65 to main modes, was
   corrected as a separate commit before the contest gates (`8701a6de`).
@@ -197,8 +216,10 @@ operator's pCloud Documents. **Submitted by the operator 2026-09-13** by e-mail 
   station reached selection while one was held; every candidate is now classified and a further repeat is
   skipped (`repeat_while_another_held`) until the hold resolves — test H8 (two repeats in one batch, a repeat in
   a later slot, an unworked station still through).
-- Whether FT4 is a boot default later (`ft8.mode`), or stays runtime-only.
-- Which non-contest bands get an FT4 default dial, and from which citation.
+- Whether FT4 is a boot default later (`ft8.mode`), or stays runtime-only. Not ruled at closure; runtime-only
+  stands until a request enters through the inbox.
+- Which non-contest bands get an FT4 default dial, and from which citation. Not ruled at closure; the three cited
+  contest bands remain the only defaults.
 
 ## Evidence
 
@@ -245,4 +266,7 @@ operator's pCloud Documents. **Submitted by the operator 2026-09-13** by e-mail 
   them or to their full-length repeats), 17 opening rungs deferred past the 2.0 s window (fire request 2.35–6.61 s
   into our slot); two transient TX alarms; decodes 2,943 over 595 slots, DT median +0.1 / p95 +0.5 s. Same-band
   dupe gate absent (ruling above). G3/AC7 still unmeasured.
+- 2026-09-19 — closure: G3 and AC7 waived, not passed, on the operator's recorded reason (Open rulings); no
+  dummy-load run scheduled; the repeat-hold ruling built 2026-09-13 (`76e28cb7`, `c3b5b8b3`, `82969cfd`) and on
+  air since `alpha.2-82`/`alpha.2-90`. Dossier archived; W-0019 leaves the backlog.
 - Contest rules: 2026 SARL Contest Manual v1.1, "The Africa FT4 DX Contest", pp. 45–46.

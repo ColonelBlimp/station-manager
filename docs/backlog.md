@@ -35,12 +35,11 @@ re-enrichment generation race) are all closed (2026-08-22).
 
 Open one workstream per active focus.
 
-1. **W-0019 · OPEN — [FT4 for the Africa FT4 DX Contest](work/W-0019-ft4-for-the-africa-ft4-dx-contest.md).** Selected 2026-09-10 for Saturday 2026-09-12 15:00–18:00 UTC; ADR 0080; go-ft8 v0.9.0 met gate G1; slices 1–5 shipped 2026-09-11; contest worked 2026-09-12 (51 QSOs, record entry 37); G2/G4 met, AC7/G3 waived until the post-contest measurements; close-out awaits those and the same-band dupe ruling. Keyed testing and the first QSO stay per-occasion operator gates; the fallback is WSJT-X with manual entry.
-2. **W-0002 · validation gate · OPEN — [Validate the reduced FT8 type-4 ladder on air](work/W-0002-ft8-type4-on-air-validation.md).** Confirm one operator-initiated completed exchange with a real nonstandard station; RF action always requires agreement for that occasion.
-3. **W-0008 · OPEN — [Harden audited contract boundaries](work/W-0008-harden-audited-contract-boundaries.md).** Ordered persistence, configuration, API-wire, and frontend-wire correctness slices.
-4. **W-0010 · OPEN — [Improve forwarding, data, and synchronization reliability](work/W-0010-forwarding-data-and-sync-reliability.md).** Token rotation, duplicate-QSO resolution, legal bulk backfill, idempotent outcomes, and bounded reconciliation.
-5. **W-0012 · OPEN — [Complete routed operator-experience follow-ups](work/W-0012-operator-experience-followups.md).** UI, map, onboarding, and diagnostic improvements not owned by W-0004.
-6. **W-0020 · SELECTED 2026-09-14 — [Station Events](work/W-0020-station-events.md).** Replace the header
+1. **W-0002 · validation gate · OPEN — [Validate the reduced FT8 type-4 ladder on air](work/W-0002-ft8-type4-on-air-validation.md).** Confirm one operator-initiated completed exchange with a real nonstandard station; RF action always requires agreement for that occasion.
+2. **W-0008 · OPEN — [Harden audited contract boundaries](work/W-0008-harden-audited-contract-boundaries.md).** Ordered persistence, configuration, API-wire, and frontend-wire correctness slices.
+3. **W-0010 · OPEN — [Improve forwarding, data, and synchronization reliability](work/W-0010-forwarding-data-and-sync-reliability.md).** Token rotation, duplicate-QSO resolution, legal bulk backfill, idempotent outcomes, and bounded reconciliation.
+4. **W-0012 · OPEN — [Complete routed operator-experience follow-ups](work/W-0012-operator-experience-followups.md).** UI, map, onboarding, and diagnostic improvements not owned by W-0004.
+5. **W-0020 · SELECTED 2026-09-14 — [Station Events](work/W-0020-station-events.md).** Replace the header
    notification slide-over with a full-page Station Events section; the alarm family (TX/drive alarm
    raised and cleared, non-operator disarm, abnormal exchange termination) joins the `operator_event`
    store under ADR 0076's typed-metadata rule; retention 500 per category; typed facts through a
@@ -48,7 +47,7 @@ Open one workstream per active focus.
    built 2026-09-18 (migration 0009, recorder, producing boundaries, `GET /v1/station-events`, the
    page, docs and manual); close-out awaits the passive AC2 evidence — the first real alarm rows on the
    page — and the operator's acceptance.
-7. **W-0018 · OPEN — [Bring the embedded manual to release readiness](work/W-0018-bring-the-embedded-manual-to-release-readiness.md).** Page-by-page standing pass during dogfooding and a release gate before a public release; not a blocker for the next internal candidate (alpha.2 Findings #9, #10, #13, #14, #15).
+6. **W-0018 · OPEN — [Bring the embedded manual to release readiness](work/W-0018-bring-the-embedded-manual-to-release-readiness.md).** Page-by-page standing pass during dogfooding and a release gate before a public release; not a blocker for the next internal candidate (alpha.2 Findings #9, #10, #13, #14, #15).
 
 ## P3 — deferred or trigger-bound
 

@@ -1,11 +1,20 @@
 ---
 number: 0080
 title: Add FT4 as a second timing and modulation profile of the FT8 subsystem
-status: Proposed
+status: Accepted (operator-ratified 2026-09-19; implemented by W-0019)
 date: 2026-09-10
 ---
 
 # 0080 — Add FT4 as a second timing and modulation profile of the FT8 subsystem
+
+> **Dated update (2026-09-19, W-0019 closed).** The design shipped as W-0019 slices 1–4 (2026-09-10/11),
+> worked the Africa FT4 DX Contest on 2026-09-12 (51 QSOs; 94 completed FT4 QSOs across the validation and
+> contest runs) and the dossier is archived at
+> [`docs/archive/work/W-0019-ft4-for-the-africa-ft4-dx-contest.md`](../archive/work/W-0019-ft4-for-the-africa-ft4-dx-contest.md).
+> Gates G1, G2 and G4 were met; **G3 (dummy-load keyed test) and AC7 (live decode p95) were waived for closure,
+> not passed** — the operator's recorded reason is in the dossier. That waiver must not be cited to change the
+> + 2.000 s admission edge or any FT timing; such a change needs fresh instrumentation. The ADR is accepted as
+> the shipped design with those evidence limits preserved.
 
 ## Context
 
@@ -223,8 +232,8 @@ would add a fourth item; if the list grows past that, group them then.
   (external library and live pipeline), ADR 0029/0030/0032 (transmit roadmap, PTT controller,
   synchronised truncate), ADR 0033 (caller-side sequencing), ADR 0067 (one-rule run model).
 - `docs/ft8.md` (subsystem reference), `internal/ft8/AGENTS.md` (invariants and the
-  add-a-mode checklist), `docs/work/W-0019-ft4-for-the-africa-ft4-dx-contest.md` (plan, gates and
-  evidence).
+  add-a-mode checklist), `docs/archive/work/W-0019-ft4-for-the-africa-ft4-dx-contest.md` (plan, gates and
+  evidence; archived on closure 2026-09-19).
 - Franke, Somerville, Taylor, "The FT4 and FT8 Communication Protocols", QEX July/August 2020,
   <https://wsjt.sourceforge.io/FT4_FT8_QEX.pdf>.
 - 2026 SARL Contest Manual v1.1 (2025-12-15), "The Africa FT4 DX Contest", pp. 45–46,
