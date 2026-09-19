@@ -393,7 +393,9 @@ Known: upgrading from 2.0.0-alpha.1 to alpha.2 with a `qrzcq` forwarder
 in the config (enabled or not) refuses to start with `type "qrzcq" does
 not support action "update"`, because alpha.1 wrote the old all-actions
 default. Set that forwarder's `action_filter` to `["insert"]` (or remove
-the key) and start again; the next release reconciles this shape itself.
+the key) and start again. From alpha.3 the daemon reconciles exactly that
+alpha.1-written shape itself at load (and `smd config-check` shows the
+file loading); any other unsupported action is still refused.
 
 ---
 

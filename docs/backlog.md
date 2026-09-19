@@ -25,7 +25,8 @@ on-air validation gate in W-0002.
    Finding #6, B1-01 WAIVED until the next candidate). Narrow by ruling: only a `qrzcq` forwarder whose stored
    filter is exactly alpha.1's ordered `["insert","update","delete"]` default becomes the literal
    `["insert"]`; explicit unsupported actions stay rejected. Tests prove both cases. Built 2026-09-06;
-   ships with the next candidate, which retires the B1-01 waiver. Evidence in the W-0008 dossier.
+   in the **alpha.3 candidate** (`333427ea`, tag `v2.0.0-alpha.3`, frozen 2026-09-19), whose acceptance
+   retires the B1-01 waiver ([record](reports/dogfood-acceptance-v2.0.0-alpha.3.md)). Evidence in the W-0008 dossier.
 
 Conditional: alpha.2 Finding #7 (false TX alarm at bridge open, W-0011) becomes P1 #2 once passively reproduced.
 W-0007's four findings (equal-version SM Cloud conflict, partial station baseline, concurrent QSO delete,

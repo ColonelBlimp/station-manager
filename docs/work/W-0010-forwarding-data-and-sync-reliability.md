@@ -44,6 +44,10 @@ intent and converge without routine full-log churn or forbidden third-party API 
    `qrz.buildForm`) is today a NEW terminal failure rather than a no-op — the worker passes the empty id
    through by design so field-keyed deletes (ClubLog) stay reachable, so the skip belongs in the id-keyed
    forwarder, or at enqueue when that forwarder holds no successful insert for the QSO.
+   Fixture and scope, ruled 2026-09-19: the terminal `failed` qrz insert of 2026-08-06 (inbox 2026-09-12,
+   alpha.2 Finding #19) is preserved untouched — not retried, not cleared — as this outcome's regression
+   fixture; the work must distinguish failed from waiting items, identify the QSO, recover from
+   authentication failures, and make a QRZ deletion without an upstream ID a no-op.
 
 ## Verification boundary
 

@@ -150,8 +150,11 @@ not compete with the app-shell, notification-history, or UI-cohesion dossiers.
   the Dashboard" as the leave-the-workspace example now say the Logbook. Tests: router landing (bare
   root → last-used mode; unknown path → Operate), sidebar nav without a Dashboard; the boot boundary
   and first-run title tests unchanged and green. Reversion proof: the three new tests fail on the
-  previous router and sidebar. The landing-view preference (option set Phone/CW, FT8, FT4,
-  last-used; config versus browser) stays open.
+  previous router and sidebar. The landing-view preference was **ruled 2026-09-19:** a browser-local
+  preference (like the rail choice, no `config.json` schema change) with the option set Last used
+  (default), Phone/CW, FT8 and FT4; the first-use fallback stays Phone/CW; it applies only to the bare
+  root — a deep link or bookmark and the first-run welcome gate take precedence. Post-freeze slice; not
+  part of the alpha.3 candidate.
 - **The contacts map inside the shell, with a pop-out (operator question, 2026-09-14; not
   selected):** "can the map be a part of the SPA rather than its own tab and allow FT8, FT4 to
   continue working — indeed, Phone/CW to retain its settings — i.e. the Op is running Phone/CW,
@@ -226,6 +229,18 @@ not compete with the app-shell, notification-history, or UI-cohesion dossiers.
 - **Onboarding/preferences:** reduce non-Linux first-run friction; add download-site install content
   from the canonical install guide; keep beginner help, profiles, and `default_logbook.id` wiring
   deferred until their consuming workflow exists.
+
+- **Excel export of a session (inbox 2026-09-10; ruled 2026-09-19; post-freeze slice):** produce a
+  genuine `.xlsx` from the same fully stored session QSOs the ADIF export uses, with stable columns,
+  one QSO per row, and no forwarding or e-mail side effects. Acceptance criterion to ratify: the
+  workbook opens in a spreadsheet application with one header row and one row per stored session QSO,
+  and its row count equals the ADIF export's record count for the same session. Nearest confusable
+  outcome: a CSV renamed `.xlsx`, or a sheet built from the browser's display list rather than the
+  stored rows. Not part of the alpha.3 candidate.
+- **Run-role header wording (inbox 2026-09-14; ruled 2026-09-19; post-freeze slice):** the Operate
+  header's run role reads "CQ run" instead of "Calling CQ" (the role holds for the whole run, ADR
+  0067, and read as "a CQ is being keyed now"); the active button keeps "Calling CQ…". Nearest
+  confusable outcome: the header changing per rung. Not part of the alpha.3 candidate.
 
 ## Built follow-up — the contacts map rides the shell's event stream (inbox 2026-09-11 follow-up (a), built 2026-09-14)
 

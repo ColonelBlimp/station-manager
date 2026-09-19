@@ -316,6 +316,9 @@ reintroduces the stall on a safety path).
 - 2026-09-19 — **deployed.** Station on `2.0.0-alpha.2-124-gd90815c6`; `GET /v1/version` reports schema
   version 9, not dirty — migration 0009 applied on the daemon's first start. AC2 evidence (the first real
   alarm rows read on the page) now gathers passively. No RF.
+- 2026-09-19 — **passive page check PASSED (operator, deployed `alpha.2-124`):** the page rendered, the
+  Alarms and Error filters engaged, and their empty states were correct. No real alarm rows existed, so
+  AC2 remains open pending naturally occurring evidence.
 
 ## References
 
