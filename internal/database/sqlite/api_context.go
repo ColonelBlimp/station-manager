@@ -2933,11 +2933,11 @@ func (s *Service) FetchQsoHistoryByUUIDWithContext(ctx context.Context, qsoUUID 
 	return out, nil
 }
 
-// FetchPriorUpstreamIDWithContext returns the upstream_id recorded on the most
-// recent successful UPSTREAM-CREATING action (insert OR update) for the given
-// (qso_id, forwarder_name) pair. The QRZ delete forwarder needs this value to
-// populate LOGIDS on the DELETE call — upstream's delete endpoint identifies
-// records by its own id, not by our QSO id.
+// FetchPriorUpstreamIDWithContext returns the most recently modified known
+// upstream_id recorded by an UPSTREAM-CREATING action (insert OR update) for
+// the given (qso_id, forwarder_name) pair. The QRZ delete forwarder needs this
+// value to populate LOGIDS on the DELETE call — upstream's delete endpoint
+// identifies records by its own id, not by our QSO id.
 //
 // Both insert (ACTION=INSERT) and update (ACTION=INSERT&OPTION=REPLACE) can be
 // the action that created/owns the upstream record and returned its id. If an
@@ -2948,21 +2948,16 @@ func (s *Service) FetchQsoHistoryByUUIDWithContext(ctx context.Context, qsoUUID 
 // created upstream_id, so including them would be harmless but pointless; they
 // are excluded by the action filter for clarity.)
 //
-// UNIQUE(qso_id, forwarder_name, action) means at most one insert and one
-// update row exist per pair; we want the one whose SUCCESS is most recent.
-// Ordering is by `modified_at DESC, id DESC`, NOT created_at: created_at is set
-// once at insert and never mutated, but InsertQsoUploadTx re-arms an existing
-// row on conflict without touching its created_at, and the success transition
-// bumps modified_at. So a re-armed update can be the latest successful upstream
-// write while carrying an older created_at than the insert row — ordering by
-// created_at would then hand a stale LOGID to the delete. modified_at tracks the
-// last state transition; id DESC breaks ties (review 2026-06-19 M1).
+// Do not require status='uploaded'. InsertQsoUploadTx deliberately preserves
+// upstream_id when it re-arms a previously successful row; that retained id is
+// still evidence of an existing upstream record while the new attempt is
+// pending or after it fails. Ignoring it can make a later delete falsely look
+// like an id-less no-op. UNIQUE(qso_id, forwarder_name, action) means at most
+// one insert and one update row exist per pair. Ordering is by
+// `modified_at DESC, id DESC`; id DESC breaks ties (review 2026-06-19 M1).
 //
 // Returns:
-//   - ("", nil) when no matching row exists. The worker reclassifies
-//     this as a terminal failure because a delete without any prior
-//     successful upstream-creating action is structurally unresolvable —
-//     retrying cannot conjure an upstream id.
+//   - ("", nil) when no matching row with a known upstream id exists.
 //   - (upstreamID, nil) on the happy path.
 //   - ("", err) only for infrastructure failures (ctx cancel, DB error).
 func (s *Service) FetchPriorUpstreamIDWithContext(
@@ -2990,7 +2985,6 @@ func (s *Service) FetchPriorUpstreamIDWithContext(
 		models.QsoUploadWhere.QsoID.EQ(qsoID),
 		models.QsoUploadWhere.ForwarderName.EQ(forwarderName),
 		models.QsoUploadWhere.Action.IN([]string{action.Insert.String(), action.Update.String()}),
-		models.QsoUploadWhere.Status.EQ(status.Uploaded.String()),
 		models.QsoUploadWhere.UpstreamID.IsNotNull(),
 		qm.OrderBy("modified_at DESC, id DESC"),
 		qm.Limit(1),
@@ -3003,11 +2997,9 @@ func (s *Service) FetchPriorUpstreamIDWithContext(
 	}
 
 	if !row.UpstreamID.Valid || row.UpstreamID.String == "" {
-		// Defensive: the IsNotNull filter plus the mark-success path
-		// should make this unreachable, but if an older row somehow
-		// has status=uploaded and no upstream_id, treat it as "no
-		// match" rather than returning a useless empty string as if
-		// it were real.
+		// Defensive: the IsNotNull filter plus the mark-success path should
+		// make this unreachable, but treat an empty legacy value as "no
+		// match" rather than returning it as if it were a usable id.
 		return "", nil
 	}
 	return row.UpstreamID.String, nil

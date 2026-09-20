@@ -2131,12 +2131,12 @@ func TestFetchPriorUpstreamID_IgnoresDeleteAction(t *testing.T) {
 	}
 }
 
-func TestFetchPriorUpstreamID_IgnoresPendingAndFailed(t *testing.T) {
+func TestFetchPriorUpstreamID_IgnoresRowsWithoutUpstreamID(t *testing.T) {
 	svc := testService(t)
 	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
 	qsoID, _ := svc.InsertQso(validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845"))
 
-	// A pending insert row shouldn't match — no upstream_id yet.
+	// A pending insert row without an upstream_id shouldn't match.
 	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Insert)
 
 	got, err := svc.FetchPriorUpstreamIDWithContext(context.Background(), qsoID, "qrz")
@@ -2147,8 +2147,7 @@ func TestFetchPriorUpstreamID_IgnoresPendingAndFailed(t *testing.T) {
 		t.Fatalf("got %q, want empty (pending row must not match)", got)
 	}
 
-	// A failed insert row shouldn't match either — even though the
-	// row exists, it didn't produce an upstream id.
+	// A failed insert row without an upstream_id shouldn't match either.
 	claimed, _ := svc.ClaimPendingUploadsWithContext(context.Background(), "qrz", 1)
 	_ = svc.MarkUploadFailedWithContext(context.Background(), claimed[0].ID, "boom")
 
@@ -2158,6 +2157,53 @@ func TestFetchPriorUpstreamID_IgnoresPendingAndFailed(t *testing.T) {
 	}
 	if got != "" {
 		t.Fatalf("got %q, want empty (failed row must not match)", got)
+	}
+}
+
+// A queue re-arm deliberately preserves upstream_id: it remains evidence that
+// this QSO exists upstream even while the current attempt is pending or failed.
+// A later delete must still use that known id rather than falsely settle as an
+// id-less no-op (clean-room review of c7b42945).
+func TestFetchPriorUpstreamID_FindsRetainedIDAfterRearmFailure(t *testing.T) {
+	svc := testService(t)
+	ctx := context.Background()
+	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
+	qsoID, _ := svc.InsertQso(validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845"))
+
+	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Insert)
+	claimed, _ := svc.ClaimPendingUploadsWithContext(ctx, "qrz", 1)
+	if err := svc.MarkUploadSuccessWithContext(ctx, claimed[0].ID, "retained-logid"); err != nil {
+		t.Fatalf("mark initial success: %v", err)
+	}
+
+	// Re-enqueue the same insert: the row returns to pending but deliberately
+	// retains the LOGID from its earlier successful upload.
+	tx, cancel, err := svc.BeginTxContext(ctx)
+	if err != nil {
+		t.Fatalf("begin re-arm: %v", err)
+	}
+	defer cancel()
+	if err = svc.InsertQsoUploadTx(ctx, tx, qsoID, action.Insert, "qrz", "qrz", origin.Manual); err != nil {
+		t.Fatalf("re-arm insert: %v", err)
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatalf("commit re-arm: %v", err)
+	}
+
+	// Model the worker finding the QSO deleted before this re-armed insert ran.
+	// The current attempt fails, but the earlier accepted record still exists at
+	// QRZ and its retained LOGID remains the only safe way to delete it.
+	claimed, _ = svc.ClaimPendingUploadsWithContext(ctx, "qrz", 1)
+	if err = svc.MarkUploadFailedWithContext(ctx, claimed[0].ID, "qso soft-deleted before insert forwarded"); err != nil {
+		t.Fatalf("mark re-armed insert failed: %v", err)
+	}
+
+	got, err := svc.FetchPriorUpstreamIDWithContext(ctx, qsoID, "qrz")
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if got != "retained-logid" {
+		t.Fatalf("got %q, want retained-logid from the earlier accepted upload", got)
 	}
 }
 
