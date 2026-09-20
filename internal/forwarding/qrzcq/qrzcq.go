@@ -25,6 +25,7 @@ import (
 
 	"github.com/ColonelBlimp/station-manager/internal/adif"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/failure"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	"github.com/ColonelBlimp/station-manager/internal/securehttp"
@@ -261,6 +262,13 @@ func classifyHTTPStatus(status int) (forwarding.Result, bool) {
 	if status == http.StatusRequestTimeout || status == http.StatusTooManyRequests ||
 		(status >= 500 && status < 600) {
 		return forwarding.Result{Outcome: forwarding.OutcomeTransient, Err: err}, true
+	}
+	// 401/403 carry the credential class by HTTP semantics (RFC 9110 §15.5.2,
+	// §15.5.4). Inference, not a QRZCQ citation: its upload API documents no
+	// auth-failure status in this repository, and a JSON status other than OK
+	// stays unclassified — its message may be a credential OR a data rejection.
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		return forwarding.Result{Outcome: forwarding.OutcomeTerminal, Class: failure.Auth, Err: err}, true
 	}
 	return forwarding.Result{Outcome: forwarding.OutcomeTerminal, Err: err}, true
 }

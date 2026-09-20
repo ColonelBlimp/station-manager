@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/failure"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
@@ -132,12 +133,14 @@ func TestSubmit_ClassifiesHTTPResponses(t *testing.T) {
 		status  int
 		body    string
 		outcome forwarding.Outcome
+		class   forwarding.FailureClass
 	}{
 		{name: "request timeout", status: http.StatusRequestTimeout, outcome: forwarding.OutcomeTransient},
 		{name: "rate limit", status: http.StatusTooManyRequests, outcome: forwarding.OutcomeTransient},
 		{name: "server error", status: http.StatusBadGateway, outcome: forwarding.OutcomeTransient},
 		{name: "bad request", status: http.StatusBadRequest, outcome: forwarding.OutcomeTerminal},
-		{name: "unauthorized", status: http.StatusUnauthorized, outcome: forwarding.OutcomeTerminal},
+		{name: "unauthorized", status: http.StatusUnauthorized, outcome: forwarding.OutcomeTerminal, class: failure.Auth},
+		{name: "forbidden", status: http.StatusForbidden, outcome: forwarding.OutcomeTerminal, class: failure.Auth},
 		{name: "malformed success", status: http.StatusOK, body: `not json`, outcome: forwarding.OutcomeTerminal},
 		{name: "API rejection", status: http.StatusOK, body: `{"status":"ERROR","message":"bad credentials"}`, outcome: forwarding.OutcomeTerminal},
 		{name: "queued", status: http.StatusOK, body: `{"status":"OK","message":"DATA_QUEUED"}`, outcome: forwarding.OutcomeSuccess},
@@ -155,6 +158,9 @@ func TestSubmit_ClassifiesHTTPResponses(t *testing.T) {
 			}
 			if tc.outcome != forwarding.OutcomeSuccess && res.Err == nil {
 				t.Fatal("non-success result has nil Err")
+			}
+			if res.Class != tc.class {
+				t.Fatalf("class = %q, want %q", res.Class, tc.class)
 			}
 		})
 	}

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/failure"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
@@ -165,6 +166,9 @@ func TestSubmit_Insert_HTTP401_IsTerminal(t *testing.T) {
 	if res.Outcome != forwarding.OutcomeTerminal {
 		t.Fatalf("outcome = %q, want terminal on 401", res.Outcome)
 	}
+	if res.Class != failure.Auth {
+		t.Fatalf("class = %q, want auth — a 401 is a rejected credential, re-armed at restart", res.Class)
+	}
 }
 
 // ---------- body classification (insert) ----------
@@ -222,6 +226,25 @@ func TestSubmit_Insert_AUTH_IsTerminal(t *testing.T) {
 	}
 	if !strings.Contains(res.Err.Error(), "authentication rejected") {
 		t.Fatalf("err = %q, want 'authentication rejected' substring", res.Err.Error())
+	}
+	if res.Class != failure.Auth {
+		t.Fatalf("class = %q, want auth — RESULT=AUTH is a rejected credential", res.Class)
+	}
+}
+
+// A data rejection is terminal but NOT a credential failure: a new key must
+// never make it retryable (W-0010 outcome 9's nearest confusable outcome).
+func TestSubmit_Insert_FAIL_HasNoFailureClass(t *testing.T) {
+	var rec captured
+	srv := newTestServer(t, http.StatusOK, "RESULT=FAIL&REASON=Wrong+station+callsign", &rec)
+	fwd := fwdAt(srv.URL, "key")
+
+	res := fwd.Submit(context.Background(), sampleQso(), action.Insert, "")
+	if res.Outcome != forwarding.OutcomeTerminal {
+		t.Fatalf("outcome = %q, want terminal on FAIL", res.Outcome)
+	}
+	if res.Class != "" {
+		t.Fatalf("class = %q, want empty — a data rejection is not a credential failure", res.Class)
 	}
 }
 

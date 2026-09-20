@@ -74,9 +74,12 @@ Slices, each its own commit:
    cannot safely choose among IDs retained across re-arms, so the lookup follows immutable success
    order and only treats a genuinely absent ID as the no-op ([ADR 0081](../decisions/0081-preserve-upstream-id-success-order.md)).
 2. **Durable failure class.** `forwarding.Result` gains a terminal `Class` (`auth` for a rejected
-   credential: QRZ `RESULT=AUTH`/401, SM Cloud 401, ClubLog and QRZCQ auth rejections); the worker
-   stores it in a new nullable `qso_upload.failure_class` column (log migration 0011). Rows failed
-   before the column read NULL.
+   credential: QRZ `RESULT=AUTH`/401, SM Cloud 401, ClubLog 403 and its breaker, QRZCQ 401/403 by
+   HTTP semantics — an inference, no QRZCQ citation); the worker stores it in the nullable
+   `qso_upload.failure_class` column (log migration 0011, CHECK-enumerated like `origin`); any re-arm
+   clears it; `GET /v1/qso/{uuid}/uploads` carries it as `failure_class`. Rows failed before the
+   column read NULL — the migration backfills nothing (ruling (d)). Built 2026-09-20; sqlboiler
+   models regenerated from a head-migrated scratch database.
 3. **Boot re-arm.** At worker start, after the orphan sweep, each ENABLED forwarder's
    `failed` rows with `failure_class = 'auth'` return to `pending` (attempts reset), logged with the
    count. A still-bad credential fails them once more per restart — bounded, never a spin.

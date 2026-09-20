@@ -39,6 +39,7 @@ type QsoUpload struct {
 	UpstreamID           null.String `boil:"upstream_id" json:"upstream_id,omitempty" toml:"upstream_id" yaml:"upstream_id,omitempty"`
 	Origin               string      `boil:"origin" json:"origin" toml:"origin" yaml:"origin"`
 	UpstreamIDGeneration null.Int64  `boil:"upstream_id_generation" json:"upstream_id_generation,omitempty" toml:"upstream_id_generation" yaml:"upstream_id_generation,omitempty"`
+	FailureClass         null.String `boil:"failure_class" json:"failure_class,omitempty" toml:"failure_class" yaml:"failure_class,omitempty"`
 
 	R *qsoUploadR `boil:"-" json:"-" toml:"-" yaml:"-"`
 	L qsoUploadL  `boil:"-" json:"-" toml:"-" yaml:"-"`
@@ -60,6 +61,7 @@ var QsoUploadColumns = struct {
 	UpstreamID           string
 	Origin               string
 	UpstreamIDGeneration string
+	FailureClass         string
 }{
 	ID:                   "id",
 	CreatedAt:            "created_at",
@@ -76,6 +78,7 @@ var QsoUploadColumns = struct {
 	UpstreamID:           "upstream_id",
 	Origin:               "origin",
 	UpstreamIDGeneration: "upstream_id_generation",
+	FailureClass:         "failure_class",
 }
 
 var QsoUploadTableColumns = struct {
@@ -94,6 +97,7 @@ var QsoUploadTableColumns = struct {
 	UpstreamID           string
 	Origin               string
 	UpstreamIDGeneration string
+	FailureClass         string
 }{
 	ID:                   "qso_upload.id",
 	CreatedAt:            "qso_upload.created_at",
@@ -110,6 +114,7 @@ var QsoUploadTableColumns = struct {
 	UpstreamID:           "qso_upload.upstream_id",
 	Origin:               "qso_upload.origin",
 	UpstreamIDGeneration: "qso_upload.upstream_id_generation",
+	FailureClass:         "qso_upload.failure_class",
 }
 
 // Generated where
@@ -168,6 +173,7 @@ var QsoUploadWhere = struct {
 	UpstreamID           whereHelpernull_String
 	Origin               whereHelperstring
 	UpstreamIDGeneration whereHelpernull_Int64
+	FailureClass         whereHelpernull_String
 }{
 	ID:                   whereHelperint64{field: "\"qso_upload\".\"id\""},
 	CreatedAt:            whereHelpertime_Time{field: "\"qso_upload\".\"created_at\""},
@@ -184,6 +190,7 @@ var QsoUploadWhere = struct {
 	UpstreamID:           whereHelpernull_String{field: "\"qso_upload\".\"upstream_id\""},
 	Origin:               whereHelperstring{field: "\"qso_upload\".\"origin\""},
 	UpstreamIDGeneration: whereHelpernull_Int64{field: "\"qso_upload\".\"upstream_id_generation\""},
+	FailureClass:         whereHelpernull_String{field: "\"qso_upload\".\"failure_class\""},
 }
 
 // QsoUploadRels is where relationship names are stored.
@@ -223,9 +230,9 @@ func (r *qsoUploadR) GetQso() *Qso {
 type qsoUploadL struct{}
 
 var (
-	qsoUploadAllColumns            = []string{"id", "created_at", "modified_at", "qso_id", "forwarder_name", "forwarder_type", "action", "status", "attempts", "last_attempt_at", "next_attempt_at", "last_error", "upstream_id", "origin", "upstream_id_generation"}
+	qsoUploadAllColumns            = []string{"id", "created_at", "modified_at", "qso_id", "forwarder_name", "forwarder_type", "action", "status", "attempts", "last_attempt_at", "next_attempt_at", "last_error", "upstream_id", "origin", "upstream_id_generation", "failure_class"}
 	qsoUploadColumnsWithoutDefault = []string{"qso_id", "forwarder_name", "forwarder_type", "origin"}
-	qsoUploadColumnsWithDefault    = []string{"id", "created_at", "modified_at", "action", "status", "attempts", "last_attempt_at", "next_attempt_at", "last_error", "upstream_id", "upstream_id_generation"}
+	qsoUploadColumnsWithDefault    = []string{"id", "created_at", "modified_at", "action", "status", "attempts", "last_attempt_at", "next_attempt_at", "last_error", "upstream_id", "upstream_id_generation", "failure_class"}
 	qsoUploadPrimaryKeyColumns     = []string{"id"}
 	qsoUploadGeneratedColumns      = []string{"id"}
 )

@@ -16,6 +16,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/database/txutil"
 	"github.com/ColonelBlimp/station-manager/internal/enums/source"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/failure"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/origin"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/status"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
@@ -2547,13 +2548,27 @@ WHERE  id = ? AND status = ?`,
 // 'failed', attempts bumped, last_error stored. Used for both an
 // OutcomeTerminal from the forwarder and an OutcomeTransient that
 // has exhausted its retry budget.
-func (s *Service) MarkUploadFailedWithContext(ctx context.Context, id int64, lastError string) error {
+//
+// class is the durable reason class (W-0010 outcome 9): failure.Auth when the
+// destination rejected the credential, so boot-time recovery can re-arm exactly
+// those rows; the empty value stores NULL ("unclassified") and is what every
+// non-credential reason — exhausted retries, malformed record, QSO gone —
+// passes. A non-empty value must parse, so a typo can never be stored as a
+// class the CHECK would also refuse.
+func (s *Service) MarkUploadFailedWithContext(ctx context.Context, id int64, lastError string, class failure.Class) error {
 	const op errors.Op = "sqlite.Service.MarkUploadFailedWithContext"
 	if err := checkService(op, s); err != nil {
 		return err
 	}
 	if id < 1 {
 		return errors.New(op).WithMsg(errMsgInvalidId)
+	}
+	var classArg any
+	if class != "" {
+		if _, err := failure.Parse(class.String()); err != nil {
+			return errors.New(op).WithErr(err)
+		}
+		classArg = class.String()
 	}
 
 	h, err := s.getOpenHandle(op)
@@ -2572,11 +2587,12 @@ func (s *Service) MarkUploadFailedWithContext(ctx context.Context, id int64, las
 	// pending so the operator's latest state is forwarded.
 	res, err := h.ExecContext(ctx, `
 UPDATE qso_upload
-SET    status     = ?,
-       attempts   = attempts + 1,
-       last_error = ?
+SET    status        = ?,
+       attempts      = attempts + 1,
+       last_error    = ?,
+       failure_class = ?
 WHERE  id = ? AND status = ?`,
-		status.Failed.String(), lastErrArg, id, status.InProgress.String())
+		status.Failed.String(), lastErrArg, classArg, id, status.InProgress.String())
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("mark upload failed")
 	}
@@ -3285,7 +3301,8 @@ func (s *Service) InsertQsoUploadTx(ctx context.Context, tx *sql.Tx, qsoId int64
 			created_at      = datetime('now'),
 			next_attempt_at = strftime('%s', 'now'),
 			last_attempt_at = NULL,
-			last_error      = NULL`
+			last_error      = NULL,
+			failure_class   = NULL`
 
 	if _, err := tx.ExecContext(ctx, q,
 		qsoId, forwarderName, forwarderType, action.String(), status.Pending.String(), org.String(),

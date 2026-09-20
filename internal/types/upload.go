@@ -20,7 +20,12 @@ type QsoUpload struct {
 	LastAttemptAt int64     `json:"last_attempt_at" boil:"last_attempt_at,bind"`
 	NextAttemptAt int64     `json:"next_attempt_at" boil:"next_attempt_at,bind"`
 	LastError     string    `json:"last_error" boil:"last_error,bind"`
-	UpstreamID    string    `json:"upstream_id" boil:"upstream_id,bind"`
+	// FailureClass is the durable reason class of a `failed` row (migration
+	// 0011): "auth" when the destination rejected the credential — re-armed
+	// once per daemon restart — or "" (stored NULL) for any other terminal
+	// reason. Orthogonal to LastError, the operator-readable text.
+	FailureClass string `json:"failure_class" boil:"failure_class,bind"`
+	UpstreamID   string `json:"upstream_id" boil:"upstream_id,bind"`
 	// Origin names what CAUSED this queue entry to exist — live logging, an
 	// import, an operator edit, a manual backfill, a stamp-sync mirror, or a
 	// reconcile repair; `legacy` for rows carried over by migration 0007.

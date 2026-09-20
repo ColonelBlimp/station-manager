@@ -45,7 +45,7 @@ func TestUploadCompletion_RowsAffectedFailureDoesNotRunZeroRowClassifier(t *test
 		{
 			name: "failed",
 			run: func(s *Service) error {
-				return s.MarkUploadFailedWithContext(context.Background(), 1, "failed")
+				return s.MarkUploadFailedWithContext(context.Background(), 1, "failed", "")
 			},
 		},
 	}

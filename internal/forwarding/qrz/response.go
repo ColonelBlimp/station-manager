@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/failure"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 )
@@ -100,10 +101,13 @@ func parseResponse(body []byte) (response, error) {
 func classifyResponse(act forwarding.Action, resp response) forwarding.Result {
 	const op errors.Op = "qrz.classifyResponse"
 
-	// AUTH short-circuits the per-action matrix.
+	// AUTH short-circuits the per-action matrix. It is QRZ's rejected-api_key
+	// answer, so the row carries the credential class: re-armed once per
+	// daemon restart, never by a data fix (W-0010 outcome 9).
 	if resp.Result == resultAuth {
 		return forwarding.Result{
 			Outcome: forwarding.OutcomeTerminal,
+			Class:   failure.Auth,
 			Err: errors.New(op).WithMsgf(
 				"QRZ authentication rejected: %s", reasonOrDefault(resp.Reason, "no reason given"),
 			),

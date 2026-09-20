@@ -303,7 +303,7 @@ func (w *Worker) processRow(ctx context.Context, row types.QsoUpload) {
 			Int64("upload_id", row.ID).
 			Str("action", row.Action).
 			Msg("forwarder: row carries unknown action string")
-		_ = w.markFailed(ctx, row, fmt.Sprintf("unknown action %q", row.Action), "")
+		_ = w.markFailed(ctx, row, fmt.Sprintf("unknown action %q", row.Action), "", "")
 		return
 	}
 
@@ -414,7 +414,7 @@ func (w *Worker) fetchQsoForAction(ctx context.Context, row types.QsoUpload, act
 		// a persist failure is logged by markFailed, and a re-arm leaves the row pending
 		// (it will forward again), so the "terminally failed" line must not run ahead of
 		// the write that makes it true.
-		if w.markFailed(ctx, row, reason, "") == dispPersisted {
+		if w.markFailed(ctx, row, reason, "", "") == dispPersisted {
 			w.logger.WarnWith().
 				Str("forwarder", w.cfg.Name).
 				Int64("upload_id", row.ID).
@@ -461,7 +461,7 @@ func (w *Worker) fetchQsoForAction(ctx context.Context, row types.QsoUpload, act
 		Int64("upload_id", row.ID).
 		Str("action", act.String()).
 		Msg("forwarder: switch reached unreachable action")
-	_ = w.markFailed(ctx, row, fmt.Sprintf("unreachable action %q", act), "")
+	_ = w.markFailed(ctx, row, fmt.Sprintf("unreachable action %q", act), "", "")
 	return types.Qso{}, true
 }
 
@@ -520,7 +520,7 @@ func (w *Worker) persistOutcome(
 		// don't trust it blindly — a nil here would store an empty last_error
 		// and emit an empty forward.failed reason (review 2026-06-05 L2).
 		cause = nonNilErr(res.Err, "forwarder reported terminal outcome without an error")
-		disp = w.markFailed(ctx, row, cause.Error(), qsoUUID)
+		disp = w.markFailed(ctx, row, cause.Error(), qsoUUID, res.Class)
 
 	case forwarding.OutcomeTransient:
 		cause = nonNilErr(res.Err, "forwarder reported transient outcome without an error")
@@ -547,7 +547,7 @@ func (w *Worker) persistOutcome(
 		}
 		ev.Msg("forwarder: returned unrecognised Outcome")
 		cause = nonNilErr(res.Err, "forwarder reported an unrecognised outcome")
-		disp = w.markFailed(ctx, row, fmt.Sprintf("unknown outcome %q: %s", res.Outcome, errText(res.Err)), qsoUUID)
+		disp = w.markFailed(ctx, row, fmt.Sprintf("unknown outcome %q: %s", res.Outcome, errText(res.Err)), qsoUUID, "")
 	}
 
 	// Reachability transition (L11). An unreachable outcome marks the destination
@@ -727,7 +727,7 @@ func (w *Worker) markTransientFromForwarder(
 ) (string, disposition) {
 	nextAttempts := row.Attempts + 1
 	if nextAttempts >= int64(w.cfg.Retry.MaxAttempts) {
-		return outcomeExhausted, w.markFailed(ctx, row, errText(cause), qsoUUID)
+		return outcomeExhausted, w.markFailed(ctx, row, errText(cause), qsoUUID, "")
 	}
 	delay := computeBackoff(nextAttempts, w.cfg.Retry)
 	extra.delay = delay
@@ -780,7 +780,7 @@ func (w *Worker) markTransientInternal(ctx context.Context, row types.QsoUpload,
 	// assert a transition that never committed — the exact trap persistOutcome/logAttempt
 	// avoids. Only a committed (dispPersisted) transition earns a line.
 	if nextAttempts >= int64(w.cfg.Retry.MaxAttempts) {
-		if w.markFailed(ctx, row, "internal: "+errText(cause), "") == dispPersisted {
+		if w.markFailed(ctx, row, "internal: "+errText(cause), "", "") == dispPersisted {
 			base(w.logger.WarnWith()).Msg("forwarding: internal transient exhausted — row failed")
 		}
 		return
@@ -860,12 +860,16 @@ func (w *Worker) resolveQsoUUID(ctx context.Context, qsoID int64) string {
 // the committed transition and its event, and so the SAME uuid stamps both publications.
 // Never emit an empty qso_uuid: if it stays unresolved (a dangling upload FK ingest should
 // never produce), the ephemeral SSE is dropped while the durable record still fires.
-func (w *Worker) markFailed(ctx context.Context, row types.QsoUpload, lastErr, qsoUUID string) disposition {
+//
+// class is the durable reason class stored beside last_error (W-0010 outcome 9):
+// the forwarder's Result.Class for a terminal outcome, empty (NULL) for every
+// worker-decided failure — exhausted retries, unknown action, QSO gone.
+func (w *Worker) markFailed(ctx context.Context, row types.QsoUpload, lastErr, qsoUUID string, class forwarding.FailureClass) disposition {
 	if qsoUUID == "" {
 		qsoUUID = w.resolveQsoUUID(ctx, row.QsoID)
 	}
 
-	err := w.db.MarkUploadFailedWithContext(ctx, row.ID, lastErr)
+	err := w.db.MarkUploadFailedWithContext(ctx, row.ID, lastErr, class)
 	if w.reArmed(err, row.ID, "failed") {
 		return dispRearmed
 	}

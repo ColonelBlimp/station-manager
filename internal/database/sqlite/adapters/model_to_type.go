@@ -176,7 +176,7 @@ func OperatorEventModelToType(model *models.OperatorEvent) (types.OperatorEvent,
 // QsoUploadModelToType converts a sqlite row to types.QsoUpload.
 //
 // The model has several nullable columns (created_at, modified_at,
-// last_attempt_at, last_error, upstream_id); the DTO flattens them to
+// last_attempt_at, last_error, failure_class, upstream_id); the DTO flattens them to
 // zero-values so downstream consumers (worker, pull-endpoint handler)
 // don't have to handle null-vs-value distinctions the daemon doesn't
 // care about.
@@ -198,6 +198,7 @@ func QsoUploadModelToType(model *models.QsoUpload) (types.QsoUpload, error) {
 		LastAttemptAt: model.LastAttemptAt.Int64,
 		NextAttemptAt: model.NextAttemptAt,
 		LastError:     model.LastError.String,
+		FailureClass:  model.FailureClass.String,
 		UpstreamID:    model.UpstreamID.String,
 		Origin:        model.Origin,
 	}, nil

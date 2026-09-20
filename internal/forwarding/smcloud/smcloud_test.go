@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/failure"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
@@ -308,15 +309,18 @@ func TestSubmit_OutcomeDetail(t *testing.T) {
 
 func TestSubmit_OutcomeClassification(t *testing.T) {
 	cases := []struct {
-		name   string
-		status int
-		want   forwarding.Outcome
+		name      string
+		status    int
+		want      forwarding.Outcome
+		wantClass forwarding.FailureClass
 	}{
-		{"bad token", http.StatusUnauthorized, forwarding.OutcomeTerminal},
-		{"malformed", http.StatusBadRequest, forwarding.OutcomeTerminal},
-		{"server error", http.StatusInternalServerError, forwarding.OutcomeTransient},
-		{"rate limited", http.StatusTooManyRequests, forwarding.OutcomeTransient},
-		{"degraded", http.StatusServiceUnavailable, forwarding.OutcomeTransient},
+		// 401 is the cloud's rejected-bearer-token answer (internal/cloud/server
+		// writeError "unauthorized"): the credential class, re-armed at restart.
+		{"bad token", http.StatusUnauthorized, forwarding.OutcomeTerminal, failure.Auth},
+		{"malformed", http.StatusBadRequest, forwarding.OutcomeTerminal, ""},
+		{"server error", http.StatusInternalServerError, forwarding.OutcomeTransient, ""},
+		{"rate limited", http.StatusTooManyRequests, forwarding.OutcomeTransient, ""},
+		{"degraded", http.StatusServiceUnavailable, forwarding.OutcomeTransient, ""},
 	}
 	for _, c := range cases {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -331,6 +335,9 @@ func TestSubmit_OutcomeClassification(t *testing.T) {
 		}
 		if res.Err == nil {
 			t.Errorf("%s: no error recorded for last_error", c.name)
+		}
+		if res.Class != c.wantClass {
+			t.Errorf("%s: class = %q, want %q", c.name, res.Class, c.wantClass)
 		}
 	}
 }

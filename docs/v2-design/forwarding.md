@@ -556,6 +556,9 @@ attempts          INTEGER default 0
 last_attempt_at   INTEGER (unix) — diagnostic only, workers do not read
 next_attempt_at   INTEGER (unix) — load-bearing for the claim query (§5)
 last_error        TEXT   -- most recent Result.Err message when not success
+failure_class     TEXT   -- (migration 0011) NULL or 'auth': typed reason of a `failed` row,
+                  --   from Result.Class; 'auth' = credential rejected, re-armed at
+                  --   worker start once per restart; cleared on re-arm (W-0010 outcome 9)
 upstream_id       TEXT   -- optional; set from Result.UpstreamID on success
 upstream_id_generation INTEGER -- optional; monotonic success order for upstream_id (ADR 0081)
 origin            TEXT   -- (migration 0007) NOT NULL, no default; WHY the row exists:
@@ -712,6 +715,13 @@ writes `qso_upload`.
 | `in_progress` | `uploaded` | Submit returned `OutcomeSuccess` |
 | `in_progress` | `pending` | Submit returned `OutcomeTransient` and `attempts < max_attempts` |
 | `in_progress` | `failed` | Submit returned `OutcomeTerminal`, OR `OutcomeTransient` with `attempts >= max_attempts` |
+
+A `failed` row also records **why** in `failure_class` (migration 0011, W-0010
+outcome 9): the forwarder's `Result.Class` for a terminal outcome — `auth` when
+the destination rejected the configured credential (QRZ `RESULT=AUTH`/401, SM
+Cloud 401, ClubLog 403) — and NULL for every worker-decided failure (exhausted
+retries, unknown action, QSO gone) or data rejection. Recovery keys on the
+class, never on `last_error` text. Any re-arm clears it.
 
 **Crash recovery on startup.** The daemon resets any
 `status='in_progress'` row back to `status='pending'` during service

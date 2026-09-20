@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/failure"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
@@ -324,11 +325,17 @@ func TestSubmit_HTTP403_TripsBreaker_AndShortCircuits(t *testing.T) {
 	if !strings.Contains(res.Err.Error(), "403") {
 		t.Fatalf("err = %q, want '403' substring", res.Err.Error())
 	}
+	if res.Class != failure.Auth {
+		t.Fatalf("class = %q, want auth — 403 is ClubLog's rejected-credential answer", res.Class)
+	}
 
 	// Second Submit must NOT reach the network — the breaker is tripped.
 	res2 := fwd.Submit(context.Background(), sampleQso(), action.Insert, "")
 	if res2.Outcome != forwarding.OutcomeTerminal {
 		t.Fatalf("second outcome = %q, want terminal (breaker tripped)", res2.Outcome)
+	}
+	if res2.Class != failure.Auth {
+		t.Fatalf("breaker class = %q, want auth — rows refused behind the breaker are stranded by the same credential", res2.Class)
 	}
 	if got := calls.Load(); got != 1 {
 		t.Fatalf("server saw %d calls, want 1 — breaker must suppress further requests", got)

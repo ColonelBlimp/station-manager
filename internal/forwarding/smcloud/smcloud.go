@@ -47,6 +47,7 @@ import (
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/failure"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	"github.com/ColonelBlimp/station-manager/internal/securehttp"
@@ -376,7 +377,10 @@ func (f *Forwarder) Submit(
 
 // classifyHTTPStatus maps a non-2xx response to a Result. Same matrix as the
 // qrz forwarder: 408/429/5xx are transient (host up, try later); other 4xx —
-// notably 401 (bad token) and 400 (malformed) — are terminal.
+// notably 401 (bad token) and 400 (malformed) — are terminal. 401 is the
+// cloud's rejected-bearer-token answer (internal/cloud/server, "unauthorized"),
+// so it carries the credential class and is re-armed once per daemon restart —
+// a rotated token no longer strands its rows (W-0010 outcomes 1 and 9).
 func classifyHTTPStatus(status int, body []byte) (forwarding.Result, bool) {
 	const op errors.Op = "smcloud.classifyHTTPStatus"
 
@@ -390,6 +394,12 @@ func classifyHTTPStatus(status int, body []byte) (forwarding.Result, bool) {
 		status >= 500 && status < 600:
 		return forwarding.Result{
 			Outcome: forwarding.OutcomeTransient,
+			Err:     errors.New(op).WithMsgf("smcloud returned HTTP %d (body: %s)", status, snippet),
+		}, true
+	case status == http.StatusUnauthorized:
+		return forwarding.Result{
+			Outcome: forwarding.OutcomeTerminal,
+			Class:   failure.Auth,
 			Err:     errors.New(op).WithMsgf("smcloud returned HTTP %d (body: %s)", status, snippet),
 		}, true
 	case status == http.StatusConflict:

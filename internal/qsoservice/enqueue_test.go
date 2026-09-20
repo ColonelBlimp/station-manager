@@ -173,7 +173,7 @@ func TestEnqueueUploads_NoBulkBackfill_RetriesFailedLiveRow(t *testing.T) {
 	claimed, err := s.DB.ClaimPendingUploadsWithContext(ctx, "clublog", 10)
 	require.NoError(t, err)
 	require.Len(t, claimed, 1)
-	require.NoError(t, s.DB.MarkUploadFailedWithContext(ctx, claimed[0].ID, "auth rejected (403)"))
+	require.NoError(t, s.DB.MarkUploadFailedWithContext(ctx, claimed[0].ID, "auth rejected (403)", ""))
 
 	res, err := s.EnqueueUploads(ctx, "clublog", []string{u1, u2}, false, origin.Manual)
 	require.NoError(t, err)

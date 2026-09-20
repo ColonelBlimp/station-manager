@@ -13,6 +13,7 @@ import (
 	"context"
 
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/failure"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
@@ -20,6 +21,11 @@ import (
 // action.Insert / action.Update / action.Delete. Re-exported as an alias
 // so forwarder packages don't need to import enums/upload/action directly.
 type Action = action.Action
+
+// FailureClass mirrors the upload queue's failure-class enum (failure.Auth).
+// Re-exported as an alias so forwarder packages don't need to import
+// enums/upload/failure directly.
+type FailureClass = failure.Class
 
 // Outcome classifies the result of a Submit call. The forwarder — not the
 // worker — is responsible for distinguishing "try again later" from
@@ -65,11 +71,20 @@ const (
 // `cloud_newer_noop` (the cloud already held a newer copy), both Success. The
 // worker logs it as `outcome_detail` on the attempt record when set; empty means
 // "no finer detail". It never affects the row's lifecycle, only its trace.
+//
+// Class is a DURABLE sub-classification of an OutcomeTerminal result, stored in
+// qso_upload.failure_class (W-0010 outcome 9). Set failure.Auth when the
+// upstream rejected the configured credential: those rows are re-armed once per
+// daemon restart so a corrected key drains them. Leave it empty (stored NULL)
+// for every other terminal reason — a callsign mismatch or malformed record
+// must never become retryable because a key changed. Ignored on any other
+// Outcome.
 type Result struct {
 	Outcome    Outcome
 	Err        error
 	UpstreamID string
 	Detail     string
+	Class      FailureClass
 }
 
 // Forwarder is the plugin boundary between the worker layer and a concrete

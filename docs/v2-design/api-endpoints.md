@@ -116,6 +116,7 @@ items return a QSO through a boundary projection of `types.Qso`: the canonical *
 - **Gating:** Always-on.
 - **Request:** Path `{uuid}`.
 - **Response:** **200**, body `{"items": [types.QsoUpload, …]}` (never null; ordered by forwarder_name, action). Includes soft-deleted QSOs (delete forwarding stays observable).
+- **`failure_class` (added 2026-09-20, migration 0011):** each item carries `failure_class` — the typed reason of a `failed` row: `"auth"` when the destination rejected the configured credential (re-armed at worker start, once per daemon restart), `""` for any other terminal reason or a non-failed row. Orthogonal to `last_error`, the readable text. Always present, never omitted.
 - **`origin` (added 2026-08-01, migration 0007):** each item carries `origin` — **what CAUSED the queue entry to exist**, distinct from `action`, which says what mutation is being forwarded. One of `live` · `import` · `edit` · `manual` · `stamp_sync` · `reconcile` · `legacy`. A QSO the operator deleted is `action: "delete", origin: "edit"`; a reconcile repairing that same missed delete re-enqueues the row as `action: "delete", origin: "reconcile"`. `legacy` marks rows that pre-date the column and is never assigned by a producer. **Additive and backward-compatible**, and deliberately **not** `omitempty`: an absent field and an unknown provenance must not look the same, so the key is always present and never empty. A re-enqueue by a different cause REPLACES origin (an ordinary retry does not).
 - **Errors:** 400 `invalid_uuid`; 404 `not_found`; 500 `db_error`.
 

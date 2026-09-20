@@ -79,6 +79,7 @@ import (
 
 	"github.com/ColonelBlimp/station-manager/internal/adif"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/failure"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	"github.com/ColonelBlimp/station-manager/internal/securehttp"
@@ -343,9 +344,12 @@ func (f *Forwarder) Submit(
 
 	// Circuit breaker: once Club Log has returned a 403 we must not send
 	// further real-time requests or the IP gets firewalled.
+	// Rows refused behind the breaker are stranded by the same credential, so
+	// they carry the auth class too and re-arm with it at the next restart.
 	if f.authFailed.Load() {
 		return forwarding.Result{
 			Outcome: forwarding.OutcomeTerminal,
+			Class:   failure.Auth,
 			Err: errors.New(op).WithMsg(
 				"ClubLog auth previously rejected (403); refusing further requests until restart — fix credentials",
 			),
@@ -500,6 +504,7 @@ func (f *Forwarder) classifyHTTPStatus(op errors.Op, status int, statusText stri
 		f.authFailed.Store(true)
 		return forwarding.Result{
 			Outcome: forwarding.OutcomeTerminal,
+			Class:   failure.Auth,
 			Err: errors.New(op).WithMsgf(
 				"ClubLog auth rejected (HTTP 403): %s — stopping requests until credentials are fixed", detail,
 			),

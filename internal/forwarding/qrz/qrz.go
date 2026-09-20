@@ -40,6 +40,7 @@ import (
 
 	"github.com/ColonelBlimp/station-manager/internal/adif"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/failure"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	"github.com/ColonelBlimp/station-manager/internal/securehttp"
@@ -375,6 +376,7 @@ func buildForm(apiKey string, qso types.Qso, act forwarding.Action, priorUpstrea
 //	408 Request Timeout         → Transient
 //	429 Too Many Requests       → Transient
 //	5xx                         → Transient (server-side, may recover)
+//	401 Unauthorized            → Terminal, class auth (credential rejected)
 //	other 4xx                   → Terminal (bad request, etc.)
 //	other (1xx, 3xx unhandled)  → Terminal (unexpected for this API)
 //
@@ -395,6 +397,14 @@ func classifyHTTPStatus(status int, body []byte) (forwarding.Result, bool) {
 		status >= 500 && status < 600:
 		return forwarding.Result{
 			Outcome: forwarding.OutcomeTransient,
+			Err: errors.New(op).WithMsgf(
+				"QRZ returned HTTP %d (body: %s)", status, snippet,
+			),
+		}, true
+	case status == http.StatusUnauthorized:
+		return forwarding.Result{
+			Outcome: forwarding.OutcomeTerminal,
+			Class:   failure.Auth,
 			Err: errors.New(op).WithMsgf(
 				"QRZ returned HTTP %d (body: %s)", status, snippet,
 			),

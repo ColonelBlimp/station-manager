@@ -40,7 +40,7 @@ func seedForwarderUpload(t *testing.T, srv *Server, lbID int64, fwd, call, tm st
 	case status.InProgress:
 		// leave the claimed row in_progress (the in-flight batch)
 	case status.Failed:
-		if err := srv.db.MarkUploadFailedWithContext(context.Background(), claimed[0].ID, "seed failure"); err != nil {
+		if err := srv.db.MarkUploadFailedWithContext(context.Background(), claimed[0].ID, "seed failure", ""); err != nil {
 			t.Fatalf("mark failed: %v", err)
 		}
 	case status.Uploaded:

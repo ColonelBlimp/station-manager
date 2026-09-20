@@ -1587,7 +1587,7 @@ func TestMarkUploadFailed(t *testing.T) {
 	claimed, _ := svc.ClaimPendingUploadsWithContext(context.Background(), "qrz", 1)
 	rowID := claimed[0].ID
 
-	if err := svc.MarkUploadFailedWithContext(context.Background(), rowID, "bad credentials"); err != nil {
+	if err := svc.MarkUploadFailedWithContext(context.Background(), rowID, "bad credentials", ""); err != nil {
 		t.Fatalf("mark failed: %v", err)
 	}
 
@@ -1748,7 +1748,7 @@ func TestDiscardQueuedUploadsForForwarder(t *testing.T) {
 	qFailed, _ := svc.InsertQso(validTestQso(lbID, "EA1B", "10m", "SSB", "20250508", "0930"))
 	enqueueUpload(t, svc, qFailed, "qrz", "qrz", action.Insert)
 	claimOneAndMark(t, svc, "qrz", func(id int64) error {
-		return svc.MarkUploadFailedWithContext(ctx, id, "bad data")
+		return svc.MarkUploadFailedWithContext(ctx, id, "bad data", "")
 	})
 
 	// qrz pending — left pending; should be discarded.
@@ -1821,7 +1821,7 @@ func seedUploadInState(t *testing.T, svc *Service, lbID int64, fwd, call, tm str
 	case status.InProgress:
 		// leave the claimed row in_progress, unmarked (the in-flight batch)
 	case status.Failed:
-		if err := svc.MarkUploadFailedWithContext(context.Background(), claimed[0].ID, "seed failure"); err != nil {
+		if err := svc.MarkUploadFailedWithContext(context.Background(), claimed[0].ID, "seed failure", ""); err != nil {
 			t.Fatalf("mark failed: %v", err)
 		}
 	case status.Uploaded:
@@ -2159,7 +2159,7 @@ func TestFetchPriorUpstreamID_IgnoresRowsWithoutUpstreamID(t *testing.T) {
 
 	// A failed insert row without an upstream_id shouldn't match either.
 	claimed, _ := svc.ClaimPendingUploadsWithContext(context.Background(), "qrz", 1)
-	_ = svc.MarkUploadFailedWithContext(context.Background(), claimed[0].ID, "boom")
+	_ = svc.MarkUploadFailedWithContext(context.Background(), claimed[0].ID, "boom", "")
 
 	got, err = svc.FetchPriorUpstreamIDWithContext(context.Background(), qsoID, "qrz")
 	if err != nil {
@@ -2204,7 +2204,7 @@ func TestFetchPriorUpstreamID_FindsRetainedIDAfterRearmFailure(t *testing.T) {
 	// The current attempt fails, but the earlier accepted record still exists at
 	// QRZ and its retained LOGID remains the only safe way to delete it.
 	claimed, _ = svc.ClaimPendingUploadsWithContext(ctx, "qrz", 1)
-	if err = svc.MarkUploadFailedWithContext(ctx, claimed[0].ID, "qso soft-deleted before insert forwarded"); err != nil {
+	if err = svc.MarkUploadFailedWithContext(ctx, claimed[0].ID, "qso soft-deleted before insert forwarded", ""); err != nil {
 		t.Fatalf("mark re-armed insert failed: %v", err)
 	}
 
@@ -2250,7 +2250,7 @@ func TestFetchPriorUpstreamID_PrefersUploadedIDOverNewerRetainedID(t *testing.T)
 		t.Fatalf("commit re-arm: %v", err)
 	}
 	claimed, _ := svc.ClaimPendingUploadsWithContext(ctx, "qrz", 1)
-	if err = svc.MarkUploadFailedWithContext(ctx, claimed[0].ID, "qso soft-deleted before insert forwarded"); err != nil {
+	if err = svc.MarkUploadFailedWithContext(ctx, claimed[0].ID, "qso soft-deleted before insert forwarded", ""); err != nil {
 		t.Fatalf("mark re-armed insert failed: %v", err)
 	}
 
@@ -2313,7 +2313,7 @@ func TestFetchPriorUpstreamID_PrefersLatestRetainedIDOverOlderUploadedID(t *test
 		t.Fatalf("commit re-arm: %v", err)
 	}
 	claimed, _ := svc.ClaimPendingUploadsWithContext(ctx, "qrz", 1)
-	if err = svc.MarkUploadFailedWithContext(ctx, claimed[0].ID, "qso soft-deleted; delete row supersedes"); err != nil {
+	if err = svc.MarkUploadFailedWithContext(ctx, claimed[0].ID, "qso soft-deleted; delete row supersedes", ""); err != nil {
 		t.Fatalf("mark re-armed update failed: %v", err)
 	}
 
