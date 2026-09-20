@@ -734,6 +734,17 @@ server-side, ClubLog the same). For the few that aren't, the
 upstream returns a dedupe error classified as `OutcomeSuccess` with
 `last_error` noting the dedupe hit.
 
+**Credential recovery on startup** (W-0010 outcome 9, ruling
+2026-09-20 (b)). After the orphan sweep and the disabled-forwarder
+discard, each ENABLED forwarder's `failed` rows of `failure_class =
+'auth'` return to `pending` (attempts, timers, `last_error` and the
+class reset; `upstream_id` and `origin` kept) — one attempt per daemon
+restart with the credential that restart loaded. It runs at start and
+never on a config save, because §8 means the running worker still
+holds the old credential until the restart. A still-bad credential
+fails the rows once more, terminally; rows failed for any other reason
+(class NULL — including every pre-0011 row) are never touched.
+
 **SSE emission points.** Only terminal transitions emit events:
 
 - `in_progress` → `uploaded`: emit `forward.succeeded`.

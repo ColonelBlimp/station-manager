@@ -82,7 +82,13 @@ Slices, each its own commit:
    models regenerated from a head-migrated scratch database.
 3. **Boot re-arm.** At worker start, after the orphan sweep, each ENABLED forwarder's
    `failed` rows with `failure_class = 'auth'` return to `pending` (attempts reset), logged with the
-   count. A still-bad credential fails them once more per restart — bounded, never a spin.
+   count. A still-bad credential fails them once more per restart — bounded, never a spin. Built
+   2026-09-20: `RearmAuthFailedUploadsForForwarderWithContext` (mirrors the enqueue re-arm; selects by
+   class only, never by `last_error`) called from the workers node before any worker claims; an
+   `smd.log` info line `forwarder: credential-rejected uploads re-armed …` with `rearmed` carries the
+   count. Proofs: storage (only the named forwarder's auth rows; a NULL-class row with an auth-looking
+   message stays failed; re-armed rows claimable) and the orchestrated daemon (an enabled stub's auth
+   row leaves `failed`, its unclassified sibling does not).
 4. **Card and API.** `GET /v1/forwarder-queues` adds `waiting` (pending) and `failed`; the card
    reads "N waiting · M failed · K in flight", the failed count links to the logbook's
    `missing_from` filter for that forwarder, and a "Retry failed (M)" button posts

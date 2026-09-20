@@ -577,8 +577,9 @@ func (d *daemon) ft8QsoLogger() func(context.Context, ft8.CompletedQso) {
 
 // ---- forwarder workers + smcloud reconciler ----
 
-// startWorkers runs the orphan sweep + disabled-forwarder discard, spawns the forwarder workers, and
-// launches the first enabled smcloud reconciler (which rides the workers' WaitGroup lifecycle).
+// startWorkers runs the orphan sweep + disabled-forwarder discard + auth-failure re-arm, spawns the
+// forwarder workers, and launches the first enabled smcloud reconciler (which rides the workers'
+// WaitGroup lifecycle).
 func (d *daemon) startWorkers(ctx context.Context) error {
 	const op errors.Op = "smd.startWorkers"
 
@@ -611,6 +612,27 @@ func (d *daemon) startWorkers(ctx context.Context) error {
 		if discarded > 0 {
 			d.logger.WarnWith().Str("forwarder", fc.Name).Int64("discarded", discarded).
 				Msg("forwarder disabled; discarded queued uploads (re-upload via the logbook app)")
+		}
+	}
+
+	// Boot re-arm (W-0010 outcome 9, ruling (b)): rows a rejected credential
+	// stranded get one more attempt per restart, with whatever credential this
+	// start loaded. Done here — after the orphan sweep and disabled discard,
+	// before any worker can claim — and never on a config save, since the
+	// running worker still holds the old credential until the restart.
+	for _, fc := range d.cfg.Forwarders {
+		if !fc.Enabled {
+			continue
+		}
+		rearmCtx, rearmCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		rearmed, rerr := d.db.RearmAuthFailedUploadsForForwarderWithContext(rearmCtx, fc.Name)
+		rearmCancel()
+		if rerr != nil {
+			return errors.New(op).WithErr(rerr).WithMsgf("re-arm auth-failed uploads for forwarder %q", fc.Name)
+		}
+		if rearmed > 0 {
+			d.logger.InfoWith().Str("forwarder", fc.Name).Int64("rearmed", rearmed).
+				Msg("forwarder: credential-rejected uploads re-armed for one attempt with the loaded credential")
 		}
 	}
 

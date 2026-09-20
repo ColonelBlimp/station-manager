@@ -2681,6 +2681,52 @@ func (s *Service) ResetOrphanedUploadsWithContext(ctx context.Context) (int64, e
 	return n, nil
 }
 
+// RearmAuthFailedUploadsForForwarderWithContext returns one forwarder's `failed`
+// rows of class `auth` to `pending` so the next claim retries them with the
+// credential the daemon just loaded (W-0010 outcome 9, ruling (b)). Run at
+// worker start for each ENABLED forwarder, never on a config save: the running
+// worker would otherwise retry with the old credential. A still-bad credential
+// fails the rows once more per restart — bounded, never a spin. Returns the
+// number of rows re-armed, for logging.
+//
+// Mirrors InsertQsoUploadTx's re-arm (attempts, timers, last_error and
+// failure_class reset; upstream_id and origin kept), so a re-armed row is
+// indistinguishable from a fresh enqueue to the claim query. Only the class
+// selects rows — never last_error text — so a pre-0011 row (class NULL) is
+// never touched by boot recovery, however recognisable its message (ruling (d)).
+func (s *Service) RearmAuthFailedUploadsForForwarderWithContext(ctx context.Context, forwarderName string) (int64, error) {
+	const op errors.Op = "sqlite.Service.RearmAuthFailedUploadsForForwarderWithContext"
+	if err := checkService(op, s); err != nil {
+		return 0, err
+	}
+	if strings.TrimSpace(forwarderName) == "" {
+		return 0, errors.New(op).WithMsg("forwarderName is empty")
+	}
+
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return 0, err
+	}
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+
+	res, err := h.ExecContext(ctx, `
+UPDATE qso_upload
+SET    status          = ?,
+       attempts        = 0,
+       created_at      = datetime('now'),
+       next_attempt_at = strftime('%s', 'now'),
+       last_attempt_at = NULL,
+       last_error      = NULL,
+       failure_class   = NULL
+WHERE  forwarder_name = ? AND status = ? AND failure_class = ?`,
+		status.Pending.String(), forwarderName, status.Failed.String(), failure.Auth.String())
+	if err != nil {
+		return 0, errors.New(op).WithErr(err).WithMsg("rearm auth-failed uploads for forwarder")
+	}
+	return checkedRowsAffected(op, res, "rearm auth-failed uploads for forwarder")
+}
+
 // DiscardQueuedUploadsForForwarderWithContext deletes the not-yet-uploaded rows
 // (pending / in_progress / failed) for a single forwarder, leaving 'uploaded'
 // rows untouched. Run at daemon startup for each DISABLED forwarder (ADR 0039):
