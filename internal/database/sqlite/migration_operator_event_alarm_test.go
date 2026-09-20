@@ -31,8 +31,8 @@ func alarmRow(kind string) (category, severity, detail string) {
 // pair CHECK and not a table that refuses everything.
 func TestMigrate0009_EnforcesTheCategoryKindPairsFromTheVocabulary(t *testing.T) {
 	svc := testService(t)
-	if v := schemaVersion(t, svc); v != 9 {
-		t.Fatalf("schema version = %d, want 9 — 0009 must be head", v)
+	if v := schemaVersion(t, svc); v != 10 {
+		t.Fatalf("schema version = %d, want 10", v)
 	}
 	pairs := stationevents.KindsByCategory()
 	for cat, kinds := range pairs {
@@ -103,8 +103,8 @@ func TestMigrate0009_RebuildKeepsSeverityBuildDetailTriggerAndIndex(t *testing.T
 // rows intact.
 func TestMigrate0009_DownKeepsNotificationRowsAndDiscardsAlarmRows(t *testing.T) {
 	svc := testService(t)
-	if v := schemaVersion(t, svc); v != 9 {
-		t.Fatalf("schema version = %d, want 9 — the -1 below assumes 0009 is head", v)
+	if v := schemaVersion(t, svc); v != 10 {
+		t.Fatalf("schema version = %d, want 10", v)
 	}
 	if err := insertOperatorEvent(t, svc, "notification", "forward.failed", "warn", "v",
 		`{"qso_id":7,"forwarder":"qrz","action":"insert","attempts":5}`); err != nil {
@@ -123,7 +123,7 @@ func TestMigrate0009_DownKeepsNotificationRowsAndDiscardsAlarmRows(t *testing.T)
 		return n
 	}
 
-	applyMigrationSteps(t, svc, -1) // 0009 down → 0008's closed CHECKs
+	migrateToVersion(t, svc, 8) // crosses 0009 down → 0008's closed CHECKs
 	if n := count("after down", "notification"); n != 1 {
 		t.Errorf("after down: notification rows = %d, want 1 (preserved)", n)
 	}
@@ -141,7 +141,7 @@ func TestMigrate0009_DownKeepsNotificationRowsAndDiscardsAlarmRows(t *testing.T)
 		t.Error("after down: an alarm row must be refused by 0008's CHECK")
 	}
 
-	applyMigrationSteps(t, svc, 1) // re-up
+	migrateToVersion(t, svc, 10) // re-up through head
 	if n := count("after re-up", "notification"); n != 1 {
 		t.Errorf("after re-up: notification rows = %d, want 1", n)
 	}
@@ -161,8 +161,8 @@ func TestMigrate0009_RebuildKeepsTheIdHighWaterMark(t *testing.T) {
 	if _, err := svc.handle.Exec(`DELETE FROM operator_event`); err != nil { // retention evicted it
 		t.Fatalf("evict: %v", err)
 	}
-	applyMigrationSteps(t, svc, -1)
-	applyMigrationSteps(t, svc, 1)
+	migrateToVersion(t, svc, 8)
+	migrateToVersion(t, svc, 10)
 	if err := insertOperatorEvent(t, svc, "alarm", "tx_alarm.raised", "error", "v", `{}`); err != nil {
 		t.Fatalf("insert after round-trip: %v", err)
 	}

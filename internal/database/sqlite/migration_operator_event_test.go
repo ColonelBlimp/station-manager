@@ -147,11 +147,8 @@ func TestMigrate0008_OperatorEventHasPerCategoryIndex(t *testing.T) {
 func TestMigrate0008_DownDropsTableUpRestoresIt(t *testing.T) {
 	svc := testService(t)
 
-	// 0009 (the alarm pairs, a rebuild that keeps the table) sits above 0008
-	// since W-0020 slice 1, so reaching "no table" is two steps down and the
-	// restore two steps up. The version pin keeps the counts honest.
-	if v := schemaVersion(t, svc); v != 9 {
-		t.Fatalf("schema version = %d, want 9 — 0009 must be head for the two-step step-back to target 0008", v)
+	if v := schemaVersion(t, svc); v != 10 {
+		t.Fatalf("schema version = %d, want 10", v)
 	}
 	assertTable := func(when string, want bool) {
 		t.Helper()
@@ -164,8 +161,8 @@ func TestMigrate0008_DownDropsTableUpRestoresIt(t *testing.T) {
 		}
 	}
 	assertTable("after up", true)
-	applyMigrationSteps(t, svc, -2) // 0009 down (table kept), then 0008 down (table dropped)
+	migrateToVersion(t, svc, 7) // crosses 0008 down (table dropped)
 	assertTable("after down", false)
-	applyMigrationSteps(t, svc, 2)
+	migrateToVersion(t, svc, 10)
 	assertTable("after re-up", true)
 }

@@ -119,24 +119,19 @@ func TestMigrate0007_ExistingRowsBecomeLegacyAndSurviveRetry(t *testing.T) {
 	svc := testService(t)
 	db := svc.handle
 
-	// Assert we are actually AT 0007 before stepping back, or the rollback targets
-	// 0006 instead — which rebuilds `qso` and makes the seed below die on a foreign
-	// key, a failure that says nothing about origin. A proof that dies in setup is
-	// worthless however red it looks.
-	if v := schemaVersion(t, svc); v != 9 {
-		t.Fatalf("schema version = %d, want 9 — head moved (a migration was added past 0009); "+
-			"the step counts below assume 0009 is head, so update them or this proof tests nothing", v)
+	if v := schemaVersion(t, svc); v != 10 {
+		t.Fatalf("schema version = %d, want 10", v)
 	}
 
-	// Roll back to v6 (0009, 0008, then 0007 down), insert a row as v6 would have
-	// (no origin column), then roll forward through 0007.
-	applyMigrationSteps(t, svc, -3)
+	// Roll back to v6, insert a row as v6 would have (no origin column), then
+	// roll forward through 0007. Absolute targets stay honest as head advances.
+	migrateToVersion(t, svc, 6)
 	seedLogbookAndQsoRow(t, db)
 	if _, err := db.Exec(`INSERT INTO qso_upload (qso_id, forwarder_name, forwarder_type, action, status)
 		VALUES (1, 'qrz', 'qrz', 'insert', 'pending')`); err != nil {
 		t.Fatalf("seed pre-0007 upload row: %v", err)
 	}
-	applyMigrationSteps(t, svc, 1)
+	migrateToVersion(t, svc, 7)
 
 	var origin string
 	if err := db.QueryRow(`SELECT origin FROM qso_upload WHERE forwarder_name='qrz'`).Scan(&origin); err != nil {
@@ -213,10 +208,8 @@ func TestMigrate0007_UpdatingAMigratedRowStillAdvancesModifiedAt(t *testing.T) {
 func TestMigrate0007_PartialIndexesSurviveBothDirections(t *testing.T) {
 	svc := testService(t)
 
-	// Without this the step-back targets 0006 and the test checks indexes that were
-	// never at risk — passing before 0007 exists and proving nothing about it.
-	if v := schemaVersion(t, svc); v != 9 {
-		t.Fatalf("schema version = %d, want 9 — head moved past 0009; update the step counts below", v)
+	if v := schemaVersion(t, svc); v != 10 {
+		t.Fatalf("schema version = %d, want 10", v)
 	}
 
 	assertIndexes := func(when string) {
@@ -245,9 +238,9 @@ func TestMigrate0007_PartialIndexesSurviveBothDirections(t *testing.T) {
 	}
 
 	assertIndexes("after up")
-	applyMigrationSteps(t, svc, -3) // 0009, 0008, then 0007 down — reach v6
+	migrateToVersion(t, svc, 6)
 	assertIndexes("after down")
-	applyMigrationSteps(t, svc, 3)
+	migrateToVersion(t, svc, 10)
 	assertIndexes("after re-up")
 }
 
@@ -256,8 +249,8 @@ func TestMigrate0007_PartialIndexesSurviveBothDirections(t *testing.T) {
 func TestMigrate0007_ForeignKeysIntactBothDirections(t *testing.T) {
 	svc := testService(t)
 
-	if v := schemaVersion(t, svc); v != 9 {
-		t.Fatalf("schema version = %d, want 9 — head moved past 0009; update the step counts below", v)
+	if v := schemaVersion(t, svc); v != 10 {
+		t.Fatalf("schema version = %d, want 10", v)
 	}
 	seedUploadRow(t, svc, "qrz")
 
@@ -274,9 +267,9 @@ func TestMigrate0007_ForeignKeysIntactBothDirections(t *testing.T) {
 	}
 
 	check("after up")
-	applyMigrationSteps(t, svc, -3) // 0009, 0008, then 0007 down — reach v6
+	migrateToVersion(t, svc, 6)
 	check("after down")
-	applyMigrationSteps(t, svc, 3)
+	migrateToVersion(t, svc, 10)
 	check("after re-up")
 }
 
@@ -294,10 +287,10 @@ func TestMigrate0007_DownPreservesEveryPreExistingColumn(t *testing.T) {
 		t.Fatalf("populate every column: %v", err)
 	}
 
-	if v := schemaVersion(t, svc); v != 9 {
-		t.Fatalf("schema version = %d, want 9 — head moved past 0009; the -3 below assumes 0009 is head", v)
+	if v := schemaVersion(t, svc); v != 10 {
+		t.Fatalf("schema version = %d, want 10", v)
 	}
-	applyMigrationSteps(t, svc, -3) // 0009, 0008, then 0007 down (the rebuild under test)
+	migrateToVersion(t, svc, 6) // crosses 0007 down (the rebuild under test)
 
 	var (
 		gotID, gotQsoID                              int64

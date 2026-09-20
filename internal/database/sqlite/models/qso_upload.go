@@ -24,87 +24,92 @@ import (
 
 // QsoUpload is an object representing the database table.
 type QsoUpload struct {
-	ID            int64       `boil:"id" json:"id" toml:"id" yaml:"id"`
-	CreatedAt     time.Time   `boil:"created_at" json:"created_at" toml:"created_at" yaml:"created_at"`
-	ModifiedAt    null.Time   `boil:"modified_at" json:"modified_at,omitempty" toml:"modified_at" yaml:"modified_at,omitempty"`
-	QsoID         int64       `boil:"qso_id" json:"qso_id" toml:"qso_id" yaml:"qso_id"`
-	ForwarderName string      `boil:"forwarder_name" json:"forwarder_name" toml:"forwarder_name" yaml:"forwarder_name"`
-	ForwarderType string      `boil:"forwarder_type" json:"forwarder_type" toml:"forwarder_type" yaml:"forwarder_type"`
-	Action        string      `boil:"action" json:"action" toml:"action" yaml:"action"`
-	Status        string      `boil:"status" json:"status" toml:"status" yaml:"status"`
-	Attempts      int64       `boil:"attempts" json:"attempts" toml:"attempts" yaml:"attempts"`
-	LastAttemptAt null.Int64  `boil:"last_attempt_at" json:"last_attempt_at,omitempty" toml:"last_attempt_at" yaml:"last_attempt_at,omitempty"`
-	NextAttemptAt int64       `boil:"next_attempt_at" json:"next_attempt_at" toml:"next_attempt_at" yaml:"next_attempt_at"`
-	LastError     null.String `boil:"last_error" json:"last_error,omitempty" toml:"last_error" yaml:"last_error,omitempty"`
-	UpstreamID    null.String `boil:"upstream_id" json:"upstream_id,omitempty" toml:"upstream_id" yaml:"upstream_id,omitempty"`
-	Origin        string      `boil:"origin" json:"origin" toml:"origin" yaml:"origin"`
+	ID                   int64       `boil:"id" json:"id" toml:"id" yaml:"id"`
+	CreatedAt            time.Time   `boil:"created_at" json:"created_at" toml:"created_at" yaml:"created_at"`
+	ModifiedAt           null.Time   `boil:"modified_at" json:"modified_at,omitempty" toml:"modified_at" yaml:"modified_at,omitempty"`
+	QsoID                int64       `boil:"qso_id" json:"qso_id" toml:"qso_id" yaml:"qso_id"`
+	ForwarderName        string      `boil:"forwarder_name" json:"forwarder_name" toml:"forwarder_name" yaml:"forwarder_name"`
+	ForwarderType        string      `boil:"forwarder_type" json:"forwarder_type" toml:"forwarder_type" yaml:"forwarder_type"`
+	Action               string      `boil:"action" json:"action" toml:"action" yaml:"action"`
+	Status               string      `boil:"status" json:"status" toml:"status" yaml:"status"`
+	Attempts             int64       `boil:"attempts" json:"attempts" toml:"attempts" yaml:"attempts"`
+	LastAttemptAt        null.Int64  `boil:"last_attempt_at" json:"last_attempt_at,omitempty" toml:"last_attempt_at" yaml:"last_attempt_at,omitempty"`
+	NextAttemptAt        int64       `boil:"next_attempt_at" json:"next_attempt_at" toml:"next_attempt_at" yaml:"next_attempt_at"`
+	LastError            null.String `boil:"last_error" json:"last_error,omitempty" toml:"last_error" yaml:"last_error,omitempty"`
+	UpstreamID           null.String `boil:"upstream_id" json:"upstream_id,omitempty" toml:"upstream_id" yaml:"upstream_id,omitempty"`
+	Origin               string      `boil:"origin" json:"origin" toml:"origin" yaml:"origin"`
+	UpstreamIDGeneration null.Int64  `boil:"upstream_id_generation" json:"upstream_id_generation,omitempty" toml:"upstream_id_generation" yaml:"upstream_id_generation,omitempty"`
 
 	R *qsoUploadR `boil:"-" json:"-" toml:"-" yaml:"-"`
 	L qsoUploadL  `boil:"-" json:"-" toml:"-" yaml:"-"`
 }
 
 var QsoUploadColumns = struct {
-	ID            string
-	CreatedAt     string
-	ModifiedAt    string
-	QsoID         string
-	ForwarderName string
-	ForwarderType string
-	Action        string
-	Status        string
-	Attempts      string
-	LastAttemptAt string
-	NextAttemptAt string
-	LastError     string
-	UpstreamID    string
-	Origin        string
+	ID                   string
+	CreatedAt            string
+	ModifiedAt           string
+	QsoID                string
+	ForwarderName        string
+	ForwarderType        string
+	Action               string
+	Status               string
+	Attempts             string
+	LastAttemptAt        string
+	NextAttemptAt        string
+	LastError            string
+	UpstreamID           string
+	Origin               string
+	UpstreamIDGeneration string
 }{
-	ID:            "id",
-	CreatedAt:     "created_at",
-	ModifiedAt:    "modified_at",
-	QsoID:         "qso_id",
-	ForwarderName: "forwarder_name",
-	ForwarderType: "forwarder_type",
-	Action:        "action",
-	Status:        "status",
-	Attempts:      "attempts",
-	LastAttemptAt: "last_attempt_at",
-	NextAttemptAt: "next_attempt_at",
-	LastError:     "last_error",
-	UpstreamID:    "upstream_id",
-	Origin:        "origin",
+	ID:                   "id",
+	CreatedAt:            "created_at",
+	ModifiedAt:           "modified_at",
+	QsoID:                "qso_id",
+	ForwarderName:        "forwarder_name",
+	ForwarderType:        "forwarder_type",
+	Action:               "action",
+	Status:               "status",
+	Attempts:             "attempts",
+	LastAttemptAt:        "last_attempt_at",
+	NextAttemptAt:        "next_attempt_at",
+	LastError:            "last_error",
+	UpstreamID:           "upstream_id",
+	Origin:               "origin",
+	UpstreamIDGeneration: "upstream_id_generation",
 }
 
 var QsoUploadTableColumns = struct {
-	ID            string
-	CreatedAt     string
-	ModifiedAt    string
-	QsoID         string
-	ForwarderName string
-	ForwarderType string
-	Action        string
-	Status        string
-	Attempts      string
-	LastAttemptAt string
-	NextAttemptAt string
-	LastError     string
-	UpstreamID    string
-	Origin        string
+	ID                   string
+	CreatedAt            string
+	ModifiedAt           string
+	QsoID                string
+	ForwarderName        string
+	ForwarderType        string
+	Action               string
+	Status               string
+	Attempts             string
+	LastAttemptAt        string
+	NextAttemptAt        string
+	LastError            string
+	UpstreamID           string
+	Origin               string
+	UpstreamIDGeneration string
 }{
-	ID:            "qso_upload.id",
-	CreatedAt:     "qso_upload.created_at",
-	ModifiedAt:    "qso_upload.modified_at",
-	QsoID:         "qso_upload.qso_id",
-	ForwarderName: "qso_upload.forwarder_name",
-	ForwarderType: "qso_upload.forwarder_type",
-	Action:        "qso_upload.action",
-	Status:        "qso_upload.status",
-	Attempts:      "qso_upload.attempts",
-	LastAttemptAt: "qso_upload.last_attempt_at",
-	NextAttemptAt: "qso_upload.next_attempt_at",
-	LastError:     "qso_upload.last_error",
-	UpstreamID:    "qso_upload.upstream_id",
-	Origin:        "qso_upload.origin",
+	ID:                   "qso_upload.id",
+	CreatedAt:            "qso_upload.created_at",
+	ModifiedAt:           "qso_upload.modified_at",
+	QsoID:                "qso_upload.qso_id",
+	ForwarderName:        "qso_upload.forwarder_name",
+	ForwarderType:        "qso_upload.forwarder_type",
+	Action:               "qso_upload.action",
+	Status:               "qso_upload.status",
+	Attempts:             "qso_upload.attempts",
+	LastAttemptAt:        "qso_upload.last_attempt_at",
+	NextAttemptAt:        "qso_upload.next_attempt_at",
+	LastError:            "qso_upload.last_error",
+	UpstreamID:           "qso_upload.upstream_id",
+	Origin:               "qso_upload.origin",
+	UpstreamIDGeneration: "qso_upload.upstream_id_generation",
 }
 
 // Generated where
@@ -148,35 +153,37 @@ func (w whereHelpernull_Int64) IsNull() qm.QueryMod    { return qmhelper.WhereIs
 func (w whereHelpernull_Int64) IsNotNull() qm.QueryMod { return qmhelper.WhereIsNotNull(w.field) }
 
 var QsoUploadWhere = struct {
-	ID            whereHelperint64
-	CreatedAt     whereHelpertime_Time
-	ModifiedAt    whereHelpernull_Time
-	QsoID         whereHelperint64
-	ForwarderName whereHelperstring
-	ForwarderType whereHelperstring
-	Action        whereHelperstring
-	Status        whereHelperstring
-	Attempts      whereHelperint64
-	LastAttemptAt whereHelpernull_Int64
-	NextAttemptAt whereHelperint64
-	LastError     whereHelpernull_String
-	UpstreamID    whereHelpernull_String
-	Origin        whereHelperstring
+	ID                   whereHelperint64
+	CreatedAt            whereHelpertime_Time
+	ModifiedAt           whereHelpernull_Time
+	QsoID                whereHelperint64
+	ForwarderName        whereHelperstring
+	ForwarderType        whereHelperstring
+	Action               whereHelperstring
+	Status               whereHelperstring
+	Attempts             whereHelperint64
+	LastAttemptAt        whereHelpernull_Int64
+	NextAttemptAt        whereHelperint64
+	LastError            whereHelpernull_String
+	UpstreamID           whereHelpernull_String
+	Origin               whereHelperstring
+	UpstreamIDGeneration whereHelpernull_Int64
 }{
-	ID:            whereHelperint64{field: "\"qso_upload\".\"id\""},
-	CreatedAt:     whereHelpertime_Time{field: "\"qso_upload\".\"created_at\""},
-	ModifiedAt:    whereHelpernull_Time{field: "\"qso_upload\".\"modified_at\""},
-	QsoID:         whereHelperint64{field: "\"qso_upload\".\"qso_id\""},
-	ForwarderName: whereHelperstring{field: "\"qso_upload\".\"forwarder_name\""},
-	ForwarderType: whereHelperstring{field: "\"qso_upload\".\"forwarder_type\""},
-	Action:        whereHelperstring{field: "\"qso_upload\".\"action\""},
-	Status:        whereHelperstring{field: "\"qso_upload\".\"status\""},
-	Attempts:      whereHelperint64{field: "\"qso_upload\".\"attempts\""},
-	LastAttemptAt: whereHelpernull_Int64{field: "\"qso_upload\".\"last_attempt_at\""},
-	NextAttemptAt: whereHelperint64{field: "\"qso_upload\".\"next_attempt_at\""},
-	LastError:     whereHelpernull_String{field: "\"qso_upload\".\"last_error\""},
-	UpstreamID:    whereHelpernull_String{field: "\"qso_upload\".\"upstream_id\""},
-	Origin:        whereHelperstring{field: "\"qso_upload\".\"origin\""},
+	ID:                   whereHelperint64{field: "\"qso_upload\".\"id\""},
+	CreatedAt:            whereHelpertime_Time{field: "\"qso_upload\".\"created_at\""},
+	ModifiedAt:           whereHelpernull_Time{field: "\"qso_upload\".\"modified_at\""},
+	QsoID:                whereHelperint64{field: "\"qso_upload\".\"qso_id\""},
+	ForwarderName:        whereHelperstring{field: "\"qso_upload\".\"forwarder_name\""},
+	ForwarderType:        whereHelperstring{field: "\"qso_upload\".\"forwarder_type\""},
+	Action:               whereHelperstring{field: "\"qso_upload\".\"action\""},
+	Status:               whereHelperstring{field: "\"qso_upload\".\"status\""},
+	Attempts:             whereHelperint64{field: "\"qso_upload\".\"attempts\""},
+	LastAttemptAt:        whereHelpernull_Int64{field: "\"qso_upload\".\"last_attempt_at\""},
+	NextAttemptAt:        whereHelperint64{field: "\"qso_upload\".\"next_attempt_at\""},
+	LastError:            whereHelpernull_String{field: "\"qso_upload\".\"last_error\""},
+	UpstreamID:           whereHelpernull_String{field: "\"qso_upload\".\"upstream_id\""},
+	Origin:               whereHelperstring{field: "\"qso_upload\".\"origin\""},
+	UpstreamIDGeneration: whereHelpernull_Int64{field: "\"qso_upload\".\"upstream_id_generation\""},
 }
 
 // QsoUploadRels is where relationship names are stored.
@@ -216,9 +223,9 @@ func (r *qsoUploadR) GetQso() *Qso {
 type qsoUploadL struct{}
 
 var (
-	qsoUploadAllColumns            = []string{"id", "created_at", "modified_at", "qso_id", "forwarder_name", "forwarder_type", "action", "status", "attempts", "last_attempt_at", "next_attempt_at", "last_error", "upstream_id", "origin"}
+	qsoUploadAllColumns            = []string{"id", "created_at", "modified_at", "qso_id", "forwarder_name", "forwarder_type", "action", "status", "attempts", "last_attempt_at", "next_attempt_at", "last_error", "upstream_id", "origin", "upstream_id_generation"}
 	qsoUploadColumnsWithoutDefault = []string{"qso_id", "forwarder_name", "forwarder_type", "origin"}
-	qsoUploadColumnsWithDefault    = []string{"id", "created_at", "modified_at", "action", "status", "attempts", "last_attempt_at", "next_attempt_at", "last_error", "upstream_id"}
+	qsoUploadColumnsWithDefault    = []string{"id", "created_at", "modified_at", "action", "status", "attempts", "last_attempt_at", "next_attempt_at", "last_error", "upstream_id", "upstream_id_generation"}
 	qsoUploadPrimaryKeyColumns     = []string{"id"}
 	qsoUploadGeneratedColumns      = []string{"id"}
 )

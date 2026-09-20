@@ -504,7 +504,6 @@
   "allowedDuplications": [
     "internal/database/sqlite/api_context.go::(*Service).FetchCountryByNameWithContext <-> internal/database/sqlite/api_context.go::(*Service).FetchCountryByPrefixWithContext",
     "internal/database/sqlite/api_context.go::(*Service).FetchLogbookByIDWithContext <-> internal/database/sqlite/api_context.go::(*Service).FetchQsoByIdWithContext",
-    "internal/database/sqlite/api_context.go::(*Service).MarkUploadFailedWithContext <-> internal/database/sqlite/api_context.go::(*Service).MarkUploadSuccessWithContext",
     "internal/forwarding/qrz/response.go::classifyInsert <-> internal/forwarding/qrz/response.go::classifyUpdate"
   ],
   "referenceSummaries": [

@@ -557,6 +557,7 @@ last_attempt_at   INTEGER (unix) — diagnostic only, workers do not read
 next_attempt_at   INTEGER (unix) — load-bearing for the claim query (§5)
 last_error        TEXT   -- most recent Result.Err message when not success
 upstream_id       TEXT   -- optional; set from Result.UpstreamID on success
+upstream_id_generation INTEGER -- optional; monotonic success order for upstream_id (ADR 0081)
 origin            TEXT   -- (migration 0007) NOT NULL, no default; WHY the row exists:
                   --   'live'|'import'|'edit'|'manual'|'stamp_sync'|'reconcile'|'legacy'
                   --   Distinct from `action`, which is WHAT is being forwarded.

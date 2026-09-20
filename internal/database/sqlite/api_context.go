@@ -2191,7 +2191,9 @@ func uploadActionOrder(a string) int {
 
 // MarkUploadSuccessWithContext records a successful Submit outcome:
 // status → 'uploaded', attempts bumped, upstream_id persisted
-// (empty string becomes NULL), last_error cleared.
+// (empty string becomes NULL), last_error cleared. A non-empty id returned by
+// an upstream-creating action also receives the next per-QSO/forwarder
+// upstream_id_generation, which re-arms never change (ADR 0081).
 func (s *Service) MarkUploadSuccessWithContext(ctx context.Context, id int64, upstreamID string) error {
 	const op errors.Op = "sqlite.Service.MarkUploadSuccessWithContext"
 	if err := checkService(op, s); err != nil {
@@ -2219,12 +2221,21 @@ func (s *Service) MarkUploadSuccessWithContext(ctx context.Context, id int64, up
 	// with the latest state.
 	res, err := h.ExecContext(ctx, `
 UPDATE qso_upload
-SET    status      = ?,
-       attempts    = attempts + 1,
-       upstream_id = ?,
-       last_error  = NULL
+SET    status                 = ?,
+       attempts               = attempts + 1,
+       upstream_id            = ?,
+       upstream_id_generation = CASE
+           WHEN ? IS NULL OR action NOT IN ('insert', 'update') THEN NULL
+           ELSE (
+               SELECT COALESCE(MAX(s.upstream_id_generation), 0) + 1
+               FROM qso_upload AS s
+               WHERE s.qso_id = qso_upload.qso_id
+                 AND s.forwarder_name = qso_upload.forwarder_name
+           )
+       END,
+       last_error             = NULL
 WHERE  id = ? AND status = ?`,
-		status.Uploaded.String(), upstreamArg, id, status.InProgress.String())
+		status.Uploaded.String(), upstreamArg, upstreamArg, id, status.InProgress.String())
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("mark upload success")
 	}
@@ -2319,12 +2330,21 @@ func (s *Service) MarkUploadSuccessWithAdifStampWithContext(
 	}
 	res, err := tx.ExecContext(ctx, `
 UPDATE qso_upload
-SET    status      = ?,
-       attempts    = attempts + 1,
-       upstream_id = ?,
-       last_error  = NULL
+SET    status                 = ?,
+       attempts               = attempts + 1,
+       upstream_id            = ?,
+       upstream_id_generation = CASE
+           WHEN ? IS NULL OR action NOT IN ('insert', 'update') THEN NULL
+           ELSE (
+               SELECT COALESCE(MAX(s.upstream_id_generation), 0) + 1
+               FROM qso_upload AS s
+               WHERE s.qso_id = qso_upload.qso_id
+                 AND s.forwarder_name = qso_upload.forwarder_name
+           )
+       END,
+       last_error             = NULL
 WHERE  id = ? AND status = ?`,
-		status.Uploaded.String(), upstreamArg, id, status.InProgress.String(),
+		status.Uploaded.String(), upstreamArg, upstreamArg, id, status.InProgress.String(),
 	)
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("update qso_upload")
@@ -2933,8 +2953,8 @@ func (s *Service) FetchQsoHistoryByUUIDWithContext(ctx context.Context, qsoUUID 
 	return out, nil
 }
 
-// FetchPriorUpstreamIDWithContext returns the preferred known upstream_id
-// recorded by an UPSTREAM-CREATING action (insert OR update) for the given
+// FetchPriorUpstreamIDWithContext returns the newest known upstream_id recorded
+// by an UPSTREAM-CREATING action (insert OR update) for the given
 // (qso_id, forwarder_name) pair. The QRZ delete forwarder needs this value to
 // populate LOGIDS on the DELETE call — upstream's delete endpoint identifies
 // records by its own id, not by our QSO id.
@@ -2949,14 +2969,14 @@ func (s *Service) FetchQsoHistoryByUUIDWithContext(ctx context.Context, qsoUUID 
 // are excluded by the action filter for clarity.)
 //
 // Do not require status='uploaded'. InsertQsoUploadTx deliberately preserves
-// upstream_id when it re-arms a previously successful row; that retained id is
-// still evidence of an existing upstream record while the new attempt is
-// pending or after it fails. Ignoring it can make a later delete falsely look
-// like an id-less no-op. Retained ids are FALLBACKS: an uploaded candidate
-// sorts first because queue re-arm/failure also advances modified_at and must
-// not make an older retained id outrank a still-uploaded one. Within each tier,
-// modified_at DESC chooses the freshest row and id DESC breaks ties. UNIQUE
-// (qso_id, forwarder_name, action) means at most one row per tier and action.
+// upstream_id and upstream_id_generation when it re-arms a previously
+// successful row; both remain evidence of the accepted upstream record while
+// the new attempt is pending or after it fails. The generation changes ONLY
+// when a non-empty id is accepted, so queue-state transitions cannot reorder
+// successes. Migration-era retained ids whose success order was already lost
+// have NULL generation and sort after every known generation, then by the old
+// modified_at/id fallback. UNIQUE(qso_id, forwarder_name, action) means at most
+// one insert and one update row exist per pair (ADR 0081).
 //
 // Returns:
 //   - ("", nil) when no matching row with a known upstream id exists.
@@ -2988,7 +3008,8 @@ func (s *Service) FetchPriorUpstreamIDWithContext(
 		models.QsoUploadWhere.ForwarderName.EQ(forwarderName),
 		models.QsoUploadWhere.Action.IN([]string{action.Insert.String(), action.Update.String()}),
 		models.QsoUploadWhere.UpstreamID.IsNotNull(),
-		qm.OrderBy("CASE WHEN status = 'uploaded' THEN 0 ELSE 1 END, modified_at DESC, id DESC"),
+		qm.OrderBy("CASE WHEN upstream_id_generation IS NULL THEN 1 ELSE 0 END, "+
+			"upstream_id_generation DESC, modified_at DESC, id DESC"),
 		qm.Limit(1),
 	).One(ctx, h)
 	if err != nil {
@@ -3237,11 +3258,11 @@ func (s *Service) InsertQsoUploadTx(ctx context.Context, tx *sql.Tx, qsoId int64
 		return errors.New(op).WithErr(err)
 	}
 
-	// Re-arm preserves upstream_id deliberately: FetchPriorUpstreamIDWithContext
-	// reads it back for the QRZ delete-after-insert flow, and the worker's
-	// own success path overwrites it on the next successful attempt.
-	// Clearing it here would lose history a re-armed insert (the rare
-	// force=true edge case) might want to keep.
+	// Re-arm preserves upstream_id AND upstream_id_generation deliberately:
+	// FetchPriorUpstreamIDWithContext reads them back for the QRZ
+	// delete-after-insert flow, and the worker's own success path overwrites both
+	// on the next accepted attempt. Clearing either would lose history a re-armed
+	// insert (the rare force=true edge case) might need for a later delete.
 	// origin is REPLACED on re-arm while upstream_id is PRESERVED — deliberately
 	// opposite treatments in one statement, so do not "tidy" them into agreement.
 	// upstream_id is history the QRZ delete-after-insert flow reads back; origin

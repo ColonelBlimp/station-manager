@@ -69,10 +69,13 @@ Slices, each its own commit:
 
 1. **QRZ delete with no upstream id is a no-op.** `qrz.Submit(delete, "")` returns Success with
    detail `no_upstream_record` and fires no HTTP; the row settles `uploaded`. Forwarder-level (the
-   worker keeps passing the empty id through so field-keyed deletes stay reachable).
+   worker keeps passing the empty id through so field-keyed deletes stay reachable). Post-commit
+   review added log migration 0010's nullable `upstream_id_generation`: queue timestamps/status
+   cannot safely choose among IDs retained across re-arms, so the lookup follows immutable success
+   order and only treats a genuinely absent ID as the no-op ([ADR 0081](../decisions/0081-preserve-upstream-id-success-order.md)).
 2. **Durable failure class.** `forwarding.Result` gains a terminal `Class` (`auth` for a rejected
    credential: QRZ `RESULT=AUTH`/401, SM Cloud 401, ClubLog and QRZCQ auth rejections); the worker
-   stores it in a new nullable `qso_upload.failure_class` column (log migration 0010). Rows failed
+   stores it in a new nullable `qso_upload.failure_class` column (log migration 0011). Rows failed
    before the column read NULL.
 3. **Boot re-arm.** At worker start, after the orphan sweep, each ENABLED forwarder's
    `failed` rows with `failure_class = 'auth'` return to `pending` (attempts reset), logged with the
@@ -90,9 +93,11 @@ Rulings for slices 2–4 (2026-09-20):
 - (b) **Authentication failures re-arm at worker start, not at `PUT /v1/config`.** Each enabled
   forwarder gets one attempt per daemon restart; the running worker is never handed rows while it
   still holds the old credential.
-- (c) **Migration 0010 adds nullable `qso_upload.failure_class` and bumps the log schema head.**
-  Durable typed state is the contract; recovery must not parse redacted, provider-owned error text.
-- (d) **Migration 0010 leaves every existing row's `failure_class` NULL.** In particular, the
+- (c) **The next log migration adds nullable `qso_upload.failure_class` (now 0011) and bumps the
+  schema head.** Durable typed state is the contract; recovery must not parse redacted,
+  provider-owned error text. Migration 0010 was consumed by slice 1's reviewed
+  `upstream_id_generation` prerequisite (ADR 0081); the policy ruling is unchanged.
+- (d) **Migration 0011 leaves every existing row's `failure_class` NULL.** In particular, the
   preserved 2026-08-06 QRZ fixture remains untouched by automatic boot recovery. It moves only if
   the operator explicitly invokes "Retry failed", consistent with (a).
 

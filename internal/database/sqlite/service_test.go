@@ -2059,14 +2059,11 @@ func TestFetchPriorUpstreamID_ConsidersUpdateAction(t *testing.T) {
 	}
 }
 
-// TestFetchPriorUpstreamID_OrdersBySuccessFreshnessNotCreation is the M1
-// regression (review 2026-06-19): the lookup must pick the row whose SUCCESS is
-// most recent (modified_at), not the most recently CREATED row (created_at). The
-// re-arm case: an insert row created first, then re-armed and re-uploaded AFTER
-// a later-created update row succeeded — the insert holds the live upstream id
-// despite its older created_at. Timestamps are pinned via raw SQL because
-// DATETIME is second-resolution and a fast test would otherwise tie.
-func TestFetchPriorUpstreamID_OrdersBySuccessFreshnessNotCreation(t *testing.T) {
+// The lookup follows immutable success generation, not mutable queue
+// timestamps. Here the insert succeeds, a later-created update succeeds, then
+// the insert is re-armed and succeeds again. Even if its modified_at is pinned
+// older afterward, its third success generation owns the current upstream id.
+func TestFetchPriorUpstreamID_OrdersBySuccessGeneration(t *testing.T) {
 	svc := testService(t)
 	ctx := context.Background()
 	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
@@ -2074,7 +2071,7 @@ func TestFetchPriorUpstreamID_OrdersBySuccessFreshnessNotCreation(t *testing.T) 
 
 	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Insert)
 	ins, _ := svc.ClaimPendingUploadsWithContext(ctx, "qrz", 1)
-	if err := svc.MarkUploadSuccessWithContext(ctx, ins[0].ID, "insert-id-rearmed"); err != nil {
+	if err := svc.MarkUploadSuccessWithContext(ctx, ins[0].ID, "insert-id-first"); err != nil {
 		t.Fatalf("mark insert: %v", err)
 	}
 	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Update)
@@ -2083,19 +2080,33 @@ func TestFetchPriorUpstreamID_OrdersBySuccessFreshnessNotCreation(t *testing.T) 
 		t.Fatalf("mark update: %v", err)
 	}
 
-	// Encode the re-arm: the UPDATE row was CREATED later, but the INSERT row was
-	// re-uploaded (modified) later — so it owns the current upstream id. Drop the
-	// auto-touch trigger first, else it stamps modified_at = now on our UPDATEs
-	// and both rows tie at the test-run second.
+	tx, cancel, err := svc.BeginTxContext(ctx)
+	if err != nil {
+		t.Fatalf("begin re-arm: %v", err)
+	}
+	defer cancel()
+	if err = svc.InsertQsoUploadTx(ctx, tx, qsoID, action.Insert, "qrz", "qrz", origin.Edit); err != nil {
+		t.Fatalf("re-arm insert: %v", err)
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatalf("commit re-arm: %v", err)
+	}
+	ins, _ = svc.ClaimPendingUploadsWithContext(ctx, "qrz", 1)
+	if err = svc.MarkUploadSuccessWithContext(ctx, ins[0].ID, "insert-id-rearmed"); err != nil {
+		t.Fatalf("mark re-armed insert: %v", err)
+	}
+
+	// Make the queue timestamp tell the opposite story; generation must still
+	// select the genuinely latest accepted id.
 	if _, e := svc.handle.Exec(`DROP TRIGGER IF EXISTS trg_qso_upload_set_updated_at`); e != nil {
 		t.Fatalf("drop trigger: %v", e)
 	}
 	if _, e := svc.handle.Exec(
-		`UPDATE qso_upload SET created_at='2026-01-01 00:00:01', modified_at='2026-01-01 00:00:09' WHERE id=?`, ins[0].ID); e != nil {
+		`UPDATE qso_upload SET modified_at='2026-01-01 00:00:01' WHERE id=?`, ins[0].ID); e != nil {
 		t.Fatalf("pin insert ts: %v", e)
 	}
 	if _, e := svc.handle.Exec(
-		`UPDATE qso_upload SET created_at='2026-01-01 00:00:05', modified_at='2026-01-01 00:00:03' WHERE id=?`, upd[0].ID); e != nil {
+		`UPDATE qso_upload SET modified_at='2026-01-01 00:00:09' WHERE id=?`, upd[0].ID); e != nil {
 		t.Fatalf("pin update ts: %v", e)
 	}
 
@@ -2104,8 +2115,7 @@ func TestFetchPriorUpstreamID_OrdersBySuccessFreshnessNotCreation(t *testing.T) 
 		t.Fatalf("fetch: %v", err)
 	}
 	if got != "insert-id-rearmed" {
-		t.Fatalf("got %q, want insert-id-rearmed — lookup must order by success freshness (modified_at), "+
-			"not creation (created_at); under created_at ordering the stale later-created update row wins", got)
+		t.Fatalf("got %q, want insert-id-rearmed from the greatest success generation", got)
 	}
 }
 
@@ -2246,7 +2256,7 @@ func TestFetchPriorUpstreamID_PrefersUploadedIDOverNewerRetainedID(t *testing.T)
 
 	// Pin the failed row later so this test does not depend on SQLite's
 	// second-resolution timestamps. A bare modified_at ordering picks its stale
-	// id; status priority must keep the uploaded update authoritative.
+	// id; success generation must keep the later accepted update authoritative.
 	if _, err = svc.handle.Exec(`DROP TRIGGER IF EXISTS trg_qso_upload_set_updated_at`); err != nil {
 		t.Fatalf("drop trigger: %v", err)
 	}
@@ -2265,6 +2275,54 @@ func TestFetchPriorUpstreamID_PrefersUploadedIDOverNewerRetainedID(t *testing.T)
 	}
 	if got != "current-update-id" {
 		t.Fatalf("got %q, want current-update-id from the still-uploaded row", got)
+	}
+}
+
+// The inverse boundary matters too: if the most recent success is the row that
+// was re-armed, its retained id must remain newer than an older row that still
+// happens to have status=uploaded. Current queue status cannot decide this;
+// success order must survive independently across the re-arm.
+func TestFetchPriorUpstreamID_PrefersLatestRetainedIDOverOlderUploadedID(t *testing.T) {
+	svc := testService(t)
+	ctx := context.Background()
+	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
+	qsoID, _ := svc.InsertQso(validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845"))
+
+	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Insert)
+	ins, _ := svc.ClaimPendingUploadsWithContext(ctx, "qrz", 1)
+	if err := svc.MarkUploadSuccessWithContext(ctx, ins[0].ID, "older-insert-id"); err != nil {
+		t.Fatalf("mark insert success: %v", err)
+	}
+	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Update)
+	upd, _ := svc.ClaimPendingUploadsWithContext(ctx, "qrz", 1)
+	if err := svc.MarkUploadSuccessWithContext(ctx, upd[0].ID, "latest-update-id"); err != nil {
+		t.Fatalf("mark update success: %v", err)
+	}
+
+	// Re-arm and fail the LATEST successful row. Its current queue state is
+	// failed, but its retained id still came from the latest accepted write.
+	tx, cancel, err := svc.BeginTxContext(ctx)
+	if err != nil {
+		t.Fatalf("begin re-arm: %v", err)
+	}
+	defer cancel()
+	if err = svc.InsertQsoUploadTx(ctx, tx, qsoID, action.Update, "qrz", "qrz", origin.Edit); err != nil {
+		t.Fatalf("re-arm update: %v", err)
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatalf("commit re-arm: %v", err)
+	}
+	claimed, _ := svc.ClaimPendingUploadsWithContext(ctx, "qrz", 1)
+	if err = svc.MarkUploadFailedWithContext(ctx, claimed[0].ID, "qso soft-deleted; delete row supersedes"); err != nil {
+		t.Fatalf("mark re-armed update failed: %v", err)
+	}
+
+	got, err := svc.FetchPriorUpstreamIDWithContext(ctx, qsoID, "qrz")
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if got != "latest-update-id" {
+		t.Fatalf("got %q, want latest-update-id retained from the latest successful upload", got)
 	}
 }
 
@@ -2397,6 +2455,53 @@ func TestMarkUploadSuccessWithAdifStamp_HappyPath(t *testing.T) {
 	}
 	if qso.QrzComUploadDate != todayUTC8() {
 		t.Fatalf("QrzComUploadDate = %q, want %q", qso.QrzComUploadDate, todayUTC8())
+	}
+}
+
+// The worker uses the stamp-writing completion path for QRZ inserts and
+// updates, so it must assign the same durable success order as the un-stamped
+// completion path. Otherwise delete lookup would silently fall back to mutable
+// queue timestamps for every real QRZ success.
+func TestMarkUploadSuccessWithAdifStamp_AssignsSuccessGeneration(t *testing.T) {
+	svc := testService(t)
+	ctx := context.Background()
+	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
+	qsoID, _ := svc.InsertQso(validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845"))
+
+	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Insert)
+	claimed, _ := svc.ClaimPendingUploadsWithContext(ctx, "qrz", 1)
+	insertID := claimed[0].ID
+	if err := svc.MarkUploadSuccessWithAdifStampWithContext(
+		ctx, insertID, "insert-logid", qsoID, "QRZCOM",
+	); err != nil {
+		t.Fatalf("mark insert + stamp: %v", err)
+	}
+
+	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Update)
+	claimed, _ = svc.ClaimPendingUploadsWithContext(ctx, "qrz", 1)
+	updateID := claimed[0].ID
+	if err := svc.MarkUploadSuccessWithAdifStampWithContext(
+		ctx, updateID, "update-logid", qsoID, "QRZCOM",
+	); err != nil {
+		t.Fatalf("mark update + stamp: %v", err)
+	}
+
+	for _, tc := range []struct {
+		id   int64
+		want int64
+	}{
+		{insertID, 1},
+		{updateID, 2},
+	} {
+		var got sql.NullInt64
+		if err := svc.handle.QueryRowContext(ctx,
+			`SELECT upstream_id_generation FROM qso_upload WHERE id = ?`, tc.id,
+		).Scan(&got); err != nil {
+			t.Fatalf("read generation for row %d: %v", tc.id, err)
+		}
+		if !got.Valid || got.Int64 != tc.want {
+			t.Errorf("row %d generation = %+v, want %d", tc.id, got, tc.want)
+		}
 	}
 }
 
