@@ -277,7 +277,12 @@ first-run setup is still needed is not a settled Map tab (the welcome card cover
 stream opens). P3 refuted in a code comment: build identity rides the rig stream by W-0004 AC3's
 ratified placement, so a Map tab is now the no-CAT case for it — the tab title's DEV marker
 refreshes on the next reload, the accepted AC3 behaviour; routing it through the log stream would
-widen ADR 0079 without a ruling. Baseline rekeyed again (`line@494` → `line@500`).
+widen ADR 0079 without a ruling. Baseline rekeyed again (`line@494` → `line@500`). Flake fixed
+2026-09-20: CI run 35516449552 (a Go-only commit) failed this file with an
+`EnvironmentTeardownError` from d3-geo — the map route's lazy MapView chunk was still importing
+when the file's only test finished and jsdom was torn down (seen once in four runs, never
+locally in five). The pin now also waits for MapView to mount (`h1` "Contacts Map") before the
+test runs; reversion proof: a wrong marker fails the wait against the real heading.
 On air 2026-09-14 (`2.0.0-alpha.2-90-g7126ab64`, 15 m FT8 Call-CQ run, Map tab open beside the
 FT8 view): the operator reports the map working — the passive check the build was waiting on. The
 log agrees: the Map tab took the daemon's global subscriber count to four (entry 36 had six), no

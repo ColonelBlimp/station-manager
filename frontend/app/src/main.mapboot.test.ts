@@ -65,6 +65,16 @@ describe('main.ts: a Map tab holds the log stream only', () => {
         await vi.waitFor(() =>
             expect(requests.filter((u) => u === '/v1/logbook/1/count')).toHaveLength(1)
         );
+        // The map route lazy-loads MapView (its own chunk: basemap + d3-geo).
+        // That import is still in flight when the count seed lands, and on a
+        // slow runner it can resolve AFTER this file's only test has finished
+        // and vitest has torn the jsdom environment down — surfacing as an
+        // EnvironmentTeardownError from d3-geo (CI run 35516449552,
+        // 2026-09-20). Wait for the view to mount so the chunk is loaded
+        // before the environment goes away.
+        await vi.waitFor(() =>
+            expect(document.querySelector('h1')?.textContent).toBe('Contacts Map')
+        );
     });
     afterAll(() => {
         vi.unstubAllGlobals();
