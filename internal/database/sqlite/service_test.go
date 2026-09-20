@@ -2207,6 +2207,67 @@ func TestFetchPriorUpstreamID_FindsRetainedIDAfterRearmFailure(t *testing.T) {
 	}
 }
 
+// A retained id is a fallback, not stronger evidence than another row that is
+// still uploaded. Queue transitions advance modified_at, so a recently failed
+// re-arm must not make its older retained id outrank a newer successful update.
+func TestFetchPriorUpstreamID_PrefersUploadedIDOverNewerRetainedID(t *testing.T) {
+	svc := testService(t)
+	ctx := context.Background()
+	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
+	qsoID, _ := svc.InsertQso(validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845"))
+
+	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Insert)
+	ins, _ := svc.ClaimPendingUploadsWithContext(ctx, "qrz", 1)
+	if err := svc.MarkUploadSuccessWithContext(ctx, ins[0].ID, "stale-insert-id"); err != nil {
+		t.Fatalf("mark insert success: %v", err)
+	}
+	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Update)
+	upd, _ := svc.ClaimPendingUploadsWithContext(ctx, "qrz", 1)
+	if err := svc.MarkUploadSuccessWithContext(ctx, upd[0].ID, "current-update-id"); err != nil {
+		t.Fatalf("mark update success: %v", err)
+	}
+
+	// Re-arm and fail the older insert row while retaining its old id.
+	tx, cancel, err := svc.BeginTxContext(ctx)
+	if err != nil {
+		t.Fatalf("begin re-arm: %v", err)
+	}
+	defer cancel()
+	if err = svc.InsertQsoUploadTx(ctx, tx, qsoID, action.Insert, "qrz", "qrz", origin.Manual); err != nil {
+		t.Fatalf("re-arm insert: %v", err)
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatalf("commit re-arm: %v", err)
+	}
+	claimed, _ := svc.ClaimPendingUploadsWithContext(ctx, "qrz", 1)
+	if err = svc.MarkUploadFailedWithContext(ctx, claimed[0].ID, "qso soft-deleted before insert forwarded"); err != nil {
+		t.Fatalf("mark re-armed insert failed: %v", err)
+	}
+
+	// Pin the failed row later so this test does not depend on SQLite's
+	// second-resolution timestamps. A bare modified_at ordering picks its stale
+	// id; status priority must keep the uploaded update authoritative.
+	if _, err = svc.handle.Exec(`DROP TRIGGER IF EXISTS trg_qso_upload_set_updated_at`); err != nil {
+		t.Fatalf("drop trigger: %v", err)
+	}
+	if _, err = svc.handle.Exec(
+		`UPDATE qso_upload SET modified_at='2026-01-01 00:00:09' WHERE id=?`, ins[0].ID); err != nil {
+		t.Fatalf("pin insert timestamp: %v", err)
+	}
+	if _, err = svc.handle.Exec(
+		`UPDATE qso_upload SET modified_at='2026-01-01 00:00:03' WHERE id=?`, upd[0].ID); err != nil {
+		t.Fatalf("pin update timestamp: %v", err)
+	}
+
+	got, err := svc.FetchPriorUpstreamIDWithContext(ctx, qsoID, "qrz")
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if got != "current-update-id" {
+		t.Fatalf("got %q, want current-update-id from the still-uploaded row", got)
+	}
+}
+
 // InsertQsoUploadTx UPSERTs on conflict over (qso_id, forwarder_name,
 // action) — a second enqueue for the same triple does not violate the
 // UNIQUE constraint and does not duplicate the row. Instead, it re-arms

@@ -2933,11 +2933,11 @@ func (s *Service) FetchQsoHistoryByUUIDWithContext(ctx context.Context, qsoUUID 
 	return out, nil
 }
 
-// FetchPriorUpstreamIDWithContext returns the most recently modified known
-// upstream_id recorded by an UPSTREAM-CREATING action (insert OR update) for
-// the given (qso_id, forwarder_name) pair. The QRZ delete forwarder needs this
-// value to populate LOGIDS on the DELETE call — upstream's delete endpoint
-// identifies records by its own id, not by our QSO id.
+// FetchPriorUpstreamIDWithContext returns the preferred known upstream_id
+// recorded by an UPSTREAM-CREATING action (insert OR update) for the given
+// (qso_id, forwarder_name) pair. The QRZ delete forwarder needs this value to
+// populate LOGIDS on the DELETE call — upstream's delete endpoint identifies
+// records by its own id, not by our QSO id.
 //
 // Both insert (ACTION=INSERT) and update (ACTION=INSERT&OPTION=REPLACE) can be
 // the action that created/owns the upstream record and returned its id. If an
@@ -2952,9 +2952,11 @@ func (s *Service) FetchQsoHistoryByUUIDWithContext(ctx context.Context, qsoUUID 
 // upstream_id when it re-arms a previously successful row; that retained id is
 // still evidence of an existing upstream record while the new attempt is
 // pending or after it fails. Ignoring it can make a later delete falsely look
-// like an id-less no-op. UNIQUE(qso_id, forwarder_name, action) means at most
-// one insert and one update row exist per pair. Ordering is by
-// `modified_at DESC, id DESC`; id DESC breaks ties (review 2026-06-19 M1).
+// like an id-less no-op. Retained ids are FALLBACKS: an uploaded candidate
+// sorts first because queue re-arm/failure also advances modified_at and must
+// not make an older retained id outrank a still-uploaded one. Within each tier,
+// modified_at DESC chooses the freshest row and id DESC breaks ties. UNIQUE
+// (qso_id, forwarder_name, action) means at most one row per tier and action.
 //
 // Returns:
 //   - ("", nil) when no matching row with a known upstream id exists.
@@ -2986,7 +2988,7 @@ func (s *Service) FetchPriorUpstreamIDWithContext(
 		models.QsoUploadWhere.ForwarderName.EQ(forwarderName),
 		models.QsoUploadWhere.Action.IN([]string{action.Insert.String(), action.Update.String()}),
 		models.QsoUploadWhere.UpstreamID.IsNotNull(),
-		qm.OrderBy("modified_at DESC, id DESC"),
+		qm.OrderBy("CASE WHEN status = 'uploaded' THEN 0 ELSE 1 END, modified_at DESC, id DESC"),
 		qm.Limit(1),
 	).One(ctx, h)
 	if err != nil {
