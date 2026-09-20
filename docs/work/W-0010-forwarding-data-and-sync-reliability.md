@@ -94,6 +94,15 @@ Slices, each its own commit:
    `missing_from` filter for that forwarder, and a "Retry failed (M)" button posts
    `POST /v1/forwarder/{name}/queue/retry`, which re-arms that forwarder's `failed` rows.
 
+CI note (2026-09-20). Slice 2's run (35511192956) tripped the 10-minute per-package race timeout in
+`internal/api`: the package had grown to 349–587 s on the runner (233 s of that is runner variance
+between two docs-only runs), because each of its ~370 test servers migrated a fresh database through
+both migration sets (~0.46 s each under `-race`), so every new migration grew all of them. Operator
+ruling: raise the timeout to 15 m in a CI-only commit (`98af6e2c`), then fix the cause as a separate
+test-infrastructure commit — one migrated template per package run, closed, copied per test into
+`t.TempDir()`; remeasure and consider restoring 10 m. Measured after the refactor: `-race -short`
+239 s → 12 s locally, plain run 12 s → 4 s, 488/488 passing, template directory removed by `TestMain`.
+
 Rulings for slices 2–4 (2026-09-20):
 
 - (a) **"Retry failed" re-arms all failed rows for the enabled, path-named forwarder.** It is an

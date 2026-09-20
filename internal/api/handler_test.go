@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -29,8 +31,128 @@ func unmarshalJSON(body string, v any) error {
 	return json.Unmarshal([]byte(body), v)
 }
 
-// testServer creates a Server wired to an in-memory sqlite database for
-// handler testing.
+// Migrated-template database (test infrastructure, operator ruling 2026-09-20).
+//
+// This package builds ~370 test servers per run. Migrating each one's fresh
+// database through both migration sets cost ~0.46 s per server under -race —
+// roughly 170 s of a 239 s local run, ~420 s on the CI runner — and every new
+// migration grew all of them, which is how the package crept from ~260 s to
+// the 10-minute race ceiling (run 35511192956). Instead, ONE database is
+// migrated per package run, closed, and each test receives its own isolated
+// copy of that file: same schema, same migration history, same planner stats
+// (ANALYZE ran on the template), no per-test migration. Tests remain fully
+// isolated — a copy is a private file under t.TempDir(), never shared.
+var (
+	dbTemplateOnce sync.Once
+	dbTemplateDir  string // package-scoped scratch dir, removed by TestMain
+	dbTemplatePath string
+	dbTemplateErr  error
+)
+
+// TestMain exists only to remove the package-scoped template directory once
+// every test has run; t.TempDir cannot own a file that must outlive one test.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if dbTemplateDir != "" {
+		_ = os.RemoveAll(dbTemplateDir)
+	}
+	os.Exit(code)
+}
+
+// buildDBTemplate migrates a file-backed database to head through the real
+// Service (both sets, schema verification, ANALYZE) and CLOSES it, so the file
+// on disk is complete and self-contained before anything copies it.
+func buildDBTemplate() {
+	dir, err := os.MkdirTemp("", "sm-api-dbtemplate-")
+	if err != nil {
+		dbTemplateErr = fmt.Errorf("template scratch dir: %w", err)
+		return
+	}
+	dbTemplateDir = dir
+
+	cfg := config.DefaultConfig(dir)
+	cfgSvc := config.New(cfg)
+	if err := cfgSvc.Initialize(); err != nil {
+		dbTemplateErr = fmt.Errorf("template config init: %w", err)
+		return
+	}
+	logSvc := &logging.Service{}
+	logSvc.ConfigService = cfgSvc
+	logSvc.WorkingDir = cfgSvc.WorkingDir()
+	if err := logSvc.Initialize(); err != nil {
+		dbTemplateErr = fmt.Errorf("template logging init: %w", err)
+		return
+	}
+	defer func() { _ = logSvc.Close() }()
+
+	path := filepath.Join(dir, "template.db")
+	dbSvc := &sqlite.Service{}
+	dbSvc.ConfigService = cfgSvc
+	dbSvc.LoggerService = logSvc
+	if err := dbSvc.Initialize(); err != nil {
+		dbTemplateErr = fmt.Errorf("template sqlite init: %w", err)
+		return
+	}
+	dbSvc.DatabaseConfig = testDatastoreConfig(path)
+	if err := dbSvc.Open(); err != nil {
+		dbTemplateErr = fmt.Errorf("template sqlite open: %w", err)
+		return
+	}
+	if err := dbSvc.Migrate(); err != nil {
+		_ = dbSvc.Close()
+		dbTemplateErr = fmt.Errorf("template sqlite migrate: %w", err)
+		return
+	}
+	if err := dbSvc.Close(); err != nil {
+		dbTemplateErr = fmt.Errorf("template sqlite close: %w", err)
+		return
+	}
+	// A clean close of the last connection checkpoints and removes the WAL, so
+	// the main file alone is the whole database. Refuse to serve a template
+	// whose WAL survived — a copy of the main file alone would then be stale.
+	for _, side := range []string{path + "-wal", path + "-shm"} {
+		if _, err := os.Stat(side); err == nil {
+			dbTemplateErr = fmt.Errorf("template %s still present after close; the main file is not self-contained", filepath.Base(side))
+			return
+		}
+	}
+	dbTemplatePath = path
+}
+
+// testDatastoreConfig is the single-connection datastore shape every test
+// server (and the template) opens with.
+func testDatastoreConfig(path string) *types.DatastoreConfig {
+	return &types.DatastoreConfig{
+		Driver:                    "sqlite",
+		Path:                      path,
+		MaxOpenConns:              1,
+		MaxIdleConns:              1,
+		ContextTimeout:            10,
+		TransactionContextTimeout: 10,
+	}
+}
+
+// copyDBTemplate gives the calling test its own copy of the migrated template
+// under t.TempDir() and returns the copy's path.
+func copyDBTemplate(t *testing.T) string {
+	t.Helper()
+	dbTemplateOnce.Do(buildDBTemplate)
+	if dbTemplateErr != nil {
+		t.Fatalf("migrated template database unavailable: %v", dbTemplateErr)
+	}
+	data, err := os.ReadFile(dbTemplatePath)
+	if err != nil {
+		t.Fatalf("read template database: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "api.db")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write test database copy: %v", err)
+	}
+	return path
+}
+
+// testServer creates a Server wired to a private, fully migrated sqlite
+// database (a copy of the package template) for handler testing.
 func testServer(t *testing.T) *Server {
 	return testServerWithCfg(t, nil)
 }
@@ -90,19 +212,11 @@ func testServerWithLogger(
 	if err := dbSvc.Initialize(); err != nil {
 		t.Fatalf("sqlite init: %v", err)
 	}
-	dbSvc.DatabaseConfig = &types.DatastoreConfig{
-		Driver:                    "sqlite",
-		Path:                      ":memory:",
-		MaxOpenConns:              1,
-		MaxIdleConns:              1,
-		ContextTimeout:            10,
-		TransactionContextTimeout: 10,
-	}
+	// A private copy of the migrated template — no per-test Migrate; see
+	// buildDBTemplate for why and for what the copy is guaranteed to contain.
+	dbSvc.DatabaseConfig = testDatastoreConfig(copyDBTemplate(t))
 	if err := dbSvc.Open(); err != nil {
 		t.Fatalf("sqlite open: %v", err)
-	}
-	if err := dbSvc.Migrate(); err != nil {
-		t.Fatalf("sqlite migrate: %v", err)
 	}
 	t.Cleanup(func() {
 		_ = dbSvc.Close()
