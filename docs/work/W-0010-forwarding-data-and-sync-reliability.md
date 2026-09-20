@@ -1,7 +1,7 @@
 # W-0010 — Improve forwarding, data, and synchronization reliability
 
-**Status:** Open — staged workstream
-**Selected:** Not selected
+**Status:** Selected — outcome 9 in progress
+**Selected:** 2026-09-20 (operator: "Select W-0010 and start outcome 9")
 **Outcome:** Upload recovery, synchronization, email, and duplicate handling preserve operator
 intent and converge without routine full-log churn or forbidden third-party API use.
 
@@ -48,6 +48,53 @@ intent and converge without routine full-log churn or forbidden third-party API 
    alpha.2 Finding #19) is preserved untouched — not retried, not cleared — as this outcome's regression
    fixture; the work must distinguish failed from waiting items, identify the QSO, recover from
    authentication failures, and make a QRZ deletion without an upstream ID a no-op.
+
+## Outcome 9 — slice plan (2026-09-20)
+
+Verified against the tree at `39c854e3` before any code:
+
+- Already shipped: the QRZ key redaction (`68e74f90`, `qrz.redactKey` before classification), and
+  the durable terminal record — `worker.markFailed` writes an operator event (category
+  `notification`, kind `forward.failed`, W-0001/ADR 0076). The fixture row (2026-08-06) predates
+  that write, so no event row exists for it.
+- Config changes require a daemon restart (`docs/v2-design/forwarding.md` §8). Re-arming at
+  `PUT /v1/config` would hand the rows to the still-running worker holding the OLD credential, which
+  fails them terminally again. The re-arm therefore runs at worker start (every restart), for rows
+  whose failure is classed as authentication — shared by every forwarder, so SM Cloud's 401 (outcome
+  1's queue half) uses the same path.
+- The card counts `pending + failed` as one `clearable` number (`GET /v1/forwarder-queues`), which
+  is exactly the "1 queued" the fixture produced.
+
+Slices, each its own commit:
+
+1. **QRZ delete with no upstream id is a no-op.** `qrz.Submit(delete, "")` returns Success with
+   detail `no_upstream_record` and fires no HTTP; the row settles `uploaded`. Forwarder-level (the
+   worker keeps passing the empty id through so field-keyed deletes stay reachable).
+2. **Durable failure class.** `forwarding.Result` gains a terminal `Class` (`auth` for a rejected
+   credential: QRZ `RESULT=AUTH`/401, SM Cloud 401, ClubLog and QRZCQ auth rejections); the worker
+   stores it in a new nullable `qso_upload.failure_class` column (log migration 0010). Rows failed
+   before the column read NULL.
+3. **Boot re-arm.** At worker start, after the orphan sweep, each ENABLED forwarder's
+   `failed` rows with `failure_class = 'auth'` return to `pending` (attempts reset), logged with the
+   count. A still-bad credential fails them once more per restart — bounded, never a spin.
+4. **Card and API.** `GET /v1/forwarder-queues` adds `waiting` (pending) and `failed`; the card
+   reads "N waiting · M failed · K in flight", the failed count links to the logbook's
+   `missing_from` filter for that forwarder, and a "Retry failed (M)" button posts
+   `POST /v1/forwarder/{name}/queue/retry`, which re-arms that forwarder's `failed` rows.
+
+Rulings for slices 2–4 (2026-09-20):
+
+- (a) **"Retry failed" re-arms all failed rows for the enabled, path-named forwarder.** It is an
+  explicit operator action, unlike automatic recovery. A still-invalid row may fail once more and
+  write one more `forward.failed` event, but it cannot duplicate an accepted upload.
+- (b) **Authentication failures re-arm at worker start, not at `PUT /v1/config`.** Each enabled
+  forwarder gets one attempt per daemon restart; the running worker is never handed rows while it
+  still holds the old credential.
+- (c) **Migration 0010 adds nullable `qso_upload.failure_class` and bumps the log schema head.**
+  Durable typed state is the contract; recovery must not parse redacted, provider-owned error text.
+- (d) **Migration 0010 leaves every existing row's `failure_class` NULL.** In particular, the
+  preserved 2026-08-06 QRZ fixture remains untouched by automatic boot recovery. It moves only if
+  the operator explicitly invokes "Retry failed", consistent with (a).
 
 ## Verification boundary
 

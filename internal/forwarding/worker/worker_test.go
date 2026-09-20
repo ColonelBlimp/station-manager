@@ -1060,8 +1060,9 @@ func TestWorker_Delete_NoPriorInsert_IdRequiringForwarderFails(t *testing.T) {
 	qsoID := h.seedLogbookAndQso()
 	h.enqueueUpload(qsoID, "stub", stub.Type, action.Delete)
 
-	// Forwarder that rejects a missing id terminally (stands in for QRZ's
-	// buildForm empty-priorUpstreamID guard).
+	// Forwarder that rejects a missing id terminally. (QRZ itself now settles
+	// an empty id as a Success no-op — W-0010 outcome 9 — so this stub stands
+	// for any id-keyed forwarder that still chooses to refuse.)
 	fwd := &recordingForwarder{
 		typeName: stub.Type,
 		result: forwarding.Result{

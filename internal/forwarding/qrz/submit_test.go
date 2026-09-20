@@ -378,10 +378,12 @@ func TestSubmit_Delete_FAIL_IsIdempotentSuccess(t *testing.T) {
 	}
 }
 
-func TestSubmit_Delete_EmptyPriorID_IsTerminal(t *testing.T) {
-	// The worker should have short-circuited before calling Submit —
-	// an empty priorUpstreamID here is a caller bug, classified
-	// Terminal so retries don't hammer QRZ with a malformed delete.
+func TestSubmit_Delete_EmptyPriorID_IsNoOpSuccess(t *testing.T) {
+	// No upstream id means QRZ never accepted an insert for this QSO (a QRZ
+	// insert success always carries LOGID), so there is nothing upstream to
+	// delete. The delete settles as a Success no-op without touching QRZ —
+	// not a Terminal failure that reads as a live backlog on the Forwarding
+	// card (W-0010 outcome 9).
 	var calls atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
@@ -392,11 +394,14 @@ func TestSubmit_Delete_EmptyPriorID_IsTerminal(t *testing.T) {
 	fwd := fwdAt(srv.URL, "key")
 
 	res := fwd.Submit(context.Background(), sampleQso(), action.Delete, "")
-	if res.Outcome != forwarding.OutcomeTerminal {
-		t.Fatalf("outcome = %q, want terminal on empty priorUpstreamID", res.Outcome)
+	if res.Outcome != forwarding.OutcomeSuccess {
+		t.Fatalf("outcome = %q (err=%v), want success no-op on empty priorUpstreamID", res.Outcome, res.Err)
 	}
-	if !strings.Contains(res.Err.Error(), "priorUpstreamID") {
-		t.Fatalf("err = %q, want 'priorUpstreamID' substring", res.Err.Error())
+	if res.Err != nil {
+		t.Fatalf("err = %v, want nil on a no-op delete", res.Err)
+	}
+	if res.Detail != DetailNoUpstreamRecord {
+		t.Fatalf("detail = %q, want %q so the attempt log names the no-op", res.Detail, DetailNoUpstreamRecord)
 	}
 	if got := calls.Load(); got != 0 {
 		t.Fatalf("server saw %d calls, want 0 — empty priorUpstreamID must not fire HTTP", got)

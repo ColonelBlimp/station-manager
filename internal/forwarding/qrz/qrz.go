@@ -186,6 +186,12 @@ func newWithEndpoint(apiKey, endpoint string, client *http.Client) *Forwarder {
 	}
 }
 
+// DetailNoUpstreamRecord is the Result.Detail a delete settles with when the
+// worker found no upstream id for the QSO: QRZ never accepted an insert for it
+// (a QRZ insert success always carries LOGID), so there is nothing to delete
+// and no request is sent (W-0010 outcome 9).
+const DetailNoUpstreamRecord = "no_upstream_record"
+
 // Type returns the registry identifier for this forwarder.
 func (f *Forwarder) Type() string { return Type }
 
@@ -201,11 +207,13 @@ func (f *Forwarder) AdifPrefix() string { return AdifFieldPrefix }
 //	update   ACTION=INSERT  OPTION=REPLACE                ADIF=<record>
 //	delete   ACTION=DELETE  LOGIDS=<priorUpstreamID>
 //
-// For delete, priorUpstreamID must be the LOGID QRZ returned on the
-// earlier successful insert; the worker fetches this from the
-// qso_upload history before calling Submit. An empty priorUpstreamID
-// here is a caller bug — surfaced as Terminal rather than sent to
-// QRZ as a malformed delete.
+// For delete, priorUpstreamID is the LOGID QRZ returned on the earlier
+// successful insert; the worker fetches this from the qso_upload history
+// before calling Submit. An EMPTY priorUpstreamID means QRZ never accepted
+// an insert for this QSO (its insert success always carries LOGID), so the
+// delete settles as a Success no-op (Detail DetailNoUpstreamRecord) and no
+// request is sent — a failed insert followed by a delete must not leave a
+// second terminal failure on the Forwarding card (W-0010 outcome 9).
 //
 // Outcome classification has two layers:
 //   - transport (this function): ctx cancel, network error, or
@@ -226,11 +234,15 @@ func (f *Forwarder) Submit(
 		return forwarding.Result{Outcome: forwarding.OutcomeTransient, Err: err}
 	}
 
+	if act == action.Delete && priorUpstreamID == "" {
+		return forwarding.Result{Outcome: forwarding.OutcomeSuccess, Detail: DetailNoUpstreamRecord}
+	}
+
 	form, err := buildForm(f.apiKey, qso, act, priorUpstreamID)
 	if err != nil {
-		// A build-time error (unknown action, empty priorUpstreamID on
-		// delete, adif conversion failure) is not something retries
-		// can heal.
+		// A build-time error (unknown action or ADIF conversion failure)
+		// is not something retries can heal. An id-less delete already
+		// settled as the no-op success above.
 		return forwarding.Result{Outcome: forwarding.OutcomeTerminal, Err: err}
 	}
 
@@ -337,10 +349,11 @@ func buildForm(apiKey string, qso types.Qso, act forwarding.Action, priorUpstrea
 		// priorUpstreamID is the LOGID captured on the earlier successful
 		// insert, resolved by the worker via
 		// sqlite.Service.FetchPriorUpstreamIDWithContext before Submit.
-		// Empty here is a caller bug — the worker should have
-		// short-circuited with a terminal result before we got this far.
+		// Submit settles an empty id as a no-op before building the form, so
+		// reaching here empty is a caller bug: refuse rather than send a
+		// malformed DELETE.
 		if priorUpstreamID == "" {
-			return nil, errors.New(op).WithMsg("delete requires non-empty priorUpstreamID (worker lookup failed)")
+			return nil, errors.New(op).WithMsg("delete requires non-empty priorUpstreamID (caller bug)")
 		}
 		form.Set("ACTION", "DELETE")
 		form.Set("LOGIDS", priorUpstreamID)

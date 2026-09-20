@@ -335,7 +335,12 @@ the worker.
 need the remote record id to issue a delete. That id was captured on
 the earlier successful insert as `Result.UpstreamID` and stored in
 `qso_upload.upstream_id`. For a delete action, the worker looks up
-that insert row's `upstream_id` and passes it through. For
+that insert row's `upstream_id` and passes it through — empty
+included, since a field-keyed upstream (ClubLog) never stored one.
+An id-keyed upstream decides what an empty id means: QRZ settles the
+delete as a Success no-op (`Detail: no_upstream_record`, no request
+sent), because its insert success always carries LOGID, so an empty
+id proves nothing was ever created upstream (W-0010 outcome 9). For
 insert/update the param is empty and forwarders ignore it. The
 alternative shapes considered (stashing it on `types.Qso`, or letting
 the forwarder query sqlite itself) either abused the DTO or broke
