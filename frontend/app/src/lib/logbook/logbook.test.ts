@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { logbookState } from './logbook.svelte';
+import { navigate, takeLogbookMissingFrom } from '../router.svelte';
 import type { LogbookQso } from '../api/logbooks';
 
 function qso(id: number, uuid: string): LogbookQso {
@@ -535,5 +536,55 @@ describe('selected destination labelling', () => {
         expect(logbookState.notice).toMatch(/never uploaded live/i); // …with the reason…
         expect(logbookState.notice).toMatch(/ADIF export/i); // …and the remedy.
         vi.restoreAllMocks();
+    });
+});
+
+// W-0010 outcome 9, slice 4: arriving from Settings → Forwarding's failed count,
+// the logbook opens already filtered to "not on <destination>" — the first page
+// request carries missing_from, so the operator never sees the whole logbook
+// flash first. The handoff is one-shot (router.takeLogbookMissingFrom).
+describe('mount with a missing-from handoff', () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        logbookState.rows = [];
+        logbookState.selectedId = null;
+        logbookState.forwarders = [];
+        logbookState.selectedDestination = '';
+        navigate('operate');
+    });
+
+    it('init applies the handed-off destination before the first page load', async () => {
+        const urls: string[] = [];
+        vi.stubGlobal(
+            'fetch',
+            vi.fn((input: RequestInfo | URL) => {
+                const url = urlText(input);
+                urls.push(url);
+                const json = (body: unknown) =>
+                    Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+                if (url.startsWith('/v1/config')) {
+                    return json({
+                        forwarders: [{ name: 'qrz', type: 'qrz', enabled: true }],
+                        mailer: { enabled: false },
+                    });
+                }
+                if (url === '/v1/logbook') return json([{ id: 1, name: 'L', callsign: 'G4ABC' }]);
+                if (url.startsWith('/v1/logbook/1/qso'))
+                    return json({ items: [], next_cursor: null });
+                if (url.startsWith('/v1/logbook/1/count')) return json({ count: 0 });
+                return Promise.resolve(new Response('{}', { status: 404 }));
+            })
+        );
+        navigate('logbook', { missingFrom: 'qrz' });
+
+        await logbookState.init();
+
+        expect(logbookState.selectedDestination).toBe('qrz');
+        const pageUrls = urls.filter((u) => u.startsWith('/v1/logbook/1/qso'));
+        expect(pageUrls.length).toBeGreaterThan(0);
+        for (const u of pageUrls) expect(u).toContain('missing_from=qrz');
+        expect(urls.find((u) => u.startsWith('/v1/logbook/1/count'))).toContain('missing_from=qrz');
+        // Consumed: a re-init (e.g. navigating away and back) starts unfiltered.
+        expect(takeLogbookMissingFrom()).toBeUndefined();
     });
 });

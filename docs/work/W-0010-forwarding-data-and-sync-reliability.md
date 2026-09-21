@@ -1,6 +1,6 @@
 # W-0010 — Improve forwarding, data, and synchronization reliability
 
-**Status:** Selected — outcome 9 in progress
+**Status:** Selected — outcome 9 in progress (slice 4 built, awaiting deploy check)
 **Selected:** 2026-09-20 (operator: "Select W-0010 and start outcome 9")
 **Outcome:** Upload recovery, synchronization, email, and duplicate handling preserve operator
 intent and converge without routine full-log churn or forbidden third-party API use.
@@ -93,6 +93,25 @@ Slices, each its own commit:
    reads "N waiting · M failed · K in flight", the failed count links to the logbook's
    `missing_from` filter for that forwarder, and a "Retry failed (M)" button posts
    `POST /v1/forwarder/{name}/queue/retry`, which re-arms that forwarder's `failed` rows.
+   Design (2026-09-21): the GET keeps `clearable` as `waiting + failed` (the Clear button's
+   count) and adds the two parts. The retry answers `{rearmed}`; 400 `invalid_forwarder`, 404
+   `unknown_forwarder`, 400 `forwarder_disabled` — a disabled forwarder has no worker, so its
+   re-armed rows would read as "waiting" until the next start discards them (the nearest
+   confusable outcome); the exact path name is looked up, like clear, and "enabled" is read from
+   the loaded config, like the backfill gate. The failed count links to `/logbook?missing_from=<name>`,
+   a one-shot handoff the logbook applies at mount and then canonicalises away (the destination
+   picker owns that state and does not write the URL); it is offered only for types that stamp
+   per-QSO upload status, and the card says the filter lists every QSO not on the destination, not
+   only the failed rows. Retry asks no confirmation — it is not destructive; a still-invalid row
+   fails once more, terminally (ruling (a)). Built 2026-09-21: storage
+   `RearmFailedUploadsForForwarderWithContext` shares one UPDATE with the auth re-arm;
+   `ForwarderQueueCounts` carries `Waiting`/`Failed` with `Clearable()` derived; the SPA card reads
+   "N waiting · M failed · K in flight" with "Retry failed (M)" and the gap link; the router's
+   `takeLogbookMissingFrom` handoff; `api-endpoints.md` and `forwarding.md` §7 updated. Proofs:
+   storage (auth-only re-arm and a merged count both fail), handler (no enabled gate → 200 for a
+   disabled forwarder; auth-only re-arm → 1 not 2), SPA (link without the stamp guard, mount
+   without the handoff, handoff not cleared). Not yet deployed — the fixture check on the card is
+   the next step.
 
 CI note (2026-09-20). Slice 2's run (35511192956) tripped the 10-minute per-package race timeout in
 `internal/api`: the package had grown to 349–587 s on the runner (233 s of that is runner variance

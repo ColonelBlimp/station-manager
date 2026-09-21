@@ -745,6 +745,16 @@ holds the old credential until the restart. A still-bad credential
 fails the rows once more, terminally; rows failed for any other reason
 (class NULL — including every pre-0011 row) are never touched.
 
+**Operator retry** (W-0010 outcome 9, ruling (a)). `POST
+/v1/forwarder/{name}/queue/retry` — Settings → Forwarding's "Retry
+failed" — returns EVERY `failed` row of one enabled forwarder to
+`pending`, whatever its class, with the same reset. It is the explicit
+counterpart of the boot recovery: the operator chooses to re-send rows
+the daemon would never re-arm on its own (a data rejection, exhausted
+retries, or the pre-0011 fixture). `GET /v1/forwarder-queues` reads
+`waiting` (pending) and `failed` apart so the card never shows a
+terminal failure as a live backlog.
+
 **SSE emission points.** Only terminal transitions emit events:
 
 - `in_progress` → `uploaded`: emit `forward.succeeded`.
@@ -766,7 +776,7 @@ which defeats the purpose of the event stream.
 
 **No `attempts_total` vs `attempts_current`.** The single `attempts`
 counter is the count since the row was created. If the operator
-manually re-queues a `failed` row (future endpoint), it resets to
+manually re-queues a `failed` row (`queue/retry` above), it resets to
 zero. v1 overcomplicated this; v2 does not.
 
 ---

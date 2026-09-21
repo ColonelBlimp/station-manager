@@ -1924,18 +1924,21 @@ func TestForwarderQueueCounts(t *testing.T) {
 		t.Fatalf("counts: %v", err)
 	}
 
-	if got := counts["qrz"]; got.Clearable != 3 || got.InFlight != 1 {
-		t.Errorf("qrz = %+v, want {Clearable:3 InFlight:1}", got)
+	// W-0010 outcome 9: waiting (pending) and failed are read apart — the card
+	// must not show a terminal failure as a live backlog — and clearable is
+	// exactly their sum.
+	if got := counts["qrz"]; got.Waiting != 2 || got.Failed != 1 || got.Clearable() != 3 || got.InFlight != 1 {
+		t.Errorf("qrz = %+v, want {Waiting:2 Failed:1 InFlight:1} (clearable 3)", got)
 	}
-	if got := counts["clublog"]; got.Clearable != 1 || got.InFlight != 2 {
-		t.Errorf("clublog = %+v, want {Clearable:1 InFlight:2}", got)
+	if got := counts["clublog"]; got.Waiting != 0 || got.Failed != 1 || got.Clearable() != 1 || got.InFlight != 2 {
+		t.Errorf("clublog = %+v, want {Waiting:0 Failed:1 InFlight:2} (clearable 1)", got)
 	}
 	// Uploaded-only: real history contributes no clearable/in-flight work.
-	if got := counts["hamqth"]; got.Clearable != 0 || got.InFlight != 0 {
+	if got := counts["hamqth"]; got.Clearable() != 0 || got.InFlight != 0 {
 		t.Errorf("hamqth (uploaded only) = %+v, want {0 0}", got)
 	}
 	// A never-seeded forwarder is absent — its zero value is {0,0}.
-	if got := counts["absent"]; got.Clearable != 0 || got.InFlight != 0 {
+	if got := counts["absent"]; got.Clearable() != 0 || got.InFlight != 0 {
 		t.Errorf("absent forwarder = %+v, want zero value {0 0}", got)
 	}
 }

@@ -25,6 +25,7 @@ import { fetchMailer, fetchForwarders } from '../api/config-blocks';
 import { enqueueUploads } from '../api/uploads';
 import { enrichCallsign } from '../api/enrichment';
 import { forwarderLabel, hasUploadStamp, type ForwarderInfo } from './uploadStatus';
+import { takeLogbookMissingFrom } from '../router.svelte';
 
 const PAGE_SIZES = [25, 50, 100] as const;
 
@@ -339,7 +340,19 @@ export class LogbookState {
         this.loading = true;
         this.error = null;
         void this.loadMailer();
-        void this.loadForwarders();
+        const handoff = takeLogbookMissingFrom();
+        if (handoff === undefined) {
+            void this.loadForwarders();
+        } else {
+            // Arrived from Settings → Forwarding's failed count (W-0010 outcome
+            // 9): the forwarder list must be in hand BEFORE the first page load,
+            // or missingFromParam cannot tell whether the destination stamps
+            // uploads and the whole logbook flashes first. The picker then shows
+            // the destination like any operator pick.
+            await this.loadForwarders();
+            this.selectedDestination = handoff;
+            this.showUploaded = false;
+        }
         const out = await fetchLogbooks();
         if (out.kind !== 'ok') {
             this.error = out.message;

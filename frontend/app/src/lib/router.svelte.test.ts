@@ -5,7 +5,16 @@
 // missing strip reverted '/app/…' to '/' (a different SPA) and the URL jumped off.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { subPathOf, urlOf, router, setMode, setModeChangeHook, isFtMode } from './router.svelte';
+import {
+    subPathOf,
+    urlOf,
+    router,
+    navigate,
+    setMode,
+    setModeChangeHook,
+    isFtMode,
+    takeLogbookMissingFrom,
+} from './router.svelte';
 
 describe('router base-path handling', () => {
     it('strips a non-empty base before parsing (the former /app mount)', () => {
@@ -165,5 +174,49 @@ describe('FT4 as a third operating mode', () => {
         expect(isFtMode('ft8')).toBe(true);
         expect(isFtMode('ft4')).toBe(true);
         expect(isFtMode('phone')).toBe(false);
+    });
+});
+
+/*
+    The Settings → Forwarding card's failed count links to the logbook's
+    "not on X" view (W-0010 outcome 9, slice 4). The router carries the
+    destination as `/logbook?missing_from=<name>`: a ONE-SHOT handoff the
+    logbook takes at mount and the router then canonicalises away, because the
+    logbook's destination picker owns that state and never writes the URL — a
+    query that lingered would re-apply a stale filter on the next refresh.
+*/
+describe('logbook missing-from handoff', () => {
+    afterEach(() => {
+        takeLogbookMissingFrom();
+        navigate('operate');
+    });
+
+    it('urlOf writes the query for a logbook destination and nothing else', () => {
+        expect(urlOf('logbook', 'phone', '', 'qrz')).toBe('/logbook?missing_from=qrz');
+        expect(urlOf('logbook', 'phone', '', ' qrz ')).toBe('/logbook?missing_from=%20qrz%20');
+        expect(urlOf('logbook', 'phone', '')).toBe('/logbook');
+        expect(urlOf('operate', 'phone', '', 'qrz')).toBe('/operate/phone');
+    });
+
+    it('navigate carries the destination into the URL and the logbook takes it ONCE', () => {
+        navigate('logbook', { missingFrom: 'qrz' });
+        expect(router.view).toBe('logbook');
+        expect(window.location.pathname + window.location.search).toBe('/logbook?missing_from=qrz');
+        expect(takeLogbookMissingFrom()).toBe('qrz');
+        // Taken: a second read is empty and the URL is canonical again.
+        expect(takeLogbookMissingFrom()).toBeUndefined();
+        expect(window.location.pathname + window.location.search).toBe('/logbook');
+    });
+
+    it('a deep link with the query lands on the logbook with the destination pending', () => {
+        window.history.pushState({}, '', '/logbook?missing_from=clublog');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+        expect(router.view).toBe('logbook');
+        expect(takeLogbookMissingFrom()).toBe('clublog');
+    });
+
+    it('a plain /logbook has nothing pending', () => {
+        navigate('logbook');
+        expect(takeLogbookMissingFrom()).toBeUndefined();
     });
 });

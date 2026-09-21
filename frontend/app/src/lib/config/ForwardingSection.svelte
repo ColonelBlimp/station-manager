@@ -20,9 +20,12 @@
     import {
         fetchForwarderQueues,
         clearForwarderQueue,
+        retryForwarderQueue,
         type ForwarderQueueCount,
     } from '../api/forwarder-queues';
     import { toasts } from '../ui/toasts.svelte';
+    import { navigate, logbookMissingFromUrl } from '../router.svelte';
+    import { hasUploadStamp } from '../logbook/uploadStatus';
     import MaskedField from './MaskedField.svelte';
 
     // Live upload-queue counts, keyed by forwarder name. This is DAEMON-live
@@ -32,6 +35,7 @@
     // transient count error must not block editing config.
     let queues = $state<Record<string, ForwarderQueueCount>>({});
     let clearing = $state<Record<string, boolean>>({});
+    let retrying = $state<Record<string, boolean>>({});
 
     async function loadQueues(): Promise<void> {
         const out = await fetchForwarderQueues();
@@ -109,6 +113,38 @@
             }
         } finally {
             clearing = { ...clearing, [name]: false };
+        }
+    }
+
+    // Re-arm a forwarder's failed uploads for one more attempt (W-0010 outcome 9,
+    // ruling (a)). No confirm: it is not destructive — a still-rejected upload
+    // fails again, an accepted one is never re-sent. Same latch-through-refetch
+    // discipline as the clear, so no stale "Retry failed (N)" survives a click.
+    async function onRetryFailed(name: string, label: string): Promise<void> {
+        retrying = { ...retrying, [name]: true };
+        try {
+            const out = await retryForwarderQueue(name);
+            if (out.kind === 'ok') {
+                toasts.info(
+                    `Re-queued ${out.rearmed} failed upload${out.rearmed === 1 ? '' : 's'} for ${label}.`
+                );
+                if (!(await reconcileQueue(name))) {
+                    toasts.warn(
+                        `Couldn't refresh ${label}'s queue count — it'll update on the next load.`
+                    );
+                }
+            } else if (out.indeterminate) {
+                const confirmed = await reconcileQueue(name);
+                toasts.warn(
+                    confirmed
+                        ? `Retrying ${label} didn't confirm cleanly; its queue count has been refreshed to its current state.`
+                        : `Retrying ${label} didn't confirm and its queue couldn't be re-read — whether it re-queued is unknown.`
+                );
+            } else {
+                toasts.error(out.message);
+            }
+        } finally {
+            retrying = { ...retrying, [name]: false };
         }
     }
 
@@ -234,15 +270,17 @@
                             >
                                 {f.enabled ? 'enabled' : 'disabled'}
                             </span>
-                            <!-- Live queue depth (W-0005): clearable backlog vs
-                                 the in-flight batch. Reads at a glance on the
-                                 collapsed card, beside the on/off pill. -->
+                            <!-- Live queue depth (W-0005): waiting backlog, failed
+                                 rows and the in-flight batch, read APART (W-0010
+                                 outcome 9 — one terminal failure sat as "1 queued"
+                                 for five weeks). Reads at a glance on the collapsed
+                                 card, beside the on/off pill. -->
                             {#if q}
                                 <span
                                     class="text-[11px] text-muted"
-                                    title="Queued uploads waiting to send · currently being sent"
+                                    title="Uploads waiting to send · failed and not retried · currently being sent"
                                 >
-                                    {q.clearable} queued · {q.in_flight} in flight
+                                    {q.waiting} waiting · {q.failed} failed · {q.in_flight} in flight
                                 </span>
                             {/if}
                             {#if !td}
@@ -260,6 +298,44 @@
                             />
                             Enabled
                         </label>
+
+                        <!-- Retry failed (W-0010 outcome 9): re-arm this
+                             destination's failed uploads. Same placement rules
+                             as the clear below. The gap link is offered only
+                             for a type that stamps per-QSO upload status — the
+                             daemon rejects the filter for the rest (SM Cloud) —
+                             and says what that view really lists. -->
+                        {#if q}
+                            {@const label = f.label || td?.display_name || f.type}
+                            <div class="mt-3">
+                                <button
+                                    class="btn"
+                                    disabled={q.failed === 0 || retrying[f.name]}
+                                    onclick={() => onRetryFailed(f.name, label)}
+                                >
+                                    {retrying[f.name] ? 'Retrying…' : `Retry failed (${q.failed})`}
+                                </button>
+                                <p class="mt-1 text-xs text-muted">
+                                    Re-queues this destination's failed uploads for one more attempt
+                                    — after correcting a rejected credential, for instance. An
+                                    upload the destination still rejects fails again.
+                                </p>
+                                {#if q.failed > 0 && hasUploadStamp(f.type)}
+                                    <p class="mt-1 text-xs text-muted">
+                                        <a
+                                            class="underline hover:text-ink"
+                                            href={logbookMissingFromUrl(f.name)}
+                                            onclick={(e) => {
+                                                e.preventDefault();
+                                                navigate('logbook', { missingFrom: f.name });
+                                            }}>Show the QSOs not on {label}</a
+                                        >
+                                        — that view lists every QSO not on {label}, not only the
+                                        failed uploads.
+                                    </p>
+                                {/if}
+                            </div>
+                        {/if}
 
                         <!-- Clear queue (W-0005): drop this destination's
                              pending+failed backlog. A live daemon action, kept

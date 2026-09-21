@@ -84,16 +84,55 @@ export function subPathOf(pathname: string, base: string): string {
 }
 
 // The full URL (base + route) to push/replace into the address bar. Pure + base-explicit.
-export function urlOf(view: View, mode: OpMode, base: string): string {
-    return base + pathFor(view, mode);
+// `missingFrom` names a forwarder for the logbook's "not on X" view (below); it is
+// written only for the logbook route.
+export function urlOf(view: View, mode: OpMode, base: string, missingFrom?: string): string {
+    const url = base + pathFor(view, mode);
+    return view === 'logbook' && missingFrom
+        ? `${url}?missing_from=${encodeURIComponent(missingFrom)}`
+        : url;
 }
 
 const subPath = (): string => subPathOf(window.location.pathname, BASE);
-const urlFor = (view: View, mode: OpMode): string => urlOf(view, mode, BASE);
+const urlFor = (view: View, mode: OpMode, missingFrom?: string): string =>
+    urlOf(view, mode, BASE, missingFrom);
+
+/*
+    Logbook "missing from" handoff (W-0010 outcome 9, slice 4). Settings →
+    Forwarding's failed count links to the logbook already filtered to the QSOs
+    not on that destination: `/logbook?missing_from=<name>`. The query is a
+    ONE-SHOT handoff, not routed state — the logbook's destination picker owns
+    that state and never writes the URL, so a query that lingered would re-apply
+    a stale filter on the next refresh. The logbook takes it at mount
+    (takeLogbookMissingFrom), and the URL is canonicalised back to /logbook.
+*/
+let pendingMissingFrom: string | undefined;
+
+function missingFromOf(search: string): string | undefined {
+    const v = new URLSearchParams(search).get('missing_from');
+    return v ? v : undefined;
+}
+
+/** The pending "not on X" destination, if a logbook link carried one. Taking it
+ *  clears it and drops the query from the address bar. */
+export function takeLogbookMissingFrom(): string | undefined {
+    const v = pendingMissingFrom;
+    pendingMissingFrom = undefined;
+    if (v !== undefined && router.view === 'logbook' && window.location.search !== '') {
+        window.history.replaceState({}, '', urlFor('logbook', router.mode));
+    }
+    return v;
+}
+
+/** The href for the logbook's "not on `name`" view, for a real link. */
+export function logbookMissingFromUrl(name: string): string {
+    return urlFor('logbook', router.mode, name);
+}
 
 const initial = parse(subPath(), storedMode());
 export const router = $state<Loc>(initial);
 storageSet(MODE_KEY, router.mode); // remember a deep-linked mode
+if (initial.view === 'logbook') pendingMissingFrom = missingFromOf(window.location.search);
 
 // Normalise the URL (e.g. a bare /operate → /operate/phone) to the canonical path
 // without adding a history entry.
@@ -148,11 +187,14 @@ function mayLeave(to: View): boolean {
     return leaveGuard === null || leaveGuard();
 }
 
-export function navigate(view: View): void {
+export function navigate(view: View, opts?: { missingFrom?: string }): void {
     if (!mayLeave(view)) return;
     router.view = view;
-    const path = urlFor(view, router.mode);
-    if (window.location.pathname !== path) window.history.pushState({}, '', path);
+    pendingMissingFrom = view === 'logbook' ? opts?.missingFrom : undefined;
+    const url = urlFor(view, router.mode, pendingMissingFrom);
+    if (window.location.pathname + window.location.search !== url) {
+        window.history.pushState({}, '', url);
+    }
 }
 
 export function setMode(mode: OpMode): void {
@@ -183,5 +225,6 @@ window.addEventListener('popstate', () => {
     const from = router.mode;
     router.view = loc.view;
     router.mode = loc.mode;
+    pendingMissingFrom = loc.view === 'logbook' ? missingFromOf(window.location.search) : undefined;
     modeChanged(from, loc.mode);
 });

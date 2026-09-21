@@ -6,8 +6,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/failure"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/status"
 )
 
@@ -61,6 +63,17 @@ func clearQueue(t *testing.T, srv *Server, name string, setPath bool) *httptest.
 	}
 	w := httptest.NewRecorder()
 	srv.handleClearForwarderQueue(w, req)
+	return w
+}
+
+func retryQueue(t *testing.T, srv *Server, name string, setPath bool) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/v1/forwarder/"+url.PathEscape(name)+"/queue/retry", nil)
+	if setPath {
+		req.SetPathValue("name", name)
+	}
+	w := httptest.NewRecorder()
+	srv.handleRetryForwarderQueue(w, req)
 	return w
 }
 
@@ -205,10 +218,138 @@ func TestForwarderQueues_ListsAllWithCounts(t *testing.T) {
 		t.Errorf("order = [%q, %q], want [qrz, clublog] (config order)",
 			got.Forwarders[0].Name, got.Forwarders[1].Name)
 	}
-	if q := by["qrz"]; q.Clearable != 2 || q.InFlight != 1 {
-		t.Errorf("qrz = %+v, want {Clearable:2 InFlight:1}", q)
+	// W-0010 outcome 9: waiting and failed are carried apart so the card never
+	// shows a terminal failure as a live backlog; clearable stays their sum.
+	if q := by["qrz"]; q.Waiting != 1 || q.Failed != 1 || q.Clearable != 2 || q.InFlight != 1 {
+		t.Errorf("qrz = %+v, want {Waiting:1 Failed:1 Clearable:2 InFlight:1}", q)
 	}
-	if c := by["clublog"]; c.Clearable != 0 || c.InFlight != 0 {
-		t.Errorf("clublog (disabled, no rows) = %+v, want {0 0}", c)
+	if c := by["clublog"]; c.Waiting != 0 || c.Failed != 0 || c.Clearable != 0 || c.InFlight != 0 {
+		t.Errorf("clublog (disabled, no rows) = %+v, want all zero", c)
+	}
+	// The wire keys are the contract the SPA reads (api-endpoints.md).
+	for _, key := range []string{`"waiting":1`, `"failed":1`, `"clearable":2`, `"in_flight":1`} {
+		if !strings.Contains(w.Body.String(), key) {
+			t.Errorf("body lacks %s: %s", key, w.Body.String())
+		}
+	}
+}
+
+// TestRetryForwarderQueue_HappyPath: the operator's "Retry failed" (W-0010
+// outcome 9, ruling (a)) re-arms every failed row of the named ENABLED forwarder
+// — whatever its failure class — and reports the count; pending, in-flight and
+// uploaded rows are untouched, and the readout then shows them as waiting.
+func TestRetryForwarderQueue_HappyPath(t *testing.T) {
+	srv := serverWithForwarders(t, forwarderCfg("qrz", "qrz", true, "insert", "update", "delete"))
+	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
+
+	uploaded := seedForwarderUpload(t, srv, lbID, "qrz", "AA1AA", "0900", status.Uploaded)
+	inflight := seedForwarderUpload(t, srv, lbID, "qrz", "BB2BB", "0905", status.InProgress)
+	failedPlain := seedForwarderUpload(t, srv, lbID, "qrz", "CC3CC", "0910", status.Failed)
+	// One failed row carries the auth class, so the retry visibly ignores the class.
+	failedAuth, _ := submitAndGetID(t, srv, lbID, qsoADIF("DD4DD", "0915"))
+	claimed, err := srv.db.ClaimPendingUploadsWithContext(context.Background(), "qrz", 10)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("claim auth row: %v (%d rows)", err, len(claimed))
+	}
+	if err := srv.db.MarkUploadFailedWithContext(context.Background(), claimed[0].ID, "credential rejected", failure.Auth); err != nil {
+		t.Fatalf("mark auth failed: %v", err)
+	}
+	seedForwarderUpload(t, srv, lbID, "qrz", "EE5EE", "0920", status.Pending)
+
+	w := retryQueue(t, srv, "qrz", true)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+	var got retryForwarderQueueResponse
+	if err := unmarshalJSON(w.Body.String(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Rearmed != 2 {
+		t.Fatalf("rearmed = %d, want 2 (both failed rows, any class)", got.Rearmed)
+	}
+
+	want := map[int64]string{uploaded: "uploaded", inflight: "in_progress", failedAuth: "pending", failedPlain: "pending"}
+	for qsoID, st := range want {
+		rows, err := srv.db.FetchUploadsByQsoIDWithContext(context.Background(), qsoID)
+		if err != nil || len(rows) != 1 {
+			t.Fatalf("fetch uploads for %d: %v (%d rows)", qsoID, err, len(rows))
+		}
+		if rows[0].Status != st {
+			t.Errorf("qso %d status = %q after retry, want %q", qsoID, rows[0].Status, st)
+		}
+		if st == "pending" && rows[0].FailureClass != "" {
+			t.Errorf("qso %d keeps failure_class %q after retry; a re-arm clears it", qsoID, rows[0].FailureClass)
+		}
+	}
+
+	// The readout agrees: 3 waiting (1 original + 2 re-armed), 0 failed.
+	rq := getForwarderQueues(t, srv)
+	var queues forwarderQueuesResponse
+	if err := unmarshalJSON(rq.Body.String(), &queues); err != nil {
+		t.Fatalf("decode queues: %v", err)
+	}
+	if q := queues.Forwarders[0]; q.Waiting != 3 || q.Failed != 0 || q.InFlight != 1 {
+		t.Errorf("readout after retry = %+v, want {Waiting:3 Failed:0 InFlight:1}", q)
+	}
+}
+
+// TestRetryForwarderQueue_Validation: an empty name is a 400, an unconfigured
+// name a 404, and a DISABLED forwarder a 400 — unlike clear, retry needs a
+// worker to drain the re-armed rows, and a disabled forwarder has none (its
+// queue is discarded at the next start), so re-arming would only show a
+// "waiting" count that never moves.
+func TestRetryForwarderQueue_Validation(t *testing.T) {
+	srv := serverWithForwarders(t,
+		forwarderCfg("qrz", "qrz", true, "insert"),
+		forwarderCfg("clublog", "clublog", false, "insert"), // disabled
+	)
+
+	t.Run("empty name", func(t *testing.T) {
+		w := retryQueue(t, srv, "", false)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400; body = %s", w.Code, w.Body.String())
+		}
+		if code := decodeErrCode(t, w); code != "invalid_forwarder" {
+			t.Errorf("code = %q, want invalid_forwarder", code)
+		}
+	})
+
+	t.Run("unknown forwarder", func(t *testing.T) {
+		w := retryQueue(t, srv, "lotw", true)
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("status = %d, want 404; body = %s", w.Code, w.Body.String())
+		}
+		if code := decodeErrCode(t, w); code != "unknown_forwarder" {
+			t.Errorf("code = %q, want unknown_forwarder", code)
+		}
+	})
+
+	t.Run("disabled forwarder refused", func(t *testing.T) {
+		w := retryQueue(t, srv, "clublog", true)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400; body = %s", w.Code, w.Body.String())
+		}
+		if code := decodeErrCode(t, w); code != "forwarder_disabled" {
+			t.Errorf("code = %q, want forwarder_disabled", code)
+		}
+	})
+}
+
+// TestRetryForwarderQueue_PreservesExactName: same round-trip rule as clear —
+// the exact path value is looked up, so a padded-but-legal name is retryable.
+func TestRetryForwarderQueue_PreservesExactName(t *testing.T) {
+	const padded = " qrz "
+	srv := serverWithForwarders(t, forwarderCfg(padded, "qrz", true, "insert"))
+
+	w := retryQueue(t, srv, padded, true)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 — the exact configured name must be retryable; body = %s", w.Code, w.Body.String())
+	}
+	var got retryForwarderQueueResponse
+	if err := unmarshalJSON(w.Body.String(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Rearmed != 0 {
+		t.Errorf("rearmed = %d, want 0 (no rows) — the point is the 200, not the count", got.Rearmed)
 	}
 }

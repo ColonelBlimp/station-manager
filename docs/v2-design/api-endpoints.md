@@ -132,8 +132,8 @@ items return a QSO through a boundary projection of `types.Qso`: the canonical *
 - **Purpose:** Per-forwarder upload-queue readout for Settings → Forwarding (W-0005) — the clearable backlog vs the in-flight batch, so an operator can see what a "Clear queue" would drop and what is still being sent.
 - **Gating:** Always-on.
 - **Request:** No body.
-- **Behaviour:** One entry per **configured** forwarder (enabled or disabled, in config order). `clearable` = rows at status `pending` + `failed` (what a clear removes); `in_flight` = rows at status `in_progress` (the currently-claimed batch, never cleared); `uploaded` history is counted in neither. A forwarder with no queued rows reads `{clearable: 0, in_flight: 0}`.
-- **Response:** **200**, body `{"forwarders": [{"name": "…", "clearable": N, "in_flight": N}, …]}`.
+- **Behaviour:** One entry per **configured** forwarder (enabled or disabled, in config order). `waiting` = rows at status `pending` (still to be sent); `failed` = rows at status `failed` (terminal until re-armed — read apart from `waiting` since W-0010 outcome 9, so a failure never shows as a live backlog); `clearable` = `waiting + failed` (what a clear removes); `in_flight` = rows at status `in_progress` (the currently-claimed batch, never cleared); `uploaded` history is counted in none. A forwarder with no queued rows reads all zeros.
+- **Response:** **200**, body `{"forwarders": [{"name": "…", "waiting": N, "failed": N, "clearable": N, "in_flight": N}, …]}`.
 - **Errors:** 500 `queue_counts_failed`.
 
 ### `POST /v1/forwarder/{name}/queue/clear`
@@ -143,6 +143,14 @@ items return a QSO through a boundary projection of `types.Qso`: the canonical *
 - **Behaviour:** Per-forwarder (a `forwarder_name` equality), never global. The affected QSOs revert to "not uploaded to X" — the ADIF upload stamp, not the queue row, is the source of truth — and are recoverable via manual backfill (`POST /v1/forwarder/{name}/uploads`).
 - **Response:** **200**, body `{"discarded": N}` (rows removed).
 - **Errors:** 400 `invalid_forwarder` (empty name); 404 `unknown_forwarder` (not a configured forwarder); 500 `clear_failed`.
+
+### `POST /v1/forwarder/{name}/queue/retry`
+- **Purpose:** Operator-triggered "Retry failed" (W-0010 outcome 9, ruling (a)) — return the named forwarder's `failed` rows to `pending` for one more attempt by its worker, e.g. after correcting a rejected credential. Every failed row is re-armed, whatever its `failure_class`; a row the destination still rejects fails once more (one more `forward.failed` event) and an accepted upload is never re-sent (`uploaded` rows are untouched). Automatic recovery of `auth`-classed rows at daemon start is separate and needs no call.
+- **Gating:** Always-on, but the forwarder must be **enabled**: a disabled forwarder has no worker and its queue is discarded at the next start, so re-arming would only show a `waiting` count that never moves. Enabled is read from the loaded config, like the backfill gate — a config edit saved without a restart is not a running worker.
+- **Request:** Path `{name}` (the forwarder's config name, matched exactly like clear). No body.
+- **Behaviour:** Per-forwarder, never global. Re-armed rows read `pending` with `attempts` 0, `next_attempt_at` now, and `last_error`/`failure_class` cleared; `upstream_id` and `origin` are kept.
+- **Response:** **200**, body `{"rearmed": N}` (rows re-armed; 0 when nothing had failed).
+- **Errors:** 400 `invalid_forwarder` (empty name); 404 `unknown_forwarder` (not a configured forwarder); 400 `forwarder_disabled`; 500 `retry_failed`.
 
 ### `POST /v1/smcloud/reconcile`
 - **Purpose:** On-demand SM Cloud reconcile (ADR 0040 S4) — run one detect+heal pass NOW instead of waiting for the hourly loop: compute the local live-row `{count, hash}` (the shared `internal/cloud/reconcile` summary), compare with the cloud's, and on mismatch diff the two manifests and re-enqueue diverged UUIDs through the smcloud forwarder's queue (upserts via the backfill path, missed tombstones via delete rows). The operator's "back up / check now" button.

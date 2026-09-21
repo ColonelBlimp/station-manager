@@ -236,6 +236,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *l
 	// and upload history. See handler_forwarder_queue.go.
 	apiMux.HandleFunc("GET /v1/forwarder-queues", s.handleForwarderQueues)
 	apiMux.HandleFunc("POST /v1/forwarder/{name}/queue/clear", s.handleClearForwarderQueue)
+	apiMux.HandleFunc("POST /v1/forwarder/{name}/queue/retry", s.handleRetryForwarderQueue)
 
 	// SM Cloud on-demand reconcile (ADR 0040 S4) — one detect+heal pass now.
 	// 503 until cmd/smd wires an enabled smcloud forwarder's reconciler.

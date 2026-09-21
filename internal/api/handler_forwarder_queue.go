@@ -4,14 +4,19 @@ import (
 	"net/http"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 // forwarderQueueCount is one forwarder's entry in the GET /v1/forwarder-queues
-// response: Clearable is the operator-clearable backlog (pending + failed) a
-// clear would remove; InFlight is the in_progress batch a live worker is
-// processing and never clears. See W-0005.
+// response: Waiting is the pending backlog still to be sent and Failed the
+// terminal rows a retry would re-arm — carried apart (W-0010 outcome 9) so a
+// failure never reads as a live backlog; Clearable is their sum, the count a
+// clear would remove (W-0005); InFlight is the in_progress batch a live worker
+// is processing and never clears.
 type forwarderQueueCount struct {
 	Name      string `json:"name"`
+	Waiting   int64  `json:"waiting"`
+	Failed    int64  `json:"failed"`
 	Clearable int64  `json:"clearable"`
 	InFlight  int64  `json:"in_flight"`
 }
@@ -23,6 +28,11 @@ type forwarderQueuesResponse struct {
 // clearForwarderQueueResponse is the POST /v1/forwarder/{name}/queue/clear result.
 type clearForwarderQueueResponse struct {
 	Discarded int64 `json:"discarded"`
+}
+
+// retryForwarderQueueResponse is the POST /v1/forwarder/{name}/queue/retry result.
+type retryForwarderQueueResponse struct {
+	Rearmed int64 `json:"rearmed"`
 }
 
 // handleForwarderQueues serves GET /v1/forwarder-queues — the Settings →
@@ -45,7 +55,9 @@ func (s *Server) handleForwarderQueues(w http.ResponseWriter, r *http.Request) {
 		c := counts[f.Name] // zero value {0,0} when the forwarder has no rows
 		out.Forwarders = append(out.Forwarders, forwarderQueueCount{
 			Name:      f.Name,
-			Clearable: c.Clearable,
+			Waiting:   c.Waiting,
+			Failed:    c.Failed,
+			Clearable: c.Clearable(),
 			InFlight:  c.InFlight,
 		})
 	}
@@ -89,12 +101,64 @@ func (s *Server) handleClearForwarderQueue(w http.ResponseWriter, r *http.Reques
 	s.writeJSON(w, http.StatusOK, clearForwarderQueueResponse{Discarded: n})
 }
 
+// handleRetryForwarderQueue serves POST /v1/forwarder/{name}/queue/retry — the
+// operator's "Retry failed" (W-0010 outcome 9, ruling (a)). It returns EVERY
+// failed row of the named forwarder to pending, whatever its failure class; the
+// forwarder's worker then drains them like any other backlog. A row that is
+// still invalid fails once more, terminally (one more forward.failed event); an
+// accepted upload cannot be duplicated because uploaded rows are never touched.
+//
+// Unlike clear, retry requires the forwarder to be ENABLED: a disabled one has
+// no worker, and its queue is discarded at the next start, so re-arming would
+// only show a "waiting" count that never moves. Enabled is read from the loaded
+// config, the same source as the backfill gate — a config edit saved without a
+// restart is not a running worker (forwarding.md §8).
+//
+// Status codes:
+//   - 400 invalid_forwarder   empty name
+//   - 404 unknown_forwarder   name is not a configured forwarder
+//   - 400 forwarder_disabled  configured but not enabled
+//   - 200 {rearmed}
+func (s *Server) handleRetryForwarderQueue(w http.ResponseWriter, r *http.Request) {
+	const op errors.Op = "api.handleRetryForwarderQueue"
+
+	// Exact path value, for the same round-trip reason as clear.
+	name := r.PathValue("name")
+	if name == "" {
+		s.writeError(w, http.StatusBadRequest, "invalid_forwarder", "forwarder name is required", op)
+		return
+	}
+	fwd, ok := s.configuredForwarder(name)
+	if !ok {
+		s.writeError(w, http.StatusNotFound, "unknown_forwarder", "no such forwarder", op)
+		return
+	}
+	if !fwd.Enabled {
+		s.writeError(w, http.StatusBadRequest, "forwarder_disabled",
+			"forwarder is disabled; enable it and restart the daemon before retrying", op)
+		return
+	}
+
+	n, err := s.db.RearmFailedUploadsForForwarderWithContext(r.Context(), name)
+	if err != nil {
+		s.writeServerError(w, op, err, "retry_failed", "retry forwarder queue failed")
+		return
+	}
+	s.writeJSON(w, http.StatusOK, retryForwarderQueueResponse{Rearmed: n})
+}
+
 // isConfiguredForwarder reports whether name matches a configured forwarder.
 func (s *Server) isConfiguredForwarder(name string) bool {
+	_, ok := s.configuredForwarder(name)
+	return ok
+}
+
+// configuredForwarder resolves name (exact match) to its configured entry.
+func (s *Server) configuredForwarder(name string) (types.ForwarderConfig, bool) {
 	for _, f := range s.cfg.Forwarders() {
 		if f.Name == name {
-			return true
+			return f, true
 		}
 	}
-	return false
+	return types.ForwarderConfig{}, false
 }

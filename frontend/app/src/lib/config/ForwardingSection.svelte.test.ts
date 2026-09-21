@@ -3,6 +3,7 @@ import { render, screen, fireEvent } from '@testing-library/svelte';
 import ForwardingSection from './ForwardingSection.svelte';
 import { forwardingState } from './forwarding.svelte';
 import { toastsState, _resetForTests as resetToasts } from '../ui/toasts.svelte';
+import { navigate, takeLogbookMissingFrom } from '../router.svelte';
 
 /*
     FORWARDING SECTION — WHAT THE OPERATOR SEES.
@@ -23,6 +24,8 @@ import { toastsState, _resetForTests as resetToasts } from '../ui/toasts.svelte'
 afterEach(() => {
     vi.restoreAllMocks();
     resetToasts();
+    takeLogbookMissingFrom();
+    navigate('operate');
     forwardingState.drafts = [];
     forwardingState.types = [];
     forwardingState.loaded = false;
@@ -93,17 +96,26 @@ async function renderLoaded() {
 // `deferRefresh`, the post-clear GET hangs until `releaseRefresh()` is called, so
 // a test can observe the state while the refetch is in flight.
 function mockForwardingWithQueues(
-    initialQueues: Array<{ name: string; clearable: number; in_flight: number }>,
+    initialQueues: Array<{
+        name: string;
+        waiting?: number;
+        failed?: number;
+        clearable: number;
+        in_flight: number;
+    }>,
     opts: {
         clearResult?: { status: number; body: unknown };
         clearFails?: 'timeout' | 'network';
+        retryResult?: { status: number; body: unknown };
         refreshFails?: boolean;
         deferRefresh?: boolean;
     } = {}
 ) {
     const clearResult = opts.clearResult ?? { status: 200, body: { discarded: 0 } };
+    const retryResult = opts.retryResult ?? { status: 200, body: { rearmed: 0 } };
     const cleared = new Set<string>();
-    const calls = { clear: [] as string[] };
+    const retried = new Set<string>();
+    const calls = { clear: [] as string[], retry: [] as string[] };
     let queueGets = 0;
     let releaseRefresh: (() => void) | null = null;
     const json = (body: unknown, status = 200) =>
@@ -112,14 +124,30 @@ function mockForwardingWithQueues(
             headers: { 'Content-Type': 'application/json' },
         });
     const queueBody = () => ({
-        // Clear zeroes ONLY clearable; in_flight is preserved.
-        forwarders: initialQueues.map((q) => (cleared.has(q.name) ? { ...q, clearable: 0 } : q)),
+        // Clear zeroes ONLY clearable (waiting + failed); in_flight is preserved.
+        // A retry moves failed into waiting.
+        forwarders: initialQueues.map((q) => {
+            // Older cases give only clearable: read it as all-waiting.
+            const failed = q.failed ?? 0;
+            const waiting = q.waiting ?? q.clearable - failed;
+            if (cleared.has(q.name)) return { ...q, waiting: 0, failed: 0, clearable: 0 };
+            if (retried.has(q.name)) return { ...q, waiting: waiting + failed, failed: 0 };
+            return { ...q, waiting, failed };
+        }),
     });
     vi.stubGlobal(
         'fetch',
         vi.fn((url: RequestInfo | URL) => {
             const u = url instanceof URL ? url.href : typeof url === 'string' ? url : url.url;
             if (u.includes('forwarder-types')) return Promise.resolve(json(TYPES));
+            if (u.includes('/queue/retry')) {
+                const name = decodeURIComponent(
+                    u.split('/v1/forwarder/')[1].split('/queue/retry')[0]
+                );
+                calls.retry.push(name);
+                if (retryResult.status >= 200 && retryResult.status < 300) retried.add(name);
+                return Promise.resolve(json(retryResult.body, retryResult.status));
+            }
             if (u.includes('/queue/clear')) {
                 const name = decodeURIComponent(
                     u.split('/v1/forwarder/')[1].split('/queue/clear')[0]
@@ -334,16 +362,113 @@ describe('ForwardingSection', () => {
     // U11 — THE LIVE QUEUE DEPTH IS SHOWN PER DESTINATION (W-0005). Distinguishes
     // the clearable backlog from the in-flight batch so "clear" is never confused
     // with "nothing is still sending."
-    it('U11: shows each destination’s clearable/in-flight queue depth', async () => {
+    // U11 — the queue depth reads WAITING and FAILED apart (W-0010 outcome 9):
+    // the alpha.2 fixture, one terminal QRZ failure, sat as "1 queued" for five
+    // weeks because pending and failed were one number.
+    it('U11: shows each destination’s waiting/failed/in-flight queue depth', async () => {
         mockForwardingWithQueues([
-            { name: 'qrz', clearable: 12, in_flight: 3 },
+            { name: 'qrz', waiting: 12, failed: 1, clearable: 13, in_flight: 3 },
             { name: 'smcloud', clearable: 0, in_flight: 0 },
         ]);
         render(ForwardingSection);
         await vi.waitFor(() =>
-            expect(screen.getByText('12 queued · 3 in flight')).toBeInTheDocument()
+            expect(screen.getByText('12 waiting · 1 failed · 3 in flight')).toBeInTheDocument()
         );
-        expect(screen.getByText('0 queued · 0 in flight')).toBeInTheDocument();
+        expect(screen.getByText('0 waiting · 0 failed · 0 in flight')).toBeInTheDocument();
+    });
+
+    // U17 — RETRY FAILED: no confirm (not destructive), POST, report, stay
+    // disabled through the refetch, then the failed rows read as waiting.
+    it('U17: retry re-arms the failed rows, reports, and the count moves to waiting', async () => {
+        const confirm = vi.spyOn(window, 'confirm');
+        const { calls, releaseRefresh } = mockForwardingWithQueues(
+            [{ name: 'qrz', waiting: 1, failed: 2, clearable: 3, in_flight: 0 }],
+            { retryResult: { status: 200, body: { rearmed: 2 } }, deferRefresh: true }
+        );
+        render(ForwardingSection);
+
+        const btn = await vi.waitFor(() =>
+            screen.getByRole('button', { name: /retry failed \(2\)/i })
+        );
+        await fireEvent.click(btn);
+
+        expect(confirm).not.toHaveBeenCalled();
+        await vi.waitFor(() => expect(calls.retry).toEqual(['qrz']));
+        await vi.waitFor(() =>
+            expect(
+                toastsState.items.some(
+                    (t) => t.message === 'Re-queued 2 failed uploads for QRZ.com.'
+                )
+            ).toBe(true)
+        );
+        expect(screen.getByRole('button', { name: /retrying/i })).toBeDisabled();
+
+        releaseRefresh();
+        await vi.waitFor(() =>
+            expect(screen.getByText('3 waiting · 0 failed · 0 in flight')).toBeInTheDocument()
+        );
+        expect(screen.getByRole('button', { name: /retry failed \(0\)/i })).toBeDisabled();
+        expect(calls.retry).toEqual(['qrz']);
+    });
+
+    it('U17b: a refused retry surfaces the daemon error message', async () => {
+        mockForwardingWithQueues(
+            [{ name: 'qrz', waiting: 0, failed: 1, clearable: 1, in_flight: 0 }],
+            {
+                retryResult: {
+                    status: 400,
+                    body: { code: 'forwarder_disabled', message: 'forwarder is disabled' },
+                },
+            }
+        );
+        render(ForwardingSection);
+        const btn = await vi.waitFor(() =>
+            screen.getByRole('button', { name: /retry failed \(1\)/i })
+        );
+        await fireEvent.click(btn);
+        await vi.waitFor(() =>
+            expect(
+                toastsState.items.some(
+                    (t) => t.level === 'error' && t.message === 'forwarder is disabled'
+                )
+            ).toBe(true)
+        );
+    });
+
+    // U18 — WHICH QSOs: the failed count links to the logbook's "not on X" view,
+    // but only for a type that stamps per-QSO upload status (the daemon rejects
+    // missing_from for the others — SM Cloud), and the link says the view lists
+    // every QSO not on the destination, not only the failed rows.
+    it('U18: the failed count links to the logbook gap view for a stamping type only', async () => {
+        mockForwardingWithQueues([
+            { name: 'qrz', waiting: 0, failed: 2, clearable: 2, in_flight: 0 },
+            { name: 'smcloud', waiting: 0, failed: 1, clearable: 1, in_flight: 0 },
+        ]);
+        render(ForwardingSection);
+
+        const link = await vi.waitFor(() =>
+            screen.getByRole('link', { name: /show the qsos not on qrz\.com/i })
+        );
+        expect(link).toHaveAttribute('href', '/logbook?missing_from=qrz');
+        expect(screen.queryByRole('link', { name: /not on sm cloud/i })).toBeNull();
+        expect(
+            screen.getByText(/lists every qso not on qrz\.com, not only the failed/i)
+        ).toBeInTheDocument();
+
+        await fireEvent.click(link);
+        expect(window.location.pathname + window.location.search).toBe('/logbook?missing_from=qrz');
+        expect(takeLogbookMissingFrom()).toBe('qrz');
+    });
+
+    it('U18b: no gap link when nothing has failed', async () => {
+        mockForwardingWithQueues([
+            { name: 'qrz', waiting: 3, failed: 0, clearable: 3, in_flight: 0 },
+        ]);
+        render(ForwardingSection);
+        await vi.waitFor(() =>
+            expect(screen.getByText('3 waiting · 0 failed · 0 in flight')).toBeInTheDocument()
+        );
+        expect(screen.queryByRole('link', { name: /not on/i })).toBeNull();
     });
 
     // U12 — CLEAR QUEUE: confirm, POST, report the count, stay DISABLED through the
@@ -374,7 +499,7 @@ describe('ForwardingSection', () => {
         // Release the refetch: queued drops to 0, in-flight is untouched, one clear.
         releaseRefresh();
         await vi.waitFor(() =>
-            expect(screen.getByText('0 queued · 2 in flight')).toBeInTheDocument()
+            expect(screen.getByText('0 waiting · 0 failed · 2 in flight')).toBeInTheDocument()
         );
         expect(screen.getByRole('button', { name: /clear queue \(0\)/i })).toBeDisabled();
         expect(calls.clear).toEqual(['qrz']);
@@ -439,7 +564,7 @@ describe('ForwardingSection', () => {
         );
         // No stale Clear button and no stale count survive the failed refresh.
         expect(screen.queryByRole('button', { name: /clear queue/i })).toBeNull();
-        expect(screen.queryByText(/queued ·/)).toBeNull();
+        expect(screen.queryByText(/waiting ·/)).toBeNull();
     });
 
     // U15 — AN AMBIGUOUS TIMEOUT is reconciled, not reported as failure: the
@@ -458,7 +583,7 @@ describe('ForwardingSection', () => {
         await fireEvent.click(btn);
 
         await vi.waitFor(() =>
-            expect(screen.getByText('0 queued · 2 in flight')).toBeInTheDocument()
+            expect(screen.getByText('0 waiting · 0 failed · 2 in flight')).toBeInTheDocument()
         );
         expect(toastsState.items.some((t) => t.level === 'warn')).toBe(true);
         expect(toastsState.items.some((t) => t.level === 'error')).toBe(false);
@@ -480,7 +605,7 @@ describe('ForwardingSection', () => {
         await fireEvent.click(btn);
 
         await vi.waitFor(() =>
-            expect(screen.getByText('0 queued · 2 in flight')).toBeInTheDocument()
+            expect(screen.getByText('0 waiting · 0 failed · 2 in flight')).toBeInTheDocument()
         );
         expect(toastsState.items.some((t) => t.level === 'warn')).toBe(true);
         expect(toastsState.items.some((t) => t.level === 'error')).toBe(false);

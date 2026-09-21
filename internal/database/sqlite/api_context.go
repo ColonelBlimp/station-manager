@@ -2696,6 +2696,28 @@ func (s *Service) ResetOrphanedUploadsWithContext(ctx context.Context) (int64, e
 // never touched by boot recovery, however recognisable its message (ruling (d)).
 func (s *Service) RearmAuthFailedUploadsForForwarderWithContext(ctx context.Context, forwarderName string) (int64, error) {
 	const op errors.Op = "sqlite.Service.RearmAuthFailedUploadsForForwarderWithContext"
+	return s.rearmFailedUploads(ctx, op, forwarderName, true)
+}
+
+// RearmFailedUploadsForForwarderWithContext returns EVERY `failed` row of a
+// single forwarder to `pending`, whatever its failure_class — the operator's
+// explicit "Retry failed" (POST /v1/forwarder/{name}/queue/retry, W-0010
+// outcome 9 ruling (a)), as opposed to the class-scoped boot recovery above.
+// A row that is still invalid fails once more, terminally, and writes one more
+// forward.failed event; it cannot duplicate an accepted upload because
+// `uploaded` rows are never touched. Same reset as the auth re-arm; the caller
+// gates on the forwarder being enabled (a disabled one has no worker to drain
+// the rows). Returns the number of rows re-armed.
+func (s *Service) RearmFailedUploadsForForwarderWithContext(ctx context.Context, forwarderName string) (int64, error) {
+	const op errors.Op = "sqlite.Service.RearmFailedUploadsForForwarderWithContext"
+	return s.rearmFailedUploads(ctx, op, forwarderName, false)
+}
+
+// rearmFailedUploads is the one UPDATE behind both re-arms: the auth-only boot
+// recovery and the operator's retry of every failed row. authOnly narrows the
+// WHERE to failure_class = 'auth'; the reset itself is identical (attempts,
+// timers, last_error and the class cleared; upstream_id and origin kept).
+func (s *Service) rearmFailedUploads(ctx context.Context, op errors.Op, forwarderName string, authOnly bool) (int64, error) {
 	if err := checkService(op, s); err != nil {
 		return 0, err
 	}
@@ -2710,7 +2732,7 @@ func (s *Service) RearmAuthFailedUploadsForForwarderWithContext(ctx context.Cont
 	ctx, cancel := s.ensureCtxTimeout(ctx)
 	defer cancel()
 
-	res, err := h.ExecContext(ctx, `
+	query := `
 UPDATE qso_upload
 SET    status          = ?,
        attempts        = 0,
@@ -2719,12 +2741,17 @@ SET    status          = ?,
        last_attempt_at = NULL,
        last_error      = NULL,
        failure_class   = NULL
-WHERE  forwarder_name = ? AND status = ? AND failure_class = ?`,
-		status.Pending.String(), forwarderName, status.Failed.String(), failure.Auth.String())
-	if err != nil {
-		return 0, errors.New(op).WithErr(err).WithMsg("rearm auth-failed uploads for forwarder")
+WHERE  forwarder_name = ? AND status = ?`
+	args := []any{status.Pending.String(), forwarderName, status.Failed.String()}
+	if authOnly {
+		query += ` AND failure_class = ?`
+		args = append(args, failure.Auth.String())
 	}
-	return checkedRowsAffected(op, res, "rearm auth-failed uploads for forwarder")
+	res, err := h.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, errors.New(op).WithErr(err).WithMsg("rearm failed uploads for forwarder")
+	}
+	return checkedRowsAffected(op, res, "rearm failed uploads for forwarder")
 }
 
 // DiscardQueuedUploadsForForwarderWithContext deletes the not-yet-uploaded rows
@@ -2923,14 +2950,21 @@ WHERE forwarder_name = ? AND status IN (?, ?)`,
 }
 
 // ForwarderQueueCounts is one forwarder's upload-queue breakdown for the
-// operator-facing Settings → Forwarding surface (W-0005): Clearable is the
-// pending+failed backlog an operator-triggered clear would remove; InFlight is
-// the in_progress batch a live worker is processing and never clears. Uploaded
-// rows are history and counted in neither.
+// operator-facing Settings → Forwarding surface (W-0005): Waiting is the
+// `pending` backlog still to be sent, Failed the `failed` rows that will not be
+// sent again without a re-arm (W-0010 outcome 9 reads the two apart so a
+// terminal failure never shows as a live backlog), and InFlight the in_progress
+// batch a live worker is processing and never clears. Uploaded rows are history
+// and counted in none of them.
 type ForwarderQueueCounts struct {
-	Clearable int64
-	InFlight  int64
+	Waiting  int64
+	Failed   int64
+	InFlight int64
 }
+
+// Clearable is the backlog an operator-triggered clear would remove:
+// waiting + failed (DiscardClearableUploadsForForwarderWithContext).
+func (c ForwarderQueueCounts) Clearable() int64 { return c.Waiting + c.Failed }
 
 // ForwarderQueueCountsWithContext returns per-forwarder queue counts, keyed by
 // forwarder_name, for every forwarder that has any qso_upload rows. A forwarder
@@ -2952,14 +2986,16 @@ func (s *Service) ForwarderQueueCountsWithContext(ctx context.Context) (map[stri
 
 	var rows []struct {
 		ForwarderName string `boil:"forwarder_name"`
-		Clearable     int64  `boil:"clearable"`
+		Waiting       int64  `boil:"waiting"`
+		Failed        int64  `boil:"failed"`
 		InFlight      int64  `boil:"in_flight"`
 	}
 	err = queries.Raw(`
 SELECT
     forwarder_name,
-    COALESCE(SUM(CASE WHEN status IN (?, ?) THEN 1 ELSE 0 END), 0) AS clearable,
-    COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0)       AS in_flight
+    COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0) AS waiting,
+    COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0) AS failed,
+    COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0) AS in_flight
 FROM qso_upload
 GROUP BY forwarder_name`,
 		status.Pending.String(), status.Failed.String(), status.InProgress.String(),
@@ -2970,7 +3006,7 @@ GROUP BY forwarder_name`,
 
 	out := make(map[string]ForwarderQueueCounts, len(rows))
 	for _, r := range rows {
-		out[r.ForwarderName] = ForwarderQueueCounts{Clearable: r.Clearable, InFlight: r.InFlight}
+		out[r.ForwarderName] = ForwarderQueueCounts{Waiting: r.Waiting, Failed: r.Failed, InFlight: r.InFlight}
 	}
 	return out, nil
 }
