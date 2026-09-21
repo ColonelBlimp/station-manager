@@ -111,8 +111,19 @@ Slices, each its own commit:
    `takeLogbookMissingFrom` handoff; `api-endpoints.md` and `forwarding.md` §7 updated. Proofs:
    storage (auth-only re-arm and a merged count both fail), handler (no enabled gate → 200 for a
    disabled forwarder; auth-only re-arm → 1 not 2), SPA (link without the stamp guard, mount
-   without the handoff, handoff not cleared). Not yet deployed — the fixture check on the card is
-   the next step.
+   without the handoff, handoff not cleared). Deployed 2026-09-21 as `2.0.0-alpha.3-17-gc295b627`
+   (schema 11); the boot re-arm logged nothing (no `auth`-classed rows, as ruled). **The fixture
+   row is gone, and was before the preservation ruling:** `smd.log` 2026-09-12 13:19:15 —
+   `forwarder disabled; discarded queued uploads`, `discarded: 1`, forwarder `qrz` — the
+   disabled-forwarder startup discard (ADR 0039) removed the 2026-08-06 failed insert at a restart
+   with QRZ turned off, seven days before the 2026-09-19 "preserve it" ruling. Today
+   `GET /v1/forwarder-queues` reads all zeros for QRZ, correctly; QSO 7025 (7Q7EB) carries only its
+   SM Cloud row and still counts as not-on-QRZ (`missing_from=qrz` count 1). The card's "M failed"
+   reading is therefore proven by the handler and SPA tests, not by the live fixture. The alpha.2
+   acceptance record's Finding 19 says the operator confirmed QSO 7025 was a UI test, not a contact;
+   do not backfill it to QRZ merely to exercise the card. The passive station check confirms the
+   empty-queue reading and the logbook gap, while live failed-row display remains unobserved. A live
+   failed-row check, if required, must use a legitimate contact that fails naturally.
 
 CI note (2026-09-20). Slice 2's run (35511192956) tripped the 10-minute per-package race timeout in
 `internal/api`: the package had grown to 349–587 s on the runner (233 s of that is runner variance
