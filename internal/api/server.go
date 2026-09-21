@@ -33,9 +33,12 @@ type Server struct {
 	httpServer *http.Server
 	listener   net.Listener
 	cfg        *config.Service
-	qso        *qsoservice.Service
-	db         *sqlite.Service
-	logger     *logging.Service
+	// startupForwarders mirrors the enabled worker set built from cfg at daemon
+	// startup. PUT /v1/config updates cfg immediately; workers change on restart.
+	startupForwarders map[string]struct{}
+	qso               *qsoservice.Service
+	db                *sqlite.Service
+	logger            *logging.Service
 	// logHealth reports whether the durable log writer is currently failing, for
 	// /v1/healthz. Wired from logger (the real implementer) in New; a test can
 	// override it to drive the degraded branch without a failing file. Nil is
@@ -121,22 +124,27 @@ type Server struct {
 // cfgSvc is the live, mutex-guarded config.Service that GET/PUT
 // /v1/config reads from and writes to. Distinct from the cfg snapshot
 // used to materialise startup-time tunables (timeouts, limits,
-// protocol) because those don't change at runtime; the config-update
-// endpoint only touches operator-relevant fields (logging_station,
-// default_*_id) which startup doesn't bake into Server fields.
+// protocol) and the forwarder worker set; config saves do not restart workers.
 func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *qsoservice.Service, db *sqlite.Service, logger *logging.Service, hub *events.Hub, enrich *lookup.Orchestrator, mailer *email.Service, br *bridge.Service, ft8Svc *ft8.Service) *Server {
+	startupForwarders := make(map[string]struct{})
+	for _, f := range cfg.Forwarders {
+		if f.Enabled {
+			startupForwarders[f.Name] = struct{}{}
+		}
+	}
 	s := &Server{
-		cfg:       cfgSvc,
-		qso:       qso,
-		db:        db,
-		logger:    logger,
-		logHealth: logger,
-		dbHealth:  newDBHealthLog(logger),
-		hub:       hub,
-		enrich:    enrich,
-		mailer:    mailer,
-		bridge:    br,
-		ft8:       ft8Svc,
+		cfg:               cfgSvc,
+		startupForwarders: startupForwarders,
+		qso:               qso,
+		db:                db,
+		logger:            logger,
+		logHealth:         logger,
+		dbHealth:          newDBHealthLog(logger),
+		hub:               hub,
+		enrich:            enrich,
+		mailer:            mailer,
+		bridge:            br,
+		ft8:               ft8Svc,
 		// Wire the retune stop-hook here rather than leaving it to cmd/smd: both
 		// halves of that behaviour pass in isolation whether or not they are
 		// connected, so the fewer places the wire can be forgotten the better.

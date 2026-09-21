@@ -95,10 +95,11 @@ Slices, each its own commit:
    `POST /v1/forwarder/{name}/queue/retry`, which re-arms that forwarder's `failed` rows.
    Design (2026-09-21): the GET keeps `clearable` as `waiting + failed` (the Clear button's
    count) and adds the two parts. The retry answers `{rearmed}`; 400 `invalid_forwarder`, 404
-   `unknown_forwarder`, 400 `forwarder_disabled` — a disabled forwarder has no worker, so its
-   re-armed rows would read as "waiting" until the next start discards them (the nearest
-   confusable outcome); the exact path name is looked up, like clear, and "enabled" is read from
-   the loaded config, like the backfill gate. The failed count links to `/logbook?missing_from=<name>`,
+   `unknown_forwarder`, 400 `forwarder_disabled` — a forwarder disabled at startup has no worker, so
+   its re-armed rows would read as "waiting" until the next start discards them (the nearest
+   confusable outcome); the exact path name is looked up, like clear, and worker availability comes
+   from the startup snapshot because a config save changes the live config before workers restart.
+   The failed count links to `/logbook?missing_from=<name>`,
    a one-shot handoff the logbook applies at mount and then canonicalises away (the destination
    picker owns that state and does not write the URL); it is offered only for types that stamp
    per-QSO upload status, and the card says the filter lists every QSO not on the destination, not

@@ -747,8 +747,9 @@ fails the rows once more, terminally; rows failed for any other reason
 
 **Operator retry** (W-0010 outcome 9, ruling (a)). `POST
 /v1/forwarder/{name}/queue/retry` — Settings → Forwarding's "Retry
-failed" — returns EVERY `failed` row of one enabled forwarder to
-`pending`, whatever its class, with the same reset. It is the explicit
+failed" — returns EVERY `failed` row of one forwarder whose worker was
+created at daemon startup to `pending`, whatever its class, with the same
+reset. It is the explicit
 counterpart of the boot recovery: the operator chooses to re-send rows
 the daemon would never re-arm on its own (a data rejection, exhausted
 retries, or the pre-0011 fixture). `GET /v1/forwarder-queues` reads

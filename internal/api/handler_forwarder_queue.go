@@ -108,11 +108,10 @@ func (s *Server) handleClearForwarderQueue(w http.ResponseWriter, r *http.Reques
 // still invalid fails once more, terminally (one more forward.failed event); an
 // accepted upload cannot be duplicated because uploaded rows are never touched.
 //
-// Unlike clear, retry requires the forwarder to be ENABLED: a disabled one has
-// no worker, and its queue is discarded at the next start, so re-arming would
-// only show a "waiting" count that never moves. Enabled is read from the loaded
-// config, the same source as the backfill gate — a config edit saved without a
-// restart is not a running worker (forwarding.md §8).
+// Unlike clear, retry requires a worker created at daemon startup: a forwarder
+// disabled at startup has none, so re-arming would show a "waiting" count that
+// never moves. The startup snapshot matters because config saves change the
+// live config service immediately while workers change only on restart.
 //
 // Status codes:
 //   - 400 invalid_forwarder   empty name
@@ -128,14 +127,14 @@ func (s *Server) handleRetryForwarderQueue(w http.ResponseWriter, r *http.Reques
 		s.writeError(w, http.StatusBadRequest, "invalid_forwarder", "forwarder name is required", op)
 		return
 	}
-	fwd, ok := s.configuredForwarder(name)
+	_, ok := s.configuredForwarder(name)
 	if !ok {
 		s.writeError(w, http.StatusNotFound, "unknown_forwarder", "no such forwarder", op)
 		return
 	}
-	if !fwd.Enabled {
+	if _, running := s.startupForwarders[name]; !running {
 		s.writeError(w, http.StatusBadRequest, "forwarder_disabled",
-			"forwarder is disabled; enable it and restart the daemon before retrying", op)
+			"forwarder has no running worker; restart the daemon with it enabled before retrying", op)
 		return
 	}
 

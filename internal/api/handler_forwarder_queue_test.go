@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/failure"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/status"
 )
@@ -331,6 +332,38 @@ func TestRetryForwarderQueue_Validation(t *testing.T) {
 		}
 		if code := decodeErrCode(t, w); code != "forwarder_disabled" {
 			t.Errorf("code = %q, want forwarder_disabled", code)
+		}
+	})
+}
+
+// Config saves change the config service immediately, while the worker set
+// changes only at daemon restart. Retry follows the workers created at startup.
+func TestRetryForwarderQueue_UsesStartupWorkerSet(t *testing.T) {
+	t.Run("saved disable leaves worker running", func(t *testing.T) {
+		srv := serverWithForwarders(t, forwarderCfg("qrz", "qrz", true, "insert"))
+		if _, err := srv.cfg.Update(func(cfg *config.Config) error {
+			cfg.Forwarders[0].Enabled = false
+			return nil
+		}); err != nil {
+			t.Fatalf("save disabled config: %v", err)
+		}
+		w := retryQueue(t, srv, "qrz", true)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 while the startup worker still runs; body = %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("saved enable has no worker yet", func(t *testing.T) {
+		srv := serverWithForwarders(t, forwarderCfg("qrz", "qrz", false, "insert"))
+		if _, err := srv.cfg.Update(func(cfg *config.Config) error {
+			cfg.Forwarders[0].Enabled = true
+			return nil
+		}); err != nil {
+			t.Fatalf("save enabled config: %v", err)
+		}
+		w := retryQueue(t, srv, "qrz", true)
+		if w.Code != http.StatusBadRequest || decodeErrCode(t, w) != "forwarder_disabled" {
+			t.Fatalf("status = %d, want 400 forwarder_disabled until a worker starts; body = %s", w.Code, w.Body.String())
 		}
 	})
 }

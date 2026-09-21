@@ -146,7 +146,7 @@ items return a QSO through a boundary projection of `types.Qso`: the canonical *
 
 ### `POST /v1/forwarder/{name}/queue/retry`
 - **Purpose:** Operator-triggered "Retry failed" (W-0010 outcome 9, ruling (a)) — return the named forwarder's `failed` rows to `pending` for one more attempt by its worker, e.g. after correcting a rejected credential. Every failed row is re-armed, whatever its `failure_class`; a row the destination still rejects fails once more (one more `forward.failed` event) and an accepted upload is never re-sent (`uploaded` rows are untouched). Automatic recovery of `auth`-classed rows at daemon start is separate and needs no call.
-- **Gating:** Always-on, but the forwarder must be **enabled**: a disabled forwarder has no worker and its queue is discarded at the next start, so re-arming would only show a `waiting` count that never moves. Enabled is read from the loaded config, like the backfill gate — a config edit saved without a restart is not a running worker.
+- **Gating:** Always-on, but the forwarder must have been **enabled at daemon startup**: a forwarder disabled then has no worker, so re-arming would only show a `waiting` count that never moves. The gate uses the startup worker set; `PUT /v1/config` changes saved configuration immediately but does not add or stop workers until restart.
 - **Request:** Path `{name}` (the forwarder's config name, matched exactly like clear). No body.
 - **Behaviour:** Per-forwarder, never global. Re-armed rows read `pending` with `attempts` 0, `next_attempt_at` now, and `last_error`/`failure_class` cleared; `upstream_id` and `origin` are kept.
 - **Response:** **200**, body `{"rearmed": N}` (rows re-armed; 0 when nothing had failed).
