@@ -164,6 +164,18 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      Lesson recorded in the harness: `--expect-dropped` names the SOURCE copy's columns the old
      schema lacks; a column the new schema adds and the down removes (`logbook.uuid`) is invisible
      to the before/after comparison and is covered by 0012's own down test.
+   - **Deployed 2026-09-22 as `2.0.0-alpha.3-24-g74d5cf70` (slice 1 commit `74d5cf70`;
+     startup self-heal defers when the file already has a default, then adoption projects it, so a
+     stale config default cannot seed a duplicate logbook). Station reads, all passive:**
+     `GET /v1/version` → schema 12, `archive {id 01a0c8cb-904f-7394-afca-ef922b41bbfb, label Home,
+     ownership legacy}`; `smd.log` one line `startup: archive catalogue written (existing
+     installation adopted in place)` with that id and the canonical path, no persist warning;
+     `config.json` version 4, one catalogue entry (legacy, that path), active = that id, pending
+     absent, `default_logbook_id` 1; the file's `archive_metadata` row holds the same UUID with
+     default logbook 1; the one logbook now carries uuid `01a0c8cb-904f-713c-af34-5f887f153a22`,
+     visible on `GET /v1/logbook`. AC 8 holds on the live install (registered in place, no move,
+     counts unchanged). Still to observe: a second restart writes no new catalogue line (the
+     idempotency proof on the real file; proven in tests).
    - `datastore.path` stays honoured as the compatibility selector until slice 2 resolves the path
      from the catalogue; a config whose path names a file with a different embedded UUID than the
      catalogue entry fails closed with a named diagnostic.
