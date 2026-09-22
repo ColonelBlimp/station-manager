@@ -115,7 +115,21 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      required.
      Also from the b0d94f13 review: `--to 0` is now refused by an explicit floor at both
      boundaries (version 0 is no schema; 0001's down drops every table) rather than left to the
-     migration library's error, with tests.
+     migration library's error, with tests. Review of `7d99af72` (P1, valid): the fingerprint
+     hashed row ids only, so a rewritten retained value would still read ROWS IDENTICAL. It now
+     hashes every column of every protected table (rows sorted by key, NULL and blobs encoded
+     explicitly); the verdict compares every column both schemas share, names the ones the
+     downgrade drops — for 11 → 9 exactly `qso_upload.failure_class` and
+     `qso_upload.upstream_id_generation` — and fails on any column present only after.
+     Sensitivity proven with `--mutate-one-row` (a hook that changes one `qso.call` in the scratch
+     copy): the run reports `qso.call: value hash changed`. Both drills rerun green under the
+     full-column verdict. Follow-up review the same day: a dropped column was merely listed, so
+     a down migration that removed `qso.call` would still pass — the verdict now takes an EXACT
+     expected drop set (`--expect-dropped`, empty for the tag run, the two upload columns for
+     alpha.3) and fails on any other drop or on an expected drop that did not happen; proven on
+     the verdict function alone (a removed `qso.call` → "columns dropped that the drill did not
+     expect") and by an alpha.3 run with an empty expected set, which fails. Both drills green
+     with their exact sets.
    - `datastore.path` stays honoured as the compatibility selector until slice 2 resolves the path
      from the catalogue; a config whose path names a file with a different embedded UUID than the
      catalogue entry fails closed with a named diagnostic.

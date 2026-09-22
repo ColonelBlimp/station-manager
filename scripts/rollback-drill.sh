@@ -17,6 +17,8 @@
 #   scripts/rollback-drill.sh --new <smd> --new-schema N --new-config M \
 #       --old <smd> --old-schema N --old-config M \
 #       [--db <station-manager.db>] [--config <config.json>] [--label <name>] [--keep]
+#       [--expect-dropped "table.col,table.col"]   # EXACT set of columns the downgrade may drop
+#       [--mutate-one-row]   # proof hook: changes one retained value so the verdict MUST fail
 #
 # The expected versions are asserted at every phase, so a drill whose new
 # binary did not actually migrate (or whose downgrade step was skipped) fails
@@ -27,7 +29,7 @@
 # none is needed); nothing secret is ever on disk in the scratch.
 set -euo pipefail
 
-NEW=""; OLD=""; NEW_SCHEMA=""; NEW_CONFIG=""; OLD_SCHEMA=""; OLD_CONFIG=""; LABEL="old"; KEEP=0
+NEW=""; OLD=""; NEW_SCHEMA=""; NEW_CONFIG=""; OLD_SCHEMA=""; OLD_CONFIG=""; LABEL="old"; KEEP=0; MUTATE=0; EXPECT_DROPPED=""
 DB="$HOME/.local/share/station-manager/db/station-manager.db"
 CFG="$HOME/.local/share/station-manager/config.json"
 while [ $# -gt 0 ]; do
@@ -37,6 +39,8 @@ while [ $# -gt 0 ]; do
     --old-schema) OLD_SCHEMA="$2"; shift 2;; --old-config) OLD_CONFIG="$2"; shift 2;;
     --db) DB="$2"; shift 2;; --config) CFG="$2"; shift 2;;
     --label) LABEL="$2"; shift 2;; --keep) KEEP=1; shift;;
+    --mutate-one-row) MUTATE=1; shift;;
+    --expect-dropped) EXPECT_DROPPED="$2"; shift 2;;
     *) echo "unknown argument: $1" >&2; exit 2;;
   esac
 done
@@ -156,18 +160,62 @@ print("  ok: every configured database path is under the scratch")
 PY
 }
 
-fingerprint() { # $1 = db path → prints "table count sha256(sorted ids)" lines + schema version
+fingerprint() { # $1 = db path → per table: row count, then one sha256 PER COLUMN over every
+                # row's (key, value), rows sorted by key, NULL and blobs encoded explicitly.
+                # Per-column hashes let the verdict compare every column both schemas share
+                # and name the ones a down migration drops, instead of hashing ids alone
+                # (review 7d99af72: an id-only fingerprint would pass a rewritten qso.call).
 python3 - "$1" <<'PY'
 import sqlite3, sys, hashlib
 db = sqlite3.connect(sys.argv[1])
 tables = [r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")]
 keyed = {"qso": "uuid", "qso_history": "id", "qso_upload": "id", "logbook": "id", "operator_event": "id"}
+def enc(v):
+    if v is None: return "NULL"
+    if isinstance(v, bytes): return "blob:" + hashlib.sha256(v).hexdigest()
+    return type(v).__name__ + ":" + repr(v)
 for t, key in keyed.items():
     if t not in tables: print(f"{t}: absent"); continue
-    rows = sorted(str(r[0]) for r in db.execute(f"SELECT {key} FROM {t}"))
-    print(f"{t}: {len(rows)} sha256={hashlib.sha256('\\n'.join(rows).encode()).hexdigest()[:16]}")
+    cols = [r[1] for r in db.execute(f"PRAGMA table_info({t})")]
+    rows = sorted(db.execute(f"SELECT {key}, {', '.join(cols)} FROM {t}").fetchall(), key=lambda r: str(r[0]))
+    print(f"{t}: {len(rows)} rows")
+    for i, c in enumerate(cols):
+        h = hashlib.sha256("\n".join(f"{r[0]}\t{enc(r[i+1])}" for r in rows).encode()).hexdigest()[:16]
+        print(f"{t}.{c} {h}")
 v = db.execute("SELECT version, dirty FROM schema_migrations_log").fetchone() if "schema_migrations_log" in tables else None
 print(f"schema: {v}")
+PY
+}
+
+verdict() { # $1 = before fingerprint, $2 = after fingerprint, $3 = exact expected drop set →
+            # 0 only if every row count and every shared column's value hash is identical AND the
+            # columns absent after are EXACTLY the expected set (a down migration may drop what the
+            # older schema never had, never anything else) AND nothing appears only after.
+python3 - "$1" "$2" "$3" <<'PY'
+import sys
+expected = set(x.strip() for x in sys.argv[3].split(",") if x.strip())
+def parse(text):
+    counts, cols = {}, {}
+    for ln in text.splitlines():
+        if ln.startswith("schema:"): continue
+        head, _, rest = ln.partition(" ")
+        if head.endswith(":"): counts[head[:-1]] = rest
+        else: cols[head] = rest
+    return counts, cols
+bc, bcols = parse(sys.argv[1]); ac, acols = parse(sys.argv[2])
+bad = []
+for t in bc:
+    if bc[t] != ac.get(t): bad.append(f"{t}: {bc[t]} before, {ac.get(t)} after")
+for c in sorted(set(bcols) & set(acols)):
+    if bcols[c] != acols[c]: bad.append(f"{c}: value hash changed {bcols[c]} -> {acols[c]}")
+dropped = set(bcols) - set(acols); added = sorted(set(acols) - set(bcols))
+if added: bad.append(f"columns present only after: {added}")
+if dropped - expected: bad.append(f"columns dropped that the drill did not expect: {sorted(dropped - expected)}")
+if expected - dropped: bad.append(f"columns expected to be dropped but still present: {sorted(expected - dropped)}")
+if bad:
+    print("  ROWS DIFFER:"); [print("    " + b) for b in bad]; sys.exit(1)
+print("  ROWS IDENTICAL before -> after: every row count and every shared column's value hash")
+print(f"  columns dropped by the downgrade, exactly as expected: {sorted(dropped) if dropped else 'none'}")
 PY
 }
 
@@ -213,6 +261,13 @@ if [ "$NEW_CONFIG" -gt "$OLD_CONFIG" ]; then
 else
   echo "  config version unchanged between builds ($NEW_CONFIG): the config step is not under test in this run"
 fi
+if [ "$MUTATE" = 1 ]; then
+  # Proof hook, never for a real drill: change ONE retained value in the scratch
+  # copy so the verdict must report ROWS DIFFER. A drill that stays green with
+  # this flag has a fingerprint that is not looking at the data.
+  python3 -c "import sqlite3,sys; db=sqlite3.connect(sys.argv[1]); db.execute(\"UPDATE qso SET call='DR1LL' WHERE rowid=(SELECT MIN(rowid) FROM qso)\"); db.commit()" "$SCRATCH/db/station-manager.db"
+  echo "  MUTATED one qso.call in the scratch copy (proof run)"
+fi
 expect "db schema after downgrade" "$(schema_of "$SCRATCH/db/station-manager.db")" "$OLD_SCHEMA"
 expect "config version after downgrade" "$(config_version_of "$SCRATCH/config.json")" "$OLD_CONFIG"
 DOWN="$(fingerprint "$SCRATCH/db/station-manager.db")"; echo "$DOWN" | sed 's/^/  /'
@@ -226,10 +281,5 @@ confine_check
 AFTER="$(fingerprint "$SCRATCH/db/station-manager.db")"; echo "$AFTER" | sed 's/^/  /'
 
 echo "drill[$LABEL]: verdict"
-strip() { grep -v '^schema:'; }
-if [ "$(echo "$BEFORE" | strip)" = "$(echo "$AFTER" | strip)" ]; then
-  echo "  ROWS IDENTICAL before → after (counts and id/uuid fingerprints)"
-else
-  echo "  ROWS DIFFER:"; diff <(echo "$BEFORE") <(echo "$AFTER") | sed 's/^/    /'; exit 1
-fi
+verdict "$BEFORE" "$AFTER" "$EXPECT_DROPPED"
 echo "$AFTER" | grep '^schema:' | sed 's/^/  /'
