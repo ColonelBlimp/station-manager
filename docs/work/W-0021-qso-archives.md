@@ -86,6 +86,36 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      a test that saves a writable block and reads the catalogue back untouched. Proofs: no down
      step registered → the 4→3 test fails; validator unwired → every rule passes vacuously;
      stray argument → the default file would be rewritten.
+   - **Rollback drill run 2026-09-22 (ruling (e)), both binaries, PASSED.** Harness:
+     `scripts/rollback-drill.sh --new <smd> --new-schema N --new-config M --old <smd> --old-schema N
+     --old-config M` — takes a consistent SQLite online backup of the live `station-manager.db`
+     and a credential-scrubbed copy of `config.json` into a `0700` scratch under home, rewrites
+     `data_dir`, `datastore.path`, `socket_path` (unix) and any `qso_archives[].path` naming the
+     live file into it (any other catalogue path is refused), turns off forwarders,
+     bridge, FT8, evidence capture and sync, SMTP, PSK Reporter and every lookup provider, refuses
+     to start unless every resolved database path (catalogue entries included) lies under the
+     scratch — re-checked after each daemon ran, since adoption writes paths — asserts the
+     expected schema and config versions after the new start, after the downgrade and as reported
+     by the old daemon (so a skipped step or an unmigrated build fails rather than passing on
+     identical rows), fingerprints the rows
+     (count + sha256 of sorted ids/uuids for qso, qso_history, qso_upload, logbook,
+     operator_event), boots the NEW binary on the copy (it persisted config v4 at start), runs
+     `smd db-downgrade` / `smd config-downgrade` with the new binary, boots the OLD binary, and
+     compares; the config copy is shredded on exit. Run 1, old = the `pre-w0021` tag built from a
+     worktree (schema 11, config 3): config 4 → 3, no db step needed, tagged build answered
+     `/v1/version` schema 11. Run 2, old = the frozen alpha.3 RPM's binary (schema 9, config 3):
+     db 11 → 9 (0011 and 0010 down), config 4 → 3, alpha.3 answered schema 9. Both runs: rows
+     identical before → after — qso 8,129 (`70cc82b355b8a3f3`), qso_upload 15,733
+     (`def65b35cbc93ca4`), qso_history 2, logbook 1, operator_event 0. The same command reruns
+     the drill once migration 0012 exists, which is the gate before sub-commit C reaches trunk.
+     Second review of the harness the same day fixed four findings (catalogue paths unconfined;
+     a no-op run could pass; db + WAL copied at two instants; shred cannot reach replaced inodes
+     — credentials are now scrubbed before the copy is written); both runs repeated green with
+     the version assertions, and a negative run claiming schema 12 for the new build failed as
+     required.
+     Also from the b0d94f13 review: `--to 0` is now refused by an explicit floor at both
+     boundaries (version 0 is no schema; 0001's down drops every table) rather than left to the
+     migration library's error, with tests.
    - `datastore.path` stays honoured as the compatibility selector until slice 2 resolves the path
      from the catalogue; a config whose path names a file with a different embedded UUID than the
      catalogue entry fails closed with a named diagnostic.

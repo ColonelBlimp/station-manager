@@ -50,6 +50,11 @@ func (s *Service) DowngradeLogSchemaTo(target uint) (from uint, err error) {
 	if dirty {
 		return current, errors.New(op).WithMsgf("schema version %d is dirty; repair it before a downgrade", current)
 	}
+	if target < 1 {
+		// Version 0 is no schema at all: 0001's down step drops every table. No
+		// build ever ran there, so it is never a rollback target (review b0d94f13).
+		return current, errors.New(op).WithMsg("target version must be at least 1 (version 0 would drop every table)")
+	}
 	if target >= current {
 		return current, errors.New(op).WithMsgf("target version %d is not below the current version %d (down only)", target, current)
 	}

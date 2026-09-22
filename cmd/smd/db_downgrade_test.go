@@ -50,6 +50,9 @@ func TestDBDowngrade_RefusesWithoutYesAndRefusesUpward(t *testing.T) {
 	if err := runDBDowngradeTo(&out, []string{"--config", cfgPath, "--yes"}); err == nil {
 		t.Fatal("missing --to accepted; want a refusal")
 	}
+	if err := runDBDowngradeTo(&out, []string{"--config", cfgPath, "--to", "0", "--yes"}); err == nil {
+		t.Fatal("--to 0 accepted; version 0 is no schema at all (0001 down drops every table)")
+	}
 
 	db := reopenDB(t, tmp)
 	v, _, err := db.SchemaVersionWithContext(context.Background())

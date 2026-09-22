@@ -54,6 +54,9 @@ func runDBDowngradeTo(out io.Writer, args []string) error {
 		fs.Usage()
 		return errors.New(op).WithMsg("--to <version> is required")
 	}
+	if *target < 1 {
+		return errors.New(op).WithMsg("--to must be at least 1: version 0 is no schema at all (the first down step drops every table)")
+	}
 	if !*yes {
 		return errors.New(op).WithMsgf("refusing to migrate the log schema down to %d without --yes "+
 			"(stop the daemon first; a down migration drops what newer migrations added)", *target)

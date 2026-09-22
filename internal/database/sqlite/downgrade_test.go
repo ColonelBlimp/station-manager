@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
@@ -73,6 +74,12 @@ func TestDowngradeLogSchemaTo_RefusesSameOrHigherTarget(t *testing.T) {
 	}
 	if v := schemaVersion(t, svc); v != 11 {
 		t.Fatalf("schema version = %d after refused downgrades, want 11", v)
+	}
+	// Version 0 is "no schema": 0001's down step drops every table. No build
+	// ever ran at 0, so it is refused by an explicit floor, not left to whatever
+	// the migration library does with a nonexistent target.
+	if _, err := svc.DowngradeLogSchemaTo(0); err == nil || !strings.Contains(err.Error(), "at least 1") {
+		t.Fatalf("target 0 = %v; want a refusal naming the floor of 1", err)
 	}
 	// The load-bearing case: from a LOWERED version, a higher target that the
 	// bundled source could satisfy must still be refused — this is what keeps the
