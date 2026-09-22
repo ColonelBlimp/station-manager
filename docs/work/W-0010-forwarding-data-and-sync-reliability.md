@@ -1,6 +1,6 @@
 # W-0010 — Improve forwarding, data, and synchronization reliability
 
-**Status:** Selected — outcome 9 in progress (slice 4 built, awaiting deploy check)
+**Status:** Selected — outcome 9 CLOSED 2026-09-21 (operator: test proof plus passive station evidence); outcomes 1–8 remain unselected
 **Selected:** 2026-09-20 (operator: "Select W-0010 and start outcome 9")
 **Outcome:** Upload recovery, synchronization, email, and duplicate handling preserve operator
 intent and converge without routine full-log churn or forbidden third-party API use.
@@ -124,6 +124,9 @@ Slices, each its own commit:
    do not backfill it to QRZ merely to exercise the card. The passive station check confirms the
    empty-queue reading and the logbook gap, while live failed-row display remains unobserved. A live
    failed-row check, if required, must use a legitimate contact that fails naturally.
+   **Closed 2026-09-21 (operator):** outcome 9 accepted on the test proofs and the passive station
+   evidence; the live failed-row reading stays an open observation, to be recorded here if a real
+   contact ever fails at a destination. Finding 19 of the alpha.2 record is answered by slices 1–4.
 
 CI note (2026-09-20). Slice 2's run (35511192956) tripped the 10-minute per-package race timeout in
 `internal/api`: the package had grown to 349–587 s on the runner (233 s of that is runner variance

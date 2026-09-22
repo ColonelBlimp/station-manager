@@ -329,6 +329,24 @@
       "summary": "W-0020 replaces the header notification slide-over with a full-page Station Events section and adds the alarm family (TX/drive alarms, non-operator disarms, abnormal exchange terminations) to the operator_event store under ADR 0076's typed-metadata rule."
     },
     {
+      "id": "work.w-0021",
+      "path": "docs/work/W-0021-qso-archives.md",
+      "class": "work-item",
+      "audiences": ["operator", "contributor", "agent"],
+      "topics": ["archives", "logbooks", "datastore", "smcloud", "lifecycle"],
+      "scopes": [
+        "internal/database/sqlite/migrations/log/**",
+        "internal/database/sqlite/service.go",
+        "internal/database/sqlite/bootstrap.go",
+        "internal/config/config.go",
+        "internal/types/datastore.go",
+        "cmd/smd/lifecycle_adapters.go",
+        "cmd/smd/main.go",
+        "internal/cloud/store/migrations/**"
+      ],
+      "summary": "W-0021 delivers ADR 0071's first-class QSO archives: stable archive and logbook identities with in-place adoption of the existing install, a managed archive catalogue and provisioner with last-known-good startup, create/list/activate over the attended restart, the shell archive selector, and SM Cloud keyed by archive/logbook UUIDs."
+    },
+    {
       "id": "work.dogfood-inbox",
       "path": "docs/dogfood-inbox.md",
       "class": "work-item",

@@ -2,10 +2,10 @@
 
 Updated: 2026-09-21
 
-- **Goal:** W-0010 outcome 9 (SELECTED 2026-09-20): failed rows read apart from waiting, auth failures recover, QRZ id-less delete is a no-op. [`backlog`](backlog.md) owns priority.
-- **State:** outcome 9 slices 1–4 deployed as `2.0.0-alpha.3-17-gc295b627` (schema 11). QRZ card reads 0 waiting / 0 failed / 0 in flight; the preserved failed-row fixture had already been discarded on 2026-09-12 while QRZ was disabled. Tests prove failed-row behavior; the live failed state is unobserved.
-- **Next:** do not backfill QSO 7025 to QRZ for acceptance: the operator confirmed it was a UI test, not a contact (alpha.2 Finding 19). Decide whether test proof plus passive station evidence closes outcome 9; then ADR 0071 archives (files first). Order (2026-09-19): alpha.3 acceptance → outcome 9 → archives → Settings → Logbooks → contesting. **alpha.3 FROZEN** at `333427ea` (local tag); [record](reports/dogfood-acceptance-v2.0.0-alpha.3.md) Gate A pending the operator. W-0020 AC2 awaits passive rows. RF per-occasion only; FT8-10 BLOCKED.
+- **Goal:** W-0021 (SELECTED 2026-09-21): first-class QSO archives per ADR 0071, files first — identities and in-place adoption before catalogue, activation, SPA and SM Cloud identity. [`backlog`](backlog.md) owns priority.
+- **State:** W-0010 outcome 9 CLOSED 2026-09-21 (deployed `alpha.3-17`, schema 11). W-0021 dossier opened, five slices, nothing in code yet. Station on a dev build; frozen RPM deferred.
+- **Next:** rulings (a)–(c) in the W-0021 dossier (adopted-file ownership, logbook UUID backfill, SM Cloud identity as slice 5); then slice 1 (migration 0012 `archive_metadata` + `logbook.uuid`, catalogue, `default_logbook_id` projection) RED-first. Order: archives → Settings → Logbooks → contesting; W-0012's 3 slices independent. **alpha.3 FROZEN** at `333427ea`; [record](reports/dogfood-acceptance-v2.0.0-alpha.3.md) Gate A pending. W-0020 AC2 awaits passive rows. RF per-occasion only; FT8-10 BLOCKED.
 - **Decisions not to revisit:** W-0004 named palettes DECLINED. PT-6 `fsOps` package-private. FT8 timing stays +0.500/+0.660; the W-0019 G3/AC7 waiver is never cited for a timing or admission-edge change. `txConfirmTimeout` DEFERRED (on-air approval).
 - **Do not:** re-open a closed dossier (W-0001/W-0003/W-0004/W-0005/W-0019); initiate RF/hardware without per-occasion agreement; amend or push without operator direction.
-- **Relevant files:** [`W-0010`](work/W-0010-forwarding-data-and-sync-reliability.md), [`alpha.3 record`](reports/dogfood-acceptance-v2.0.0-alpha.3.md), [`W-0012`](work/W-0012-operator-experience-followups.md), [`inbox`](dogfood-inbox.md).
+- **Relevant files:** [`W-0021`](work/W-0021-qso-archives.md), [`ADR 0071`](decisions/0071-first-class-qso-archives.md), [`W-0010`](work/W-0010-forwarding-data-and-sync-reliability.md), [`inbox`](dogfood-inbox.md).
 - **Coordination:** the operator commits and pushes; non-Markdown commits draw a codex review.

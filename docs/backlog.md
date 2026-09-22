@@ -36,9 +36,10 @@ re-enrichment generation race) are all closed (2026-08-22).
 
 Open one workstream per active focus.
 
-1. **W-0010 · SELECTED 2026-09-20 — [Improve forwarding, data, and synchronization reliability](work/W-0010-forwarding-data-and-sync-reliability.md).** Token rotation, duplicate-QSO resolution, legal bulk backfill, idempotent outcomes, and bounded reconciliation. **Outcome 9 in progress** (failed-versus-waiting forwarder rows; the preserved QRZ fixture): four slices planned in the dossier; slices 1 (QRZ delete without an upstream id is a no-op, + ADR 0081 success order), 2 (durable `failure_class`, migration 0011) and 3 (boot re-arm of `auth` rows) built 2026-09-20, slice 4 (card and API: waiting/failed counts, retry endpoint, logbook gap link) built 2026-09-21; rulings (a)–(d) settled; next: deploy the dev build and check the preserved QRZ fixture reads as failed on the card.
-2. **W-0012 · OPEN — [Complete routed operator-experience follow-ups](work/W-0012-operator-experience-followups.md).** UI, map, onboarding, and diagnostic improvements not owned by W-0004. The three slices ruled 2026-09-19 (landing preference, "CQ run" header, Excel export) are independent post-freeze commits outside the data-model chain.
-3. **W-0020 · SELECTED 2026-09-14 — [Station Events](work/W-0020-station-events.md).** Replace the header
+1. **W-0021 · SELECTED 2026-09-21 — [First-class QSO archives (ADR 0071 programme)](work/W-0021-qso-archives.md).** Stable archive and logbook identities with in-place adoption, managed catalogue and provisioner with last-known-good startup, create/list/activate over the attended restart, the shell archive selector, SM Cloud keyed by UUIDs. Five slices planned in the dossier; slice 1 (identities and adoption, log migration 0012) awaits rulings (a)–(c).
+2. **W-0010 · SELECTED 2026-09-20 — [Improve forwarding, data, and synchronization reliability](work/W-0010-forwarding-data-and-sync-reliability.md).** Token rotation, duplicate-QSO resolution, legal bulk backfill, idempotent outcomes, and bounded reconciliation. **Outcome 9 CLOSED 2026-09-21** (failed-versus-waiting forwarder rows, `failure_class`, boot re-arm of auth failures, retry endpoint and card; accepted on test proof plus passive station evidence — the QRZ fixture had been discarded on 2026-09-12). Outcomes 1–8 stay unselected; the next selected work is the ADR 0071 archive programme.
+3. **W-0012 · OPEN — [Complete routed operator-experience follow-ups](work/W-0012-operator-experience-followups.md).** UI, map, onboarding, and diagnostic improvements not owned by W-0004. The three slices ruled 2026-09-19 (landing preference, "CQ run" header, Excel export) are independent post-freeze commits outside the data-model chain.
+4. **W-0020 · SELECTED 2026-09-14 — [Station Events](work/W-0020-station-events.md).** Replace the header
    notification slide-over with a full-page Station Events section; the alarm family (TX/drive alarm
    raised and cleared, non-operator disarm, abnormal exchange termination) joins the `operator_event`
    store under ADR 0076's typed-metadata rule; retention 500 per category; typed facts through a
@@ -46,9 +47,9 @@ Open one workstream per active focus.
    built 2026-09-18 (migration 0009, recorder, producing boundaries, `GET /v1/station-events`, the
    page, docs and manual); close-out awaits the passive AC2 evidence — the first real alarm rows on the
    page — and the operator's acceptance.
-4. **W-0002 · validation gate · OPEN — [Validate the reduced FT8 type-4 ladder on air](work/W-0002-ft8-type4-on-air-validation.md).** Confirm one operator-initiated completed exchange with a real nonstandard station; RF action always requires agreement for that occasion.
-5. **W-0008 · OPEN — [Harden audited contract boundaries](work/W-0008-harden-audited-contract-boundaries.md).** Ordered persistence, configuration, API-wire, and frontend-wire correctness slices.
-6. **W-0018 · OPEN — [Bring the embedded manual to release readiness](work/W-0018-bring-the-embedded-manual-to-release-readiness.md).** Page-by-page standing pass during dogfooding and a release gate before a public release; not a blocker for the next internal candidate (alpha.2 Findings #9, #10, #13, #14, #15).
+5. **W-0002 · validation gate · OPEN — [Validate the reduced FT8 type-4 ladder on air](work/W-0002-ft8-type4-on-air-validation.md).** Confirm one operator-initiated completed exchange with a real nonstandard station; RF action always requires agreement for that occasion.
+6. **W-0008 · OPEN — [Harden audited contract boundaries](work/W-0008-harden-audited-contract-boundaries.md).** Ordered persistence, configuration, API-wire, and frontend-wire correctness slices.
+7. **W-0018 · OPEN — [Bring the embedded manual to release readiness](work/W-0018-bring-the-embedded-manual-to-release-readiness.md).** Page-by-page standing pass during dogfooding and a release gate before a public release; not a blocker for the next internal candidate (alpha.2 Findings #9, #10, #13, #14, #15).
 
 
 
@@ -64,9 +65,8 @@ Open one workstream per active focus.
 ## Designed or parked — not queued
 
 - **Data-model chain (operator order, 2026-09-19; each step opens its own dossier when selected):**
-  after alpha.3 acceptance and W-0010 outcome 9 — (3) the **ADR 0071 archive programme** (Accepted,
-  files first: identity/adoption, safe catalogue and provisioning, attended restart activation);
-  (4) **Settings → Logbooks** on the active-archive model (W-0014 exchange 2026-09-19; ADR 0056
+  after alpha.3 acceptance and W-0010 outcome 9 — (3) the **ADR 0071 archive programme** — SELECTED
+  2026-09-21 as W-0021 above; (4) **Settings → Logbooks** on the active-archive model (W-0014 exchange 2026-09-19; ADR 0056
   bindings in the archive-aware shape gate different-call logbooks); (5) **contesting** — contest
   mode (W-0011 ruling), scoring, export and different-call operation, its own ADR.
 - **W-0014 · PARKED — [Deferred product workstreams](work/W-0014-deferred-product-workstreams.md).** Discovery inventory only; each member needs go-ahead and its own design/dossier before implementation.
