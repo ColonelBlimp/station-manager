@@ -122,7 +122,8 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      downgrade drops — for 11 → 9 exactly `qso_upload.failure_class` and
      `qso_upload.upstream_id_generation` — and fails on any column present only after.
      Sensitivity proven with `--mutate-one-row` (a hook that changes one `qso.call` in the scratch
-     copy): the run reports `qso.call: value hash changed`. Both drills rerun green under the
+     copy, selecting a different value and refusing an empty QSO table): the run reports
+     `qso.call: value hash changed`. Both drills rerun green under the
      full-column verdict. Follow-up review the same day: a dropped column was merely listed, so
      a down migration that removed `qso.call` would still pass — the verdict now takes an EXACT
      expected drop set (`--expect-dropped`, empty for the tag run, the two upload columns for

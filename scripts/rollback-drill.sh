@@ -265,7 +265,17 @@ if [ "$MUTATE" = 1 ]; then
   # Proof hook, never for a real drill: change ONE retained value in the scratch
   # copy so the verdict must report ROWS DIFFER. A drill that stays green with
   # this flag has a fingerprint that is not looking at the data.
-  python3 -c "import sqlite3,sys; db=sqlite3.connect(sys.argv[1]); db.execute(\"UPDATE qso SET call='DR1LL' WHERE rowid=(SELECT MIN(rowid) FROM qso)\"); db.commit()" "$SCRATCH/db/station-manager.db"
+  python3 - "$SCRATCH/db/station-manager.db" <<'PY' || exit 1
+import sqlite3, sys
+with sqlite3.connect(sys.argv[1]) as db:
+    row = db.execute("SELECT rowid, call FROM qso ORDER BY rowid LIMIT 1").fetchone()
+    if row is None:
+        raise SystemExit("  FAIL: --mutate-one-row needs a QSO in the scratch copy")
+    replacement = "DR1LM" if row[1] == "DR1LL" else "DR1LL"
+    changed = db.execute("UPDATE qso SET call = ? WHERE rowid = ?", (replacement, row[0]))
+    if changed.rowcount != 1:
+        raise SystemExit("  FAIL: --mutate-one-row did not update exactly one QSO")
+PY
   echo "  MUTATED one qso.call in the scratch copy (proof run)"
 fi
 expect "db schema after downgrade" "$(schema_of "$SCRATCH/db/station-manager.db")" "$OLD_SCHEMA"
