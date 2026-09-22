@@ -439,13 +439,13 @@ func TestMigrate_RelaxesRSTLengthFromVersion1(t *testing.T) {
 	svc := testServiceWithoutMigrations(t)
 	applyMigrationSteps(t, svc, 1)
 
-	logbookID, err := svc.InsertLogbookWithContext(context.Background(), types.Logbook{
-		Name:     "Test",
-		Callsign: "G4ABC",
-	})
+	// Raw: the typed insert writes every current column (logbook.uuid since
+	// 0012), which a version-1 schema does not have.
+	res, err := svc.handle.Exec(`INSERT INTO logbook (callsign, name) VALUES ('G4ABC', 'Test')`)
 	if err != nil {
 		t.Fatalf("insert logbook: %v", err)
 	}
+	logbookID, _ := res.LastInsertId()
 
 	before := validTestQso(logbookID, "M0CMC", "20m", "SSB", "20240615", "1253")
 	beforeID := insertQsoRawV1(t, svc, before)

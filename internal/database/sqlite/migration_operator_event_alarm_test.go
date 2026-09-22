@@ -31,8 +31,8 @@ func alarmRow(kind string) (category, severity, detail string) {
 // pair CHECK and not a table that refuses everything.
 func TestMigrate0009_EnforcesTheCategoryKindPairsFromTheVocabulary(t *testing.T) {
 	svc := testService(t)
-	if v := schemaVersion(t, svc); v != 11 {
-		t.Fatalf("schema version = %d, want 11", v)
+	if v := schemaVersion(t, svc); v != 12 {
+		t.Fatalf("schema version = %d, want 12", v)
 	}
 	pairs := stationevents.KindsByCategory()
 	for cat, kinds := range pairs {
@@ -103,8 +103,8 @@ func TestMigrate0009_RebuildKeepsSeverityBuildDetailTriggerAndIndex(t *testing.T
 // rows intact.
 func TestMigrate0009_DownKeepsNotificationRowsAndDiscardsAlarmRows(t *testing.T) {
 	svc := testService(t)
-	if v := schemaVersion(t, svc); v != 11 {
-		t.Fatalf("schema version = %d, want 11", v)
+	if v := schemaVersion(t, svc); v != 12 {
+		t.Fatalf("schema version = %d, want 12", v)
 	}
 	if err := insertOperatorEvent(t, svc, "notification", "forward.failed", "warn", "v",
 		`{"qso_id":7,"forwarder":"qrz","action":"insert","attempts":5}`); err != nil {
@@ -141,7 +141,7 @@ func TestMigrate0009_DownKeepsNotificationRowsAndDiscardsAlarmRows(t *testing.T)
 		t.Error("after down: an alarm row must be refused by 0008's CHECK")
 	}
 
-	migrateToVersion(t, svc, 11) // re-up through head
+	migrateToVersion(t, svc, 12) // re-up through head
 	if n := count("after re-up", "notification"); n != 1 {
 		t.Errorf("after re-up: notification rows = %d, want 1", n)
 	}
@@ -162,7 +162,7 @@ func TestMigrate0009_RebuildKeepsTheIdHighWaterMark(t *testing.T) {
 		t.Fatalf("evict: %v", err)
 	}
 	migrateToVersion(t, svc, 8)
-	migrateToVersion(t, svc, 11)
+	migrateToVersion(t, svc, 12)
 	if err := insertOperatorEvent(t, svc, "alarm", "tx_alarm.raised", "error", "v", `{}`); err != nil {
 		t.Fatalf("insert after round-trip: %v", err)
 	}

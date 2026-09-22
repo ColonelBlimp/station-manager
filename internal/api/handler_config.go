@@ -912,6 +912,7 @@ func (s *Server) seedDefaultLogbook(r *http.Request, defaultID int64, callsign s
 		if !strings.EqualFold(strings.TrimSpace(existing.Callsign), strings.TrimSpace(callsign)) {
 			return 0, &setupLogbookMismatchError{existingCallsign: existing.Callsign}
 		}
+		s.recordDefaultInArchive(r, existing.ID)
 		return existing.ID, nil
 	} else if !stderr.Is(err, errors.ErrNotFound) {
 		return 0, err
@@ -925,7 +926,21 @@ func (s *Server) seedDefaultLogbook(r *http.Request, defaultID int64, callsign s
 	if err != nil {
 		return 0, err
 	}
+	s.recordDefaultInArchive(r, id)
 	return id, nil
+}
+
+// recordDefaultInArchive writes the default logbook into the archive file
+// (ADR 0071): the file keeps its own pointer and config's default_logbook_id is
+// a projection of it, so setup — the one PUT that sets the pointer — records it
+// here, BEFORE the config commit: if that commit then fails, the next start
+// projects the file's value into config. A failure is logged, not fatal:
+// adoption at the next start writes config's value into a file that has none.
+func (s *Server) recordDefaultInArchive(r *http.Request, logbookID int64) {
+	if err := s.db.SetArchiveDefaultLogbookWithContext(r.Context(), logbookID); err != nil {
+		s.logger.WarnWith().Err(err).Int64("default_logbook_id", logbookID).
+			Msg("config: the archive's default logbook could not be recorded; the next start reconciles it")
+	}
 }
 
 // buildConfigResponse projects a Config snapshot into the wire shape.

@@ -21,6 +21,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/status"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/types"
+	"github.com/ColonelBlimp/station-manager/internal/utils"
 	"github.com/aarondl/null/v8"
 	"github.com/aarondl/sqlboiler/v4/boil"
 	"github.com/aarondl/sqlboiler/v4/queries"
@@ -1777,6 +1778,9 @@ func (s *Service) InsertLogbookWithContext(ctx context.Context, logbook types.Lo
 	if err != nil {
 		return 0, errors.New(op).WithErr(err)
 	}
+	// Identity is minted HERE, never accepted from the caller (ADR 0071): a
+	// client-supplied uuid would let two files or two clients claim one identity.
+	model.UUID = null.StringFrom(utils.NewUUIDv7())
 	if err = model.Insert(ctx, h, boil.Infer()); err != nil {
 		// UNIQUE on logbook.name fires when the operator tries to
 		// create a logbook whose name already exists. Promote to a

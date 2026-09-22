@@ -273,12 +273,18 @@ func (d *daemon) initQso() error {
 	return nil
 }
 
-// startQso self-heals the default logbook row (needs the log DB open) and refreshes the snapshot in
-// case a corrected DefaultLogbookID was persisted.
+// startQso self-heals the default logbook row (needs the log DB open), adopts the file as the
+// station's archive, and refreshes the snapshot in case a corrected DefaultLogbookID or the
+// catalogue was persisted.
 func (d *daemon) startQso(context.Context) error {
 	const op errors.Op = "smd.startQso"
 	if err := ensureDefaultLogbook(context.Background(), d.db, d.cfgSvc, d.logger); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("ensure default logbook")
+	}
+	// Then the file's identity and the catalogue (ADR 0071): the default logbook
+	// row exists by now, so the archive can record it.
+	if err := adoptArchive(context.Background(), d.db, d.cfgSvc, d.logger); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("adopt archive")
 	}
 	d.cfg = d.cfgSvc.Snapshot()
 	return nil

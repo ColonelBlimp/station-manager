@@ -17,7 +17,9 @@
 #   scripts/rollback-drill.sh --new <smd> --new-schema N --new-config M \
 #       --old <smd> --old-schema N --old-config M \
 #       [--db <station-manager.db>] [--config <config.json>] [--label <name>] [--keep]
-#       [--expect-dropped "table.col,table.col"]   # EXACT set of columns the downgrade may drop
+#       [--expect-dropped "table.col,table.col"]   # EXACT set of the SOURCE copy's columns that
+#                                                  # the old schema lacks (12→11 drops nothing the
+#                                                  # source had; 11→9 drops two qso_upload columns)
 #       [--mutate-one-row]   # proof hook: changes one retained value so the verdict MUST fail
 #
 # The expected versions are asserted at every phase, so a drill whose new
@@ -211,7 +213,7 @@ for c in sorted(set(bcols) & set(acols)):
 dropped = set(bcols) - set(acols); added = sorted(set(acols) - set(bcols))
 if added: bad.append(f"columns present only after: {added}")
 if dropped - expected: bad.append(f"columns dropped that the drill did not expect: {sorted(dropped - expected)}")
-if expected - dropped: bad.append(f"columns expected to be dropped but still present: {sorted(expected - dropped)}")
+if expected - dropped: bad.append(f"columns expected to be dropped were not (still present, or never in the source copy's schema): {sorted(expected - dropped)}")
 if bad:
     print("  ROWS DIFFER:"); [print("    " + b) for b in bad]; sys.exit(1)
 print("  ROWS IDENTICAL before -> after: every row count and every shared column's value hash")

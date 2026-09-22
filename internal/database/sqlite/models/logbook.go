@@ -31,6 +31,7 @@ type Logbook struct {
 	Name        string      `boil:"name" json:"name" toml:"name" yaml:"name"`
 	Callsign    string      `boil:"callsign" json:"callsign" toml:"callsign" yaml:"callsign"`
 	Description null.String `boil:"description" json:"description,omitempty" toml:"description" yaml:"description,omitempty"`
+	UUID        null.String `boil:"uuid" json:"uuid,omitempty" toml:"uuid" yaml:"uuid,omitempty"`
 
 	R *logbookR `boil:"-" json:"-" toml:"-" yaml:"-"`
 	L logbookL  `boil:"-" json:"-" toml:"-" yaml:"-"`
@@ -44,6 +45,7 @@ var LogbookColumns = struct {
 	Name        string
 	Callsign    string
 	Description string
+	UUID        string
 }{
 	ID:          "id",
 	CreatedAt:   "created_at",
@@ -52,6 +54,7 @@ var LogbookColumns = struct {
 	Name:        "name",
 	Callsign:    "callsign",
 	Description: "description",
+	UUID:        "uuid",
 }
 
 var LogbookTableColumns = struct {
@@ -62,6 +65,7 @@ var LogbookTableColumns = struct {
 	Name        string
 	Callsign    string
 	Description string
+	UUID        string
 }{
 	ID:          "logbook.id",
 	CreatedAt:   "logbook.created_at",
@@ -70,6 +74,7 @@ var LogbookTableColumns = struct {
 	Name:        "logbook.name",
 	Callsign:    "logbook.callsign",
 	Description: "logbook.description",
+	UUID:        "logbook.uuid",
 }
 
 // Generated where
@@ -126,6 +131,7 @@ var LogbookWhere = struct {
 	Name        whereHelperstring
 	Callsign    whereHelperstring
 	Description whereHelpernull_String
+	UUID        whereHelpernull_String
 }{
 	ID:          whereHelperint64{field: "\"logbook\".\"id\""},
 	CreatedAt:   whereHelpertime_Time{field: "\"logbook\".\"created_at\""},
@@ -134,23 +140,43 @@ var LogbookWhere = struct {
 	Name:        whereHelperstring{field: "\"logbook\".\"name\""},
 	Callsign:    whereHelperstring{field: "\"logbook\".\"callsign\""},
 	Description: whereHelpernull_String{field: "\"logbook\".\"description\""},
+	UUID:        whereHelpernull_String{field: "\"logbook\".\"uuid\""},
 }
 
 // LogbookRels is where relationship names are stored.
 var LogbookRels = struct {
-	Qsos string
+	DefaultLogbookArchiveMetadata string
+	Qsos                          string
 }{
-	Qsos: "Qsos",
+	DefaultLogbookArchiveMetadata: "DefaultLogbookArchiveMetadata",
+	Qsos:                          "Qsos",
 }
 
 // logbookR is where relationships are stored.
 type logbookR struct {
-	Qsos QsoSlice `boil:"Qsos" json:"Qsos" toml:"Qsos" yaml:"Qsos"`
+	DefaultLogbookArchiveMetadata ArchiveMetadatumSlice `boil:"DefaultLogbookArchiveMetadata" json:"DefaultLogbookArchiveMetadata" toml:"DefaultLogbookArchiveMetadata" yaml:"DefaultLogbookArchiveMetadata"`
+	Qsos                          QsoSlice              `boil:"Qsos" json:"Qsos" toml:"Qsos" yaml:"Qsos"`
 }
 
 // NewStruct creates a new relationship struct
 func (*logbookR) NewStruct() *logbookR {
 	return &logbookR{}
+}
+
+func (o *Logbook) GetDefaultLogbookArchiveMetadata() ArchiveMetadatumSlice {
+	if o == nil {
+		return nil
+	}
+
+	return o.R.GetDefaultLogbookArchiveMetadata()
+}
+
+func (r *logbookR) GetDefaultLogbookArchiveMetadata() ArchiveMetadatumSlice {
+	if r == nil {
+		return nil
+	}
+
+	return r.DefaultLogbookArchiveMetadata
 }
 
 func (o *Logbook) GetQsos() QsoSlice {
@@ -173,9 +199,9 @@ func (r *logbookR) GetQsos() QsoSlice {
 type logbookL struct{}
 
 var (
-	logbookAllColumns            = []string{"id", "created_at", "modified_at", "deleted_at", "name", "callsign", "description"}
+	logbookAllColumns            = []string{"id", "created_at", "modified_at", "deleted_at", "name", "callsign", "description", "uuid"}
 	logbookColumnsWithoutDefault = []string{"name", "callsign"}
-	logbookColumnsWithDefault    = []string{"id", "created_at", "modified_at", "deleted_at", "description"}
+	logbookColumnsWithDefault    = []string{"id", "created_at", "modified_at", "deleted_at", "description", "uuid"}
 	logbookPrimaryKeyColumns     = []string{"id"}
 	logbookGeneratedColumns      = []string{"id"}
 )
@@ -271,6 +297,20 @@ func (q logbookQuery) Exists(ctx context.Context, exec boil.ContextExecutor) (bo
 	return count > 0, nil
 }
 
+// DefaultLogbookArchiveMetadata retrieves all the archive_metadatum's ArchiveMetadata with an executor via default_logbook_id column.
+func (o *Logbook) DefaultLogbookArchiveMetadata(mods ...qm.QueryMod) archiveMetadatumQuery {
+	var queryMods []qm.QueryMod
+	if len(mods) != 0 {
+		queryMods = append(queryMods, mods...)
+	}
+
+	queryMods = append(queryMods,
+		qm.Where("\"archive_metadata\".\"default_logbook_id\"=?", o.ID),
+	)
+
+	return ArchiveMetadata(queryMods...)
+}
+
 // Qsos retrieves all the qso's Qsos with an executor.
 func (o *Logbook) Qsos(mods ...qm.QueryMod) qsoQuery {
 	var queryMods []qm.QueryMod
@@ -283,6 +323,112 @@ func (o *Logbook) Qsos(mods ...qm.QueryMod) qsoQuery {
 	)
 
 	return Qsos(queryMods...)
+}
+
+// LoadDefaultLogbookArchiveMetadata allows an eager lookup of values, cached into the
+// loaded structs of the objects. This is for a 1-M or N-M relationship.
+func (logbookL) LoadDefaultLogbookArchiveMetadata(ctx context.Context, e boil.ContextExecutor, singular bool, maybeLogbook any, mods queries.Applicator) error {
+	var slice []*Logbook
+	var object *Logbook
+
+	if singular {
+		var ok bool
+		object, ok = maybeLogbook.(*Logbook)
+		if !ok {
+			object = new(Logbook)
+			ok = queries.SetFromEmbeddedStruct(&object, &maybeLogbook)
+			if !ok {
+				return errors.New(fmt.Sprintf("failed to set %T from embedded struct %T", object, maybeLogbook))
+			}
+		}
+	} else {
+		s, ok := maybeLogbook.(*[]*Logbook)
+		if ok {
+			slice = *s
+		} else {
+			ok = queries.SetFromEmbeddedStruct(&slice, maybeLogbook)
+			if !ok {
+				return errors.New(fmt.Sprintf("failed to set %T from embedded struct %T", slice, maybeLogbook))
+			}
+		}
+	}
+
+	args := make(map[any]struct{})
+	if singular {
+		if object.R == nil {
+			object.R = &logbookR{}
+		}
+		args[object.ID] = struct{}{}
+	} else {
+		for _, obj := range slice {
+			if obj.R == nil {
+				obj.R = &logbookR{}
+			}
+			args[obj.ID] = struct{}{}
+		}
+	}
+
+	if len(args) == 0 {
+		return nil
+	}
+
+	argsSlice := make([]any, len(args))
+	i := 0
+	for arg := range args {
+		argsSlice[i] = arg
+		i++
+	}
+
+	query := NewQuery(
+		qm.From(`archive_metadata`),
+		qm.WhereIn(`archive_metadata.default_logbook_id in ?`, argsSlice...),
+	)
+	if mods != nil {
+		mods.Apply(query)
+	}
+
+	results, err := query.QueryContext(ctx, e)
+	if err != nil {
+		return errors.Wrap(err, "failed to eager load archive_metadata")
+	}
+
+	var resultSlice []*ArchiveMetadatum
+	if err = queries.Bind(results, &resultSlice); err != nil {
+		return errors.Wrap(err, "failed to bind eager loaded slice archive_metadata")
+	}
+
+	if err = results.Close(); err != nil {
+		return errors.Wrap(err, "failed to close results in eager load on archive_metadata")
+	}
+	if err = results.Err(); err != nil {
+		return errors.Wrap(err, "error occurred during iteration of eager loaded relations for archive_metadata")
+	}
+
+	if singular {
+		object.R.DefaultLogbookArchiveMetadata = resultSlice
+		for _, foreign := range resultSlice {
+			if foreign.R == nil {
+				foreign.R = &archiveMetadatumR{}
+			}
+			foreign.R.DefaultLogbook = object
+		}
+		return nil
+	}
+
+	for _, foreign := range resultSlice {
+		for _, local := range slice {
+			if queries.Equal(local.ID, foreign.DefaultLogbookID) {
+				local.R.DefaultLogbookArchiveMetadata = append(local.R.DefaultLogbookArchiveMetadata, foreign)
+				if foreign.R == nil {
+					foreign.R = &archiveMetadatumR{}
+				}
+				foreign.R.DefaultLogbook = local
+				break
+			}
+		}
+	}
+
+	return nil
 }
 
 // LoadQsos allows an eager lookup of values, cached into the
@@ -386,6 +532,133 @@ func (logbookL) LoadQsos(ctx context.Context, e boil.ContextExecutor, singular b
 				foreign.R.Logbook = local
 				break
 			}
+		}
+	}
+
+	return nil
+}
+
+// AddDefaultLogbookArchiveMetadata adds the given related objects to the existing relationships
+// of the logbook, optionally inserting them as new records.
+// Appends related to o.R.DefaultLogbookArchiveMetadata.
+// Sets related.R.DefaultLogbook appropriately.
+func (o *Logbook) AddDefaultLogbookArchiveMetadata(ctx context.Context, exec boil.ContextExecutor, insert bool, related ...*ArchiveMetadatum) error {
+	var err error
+	for _, rel := range related {
+		if insert {
+			queries.Assign(&rel.DefaultLogbookID, o.ID)
+			if err = rel.Insert(ctx, exec, boil.Infer()); err != nil {
+				return errors.Wrap(err, "failed to insert into foreign table")
+			}
+		} else {
+			updateQuery := fmt.Sprintf(
+				"UPDATE \"archive_metadata\" SET %s WHERE %s",
+				strmangle.SetParamNames("\"", "\"", 0, []string{"default_logbook_id"}),
+				strmangle.WhereClause("\"", "\"", 0, archiveMetadatumPrimaryKeyColumns),
+			)
+			values := []any{o.ID, rel.Singleton}
+
+			if boil.IsDebug(ctx) {
+				writer := boil.DebugWriterFrom(ctx)
+				fmt.Fprintln(writer, updateQuery)
+				fmt.Fprintln(writer, values)
+			}
+			if _, err = exec.ExecContext(ctx, updateQuery, values...); err != nil {
+				return errors.Wrap(err, "failed to update foreign table")
+			}
+
+			queries.Assign(&rel.DefaultLogbookID, o.ID)
+		}
+	}
+
+	if o.R == nil {
+		o.R = &logbookR{
+			DefaultLogbookArchiveMetadata: related,
+		}
+	} else {
+		o.R.DefaultLogbookArchiveMetadata = append(o.R.DefaultLogbookArchiveMetadata, related...)
+	}
+
+	for _, rel := range related {
+		if rel.R == nil {
+			rel.R = &archiveMetadatumR{
+				DefaultLogbook: o,
+			}
+		} else {
+			rel.R.DefaultLogbook = o
+		}
+	}
+	return nil
+}
+
+// SetDefaultLogbookArchiveMetadata removes all previously related items of the
+// logbook replacing them completely with the passed
+// in related items, optionally inserting them as new records.
+// Sets o.R.DefaultLogbook's DefaultLogbookArchiveMetadata accordingly.
+// Replaces o.R.DefaultLogbookArchiveMetadata with related.
+// Sets related.R.DefaultLogbook's DefaultLogbookArchiveMetadata accordingly.
+func (o *Logbook) SetDefaultLogbookArchiveMetadata(ctx context.Context, exec boil.ContextExecutor, insert bool, related ...*ArchiveMetadatum) error {
+	query := "update \"archive_metadata\" set \"default_logbook_id\" = null where \"default_logbook_id\" = ?"
+	values := []any{o.ID}
+	if boil.IsDebug(ctx) {
+		writer := boil.DebugWriterFrom(ctx)
+		fmt.Fprintln(writer, query)
+		fmt.Fprintln(writer, values)
+	}
+	_, err := exec.ExecContext(ctx, query, values...)
+	if err != nil {
+		return errors.Wrap(err, "failed to remove relationships before set")
+	}
+
+	if o.R != nil {
+		for _, rel := range o.R.DefaultLogbookArchiveMetadata {
+			queries.SetScanner(&rel.DefaultLogbookID, nil)
+			if rel.R == nil {
+				continue
+			}
+
+			rel.R.DefaultLogbook = nil
+		}
+		o.R.DefaultLogbookArchiveMetadata = nil
+	}
+
+	return o.AddDefaultLogbookArchiveMetadata(ctx, exec, insert, related...)
+}
+
+// RemoveDefaultLogbookArchiveMetadata relationships from objects passed in.
+// Removes related items from R.DefaultLogbookArchiveMetadata (uses pointer comparison, removal does not keep order)
+// Sets related.R.DefaultLogbook.
+func (o *Logbook) RemoveDefaultLogbookArchiveMetadata(ctx context.Context, exec boil.ContextExecutor, related ...*ArchiveMetadatum) error {
+	if len(related) == 0 {
+		return nil
+	}
+
+	var err error
+	for _, rel := range related {
+		queries.SetScanner(&rel.DefaultLogbookID, nil)
+		if rel.R != nil {
+			rel.R.DefaultLogbook = nil
+		}
+		if _, err = rel.Update(ctx, exec, boil.Whitelist("default_logbook_id")); err != nil {
+			return err
+		}
+	}
+	if o.R == nil {
+		return nil
+	}
+
+	for _, rel := range related {
+		for i, ri := range o.R.DefaultLogbookArchiveMetadata {
+			if rel != ri {
+				continue
+			}
+
+			ln := len(o.R.DefaultLogbookArchiveMetadata)
+			if ln > 1 && i < ln-1 {
+				o.R.DefaultLogbookArchiveMetadata[i] = o.R.DefaultLogbookArchiveMetadata[ln-1]
+			}
+			o.R.DefaultLogbookArchiveMetadata = o.R.DefaultLogbookArchiveMetadata[:ln-1]
+			break
 		}
 	}
 

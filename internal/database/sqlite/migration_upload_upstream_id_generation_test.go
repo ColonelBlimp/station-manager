@@ -10,8 +10,8 @@ import (
 // safely decide which retained remote id a later delete must use.
 func TestMigrate0010_AddsUpstreamIDGenerationAtHead(t *testing.T) {
 	svc := testService(t)
-	if v := schemaVersion(t, svc); v != 11 {
-		t.Fatalf("schema version = %d, want 11", v)
+	if v := schemaVersion(t, svc); v != 12 {
+		t.Fatalf("schema version = %d, want 12", v)
 	}
 
 	var count int

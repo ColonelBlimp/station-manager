@@ -1,6 +1,6 @@
 # W-0021 — First-class QSO archives (ADR 0071 programme)
 
-**Status:** Selected — slice 1 in progress (rulings (a)–(e) settled 2026-09-22)
+**Status:** Selected — slice 1 complete and drilled at schema 12 (2026-09-22)
 **Selected:** 2026-09-21 (operator: "Close outcome 9 and start the ADR 0071 archives")
 **Outcome:** The operator can create a physically separate QSO database for a contest, activate it
 through an attended restart, and later return to the home archive — with every archive and every
@@ -131,6 +131,39 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      the verdict function alone (a removed `qso.call` → "columns dropped that the drill did not
      expect") and by an alpha.3 run with an empty expected set, which fails. Both drills green
      with their exact sets.
+   - **Built 2026-09-22, sub-commit C of slice 1 (the migration commit).** Log migration 0012:
+     `archive_metadata` singleton (`singleton = 1` CHECK, `archive_uuid` UNIQUE, `created_at`,
+     `default_logbook_id` REFERENCES logbook ON DELETE SET NULL) and `logbook.uuid TEXT` with a
+     partial UNIQUE index; down drops index, column, table. Schema head 12 (all pins bumped;
+     sqlboiler models regenerated — the generator moved its shared helpers into the new model
+     file). `types.Logbook.UUID` (never accepted from a client); `InsertLogbookWithContext`
+     mints; `Service.ArchiveIdentityWithContext` / `EnsureArchiveIdentityWithContext(ctx,
+     defaultLogbookID)` (one transaction: identity row only if absent, default pointer only for
+     an existing row, uuid for every NULL logbook; returns the row as READ BACK) /
+     `SetArchiveDefaultLogbookWithContext`. `cmd/smd` `adoptArchive` runs in `startQso` after
+     `ensureDefaultLogbook`, in the ruled database-first order: identity ensured and read back →
+     catalogue reconciled against that UUID (empty → legacy entry "Home" at the canonical
+     symlink-resolved path + active; same UUID → untouched, path refreshed; active entry naming a
+     DIFFERENT uuid → refused by name, nothing rewritten) → `default_logbook_id` projected (file
+     wins when it names a row; a file with none learns config's). A catalogue persist failure
+     warns and continues on the in-memory catalogue; the next start registers the same UUID.
+     First-run setup records the seeded default in the archive before the config commit
+     (`seedDefaultLogbook`). `GET /v1/version` gains `archive {id, label, ownership}` (never the
+     path). Proofs: insert without minting, backfill disabled, mismatch guard off, projection off
+     — each fails its test by name; adoption tests run on a real file (the shared test helper
+     pins ":memory:", where two services even shared one store). Review found a startup ordering
+     case: when the file already names a default but config's projected id is stale and missing,
+     the old self-heal could seed a spurious row or fail on a duplicate name before adoption ran.
+     The self-heal now defers to an existing file default; the next adoption projects it. A real-file
+     regression test first failed on the duplicate-name path, then passed with that guard.
+   - **Rollback drill at schema 12, both binaries, PASSED (the gate before this commit):** new
+     build opened the station copy, migrated 11 → 12, adopted it (identity + catalogue written,
+     config v4); tag run 12 → 11 / 4 → 3, tagged build answered schema 11, rows identical, source
+     columns dropped: none; alpha.3 run 12 → 9 / 4 → 3, alpha.3 answered schema 9, rows identical,
+     source columns dropped exactly `qso_upload.failure_class`, `qso_upload.upstream_id_generation`.
+     Lesson recorded in the harness: `--expect-dropped` names the SOURCE copy's columns the old
+     schema lacks; a column the new schema adds and the down removes (`logbook.uuid`) is invisible
+     to the before/after comparison and is covered by 0012's own down test.
    - `datastore.path` stays honoured as the compatibility selector until slice 2 resolves the path
      from the catalogue; a config whose path names a file with a different embedded UUID than the
      catalogue entry fails closed with a named diagnostic.

@@ -4,6 +4,7 @@
 package models
 
 var TableNames = struct {
+	ArchiveMetadata  string
 	ContactedStation string
 	Country          string
 	Logbook          string
@@ -12,6 +13,7 @@ var TableNames = struct {
 	QsoHistory       string
 	QsoUpload        string
 }{
+	ArchiveMetadata:  "archive_metadata",
 	ContactedStation: "contacted_station",
 	Country:          "country",
 	Logbook:          "logbook",

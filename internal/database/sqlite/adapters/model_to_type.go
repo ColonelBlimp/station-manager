@@ -128,6 +128,7 @@ func LogbookModelToType(model *models.Logbook) (types.Logbook, error) {
 	}
 	return types.Logbook{
 		ID:          model.ID,
+		UUID:        model.UUID.String,
 		Name:        model.Name,
 		Callsign:    model.Callsign,
 		Description: model.Description.String,

@@ -6,6 +6,9 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/ColonelBlimp/station-manager/internal/config"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 func TestVersion_HappyPath(t *testing.T) {
@@ -39,12 +42,38 @@ func TestVersion_HappyPath(t *testing.T) {
 
 	// schema version: migrations ran in testServer's setup, so schema should be
 	// at the latest migration and not dirty. Bump this with each new migration —
-	// currently 11 (0001_init + 0002_relax_rst_length + 0003_allow_time_seconds +
+	// currently 12 (0001_init + 0002_relax_rst_length + 0003_allow_time_seconds +
 	// 0004_utc_timestamps + 0005_qso_revision + 0006_widen_mode_call +
 	// 0007_qso_upload_origin + 0008_operator_event + 0009_operator_event_alarm +
-	// 0010_qso_upload_upstream_id_generation + 0011_qso_upload_failure_class).
-	if !strings.Contains(body, `"schema":{"version":11,"dirty":false}`) {
-		t.Fatalf("body = %q, want schema:{version:11,dirty:false}", body)
+	// 0010_qso_upload_upstream_id_generation + 0011_qso_upload_failure_class +
+	// 0012_archive_identity).
+	if !strings.Contains(body, `"schema":{"version":12,"dirty":false}`) {
+		t.Fatalf("body = %q, want schema:{version:12,dirty:false}", body)
+	}
+	// No archive adopted in this server: the field is absent, never a fake identity.
+	if strings.Contains(body, `"archive"`) {
+		t.Fatalf("body = %q, want no archive field before adoption", body)
+	}
+}
+
+// The active archive's identity (ADR 0071, W-0021 slice 1) is reported beside
+// the schema so an operator can see WHICH file the daemon serves.
+func TestVersion_ReportsTheActiveArchive(t *testing.T) {
+	const id = "019fd5c5-efcc-7193-be4f-1fee532ee315"
+	srv := testServerWithCfg(t, func(cfg *config.Config) {
+		cfg.QsoArchives = []types.QsoArchiveConfig{{ID: id, Label: "Home", Ownership: types.QsoArchiveOwnershipLegacy, Path: "/data/db/station-manager.db"}}
+		cfg.ActiveQsoArchiveID = id
+	})
+	req := httptest.NewRequest(http.MethodGet, "/v1/version", nil)
+	w := httptest.NewRecorder()
+	srv.handleVersion(w, req)
+	body := w.Body.String()
+	want := `"archive":{"id":"` + id + `","label":"Home","ownership":"legacy"}`
+	if !strings.Contains(body, want) {
+		t.Fatalf("body = %q, want %s", body, want)
+	}
+	if strings.Contains(body, "/data/db") {
+		t.Fatalf("body = %q leaks the file path; only id, label and ownership belong on the wire", body)
 	}
 }
 

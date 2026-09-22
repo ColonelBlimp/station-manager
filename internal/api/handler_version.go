@@ -37,12 +37,21 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 		Version uint64 `json:"version"`
 		Dirty   bool   `json:"dirty"`
 	}
+	// archiveInfo names the active QSO archive (ADR 0071): identity, label and
+	// ownership only — the file path is server-side information and stays off
+	// the wire.
+	type archiveInfo struct {
+		ID        string `json:"id"`
+		Label     string `json:"label"`
+		Ownership string `json:"ownership"`
+	}
 	type versionResponse struct {
-		Daemon   string      `json:"daemon"`
-		Env      string      `json:"env"`
-		Go       string      `json:"go"`
-		Instance string      `json:"instance"`
-		Schema   *schemaInfo `json:"schema,omitempty"`
+		Daemon   string       `json:"daemon"`
+		Env      string       `json:"env"`
+		Go       string       `json:"go"`
+		Instance string       `json:"instance"`
+		Schema   *schemaInfo  `json:"schema,omitempty"`
+		Archive  *archiveInfo `json:"archive,omitempty"`
 	}
 
 	resp := versionResponse{
@@ -50,6 +59,11 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 		Env:      buildinfo.Env,
 		Go:       runtime.Version(),
 		Instance: processInstance,
+	}
+	if snap := s.cfg.Snapshot(); snap.ActiveQsoArchiveID != "" {
+		if a := snap.QsoArchiveByID(snap.ActiveQsoArchiveID); a != nil {
+			resp.Archive = &archiveInfo{ID: a.ID, Label: a.Label, Ownership: string(a.Ownership)}
+		}
 	}
 
 	if ver, dirty, err := s.db.SchemaVersionWithContext(r.Context()); err == nil {

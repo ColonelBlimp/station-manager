@@ -483,6 +483,8 @@ func launchFt8QsoLog(wg *sync.WaitGroup, onPanic safego.PanicHandler, work func(
 //     first-run path; PUT /v1/config will seed the row when the operator
 //     finishes setup. Pre-seeding here would race the setup handler.
 //   - Row exists at DefaultLogbookID: return (idempotent).
+//   - Row missing but the archive file has a default: leave config untouched;
+//     adoption projects the file's authoritative id immediately afterwards.
 //   - Row missing: insert using StationCallsign. If the assigned ID
 //     differs (rare; happens only when the operator hand-edited
 //     DefaultLogbookID to a non-1 value), persist the corrected ID
@@ -515,6 +517,16 @@ func ensureDefaultLogbook(
 		return nil
 	} else if !stderr.Is(ferr, errors.ErrNotFound) {
 		return errors.New(op).WithErr(ferr).WithMsg("fetching default logbook")
+	}
+	// A previous start may have recorded the file's default but failed to
+	// persist its config projection. Do not seed a replacement from the stale
+	// config id: adoptArchive runs next and projects the file's value.
+	if identity, err := dbSvc.ArchiveIdentityWithContext(ctx); err == nil {
+		if identity.DefaultLogbookID > 0 {
+			return nil
+		}
+	} else if !stderr.Is(err, errors.ErrNotFound) {
+		return errors.New(op).WithErr(err).WithMsg("read archive default logbook")
 	}
 
 	callsign := strings.TrimSpace(cfg.LoggingStation.StationCallsign)
