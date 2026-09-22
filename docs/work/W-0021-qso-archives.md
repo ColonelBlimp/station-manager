@@ -1,6 +1,6 @@
 # W-0021 — First-class QSO archives (ADR 0071 programme)
 
-**Status:** Selected — dossier opened; slice 1 awaits the operator's rulings (a)–(c) below
+**Status:** Selected — slice 1 in progress (rulings (a)–(e) settled 2026-09-22)
 **Selected:** 2026-09-21 (operator: "Close outcome 9 and start the ADR 0071 archives")
 **Outcome:** The operator can create a physically separate QSO database for a contest, activate it
 through an attended restart, and later return to the home archive — with every archive and every
@@ -63,6 +63,29 @@ the compatibility promise that a daemon at any slice boundary starts the existin
    - `default_logbook_id` moves into `archive_metadata`; the config field becomes a projection of the
      active archive (`ensureDefaultLogbook` and the seven consumers above read through it). Its
      existing self-heal (correct a wrong id to the only row) is preserved by characterization test.
+   - **Critical order at start (reviewer, 2026-09-22; ADR 0071's database-first rule):** migrate
+     the QSO file; in one transaction fill the missing archive and logbook UUIDs and the
+     `default_logbook_id` pointer; read the archive UUID back from the file; only then persist the
+     v4 catalogue entry. A restart after a failed catalogue write finds the embedded identity and
+     reuses it — never a second UUID. The paired database and config downgrade drill is proven
+     before this migration commit reaches trunk.
+   - Built 2026-09-22, sub-commit A of slice 1: `Service.DowngradeLogSchemaTo(target)` (log set
+     only, down only, dirty refused, returns the version it left) and `smd db-downgrade --to N
+     --yes [--config p]` over the same container wiring as `smd import`, opening WITHOUT
+     `Migrate()`; `docs/install.md` §7 gains the rollback recipe. Proofs: without the down-only
+     guard a target of 11 from version 10 migrates up (test names it); without `--yes` the
+     command runs. Rows retained across 11 → 10 asserted on QSO, upload and logbook.
+   - Built 2026-09-22, sub-commit B of slice 1: config schema v4 — `types.QsoArchiveConfig`
+     (`id`, `label`, `ownership` managed|legacy|external, `path`, `last_activation_error`),
+     `Config.ActiveQsoArchiveID` / `PendingQsoArchiveID` / `QsoArchives` with `QsoArchiveByID`;
+     the migration table gains `down`, v3→v4 stamps only, v4→v3 strips the three keys;
+     `config.DowngradeDocument` (whole path checked before any step, floor named) and
+     `config.WriteDocument` (raw durable write, same mode rules); `validateQsoArchives`
+     (`invalid_qso_archive`); `smd config-downgrade --to N --yes`; `config.md` §3/§13 and
+     the install guide's rollback recipe. PUT /v1/config carries no catalogue field — pinned by
+     a test that saves a writable block and reads the catalogue back untouched. Proofs: no down
+     step registered → the 4→3 test fails; validator unwired → every rule passes vacuously;
+     stray argument → the default file would be rewritten.
    - `datastore.path` stays honoured as the compatibility selector until slice 2 resolves the path
      from the catalogue; a config whose path names a file with a different embedded UUID than the
      catalogue entry fails closed with a named diagnostic.
@@ -219,6 +242,62 @@ cross-archive query.
   archive per row (attribution survives the hop) is a ruling for that ADR; (v) node ↔ master
   reconcile is the SMC reconcile mechanism one hop down, and a node that cannot reach the master
   keeps its rows durably queued exactly as it does today for an unreachable destination.
+- **2026-09-22, operator: "trunk with a tag, or a branch, for this structural change?"**
+  Recommendation: trunk, with a tag and a rollback drill. Grounds: every commit here is built to be
+  releasable on its own (the slice plan's invariant — a daemon at any slice boundary starts the
+  existing station unchanged; activation is not even routed until slice 3 is whole), the per-commit
+  Codex review, CI, the dev-build dogfood loop and the second coder all work on the shared HEAD,
+  and the hot files (`config.go`, `lifecycle_adapters.go`) are exactly where a long-lived branch
+  would rot. A branch would trade many small reviewed steps for one large merge the review flow is
+  not built for. Safeguards that make trunk safe: (1) a tag at the last green main before slice 1's
+  migration commit, so a known-good build can be redeployed; (2) slice 1 includes a rollback
+  drill — the tagged binary opens a database already migrated to 0012 (golang-migrate stops at the
+  last migration its source knows; the schema check tests for missing objects, not extra ones —
+  an inference to prove, not assume) and the 0012 down migration is exercised; (3) the frozen
+  alpha.3 RPM remains the independent fallback; (4) no feature-flag framework — a half-built
+  surface is simply not routed or not rendered until its slice is complete. A branch is worth it
+  only for slice 5 if the SM Cloud server and client must change together and the dev Postgres
+  cannot host both versions; decide then.
+  **Ruled 2026-09-22 (operator): trunk with a tag; the rollback drill as I first wrote it was
+  wrong and is revised.** The tagged binary cannot open a schema-12 file: golang-migrate's
+  `readUp` first requires the file's current version to exist in the binary's bundled source
+  (`migrate.go:535`), the service treats that error as fatal (`migrations.go:126`), and the config
+  loader rejects unknown keys after migration (`config.go:599`) and a newer-than-supported config
+  version (`config.go:576`), so new catalogue keys alone would stop the old build. A branch would
+  only postpone the same problem to merge. **Revised drill, run on disposable copies of the
+  station's `station-manager.db` and `config.json` before the schema commit lands on trunk**
+  (verified 2026-09-22: config migrations have no down step at all — `config/migrations.go:410`
+  "downgrade is not supported" — and the frozen alpha.3 build pins schema head 9, so it already
+  cannot open the live schema-11 file; migrations 0010 and 0011 landed after the freeze):
+  (1) migrate a copy up to 0012 and apply the 0012 down migration — slice 1 ships the operator
+  path for that (a `smd` subcommand that migrates the log set down to a named version; today only
+  a test helper exists); (2) roll the config back to the tagged shape — slice 1's config migration
+  is the first with a down step (the table gains one for it), or the catalogue lives at the same
+  config version and the downgrade guide names the keys to strip; (3) start the tagged binary against
+  both and prove QSO, `qso_upload`, history and operator-event row counts and UUIDs are byte-
+  identical to the pre-drill copy; (4) repeat (3) with the frozen alpha.3 RPM's binary, which
+  likewise needs the compatible data and is not a direct fallback for upgraded files. The drill
+  is recorded in this dossier with the commands and counts before the migration commit.
+  Refined the same day (operator): step 4 is not a repeat of step 3 — after 0012 down the file
+  is at 11 and alpha.3 knows 9, so the alpha.3 drill also applies 0011 and 0010 down before its
+  boot, then verifies the retained rows and QSO UUIDs (the `failure_class` and
+  `upstream_id_generation` columns are what those downs drop; QSO rows are untouched). And the
+  boot proofs run ISOLATED: copying the files does not isolate them — the station's config would
+  start forwarder workers, connect to the rig and CAT, and could sync evidence or send mail — so
+  the drill runs in a throwaway working directory with every forwarder disabled, the bridge and
+  CAT driver off, evidence capture and sync off, SMTP off, and no network reachable, and the
+  config copy (it holds credentials) lives in a `0700` scratch directory under home as `0600`
+  files, shredded after. **Ruled: config schema v4 with an explicit down step** — the migration
+  convention (`config/migrations.go:9`) bumps the version whenever the shipped shape changes, so
+  the catalogue keys arrive as v4 and the table gains its first down migration for the drill.
+  Further detail (operator, same day): a throwaway working directory alone does not isolate the
+  drill — a non-empty `data_dir` in the copied config overrides `SM_WORKING_DIR`
+  (`utils/working_dir.go:30`) and SQLite opens the config's `datastore.path` directly
+  (`sqlite/service.go:86`), so an unedited copy would open the LIVE station file. The test config
+  therefore rewrites `data_dir` and `datastore.path` (and, once they exist, the catalogue paths)
+  into the scratch directory, and the drill asserts every resolved database path — QSO,
+  reference, evidence, backups — lies under the scratch root before either binary is started;
+  a path outside it aborts the drill.
 
 ## Review findings on the plan (2026-09-22)
 
@@ -247,6 +326,11 @@ uncertain durability, a failed restart request and a failed clear, each with a p
 
 ## Rulings wanted before slice 1 code
 
+**Ruled by the operator 2026-09-22: (a) `legacy` ownership for the adopted file; (b) Go-side UUIDv7
+backfill with UUIDs minted on runtime creation; (c) SM Cloud identity in slice 5 behind the interim
+forwarding gate. The slice 1 implementation discussion is complete: proceed RED-first in the recorded
+database-first order, with the paired rollback drill proven before the migration commit reaches trunk.**
+
 - (a) **Ownership of the adopted in-place file.** The live station file sits at the default path
   under the working directory but not in the managed `db/qso-archives/` layout, so it can be neither
   "managed" (path derived from the UUID) nor "external" (outside the working directory) as ADR 0071
@@ -258,6 +342,8 @@ uncertain durability, a failed restart request and a failed clear, each with a p
   QSOs), the column nullable in SQL and enforced NOT NULL by the service after backfill. Alternative:
   a random (v4) `DEFAULT` in SQL, which breaks the project's v7 convention and time-ordering.
 - (d) **Ruled 2026-09-22:** an armed but idle FT8 session is busy for activation (409 until disarmed).
+- (e) **Ruled 2026-09-22:** trunk with a tag; config schema v4 with an explicit down step; the
+  rollback drill (both binaries, isolated boot) runs before the migration commit.
 - (c) **Slice 5's position.** Recommend after slices 2–4 with the "one SMC-enabled archive" gate in
   force, so the station gains physical archives first. Alternative: ADR 0071's literal order (SMC
   identity inside step 1), which blocks every local slice on the Postgres schema and protocol work.

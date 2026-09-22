@@ -92,6 +92,7 @@ func Validate(cfg Config) []Finding {
 	out = append(out, validateEvidence(cfg.Evidence)...)
 	out = append(out, validateEvidenceSync(cfg)...)
 	out = append(out, validateDatastore(cfg.Datastore)...)
+	out = append(out, validateQsoArchives(cfg)...)
 	out = append(out, validateLogging(cfg.Logging)...)
 	// Advisory findings (non-fatal). Currently just the ACKNOWLEDGED non-loopback
 	// bind notice — an unacknowledged bind is fatal (validateServer above) and
@@ -775,4 +776,57 @@ func normalizeAndValidate(next *Config) error {
 		}
 	}
 	return nil
+}
+
+// validateQsoArchives checks the QSO archive catalogue (config v4, ADR 0071):
+// UUIDv7 ids, unique; a non-empty label; a known ownership; no path on a
+// managed entry (it derives from the id) and an absolute one on legacy and
+// external entries; active and pending selectors that name an entry or are
+// empty. Each rule is an error: a wrong entry is a daemon opening the wrong
+// file, or none, at its next start.
+func validateQsoArchives(cfg Config) []Finding {
+	var out []Finding
+	bad := func(field, msg string) {
+		out = append(out, Finding{Field: field, Code: "invalid_qso_archive", Message: msg})
+	}
+	seen := make(map[string]struct{}, len(cfg.QsoArchives))
+	for i, a := range cfg.QsoArchives {
+		field := fmt.Sprintf("qso_archives[%d]", i)
+		if !utils.IsValidUUIDv7(a.ID) {
+			bad(field, fmt.Sprintf("%s: id %q is not a UUIDv7", field, a.ID))
+		} else if _, dup := seen[a.ID]; dup {
+			bad(field, fmt.Sprintf("%s: duplicate id %q", field, a.ID))
+		} else {
+			seen[a.ID] = struct{}{}
+		}
+		if strings.TrimSpace(a.Label) == "" {
+			bad(field, fmt.Sprintf("%s: label must not be empty", field))
+		}
+		switch a.Ownership {
+		case types.QsoArchiveOwnershipManaged:
+			if a.Path != "" {
+				bad(field, fmt.Sprintf("%s: a managed archive carries no path (it derives from the id)", field))
+			}
+		case types.QsoArchiveOwnershipLegacy, types.QsoArchiveOwnershipExternal:
+			if a.Path == "" {
+				bad(field, fmt.Sprintf("%s: a %s archive needs its path", field, a.Ownership))
+			} else if !filepath.IsAbs(a.Path) {
+				bad(field, fmt.Sprintf("%s: path %q must be absolute", field, a.Path))
+			}
+		default:
+			bad(field, fmt.Sprintf("%s: ownership %q is not one of managed, legacy, external", field, a.Ownership))
+		}
+	}
+	for _, sel := range []struct{ field, id string }{
+		{"active_qso_archive_id", cfg.ActiveQsoArchiveID},
+		{"pending_qso_archive_id", cfg.PendingQsoArchiveID},
+	} {
+		if sel.id == "" {
+			continue
+		}
+		if _, ok := seen[sel.id]; !ok {
+			bad(sel.field, fmt.Sprintf("%s %q does not name a catalogue entry", sel.field, sel.id))
+		}
+	}
+	return out
 }

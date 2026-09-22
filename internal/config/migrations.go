@@ -11,7 +11,7 @@ import (
 // change alters the config shape. A config file with no `version` field is the
 // pre-versioning baseline — the catalogue-era shape, treated as v1. See
 // docs/v2-design/config.md §13.
-const currentConfigVersion = 3
+const currentConfigVersion = 4
 
 // CurrentSchemaVersion is the config schema version this build writes and
 // migrates up to — the public view of currentConfigVersion for callers (e.g.
@@ -26,6 +26,10 @@ func CurrentSchemaVersion() int { return currentConfigVersion }
 type migration struct {
 	from  int
 	apply func(doc map[string]any) error
+	// down reverses apply (from+1 → from) for the rollback drill; nil means the
+	// step is one-way and a downgrade through it is refused by name. Only steps
+	// that ADD keys the older loader would refuse need one (v4 is the first).
+	down func(doc map[string]any) error
 }
 
 // migrations is the ordered registry, each step from→from+1.
@@ -45,9 +49,69 @@ type migration struct {
 //     canonical field is absent — otherwise it wins) then deletes it. Also
 //     reconciles the alpha.1-generated qrzcq action_filter (W-0008 CC-5, see
 //     migrateAlpha1QrzcqFilter).
+//   - v3→v4 (ADR 0071, W-0021 slice 1): the QSO archive catalogue keys
+//     `active_qso_archive_id`, `pending_qso_archive_id` and `qso_archives` become
+//     part of the shape. The step itself adds nothing — adoption at daemon start
+//     fills the catalogue from the file's own identity — so it only stamps the
+//     version. Its DOWN step removes the three keys, which is what lets a tagged
+//     older build (unknown keys refused, newer version refused) read the file.
 var migrations = []migration{
 	{from: 1, apply: migrateV1toV2},
 	{from: 2, apply: migrateV2toV3},
+	{from: 3, apply: migrateV3toV4, down: downgradeV4toV3},
+}
+
+// qsoArchiveCatalogueKeys are the v4 top-level keys the v3 loader refuses.
+var qsoArchiveCatalogueKeys = []string{"active_qso_archive_id", "pending_qso_archive_id", "qso_archives"}
+
+func migrateV3toV4(map[string]any) error { return nil }
+
+func downgradeV4toV3(doc map[string]any) error {
+	for _, k := range qsoArchiveCatalogueKeys {
+		delete(doc, k)
+	}
+	return nil
+}
+
+// DowngradeDocument rewrites a raw config document from its own version down
+// to `to`, applying each registered down step in turn (`smd config-downgrade`,
+// the rollback drill's config half). Refused, with nothing rewritten: a target
+// at or above the document's version; a document newer than this build knows;
+// and any step on the way that has no down migration — named, so the operator
+// knows which version is the floor. The result is stamped with `to`.
+func DowngradeDocument(data []byte, to int) ([]byte, error) {
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return nil, fmt.Errorf("parsing config document: %w", err)
+	}
+	from, err := documentVersion(doc)
+	if err != nil {
+		return nil, err
+	}
+	if from > currentConfigVersion {
+		return nil, fmt.Errorf("config version %d is newer than this Station Manager supports (max %d)", from, currentConfigVersion)
+	}
+	if to < 1 || to >= from {
+		return nil, fmt.Errorf("target version %d is not below the document's version %d (down only)", to, from)
+	}
+	// Check the whole path first so a refusal never leaves a half-downgraded doc.
+	for v := from - 1; v >= to; v-- {
+		m := migrationFrom(v)
+		if m == nil || m.down == nil {
+			return nil, fmt.Errorf("no down migration from version %d to %d; version %d is the lowest this build can write", v+1, v, v+1)
+		}
+	}
+	for v := from - 1; v >= to; v-- {
+		if err := migrationFrom(v).down(doc); err != nil {
+			return nil, fmt.Errorf("downgrading config v%d→v%d: %w", v+1, v, err)
+		}
+	}
+	doc["version"] = to
+	out, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("re-marshalling downgraded config: %w", err)
+	}
+	return out, nil
 }
 
 // migrateV1toV2 folds the global bridge.mode_mappings[driver] block (removed from
@@ -472,4 +536,14 @@ func migrationFrom(v int) *migration {
 		}
 	}
 	return nil
+}
+
+// DocumentSchemaVersion reports a raw config document's `version` (a missing
+// field is the version-1 baseline), for tooling that reports a transition.
+func DocumentSchemaVersion(data []byte) (int, error) {
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return 0, fmt.Errorf("parsing config document: %w", err)
+	}
+	return documentVersion(doc)
 }

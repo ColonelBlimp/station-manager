@@ -106,6 +106,8 @@ func main() {
 	//   smd import [flags] <file.adi>    → one-shot import (runImport())
 	//   smd restore [flags]              → SM Cloud restore (runRestore())
 	//   smd config-check [--config p]    → read-only preflight: unknown keys, Load, forwarder construction (runConfigCheck())
+	//   smd db-downgrade --to N --yes    → migrate the log schema DOWN for a rollback to an older build (runDBDowngrade())
+	//   smd config-downgrade --to N --yes → rewrite config.json to an older schema for the same rollback (runConfigDowngrade())
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "import":
@@ -122,6 +124,18 @@ func main() {
 			return
 		case "config-check":
 			if err := runConfigCheck(os.Args[2:]); err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "smd: %v\n", err)
+				os.Exit(ExitError)
+			}
+			return
+		case "db-downgrade":
+			if err := runDBDowngrade(os.Args[2:]); err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "smd: %v\n", err)
+				os.Exit(ExitError)
+			}
+			return
+		case "config-downgrade":
+			if err := runConfigDowngrade(os.Args[2:]); err != nil {
 				_, _ = fmt.Fprintf(os.Stderr, "smd: %v\n", err)
 				os.Exit(ExitError)
 			}

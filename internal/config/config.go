@@ -137,6 +137,18 @@ type Config struct {
 	// (when CAT lands); the API joins them at response time.
 	DefaultRigID int64 `json:"default_rig_id"`
 
+	// QSO archive catalogue (config v4, ADR 0071 / W-0021). Station-global and
+	// startup-critical: the daemon reads it to find the QSO file before any
+	// database is open, so it lives here and not in a database. Server-managed —
+	// PUT /v1/config carries no field for it; adoption at start and the archive
+	// manager are its only writers. ActiveQsoArchiveID names the archive the
+	// daemon serves; PendingQsoArchiveID is present only while an activation is
+	// in flight (promoted to active, or cleared, before HTTP serves). Empty
+	// catalogue and selectors are the pre-adoption state of an existing install.
+	ActiveQsoArchiveID  string                   `json:"active_qso_archive_id,omitempty"`
+	PendingQsoArchiveID string                   `json:"pending_qso_archive_id,omitempty"`
+	QsoArchives         []types.QsoArchiveConfig `json:"qso_archives,omitempty"`
+
 	// RestoreRigOnModeSwitch controls whether switching the operating mode
 	// (Phone/CW ↔ FT8) auto re-tunes a CAT-LIVE rig back to that mode's last
 	// freq/mode: the SPA snapshots each mode's operating state on leave and
@@ -344,6 +356,19 @@ func rigNamed(rigs []types.RigConfig, name string) bool {
 }
 
 // RigByID returns the catalogue entry with the given id, or nil if none.
+// QsoArchiveByID returns the catalogue entry with that id, or nil.
+func (c Config) QsoArchiveByID(id string) *types.QsoArchiveConfig {
+	if id == "" {
+		return nil
+	}
+	for i := range c.QsoArchives {
+		if c.QsoArchives[i].ID == id {
+			return &c.QsoArchives[i]
+		}
+	}
+	return nil
+}
+
 func (c Config) RigByID(id int64) *types.RigConfig {
 	for i := range c.Rigs {
 		if c.Rigs[i].ID == id {
@@ -770,7 +795,20 @@ func writeJSONDurable(path string, cfg Config, fs fsOps) (Durability, error) {
 	if err != nil {
 		return Durable, fmt.Errorf("marshalling config: %w", err)
 	}
+	return writeBytesDurable(path, data, fs)
+}
 
+// WriteDocument writes an already-serialised config document with the same
+// crash-durable replacement and mode rules as WriteJSON. It exists for the
+// operations that must NOT re-marshal through the current typed Config — a
+// schema downgrade (`smd config-downgrade`) writes an OLDER shape, and the
+// typed struct would put the current keys straight back.
+func WriteDocument(path string, data []byte) (Durability, error) {
+	return writeBytesDurable(path, data, osFS{})
+}
+
+func writeBytesDurable(path string, data []byte, fs fsOps) (Durability, error) {
+	var err error
 	mode := os.FileMode(0o600)
 	if fi, statErr := fs.Stat(path); statErr == nil {
 		// Preserve an operator-tightened mode (a subset of owner-rw, e.g. 0400);

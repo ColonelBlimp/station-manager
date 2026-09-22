@@ -382,12 +382,42 @@ Your data directory survives the upgrade — `dnf` only manages the
 files it installed (the binary and the unit). Database schema
 migrations are applied automatically on daemon startup.
 
+### Rolling back to an older build
+
+Schema migrations only run upward at startup, and an older build cannot
+open a database whose schema is newer than the migrations it ships (its
+migration library refuses a version it does not know). To return to an
+older build after a newer one has migrated the file:
+
+```
+systemctl --user stop smd
+smd db-downgrade --to <that build's schema version> --yes
+smd config-downgrade --to <that build's config version> --yes
+sudo dnf install /path/to/station-manager-<older-version>.x86_64.rpm
+systemctl --user start smd
+```
+
+`smd db-downgrade` migrates the QSO database's log schema DOWN to the named
+version on the config's own database (`--config <path>` for another file),
+prints the transition, and refuses a target at or above the current version
+— it never migrates up. Each down step drops what its migration added, so
+run it only with the daemon stopped and a copy of the database in hand; QSO,
+upload-queue and history rows are kept by every down migration shipped so
+far. The reference and evidence databases are station-global and are never
+touched. The older build's schema version is printed by that build's
+`GET /v1/version` (`schema.version`). `smd config-downgrade` does the same for
+`config.json`: an older build refuses a newer `version` and any key it does not
+know, so the file is rewritten to that build's config version through the
+registered down steps (the config reference §13 lists the versions and which
+steps can be reversed). Both commands print the transition they made.
+
 If the new version needs a file-only `config.json` key that the old
 daemon does not know (for example the SM Cloud `allow_insecure_http`
-acknowledgement), add it after the old daemon's last write — the old
-daemon ignores unknown keys on load and drops them the next time it
-writes the file (at start and on every Settings save). Add the key with
-the old daemon running and nothing saved afterwards, then restart.
+acknowledgement), add it only once the old daemon is stopped: a daemon
+refuses to start on a key it does not recognise (ADR 0074, unknown-key
+rejection), so the old build would refuse the edited file if it were
+restarted. Stop the old daemon, add the key, install the new build, run
+`smd config-check`, then start.
 
 Known: upgrading from 2.0.0-alpha.1 to alpha.2 with a `qrzcq` forwarder
 in the config (enabled or not) refuses to start with `type "qrzcq" does

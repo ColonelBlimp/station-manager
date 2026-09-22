@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"os"
 	"path/filepath"
@@ -68,11 +69,11 @@ func TestLoad_MalformedConfigIsActionable(t *testing.T) {
 	})
 
 	t.Run("wrong type names the field in JSON terms", func(t *testing.T) {
-		// Version 3 (current) so migrateDocument returns the bytes unchanged and the
+		// The CURRENT version so migrateDocument returns the bytes unchanged and the
 		// line/column snippet still points at the file the operator is looking at. A
 		// below-current file is re-marshalled by migration, which correctly suppresses
 		// offsets (they'd point at bytes the operator can't see).
-		got := loadErrText(t, "{\n  \"version\": 3,\n  \"logging_station\": { \"station_callsign\": 123 }\n}\n")
+		got := loadErrText(t, fmt.Sprintf("{\n  \"version\": %d,\n  \"logging_station\": { \"station_callsign\": 123 }\n}\n", currentConfigVersion))
 		for _, want := range []string{"logging_station.station_callsign", "a string (in quotes)", "got number", "line 3"} {
 			if !strings.Contains(got, want) {
 				t.Fatalf("message missing %q:\n%s", want, got)
