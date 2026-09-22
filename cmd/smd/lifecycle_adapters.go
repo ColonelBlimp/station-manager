@@ -238,6 +238,11 @@ func (d *daemon) startLogDB(context.Context) error {
 		d.paths = p
 	}
 	d.refPath = d.paths.Reference
+	// The catalogue's path is a claim; the file's identity row is the proof.
+	// Checked before the split and the migrations touch the file.
+	if err := verifyArchiveIdentity(d.paths); err != nil {
+		return errors.New(op).WithErr(err)
+	}
 	if err := sqlite.BootstrapReferenceSplit(d.paths.QSO, d.refPath, d.paths.Backups, d.logger); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("bootstrap reference split")
 	}

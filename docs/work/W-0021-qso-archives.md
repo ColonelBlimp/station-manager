@@ -223,6 +223,21 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      (iii) `sqlite.Service.Initialize` created/checked the directory of `datastore.path` before
      `SetDatabasePath` applied — the check now runs at `Open` on the effective path, proven by a
      stale, uncreatable `datastore.path` with a good managed path opening cleanly.
+     Codex review of the commit (`cc1078b7`, P1, valid): the catalogue path was trusted — a legacy
+     or external entry pointing at another archive's file would have been split, migrated and
+     written to. `sqlite.PeekArchiveIdentity` (a separate read-only connection, before any write)
+     and `verifyArchiveIdentity` now run before the split in both the commands' shared open
+     sequence and the daemon's `startLogDB`: a file holding another archive's identity is refused
+     naming both ids; a file with no identity behind a catalogue entry is refused too.
+     Proofs: B pointing at A's file is refused and A stays unchanged; a named archive with no
+     identity is refused; guard disabled → the import into B is accepted.
+     Second review of the follow-up: (i) the guard's "active entry may be identity-less"
+     exception was wrong — under the database-first order an entry, active included, exists only
+     after the identity was written, so an identity-less file behind ANY entry is mis-pointed;
+     refused now, proven by a default import into an active entry whose file has no identity;
+     (ii) the chosen-id write committed the identity before the logbook backfill and a retry
+     returned early — the backfill now commits inside the same transaction and a same-id retry
+     runs the idempotent backfill, proven by an orphan NULL-uuid row repaired on retry.
    - **Interim archive forwarding gate** (review finding 1; lands here, before activation exists):
      until the ADR 0056 per-logbook bindings ship, forwarding is admitted only in the adopted
      archive. In any other archive `shouldEnqueue` yields no rows for any destination, the boot

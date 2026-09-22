@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	stderr "errors"
+	"fmt"
+	"os"
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
@@ -103,29 +105,38 @@ func (s *Service) EnsureArchiveIdentityWithContext(ctx context.Context, defaultL
 		}
 	}
 
+	if err := backfillLogbookUUIDs(ctx, tx); err != nil {
+		return ArchiveIdentity{}, errors.New(op).WithErr(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return ArchiveIdentity{}, errors.New(op).WithErr(err).WithMsg("commit archive identity")
+	}
+	return s.ArchiveIdentityWithContext(ctx)
+}
+
+// backfillLogbookUUIDs mints a uuid for every logbook row without one, inside
+// the caller's transaction, so an identity write and its backfill commit as one.
+func backfillLogbookUUIDs(ctx context.Context, tx *sql.Tx) error {
 	rows, err := tx.QueryContext(ctx, `SELECT id FROM logbook WHERE uuid IS NULL`)
 	if err != nil {
-		return ArchiveIdentity{}, errors.New(op).WithErr(err).WithMsg("find logbooks without uuid")
+		return fmt.Errorf("find logbooks without uuid: %w", err)
 	}
 	var missing []int64
 	for rows.Next() {
 		var id int64
 		if err := rows.Scan(&id); err != nil {
 			_ = rows.Close()
-			return ArchiveIdentity{}, errors.New(op).WithErr(err)
+			return err
 		}
 		missing = append(missing, id)
 	}
 	_ = rows.Close()
 	for _, id := range missing {
 		if _, err := tx.ExecContext(ctx, `UPDATE logbook SET uuid = ? WHERE id = ? AND uuid IS NULL`, utils.NewUUIDv7(), id); err != nil {
-			return ArchiveIdentity{}, errors.New(op).WithErr(err).WithMsgf("backfill logbook %d uuid", id)
+			return fmt.Errorf("backfill logbook %d uuid: %w", id, err)
 		}
 	}
-	if err := tx.Commit(); err != nil {
-		return ArchiveIdentity{}, errors.New(op).WithErr(err).WithMsg("commit archive identity")
-	}
-	return s.ArchiveIdentityWithContext(ctx)
+	return nil
 }
 
 // SetArchiveDefaultLogbookWithContext points the file's default logbook at an
@@ -158,4 +169,100 @@ func (s *Service) SetArchiveDefaultLogbookWithContext(ctx context.Context, logbo
 		return errors.New(op).WithMsgf("no archive identity row, or logbook %d does not exist", logbookID)
 	}
 	return nil
+}
+
+// PeekArchiveIdentity reads a QSO file's identity row through a separate
+// READ-ONLY connection, before any service opens, splits or migrates it. It is
+// how a caller that was handed a catalogue path proves the file is the archive
+// the catalogue claims (review cc1078b7): a legacy or external entry can point
+// at any file. found is false for a missing file, a pre-0012 file without the
+// table, or an empty table; err reports an unreadable file.
+func PeekArchiveIdentity(path string) (identity ArchiveIdentity, found bool, err error) {
+	const op errors.Op = "sqlite.PeekArchiveIdentity"
+	if path == "" || path == ":memory:" {
+		return ArchiveIdentity{}, false, nil
+	}
+	if _, statErr := os.Stat(path); statErr != nil {
+		if os.IsNotExist(statErr) {
+			return ArchiveIdentity{}, false, nil
+		}
+		return ArchiveIdentity{}, false, errors.New(op).WithErr(statErr).WithMsg("stat archive file")
+	}
+	db, err := sql.Open(SqliteDriver, "file:"+path+"?mode=ro&_pragma=busy_timeout(5000)&_time_format=sqlite")
+	if err != nil {
+		return ArchiveIdentity{}, false, errors.New(op).WithErr(err).WithMsg("open archive read-only")
+	}
+	defer func() { _ = db.Close() }()
+	has, err := hasTable(db, "archive_metadata")
+	if err != nil {
+		return ArchiveIdentity{}, false, errors.New(op).WithErr(err).WithMsg("inspect archive file")
+	}
+	if !has {
+		return ArchiveIdentity{}, false, nil
+	}
+	identity, err = readArchiveIdentity(context.Background(), op, db)
+	if stderr.Is(err, errors.ErrNotFound) {
+		return ArchiveIdentity{}, false, nil
+	}
+	if err != nil {
+		return ArchiveIdentity{}, false, err
+	}
+	return identity, true, nil
+}
+
+// WriteArchiveIdentityWithContext gives a file a CHOSEN archive UUID — the
+// provisioner's path (ADR 0071): the catalogue entry and the file are created
+// with one id, minted by the caller. Idempotent for the same id; a file that
+// already carries a different identity is refused, never overwritten (a copied
+// archive registered under a new id would otherwise lose its provenance). The
+// default logbook pointer is stored only when that row exists; logbooks without
+// a uuid are backfilled as in EnsureArchiveIdentityWithContext.
+func (s *Service) WriteArchiveIdentityWithContext(ctx context.Context, archiveUUID string, defaultLogbookID int64) (ArchiveIdentity, error) {
+	const op errors.Op = "sqlite.Service.WriteArchiveIdentityWithContext"
+	if err := checkService(op, s); err != nil {
+		return ArchiveIdentity{}, err
+	}
+	if !utils.IsValidUUIDv7(archiveUUID) {
+		return ArchiveIdentity{}, errors.New(op).WithMsgf("archive uuid %q is not a UUIDv7", archiveUUID)
+	}
+	existing, err := s.ArchiveIdentityWithContext(ctx)
+	switch {
+	case err == nil && existing.ArchiveUUID != archiveUUID:
+		return existing, errors.New(op).WithMsgf("file already holds archive %s; refusing to relabel it as %s", existing.ArchiveUUID, archiveUUID)
+	case err != nil && !stderr.Is(err, errors.ErrNotFound):
+		return ArchiveIdentity{}, err
+	case err == nil:
+		// Same id: the identity stands; a backfill an earlier run did not
+		// finish completes here (Ensure mints nothing, backfills what is NULL).
+		return s.EnsureArchiveIdentityWithContext(ctx, defaultLogbookID)
+	}
+	tx, cancel, err := s.BeginTxContext(ctx)
+	if err != nil {
+		return ArchiveIdentity{}, errors.New(op).WithErr(err)
+	}
+	defer cancel()
+	defer func() { _ = tx.Rollback() }()
+	var def sql.NullInt64
+	if defaultLogbookID > 0 {
+		var exists int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM logbook WHERE id = ?`, defaultLogbookID).Scan(&exists); err != nil {
+			return ArchiveIdentity{}, errors.New(op).WithErr(err).WithMsg("check default logbook")
+		}
+		if exists == 1 {
+			def = sql.NullInt64{Int64: defaultLogbookID, Valid: true}
+		}
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO archive_metadata (singleton, archive_uuid, default_logbook_id) VALUES (1, ?, ?)`, archiveUUID, def); err != nil {
+		return ArchiveIdentity{}, errors.New(op).WithErr(err).WithMsg("write archive identity")
+	}
+	// The backfill commits WITH the identity: one transaction, never an
+	// identity row without its logbooks' uuids.
+	if err := backfillLogbookUUIDs(ctx, tx); err != nil {
+		return ArchiveIdentity{}, errors.New(op).WithErr(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return ArchiveIdentity{}, errors.New(op).WithErr(err).WithMsg("commit archive identity")
+	}
+	return s.ArchiveIdentityWithContext(ctx)
 }

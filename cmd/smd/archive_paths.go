@@ -47,6 +47,9 @@ func openArchiveDatabases(cfg config.Config, cfgSvc *config.Service, archiveID s
 	if err != nil {
 		return archive.Paths{}, nil, errors.New(op).WithErr(err).WithMsg("resolve archive")
 	}
+	if err := verifyArchiveIdentity(paths); err != nil {
+		return paths, nil, errors.New(op).WithErr(err)
+	}
 	// Idempotent, backup-first split of an old single-file DB — in case a command
 	// runs against it before the daemon has started once. Must precede Open.
 	if err := sqlite.BootstrapReferenceSplit(paths.QSO, paths.Reference, paths.Backups, loggerSvc); err != nil {
@@ -85,6 +88,35 @@ func openArchiveDatabases(cfg config.Config, cfgSvc *config.Service, archiveID s
 		return paths, nil, errors.New(op).WithErr(err).WithMsg("secure database files")
 	}
 	return paths, closeBoth, nil
+}
+
+// verifyArchiveIdentity proves, BEFORE any split, migration or write, that the
+// file a catalogue entry names is the archive it claims (review cc1078b7): a
+// legacy or external entry records a path, and a path can point at any file.
+// The file's own identity row is the authority. A file holding another
+// archive's identity is refused naming both ids; a file with NO identity is
+// refused too — under the database-first adoption order an entry, the active
+// one included, exists only after the file's identity was written and read
+// back, so an identity-less file behind any entry is a mis-pointed or replaced
+// file. A genuinely pre-adoption install has no entry at all (Entry nil) and is
+// left to the daemon's adoption.
+func verifyArchiveIdentity(paths archive.Paths) error {
+	if paths.Entry == nil {
+		return nil
+	}
+	identity, found, err := sqlite.PeekArchiveIdentity(paths.QSO)
+	if err != nil {
+		return fmt.Errorf("read the identity of %s: %w", paths.QSO, err)
+	}
+	switch {
+	case found && identity.ArchiveUUID != paths.Entry.ID:
+		return fmt.Errorf("catalogue entry %s (%s) names %s, but that file holds archive %s; refusing to touch it",
+			paths.Entry.ID, paths.Entry.Label, paths.QSO, identity.ArchiveUUID)
+	case !found:
+		return fmt.Errorf("archive %s (%s) at %s carries no identity; it is not the provisioned or adopted file the catalogue names",
+			paths.Entry.ID, paths.Entry.Label, paths.QSO)
+	}
+	return nil
 }
 
 // targetLogbook is the logbook a command writes to: the --logbook value when

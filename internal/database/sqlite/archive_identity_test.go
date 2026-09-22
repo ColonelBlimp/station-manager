@@ -3,9 +3,12 @@ package sqlite
 import (
 	"context"
 	stderr "errors"
+	"path/filepath"
 	"testing"
 
+	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
@@ -146,5 +149,103 @@ func TestSetArchiveDefaultLogbook(t *testing.T) {
 	}
 	if err := svc.SetArchiveDefaultLogbookWithContext(ctx, 999); err == nil {
 		t.Fatal("a default logbook id that names no row was accepted")
+	}
+}
+
+func TestPeekArchiveIdentity(t *testing.T) {
+	if _, found, err := PeekArchiveIdentity(filepath.Join(t.TempDir(), "missing.db")); err != nil || found {
+		t.Fatalf("missing file: found=%v err=%v; want not found, no error", found, err)
+	}
+	svc, path := testFileService(t)
+	if _, found, err := PeekArchiveIdentity(path); err != nil || found {
+		t.Fatalf("fresh file without identity: found=%v err=%v", found, err)
+	}
+	want, err := svc.EnsureArchiveIdentityWithContext(context.Background(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, found, err := PeekArchiveIdentity(path)
+	if err != nil || !found || got.ArchiveUUID != want.ArchiveUUID {
+		t.Fatalf("peek after ensure: %+v found=%v err=%v; want %+v", got, found, err, want)
+	}
+}
+
+// testFileService is testService on a real file: needed where a second,
+// independent connection must read the file (PeekArchiveIdentity).
+func testFileService(t *testing.T) (*Service, string) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "db", "log.db")
+	cfg := config.DefaultConfig(dir)
+	cfg.Datastore.Path = path
+	cfg.Logging.FileLogging = false
+	cfgSvc := config.New(cfg)
+	if err := cfgSvc.Initialize(); err != nil {
+		t.Fatalf("config init: %v", err)
+	}
+	logSvc := &logging.Service{ConfigService: cfgSvc, WorkingDir: cfgSvc.WorkingDir()}
+	if err := logSvc.Initialize(); err != nil {
+		t.Fatalf("logging init: %v", err)
+	}
+	svc := &Service{ConfigService: cfgSvc, LoggerService: logSvc}
+	if err := svc.Initialize(); err != nil {
+		t.Fatalf("sqlite init: %v", err)
+	}
+	svc.SetMigrationSets(MigrationSetLog)
+	if err := svc.Open(); err != nil {
+		t.Fatalf("sqlite open: %v", err)
+	}
+	if err := svc.Migrate(); err != nil {
+		t.Fatalf("sqlite migrate: %v", err)
+	}
+	t.Cleanup(func() { _ = svc.Close(); _ = logSvc.Close() })
+	return svc, path
+}
+
+// The provisioner's path: the caller chooses the id (the catalogue entry and the
+// file share it). Same id again is a no-op; a different id is refused so a file
+// can never be relabelled as another archive.
+func TestWriteArchiveIdentity_ChosenIDIdempotentNeverRelabelled(t *testing.T) {
+	svc := testService(t)
+	ctx := context.Background()
+	const chosen = "019fd5c5-efcc-7193-be4f-1fee532ee315"
+	lb, _ := svc.InsertLogbookWithContext(ctx, types.Logbook{Name: "L", Callsign: "G4ABC"})
+	got, err := svc.WriteArchiveIdentityWithContext(ctx, chosen, lb)
+	if err != nil || got.ArchiveUUID != chosen || got.DefaultLogbookID != lb {
+		t.Fatalf("write = %+v (%v), want uuid %s default %d", got, err, chosen, lb)
+	}
+	again, err := svc.WriteArchiveIdentityWithContext(ctx, chosen, lb)
+	if err != nil || again != got {
+		t.Fatalf("second write with the same id = %+v (%v), want unchanged", again, err)
+	}
+	if _, err := svc.WriteArchiveIdentityWithContext(ctx, "019fd5c5-efcc-7193-be4f-1fee532ee316", lb); err == nil {
+		t.Fatal("relabelling the file as another archive was accepted")
+	}
+	if _, err := svc.WriteArchiveIdentityWithContext(ctx, "not-a-uuid", lb); err == nil {
+		t.Fatal("a malformed id was accepted")
+	}
+}
+
+// A retry of the chosen-id write must complete an interrupted backfill: a
+// logbook row left without a uuid (an earlier run that died after the identity
+// commit) receives one on the next write with the same id.
+func TestWriteArchiveIdentity_RetryCompletesTheBackfill(t *testing.T) {
+	svc := testService(t)
+	ctx := context.Background()
+	const chosen = "019fd5c5-efcc-7193-be4f-1fee532ee315"
+	if _, err := svc.WriteArchiveIdentityWithContext(ctx, chosen, 0); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate the interrupted state: a row that has no uuid although the
+	// identity row exists.
+	if _, err := svc.handle.Exec(`INSERT INTO logbook (id, callsign, name) VALUES (5,'G4ABC','Orphan')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.WriteArchiveIdentityWithContext(ctx, chosen, 0); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	lb, err := svc.FetchLogbookByIDWithContext(ctx, 5)
+	if err != nil || !utils.IsValidUUIDv7(lb.UUID) {
+		t.Fatalf("retry left logbook 5 without a uuid: %q (%v)", lb.UUID, err)
 	}
 }
