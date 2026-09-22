@@ -2,12 +2,14 @@ package qsoservice
 
 import (
 	stderr "errors"
+	"sync"
 
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/events"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 const ServiceName = "qsoservice"
@@ -24,7 +26,11 @@ type Service struct {
 	RefDB  *sqlite.Service  `di.inject:"referencedb"`
 	Logger *logging.Service `di.inject:"loggingservice"`
 	Config *config.Service  `di.inject:"configservice"`
-	Hub    *events.Hub      `di.inject:"eventhub"`
+	// archive is the catalogue entry this service writes (nil = the not-yet-
+	// adopted file); see SetArchive and the interim forwarding gate.
+	archive   *types.QsoArchiveConfig
+	archiveMu sync.RWMutex
+	Hub       *events.Hub `di.inject:"eventhub"`
 
 	// activeRigID pins MY_RIG attribution to the rig the bridge connected to at
 	// startup — set once by cmd/smd via SetActiveRig, before serving. NOT

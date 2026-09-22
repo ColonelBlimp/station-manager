@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/qsoservice"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
@@ -21,8 +22,13 @@ type forwarderQueueCount struct {
 	InFlight  int64  `json:"in_flight"`
 }
 
+// forwarderQueuesResponse also states the interim forwarding gate (W-0021
+// slice 2B): in an archive other than the adopted one nothing is ever queued,
+// and the card must say why rather than show empty queues.
 type forwarderQueuesResponse struct {
-	Forwarders []forwarderQueueCount `json:"forwarders"`
+	Forwarders      []forwarderQueueCount `json:"forwarders"`
+	ForwardingGated bool                  `json:"forwarding_gated"`
+	GateReason      string                `json:"gate_reason,omitempty"`
 }
 
 // clearForwarderQueueResponse is the POST /v1/forwarder/{name}/queue/clear result.
@@ -51,6 +57,10 @@ func (s *Server) handleForwarderQueues(w http.ResponseWriter, r *http.Request) {
 
 	fwds := s.cfg.Forwarders()
 	out := forwarderQueuesResponse{Forwarders: make([]forwarderQueueCount, 0, len(fwds))}
+	if !s.qso.ForwardingAdmitted() {
+		out.ForwardingGated = true
+		out.GateReason = qsoservice.ForwardingGateReason
+	}
 	for _, f := range fwds {
 		c := counts[f.Name] // zero value {0,0} when the forwarder has no rows
 		out.Forwarders = append(out.Forwarders, forwarderQueueCount{
@@ -130,6 +140,10 @@ func (s *Server) handleRetryForwarderQueue(w http.ResponseWriter, r *http.Reques
 	_, ok := s.configuredForwarder(name)
 	if !ok {
 		s.writeError(w, http.StatusNotFound, "unknown_forwarder", "no such forwarder", op)
+		return
+	}
+	if !s.qso.ForwardingAdmitted() {
+		s.writeError(w, http.StatusBadRequest, "forwarding_gated", qsoservice.ForwardingGateReason, op)
 		return
 	}
 	if _, running := s.startupForwarders[name]; !running {

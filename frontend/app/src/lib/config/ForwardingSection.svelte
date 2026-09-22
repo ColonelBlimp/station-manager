@@ -22,6 +22,7 @@
         clearForwarderQueue,
         retryForwarderQueue,
         type ForwarderQueueCount,
+        type ForwardingGate,
     } from '../api/forwarder-queues';
     import { toasts } from '../ui/toasts.svelte';
     import { navigate, logbookMissingFromUrl } from '../router.svelte';
@@ -34,6 +35,11 @@
     // A load failure just leaves a forwarder's count absent (the line hides) — a
     // transient count error must not block editing config.
     let queues = $state<Record<string, ForwarderQueueCount>>({});
+    // The interim forwarding gate (ADR 0071): set from the same GET. When gated,
+    // no new rows are queued; any rows from before the gate remain visible and
+    // clearable. The section says so once; Retry is disabled because the daemon
+    // refuses it.
+    let gate = $state<ForwardingGate>({ gated: false, reason: '' });
     let clearing = $state<Record<string, boolean>>({});
     let retrying = $state<Record<string, boolean>>({});
 
@@ -43,6 +49,7 @@
             const next: Record<string, ForwarderQueueCount> = {};
             for (const q of out.forwarders) next[q.name] = q;
             queues = next;
+            gate = out.gate;
         }
     }
 
@@ -57,6 +64,7 @@
             const next: Record<string, ForwarderQueueCount> = {};
             for (const q of out.forwarders) next[q.name] = q;
             queues = next;
+            gate = out.gate;
             return true;
         }
         const rest = { ...queues };
@@ -184,6 +192,17 @@
                 automatically — upload those from the logbook's backfill.
             </p>
 
+            {#if gate.gated}
+                <div
+                    class="rounded-md border border-warning bg-surface-muted px-3 py-2 text-sm text-warning"
+                    role="status"
+                >
+                    Forwarding is off in this archive: {gate.reason}. QSOs logged here are kept but
+                    not uploaded anywhere; no new queue rows are created. Any existing rows remain
+                    visible and can be cleared.
+                </div>
+            {/if}
+
             {#if forwardingState.drafts.length === 0}
                 <p class="text-sm text-muted">
                     No forwarder destinations available from the daemon.
@@ -310,7 +329,7 @@
                             <div class="mt-3">
                                 <button
                                     class="btn"
-                                    disabled={q.failed === 0 || retrying[f.name]}
+                                    disabled={q.failed === 0 || retrying[f.name] || gate.gated}
                                     onclick={() => onRetryFailed(f.name, label)}
                                 >
                                     {retrying[f.name] ? 'Retrying…' : `Retry failed (${q.failed})`}

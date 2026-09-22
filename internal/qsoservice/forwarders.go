@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/ColonelBlimp/station-manager/internal/archive"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -60,4 +61,44 @@ func refuseBulkBackfillImport(forwardTo []string, forwarders []types.ForwarderCo
 		}
 	}
 	return nil
+}
+
+// SetArchive tells the service which archive it writes (the daemon resolves it
+// from the catalogue; nil is the not-yet-adopted file). It drives the interim
+// forwarding gate below.
+func (s *Service) SetArchive(entry *types.QsoArchiveConfig) {
+	s.archiveMu.Lock()
+	defer s.archiveMu.Unlock()
+	s.archive = entry
+}
+
+// ForwardingAdmitted reports whether this archive may forward at all (W-0021
+// slice 2B, archive.ForwardingAdmitted): only the adopted file, until the ADR
+// 0056 per-logbook bindings replace the gate with explicit routing.
+func (s *Service) ForwardingAdmitted() bool {
+	s.archiveMu.RLock()
+	defer s.archiveMu.RUnlock()
+	return archive.ForwardingAdmitted(s.archive)
+}
+
+// forwardersForEnqueue is the destination list every enqueue path iterates:
+// the configured forwarders in the adopted archive, none anywhere else. One
+// gate, so no path — live submit, edit, delete, stamp sync, manual backfill,
+// import — can enqueue in an archive whose credentials are not its own.
+func (s *Service) forwardersForEnqueue() []types.ForwarderConfig {
+	if !s.ForwardingAdmitted() {
+		return nil
+	}
+	return s.Config.Forwarders()
+}
+
+// ForwardingGateReason is the operator-facing sentence for the gate, exposed
+// here so the HTTP layer needs no new import (ADR 0043 keeps internal/api's
+// import breadth frozen; the QSO service is already its port to forwarding).
+const ForwardingGateReason = archive.ForwardingGateReason
+
+// errForwardingGated is the refusal a caller that ASKED for forwarding gets in a
+// gated archive (manual backfill, import --forward): named, never a silent skip.
+func errForwardingGated() error {
+	return &SubmitError{Code: "forwarding_gated", Message: archive.ForwardingGateReason}
 }

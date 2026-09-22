@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -315,4 +316,35 @@ func giveIdentity(t *testing.T, cfg config.Config, path, id string) {
 		t.Fatalf("write identity %s: %v", id, err)
 	}
 	_ = db.Close()
+}
+
+// `smd import --forward` into an archive other than the adopted one is refused
+// with the gate's reason (W-0021 slice 2B): the named forwarder's credentials
+// belong to the home archive.
+func TestImport_ForwardIntoAGatedArchiveIsRefused(t *testing.T) {
+	var legacyPath string
+	tmp := setupImportTestbed(t, func(c *config.Config) {
+		legacyPath = c.Datastore.Path
+		c.QsoArchives = []types.QsoArchiveConfig{
+			{ID: archA, Label: "Home", Ownership: types.QsoArchiveOwnershipLegacy, Path: legacyPath},
+			{ID: archB, Label: "Contest", Ownership: types.QsoArchiveOwnershipManaged},
+		}
+		c.ActiveQsoArchiveID = archA
+		c.Forwarders = []types.ForwarderConfig{{Name: "qrz", Type: "qrz", Enabled: true, ActionFilter: []string{"insert"},
+			Credentials: json.RawMessage(`{"api_key":"x"}`)}}
+	})
+	cfg, err := config.Load(filepath.Join(tmp, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	managedPath := provisionManagedFile(t, cfg, archB)
+	adifPath := writeADIF(t, tmp, "input.adi", sampleRecord)
+	err = runImport([]string{"--archive", archB, "--forward", "qrz", adifPath})
+	if err == nil || !strings.Contains(err.Error(), "forwarding_gated") {
+		t.Fatalf("import --forward into a managed archive = %v; want forwarding_gated", err)
+	}
+	b := openArchiveFile(t, cfg, managedPath)
+	if q, _ := b.FetchQsoSliceByLogbookIdWithContext(context.Background(), 1); len(q) != 0 {
+		t.Fatalf("refused import stored %d QSOs", len(q))
+	}
 }

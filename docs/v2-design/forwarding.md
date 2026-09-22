@@ -756,6 +756,17 @@ retries, or the pre-0011 fixture). `GET /v1/forwarder-queues` reads
 `waiting` (pending) and `failed` apart so the card never shows a
 terminal failure as a live backlog.
 
+**Interim archive gate** (ADR 0071, W-0021 slice 2). Forwarder
+credentials are station-global and belong to the adopted archive — the
+installation's own file. Until the ADR 0056 per-logbook bindings ship,
+forwarding is admitted only there: in any other archive (a managed
+contest file, an external file) every enqueue path yields no rows for
+any destination, the daemon starts no worker, no auth re-arm and no SM
+Cloud reconciler, `smd import --forward` and the manual backfill are
+refused with `forwarding_gated`, and `GET /v1/forwarder-queues` states
+the gate so the Forwarding card can say why its queues are empty. The
+bindings retire the gate by replacing it with explicit routing.
+
 **SSE emission points.** Only terminal transitions emit events:
 
 - `in_progress` → `uploaded`: emit `forward.succeeded`.

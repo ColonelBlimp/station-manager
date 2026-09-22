@@ -302,6 +302,9 @@ func (d *daemon) startQso(context.Context) error {
 		return errors.New(op).WithErr(err).WithMsg("adopt archive")
 	}
 	d.cfg = d.cfgSvc.Snapshot()
+	// The QSO service learns which archive it writes: the interim forwarding
+	// gate (archive.ForwardingAdmitted) keys on it.
+	d.qso.SetArchive(d.paths.Entry)
 	return nil
 }
 
@@ -620,6 +623,15 @@ func (d *daemon) startWorkers(ctx context.Context) error {
 	}
 	if n > 0 {
 		d.logger.InfoWith().Int64("reset", n).Msg("forwarder: orphaned in_progress rows reset to pending")
+	}
+	// Interim forwarding gate (W-0021 slice 2B): in an archive other than the
+	// adopted one nothing is enqueued, so no worker, no re-arm and no SM Cloud
+	// reconciler — the reconciler would push this archive's rows into the home
+	// archive's cloud logbook. One log line says so.
+	if !archive.ForwardingAdmitted(d.paths.Entry) {
+		d.logger.InfoWith().Str("archive_id", d.paths.Entry.ID).Str("ownership", string(d.paths.Entry.Ownership)).
+			Msg("forwarder: " + archive.ForwardingGateReason + "; no workers or reconciler started")
+		return nil
 	}
 	for _, fc := range d.cfg.Forwarders {
 		if fc.Enabled {

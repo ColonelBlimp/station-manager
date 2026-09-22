@@ -109,6 +109,7 @@ function mockForwardingWithQueues(
         retryResult?: { status: number; body: unknown };
         refreshFails?: boolean;
         deferRefresh?: boolean;
+        gated?: boolean;
     } = {}
 ) {
     const clearResult = opts.clearResult ?? { status: 200, body: { discarded: 0 } };
@@ -124,6 +125,10 @@ function mockForwardingWithQueues(
             headers: { 'Content-Type': 'application/json' },
         });
     const queueBody = () => ({
+        forwarding_gated: opts.gated === true,
+        gate_reason: opts.gated
+            ? 'forwarding is off in this archive until per-logbook bindings exist'
+            : undefined,
         // Clear zeroes ONLY clearable (waiting + failed); in_flight is preserved.
         // A retry moves failed into waiting.
         forwarders: initialQueues.map((q) => {
@@ -458,6 +463,32 @@ describe('ForwardingSection', () => {
         await fireEvent.click(link);
         expect(window.location.pathname + window.location.search).toBe('/logbook?missing_from=qrz');
         expect(takeLogbookMissingFrom()).toBe('qrz');
+    });
+
+    // U19 — THE INTERIM FORWARDING GATE (ADR 0071): in a non-adopted archive the
+    // section says so once, the zero counts read as the rule, and Retry stays
+    // disabled even with failed rows (the daemon refuses it anyway).
+    it('U19: a gated archive shows the reason once and disables retry', async () => {
+        mockForwardingWithQueues(
+            [{ name: 'qrz', waiting: 0, failed: 2, clearable: 2, in_flight: 0 }],
+            { gated: true }
+        );
+        render(ForwardingSection);
+        const status = await vi.waitFor(() => screen.getByRole('status'));
+        expect(status.textContent).toMatch(/forwarding is off in this archive/i);
+        expect(status.textContent).toMatch(/per-logbook bindings/i);
+        expect(screen.getByRole('button', { name: /retry failed \(2\)/i })).toBeDisabled();
+    });
+
+    it('U19b: the adopted archive shows no gate notice', async () => {
+        mockForwardingWithQueues([
+            { name: 'qrz', waiting: 1, failed: 0, clearable: 1, in_flight: 0 },
+        ]);
+        render(ForwardingSection);
+        await vi.waitFor(() =>
+            expect(screen.getByText('1 waiting · 0 failed · 0 in flight')).toBeInTheDocument()
+        );
+        expect(screen.queryByRole('status')).toBeNull();
     });
 
     it('U18b: no gap link when nothing has failed', async () => {

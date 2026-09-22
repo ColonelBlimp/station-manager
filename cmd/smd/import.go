@@ -179,6 +179,7 @@ func runImport(args []string) error {
 		return errors.New(op).WithErr(err)
 	}
 	defer closeDBs()
+	qsoSvc.SetArchive(paths.Entry) // the interim forwarding gate keys on the TARGET archive
 
 	// ---- Resolve target logbook.
 	if logbookID, err = targetLogbook(logbookID, dbSvc, paths, cfg); err != nil {

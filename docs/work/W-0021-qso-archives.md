@@ -238,6 +238,18 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      (ii) the chosen-id write committed the identity before the logbook backfill and a retry
      returned early — the backfill now commits inside the same transaction and a same-id retry
      runs the idempotent backfill, proven by an orphan NULL-uuid row repaired on retry.
+   - Built 2026-09-22, sub-commit 2B: `archive.ForwardingAdmitted(entry)` (nil or `legacy` →
+     admitted); `qsoservice.SetArchive` / `ForwardingAdmitted` / `forwardersForEnqueue` — the one
+     list every enqueue path iterates (live submit, edit, delete, stamp sync, manual backfill,
+     import), `forwarding_gated` refusals for the manual backfill and for an import naming
+     forwarders; the daemon sets the archive in `startQso` and `startWorkers` returns after the
+     orphan sweep in a gated archive (no discard, re-arm, workers or reconciler, one log line);
+     `smd import` sets the TARGET archive; `GET /v1/forwarder-queues` carries `forwarding_gated`
+     + `gate_reason`, retry answers 400 `forwarding_gated`; the Forwarding card shows the reason
+     once (role=status) and disables Retry. Proofs: enqueue ignoring the gate → a live submit in a
+     managed archive enqueues; daemon gate off → the boot re-arm runs; import not naming its target
+     → `--forward` into B is accepted. Lesson: an import with no `--forward` never enqueues, gate or
+     not — the first submit-path test was vacuous until it used the live `Submit`.
    - **Interim archive forwarding gate** (review finding 1; lands here, before activation exists):
      until the ADR 0056 per-logbook bindings ship, forwarding is admitted only in the adopted
      archive. In any other archive `shouldEnqueue` yields no rows for any destination, the boot

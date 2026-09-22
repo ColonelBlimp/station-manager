@@ -79,6 +79,9 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 // log is the logbook SPA's job, not the importer's. A destination that forbids
 // bulk backfill entirely refuses up front (refuseBulkBackfillImport).
 func (s *Service) SubmitImport(ctx context.Context, logbookID int64, rec adif.Record, force bool, forwardTo []string) (SubmitResult, error) {
+	if len(forwardTo) > 0 && !s.ForwardingAdmitted() {
+		return SubmitResult{}, errForwardingGated()
+	}
 	if err := refuseBulkBackfillImport(forwardTo, s.Config.Forwarders()); err != nil {
 		return SubmitResult{}, err
 	}
@@ -460,7 +463,7 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	// problems and were one identical log (Q5). Non-nil so an empty fan-out logs an
 	// explicit [] ("queued nowhere"), not a missing field.
 	forwardedTo := make([]string, 0, len(s.Config.Forwarders()))
-	for _, fwd := range s.Config.Forwarders() {
+	for _, fwd := range s.forwardersForEnqueue() {
 		if !shouldEnqueue(fwd, action.Insert) {
 			continue
 		}

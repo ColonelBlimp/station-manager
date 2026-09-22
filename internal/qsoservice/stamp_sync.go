@@ -39,7 +39,7 @@ func (s *Service) EnqueueStampSync(ctx context.Context, qsoIDs []int64) (int, er
 		return 0, nil
 	}
 	var targets []types.ForwarderConfig
-	for _, fc := range s.Config.Forwarders() {
+	for _, fc := range s.forwardersForEnqueue() {
 		if forwarding.IsRowMirror(fc.Type) && shouldEnqueue(fc, action.Update) {
 			targets = append(targets, fc)
 		}

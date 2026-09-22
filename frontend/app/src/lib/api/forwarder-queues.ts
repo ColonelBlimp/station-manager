@@ -28,8 +28,16 @@ export interface ForwarderQueueCount {
     in_flight: number;
 }
 
+/** The interim forwarding gate (ADR 0071 / W-0021): in an archive other than the
+ *  adopted one nothing is ever queued to any destination, and the daemon says why. */
+export interface ForwardingGate {
+    gated: boolean;
+    reason: string;
+}
+
 export type QueuesOutcome =
-    { kind: 'ok'; forwarders: ForwarderQueueCount[] } | { kind: 'error'; message: string };
+    | { kind: 'ok'; forwarders: ForwarderQueueCount[]; gate: ForwardingGate }
+    | { kind: 'error'; message: string };
 
 export type ClearOutcome =
     | { kind: 'ok'; discarded: number }
@@ -70,6 +78,10 @@ export async function fetchForwarderQueues(signal?: AbortSignal): Promise<Queues
         forwarders: body.forwarders
             .map(toCount)
             .filter((f): f is ForwarderQueueCount => f !== null),
+        gate: {
+            gated: body.forwarding_gated === true,
+            reason: typeof body.gate_reason === 'string' ? body.gate_reason : '',
+        },
     };
 }
 

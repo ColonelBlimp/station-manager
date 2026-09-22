@@ -65,6 +65,9 @@ type EnqueueResult struct {
 func (s *Service) EnqueueUploads(ctx context.Context, forwarderName string, uuids []string, force bool, org origin.Origin) (EnqueueResult, error) {
 	const op errors.Op = "qsoservice.EnqueueUploads"
 
+	if !s.ForwardingAdmitted() {
+		return EnqueueResult{}, errForwardingGated()
+	}
 	fwd, ok := s.findEnabledInsertForwarder(forwarderName)
 	if !ok {
 		return EnqueueResult{}, &SubmitError{
@@ -248,7 +251,7 @@ func (s *Service) findEnabledInsertForwarder(name string) (types.ForwarderConfig
 // returns it only if it is enabled and its action_filter covers act.
 func (s *Service) findEnabledForwarderFor(name string, act action.Action) (types.ForwarderConfig, bool) {
 	name = strings.TrimSpace(name)
-	for _, fc := range s.Config.Forwarders() {
+	for _, fc := range s.forwardersForEnqueue() {
 		if strings.EqualFold(fc.Name, name) && shouldEnqueue(fc, act) {
 			return fc, true
 		}
@@ -276,6 +279,9 @@ type EnqueueDeleteResult struct {
 func (s *Service) EnqueueDeleteUploads(ctx context.Context, forwarderName string, uuids []string, org origin.Origin) (EnqueueDeleteResult, error) {
 	const op errors.Op = "qsoservice.EnqueueDeleteUploads"
 
+	if !s.ForwardingAdmitted() {
+		return EnqueueDeleteResult{}, errForwardingGated()
+	}
 	fwd, ok := s.findEnabledForwarderFor(forwarderName, action.Delete)
 	if !ok {
 		return EnqueueDeleteResult{}, &SubmitError{

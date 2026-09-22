@@ -126,14 +126,14 @@ items return a QSO through a boundary projection of `types.Qso`: the canonical *
 - **Request:** Path `{name}` (the forwarder's config name). Body `{"uuids": ["…", …], "force": false}`. `uuids` are deduplicated; `force` (default false) re-sends QSOs already uploaded to this destination instead of skipping them.
 - **Behaviour:** action is always `insert`. Each UUID lands in exactly one bucket — enqueued, `skipped_uploaded` (already on this destination, no force), `skipped_deleted` (soft-deleted; not backfilled), or `not_found` (unknown/malformed). Per-QSO best-effort: one bad UUID never fails the rest. "Already uploaded" = an existing insert-upload row at status `uploaded` for this forwarder (keyed by name, so N-agnostic across forwarder types).
 - **Response:** **200**, body `{"enqueued": N, "skipped_uploaded": M, "skipped_deleted"?: ["…"], "not_found"?: ["…"]}`.
-- **Errors:** 400 `invalid_forwarder` (empty name); 400 `missing_required_field` (empty `uuids`); 400 `batch_too_large` (> 5000 uuids); 400 `forwarder_unavailable` (forwarder unknown, **disabled**, or doesn't forward inserts — a disabled forwarder has no worker and gets its queue rows discarded at startup, so enqueuing would strand them); 400 malformed body; 500 `enqueue_failed`.
+- **Errors:** 400 `invalid_forwarder` (empty name); 400 `missing_required_field` (empty `uuids`); 400 `batch_too_large` (> 5000 uuids); 400 `forwarding_gated` (the archive is not the adopted one — the interim gate, see `GET /v1/forwarder-queues`); 400 `forwarder_unavailable` (forwarder unknown, **disabled**, or doesn't forward inserts — a disabled forwarder has no worker and gets its queue rows discarded at startup, so enqueuing would strand them); 400 malformed body; 500 `enqueue_failed`.
 
 ### `GET /v1/forwarder-queues`
 - **Purpose:** Per-forwarder upload-queue readout for Settings → Forwarding (W-0005) — the clearable backlog vs the in-flight batch, so an operator can see what a "Clear queue" would drop and what is still being sent.
 - **Gating:** Always-on.
 - **Request:** No body.
 - **Behaviour:** One entry per **configured** forwarder (enabled or disabled, in config order). `waiting` = rows at status `pending` (still to be sent); `failed` = rows at status `failed` (terminal until re-armed — read apart from `waiting` since W-0010 outcome 9, so a failure never shows as a live backlog); `clearable` = `waiting + failed` (what a clear removes); `in_flight` = rows at status `in_progress` (the currently-claimed batch, never cleared); `uploaded` history is counted in none. A forwarder with no queued rows reads all zeros.
-- **Response:** **200**, body `{"forwarders": [{"name": "…", "waiting": N, "failed": N, "clearable": N, "in_flight": N}, …]}`.
+- **Response:** **200**, body `{"forwarders": [{"name": "…", "waiting": N, "failed": N, "clearable": N, "in_flight": N}, …], "forwarding_gated": bool, "gate_reason"?: string}`. `forwarding_gated` is the interim forwarding gate (ADR 0071, W-0021): in an archive other than the adopted one no new rows are queued to any destination — no worker, re-arm or SM Cloud reconciler runs — until the ADR 0056 per-logbook bindings replace the gate with explicit routing; `gate_reason` is the operator-facing sentence, present only when gated. Existing rows remain visible in the counts and may be cleared.
 - **Errors:** 500 `queue_counts_failed`.
 
 ### `POST /v1/forwarder/{name}/queue/clear`
@@ -150,7 +150,7 @@ items return a QSO through a boundary projection of `types.Qso`: the canonical *
 - **Request:** Path `{name}` (the forwarder's config name, matched exactly like clear). No body.
 - **Behaviour:** Per-forwarder, never global. Re-armed rows read `pending` with `attempts` 0, `next_attempt_at` now, and `last_error`/`failure_class` cleared; `upstream_id` and `origin` are kept.
 - **Response:** **200**, body `{"rearmed": N}` (rows re-armed; 0 when nothing had failed).
-- **Errors:** 400 `invalid_forwarder` (empty name); 404 `unknown_forwarder` (not a configured forwarder); 400 `forwarder_disabled`; 500 `retry_failed`.
+- **Errors:** 400 `invalid_forwarder` (empty name); 404 `unknown_forwarder` (not a configured forwarder); 400 `forwarding_gated` (the archive is not the adopted one — see `GET /v1/forwarder-queues`); 400 `forwarder_disabled`; 500 `retry_failed`.
 
 ### `POST /v1/smcloud/reconcile`
 - **Purpose:** On-demand SM Cloud reconcile (ADR 0040 S4) — run one detect+heal pass NOW instead of waiting for the hourly loop: compute the local live-row `{count, hash}` (the shared `internal/cloud/reconcile` summary), compare with the cloud's, and on mismatch diff the two manifests and re-enqueue diverged UUIDs through the smcloud forwarder's queue (upserts via the backfill path, missed tombstones via delete rows). The operator's "back up / check now" button.
