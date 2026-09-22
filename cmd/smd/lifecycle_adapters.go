@@ -28,6 +28,7 @@ import (
 
 	"github.com/ColonelBlimp/station-manager/internal/adif"
 	"github.com/ColonelBlimp/station-manager/internal/api"
+	"github.com/ColonelBlimp/station-manager/internal/archive"
 	"github.com/ColonelBlimp/station-manager/internal/bridge"
 	"github.com/ColonelBlimp/station-manager/internal/buildinfo"
 	"github.com/ColonelBlimp/station-manager/internal/config"
@@ -72,8 +73,8 @@ type daemon struct {
 	qso    *qsoservice.Service
 
 	// DB paths derived once the log-DB node initialises (its Initialize sets DatabaseConfig.Path).
-	logDBDir string
-	refPath  string
+	paths   archive.Paths // resolved from the catalogue before the graph is built (ADR 0071)
+	refPath string
 
 	// Fleet. bridge + ft8 are constructed pre-orchestrator; evidence + psk in their node Initialize.
 	bridge        *bridge.Service
@@ -225,14 +226,23 @@ func (d *daemon) stopLogging() error {
 // split BEFORE either connection opens (it re-keys both DBs' migration tracking).
 func (d *daemon) startLogDB(context.Context) error {
 	const op errors.Op = "smd.startLogDB"
-	d.logDBDir = filepath.Dir(d.db.DatabaseConfig.Path)
-	d.refPath = filepath.Join(d.logDBDir, referenceDBFilename)
-	if err := sqlite.BootstrapReferenceSplit(
-		d.db.DatabaseConfig.Path, d.refPath, filepath.Join(d.logDBDir, "backups"), d.logger,
-	); err != nil {
+	// The QSO file and the global stores come from the catalogue (ADR 0071),
+	// resolved once in run() before this graph existed; datastore.path is only
+	// the pre-adoption fallback. A daemon assembled without run() (tests) resolves
+	// here, through the same rule.
+	if d.paths.QSO == "" {
+		p, err := archive.Resolve(d.cfg, "")
+		if err != nil {
+			return errors.New(op).WithErr(err).WithMsg("resolve active archive")
+		}
+		d.paths = p
+	}
+	d.refPath = d.paths.Reference
+	if err := sqlite.BootstrapReferenceSplit(d.paths.QSO, d.refPath, d.paths.Backups, d.logger); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("bootstrap reference split")
 	}
 	d.db.SetMigrationSets(sqlite.MigrationSetLog)
+	d.db.SetDatabasePath(d.paths.QSO)
 	if err := d.db.Open(); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("open database")
 	}
@@ -254,7 +264,7 @@ func (d *daemon) startRefDB(context.Context) error {
 	if err := d.refDB.Migrate(); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("run reference migrations")
 	}
-	if err := sqlite.SecureDataFiles(d.cfgSvc.WorkingDir(), filepath.Join(d.logDBDir, "backups"),
+	if err := sqlite.SecureDataFiles(d.cfgSvc.WorkingDir(), d.paths.Backups,
 		d.logger, d.db.DatabaseConfig.Path, d.refPath); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("secure database files")
 	}
@@ -333,9 +343,10 @@ func (d *daemon) initMailer() error {
 // ---- evidence (always active, fail-soft) ----
 
 func (d *daemon) initEvidence() error {
+	// Station-global: evidence never follows the QSO archive (ADR 0071).
 	evidencePath := evidence.RelocateArchive(
 		filepath.Join(d.cfgSvc.WorkingDir(), "evidence.db"),
-		filepath.Join(d.logDBDir, "evidence.db"),
+		d.paths.Evidence,
 		d.logger,
 	)
 	evCfg := evidence.Config{

@@ -197,6 +197,32 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      consequence) and never fall back to `datastore.path` once the catalogue exists. Proof: after
      activating B, an import lands in B; `--archive A` lands in A; neither derives `reference.db`
      from the QSO file's directory.
+   - Built 2026-09-22, sub-commit 2A: package `internal/archive` (`Resolve(cfg, id) Paths` —
+     active or named entry, pre-adoption fallback to `datastore.path`, refusals by name for an
+     unknown id, an active id outside the catalogue, or entries with no active; `PathFor`
+     derives a managed path from the id; `Reference`/`Evidence` under `<data_dir>/db` with the
+     freeze rule for a file observed beside an external QSO file; `Backups` archive-scoped).
+     `cmd/smd` `resolveArchivePaths` + `openArchiveDatabases` shared by `smd import` and
+     `smd restore` (both gain `--archive <uuid>` and print the resolved archive); the daemon
+     resolves in `run()` via `startupPaths` before the graph is built and `startLogDB` opens
+     `paths.QSO`, `startRefDB` `paths.Reference`, `initEvidence` relocates into `paths.Evidence`;
+     `datastore.path` no longer selects an adopted QSO file; its original directory remains the
+     station-global store freeze anchor. Proofs: import dropping the
+     `--archive` value lands in the active archive (test names it); the resolver preferring the
+     file beside the QSO file over the global one fails the freeze test and the import test that
+     asserts `reference.db` under `<data_dir>/db` with an external QSO file. Maintainability
+     baseline ratcheted for `runImport`/`runRestore` (the shared open sequence removed nine
+     branches from each). `install.md` and `config.md` §3 updated. Review of 2A (three findings,
+     all fixed with RED tests and proofs): (i) the freeze rule keyed on the SELECTED file's
+     directory, so A → B → A would have moved evidence.db — it now keys on the station's
+     pre-archive layout (`filepath.Dir(datastore.path)`), proven by a three-step A → B → A resolve;
+     (ii) `--archive B` took the default logbook from the active archive's config projection — the
+     commands now use the targeted file's identity default (`targetLogbook`), falling back to
+     config only for the active or not-yet-adopted archive and refusing a named archive without
+     one, proven by an import into B whose default is its logbook 2 while config says 1;
+     (iii) `sqlite.Service.Initialize` created/checked the directory of `datastore.path` before
+     `SetDatabasePath` applied — the check now runs at `Open` on the effective path, proven by a
+     stale, uncreatable `datastore.path` with a good managed path opening cleanly.
    - **Interim archive forwarding gate** (review finding 1; lands here, before activation exists):
      until the ADR 0056 per-logbook bindings ship, forwarding is admitted only in the adopted
      archive. In any other archive `shouldEnqueue` yields no rows for any destination, the boot

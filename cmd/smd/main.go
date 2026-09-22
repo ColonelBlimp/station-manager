@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/adif"
+	"github.com/ColonelBlimp/station-manager/internal/archive"
 	"github.com/ColonelBlimp/station-manager/internal/bridge"
 	"github.com/ColonelBlimp/station-manager/internal/buildinfo"
 	"github.com/ColonelBlimp/station-manager/internal/config"
@@ -70,11 +71,6 @@ const (
 // graceful shutdown, so main() can exit ExitRestart (→ systemd respawn) rather
 // than the normal 0 after run() returns cleanly.
 var restartRequested atomic.Bool
-
-// referenceDBFilename is the shared enrichment-cache database (country +
-// contacted_station), opened alongside the log DB in the same directory
-// (reference.db / log-db split).
-const referenceDBFilename = "reference.db"
 
 // ft8QsoLogTimeout bounds the off-pipeline log+enrich of one completed FT8
 // exchange (a DB write plus a best-effort country lookup). Independent of the
@@ -233,11 +229,11 @@ func run() error {
 
 	// ---- Build DI container ----
 	cfgSvc := config.New(cfg)
-	// Record the on-disk path so /v1/config PUT can rewrite it
-	// atomically. firstRunPath covers the just-seeded path; for an
-	// existing config we re-resolve via the same precedence used in
-	// loadConfig.
-	cfgPath, err := resolveConfigPath(*configPath, firstRunPath)
+	// Two startup paths decided BEFORE any database or the lifecycle graph
+	// exists: the config file to persist to, and — ADR 0071 — the QSO file to
+	// serve (the catalogue's active archive, or datastore.path until the file is
+	// adopted). Either failing is fatal here.
+	cfgPath, paths, err := startupPaths(cfg, *configPath, firstRunPath)
 	if err != nil {
 		logStartupFailure(err)
 		return err
@@ -356,6 +352,7 @@ func run() error {
 		hub:            hub,
 		db:             dbSvc,
 		refDB:          refDbSvc,
+		paths:          paths,
 		qso:            qsoSvc,
 		workerCtx:      workerCtx,
 		workerCancel:   workerCancel,
@@ -1084,3 +1081,19 @@ type ft8Keyer struct{ b *bridge.Service }
 func (k ft8Keyer) KeyTx(ctx context.Context, mode string) error { return k.b.KeyFt8Tx(ctx, mode) }
 func (k ft8Keyer) UnkeyTx(ctx context.Context) error            { return k.b.UnkeyFt8Tx(ctx) }
 func (k ft8Keyer) TxReady() bool                                { return k.b.TxReady() }
+
+// startupPaths resolves the two paths run() needs before anything opens: the
+// on-disk config path (so /v1/config PUT can rewrite it atomically —
+// firstRunPath covers a just-seeded file, otherwise the same precedence as
+// loadConfig) and the active archive's paths (ADR 0071).
+func startupPaths(cfg config.Config, configFlag, firstRunPath string) (string, archive.Paths, error) {
+	cfgPath, err := resolveConfigPath(configFlag, firstRunPath)
+	if err != nil {
+		return "", archive.Paths{}, err
+	}
+	paths, err := resolveArchivePaths(cfg, "", nil)
+	if err != nil {
+		return "", archive.Paths{}, fmt.Errorf("resolve active archive: %w", err)
+	}
+	return cfgPath, paths, nil
+}

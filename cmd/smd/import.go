@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"time"
@@ -57,9 +56,10 @@ func runImport(args []string) error {
 	var progressEvery int
 	var forwardFwds string
 	fs.StringVar(&configPath, "config", "", "path to config.json (default: $SM_WORKING_DIR, else the XDG data dir for a system install, else the executable's directory)")
-	fs.Int64Var(&logbookID, "logbook", 0, "target logbook id (default: default_logbook from config)")
+	fs.Int64Var(&logbookID, "logbook", 0, "target logbook id (default: the target archive's default logbook)")
 	fs.BoolVar(&dryRun, "dry-run", false, "parse and validate only — no DB writes")
 	fs.IntVar(&progressEvery, "progress-every", 100, "emit a progress line every N records (0 disables)")
+	archiveID := fs.String("archive", "", "catalogue id (uuid) of the archive to import into (default: the active archive); run with the daemon stopped")
 	fs.StringVar(&forwardFwds, "forward", "", "comma-separated forwarder name(s) to QUEUE the imported QSOs for upload to (e.g. \"qrz\"). DEFAULT IS NONE: import uploads nothing unless you name a forwarder here. Use only when you actually want the imported log pushed to that service.")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(os.Stderr, "usage: smd import [flags] <file.adi>")
@@ -174,58 +174,15 @@ func runImport(args []string) error {
 
 	// reference.db / log-db split: log connection for qso/queue/history, a
 	// reference connection for the enrichment caches qsoservice warms on import.
-	logDBDir := filepath.Dir(dbSvc.DatabaseConfig.Path)
-	refPath := filepath.Join(logDBDir, referenceDBFilename)
-
-	// Idempotent, backup-first split of an existing single-file DB — in case an
-	// operator runs `smd import` against an old DB before the daemon has started
-	// once. No-op when fresh or already split. Must precede Open.
-	if err := sqlite.BootstrapReferenceSplit(
-		dbSvc.DatabaseConfig.Path, refPath, filepath.Join(logDBDir, "backups"), loggerSvc,
-	); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("bootstrap reference split")
+	paths, closeDBs, err := openArchiveDatabases(cfg, cfgSvc, *archiveID, dbSvc, refDbSvc, loggerSvc, os.Stdout)
+	if err != nil {
+		return errors.New(op).WithErr(err)
 	}
-
-	dbSvc.SetMigrationSets(sqlite.MigrationSetLog)
-	if err := dbSvc.Open(); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("open database")
-	}
-	defer func() {
-		if cerr := dbSvc.Close(); cerr != nil {
-			loggerSvc.ErrorWith().Err(cerr).Msg("database close error")
-		}
-	}()
-	if err := dbSvc.Migrate(); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("run migrations")
-	}
-
-	refDbSvc.SetMigrationSets(sqlite.MigrationSetReference)
-	refDbSvc.SetDatabasePath(refPath)
-	if err := refDbSvc.Open(); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("open reference database")
-	}
-	defer func() {
-		if cerr := refDbSvc.Close(); cerr != nil {
-			loggerSvc.ErrorWith().Err(cerr).Msg("reference database close error")
-		}
-	}()
-	if err := refDbSvc.Migrate(); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("run reference migrations")
-	}
-
-	// ST-6: import opens/writes the same databases, so it must make them owner-private too
-	// (else a permissive-umask import leaves readable QSO data until a later daemon start).
-	if err := sqlite.SecureDataFiles(cfgSvc.WorkingDir(), filepath.Join(logDBDir, "backups"),
-		loggerSvc, dbSvc.DatabaseConfig.Path, refPath); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("secure database files")
-	}
+	defer closeDBs()
 
 	// ---- Resolve target logbook.
-	if logbookID == 0 {
-		logbookID = cfg.DefaultLogbookID
-	}
-	if logbookID < 1 {
-		return errors.New(op).WithMsg("no target logbook (config has no default_logbook_id; pass --logbook)")
+	if logbookID, err = targetLogbook(logbookID, dbSvc, paths, cfg); err != nil {
+		return errors.New(op).WithErr(err)
 	}
 	if _, ferr := dbSvc.FetchLogbookByIDWithContext(context.Background(), logbookID); ferr != nil {
 		return errors.New(op).WithErr(ferr).WithMsgf("target logbook id=%d does not exist", logbookID)

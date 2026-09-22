@@ -130,7 +130,7 @@
       "path": "cmd/smd/import.go",
       "function": "runImport",
       "direction": "maximum",
-      "value": 62
+      "value": 52
     },
     {
       "language": "go",
@@ -146,7 +146,7 @@
       "path": "cmd/smd/restore.go",
       "function": "runRestore",
       "direction": "maximum",
-      "value": 72
+      "value": 62
     },
     {
       "language": "go",
@@ -250,7 +250,7 @@
       "path": "cmd/smd/import.go",
       "function": "runImport",
       "direction": "maximum",
-      "value": 47
+      "value": 39
     },
     {
       "language": "go",
@@ -266,7 +266,7 @@
       "path": "cmd/smd/restore.go",
       "function": "runRestore",
       "direction": "maximum",
-      "value": 54
+      "value": 46
     },
     {
       "language": "go",
@@ -370,7 +370,7 @@
       "path": "cmd/smd/import.go",
       "function": "runImport",
       "direction": "minimum",
-      "value": 12
+      "value": 15
     },
     {
       "language": "go",
@@ -386,7 +386,7 @@
       "path": "cmd/smd/restore.go",
       "function": "runRestore",
       "direction": "minimum",
-      "value": 12
+      "value": 15
     },
     {
       "language": "go",

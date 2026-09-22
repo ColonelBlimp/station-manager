@@ -310,6 +310,13 @@ running before. If you call the raw `smd import` instead, stop the daemon
 yourself first (`smctl stop`) so the two aren't racing on the same SQLite
 file. The import itself takes seconds.
 
+Both `smd import` and `smd restore` open the daemon's ACTIVE archive — the
+file the catalogue in `config.json` names, the same rule the daemon uses —
+and print which archive they resolved (label, id, path). To target another
+catalogued archive, pass `--archive <uuid>`; the daemon must be stopped
+either way. The reference and evidence databases are station-global under
+`<data_dir>/db` and are never created beside the QSO file.
+
 You don't need to set `SM_WORKING_DIR` in your shell. When run from
 `/usr/bin/smd` (the installed location), the binary resolves its
 working directory via the same XDG fallback the daemon uses, so it

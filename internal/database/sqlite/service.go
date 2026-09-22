@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	stderr "errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -91,12 +92,11 @@ func (s *Service) Initialize() error {
 		return errors.New(op).WithErr(err).WithMsg("Invalid database config")
 	}
 
-	if dbCfg.Driver == SqliteDriver {
-		// Ensure the database directory exists.
-		if err = s.checkDatabaseDir(dbCfg.Path); err != nil {
-			return errors.New(op).WithErr(err)
-		}
-	}
+	// The database DIRECTORY is checked and created at Open, against the
+	// effective path: SetDatabasePath may redirect this service after Initialize
+	// (the reference database, and — ADR 0071 — the catalogue's active archive),
+	// and a stale, uncreatable datastore.path must not stop a daemon whose
+	// active archive lives elsewhere.
 
 	// All steps succeeded — commit the validated config and latch initialised.
 	s.DatabaseConfig = &dbCfg
@@ -122,6 +122,11 @@ func (s *Service) Open() error {
 	dsn, err := s.getDsn()
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg(errMsgDsnBuildError)
+	}
+	if s.DatabaseConfig.Driver == SqliteDriver && !strings.Contains(s.DatabaseConfig.Path, ":memory:") {
+		if err := s.checkDatabaseDir(s.DatabaseConfig.Path); err != nil {
+			return errors.New(op).WithErr(err)
+		}
 	}
 
 	s.mu.Lock()

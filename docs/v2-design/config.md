@@ -71,7 +71,7 @@ configuration.
 | `useragent` | `string` | Shared outbound HTTP User-Agent; first-run startup supplies `station-manager/<build-version>` when absent. |
 | `socket_path` | `string` | TCP address or Unix-socket path selected by `server.protocol`. |
 | `server` | `ServerConfig` | Listener, HTTP limits/timeouts, embedded-SPA, profiling, and insecure-network acknowledgement. |
-| `datastore` | `types.DatastoreConfig` | SQLite path, options, pool, and context timeouts. |
+| `datastore` | `types.DatastoreConfig` | SQLite options, pool, and context timeouts. `path` is the QSO file only until adoption (ADR 0071): once the catalogue below names an active archive, that entry selects the file (a managed archive's path derives from its id; a legacy or external entry records the path) and `datastore.path` is no longer consulted for it. The reference and evidence databases are station-global under `<data_dir>/db`, or frozen where an old external layout already created them beside the QSO file. |
 | `logging` | `types.LoggingConfig` | Daemon logging and rotation. |
 | `forwarders` | `[]types.ForwarderConfig` | Durable destination instances, filters, cadence, retry, endpoints, and opaque credentials. |
 | `logging_station` | `types.LoggingStation` | ADIF `MY_*` station identity used when emitting QSOs. |

@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"time"
@@ -48,7 +47,8 @@ func runRestore(args []string) error {
 	fs.StringVar(&configPath, "config", "", "path to config.json (default: $SM_WORKING_DIR, else the XDG data dir, else the executable's directory)")
 	fs.StringVar(&forwarderName, "forwarder", "", "config name of the smcloud forwarder to read url/token from (default: the first type=\"smcloud\" entry)")
 	fs.StringVar(&cloudLogbook, "cloud-logbook", "", "cloud-side logbook name to restore from (default: the forwarder's configured logbook)")
-	fs.Int64Var(&logbookID, "logbook", 0, "LOCAL target logbook id (default: default_logbook from config)")
+	fs.Int64Var(&logbookID, "logbook", 0, "LOCAL target logbook id (default: the target archive's default logbook)")
+	archiveID := fs.String("archive", "", "catalogue id (uuid) of the archive to restore into (default: the active archive); run with the daemon stopped")
 	fs.BoolVar(&dryRun, "dry-run", false, "fetch the export and report what would be restored — no DB writes")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(os.Stderr, "usage: smd restore [flags]")
@@ -180,52 +180,15 @@ func runRestore(args []string) error {
 		return errors.New(op).WithErr(err).WithMsg("resolve qso service")
 	}
 
-	logDBDir := filepath.Dir(dbSvc.DatabaseConfig.Path)
-	refPath := filepath.Join(logDBDir, referenceDBFilename)
-	if err := sqlite.BootstrapReferenceSplit(
-		dbSvc.DatabaseConfig.Path, refPath, filepath.Join(logDBDir, "backups"), loggerSvc,
-	); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("bootstrap reference split")
+	paths, closeDBs, err := openArchiveDatabases(cfg, cfgSvc, *archiveID, dbSvc, refDbSvc, loggerSvc, os.Stdout)
+	if err != nil {
+		return errors.New(op).WithErr(err)
 	}
-	dbSvc.SetMigrationSets(sqlite.MigrationSetLog)
-	if err := dbSvc.Open(); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("open database")
-	}
-	defer func() {
-		if cerr := dbSvc.Close(); cerr != nil {
-			loggerSvc.ErrorWith().Err(cerr).Msg("database close error")
-		}
-	}()
-	if err := dbSvc.Migrate(); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("run migrations")
-	}
-	refDbSvc.SetMigrationSets(sqlite.MigrationSetReference)
-	refDbSvc.SetDatabasePath(refPath)
-	if err := refDbSvc.Open(); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("open reference database")
-	}
-	defer func() {
-		if cerr := refDbSvc.Close(); cerr != nil {
-			loggerSvc.ErrorWith().Err(cerr).Msg("reference database close error")
-		}
-	}()
-	if err := refDbSvc.Migrate(); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("run reference migrations")
-	}
-
-	// ST-6: restore opens/writes the same databases, so it must make them owner-private too
-	// (else a permissive-umask restore leaves readable QSO data until a later daemon start).
-	if err := sqlite.SecureDataFiles(cfgSvc.WorkingDir(), filepath.Join(logDBDir, "backups"),
-		loggerSvc, dbSvc.DatabaseConfig.Path, refPath); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("secure database files")
-	}
+	defer closeDBs()
 
 	// ---- Resolve the LOCAL target logbook.
-	if logbookID == 0 {
-		logbookID = cfg.DefaultLogbookID
-	}
-	if logbookID < 1 {
-		return errors.New(op).WithMsg("no target logbook (config has no default_logbook_id; pass -logbook)")
+	if logbookID, err = targetLogbook(logbookID, dbSvc, paths, cfg); err != nil {
+		return errors.New(op).WithErr(err)
 	}
 	if _, ferr := dbSvc.FetchLogbookByIDWithContext(context.Background(), logbookID); ferr != nil {
 		return errors.New(op).WithErr(ferr).WithMsgf("target logbook id=%d does not exist", logbookID)
