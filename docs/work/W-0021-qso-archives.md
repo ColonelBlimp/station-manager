@@ -303,6 +303,13 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      legacy or external file inside the managed directory would have been called removable —
      every catalogued file is excluded after symlink resolution, proven with a legacy entry
      pointing into the managed directory.
+     Committed as `16611884`; its review found two more P2s, fixed: (i) the durability chain
+     stopped at `db/` — when `db/` and `qso-archives/` are both new, `data_dir`'s entry for `db/`
+     was never synced; `dirsUpTo` now syncs every directory from the managed one up through the
+     working directory (the ordering test requires all three); (ii) the durable retry checked
+     existence only — it now reads the file's embedded identity (`sqlite.PeekArchiveIdentity`)
+     and requires a match with the catalogue id; a missing file, arbitrary bytes, or another
+     archive's file copied over the path is refused naming both ids.
    - **Interim archive forwarding gate** (review finding 1; lands here, before activation exists):
      until the ADR 0056 per-logbook bindings ship, forwarding is admitted only in the adopted
      archive. In any other archive `shouldEnqueue` yields no rows for any destination, the boot

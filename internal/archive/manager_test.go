@@ -438,9 +438,18 @@ func TestCreate_SyncsTheDirectoryBeforeTheCatalogueAndChecksTheFileOnRetry(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Every directory from the managed one up THROUGH the working directory
+	// (review 16611884): db/ and qso-archives/ are both new in this fixture, and
+	// data_dir's entry for db/ is only durable once data_dir itself is synced.
 	dir := ManagedDir(cfgSvc.Snapshot())
-	if len(syncedWhileUnlisted) < 2 || syncedWhileUnlisted[0] != dir || syncedWhileUnlisted[1] != filepath.Dir(dir) {
-		t.Fatalf("directories synced before the catalogue write = %v; want [%s %s]", syncedWhileUnlisted, dir, filepath.Dir(dir))
+	want := []string{dir, filepath.Dir(dir), cfgSvc.Snapshot().DataDir}
+	if len(syncedWhileUnlisted) != len(want) {
+		t.Fatalf("directories synced before the catalogue write = %v; want %v", syncedWhileUnlisted, want)
+	}
+	for i := range want {
+		if syncedWhileUnlisted[i] != want[i] {
+			t.Fatalf("directories synced before the catalogue write = %v; want %v", syncedWhileUnlisted, want)
+		}
 	}
 	// The file vanishes (the crash the barrier guards against, or an operator
 	// deletion): a retry with the same key must not claim success.
@@ -450,6 +459,43 @@ func TestCreate_SyncsTheDirectoryBeforeTheCatalogueAndChecksTheFileOnRetry(t *te
 	_, err = m.Create(context.Background(), CreateRequest{RequestKey: "k", Label: "L", LogbookName: "L", LogbookCallsign: "G4ABC"})
 	if err == nil || !strings.Contains(err.Error(), "missing") {
 		t.Fatalf("retry with the file gone = %v; want an error naming the missing file", err)
+	}
+}
+
+// A durable retry proves the FILE, not the path (review 16611884): a directory,
+// arbitrary bytes, or another archive copied over the path is never "reused".
+func TestCreate_RetryRequiresTheFilesIdentityToMatch(t *testing.T) {
+	m, cfgSvc, _ := testManager(t)
+	req := CreateRequest{RequestKey: "k", Label: "L", LogbookName: "L", LogbookCallsign: "G4ABC"}
+	res, err := m.Create(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := m.Create(context.Background(), CreateRequest{RequestKey: "k2", Label: "Other", LogbookName: "L", LogbookCallsign: "G4ABC"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Another archive's file copied over this path.
+	data, err := os.ReadFile(other.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(res.Path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = m.Create(context.Background(), req)
+	if err == nil || !strings.Contains(err.Error(), other.Entry.ID) || !strings.Contains(err.Error(), res.Entry.ID) {
+		t.Fatalf("retry over another archive's file = %v; want a refusal naming both ids", err)
+	}
+	// Arbitrary bytes at the path.
+	if err := os.WriteFile(res.Path, []byte("not a database"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Create(context.Background(), req); err == nil {
+		t.Fatal("retry over arbitrary bytes claimed success")
+	}
+	if n := len(cfgSvc.Snapshot().QsoArchives); n != 2 {
+		t.Fatalf("refused retries changed the catalogue: %d entries", n)
 	}
 }
 

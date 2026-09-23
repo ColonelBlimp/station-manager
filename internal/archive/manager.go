@@ -90,11 +90,18 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (CreateResult, 
 		for i := range snap.QsoArchives {
 			if e := snap.QsoArchives[i]; e.RequestKey == req.RequestKey {
 				path := PathFor(snap, e)
-				// A catalogued archive whose file is gone is never "reused":
-				// the entry is a claim, the file is the archive.
-				if _, err := os.Stat(path); err != nil {
-					return CreateResult{}, fmt.Errorf("archive %s (%s) for request %s is in the catalogue but its file %s is missing: %w",
-						e.ID, e.Label, req.RequestKey, path, err)
+				// The entry is a claim, the file is the archive: a reuse requires
+				// the file's own embedded identity to be readable and to match — a
+				// missing file, arbitrary bytes, or another archive copied over the
+				// path is refused, never "reused".
+				identity, found, err := sqlite.PeekArchiveIdentity(path)
+				switch {
+				case err != nil:
+					return CreateResult{}, fmt.Errorf("archive %s (%s) for request %s: reading its file %s: %w", e.ID, e.Label, req.RequestKey, path, err)
+				case !found:
+					return CreateResult{}, fmt.Errorf("archive %s (%s) for request %s is in the catalogue but its file %s is missing or carries no identity", e.ID, e.Label, req.RequestKey, path)
+				case identity.ArchiveUUID != e.ID:
+					return CreateResult{}, fmt.Errorf("archive %s (%s) for request %s: the file at %s holds archive %s; refusing", e.ID, e.Label, req.RequestKey, path, identity.ArchiveUUID)
 				}
 				return CreateResult{Entry: e, Path: path, Reused: true}, nil
 			}
@@ -135,11 +142,12 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (CreateResult, 
 	if err := os.Rename(tmp, final); err != nil {
 		return CreateResult{}, m.withCleanup(fmt.Errorf("place archive file: %w", err), tmp)
 	}
-	// Durability barrier (review 8c8af208): the rename and any directory entries
-	// this creation made must be on disk BEFORE the catalogue names the archive —
-	// config.json's own directory sync says nothing about this directory. Without
-	// it a power failure could keep the entry and lose the file.
-	for _, d := range []string{dir, filepath.Dir(dir)} {
+	// Durability barrier (reviews 8c8af208, 16611884): the rename and every
+	// directory entry this creation may have made — qso-archives/ in db/, db/ in
+	// the working directory — must be on disk BEFORE the catalogue names the
+	// archive; config.json's own directory sync says nothing about these. So sync
+	// from the managed directory up THROUGH the working directory.
+	for _, d := range dirsUpTo(dir, snap.DataDir) {
 		if err := syncDir(d); err != nil {
 			return CreateResult{}, m.withCleanup(fmt.Errorf("sync %s: %w", d, err), final)
 		}
@@ -182,6 +190,22 @@ func (m *Manager) validate(req CreateRequest) error {
 		return &RequestError{Code: "invalid_field_value", Message: "logbook callsign must be 3-32 characters and contain at least one digit"}
 	}
 	return nil
+}
+
+// dirsUpTo lists dir and each of its parents up to and including root (the
+// working directory), innermost first — the chain a durability barrier must
+// sync. A dir outside root yields just dir.
+func dirsUpTo(dir, root string) []string {
+	out := []string{dir}
+	for p := dir; p != root; {
+		parent := filepath.Dir(p)
+		if parent == p {
+			break
+		}
+		out = append(out, parent)
+		p = parent
+	}
+	return out
 }
 
 // closeFile is the pre-create's close, a seam so a test can fail it.
