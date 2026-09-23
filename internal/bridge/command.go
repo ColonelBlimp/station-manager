@@ -46,6 +46,11 @@ var ErrTxUncertain = stderr.New("bridge: previous transmission unconfirmed; refu
 // rig_tx_active rather than a generic 500 (review 2026-06-19 L1).
 var ErrTxActive = stderr.New("bridge: transmission active; refusing command")
 
+// ErrTxSealed refuses a tune or FT8 key while an archive activation holds the
+// keyed paths sealed (ADR 0071): the daemon restarts shortly and must not key
+// the rig again in this process. The API maps it to 409 archive_switch_pending.
+var ErrTxSealed = stderr.New("bridge: archive switch pending; keyed transmission is sealed until the restart")
+
 // ErrTxRecheckUnsupported is returned when the configured rigdef has neither a
 // read_tx_status query nor CI-V's ACK-confirmed tx_off recovery mechanism.
 // Such fire-and-forget defs confirm a successfully written unkey through the

@@ -109,3 +109,14 @@ func TestBridgeInfoFor_Tune(t *testing.T) {
 		}
 	}
 }
+
+// W-0021 slice 3B: a tune refused by the archive-switch seal is 409
+// archive_switch_pending (the bridge pins SealTx itself: bridge.TestSealTx_*).
+func TestWriteRigTuneError_SealedIsArchiveSwitchPending(t *testing.T) {
+	srv := testServer(t)
+	w := httptest.NewRecorder()
+	srv.writeRigTuneError(w, "api.test", bridge.ErrTxSealed)
+	if w.Code != http.StatusConflict || decodeErrCode(t, w) != "archive_switch_pending" {
+		t.Fatalf("status=%d body=%s, want 409 archive_switch_pending", w.Code, w.Body.String())
+	}
+}

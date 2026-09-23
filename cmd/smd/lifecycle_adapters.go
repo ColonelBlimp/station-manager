@@ -77,6 +77,9 @@ type daemon struct {
 	// activationFailure is set on a last-known-good generation: the pending
 	// candidate this start was asked to activate did not come up (startGenerations).
 	activationFailure *activationFailure
+	// archives is the archive manager the HTTP port serves (ADR 0071): built in
+	// initHTTP with the daemon's seals and restart trigger.
+	archives *archive.Manager
 	// creatingArtefacts names the .creating files an interrupted archive creation
 	// left in the managed directory, as diagnosed at this start (never archives).
 	creatingArtefacts []string
@@ -753,14 +756,24 @@ func (d *daemon) initHTTP() error {
 			return d.smcloudRec.RunOnce(ctx, smcloud.TriggerManual)
 		})
 	}
+	// The archive port (ADR 0071): provisioning and activation over the attended
+	// restart. The activation's restart request is the SAME trigger as
+	// POST /v1/restart, wired only under the respawn contract (SM_SELF_RESTART=1);
+	// without it an activation is refused before anything is sealed or written.
+	d.archives = archive.NewManager(d.cfgSvc, d.logger, qsoservice.IsValidCallsign)
+	var restart func() error
 	if os.Getenv("SM_SELF_RESTART") == "1" {
-		d.server.SetRestart(func() {
+		trigger := func() {
 			d.restartOnce.Do(func() {
 				restartRequested.Store(true)
 				close(d.restartCh)
 			})
-		})
+		}
+		d.server.SetRestart(trigger)
+		restart = func() error { trigger(); return nil }
 	}
+	d.archives.SetActivation(ft8Seal{d.ft8}, bridgeSeal{d.bridge}, restart)
+	d.server.SetArchiveManager(d.archives)
 	return nil
 }
 

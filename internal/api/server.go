@@ -80,6 +80,9 @@ type Server struct {
 	// restart triggers a graceful daemon restart (POST /v1/restart). Injected by
 	// cmd/smd via SetRestart; nil → the route answers 503.
 	restart RestartFunc
+	// archives is the QSO archive port (ADR 0071). Injected by cmd/smd via
+	// SetArchiveManager; nil → the /v1/qso-archives routes answer 503.
+	archives ArchiveManager
 	// shutdownCh is closed by Shutdown to signal long-lived handlers
 	// (the SSE event stream) that they should return promptly. r.Context()
 	// alone does NOT fire on http.Server.Shutdown — only on connection
@@ -250,6 +253,10 @@ func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *l
 	// 503 until cmd/smd wires an enabled smcloud forwarder's reconciler.
 	apiMux.HandleFunc("POST /v1/smcloud/reconcile", s.handleSmcloudReconcile)
 	apiMux.HandleFunc("POST /v1/restart", s.handleRestart)
+	// QSO archives (ADR 0071): catalogue, provisioning, activation over the attended restart.
+	apiMux.HandleFunc("GET /v1/qso-archives", s.handleListQsoArchives)
+	apiMux.HandleFunc("POST /v1/qso-archives", s.handleCreateQsoArchive)
+	apiMux.HandleFunc("POST /v1/qso-archives/{uuid}/activate", s.handleActivateQsoArchive)
 
 	// Logbook CRUD
 	apiMux.HandleFunc("GET /v1/logbook", s.handleListLogbooks)

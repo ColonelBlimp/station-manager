@@ -400,6 +400,49 @@ the compatibility promise that a daemon at any slice boundary starts the existin
    seal left behind; with the seal up, each of `StartQso`, `TransmitNext`, `ArmTx`, `ClaimProfile`
    and `StartTune` is refused with the named reason; the plain `POST /v1/restart` guard is
    unchanged. `api-endpoints.md` in the same commits.
+   - **3 build plan (2026-09-23):** three sub-commits, RED-first. **3A** FT8 seal in
+     `internal/ft8`: `SealTxAdmission()` is one check-and-set under `seqGate → txMu`
+     (`seq.Active()`, `txInFlight`, `txArmed` refuse with the busy reason; else `switchSealed`);
+     `ReleaseTxAdmissionSeal()`; refusals carry `ErrArchiveSwitchPending` from `sessionTxGate`
+     (every session start), `TransmitNext`, `armTx` and `ClaimProfile`. **3B** bridge seal in
+     `internal/bridge`: `SealTx()` under `keyMu → mu` (`tuneActive || ft8TxActive` refuse; else
+     `txSealed`), `ReleaseTxSeal()`; `StartTune` and `KeyFt8Tx` refuse with `ErrTxSealed`.
+     **3C** the activation on `archive.Manager` behind two seal PORTS (`archive.Seal{Seal() error;
+     Release()}`) and a restart port (`func() error`), so `internal/archive` imports neither
+     subsystem and `internal/api` reaches all of it through ONE injected port
+     (`api.ArchiveManager`: `List`, `Create`, `Activate`; wired by cmd/smd like `SetRestart`) —
+     `internal/archive` stays out of the ADR 0043 frozen import set. Wire shapes live in
+     `internal/types` (`QsoArchiveCreateRequest`, `QsoArchiveView` with `state`
+     active|pending|inactive, `QsoArchiveActivation` with `durability`). `Activate` order: single
+     flight → entry exists and is not active → restart port wired → the file's identity peeked
+     and matching → FT8 seal → bridge seal (FT8 seal dropped on refusal) → persist `pending` →
+     restart; the abort path per finding 3c. Error codes map in the handler by `RequestError`
+     code (400 field errors, 404 `archive_not_found`, 409 `archive_active` /
+     `activation_in_progress` / `tx_busy` / `archive_unavailable`, 503 `restart_unavailable`,
+     500 `activation_persist_failed` / `pending_unclear`); the FT8 and tune handlers map the seal
+     refusals to 409 `archive_switch_pending`.
+   - **3 built (2026-09-23), uncommitted:** 3A `ft8.SealTxAdmission` / `ReleaseTxAdmissionSeal`
+     (seqGate → txMu check-and-set; precedence session, in-flight, armed → `ErrQsoInProgress`,
+     `ErrTxInFlight`, new `ErrTxArmed`; `switchSealed` refuses in `sessionTxGate`, `TransmitNext`,
+     `armTx`, `ClaimProfile` with `ErrArchiveSwitchPending`); 3B `bridge.SealTx` / `ReleaseTxSeal`
+     (keyMu → mu; `tuneActive || ft8TxActive` → `ErrTxActive`; `txSealed` refuses `StartTune` and
+     `KeyFt8Tx` with `ErrTxSealed`); both mapped to 409 `archive_switch_pending` in the FT8 and
+     tune handlers. 3C `archive.Seal` port + `Manager.SetActivation(tx, rig, restart)`, `List`,
+     `CreateArchive`, `Activate` (order and abort path as designed; `RequestError.RequestCode()`
+     classifies across the port); `api.ArchiveManager` port + `SetArchiveManager`, routes
+     `GET/POST /v1/qso-archives`, `POST /v1/qso-archives/{uuid}/activate`, `archiveErrorStatus`
+     map; cmd/smd `archive_port.go` seal adapters, `initHTTP` builds the manager with
+     `qsoservice.IsValidCallsign` and the same restart trigger as `POST /v1/restart` (nil without
+     `SM_SELF_RESTART=1`). Wire types in `internal/types` (`QsoArchiveCreateRequest`,
+     `QsoArchiveView`, `QsoArchiveCreated`, `QsoArchiveActivation`); `archive.CreateRequest` is
+     now an alias. Tests: ft8 `archive_seal_test.go` (4), bridge `tx_seal_test.go` (3), api
+     `handler_ft8_seal_test.go` + tune mapping + `handler_qso_archives_test.go` (fake port, every
+     code→status), archive `activate_test.go` (success + single flight, 5 refusals before sealing,
+     FT8/rig busy, persist failure, restart failure, unclearable pending), cmd/smd
+     `lifecycle_archive_activate_test.go` (real ports: seals held, pending persisted, restart
+     channel closed; refused without the contract, admission untouched). Reversion proofs: 7 (3A)
+     + 1 (3A api) + 4 (3B) + 5 (3C), each failing at its assertion. `api-endpoints.md` gained the
+     "QSO archives" section. Not in this slice: the SPA (slice 4) and the SM Cloud identity (5).
 4. **SPA**: the archive selector above the logbook selector in the shell header, the Archives view
    (label, state, ownership, size, last open; create form; Activate with the restart confirmation),
    and the end-to-end fault/restore drills (AC 1 on the station, with a real second archive).

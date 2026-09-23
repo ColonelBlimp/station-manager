@@ -625,6 +625,11 @@ func (s *Server) handleFt8AutoWorkStop(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) writeFt8QsoError(w http.ResponseWriter, op errors.Op, err error) {
 	switch {
+	case stderr.Is(err, ft8.ErrArchiveSwitchPending):
+		// ADR 0071: an archive activation holds TX admission sealed until the
+		// daemon restarts; nothing transmits or arms in this process again.
+		s.writeError(w, http.StatusConflict, "archive_switch_pending",
+			"an archive switch is pending; the daemon restarts shortly and transmit admission is sealed until then", op)
 	case stderr.Is(err, ft8.ErrTxNotArmed):
 		s.writeError(w, http.StatusConflict, "ft8_tx_not_armed",
 			"arm FT8 transmit before starting a QSO", op)

@@ -130,6 +130,10 @@ func (s *Service) StartTune(ctx context.Context) error {
 		// rig_tx_active, not a generic 500 (review 2026-06-19 L1).
 		return errors.New(errOp).WithErr(ErrTxActive).WithMsg("ft8 tx active; refusing concurrent tune")
 	}
+	if s.txSealed {
+		s.mu.Unlock()
+		return errors.New(errOp).WithErr(ErrTxSealed)
+	}
 	if s.lastMode == "" || s.lastPower <= 0 {
 		s.mu.Unlock()
 		return errors.New(errOp).WithErr(ErrTuneStateUnknown)
@@ -799,4 +803,36 @@ func resolveTuneRestoreSettle(cfgMs int) (time.Duration, bool) {
 		return maxTuneRestoreSettle, true
 	}
 	return d, false
+}
+
+// SealTx is the archive activation's check-and-set on the rig's keyed paths
+// (ADR 0071, W-0021): under keyMu → mu — the order StartTune and KeyFt8Tx take,
+// so no key can be mid-commit — a keyed tune carrier or FT8 transmission
+// refuses with ErrTxActive and nothing changes; otherwise the seal is set and
+// both keyed paths refuse with ErrTxSealed until ReleaseTxSeal or the restart.
+// Idempotent while sealed. A stuck/unconfirmed TX (txUncertain) is not a
+// refusal here: it already refuses every key on its own, and the restart is
+// the recovery path.
+func (s *Service) SealTx() error {
+	const errOp errors.Op = "bridge.Service.SealTx"
+	s.keyMu.Lock()
+	defer s.keyMu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.txSealed {
+		return nil
+	}
+	if s.tuneActive || s.ft8TxActive {
+		return errors.New(errOp).WithErr(ErrTxActive).WithMsg("a transmission is keyed; refusing to seal")
+	}
+	s.txSealed = true
+	return nil
+}
+
+// ReleaseTxSeal reopens the keyed paths — the activation's abort path. A
+// no-op when not sealed.
+func (s *Service) ReleaseTxSeal() {
+	s.mu.Lock()
+	s.txSealed = false
+	s.mu.Unlock()
 }

@@ -65,6 +65,8 @@ func (s *Server) writeFt8ClaimError(w http.ResponseWriter, op errors.Op, err err
 	}
 	code, msg := "", ""
 	switch {
+	case stderr.Is(err, ft8.ErrArchiveSwitchPending):
+		code, msg = "archive_switch_pending", "an archive switch is pending; the daemon restarts shortly"
 	case stderr.Is(err, ft8.ErrProfileBusy):
 		code, msg = "ft8_profile_busy", "another subscriber holds a capture on the other profile"
 	case stderr.Is(err, ft8.ErrProfileTxInFlight):

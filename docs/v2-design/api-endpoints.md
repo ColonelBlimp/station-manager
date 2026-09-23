@@ -191,6 +191,30 @@ items return a QSO through a boundary projection of `types.Qso`: the canonical *
 
 ---
 
+## QSO archives (ADR 0071)
+
+The station-global archive catalogue (`config.md` §3): the archive the daemon serves (`active`), the candidate the next start activates (`pending`), and the rest (`inactive`). The **attended restart is the switch** — the daemon never swaps its database handle in-process; activation records a candidate and restarts, and the start proves the candidate before promoting it (or falls back to the last-known-good archive and records the failure on the entry).
+
+### `GET /v1/qso-archives`
+- **Purpose:** The catalogue with each archive's state.
+- **Response:** **200** `{archives: [{id, label, ownership: "managed"|"legacy"|"external", state: "active"|"pending"|"inactive", last_activation_error?}]}` in catalogue order. A failed candidate is `inactive` with `last_activation_error`; a candidate whose restart could not be requested and whose selector could not be cleared lists as `pending` with the diagnostic — the next restart activates it.
+- **Errors:** **503** `archives_unavailable` (no archive manager wired).
+
+### `POST /v1/qso-archives`
+- **Purpose:** Provision a managed archive, inactive, named by its semantics only — never a path (path confinement: managed files live at `<data_dir>/db/qso-archives/<id>.db`, `0700`/`0600`).
+- **Request:** `{request_key, label, logbook_name, logbook_callsign}` — all required; unknown or duplicate keys are rejected (AW-2). `request_key` is the idempotency key: a retry with the same key (through a restarted daemon too) returns the archive the first request made, provided its file still carries that identity.
+- **Response:** **201** `{archive: {id, label, ownership: "managed", state: "inactive"}, reused: false}`; **200** with `reused: true` when the key found an existing archive.
+- **Errors:** 400 `invalid_json` / `missing_required_field` / `invalid_field_value`; 500 `archive_create_failed` (the build, placement, durability sync or catalogue write failed — nothing selectable is left behind; a `.creating` leftover is named in the log at every start); 503 `archives_unavailable`.
+
+### `POST /v1/qso-archives/{uuid}/activate`
+- **Purpose:** Request that the next start serve this archive. Single-flight per process (the restart is the switch).
+- **Order, each step refusing before the next runs:** the entry exists and is not the active one; the daemon has the respawn contract (`SM_SELF_RESTART=1`, as `POST /v1/restart`); the file at the entry's path holds this archive's identity; FT8 admission is sealed as one check-and-set under the FT8 lock order (an active session, a transmission in flight — a manual send waiting for its slot counts — or an **armed** TX refuses; armed-but-idle is busy, ruled 2026-09-22); the rig's keyed paths are sealed under the bridge's single flight (a keyed tune or FT8 transmission refuses, and the FT8 seal is dropped); only then is `pending_qso_archive_id` written file-first and the graceful restart requested. The seals are held until the process exits: every FT8 admission (arm, send, session start, profile claim) and `POST /v1/rig/tune` answer **409** `archive_switch_pending` meanwhile.
+- **Response:** **202** `{id, durability: "durable"|"uncertain"}` — `uncertain` means the selector's rename landed but its directory sync could not be confirmed (PT-6); startup is safe under either truth (pending present → candidate activation with rollback; absent → the old archive serves and the catalogue reads honestly).
+- **Errors:** 404 `archive_not_found`; 409 `archive_active` (already the active archive), `activation_in_progress` (an activation is pending in this process), `tx_busy` (message names the FT8 or rig reason), `archive_unavailable` (file missing, unreadable, or holds another archive's identity); 503 `restart_unavailable` (no respawn contract — nothing is sealed or written), `archives_unavailable`; 500 `activation_persist_failed` (definitive write failure: nothing on disk, both seals released), `restart_failed` (the restart could not be requested after the persist: pending cleared, seals released), `pending_unclear` (restart request failed AND the clear failed: seals released, the archive lists as `pending` with the diagnostic, the next restart performs the activation with the ordinary rollback).
+- **Notes:** The plain `POST /v1/restart` guard is unchanged. CSRF: covered by the API-wide same-origin middleware like every mutating route.
+
+---
+
 ## Draft support / lookup
 
 ### `GET /v1/contest-dupe`

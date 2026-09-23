@@ -250,8 +250,12 @@ type Service struct {
 	tuneActive       bool
 	tuneRestoreMode  string
 	tuneRestorePower int
-	tuneStart        time.Time // when the carrier keyed (L4: stop-record duration)
-	tuneTimer        *time.Timer
+	// txSealed (ADR 0071, W-0021): an archive activation holds the keyed paths
+	// shut — StartTune and KeyFt8Tx refuse — until the daemon restarts. Set by
+	// SealTx under keyMu → mu only while neither tune nor FT8 TX is keyed.
+	txSealed  bool
+	tuneStart time.Time // when the carrier keyed (L4: stop-record duration)
+	tuneTimer *time.Timer
 	// tuneGen is the tune path's TX-transition generation (mu-guarded),
 	// bumped on every key/finish/disconnect-clear. The auto-off backstop
 	// captures the generation it was armed for and refuses to release or

@@ -66,6 +66,11 @@ func (s *Server) writeRigTuneError(w http.ResponseWriter, op errors.Op, err erro
 		// conflict, not a tune failure (review 2026-06-19 L1).
 		s.writeError(w, http.StatusConflict, "rig_tx_active",
 			"a transmission is already active; stop it before tuning", op)
+	case stderr.Is(err, bridge.ErrTxSealed):
+		// ADR 0071: an archive activation holds the keyed paths sealed until the
+		// daemon restarts.
+		s.writeError(w, http.StatusConflict, "archive_switch_pending",
+			"an archive switch is pending; the daemon restarts shortly and the rig is not keyed until then", op)
 	case stderr.Is(err, bridge.ErrTxUncertain):
 		// ADR 0051: the previous transmission's unkey is unconfirmed — the PTT
 		// may still be owned. Clears on confirmation or surfaces as tx-alarm.

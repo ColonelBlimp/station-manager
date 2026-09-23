@@ -59,6 +59,13 @@ var (
 	ErrTxNotReady = stderrors.New("ft8: rig not ready to transmit")
 	// ErrTxNotArmed: a send was requested while disarmed.
 	ErrTxNotArmed = stderrors.New("ft8: transmit not armed")
+	// ErrTxArmed: an archive activation found TX armed (armed but idle is busy,
+	// operator ruling 2026-09-22) — disarm first.
+	ErrTxArmed = stderrors.New("ft8: transmit is armed")
+	// ErrArchiveSwitchPending: an archive activation holds TX admission sealed
+	// until the daemon restarts (ADR 0071). Every admission — arm, manual send,
+	// session start, profile claim — refuses with it.
+	ErrArchiveSwitchPending = stderrors.New("ft8: archive switch pending; transmit admission is sealed until the restart")
 	// ErrTxInFlight: a send was requested while a transmission is already running.
 	ErrTxInFlight = stderrors.New("ft8: a transmission is already in flight")
 	// ErrTxSuperseded: a sequencer rung reached the transmission commit after its
@@ -151,6 +158,9 @@ func (s *Service) armTx() error {
 	case s.txClosed:
 		s.txMu.Unlock()
 		return errors.New(op).WithErr(ErrTxUnavailable).WithMsg("subsystem stopped")
+	case s.switchSealed:
+		s.txMu.Unlock()
+		return errors.New(op).WithErr(ErrArchiveSwitchPending)
 	case s.txArmed:
 		s.txMu.Unlock()
 		return nil // idempotent — already armed, already bound; the dial is irrelevant
@@ -492,6 +502,9 @@ func (s *Service) TransmitNext(message string, offsetHz float64) error {
 	// under seqGate via fireOpening, so this nesting is the established order.)
 	s.seqGate.Lock()
 	defer s.seqGate.Unlock()
+	if s.admissionSealed() {
+		return errors.New(op).WithErr(ErrArchiveSwitchPending)
+	}
 	// Offset and encodability are validated UNDER seqGate, against the profile
 	// the request will proceed under: a profile claim holds the same gate, so a
 	// send that validated as FT8 cannot wait behind a claim and then key as
@@ -787,8 +800,12 @@ func (s *Service) sessionTxGate(op errors.Op) error {
 	s.txMu.Lock()
 	armed := s.txArmed
 	inFlight := s.txInFlight
+	sealed := s.switchSealed
 	ready := s.keyer != nil && s.keyer.TxReady()
 	s.txMu.Unlock()
+	if sealed {
+		return errors.New(op).WithErr(ErrArchiveSwitchPending)
+	}
 	if !armed {
 		return errors.New(op).WithErr(ErrTxNotArmed)
 	}
@@ -1605,4 +1622,51 @@ func (s *Service) txMode() string {
 		return s.cfg.TX.Mode
 	}
 	return ""
+}
+
+// SealTxAdmission is the archive activation's check-and-set on TX admission
+// (ADR 0071, W-0021): under the established order seqGate → txMu — the same
+// acquisition ClaimProfile makes — an active session (ErrQsoInProgress), a
+// transmission in flight (ErrTxInFlight; a manual send waiting for its slot is
+// in flight) or an armed TX (ErrTxArmed; armed-but-idle is busy, operator
+// ruling 2026-09-22) refuses, in that precedence, and nothing changes.
+// Otherwise the seal is set and every admission path that holds those locks —
+// session starts (sessionTxGate), TransmitNext, ArmTx, ClaimProfile — refuses
+// with ErrArchiveSwitchPending until ReleaseTxAdmissionSeal or the restart.
+// Idempotent while sealed. Nothing is checked outside the lock that guards it.
+func (s *Service) SealTxAdmission() error {
+	const op errors.Op = "ft8.Service.SealTxAdmission"
+	s.seqGate.Lock()
+	defer s.seqGate.Unlock()
+	s.txMu.Lock()
+	defer s.txMu.Unlock()
+	if s.switchSealed {
+		return nil
+	}
+	switch {
+	case s.seq != nil && s.seq.Active(): // txMu → seq.mu is the established order
+		return errors.New(op).WithErr(ErrQsoInProgress)
+	case s.txInFlight:
+		return errors.New(op).WithErr(ErrTxInFlight)
+	case s.txArmed:
+		return errors.New(op).WithErr(ErrTxArmed)
+	}
+	s.switchSealed = true
+	return nil
+}
+
+// ReleaseTxAdmissionSeal reopens admission — the activation's abort path
+// (a persist or restart-request failure). A no-op when not sealed.
+func (s *Service) ReleaseTxAdmissionSeal() {
+	s.txMu.Lock()
+	s.switchSealed = false
+	s.txMu.Unlock()
+}
+
+// admissionSealed reads the seal under txMu for a caller that holds seqGate
+// but not txMu.
+func (s *Service) admissionSealed() bool {
+	s.txMu.Lock()
+	defer s.txMu.Unlock()
+	return s.switchSealed
 }

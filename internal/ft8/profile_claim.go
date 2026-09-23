@@ -131,7 +131,7 @@ func (s *Service) ClaimProfile(name string) (Profile, error) {
 	defer s.seqGate.Unlock()
 	s.txMu.Lock()
 	defer s.txMu.Unlock()
-	armed, inFlight := s.txArmed, s.txInFlight
+	armed, inFlight, sealed := s.txArmed, s.txInFlight, s.switchSealed
 	sessionActive := s.seq.Active() // txMu → seq.mu is the established order
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -143,6 +143,8 @@ func (s *Service) ClaimProfile(name string) (Profile, error) {
 		return s.profile, errors.New(op).WithErr(&ProfileRefusal{Err: sentinel, RetryAfter: s.lingerRemainingLocked()})
 	}
 	switch {
+	case sealed:
+		return refuse(ErrArchiveSwitchPending) // an archive activation holds admission (ADR 0071)
 	case s.subCount > 0:
 		return refuse(ErrProfileBusy)
 	case inFlight:

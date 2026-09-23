@@ -87,6 +87,10 @@ func (s *Service) KeyFt8Tx(ctx context.Context, mode string) error {
 		// conflict rather than see a generic transmit failure (review L1).
 		return errors.New(errOp).WithErr(ErrTxActive).WithMsg("tune carrier active; refusing concurrent FT8 TX")
 	}
+	if s.txSealed {
+		s.mu.Unlock()
+		return errors.New(errOp).WithErr(ErrTxSealed)
+	}
 	cl := s.activeClient
 	if cl == nil {
 		s.mu.Unlock()

@@ -1215,3 +1215,10 @@ func TestStartTransmission_DialRefusalRetiresTheSession(t *testing.T) {
 		s.AbandonQso()
 	})
 }
+
+// sealedNow reads the archive-switch seal under txMu (assertions only).
+func (s *Service) sealedNow() bool {
+	s.txMu.Lock()
+	defer s.txMu.Unlock()
+	return s.switchSealed
+}

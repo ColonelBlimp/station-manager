@@ -69,6 +69,11 @@ func (s *Server) handleFt8TxSend(w http.ResponseWriter, r *http.Request) {
 // is an internal failure.
 func (s *Server) writeFt8TxError(w http.ResponseWriter, op errors.Op, err error) {
 	switch {
+	case stderr.Is(err, ft8.ErrArchiveSwitchPending):
+		// ADR 0071: an archive activation holds TX admission sealed until the
+		// daemon restarts; nothing transmits or arms in this process again.
+		s.writeError(w, http.StatusConflict, "archive_switch_pending",
+			"an archive switch is pending; the daemon restarts shortly and transmit admission is sealed until then", op)
 	case stderr.Is(err, ft8.ErrTxUnavailable):
 		s.writeError(w, http.StatusServiceUnavailable, "ft8_tx_unavailable",
 			"FT8 transmit is unavailable (no rig keyer wired, or this build has no audio output)", op)

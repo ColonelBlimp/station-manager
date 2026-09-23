@@ -31,15 +31,14 @@ type RequestError struct {
 
 func (e *RequestError) Error() string { return e.Code + ": " + e.Message }
 
-// CreateRequest names a new managed archive by its semantics only — never a
-// path (ADR 0071 path confinement). RequestKey makes creation idempotent: a
-// retried request with the same key returns the archive the first one made.
-type CreateRequest struct {
-	RequestKey      string
-	Label           string
-	LogbookName     string
-	LogbookCallsign string
-}
+// RequestCode lets a caller across a package port (internal/api) classify the
+// refusal by code without naming this type.
+func (e *RequestError) RequestCode() string { return e.Code }
+
+// CreateRequest is the wire shape (types.QsoArchiveCreateRequest): a new
+// managed archive named by its semantics only — never a path (ADR 0071 path
+// confinement); RequestKey makes creation idempotent.
+type CreateRequest = types.QsoArchiveCreateRequest
 
 // CreateResult is the provisioned archive: its catalogue entry (inactive) and
 // its file. The initial logbook is read from the file like any other (its id
@@ -56,6 +55,12 @@ type Manager struct {
 	cfg           *config.Service
 	logger        *logging.Service
 	validCallsign func(string) bool
+
+	// Activation ports (SetActivation) and the per-process single flight: one
+	// activation is requested per process, since the restart is the switch.
+	txSeal, rigSeal Seal
+	restart         func() error
+	activated       bool
 
 	mu sync.Mutex
 }
