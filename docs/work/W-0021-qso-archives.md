@@ -294,6 +294,15 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      finds `qso-archives` created outside); (ii) P2 the close-branch fix had no valid proof — the
      pre-create is its own helper with an injectable close, and reverting the branch to a bare
      removal drops the removal failure from the error, which the test now catches.
+     Committed by me as `8c8af208` (operator: "Commit, no tagline"). Its Codex review found two
+     valid P2s, fixed as a follow-up: (i) the managed directory was not synced between the
+     rename and the catalogue commit — `syncDir` (a seam) now fsyncs the managed directory and
+     its parent before the entry is written, proven by a hook that records the syncs while the
+     catalogue is still empty; a durable retry whose file is gone is an error naming the file,
+     never a "reused" success; (ii) the start-time diagnosis excluded only MANAGED entries, so a
+     legacy or external file inside the managed directory would have been called removable —
+     every catalogued file is excluded after symlink resolution, proven with a legacy entry
+     pointing into the managed directory.
    - **Interim archive forwarding gate** (review finding 1; lands here, before activation exists):
      until the ADR 0056 per-logbook bindings ship, forwarding is admitted only in the adopted
      archive. In any other archive `shouldEnqueue` yields no rows for any destination, the boot

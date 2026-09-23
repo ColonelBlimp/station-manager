@@ -415,3 +415,67 @@ func TestPrecreateArchiveFile_CloseFailureFoldsCleanup(t *testing.T) {
 		t.Fatal("the removal failure was not logged")
 	}
 }
+
+// Review 8c8af208: the managed directory is synced after placement and BEFORE
+// the catalogue names the archive, so a power failure cannot keep the entry and
+// lose the file; and a durable retry whose file is gone is an error, never a
+// "reused" success.
+func TestCreate_SyncsTheDirectoryBeforeTheCatalogueAndChecksTheFileOnRetry(t *testing.T) {
+	m, cfgSvc, _ := testManager(t)
+	orig := syncDir
+	t.Cleanup(func() { syncDir = orig })
+	var syncedWhileUnlisted []string
+	syncDir = func(p string) error {
+		if err := orig(p); err != nil {
+			return err
+		}
+		if len(cfgSvc.Snapshot().QsoArchives) == 0 { // not yet in the catalogue
+			syncedWhileUnlisted = append(syncedWhileUnlisted, p)
+		}
+		return nil
+	}
+	res, err := m.Create(context.Background(), CreateRequest{RequestKey: "k", Label: "L", LogbookName: "L", LogbookCallsign: "G4ABC"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := ManagedDir(cfgSvc.Snapshot())
+	if len(syncedWhileUnlisted) < 2 || syncedWhileUnlisted[0] != dir || syncedWhileUnlisted[1] != filepath.Dir(dir) {
+		t.Fatalf("directories synced before the catalogue write = %v; want [%s %s]", syncedWhileUnlisted, dir, filepath.Dir(dir))
+	}
+	// The file vanishes (the crash the barrier guards against, or an operator
+	// deletion): a retry with the same key must not claim success.
+	if err := os.Remove(res.Path); err != nil {
+		t.Fatal(err)
+	}
+	_, err = m.Create(context.Background(), CreateRequest{RequestKey: "k", Label: "L", LogbookName: "L", LogbookCallsign: "G4ABC"})
+	if err == nil || !strings.Contains(err.Error(), "missing") {
+		t.Fatalf("retry with the file gone = %v; want an error naming the missing file", err)
+	}
+}
+
+// Review 8c8af208: a legacy (or external) entry may point INTO the managed
+// directory; the diagnosis must never call a catalogued file removable.
+func TestDiagnoseCreatingArtefacts_NeverReportsACataloguedLegacyFile(t *testing.T) {
+	m, cfgSvc, buf := testManager(t)
+	dir := ManagedDir(cfgSvc.Snapshot())
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Join(dir, "home.db")
+	if err := os.WriteFile(home, []byte("live"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cfgSvc.Update(func(c *config.Config) error {
+		c.QsoArchives = append(c.QsoArchives, types.QsoArchiveConfig{ID: idA, Label: "Home", Ownership: types.QsoArchiveOwnershipLegacy, Path: home})
+		c.ActiveQsoArchiveID = idA
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if found := DiagnoseCreatingArtefacts(cfgSvc.Snapshot(), m.logger); len(found) != 0 {
+		t.Fatalf("the catalogued legacy archive was reported as an artefact: %v", found)
+	}
+	if strings.Contains(buf.String(), "not in the catalogue") {
+		t.Fatal("the live archive was logged as removable")
+	}
+}

@@ -89,7 +89,14 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (CreateResult, 
 		snap := m.cfg.Snapshot()
 		for i := range snap.QsoArchives {
 			if e := snap.QsoArchives[i]; e.RequestKey == req.RequestKey {
-				return CreateResult{Entry: e, Path: PathFor(snap, e), Reused: true}, nil
+				path := PathFor(snap, e)
+				// A catalogued archive whose file is gone is never "reused":
+				// the entry is a claim, the file is the archive.
+				if _, err := os.Stat(path); err != nil {
+					return CreateResult{}, fmt.Errorf("archive %s (%s) for request %s is in the catalogue but its file %s is missing: %w",
+						e.ID, e.Label, req.RequestKey, path, err)
+				}
+				return CreateResult{Entry: e, Path: path, Reused: true}, nil
 			}
 		}
 	}
@@ -127,6 +134,15 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (CreateResult, 
 	}
 	if err := os.Rename(tmp, final); err != nil {
 		return CreateResult{}, m.withCleanup(fmt.Errorf("place archive file: %w", err), tmp)
+	}
+	// Durability barrier (review 8c8af208): the rename and any directory entries
+	// this creation made must be on disk BEFORE the catalogue names the archive —
+	// config.json's own directory sync says nothing about this directory. Without
+	// it a power failure could keep the entry and lose the file.
+	for _, d := range []string{dir, filepath.Dir(dir)} {
+		if err := syncDir(d); err != nil {
+			return CreateResult{}, m.withCleanup(fmt.Errorf("sync %s: %w", d, err), final)
+		}
 	}
 
 	entry := types.QsoArchiveConfig{ID: id, Label: req.Label, Ownership: types.QsoArchiveOwnershipManaged, RequestKey: req.RequestKey}
@@ -169,7 +185,22 @@ func (m *Manager) validate(req CreateRequest) error {
 }
 
 // closeFile is the pre-create's close, a seam so a test can fail it.
-var closeFile = func(f *os.File) error { return f.Close() }
+var closeFile = closeOSFile
+
+func closeOSFile(f *os.File) error { return f.Close() }
+
+// syncDir fsyncs a directory so its entries (a rename, a new subdirectory)
+// survive a crash; a seam so a test can observe the order.
+var syncDir = syncDirectory
+
+func syncDirectory(path string) error {
+	d, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = d.Close() }()
+	return d.Sync()
+}
 
 // precreateArchiveFile creates the .creating file 0600 and empty, so SQLite
 // opens an owner-only file instead of creating one under the umask. A close
@@ -294,6 +325,15 @@ func (m *Manager) withCleanup(cause error, path string) error {
 	return cause
 }
 
+// canonical resolves symlinks for a path comparison; an unresolvable path
+// compares as itself.
+func canonical(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return p
+}
+
 func (m *Manager) removeWithSidecars(path string) error {
 	var first error
 	for _, p := range []string{path, path + "-wal", path + "-shm"} {
@@ -323,15 +363,17 @@ func DiagnoseCreatingArtefacts(cfg config.Config, logger *logging.Service) []str
 			Msg("archive: a .creating file was left by an interrupted archive creation; it is not an archive and can be removed")
 		found = append(found, p)
 	}
+	// EVERY catalogued file is excluded, whatever its ownership (review
+	// 8c8af208): a legacy or external entry may point into the managed directory,
+	// and calling the operator's live archive "removable" would be the worst
+	// diagnostic this daemon could print. Paths compare after resolving symlinks.
 	listed := make(map[string]struct{}, len(cfg.QsoArchives))
 	for _, e := range cfg.QsoArchives {
-		if e.Ownership == types.QsoArchiveOwnershipManaged {
-			listed[PathFor(cfg, e)] = struct{}{}
-		}
+		listed[canonical(PathFor(cfg, e))] = struct{}{}
 	}
 	dbs, _ := filepath.Glob(filepath.Join(dir, "*.db"))
 	for _, p := range dbs {
-		if _, ok := listed[p]; ok {
+		if _, ok := listed[canonical(p)]; ok {
 			continue
 		}
 		logger.WarnWith().Str("path", p).
