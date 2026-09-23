@@ -462,6 +462,28 @@ func TestCreate_SyncsTheDirectoryBeforeTheCatalogueAndChecksTheFileOnRetry(t *te
 	}
 }
 
+// The sync chain is bounded by the working directory however it was spelled
+// (review 83ffc913): a configured trailing slash must not push the walk past
+// data_dir to /, and a directory outside the root syncs only itself.
+func TestDirsUpTo_BoundedByACleanedRoot(t *testing.T) {
+	got := dirsUpTo("/srv/private/station/db/qso-archives", "/srv/private/station/")
+	want := []string{"/srv/private/station/db/qso-archives", "/srv/private/station/db", "/srv/private/station"}
+	if len(got) != len(want) {
+		t.Fatalf("dirsUpTo = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("dirsUpTo = %v, want %v", got, want)
+		}
+	}
+	if got := dirsUpTo("/elsewhere/x", "/srv/private/station"); len(got) != 1 || got[0] != "/elsewhere/x" {
+		t.Fatalf("dirsUpTo outside the root = %v, want just the directory", got)
+	}
+	if got := dirsUpTo("/srv/private/station", "/srv/private/station/"); len(got) != 1 {
+		t.Fatalf("dirsUpTo at the root = %v, want just the root", got)
+	}
+}
+
 // A durable retry proves the FILE, not the path (review 16611884): a directory,
 // arbitrary bytes, or another archive copied over the path is never "reused".
 func TestCreate_RetryRequiresTheFilesIdentityToMatch(t *testing.T) {

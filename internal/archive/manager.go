@@ -194,9 +194,19 @@ func (m *Manager) validate(req CreateRequest) error {
 
 // dirsUpTo lists dir and each of its parents up to and including root (the
 // working directory), innermost first — the chain a durability barrier must
-// sync. A dir outside root yields just dir.
+// sync. Both paths are cleaned first (a configured trailing slash must not
+// defeat the boundary, review 83ffc913), and a dir that is not under root
+// yields just dir: the walk can never climb past the working directory.
 func dirsUpTo(dir, root string) []string {
+	dir, root = filepath.Clean(dir), filepath.Clean(root)
 	out := []string{dir}
+	if dir == root {
+		return out
+	}
+	rel, err := filepath.Rel(root, dir)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return out
+	}
 	for p := dir; p != root; {
 		parent := filepath.Dir(p)
 		if parent == p {

@@ -310,6 +310,11 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      existence only — it now reads the file's embedded identity (`sqlite.PeekArchiveIdentity`)
      and requires a match with the catalogue id; a missing file, arbitrary bytes, or another
      archive's file copied over the path is refused naming both ids.
+     Committed as `83ffc913`; its review's one P2 fixed: `dirsUpTo` compared parents against an
+     uncleaned `data_dir`, so a configured trailing slash would have walked the sync past the
+     working directory to `/` (and a non-readable ancestor would then fail creation) — both
+     paths are cleaned and the walk is bounded (a directory not under the root syncs only
+     itself); unit-proven with a trailing-slash root, an outside directory and the root itself.
    - **Interim archive forwarding gate** (review finding 1; lands here, before activation exists):
      until the ADR 0056 per-logbook bindings ship, forwarding is admitted only in the adopted
      archive. In any other archive `shouldEnqueue` yields no rows for any destination, the boot
