@@ -276,6 +276,15 @@ export function setSubmit(fn: SubmitFn): void {
     submit = fn;
 }
 
+// The archive-switch gate (ADR 0071): while a switch is in flight or unresolved
+// the default-logbook binding may belong to the OLD archive, so a submit is
+// refused before it reaches the seam. Injected (ADR 0045: no lib/api or config
+// import here); null when no gate is wired.
+let submitGate: (() => string | null) | null = null;
+export function setSubmitGate(fn: (() => string | null) | null): void {
+    submitGate = fn;
+}
+
 // Submit progress + the ONE outcome that stays card-local: the duplicate
 // refusal (its "Log anyway" action belongs next to the Log button). All
 // other outcomes — success, non-duplicate refusals — go through toasts so
@@ -298,6 +307,12 @@ export async function logDraft(force = false): Promise<boolean> {
     // button-level-only guard grew a bypass once already (the duplicate
     // "Log anyway" path, 2026-07-08 review finding).
     if (!canLog() || !rigReady() || submitState.busy) return false;
+    const blocked = submitGate?.() ?? null;
+    if (blocked !== null) {
+        submitState.error = blocked;
+        toasts.error(blocked);
+        return false;
+    }
     stampOff(); // QSO end = now, unless the operator entered one
     const call = draft.callsign.trim().toUpperCase();
     // Snapshot the comment alongside the submitted {...draft}: the draft stays

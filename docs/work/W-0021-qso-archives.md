@@ -446,6 +446,95 @@ the compatibility promise that a daemon at any slice boundary starts the existin
 4. **SPA**: the archive selector above the logbook selector in the shell header, the Archives view
    (label, state, ownership, size, last open; create form; Activate with the restart confirmation),
    and the end-to-end fault/restore drills (AC 1 on the station, with a real second archive).
+   - **4 design (2026-09-23):** the listing gains `size_bytes` and `modified_at` (the file's
+     stat; "last open" is not tracked — the file's last write is the honest proxy and is labelled
+     so). SPA: `lib/api/qso-archives.ts` (list / create / activate outcomes, `refused` carries the
+     daemon's code + message), `lib/config/archives.svelte.ts` (the shared store: `list`,
+     `active`, `pending`, `load()`, `create()`, `activate(id)` — confirm, capture the daemon
+     instance, POST activate, on 202 the same `waitForDaemonBack` reconciliation the Settings
+     restart uses, then reload; a refusal is a toast with the daemon's message; a timed-out POST is
+     the ambiguous write per ADR 0078, never "failed"), `lib/config/ArchivesSection.svelte` (a
+     Settings tab "Archives": table label / state badge / ownership / size / last written / last
+     activation error; create form with a client-minted `request_key` kept for the retry; an
+     Activate button per non-active archive, disabled while an activation is pending or a request
+     is in flight), and the header: an "Archive" line ABOVE the Logbook line showing the active
+     archive as a `<select>` of the catalogue whose change runs the same `activate` (reset to the
+     active on refusal or cancel) — one flow, two entry points. Honest state (AC 4): the header
+     and the list show the daemon's `state`; nothing is called active on a 202. `main.ts` loads
+     the catalogue at boot beside the station context and after the daemon is back. The FT8
+     claim banner and the tune toast already show the daemon's `archive_switch_pending` message.
+     Manual: a "QSO Archives" chapter (weight 45). The station drills (AC 1) are operator-run
+     after deploy.
+   - **4 built (2026-09-23), uncommitted:** as designed. Go: `QsoArchiveView.SizeBytes` /
+     `ModifiedAt` from the file's stat (test + proof). SPA: `lib/api/qso-archives.ts` (+7 tests),
+     `lib/config/archives.svelte.ts` (`loadArchives`, `createArchive`, `activateArchive(id,
+     confirm)` with the ADR 0078 reconciliation, `mintRequestKey`; 12 tests: declined confirm,
+     active never re-activated, accepted → new instance → reload, accepted-not-back = unknown,
+     refused shows the reason and reloads, timed-out reconciles, single flight, create
+     created/refused/timed-out), `lib/config/ArchivesSection.svelte` (Settings tab "Archives"
+     after Station; 6 rendered tests: states + error + Activate only off the active archive,
+     pending disables every Activate, declined/confirmed Activate, create form with one request
+     key kept on a refusal, cleared on success), the header `<select aria-label="Active archive">`
+     above the Logbook line (3 tests), `main.ts` `loadArchives()` at boot beside the build
+     identity (baseline rekeyed `line@500 → line@504` in the same change). Manual chapter
+     `manual/content/chapters/qso-archives.md`. Gates: lint / format / svelte-check / vitest
+     (1785) / go / observatory green. Left for the operator: deploy, then the AC 1 station drills
+     with a real second archive.
+     Review (2026-09-23), two P1s fixed: (1) after A → B every archive-scoped store — station
+     context (default logbook id / name / count), the Phone/CW submission target, dupe checks, a
+     mounted Logbook view, FT8 state — was still bound to A; the switch now ends in a GUARDED page
+     reload (only once a DIFFERENT instance answered AND the fresh catalogue read succeeded; never
+     on an unknown outcome), so everything rebinds through the boot path; the confirmation says the
+     page reloads. (2) a failed catalogue re-read retained the old list as if current and
+     `settleRestart` named its active entry; `loadArchives` now returns the read's success and
+     marks a retained list `stale` (error + Retry shown in the tab, Activate and the header
+     selector disabled), and nothing names an active archive from it. Three reversion proofs.
+     Second review, one P1 (fixed): the branches that could not prove the new generation (no
+     baseline instance, the wait expired, or a new daemon whose catalogue read failed) cleared
+     `activating` and only warned, leaving Phone/CW submit, FT8 and the Logbook usable on A's
+     bindings against B. Now: a DIFFERENT instance answering reloads at once, whatever the
+     catalogue read says; otherwise `archivesState.switchUnresolved` gates the app — a shell-level
+     `ArchiveSwitchGate` overlay (`role="alertdialog"`, one control: Reload now) plus injected
+     seams `setSubmitGate` (qso.svelte.ts, refuses before the submit seam) and
+     `setFt8AdmissionGate` (ft8.svelte.ts `txStartRefusal`: arm and every session start refuse;
+     disarm passes), both wired to `archiveSwitchGate()` in main.ts, which also names an in-flight
+     activation; another activation is refused while gated; with a baseline the store keeps
+     watching (`keepWatching`, 10 × 30 s) and reloads on sight. Tests: no-baseline gate, wait
+     expired → gate + watch → reload on sight, watch gives up, new instance + failed read →
+     reload, timed-out request + new instance → reload, submit gate, FT8 gate, overlay. Four
+     reversion proofs (unique anchors, asserted on patch and restore).
+     Third review, two P1s (fixed): (1) other open tabs never rebound — only the requesting tab
+     reloaded; every tab now records the daemon's identity at boot (`recordBootIdentity`,
+     `/v1/version` `instance` + `archive.id`) and on every reconnect of the always-on stream
+     (`onReconnect` in main.ts) runs `verifyArchiveGeneration`: the same archive → nothing, another
+     archive → reload, an identity unreadable after 3 tries → the gate (fail closed); a tab whose
+     boot read failed adopts the first identity it can read. (2) a non-timeout transport failure
+     on the activation POST was shown as a definite error and left the app open; the client now
+     keeps the classification (`network` = unconfirmed, timed out or not; `error` = the daemon
+     answered without a code) and the store reconciles EVERY `network` outcome through the same
+     new-instance wait and gate, leaving only an explicit daemon answer ungated (create: a
+     `network` outcome refreshes the list and keeps the request key for the reuse). Tests: client
+     classification + `fetchDaemonIdentity`; store: non-timeout network → reconcile + gate, uncoded
+     answer → error only, reconnect same / changed / unreadable / transient / no-boot-identity.
+     Three reversion proofs (restore only after an applied patch).
+     Fourth review, P1 + P2 (fixed): (1) the boot identity was read independently of the
+     archive-scoped reads, so a boot straddling a switch could record B while the stores held A,
+     and a missing baseline adopted the first identity it saw; now `bootArchiveScoped(reads)`
+     brackets the station context + catalogue reads with two identity reads — agreeing reads are
+     recorded, differing ones (a restart or switch mid-boot) reload at once, an unreadable side
+     leaves the baseline unknown, and a missing baseline REBINDS (reloads) on the first readable
+     reconnect, never adopts. (2) the gate overlay was mounted inside the shell branch only, so a
+     full-window Map tab with an unreadable identity kept its map; `ArchiveSwitchGate` now sits
+     outside the route conditional (App test renders it over the map route). Three reversion
+     proofs.
+     Fifth review, P1 (fixed): an incomplete boot bracket only cleared the baseline and waited
+     for a reconnect that a first-time stream connection never delivers — fail-open. Now either
+     identity read failing (after 3 tries each) LATCHES the gate at once and starts
+     `watchForDaemon` (`waitForDaemonBack('')`, 10 rounds) which reloads as soon as any daemon
+     answers, so an outage at boot heals itself and a flaky identity endpoint cannot storm
+     reloads. The overlay title is now "Archive binding unproven" (it covers boot, reconnect and
+     activation). RED test: the latch is asserted right after `bootArchiveScoped`, without
+     calling `verifyArchiveGeneration`. Two reversion proofs.
 5. **SM Cloud identity** (AC 6): `archives` entity, `logbook_uuid`, archive/logbook UUIDs on push,
    manifest, reconcile and export/restore, per-tenant legacy-archive adoption, and the reconciler per
    logical logbook (ADR 0056 archive-aware). **It also lays the first ADR 0056 binding** (review

@@ -73,6 +73,11 @@ type QsoArchiveView struct {
 	Ownership           QsoArchiveOwnership `json:"ownership"`
 	State               QsoArchiveState     `json:"state"`
 	LastActivationError string              `json:"last_activation_error,omitempty"`
+	// SizeBytes and ModifiedAt (RFC 3339, UTC) are the file's stat at listing
+	// time; absent when the file cannot be stat'ed. ModifiedAt is the last
+	// write, not a "last opened" — nothing tracks that.
+	SizeBytes  int64  `json:"size_bytes,omitempty"`
+	ModifiedAt string `json:"modified_at,omitempty"`
 }
 
 // QsoArchiveCreated is the POST /v1/qso-archives response: the archive, and

@@ -197,7 +197,7 @@ The station-global archive catalogue (`config.md` §3): the archive the daemon s
 
 ### `GET /v1/qso-archives`
 - **Purpose:** The catalogue with each archive's state.
-- **Response:** **200** `{archives: [{id, label, ownership: "managed"|"legacy"|"external", state: "active"|"pending"|"inactive", last_activation_error?}]}` in catalogue order. A failed candidate is `inactive` with `last_activation_error`; a candidate whose restart could not be requested and whose selector could not be cleared lists as `pending` with the diagnostic — the next restart activates it.
+- **Response:** **200** `{archives: [{id, label, ownership: "managed"|"legacy"|"external", state: "active"|"pending"|"inactive", last_activation_error?, size_bytes?, modified_at?}]}` in catalogue order. `size_bytes` / `modified_at` (RFC 3339 UTC) are the file's stat at listing time — the last write, not a "last opened" — and are absent when the file cannot be stat'ed. A failed candidate is `inactive` with `last_activation_error`; a candidate whose restart could not be requested and whose selector could not be cleared lists as `pending` with the diagnostic — the next restart activates it.
 - **Errors:** **503** `archives_unavailable` (no archive manager wired).
 
 ### `POST /v1/qso-archives`

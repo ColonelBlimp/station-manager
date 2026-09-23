@@ -830,6 +830,15 @@ export function setFt8SessionDefaults(answerMode: string): void {
 
 const txUnavailable: Ft8TxResult = { ok: false, message: 'FT transmit is unavailable.' };
 
+// The archive-switch gate (ADR 0071): every TX-starting intent — arm, Call CQ,
+// answer, work a caller — is refused while an archive switch is in flight or
+// unresolved, because the session's logbook binding may belong to the OLD
+// archive. Injected by main.ts; null when no gate is wired.
+let admissionGate: (() => string | null) | null = null;
+export function setFt8AdmissionGate(fn: (() => string | null) | null): void {
+    admissionGate = fn;
+}
+
 /** The refusal a TX-starting intent gets until the claimed profile's stream is
  *  OPEN, or null when it may proceed: before the claim, and again while the
  *  stream is down. The daemon knows one profile and arms whichever it is on;
@@ -837,6 +846,8 @@ const txUnavailable: Ft8TxResult = { ok: false, message: 'FT transmit is unavail
  *  `?mode=` proves it has not moved (a claim is refused busy while that
  *  stream is subscribed). Disarm and abandon never wait (codex 67cc1b96 P1). */
 function txStartRefusal(): Ft8TxResult | null {
+    const gated = admissionGate?.() ?? null;
+    if (gated !== null) return { ok: false, message: gated };
     if (!ft8State.claimed) {
         return {
             ok: false,
@@ -1502,6 +1513,7 @@ export function stopFt8(): void {
 
 /** Test seam — restore module singletons between cases. */
 export function resetFt8ForTests(): void {
+    admissionGate = null;
     // A fresh tab starts with no engaged stations; clearing here (rather than only
     // via the dedicated reset) keeps the set from leaking across tests.
     resetFt8EngagedThisSession();

@@ -2,7 +2,7 @@
 // logs to. Guards the config → setStationInfo → header render wiring (the gap the
 // operator hit dogfooding — no way to see the active logbook/rig from the FT8 view).
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/svelte';
 import { flushSync } from 'svelte';
 import Header from './Header.svelte';
@@ -10,9 +10,24 @@ import { setStationInfo, setLogbookCount, _resetStationForTests } from '../opera
 import { rig } from '../operate/rig.svelte';
 import { router } from '../router.svelte';
 import { isVisible, toggleTile } from '../operate/layout.svelte';
+import { archivesState, _resetArchivesForTests } from '../config/archives.svelte';
+
+vi.mock('../api/qso-archives', () => ({
+    fetchQsoArchives: vi.fn(),
+    createQsoArchive: vi.fn(),
+    activateQsoArchive: vi.fn(),
+    fetchDaemonIdentity: vi.fn(),
+}));
+vi.mock('../api/restart', () => ({
+    fetchDaemonInstance: vi.fn(),
+    waitForDaemonBack: vi.fn(),
+}));
+import { activateQsoArchive } from '../api/qso-archives';
 
 beforeEach(() => {
     _resetStationForTests();
+    _resetArchivesForTests();
+    vi.mocked(activateQsoArchive).mockReset();
     router.mode = 'phone';
     rig.cat = 'off';
 });
@@ -183,5 +198,78 @@ describe('Header CAT chip → Rig Control panel', () => {
         router.view = 'operate';
         render(Header);
         expect(screen.getByTitle('Waiting for confirmation').tagName).toBe('BUTTON');
+    });
+});
+
+// The archive selector (ADR 0071): above the logbook, showing the DAEMON's active
+// archive; a pick runs the shared activate flow, a declined confirmation leaves
+// the selector on the active archive and sends nothing.
+describe('Header archive selector', () => {
+    const HOME = {
+        id: 'a',
+        label: 'Home',
+        ownership: 'legacy',
+        state: 'active',
+        lastActivationError: '',
+        sizeBytes: null,
+        modifiedAt: null,
+    } as const;
+    const CONTEST = {
+        id: 'b',
+        label: 'Contest',
+        ownership: 'managed',
+        state: 'inactive',
+        lastActivationError: '',
+        sizeBytes: null,
+        modifiedAt: null,
+    } as const;
+
+    it('is absent until the catalogue is known, then names the active archive', () => {
+        render(Header);
+        expect(screen.queryByLabelText('Active archive')).toBeNull();
+        archivesState.list = [HOME, CONTEST];
+        flushSync();
+        const sel: HTMLSelectElement = screen.getByLabelText('Active archive');
+        expect(sel.value).toBe('a');
+        expect(sel.options).toHaveLength(2);
+    });
+
+    it('is disabled while the list is stale (nothing is acted on from a retained list)', () => {
+        archivesState.list = [HOME, CONTEST];
+        archivesState.loaded = true;
+        archivesState.stale = true;
+        render(Header);
+        expect(screen.getByLabelText('Active archive')).toBeDisabled();
+    });
+
+    it('a declined pick sends nothing and stays on the active archive', async () => {
+        archivesState.list = [HOME, CONTEST];
+        render(Header);
+        vi.spyOn(window, 'confirm').mockReturnValue(false);
+        const sel: HTMLSelectElement = screen.getByLabelText('Active archive');
+        await fireEvent.change(sel, { target: { value: 'b' } });
+        await new Promise((r) => setTimeout(r, 0));
+        expect(activateQsoArchive).not.toHaveBeenCalled();
+        expect(sel.value).toBe('a');
+    });
+
+    it('a confirmed pick requests the activation', async () => {
+        archivesState.list = [HOME, CONTEST];
+        render(Header);
+        vi.spyOn(window, 'confirm').mockReturnValue(true);
+        vi.mocked(activateQsoArchive).mockResolvedValue({
+            kind: 'refused',
+            code: 'tx_busy',
+            message: 'busy',
+        });
+        vi.mocked(await import('../api/qso-archives')).fetchQsoArchives.mockResolvedValue({
+            kind: 'ok',
+            archives: [HOME, CONTEST],
+        });
+        vi.mocked(await import('../api/restart')).fetchDaemonInstance.mockResolvedValue('i1');
+        const sel: HTMLSelectElement = screen.getByLabelText('Active archive');
+        await fireEvent.change(sel, { target: { value: 'b' } });
+        await new Promise((r) => setTimeout(r, 0));
+        expect(activateQsoArchive).toHaveBeenCalledWith('b');
     });
 });

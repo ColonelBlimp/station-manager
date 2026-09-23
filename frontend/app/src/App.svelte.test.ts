@@ -7,6 +7,9 @@ import { render } from '@testing-library/svelte';
 import { flushSync } from 'svelte';
 import App from './App.svelte';
 import { setup, _resetSetupForTests } from './lib/setup.svelte';
+import { navigate } from './lib/router.svelte';
+import { archivesState, _resetArchivesForTests } from './lib/config/archives.svelte';
+import { screen } from '@testing-library/svelte';
 
 describe('App tab title on the first-run surface', () => {
     beforeEach(() => {
@@ -27,5 +30,27 @@ describe('App tab title on the first-run surface', () => {
         render(App);
         flushSync();
         expect(document.title).toBe('Welcome · Station Manager');
+    });
+});
+
+// The unresolved-switch gate (ADR 0071) must cover EVERY route branch — the
+// full-window Map tab has no shell, and a Map tab whose reconnect identity is
+// unreadable is exactly a tab that must not keep operating silently.
+describe('ArchiveSwitchGate covers the Map branch', () => {
+    beforeEach(() => {
+        _resetSetupForTests();
+        _resetArchivesForTests();
+    });
+
+    it('renders the gate over the map route when a switch is unresolved', () => {
+        setup.status = 'complete';
+        navigate('map');
+        archivesState.switchUnresolved = true;
+        archivesState.switchDetail =
+            'The connection came back but the daemon’s identity could not be read.';
+        render(App);
+        flushSync();
+        expect(screen.getByRole('alertdialog')).toHaveTextContent('Archive binding unproven');
+        navigate('operate');
     });
 });

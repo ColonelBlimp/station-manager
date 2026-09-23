@@ -3,6 +3,7 @@
     import Header from './lib/ui/Header.svelte';
     import TxAlarmBanner from './lib/ui/TxAlarmBanner.svelte';
     import DriveAlarmBanner from './lib/ui/DriveAlarmBanner.svelte';
+    import ArchiveSwitchGate from './lib/ui/ArchiveSwitchGate.svelte';
     import DriveMonitorNotice from './lib/ui/DriveMonitorNotice.svelte';
     import Toasts from './lib/ui/Toasts.svelte';
     import SetupCard from './lib/ui/SetupCard.svelte';
@@ -90,6 +91,11 @@
      ms on localhost, and holding blank beats flashing the shell at a fresh
      install. A daemon outage resolves to 'complete' (fail-soft shell), never
      to a false first-run greeting. -->
+<!-- Fail-closed gate after an archive switch whose daemon generation could not
+     be proven (ADR 0071). OUTSIDE the route conditional so it covers every
+     branch — the full-window Map tab included, which has no shell chrome. -->
+<ArchiveSwitchGate />
+
 {#if setup.status === 'loading'}
     <Toasts />
 {:else if setupGateOpen()}

@@ -13,6 +13,7 @@ import {
     canLog,
     logDraft,
     setSubmit,
+    setSubmitGate,
     submitState,
     dismissDuplicate,
     rstDefaultFor,
@@ -148,6 +149,30 @@ describe('RST defaults follow the rig mode (default-fill effect)', () => {
         clearDraft();
         expect(draft.rstSent).toBe('599');
         expect(draft.rstRcvd).toBe('599');
+    });
+});
+
+describe('the archive-switch gate (ADR 0071, fail closed)', () => {
+    afterEach(() => setSubmitGate(null));
+    it("a gated submit is refused before the seam with the gate's message", async () => {
+        fillDraft();
+        const seam = vi.fn(() => Promise.resolve({ ok: true as const }));
+        setSubmit(seam);
+        setSubmitGate(
+            () =>
+                'An archive switch is unresolved — reload the page before logging or transmitting.'
+        );
+        expect(await logDraft()).toBe(false);
+        expect(seam).not.toHaveBeenCalled();
+        expect(draft.callsign).toBe('DL3YA'); // the draft is kept
+        expect(toastsState.items[0]).toMatchObject({ level: 'error' });
+        expect(toastsState.items[0].message).toContain('archive switch');
+    });
+    it('an open gate lets the submit through', async () => {
+        fillDraft();
+        setSubmit(() => Promise.resolve({ ok: true }));
+        setSubmitGate(() => null);
+        expect(await logDraft()).toBe(true);
     });
 });
 

@@ -15,6 +15,7 @@
     import { toggleTile } from '../operate/layout.svelte';
     import { router } from '../router.svelte';
     import SessionTimer from './SessionTimer.svelte';
+    import { archivesState, activeArchive, activateArchive } from '../config/archives.svelte';
 
     // Thousands-grouped QSO count (e.g. "1,234") beside the logbook name.
     const countFmt = new Intl.NumberFormat();
@@ -87,8 +88,41 @@
          Hidden on the narrowest widths to keep the chip + timer readable. -->
     <div
         class="ml-auto hidden flex-col items-end text-xs leading-tight sm:flex"
-        title="Logbook + rig this session logs to (from config)"
+        title="Archive + logbook + rig this session logs to (from config)"
     >
+        <!-- The archive selector (ADR 0071) sits above the logbook: picking another
+             archive runs the same confirm → activate → restart flow as Settings →
+             Archives. The value is the DAEMON's active archive, so a refused or
+             cancelled pick falls back to it on its own; a pending candidate is
+             named while the restart is awaited. -->
+        {#if archivesState.list.length > 0}
+            {@const active = activeArchive()}
+            <label class="flex items-center gap-1">
+                <span class="text-muted">Archive</span>
+                <select
+                    class="max-w-40 cursor-pointer rounded-sm bg-transparent font-medium text-ink"
+                    aria-label="Active archive"
+                    title={archivesState.stale
+                        ? 'The archive list could not be refreshed and may be out of date'
+                        : 'Active archive; pick another to switch (restarts the daemon)'}
+                    value={active?.id ?? ''}
+                    disabled={archivesState.activating ||
+                        archivesState.stale ||
+                        archivesState.switchUnresolved}
+                    onchange={(e) => {
+                        const id = e.currentTarget.value;
+                        e.currentTarget.value = active?.id ?? '';
+                        if (id !== '' && id !== active?.id) void activateArchive(id);
+                    }}
+                >
+                    {#each archivesState.list as a (a.id)}
+                        <option value={a.id}
+                            >{a.label}{a.state === 'pending' ? ' (pending restart)' : ''}</option
+                        >
+                    {/each}
+                </select>
+            </label>
+        {/if}
         <span>
             <span class="text-muted">Logbook</span>
             <span class="font-medium text-ink">{station.logbookName || '—'}</span>

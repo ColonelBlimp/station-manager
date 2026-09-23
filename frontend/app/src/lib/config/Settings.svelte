@@ -12,6 +12,7 @@
     import EmailSection from './EmailSection.svelte';
     import EnrichmentSection from './EnrichmentSection.svelte';
     import GeneralSection from './GeneralSection.svelte';
+    import ArchivesSection from './ArchivesSection.svelte';
     import { restartDaemon, waitForDaemonBack, fetchDaemonInstance } from '../api/restart';
     import { OUTCOME_UNKNOWN_LEAD } from '../api/_helpers';
     import { toasts } from '../ui/toasts.svelte';
@@ -20,9 +21,13 @@
     // ahead of the outside services it talks to (Forwarding, Email,
     // Enrichment). unsaved.ts walks the same order, so the leave prompt reads
     // as a walk across the tabs — keep the two in step.
-    type SectionId = 'station' | 'rigs' | 'ft8' | 'forwarding' | 'email' | 'enrichment' | 'general';
+    type SectionId =
+        'station' | 'archives' | 'rigs' | 'ft8' | 'forwarding' | 'email' | 'enrichment' | 'general';
     const sections: { id: SectionId; label: string }[] = [
         { id: 'station', label: 'Station' },
+        // Archives (ADR 0071): the station's QSO databases — station data, so it
+        // sits with Station, ahead of the radio and the outside services.
+        { id: 'archives', label: 'Archives' },
         { id: 'rigs', label: 'Rigs' },
         { id: 'ft8', label: 'FT8' },
         { id: 'forwarding', label: 'Forwarding' },
@@ -161,6 +166,9 @@
          Rigs #1 / #3). Each section still loads once, on first render. -->
     <div class:hidden={active !== 'station'}>
         <StationSection />
+    </div>
+    <div class:hidden={active !== 'archives'}>
+        <ArchivesSection />
     </div>
     <div class:hidden={active !== 'rigs'}>
         <RigsSection />

@@ -12,6 +12,7 @@ import {
     setFt8Claimer,
     reclaimFt8,
     setFt8TxActions,
+    setFt8AdmissionGate,
     armTx,
     callCq,
     answerCq,
@@ -1175,5 +1176,56 @@ describe('ft8-qso held (same-band/profile repeat hold)', () => {
 
         ft8Link.onQso({ active: false, auto_work_armed: true });
         expect(ft8State.qso.held).toBeNull();
+    });
+});
+
+// The archive-switch gate (ADR 0071, fail closed): every TX-starting intent is
+// refused with the gate's message before the seam is reached; disarm passes.
+describe('archive-switch admission gate', () => {
+    afterEach(() => setFt8AdmissionGate(null));
+    it('refuses arm and every session start while gated; disarm still reaches the seam', async () => {
+        const calls: string[] = [];
+        const ok = Promise.resolve({ ok: true, message: '' });
+        setFt8TxActions({
+            arm: (a) => (calls.push(`arm:${a}`), Promise.resolve({ kind: 'accepted' as const })),
+            callCq: () => (calls.push('cq'), ok),
+            answerCq: () => (calls.push('answer'), ok),
+            workCaller: () => (calls.push('work'), ok),
+            abandon: () => ok,
+            next: () => ok,
+            stopAutoWork: () => ok,
+            pickAnswerer: () => ok,
+            bagAnswerer: () => ok,
+            unbagAnswerer: () => ok,
+            resumeDrain: () => ok,
+            skip: () => ok,
+        });
+        ft8State.claimed = true;
+        ft8State.connected = true;
+        setFt8AdmissionGate(
+            () =>
+                'An archive switch is unresolved — reload the page before logging or transmitting.'
+        );
+        const arm = await armTx(true);
+        expect(arm.status).toBe('failed');
+        if (arm.status === 'failed') expect(arm.message).toContain('archive switch');
+        const cq = await callCq(1500, 14.074, 'odd');
+        expect(cq.ok).toBe(false);
+        expect(cq.message).toContain('archive switch');
+        const args = {
+            theirCall: 'W1ABC',
+            theirGrid: 'FN42',
+            slotUtc: 't',
+            offsetHz: 1500,
+            opFreqMHz: 14.074,
+            fd: false,
+            theirSnr: -12,
+        };
+        expect((await answerCq(args)).ok).toBe(false);
+        const { fd: _fd, ...work } = args;
+        expect((await workCaller(work)).ok).toBe(false);
+        expect(calls).toEqual([]);
+        await armTx(false);
+        expect(calls).toEqual(['arm:false']);
     });
 });

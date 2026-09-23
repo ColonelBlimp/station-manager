@@ -2,7 +2,7 @@ import { mount } from 'svelte';
 import App from './App.svelte';
 import { enrich, prefs, setEnricher, setMyGrid } from './lib/operate/enrich.svelte';
 import { setHistory } from './lib/operate/worked.svelte';
-import { setSubmit } from './lib/operate/qso.svelte';
+import { setSubmit, setSubmitGate } from './lib/operate/qso.svelte';
 import { addSessionQso, session, sessionModeLiteral } from './lib/operate/session.svelte';
 import { setMailer } from './lib/operate/mailer.svelte';
 import {
@@ -38,8 +38,15 @@ import {
     setFt8DisplayPrefs,
     type Ft8TxResult,
     setFt8Claimer,
+    setFt8AdmissionGate,
 } from './lib/operate/ft8.svelte';
 import { setStationInfo, setLogbookCount } from './lib/operate/station.svelte';
+import {
+    loadArchives,
+    archiveSwitchGate,
+    bootArchiveScoped,
+    verifyArchiveGeneration,
+} from './lib/config/archives.svelte';
 import { setFt8AudioWindow } from './lib/operate/audioLevel.svelte';
 import { setTxDriveConfig, onRigMeters } from './lib/operate/txDrive.svelte';
 import { setFt8Enricher, setFt8Dupe, ft8EnrichState } from './lib/operate/ft8Enrich.svelte';
@@ -445,8 +452,19 @@ setModeChangeHook((from, to) => void onOperatingModeChange(from, to));
 // once at boot independently of station context (W-0004 AC1). Fire-and-forget: an
 // outage settles to an honest unavailable state and never blocks the shell.
 void loadBuildIdentity();
+// Fail closed across an archive switch (ADR 0071): a QSO submit and every FT8
+// TX-starting intent are refused while a switch is in flight or unresolved.
+setSubmitGate(archiveSwitchGate);
+setFt8AdmissionGate(archiveSwitchGate);
 
-void fetchStationContext().then((c) => {
+// The archive-scoped boot reads — the station context (default logbook id, name,
+// count) and the archive catalogue for the header selector — run inside the
+// identity bracket (ADR 0071): the daemon's identity is read before and after,
+// so the archive this tab records is provably the one these stores were built
+// against; every reconnect of the always-on stream compares against it and
+// reloads (or gates) when the daemon serves another archive.
+void bootArchiveScoped(async () => {
+    const [c] = await Promise.all([fetchStationContext(), loadArchives()]);
     applyStationContext(c);
     // First-run gate: only a REACHED config saying setup_complete=false shows
     // setup — a daemon outage falls through to the fail-soft shell instead of
@@ -624,7 +642,10 @@ openLogEvents({
     onOpen: () => {},
     onTransportError: () => {},
     onQsoChanged: () => {},
-    onReconnect: refreshLogbookCount,
+    onReconnect: () => {
+        refreshLogbookCount();
+        void verifyArchiveGeneration();
+    },
 });
 
 const target = document.getElementById('app');

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -122,6 +123,17 @@ func TestActivate_SealsPersistsPendingAndRequestsTheRestart(t *testing.T) {
 	views := f.m.List()
 	if len(views) != 2 || views[0].State != types.QsoArchiveStateActive || views[1].State != types.QsoArchiveStatePending {
 		t.Fatalf("list = %+v, want Home active, Contest pending", views)
+	}
+	// The file's stat rides the listing (slice 4): Contest exists, Home's path
+	// (the fixture's datastore.path) was never created.
+	if views[1].SizeBytes <= 0 || views[1].ModifiedAt == "" {
+		t.Fatalf("Contest view carries no file stat: %+v", views[1])
+	}
+	if _, err := time.Parse(time.RFC3339, views[1].ModifiedAt); err != nil {
+		t.Fatalf("modified_at %q is not RFC 3339: %v", views[1].ModifiedAt, err)
+	}
+	if views[0].SizeBytes != 0 || views[0].ModifiedAt != "" {
+		t.Fatalf("a missing file must carry no stat: %+v", views[0])
 	}
 	// One activation per process: the restart is the switch.
 	if _, err := f.activate(t); codeOf(t, err) != "activation_in_progress" {

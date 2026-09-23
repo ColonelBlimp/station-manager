@@ -3,6 +3,8 @@ package archive
 import (
 	"context"
 	"fmt"
+	"os"
+	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
@@ -48,7 +50,12 @@ func viewOf(snap config.Config, e types.QsoArchiveConfig) types.QsoArchiveView {
 	case snap.PendingQsoArchiveID:
 		state = types.QsoArchiveStatePending
 	}
-	return types.QsoArchiveView{ID: e.ID, Label: e.Label, Ownership: e.Ownership, State: state, LastActivationError: e.LastActivationError}
+	v := types.QsoArchiveView{ID: e.ID, Label: e.Label, Ownership: e.Ownership, State: state, LastActivationError: e.LastActivationError}
+	if fi, err := os.Stat(PathFor(snap, e)); err == nil && fi.Mode().IsRegular() {
+		v.SizeBytes = fi.Size()
+		v.ModifiedAt = fi.ModTime().UTC().Format(time.RFC3339)
+	}
+	return v
 }
 
 // CreateArchive is Create on the wire: the new (or reused) archive as the API
