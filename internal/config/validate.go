@@ -790,8 +790,15 @@ func validateQsoArchives(cfg Config) []Finding {
 		out = append(out, Finding{Field: field, Code: "invalid_qso_archive", Message: msg})
 	}
 	seen := make(map[string]struct{}, len(cfg.QsoArchives))
+	keys := make(map[string]struct{}, len(cfg.QsoArchives))
 	for i, a := range cfg.QsoArchives {
 		field := fmt.Sprintf("qso_archives[%d]", i)
+		if a.RequestKey != "" {
+			if _, dup := keys[a.RequestKey]; dup {
+				bad(field, fmt.Sprintf("%s: duplicate request_key %q (one creation request cannot have made two archives)", field, a.RequestKey))
+			}
+			keys[a.RequestKey] = struct{}{}
+		}
 		if !utils.IsValidUUIDv7(a.ID) {
 			bad(field, fmt.Sprintf("%s: id %q is not a UUIDv7", field, a.ID))
 		} else if _, dup := seen[a.ID]; dup {

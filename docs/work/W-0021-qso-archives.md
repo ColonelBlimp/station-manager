@@ -250,6 +250,50 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      managed archive enqueues; daemon gate off → the boot re-arm runs; import not naming its target
      → `--forward` into B is accepted. Lesson: an import with no `--forward` never enqueues, gate or
      not — the first submit-path test was vacuous until it used the live `Submit`.
+   - **Built 2026-09-23, sub-commit 2C:** `internal/archive/manager.go`
+     (single-flight `Manager.Create`: mint ids → build `<managed>/<id>.db.creating` with the log
+     set → seed logbook + `WriteArchiveIdentity` → `CheckIntegrityWithContext` → close to a single
+     file, sidecars checked → chmod 0600 → rename → INACTIVE catalogue entry; failure at any step
+     removes the file; request-key idempotency; `RequestError` for 400s; `DiagnoseCreatingArtefacts`
+     logs and returns leftovers, never deletes) + `sqlite.Service.CheckIntegrityWithContext`; five
+     tests green (provision, idempotent key, validation, persist failure leaves nothing, artefacts).
+     The catalogue entry is written with `config.Service.Update` (file first; a failed write
+     leaves memory untouched — `UpdateInMemoryThenPersist` would have kept a half-built archive
+     selectable in memory, which the persist-failure test caught). The daemon runs
+     `DiagnoseCreatingArtefacts` in `startQso` after adoption and records the result
+     (`d.creatingArtefacts`) — lifecycle test: a stray `.creating` file is named, left in place
+     and never listed. Proofs: removal at step 5 skipped → the placed file survives a failed
+     catalogue write; identity not written → the provisioned file has none; request key not
+     remembered → a retry makes a second archive. Fixture lesson: the persist-failure test must
+     lock only the config directory — locking `data_dir` blocks the managed directory at step 2
+     and never reaches step 5. `config.md` §3 and the install guide's backup set updated.
+     Review of 2C (five findings, all fixed with RED tests): (i) P1 request-key idempotency was
+     process-local — the key now lives on the catalogue entry (`request_key`, config v5 with a
+     down step; duplicates refused by validation) and a NEW manager returns the same archive;
+     (ii) P1 the backup guidance ignored WAL — it now requires a stopped daemon or SQLite's online
+     backup, never a live copy; (iii) P2 an existing 0755 managed directory stayed 0755 and SQLite
+     created the file under the umask — the directory is chmod'd 0700 and the `.creating` file is
+     pre-created 0600 before SQLite opens it, proven on a pre-existing 0755 directory; (iv) P2
+     cleanup failures were discarded — a failed removal is logged, folded into the returned error,
+     and unlisted `.db` files are diagnosed at start beside `.creating` ones; (v) P2 the log-only
+     rule was unproven — the provisioning test asserts no reference tables and no reference
+     migration tracking in the new file.
+     Third review round (three findings, fixed with RED tests): (i) P1 the managed directory
+     could be a symlink to outside the working directory — `ensureContainedManagedDir` refuses a
+     symlinked directory and any path that resolves outside (`fsperm.Contained`), secures it with
+     `fsperm.SecureApplicationPath` (never through a symlink) and verifies 0700; proven with a
+     symlink to an external 0755 directory that stays 0755 and empty (with the two symlink checks
+     disabled the fsperm mode verification still refuses — defence in depth, the proof names it);
+     (ii) P2 a durable retry returned an incomplete result — the logbook identities left the
+     contract (the file's default logbook is read like any other) and the retry test compares
+     the whole result; (iii) P2 a close-time cleanup error was discarded — folded through
+     `withCleanup`, unit-proven on an unremovable file. The dogfood-inbox note logged today is a
+     separate path, outside this commit. Fourth round (two findings, fixed): (i) P1 a PARENT
+     symlink (`<data_dir>/db` → outside) was created through before the refusal — containment is
+     now checked on the deepest existing ancestor BEFORE `MkdirAll` (with the old order the test
+     finds `qso-archives` created outside); (ii) P2 the close-branch fix had no valid proof — the
+     pre-create is its own helper with an injectable close, and reverting the branch to a bare
+     removal drops the removal failure from the error, which the test now catches.
    - **Interim archive forwarding gate** (review finding 1; lands here, before activation exists):
      until the ADR 0056 per-logbook bindings ship, forwarding is admitted only in the adopted
      archive. In any other archive `shouldEnqueue` yields no rows for any destination, the boot

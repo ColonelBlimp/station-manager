@@ -73,8 +73,11 @@ type daemon struct {
 	qso    *qsoservice.Service
 
 	// DB paths derived once the log-DB node initialises (its Initialize sets DatabaseConfig.Path).
-	paths   archive.Paths // resolved from the catalogue before the graph is built (ADR 0071)
-	refPath string
+	paths archive.Paths // resolved from the catalogue before the graph is built (ADR 0071)
+	// creatingArtefacts names the .creating files an interrupted archive creation
+	// left in the managed directory, as diagnosed at this start (never archives).
+	creatingArtefacts []string
+	refPath           string
 
 	// Fleet. bridge + ft8 are constructed pre-orchestrator; evidence + psk in their node Initialize.
 	bridge        *bridge.Service
@@ -305,6 +308,9 @@ func (d *daemon) startQso(context.Context) error {
 	// The QSO service learns which archive it writes: the interim forwarding
 	// gate (archive.ForwardingAdmitted) keys on it.
 	d.qso.SetArchive(d.paths.Entry)
+	// Leftovers of an interrupted archive creation are named at every start;
+	// they are never archives and the operator removes them (ADR 0071).
+	d.creatingArtefacts = archive.DiagnoseCreatingArtefacts(d.cfg, d.logger)
 	return nil
 }
 

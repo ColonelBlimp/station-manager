@@ -10,7 +10,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
 
-const v4ConfigDoc = `{"version":4,"data_dir":"/tmp/x","setup_complete":true,"default_logbook_id":1,
+const v4ConfigDoc = `{"version":5,"data_dir":"/tmp/x","setup_complete":true,"default_logbook_id":1,
 	"logging_station":{"station_callsign":"G4ABC"},
 	"active_qso_archive_id":"019fd5c5-efcc-7193-be4f-1fee532ee315",
 	"qso_archives":[{"id":"019fd5c5-efcc-7193-be4f-1fee532ee315","label":"Home","ownership":"legacy","path":"/tmp/x/db/station-manager.db"}]}`
@@ -28,7 +28,7 @@ func TestConfigDowngrade_RewritesFileToOlderSchema(t *testing.T) {
 	if err := runConfigDowngradeTo(&out, []string{"--config", p, "--to", "3", "--yes"}); err != nil {
 		t.Fatalf("config-downgrade: %v", err)
 	}
-	if !strings.Contains(out.String(), "4 → 3") {
+	if !strings.Contains(out.String(), "5 → 3") {
 		t.Fatalf("report %q does not name the transition 4 → 3", out.String())
 	}
 	data, err := os.ReadFile(p)
@@ -62,7 +62,7 @@ func TestConfigDowngrade_Refusals_LeaveTheFileUntouched(t *testing.T) {
 	if err := runConfigDowngradeTo(&out, []string{"--config", p, "--to", "3"}); err == nil {
 		t.Fatal("ran without --yes")
 	}
-	if err := runConfigDowngradeTo(&out, []string{"--config", p, "--to", "4", "--yes"}); err == nil {
+	if err := runConfigDowngradeTo(&out, []string{"--config", p, "--to", "5", "--yes"}); err == nil {
 		t.Fatal("target equal to the current version accepted")
 	}
 	// A stray word stops flag parsing, so the --config after it is dropped and

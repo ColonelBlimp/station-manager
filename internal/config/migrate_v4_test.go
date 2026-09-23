@@ -29,8 +29,8 @@ const v4Doc = `{"version":4,"data_dir":"/tmp/x","setup_complete":true,"default_l
 
 func TestMigrateV3toV4_StampsVersionAddsNoCatalogue(t *testing.T) {
 	m := migratedMap(t, v3Doc)
-	if v := m["version"]; v != float64(4) {
-		t.Fatalf("version after migration = %v, want 4", v)
+	if v := m["version"]; v != float64(5) {
+		t.Fatalf("version after migration = %v, want 5 (the current head)", v)
 	}
 	for _, k := range []string{"active_qso_archive_id", "pending_qso_archive_id", "qso_archives"} {
 		if _, present := m[k]; present {
@@ -41,10 +41,10 @@ func TestMigrateV3toV4_StampsVersionAddsNoCatalogue(t *testing.T) {
 	if m["default_logbook_id"] != float64(1) || m["setup_complete"] != true {
 		t.Errorf("3→4 disturbed existing keys: %v", m)
 	}
-	// Idempotent: a v4 document comes back byte-identical.
-	out, err := migrateDocument([]byte(v4Doc))
-	if err != nil || string(out) != v4Doc {
-		t.Fatalf("a v4 document must pass through unchanged (err %v)", err)
+	// Idempotent: a current-version document comes back byte-identical.
+	out, err := migrateDocument([]byte(v5Doc))
+	if err != nil || string(out) != v5Doc {
+		t.Fatalf("a v5 document must pass through unchanged (err %v)", err)
 	}
 }
 
@@ -75,7 +75,7 @@ func TestDowngradeDocument_V4toV3_StripsCatalogueKeepsTheRest(t *testing.T) {
 }
 
 func TestDowngradeDocument_Refusals(t *testing.T) {
-	// At or above current: nothing to do, refused rather than silently stamped.
+	// At or above the document's version: nothing to do, refused rather than silently stamped.
 	for _, to := range []int{4, 5} {
 		if _, err := DowngradeDocument([]byte(v4Doc), to); err == nil {
 			t.Errorf("downgrade to %d accepted; want a refusal (target must be below the document's version)", to)
@@ -103,8 +103,8 @@ func TestLoad_V4CatalogueRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Version != 4 {
-		t.Fatalf("Version = %d, want 4", cfg.Version)
+	if cfg.Version != 5 {
+		t.Fatalf("Version = %d, want 5 (a v4 file migrates up at load)", cfg.Version)
 	}
 	if cfg.ActiveQsoArchiveID != "019fd5c5-efcc-7193-be4f-1fee532ee315" || cfg.PendingQsoArchiveID != "019fd5c5-efcc-7193-be4f-1fee532ee316" {
 		t.Fatalf("selection = active %q pending %q", cfg.ActiveQsoArchiveID, cfg.PendingQsoArchiveID)
@@ -128,4 +128,48 @@ func writeTempConfig(t *testing.T, body string) string {
 		t.Fatalf("write config: %v", err)
 	}
 	return p
+}
+
+// v5 (W-0021 slice 2C review): `qso_archives[].request_key` makes archive
+// creation idempotent across restarts. 4→5 stamps only; 5→4 strips the key.
+const v5Doc = `{"version":5,"data_dir":"/tmp/x","setup_complete":true,"default_logbook_id":1,
+	"logging_station":{"station_callsign":"G4ABC"},
+	"qso_archives":[{"id":"019fd5c5-efcc-7193-be4f-1fee532ee316","label":"Contest","ownership":"managed","request_key":"req-1"}]}`
+
+func TestMigrateV4toV5_StampsOnly_DowngradeStripsRequestKey(t *testing.T) {
+	m := migratedMap(t, v4Doc)
+	if v := m["version"]; v != float64(5) {
+		t.Fatalf("version after migration = %v, want 5", v)
+	}
+	out, err := DowngradeDocument([]byte(v5Doc), 4)
+	if err != nil {
+		t.Fatalf("downgrade 5→4: %v", err)
+	}
+	var d map[string]any
+	if err := json.Unmarshal(out, &d); err != nil {
+		t.Fatal(err)
+	}
+	entries := d["qso_archives"].([]any)
+	if e := entries[0].(map[string]any); e["request_key"] != nil {
+		t.Fatalf("request_key survived the 5→4 down step: %v", e)
+	}
+	if e := entries[0].(map[string]any); e["label"] != "Contest" {
+		t.Fatalf("5→4 disturbed the entry: %v", e)
+	}
+	// 5→3 chains both down steps.
+	out, err = DowngradeDocument([]byte(v5Doc), 3)
+	if err != nil {
+		t.Fatalf("downgrade 5→3: %v", err)
+	}
+	d = nil // a fresh map: Unmarshal into a non-nil map merges keys
+	if err := json.Unmarshal(out, &d); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := d["qso_archives"]; present || d["version"] != float64(3) {
+		t.Fatalf("5→3 = %v; want no catalogue and version 3", d)
+	}
+	cfg, err := Load(writeTempConfig(t, v5Doc))
+	if err != nil || cfg.QsoArchives[0].RequestKey != "req-1" {
+		t.Fatalf("Load v5: %v %+v", err, cfg.QsoArchives)
+	}
 }

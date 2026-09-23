@@ -66,7 +66,7 @@ configuration.
 
 | JSON key | Go shape | Ownership and purpose |
 |---|---|---|
-| `version` | `int` | Schema version; currently `4`. |
+| `version` | `int` | Schema version; currently `5`. |
 | `data_dir` | `string` | Root for database, logs, caches, and other daemon state. |
 | `useragent` | `string` | Shared outbound HTTP User-Agent; first-run startup supplies `station-manager/<build-version>` when absent. |
 | `socket_path` | `string` | TCP address or Unix-socket path selected by `server.protocol`. |
@@ -91,7 +91,7 @@ configuration.
 | `evidence` | `types.EvidenceConfig` | Explicit capture/sync consent, physical cap, and restart-pinned antenna declarations. |
 | `rigs` | `[]types.RigConfig` | Installed-rig catalogue and operator-specific per-rig overrides. |
 | `active_qso_archive_id` / `pending_qso_archive_id` | `string` | Server-managed selectors into `qso_archives` (ADR 0071): the archive the daemon serves, and — only while an activation is in flight — the candidate for the next start. Empty before adoption. |
-| `qso_archives` | `[]types.QsoArchiveConfig` | Server-managed station-global archive catalogue: `id` (immutable UUIDv7, also embedded in the file's `archive_metadata` row, which is the authority), `label` (mutable, never renames the file), `ownership` (`managed` — path derives from the id; `legacy` — the adopted pre-archive file at its recorded absolute `path`; `external` — operator-owned file at its absolute `path`), `last_activation_error`. Written by adoption at start and the archive manager only; `PUT /v1/config` carries no field for it. |
+| `qso_archives` | `[]types.QsoArchiveConfig` | Server-managed station-global archive catalogue: `id` (immutable UUIDv7, also embedded in the file's `archive_metadata` row, which is the authority), `label` (mutable, never renames the file), `ownership` (`managed` — path derives from the id; `legacy` — the adopted pre-archive file at its recorded absolute `path`; `external` — operator-owned file at its absolute `path`), `last_activation_error`, `request_key` (the creation request's idempotency key, v5). Written by adoption at start and the archive manager only; `PUT /v1/config` carries no field for it. Managed archives live at `<data_dir>/db/qso-archives/<id>.db` (directory `0700`, files `0600`); the manager builds a new one as `<id>.db.creating`, migrates it with the log set, seeds its logbook and identity, checks integrity, closes it to a single file, renames it into place and only then adds the inactive entry — a `.creating` file left by an interrupted creation is named in the log at every start, never listed as an archive and never deleted by the daemon. |
 
 Unknown JSON fields are refused at load (§5.4, ADR 0074): a supported-version
 file with a key the daemon does not recognise never starts, so a value is never
@@ -577,7 +577,7 @@ accepted through the API must also survive the next startup.
 
 ### 13.1 Version field and ordered registry
 
-The current schema version is `4`. A missing version is the version-`1` baseline.
+The current schema version is `5`. A missing version is the version-`1` baseline.
 Migrations are registered and applied one version at a time. A step may also carry
 a down migration; only steps that add keys an older loader would refuse need one.
 
@@ -620,6 +620,11 @@ identity — so it only stamps the version. It is the first step with a down mig
 `4 -> 3` removes the three keys, which is what lets a tagged older build (unknown keys
 refused, newer version refused) read the file again during a rollback.
 
+Version `4 -> 5` (W-0021 slice 2C) adds `qso_archives[].request_key`, the creation
+request's idempotency key, so a retried create — through a restarted daemon too —
+returns the archive it already made. The step stamps only; `5 -> 4` strips the key
+from every entry.
+
 ### 13.3 Pipeline placement
 
 Raw migration precedes typed unmarshal; the unknown-key gate (§5.4) runs between
@@ -630,7 +635,7 @@ write, and validates only the canonical current candidate.
 
 ### 13.4 Persistence and downgrade guard
 
-`Load` itself never writes. The in-memory value is current and carries version `4`.
+`Load` itself never writes. The in-memory value is current and carries version `5`.
 When the on-disk document was an older version, startup persists the migrated shape
 exactly once, under an explicit `schema_version` persistence reason (names the
 version, never a value); the next boot reads a current file and writes nothing. A

@@ -37,4 +37,8 @@ type QsoArchiveConfig struct {
 	// LastActivationError is the diagnostic from the most recent failed
 	// activation attempt, kept so a failed candidate never reads as active.
 	LastActivationError string `json:"last_activation_error,omitempty"`
+	// RequestKey is the creation request's idempotency key (config v5): a
+	// retried create with the same key — through a restarted daemon too —
+	// returns this archive instead of making another. Absent on adopted entries.
+	RequestKey string `json:"request_key,omitempty"`
 }

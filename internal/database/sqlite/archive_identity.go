@@ -266,3 +266,35 @@ func (s *Service) WriteArchiveIdentityWithContext(ctx context.Context, archiveUU
 	}
 	return s.ArchiveIdentityWithContext(ctx)
 }
+
+// CheckIntegrityWithContext runs SQLite's integrity and foreign-key checks on
+// the open file and refuses anything but a clean report. The provisioner runs
+// it on a freshly built archive before that file is offered to the catalogue.
+func (s *Service) CheckIntegrityWithContext(ctx context.Context) error {
+	const op errors.Op = "sqlite.Service.CheckIntegrityWithContext"
+	if err := checkService(op, s); err != nil {
+		return err
+	}
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+	var report string
+	if err := h.QueryRowContext(ctx, `PRAGMA integrity_check`).Scan(&report); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("integrity_check")
+	}
+	if report != "ok" {
+		return errors.New(op).WithMsgf("integrity_check: %s", report)
+	}
+	rows, err := h.QueryContext(ctx, `PRAGMA foreign_key_check`)
+	if err != nil {
+		return errors.New(op).WithErr(err).WithMsg("foreign_key_check")
+	}
+	defer func() { _ = rows.Close() }()
+	if rows.Next() {
+		return errors.New(op).WithMsg("foreign_key_check: violations present")
+	}
+	return rows.Err()
+}

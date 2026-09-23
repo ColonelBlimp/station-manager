@@ -66,6 +66,11 @@ func TestValidate_QsoArchives(t *testing.T) {
 			bad.Path = ""
 			c.QsoArchives = []types.QsoArchiveConfig{bad}
 		}, "path"},
+		{"duplicate request key", func(c *Config) {
+			a, b := legacy, managed
+			a.RequestKey, b.RequestKey = "same", "same"
+			c.QsoArchives = []types.QsoArchiveConfig{a, b}
+		}, "request_key"},
 		{"external entry with a relative path", func(c *Config) {
 			bad := legacy
 			bad.Ownership = types.QsoArchiveOwnershipExternal

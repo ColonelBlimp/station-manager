@@ -389,6 +389,17 @@ Your data directory survives the upgrade — `dnf` only manages the
 files it installed (the binary and the unit). Database schema
 migrations are applied automatically on daemon startup.
 
+A full station backup is `config.json` (the archive catalogue lives in
+it), every QSO archive — the adopted `db/station-manager.db` and each
+managed `db/qso-archives/<id>.db` — plus the station-global
+`db/reference.db` and `db/evidence.db`. A single copy of the active
+database is no longer a full backup once a second archive exists. The
+databases run in WAL mode, so a plain file copy taken while the daemon
+runs is not necessarily consistent: stop the daemon first
+(`systemctl --user stop smd`), or take each database with SQLite's
+online backup (for example `sqlite3 <file> ".backup <copy>"`, or the
+same API `scripts/rollback-drill.sh` uses), never a live `cp`.
+
 ### Rolling back to an older build
 
 Schema migrations only run upward at startup, and an older build cannot
