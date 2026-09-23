@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ColonelBlimp/station-manager/internal/archive"
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
@@ -93,7 +94,7 @@ func TestAdoptArchive_FreshInstallRegisteredInPlaceThenIdempotent(t *testing.T) 
 		t.Fatalf("ensureDefaultLogbook: %v", err)
 	}
 
-	if err := adoptArchive(ctx, db, cfgSvc, logger); err != nil {
+	if err := adoptArchive(ctx, db, cfgSvc, logger, resolvedPaths(t, cfgSvc)); err != nil {
 		t.Fatalf("adopt: %v", err)
 	}
 	identity, err := db.ArchiveIdentityWithContext(ctx)
@@ -126,7 +127,7 @@ func TestAdoptArchive_FreshInstallRegisteredInPlaceThenIdempotent(t *testing.T) 
 	}
 
 	// Second start: nothing is minted or rewritten.
-	if err := adoptArchive(ctx, db, cfgSvc, logger); err != nil {
+	if err := adoptArchive(ctx, db, cfgSvc, logger, resolvedPaths(t, cfgSvc)); err != nil {
 		t.Fatalf("adopt again: %v", err)
 	}
 	again, _ := db.ArchiveIdentityWithContext(ctx)
@@ -146,7 +147,7 @@ func TestAdoptArchive_ReusesAnIdentityAlreadyInTheFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pre-write identity: %v", err)
 	}
-	if err := adoptArchive(ctx, db, cfgSvc, logger); err != nil {
+	if err := adoptArchive(ctx, db, cfgSvc, logger, resolvedPaths(t, cfgSvc)); err != nil {
 		t.Fatalf("adopt: %v", err)
 	}
 	if got := cfgSvc.Snapshot().ActiveQsoArchiveID; got != pre.ArchiveUUID {
@@ -166,7 +167,7 @@ func TestAdoptArchive_CatalogueUUIDMismatchFailsClosed(t *testing.T) {
 	if _, err := db.EnsureArchiveIdentityWithContext(ctx, 0); err != nil {
 		t.Fatalf("identity: %v", err)
 	}
-	err := adoptArchive(ctx, db, cfgSvc, logger)
+	err := adoptArchive(ctx, db, cfgSvc, logger, resolvedPaths(t, cfgSvc))
 	if err == nil {
 		t.Fatal("adoption accepted a file whose uuid differs from the catalogue's active entry")
 	}
@@ -195,7 +196,7 @@ func TestAdoptArchive_ProjectsDefaultLogbookFromTheFile(t *testing.T) {
 	if _, err := db.EnsureArchiveIdentityWithContext(ctx, second); err != nil {
 		t.Fatal(err)
 	}
-	if err := adoptArchive(ctx, db, cfgSvc, logger); err != nil {
+	if err := adoptArchive(ctx, db, cfgSvc, logger, resolvedPaths(t, cfgSvc)); err != nil {
 		t.Fatalf("adopt: %v", err)
 	}
 	if got := cfgSvc.Snapshot().DefaultLogbookID; got != second {
@@ -210,7 +211,7 @@ func TestAdoptArchive_ProjectsDefaultLogbookFromTheFile(t *testing.T) {
 	if _, err := db2.EnsureArchiveIdentityWithContext(ctx, 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := adoptArchive(ctx, db2, cfgSvc2, logger2); err != nil {
+	if err := adoptArchive(ctx, db2, cfgSvc2, logger2, resolvedPaths(t, cfgSvc2)); err != nil {
 		t.Fatalf("adopt: %v", err)
 	}
 	if id, _ := db2.ArchiveIdentityWithContext(ctx); id.DefaultLogbookID != 1 {
@@ -244,7 +245,7 @@ func TestAdoptArchive_FileDefaultWinsBeforeConfigSelfHeal(t *testing.T) {
 	if err := ensureDefaultLogbook(ctx, db, cfgSvc, logger); err != nil {
 		t.Fatalf("stale config self-heal ran before file default projection: %v", err)
 	}
-	if err := adoptArchive(ctx, db, cfgSvc, logger); err != nil {
+	if err := adoptArchive(ctx, db, cfgSvc, logger, resolvedPaths(t, cfgSvc)); err != nil {
 		t.Fatalf("adopt: %v", err)
 	}
 	if got := cfgSvc.Snapshot().DefaultLogbookID; got != wanted {
@@ -266,7 +267,7 @@ func TestAdoptArchive_CataloguePersistFailureIsRetriedNextStartWithoutANewMint(t
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
-	if err := adoptArchive(ctx, db, cfgSvc, logger); err != nil {
+	if err := adoptArchive(ctx, db, cfgSvc, logger, resolvedPaths(t, cfgSvc)); err != nil {
 		t.Fatalf("adopt with an unwritable config must warn and continue, got %v", err)
 	}
 	first, _ := db.ArchiveIdentityWithContext(ctx)
@@ -274,11 +275,21 @@ func TestAdoptArchive_CataloguePersistFailureIsRetriedNextStartWithoutANewMint(t
 		t.Fatal("in-memory catalogue not set after a persist failure")
 	}
 	_ = os.Chmod(dir, 0o700)
-	if err := adoptArchive(ctx, db, cfgSvc, logger); err != nil {
+	if err := adoptArchive(ctx, db, cfgSvc, logger, resolvedPaths(t, cfgSvc)); err != nil {
 		t.Fatalf("adopt after the directory is writable again: %v", err)
 	}
 	disk := catalogueOnDisk(t, cfgSvc)
 	if disk.ActiveQsoArchiveID != first.ArchiveUUID {
 		t.Fatalf("on disk active = %q, want the first identity %q", disk.ActiveQsoArchiveID, first.ArchiveUUID)
 	}
+}
+
+// resolvedPaths is what run() hands the daemon: the effective selection.
+func resolvedPaths(t *testing.T, cfgSvc *config.Service) archive.Paths {
+	t.Helper()
+	p, err := archive.ResolveEffective(cfgSvc.Snapshot())
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	return p
 }

@@ -150,3 +150,27 @@ func TestResolve_FrozenGlobalStoreIsStationWideNotPerArchive(t *testing.T) {
 		}
 	}
 }
+
+// The start-time selection (2D): a pending archive is the candidate this start
+// must prove; without one, the active archive is served as before.
+func TestResolveEffective_PendingIsTheCandidate(t *testing.T) {
+	cfg := baseCfg(t)
+	cfg.QsoArchives = []types.QsoArchiveConfig{
+		{ID: idA, Label: "Home", Ownership: types.QsoArchiveOwnershipLegacy, Path: filepath.Join(cfg.DataDir, "db", "station-manager.db")},
+		{ID: idB, Label: "Contest", Ownership: types.QsoArchiveOwnershipManaged},
+	}
+	cfg.ActiveQsoArchiveID = idA
+	p, err := ResolveEffective(cfg)
+	if err != nil || p.Entry.ID != idA || p.Candidate {
+		t.Fatalf("no pending: %+v (%v); want the active archive, not a candidate", p, err)
+	}
+	cfg.PendingQsoArchiveID = idB
+	p, err = ResolveEffective(cfg)
+	if err != nil || p.Entry.ID != idB || !p.Candidate || p.QSO != PathFor(cfg, cfg.QsoArchives[1]) {
+		t.Fatalf("pending B: %+v (%v); want B as the candidate", p, err)
+	}
+	cfg.PendingQsoArchiveID = "019fd5c5-efcc-7193-be4f-1fee532ee399"
+	if _, err := ResolveEffective(cfg); err == nil {
+		t.Fatal("a pending id outside the catalogue resolved")
+	}
+}

@@ -37,6 +37,25 @@ type Paths struct {
 	// Backups holds pre-split QSO backups: archive-scoped once an archive exists,
 	// so equal basenames from two archives cannot collide.
 	Backups string
+	// Candidate marks a resolution of the PENDING archive (ResolveEffective): the
+	// daemon is starting on it to activate it, and must fall back to the active
+	// archive if anything fails before promotion.
+	Candidate bool
+}
+
+// ResolveEffective is the daemon's start-time selection (ADR 0071): the
+// PENDING archive when an activation is in flight — the candidate this start
+// must prove before promoting it — otherwise the active archive.
+func ResolveEffective(cfg config.Config) (Paths, error) {
+	if cfg.PendingQsoArchiveID == "" {
+		return Resolve(cfg, "")
+	}
+	p, err := Resolve(cfg, cfg.PendingQsoArchiveID)
+	if err != nil {
+		return Paths{}, fmt.Errorf("pending archive: %w", err)
+	}
+	p.Candidate = true
+	return p, nil
 }
 
 // GlobalDir is where station-global databases live: <data_dir>/db.

@@ -323,6 +323,48 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      forwarding is off in this archive until per-logbook bindings exist. Proof: a submit in a second
      archive with every forwarder enabled writes zero `qso_upload` rows and no reconciler starts.
      The gate is retired by the bindings, which replace it with explicit routing.
+   - **2D design (2026-09-23), pending → active at start:** `archive.ResolveEffective` selects
+     the PENDING entry as the candidate (marked `Paths.Candidate`) when one is set, else the
+     active one. `run()` builds the graph as a GENERATION: attempt 1 on the effective selection;
+     the graph itself is the validation (`startLogDB` verifies the file's identity and migrates,
+     `startQso` adopts/projects, workers and the rest come up) and a new lifecycle node
+     `archive-promote` (after `qsoservice` and `workers`, before `http`) persists
+     `active = candidate`, clears `pending` and the entry's `last_activation_error` with
+     `config.Service.Update` (file first). If ANY node of attempt 1 fails while the candidate is
+     effective — the file missing, wrong identity, corrupt, or the promotion write failing — the
+     orchestrator's rollback tears attempt 1 down, the failure is recorded on the candidate's
+     entry (`last_activation_error`, memory-first so the daemon serves this session even when
+     config.json is unwritable) and `pending` cleared, and attempt 2 is built once against the
+     last-known-good active archive; a failure there is the ordinary fatal start. `adoptArchive`
+     compares the file's identity with the EFFECTIVE entry and projects that file's default.
+     Observable states: `inactive → pending → active`, or `pending → failed` with the old active
+     still active (ADR 0071). No in-process handle swap.
+   - **2D built (2026-09-23), uncommitted:** as designed, with one mechanism change found while
+     building — a rolled-back graph cannot be re-driven (the logging service is once-initialised by
+     design, so a second `Start` on the same instances would run silent), so a GENERATION is a fresh
+     container + services + daemon + graph: `buildDaemon` (factored out of `run()`) and
+     `startGenerations(cfgSvc, paths, build)` own the two attempts; `recordActivationFailure`
+     writes the entry's `last_activation_error` and clears `pending` memory-first and the
+     last-known-good generation logs the failure once its logger is open (`daemon.activationFailure`).
+     `archive-promote` node: `StartAfter` qsoservice, log/ref DB, workers, events, evidence, ft8,
+     qso-log; `http` `StartAfter` it (plan-order test). `adoptArchive` compares the file with the
+     EFFECTIVE entry and no longer sets `active` when an entry is selected. Tests
+     (`lifecycle_archive_promote_test.go`, real provisioner + adopting generation 0): valid candidate
+     promoted in memory and on disk in one generation; wrong-identity candidate → two generations,
+     Home serves, error recorded on both; unwritable `config.json` at promotion → Home serves,
+     memory records, disk keeps `pending` for the next start; no candidate → no second generation
+     and the catalogue untouched. Six compiling reversion proofs (effective selection, promote no-op,
+     no second generation, failure unrecorded, adoption against `active`, http not waiting) each
+     failed at the intended assertion. Harness: `newOrchestratedDaemon` split into
+     `seedOrchestratedConfig` (config.json in its own `etc/` dir, unix listener so self-heals
+     validate) + `buildOrchestratedDaemon`. Observatory: `run()` improved; baseline ratcheted.
+     Review P1 (fixed): a start-failure rollback calls a RUNNING node's `Stop` without
+     `PrepareStop`, and the workers node's `Stop` only waited — a pending LEGACY candidate
+     (switching back to Home) with forwarding admitted whose promotion could not be written hung
+     in `workerWG.Wait` and `startGenerations` never reached the fallback. `Stop` is now
+     `drainWorkers` (cancel, then wait; the clean-shutdown second cancel is a no-op). Test
+     `TestLifecycle_LegacyCandidateWithWorkersRollsBackWithoutDeadlock` (stub forwarder, unwritable
+     config, 20 s guard); with the old `Stop` it times out.
 3. **API over the attended restart** (AC 2, 4): `GET/POST /v1/qso-archives`,
    `POST /v1/qso-archives/{uuid}/activate` (single-flight; refuses a daemon without the respawn
    contract; `202` + graceful restart). **Sealed admission** (review findings 3 and 3b): the

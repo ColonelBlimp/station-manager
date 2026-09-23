@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	stderr "errors"
+	"fmt"
 	"path/filepath"
 
+	"github.com/ColonelBlimp/station-manager/internal/archive"
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
@@ -35,7 +37,7 @@ const legacyArchiveLabel = "Home"
 // time the file learns it. A catalogue persist failure is logged and the daemon
 // continues on the in-memory catalogue: the identity is already in the file, so
 // the next start with a writable config registers the same uuid, never a new one.
-func adoptArchive(ctx context.Context, db *sqlite.Service, cfgSvc *config.Service, logger *logging.Service) error {
+func adoptArchive(ctx context.Context, db *sqlite.Service, cfgSvc *config.Service, logger *logging.Service, paths archive.Paths) error {
 	const op errors.Op = "smd.adoptArchive"
 	snap := cfgSvc.Snapshot()
 
@@ -49,10 +51,17 @@ func adoptArchive(ctx context.Context, db *sqlite.Service, cfgSvc *config.Servic
 		return errors.New(op).WithErr(err).WithMsg("resolve datastore path")
 	}
 
-	if snap.ActiveQsoArchiveID != "" && snap.ActiveQsoArchiveID != identity.ArchiveUUID {
-		return errors.New(op).WithMsgf("config.json names active archive %s but the file at %s holds archive %s; "+
+	// The EFFECTIVE selection (2D): the entry this start opened — the active
+	// archive, or the pending candidate being proved. The file must hold that
+	// archive; a pre-adoption install (no entry) is compared with the active id.
+	expected := snap.ActiveQsoArchiveID
+	if paths.Entry != nil {
+		expected = paths.Entry.ID
+	}
+	if expected != "" && expected != identity.ArchiveUUID {
+		return errors.New(op).WithMsgf("config.json selects archive %s but the file at %s holds archive %s; "+
 			"refusing to start rather than serve the wrong file (fix the catalogue or the datastore path)",
-			snap.ActiveQsoArchiveID, canonical, identity.ArchiveUUID)
+			expected, canonical, identity.ArchiveUUID)
 	}
 
 	changed := false
@@ -67,7 +76,9 @@ func adoptArchive(ctx context.Context, db *sqlite.Service, cfgSvc *config.Servic
 			e.Path = canonical
 			changed = true
 		}
-		if c.ActiveQsoArchiveID != identity.ArchiveUUID {
+		// The active selector is set only for a pre-adoption install; a pending
+		// candidate is promoted by the archive-promote node once the graph is up.
+		if paths.Entry == nil && c.ActiveQsoArchiveID != identity.ArchiveUUID {
 			c.ActiveQsoArchiveID = identity.ArchiveUUID
 			changed = true
 		}
@@ -112,4 +123,69 @@ func canonicalPath(p string) (string, error) {
 		return real, nil
 	}
 	return abs, nil // a not-yet-created file has no symlinks to resolve
+}
+
+// startArchivePromote is the `archive-promote` lifecycle node (ADR 0071, 2D):
+// when this start opened a PENDING candidate and every database-dependent node
+// came up on it, promote it — active = candidate, pending cleared, the entry's
+// last failure cleared — with config.Service.Update (file first). A write
+// failure fails this node, which fails the generation, which run() answers by
+// rolling back and starting again on the last-known-good archive. It runs
+// before http, so no request sees a daemon serving one archive while the
+// catalogue names another. A no-op when nothing is pending.
+func (d *daemon) startArchivePromote(context.Context) error {
+	const op errors.Op = "smd.startArchivePromote"
+	if !d.paths.Candidate || d.paths.Entry == nil {
+		return nil
+	}
+	id := d.paths.Entry.ID
+	dur, err := d.cfgSvc.Update(func(c *config.Config) error {
+		if e := c.QsoArchiveByID(id); e != nil {
+			e.LastActivationError = ""
+		}
+		c.ActiveQsoArchiveID = id
+		c.PendingQsoArchiveID = ""
+		return nil
+	})
+	if err != nil {
+		return errors.New(op).WithErr(err).WithMsgf("promote archive %s to active", id)
+	}
+	d.cfg = d.cfgSvc.Snapshot()
+	d.paths.Candidate = false // from here on this is the active archive
+	ev := d.logger.InfoWith().Str("archive_id", id).Str("label", d.paths.Entry.Label).Str("path", d.paths.QSO)
+	if dur == config.DurabilityUncertain {
+		ev = ev.Bool("durability_uncertain", true)
+	}
+	ev.Msg("archive: candidate activated (pending → active)")
+	return nil
+}
+
+// activationFailure names the pending candidate a start could not activate;
+// the last-known-good generation logs it once its logger is open.
+type activationFailure struct {
+	Candidate types.QsoArchiveConfig
+	Err       error
+}
+
+// recordActivationFailure is startGenerations' answer to a candidate that did
+// not come up: the failure goes on the candidate's entry and pending is
+// cleared, memory first — the daemon must serve the last-known-good archive
+// this session even when config.json cannot be written — so the next start is
+// an ordinary one. It returns the failure to report, naming the candidate and
+// a persist failure when there was one.
+func recordActivationFailure(cfgSvc *config.Service, candidate types.QsoArchiveConfig, cause error) error {
+	_, err := cfgSvc.UpdateInMemoryThenPersist(func(c *config.Config) error {
+		if e := c.QsoArchiveByID(candidate.ID); e != nil {
+			e.LastActivationError = cause.Error()
+		}
+		if c.PendingQsoArchiveID == candidate.ID {
+			c.PendingQsoArchiveID = ""
+		}
+		return nil
+	})
+	failure := fmt.Errorf("archive: activation of candidate %s (%q) failed: %w", candidate.ID, candidate.Label, cause)
+	if err != nil {
+		failure = fmt.Errorf("%w (and recording it in config.json failed: %v)", failure, err)
+	}
+	return failure
 }

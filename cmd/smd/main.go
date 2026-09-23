@@ -32,6 +32,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/forwarding/qrz"     // registers "qrz" forwarder + default retry via init(); main also sets qrz.UserAgent below
 	"github.com/ColonelBlimp/station-manager/internal/forwarding/qrzcq"   // registers "qrzcq" forwarder + 90-second pacing via init(); main also sets qrzcq.UserAgent below
 	"github.com/ColonelBlimp/station-manager/internal/forwarding/smcloud" // registers "smcloud" forwarder (ADR 0040 backup client) via init(); main also sets smcloud.UserAgent below
+	"github.com/ColonelBlimp/station-manager/internal/lifecycle/orchestrator"
 	// The test-only "stub" forwarder is registered ONLY in dev builds (-tags dev,
 	// see forwarder_stub_dev.go) — never in a release binary, so a production
 	// config can't select type:"stub" and get fake "uploaded" status without
@@ -260,132 +261,24 @@ func run() error {
 	clublog.UserAgent = cfg.UserAgent
 	smcloud.UserAgent = cfg.UserAgent
 
-	container := iocdi.New()
-
-	// Event hub — registered before Build so every service with a
-	// `di.inject:"eventhub"` field (qsoservice, future subscribers)
-	// gets the same instance. Closed at shutdown after publishers
-	// have stopped.
-	hub := events.NewHub()
-
-	if err = container.RegisterInstance(config.ServiceName, cfgSvc); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("register config service")
-	}
-	if err = container.RegisterInstance(events.ServiceName, hub); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("register event hub")
-	}
-	if err = container.Register(logging.ServiceName, reflect.TypeFor[*logging.Service]()); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("register logging service")
-	}
-	if err = container.Register(types.SqliteServiceName, reflect.TypeFor[*sqlite.Service]()); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("register sqlite service")
-	}
-	// Second sqlite bean: the shared enrichment-cache connection (reference.db),
-	// distinguished from the log bean by name + migration set (configured after
-	// resolve, before Open). qsoservice + the orchestrator inject it.
-	if err = container.Register(types.ReferenceDBServiceName, reflect.TypeFor[*sqlite.Service]()); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("register reference-db sqlite service")
-	}
-	if err = container.Register(qsoservice.ServiceName, reflect.TypeFor[*qsoservice.Service]()); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("register qso service")
-	}
-
-	// The logging service's WorkingDir string field is resolved via
-	// LiteralProvider. SetLiteralProvider writes to an iocdi package
-	// global (atomic.Value); intentionally process-lifetime — the
-	// container shares this provider with any other iocdi consumer in
-	// the process, which is fine for a single-shot daemon binary.
-	iocdi.SetLiteralProvider(func(id string, targetType reflect.Type) (any, bool, error) {
-		if id == "workingdir" && targetType.Kind() == reflect.String {
-			return cfgSvc.WorkingDir(), true, nil
-		}
-		return nil, false, nil
+	// ---- Assemble + start the daemon through the orchestrator (ADR 0070 phase 3, ADR 0071) ----
+	// Each generation's orchestrator drives Initialize→Start across its graph in dependency order
+	// (logging opens the log file, the DBs open + migrate, the fleet + promoted infra start). On ANY
+	// failure it rolls back every advanced node and returns; run() must NOT fall through into the
+	// legacy teardown — the rollback already owns it (operator ruling, phase 3a). A failed pending
+	// candidate gets one more generation, on the last-known-good archive (startGenerations).
+	d, orch, err := startGenerations(cfgSvc, paths, func(p archive.Paths) (*daemon, *orchestrator.Orchestrator, error) {
+		return buildDaemon(cfgSvc, cfgPath, firstRunPath, startupChanges, p)
 	})
-
-	// ---- Wire the container ----
-	// ADR 0070: the orchestrator, not Build(), drives Initialize. Wire constructs + injects the beans;
-	// the lifecycle graph below drives each bean's Initialize in dependency order.
-	if err = container.Wire(); err != nil {
-		err = errors.New(op).WithErr(err).WithMsg("wire container")
-		logStartupFailure(err) // still pre-logger
+	if err != nil {
+		logStartupFailure(err) // pre-logger, or the rollback closed the logger; mirror to smd.log
 		return err
 	}
-
-	// ---- Resolve services ----
-	loggerSvc, err := iocdi.ResolveAs[*logging.Service](container, logging.ServiceName)
-	if err != nil {
-		err = errors.New(op).WithErr(err).WithMsg("resolve logging service")
-		logStartupFailure(err) // the logger itself didn't come up — mirror to smd.log
-		return err
-	}
-	// The hub was built before the container (services inject it), so this is the first point a
-	// logger exists to give it. It reports slow-reader evictions.
-	hub.SetLogger(loggerSvc)
-
-	dbSvc, err := iocdi.ResolveAs[*sqlite.Service](container, types.SqliteServiceName)
-	if err != nil {
-		return errors.New(op).WithErr(err).WithMsg("resolve sqlite service")
-	}
-	refDbSvc, err := iocdi.ResolveAs[*sqlite.Service](container, types.ReferenceDBServiceName)
-	if err != nil {
-		return errors.New(op).WithErr(err).WithMsg("resolve reference-db sqlite service")
-	}
-	qsoSvc, err := iocdi.ResolveAs[*qsoservice.Service](container, qsoservice.ServiceName)
-	if err != nil {
-		return errors.New(op).WithErr(err).WithMsg("resolve qso service")
-	}
-
-	// ---- Worker context ----
-	// The forwarder workers and the FT8/bridge/psk long-lived goroutines bind here; it is cancelled
-	// at shutdown before the ordered teardown so in-flight work observes ctx.Done().
-	workerCtx, workerCancel := context.WithCancel(context.Background())
-	defer workerCancel()
-
-	// ---- Assemble the daemon + its lifecycle graph (ADR 0070 phase 3) ----
-	d := &daemon{
-		cfg:            cfg,
-		cfgSvc:         cfgSvc,
-		cfgPath:        cfgPath,
-		firstRunPath:   firstRunPath,
-		startupChanges: startupChanges,
-		logger:         loggerSvc,
-		hub:            hub,
-		db:             dbSvc,
-		refDB:          refDbSvc,
-		paths:          paths,
-		qso:            qsoSvc,
-		workerCtx:      workerCtx,
-		workerCancel:   workerCancel,
-		errCh:          make(chan error, 1),
-		restartCh:      make(chan struct{}),
-	}
-	// bridge + ft8 are constructed here (not in their node Initialize) so the HTTP server keeps their
-	// handles even when they are config-disabled and pruned from the active graph.
-	d.bridge = bridge.New(cfg.ActiveBridge(), loggerSvc)
-	d.ft8 = ft8.NewService(cfg.ActiveFt8(), loggerSvc, cfgSvc.WorkingDir())
-
-	orch, err := d.registerLifecycle(container)
-	if err != nil {
-		err = errors.New(op).WithErr(err).WithMsg("register lifecycle graph")
-		logStartupFailure(err)
-		return err
-	}
-
-	// ---- Start the daemon through the orchestrator ----
-	// The orchestrator drives Initialize→Start across the graph in dependency order (logging opens
-	// the log file, the DBs open + migrate, the fleet + promoted infra start). On ANY failure it rolls
-	// back every advanced node and returns; run() must NOT fall through into the legacy teardown — the
-	// rollback already owns it (operator ruling, phase 3a).
-	if err = orch.Start(workerCtx); err != nil {
-		logStartupFailure(err) // rollback may have closed the logger; mirror to smd.log
-		return err
-	}
-
 	// Start succeeded. The orchestrator now owns the ENTIRE teardown — orchestrator.Shutdown below
 	// drives every node's Stop in the derived drain order (the RF fence first; the DBs, logger,
 	// refresher and hub included) — so run() installs NO deferred closers: they would double-close
-	// what Shutdown closes. The deferred workerCancel above stays as a belt for the error/panic paths.
-
+	// what Shutdown closes. The deferred workerCancel stays as a belt for the error/panic paths.
+	defer d.workerCancel()
 	// ---- Wait for shutdown signal ----
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -393,12 +286,12 @@ func run() error {
 	var runErr error
 	select {
 	case sig := <-sigCh:
-		loggerSvc.InfoWith().Str("signal", sig.String()).Msg("shutdown signal received")
+		d.logger.InfoWith().Str("signal", sig.String()).Msg("shutdown signal received")
 	case <-d.restartCh:
-		loggerSvc.InfoWith().Msg("restart requested (POST /v1/restart); graceful shutdown then exit for systemd respawn")
+		d.logger.InfoWith().Msg("restart requested (POST /v1/restart); graceful shutdown then exit for systemd respawn")
 	case runErr = <-d.errCh:
 		if runErr != nil {
-			loggerSvc.ErrorWith().Err(runErr).Msg("server exited with error")
+			d.logger.ErrorWith().Err(runErr).Msg("server exited with error")
 		}
 	}
 
@@ -408,7 +301,7 @@ func run() error {
 	// so the logger records the whole teardown. cleanShutdown makes the logging node emit "smd stopped"
 	// immediately before it closes. The observer logs the exceptional records live while the logger is
 	// open; reportLoggingOutcome handles the logging node's own outcome afterward.
-	budget := time.Duration(cfg.Server.ShutdownTimeoutSec) * time.Second
+	budget := time.Duration(d.cfg.Server.ShutdownTimeoutSec) * time.Second
 	if budget <= 0 {
 		budget = 10 * time.Second // match config.applyDefaults' 10s floor
 	}
@@ -1082,6 +975,168 @@ func (k ft8Keyer) KeyTx(ctx context.Context, mode string) error { return k.b.Key
 func (k ft8Keyer) UnkeyTx(ctx context.Context) error            { return k.b.UnkeyFt8Tx(ctx) }
 func (k ft8Keyer) TxReady() bool                                { return k.b.TxReady() }
 
+// buildDaemon assembles one start GENERATION (ADR 0071): a fresh container,
+// service instances, daemon and lifecycle graph on the archive `paths`
+// selects. Services are not re-startable after a rollback (the logging service
+// is once-initialised by design), so a start that must fall back to another
+// archive builds everything again rather than re-driving a rolled-back graph.
+func buildDaemon(cfgSvc *config.Service, cfgPath, firstRunPath string, startupChanges []config.FieldChange,
+	paths archive.Paths) (*daemon, *orchestrator.Orchestrator, error) {
+	const op errors.Op = "smd.buildDaemon"
+	cfg := cfgSvc.Snapshot()
+	var err error
+	container := iocdi.New()
+
+	// Event hub — registered before Build so every service with a
+	// `di.inject:"eventhub"` field (qsoservice, future subscribers)
+	// gets the same instance. Closed at shutdown after publishers
+	// have stopped.
+	hub := events.NewHub()
+
+	if err = container.RegisterInstance(config.ServiceName, cfgSvc); err != nil {
+		return nil, nil, errors.New(op).WithErr(err).WithMsg("register config service")
+	}
+	if err = container.RegisterInstance(events.ServiceName, hub); err != nil {
+		return nil, nil, errors.New(op).WithErr(err).WithMsg("register event hub")
+	}
+	if err = container.Register(logging.ServiceName, reflect.TypeFor[*logging.Service]()); err != nil {
+		return nil, nil, errors.New(op).WithErr(err).WithMsg("register logging service")
+	}
+	if err = container.Register(types.SqliteServiceName, reflect.TypeFor[*sqlite.Service]()); err != nil {
+		return nil, nil, errors.New(op).WithErr(err).WithMsg("register sqlite service")
+	}
+	// Second sqlite bean: the shared enrichment-cache connection (reference.db),
+	// distinguished from the log bean by name + migration set (configured after
+	// resolve, before Open). qsoservice + the orchestrator inject it.
+	if err = container.Register(types.ReferenceDBServiceName, reflect.TypeFor[*sqlite.Service]()); err != nil {
+		return nil, nil, errors.New(op).WithErr(err).WithMsg("register reference-db sqlite service")
+	}
+	if err = container.Register(qsoservice.ServiceName, reflect.TypeFor[*qsoservice.Service]()); err != nil {
+		return nil, nil, errors.New(op).WithErr(err).WithMsg("register qso service")
+	}
+
+	// The logging service's WorkingDir string field is resolved via
+	// LiteralProvider. SetLiteralProvider writes to an iocdi package
+	// global (atomic.Value); intentionally process-lifetime — the
+	// container shares this provider with any other iocdi consumer in
+	// the process, which is fine for a single-shot daemon binary.
+	iocdi.SetLiteralProvider(func(id string, targetType reflect.Type) (any, bool, error) {
+		if id == "workingdir" && targetType.Kind() == reflect.String {
+			return cfgSvc.WorkingDir(), true, nil
+		}
+		return nil, false, nil
+	})
+
+	// ---- Wire the container ----
+	// ADR 0070: the orchestrator, not Build(), drives Initialize. Wire constructs + injects the beans;
+	// the lifecycle graph below drives each bean's Initialize in dependency order.
+	if err = container.Wire(); err != nil {
+		err = errors.New(op).WithErr(err).WithMsg("wire container")
+		return nil, nil, err
+	}
+
+	// ---- Resolve services ----
+	loggerSvc, err := iocdi.ResolveAs[*logging.Service](container, logging.ServiceName)
+	if err != nil {
+		err = errors.New(op).WithErr(err).WithMsg("resolve logging service")
+		return nil, nil, err
+	}
+	// The hub was built before the container (services inject it), so this is the first point a
+	// logger exists to give it. It reports slow-reader evictions.
+	hub.SetLogger(loggerSvc)
+
+	dbSvc, err := iocdi.ResolveAs[*sqlite.Service](container, types.SqliteServiceName)
+	if err != nil {
+		return nil, nil, errors.New(op).WithErr(err).WithMsg("resolve sqlite service")
+	}
+	refDbSvc, err := iocdi.ResolveAs[*sqlite.Service](container, types.ReferenceDBServiceName)
+	if err != nil {
+		return nil, nil, errors.New(op).WithErr(err).WithMsg("resolve reference-db sqlite service")
+	}
+	qsoSvc, err := iocdi.ResolveAs[*qsoservice.Service](container, qsoservice.ServiceName)
+	if err != nil {
+		return nil, nil, errors.New(op).WithErr(err).WithMsg("resolve qso service")
+	}
+
+	// ---- Worker context ----
+	// The forwarder workers and the FT8/bridge/psk long-lived goroutines bind here; it is cancelled
+	// at shutdown before the ordered teardown so in-flight work observes ctx.Done(). Per generation:
+	// run() cancels the survivor's at exit; a rolled-back generation's is cancelled by startGenerations.
+	workerCtx, workerCancel := context.WithCancel(context.Background())
+
+	// ---- Assemble the daemon + its lifecycle graph (ADR 0070 phase 3) ----
+	d := &daemon{
+		cfg:            cfg,
+		cfgSvc:         cfgSvc,
+		cfgPath:        cfgPath,
+		firstRunPath:   firstRunPath,
+		startupChanges: startupChanges,
+		logger:         loggerSvc,
+		hub:            hub,
+		db:             dbSvc,
+		refDB:          refDbSvc,
+		paths:          paths,
+		qso:            qsoSvc,
+		workerCtx:      workerCtx,
+		workerCancel:   workerCancel,
+		errCh:          make(chan error, 1),
+		restartCh:      make(chan struct{}),
+	}
+	// bridge + ft8 are constructed here (not in their node Initialize) so the HTTP server keeps their
+	// handles even when they are config-disabled and pruned from the active graph.
+	d.bridge = bridge.New(cfg.ActiveBridge(), loggerSvc)
+	d.ft8 = ft8.NewService(cfg.ActiveFt8(), loggerSvc, cfgSvc.WorkingDir())
+
+	orch, err := d.registerLifecycle(container)
+	if err != nil {
+		err = errors.New(op).WithErr(err).WithMsg("register lifecycle graph")
+		return nil, nil, err
+	}
+	return d, orch, nil
+}
+
+// generationBuilder builds a daemon and its graph on one archive selection.
+type generationBuilder func(paths archive.Paths) (*daemon, *orchestrator.Orchestrator, error)
+
+// startGenerations drives the daemon's start as ADR 0071 generations. Attempt 1
+// starts on the EFFECTIVE selection: the pending candidate when an activation
+// is in flight, otherwise the active archive. A candidate that does not come
+// up — the file cannot be opened, holds another archive's identity, any node
+// on it fails, or the promotion cannot be persisted — has its graph rolled
+// back by the orchestrator; the failure is recorded on the candidate's entry
+// and pending is cleared (memory first, so this session serves the right
+// archive even when config.json cannot be written), and attempt 2 is built
+// once against the last-known-good active archive. That attempt's failure is
+// final. A non-candidate start has no second attempt.
+func startGenerations(cfgSvc *config.Service, paths archive.Paths, build generationBuilder) (*daemon, *orchestrator.Orchestrator, error) {
+	d, orch, err := build(paths)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err = orch.Start(d.workerCtx); err == nil {
+		return d, orch, nil
+	}
+	d.workerCancel()
+	if !paths.Candidate || paths.Entry == nil {
+		return nil, nil, err
+	}
+	failure := recordActivationFailure(cfgSvc, *paths.Entry, err)
+	logStartupFailure(failure) // the candidate generation's logger is closed by the rollback; mirror to smd.log
+	lkg, rerr := archive.Resolve(cfgSvc.Snapshot(), "")
+	if rerr != nil {
+		return nil, nil, fmt.Errorf("%w; and the last-known-good archive cannot be resolved: %v", failure, rerr)
+	}
+	if d, orch, err = build(lkg); err != nil {
+		return nil, nil, err
+	}
+	d.activationFailure = &activationFailure{Candidate: *paths.Entry, Err: failure}
+	if err = orch.Start(d.workerCtx); err != nil {
+		d.workerCancel()
+		return nil, nil, err
+	}
+	return d, orch, nil
+}
+
 // startupPaths resolves the two paths run() needs before anything opens: the
 // on-disk config path (so /v1/config PUT can rewrite it atomically —
 // firstRunPath covers a just-seeded file, otherwise the same precedence as
@@ -1091,9 +1146,12 @@ func startupPaths(cfg config.Config, configFlag, firstRunPath string) (string, a
 	if err != nil {
 		return "", archive.Paths{}, err
 	}
-	paths, err := resolveArchivePaths(cfg, "", nil)
+	// The daemon's selection is the EFFECTIVE one (ADR 0071): a pending
+	// candidate when an activation is in flight, otherwise the active archive.
+	// Commands (import, restore) keep resolving the active archive.
+	paths, err := archive.ResolveEffective(cfg)
 	if err != nil {
-		return "", archive.Paths{}, fmt.Errorf("resolve active archive: %w", err)
+		return "", archive.Paths{}, fmt.Errorf("resolve archive: %w", err)
 	}
 	return cfgPath, paths, nil
 }

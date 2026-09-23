@@ -138,7 +138,7 @@
       "path": "cmd/smd/main.go",
       "function": "run",
       "direction": "maximum",
-      "value": 25
+      "value": 10
     },
     {
       "language": "go",
@@ -258,7 +258,7 @@
       "path": "cmd/smd/main.go",
       "function": "run",
       "direction": "maximum",
-      "value": 26
+      "value": 12
     },
     {
       "language": "go",
@@ -378,7 +378,7 @@
       "path": "cmd/smd/main.go",
       "function": "run",
       "direction": "minimum",
-      "value": 18
+      "value": 29
     },
     {
       "language": "go",

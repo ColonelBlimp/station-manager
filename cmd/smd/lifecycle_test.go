@@ -196,6 +196,12 @@ func TestLifecycleGraph_StartOrderIsEdgeEnforced(t *testing.T) {
 	before(nodeEvents, nodeFt8)
 	before(nodeLogDB, nodeRefDB)
 	before(nodeConfig, nodeLogging)
+	// ADR 0071: a pending candidate is promoted only after every node that opens
+	// or depends on the archive is up, and http serves only after the promotion.
+	for _, n := range []string{nodeQso, nodeLogDB, nodeRefDB, nodeWorkers, nodeEvents, nodeEvidence, nodeFt8, nodeQsoLog} {
+		before(n, nodePromote)
+	}
+	before(nodePromote, nodeHTTP)
 }
 
 // AC-G4: the drain graph carries only real producer/drain-safety edges.

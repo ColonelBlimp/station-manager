@@ -16,6 +16,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -40,11 +41,21 @@ import (
 // touches no hardware.
 func newOrchestratedDaemon(t *testing.T, mut func(*config.Config)) (*daemon, *orchestrator.Orchestrator) {
 	t.Helper()
+	cfgSvc := seedOrchestratedConfig(t, mut)
+	return buildOrchestratedDaemon(t, cfgSvc, cfgSvc.Snapshot())
+}
+
+// seedOrchestratedConfig writes the test config.json (in its own directory,
+// so a test can make it unwritable without touching the data files) and
+// returns the config service a daemon generation builds on.
+func seedOrchestratedConfig(t *testing.T, mut func(*config.Config)) *config.Service {
+	t.Helper()
 	tmp := t.TempDir()
 	t.Setenv("SM_WORKING_DIR", tmp)
 
 	cfg := config.DefaultConfig(tmp)
 	cfg.Datastore.Path = filepath.Join(tmp, "log.db")
+	cfg.Server.Protocol = "unix" // a unix listener at the tmp path validates, so self-heals can persist
 	cfg.SocketPath = filepath.Join(tmp, "smd.sock")
 	cfg.UserAgent = "station-manager-test/1.0"
 	if mut != nil {
@@ -52,11 +63,23 @@ func newOrchestratedDaemon(t *testing.T, mut func(*config.Config)) (*daemon, *or
 	}
 
 	cfgSvc := config.New(cfg)
-	cfgPath := filepath.Join(tmp, "config.json")
+	cfgPath := filepath.Join(tmp, "etc", "config.json")
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := config.WriteJSON(cfgPath, cfg); err != nil {
 		t.Fatalf("seed config.json: %v", err)
 	}
 	cfgSvc.SetPath(cfgPath)
+	return cfgSvc
+}
+
+// buildOrchestratedDaemon is the test replica of buildDaemon: one generation
+// on `cfg` (a snapshot the caller chose) with the paths startLogDB resolves
+// lazily unless the caller sets them afterwards.
+func buildOrchestratedDaemon(t *testing.T, cfgSvc *config.Service, cfg config.Config) (*daemon, *orchestrator.Orchestrator) {
+	t.Helper()
+	cfgPath := cfgSvc.Path
 
 	container := iocdi.New()
 	hub := events.NewHub()

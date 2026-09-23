@@ -33,16 +33,17 @@ const (
 	nodeQso     = qsoservice.ServiceName       // "qsoservice"
 
 	// Non-bean fleet + promoted infra nodes.
-	nodeBridge     = "bridge"         // CAT/RF bridge — the RF-critical fence
-	nodeEnrichment = "enrichment"     // lookup.Orchestrator runtime (promoted: ft8 + http depend on it)
-	nodeMailer     = "mailer"         // email.Service (promoted: http depends on it)
-	nodeEvidence   = "evidence"       // FT8 evidence writer
-	nodePsk        = "psk"            // PSK Reporter uploader
-	nodeEvents     = "station-events" // Station Events recorder (W-0020): alarm-family rows, non-blocking
-	nodeFt8        = "ft8"            // FT8 decode subsystem (sole producer for evidence/qso-log)
-	nodeWorkers    = "workers"        // forwarder workers + the smcloud reconciler that rides them
-	nodeQsoLog     = "qso-log"        // FT8 completed-QSO log goroutines (launched by ft8's decode loop)
-	nodeHTTP       = "http"           // the HTTP API server (the front door)
+	nodeBridge     = "bridge"          // CAT/RF bridge — the RF-critical fence
+	nodeEnrichment = "enrichment"      // lookup.Orchestrator runtime (promoted: ft8 + http depend on it)
+	nodeMailer     = "mailer"          // email.Service (promoted: http depends on it)
+	nodeEvidence   = "evidence"        // FT8 evidence writer
+	nodePsk        = "psk"             // PSK Reporter uploader
+	nodeEvents     = "station-events"  // Station Events recorder (W-0020): alarm-family rows, non-blocking
+	nodeFt8        = "ft8"             // FT8 decode subsystem (sole producer for evidence/qso-log)
+	nodeWorkers    = "workers"         // forwarder workers + the smcloud reconciler that rides them
+	nodeQsoLog     = "qso-log"         // FT8 completed-QSO log goroutines (launched by ft8's decode loop)
+	nodeHTTP       = "http"            // the HTTP API server (the front door)
+	nodePromote    = "archive-promote" // ADR 0071: pending → active once the DB-dependent graph is up, BEFORE http serves
 )
 
 // lifecycleNodes declares the daemon graph. Registration order is the deterministic shutdown
@@ -94,11 +95,15 @@ func lifecycleNodes() []iocdi.Node {
 		// Forwarder workers (need db + qso + hub). qso-log rides ft8's decode loop; it drains after ft8.
 		{Name: nodeWorkers, StartAfter: []string{nodeLogDB, nodeQso, nodeHub, nodeLogging}},
 		{Name: nodeQsoLog, StartAfter: []string{nodeFt8}, DrainAfter: []string{nodeFt8}},
+		// ADR 0071: a pending candidate is promoted only once every node that
+		// opens or depends on the archive is up, and http waits for it so no
+		// request sees the daemon serve one archive while the catalogue names another.
+		{Name: nodePromote, StartAfter: []string{nodeQso, nodeLogDB, nodeRefDB, nodeWorkers, nodeEvents, nodeEvidence, nodeFt8, nodeQsoLog}},
 
 		// The front door — composes every service, so it starts last.
 		{Name: nodeHTTP, StartAfter: []string{
 			nodeEnrichment, nodeMailer, nodeBridge, nodeFt8, nodeEvidence,
-			nodeQso, nodeLogDB, nodeHub, nodeLogging,
+			nodeQso, nodeLogDB, nodeHub, nodeLogging, nodePromote,
 		}},
 	}
 

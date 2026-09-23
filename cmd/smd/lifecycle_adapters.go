@@ -74,6 +74,9 @@ type daemon struct {
 
 	// DB paths derived once the log-DB node initialises (its Initialize sets DatabaseConfig.Path).
 	paths archive.Paths // resolved from the catalogue before the graph is built (ADR 0071)
+	// activationFailure is set on a last-known-good generation: the pending
+	// candidate this start was asked to activate did not come up (startGenerations).
+	activationFailure *activationFailure
 	// creatingArtefacts names the .creating files an interrupted archive creation
 	// left in the managed directory, as diagnosed at this start (never archives).
 	creatingArtefacts []string
@@ -163,9 +166,14 @@ func (d *daemon) registerLifecycle(c *iocdi.Container) (*orchestrator.Orchestrat
 		{NodeID: nodePsk, Initialize: d.initPsk, Start: d.startPsk, Stop: stopErr(d.stopPskSvc)},
 		{NodeID: nodeEvents, Initialize: d.initEvents, Start: d.startEvents, Stop: stopErr(d.stopEvents)},
 		{NodeID: nodeFt8, Active: d.ft8.Enabled, Initialize: d.initFt8, Start: d.ft8.Start, Stop: stopErr(d.ft8.Stop)},
+		// Stop cancels before it waits (drainWorkers), not only Wait: a start-failure rollback of a
+		// RUNNING node calls Stop without PrepareStop, and a wait alone would never return while the
+		// workers tick (a pending legacy archive with forwarding admitted whose promotion cannot be
+		// written). In a clean shutdown PrepareStop has already cancelled; the second cancel is a no-op.
 		{NodeID: nodeWorkers, Start: d.startWorkers, PrepareStop: d.workerPrepareStop,
-			Stop: stopVoid(d.workerWG.Wait), Rollback: rollbackVia(d.drainWorkers)},
+			Stop: stopErr(d.drainWorkers), Rollback: rollbackVia(d.drainWorkers)},
 		{NodeID: nodeQsoLog, Stop: stopVoid(d.qsoLogWG.Wait)},
+		{NodeID: nodePromote, Start: d.startArchivePromote},
 		{NodeID: nodeHTTP, Initialize: d.initHTTP, Start: d.startHTTP,
 			PrepareStop: d.httpStopAccepting, Stop: d.stopHTTP},
 	}
@@ -192,6 +200,10 @@ func (d *daemon) startLogging(context.Context) error {
 			Interface("changes", d.startupChanges).Msg("config saved")
 	}
 	d.logger.InfoWith().Msg("smd starting")
+	if f := d.activationFailure; f != nil {
+		d.logger.ErrorWith().Err(f.Err).Str("archive_id", f.Candidate.ID).Str("label", f.Candidate.Label).
+			Msg("archive: candidate activation FAILED; serving the last-known-good active archive (pending cleared, failure recorded on the entry)")
+	}
 	d.logger.InfoWith().Str("level", d.cfg.Logging.Level).Msg("logging configured")
 	for _, w := range config.Warnings(d.cfg) {
 		d.logger.WarnWith().Msg(w)
@@ -301,7 +313,7 @@ func (d *daemon) startQso(context.Context) error {
 	}
 	// Then the file's identity and the catalogue (ADR 0071): the default logbook
 	// row exists by now, so the archive can record it.
-	if err := adoptArchive(context.Background(), d.db, d.cfgSvc, d.logger); err != nil {
+	if err := adoptArchive(context.Background(), d.db, d.cfgSvc, d.logger, d.paths); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("adopt archive")
 	}
 	d.cfg = d.cfgSvc.Snapshot()
