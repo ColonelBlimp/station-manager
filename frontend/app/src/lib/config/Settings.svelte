@@ -25,17 +25,17 @@
         'station' | 'archives' | 'rigs' | 'ft8' | 'forwarding' | 'email' | 'enrichment' | 'general';
     const sections: { id: SectionId; label: string }[] = [
         { id: 'station', label: 'Station' },
-        // Archives (ADR 0071): the station's QSO databases — station data, so it
-        // sits with Station, ahead of the radio and the outside services.
-        { id: 'archives', label: 'Archives' },
         { id: 'rigs', label: 'Rigs' },
         { id: 'ft8', label: 'FT8' },
         { id: 'forwarding', label: 'Forwarding' },
         { id: 'email', label: 'Email' },
         { id: 'enrichment', label: 'Enrichment' },
-        // General (cross-cutting prefs + About) lands last — it isn't a station-or-service
-        // domain like the others.
+        // General (cross-cutting prefs + About) comes after the station-or-service
+        // domains; only Archives sits behind it.
         { id: 'general', label: 'General' },
+        // Archives (ADR 0071): the station's QSO databases. Last, as the least
+        // used tab — a switch is an occasional act (operator ruling 2026-09-24).
+        { id: 'archives', label: 'Archives' },
     ];
     let active = $state<SectionId>('station');
 

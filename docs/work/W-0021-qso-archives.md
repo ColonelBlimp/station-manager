@@ -602,6 +602,38 @@ the compatibility promise that a daemon at any slice boundary starts the existin
        never green and reads "not forwarding here" (operator: the eye reads the green pill
        before the grey banner), and the expanded card leads with "Station-wide settings — not in
        effect in this archive" above its Enabled checkbox; rendered test + proof.
+     - **Drill 3 PASSED (14:40 local, build `-41-gd8fbd269`), physical isolation (AC 1, AC 2's
+       "nothing to B's destinations"):** one Phone QSO logged in Drill (7Q7EB, 17 m SSB, 12:40:35Z,
+       logbook 1; the operator used a real call rather than a TEST one — it is a dummy contact in
+       the Drill archive only). Drill file: 1 `qso` row, 0 `qso_upload` rows, the log's submit line
+       carries `forwarded_to: []`. Home file: 8,129 QSOs, no row with that call, last QSO still
+       2026-09-15 (untouched). `/v1/logbook/1/count` = 1 (the header count); the Logbook view
+       showed the one contact. Note for later: the Drill archive holds this dummy QSO; no
+       delete/detach exists yet (out of this programme's scope).
+     - **Drill 4 PASSED (14:43 local), Drill → Home:** activation requested 14:43:24.25 → "smd
+       stopped" .27 → "smd starting" 14:43:29.33 → the three forwarder workers started (Home is
+       admitted) → "candidate activated (pending → active)" 14:43:30.78. Home active with
+       `/v1/logbook/1/count` = 8,129, Drill inactive, no activation error, `pending` cleared,
+       `forwarding_gated` false. AC 5 observed: `reference.db` and `evidence.db` stayed at their
+       canonical paths, no copy beside either QSO file; the Drill file was closed to a single
+       file (no `-wal`/`-shm`) and still holds its one dummy QSO (AC 1 second half: reactivating
+       Home reveals Home's unchanged rows; Drill's row stayed in Drill). Operator finding → inbox:
+       after the reload Settings opened on Station, not Archives (tab state is not in the URL).
+     - **Drill 5 PASSED (14:46–14:48 local), failed candidate (AC 3, AC 4).** Pass 1, file
+       renamed aside with the daemon running: Activate → 409 `archive_unavailable` in 0 ms naming
+       the missing file; no "activation requested" line, no `pending`, no error recorded, an FT8
+       claim still admitted (nothing sealed). Pass 2, file restored, Activate → 202 → "activation
+       requested; transmit admission sealed" 14:48:17.42 → "smd stopped" .44 → a watcher moved
+       the file aside at .446 → "smd starting" 14:48:22.58 → generation 1 failed in `startLogDB`
+       (the candidate's identity could not be proven) → "smd starting" .595 (generation 2 on the
+       last-known-good archive) → the three forwarder workers started on Home. Result: Home
+       active, Drill inactive with `last_activation_error` = the startLogDB chain, `pending`
+       cleared, no stray file created in the managed directory; the SPA reloaded to Home and shows
+       the failure under Drill with Activate offered (retry after fixing the file). Findings →
+       inbox: the start-time wording says "carries no identity" for a MISSING file; the SPA shows
+       the whole error chain. Afterwards the file was restored and the empty `-wal`/`-shm` (left by
+       read-only peeks) removed; Drill lists with its size again; its failure text stays until the
+       next successful activation clears it (by design).
 5. **SM Cloud identity** (AC 6): `archives` entity, `logbook_uuid`, archive/logbook UUIDs on push,
    manifest, reconcile and export/restore, per-tenant legacy-archive adoption, and the reconciler per
    logical logbook (ADR 0056 archive-aware). **It also lays the first ADR 0056 binding** (review
@@ -659,6 +691,36 @@ cross-archive query.
   archive starts with no bindings; the creation form may copy compatible ones explicitly. Those
   binding rows are unbuilt today (ADR 0056 dated update 2026-09-19) and are the first thing Settings
   → Logbooks builds after this programme, on the active archive.
+- **2026-09-24, operator (drill 2, Forwarding tab in Drill): "forwarding is NOT critical to SMD
+  startup and therefore can be in an archive; forwarders should be part of the archive — when a
+  new archive is created they CAN be enabled but default to DISABLED; the current text is
+  confusing."** Agreed, and it is the 2026-09-22 rule restated: routing (which destination this
+  archive uploads to) lives in the archive file as bindings, a new archive starts with none; only
+  the station's credentials and transport stay in `config.json`. Granularity reconciled in the UI:
+  the Forwarding tab shows ONE switch per destination for the ACTIVE archive (ENABLED / DISABLED,
+  meaning "this archive uploads new QSOs here"), which binds every logbook in the archive;
+  per-logbook exceptions belong to Settings → Logbooks. Station accounts (credentials) become a
+  separate section with no on/off pill. With the switches in place the interim gate is redundant
+  (an archive with every destination DISABLED forwards nothing by construction; adoption seeds
+  Home's switches from the station's enabled flags once, idempotently). Consequence for slice 5:
+  widen it from "SM Cloud binding only" to the per-destination switch for all four services (the
+  same binding row). Interim until then (operator to rule): drop the pills from the rows in a gated
+  archive and let the banner carry the one fact. Discussion only; no code changed.
+- **2026-09-24, operator correction: credentials are not uniformly station-wide.** ClubLog has
+  two keys: the **API key** identifies Station Manager to ClubLog (injected at build time, never a
+  config field — `clublog.go` InjectedAPIKey) and the **application password** identifies the
+  user's ClubLog account (today in `config.json` with the account email and the callsign the
+  upload is filed under; one account may hold several callsigns); a QRZ.com API key is per logbook on the QRZ side (two QRZ logbooks = two
+  keys); SM Cloud's URL and token identify the tenant. So the rule is: what identifies the
+  application or the tenant → `config.json`; what identifies a specific remote logbook or account
+  → the binding row inside the archive file, beside the logical logbook it serves (ADR 0056's
+  "which forwarder credential/account each logbook uploads to", taken literally). Consequences:
+  (i) the per-archive switch for QRZ is not a bare on/off — enabling asks for that logbook's key;
+  ClubLog asks which account/callsign, defaulting to the station's; the "station accounts"
+  section holds only the application-wide and tenant-wide items; (ii) secrets then live in the
+  archive file (0600 in 0700, already the station's most sensitive data) — a backup or export of
+  an archive carries keys, and the cloud restore path must never ship them: a required line in
+  slice 5's design before any binding row holds a key. Discussion only; no code changed.
 - **2026-09-22, operator: "a LAN master SMD with node SMDs forwarding to it — a complication for
   this design?"** No; the archive design is the prerequisite for it. Nothing in the records names
   a LAN topology today (ADR 0052 defines the single-writer rule for SM Cloud; ADR 0071 is silent),
