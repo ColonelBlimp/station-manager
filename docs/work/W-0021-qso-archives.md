@@ -744,8 +744,9 @@ cross-archive query.
   (an archive with every destination DISABLED forwards nothing by construction; adoption seeds
   Home's switches from the station's enabled flags once, idempotently). Consequence for slice 5:
   widen it from "SM Cloud binding only" to the per-destination switch for all four services (the
-  same binding row). Interim until then (operator to rule): drop the pills from the rows in a gated
-  archive and let the banner carry the one fact. Discussion only; no code changed.
+  same binding row). Interim, RULED 2026-09-24 and built: the summary pills are hidden while gated (no per-destination
+  truth to tell; the banner carries the one fact); queue counts, the card note and the non-gated
+  presentation are unchanged until slice 5 replaces the tab.
 - **2026-09-24, operator correction: credentials are not uniformly station-wide.** ClubLog has
   two keys: the **API key** identifies Station Manager to ClubLog (injected at build time, never a
   config field — `clublog.go` InjectedAPIKey) and the **application password** identifies the

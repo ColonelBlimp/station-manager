@@ -291,21 +291,19 @@
                              destination shows its state, so the row has to read at a
                              glance either way. Text is lower-case; the uppercase is CSS,
                              matching the rig pill. -->
-                            <span
-                                class="rounded border px-1.5 py-0.5 text-[10px] font-semibold tracking-wide uppercase {f.enabled &&
-                                !gate.gated
-                                    ? 'border-green-500/40 bg-green-50 text-green-700 dark:bg-green-500/10 dark:text-green-400'
-                                    : 'border-line bg-surface-muted text-muted'}"
-                            >
-                                <!-- Never GREEN while gated: the eye reads the green pill before
-                                     the banner (operator, drill 2, 2026-09-24), so a destination
-                                     that forwards nothing here wears the muted pill and says so. -->
-                                {f.enabled
-                                    ? gate.gated
-                                        ? 'not forwarding here'
-                                        : 'enabled'
-                                    : 'disabled'}
-                            </span>
+                            {#if !gate.gated}
+                                <!-- Hidden while gated (operator ruling 2026-09-24): in an
+                                     archive that forwards nothing there is no per-destination
+                                     truth for a pill to tell, and the banner states the one
+                                     applicable fact; queue counts and the card stay. -->
+                                <span
+                                    class="rounded border px-1.5 py-0.5 text-[10px] font-semibold tracking-wide uppercase {f.enabled
+                                        ? 'border-green-500/40 bg-green-50 text-green-700 dark:bg-green-500/10 dark:text-green-400'
+                                        : 'border-line bg-surface-muted text-muted'}"
+                                >
+                                    {f.enabled ? 'enabled' : 'disabled'}
+                                </span>
+                            {/if}
                             <!-- Live queue depth (W-0005): waiting backlog, failed
                                  rows and the in-flight batch, read APART (W-0010
                                  outcome 9 — one terminal failure sat as "1 queued"

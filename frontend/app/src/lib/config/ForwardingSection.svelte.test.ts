@@ -481,13 +481,12 @@ describe('ForwardingSection', () => {
         // doubled it on the station).
         expect(status.textContent?.match(/forwarding is off in this archive/gi)).toHaveLength(1);
         expect(status.textContent).toMatch(/^\s*Forwarding is off/);
-        // An enabled destination says it is not forwarding here while gated — and
-        // never wears the green pill (the eye reads green before the banner) —
-        // and its expanded card says the settings are station-wide, not in effect.
-        const pills = screen.getAllByText('not forwarding here');
-        expect(pills.length).toBeGreaterThan(0);
-        for (const pill of pills) expect(pill.className).not.toMatch(/green/);
+        // While gated there is NO pill on any row (operator ruling 2026-09-24): the
+        // banner carries the one fact; the queue counts and the card note stay.
         expect(screen.queryByText('enabled')).toBeNull();
+        expect(screen.queryByText('disabled')).toBeNull();
+        expect(screen.queryByText('not forwarding here')).toBeNull();
+        expect(screen.getByText('0 waiting · 2 failed · 0 in flight')).toBeInTheDocument();
         expect(screen.getAllByTestId('gated-card-note').length).toBeGreaterThan(0);
         expect(screen.getByRole('button', { name: /retry failed \(2\)/i })).toBeDisabled();
     });
