@@ -1129,7 +1129,7 @@ func startGenerations(cfgSvc *config.Service, paths archive.Paths, build generat
 	if d, orch, err = build(lkg); err != nil {
 		return nil, nil, err
 	}
-	d.activationFailure = &activationFailure{Candidate: *paths.Entry, Err: failure}
+	d.activationFailure = &activationFailure{Candidate: *paths.Entry, Err: failure, At: time.Now()}
 	if err = orch.Start(d.workerCtx); err != nil {
 		d.workerCancel()
 		return nil, nil, err

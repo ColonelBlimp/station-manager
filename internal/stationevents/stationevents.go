@@ -1,6 +1,6 @@
 // Package stationevents is the vocabulary of the operator-facing Station Events
-// store (W-0020, ADR 0076 shape): the closed (category, kind) pairs migration
-// 0009 enforces, the severity set, and the typed FACTS the daemon's producing
+// store (W-0020, ADR 0076 shape): the closed (category, kind) pairs the schema
+// head enforces, the severity set, and the typed FACTS the daemon's producing
 // boundaries hand to the assembly-owned recorder.
 //
 // It imports only the standard library so every producer-side package can name
@@ -12,24 +12,34 @@ package stationevents
 
 import "time"
 
-// Categories. The CHECK in migration 0009 admits only these two, each with its
-// own kind set — a kind is legal only under ITS category.
+// Categories. The schema CHECK admits only these two, each with its own kind
+// set — a kind is legal only under ITS category.
 const (
 	CategoryNotification = "notification"
 	CategoryAlarm        = "alarm"
 )
 
-// Kinds. Two durable notification kinds (ADR 0076) and the alarm family
-// (W-0020 rulings 2026-09-14).
+// Kinds. The notification kinds (ADR 0076's two, plus the archive switch
+// outcomes of ADR 0071 — recorded by the daemon at the lifecycle boundary) and
+// the alarm family (W-0020 rulings 2026-09-14).
 const (
-	KindExportAdifFailed  = "export.adif_failed"
-	KindForwardFailed     = "forward.failed"
-	KindTxAlarmRaised     = "tx_alarm.raised"
-	KindTxAlarmCleared    = "tx_alarm.cleared"
-	KindDriveAlarmRaised  = "drive_alarm.raised"
-	KindDriveAlarmCleared = "drive_alarm.cleared"
-	KindTxDisarmed        = "tx.disarmed"
-	KindSessionTerminated = "session.terminated"
+	KindExportAdifFailed = "export.adif_failed"
+	KindForwardFailed    = "forward.failed"
+	// KindArchiveActivated: a pending archive was promoted to active after the
+	// restart proved it (recorded only once the promotion write succeeded, in
+	// the newly active archive's own file).
+	KindArchiveActivated = "archive.activated"
+	// KindArchiveActivationFailed: a candidate did not come up and the daemon
+	// fell back to the last-known-good archive (recorded in that archive's
+	// file, after the fallback reached it). Expected refusals — busy, already
+	// active, cancelled — are never events.
+	KindArchiveActivationFailed = "archive.activation_failed"
+	KindTxAlarmRaised           = "tx_alarm.raised"
+	KindTxAlarmCleared          = "tx_alarm.cleared"
+	KindDriveAlarmRaised        = "drive_alarm.raised"
+	KindDriveAlarmCleared       = "drive_alarm.cleared"
+	KindTxDisarmed              = "tx.disarmed"
+	KindSessionTerminated       = "session.terminated"
 )
 
 // Severities — the closed set the store's CHECK admits (ADR 0008 toast levels).
@@ -43,13 +53,21 @@ const (
 // untrusted decoded input, normalised upper-case and trimmed by the recorder.
 const PartnerCallMaxLen = 32
 
+// ArchiveLabelMaxLen bounds an archive label on an archive.* row: operator
+// text, trimmed to printable runes by the recorder (the catalogue admits up to
+// 80; the row never carries more).
+const ArchiveLabelMaxLen = 80
+
 // KindsByCategory is the closed pair table: every (category, kind) the store
-// accepts, and nothing else. Migration 0009's CHECK is written from this table
-// and the schema test enumerates it in both directions, so the two cannot
+// accepts, and nothing else. The schema CHECK is written from this table and
+// the migration tests enumerate it in both directions, so the two cannot
 // drift apart unnoticed. Returned fresh so a caller cannot mutate it.
 func KindsByCategory() map[string][]string {
 	return map[string][]string{
-		CategoryNotification: {KindExportAdifFailed, KindForwardFailed},
+		CategoryNotification: {
+			KindExportAdifFailed, KindForwardFailed,
+			KindArchiveActivated, KindArchiveActivationFailed,
+		},
 		CategoryAlarm: {
 			KindTxAlarmRaised, KindTxAlarmCleared,
 			KindDriveAlarmRaised, KindDriveAlarmCleared,
@@ -111,9 +129,27 @@ type ExchangeTerminated struct {
 	At          time.Time
 }
 
-func (TxAlarmRaised) fact()       {}
-func (TxAlarmCleared) fact()      {}
-func (DriveAlarmRaised) fact()    {}
-func (DriveAlarmRecovered) fact() {}
-func (TxDisarmed) fact()          {}
-func (ExchangeTerminated) fact()  {}
+// ArchiveActivated — the pending candidate became the active archive.
+type ArchiveActivated struct {
+	ArchiveID string
+	Label     string
+	At        time.Time
+}
+
+// ArchiveActivationFailed — the candidate did not come up; Code is the stable
+// archive failure code (archive.Fail*), never the error text.
+type ArchiveActivationFailed struct {
+	ArchiveID string
+	Label     string
+	Code      string
+	At        time.Time
+}
+
+func (ArchiveActivated) fact()        {}
+func (ArchiveActivationFailed) fact() {}
+func (TxAlarmRaised) fact()           {}
+func (TxAlarmCleared) fact()          {}
+func (DriveAlarmRaised) fact()        {}
+func (DriveAlarmRecovered) fact()     {}
+func (TxDisarmed) fact()              {}
+func (ExchangeTerminated) fact()      {}

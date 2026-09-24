@@ -469,7 +469,19 @@ func (d *daemon) initEvents() error {
 	return nil
 }
 
-func (d *daemon) startEvents(ctx context.Context) error { return d.events.Start(ctx) }
+func (d *daemon) startEvents(ctx context.Context) error {
+	if err := d.events.Start(ctx); err != nil {
+		return err
+	}
+	// A last-known-good generation records the candidate's failure here — the
+	// first point the recovered archive's events store is up (the failure
+	// belongs in the archive the daemon fell back to). Best-effort enqueue;
+	// it cannot affect the start.
+	if f := d.activationFailure; f != nil {
+		d.events.ArchiveActivationFailed(f.Candidate.ID, f.Candidate.Label, archive.FailureCode(f.Err), f.At)
+	}
+	return nil
+}
 
 func (d *daemon) stopEvents() error {
 	if d.events == nil {

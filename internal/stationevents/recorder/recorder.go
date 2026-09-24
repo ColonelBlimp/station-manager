@@ -101,6 +101,18 @@ func (r *Recorder) Stop() error {
 
 // ---- producer-facing seams (bridge.AlarmObserver, ft8.SessionObserver) ----
 
+// ArchiveActivated / ArchiveActivationFailed are the archive switch outcomes
+// (ADR 0071): recorded by the assembly at the lifecycle boundary — the
+// promotion node after its write succeeds, the fallback generation once its
+// events node is up. Best-effort like every fact: a full queue drops and logs.
+func (r *Recorder) ArchiveActivated(archiveID, label string, at time.Time) {
+	r.enqueue(stationevents.ArchiveActivated{ArchiveID: archiveID, Label: label, At: at})
+}
+
+func (r *Recorder) ArchiveActivationFailed(archiveID, label, code string, at time.Time) {
+	r.enqueue(stationevents.ArchiveActivationFailed{ArchiveID: archiveID, Label: label, Code: code, At: at})
+}
+
 func (r *Recorder) TxAlarmRaised(code string, at time.Time) {
 	r.enqueue(stationevents.TxAlarmRaised{Code: code, At: at})
 }

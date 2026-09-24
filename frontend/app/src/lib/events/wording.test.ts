@@ -23,6 +23,8 @@ describe('station event wording', () => {
         const kinds = [
             'export.adif_failed',
             'forward.failed',
+            'archive.activated',
+            'archive.activation_failed',
             'tx_alarm.raised',
             'tx_alarm.cleared',
             'drive_alarm.raised',
@@ -98,5 +100,40 @@ describe('station event wording', () => {
                 ev('session.terminated', { cause: 'unattended', partner_call: '', rung: 'calling' })
             )
         ).toBe(DETAILS_UNAVAILABLE);
+    });
+});
+
+// The archive outcomes (ADR 0071): worded from the typed fields only.
+describe('archive switch wording', () => {
+    it('activated names the archive', () => {
+        expect(detailSummary(ev('archive.activated', { archive_id: 'a', label: 'Contest' }))).toBe(
+            'Contest'
+        );
+        expect(detailSummary(ev('archive.activated', { archive_id: 'a' }))).toBe(
+            DETAILS_UNAVAILABLE
+        );
+    });
+    it('a failure names the archive and words the stable code', () => {
+        expect(
+            detailSummary(
+                ev('archive.activation_failed', {
+                    archive_id: 'a',
+                    label: 'Drill',
+                    code: 'archive_file_missing',
+                })
+            )
+        ).toBe('Drill · the archive file is missing');
+        expect(
+            detailSummary(
+                ev('archive.activation_failed', {
+                    archive_id: 'a',
+                    label: 'Drill',
+                    code: 'later_code',
+                })
+            )
+        ).toBe('Drill · later_code');
+        expect(detailSummary(ev('archive.activation_failed', { label: 'Drill' }))).toBe(
+            DETAILS_UNAVAILABLE
+        );
     });
 });

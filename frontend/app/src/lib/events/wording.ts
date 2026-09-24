@@ -14,6 +14,10 @@ export function kindLabel(kind: string): string {
             return 'ADIF export failed';
         case 'forward.failed':
             return 'Upload failed';
+        case 'archive.activated':
+            return 'Archive switched';
+        case 'archive.activation_failed':
+            return 'Archive switch failed';
         case 'tx_alarm.raised':
             return 'TX alarm raised';
         case 'tx_alarm.cleared':
@@ -83,6 +87,29 @@ function causeLabel(cause: string): string {
     }
 }
 
+// The daemon's stable archive failure codes (internal/archive Fail*), worded
+// for the events page; an unknown code shows as its code.
+function archiveFailureLabel(code: string): string {
+    switch (code) {
+        case 'archive_file_missing':
+            return 'the archive file is missing';
+        case 'archive_file_unreadable':
+            return 'the archive file could not be read';
+        case 'archive_no_identity':
+            return 'the file is not a Station Manager archive';
+        case 'archive_identity_mismatch':
+            return 'the file belongs to a different archive';
+        case 'promotion_persist_failed':
+            return 'the switch could not be recorded';
+        case 'pending_unclear':
+            return 'the restart could not be requested';
+        case 'archive_start_failed':
+            return 'the daemon could not start on it';
+        default:
+            return code;
+    }
+}
+
 function stood(ms: number): string {
     return ms < 1000 ? `stood ${ms} ms` : `stood ${(ms / 1000).toFixed(1)} s`;
 }
@@ -113,6 +140,13 @@ const summarisers: Record<string, (o: Detail) => string | null> = {
         const attempts = num(o, 'attempts');
         if (forwarder === null || action === null || attempts === null || attempts < 1) return null;
         return `${forwarder} · ${action} · ${attempts} attempt${attempts === 1 ? '' : 's'}`;
+    },
+    'archive.activated': (o) => str(o, 'label'),
+    'archive.activation_failed': (o) => {
+        const label = str(o, 'label');
+        const code = str(o, 'code');
+        if (label === null || code === null) return null;
+        return `${label} · ${archiveFailureLabel(code)}`;
     },
     'tx_alarm.raised': codeOnly,
     'drive_alarm.raised': codeOnly,

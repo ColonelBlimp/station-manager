@@ -5,6 +5,7 @@ import (
 	stderr "errors"
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/archive"
 	"github.com/ColonelBlimp/station-manager/internal/config"
@@ -148,10 +149,17 @@ func (d *daemon) startArchivePromote(context.Context) error {
 		return nil
 	})
 	if err != nil {
-		return errors.New(op).WithErr(err).WithMsgf("promote archive %s to active", id)
+		// Classified so the fallback generation records the stable code.
+		return &archive.ActivationFailure{Code: archive.FailPromotionPersist, Err: errors.New(op).WithErr(err).WithMsgf("promote archive %s to active", id)}
 	}
 	d.cfg = d.cfgSvc.Snapshot()
 	d.paths.Candidate = false // from here on this is the active archive
+	// The success event — only now, after the promotion write, and into this
+	// (newly active) archive's own file. Best-effort: the recorder's enqueue
+	// never blocks or fails the node.
+	if d.events != nil {
+		d.events.ArchiveActivated(id, d.paths.Entry.Label, time.Now())
+	}
 	ev := d.logger.InfoWith().Str("archive_id", id).Str("label", d.paths.Entry.Label).Str("path", d.paths.QSO)
 	if dur == config.DurabilityUncertain {
 		ev = ev.Bool("durability_uncertain", true)
@@ -165,6 +173,9 @@ func (d *daemon) startArchivePromote(context.Context) error {
 type activationFailure struct {
 	Candidate types.QsoArchiveConfig
 	Err       error
+	// At is when the fallback was decided — the occurrence time the Station
+	// Event carries once the last-known-good generation's events node is up.
+	At time.Time
 }
 
 // recordActivationFailure is startGenerations' answer to a candidate that did
@@ -176,7 +187,7 @@ type activationFailure struct {
 func recordActivationFailure(cfgSvc *config.Service, candidate types.QsoArchiveConfig, cause error) error {
 	_, err := cfgSvc.UpdateInMemoryThenPersist(func(c *config.Config) error {
 		if e := c.QsoArchiveByID(candidate.ID); e != nil {
-			e.LastActivationError = cause.Error()
+			e.LastActivationError = archive.FailureCode(cause) // the code only; the chain is logged below
 		}
 		if c.PendingQsoArchiveID == candidate.ID {
 			c.PendingQsoArchiveID = ""

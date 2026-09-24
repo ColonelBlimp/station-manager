@@ -28,8 +28,10 @@ export interface QsoArchive {
     label: string;
     ownership: ArchiveOwnership;
     state: ArchiveState;
-    /** The most recent failed activation's diagnostic; '' when none. */
+    /** The most recent failed activation, worded by the daemon; '' when none. */
     lastActivationError: string;
+    /** Its stable code (the daemon's classification); '' when none. Shown, never parsed. */
+    lastActivationCode: string;
     /** The file's size at listing time; null when the daemon could not stat it. */
     sizeBytes: number | null;
     /** The file's last write (RFC 3339, UTC); null when unknown. Not a "last opened". */
@@ -99,6 +101,8 @@ export function toArchive(v: unknown): QsoArchive | null {
         state,
         lastActivationError:
             typeof v.last_activation_error === 'string' ? v.last_activation_error : '',
+        lastActivationCode:
+            typeof v.last_activation_code === 'string' ? v.last_activation_code : '',
         sizeBytes: typeof v.size_bytes === 'number' ? v.size_bytes : null,
         modifiedAt: typeof v.modified_at === 'string' ? v.modified_at : null,
     };

@@ -146,7 +146,8 @@ func TestQsoArchives_Activate(t *testing.T) {
 	})
 	for code, status := range map[string]int{
 		"archive_not_found": 404, "archive_active": 409, "activation_in_progress": 409, "tx_busy": 409,
-		"archive_unavailable": 409, "restart_unavailable": 503, "activation_persist_failed": 500,
+		"archive_file_missing": 409, "archive_file_unreadable": 409, "archive_no_identity": 409,
+		"archive_identity_mismatch": 409, "restart_unavailable": 503, "activation_persist_failed": 500,
 		"restart_failed": 500, "pending_unclear": 500, "something_new": 500,
 	} {
 		t.Run(code, func(t *testing.T) {

@@ -181,18 +181,33 @@ func TestActivate_RefusesBeforeSealing(t *testing.T) {
 		}
 		_ = raw.Close()
 		_, err = f.activate(t)
-		if codeOf(t, err) != "archive_unavailable" || !strings.Contains(err.Error(), "holds archive") {
+		// The refusal carries the stable code and the plain wording — never the path.
+		if codeOf(t, err) != FailIdentityMismatch || err.Error() != FailIdentityMismatch+": "+FailureMessage(FailIdentityMismatch) {
 			t.Fatalf("err = %v", err)
+		}
+		if strings.Contains(err.Error(), f.contest.Path) {
+			t.Fatalf("the refusal leaks the path: %v", err)
 		}
 		f.nothingHappened(t)
 	})
-	t.Run("the file is missing", func(t *testing.T) {
+	t.Run("the file is missing is reported as MISSING, not as identity-less", func(t *testing.T) {
 		f := newActivationFixture(t)
 		if err := os.Remove(f.contest.Path); err != nil {
 			t.Fatal(err)
 		}
 		_, err := f.activate(t)
-		if codeOf(t, err) != "archive_unavailable" {
+		if codeOf(t, err) != FailFileMissing || !strings.Contains(err.Error(), "file is missing") {
+			t.Fatalf("err = %v", err)
+		}
+		f.nothingHappened(t)
+	})
+	t.Run("a file without an identity row is reported as not an archive", func(t *testing.T) {
+		f := newActivationFixture(t)
+		if err := os.WriteFile(f.contest.Path, []byte(""), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := f.activate(t)
+		if codeOf(t, err) != FailNoIdentity {
 			t.Fatalf("err = %v", err)
 		}
 		f.nothingHappened(t)
@@ -292,7 +307,12 @@ func TestActivate_RestartFailureWithUnclearablePendingIsReported(t *testing.T) {
 		t.Fatalf("disk pending = %q; the persisted request stands for the next restart", p)
 	}
 	views := f.m.List()
-	if len(views) != 2 || views[1].State != types.QsoArchiveStatePending || !strings.Contains(views[1].LastActivationError, "could not be cleared") {
-		t.Fatalf("list = %+v, want Contest pending with the diagnostic", views)
+	if len(views) != 2 || views[1].State != types.QsoArchiveStatePending || views[1].LastActivationCode != FailPendingUnclear ||
+		views[1].LastActivationError != FailureMessage(FailPendingUnclear) {
+		t.Fatalf("list = %+v, want Contest pending with the pending_unclear code and its wording", views)
+	}
+	// The entry persists the CODE, never the diagnostic text.
+	if e := f.cfgSvc.Snapshot().QsoArchiveByID(f.contest.Entry.ID); e.LastActivationError != FailPendingUnclear {
+		t.Fatalf("entry holds %q, want the code %q", e.LastActivationError, FailPendingUnclear)
 	}
 }

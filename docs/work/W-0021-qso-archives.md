@@ -634,6 +634,46 @@ the compatibility promise that a daemon at any slice boundary starts the existin
        the whole error chain. Afterwards the file was restored and the empty `-wal`/`-shm` (left by
        read-only peeks) removed; Drill lists with its size again; its failure text stays until the
        next successful activation clears it (by design).
+   - **Activation follow-up (directed 2026-09-24; acceptance boundary as ruled):** (a) the
+     daemon owns failure classification — `archive.ActivationFailure{Code}` with the stable codes
+     `archive_file_missing` (os.Stat first, so a missing file is never "no identity"),
+     `archive_file_unreadable`, `archive_no_identity`, `archive_identity_mismatch`,
+     `promotion_persist_failed`, `pending_unclear`, `archive_start_failed`; one classifier
+     `archive.VerifyIdentity(paths)` serves the activation preflight (409 with the code and the
+     plain message; the path only in the log) and the start-time check (`startLogDB`, the
+     commands' open); `archive.FailureMessage(code)` is the operator wording. (b) the catalogue
+     entry persists ONLY the code in `last_activation_error` (never raw error text or paths; an
+     older free-text value maps to `archive_start_failed`); the listing carries
+     `last_activation_code` + the plain `last_activation_error`; the SPA renders, never parses.
+     (c) Station Events: `archive.activated` (info) and `archive.activation_failed` (error) join
+     the `notification` category — migration 0013 rebuilds `operator_event`'s pair CHECK (down
+     restores 0009's and discards the two kinds' rows, the 0009 policy); facts carry typed,
+     bounded metadata only: archive id (UUID grammar), label (trimmed, printable, ≤ 80), code
+     (identifier grammar). `archive.activated` is recorded in `startArchivePromote` only after the
+     promotion write succeeds (so in the newly active archive's file); `archive.activation_failed`
+     is recorded by the last-known-good generation's events node once it is up (so in the
+     recovered archive's file), never for expected refusals (tx_busy, already active, cancel) and
+     never for a 202 alone. Recording is the recorder's best-effort enqueue: it cannot affect
+     activation, rollback, fallback or logging. Schema head 13.
+   - **Built (2026-09-24), uncommitted:** `internal/archive/failure.go` (codes, `ActivationFailure`,
+     `FailureCode`, `FailureMessage`, `NormalizeFailureCode`, `VerifyIdentity` with `os.Stat`
+     first); `Activate` preflight and the start-time check both call it; the entry stores the code
+     (`recordActivationFailure`, `abortAfterPersist`), `startArchivePromote` classifies its write
+     failure; `QsoArchiveView.LastActivationCode`; API map gains the four identity codes
+     (`archive_unavailable` retired). Station Events: vocabulary + facts + recorder conversion
+     (category looked up per kind; `archiveID` UUID grammar, `archiveLabel` ≤ 80 printable runes,
+     `code` identifier grammar), migration 0013 up/down (+ test: pairs accepted, down discards only
+     the archive rows), every schema-head pin → 13, `startArchivePromote` → `ArchiveActivated`
+     after the write, `startEvents` → `ArchiveActivationFailed(f.At)` on the fallback generation.
+     Lifecycle tests: activated row in the NEW archive's file only; failed row (code
+     `archive_identity_mismatch`) in the RECOVERED archive's file only; a file removed after the
+     202 → `archive_file_missing` on the entry, the event and the listing (no path); a refused
+     activation records nothing and marks nothing. SPA: events wording for both kinds (stable code
+     → words), `lastActivationCode` on the client type. Docs: api-endpoints (codes, listing
+     fields, the two event kinds), config.md (the entry holds the code), manual station-events
+     chapter, capsule. Five Go reversion proofs. The station's Drill entry still holds the old
+     free-text value → reads as `archive_start_failed` / "The daemon could not start on this
+     archive." until its next activation clears it.
 5. **SM Cloud identity** (AC 6): `archives` entity, `logbook_uuid`, archive/logbook UUIDs on push,
    manifest, reconcile and export/restore, per-tenant legacy-archive adoption, and the reconciler per
    logical logbook (ADR 0056 archive-aware). **It also lays the first ADR 0056 binding** (review

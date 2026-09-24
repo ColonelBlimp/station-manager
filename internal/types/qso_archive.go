@@ -34,8 +34,10 @@ type QsoArchiveConfig struct {
 	// Path is the canonical absolute path of a legacy or external file. Absent
 	// for a managed archive, whose path derives from ID.
 	Path string `json:"path,omitempty"`
-	// LastActivationError is the diagnostic from the most recent failed
-	// activation attempt, kept so a failed candidate never reads as active.
+	// LastActivationError holds the STABLE CODE of the most recent failed
+	// activation (archive.Fail*), never raw error text or a path — those stay in
+	// the log; kept so a failed candidate never reads as active. Cleared by the
+	// next successful activation.
 	LastActivationError string `json:"last_activation_error,omitempty"`
 	// RequestKey is the creation request's idempotency key (config v5): a
 	// retried create with the same key — through a restarted daemon too —
@@ -68,11 +70,15 @@ const (
 // catalogue entry's operator-facing fields plus its state. A failed activation
 // is an inactive archive with LastActivationError set — never "active".
 type QsoArchiveView struct {
-	ID                  string              `json:"id"`
-	Label               string              `json:"label"`
-	Ownership           QsoArchiveOwnership `json:"ownership"`
-	State               QsoArchiveState     `json:"state"`
-	LastActivationError string              `json:"last_activation_error,omitempty"`
+	ID        string              `json:"id"`
+	Label     string              `json:"label"`
+	Ownership QsoArchiveOwnership `json:"ownership"`
+	State     QsoArchiveState     `json:"state"`
+	// LastActivationCode is the stable code of the most recent failed
+	// activation (the daemon's classification); LastActivationError is its
+	// plain wording. Both absent when the last activation did not fail.
+	LastActivationCode  string `json:"last_activation_code,omitempty"`
+	LastActivationError string `json:"last_activation_error,omitempty"`
 	// SizeBytes and ModifiedAt (RFC 3339, UTC) are the file's stat at listing
 	// time; absent when the file cannot be stat'ed. ModifiedAt is the last
 	// write, not a "last opened" — nothing tracks that.

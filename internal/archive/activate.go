@@ -2,12 +2,10 @@ package archive
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/config"
-	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
@@ -50,7 +48,8 @@ func viewOf(snap config.Config, e types.QsoArchiveConfig) types.QsoArchiveView {
 	case snap.PendingQsoArchiveID:
 		state = types.QsoArchiveStatePending
 	}
-	v := types.QsoArchiveView{ID: e.ID, Label: e.Label, Ownership: e.Ownership, State: state, LastActivationError: e.LastActivationError}
+	code := NormalizeFailureCode(e.LastActivationError)
+	v := types.QsoArchiveView{ID: e.ID, Label: e.Label, Ownership: e.Ownership, State: state, LastActivationCode: code, LastActivationError: FailureMessage(code)}
 	if fi, err := os.Stat(PathFor(snap, e)); err == nil && fi.Mode().IsRegular() {
 		v.SizeBytes = fi.Size()
 		v.ModifiedAt = fi.ModTime().UTC().Format(time.RFC3339)
@@ -107,15 +106,18 @@ func (m *Manager) Activate(ctx context.Context, id string) (types.QsoArchiveActi
 	if m.restart == nil {
 		return types.QsoArchiveActivation{}, &RequestError{Code: "restart_unavailable", Message: "this daemon has no service-manager restart configured; an activation needs the attended restart"}
 	}
-	path := PathFor(snap, *entry)
-	identity, found, err := sqlite.PeekArchiveIdentity(path)
-	switch {
-	case err != nil:
-		return types.QsoArchiveActivation{}, &RequestError{Code: "archive_unavailable", Message: fmt.Sprintf("the archive's file %s cannot be read: %v", path, err)}
-	case !found:
-		return types.QsoArchiveActivation{}, &RequestError{Code: "archive_unavailable", Message: fmt.Sprintf("the archive's file %s is missing or carries no identity", path)}
-	case identity.ArchiveUUID != id:
-		return types.QsoArchiveActivation{}, &RequestError{Code: "archive_unavailable", Message: fmt.Sprintf("the file at %s holds archive %s, not %s", path, identity.ArchiveUUID, id)}
+	// Preflight with the one classifier the start uses: the refusal carries the
+	// stable code and the operator's wording; the path and the detail go to the
+	// log, not the response. An expected refusal is not a durable failure — it
+	// is neither recorded on the entry nor as a Station Event.
+	paths, err := Resolve(snap, id)
+	if err != nil {
+		return types.QsoArchiveActivation{}, &RequestError{Code: "archive_not_found", Message: "no such archive"}
+	}
+	if err := VerifyIdentity(paths); err != nil {
+		code := FailureCode(err)
+		m.logger.WarnWith().Err(err).Str("archive_id", id).Str("code", code).Msg("archive: activation refused at preflight")
+		return types.QsoArchiveActivation{}, &RequestError{Code: code, Message: FailureMessage(code)}
 	}
 
 	if m.txSeal != nil {
@@ -167,15 +169,15 @@ func (m *Manager) abortAfterPersist(id string, cause error) error {
 		m.logger.ErrorWith().Err(cause).Str("archive_id", id).Msg("archive: restart request failed; activation withdrawn")
 		return &RequestError{Code: "restart_failed", Message: "the restart could not be requested; the activation was withdrawn: " + cause.Error()}
 	}
-	diag := fmt.Sprintf("restart request failed (%v) and the pending selector could not be cleared (%v); the next restart activates this archive", cause, err)
+	// The entry carries the CODE only; the diagnostic goes to the log.
 	_, _ = m.cfg.UpdateInMemoryThenPersist(func(c *config.Config) error {
 		if e := c.QsoArchiveByID(id); e != nil {
-			e.LastActivationError = diag
+			e.LastActivationError = FailPendingUnclear
 		}
 		return nil
 	})
 	m.logger.ErrorWith().Err(cause).Str("archive_id", id).Str("clear_error", err.Error()).Msg("archive: restart request failed and pending could not be cleared; the next restart activates")
-	return &RequestError{Code: "pending_unclear", Message: diag}
+	return &RequestError{Code: FailPendingUnclear, Message: FailureMessage(FailPendingUnclear)}
 }
 
 func (m *Manager) releaseSeals() {

@@ -42,13 +42,13 @@ func TestVersion_HappyPath(t *testing.T) {
 
 	// schema version: migrations ran in testServer's setup, so schema should be
 	// at the latest migration and not dirty. Bump this with each new migration —
-	// currently 12 (0001_init + 0002_relax_rst_length + 0003_allow_time_seconds +
+	// currently 13 (0001_init + 0002_relax_rst_length + 0003_allow_time_seconds +
 	// 0004_utc_timestamps + 0005_qso_revision + 0006_widen_mode_call +
 	// 0007_qso_upload_origin + 0008_operator_event + 0009_operator_event_alarm +
 	// 0010_qso_upload_upstream_id_generation + 0011_qso_upload_failure_class +
-	// 0012_archive_identity).
-	if !strings.Contains(body, `"schema":{"version":12,"dirty":false}`) {
-		t.Fatalf("body = %q, want schema:{version:12,dirty:false}", body)
+	// 0012_archive_identity + 0013_operator_event_archive).
+	if !strings.Contains(body, `"schema":{"version":13,"dirty":false}`) {
+		t.Fatalf("body = %q, want schema:{version:13,dirty:false}", body)
 	}
 	// No archive adopted in this server: the field is absent, never a fake identity.
 	if strings.Contains(body, `"archive"`) {

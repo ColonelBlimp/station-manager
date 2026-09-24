@@ -211,6 +211,7 @@ describe('Header archive selector', () => {
         ownership: 'legacy',
         state: 'active',
         lastActivationError: '',
+        lastActivationCode: '',
         sizeBytes: null,
         modifiedAt: null,
     } as const;
@@ -220,6 +221,7 @@ describe('Header archive selector', () => {
         ownership: 'managed',
         state: 'inactive',
         lastActivationError: '',
+        lastActivationCode: '',
         sizeBytes: null,
         modifiedAt: null,
     } as const;

@@ -29,6 +29,7 @@ recorded it.
   frequency became unreadable, transmit was no longer armed, or the message could not be
   encoded. The row names the other station and the step the exchange was on.
 - **ADIF export failed** and **Upload failed** — the two notification kinds, as before.
+- **Archive switched** and **Archive switch failed** — the outcome of activating another archive (see *QSO Archives*): the switch is recorded once the daemon has come up on the new archive; a failure names the archive and the plain reason, and the daemon carries on with the archive it had.
 
 ### What is deliberately not recorded
 

@@ -101,22 +101,10 @@ func openArchiveDatabases(cfg config.Config, cfgSvc *config.Service, archiveID s
 // file. A genuinely pre-adoption install has no entry at all (Entry nil) and is
 // left to the daemon's adoption.
 func verifyArchiveIdentity(paths archive.Paths) error {
-	if paths.Entry == nil {
-		return nil
-	}
-	identity, found, err := sqlite.PeekArchiveIdentity(paths.QSO)
-	if err != nil {
-		return fmt.Errorf("read the identity of %s: %w", paths.QSO, err)
-	}
-	switch {
-	case found && identity.ArchiveUUID != paths.Entry.ID:
-		return fmt.Errorf("catalogue entry %s (%s) names %s, but that file holds archive %s; refusing to touch it",
-			paths.Entry.ID, paths.Entry.Label, paths.QSO, identity.ArchiveUUID)
-	case !found:
-		return fmt.Errorf("archive %s (%s) at %s carries no identity; it is not the provisioned or adopted file the catalogue names",
-			paths.Entry.ID, paths.Entry.Label, paths.QSO)
-	}
-	return nil
+	// One classifier for the daemon's start, the commands' open and the
+	// activation preflight (archive.VerifyIdentity): the same file gets the same
+	// stable code — a missing file is "missing" on every path.
+	return archive.VerifyIdentity(paths)
 }
 
 // targetLogbook is the logbook a command writes to: the --logbook value when

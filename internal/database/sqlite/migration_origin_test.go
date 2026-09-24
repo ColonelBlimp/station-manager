@@ -119,8 +119,8 @@ func TestMigrate0007_ExistingRowsBecomeLegacyAndSurviveRetry(t *testing.T) {
 	svc := testService(t)
 	db := svc.handle
 
-	if v := schemaVersion(t, svc); v != 12 {
-		t.Fatalf("schema version = %d, want 12", v)
+	if v := schemaVersion(t, svc); v != 13 {
+		t.Fatalf("schema version = %d, want 13", v)
 	}
 
 	// Roll back to v6, insert a row as v6 would have (no origin column), then
@@ -208,8 +208,8 @@ func TestMigrate0007_UpdatingAMigratedRowStillAdvancesModifiedAt(t *testing.T) {
 func TestMigrate0007_PartialIndexesSurviveBothDirections(t *testing.T) {
 	svc := testService(t)
 
-	if v := schemaVersion(t, svc); v != 12 {
-		t.Fatalf("schema version = %d, want 12", v)
+	if v := schemaVersion(t, svc); v != 13 {
+		t.Fatalf("schema version = %d, want 13", v)
 	}
 
 	assertIndexes := func(when string) {
@@ -249,8 +249,8 @@ func TestMigrate0007_PartialIndexesSurviveBothDirections(t *testing.T) {
 func TestMigrate0007_ForeignKeysIntactBothDirections(t *testing.T) {
 	svc := testService(t)
 
-	if v := schemaVersion(t, svc); v != 12 {
-		t.Fatalf("schema version = %d, want 12", v)
+	if v := schemaVersion(t, svc); v != 13 {
+		t.Fatalf("schema version = %d, want 13", v)
 	}
 	seedUploadRow(t, svc, "qrz")
 
@@ -287,8 +287,8 @@ func TestMigrate0007_DownPreservesEveryPreExistingColumn(t *testing.T) {
 		t.Fatalf("populate every column: %v", err)
 	}
 
-	if v := schemaVersion(t, svc); v != 12 {
-		t.Fatalf("schema version = %d, want 12", v)
+	if v := schemaVersion(t, svc); v != 13 {
+		t.Fatalf("schema version = %d, want 13", v)
 	}
 	migrateToVersion(t, svc, 6) // crosses 0007 down (the rebuild under test)
 

@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	stderr "errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -153,8 +155,8 @@ func TestLifecycle_CandidateThatCannotOpenFallsBackToLastKnownGood(t *testing.T)
 			t.Fatalf("%s: active=%q pending=%q, want active=Home pending cleared", name, c.ActiveQsoArchiveID, c.PendingQsoArchiveID)
 		}
 		e := c.QsoArchiveByID(f.contest.Entry.ID)
-		if e == nil || !strings.Contains(e.LastActivationError, "holds archive") {
-			t.Fatalf("%s: Contest entry = %+v, want the identity mismatch recorded as its activation error", name, e)
+		if e == nil || e.LastActivationError != archive.FailIdentityMismatch {
+			t.Fatalf("%s: Contest entry = %+v, want the stable code %q on the entry (never the error chain)", name, e, archive.FailIdentityMismatch)
 		}
 	}
 }
@@ -185,8 +187,8 @@ func TestLifecycle_CandidateWhosePromotionCannotPersistFallsBack(t *testing.T) {
 		t.Fatalf("memory: active=%q pending=%q, want active=Home pending cleared", c.ActiveQsoArchiveID, c.PendingQsoArchiveID)
 	}
 	e := c.QsoArchiveByID(f.contest.Entry.ID)
-	if e == nil || !strings.Contains(e.LastActivationError, "promote archive") {
-		t.Fatalf("Contest entry = %+v, want the promotion write failure recorded", e)
+	if e == nil || e.LastActivationError != archive.FailPromotionPersist {
+		t.Fatalf("Contest entry = %+v, want the promotion failure code %q", e, archive.FailPromotionPersist)
 	}
 	if d.activationFailure == nil || !strings.Contains(d.activationFailure.Err.Error(), "recording it in config.json failed") {
 		t.Fatalf("activation failure = %v, want it to name the unpersisted record", d.activationFailure)
@@ -281,7 +283,167 @@ func TestLifecycle_LegacyCandidateWithWorkersRollsBackWithoutDeadlock(t *testing
 	if c.ActiveQsoArchiveID != f.contest.Entry.ID || c.PendingQsoArchiveID != "" {
 		t.Fatalf("memory: active=%q pending=%q, want Contest active, pending cleared", c.ActiveQsoArchiveID, c.PendingQsoArchiveID)
 	}
-	if e := c.QsoArchiveByID(f.home); e == nil || !strings.Contains(e.LastActivationError, "promote archive") {
-		t.Fatalf("Home entry = %+v, want the promotion failure recorded", e)
+	if e := c.QsoArchiveByID(f.home); e == nil || e.LastActivationError != archive.FailPromotionPersist {
+		t.Fatalf("Home entry = %+v, want the promotion failure code", e)
+	}
+}
+
+// ---- Station Events (activation follow-up, 2026-09-24) ----
+
+// notificationEvents polls the daemon's ACTIVE store for notification rows: the
+// recorder writes asynchronously, so a just-recorded fact lands within a beat.
+func notificationEvents(t *testing.T, d *daemon, want int) []types.OperatorEvent {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		rows, err := d.db.FetchOperatorEventsByCategoryWithContext(context.Background(), "notification", 10)
+		if err != nil {
+			t.Fatalf("fetch events: %v", err)
+		}
+		if len(rows) >= want || time.Now().After(deadline) {
+			return rows
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+// archiveEventRowsIn counts archive.* rows in a CLOSED archive file (read-only).
+func archiveEventRowsIn(t *testing.T, path string) int {
+	t.Helper()
+	raw, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = raw.Close() }()
+	var n int
+	if err := raw.QueryRow(`select count(*) from operator_event where kind like 'archive.%'`).Scan(&n); err != nil {
+		t.Fatalf("count archive events in %s: %v", path, err)
+	}
+	return n
+}
+
+func detailOfEvent(t *testing.T, ev types.OperatorEvent) map[string]any {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal(ev.Detail, &m); err != nil {
+		t.Fatalf("detail %s: %v", ev.Detail, err)
+	}
+	return m
+}
+
+// A proven switch records archive.activated in the NEWLY ACTIVE archive's own
+// file, with typed metadata only — and nothing in the archive it left.
+func TestLifecycle_PromotionRecordsArchiveActivatedInTheNewArchive(t *testing.T) {
+	f := newPromoteFixture(t, nil)
+	d, _, err := startGenerations(f.cfgSvc, f.effective(t), f.build(t))
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	rows := notificationEvents(t, d, 1)
+	if len(rows) != 1 || rows[0].Kind != "archive.activated" || rows[0].Severity != "info" {
+		t.Fatalf("events in the new archive = %+v, want one archive.activated (info)", rows)
+	}
+	det := detailOfEvent(t, rows[0])
+	if det["archive_id"] != f.contest.Entry.ID || det["label"] != "Contest" || len(det) != 2 {
+		t.Fatalf("detail = %v, want exactly {archive_id, label}", det)
+	}
+	home := f.cfgSvc.Snapshot().QsoArchiveByID(f.home)
+	if n := archiveEventRowsIn(t, home.Path); n != 0 {
+		t.Fatalf("the archive left behind holds %d archive event(s); the success belongs to the new one only", n)
+	}
+}
+
+// A candidate that does not come up records archive.activation_failed in the
+// RECOVERED (last-known-good) archive's file, with the stable code — never the
+// error chain — and nothing in the candidate's file.
+func TestLifecycle_FallbackRecordsActivationFailedInTheRecoveredArchive(t *testing.T) {
+	f := newPromoteFixture(t, nil)
+	raw, err := sql.Open("sqlite", "file:"+f.contest.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`UPDATE archive_metadata SET archive_uuid = '019fd5c5-efcc-7193-be4f-1fee532ee3ff'`); err != nil {
+		t.Fatal(err)
+	}
+	_ = raw.Close()
+	d, _, err := startGenerations(f.cfgSvc, f.effective(t), f.build(t))
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	rows := notificationEvents(t, d, 1)
+	if len(rows) != 1 || rows[0].Kind != "archive.activation_failed" || rows[0].Severity != "error" {
+		t.Fatalf("events in the recovered archive = %+v, want one archive.activation_failed (error)", rows)
+	}
+	det := detailOfEvent(t, rows[0])
+	if det["archive_id"] != f.contest.Entry.ID || det["label"] != "Contest" || det["code"] != archive.FailIdentityMismatch || len(det) != 3 {
+		t.Fatalf("detail = %v, want exactly {archive_id, label, code=%s}", det, archive.FailIdentityMismatch)
+	}
+	if n := archiveEventRowsIn(t, f.contest.Path); n != 0 {
+		t.Fatalf("the candidate's file holds %d archive event(s); the failure belongs to the recovered archive", n)
+	}
+}
+
+// Drill 5 on the station: the candidate's file vanishes between the accepted
+// request and the restart. The start reports it as MISSING — the stable code on
+// the entry and on the event, not "no identity".
+func TestLifecycle_CandidateFileMissingAtStartIsReportedAsMissing(t *testing.T) {
+	f := newPromoteFixture(t, nil)
+	first := true
+	build := func(p archive.Paths) (*daemon, *orchestrator.Orchestrator, error) {
+		if first {
+			first = false
+			if err := os.Remove(f.contest.Path); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return f.build(t)(p)
+	}
+	d, _, err := startGenerations(f.cfgSvc, f.effective(t), build)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if e := f.cfgSvc.Snapshot().QsoArchiveByID(f.contest.Entry.ID); e.LastActivationError != archive.FailFileMissing {
+		t.Fatalf("entry code = %q, want %q", e.LastActivationError, archive.FailFileMissing)
+	}
+	rows := notificationEvents(t, d, 1)
+	if len(rows) != 1 || detailOfEvent(t, rows[0])["code"] != archive.FailFileMissing {
+		t.Fatalf("events = %+v, want one archive.activation_failed with code %s", rows, archive.FailFileMissing)
+	}
+	// The listing says it plainly, without the path.
+	views := d.archives.List()
+	for _, v := range views {
+		if v.ID == f.contest.Entry.ID {
+			if v.LastActivationCode != archive.FailFileMissing || v.LastActivationError != archive.FailureMessage(archive.FailFileMissing) || strings.Contains(v.LastActivationError, f.contest.Path) {
+				t.Fatalf("view = %+v", v)
+			}
+		}
+	}
+}
+
+// An expected refusal — the file is missing at the preflight — is not an event.
+func TestLifecycle_RefusedActivationRecordsNoEvent(t *testing.T) {
+	t.Setenv("SM_SELF_RESTART", "1")
+	d, orch := newOrchestratedDaemon(t, nil)
+	if err := orch.Start(d.workerCtx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	ctx := context.Background()
+	res, err := d.archives.Create(ctx, archive.CreateRequest{RequestKey: "k", Label: "Contest", LogbookName: "Contest", LogbookCallsign: "G4ABC"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(res.Path); err != nil {
+		t.Fatal(err)
+	}
+	_, err = d.archives.Activate(ctx, res.Entry.ID)
+	var re *archive.RequestError
+	if !stderr.As(err, &re) || re.Code != archive.FailFileMissing || re.Message != archive.FailureMessage(archive.FailFileMissing) {
+		t.Fatalf("activate = %v, want the plain %s refusal", err, archive.FailFileMissing)
+	}
+	if rows := notificationEvents(t, d, 1); len(rows) != 0 {
+		t.Fatalf("a refused activation recorded %+v; expected refusals are not events", rows)
+	}
+	if e := d.cfgSvc.Snapshot().QsoArchiveByID(res.Entry.ID); e.LastActivationError != "" {
+		t.Fatalf("a refusal marked the entry: %q", e.LastActivationError)
 	}
 }

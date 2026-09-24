@@ -48,6 +48,7 @@ const HOME = {
     ownership: 'legacy',
     state: 'active',
     lastActivationError: '',
+    lastActivationCode: '',
     sizeBytes: 1,
     modifiedAt: null,
 } as const;
@@ -57,6 +58,7 @@ const CONTEST = {
     ownership: 'managed',
     state: 'inactive',
     lastActivationError: '',
+    lastActivationCode: '',
     sizeBytes: 1,
     modifiedAt: null,
 } as const;

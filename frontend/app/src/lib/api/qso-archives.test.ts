@@ -58,12 +58,14 @@ describe('fetchQsoArchives', () => {
             sizeBytes: 12,
             modifiedAt: '2026-09-23T10:00:00Z',
             lastActivationError: '',
+            lastActivationCode: '',
         });
         expect(out.archives[1]).toMatchObject({
             state: 'inactive',
             sizeBytes: null,
             modifiedAt: null,
             lastActivationError: 'x',
+            lastActivationCode: '',
         });
     });
 

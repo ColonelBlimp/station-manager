@@ -32,6 +32,7 @@ const HOME = {
     ownership: 'legacy',
     state: 'active',
     lastActivationError: '',
+    lastActivationCode: '',
     sizeBytes: 2048,
     modifiedAt: '2026-09-23T10:00:00Z',
 } as const;
@@ -41,6 +42,7 @@ const CONTEST = {
     ownership: 'managed',
     state: 'inactive',
     lastActivationError: 'the file at /x holds archive y',
+    lastActivationCode: '',
     sizeBytes: null,
     modifiedAt: null,
 } as const;

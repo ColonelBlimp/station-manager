@@ -20,16 +20,65 @@ import (
 // Severities per kind: raised alarms error; clears and recoveries info;
 // automatic disarms and abnormal terminations warn (ruling 7).
 var severityByKind = map[string]string{
-	stationevents.KindTxAlarmRaised:     stationevents.SeverityError,
-	stationevents.KindTxAlarmCleared:    stationevents.SeverityInfo,
-	stationevents.KindDriveAlarmRaised:  stationevents.SeverityError,
-	stationevents.KindDriveAlarmCleared: stationevents.SeverityInfo,
-	stationevents.KindTxDisarmed:        stationevents.SeverityWarn,
-	stationevents.KindSessionTerminated: stationevents.SeverityWarn,
+	stationevents.KindArchiveActivated:        stationevents.SeverityInfo,
+	stationevents.KindArchiveActivationFailed: stationevents.SeverityError,
+	stationevents.KindTxAlarmRaised:           stationevents.SeverityError,
+	stationevents.KindTxAlarmCleared:          stationevents.SeverityInfo,
+	stationevents.KindDriveAlarmRaised:        stationevents.SeverityError,
+	stationevents.KindDriveAlarmCleared:       stationevents.SeverityInfo,
+	stationevents.KindTxDisarmed:              stationevents.SeverityWarn,
+	stationevents.KindSessionTerminated:       stationevents.SeverityWarn,
 }
 
 // identMaxLen bounds every identifier field (code, cause, rung).
 const identMaxLen = 32
+
+// categoryByKind is the vocabulary's pair table inverted, so a row's category
+// is looked up rather than assumed: the archive kinds are notifications, the
+// rest alarms.
+var categoryByKind = func() map[string]string {
+	out := map[string]string{}
+	for cat, kinds := range stationevents.KindsByCategory() {
+		for _, k := range kinds {
+			out[k] = cat
+		}
+	}
+	return out
+}()
+
+// archiveID admits only the UUID shape our own catalogue mints (36 chars:
+// lower-case hex and '-'); anything else is replaced, never truncated.
+func archiveID(s string) string {
+	if len(s) != 36 {
+		return invalidIdent
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		ok := (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || c == '-'
+		if !ok {
+			return invalidIdent
+		}
+	}
+	return s
+}
+
+// archiveLabel bounds operator text (the catalogue label): trimmed, printable
+// runes only, at most ArchiveLabelMaxLen runes.
+func archiveLabel(raw string) string {
+	var b strings.Builder
+	n := 0
+	for _, r := range strings.TrimSpace(raw) {
+		if r < 0x20 || r == 0x7f {
+			continue
+		}
+		if n == stationevents.ArchiveLabelMaxLen {
+			break
+		}
+		b.WriteRune(r)
+		n++
+	}
+	return b.String()
+}
 
 // invalidIdent replaces an identifier that failed the grammar. It is a
 // constant so a row can never carry the offending text — the log line (not the
@@ -71,6 +120,17 @@ func partnerCall(raw string) string {
 	return b.String()
 }
 
+type archiveDetail struct {
+	ArchiveID string `json:"archive_id"`
+	Label     string `json:"label"`
+}
+
+type archiveFailedDetail struct {
+	ArchiveID string `json:"archive_id"`
+	Label     string `json:"label"`
+	Code      string `json:"code"`
+}
+
 type txAlarmDetail struct {
 	Code string `json:"code"`
 }
@@ -103,6 +163,12 @@ func rowFor(f stationevents.Fact, build string) sqlite.OperatorEventInput {
 		detail any
 	)
 	switch v := f.(type) {
+	case stationevents.ArchiveActivated:
+		kind, at, detail = stationevents.KindArchiveActivated, v.At, archiveDetail{ArchiveID: archiveID(v.ArchiveID), Label: archiveLabel(v.Label)}
+	case stationevents.ArchiveActivationFailed:
+		kind, at, detail = stationevents.KindArchiveActivationFailed, v.At, archiveFailedDetail{
+			ArchiveID: archiveID(v.ArchiveID), Label: archiveLabel(v.Label), Code: ident(v.Code),
+		}
 	case stationevents.TxAlarmRaised:
 		kind, at, detail = stationevents.KindTxAlarmRaised, v.At, txAlarmDetail{Code: ident(v.Code)}
 	case stationevents.TxAlarmCleared:
@@ -132,7 +198,7 @@ func rowFor(f stationevents.Fact, build string) sqlite.OperatorEventInput {
 		panic("stationevents/recorder: detail marshal: " + err.Error()) // fixed structs: cannot happen
 	}
 	return sqlite.OperatorEventInput{
-		Category:   stationevents.CategoryAlarm,
+		Category:   categoryByKind[kind],
 		Kind:       kind,
 		Severity:   severityByKind[kind],
 		Build:      build,
@@ -144,6 +210,10 @@ func rowFor(f stationevents.Fact, build string) sqlite.OperatorEventInput {
 // kindOf names a fact's kind for log lines without building the row.
 func kindOf(f stationevents.Fact) string {
 	switch f.(type) {
+	case stationevents.ArchiveActivated:
+		return stationevents.KindArchiveActivated
+	case stationevents.ArchiveActivationFailed:
+		return stationevents.KindArchiveActivationFailed
 	case stationevents.TxAlarmRaised:
 		return stationevents.KindTxAlarmRaised
 	case stationevents.TxAlarmCleared:

@@ -142,6 +142,8 @@ func TestConversion_IsTotalOverTheSealedFactSetWithFixedTypedDetails(t *testing.
 		severity string
 		keys     []string
 	}{
+		{stationevents.ArchiveActivated{ArchiveID: "019fd5c5-efcc-7193-be4f-1fee532ee315", Label: "Contest", At: at}, stationevents.KindArchiveActivated, "info", []string{"archive_id", "label"}},
+		{stationevents.ArchiveActivationFailed{ArchiveID: "019fd5c5-efcc-7193-be4f-1fee532ee315", Label: "Contest", Code: "archive_file_missing", At: at}, stationevents.KindArchiveActivationFailed, "error", []string{"archive_id", "label", "code"}},
 		{stationevents.TxAlarmRaised{Code: "tx_unconfirmed", At: at}, stationevents.KindTxAlarmRaised, "error", []string{"code"}},
 		{stationevents.TxAlarmCleared{Code: "tx_still_keyed", RaisedAt: raised, At: at}, stationevents.KindTxAlarmCleared, "info", []string{"active_ms", "code"}},
 		{stationevents.DriveAlarmRaised{Code: "drive_no_output", At: at}, stationevents.KindDriveAlarmRaised, "error", []string{"code"}},
@@ -154,8 +156,12 @@ func TestConversion_IsTotalOverTheSealedFactSetWithFixedTypedDetails(t *testing.
 	for _, c := range cases {
 		seen[reflect.TypeOf(c.fact)] = true
 		row := rowFor(c.fact, "v-build")
-		if row.Category != stationevents.CategoryAlarm || row.Kind != c.kind || row.Severity != c.severity {
-			t.Errorf("%T → (%s, %s, %s), want (alarm, %s, %s)", c.fact, row.Category, row.Kind, row.Severity, c.kind, c.severity)
+		wantCat := stationevents.CategoryAlarm
+		if strings.HasPrefix(c.kind, "archive.") {
+			wantCat = stationevents.CategoryNotification // the archive outcomes are notifications, not alarms
+		}
+		if row.Category != wantCat || row.Kind != c.kind || row.Severity != c.severity {
+			t.Errorf("%T → (%s, %s, %s), want (%s, %s, %s)", c.fact, row.Category, row.Kind, row.Severity, wantCat, c.kind, c.severity)
 		}
 		if row.Build != "v-build" || !row.OccurredAt.Equal(at) {
 			t.Errorf("%T: build=%q occurred_at=%v, want v-build at %v", c.fact, row.Build, row.OccurredAt, at)
@@ -168,18 +174,15 @@ func TestConversion_IsTotalOverTheSealedFactSetWithFixedTypedDetails(t *testing.
 		if len(keys) != len(c.keys) || !containsAll(keys, c.keys) {
 			t.Errorf("%T detail keys = %v, want exactly %v", c.fact, keys, c.keys)
 		}
-		if _, listed := stationevents.KindsByCategory()[stationevents.CategoryAlarm]; !listed {
-			t.Fatal("alarm category missing from the vocabulary")
-		}
-		if !contains(stationevents.KindsByCategory()[stationevents.CategoryAlarm], row.Kind) {
-			t.Errorf("kind %q is not in the vocabulary's alarm kinds — the schema would refuse it", row.Kind)
+		if !contains(stationevents.KindsByCategory()[wantCat], row.Kind) {
+			t.Errorf("kind %q is not in the vocabulary's %s kinds — the schema would refuse it", row.Kind, wantCat)
 		}
 	}
-	if len(seen) != 6 {
-		t.Errorf("cases cover %d fact types, want the 6 sealed ones", len(seen))
+	if len(seen) != 8 {
+		t.Errorf("cases cover %d fact types, want the 8 sealed ones", len(seen))
 	}
 	// The cleared row says how long the alarm stood, in ms from the two stamps.
-	m := detailOf(t, rowFor(cases[1].fact, "v"))
+	m := detailOf(t, rowFor(cases[3].fact, "v")) // the cleared alarm
 	if m["active_ms"] != float64(1500) {
 		t.Errorf("active_ms = %v, want 1500", m["active_ms"])
 	}
@@ -209,6 +212,21 @@ func TestConversion_BoundsIdentifiersAndNormalisesThePartnerCall(t *testing.T) {
 	}
 	if m := detailOf(t, rowFor(stationevents.TxAlarmRaised{Code: "", At: at}, "v")); m["code"] != invalidIdent {
 		t.Errorf("empty code must be replaced, got %v", m)
+	}
+	// Archive rows: the id must look like a UUID our catalogue mints, the label is
+	// bounded operator text, the code an identifier — never raw error text.
+	a := detailOf(t, rowFor(stationevents.ArchiveActivationFailed{
+		ArchiveID: "/home/x/db/qso-archives/evil.db", Label: "  Drill\t2026 " + strings.Repeat("x", 100),
+		Code: "orchestrator: start \"sqliteservice\": …", At: at}, "v"))
+	if a["archive_id"] != invalidIdent || a["code"] != invalidIdent {
+		t.Errorf("a path as archive_id and error text as code must be replaced, got %v", a)
+	}
+	if l := a["label"].(string); len([]rune(l)) != stationevents.ArchiveLabelMaxLen || !strings.HasPrefix(l, "Drill2026") {
+		t.Errorf("label = %q (runes %d), want trimmed printable text bounded to %d", l, len([]rune(l)), stationevents.ArchiveLabelMaxLen)
+	}
+	ok := detailOf(t, rowFor(stationevents.ArchiveActivated{ArchiveID: "019fd5c5-efcc-7193-be4f-1fee532ee315", Label: "Contest", At: at}, "v"))
+	if ok["archive_id"] != "019fd5c5-efcc-7193-be4f-1fee532ee315" || ok["label"] != "Contest" {
+		t.Errorf("a well-formed archive row must pass through, got %v", ok)
 	}
 }
 
