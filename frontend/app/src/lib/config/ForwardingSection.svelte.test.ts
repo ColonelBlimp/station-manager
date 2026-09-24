@@ -477,6 +477,18 @@ describe('ForwardingSection', () => {
         const status = await vi.waitFor(() => screen.getByRole('status'));
         expect(status.textContent).toMatch(/forwarding is off in this archive/i);
         expect(status.textContent).toMatch(/per-logbook bindings/i);
+        // The daemon's reason is the lead, said ONCE (drill 2: a fixed prefix
+        // doubled it on the station).
+        expect(status.textContent?.match(/forwarding is off in this archive/gi)).toHaveLength(1);
+        expect(status.textContent).toMatch(/^\s*Forwarding is off/);
+        // An enabled destination says it is not forwarding here while gated — and
+        // never wears the green pill (the eye reads green before the banner) —
+        // and its expanded card says the settings are station-wide, not in effect.
+        const pills = screen.getAllByText('not forwarding here');
+        expect(pills.length).toBeGreaterThan(0);
+        for (const pill of pills) expect(pill.className).not.toMatch(/green/);
+        expect(screen.queryByText('enabled')).toBeNull();
+        expect(screen.getAllByTestId('gated-card-note').length).toBeGreaterThan(0);
         expect(screen.getByRole('button', { name: /retry failed \(2\)/i })).toBeDisabled();
     });
 

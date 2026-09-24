@@ -40,6 +40,14 @@
     // clearable. The section says so once; Retry is disabled because the daemon
     // refuses it.
     let gate = $state<ForwardingGate>({ gated: false, reason: '' });
+    // The banner's lead is the daemon's reason, capitalised — not a fixed prefix
+    // in front of it, which read "Forwarding is off in this archive: forwarding
+    // is off in this archive until…" on the station (drill 2, 2026-09-24).
+    const gateLead = $derived(
+        gate.reason
+            ? gate.reason.charAt(0).toUpperCase() + gate.reason.slice(1)
+            : 'Forwarding is off in this archive'
+    );
     let clearing = $state<Record<string, boolean>>({});
     let retrying = $state<Record<string, boolean>>({});
 
@@ -197,9 +205,10 @@
                     class="rounded-md border border-warning bg-surface-muted px-3 py-2 text-sm text-warning"
                     role="status"
                 >
-                    Forwarding is off in this archive: {gate.reason}. QSOs logged here are kept but
-                    not uploaded anywhere; no new queue rows are created. Any existing rows remain
-                    visible and can be cleared.
+                    {gateLead}. QSOs logged here are kept but not uploaded anywhere; no new queue
+                    rows are created. Any existing rows remain visible and can be cleared. The
+                    destinations below are the station's settings; none of them receives QSOs from
+                    this archive.
                 </div>
             {/if}
 
@@ -283,11 +292,19 @@
                              glance either way. Text is lower-case; the uppercase is CSS,
                              matching the rig pill. -->
                             <span
-                                class="rounded border px-1.5 py-0.5 text-[10px] font-semibold tracking-wide uppercase {f.enabled
+                                class="rounded border px-1.5 py-0.5 text-[10px] font-semibold tracking-wide uppercase {f.enabled &&
+                                !gate.gated
                                     ? 'border-green-500/40 bg-green-50 text-green-700 dark:bg-green-500/10 dark:text-green-400'
                                     : 'border-line bg-surface-muted text-muted'}"
                             >
-                                {f.enabled ? 'enabled' : 'disabled'}
+                                <!-- Never GREEN while gated: the eye reads the green pill before
+                                     the banner (operator, drill 2, 2026-09-24), so a destination
+                                     that forwards nothing here wears the muted pill and says so. -->
+                                {f.enabled
+                                    ? gate.gated
+                                        ? 'not forwarding here'
+                                        : 'enabled'
+                                    : 'disabled'}
                             </span>
                             <!-- Live queue depth (W-0005): waiting backlog, failed
                                  rows and the in-flight batch, read APART (W-0010
@@ -309,6 +326,14 @@
                     </summary>
 
                     <div class="border-t border-line px-3 py-3">
+                        {#if gate.gated}
+                            <!-- The card edits the STATION's settings (one config.json), which
+                                 this archive does not use: say so above the checkbox that
+                                 otherwise reads as "live here" (drill 2 screenshot). -->
+                            <p class="mb-2 text-xs text-muted" data-testid="gated-card-note">
+                                Station-wide settings — not in effect in this archive.
+                            </p>
+                        {/if}
                         <label class="flex w-fit items-center gap-1.5 text-sm text-ink">
                             <input
                                 type="checkbox"

@@ -574,6 +574,34 @@ the compatibility promise that a daemon at any slice boundary starts the existin
        client-side callsign validation (a one-character callsign reached the daemon, which
        refused it 400). Fixed: the shared `isValidCallsign` rule marks the field (`input-error`,
        `aria-invalid`, inline hint) and holds the submit; rendered test + reversion proof.
+       Both fixed in `f731286b` (operator), deployed `2.0.0-alpha.3-40-gf731286b` 13:44 local.
+     - **Drill 1 PASSED (2026-09-24 13:47 local):** "Drill" created from the SPA (201 in 33 ms).
+       File `db/qso-archives/01a0d33e-4809-7002-85a1-278299e88967.db`, 135,168 B, mode 0600 in a
+       0700 directory, no `-wal`/`-shm` beside it; `archive_metadata` = (1, that id, default
+       logbook 1); logbook 1 "Drill" 7Q5MLV with its own UUIDv7; 0 QSOs; schema_migrations_log [(12, 0)]. Catalogue:
+       Home active legacy at its recorded path, Drill inactive managed with `request_key`
+       `a87a023d-…`; `pending` empty. `GET /v1/qso-archives` lists both with size and last write.
+       Log: "managed archive created (inactive until activated)"; the `.creating` file was renamed
+       into place. AC 7 (path confinement) observed on the station: the SPA named no path.
+     - **Drill 2 PASSED (13:50 local), Home → Drill:** SPA Activate → 202 →
+       "activation requested; transmit admission sealed, restarting" → the same restart path as
+       `POST /v1/restart` → "smd stopped" 13:50:16.76 → "smd starting" 13:50:21.83 (systemd
+       respawn) → "candidate activated (pending → active)" 13:50:23.22 after the graph came up.
+       `/v1/version` archive = Drill (managed), new instance id; catalogue Drill active / Home
+       inactive, `pending` cleared, no `last_activation_error`; `default_logbook_id` 1 (Drill's
+       projection); `/v1/forwarder-queues` `forwarding_gated` true with the interim reason
+       (AC 2 half: nothing queued in Drill). The page reloaded itself and showed Drill active
+       (AC 4). Operator findings → inbox: the header's "Restart daemon" button placement, and
+       the station identity block now cramped (Archive / Logbook / Rig stacked).
+       Operator question answered with evidence: Drill forwards nothing — the start on Drill
+       logged "forwarding is off in this archive…; no worker started", `/v1/forwarder-queues`
+       reports the gate, and the 2B test proves zero upload rows on a submit; the forwarders shown
+       are the station-global config (one config.json), never copied into the archive. Fixed from
+       the screenshot (uncommitted): the banner led with a fixed prefix in front of the daemon's
+       reason (doubled phrase) — the reason now leads once; while gated an enabled destination's pill is
+       never green and reads "not forwarding here" (operator: the eye reads the green pill
+       before the grey banner), and the expanded card leads with "Station-wide settings — not in
+       effect in this archive" above its Enabled checkbox; rendered test + proof.
 5. **SM Cloud identity** (AC 6): `archives` entity, `logbook_uuid`, archive/logbook UUIDs on push,
    manifest, reconcile and export/restore, per-tenant legacy-archive adoption, and the reconciler per
    logical logbook (ADR 0056 archive-aware). **It also lays the first ADR 0056 binding** (review
