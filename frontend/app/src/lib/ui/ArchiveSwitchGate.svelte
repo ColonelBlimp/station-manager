@@ -16,11 +16,25 @@
     // deliberately bypass the admission gates (a disarm or a tune stop is never
     // refused), and each is offered only while it can be acted on.
     let stopping = $state(false);
+    // A stop whose confirmation never came (the request timed out and no push
+    // matched within the grace) is UNKNOWN: the transmission may still be up.
+    // It is said on the gate surface itself, not only as a toast, because this
+    // is the one place the operator can still act (review P2).
+    let stopNote = $state('');
+    function noteStop(r: { status: string; message?: string }): void {
+        if (r.status === 'failed') {
+            toasts.error(r.message ?? 'The stop request failed.');
+        } else if (r.status === 'unknown') {
+            stopNote = r.message ?? 'The stop could not be confirmed — check the rig.';
+            toasts.warn(stopNote);
+        } else {
+            stopNote = '';
+        }
+    }
     async function disableTx(): Promise<void> {
         stopping = true;
         try {
-            const r = await armTx(false);
-            if (r.status === 'failed') toasts.error(r.message);
+            noteStop(await armTx(false));
         } finally {
             stopping = false;
         }
@@ -28,8 +42,7 @@
     async function stopTune(): Promise<void> {
         stopping = true;
         try {
-            const r = await toggleTune();
-            if (r.status === 'failed') toasts.error(r.message);
+            noteStop(await toggleTune());
         } finally {
             stopping = false;
         }
@@ -62,6 +75,11 @@
                 Logging and transmitting are paused so nothing lands in the wrong archive. Reload to
                 continue on the archive the daemon is serving.
             </p>
+            {#if stopNote}
+                <p class="mt-2 text-sm text-ink" role="status" data-testid="stop-note">
+                    {stopNote}
+                </p>
+            {/if}
             <div class="mt-4 flex flex-wrap gap-2">
                 <button
                     type="button"

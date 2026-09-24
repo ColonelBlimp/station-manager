@@ -558,7 +558,12 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      archive reopened admission while a newer one still read the replacement daemon — checks are
      now COUNTED (`beginCheck`/`endCheck`; `verifying` holds until the last settles). Tests:
      overlapping checks; stop controls absent when nothing is keyed, present and reaching the
-     seams otherwise. Two reversion proofs.
+     seams otherwise. Two reversion proofs. Committed `4353c93f` (operator).
+   - **Review of `4353c93f` (P2, fixed, uncommitted):** the gate's stop handlers discarded an
+     UNKNOWN outcome (a stop that timed out with no confirming push within the grace) — the
+     transmission may still be up; the outcome is now said on the gate surface (`stop-note`,
+     `role="status"`) and as a warn toast, the control staying usable. Fake-timer tests for the FT8
+     disable and the tune stop; one reversion proof.
 5. **SM Cloud identity** (AC 6): `archives` entity, `logbook_uuid`, archive/logbook UUIDs on push,
    manifest, reconcile and export/restore, per-tenant legacy-archive adoption, and the reconciler per
    logical logbook (ADR 0056 archive-aware). **It also lays the first ADR 0056 binding** (review

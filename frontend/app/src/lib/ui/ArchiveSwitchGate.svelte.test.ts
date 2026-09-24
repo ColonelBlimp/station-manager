@@ -104,3 +104,49 @@ describe('ArchiveSwitchGate stop controls', () => {
         expect(sent).toEqual([false]);
     });
 });
+
+// An unconfirmed stop (timed out, no confirming push within the grace) is said
+// on the gate surface: the transmission may still be up (review P2).
+describe('ArchiveSwitchGate unconfirmed stops', () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    it('an unconfirmed FT8 disable is reported on the gate and the control stays usable', async () => {
+        const ok = Promise.resolve({ ok: true, message: '' });
+        setFt8TxActions({
+            arm: () => Promise.resolve({ kind: 'timedOut' as const, message: 'request timed out' }),
+            callCq: () => ok,
+            answerCq: () => ok,
+            workCaller: () => ok,
+            abandon: () => ok,
+            next: () => ok,
+            stopAutoWork: () => ok,
+            pickAnswerer: () => ok,
+            bagAnswerer: () => ok,
+            unbagAnswerer: () => ok,
+            resumeDrain: () => ok,
+            skip: () => ok,
+        });
+        ft8State.tx.armed = true;
+        archivesState.switchUnresolved = true;
+        render(ArchiveSwitchGate);
+        flushSync();
+        await fireEvent.click(screen.getByRole('button', { name: 'Disable FT8 TX' }));
+        await vi.advanceTimersByTimeAsync(2000); // the confirm grace, no matching push
+        flushSync();
+        expect(screen.getByTestId('stop-note')).toHaveTextContent(/confirm|unknown|still/i);
+        expect(screen.getByRole('button', { name: 'Disable FT8 TX' })).toBeEnabled();
+    });
+
+    it('an unconfirmed tune stop is reported on the gate', async () => {
+        setTuneSender(() => Promise.resolve({ kind: 'timedOut', message: 'request timed out' }));
+        rig.tuneActive = true;
+        archivesState.switchUnresolved = true;
+        render(ArchiveSwitchGate);
+        flushSync();
+        await fireEvent.click(screen.getByRole('button', { name: 'Stop tune' }));
+        await vi.advanceTimersByTimeAsync(2000);
+        flushSync();
+        expect(screen.getByTestId('stop-note').textContent).not.toBe('');
+    });
+});
