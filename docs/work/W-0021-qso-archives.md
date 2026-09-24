@@ -563,7 +563,17 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      UNKNOWN outcome (a stop that timed out with no confirming push within the grace) — the
      transmission may still be up; the outcome is now said on the gate surface (`stop-note`,
      `role="status"`) and as a warn toast, the control staying usable. Fake-timer tests for the FT8
-     disable and the tune stop; one reversion proof.
+     disable and the tune stop; one reversion proof. Committed `8b0ee330`, Codex clean.
+   - **Deployed 2026-09-24 13:31 local: `2.0.0-alpha.3-39-g8b0ee330-dirty`, schema 12, Home
+     active, catalogue = Home only.** The restart wrote no catalogue line — adoption is idempotent
+     on the station (the slice 1 "second restart" check, closed). **AC 1 station drills** (no RF):
+     - Drill 1 (create "Drill"): BUG — the Logbook callsign field accepted lowercase as typed
+       (the daemon and the submit uppercase it, so the archive was created correctly; the field
+       lied meanwhile). Fixed: uppercase on input like the logging card, `font-mono uppercase`;
+       rendered test asserts the field's value; reversion proof. Uncommitted. BUG 2 — no
+       client-side callsign validation (a one-character callsign reached the daemon, which
+       refused it 400). Fixed: the shared `isValidCallsign` rule marks the field (`input-error`,
+       `aria-invalid`, inline hint) and holds the submit; rendered test + reversion proof.
 5. **SM Cloud identity** (AC 6): `archives` entity, `logbook_uuid`, archive/logbook UUIDs on push,
    manifest, reconcile and export/restore, per-tenant legacy-archive adoption, and the reconciler per
    logical logbook (ADR 0056 archive-aware). **It also lays the first ADR 0056 binding** (review

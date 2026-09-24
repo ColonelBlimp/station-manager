@@ -145,6 +145,8 @@ describe('ArchivesSection', () => {
         await fireEvent.input(screen.getByLabelText('Logbook callsign'), {
             target: { value: 'g4abc' },
         });
+        // Uppercase as typed (drill 1, 2026-09-24): the field shows what the daemon stores.
+        expect(screen.getByLabelText('Logbook callsign')).toHaveValue('G4ABC');
         const submit = screen.getByRole('button', { name: 'Create archive' });
         expect(submit).toBeEnabled();
         await fireEvent.click(submit);
@@ -162,6 +164,33 @@ describe('ArchivesSection', () => {
         await flush();
         expect(vi.mocked(createQsoArchive).mock.calls[1][0].requestKey).toBe(first.requestKey);
         expect(archivesState.creating).toBe(false);
+    });
+
+    it('a malformed callsign marks the field and holds the submit; a valid one releases it', async () => {
+        await renderLoaded();
+        await fireEvent.input(screen.getByLabelText('Label'), { target: { value: 'Drill' } });
+        await fireEvent.input(screen.getByLabelText('First logbook'), {
+            target: { value: 'Drill' },
+        });
+        const field = screen.getByLabelText('Logbook callsign');
+        await fireEvent.input(field, { target: { value: 'g' } });
+        expect(screen.getByTestId('callsign-error')).toBeInTheDocument();
+        expect(field).toHaveAttribute('aria-invalid', 'true');
+        expect(screen.getByRole('button', { name: 'Create archive' })).toBeDisabled();
+        await fireEvent.input(field, { target: { value: 'abcdef' } }); // letters only: no digit
+        expect(screen.getByRole('button', { name: 'Create archive' })).toBeDisabled();
+        await fireEvent.input(field, { target: { value: '7q5mlv' } });
+        expect(screen.queryByTestId('callsign-error')).toBeNull();
+        expect(screen.getByRole('button', { name: 'Create archive' })).toBeEnabled();
+        vi.mocked(createQsoArchive).mockResolvedValue({
+            kind: 'refused',
+            code: 'x',
+            message: 'no',
+        });
+        await fireEvent.click(screen.getByRole('button', { name: 'Create archive' }));
+        await flush();
+        expect(createQsoArchive).toHaveBeenCalledTimes(1);
+        expect(vi.mocked(createQsoArchive).mock.calls[0][0].logbookCallsign).toBe('7Q5MLV');
     });
 
     it('a created archive clears the form', async () => {

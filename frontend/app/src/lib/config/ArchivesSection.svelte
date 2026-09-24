@@ -15,6 +15,7 @@
         pendingArchive,
     } from './archives.svelte';
     import type { QsoArchive } from '../api/qso-archives';
+    import { isValidCallsign } from '../validators/callsign';
 
     onMount(() => {
         if (!archivesState.loaded) void loadArchives();
@@ -27,8 +28,24 @@
     let logbookName = $state('');
     let logbookCallsign = $state('');
     let requestKey = $state('');
+    // A callsign is uppercase as typed (drill 1, 2026-09-24): the same rule the
+    // logging card applies, so the field never shows a value the daemon would
+    // not store.
+    function upperCallsign(): void {
+        logbookCallsign = logbookCallsign.toUpperCase();
+    }
+    // The callsign is validated as typed with the SPA's shared rule (3–32
+    // chars, a letter and a digit — the daemon's rule): a malformed value marks
+    // the field and holds the submit (drill 1, 2026-09-24: the form accepted a
+    // one-character callsign and left the refusal to the daemon).
+    const callsignBad = $derived(
+        logbookCallsign.trim() !== '' && isValidCallsign(logbookCallsign) !== null
+    );
     const canSubmit = $derived(
-        label.trim() !== '' && logbookName.trim() !== '' && logbookCallsign.trim() !== ''
+        label.trim() !== '' &&
+            logbookName.trim() !== '' &&
+            logbookCallsign.trim() !== '' &&
+            !callsignBad
     );
 
     async function onCreate(e: SubmitEvent): Promise<void> {
@@ -181,7 +198,19 @@
             </label>
             <label class="flex w-40 flex-col gap-1 text-sm text-ink">
                 Logbook callsign
-                <input class="input" bind:value={logbookCallsign} autocapitalize="characters" />
+                <input
+                    class="input font-mono uppercase"
+                    class:input-error={callsignBad}
+                    aria-invalid={callsignBad}
+                    bind:value={logbookCallsign}
+                    oninput={upperCallsign}
+                    autocapitalize="characters"
+                />
+                {#if callsignBad}
+                    <span class="text-xs text-invalid" data-testid="callsign-error"
+                        >3–32 letters, digits or /, with at least one letter and one digit</span
+                    >
+                {/if}
             </label>
             <button
                 type="submit"
