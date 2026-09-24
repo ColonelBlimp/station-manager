@@ -549,6 +549,16 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      window shortcut included) refuses a START while gated (a stop never). Tests: verifying
      blocks (reconnect + boot bracket), latch-before-reload (activation + reconnect), inert cover,
      tune gate. Four reversion proofs.
+   - **Follow-up committed `230d08bd` (operator); its Codex review (P1 + P2), fixed, uncommitted:**
+     (1) the inert cover made the STOP controls unreachable while a run or a tune carrier could
+     still be keyed on the daemon — the overlay now offers "Disable FT8 TX" (while `ft8State.tx.armed`)
+     and "Stop tune" (while `rig.tuneActive`), each reaching its seam (a disarm and a tune stop
+     bypass the admission gates by design). (2) overlapping reconnect checks each cleared the
+     shared `verifying` flag when their own read finished, so an older check finding the original
+     archive reopened admission while a newer one still read the replacement daemon — checks are
+     now COUNTED (`beginCheck`/`endCheck`; `verifying` holds until the last settles). Tests:
+     overlapping checks; stop controls absent when nothing is keyed, present and reaching the
+     seams otherwise. Two reversion proofs.
 5. **SM Cloud identity** (AC 6): `archives` entity, `logbook_uuid`, archive/logbook UUIDs on push,
    manifest, reconcile and export/restore, per-tenant legacy-archive adoption, and the reconciler per
    logical logbook (ADR 0056 archive-aware). **It also lays the first ADR 0056 binding** (review

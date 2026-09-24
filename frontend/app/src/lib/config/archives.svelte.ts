@@ -287,6 +287,20 @@ async function keepWatching(before: string): Promise<void> {
 let bootIdentity: DaemonIdentity | null = null;
 const IDENTITY_TRIES = 3;
 
+// Overlapping identity checks (successive reconnects launch one each, unawaited)
+// are COUNTED: `verifying` stays true until the LAST one settles, so an older
+// check finding the original archive cannot reopen admission while a newer one
+// is still reading the replacement daemon's identity (review P2).
+let pendingChecks = 0;
+function beginCheck(): void {
+    pendingChecks++;
+    archivesState.verifying = true;
+}
+function endCheck(): void {
+    pendingChecks = Math.max(0, pendingChecks - 1);
+    archivesState.verifying = pendingChecks > 0;
+}
+
 /**
  * Boot: run the archive-scoped reads (station context, catalogue) BRACKETED by
  * two identity reads, so the identity this tab records is provably the one its
@@ -298,7 +312,7 @@ const IDENTITY_TRIES = 3;
  * as a daemon answers again, so a plain outage at boot heals itself.
  */
 export async function bootArchiveScoped<T>(reads: () => Promise<T>): Promise<T> {
-    archivesState.verifying = true; // the shell may open inside `reads`; nothing is admitted until the bracket decides
+    beginCheck(); // the shell may open inside `reads`; nothing is admitted until the bracket decides
     let before: DaemonIdentity | null;
     let result: T;
     let after: DaemonIdentity | null;
@@ -307,7 +321,7 @@ export async function bootArchiveScoped<T>(reads: () => Promise<T>): Promise<T> 
         result = await reads();
         after = await readIdentityWithRetries();
     } finally {
-        archivesState.verifying = false;
+        endCheck();
     }
     if (before !== null && after !== null) {
         if (before.instance === after.instance && before.archiveId === after.archiveId) {
@@ -359,12 +373,12 @@ async function readIdentityWithRetries(): Promise<DaemonIdentity | null> {
  */
 export async function verifyArchiveGeneration(): Promise<void> {
     if (archivesState.switchUnresolved) return;
-    archivesState.verifying = true;
+    beginCheck();
     let now: DaemonIdentity | null;
     try {
         now = await readIdentityWithRetries();
     } finally {
-        archivesState.verifying = false;
+        endCheck();
     }
     if (now === null) {
         archivesState.switchUnresolved = true;
@@ -393,6 +407,7 @@ export function _setBootIdentityForTests(id: DaemonIdentity | null): void {
 }
 export function _resetArchivesForTests(): void {
     bootIdentity = null;
+    pendingChecks = 0;
     archivesState.list = [];
     archivesState.loaded = false;
     archivesState.loading = false;

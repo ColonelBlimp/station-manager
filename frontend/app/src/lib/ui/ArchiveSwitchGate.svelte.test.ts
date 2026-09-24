@@ -14,6 +14,8 @@ vi.mock('../api/restart', () => ({
 }));
 
 import ArchiveSwitchGate from './ArchiveSwitchGate.svelte';
+import { ft8State, setFt8TxActions, resetFt8ForTests } from '../operate/ft8.svelte';
+import { rig, setTuneSender } from '../operate/rig.svelte';
 import {
     archivesState,
     _resetArchivesForTests,
@@ -22,7 +24,11 @@ import {
 
 // The unresolved-switch gate covers every view and offers exactly one way out.
 beforeEach(() => _resetArchivesForTests());
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+    vi.restoreAllMocks();
+    resetFt8ForTests();
+    rig.tuneActive = false;
+});
 
 describe('ArchiveSwitchGate', () => {
     it('is absent while no switch is unresolved', () => {
@@ -42,5 +48,59 @@ describe('ArchiveSwitchGate', () => {
         expect(dialog).toHaveTextContent('did not answer as a new instance');
         await fireEvent.click(screen.getByRole('button', { name: 'Reload now' }));
         expect(reloads).toBe(1);
+    });
+});
+
+// The stop paths stay reachable through the gate (review P1): each is offered
+// only while it can be acted on, and reaches its seam although the rest of the
+// app is inert.
+describe('ArchiveSwitchGate stop controls', () => {
+    it('offers no stop control while nothing is keyed', () => {
+        archivesState.switchUnresolved = true;
+        render(ArchiveSwitchGate);
+        flushSync();
+        expect(screen.queryByRole('button', { name: 'Disable FT8 TX' })).toBeNull();
+        expect(screen.queryByRole('button', { name: 'Stop tune' })).toBeNull();
+    });
+
+    it('Disable FT8 TX reaches the disarm seam while FT8 is armed', async () => {
+        const armed: boolean[] = [];
+        const ok = Promise.resolve({ ok: true, message: '' });
+        setFt8TxActions({
+            arm: (a) => (armed.push(a), Promise.resolve({ kind: 'accepted' as const })),
+            callCq: () => ok,
+            answerCq: () => ok,
+            workCaller: () => ok,
+            abandon: () => ok,
+            next: () => ok,
+            stopAutoWork: () => ok,
+            pickAnswerer: () => ok,
+            bagAnswerer: () => ok,
+            unbagAnswerer: () => ok,
+            resumeDrain: () => ok,
+            skip: () => ok,
+        });
+        ft8State.tx.armed = true;
+        archivesState.switchUnresolved = true;
+        render(ArchiveSwitchGate);
+        flushSync();
+        await fireEvent.click(screen.getByRole('button', { name: 'Disable FT8 TX' }));
+        await new Promise((r) => setTimeout(r, 0));
+        expect(armed).toEqual([false]);
+    });
+
+    it('Stop tune reaches the tune seam while the carrier is keyed', async () => {
+        const sent: boolean[] = [];
+        setTuneSender((active) => {
+            sent.push(active);
+            return Promise.resolve({ kind: 'accepted' });
+        });
+        rig.tuneActive = true;
+        archivesState.switchUnresolved = true;
+        render(ArchiveSwitchGate);
+        flushSync();
+        await fireEvent.click(screen.getByRole('button', { name: 'Stop tune' }));
+        await new Promise((r) => setTimeout(r, 0));
+        expect(sent).toEqual([false]);
     });
 });

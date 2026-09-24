@@ -6,6 +6,34 @@
     // overlay blocks every operation until the page reloads: by the operator, or
     // by the store as soon as it can prove the daemon again. Above every route.
     import { archivesState, reloadNow } from '../config/archives.svelte';
+    import { armTx, ft8State } from '../operate/ft8.svelte';
+    import { rig, toggleTune } from '../operate/rig.svelte';
+    import { toasts } from '../ui/toasts.svelte';
+
+    // The STOP paths stay reachable through the gate (review P1): an unproven
+    // binding does not mean the daemon stopped — an FT8 run or a tune carrier can
+    // still be keyed on the daemon — and the covered app is inert. Both stops
+    // deliberately bypass the admission gates (a disarm or a tune stop is never
+    // refused), and each is offered only while it can be acted on.
+    let stopping = $state(false);
+    async function disableTx(): Promise<void> {
+        stopping = true;
+        try {
+            const r = await armTx(false);
+            if (r.status === 'failed') toasts.error(r.message);
+        } finally {
+            stopping = false;
+        }
+    }
+    async function stopTune(): Promise<void> {
+        stopping = true;
+        try {
+            const r = await toggleTune();
+            if (r.status === 'failed') toasts.error(r.message);
+        } finally {
+            stopping = false;
+        }
+    }
 
     // Focus lands on the one control as the gate appears: with the rest of the
     // app inert, keyboard users are not left on a control they can no longer see.
@@ -34,12 +62,30 @@
                 Logging and transmitting are paused so nothing lands in the wrong archive. Reload to
                 continue on the archive the daemon is serving.
             </p>
-            <button
-                type="button"
-                class="btn btn-primary mt-4"
-                bind:this={reloadButton}
-                onclick={reloadNow}>Reload now</button
-            >
+            <div class="mt-4 flex flex-wrap gap-2">
+                <button
+                    type="button"
+                    class="btn btn-primary"
+                    bind:this={reloadButton}
+                    onclick={reloadNow}>Reload now</button
+                >
+                {#if ft8State.tx.armed}
+                    <button
+                        type="button"
+                        class="btn"
+                        disabled={stopping}
+                        onclick={() => void disableTx()}>Disable FT8 TX</button
+                    >
+                {/if}
+                {#if rig.tuneActive}
+                    <button
+                        type="button"
+                        class="btn"
+                        disabled={stopping}
+                        onclick={() => void stopTune()}>Stop tune</button
+                    >
+                {/if}
+            </div>
         </div>
     </div>
 {/if}

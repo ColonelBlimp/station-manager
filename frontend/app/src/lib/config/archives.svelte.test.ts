@@ -432,6 +432,24 @@ describe('the gate while a verification is pending, and latching before a reload
         expect(archiveSwitchGate()).toBeNull();
     });
 
+    it('an older check settling cannot reopen admission while a newer one is still pending', async () => {
+        _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
+        const releases: ((v: { instance: string; archiveId: string }) => void)[] = [];
+        vi.mocked(fetchDaemonIdentity).mockImplementation(
+            () => new Promise((r) => releases.push(r))
+        );
+        const first = verifyArchiveGeneration();
+        const second = verifyArchiveGeneration();
+        await Promise.resolve();
+        expect(releases).toHaveLength(2);
+        releases[0]({ instance: 'i1', archiveId: 'a' }); // the older check: same archive
+        await first;
+        expect(archiveSwitchGate()).not.toBeNull(); // the newer check is still reading
+        releases[1]({ instance: 'i2', archiveId: 'b' }); // the newer check: the replacement daemon
+        await second;
+        expect(reloads).toBe(1);
+    });
+
     it('operations are refused for the whole boot bracket, including while the shell opens inside it', async () => {
         vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i1', archiveId: 'a' });
         let gateInsideReads: string | null = 'unset';
