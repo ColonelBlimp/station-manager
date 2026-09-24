@@ -40,6 +40,7 @@ import {
     setFt4Frequencies,
     ftFrequencyFor,
     setFtProfileLabel,
+    setTuneGate,
 } from './rig.svelte';
 
 beforeEach(() => {
@@ -1239,5 +1240,30 @@ describe('the FT data literal is named by the last opened profile', () => {
         catLink.onRigState({ vfoA: 14_074_000, mode: 'DATA-U' });
         setFtProfileLabel('FT8');
         expect(rig.mode).toBe('FT8');
+    });
+});
+
+// The archive-switch gate (ADR 0071, fail closed): a tune START is refused at the
+// seam while the SPA cannot prove its archive binding; a STOP never is.
+describe('archive-switch tune gate', () => {
+    afterEach(() => setTuneGate(null));
+    it('refuses a start with the gate message and never reaches the sender; a stop passes', async () => {
+        const sent: boolean[] = [];
+        setTuneSender((active) => {
+            sent.push(active);
+            return Promise.resolve({ kind: 'refused', message: 'x' });
+        });
+        setTuneGate(
+            () =>
+                'An archive switch is unresolved — reload the page before logging or transmitting.'
+        );
+        rig.tuneActive = false;
+        const r = await toggleTune();
+        expect(r.status).toBe('failed');
+        if (r.status === 'failed') expect(r.message).toContain('archive switch');
+        expect(sent).toEqual([]);
+        rig.tuneActive = true;
+        await toggleTune();
+        expect(sent).toEqual([false]);
     });
 });

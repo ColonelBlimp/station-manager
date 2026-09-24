@@ -16,6 +16,7 @@ import {
     setFt8Frequencies,
     setFt4Frequencies,
     setFt8Mode,
+    setTuneGate,
 } from './lib/operate/rig.svelte';
 import { openRigEvents } from './lib/api/rig-sse';
 import {
@@ -456,6 +457,7 @@ void loadBuildIdentity();
 // TX-starting intent are refused while a switch is in flight or unresolved.
 setSubmitGate(archiveSwitchGate);
 setFt8AdmissionGate(archiveSwitchGate);
+setTuneGate(archiveSwitchGate);
 
 // The archive-scoped boot reads — the station context (default logbook id, name,
 // count) and the archive catalogue for the header selector — run inside the

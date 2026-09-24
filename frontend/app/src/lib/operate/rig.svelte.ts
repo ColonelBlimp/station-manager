@@ -250,6 +250,15 @@ export function setTuneSender(fn: TuneSender): void {
     tuneSender = fn;
 }
 
+// The archive-switch gate (ADR 0071): the tune carrier is a keyed transmission,
+// so a tune start is refused while the SPA cannot prove its archive binding —
+// the window-level shortcut reaches this seam too, which the gate overlay's
+// inert cover does not intercept. Injected by main.ts; null when none is wired.
+let tuneGate: (() => string | null) | null = null;
+export function setTuneGate(fn: (() => string | null) | null): void {
+    tuneGate = fn;
+}
+
 // The grace window (ms) after a fired timeout during which a matching SSE push
 // still resolves the outcome as observed (operator-ratified 2026-09-02).
 const CONFIRM_GRACE_MS = 2000;
@@ -379,6 +388,8 @@ export async function toggleTune(): Promise<RigWriteResult> {
         return { status: 'failed', kind: 'transport', message: 'Tune control is unavailable.' };
     }
     const target = !rig.tuneActive;
+    const gated = target ? (tuneGate?.() ?? null) : null; // a STOP is never refused
+    if (gated !== null) return { status: 'failed', kind: 'refused', message: gated };
     const send = tuneSender;
     return confirmWrite(
         'tune',

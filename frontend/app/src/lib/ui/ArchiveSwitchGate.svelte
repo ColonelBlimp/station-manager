@@ -6,6 +6,13 @@
     // overlay blocks every operation until the page reloads: by the operator, or
     // by the store as soon as it can prove the daemon again. Above every route.
     import { archivesState, reloadNow } from '../config/archives.svelte';
+
+    // Focus lands on the one control as the gate appears: with the rest of the
+    // app inert, keyboard users are not left on a control they can no longer see.
+    let reloadButton = $state<HTMLButtonElement | null>(null);
+    $effect(() => {
+        if (archivesState.switchUnresolved) reloadButton?.focus();
+    });
 </script>
 
 {#if archivesState.switchUnresolved}
@@ -27,8 +34,11 @@
                 Logging and transmitting are paused so nothing lands in the wrong archive. Reload to
                 continue on the archive the daemon is serving.
             </p>
-            <button type="button" class="btn btn-primary mt-4" onclick={reloadNow}
-                >Reload now</button
+            <button
+                type="button"
+                class="btn btn-primary mt-4"
+                bind:this={reloadButton}
+                onclick={reloadNow}>Reload now</button
             >
         </div>
     </div>

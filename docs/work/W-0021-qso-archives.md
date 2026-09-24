@@ -535,6 +535,20 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      reloads. The overlay title is now "Archive binding unproven" (it covers boot, reconnect and
      activation). RED test: the latch is asserted right after `bootArchiveScoped`, without
      calling `verifyArchiveGeneration`. Two reversion proofs.
+   - **4 committed `bb4a29a7`; Codex review (2 P1 + P2), fixed in a follow-up (uncommitted):**
+     (1) operations stayed admitted while an identity verification was pending (a reconnect
+     check up to 3 × 15 s; the boot bracket's trailing read after the shell opened) —
+     `archivesState.verifying` now spans `verifyArchiveGeneration` and the whole
+     `bootArchiveScoped` bracket and `archiveSwitchGate()` refuses meanwhile (no overlay, a
+     refusal message). (2) a reload request could be cancelled by the Settings leave-guard's
+     beforeunload prompt, leaving a page with stale bindings and an open gate — every reload the
+     store requests now goes through `requestReload(detail)`, which LATCHES the gate first; a
+     surviving page stays gated with the overlay. (3) the overlay left the covered app keyboard-
+     operable — App now wraps every route branch in `<div inert={switchUnresolved}>`, the
+     overlay focuses its Reload control, and the tune seam (`rig.svelte.ts` `setTuneGate`,
+     window shortcut included) refuses a START while gated (a stop never). Tests: verifying
+     blocks (reconnect + boot bracket), latch-before-reload (activation + reconnect), inert cover,
+     tune gate. Four reversion proofs.
 5. **SM Cloud identity** (AC 6): `archives` entity, `logbook_uuid`, archive/logbook UUIDs on push,
    manifest, reconcile and export/restore, per-tenant legacy-archive adoption, and the reconciler per
    logical logbook (ADR 0056 archive-aware). **It also lays the first ADR 0056 binding** (review

@@ -37,6 +37,10 @@ export const archivesState: {
      *  gated until a reload (review P1: fail closed). Cleared only by reload. */
     switchUnresolved: boolean;
     switchDetail: string;
+    /** An identity verification (boot bracket or reconnect check) is in
+     *  flight: the binding is unproven until it settles, so operations are
+     *  refused meanwhile (review P1) without raising the overlay. */
+    verifying: boolean;
 } = $state({
     list: [],
     loaded: false,
@@ -47,6 +51,7 @@ export const archivesState: {
     activating: false,
     switchUnresolved: false,
     switchDetail: '',
+    verifying: false,
 });
 
 /** The message that blocks an archive-scoped operation (QSO submit, FT8
@@ -58,6 +63,9 @@ export function archiveSwitchGate(): string | null {
     }
     if (archivesState.activating) {
         return 'An archive switch is in progress — wait for the daemon to restart and the page to reload.';
+    }
+    if (archivesState.verifying) {
+        return 'Station Manager is confirming which archive the daemon serves — try again in a moment.';
     }
     return null;
 }
@@ -71,6 +79,16 @@ export function archiveSwitchGate(): string | null {
 // catalogue read succeeded — never on an unknown outcome. Injectable for tests
 // (jsdom cannot reload).
 let reloadPage: () => void = () => window.location.reload();
+
+/** Every reload the store requests goes through here: the gate is LATCHED
+ *  first (review P1), so an unload the operator cancels — the Settings
+ *  leave-guard prompts when it holds unsaved edits — leaves a page that is
+ *  still gated, never one running on stale bindings with the gate open. */
+function requestReload(detail: string): void {
+    archivesState.switchUnresolved = true;
+    archivesState.switchDetail = detail;
+    reloadPage();
+}
 
 /** The gate's own way out: reload now. */
 export function reloadNow(): void {
@@ -235,7 +253,7 @@ export async function activateArchive(
 async function settleRestart(before: string): Promise<void> {
     if (before !== '' && (await waitForDaemonBack(before))) {
         toasts.info('Daemon restarted. Reloading…');
-        reloadPage();
+        requestReload('The daemon restarted on another archive; this page must reload to rebind.');
         return;
     }
     archivesState.switchUnresolved = true;
@@ -251,7 +269,9 @@ async function keepWatching(before: string): Promise<void> {
     for (let round = 0; round < WATCH_ROUNDS && archivesState.switchUnresolved; round++) {
         if (await waitForDaemonBack(before)) {
             toasts.info('Daemon restarted. Reloading…');
-            reloadPage();
+            requestReload(
+                'The daemon restarted on another archive; this page must reload to rebind.'
+            );
             return;
         }
     }
@@ -278,16 +298,26 @@ const IDENTITY_TRIES = 3;
  * as a daemon answers again, so a plain outage at boot heals itself.
  */
 export async function bootArchiveScoped<T>(reads: () => Promise<T>): Promise<T> {
-    const before = await readIdentityWithRetries();
-    const result = await reads();
-    const after = await readIdentityWithRetries();
+    archivesState.verifying = true; // the shell may open inside `reads`; nothing is admitted until the bracket decides
+    let before: DaemonIdentity | null;
+    let result: T;
+    let after: DaemonIdentity | null;
+    try {
+        before = await readIdentityWithRetries();
+        result = await reads();
+        after = await readIdentityWithRetries();
+    } finally {
+        archivesState.verifying = false;
+    }
     if (before !== null && after !== null) {
         if (before.instance === after.instance && before.archiveId === after.archiveId) {
             bootIdentity = after;
         } else {
             bootIdentity = null;
             toasts.info('The daemon changed while the page was loading. Reloading…');
-            reloadPage();
+            requestReload(
+                'The daemon changed while the page was loading; this page must reload to rebind.'
+            );
         }
         return result;
     }
@@ -305,7 +335,9 @@ export async function bootArchiveScoped<T>(reads: () => Promise<T>): Promise<T> 
 async function watchForDaemon(): Promise<void> {
     for (let round = 0; round < WATCH_ROUNDS && archivesState.switchUnresolved; round++) {
         if (await waitForDaemonBack('')) {
-            reloadPage();
+            requestReload(
+                'The daemon answered again; this page must reload to prove its archive binding.'
+            );
             return;
         }
     }
@@ -327,7 +359,13 @@ async function readIdentityWithRetries(): Promise<DaemonIdentity | null> {
  */
 export async function verifyArchiveGeneration(): Promise<void> {
     if (archivesState.switchUnresolved) return;
-    const now = await readIdentityWithRetries();
+    archivesState.verifying = true;
+    let now: DaemonIdentity | null;
+    try {
+        now = await readIdentityWithRetries();
+    } finally {
+        archivesState.verifying = false;
+    }
     if (now === null) {
         archivesState.switchUnresolved = true;
         archivesState.switchDetail =
@@ -338,12 +376,14 @@ export async function verifyArchiveGeneration(): Promise<void> {
         // No proven baseline (the boot bracket could not read or agree): the
         // stores may belong to an earlier archive. Rebind — never adopt.
         toasts.info('Reconnected to the daemon; reloading to rebind.');
-        reloadPage();
+        requestReload(
+            'This page reconnected without a proven archive binding; it must reload to rebind.'
+        );
         return;
     }
     if (now.archiveId !== bootIdentity.archiveId) {
         toasts.info('The daemon now serves another archive. Reloading…');
-        reloadPage();
+        requestReload('The daemon now serves another archive; this page must reload to rebind.');
     }
 }
 
@@ -362,6 +402,7 @@ export function _resetArchivesForTests(): void {
     archivesState.activating = false;
     archivesState.switchUnresolved = false;
     archivesState.switchDetail = '';
+    archivesState.verifying = false;
 }
 export function _setReloadForTests(fn: () => void): void {
     reloadPage = fn;

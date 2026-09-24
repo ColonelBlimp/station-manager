@@ -134,7 +134,7 @@ describe('activateArchive', () => {
         expect(waitForDaemonBack).toHaveBeenCalledWith('inst-1');
         expect(reloads).toBe(1);
         expect(hasToast('info', /Daemon restarted\. Reloading/)).toBe(true);
-        expect(archivesState.switchUnresolved).toBe(false);
+        expect(archivesState.switchUnresolved).toBe(true); // latched until the page actually unloads
         expect(archivesState.activating).toBe(false);
     });
 
@@ -150,7 +150,7 @@ describe('activateArchive', () => {
         vi.mocked(fetchQsoArchives).mockResolvedValue({ kind: 'error', message: 'down' });
         await activateArchive('b', () => true);
         expect(reloads).toBe(1);
-        expect(archivesState.switchUnresolved).toBe(false);
+        expect(archivesState.switchUnresolved).toBe(true);
     });
 
     it('no baseline instance: the generation cannot be proven → the app is GATED, no reload, no watch', async () => {
@@ -188,10 +188,11 @@ describe('activateArchive', () => {
             .mockResolvedValueOnce(true); // watch round 2: the new instance
         await activateArchive('b', () => true);
         expect(archivesState.switchUnresolved).toBe(true);
-        expect(archivesState.switchDetail).toMatch(/did not answer as a new instance/);
         for (let i = 0; i < 6; i++) await Promise.resolve(); // the watch runs in the background
         expect(waitForDaemonBack).toHaveBeenCalledTimes(3);
         expect(reloads).toBe(1);
+        expect(archivesState.switchUnresolved).toBe(true); // latched through the reload request
+        expect(archivesState.switchDetail).toMatch(/restarted on another archive/);
     });
 
     it('the watch gives up after its rounds and leaves the gate up', async () => {
@@ -208,6 +209,7 @@ describe('activateArchive', () => {
         expect(waitForDaemonBack).toHaveBeenCalledTimes(11); // 1 + WATCH_ROUNDS
         expect(reloads).toBe(0);
         expect(archivesState.switchUnresolved).toBe(true);
+        expect(archivesState.switchDetail).toMatch(/did not answer as a new instance/);
     });
 
     it('a non-timeout transport failure is an UNCONFIRMED write: reconciled like a timeout, gated when unproven', async () => {
@@ -412,6 +414,63 @@ describe('bootArchiveScoped — the identity is bracketed around the archive-sco
         for (let i = 0; i < 30; i++) await Promise.resolve();
         expect(reloads).toBe(0);
         expect(archivesState.switchUnresolved).toBe(true);
+    });
+});
+
+describe('the gate while a verification is pending, and latching before a reload', () => {
+    it('operations are refused while the reconnect identity check is in flight', async () => {
+        _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
+        let release: (v: { instance: string; archiveId: string }) => void = () => {};
+        vi.mocked(fetchDaemonIdentity).mockReturnValue(new Promise((r) => (release = r)));
+        const pending = verifyArchiveGeneration();
+        await Promise.resolve();
+        expect(archivesState.verifying).toBe(true);
+        expect(archiveSwitchGate()).toMatch(/confirming which archive/);
+        release({ instance: 'i1', archiveId: 'a' });
+        await pending;
+        expect(archivesState.verifying).toBe(false);
+        expect(archiveSwitchGate()).toBeNull();
+    });
+
+    it('operations are refused for the whole boot bracket, including while the shell opens inside it', async () => {
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i1', archiveId: 'a' });
+        let gateInsideReads: string | null = 'unset';
+        await bootArchiveScoped(() => {
+            gateInsideReads = archiveSwitchGate();
+            return Promise.resolve();
+        });
+        expect(gateInsideReads).toMatch(/confirming which archive/);
+        expect(archiveSwitchGate()).toBeNull();
+    });
+
+    it('a proven switch latches the gate BEFORE requesting the reload, so a cancelled unload stays gated', async () => {
+        await loadArchives();
+        vi.mocked(fetchDaemonInstance).mockResolvedValue('inst-1');
+        vi.mocked(activateQsoArchive).mockResolvedValue({
+            kind: 'accepted',
+            id: 'b',
+            durability: 'durable',
+        });
+        vi.mocked(waitForDaemonBack).mockResolvedValue(true);
+        let latchedAtReload = false;
+        _setReloadForTests(() => {
+            latchedAtReload = archivesState.switchUnresolved;
+        });
+        await activateArchive('b', () => true);
+        expect(latchedAtReload).toBe(true);
+        expect(archivesState.switchUnresolved).toBe(true); // the page survived the (cancelled) unload: still gated
+        expect(archiveSwitchGate()).not.toBeNull();
+    });
+
+    it('a changed archive on reconnect latches before its reload too', async () => {
+        _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i2', archiveId: 'b' });
+        let latchedAtReload = false;
+        _setReloadForTests(() => {
+            latchedAtReload = archivesState.switchUnresolved;
+        });
+        await verifyArchiveGeneration();
+        expect(latchedAtReload).toBe(true);
     });
 });
 

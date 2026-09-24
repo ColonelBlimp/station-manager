@@ -4,6 +4,7 @@
     import TxAlarmBanner from './lib/ui/TxAlarmBanner.svelte';
     import DriveAlarmBanner from './lib/ui/DriveAlarmBanner.svelte';
     import ArchiveSwitchGate from './lib/ui/ArchiveSwitchGate.svelte';
+    import { archivesState } from './lib/config/archives.svelte';
     import DriveMonitorNotice from './lib/ui/DriveMonitorNotice.svelte';
     import Toasts from './lib/ui/Toasts.svelte';
     import SetupCard from './lib/ui/SetupCard.svelte';
@@ -96,54 +97,59 @@
      branch — the full-window Map tab included, which has no shell chrome. -->
 <ArchiveSwitchGate />
 
-{#if setup.status === 'loading'}
-    <Toasts />
-{:else if setupGateOpen()}
-    <SetupCard />
-    <Toasts />
-{:else if router.view === 'map'}
-    <!-- Full-window, no shell chrome: the map opens in its OWN tab (second
+<!-- Everything under the gate is INERT while it shows (review P2): no click,
+     no focus, no keyboard reach into the covered controls — the window-level
+     shortcuts are refused at their seams. -->
+<div inert={archivesState.switchUnresolved}>
+    {#if setup.status === 'loading'}
+        <Toasts />
+    {:else if setupGateOpen()}
+        <SetupCard />
+        <Toasts />
+    {:else if router.view === 'map'}
+        <!-- Full-window, no shell chrome: the map opens in its OWN tab (second
          monitor) from the Session tile, so sidebar/header would be dead
          weight here. Lazy import = its own chunk (ADR 0044 code-splitting):
          the bundled basemap + d3-geo never load unless the map is opened. -->
-    {#await import('./lib/map/MapView.svelte') then mapModule}
-        <mapModule.default />
-    {/await}
-{:else}
-    <Sidebar />
+        {#await import('./lib/map/MapView.svelte') then mapModule}
+            <mapModule.default />
+        {/await}
+    {:else}
+        <Sidebar />
 
-    <!-- System messages (info/warn/error) — single mount, fixed overlay, never
+        <!-- System messages (info/warn/error) — single mount, fixed overlay, never
          reflows the working surface. Pushed via lib/ui/toasts.svelte.ts. -->
-    <Toasts />
+        <Toasts />
 
-    <div class="content-wrap flex h-screen flex-col pl-[var(--sidebar-w)]">
-        <Header />
-        <TxAlarmBanner />
-        <DriveAlarmBanner />
-        <DriveMonitorNotice />
-        <!-- main is the horizontal (and vertical) scroll container. Its width is
+        <div class="content-wrap flex h-screen flex-col pl-[var(--sidebar-w)]">
+            <Header />
+            <TxAlarmBanner />
+            <DriveAlarmBanner />
+            <DriveMonitorNotice />
+            <!-- main is the horizontal (and vertical) scroll container. Its width is
              bounded by the rail offsets (content-wrap pl/pr), so a min-width card
              scrolls WITHIN it and the fixed rails can't scroll over the card. -->
-        <main class="flex-1 overflow-auto bg-canvas">
-            <div class="p-4 sm:p-6 lg:p-8">
-                {#if router.view === 'operate'}
-                    <Operate />
-                {:else if router.view === 'logbook'}
-                    {#await import('./lib/logbook/Logbook.svelte') then logbookModule}
-                        <logbookModule.default />
-                    {/await}
-                {:else if router.view === 'events'}
-                    <!-- Station Events (W-0020): its own chunk like the Logbook; the
+            <main class="flex-1 overflow-auto bg-canvas">
+                <div class="p-4 sm:p-6 lg:p-8">
+                    {#if router.view === 'operate'}
+                        <Operate />
+                    {:else if router.view === 'logbook'}
+                        {#await import('./lib/logbook/Logbook.svelte') then logbookModule}
+                            <logbookModule.default />
+                        {/await}
+                    {:else if router.view === 'events'}
+                        <!-- Station Events (W-0020): its own chunk like the Logbook; the
                          durable history the header's slide-over used to show. -->
-                    {#await import('./lib/events/StationEvents.svelte') then eventsModule}
-                        <eventsModule.default />
-                    {/await}
-                {:else if router.view === 'config'}
-                    {#await import('./lib/config/Settings.svelte') then settingsModule}
-                        <settingsModule.default />
-                    {/await}
-                {/if}
-            </div>
-        </main>
-    </div>
-{/if}
+                        {#await import('./lib/events/StationEvents.svelte') then eventsModule}
+                            <eventsModule.default />
+                        {/await}
+                    {:else if router.view === 'config'}
+                        {#await import('./lib/config/Settings.svelte') then settingsModule}
+                            <settingsModule.default />
+                        {/await}
+                    {/if}
+                </div>
+            </main>
+        </div>
+    {/if}
+</div>

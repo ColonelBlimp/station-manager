@@ -53,4 +53,23 @@ describe('ArchiveSwitchGate covers the Map branch', () => {
         expect(screen.getByRole('alertdialog')).toHaveTextContent('Archive binding unproven');
         navigate('operate');
     });
+
+    it('makes everything under the gate inert while it shows', () => {
+        setup.status = 'complete';
+        archivesState.switchUnresolved = true;
+        const { container } = render(App);
+        flushSync();
+        // Svelte sets `inert` as the element property (jsdom does not reflect it
+        // to an attribute), so read the property.
+        const inertDivs = () =>
+            [...container.querySelectorAll('div')].filter(
+                (d) => d.inert || d.hasAttribute('inert')
+            );
+        const cover = inertDivs()[0];
+        expect(cover).toBeDefined();
+        expect(cover.contains(screen.getByRole('alertdialog'))).toBe(false);
+        archivesState.switchUnresolved = false;
+        flushSync();
+        expect(inertDivs()).toHaveLength(0);
+    });
 });
