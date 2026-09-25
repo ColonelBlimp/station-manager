@@ -692,6 +692,19 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      logbook; smcloud `url`,`token` station, `logbook` logbook. `/v1/forwarder-types` serves it; the
      SPA `CredentialField` type carries it (no rendering change yet). Docs: `api-endpoints.md`
      forwarder-types. Proof: a descriptor without a scope fails registration.
+     **Built 2026-09-25, 5A(i) pins:** `internal/qsoservice/fanout_characterization_test.go` —
+     the station shape (`qrz` insert/update/delete, `clublog` insert/delete, `smcloud`
+     insert/update/delete enabled; `qrzcq` disabled) pins the exact row set
+     (name/type/action/origin/status) after a live submit (3 inserts), an edit (+ qrz and smcloud
+     update rows; clublog's filter has no update), a delete (+ 3 delete rows) and both
+     `forwarded_to` lists in config order; a legacy catalogue entry's submit fans out identically;
+     a managed archive queues nowhere for all three with `forwarded_to: []`.
+     `cmd/smd/lifecycle_workers_characterization_test.go` — the same names as stub-typed entries
+     plus a real loopback `smcloud` entry: workers started = {clublog, qrz, smcloud}, `qrzcq`
+     skipped, the reconciler built, the disabled name's pending row discarded, an enabled name's
+     pending row kept, an enabled name's auth-failed row re-armed. Compiling reversion proofs:
+     enabled gate dropped → qrzcq row appears; archive gate opened → managed archive fans out;
+     discard skipped; re-arm skipped; worker spawned for a disabled name; each restored.
    - **5B — migration 0014, the seed, routing and workers by binding (the boundary commit).**
      Log migration 0014 exactly as ADR part 1: `logbook_destination` plus
      `archive_metadata.destination_bindings_seeded_at` (down: rename `<type>.<uuid>` queue names
@@ -713,8 +726,8 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      endpoints/cadence/retry/`allow_insecure_http` + the binding's credentials merged over the
      entry's station-scoped keys, `Name` = `forwarder_name`) and built through the unchanged
      `Build`; discard and re-arm per binding; rows whose name matches no binding discarded loudly.
-     Every enqueue site (`submit`, `submit_batch`, `delete`, `stamp_sync`, `enqueue` backfill and
-     delete-backfill, `import --forward`) routes by the QSO's logbook from that snapshot;
+     Every enqueue site (`submit`, `submit_batch`, `update`, `delete`, `stamp_sync`, `enqueue`
+     backfill and delete-backfill, `import --forward`) routes by the QSO's logbook from that snapshot;
      `ForwardingAdmitted`/`archive.ForwardingGateReason` and `forwarding_gated`/`gate_reason` are
      removed. `GET /v1/forwarder-queues` lists binding names, and clear/retry validate against the
      startup binding snapshot (retry still requires its worker); the backfill's
