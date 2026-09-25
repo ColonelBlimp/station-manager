@@ -674,25 +674,146 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      chapter, capsule. Five Go reversion proofs. The station's Drill entry still holds the old
      free-text value → reads as `archive_start_failed` / "The daemon could not start on this
      archive." until its next activation clears it.
-5. **SM Cloud identity** (AC 6): `archives` entity, `logbook_uuid`, archive/logbook UUIDs on push,
-   manifest, reconcile and export/restore, per-tenant legacy-archive adoption, and the reconciler per
-   logical logbook (ADR 0056 archive-aware). **It also lays the first ADR 0056 binding** (review
-   finding 2b): a `logbook_forwarders`-style row inside the archive, with SM Cloud as its first and
-   only bindable destination — the archive creation form offers "back this archive up to SM Cloud"
-   explicitly (ADR 0071's copy-compatible-bindings), the enqueue path routes SM Cloud by that row,
-   and the interim gate narrows from "no forwarding outside the adopted archive" to "no destination
-   without a binding"; QRZ, ClubLog and the rest stay unbindable until Settings → Logbooks extends
-   the table. **The adopted archive keeps every route it has** (review finding 5b): slice 5's
-   migration seeds, once and idempotently, one binding row per globally enabled forwarder on each
-   logical logbook of the adopted archive, so its QRZ, ClubLog and SM Cloud uploads continue
-   unchanged across the slice boundary; only a NEW archive starts with no bindings. Proof: a
-   characterization test pinned before the migration (the set of `qso_upload` rows one submit
-   creates in the adopted archive) passes unchanged after it. AC 6 is then provable with two
-   archives each bound to SM Cloud under their own UUIDs.
-   Until this ships, creating or activating a second SMC-enabled local archive is refused with a
-   named reason (ADR 0071's gate), so slices 2–4 are usable on the station with SM Cloud bound to
-   the adopted archive only. Needs the Postgres dev DB
-   for its tests (`SMCLOUD_TEST_ALLOW_DEFAULT=1`).
+5. **Per-logbook destination bindings and SM Cloud identity** (AC 6;
+   [ADR 0082](../decisions/0082-per-logbook-destination-bindings-in-the-archive.md), accepted
+   2026-09-25, which supersedes the SM-Cloud-only binding planned here on 2026-09-22 and retires the
+   interim gate). Planned 2026-09-25; RED-first; each sub-slice is its own releasable commit series
+   and the station's Home archive forwards identically at every boundary.
+   - **5A — pins and descriptor scope (no schema).** (i) Characterization tests in their own
+     commit before anything else (ADR part 10): in `internal/qsoservice` a station-shaped config
+     (`qrz`, `clublog`, `smcloud` enabled; `qrzcq` present, disabled) pins the exact `qso_upload`
+     rows and `forwarded_to` of one live submit, one edit and one delete in the adopted archive; in
+     `cmd/smd` the worker names spawned at start (`lifecycle_startup_test` shape) and the
+     re-arm/discard calls per name; the existing
+     `TestLifecycle_GatedArchiveStartsNoForwardingAtAll` is kept as the "new managed archive: zero
+     rows, `[]`, no worker" pin and re-targeted in 5B. (ii) `forwarding.CredentialField.Scope`
+     (`station` | `logbook`, registration panics on anything else — allowlist, enumerated first):
+     qrz `api_key` logbook; qrzcq `call`,`key` logbook; clublog `email`,`password`,`callsign`
+     logbook; smcloud `url`,`token` station, `logbook` logbook. `/v1/forwarder-types` serves it; the
+     SPA `CredentialField` type carries it (no rendering change yet). Docs: `api-endpoints.md`
+     forwarder-types. Proof: a descriptor without a scope fails registration.
+   - **5B — migration 0014, the seed, routing and workers by binding (the boundary commit).**
+     Log migration 0014 exactly as ADR part 1: `logbook_destination` plus
+     `archive_metadata.destination_bindings_seeded_at` (down: rename `<type>.<uuid>` queue names
+     back to that destination's default-logbook binding name, then drop the table and marker);
+     sqlboiler models regenerated as slice 1 did for `archive_metadata` (SQLBoiler 4.19.7, sqlite
+     driver; no generation config is checked in — the command is recorded here when run), never by
+     hand; schema pins → 14. A read-only duplicate-type preflight runs immediately after config
+     load and before `persistResolvedConfig`, `Migrate()` or any other write; the config PUT
+     candidate applies the same guard so a running 5B daemon cannot save a conflict for its next
+     restart. Startup on the legacy archive, after `Migrate()` and the identity backfill, seeds only
+     while the marker is NULL, in ONE transaction — one row per (logbook × legacy entry), enabled
+     state and logbook-scoped keys copied (disabled entries seeded disabled with their keys), the
+     default logbook keeping the legacy `name`, additional logbooks named `<type>.<logbook uuid>`
+     with their existing `qso_upload` rows renamed, then the marker set. NO config strip yet (5C):
+     config stays v5 and is read only as the seed source and the station account. A migrated
+     non-legacy archive marks the adoption not-applicable without seeding; new managed archives set
+     the marker during provisioning. The workers node takes one snapshot of the active archive's
+     bindings: per enabled binding a `ForwarderConfig` is synthesised (station entry's
+     endpoints/cadence/retry/`allow_insecure_http` + the binding's credentials merged over the
+     entry's station-scoped keys, `Name` = `forwarder_name`) and built through the unchanged
+     `Build`; discard and re-arm per binding; rows whose name matches no binding discarded loudly.
+     Every enqueue site (`submit`, `submit_batch`, `delete`, `stamp_sync`, `enqueue` backfill and
+     delete-backfill, `import --forward`) routes by the QSO's logbook from that snapshot;
+     `ForwardingAdmitted`/`archive.ForwardingGateReason` and `forwarding_gated`/`gate_reason` are
+     removed. `GET /v1/forwarder-queues` lists binding names, and clear/retry validate against the
+     startup binding snapshot (retry still requires its worker); the backfill's
+     `forwarder_unavailable` means "no enabled binding of that name". The compatibility SM Cloud
+     reconciler is constructed only from the enabled default-logbook SM Cloud binding and its merged
+     station account; no binding means no reconciler. It remains one reconciler until 5F.
+
+     The existing config-driven Forwarding controls cannot remain live after ownership moves. This
+     boundary therefore also installs a truthful transitional view: no config `enabled` pill or
+     logbook-scoped credential editor, station-scoped fields only (from 5A's scopes), binding-keyed
+     queue counts, and a read-only note that destination bindings are not editable until 5D. The
+     config PUT wire rejects any attempted change to a legacy binding-owned field during this
+     transition instead of accepting a save that cannot affect the binding; omitted masked fields
+     remain preserved. The final aggregate/per-logbook UI still lands in 5E. Before 5B, tag the
+     green 5A HEAD as the known-good pre-migration rollback build. Rollback drill on disposable
+     copies BEFORE the 5B commit lands (slice 1 procedure: isolated scratch working directory,
+     every resolved path asserted under it, config copy `0600` in `0700` under home): 0014 down on
+     a seeded copy, then the binary built from that tag boots it with byte-identical
+     QSO/queue/identity rows. Proofs:
+     seed idempotent across two starts; a second start after a crash between seed and anything later
+     inserts nothing; a logbook created after that committed seed remains unbound across another 5B
+     restart; two-logbook fixture partitions names and existing rows with no shared worker name;
+     disabled qrzcq has a disabled binding with credentials preserved but no `qso_upload` row and no
+     worker; 5A pins pass unchanged; a migrated non-legacy archive and a new managed archive each
+     have the marker set, no binding rows and no worker; a config PUT attempting to change a legacy
+     binding-owned field is rejected with config and bindings unchanged; each enqueue site has a
+     reversion proof that routing by config would produce a different row set.
+   - **5C — config v6 and the station account.** Legacy binding-owned keys (`name`, `enabled`,
+     logbook-scoped credentials) known but deprecated at v6 (ADR 0075's shape). The version bump may
+     retain those keys; only the adopted Home archive's committed seed marker permits the file-first
+     stripping rewrite, which is retried on later starts while the keys remain. `validateForwarders`
+     allows one entry per type; `ForwarderInfo` on
+     `GET`/`PUT /v1/config` narrows to the station account (type, label, station-scoped
+     `credentials_set`/merge, `action_filter`; no `enabled`, no logbook-scoped keys). A
+     station-account PUT Build-probes every enabled binding in the active archive with the candidate
+     account before persistence; an inactive archive is checked when activation builds its workers.
+     The transitional view from 5B moves to this narrowed contract in the same commit.
+     `EvidenceSyncCredentials` and `smd restore` read a credentialed SM Cloud account by presence,
+     never a binding's enabled state.
+     `smd config-downgrade --to 5` becomes data-aware: it opens the adopted Home archive through
+     the `db-downgrade` container wiring, recombines each station account with that destination's
+     bindings, refuses by name when the bindings cannot collapse to one v5 instance without
+     changing enabled state or credentials, and otherwise writes the v5 shape. The collapse name is
+     the default-logbook binding name, otherwise the lexicographically first binding name; no
+     binding produces a disabled entry with a deterministic unused name derived from its type.
+     Migration 0014 down uses the same target. The ruled order is config 6→5 first, then log 14→13.
+     Drill on copies before the commit: both downgrades, both binaries boot. Docs: `config.md` §3.3,
+     §7, §11, §13 and `install.md` §7 rollback recipe.
+     Proofs: strip happens only after the seed marker commits; a failed strip is retried;
+     duplicate-type file refused before any write; the non-collapsible downgrade refuses without
+     rewriting.
+   - **5D — the bindings API.** `GET`/`PUT /v1/qso-archives/{uuid}/bindings`, 409 unless `{uuid}`
+     is the active archive; GET = per destination the station account's presence, the aggregate
+     state (`on`/`off`/`mixed`) and per live logbook the binding (enabled, `credentials_set`,
+     `forwarder_name`, queue counts), plus `restart_required` against the running snapshot; PUT
+     validates the whole candidate first and Build-probes every resulting enabled binding using the
+     same station/binding merge as startup. If any enabled candidate lacks a required
+     logbook-scoped field, the whole request fails naming that field and no persisted row changes.
+     An aggregate write creates absent rows; `credentials_clear` is accepted only for a row that
+     ends disabled; every affected row commits in one transaction; masked-on-GET, merge-on-PUT, no
+     value ever echoed.
+     Until 5F proves identity support, only the seeded adopted-Home SM Cloud binding may be enabled;
+     any other SM Cloud enable is refused with `smcloud_identity_unavailable`. Queue counts and
+     actions use the binding-aware ports landed in 5B. Docs: `api-endpoints.md` (new section under
+     QSO archives; forwarder endpoints reworded). Proofs: 409 for inactive; atomicity (one invalid
+     row rejects the whole PUT); clear refused on an enabled row; no credential value in any
+     response or log.
+   - **5E — the Forwarding tab and the logbook consumers.** `ForwardingSection.svelte` and
+     `forwarding.svelte.ts` rewritten for the active archive as ADR part 9 (destinations with the
+     aggregate switch and per-logbook rows; station accounts with no pill; the switch never claims
+     more than the daemon saved; disabled switch with reason + link when the account is missing
+     or when SM Cloud is not identity-ready; restart-required banner as today);
+     the tab's gate banner, the gated-pill code and their tests removed (`ArchiveSwitchGate`, the
+     identity overlay, is untouched); the
+     archive creation form gains the one sentence; the logbook view's `uploadStatus` and backfill
+     picker source destinations from the bindings readout, not `/v1/config`. The logbook creation
+     form's explicit SM Cloud option (ADR part 2) ships with Settings → Logbooks — no SPA logbook
+     creation exists today — the rule itself holds from 5B. Manual: `forwarding.md`,
+     `qso-archives.md`. Frontend gates + rendered tests for each state.
+   - **5F — SM Cloud identity (AC 6).** Server: Postgres migration (`archives` unique on
+     `(tenant_id, archive_uuid)` with label; `logbooks.uuid` unique per tenant, `archive_id`; the
+     per-tenant legacy archive), UUIDs accepted on `PUT /v1/qsos`, manifest, reconcile and export,
+     an explicit idempotent adoption endpoint keyed by the legacy name, `GET /v1/version` reporting
+     identity support. The server-compatible commits land before the client begins sending the new
+     wire. Client: the smcloud binding's adoption once per archive (`remote_adopted_at`),
+     `legacy_logbook_ambiguous` when several seeded bindings share one legacy name (compatibility
+     pushes + the legacy reconciler kept, no identity-aware reconciler), refusal to enable an SM
+     Cloud binding outside the adopted archive until server and mapping are identity-ready, one
+     reconciler per enabled binding replacing the boot-time one, `POST /v1/smcloud/reconcile`
+     aggregated, `smd restore` by logbook UUID into `--archive` and whole-archive provisioning.
+     Needs the Postgres dev DB (`SMCLOUD_TEST_ALLOW_DEFAULT=1`, `sm-pg`). Proof of AC 6: two
+     archives with the same label and logbook name, each bound, reconcile and restore without the
+     other's rows; the legacy archive adopts its existing rows without a duplicate.
+   - **Station drills after deploy** (operator-run, recorded here): Home unchanged after the
+     upgrade (same `forwarded_to`, worker names and queue counts as before; bindings listed under
+     Home with the legacy names); the Drill archive shows every destination off, no banner, and a
+     dummy QSO stores with `forwarded_to: []`; enabling a destination on Drill needs the operator's
+     say per occasion (a real key uploads a dummy QSO to a real logbook); the rollback drill on
+     copies; the two-archive SM Cloud proof after 5F.
 
 Deferred by the ADR and not planned here: archive delete, external attach CLI, in-process switch,
 cross-archive query.
