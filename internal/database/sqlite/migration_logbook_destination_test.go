@@ -235,3 +235,44 @@ func TestMigrate0015_UpgradesAFileAlreadyAt14(t *testing.T) {
 		t.Fatalf("names after the fallback collapse = %q, %q; want the default logbook's qrz", n1, n2)
 	}
 }
+
+// Upgrade path, second shape (Codex P1 on ea56170f): a file migrated by the
+// b1231672 build reports 14 but already HAS legacy_name (that build's 0014
+// carried it). 0015 must reach the same final shape from either 14 variant, so
+// it rebuilds the table instead of adding the column; rows survive, and the
+// column's content from that shape is not carried (no real file of that shape
+// holds seeded bindings — that build wired no seed).
+func TestMigrate0015_UpgradesAFileAt14ThatAlreadyHasTheColumn(t *testing.T) {
+	svc := testService(t)
+	if _, err := svc.DowngradeLogSchemaTo(14); err != nil {
+		t.Fatalf("downgrade to 14: %v", err)
+	}
+	execT(t, svc, `ALTER TABLE logbook_destination ADD COLUMN legacy_name TEXT`) // the b1231672 shape
+	seedNamedBindings(t, svc, 1, "qrz", "qrz.01920000-0000-7000-8000-00000000000b")
+	execT(t, svc, `UPDATE logbook_destination SET legacy_name = 'qrz'`)
+	// Advance the AUTOINCREMENT sequence beyond the surviving maximum: a row
+	// with id 9, deleted again, leaves seq = 9 with MAX(id) = 2.
+	execT(t, svc, `INSERT INTO logbook_destination (id, logbook_id, destination, forwarder_name) VALUES (9, 2, 'clublog', 'gone')`)
+	execT(t, svc, `DELETE FROM logbook_destination WHERE id = 9`)
+	if err := svc.Migrate(); err != nil {
+		t.Fatalf("migrate up from the column-bearing 14: %v", err)
+	}
+	if v := schemaVersion(t, svc); v != 15 {
+		t.Fatalf("schema version = %d, want 15", v)
+	}
+	rows, err := svc.ListLogbookDestinationsWithContext(context.Background())
+	if err != nil || len(rows) != 2 || rows[0].ForwarderName != "qrz" || rows[1].ForwarderName != "qrz.01920000-0000-7000-8000-00000000000b" {
+		t.Fatalf("rows after the upgrade = %+v (%v); want both bindings kept", rows, err)
+	}
+	// The constraints of the rebuilt table hold.
+	if _, err := svc.handle.Exec(`INSERT INTO logbook_destination (logbook_id, destination, forwarder_name) VALUES (1, 'qrz', 'other')`); err == nil {
+		t.Error("UNIQUE (logbook_id, destination) lost in the rebuild")
+	}
+	// The AUTOINCREMENT high-water mark survives the rebuild: the sequence was
+	// advanced past the surviving rows before the migration (see the setup
+	// above), so the next insert must continue from it, not from MAX(id).
+	execT(t, svc, `INSERT INTO logbook_destination (logbook_id, destination, forwarder_name) VALUES (1, 'clublog', 'clublog')`)
+	if n := countT(t, svc, `SELECT id FROM logbook_destination WHERE forwarder_name = 'clublog'`); n != 10 {
+		t.Fatalf("id of the first insert after the rebuild = %d, want 10 (high-water mark 9 carried)", n)
+	}
+}

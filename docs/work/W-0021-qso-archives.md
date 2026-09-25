@@ -848,6 +848,20 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      recorded-name tests fail. Models: the regeneration recipe reproduces the checked-in files
      unchanged (same final schema). Gates green; drill (new at 15 vs 5A HEAD at 13) rerun on the
      rebuilt binary: 15 → 13, ROWS IDENTICAL, no columns dropped.
+     **Codex review of `ea56170f` (P1, fixed 2026-09-25, follow-up commit):** two shapes of
+     schema 14 exist — the `c3df0e12` build's table without `legacy_name` and the `b1231672`
+     build's with it — and 0015's unconditional `ADD COLUMN` fails with a duplicate column on the
+     second (reproduced RED: "duplicate column name: legacy_name"). 0015 up is now a
+     rename-then-rebuild in the 0013 style: one final shape from either variant, every row copied
+     with its id, the AUTOINCREMENT high-water mark carried, constraints restated; the second
+     shape's column content is not carried (that build wired no seed, so no real file of that
+     shape holds a seeded binding). Test: a file taken to 14, given the column by hand and two
+     bindings, its AUTOINCREMENT sequence advanced to 9 by an inserted-then-deleted row, migrates
+     to 15 with both rows, UNIQUE intact, and the next insert takes id 10 (operator review: the
+     first assertion, MAX(id) = 3, passed with the sequence carry removed). Proofs: the naive ADD
+     COLUMN form fails with the duplicate-column error; the sequence carry removed → id 3, not
+     10 (restores verified before any gate ran). Models unchanged (same final schema); gates green; drill
+     (15 vs 5A HEAD at 13) rerun on the rebuilt binary: ROWS IDENTICAL.
    - **5C — config v6 and the station account.** Legacy binding-owned keys (`name`, `enabled`,
      logbook-scoped credentials) known but deprecated at v6 (ADR 0075's shape). The version bump may
      retain those keys; only the adopted Home archive's committed seed marker permits the file-first
