@@ -252,3 +252,58 @@ func (s *Service) SeedLogbookDestinationsWithContext(ctx context.Context, seeds 
 	res.Seeded = true
 	return res, nil
 }
+
+// DestinationUpsert is one binding row to write: an existing (logbook,
+// destination) row is updated in place (enabled, credentials, modified_at);
+// a missing one is inserted under ForwarderName with no legacy name.
+type DestinationUpsert struct {
+	LogbookID     int64
+	Destination   string
+	ForwarderName string
+	Enabled       bool
+	Credentials   json.RawMessage
+}
+
+// UpsertLogbookDestinationsWithContext writes every row in ONE transaction:
+// all or none (ADR 0082 part 9 — the PUT validates the complete candidate
+// first and commits atomically). forwarder_name is never changed on an
+// existing row.
+func (s *Service) UpsertLogbookDestinationsWithContext(ctx context.Context, rows []DestinationUpsert) error {
+	const op errors.Op = "sqlite.Service.UpsertLogbookDestinationsWithContext"
+	if err := checkService(op, s); err != nil {
+		return err
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	tx, cancel, err := s.BeginTxContext(ctx)
+	if err != nil {
+		return errors.New(op).WithErr(err)
+	}
+	defer cancel()
+	defer func() { _ = tx.Rollback() }()
+	for _, r := range rows {
+		enabled := 0
+		if r.Enabled {
+			enabled = 1
+		}
+		var creds any
+		if len(r.Credentials) > 0 && string(r.Credentials) != "null" && string(r.Credentials) != "{}" {
+			creds = string(r.Credentials)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO logbook_destination (logbook_id, destination, forwarder_name, enabled, credentials)
+			VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT (logbook_id, destination) DO UPDATE SET
+				enabled = excluded.enabled,
+				credentials = excluded.credentials,
+				modified_at = datetime('now')`,
+			r.LogbookID, r.Destination, r.ForwarderName, enabled, creds); err != nil {
+			return errors.New(op).WithErr(err).WithMsgf("write %s binding for logbook %d", r.Destination, r.LogbookID)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("commit bindings")
+	}
+	return nil
+}

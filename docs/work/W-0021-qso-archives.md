@@ -1015,6 +1015,62 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      bindings it never saw (found by the new test's first ordering). Two race tests, one per
      ordering (A's page already in flight; A's bindings in flight); proofs: each guard removed
      fails its own case (restored). Frontend gates: 1,839.
+     **Order change (operator, 2026-09-25, "let's aim at 5E"):** 5D and 5E are built BEFORE 5C.
+     5C only cleans config.json (deprecated keys, one-per-type, the narrowed view, the data-aware
+     downgrade); the PUT guard already makes those keys inert, so the tab does not need it first.
+     5C follows 5E.
+     **Built 2026-09-25, 5D — the bindings API:** `types.ArchiveBindingsView` /
+     `ArchiveBindingsRequest` (wire shapes, stdlib only); `sqlite.UpsertLogbookDestinationsWithContext`
+     (one transaction, name never changed on an existing row); `internal/archive/bindings.go` —
+     `BindingsView` (one entry per registered descriptor; aggregate `on`/`off`/`mixed` over live
+     logbooks with absent = off; account presence = an entry of the type with every non-clearable
+     station field set; `reason` for no account or SM Cloud outside the adopted archive — the 5F
+     remnant; per-row `credentials_set`, queue counts by binding name; `restart_required` =
+     fingerprint of the table vs the daemon's start listing), `applyBindings` (whole candidate
+     validated first: known type, live logbook, no duplicate row, enable refusals, merge blank-keeps
+     over the stored logbook-scoped keys, station keys refused, `credentials_clear` only on a row
+     that ends disabled, every non-clearable logbook-scoped field required when the row ends
+     enabled; then one upsert transaction; new rows `<type>.<logbook uuid>`), the manager port
+     (`SetActiveBindings(db, atStart)`, `Bindings`, `ApplyBindings`: `bindings_unavailable`,
+     `archive_not_found`, `archive_not_active`). API: `GET`/`PUT /v1/qso-archives/{uuid}/bindings`
+     through the archive port (ADR 0043's frozen import set — the boundary test caught a direct
+     `internal/archive` import), codes mapped in `archiveErrorStatus`; `cmd/smd` hands the active
+     DB and the start listing to the manager at HTTP init. Tests: view aggregation + masking,
+     whole-candidate refusal writes nothing, aggregate write names new rows, merge blank-keeps,
+     station key refused, clear rules, enable refusals (no account, half-configured account,
+     disable needs none), SM Cloud gate on a managed archive, port refusals, API mapping +
+     passthrough. Proofs (restored): required-field check, SM Cloud gate, clear rule and
+     restart_required each removed → their test fails. Gates: whole-tree vet + tests, gofmt,
+     observatory 0 regressions. Docs: `api-endpoints.md` (both routes).
+     **Operator review of 5D (2026-09-25), three findings, all fixed before its commit:** (1) P1
+     enabled bindings were only presence-checked — a DISABLED seeded QRZ binding holding
+     `{"api_key":123}` (supported: the seed copies a disabled entry's logbook-scoped keys as they
+     are and never constructs it) passed and could be enabled, then fail construction at every
+     restart. `applyBindings` now synthesizes every row that ends enabled exactly as the next
+     start will (`forwarding.BindingConfig` over its station account) and builds it
+     (`buildCandidate`); a failure refuses the whole PUT with `binding_unusable` (the wire names
+     destination and logbook; the cause goes to the log, as the config save's
+     `forwarder_unusable` does). Pinned twice: in `internal/archive` with a seeded disabled
+     malformed row and a valid row in the same request (refused whole, every row byte-identical
+     afterwards, a retyped valid key then enables), and end to end in `cmd/smd` with the real QRZ
+     constructor through the daemon's wired port (the daemon starts and seeds the disabled
+     malformed entry as it is; enabling it as it is is refused with no row changed; a valid key
+     enables). (2) P1 the merge read happened outside the write and the port released its lock
+     first, so two masked edits could both merge onto the same old blob — `Manager.ApplyBindings`
+     now holds `bindingsMu` over the whole read/validate/build/write (a process lock suffices:
+     the running daemon is the only writer of the open archive's bindings). Proof harness: a
+     gated database holds PUT A at its write while PUT B is started; B may reach its own write
+     only if it could read concurrently; both disjoint field edits (ClubLog-like email and
+     password) must survive. With the lock removed the test fails 10 of 10 runs; with it, passes
+     10 of 10 and ten times under `-race`. (3) P2 `credentials_clear` removed any key — it now
+     accepts only the type's logbook-scoped keys (station-scoped and undeclared keys refused,
+     never reported as cleared) and refuses a key both typed with a value and cleared. Also fixed
+     in passing: `activeEntryForBindings` read `m.activeDB` without the lock (now passed the value
+     captured under it). Proofs (restores verified): build check off → both pins fail; lock off →
+     concurrent edit loses a field; clear allowlist off and typed-and-cleared check off → the
+     clear test fails. Gates: whole-tree vet + tests, gofmt, observatory 0 regressions.
+     `api-endpoints.md` states serialization, the build rule, the clear rules and
+     `binding_unusable`.
    - **5C — config v6 and the station account.** Legacy binding-owned keys (`name`, `enabled`,
      logbook-scoped credentials) known but deprecated at v6 (ADR 0075's shape). The version bump may
      retain those keys; only the adopted Home archive's committed seed marker permits the file-first

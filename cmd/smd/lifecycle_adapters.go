@@ -108,9 +108,10 @@ type daemon struct {
 	routes []forwarding.BoundForwarder
 	// bindingNames is every binding name the active archive holds, resolved or
 	// not: the set the workers node's unknown-name discard is judged against.
-	bindingNames  map[string]struct{}
-	queueNames    []string
-	disabledNames []string
+	bindingNames    map[string]struct{}
+	queueNames      []string
+	disabledNames   []string
+	bindingsAtStart []types.LogbookDestination
 
 	// Worker context + drains (owned by run(); the fleet binds long-lived work to workerCtx).
 	workerCtx    context.Context
@@ -345,6 +346,7 @@ func (d *daemon) startQso(context.Context) error {
 	d.bindingNames = snap.bindingNames
 	d.queueNames = snap.orderedNames
 	d.disabledNames = snap.disabledNames
+	d.bindingsAtStart = snap.bindings
 	d.qso.SetDestinationRoutes(snap.routes)
 	// Leftovers of an interrupted archive creation are named at every start;
 	// they are never archives and the operator removes them (ADR 0071).
@@ -837,6 +839,9 @@ func (d *daemon) initHTTP() error {
 		restart = func() error { trigger(); return nil }
 	}
 	d.archives.SetActivation(ft8Seal{d.ft8}, bridgeSeal{d.bridge}, restart)
+	// The bindings port: the active archive's open database and the bindings
+	// this generation started with (restart_required is judged against them).
+	d.archives.SetActiveBindings(d.db, d.bindingsAtStart)
 	d.server.SetArchiveManager(d.archives)
 	return nil
 }

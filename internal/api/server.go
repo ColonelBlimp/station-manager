@@ -269,6 +269,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *l
 	apiMux.HandleFunc("GET /v1/qso-archives", s.handleListQsoArchives)
 	apiMux.HandleFunc("POST /v1/qso-archives", s.handleCreateQsoArchive)
 	apiMux.HandleFunc("POST /v1/qso-archives/{uuid}/activate", s.handleActivateQsoArchive)
+	// Destination bindings of the ACTIVE archive (ADR 0082, W-0021 5D).
+	apiMux.HandleFunc("GET /v1/qso-archives/{uuid}/bindings", s.handleGetArchiveBindings)
+	apiMux.HandleFunc("PUT /v1/qso-archives/{uuid}/bindings", s.handlePutArchiveBindings)
 
 	// Logbook CRUD
 	apiMux.HandleFunc("GET /v1/logbook", s.handleListLogbooks)

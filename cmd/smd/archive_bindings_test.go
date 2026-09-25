@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	stderr "errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ColonelBlimp/station-manager/internal/archive"
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
@@ -408,5 +410,50 @@ func TestLifecycle_SeededBindingStaysAuthoritativeOverAShadowedConfigEntry(t *te
 	// added a qrz worker line of its own (two in all).
 	if started, _ := workerNamesStarted(t, filepath.Join(d2.cfgSvc.WorkingDir(), "log", "smd.log")); len(started) != 2 || started[1] != "qrz" {
 		t.Fatalf("workers started across both generations = %v; want [qrz qrz]", started)
+	}
+}
+
+// 5D review, P1, end to end with the real QRZ constructor: a DISABLED legacy
+// entry whose key is not a string is supported — the daemon starts and seeds
+// the binding disabled with the blob as it is (disabled entries are never
+// constructed) — but the bindings port refuses to turn it on as it is, with no
+// row changed; retyping a valid key while enabling succeeds.
+func TestLifecycle_DisabledMalformedSeedIsKeptAndCannotBeEnabledAsIs(t *testing.T) {
+	d, orch := newOrchestratedDaemon(t, func(c *config.Config) {
+		c.SetupComplete = true
+		c.DefaultLogbookID = 1
+		c.LoggingStation.StationCallsign = "7Q5MLV"
+		c.Forwarders = []types.ForwarderConfig{{Name: "qrz", Type: "qrz", Enabled: false,
+			Credentials: json.RawMessage(`{"api_key":123}`), TickIntervalSec: 1, BatchSize: 1}}
+	})
+	if err := orch.Start(d.workerCtx); err != nil {
+		t.Fatalf("start with a disabled malformed entry: %v; want it supported", err)
+	}
+	ctx := context.Background()
+	before, err := d.db.ListLogbookDestinationsWithContext(ctx)
+	if err != nil || len(before) != 1 || before[0].Enabled || string(before[0].Credentials) != `{"api_key":123}` {
+		t.Fatalf("seeded = %+v (%v); want one disabled qrz binding holding the blob as it is", before, err)
+	}
+	id := d.cfgSvc.Snapshot().ActiveQsoArchiveID
+	enable := func(creds map[string]string) error {
+		_, err := d.archives.ApplyBindings(ctx, id, types.ArchiveBindingsRequest{Destinations: []types.DestinationBindingEdit{{
+			Type: "qrz", Logbooks: []types.LogbookBindingEdit{{LogbookID: before[0].LogbookID, Enabled: true, Credentials: creds}}}}})
+		return err
+	}
+	err = enable(nil)
+	var re *archive.RequestError
+	if !stderr.As(err, &re) || re.Code != "binding_unusable" {
+		t.Fatalf("enabling as it is: %v; want binding_unusable", err)
+	}
+	after, _ := d.db.ListLogbookDestinationsWithContext(ctx)
+	if fmt.Sprintf("%+v", after) != fmt.Sprintf("%+v", before) {
+		t.Fatalf("a refused enable changed rows:\nbefore %+v\nafter  %+v", before, after)
+	}
+	if err := enable(map[string]string{"api_key": "A-VALID-KEY"}); err != nil {
+		t.Fatalf("enabling with a valid key: %v", err)
+	}
+	rows, _ := d.db.ListLogbookDestinationsWithContext(ctx)
+	if len(rows) != 1 || !rows[0].Enabled || !strings.Contains(string(rows[0].Credentials), "A-VALID-KEY") {
+		t.Fatalf("after the valid enable = %+v", rows)
 	}
 }

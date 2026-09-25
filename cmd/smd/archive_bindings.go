@@ -125,6 +125,9 @@ type destinationSnapshot struct {
 	// per-binding discard applies to it whether or not its account resolves —
 	// a disabled binding has no worker either way.
 	disabledNames []string
+	// bindings is the listing itself, handed to the API so the bindings view
+	// can report restart_required against what this generation runs with.
+	bindings []types.LogbookDestination
 }
 
 // resolveDestinationRoutes reads the open archive's bindings and resolves each
@@ -141,7 +144,7 @@ func resolveDestinationRoutes(ctx context.Context, db *sqlite.Service, cfg confi
 	if err != nil {
 		return destinationSnapshot{}, errors.New(op).WithErr(err).WithMsg("list destination bindings")
 	}
-	snap := destinationSnapshot{bindingNames: make(map[string]struct{}, len(bindings))}
+	snap := destinationSnapshot{bindingNames: make(map[string]struct{}, len(bindings)), bindings: bindings}
 	for _, b := range bindings {
 		snap.bindingNames[b.ForwarderName] = struct{}{}
 		snap.orderedNames = append(snap.orderedNames, b.ForwarderName)

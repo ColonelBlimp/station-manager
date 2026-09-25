@@ -23,16 +23,32 @@ func (e *codedErr) Error() string       { return e.code + ": " + e.msg }
 func (e *codedErr) RequestCode() string { return e.code }
 
 type fakeArchives struct {
-	views    []types.QsoArchiveView
-	created  types.QsoArchiveCreated
-	createEr error
-	activate types.QsoArchiveActivation
-	actErr   error
-	gotReq   types.QsoArchiveCreateRequest
-	gotID    string
+	bindings    types.ArchiveBindingsView
+	bindingsErr error
+	applied     []types.ArchiveBindingsRequest
+	views       []types.QsoArchiveView
+	created     types.QsoArchiveCreated
+	createEr    error
+	activate    types.QsoArchiveActivation
+	actErr      error
+	gotReq      types.QsoArchiveCreateRequest
+	gotID       string
 }
 
 func (f *fakeArchives) List() []types.QsoArchiveView { return f.views }
+func (f *fakeArchives) Bindings(_ context.Context, id string) (types.ArchiveBindingsView, error) {
+	if f.bindingsErr != nil {
+		return types.ArchiveBindingsView{}, f.bindingsErr
+	}
+	return f.bindings, nil
+}
+func (f *fakeArchives) ApplyBindings(_ context.Context, id string, req types.ArchiveBindingsRequest) (types.ArchiveBindingsView, error) {
+	f.applied = append(f.applied, req)
+	if f.bindingsErr != nil {
+		return types.ArchiveBindingsView{}, f.bindingsErr
+	}
+	return f.bindings, nil
+}
 func (f *fakeArchives) CreateArchive(_ context.Context, req types.QsoArchiveCreateRequest) (types.QsoArchiveCreated, error) {
 	f.gotReq = req
 	return f.created, f.createEr

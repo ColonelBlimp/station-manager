@@ -62,6 +62,15 @@ type Manager struct {
 	restart         func() error
 	activated       bool
 
+	// Bindings port (SetActiveBindings): the ACTIVE archive's database and the
+	// bindings this generation started with (ADR 0082, 5D). nil until the
+	// daemon wires it — the bindings routes then answer bindings_unavailable.
+	activeDB BindingsDB
+	atStart  BindingFingerprint
+	// bindingsMu serializes every bindings PUT end to end (ApplyBindings).
+	// Separate from mu so a slow write never holds up activation.
+	bindingsMu sync.Mutex
+
 	mu sync.Mutex
 }
 

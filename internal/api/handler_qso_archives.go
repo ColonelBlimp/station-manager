@@ -19,6 +19,10 @@ type ArchiveManager interface {
 	List() []types.QsoArchiveView
 	CreateArchive(ctx context.Context, req types.QsoArchiveCreateRequest) (types.QsoArchiveCreated, error)
 	Activate(ctx context.Context, id string) (types.QsoArchiveActivation, error)
+	// Bindings of the ACTIVE archive (ADR 0082, 5D): read, and edit as one
+	// validated, atomic write.
+	Bindings(ctx context.Context, id string) (types.ArchiveBindingsView, error)
+	ApplyBindings(ctx context.Context, id string, req types.ArchiveBindingsRequest) (types.ArchiveBindingsView, error)
 }
 
 // requestCoder is the port's error classification: a refused request names its
@@ -48,6 +52,16 @@ var archiveErrorStatus = map[string]int{
 	"activation_persist_failed": http.StatusInternalServerError,
 	"restart_failed":            http.StatusInternalServerError,
 	"pending_unclear":           http.StatusInternalServerError,
+	// Bindings (5D).
+	"bindings_unavailable":            http.StatusServiceUnavailable,
+	"archive_not_active":              http.StatusConflict,
+	"logbook_not_found":               http.StatusNotFound,
+	"logbook_no_identity":             http.StatusConflict,
+	"binding_not_enableable":          http.StatusBadRequest,
+	"binding_field_required":          http.StatusBadRequest,
+	"binding_clear_requires_disabled": http.StatusBadRequest,
+	"binding_credentials_corrupt":     http.StatusConflict,
+	"binding_unusable":                http.StatusBadRequest,
 }
 
 // writeArchiveError answers a refused or failed archive request. A coded
