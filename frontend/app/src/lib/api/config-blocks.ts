@@ -75,3 +75,37 @@ export async function fetchForwarders(signal?: AbortSignal): Promise<ForwardersO
     }
     return { kind: 'ok', forwarders };
 }
+
+/**
+ * Read one logbook's destination BINDINGS (ADR 0082): what its backfill picker
+ * offers and what its upload-status colour is judged against. An additional
+ * logbook's binding is named `<type>.<logbook uuid>` and only that name routes
+ * its QSOs, so the logbook view must never take names from the station's
+ * config entries. Same outcome shape as fetchForwarders.
+ */
+export async function fetchLogbookDestinations(
+    logbookId: number,
+    signal?: AbortSignal
+): Promise<ForwardersOutcome> {
+    const fetched = await safeFetch(`/v1/logbook/${logbookId}/destinations`, { signal });
+    if (!fetched.ok) {
+        return { kind: 'error', message: fetched.message };
+    }
+    if (!fetched.response.ok) {
+        return { kind: 'error', message: `HTTP ${fetched.response.status}` };
+    }
+    const body = await readJsonBody(fetched.response);
+    const raw = isPlainObject(body) && Array.isArray(body.destinations) ? body.destinations : [];
+    const forwarders: ForwarderInfo[] = [];
+    for (const f of raw) {
+        if (isPlainObject(f) && typeof f.name === 'string' && typeof f.type === 'string') {
+            forwarders.push({
+                name: f.name,
+                label: typeof f.label === 'string' ? f.label : '',
+                type: f.type,
+                enabled: f.enabled === true,
+            });
+        }
+    }
+    return { kind: 'ok', forwarders };
+}

@@ -184,12 +184,19 @@ items return a QSO through a boundary projection of `types.Qso`: the canonical *
 - **Gating:** Always-on.
 - **Request:** Path `{id}`. Query: `limit` (int, default `Server.DefaultPageLimit`, clamped to `MaxPageLimit`, ≥1), `after` (opaque base64url cursor over `{qso_date, time_on, id}`), `missing_from` (forwarder **name**) — filter to QSOs **not yet uploaded** to that destination (ADR 0039 backfill). "Not uploaded" = the destination's ADIF upload-status stamp (`<prefix>_qso_upload_status`) is absent or not `"Y"` — the durable, import-surviving signal (same source as the SPA's tri-state colour + the enqueue skip-check). Resolved name→type→ADIF-prefix server-side.
 - **Response:** **200**, body `{"items": [public QSO projection, …], "next_cursor": string|null}` (`next_cursor` set only when more rows exist).
-- **Errors:** 400 `invalid_id`/`invalid_limit`/`invalid_cursor`; 400 `invalid_missing_from` (names no configured forwarder) or `missing_from_unsupported` (the forwarder exists but its type records no per-QSO upload status, so "missing from it" is undefined; it remains a valid upload target). Note "no stamp" does NOT imply the destination mirrors rows — SM Cloud does, the dev stub does not; row mirroring is a separate registered capability. These were ONE code with one message, which read as "you got the name wrong" for a name that was perfectly good; clients must be able to tell the two apart. 404 `logbook_not_found`; 500 `db_error`.
+- **Errors:** 400 `invalid_id`/`invalid_limit`/`invalid_cursor`; 400 `invalid_missing_from` (names no destination binding of THIS logbook — another logbook's binding and a station entry the archive holds no binding for are refused alike) or `missing_from_unsupported` (the forwarder exists but its type records no per-QSO upload status, so "missing from it" is undefined; it remains a valid upload target). Note "no stamp" does NOT imply the destination mirrors rows — SM Cloud does, the dev stub does not; row mirroring is a separate registered capability. These were ONE code with one message, which read as "you got the name wrong" for a name that was perfectly good; clients must be able to tell the two apart. 404 `logbook_not_found`; 500 `db_error`.
 
 ### `GET /v1/logbook/{id}/count`
-- **Purpose:** QSO count for a logbook. **Always-on.** Query: `missing_from` (forwarder name) applies the same not-yet-uploaded filter as the QSO list, so the SPA's "of N" matches the filtered page. **200** `{"logbook_id": int64, "count": int64}`. Errors: 400 `invalid_id`/`invalid_missing_from`/`missing_from_unsupported` (same meanings as the QSO list); 404 `logbook_not_found`; 500 `db_error`.
+- **Purpose:** QSO count for a logbook. **Always-on.** Query: `missing_from` (a binding name, as `GET /v1/logbook/{id}/destinations` lists it) applies the same not-yet-uploaded filter as the QSO list, so the SPA's "of N" matches the filtered page. **200** `{"logbook_id": int64, "count": int64}`. Errors: 400 `invalid_id`/`invalid_missing_from`/`missing_from_unsupported` (same meanings as the QSO list); 404 `logbook_not_found`; 500 `db_error`.
 
 ---
+
+### `GET /v1/logbook/{id}/destinations`
+- **Purpose:** The logbook's destination **bindings** (ADR 0082) from the daemon's start-time snapshot — what the logbook view's backfill picker offers and what its upload-status colour is judged against. An additional logbook's binding is named `<type>.<logbook uuid>` and only that name routes its QSOs, so the view must never take names from the station's config entries.
+- **Gating:** Always-on.
+- **Request:** Path `{id}` (positive int). No body.
+- **Response:** **200**, body `{"destinations": [{"name": "…", "type": "…", "label"?: "…", "enabled": bool}, …]}` in snapshot order, enabled or not; `label` is the station account's file-only label. Never a credential. An unknown id lists nothing.
+- **Errors:** 400 `invalid_id`.
 
 ## QSO archives (ADR 0071)
 

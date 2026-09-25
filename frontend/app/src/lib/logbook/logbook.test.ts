@@ -277,6 +277,74 @@ describe('logbook switch — stale responses are discarded', () => {
     });
 });
 
+// ADR 0082 backfill path (operator review): the picked destination follows the
+// LOGBOOK — remapped by type onto the new logbook's own binding, or reset to
+// All when it has none — and a slow bindings answer for the previous logbook
+// never overwrites the new one's.
+describe('logbook switch — the destination follows the logbook', () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        logbookState.rows = [];
+        logbookState.selectedId = null;
+        logbookState.selectedDestination = '';
+        logbookState.forwarders = [];
+    });
+
+    const extra = 'qrz.01920000-0000-7000-8000-00000000000b';
+    function stubDaemon(dest2: unknown[], hold?: { releaseA: (r: Response) => void }) {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn((input: RequestInfo | URL) => {
+                const url = urlText(input);
+                const json = (body: unknown) =>
+                    Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+                if (url === '/v1/logbook/1/destinations') {
+                    if (hold) return new Promise<Response>((res) => (hold.releaseA = res));
+                    return json({ destinations: [{ name: 'qrz', type: 'qrz', enabled: true }] });
+                }
+                if (url === '/v1/logbook/2/destinations') return json({ destinations: dest2 });
+                if (url.includes('/count')) return json({ count: 0 });
+                if (url.includes('/qso')) return json({ items: [], next_cursor: null });
+                return Promise.resolve(new Response('{}', { status: 404 }));
+            })
+        );
+    }
+
+    it("remaps the picked destination by type onto the new logbook's own binding", async () => {
+        stubDaemon([{ name: extra, type: 'qrz', enabled: true }]);
+        await logbookState.selectLogbook(1);
+        await logbookState.selectDestination('qrz');
+        await logbookState.selectLogbook(2);
+        expect(logbookState.selectedDestination).toBe(extra);
+        expect(logbookState.forwarders.map((f) => f.name)).toEqual([extra]);
+    });
+
+    it('resets to All when the new logbook has no binding of that type', async () => {
+        stubDaemon([{ name: 'clublog.x', type: 'clublog', enabled: true }]);
+        await logbookState.selectLogbook(1);
+        await logbookState.selectDestination('qrz');
+        await logbookState.selectLogbook(2);
+        expect(logbookState.selectedDestination).toBe('');
+    });
+
+    it('a late bindings answer for the previous logbook is discarded', async () => {
+        const hold = { releaseA: (_r: Response) => undefined as void };
+        stubDaemon([{ name: extra, type: 'qrz', enabled: true }], hold);
+        const first = logbookState.selectLogbook(1); // hangs on its bindings fetch
+        await logbookState.selectLogbook(2); // completes fully
+        expect(logbookState.forwarders.map((f) => f.name)).toEqual([extra]);
+        hold.releaseA(
+            new Response(
+                JSON.stringify({ destinations: [{ name: 'qrz', type: 'qrz', enabled: true }] }),
+                { status: 200 }
+            )
+        );
+        await first;
+        expect(logbookState.selectedId).toBe(2);
+        expect(logbookState.forwarders.map((f) => f.name)).toEqual([extra]);
+    });
+});
+
 // markEmailed, with the "not emailed only" filter active, must resync paging by
 // RESETTING to page 0 — refetching the current pageIndex keeps a stale start
 // cursor that can strand the operator on an emptied last page (P2 review
@@ -563,10 +631,10 @@ describe('mount with a missing-from handoff', () => {
                 const json = (body: unknown) =>
                     Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
                 if (url.startsWith('/v1/config')) {
-                    return json({
-                        forwarders: [{ name: 'qrz', type: 'qrz', enabled: true }],
-                        mailer: { enabled: false },
-                    });
+                    return json({ mailer: { enabled: false } });
+                }
+                if (url === '/v1/logbook/1/destinations') {
+                    return json({ destinations: [{ name: 'qrz', type: 'qrz', enabled: true }] });
                 }
                 if (url === '/v1/logbook') return json([{ id: 1, name: 'L', callsign: 'G4ABC' }]);
                 if (url.startsWith('/v1/logbook/1/qso'))
@@ -580,6 +648,10 @@ describe('mount with a missing-from handoff', () => {
         await logbookState.init();
 
         expect(logbookState.selectedDestination).toBe('qrz');
+        // The logbook's bindings are read BEFORE its first page (ADR 0082).
+        expect(urls.indexOf('/v1/logbook/1/destinations')).toBeLessThan(
+            urls.findIndex((u) => u.startsWith('/v1/logbook/1/qso'))
+        );
         const pageUrls = urls.filter((u) => u.startsWith('/v1/logbook/1/qso'));
         expect(pageUrls.length).toBeGreaterThan(0);
         for (const u of pageUrls) expect(u).toContain('missing_from=qrz');

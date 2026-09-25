@@ -27,7 +27,7 @@ func (s *Server) handleLogbookCount(w http.ResponseWriter, r *http.Request) {
 
 	// missing_from (ADR 0039): count only QSOs not yet uploaded to this
 	// destination, so the SPA's "of N" matches the filtered page.
-	missingPrefix, ok := s.parseMissingFrom(w, r, op)
+	missingPrefix, ok := s.parseMissingFrom(w, r, logbookID, op)
 	if !ok {
 		return // parseMissingFrom wrote the specific reason
 	}

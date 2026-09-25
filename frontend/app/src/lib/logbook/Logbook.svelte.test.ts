@@ -33,11 +33,11 @@ beforeEach(() => {
         vi.fn((input: RequestInfo | URL) => {
             const url = urlText(input);
             if (url.startsWith('/v1/config')) {
+                return Promise.resolve(jsonResponse({ mailer: { enabled: false } }));
+            }
+            if (url.endsWith('/destinations')) {
                 return Promise.resolve(
-                    jsonResponse({
-                        mailer: { enabled: false },
-                        forwarders: [{ name: 'qrz', type: 'qrz', enabled: true }],
-                    })
+                    jsonResponse({ destinations: [{ name: 'qrz', type: 'qrz', enabled: true }] })
                 );
             }
             if (url === '/v1/logbook') {
@@ -328,12 +328,11 @@ describe('Logbook page', () => {
             if (url.includes('/count')) return Promise.resolve(jsonResponse({ count: 5 }));
             if (url.includes('/qso'))
                 return Promise.resolve(jsonResponse({ items: [], next_cursor: null }));
-            return Promise.resolve(
-                jsonResponse({
-                    mailer: { enabled: false },
-                    forwarders: [{ name: 'qrz', type: 'qrz', enabled: true }],
-                })
-            );
+            if (url.endsWith('/destinations'))
+                return Promise.resolve(
+                    jsonResponse({ destinations: [{ name: 'qrz', type: 'qrz', enabled: true }] })
+                );
+            return Promise.resolve(jsonResponse({ mailer: { enabled: false } }));
         });
 
         // Turn on BOTH the destination filter and "not emailed only". The empty
@@ -361,10 +360,12 @@ describe('Logbook destination picker: destinations that stamp nothing', () => {
         fetchMock.mockImplementation((input: RequestInfo | URL) => {
             const url = urlText(input);
             if (url.startsWith('/v1/config')) {
+                return Promise.resolve(jsonResponse({ mailer: { enabled: false } }));
+            }
+            if (url.endsWith('/destinations')) {
                 return Promise.resolve(
                     jsonResponse({
-                        mailer: { enabled: false },
-                        forwarders: [
+                        destinations: [
                             { name: 'qrz', type: 'qrz', enabled: true },
                             { name: 'cloud-backup', type: 'smcloud', enabled: true },
                         ],
@@ -468,15 +469,21 @@ describe('Logbook destination dropdown labelling', () => {
                 return Promise.resolve(
                     jsonResponse([{ id: 1, name: 'Malawi 2026', callsign: '7Q5MLV' }])
                 );
-            return Promise.resolve(
-                jsonResponse({
-                    mailer: { enabled: false },
-                    forwarders: [
-                        { name: 'qrz', type: 'qrz', enabled: true, label: 'QRZ (club account)' },
-                        { name: 'clublog', type: 'clublog', enabled: true },
-                    ],
-                })
-            );
+            if (url.endsWith('/destinations'))
+                return Promise.resolve(
+                    jsonResponse({
+                        destinations: [
+                            {
+                                name: 'qrz',
+                                type: 'qrz',
+                                enabled: true,
+                                label: 'QRZ (club account)',
+                            },
+                            { name: 'clublog', type: 'clublog', enabled: true },
+                        ],
+                    })
+                );
+            return Promise.resolve(jsonResponse({ mailer: { enabled: false } }));
         });
         render(Logbook);
 

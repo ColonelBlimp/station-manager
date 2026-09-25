@@ -960,6 +960,52 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      `api-endpoints.md` still called `{name}` a config name and the queue list "configured
      forwarders in config order" in the backfill, queues, clear and retry entries — all four now
      state the binding-name contract.
+     **Codex review of `7990011b` (b) (2026-09-25), P1 + P2, both fixed in a follow-up
+     commit:** (1) P1 the seed committed bindings and the marker before worker construction
+     validated the entries — an enabled entry with an empty blob passed the object check, was
+     seeded enabled without its key, then failed `qrz.New` at every start with no way back (the
+     binding, not config, now supplied the key). `seedDestinationBindings` now constructs every
+     ENABLED entry (`forwarding.Build`, exactly as the workers node would) BEFORE the seed and
+     fails the start by name with config.json still the thing to fix; a disabled entry is seeded
+     as it is. Test: a bogus enabled stub entry refuses the start, leaves the marker NULL and no
+     rows, and a corrected config on the same file then seeds (second generation on the same
+     working directory). The rollback test's workers-node injection moved to a stub-backed type
+     with no default retry (`stub4`), since an unbuildable entry now fails earlier. Proof: the
+     Build check neutralised → the refusal test fails (restored). (2) P2 the logbook backfill
+     picker took names from `/v1/config`, so a migrated additional logbook offered `qrz` and
+     every selected row landed in `skipped_other_logbook` as "Queued 0". New
+     `GET /v1/logbook/{id}/destinations` (the logbook's bindings from the snapshot: name, type,
+     label, enabled — never a credential); the logbook store loads it per selected logbook
+     BEFORE the first page (the handoff from the Forwarding tab included) and reports
+     `skipped_other_logbook` in the upload notice; `missing_from` resolves a binding name first
+     (station entries as the fallback for a file with no bindings yet) and its refusal wording
+     names bindings. Tests: the endpoint lists each logbook's own binding and no credential;
+     `missing_from` accepts a `<type>.<uuid>` name; the store test asserts the destinations read
+     precedes the first page. Gates rerun: whole-tree vet + tests, gofmt, observatory 0
+     regressions, frontend gates (1,834); drill rerun on the rebuilt binary: ROWS IDENTICAL.
+     **Operator review of the backfill follow-up (2026-09-25), three findings, all fixed:** (1) P1
+     switching logbooks kept the previous logbook's binding name in the picker — after the new
+     logbook's bindings load, the picked destination is remapped BY TYPE onto that logbook's own
+     enabled binding, else reset to All (the picked type is remembered across the switch);
+     (2) P1 the bindings fetch had no stale-response guard — it now carries a request generation
+     like the page and count loaders, so a slow answer for logbook A never overwrites B's list;
+     (3) P2 `missing_from` accepted any archive binding and fell back to station config — it now
+     accepts only the requested logbook's binding routes (list and count), and its refusal names
+     "this logbook". Tests: remap by type, reset to All, late answer discarded (store); another
+     logbook's binding and a bindingless config name refused on both endpoints (API). Proofs
+     (restores verified): remap removed, guard removed, logbook scope removed → each test
+     fails. Gates rerun: whole-tree vet + tests, gofmt, observatory 0 regressions, frontend
+     gates (1,837); drill rerun on the rebuilt binary: ROWS IDENTICAL.
+     **Operator review, one further P1 (2026-09-25), fixed:** the pre-seed construction check ran
+     on every legacy-archive start, so once the seed was decided a config entry that had lost its
+     logbook-scoped key (a deprecated shadow of the binding's) would have killed every start
+     although the binding resolved fine. The check — and the seed helper — now run ONLY while the
+     marker is NULL; a decided seed returns before consulting config's copies. Converse test with
+     the real `qrz` type (its key is logbook-scoped): a first start seeds the binding with the key,
+     config.json then loses it, the entry no longer constructs on its own, and a second generation
+     on the same file starts, routes from the seeded binding carrying its own key and spawns the
+     qrz worker. Proof: the marker gate neutralised → that start is refused (restored). Gates
+     rerun: whole-tree vet + tests, gofmt, observatory 0 regressions; drill rerun: ROWS IDENTICAL.
    - **5C — config v6 and the station account.** Legacy binding-owned keys (`name`, `enabled`,
      logbook-scoped credentials) known but deprecated at v6 (ADR 0075's shape). The version bump may
      retain those keys; only the adopted Home archive's committed seed marker permits the file-first

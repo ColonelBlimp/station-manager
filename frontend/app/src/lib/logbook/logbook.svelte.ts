@@ -21,7 +21,7 @@ import {
     type LogbookQso,
 } from '../api/logbooks';
 import { patchQso, type QsoPatch } from '../api/qso-patch';
-import { fetchMailer, fetchForwarders } from '../api/config-blocks';
+import { fetchMailer, fetchLogbookDestinations } from '../api/config-blocks';
 import { enqueueUploads } from '../api/uploads';
 import { enrichCallsign } from '../api/enrichment';
 import { forwarderLabel, hasUploadStamp, type ForwarderInfo } from './uploadStatus';
@@ -77,8 +77,11 @@ export class LogbookState {
     mailerEnabled: boolean = $state(false);
     mailerDefaultRecipient: string = $state('');
 
-    // Configured forwarders (from /v1/config), for the upload-status colour and
-    // the backfill destination picker (ADR 0039). The ENABLED subset is E.
+    // The SELECTED logbook's destination bindings (ADR 0082, from
+    // /v1/logbook/{id}/destinations), for the upload-status colour and the
+    // backfill destination picker. Reloaded on every logbook change: an
+    // additional logbook's binding is named `<type>.<uuid>` and only that name
+    // routes its QSOs. The ENABLED subset is E.
     forwarders: ForwarderInfo[] = $state([]);
     // The destination picker value: '' = All (no upload context), else a forwarder
     // NAME. Driving both the "missing from X" filter and the upload target.
@@ -341,15 +344,12 @@ export class LogbookState {
         this.error = null;
         void this.loadMailer();
         const handoff = takeLogbookMissingFrom();
-        if (handoff === undefined) {
-            void this.loadForwarders();
-        } else {
+        if (handoff !== undefined) {
             // Arrived from Settings → Forwarding's failed count (W-0010 outcome
-            // 9): the forwarder list must be in hand BEFORE the first page load,
-            // or missingFromParam cannot tell whether the destination stamps
-            // uploads and the whole logbook flashes first. The picker then shows
-            // the destination like any operator pick.
-            await this.loadForwarders();
+            // 9). selectLogbook loads the logbook's bindings BEFORE its first
+            // page load, so missingFromParam can tell whether the destination
+            // stamps uploads and the whole logbook never flashes first. The
+            // picker then shows the destination like any operator pick.
             this.selectedDestination = handoff;
             this.showUploaded = false;
         }
@@ -377,19 +377,54 @@ export class LogbookState {
         }
     }
 
-    /** Read the configured forwarders from /v1/config for the upload-status colour
-     *  + destination picker. Best-effort: a failure leaves the list empty (no
-     *  colour, no picker), never an error — browsing is unaffected. */
+    /** Read the selected logbook's destination bindings for the upload-status
+     *  colour + destination picker. Best-effort: a failure leaves the list empty
+     *  (no colour, no picker), never an error — browsing is unaffected. */
     async loadForwarders(): Promise<void> {
-        const out = await fetchForwarders();
-        if (out.kind === 'ok') this.forwarders = out.forwarders;
+        if (this.selectedId === null) {
+            this.forwarders = [];
+            return;
+        }
+        // Same request-generation guard as the page and count loaders: a slow
+        // answer for logbook A must not land after logbook B's and show A's
+        // bindings under B's selector (operator review of the backfill path).
+        const gen = ++this.#destGen;
+        const out = await fetchLogbookDestinations(this.selectedId);
+        if (gen !== this.#destGen) return; // superseded — the newer load owns the list
+        this.forwarders = out.kind === 'ok' ? out.forwarders : [];
+        this.#remapDestination();
     }
+
+    /**
+     * After the bindings of a newly selected logbook arrive, the picked
+     * destination is REMAPPED BY TYPE onto that logbook's own enabled binding
+     * — or reset to All when it has none — so an upload never posts to the
+     * previous logbook's binding name and lands in skipped_other_logbook
+     * (operator review of the backfill path). The picker keeps its meaning
+     * ("QRZ") while the name it sends changes with the logbook.
+     */
+    #remapDestination(): void {
+        if (this.selectedDestination === '') return;
+        const own = this.forwarders.find((f) => f.name === this.selectedDestination);
+        if (own?.enabled) return;
+        const type = this.#lastDestinationType ?? own?.type;
+        const match = type ? this.forwarders.find((f) => f.type === type && f.enabled) : undefined;
+        this.selectedDestination = match ? match.name : '';
+        if (!match) this.showUploaded = false;
+    }
+
+    #destGen = 0;
+    // The TYPE of the last picked destination, remembered across a logbook
+    // switch so the remap can find the same kind of destination in the new
+    // logbook's bindings even though the previous list is gone.
+    #lastDestinationType: string | undefined = undefined;
 
     /** Pick a backfill destination (forwarder name, or '' for All). Resets the
      *  "show uploaded" toggle to the gap-filtered default and reloads. */
     async selectDestination(name: string): Promise<void> {
         if (name === this.selectedDestination) return;
         this.selectedDestination = name;
+        this.#lastDestinationType = this.forwarders.find((f) => f.name === name)?.type;
         this.showUploaded = false;
         this.notice = null;
         this.#resetPaging();
@@ -441,6 +476,11 @@ export class LogbookState {
         const noHistory = r.skipped_no_history?.length ?? 0;
         if (noHistory > 0)
             bits.push(`${noHistory} skipped — never uploaded live; use an ADIF export for those`);
+        const otherLogbook = r.skipped_other_logbook?.length ?? 0;
+        if (otherLogbook > 0)
+            bits.push(
+                `${otherLogbook} skipped — belong to another logbook than this destination serves`
+            );
         this.notice = bits.join(' · ') + '.';
         this.clearSelection();
         await Promise.all([this.#loadCount(), this.#loadPage(this.pageIndex)]);
@@ -556,6 +596,9 @@ export class LogbookState {
         this.selectedId = id;
         this.clearSelection();
         this.#resetPaging();
+        // The bindings are per logbook (ADR 0082): load them first, so the
+        // picker and the missing_from filter address THIS logbook's names.
+        await this.loadForwarders();
         await Promise.all([this.#loadCount(), this.#loadPage(0)]);
     }
 

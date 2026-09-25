@@ -27,18 +27,26 @@ import (
 // operator hit (a row mirror holding a full copy rather than a derived record),
 // but it is not the only one. They saw an unexplained 400 with no way to tell
 // which of the two failures it was (dogfood 2026-07-27).
-func (s *Server) parseMissingFrom(w http.ResponseWriter, r *http.Request, op errors.Op) (string, bool) {
+func (s *Server) parseMissingFrom(w http.ResponseWriter, r *http.Request, logbookID int64, op errors.Op) (string, bool) {
 	raw := r.URL.Query().Get("missing_from")
 	if raw == "" {
 		return "", true
 	}
-	for _, fc := range s.cfg.Forwarders() {
+	// A destination is addressed by its BINDING name (ADR 0082), and only a
+	// binding of THIS logbook — exactly what GET /v1/logbook/{id}/destinations
+	// lists; another logbook's binding, or a station entry in an archive with
+	// no bindings, is not a destination of this logbook. Name/type come from
+	// the daemon, not from the request — safe to name in the response, and
+	// naming them is the whole point. The unmatched arm below deliberately does
+	// NOT echo the raw param back.
+	for _, route := range s.qso.DestinationRoutes() {
+		if route.LogbookID != logbookID {
+			continue
+		}
+		fc := route.Config
 		if !strings.EqualFold(fc.Name, raw) {
 			continue
 		}
-		// Name/type come from config, not from the request — safe to name in the
-		// response, and naming them is the whole point. The unmatched arm below
-		// deliberately does NOT echo the raw param back.
 		prefix, stamps := forwarding.AdifPrefixForType(fc.Type)
 		if !stamps {
 			// State only what the missing prefix actually proves. It does NOT
@@ -55,7 +63,7 @@ func (s *Server) parseMissingFrom(w http.ResponseWriter, r *http.Request, op err
 		return prefix, true
 	}
 	s.writeError(w, http.StatusBadRequest, "invalid_missing_from",
-		"missing_from does not name a configured forwarder", op)
+		"missing_from does not name a destination binding of this logbook", op)
 	return "", false
 }
 
@@ -144,7 +152,7 @@ func (s *Server) handleListQsoByLogbook(w http.ResponseWriter, r *http.Request) 
 
 	// ---- missing_from (ADR 0039): page only QSOs not yet uploaded to this
 	// destination, by its durable ADIF stamp ----
-	missingPrefix, ok := s.parseMissingFrom(w, r, op)
+	missingPrefix, ok := s.parseMissingFrom(w, r, logbookID, op)
 	if !ok {
 		return // parseMissingFrom wrote the specific reason
 	}

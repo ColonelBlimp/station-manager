@@ -323,3 +323,90 @@ func TestLifecycle_DisabledUnresolvedBindingIsDiscardedEnabledOneKept(t *testing
 		t.Fatal("the disabled unresolved binding was logged as keeping rows it then discarded")
 	}
 }
+
+// Codex P1 on 7990011b: an ENABLED station entry the daemon cannot construct is
+// refused BEFORE the permanent seed, so config.json stays the thing to fix —
+// the marker stays NULL and no binding is written; a corrected config on the
+// same file then seeds.
+func TestLifecycle_UnbuildableEnabledEntryIsRefusedBeforeTheSeed(t *testing.T) {
+	d, orch := newOrchestratedDaemon(t, func(c *config.Config) {
+		c.SetupComplete = true
+		c.DefaultLogbookID = 1
+		c.LoggingStation.StationCallsign = "7Q5MLV"
+		c.Forwarders = []types.ForwarderConfig{{Name: "qrz", Type: stub.Type, Enabled: true, Credentials: json.RawMessage(`{"mode":"bogus"}`), TickIntervalSec: 1, BatchSize: 1}}
+	})
+	err := orch.Start(d.workerCtx)
+	if err == nil || !strings.Contains(err.Error(), `"qrz"`) || !strings.Contains(err.Error(), "before the archive's bindings are seeded") {
+		t.Fatalf("start = %v; want a refusal naming forwarder \"qrz\" before the seed", err)
+	}
+	ctx := context.Background()
+	if at, _ := d.db.DestinationBindingsSeededAtWithContext(ctx); at != nil {
+		t.Fatal("marker set although the enabled entry could not be constructed")
+	}
+	if rows, _ := d.db.ListLogbookDestinationsWithContext(ctx); len(rows) != 0 {
+		t.Fatalf("bindings written by a refused seed: %+v", rows)
+	}
+
+	// The operator fixes config.json; the next generation on the same file seeds.
+	if _, err := d.cfgSvc.Update(func(c *config.Config) error {
+		c.Forwarders[0].Credentials = stubCreds(t)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	d2, orch2 := buildOrchestratedDaemon(t, d.cfgSvc, d.cfgSvc.Snapshot())
+	if err := orch2.Start(d2.workerCtx); err != nil {
+		t.Fatalf("start after the fix: %v", err)
+	}
+	rows, err := d2.db.ListLogbookDestinationsWithContext(ctx)
+	if err != nil || len(rows) != 1 || rows[0].ForwarderName != "qrz" || !rows[0].Enabled {
+		t.Fatalf("bindings after the fix = %+v (%v); want the qrz binding seeded enabled", rows, err)
+	}
+}
+
+// Converse of the pre-seed check (operator review): once the seed is decided,
+// the binding owns the logbook-scoped credential and config's copy is a
+// deprecated shadow — a later start with a config entry that can no longer be
+// constructed on its own (the QRZ key gone from config.json) still succeeds,
+// because the seeded binding supplies the key.
+func TestLifecycle_SeededBindingStaysAuthoritativeOverAShadowedConfigEntry(t *testing.T) {
+	d, orch := newOrchestratedDaemon(t, func(c *config.Config) {
+		c.SetupComplete = true
+		c.DefaultLogbookID = 1
+		c.LoggingStation.StationCallsign = "7Q5MLV"
+		c.Forwarders = []types.ForwarderConfig{{Name: "qrz", Type: "qrz", Enabled: true,
+			Credentials: json.RawMessage(`{"api_key":"KEY-IN-THE-BINDING"}`), TickIntervalSec: 1, BatchSize: 1}}
+	})
+	if err := orch.Start(d.workerCtx); err != nil {
+		t.Fatalf("first start (seeds): %v", err)
+	}
+	ctx := context.Background()
+	if at, _ := d.db.DestinationBindingsSeededAtWithContext(ctx); at == nil {
+		t.Fatal("first start did not seed")
+	}
+	orch.Shutdown(2*time.Second, nil)
+
+	// config.json loses the key; on its own the entry no longer constructs.
+	if _, err := d.cfgSvc.Update(func(c *config.Config) error {
+		c.Forwarders[0].Credentials = json.RawMessage(`{}`)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := forwarding.Build(d.cfgSvc.Snapshot().Forwarders[0]); err == nil {
+		t.Fatal("fixture: the shadowed config entry must not construct on its own")
+	}
+	d2, orch2 := buildOrchestratedDaemon(t, d.cfgSvc, d.cfgSvc.Snapshot())
+	if err := orch2.Start(d2.workerCtx); err != nil {
+		t.Fatalf("start after the seed with a shadowed config entry: %v; the binding must be authoritative", err)
+	}
+	routes := d2.qso.DestinationRoutes()
+	if len(routes) != 1 || !routes[0].Config.Enabled || !strings.Contains(string(routes[0].Config.Credentials), "KEY-IN-THE-BINDING") {
+		t.Fatalf("routes = %+v; want the seeded qrz binding, enabled, carrying its own key", routes)
+	}
+	// Both generations log into the same smd.log: the second start must have
+	// added a qrz worker line of its own (two in all).
+	if started, _ := workerNamesStarted(t, filepath.Join(d2.cfgSvc.WorkingDir(), "log", "smd.log")); len(started) != 2 || started[1] != "qrz" {
+		t.Fatalf("workers started across both generations = %v; want [qrz qrz]", started)
+	}
+}

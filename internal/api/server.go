@@ -278,6 +278,8 @@ func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *l
 	apiMux.HandleFunc("DELETE /v1/logbook/{id}", s.handleDeleteLogbook)
 	apiMux.HandleFunc("GET /v1/logbook/{id}/qso", s.handleListQsoByLogbook)
 	apiMux.HandleFunc("GET /v1/logbook/{id}/count", s.handleLogbookCount)
+	// The logbook's destination bindings (ADR 0082): what its backfill picker offers.
+	apiMux.HandleFunc("GET /v1/logbook/{id}/destinations", s.handleLogbookDestinations)
 
 	// Contest
 	apiMux.HandleFunc("GET /v1/contest-dupe", s.handleContestDupe)

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	stderr "errors"
 
 	"github.com/ColonelBlimp/station-manager/internal/archive"
 	"github.com/ColonelBlimp/station-manager/internal/config"
@@ -68,7 +69,31 @@ func seedDestinationBindings(ctx context.Context, db *sqlite.Service, cfg config
 	var seeds []sqlite.DestinationSeed
 	legacy := paths.Entry == nil || paths.Entry.Ownership == types.QsoArchiveOwnershipLegacy
 	if legacy {
-		var err error
+		// Once the seed is decided, the bindings — not config.json — own the
+		// logbook-scoped credentials and config's copies are deprecated
+		// shadows; nothing here may consult them again (operator review): the
+		// checks below run ONLY while the seed is undecided.
+		seededAt, err := db.DestinationBindingsSeededAtWithContext(ctx)
+		if err != nil && !stderr.Is(err, errors.ErrNotFound) {
+			return errors.New(op).WithErr(err).WithMsg("read the seed marker")
+		}
+		if seededAt != nil {
+			return nil
+		}
+		// The seed is permanent (the marker), and once it holds a binding the
+		// binding supplies the logbook-scoped credentials. So an ENABLED entry
+		// the daemon could not start with must be refused here, BEFORE the
+		// seed, while config.json is still the thing to fix (Codex P1 on
+		// 7990011b): construct it exactly as the workers node would. A disabled
+		// entry is seeded as it is; it is never constructed.
+		for _, fc := range cfg.Forwarders {
+			if !fc.Enabled {
+				continue
+			}
+			if _, err := forwarding.Build(fc); err != nil {
+				return errors.New(op).WithErr(err).WithMsgf("forwarder %q (type %q) cannot be constructed from config.json; fix it before the archive's bindings are seeded", fc.Name, fc.Type)
+			}
+		}
 		if seeds, err = destinationSeeds(cfg.Forwarders); err != nil {
 			return errors.New(op).WithErr(err)
 		}
