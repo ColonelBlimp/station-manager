@@ -71,18 +71,26 @@ The parts, each settling one item of the 2026-09-24 direction:
    );
    ```
 
-   `forwarder_name` is minted once and never shown or edited. In the ordinary one-logbook adoption,
-   the seed (part 4) carries the legacy config entry's `name`, so Home's existing rows, workers,
-   stamps and `/v1/forwarder/{name}/…` paths are untouched; a binding created afterwards is named
+   Migration 0014 also adds nullable `archive_metadata.destination_bindings_seeded_at`. It is the
+   one-time adoption marker: the adopted Home archive sets it in the same transaction as the seed;
+   new managed archives set it during provisioning, and a non-legacy archive migrated later is
+   marked not-applicable without seeding. A logbook created after that point therefore stays
+   unbound even if a failed config rewrite has left legacy keys on disk.
+
+   `forwarder_name` is minted once and never operator-editable. It is not presented as a setting;
+   the bindings readout may carry it only as the opaque routing handle required by the existing
+   name-keyed queue actions. In the ordinary one-logbook adoption, the seed (part 4) carries the
+   legacy config entry's `name`, so Home's existing rows, workers, stamps and
+   `/v1/forwarder/{name}/…` paths are untouched; a binding created afterwards is named
    `<destination>.<logbook uuid>`. An ordinary binding edit disables rather than deletes the row;
    its credentials survive a disable so re-enabling needs no re-entry. Explicit credential removal
    is separate (part 8). There is **no archive-level row**: the "one switch per destination" the
-   operator sees is an aggregate over the archive's live logbooks — `on` when every logbook's binding is enabled,
-   `off` when none is, `mixed` otherwise — and flipping it writes every logbook's row in one SQLite
-   transaction. An absent binding counts as off and is created by the aggregate write. A per-logbook
-   exception is the same row edited alone. The registry declares each credential field's scope
-   (`station` or `logbook`) in the type descriptor, so the split is an enumerated allowlist the SPA
-   renders from, never a hard-coded table in the client.
+   operator sees is an aggregate over the archive's live logbooks — `on` when every logbook's
+   binding is enabled, `off` when none is, `mixed` otherwise — and flipping it writes every
+   logbook's row in one SQLite transaction. An absent binding counts as off and is created by the
+   aggregate write. A per-logbook exception is the same row edited alone. The registry declares each
+   credential field's scope (`station` or `logbook`) in the type descriptor, so the split is an
+   enumerated allowlist the SPA renders from, never a hard-coded table in the client.
 
 2. **A new logbook starts unbound**, whatever the archive-wide state, for every destination —
    including SM Cloud. Nothing binds implicitly, because a binding is either a credential that
@@ -108,12 +116,13 @@ The parts, each settling one item of the 2026-09-24 direction:
    had no consumer).
 
 4. **Idempotent Home adoption; legacy `config.json` fields.** On the first start of the legacy
-   (adopted) archive under this build, while the configuration still carries binding-owned legacy
-   fields, the daemon seeds — in one transaction in the archive file — one binding per legacy
-   forwarder on **each logical logbook present at that moment**, with that entry's enabled state and
-   logbook-scoped fields copied in (ADR 0056 implementation requirement 2, W-0021 review finding
-   5b). Disabled entries are seeded disabled: moving ownership must not erase a saved key merely
-   because its route is currently off.
+   (adopted) archive under this build, while its `destination_bindings_seeded_at` marker is NULL, the
+   daemon snapshots the binding-owned legacy config fields and seeds — in one transaction in the
+   archive file — one binding per legacy forwarder on **each logical logbook present at that
+   moment**, with that entry's enabled state and logbook-scoped fields copied in (ADR 0056
+   implementation requirement 2, W-0021 review finding 5b). Disabled entries are seeded disabled:
+   moving ownership must not erase a saved key merely because its route is currently off. The same
+   transaction sets the marker after all inserts and queue renames; a failure rolls back both.
 
    For each destination the archive's default logbook keeps the legacy entry's `name`. Additional
    logbooks receive `<destination>.<logbook uuid>`; in the same transaction every existing
@@ -122,14 +131,14 @@ The parts, each settling one item of the 2026-09-24 direction:
    one-worker-per-name invariant. The station's ordinary one-logbook Home therefore changes no queue
    name or API path. The duplicate-type preflight in part 3 runs before this transaction.
 
-   The seed is a Go-side startup step, not SQL (SQL cannot read `config.json`), and inserts only a
-   missing binding: a retry never overwrites a durable row. Only after that transaction commits does
-   the daemon rewrite `config.json` once, file-first, stripping binding-owned `name`, `enabled` and
-   logbook-scoped credential keys from every station entry. A failed rewrite is retried on the next
-   start independently of whether rows now exist; the already-created bindings win. Config v6 keeps
-   the legacy keys **known but deprecated** until that strip, so ADR 0074's unknown-key rejection
-   never fires on an unmigrated v5 file (ADR 0075's pattern). A new managed or external archive never
-   seeds: it starts with no rows.
+   The seed is a Go-side startup step, not SQL (SQL cannot read `config.json`). The marker makes a
+   committed seed final: a retry never overwrites a durable row or binds a later-created logbook.
+   Only after that transaction commits does the daemon rewrite `config.json` once, file-first,
+   stripping binding-owned `name`, `enabled` and logbook-scoped credential keys from every station
+   entry. A failed rewrite is retried on the next start independently of whether rows now exist; the
+   already-created bindings win. Config v6 keeps the legacy keys **known but deprecated** until that
+   strip, so ADR 0074's unknown-key rejection never fires on an unmigrated v5 file (ADR 0075's
+   pattern). A new managed or external archive never seeds: it starts with no rows.
 
    Config v6 has an explicit, data-aware down path to v5. With the daemon stopped,
    `smd config-downgrade --to 5` reads the adopted Home archive before `smd db-downgrade` removes
@@ -137,14 +146,20 @@ The parts, each settling one item of the 2026-09-24 direction:
    `name`/`enabled`/credential shape. It proceeds only when every Home binding of a destination can
    collapse to one v5 instance without changing enabled state or credentials; otherwise it refuses
    before rewriting and directs the operator to reconcile the bindings or restore the secured
-   pre-v6 config copy. The 0014 down path first collapses UUID-derived queue names back to that
-   destination's legacy/default binding name, then drops the table. The ruled rollback order is
-   therefore **config 6 → 5 first, log schema 14 → 13 second**. Rehydrating secrets into owner-only
-   `config.json` is the sole explicit exception to part 8 and exists only for rollback.
+   pre-v6 config copy. The collapse name is the default-logbook binding's name when present,
+   otherwise the lexicographically first binding name; a station account with no binding becomes a
+   disabled v5 entry with a deterministic unused name derived from its type. The 0014 down path
+   collapses UUID-derived queue names to the same target, then drops the table and seed marker. The
+   ruled rollback order is therefore **config 6 → 5 first, log schema 14 → 13 second**. Rehydrating
+   secrets into owner-only `config.json` is the sole explicit exception to part 8 and exists only
+   for rollback.
 
-   Because the seed runs only when the Home file is open, a station whose active archive is another
-   one at upgrade keeps its legacy config fields until Home is next activated; meanwhile that other
-   archive forwards nothing (no rows), exactly as under the retired gate.
+   Entering config v6 may therefore leave the known deprecated keys in place: the stripping rewrite
+   is gated specifically on the adopted Home archive's committed marker, never on whichever archive
+   happens to be active. Because the seed runs only when the Home file is open, a station whose
+   active archive is another one at upgrade keeps its legacy config fields until Home is next
+   activated; meanwhile that other archive forwards nothing (no rows), exactly as under the retired
+   gate.
 
 5. **Queued rows when a destination is disabled or its credentials change.** Binding edits are
    restart-required, like every forwarder setting today: the daemon takes one snapshot of the active
@@ -219,11 +234,12 @@ The parts, each settling one item of the 2026-09-24 direction:
    "Destinations for this archive": one card per registered type with the
    aggregate switch (`on` / `off` / `mixed`) and, expanded, one row per live logbook with its own
    switch, its logbook-scoped fields (masked: set or blank), its queue counts and its Retry / Clear
-   actions. Turning a switch on with a required field blank does not save that row on: the row stays
-   off, the card reads `mixed`, and the field is marked — the switch never claims more than the
-   daemon will do. A card whose station account is missing (SM Cloud without URL and token), or whose
-   server lacks identity support in a non-adopted archive, shows its switch disabled with the reason
-   and the link to where it is fixed (no unactionable instruction). Section "Station accounts":
+   actions. Turning a switch on with a required field blank rejects the complete save, names and
+   marks the field, and restores the last persisted switch state; no sibling row changes. The switch
+   therefore never claims more than the daemon saved. A card whose station account is missing (SM
+   Cloud without URL and token), or whose server lacks identity support in a non-adopted archive,
+   shows its switch disabled with the reason and the link to where it is fixed (no unactionable
+   instruction). Section "Station accounts":
    the SM Cloud URL and token, the ClubLog application key as present/absent, no on/off pill anywhere.
    Saving bindings shows the existing restart-required banner and the Restart daemon control. The
    archive creation form gains no forwarding controls; it states that a new archive starts with every
