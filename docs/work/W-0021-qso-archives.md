@@ -784,8 +784,9 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      response or log.
    - **5E — the Forwarding tab and the logbook consumers.** `ForwardingSection.svelte` and
      `forwarding.svelte.ts` rewritten for the active archive as ADR part 9 (destinations with the
-     aggregate switch and per-logbook rows; station accounts with no pill; the switch never claims
-     more than the daemon saved; disabled switch with reason + link when the account is missing
+     aggregate switch and per-logbook rows; station accounts with no pill; a required field left
+     blank rejects the complete save, marks the field and restores the last persisted switch
+     state, so the switch never claims more than the daemon saved; disabled switch with reason + link when the account is missing
      or when SM Cloud is not identity-ready; restart-required banner as today);
      the tab's gate banner, the gated-pill code and their tests removed (`ArchiveSwitchGate`, the
      identity overlay, is untouched); the
