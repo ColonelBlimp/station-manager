@@ -833,6 +833,21 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      asserts `legacy_name` on all four rows. Proof: the legacy branch removed → both scenario
      tests fail (restored). Models regenerated (same recipe); gates green; drill (new vs 5A
      HEAD at 13) rerun on the rebuilt binary: ROWS IDENTICAL.
+     **Codex review of `b1231672` (P2, fixed 2026-09-25, follow-up commit):** editing 0014's up
+     step in place would leave a file the 0014 build had already migrated without the column
+     (`Migrate()` accepts ErrNoChange), and the edited 0014 down referenced a column such a file
+     lacks. The durable name is now migration **0015** (`ALTER TABLE logbook_destination ADD
+     COLUMN legacy_name`); its DOWN step performs the whole collapse (recorded legacy name →
+     default logbook's binding name → lexicographically first) while the column exists, and
+     0014's down is a plain drop (the 0014 build wired no seed, so a file that stopped there holds
+     no renamed rows). Schema head 15; pins moved. Tests: the five collapse scenarios assert at
+     14 (after 0015's down) and the drop at 13; an upgrade-path test takes a file down to the
+     0014 shape, inserts bindings without `legacy_name`, runs `Migrate()` to 15, lists them with
+     an empty LegacyName and collapses by the fallback. Proofs (non-empty mutations, restored):
+     collapse UPDATE neutralised → five down tests fail; legacy branch neutralised → both
+     recorded-name tests fail. Models: the regeneration recipe reproduces the checked-in files
+     unchanged (same final schema). Gates green; drill (new at 15 vs 5A HEAD at 13) rerun on the
+     rebuilt binary: 15 → 13, ROWS IDENTICAL, no columns dropped.
    - **5C — config v6 and the station account.** Legacy binding-owned keys (`name`, `enabled`,
      logbook-scoped credentials) known but deprecated at v6 (ADR 0075's shape). The version bump may
      retain those keys; only the adopted Home archive's committed seed marker permits the file-first

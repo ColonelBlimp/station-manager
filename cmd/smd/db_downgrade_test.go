@@ -19,7 +19,7 @@ func TestDBDowngrade_MigratesLogSchemaDownAndReports(t *testing.T) {
 	if err := runDBDowngradeTo(&out, []string{"--config", cfgPath, "--to", "10", "--yes"}); err != nil {
 		t.Fatalf("db-downgrade: %v", err)
 	}
-	if !strings.Contains(out.String(), "14 → 10") {
+	if !strings.Contains(out.String(), "15 → 10") {
 		t.Fatalf("report %q does not name the transition 11 → 10", out.String())
 	}
 
@@ -44,7 +44,7 @@ func TestDBDowngrade_RefusesWithoutYesAndRefusesUpward(t *testing.T) {
 	if err := runDBDowngradeTo(&out, []string{"--config", cfgPath, "--to", "10"}); err == nil {
 		t.Fatal("ran without --yes; want a refusal")
 	}
-	if err := runDBDowngradeTo(&out, []string{"--config", cfgPath, "--to", "14", "--yes"}); err == nil {
+	if err := runDBDowngradeTo(&out, []string{"--config", cfgPath, "--to", "15", "--yes"}); err == nil {
 		t.Fatal("target equal to the current version accepted; want a refusal")
 	}
 	if err := runDBDowngradeTo(&out, []string{"--config", cfgPath, "--yes"}); err == nil {
@@ -56,8 +56,8 @@ func TestDBDowngrade_RefusesWithoutYesAndRefusesUpward(t *testing.T) {
 
 	db := reopenDB(t, tmp)
 	v, _, err := db.SchemaVersionWithContext(context.Background())
-	if err != nil || v != 14 {
-		t.Fatalf("schema version = %d (%v) after refusals, want 14 untouched", v, err)
+	if err != nil || v != 15 {
+		t.Fatalf("schema version = %d (%v) after refusals, want 15 untouched", v, err)
 	}
 }
 
@@ -80,7 +80,7 @@ func TestDBDowngrade_RefusesStrayArgumentBeforeTouchingTheDefaultDatabase(t *tes
 
 	db := reopenDB(t, tmp)
 	v, _, verr := db.SchemaVersionWithContext(context.Background())
-	if verr != nil || v != 14 {
+	if verr != nil || v != 15 {
 		t.Fatalf("default database schema version = %d (%v); the stray argument redirected the downgrade", v, verr)
 	}
 }

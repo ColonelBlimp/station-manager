@@ -12,9 +12,11 @@ date: 2026-09-25
 > first" — infers the name an older, config-driven build drains, and the inference is wrong when
 > the default logbook changes after the seed or the legacy name sorts after a UUID-derived one
 > (`station-qrz` after `qrz.<uuid>`): rows would be stranded under a name config never carried.
-> The mapping is now DURABLE: the seed records `logbook_destination.legacy_name` on every row it
-> creates, and both the 0014 down step and the 5C config downgrade collapse to that name first;
-> the inferred rule survives only as the fallback for bindings that never derived from config.
+> The mapping is now DURABLE: the seed records `logbook_destination.legacy_name` (migration 0015,
+> its own step so a file the 0014 build migrated still receives it) on every row it creates, and
+> both 0015's down step — which performs the collapse while the column exists, 0014's down then
+> only drops — and the 5C config downgrade collapse to that name first; the inferred rule survives
+> only as the fallback for bindings that never derived from config.
 
 ## Context
 

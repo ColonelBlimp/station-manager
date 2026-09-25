@@ -1,16 +1,19 @@
 package sqlite
 
 import (
+	"context"
 	"fmt"
 	"testing"
 )
 
-// Migration 0014 (ADR 0082, W-0021 5B): `logbook_destination` — one binding per
-// (logical logbook × destination type) — and the one-time adoption marker
-// `archive_metadata.destination_bindings_seeded_at`. The down step first
-// collapses UUID-derived queue names back to the destination's default-logbook
-// binding name (else the lexicographically first), then drops the table and
-// the marker; QSO, queue and logbook rows are otherwise untouched.
+// Migrations 0014 + 0015 (ADR 0082, W-0021 5B): `logbook_destination` — one
+// binding per (logical logbook × destination type) — the one-time adoption
+// marker `archive_metadata.destination_bindings_seeded_at`, and (0015) the
+// `legacy_name` a seeded binding derives from. 0015's down step collapses
+// queue names to the recorded legacy name (else the default logbook's binding
+// name, else the lexicographically first) while the column still exists;
+// 0014's down then drops the table and the marker. QSO, queue and logbook rows
+// are otherwise untouched.
 
 func execT(t *testing.T, svc *Service, q string, args ...any) {
 	t.Helper()
@@ -48,10 +51,10 @@ func seedTwoLogbookQueue(t *testing.T, svc *Service, defaultLogbook any) {
 	execT(t, svc, `INSERT INTO qso_upload (qso_id, forwarder_name, forwarder_type, action, status, origin) VALUES (2, 'qrz.01920000-0000-7000-8000-00000000000b', 'qrz', 'insert', 'pending', 'live')`)
 }
 
-func TestMigrate0014_BindingTableAndMarker_Up(t *testing.T) {
+func TestMigrate0014And0015_BindingTableMarkerAndLegacyName_Up(t *testing.T) {
 	svc := testService(t)
-	if v := schemaVersion(t, svc); v != 14 {
-		t.Fatalf("schema version = %d, want 14", v)
+	if v := schemaVersion(t, svc); v != 15 {
+		t.Fatalf("schema version = %d, want 15", v)
 	}
 	seedTwoLogbookQueue(t, svc, 1)
 	// One binding per (logbook, destination); forwarder_name unique file-wide.
@@ -80,14 +83,23 @@ func TestMigrate0014_BindingTableAndMarker_Up(t *testing.T) {
 	}
 }
 
-func TestMigrate0014_Down_CollapsesQueueNamesToTheDefaultLogbookBinding(t *testing.T) {
+func TestMigrate0015_Down_CollapsesQueueNamesToTheDefaultLogbookBinding_Then0014Drops(t *testing.T) {
 	svc := testService(t)
 	seedTwoLogbookQueue(t, svc, 1)
+	if _, err := svc.DowngradeLogSchemaTo(14); err != nil {
+		t.Fatalf("downgrade to 14: %v", err)
+	}
+	if n := countT(t, svc, `SELECT COUNT(*) FROM pragma_table_info('logbook_destination') WHERE name = 'legacy_name'`); n != 0 {
+		t.Fatal("legacy_name survived 0015's down step")
+	}
+	if n := countT(t, svc, `SELECT COUNT(*) FROM logbook_destination`); n != 2 {
+		t.Fatalf("bindings at 14 = %d, want 2 (the table survives until 0014's down)", n)
+	}
 	if _, err := svc.DowngradeLogSchemaTo(13); err != nil {
 		t.Fatalf("downgrade to 13: %v", err)
 	}
 	if v := schemaVersion(t, svc); v != 13 {
-		t.Fatalf("schema version = %d after the down step, want 13", v)
+		t.Fatalf("schema version = %d after the down steps, want 13", v)
 	}
 	if n := countT(t, svc, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'logbook_destination'`); n != 0 {
 		t.Fatal("logbook_destination survived the down step")
@@ -143,13 +155,13 @@ func namesOf(t *testing.T, svc *Service) (name1, name2 string) {
 // config-driven worker drains, and neither the current default logbook nor
 // sort order identifies it. The seed records it on every row it creates
 // (`legacy_name`); the down step collapses to that first.
-func TestMigrate0014_Down_CollapsesToTheRecordedLegacyNameBeforeAnyInference(t *testing.T) {
+func TestMigrate0015_Down_CollapsesToTheRecordedLegacyNameBeforeAnyInference(t *testing.T) {
 	// No default logbook; the legacy name "station-qrz" sorts AFTER "qrz.<uuid>".
 	svc := testService(t)
 	seedNamedBindings(t, svc, nil, "station-qrz", "qrz.01920000-0000-7000-8000-00000000000b")
 	execT(t, svc, `UPDATE logbook_destination SET legacy_name = 'station-qrz'`)
-	if _, err := svc.DowngradeLogSchemaTo(13); err != nil {
-		t.Fatalf("downgrade to 13: %v", err)
+	if _, err := svc.DowngradeLogSchemaTo(14); err != nil {
+		t.Fatalf("downgrade to 14: %v", err)
 	}
 	if n1, n2 := namesOf(t, svc); n1 != "station-qrz" || n2 != "station-qrz" {
 		t.Fatalf("names after the down step = %q, %q; want the recorded legacy name for both", n1, n2)
@@ -158,12 +170,12 @@ func TestMigrate0014_Down_CollapsesToTheRecordedLegacyNameBeforeAnyInference(t *
 
 // The default logbook CHANGED after the seed: logbook 2 is now the default,
 // yet the legacy name lives on logbook 1's row — the recorded name still wins.
-func TestMigrate0014_Down_RecordedLegacyNameWinsOverAChangedDefault(t *testing.T) {
+func TestMigrate0015_Down_RecordedLegacyNameWinsOverAChangedDefault(t *testing.T) {
 	svc := testService(t)
 	seedNamedBindings(t, svc, 2, "qrz", "qrz.01920000-0000-7000-8000-00000000000b")
 	execT(t, svc, `UPDATE logbook_destination SET legacy_name = 'qrz'`)
-	if _, err := svc.DowngradeLogSchemaTo(13); err != nil {
-		t.Fatalf("downgrade to 13: %v", err)
+	if _, err := svc.DowngradeLogSchemaTo(14); err != nil {
+		t.Fatalf("downgrade to 14: %v", err)
 	}
 	if n1, n2 := namesOf(t, svc); n1 != "qrz" || n2 != "qrz" {
 		t.Fatalf("names after the down step = %q, %q; want the recorded legacy name, not the new default's", n1, n2)
@@ -172,11 +184,11 @@ func TestMigrate0014_Down_RecordedLegacyNameWinsOverAChangedDefault(t *testing.T
 
 // Bindings that never had a legacy name (created after the seed, or in a new
 // archive) fall back to the ADR 0082 rule: the default logbook's binding name.
-func TestMigrate0014_Down_DefaultLogbookBindingWinsOverTheLexicographicMinimum(t *testing.T) {
+func TestMigrate0015_Down_DefaultLogbookBindingWinsOverTheLexicographicMinimum(t *testing.T) {
 	svc := testService(t)
 	seedNamedBindings(t, svc, 2, "qrz.a", "qrz.z")
-	if _, err := svc.DowngradeLogSchemaTo(13); err != nil {
-		t.Fatalf("downgrade to 13: %v", err)
+	if _, err := svc.DowngradeLogSchemaTo(14); err != nil {
+		t.Fatalf("downgrade to 14: %v", err)
 	}
 	if n1, n2 := namesOf(t, svc); n1 != "qrz.z" || n2 != "qrz.z" {
 		t.Fatalf("names after the down step = %q, %q; want the default logbook's qrz.z for both", n1, n2)
@@ -185,13 +197,41 @@ func TestMigrate0014_Down_DefaultLogbookBindingWinsOverTheLexicographicMinimum(t
 
 // With no default-logbook binding the target is the lexicographically first
 // binding name — here logbook 2's "qrz.a", NOT the lowest logbook's "qrz.b".
-func TestMigrate0014_Down_CollapsesToTheFirstNameWithoutADefaultBinding(t *testing.T) {
+func TestMigrate0015_Down_CollapsesToTheFirstNameWithoutADefaultBinding(t *testing.T) {
 	svc := testService(t)
 	seedNamedBindings(t, svc, nil, "qrz.b", "qrz.a")
-	if _, err := svc.DowngradeLogSchemaTo(13); err != nil {
-		t.Fatalf("downgrade to 13: %v", err)
+	if _, err := svc.DowngradeLogSchemaTo(14); err != nil {
+		t.Fatalf("downgrade to 14: %v", err)
 	}
 	if n1, n2 := namesOf(t, svc); n1 != "qrz.a" || n2 != "qrz.a" {
 		t.Fatalf("names after the down step = %q, %q; want the lexicographically first qrz.a for both", n1, n2)
+	}
+}
+
+// Upgrade path (Codex P2 on b1231672): a file the 0014 build migrated — table
+// without legacy_name, marker present — reaches 15 through the ordinary
+// Migrate() and gains the column; bindings it already holds list with an empty
+// LegacyName and collapse by the fallback rule.
+func TestMigrate0015_UpgradesAFileAlreadyAt14(t *testing.T) {
+	svc := testService(t)
+	if _, err := svc.DowngradeLogSchemaTo(14); err != nil {
+		t.Fatalf("downgrade to 14: %v", err)
+	}
+	seedNamedBindings(t, svc, 1, "qrz", "qrz.01920000-0000-7000-8000-00000000000b") // the parent's shape, no legacy_name
+	if err := svc.Migrate(); err != nil {
+		t.Fatalf("migrate up from 14: %v", err)
+	}
+	if v := schemaVersion(t, svc); v != 15 {
+		t.Fatalf("schema version = %d, want 15", v)
+	}
+	rows, err := svc.ListLogbookDestinationsWithContext(context.Background())
+	if err != nil || len(rows) != 2 || rows[0].LegacyName != "" {
+		t.Fatalf("rows after the upgrade = %+v (%v); want 2 with no legacy name", rows, err)
+	}
+	if _, err := svc.DowngradeLogSchemaTo(14); err != nil {
+		t.Fatalf("downgrade to 14: %v", err)
+	}
+	if n1, n2 := namesOf(t, svc); n1 != "qrz" || n2 != "qrz" {
+		t.Fatalf("names after the fallback collapse = %q, %q; want the default logbook's qrz", n1, n2)
 	}
 }
