@@ -1865,6 +1865,7 @@ func actionsToStrings(as []action.Action) []string {
 
 func validateForwarders(fwds []types.ForwarderConfig) error {
 	names := make(map[string]struct{}, len(fwds))
+	byType := make(map[string]string, len(fwds))
 	for i, fc := range fwds {
 		if fc.Name == "" {
 			return fmt.Errorf("forwarder[%d]: name is empty", i)
@@ -1876,6 +1877,15 @@ func validateForwarders(fwds []types.ForwarderConfig) error {
 			return fmt.Errorf("forwarder[%d]: duplicate name %q", i, fc.Name)
 		}
 		names[fc.Name] = struct{}{}
+		// One station account per destination type (ADR 0082 part 3): the
+		// per-logbook bindings hold one row per (logbook, destination), so a
+		// second entry of one type has no place in the model. Refused by the
+		// conflicting names, before any database or config write, so the
+		// operator chooses which account the station keeps.
+		if first, dup := byType[fc.Type]; dup {
+			return fmt.Errorf("forwarder[%d]: one entry per destination type (%q and %q are both %q)", i, first, fc.Name, fc.Type)
+		}
+		byType[fc.Type] = fc.Name
 
 		// allow_insecure_http is SM-Cloud-only policy (ST-4a): only SM Cloud has an
 		// accepted remote-cleartext deployment (docs/smcloud-deploy.md phase 1). Setting

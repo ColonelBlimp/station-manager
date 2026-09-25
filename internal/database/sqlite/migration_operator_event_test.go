@@ -147,8 +147,8 @@ func TestMigrate0008_OperatorEventHasPerCategoryIndex(t *testing.T) {
 func TestMigrate0008_DownDropsTableUpRestoresIt(t *testing.T) {
 	svc := testService(t)
 
-	if v := schemaVersion(t, svc); v != 13 {
-		t.Fatalf("schema version = %d, want 13", v)
+	if v := schemaVersion(t, svc); v != 14 {
+		t.Fatalf("schema version = %d, want 14", v)
 	}
 	assertTable := func(when string, want bool) {
 		t.Helper()

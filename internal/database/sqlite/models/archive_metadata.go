@@ -24,37 +24,42 @@ import (
 
 // ArchiveMetadatum is an object representing the database table.
 type ArchiveMetadatum struct {
-	Singleton        int64      `boil:"singleton" json:"singleton" toml:"singleton" yaml:"singleton"`
-	ArchiveUUID      string     `boil:"archive_uuid" json:"archive_uuid" toml:"archive_uuid" yaml:"archive_uuid"`
-	CreatedAt        time.Time  `boil:"created_at" json:"created_at" toml:"created_at" yaml:"created_at"`
-	DefaultLogbookID null.Int64 `boil:"default_logbook_id" json:"default_logbook_id,omitempty" toml:"default_logbook_id" yaml:"default_logbook_id,omitempty"`
+	Singleton                   int64      `boil:"singleton" json:"singleton" toml:"singleton" yaml:"singleton"`
+	ArchiveUUID                 string     `boil:"archive_uuid" json:"archive_uuid" toml:"archive_uuid" yaml:"archive_uuid"`
+	CreatedAt                   time.Time  `boil:"created_at" json:"created_at" toml:"created_at" yaml:"created_at"`
+	DefaultLogbookID            null.Int64 `boil:"default_logbook_id" json:"default_logbook_id,omitempty" toml:"default_logbook_id" yaml:"default_logbook_id,omitempty"`
+	DestinationBindingsSeededAt null.Time  `boil:"destination_bindings_seeded_at" json:"destination_bindings_seeded_at,omitempty" toml:"destination_bindings_seeded_at" yaml:"destination_bindings_seeded_at,omitempty"`
 
 	R *archiveMetadatumR `boil:"-" json:"-" toml:"-" yaml:"-"`
 	L archiveMetadatumL  `boil:"-" json:"-" toml:"-" yaml:"-"`
 }
 
 var ArchiveMetadatumColumns = struct {
-	Singleton        string
-	ArchiveUUID      string
-	CreatedAt        string
-	DefaultLogbookID string
+	Singleton                   string
+	ArchiveUUID                 string
+	CreatedAt                   string
+	DefaultLogbookID            string
+	DestinationBindingsSeededAt string
 }{
-	Singleton:        "singleton",
-	ArchiveUUID:      "archive_uuid",
-	CreatedAt:        "created_at",
-	DefaultLogbookID: "default_logbook_id",
+	Singleton:                   "singleton",
+	ArchiveUUID:                 "archive_uuid",
+	CreatedAt:                   "created_at",
+	DefaultLogbookID:            "default_logbook_id",
+	DestinationBindingsSeededAt: "destination_bindings_seeded_at",
 }
 
 var ArchiveMetadatumTableColumns = struct {
-	Singleton        string
-	ArchiveUUID      string
-	CreatedAt        string
-	DefaultLogbookID string
+	Singleton                   string
+	ArchiveUUID                 string
+	CreatedAt                   string
+	DefaultLogbookID            string
+	DestinationBindingsSeededAt string
 }{
-	Singleton:        "archive_metadata.singleton",
-	ArchiveUUID:      "archive_metadata.archive_uuid",
-	CreatedAt:        "archive_metadata.created_at",
-	DefaultLogbookID: "archive_metadata.default_logbook_id",
+	Singleton:                   "archive_metadata.singleton",
+	ArchiveUUID:                 "archive_metadata.archive_uuid",
+	CreatedAt:                   "archive_metadata.created_at",
+	DefaultLogbookID:            "archive_metadata.default_logbook_id",
+	DestinationBindingsSeededAt: "archive_metadata.destination_bindings_seeded_at",
 }
 
 // Generated where
@@ -166,16 +171,42 @@ func (w whereHelpernull_Int64) NIN(slice []int64) qm.QueryMod {
 func (w whereHelpernull_Int64) IsNull() qm.QueryMod    { return qmhelper.WhereIsNull(w.field) }
 func (w whereHelpernull_Int64) IsNotNull() qm.QueryMod { return qmhelper.WhereIsNotNull(w.field) }
 
+type whereHelpernull_Time struct{ field string }
+
+func (w whereHelpernull_Time) EQ(x null.Time) qm.QueryMod {
+	return qmhelper.WhereNullEQ(w.field, false, x)
+}
+func (w whereHelpernull_Time) NEQ(x null.Time) qm.QueryMod {
+	return qmhelper.WhereNullEQ(w.field, true, x)
+}
+func (w whereHelpernull_Time) LT(x null.Time) qm.QueryMod {
+	return qmhelper.Where(w.field, qmhelper.LT, x)
+}
+func (w whereHelpernull_Time) LTE(x null.Time) qm.QueryMod {
+	return qmhelper.Where(w.field, qmhelper.LTE, x)
+}
+func (w whereHelpernull_Time) GT(x null.Time) qm.QueryMod {
+	return qmhelper.Where(w.field, qmhelper.GT, x)
+}
+func (w whereHelpernull_Time) GTE(x null.Time) qm.QueryMod {
+	return qmhelper.Where(w.field, qmhelper.GTE, x)
+}
+
+func (w whereHelpernull_Time) IsNull() qm.QueryMod    { return qmhelper.WhereIsNull(w.field) }
+func (w whereHelpernull_Time) IsNotNull() qm.QueryMod { return qmhelper.WhereIsNotNull(w.field) }
+
 var ArchiveMetadatumWhere = struct {
-	Singleton        whereHelperint64
-	ArchiveUUID      whereHelperstring
-	CreatedAt        whereHelpertime_Time
-	DefaultLogbookID whereHelpernull_Int64
+	Singleton                   whereHelperint64
+	ArchiveUUID                 whereHelperstring
+	CreatedAt                   whereHelpertime_Time
+	DefaultLogbookID            whereHelpernull_Int64
+	DestinationBindingsSeededAt whereHelpernull_Time
 }{
-	Singleton:        whereHelperint64{field: "\"archive_metadata\".\"singleton\""},
-	ArchiveUUID:      whereHelperstring{field: "\"archive_metadata\".\"archive_uuid\""},
-	CreatedAt:        whereHelpertime_Time{field: "\"archive_metadata\".\"created_at\""},
-	DefaultLogbookID: whereHelpernull_Int64{field: "\"archive_metadata\".\"default_logbook_id\""},
+	Singleton:                   whereHelperint64{field: "\"archive_metadata\".\"singleton\""},
+	ArchiveUUID:                 whereHelperstring{field: "\"archive_metadata\".\"archive_uuid\""},
+	CreatedAt:                   whereHelpertime_Time{field: "\"archive_metadata\".\"created_at\""},
+	DefaultLogbookID:            whereHelpernull_Int64{field: "\"archive_metadata\".\"default_logbook_id\""},
+	DestinationBindingsSeededAt: whereHelpernull_Time{field: "\"archive_metadata\".\"destination_bindings_seeded_at\""},
 }
 
 // ArchiveMetadatumRels is where relationship names are stored.
@@ -215,9 +246,9 @@ func (r *archiveMetadatumR) GetDefaultLogbook() *Logbook {
 type archiveMetadatumL struct{}
 
 var (
-	archiveMetadatumAllColumns            = []string{"singleton", "archive_uuid", "created_at", "default_logbook_id"}
+	archiveMetadatumAllColumns            = []string{"singleton", "archive_uuid", "created_at", "default_logbook_id", "destination_bindings_seeded_at"}
 	archiveMetadatumColumnsWithoutDefault = []string{"archive_uuid"}
-	archiveMetadatumColumnsWithDefault    = []string{"singleton", "created_at", "default_logbook_id"}
+	archiveMetadatumColumnsWithDefault    = []string{"singleton", "created_at", "default_logbook_id", "destination_bindings_seeded_at"}
 	archiveMetadatumPrimaryKeyColumns     = []string{"singleton"}
 	archiveMetadatumGeneratedColumns      = []string{"singleton"}
 )

@@ -498,3 +498,25 @@ func TestDefaultForwarderConfigs_ExcludesTypesWithoutEndpoints(t *testing.T) {
 		}
 	}
 }
+
+// ---- LogbookScopedKeys (ADR 0082, W-0021 5B) ----
+
+// The seed copies ONLY a type's logbook-scoped credential keys into a binding;
+// station-scoped keys stay in config.json. Unknown type → nil.
+func TestLogbookScopedKeys(t *testing.T) {
+	RegisterForwarderType("scopekeys-test", "Scope Keys",
+		[]Action{action.Insert},
+		[]CredentialField{
+			{Key: "url", Label: "URL", Kind: "text", Scope: ScopeStation},
+			{Key: "token", Label: "Token", Kind: "password", Scope: ScopeStation},
+			{Key: "logbook", Label: "Logbook", Kind: "text", Scope: ScopeLogbook},
+			{Key: "callsign", Label: "Callsign", Kind: "text", Scope: ScopeLogbook},
+		})
+	got := LogbookScopedKeys("scopekeys-test")
+	if len(got) != 2 || got[0] != "logbook" || got[1] != "callsign" {
+		t.Fatalf("LogbookScopedKeys = %v, want [logbook callsign] in declaration order", got)
+	}
+	if got := LogbookScopedKeys("no-such-type"); got != nil {
+		t.Fatalf("LogbookScopedKeys(unknown) = %v, want nil", got)
+	}
+}

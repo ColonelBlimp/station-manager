@@ -121,6 +121,15 @@ func TestCreate_ProvisionsAManagedArchiveInactive(t *testing.T) {
 	if err != nil || identity.ArchiveUUID != res.Entry.ID || identity.DefaultLogbookID != lbs[0].ID {
 		t.Fatalf("identity = %+v (%v); want id %s default %d", identity, err, res.Entry.ID, lbs[0].ID)
 	}
+	// ADR 0082 part 1: a new managed archive starts with NO destination bindings
+	// and its seed decision already recorded, so no later start seeds it from
+	// whatever config.json still carries.
+	if at, err := db.DestinationBindingsSeededAtWithContext(context.Background()); err != nil || at == nil {
+		t.Fatalf("seed marker = %v (%v); want set at provisioning", at, err)
+	}
+	if bindings, err := db.ListLogbookDestinationsWithContext(context.Background()); err != nil || len(bindings) != 0 {
+		t.Fatalf("bindings = %v (%v); want none", bindings, err)
+	}
 	// Catalogue: the entry is present and INACTIVE; the active selector is untouched.
 	if e := snap.QsoArchiveByID(res.Entry.ID); e == nil || *e != res.Entry {
 		t.Fatalf("catalogue entry = %+v, want %+v", e, res.Entry)

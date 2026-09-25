@@ -146,16 +146,19 @@ var LogbookWhere = struct {
 // LogbookRels is where relationship names are stored.
 var LogbookRels = struct {
 	DefaultLogbookArchiveMetadata string
+	LogbookDestinations           string
 	Qsos                          string
 }{
 	DefaultLogbookArchiveMetadata: "DefaultLogbookArchiveMetadata",
+	LogbookDestinations:           "LogbookDestinations",
 	Qsos:                          "Qsos",
 }
 
 // logbookR is where relationships are stored.
 type logbookR struct {
-	DefaultLogbookArchiveMetadata ArchiveMetadatumSlice `boil:"DefaultLogbookArchiveMetadata" json:"DefaultLogbookArchiveMetadata" toml:"DefaultLogbookArchiveMetadata" yaml:"DefaultLogbookArchiveMetadata"`
-	Qsos                          QsoSlice              `boil:"Qsos" json:"Qsos" toml:"Qsos" yaml:"Qsos"`
+	DefaultLogbookArchiveMetadata ArchiveMetadatumSlice   `boil:"DefaultLogbookArchiveMetadata" json:"DefaultLogbookArchiveMetadata" toml:"DefaultLogbookArchiveMetadata" yaml:"DefaultLogbookArchiveMetadata"`
+	LogbookDestinations           LogbookDestinationSlice `boil:"LogbookDestinations" json:"LogbookDestinations" toml:"LogbookDestinations" yaml:"LogbookDestinations"`
+	Qsos                          QsoSlice                `boil:"Qsos" json:"Qsos" toml:"Qsos" yaml:"Qsos"`
 }
 
 // NewStruct creates a new relationship struct
@@ -177,6 +180,22 @@ func (r *logbookR) GetDefaultLogbookArchiveMetadata() ArchiveMetadatumSlice {
 	}
 
 	return r.DefaultLogbookArchiveMetadata
+}
+
+func (o *Logbook) GetLogbookDestinations() LogbookDestinationSlice {
+	if o == nil {
+		return nil
+	}
+
+	return o.R.GetLogbookDestinations()
+}
+
+func (r *logbookR) GetLogbookDestinations() LogbookDestinationSlice {
+	if r == nil {
+		return nil
+	}
+
+	return r.LogbookDestinations
 }
 
 func (o *Logbook) GetQsos() QsoSlice {
@@ -311,6 +330,20 @@ func (o *Logbook) DefaultLogbookArchiveMetadata(mods ...qm.QueryMod) archiveMeta
 	return ArchiveMetadata(queryMods...)
 }
 
+// LogbookDestinations retrieves all the logbook_destination's LogbookDestinations with an executor.
+func (o *Logbook) LogbookDestinations(mods ...qm.QueryMod) logbookDestinationQuery {
+	var queryMods []qm.QueryMod
+	if len(mods) != 0 {
+		queryMods = append(queryMods, mods...)
+	}
+
+	queryMods = append(queryMods,
+		qm.Where("\"logbook_destination\".\"logbook_id\"=?", o.ID),
+	)
+
+	return LogbookDestinations(queryMods...)
+}
+
 // Qsos retrieves all the qso's Qsos with an executor.
 func (o *Logbook) Qsos(mods ...qm.QueryMod) qsoQuery {
 	var queryMods []qm.QueryMod
@@ -423,6 +456,112 @@ func (logbookL) LoadDefaultLogbookArchiveMetadata(ctx context.Context, e boil.Co
 					foreign.R = &archiveMetadatumR{}
 				}
 				foreign.R.DefaultLogbook = local
+				break
+			}
+		}
+	}
+
+	return nil
+}
+
+// LoadLogbookDestinations allows an eager lookup of values, cached into the
+// loaded structs of the objects. This is for a 1-M or N-M relationship.
+func (logbookL) LoadLogbookDestinations(ctx context.Context, e boil.ContextExecutor, singular bool, maybeLogbook any, mods queries.Applicator) error {
+	var slice []*Logbook
+	var object *Logbook
+
+	if singular {
+		var ok bool
+		object, ok = maybeLogbook.(*Logbook)
+		if !ok {
+			object = new(Logbook)
+			ok = queries.SetFromEmbeddedStruct(&object, &maybeLogbook)
+			if !ok {
+				return errors.New(fmt.Sprintf("failed to set %T from embedded struct %T", object, maybeLogbook))
+			}
+		}
+	} else {
+		s, ok := maybeLogbook.(*[]*Logbook)
+		if ok {
+			slice = *s
+		} else {
+			ok = queries.SetFromEmbeddedStruct(&slice, maybeLogbook)
+			if !ok {
+				return errors.New(fmt.Sprintf("failed to set %T from embedded struct %T", slice, maybeLogbook))
+			}
+		}
+	}
+
+	args := make(map[any]struct{})
+	if singular {
+		if object.R == nil {
+			object.R = &logbookR{}
+		}
+		args[object.ID] = struct{}{}
+	} else {
+		for _, obj := range slice {
+			if obj.R == nil {
+				obj.R = &logbookR{}
+			}
+			args[obj.ID] = struct{}{}
+		}
+	}
+
+	if len(args) == 0 {
+		return nil
+	}
+
+	argsSlice := make([]any, len(args))
+	i := 0
+	for arg := range args {
+		argsSlice[i] = arg
+		i++
+	}
+
+	query := NewQuery(
+		qm.From(`logbook_destination`),
+		qm.WhereIn(`logbook_destination.logbook_id in ?`, argsSlice...),
+	)
+	if mods != nil {
+		mods.Apply(query)
+	}
+
+	results, err := query.QueryContext(ctx, e)
+	if err != nil {
+		return errors.Wrap(err, "failed to eager load logbook_destination")
+	}
+
+	var resultSlice []*LogbookDestination
+	if err = queries.Bind(results, &resultSlice); err != nil {
+		return errors.Wrap(err, "failed to bind eager loaded slice logbook_destination")
+	}
+
+	if err = results.Close(); err != nil {
+		return errors.Wrap(err, "failed to close results in eager load on logbook_destination")
+	}
+	if err = results.Err(); err != nil {
+		return errors.Wrap(err, "error occurred during iteration of eager loaded relations for logbook_destination")
+	}
+
+	if singular {
+		object.R.LogbookDestinations = resultSlice
+		for _, foreign := range resultSlice {
+			if foreign.R == nil {
+				foreign.R = &logbookDestinationR{}
+			}
+			foreign.R.Logbook = object
+		}
+		return nil
+	}
+
+	for _, foreign := range resultSlice {
+		for _, local := range slice {
+			if local.ID == foreign.LogbookID {
+				local.R.LogbookDestinations = append(local.R.LogbookDestinations, foreign)
+				if foreign.R == nil {
+					foreign.R = &logbookDestinationR{}
+				}
+				foreign.R.Logbook = local
 				break
 			}
 		}
@@ -662,6 +801,59 @@ func (o *Logbook) RemoveDefaultLogbookArchiveMetadata(ctx context.Context, exec 
 		}
 	}
 
+	return nil
+}
+
+// AddLogbookDestinations adds the given related objects to the existing relationships
+// of the logbook, optionally inserting them as new records.
+// Appends related to o.R.LogbookDestinations.
+// Sets related.R.Logbook appropriately.
+func (o *Logbook) AddLogbookDestinations(ctx context.Context, exec boil.ContextExecutor, insert bool, related ...*LogbookDestination) error {
+	var err error
+	for _, rel := range related {
+		if insert {
+			rel.LogbookID = o.ID
+			if err = rel.Insert(ctx, exec, boil.Infer()); err != nil {
+				return errors.Wrap(err, "failed to insert into foreign table")
+			}
+		} else {
+			updateQuery := fmt.Sprintf(
+				"UPDATE \"logbook_destination\" SET %s WHERE %s",
+				strmangle.SetParamNames("\"", "\"", 0, []string{"logbook_id"}),
+				strmangle.WhereClause("\"", "\"", 0, logbookDestinationPrimaryKeyColumns),
+			)
+			values := []any{o.ID, rel.ID}
+
+			if boil.IsDebug(ctx) {
+				writer := boil.DebugWriterFrom(ctx)
+				fmt.Fprintln(writer, updateQuery)
+				fmt.Fprintln(writer, values)
+			}
+			if _, err = exec.ExecContext(ctx, updateQuery, values...); err != nil {
+				return errors.Wrap(err, "failed to update foreign table")
+			}
+
+			rel.LogbookID = o.ID
+		}
+	}
+
+	if o.R == nil {
+		o.R = &logbookR{
+			LogbookDestinations: related,
+		}
+	} else {
+		o.R.LogbookDestinations = append(o.R.LogbookDestinations, related...)
+	}
+
+	for _, rel := range related {
+		if rel.R == nil {
+			rel.R = &logbookDestinationR{
+				Logbook: o,
+			}
+		} else {
+			rel.R.Logbook = o
+		}
+	}
 	return nil
 }
 

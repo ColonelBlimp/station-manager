@@ -18,8 +18,8 @@ import (
 func TestDowngradeLogSchemaTo_DownToPriorVersion_RetainsRows(t *testing.T) {
 	svc := testService(t)
 	ctx := context.Background()
-	if v := schemaVersion(t, svc); v != 13 {
-		t.Fatalf("schema version = %d, want 13 (head)", v)
+	if v := schemaVersion(t, svc); v != 14 {
+		t.Fatalf("schema version = %d, want 14 (head)", v)
 	}
 	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
 	qsoID, _ := svc.InsertQso(validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845"))
@@ -36,8 +36,8 @@ func TestDowngradeLogSchemaTo_DownToPriorVersion_RetainsRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("downgrade: %v", err)
 	}
-	if from != 13 {
-		t.Fatalf("reported from = %d, want 13", from)
+	if from != 14 {
+		t.Fatalf("reported from = %d, want 14", from)
 	}
 	if v := schemaVersion(t, svc); v != 10 {
 		t.Fatalf("schema version after downgrade = %d, want 10", v)
@@ -67,13 +67,13 @@ func TestDowngradeLogSchemaTo_DownToPriorVersion_RetainsRows(t *testing.T) {
 // current version is refused before anything runs, and the version is untouched.
 func TestDowngradeLogSchemaTo_RefusesSameOrHigherTarget(t *testing.T) {
 	svc := testService(t)
-	for _, target := range []uint{13, 14, 99} {
+	for _, target := range []uint{14, 15, 99} {
 		if _, err := svc.DowngradeLogSchemaTo(target); err == nil {
 			t.Errorf("target %d accepted at head; want a refusal (down only)", target)
 		}
 	}
-	if v := schemaVersion(t, svc); v != 13 {
-		t.Fatalf("schema version = %d after refused downgrades, want 13", v)
+	if v := schemaVersion(t, svc); v != 14 {
+		t.Fatalf("schema version = %d after refused downgrades, want 14", v)
 	}
 	// Version 0 is "no schema": 0001's down step drops every table. No build
 	// ever ran at 0, so it is refused by an explicit floor, not left to whatever

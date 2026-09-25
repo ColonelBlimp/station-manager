@@ -31,8 +31,8 @@ func alarmRow(kind string) (category, severity, detail string) {
 // pair CHECK and not a table that refuses everything.
 func TestMigrate0009_EnforcesTheCategoryKindPairsFromTheVocabulary(t *testing.T) {
 	svc := testService(t)
-	if v := schemaVersion(t, svc); v != 13 {
-		t.Fatalf("schema version = %d, want 13", v)
+	if v := schemaVersion(t, svc); v != 14 {
+		t.Fatalf("schema version = %d, want 14", v)
 	}
 	pairs := stationevents.KindsByCategory()
 	for cat, kinds := range pairs {
@@ -103,8 +103,8 @@ func TestMigrate0009_RebuildKeepsSeverityBuildDetailTriggerAndIndex(t *testing.T
 // rows intact.
 func TestMigrate0009_DownKeepsNotificationRowsAndDiscardsAlarmRows(t *testing.T) {
 	svc := testService(t)
-	if v := schemaVersion(t, svc); v != 13 {
-		t.Fatalf("schema version = %d, want 13", v)
+	if v := schemaVersion(t, svc); v != 14 {
+		t.Fatalf("schema version = %d, want 14", v)
 	}
 	if err := insertOperatorEvent(t, svc, "notification", "forward.failed", "warn", "v",
 		`{"qso_id":7,"forwarder":"qrz","action":"insert","attempts":5}`); err != nil {

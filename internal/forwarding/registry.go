@@ -545,6 +545,26 @@ func RegisterForwarderType(typeName, displayName string, actions []Action, creds
 	}
 }
 
+// LogbookScopedKeys returns, in declaration order, the credential keys a
+// registered type declares with ScopeLogbook — the fields a binding row owns
+// (ADR 0082). The seed copies exactly these from a legacy config entry; the
+// station-scoped rest stays in config.json. nil for an unregistered type.
+func LogbookScopedKeys(typeName string) []string {
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	d, ok := descriptors[typeName]
+	if !ok {
+		return nil
+	}
+	var keys []string
+	for _, c := range d.CredentialFields {
+		if c.Scope == ScopeLogbook {
+			keys = append(keys, c.Key)
+		}
+	}
+	return keys
+}
+
 // ForwarderTypes returns every registered type descriptor, sorted by type, as
 // deep copies (callers can't mutate registry state). Drives GET
 // /v1/forwarder-types. Only types registered via RegisterForwarderType appear —

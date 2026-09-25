@@ -4,21 +4,23 @@
 package models
 
 var TableNames = struct {
-	ArchiveMetadata  string
-	ContactedStation string
-	Country          string
-	Logbook          string
-	OperatorEvent    string
-	Qso              string
-	QsoHistory       string
-	QsoUpload        string
+	ArchiveMetadata    string
+	ContactedStation   string
+	Country            string
+	Logbook            string
+	LogbookDestination string
+	OperatorEvent      string
+	Qso                string
+	QsoHistory         string
+	QsoUpload          string
 }{
-	ArchiveMetadata:  "archive_metadata",
-	ContactedStation: "contacted_station",
-	Country:          "country",
-	Logbook:          "logbook",
-	OperatorEvent:    "operator_event",
-	Qso:              "qso",
-	QsoHistory:       "qso_history",
-	QsoUpload:        "qso_upload",
+	ArchiveMetadata:    "archive_metadata",
+	ContactedStation:   "contacted_station",
+	Country:            "country",
+	Logbook:            "logbook",
+	LogbookDestination: "logbook_destination",
+	OperatorEvent:      "operator_event",
+	Qso:                "qso",
+	QsoHistory:         "qso_history",
+	QsoUpload:          "qso_upload",
 }

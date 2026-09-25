@@ -16,8 +16,8 @@ import (
 
 func TestMigrate0012_ArchiveMetadataAndLogbookUUIDAtHead(t *testing.T) {
 	svc := testService(t)
-	if v := schemaVersion(t, svc); v != 13 {
-		t.Fatalf("schema version = %d, want 13", v)
+	if v := schemaVersion(t, svc); v != 14 {
+		t.Fatalf("schema version = %d, want 14", v)
 	}
 	var cols int
 	if err := svc.handle.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('archive_metadata')

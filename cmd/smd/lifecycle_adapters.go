@@ -320,6 +320,12 @@ func (d *daemon) startQso(context.Context) error {
 		return errors.New(op).WithErr(err).WithMsg("adopt archive")
 	}
 	d.cfg = d.cfgSvc.Snapshot()
+	// The file's destination bindings are decided once (ADR 0082): a managed or
+	// external archive records none (the adopted archive's seed lands with
+	// routing by binding).
+	if err := seedDestinationBindings(context.Background(), d.db, d.paths, d.logger); err != nil {
+		return errors.New(op).WithErr(err)
+	}
 	// The QSO service learns which archive it writes: the interim forwarding
 	// gate (archive.ForwardingAdmitted) keys on it.
 	d.qso.SetArchive(d.paths.Entry)

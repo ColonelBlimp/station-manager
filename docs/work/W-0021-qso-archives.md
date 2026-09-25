@@ -763,6 +763,64 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      have the marker set, no binding rows and no worker; a config PUT attempting to change a legacy
      binding-owned field is rejected with config and bindings unchanged; each enqueue site has a
      reversion proof that routing by config would produce a different row set.
+     **Built 2026-09-25, 5B commit (a) — schema, the seed service, markers, preflight
+     (routing and workers still by config; the adopted archive's seed lands in (b)).**
+     Migration 0014 (`logbook_destination` as ADR part 1 +
+     `archive_metadata.destination_bindings_seeded_at`; down collapses `<type>.<uuid>` queue
+     names to the destination's default-logbook binding name, else the lexicographically first,
+     via a temp collapse table, then drops table and marker; a collision on
+     `(qso_id, forwarder_name, action)` would fail the down step loudly rather than drop a row).
+     sqlboiler models regenerated — recipe, reproducing the checked-in files byte for byte
+     before the change: apply every `migrations/log` and `migrations/reference` up file in order
+     to a scratch SQLite file, then `sqlboiler sqlite3` with `no-tests`, `no-hooks`,
+     `add-soft-deletes`, `wipe`, `add-enum-types=false` and the aliases
+     `qso.rst_sent → RstSent`, `qso.rst_rcvd → RstRcvd` (SQLBoiler 4.19.7, sqlboiler-sqlite3);
+     schema pins → 14. `types.LogbookDestination`; `sqlite.ListLogbookDestinationsWithContext`
+     (live logbooks only), `DestinationBindingsSeededAtWithContext`,
+     `SeedLogbookDestinationsWithContext(seeds)` (one transaction: marker NULL → insert-missing
+     per live logbook × seed, the default logbook — else the lowest id — keeps the legacy name,
+     others `<type>.<logbook uuid>` with their legacy-named queue rows renamed; a binding that
+     already exists keeps its name and the rows follow THAT name; marker set last; nil seeds =
+     mark only; ErrNotFound without an identity row; a uuid-less logbook fails and rolls
+     everything back). `forwarding.LogbookScopedKeys(type)`. `cmd/smd/archive_bindings.go`
+     `seedDestinationBindings` in `startQso` after adoption: a managed or external archive
+     records the empty decision (marker, no rows); the adopted archive is left UNDECIDED at this
+     boundary. `archive.Manager.build` records the empty seed at provisioning. Duplicate-type
+     preflight in `validateForwarders` (shared by load and `PUT /v1/config`): "one entry per
+     destination type (%q and %q are both %q)".
+     **Operator review of the first (a) draft (2026-09-25), all fixed:** (1) a standalone (a)
+     that seeded the adopted archive would have renamed extra-logbook queue rows to names no
+     config-driven worker drains, while new rows kept the legacy name and would become unmatched
+     at (b) — the adopted archive's seed and renames now land in (b) with routing and workers;
+     (2) a malformed or non-object credential blob must not silently become "no credentials"
+     under a committed marker (forwarder construction runs later and disabled entries are never
+     constructed, so a corrected config could not reseed) — REQUIREMENT for (b)'s seed helper:
+     reject a blob that is not a JSON object (valid non-object JSON such as a string or an array
+     can sit inside a valid config file) and a type with no registered descriptor BEFORE the
+     seed transaction, failing the start by name; (3) insert-missing on a conflicting durable
+     row now renames to the existing row's `forwarder_name`, never a freshly computed one
+     (proof: computed-name rename → the logbook's rows carry a name no binding has);
+     (4) the down-migration fallback tests now use fixtures where the default logbook's name is
+     NOT the lexicographic minimum (default wins: `qrz.z` over `qrz.a`) and where, with no
+     default binding, the minimum is NOT the lowest logbook's name (`qrz.a` of logbook 2 over
+     `qrz.b` of logbook 1); proof: COALESCE reduced to MIN → the default-wins test fails.
+     Note for fresh installs (unchanged by the review): the adopted file's seed covers the
+     logbooks present when (b) first starts it; a logbook created later stays unbound until the
+     bindings tab (5E). Proofs (compiling, restored): down collapse removed → both collapse tests
+     fail; keeper rule removed → renamed count 2; marker check removed → second seed inserts;
+     existing-binding rule removed → rows follow a computed name; default-wins branch removed →
+     fallback test fails; the marker assertion at provisioning failed before the change.
+     Gates: whole-tree vet + tests, gofmt, observatory 0 regressions.
+     **Rollback drill (2026-09-25, `scripts/rollback-drill.sh` on online-backup copies of the
+     station's Home file and a scrubbed config, 0700 scratch, every path confined, all external
+     paths off, shredded after):** source copy schema 12 (station `-41`), 8,129 QSOs, 15,733
+     queue rows, 2 history rows, 1 logbook. (1) new build (14) vs the 5A HEAD build
+     (`f28a70d6`, 13): migrated 12→14, `db-downgrade --to 13`, old build booted at 13, ROWS
+     IDENTICAL, no columns dropped — run twice, once with the first draft (which seeded 4
+     bindings / 0 renamed on the copy, the log line read from the kept copy) and again with the
+     final (a) build (no seed on the adopted copy, marker NULL). (2) new build vs the deployed
+     `/usr/bin/smd` (`2.0.0-alpha.3-41-gd8fbd269`, 12): 14→12, booted at 12, ROWS IDENTICAL.
+     (3) `--mutate-one-row` proof run: ROWS DIFFER, exit 1. Config stayed v5 throughout.
    - **5C — config v6 and the station account.** Legacy binding-owned keys (`name`, `enabled`,
      logbook-scoped credentials) known but deprecated at v6 (ADR 0075's shape). The version bump may
      retain those keys; only the adopted Home archive's committed seed marker permits the file-first

@@ -763,6 +763,14 @@ func TestLoad_Forwarders_ValidationErrors(t *testing.T) {
 			wantErr: "duplicate name",
 		},
 		{
+			// ADR 0082 part 3: one station account per destination type — the
+			// bindings model has one row per (logbook, destination), so a second
+			// entry of one type has nowhere to go. Refused by the conflicting names.
+			name:    "two entries of one type",
+			body:    `{"forwarders":[{"name":"qrz-a","type":"qrz"},{"name":"qrz-b","type":"qrz"}]}`,
+			wantErr: `one entry per destination type ("qrz-a" and "qrz-b" are both "qrz")`,
+		},
+		{
 			name:    "unknown action in filter",
 			body:    `{"forwarders":[{"name":"x","type":"qrz","action_filter":["bogus"]}]}`,
 			wantErr: "unknown upload action",

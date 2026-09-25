@@ -338,6 +338,11 @@ func (m *Manager) build(ctx context.Context, snap config.Config, tmp, id string,
 	if _, err := svc.WriteArchiveIdentityWithContext(ctx, id, lbID); err != nil {
 		return fmt.Errorf("provision: write identity: %w", err)
 	}
+	// A new archive starts with no destination bindings (ADR 0082 part 1); the
+	// seed decision is recorded here so no later start seeds it from config.
+	if _, err := svc.SeedLogbookDestinationsWithContext(ctx, nil); err != nil {
+		return fmt.Errorf("provision: record the empty binding seed: %w", err)
+	}
 	if err := svc.CheckIntegrityWithContext(ctx); err != nil {
 		return fmt.Errorf("provision: %w", err)
 	}

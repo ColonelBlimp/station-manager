@@ -11,8 +11,8 @@ import (
 // discards only those rows, keeping every other row with its id.
 func TestMigrate0013_ArchiveOutcomesAreNotificationKinds_DownDiscardsOnlyThem(t *testing.T) {
 	svc := testService(t)
-	if v := schemaVersion(t, svc); v != 13 {
-		t.Fatalf("schema version = %d, want 13", v)
+	if v := schemaVersion(t, svc); v != 14 {
+		t.Fatalf("schema version = %d, want 14", v)
 	}
 	for _, kind := range []string{stationevents.KindArchiveActivated, stationevents.KindArchiveActivationFailed} {
 		if err := insertOperatorEvent(t, svc, stationevents.CategoryNotification, kind, "info", "v", `{"archive_id":"x","label":"Drill"}`); err != nil {
