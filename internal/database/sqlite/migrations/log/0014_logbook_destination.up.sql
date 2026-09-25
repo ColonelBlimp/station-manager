@@ -11,6 +11,12 @@
 -- Home archive seeds from the legacy config entries; a managed or external
 -- archive is marked with no rows). A logbook created after that point stays
 -- unbound whatever config.json still carries.
+--
+-- legacy_name is the config.json forwarder name a seeded binding derives from —
+-- the ONE name an older, config-driven build drains — recorded on every row
+-- the seed creates so the down step can collapse to it without inferring it
+-- from the current default logbook or from sort order (Codex P2, c3df0e12).
+-- NULL on a binding created after the seed.
 
 CREATE TABLE IF NOT EXISTS logbook_destination
 (
@@ -23,6 +29,7 @@ CREATE TABLE IF NOT EXISTS logbook_destination
     enabled           INTEGER  NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
     credentials       TEXT,
     remote_adopted_at DATETIME,
+    legacy_name       TEXT,
     CONSTRAINT uq_logbook_destination UNIQUE (logbook_id, destination)
 );
 

@@ -821,6 +821,18 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      final (a) build (no seed on the adopted copy, marker NULL). (2) new build vs the deployed
      `/usr/bin/smd` (`2.0.0-alpha.3-41-gd8fbd269`, 12): 14→12, booted at 12, ROWS IDENTICAL.
      (3) `--mutate-one-row` proof run: ROWS DIFFER, exit 1. Config stayed v5 throughout.
+     **Codex review of `c3df0e12` (P2, fixed 2026-09-25, follow-up commit):** the 0014 down
+     step inferred the collapse target from the current default logbook or sort order; with a
+     changed default, or a legacy name sorting after `qrz.<uuid>` (e.g. `station-qrz`), rows
+     would be renamed to a name the older config never carried and stranded. Now
+     `logbook_destination.legacy_name` (NULL unless seeded) records the config name on every row
+     the seed creates, `types.LogbookDestination.LegacyName` carries it, and the down step
+     collapses to it FIRST, falling back to the ADR rule only for bindings that never derived
+     from config; ADR 0082 carries a dated update. Tests: Codex's two scenarios (no default +
+     `station-qrz`; default moved to logbook 2) collapse to the recorded name; the seed test
+     asserts `legacy_name` on all four rows. Proof: the legacy branch removed → both scenario
+     tests fail (restored). Models regenerated (same recipe); gates green; drill (new vs 5A
+     HEAD at 13) rerun on the rebuilt binary: ROWS IDENTICAL.
    - **5C — config v6 and the station account.** Legacy binding-owned keys (`name`, `enabled`,
      logbook-scoped credentials) known but deprecated at v6 (ADR 0075's shape). The version bump may
      retain those keys; only the adopted Home archive's committed seed marker permits the file-first

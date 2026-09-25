@@ -139,6 +139,39 @@ func namesOf(t *testing.T, svc *Service) (name1, name2 string) {
 // The default logbook's binding name wins even when it is NOT the
 // lexicographic minimum: default = logbook 2 named "qrz.z", logbook 1 named
 // "qrz.a" → both rows end as "qrz.z".
+// Codex P2 on c3df0e12: the legacy config name is the ONLY name an older,
+// config-driven worker drains, and neither the current default logbook nor
+// sort order identifies it. The seed records it on every row it creates
+// (`legacy_name`); the down step collapses to that first.
+func TestMigrate0014_Down_CollapsesToTheRecordedLegacyNameBeforeAnyInference(t *testing.T) {
+	// No default logbook; the legacy name "station-qrz" sorts AFTER "qrz.<uuid>".
+	svc := testService(t)
+	seedNamedBindings(t, svc, nil, "station-qrz", "qrz.01920000-0000-7000-8000-00000000000b")
+	execT(t, svc, `UPDATE logbook_destination SET legacy_name = 'station-qrz'`)
+	if _, err := svc.DowngradeLogSchemaTo(13); err != nil {
+		t.Fatalf("downgrade to 13: %v", err)
+	}
+	if n1, n2 := namesOf(t, svc); n1 != "station-qrz" || n2 != "station-qrz" {
+		t.Fatalf("names after the down step = %q, %q; want the recorded legacy name for both", n1, n2)
+	}
+}
+
+// The default logbook CHANGED after the seed: logbook 2 is now the default,
+// yet the legacy name lives on logbook 1's row — the recorded name still wins.
+func TestMigrate0014_Down_RecordedLegacyNameWinsOverAChangedDefault(t *testing.T) {
+	svc := testService(t)
+	seedNamedBindings(t, svc, 2, "qrz", "qrz.01920000-0000-7000-8000-00000000000b")
+	execT(t, svc, `UPDATE logbook_destination SET legacy_name = 'qrz'`)
+	if _, err := svc.DowngradeLogSchemaTo(13); err != nil {
+		t.Fatalf("downgrade to 13: %v", err)
+	}
+	if n1, n2 := namesOf(t, svc); n1 != "qrz" || n2 != "qrz" {
+		t.Fatalf("names after the down step = %q, %q; want the recorded legacy name, not the new default's", n1, n2)
+	}
+}
+
+// Bindings that never had a legacy name (created after the seed, or in a new
+// archive) fall back to the ADR 0082 rule: the default logbook's binding name.
 func TestMigrate0014_Down_DefaultLogbookBindingWinsOverTheLexicographicMinimum(t *testing.T) {
 	svc := testService(t)
 	seedNamedBindings(t, svc, 2, "qrz.a", "qrz.z")

@@ -79,6 +79,16 @@ func TestSeedLogbookDestinations_TwoLogbooks_NamesRenamesAndMarks(t *testing.T) 
 	if got := bindingKeys(rows); fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("bindings = %v\nwant %v", got, want)
 	}
+	// Every seeded row records the legacy name it derives from — the durable
+	// mapping the down migration and the config downgrade collapse to.
+	if n := countT(t, svc, `SELECT COUNT(*) FROM logbook_destination WHERE (destination = 'qrz' AND legacy_name = 'qrz') OR (destination = 'qrzcq' AND legacy_name = 'qrzcq')`); n != 4 {
+		t.Fatalf("rows carrying their legacy name = %d, want 4", n)
+	}
+	for _, r := range rows {
+		if r.LegacyName != r.Destination {
+			t.Fatalf("binding %s: LegacyName = %q, want %q", r.ForwarderName, r.LegacyName, r.Destination)
+		}
+	}
 	// The default logbook's rows keep the legacy name; the second logbook's are renamed.
 	if n := countT(t, svc, `SELECT COUNT(*) FROM qso_upload WHERE qso_id = 1 AND forwarder_name = 'qrz'`); n != 1 {
 		t.Fatal("the default logbook's queue row was renamed")

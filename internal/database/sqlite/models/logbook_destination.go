@@ -33,6 +33,7 @@ type LogbookDestination struct {
 	Enabled         int64       `boil:"enabled" json:"enabled" toml:"enabled" yaml:"enabled"`
 	Credentials     null.String `boil:"credentials" json:"credentials,omitempty" toml:"credentials" yaml:"credentials,omitempty"`
 	RemoteAdoptedAt null.Time   `boil:"remote_adopted_at" json:"remote_adopted_at,omitempty" toml:"remote_adopted_at" yaml:"remote_adopted_at,omitempty"`
+	LegacyName      null.String `boil:"legacy_name" json:"legacy_name,omitempty" toml:"legacy_name" yaml:"legacy_name,omitempty"`
 
 	R *logbookDestinationR `boil:"-" json:"-" toml:"-" yaml:"-"`
 	L logbookDestinationL  `boil:"-" json:"-" toml:"-" yaml:"-"`
@@ -48,6 +49,7 @@ var LogbookDestinationColumns = struct {
 	Enabled         string
 	Credentials     string
 	RemoteAdoptedAt string
+	LegacyName      string
 }{
 	ID:              "id",
 	CreatedAt:       "created_at",
@@ -58,6 +60,7 @@ var LogbookDestinationColumns = struct {
 	Enabled:         "enabled",
 	Credentials:     "credentials",
 	RemoteAdoptedAt: "remote_adopted_at",
+	LegacyName:      "legacy_name",
 }
 
 var LogbookDestinationTableColumns = struct {
@@ -70,6 +73,7 @@ var LogbookDestinationTableColumns = struct {
 	Enabled         string
 	Credentials     string
 	RemoteAdoptedAt string
+	LegacyName      string
 }{
 	ID:              "logbook_destination.id",
 	CreatedAt:       "logbook_destination.created_at",
@@ -80,6 +84,7 @@ var LogbookDestinationTableColumns = struct {
 	Enabled:         "logbook_destination.enabled",
 	Credentials:     "logbook_destination.credentials",
 	RemoteAdoptedAt: "logbook_destination.remote_adopted_at",
+	LegacyName:      "logbook_destination.legacy_name",
 }
 
 // Generated where
@@ -94,6 +99,7 @@ var LogbookDestinationWhere = struct {
 	Enabled         whereHelperint64
 	Credentials     whereHelpernull_String
 	RemoteAdoptedAt whereHelpernull_Time
+	LegacyName      whereHelpernull_String
 }{
 	ID:              whereHelperint64{field: "\"logbook_destination\".\"id\""},
 	CreatedAt:       whereHelpertime_Time{field: "\"logbook_destination\".\"created_at\""},
@@ -104,6 +110,7 @@ var LogbookDestinationWhere = struct {
 	Enabled:         whereHelperint64{field: "\"logbook_destination\".\"enabled\""},
 	Credentials:     whereHelpernull_String{field: "\"logbook_destination\".\"credentials\""},
 	RemoteAdoptedAt: whereHelpernull_Time{field: "\"logbook_destination\".\"remote_adopted_at\""},
+	LegacyName:      whereHelpernull_String{field: "\"logbook_destination\".\"legacy_name\""},
 }
 
 // LogbookDestinationRels is where relationship names are stored.
@@ -143,9 +150,9 @@ func (r *logbookDestinationR) GetLogbook() *Logbook {
 type logbookDestinationL struct{}
 
 var (
-	logbookDestinationAllColumns            = []string{"id", "created_at", "modified_at", "logbook_id", "destination", "forwarder_name", "enabled", "credentials", "remote_adopted_at"}
+	logbookDestinationAllColumns            = []string{"id", "created_at", "modified_at", "logbook_id", "destination", "forwarder_name", "enabled", "credentials", "remote_adopted_at", "legacy_name"}
 	logbookDestinationColumnsWithoutDefault = []string{"logbook_id", "destination", "forwarder_name"}
-	logbookDestinationColumnsWithDefault    = []string{"id", "created_at", "modified_at", "enabled", "credentials", "remote_adopted_at"}
+	logbookDestinationColumnsWithDefault    = []string{"id", "created_at", "modified_at", "enabled", "credentials", "remote_adopted_at", "legacy_name"}
 	logbookDestinationPrimaryKeyColumns     = []string{"id"}
 	logbookDestinationGeneratedColumns      = []string{"id"}
 )

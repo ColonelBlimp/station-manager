@@ -46,7 +46,7 @@ func (s *Service) ListLogbookDestinationsWithContext(ctx context.Context) ([]typ
 	defer cancel()
 	rows, err := h.QueryContext(ctx, `
 		SELECT d.id, d.logbook_id, d.destination, d.forwarder_name, d.enabled, d.credentials,
-		       d.remote_adopted_at, d.created_at, d.modified_at
+		       d.remote_adopted_at, d.legacy_name, d.created_at, d.modified_at
 		FROM logbook_destination d
 		         JOIN logbook l ON l.id = d.logbook_id
 		WHERE l.deleted_at IS NULL
@@ -62,9 +62,10 @@ func (s *Service) ListLogbookDestinationsWithContext(ctx context.Context) ([]typ
 			enabled  int64
 			creds    sql.NullString
 			adopted  sql.NullTime
+			legacy   sql.NullString
 			modified sql.NullTime
 		)
-		if err := rows.Scan(&d.ID, &d.LogbookID, &d.Destination, &d.ForwarderName, &enabled, &creds, &adopted, &d.CreatedAt, &modified); err != nil {
+		if err := rows.Scan(&d.ID, &d.LogbookID, &d.Destination, &d.ForwarderName, &enabled, &creds, &adopted, &legacy, &d.CreatedAt, &modified); err != nil {
 			return nil, errors.New(op).WithErr(err).WithMsg("scan logbook destination")
 		}
 		d.Enabled = enabled == 1
@@ -74,6 +75,9 @@ func (s *Service) ListLogbookDestinationsWithContext(ctx context.Context) ([]typ
 		if adopted.Valid {
 			t := adopted.Time
 			d.RemoteAdoptedAt = &t
+		}
+		if legacy.Valid {
+			d.LegacyName = legacy.String
 		}
 		if modified.Valid {
 			t := modified.Time
@@ -122,8 +126,8 @@ func (s *Service) DestinationBindingsSeededAtWithContext(ctx context.Context) (*
 // default logbook (else the lowest id) keeps the seed's legacy name, every
 // other logbook is named `<destination>.<logbook uuid>` and its existing
 // queue rows under the legacy name are renamed to match — a binding that
-// already exists keeps its name and the rows follow THAT name — then sets the
-// marker. A nil seed list records the decision with no rows (a managed or
+// already exists keeps its name and the rows follow THAT name — every created
+// row records the legacy name it derives from, then the marker is set. A nil seed list records the decision with no rows (a managed or
 // external archive). Once the marker is set the call changes nothing, so a
 // retry never overwrites a durable row and a later logbook stays unbound.
 // errors.ErrNotFound when the file has no identity row; any failure rolls the
@@ -209,9 +213,9 @@ func (s *Service) SeedLogbookDestinationsWithContext(ctx context.Context, seeds 
 				creds = string(sd.Credentials)
 			}
 			r, err := tx.ExecContext(ctx, `
-				INSERT INTO logbook_destination (logbook_id, destination, forwarder_name, enabled, credentials)
-				VALUES (?, ?, ?, ?, ?)
-				ON CONFLICT (logbook_id, destination) DO NOTHING`, l.id, sd.Destination, name, enabled, creds)
+				INSERT INTO logbook_destination (logbook_id, destination, forwarder_name, enabled, credentials, legacy_name)
+				VALUES (?, ?, ?, ?, ?, ?)
+				ON CONFLICT (logbook_id, destination) DO NOTHING`, l.id, sd.Destination, name, enabled, creds, sd.LegacyName)
 			if err != nil {
 				return res, errors.New(op).WithErr(err).WithMsgf("seed %s binding for logbook %d", sd.Destination, l.id)
 			}

@@ -7,6 +7,15 @@ date: 2026-09-25
 
 # 0082 — Destination bindings live per logbook inside the archive; station accounts stay in config.json
 
+> **Dated update (2026-09-25, Codex P2 on `c3df0e12`, fixed in 5B).** Part 4's collapse rule for
+> a downgrade — "the default logbook's binding name when present, otherwise the lexicographically
+> first" — infers the name an older, config-driven build drains, and the inference is wrong when
+> the default logbook changes after the seed or the legacy name sorts after a UUID-derived one
+> (`station-qrz` after `qrz.<uuid>`): rows would be stranded under a name config never carried.
+> The mapping is now DURABLE: the seed records `logbook_destination.legacy_name` on every row it
+> creates, and both the 0014 down step and the 5C config downgrade collapse to that name first;
+> the inferred rule survives only as the fallback for bindings that never derived from config.
+
 ## Context
 
 W-0021 shipped physical QSO archives (ADR 0071): one open SQLite file per archive, a catalogue in

@@ -30,6 +30,11 @@ type LogbookDestination struct {
 	// RemoteAdoptedAt records when the remote identity was established (SM
 	// Cloud's explicit adoption); nil for every other destination.
 	RemoteAdoptedAt *time.Time `json:"remote_adopted_at,omitempty"`
-	CreatedAt       time.Time  `json:"created_at"`
-	ModifiedAt      *time.Time `json:"modified_at,omitempty"`
+	// LegacyName is the config.json forwarder name a seeded binding derives
+	// from — the one name an older, config-driven build drains — so a
+	// downgrade collapses to it rather than inferring it. Empty for a binding
+	// created after the seed.
+	LegacyName string     `json:"legacy_name,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	ModifiedAt *time.Time `json:"modified_at,omitempty"`
 }

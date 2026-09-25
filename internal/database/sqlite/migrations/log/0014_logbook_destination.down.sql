@@ -1,15 +1,20 @@
--- Reverse of 0014. Queue rows keyed by a UUID-derived binding name
--- (`<destination>.<logbook uuid>`, minted for a logbook other than the file's
--- default) are first collapsed to the destination's ONE pre-binding name — the
--- default logbook's binding name when it has one, otherwise the
--- lexicographically first binding name of that destination — so an older build,
--- whose worker set comes from config.json, can drain them under the name that
--- config carries (ADR 0082 part 4). QSO, logbook and other queue rows are
+-- Reverse of 0014. Queue rows keyed by a binding name are first collapsed to
+-- the destination's ONE pre-binding name so an older build, whose worker set
+-- comes from config.json, can drain them under the name that config carries
+-- (ADR 0082 part 4): the legacy_name the seed recorded on that destination's
+-- rows, when any row carries one; otherwise — bindings that never derived from
+-- config — the default logbook's binding name when it has one, else the
+-- lexicographically first binding name. QSO, logbook and other queue rows are
 -- untouched. Then the table and the seed marker are dropped.
 
 CREATE TEMP TABLE destination_collapse AS
 SELECT d.destination AS destination,
-       COALESCE((SELECT d2.forwarder_name
+       COALESCE((SELECT d0.legacy_name
+                 FROM logbook_destination d0
+                 WHERE d0.destination = d.destination AND d0.legacy_name IS NOT NULL
+                 ORDER BY d0.id
+                 LIMIT 1),
+                (SELECT d2.forwarder_name
                  FROM logbook_destination d2
                           JOIN archive_metadata am ON am.singleton = 1 AND d2.logbook_id = am.default_logbook_id
                  WHERE d2.destination = d.destination),
