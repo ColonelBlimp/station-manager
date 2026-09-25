@@ -187,10 +187,13 @@ func init() {
 	forwarding.RegisterForwarderType(Type, "ClubLog",
 		[]forwarding.Action{action.Insert, action.Delete},
 		[]forwarding.CredentialField{
-			{Key: "email", Label: "Account email", Kind: "text"},
-			{Key: "password", Label: "Application password", Kind: "password",
+			// All three identify the user's account and the callsign the upload is
+			// filed under (ADR 0082: logbook scope); the application key that
+			// identifies Station Manager itself is InjectedAPIKey, never a field.
+			{Key: "email", Label: "Account email", Kind: "text", Scope: forwarding.ScopeLogbook},
+			{Key: "password", Label: "Application password", Kind: "password", Scope: forwarding.ScopeLogbook,
 				Help: "A ClubLog Application Password — create one in your ClubLog settings; NOT your main account password."},
-			{Key: "callsign", Label: "Callsign", Kind: "text"},
+			{Key: "callsign", Label: "Callsign", Kind: "text", Scope: forwarding.ScopeLogbook},
 		})
 }
 

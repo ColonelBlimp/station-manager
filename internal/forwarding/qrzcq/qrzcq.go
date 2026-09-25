@@ -83,9 +83,10 @@ func init() {
 	forwarding.RegisterForwarderType(Type, "QRZCQ",
 		[]forwarding.Action{action.Insert},
 		[]forwarding.CredentialField{
-			{Key: "call", Label: "QRZCQ callsign", Kind: "text",
+			// Both identify the account the upload lands in (ADR 0082: logbook scope).
+			{Key: "call", Label: "QRZCQ callsign", Kind: "text", Scope: forwarding.ScopeLogbook,
 				Help: "The callsign of your QRZCQ account."},
-			{Key: "key", Label: "API key", Kind: "password",
+			{Key: "key", Label: "API key", Kind: "password", Scope: forwarding.ScopeLogbook,
 				Help: "Your QRZCQ account API key."},
 		})
 }

@@ -36,6 +36,20 @@ export interface CredentialField {
      * (internal/forwarding/registry.go:415).
      */
     clearable?: boolean;
+    /**
+     * Which store will own the field after ADR 0082's binding migration:
+     * 'station' = config.json's station account (identifies the application or
+     * tenant); 'logbook' = the binding row inside the archive file (identifies
+     * one remote logbook or account). Declarative only in 5A; the SPA does not
+     * render the split yet. Declared by the type in Go — the SPA never decides it.
+     */
+    scope: CredentialScope;
+}
+
+export type CredentialScope = 'station' | 'logbook';
+
+function toScope(v: unknown): CredentialScope | null {
+    return v === 'station' || v === 'logbook' ? v : null;
 }
 
 export interface ForwarderType {
@@ -134,9 +148,16 @@ export async function fetchForwarderTypes(signal?: AbortSignal): Promise<TypesOu
                       kind: str(f.kind, 'text'),
                       help: typeof f.help === 'string' ? f.help : undefined,
                       clearable: f.clearable === true,
+                      scope: toScope(f.scope),
                   }))
-                  // A field with no key cannot be bound to a credential at all.
-                  .filter((f) => f.key !== '')
+                  // A field with no key cannot be bound to a credential at all, and
+                  // a field with no known scope cannot be placed in either store
+                  // (the daemon refuses to register one; SPA and daemon ship in
+                  // one binary, so this is a malformed body, not an old daemon).
+                  .filter(
+                      (f): f is typeof f & { scope: CredentialScope } =>
+                          f.key !== '' && f.scope !== null
+                  )
             : [],
     }));
     return { kind: 'ok', types };

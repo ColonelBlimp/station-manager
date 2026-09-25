@@ -63,7 +63,8 @@ func init() {
 		[]forwarding.CredentialField{
 			// Clearable: New defaults an empty mode to ModeAlwaysSuccess, so a blank
 			// PUT is a real "reset", not a config New would reject.
-			{Key: "mode", Label: "Mode", Kind: "text", Clearable: true,
+			// The stub's behaviour is a property of the test daemon, not of a logbook.
+			{Key: "mode", Label: "Mode", Kind: "text", Clearable: true, Scope: forwarding.ScopeStation,
 				Help: "Stub behaviour mode (dev/testing only). Leave empty for \"always_success\"."},
 		})
 }

@@ -705,6 +705,14 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      pending row kept, an enabled name's auth-failed row re-armed. Compiling reversion proofs:
      enabled gate dropped → qrzcq row appears; archive gate opened → managed archive fans out;
      discard skipped; re-arm skipped; worker spawned for a disabled name; each restored.
+     **Built 2026-09-25, 5A(ii) scope:** `forwarding.CredentialField.Scope` (`ScopeStation` |
+     `ScopeLogbook`; registration panics on any other value, empty included) — qrz `api_key`
+     logbook; qrzcq `call`,`key` logbook; clublog `email`,`password`,`callsign` logbook; smcloud
+     `url`,`token` station, `logbook` logbook; stub `mode` station. `/v1/forwarder-types` serves
+     `scope`; the SPA `CredentialField` type requires it and the wire decoder drops a field whose
+     scope is missing or unknown (same-binary rule: malformed, never an old daemon); no rendering
+     change. Proofs: the two panic cases fail with the check removed (restored); a decoder test
+     pins pass-through and drop. `api-endpoints.md` documents `scope`.
    - **5B — migration 0014, the seed, routing and workers by binding (the boundary commit).**
      Log migration 0014 exactly as ADR part 1: `logbook_destination` plus
      `archive_metadata.destination_bindings_seeded_at` (down: rename `<type>.<uuid>` queue names

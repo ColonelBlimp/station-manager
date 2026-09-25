@@ -3,6 +3,7 @@ package forwarding
 import (
 	"regexp"
 	"sort"
+	"strconv"
 	"sync"
 
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
@@ -470,7 +471,22 @@ type CredentialField struct {
 	// forwarder's New() requires — that turns an empty PUT into a daemon that
 	// won't restart.
 	Clearable bool `json:"clearable,omitempty"`
+	// Scope declares the store that owns the field under ADR 0082: ScopeStation
+	// for what identifies the application or tenant (config.json's station
+	// account), ScopeLogbook for what identifies one remote logbook or account
+	// (the binding row inside the archive file). In slice 5A this is declarative
+	// metadata only; config v5 still carries every field until the binding seed
+	// and v6 strip land. Required: registration refuses any other value, so the
+	// split is an enumerated allowlist the SPA renders from rather than a table it
+	// keeps.
+	Scope string `json:"scope"`
 }
+
+// Credential field scopes — the complete set RegisterForwarderType accepts.
+const (
+	ScopeStation = "station"
+	ScopeLogbook = "logbook"
+)
 
 // TypeDescriptor is the editor-facing description of a forwarder type, served by
 // GET /v1/forwarder-types. It carries everything the config SPA needs to offer
@@ -503,6 +519,9 @@ func RegisterForwarderType(typeName, displayName string, actions []Action, creds
 		}
 		if c.Kind != "text" && c.Kind != "password" {
 			panic("forwarding.RegisterForwarderType: bad credential kind " + c.Kind + " for " + typeName)
+		}
+		if c.Scope != ScopeStation && c.Scope != ScopeLogbook {
+			panic("forwarding.RegisterForwarderType: bad credential scope " + strconv.Quote(c.Scope) + " for " + typeName + "." + c.Key)
 		}
 		if _, dup := seen[c.Key]; dup {
 			panic("forwarding.RegisterForwarderType: duplicate credential key " + c.Key + " for " + typeName)

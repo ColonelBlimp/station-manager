@@ -49,8 +49,8 @@ const TYPES = {
             display_name: 'QRZ.com',
             supported_actions: ['insert', 'update'],
             credential_fields: [
-                { key: 'api_key', label: 'API key', kind: 'password' },
-                { key: 'username', label: 'Username', kind: 'text' },
+                { key: 'api_key', label: 'API key', kind: 'password', scope: 'logbook' },
+                { key: 'username', label: 'Username', kind: 'text', scope: 'logbook' },
             ],
         },
         {
@@ -58,9 +58,15 @@ const TYPES = {
             display_name: 'SM Cloud',
             supported_actions: ['insert'],
             credential_fields: [
-                { key: 'url', label: 'URL', kind: 'text' },
+                { key: 'url', label: 'URL', kind: 'text', scope: 'station' },
                 // The one real clearable field: New() defaults it to "main".
-                { key: 'logbook', label: 'Cloud logbook', kind: 'text', clearable: true },
+                {
+                    key: 'logbook',
+                    label: 'Cloud logbook',
+                    kind: 'text',
+                    clearable: true,
+                    scope: 'logbook',
+                },
             ],
         },
     ],

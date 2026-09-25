@@ -16,7 +16,7 @@ import (
 func TestHandleForwarderTypes(t *testing.T) {
 	forwarding.RegisterForwarderType("apifwdtype-test", "API Test Forwarder",
 		[]forwarding.Action{action.Insert, action.Delete},
-		[]forwarding.CredentialField{{Key: "token", Label: "Token", Kind: "password", Help: "secret token"}})
+		[]forwarding.CredentialField{{Key: "token", Label: "Token", Kind: "password", Help: "secret token", Scope: forwarding.ScopeLogbook}})
 
 	srv := testServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/v1/forwarder-types", nil)
@@ -33,6 +33,7 @@ func TestHandleForwarderTypes(t *testing.T) {
 		`"credential_fields"`,
 		`"key":"token"`,
 		`"kind":"password"`,
+		`"scope":"logbook"`, // ADR 0082: which store owns the field
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("forwarder-types body missing %q:\n%s", want, body)

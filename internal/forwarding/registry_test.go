@@ -300,7 +300,7 @@ func TestRegisterDefaultRetry_PanicsOnInvalidConfig(t *testing.T) {
 func TestRegisterForwarderType_And_ForwarderTypes(t *testing.T) {
 	RegisterForwarderType("fwdtype-ok", "OK Forwarder",
 		[]Action{action.Insert, action.Delete},
-		[]CredentialField{{Key: "api", Label: "API", Kind: "password", Help: "h"}})
+		[]CredentialField{{Key: "api", Label: "API", Kind: "password", Help: "h", Scope: ScopeLogbook}})
 
 	// The supported-action set is recorded too (delegated to the shared path), so
 	// the action_filter defaulting / validation keep working for this type.
@@ -331,8 +331,8 @@ func TestRegisterForwarderType_And_ForwarderTypes(t *testing.T) {
 		t.Fatalf("SupportedActions = %v, want 2", d.SupportedActions)
 	}
 	if len(d.CredentialFields) != 1 || d.CredentialFields[0].Key != "api" ||
-		d.CredentialFields[0].Kind != "password" {
-		t.Fatalf("CredentialFields = %+v, want one password field 'api'", d.CredentialFields)
+		d.CredentialFields[0].Kind != "password" || d.CredentialFields[0].Scope != ScopeLogbook {
+		t.Fatalf("CredentialFields = %+v, want one logbook-scoped password field 'api'", d.CredentialFields)
 	}
 
 	// Returned slices are copies — mutating them can't corrupt the registry.
@@ -359,15 +359,25 @@ func TestRegisterForwarderType_Panics(t *testing.T) {
 		}},
 		{"bad credential kind", func() {
 			RegisterForwarderType("ftpanic-kind", "X", []Action{action.Insert},
-				[]CredentialField{{Key: "k", Label: "K", Kind: "secret"}})
+				[]CredentialField{{Key: "k", Label: "K", Kind: "secret", Scope: ScopeLogbook}})
 		}},
 		{"empty credential key", func() {
 			RegisterForwarderType("ftpanic-key", "X", []Action{action.Insert},
-				[]CredentialField{{Key: "", Label: "K", Kind: "text"}})
+				[]CredentialField{{Key: "", Label: "K", Kind: "text", Scope: ScopeLogbook}})
 		}},
 		{"duplicate credential key", func() {
 			RegisterForwarderType("ftpanic-dupkey", "X", []Action{action.Insert},
-				[]CredentialField{{Key: "k", Label: "A", Kind: "text"}, {Key: "k", Label: "B", Kind: "text"}})
+				[]CredentialField{{Key: "k", Label: "A", Kind: "text", Scope: ScopeLogbook}, {Key: "k", Label: "B", Kind: "text", Scope: ScopeLogbook}})
+		}},
+		// ADR 0082 part 1: the scope is an enumerated allowlist — a field that
+		// names neither owner cannot be placed in config.json or the archive file.
+		{"missing credential scope", func() {
+			RegisterForwarderType("ftpanic-noscope", "X", []Action{action.Insert},
+				[]CredentialField{{Key: "k", Label: "K", Kind: "text"}})
+		}},
+		{"bad credential scope", func() {
+			RegisterForwarderType("ftpanic-badscope", "X", []Action{action.Insert},
+				[]CredentialField{{Key: "k", Label: "K", Kind: "text", Scope: "archive"}})
 		}},
 		{"empty type (delegated)", func() {
 			RegisterForwarderType("", "X", []Action{action.Insert}, nil)
@@ -443,7 +453,7 @@ func TestRegisterDefaultEndpoints_PanicsOnDuplicate(t *testing.T) {
 func TestDefaultForwarderConfigs_SeedsRegisteredType(t *testing.T) {
 	RegisterForwarderType("seedtest", "Seed Test",
 		[]Action{action.Insert, action.Delete},
-		[]CredentialField{{Key: "api", Label: "API", Kind: "password"}})
+		[]CredentialField{{Key: "api", Label: "API", Kind: "password", Scope: ScopeLogbook}})
 	RegisterDefaultEndpoints("seedtest", map[string]string{
 		"insert": "https://seed/realtime",
 		"delete": "https://seed/delete",
@@ -479,7 +489,7 @@ func TestDefaultForwarderConfigs_ExcludesTypesWithoutEndpoints(t *testing.T) {
 	// dev/test stub) must NOT be auto-seeded into the non-sparse config.
 	RegisterForwarderType("seedtest-noeps", "Seed Test No Endpoints",
 		[]Action{action.Insert},
-		[]CredentialField{{Key: "k", Label: "K", Kind: "text"}})
+		[]CredentialField{{Key: "k", Label: "K", Kind: "text", Scope: ScopeStation}})
 	// Deliberately no RegisterDefaultEndpoints for this type.
 
 	for _, fc := range DefaultForwarderConfigs() {

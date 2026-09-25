@@ -40,20 +40,23 @@ const TYPES = {
             type: 'qrz',
             display_name: 'QRZ.com',
             supported_actions: ['insert'],
-            credential_fields: [{ key: 'api_key', label: 'API key', kind: 'password' }],
+            credential_fields: [
+                { key: 'api_key', label: 'API key', kind: 'password', scope: 'logbook' },
+            ],
         },
         {
             type: 'smcloud',
             display_name: 'SM Cloud',
             supported_actions: ['insert'],
             credential_fields: [
-                { key: 'url', label: 'URL', kind: 'text' },
+                { key: 'url', label: 'URL', kind: 'text', scope: 'station' },
                 {
                     key: 'logbook',
                     label: 'Cloud logbook',
                     kind: 'text',
                     clearable: true,
                     help: 'Defaults to "main".',
+                    scope: 'logbook',
                 },
             ],
         },

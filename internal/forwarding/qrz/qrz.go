@@ -118,7 +118,8 @@ func init() {
 	forwarding.RegisterForwarderType(Type, "QRZ Logbook",
 		[]forwarding.Action{action.Insert, action.Update, action.Delete},
 		[]forwarding.CredentialField{
-			{Key: "api_key", Label: "API key", Kind: "password",
+			// A QRZ API key belongs to ONE QRZ logbook (ADR 0082: logbook scope).
+			{Key: "api_key", Label: "API key", Kind: "password", Scope: forwarding.ScopeLogbook,
 				Help: "Your QRZ Logbook API key (Logbook → Settings → enable API access). Per-logbook."},
 		})
 }

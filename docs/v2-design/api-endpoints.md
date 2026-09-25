@@ -334,9 +334,9 @@ The station-global archive catalogue (`config.md` §3): the archive the daemon s
 ### `GET /v1/forwarder-types`
 - **Purpose:** Data-driven descriptors for the config SPA's Forwarding tab, so the add-forwarder credential form renders without hardcoded per-type forms (adding a forwarder type in Go needs zero SPA change).
 - **Gating:** Always-on.
-- **Response:** **200**, body `{"types": [TypeDescriptor]}` where `TypeDescriptor` = `{type, display_name, supported_actions: []string, credential_fields: [CredentialField]}` and `CredentialField` = `{key, label, kind: "text"|"password", help?}`. Sorted by `type`. Only types registered via `forwarding.RegisterForwarderType` (the real forwarders compiled into the binary — QRZ, ClubLog, + stub in dev builds) appear.
+- **Response:** **200**, body `{"types": [TypeDescriptor]}` where `TypeDescriptor` = `{type, display_name, supported_actions: []string, credential_fields: [CredentialField]}` and `CredentialField` = `{key, label, kind: "text"|"password", help?, clearable?, scope: "station"|"logbook"}`. `scope` declares the field's target owner under ADR 0082: `station` = the station account in `config.json` (identifies the application or the tenant — SM Cloud URL and token); `logbook` = the binding row inside the archive file (identifies one remote logbook or account — QRZ key, QRZCQ call and key, ClubLog email/application password/callsign, SM Cloud legacy logbook name). Every field carries one; registration refuses any other value. Sorted by `type`. Only types registered via `forwarding.RegisterForwarderType` (the real forwarders compiled into the binary — QRZ, ClubLog, + stub in dev builds) appear.
 - **Errors:** None on the wire (always 200).
-- **Notes:** Read-only. `kind:"password"` fields drive masked entry; they are merged-not-echoed by `PUT /v1/config` (see the `forwarders` notes above). Write path for the destinations themselves is `PUT /v1/config`'s `forwarders` block.
+- **Notes:** Read-only. In slice 5A `scope` is declarative only: config v5 still stores every credential and the SPA does not render the split; slices 5B/5C move the declared owners. `kind:"password"` fields drive masked entry; they are merged-not-echoed by `PUT /v1/config` (see the `forwarders` notes above). Write path for the destinations themselves is `PUT /v1/config`'s `forwarders` block.
 
 ---
 
