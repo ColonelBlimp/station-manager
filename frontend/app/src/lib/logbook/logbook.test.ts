@@ -327,6 +327,104 @@ describe('logbook switch — the destination follows the logbook', () => {
         expect(logbookState.selectedDestination).toBe('');
     });
 
+    it('a page already in flight for the previous logbook is discarded while the new bindings load', async () => {
+        // Codex P2 on a7abb537, the reported ordering: A's PAGE is already in
+        // flight when B is selected (A's bindings answered first). B's bindings
+        // are held, so B's own loaders have not started; A's page landing now
+        // must not populate rows under B's selector — the invalidation has to
+        // be synchronous, at the switch, not deferred to B's loaders.
+        let releaseAPage: (r: Response) => void = () => undefined;
+        let aPageRequested = false;
+        vi.stubGlobal(
+            'fetch',
+            vi.fn((input: RequestInfo | URL) => {
+                const url = urlText(input);
+                const json = (body: unknown) =>
+                    Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+                if (url === '/v1/logbook/1/destinations')
+                    return json({ destinations: [{ name: 'qrz', type: 'qrz', enabled: true }] });
+                if (url.startsWith('/v1/logbook/1/qso')) {
+                    aPageRequested = true;
+                    return new Promise<Response>((res) => (releaseAPage = res));
+                }
+                if (url.startsWith('/v1/logbook/1/count')) return json({ count: 111 });
+                if (url === '/v1/logbook/2/destinations')
+                    return new Promise<Response>(() => undefined); // held for the whole test
+                return Promise.resolve(new Response('{}', { status: 404 }));
+            })
+        );
+        const first = logbookState.selectLogbook(1);
+        await vi.waitFor(() => expect(aPageRequested).toBe(true)); // A's page is in flight
+        void logbookState.selectLogbook(2); // B's bindings never answer
+        releaseAPage(
+            new Response(
+                JSON.stringify({
+                    items: [{ id: 1, uuid: 'u-a', call: 'G1OLD' }],
+                    next_cursor: null,
+                }),
+                { status: 200 }
+            )
+        );
+        await first;
+        expect(logbookState.selectedId).toBe(2);
+        expect(logbookState.rows).toEqual([]); // A's late page never landed under B
+        // (A's count answered BEFORE the switch, while A was selected — that landing is legitimate.)
+    });
+
+    it('a late page for the previous logbook is discarded while the new bindings are still loading', async () => {
+        // Codex P2 on a7abb537: A's page was pending when B was selected; B's
+        // bindings are held, so B's own page loader has not started yet. A's
+        // page landing now must NOT populate rows under B's selector.
+        let releaseAPage: (r: Response) => void = () => undefined;
+        let releaseBDest: (r: Response) => void = () => undefined;
+        vi.stubGlobal(
+            'fetch',
+            vi.fn((input: RequestInfo | URL) => {
+                const url = urlText(input);
+                const json = (body: unknown) =>
+                    Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+                if (url === '/v1/logbook/1/destinations')
+                    return json({ destinations: [{ name: 'qrz', type: 'qrz', enabled: true }] });
+                if (url.startsWith('/v1/logbook/1/qso'))
+                    return new Promise<Response>((res) => (releaseAPage = res));
+                if (url.startsWith('/v1/logbook/1/count')) return json({ count: 111 });
+                if (url === '/v1/logbook/2/destinations')
+                    return new Promise<Response>((res) => (releaseBDest = res));
+                if (url.startsWith('/v1/logbook/2/qso'))
+                    return json({
+                        items: [{ id: 9, uuid: 'u-b', call: 'K2BBB' }],
+                        next_cursor: null,
+                    });
+                if (url.startsWith('/v1/logbook/2/count')) return json({ count: 1 });
+                return Promise.resolve(new Response('{}', { status: 404 }));
+            })
+        );
+        const first = logbookState.selectLogbook(1); // A: bindings answer, page hangs
+        const second = logbookState.selectLogbook(2); // B: bindings hang
+        await Promise.resolve();
+        releaseAPage(
+            new Response(
+                JSON.stringify({
+                    items: [{ id: 1, uuid: 'u-a', call: 'G1OLD' }],
+                    next_cursor: null,
+                }),
+                { status: 200 }
+            )
+        );
+        await first;
+        expect(logbookState.selectedId).toBe(2);
+        expect(logbookState.rows).toEqual([]); // A's late page never landed under B
+        releaseBDest(
+            new Response(
+                JSON.stringify({ destinations: [{ name: extra, type: 'qrz', enabled: true }] }),
+                { status: 200 }
+            )
+        );
+        await second;
+        expect(logbookState.rows.map((r) => r.call)).toEqual(['K2BBB']);
+        expect(logbookState.count).toBe(1);
+    });
+
     it('a late bindings answer for the previous logbook is discarded', async () => {
         const hold = { releaseA: (_r: Response) => undefined as void };
         stubDaemon([{ name: extra, type: 'qrz', enabled: true }], hold);

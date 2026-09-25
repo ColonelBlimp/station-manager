@@ -1006,6 +1006,15 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      on the same file starts, routes from the seeded binding carrying its own key and spawns the
      qrz worker. Proof: the marker gate neutralised → that start is refused (restored). Gates
      rerun: whole-tree vet + tests, gofmt, observatory 0 regressions; drill rerun: ROWS IDENTICAL.
+     **Codex review of `a7abb537` (2026-09-25), P2, fixed in a follow-up commit:** awaiting the
+     new bindings fetch in `selectLogbook` deferred the invalidation of the previous logbook's
+     in-flight page and count until the new loaders started, so A's late page could land under
+     B's selector while B's bindings were still loading. The switch now bumps the page and count
+     generations SYNCHRONOUSLY before the await, and carries a selection generation checked after
+     it, so a switch superseded while its bindings loaded never loads pages for a logbook whose
+     bindings it never saw (found by the new test's first ordering). Two race tests, one per
+     ordering (A's page already in flight; A's bindings in flight); proofs: each guard removed
+     fails its own case (restored). Frontend gates: 1,839.
    - **5C — config v6 and the station account.** Legacy binding-owned keys (`name`, `enabled`,
      logbook-scoped credentials) known but deprecated at v6 (ADR 0075's shape). The version bump may
      retain those keys; only the adopted Home archive's committed seed marker permits the file-first

@@ -414,6 +414,7 @@ export class LogbookState {
     }
 
     #destGen = 0;
+    #selectGen = 0;
     // The TYPE of the last picked destination, remembered across a logbook
     // switch so the remap can find the same kind of destination in the new
     // logbook's bindings even though the previous list is gone.
@@ -596,9 +597,21 @@ export class LogbookState {
         this.selectedId = id;
         this.clearSelection();
         this.#resetPaging();
+        // Invalidate the previous logbook's in-flight page and count NOW —
+        // synchronously, before the await below — or a slow answer of theirs
+        // would pass its generation check while this logbook's bindings are
+        // still loading and show A's rows under B's selector (Codex P2 on
+        // a7abb537). The loaders that follow bump their generations again.
+        this.#pageGen++;
+        this.#countGen++;
+        const sel = ++this.#selectGen;
         // The bindings are per logbook (ADR 0082): load them first, so the
         // picker and the missing_from filter address THIS logbook's names.
         await this.loadForwarders();
+        // A newer selection took over while the bindings were loading: its own
+        // call loads the pages once ITS bindings are in; this one must not load
+        // pages for a logbook whose bindings it never saw.
+        if (sel !== this.#selectGen) return;
         await Promise.all([this.#loadCount(), this.#loadPage(0)]);
     }
 
