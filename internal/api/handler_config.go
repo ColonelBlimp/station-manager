@@ -593,6 +593,9 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	current := s.cfg.Snapshot()
+	if s.refuseBindingOwnedForwarderEdit(w, &req, current, op) {
+		return
+	}
 
 	// Request-only field validations — hoisted ahead of the commit so the in-lock
 	// overlay stays pure and a bad field is a loud 400 before we take the config
@@ -670,40 +673,8 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	completingSetup := !current.SetupComplete &&
 		req.LoggingStation != nil && req.LoggingStation.StationCallsign != ""
 	if completingSetup {
-		dry := current.Clone()
-		overlayConfig(&dry, &req)
-		config.Normalize(&dry)
-		if f := firstBlockingFinding(config.Validate(dry)); f != nil {
-			s.writeError(w, http.StatusBadRequest, f.Code, f.Message, op)
-			return
-		}
-		// The forwarder probe belongs in the dry run too, not only in the commit
-		// below: seedDefaultLogbook writes to the DB, and that write is NOT rolled
-		// back when the in-lock validation later rejects. A setup PUT carrying an
-		// unstartable forwarder would 400 with setup still incomplete but the
-		// logbook row already created — and if the operator then corrected the
-		// callsign as well, the retry would hit the orphaned row at the default id
-		// and fail 409 default_logbook_callsign_mismatch, needing manual DB
-		// surgery. Gating here is what the dry run is for.
-		if req.Forwarders != nil {
-			if f, cause := config.ForwarderStartupFinding(dry.Forwarders); f != nil {
-				s.logger.WarnWith().Err(cause).Str("code", f.Code).
-					Msg("config PUT rejected during setup: enabled forwarder cannot be started")
-				s.writeError(w, http.StatusBadRequest, f.Code, f.Message, op)
-				return
-			}
-		}
-		id, err := s.seedDefaultLogbook(r, dry.DefaultLogbookID, dry.LoggingStation.StationCallsign)
-		if err != nil {
-			var mismatch *setupLogbookMismatchError
-			if stderr.As(err, &mismatch) {
-				s.writeError(w, http.StatusConflict, "default_logbook_callsign_mismatch",
-					fmt.Sprintf("a logbook already exists at the default id under callsign %q; "+
-						"set up under that callsign, or remove that logbook from the database before retrying",
-						mismatch.existingCallsign), op)
-				return
-			}
-			s.writeServerError(w, op, err, "db_error", "failed to seed default logbook")
+		id, handled := s.completeSetupDryRun(w, r, current, &req, op)
+		if handled {
 			return
 		}
 		setupLogbookID = id
@@ -1546,4 +1517,91 @@ func (s *Server) applyCommittedFt8MaxRepeats() {
 	if tx := snap.Ft8.TX; tx != nil {
 		s.ft8.SetMaxRepeats(tx.MaxRepeats)
 	}
+}
+
+// refuseBindingOwnedForwarderEdit answers a PUT that changes a binding-owned
+// forwarder field with 400 and reports true (ADR 0082 transition): a forwarder
+// entry's `enabled` and its logbook-scoped credential keys are owned by the
+// active archive's bindings now, and a save that cannot affect a binding must
+// not be accepted as if it could. Station-scoped fields (SM Cloud URL and
+// token…) stay editable; omitted masked fields stay preserved by the merge.
+func (s *Server) refuseBindingOwnedForwarderEdit(w http.ResponseWriter, req *ConfigResponse, current config.Config, op errors.Op) bool {
+	if req.Forwarders == nil {
+		return false
+	}
+	name, field, owned := bindingOwnedForwarderEdit(req.Forwarders, current.Forwarders)
+	if !owned {
+		return false
+	}
+	s.writeError(w, http.StatusBadRequest, "forwarder_field_binding_owned",
+		fmt.Sprintf("forwarder %q: %s is owned by the active archive's destination bindings and cannot be changed here until the bindings editor lands; the station account fields remain editable", name, field), op)
+	return true
+}
+
+// bindingOwnedForwarderEdit finds the first incoming forwarder entry that
+// changes a binding-owned field (ADR 0082 transition): an `enabled` flag that
+// differs from the stored entry (or is true for an entry the station does not
+// hold), or any credential key the type declares logbook-scoped, blank or not.
+// Returns the entry name and the field, or ok=false when nothing is owned.
+func bindingOwnedForwarderEdit(incoming []ForwarderInfo, existing []types.ForwarderConfig) (name, field string, owned bool) {
+	byName := make(map[string]types.ForwarderConfig, len(existing))
+	for _, fc := range existing {
+		byName[fc.Name] = fc
+	}
+	for _, in := range incoming {
+		ex, matched := byName[in.Name]
+		if (matched && in.Enabled != ex.Enabled) || (!matched && in.Enabled) {
+			return in.Name, "enabled", true
+		}
+		for _, k := range forwarding.LogbookScopedKeys(in.Type) {
+			if _, present := in.Credentials[k]; present {
+				return in.Name, "credentials." + k, true
+			}
+		}
+	}
+	return "", "", false
+}
+
+// completeSetupDryRun is the first-run setup transition's pre-commit work
+// (extracted from handlePutConfig for the maintainability gate): dry-run the
+// overlaid config, probe an enabled forwarder, and seed the default logbook
+// OUTSIDE the config lock. handled is true when a response was written.
+func (s *Server) completeSetupDryRun(w http.ResponseWriter, r *http.Request, current config.Config, req *ConfigResponse, op errors.Op) (int64, bool) {
+	dry := current.Clone()
+	overlayConfig(&dry, req)
+	config.Normalize(&dry)
+	if f := firstBlockingFinding(config.Validate(dry)); f != nil {
+		s.writeError(w, http.StatusBadRequest, f.Code, f.Message, op)
+		return 0, true
+	}
+	// The forwarder probe belongs in the dry run too, not only in the commit
+	// below: seedDefaultLogbook writes to the DB, and that write is NOT rolled
+	// back when the in-lock validation later rejects. A setup PUT carrying an
+	// unstartable forwarder would 400 with setup still incomplete but the
+	// logbook row already created — and if the operator then corrected the
+	// callsign as well, the retry would hit the orphaned row at the default id
+	// and fail 409 default_logbook_callsign_mismatch, needing manual DB
+	// surgery. Gating here is what the dry run is for.
+	if req.Forwarders != nil {
+		if f, cause := config.ForwarderStartupFinding(dry.Forwarders); f != nil {
+			s.logger.WarnWith().Err(cause).Str("code", f.Code).
+				Msg("config PUT rejected during setup: enabled forwarder cannot be started")
+			s.writeError(w, http.StatusBadRequest, f.Code, f.Message, op)
+			return 0, true
+		}
+	}
+	id, err := s.seedDefaultLogbook(r, dry.DefaultLogbookID, dry.LoggingStation.StationCallsign)
+	if err != nil {
+		var mismatch *setupLogbookMismatchError
+		if stderr.As(err, &mismatch) {
+			s.writeError(w, http.StatusConflict, "default_logbook_callsign_mismatch",
+				fmt.Sprintf("a logbook already exists at the default id under callsign %q; "+
+					"set up under that callsign, or remove that logbook from the database before retrying",
+					mismatch.existingCallsign), op)
+			return 0, true
+		}
+		s.writeServerError(w, op, err, "db_error", "failed to seed default logbook")
+		return 0, true
+	}
+	return id, false
 }

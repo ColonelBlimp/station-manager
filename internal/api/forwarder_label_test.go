@@ -110,11 +110,12 @@ func TestForwarderLabel_IsServedToTheClient(t *testing.T) {
 // only what it names, and anything unnamed is silently dropped.
 func TestForwarderLabel_SurvivesASaveThatDoesNotCarryIt(t *testing.T) {
 	srv := labelTestServer(t, seedForwarders(
-		types.ForwarderConfig{Name: "smcloud", Type: "smcloud", Label: "Shack cloud", Enabled: true},
+		types.ForwarderConfig{Name: "smcloud", Type: "smcloud", Label: "Shack cloud", Enabled: false},
 	))
 
-	// Exactly what the Forwarding tab sends: name/type/enabled, no label.
-	body := `{"forwarders":[{"name":"smcloud","type":"smcloud","enabled":false}]}`
+	// Exactly what the Forwarding tab sends: name/type/enabled (unchanged —
+	// binding-owned under ADR 0082) and a station-scoped edit, no label.
+	body := `{"forwarders":[{"name":"smcloud","type":"smcloud","enabled":false,"action_filter":["insert","update"]}]}`
 	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -126,7 +127,7 @@ func TestForwarderLabel_SurvivesASaveThatDoesNotCarryIt(t *testing.T) {
 
 	// The save really happened (so the rule is not passing on a no-op)…
 	stored := srv.cfg.Snapshot().Forwarders
-	if len(stored) != 1 || stored[0].Enabled {
+	if len(stored) != 1 || len(stored[0].ActionFilter) != 2 {
 		t.Fatalf("fixture: the save did not apply; stored = %+v", stored)
 	}
 	// …and the label the operator set by hand is still there.
@@ -144,11 +145,11 @@ func TestForwarderEndpoints_SurviveASaveThatDoesNotCarryThem(t *testing.T) {
 	custom := map[string]string{"insert": "https://mirror.example.com/realtime.php"}
 	srv := labelTestServer(t, seedForwarders(
 		types.ForwarderConfig{
-			Name: "clublog", Type: "clublog", Enabled: true, Endpoints: custom,
+			Name: "clublog", Type: "clublog", Enabled: false, Endpoints: custom,
 		},
 	))
 
-	body := `{"forwarders":[{"name":"clublog","type":"clublog","enabled":false}]}`
+	body := `{"forwarders":[{"name":"clublog","type":"clublog","enabled":false,"action_filter":["insert","delete"]}]}`
 	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -158,7 +159,7 @@ func TestForwarderEndpoints_SurviveASaveThatDoesNotCarryThem(t *testing.T) {
 	}
 
 	stored := srv.cfg.Snapshot().Forwarders
-	if len(stored) != 1 || stored[0].Enabled {
+	if len(stored) != 1 || len(stored[0].ActionFilter) != 2 {
 		t.Fatalf("fixture: the save did not apply; stored = %+v", stored)
 	}
 	if got := stored[0].Endpoints["insert"]; got != custom["insert"] {

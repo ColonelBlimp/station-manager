@@ -13,12 +13,12 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
-// W-0021 slice 2B: a daemon whose ACTIVE archive is not the adopted one starts
-// no forwarder worker, no auth re-arm and no SM Cloud reconciler. Observable
-// proof: a credential-rejected row that the re-arm WOULD have returned to
-// pending stays failed, no reconciler is constructed, and the QSO service
-// reports the gate.
-func TestLifecycle_GatedArchiveStartsNoForwardingAtAll(t *testing.T) {
+// ADR 0082 (W-0021 5B, replacing the slice 2B gate): a daemon whose ACTIVE
+// archive holds no bindings starts no forwarder worker, no auth re-arm and no
+// SM Cloud reconciler, whatever config.json's entries say — and rows queued
+// under a name no binding carries are discarded loudly at start (ADR 0039's
+// rule, per binding), never drained into the station's accounts.
+func TestLifecycle_ArchiveWithoutBindingsStartsNoForwardingAtAll(t *testing.T) {
 	const managed = "019fd5c5-efcc-7193-be4f-1fee532ee316"
 	var managedPath string
 	d, orch := newOrchestratedDaemon(t, func(c *config.Config) {
@@ -30,12 +30,10 @@ func TestLifecycle_GatedArchiveStartsNoForwardingAtAll(t *testing.T) {
 			Credentials: stubCreds(t), TickIntervalSec: 1, BatchSize: 1,
 		}}
 	})
-	// The managed file: migrated, one failed auth row for the enabled forwarder,
-	// and the catalogue's identity (what the provisioner writes).
 	if err := os.MkdirAll(filepath.Dir(managedPath), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	authQso, _ := seedFailedUploads(t, managedPath, "stub-one")
+	authQso, dataQso := seedFailedUploads(t, managedPath, "stub-one")
 	raw, err := sql.Open("sqlite", "file:"+managedPath)
 	if err != nil {
 		t.Fatal(err)
@@ -48,19 +46,18 @@ func TestLifecycle_GatedArchiveStartsNoForwardingAtAll(t *testing.T) {
 	if err := orch.Start(d.workerCtx); err != nil {
 		t.Fatalf("orchestrated start failed: %v", err)
 	}
-	if d.qso.ForwardingAdmitted() {
-		t.Fatal("QSO service reports forwarding admitted in a managed archive")
-	}
 	if d.smcloudRec != nil {
-		t.Fatal("an SM Cloud reconciler was constructed in a gated archive")
+		t.Fatal("an SM Cloud reconciler was constructed in an archive with no bindings")
+	}
+	if started, _ := workerNamesStarted(t, filepath.Join(d.cfgSvc.WorkingDir(), "log", "smd.log")); len(started) != 0 {
+		t.Fatalf("workers started = %v; want none", started)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	rows, err := d.db.FetchUploadsByQsoIDWithContext(ctx, authQso)
-	if err != nil || len(rows) != 1 {
-		t.Fatalf("fetch auth row: %v (%d rows)", err, len(rows))
-	}
-	if rows[0].Status != "failed" {
-		t.Fatalf("auth row status = %q; the boot re-arm ran in a gated archive", rows[0].Status)
+	for _, id := range []int64{authQso, dataQso} {
+		rows, err := d.db.FetchUploadsByQsoIDWithContext(ctx, id)
+		if err != nil || len(rows) != 0 {
+			t.Fatalf("qso %d rows after start = %d (%v); want 0 — a name no binding carries is discarded", id, len(rows), err)
+		}
 	}
 }

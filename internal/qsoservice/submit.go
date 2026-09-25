@@ -79,10 +79,7 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 // log is the logbook SPA's job, not the importer's. A destination that forbids
 // bulk backfill entirely refuses up front (refuseBulkBackfillImport).
 func (s *Service) SubmitImport(ctx context.Context, logbookID int64, rec adif.Record, force bool, forwardTo []string) (SubmitResult, error) {
-	if len(forwardTo) > 0 && !s.ForwardingAdmitted() {
-		return SubmitResult{}, errForwardingGated()
-	}
-	if err := refuseBulkBackfillImport(forwardTo, s.Config.Forwarders()); err != nil {
+	if err := refuseBulkBackfillImport(forwardTo, s.routesFor(logbookID)); err != nil {
 		return SubmitResult{}, err
 	}
 	return s.submit(ctx, logbookID, rec, force, true, forwardTo)
@@ -451,9 +448,9 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 		return SubmitResult{}, errors.New(op).WithErr(err).WithMsg("failed to insert QSO")
 	}
 
-	// Insert upload-queue rows for each ENABLED forwarder whose action_filter
-	// includes 'insert' (ADR 0039: `enabled` gates enqueue — a disabled
-	// forwarder gets no rows; the queued-but-not-uploaded state is gone).
+	// Insert upload-queue rows for each ENABLED binding of the QSO's logbook
+	// whose action_filter includes 'insert' (ADR 0082 routing; ADR 0039:
+	// `enabled` gates enqueue — a disabled binding gets no rows).
 	// Inside the same transaction as the QSO insert per the one-fails-all-fail
 	// invariant (see docs/v2-design/forwarding.md §1). No enabled forwarders →
 	// the loop is a no-op and only the QSO row is committed.
@@ -462,8 +459,9 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	// queued-and-failed, queued-and-pending, and never-queued are three different
 	// problems and were one identical log (Q5). Non-nil so an empty fan-out logs an
 	// explicit [] ("queued nowhere"), not a missing field.
-	forwardedTo := make([]string, 0, len(s.Config.Forwarders()))
-	for _, fwd := range s.forwardersForEnqueue() {
+	routes := s.routesFor(logbookID)
+	forwardedTo := make([]string, 0, len(routes))
+	for _, fwd := range routes {
 		if !shouldEnqueue(fwd, action.Insert) {
 			continue
 		}

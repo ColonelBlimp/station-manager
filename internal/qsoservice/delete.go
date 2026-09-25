@@ -74,8 +74,9 @@ func (s *Service) Delete(ctx context.Context, existing types.Qso, src source.Sou
 
 	// Destinations this delete was queued to — recorded on "QSO soft-deleted" for the
 	// same reason as submit's "QSO stored" (Q5). Non-nil so an empty fan-out logs [].
-	forwardedTo := make([]string, 0, len(s.Config.Forwarders()))
-	for _, fwd := range s.forwardersForEnqueue() {
+	routes := s.routesFor(existing.LogbookID)
+	forwardedTo := make([]string, 0, len(routes))
+	for _, fwd := range routes {
 		if !shouldEnqueue(fwd, action.Delete) {
 			continue
 		}

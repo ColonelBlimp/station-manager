@@ -46,21 +46,25 @@ func corruptCredServer(t *testing.T, creds string) (*Server, *strings.Builder) {
 	t.Helper()
 	buf := &strings.Builder{}
 	srv := testServerWithLogger(t, func(c *config.Config) {
+		// Disabled: under ADR 0082 `enabled` is binding-owned and a PUT may not
+		// change it, so the unrelated save below leaves it as stored.
 		c.Forwarders = []types.ForwarderConfig{{
-			Name: "clublog", Type: "clublog", Enabled: true,
+			Name: "clublog", Type: "clublog", Enabled: false,
 			Credentials: json.RawMessage(creds),
 		}}
 	}, nil, logging.NewForWriter(buf))
 	return srv, buf
 }
 
-// putForwarderDisable sends exactly what the Forwarding tab sends for an unrelated
-// change: name/type/enabled, NO credentials. This masked-on-GET default is the drop
-// trigger. Disabling the forwarder is also what lets the save COMMIT (an ENABLED
-// forwarder with dropped/corrupt creds would fail config.ForwarderStartupFinding → 400).
-func putForwarderDisable(t *testing.T, srv *Server) *httptest.ResponseRecorder {
+// putForwarderUnrelated sends exactly what the Forwarding tab sends for an
+// unrelated change: name/type/enabled (unchanged — ADR 0082 makes it
+// binding-owned), a station-scoped action_filter edit, NO credentials. This
+// masked-on-GET default is the drop trigger. The entry stays disabled so the
+// save COMMITS (an ENABLED forwarder with dropped/corrupt creds would fail
+// config.ForwarderStartupFinding → 400).
+func putForwarderUnrelated(t *testing.T, srv *Server) *httptest.ResponseRecorder {
 	t.Helper()
-	body := `{"forwarders":[{"name":"clublog","type":"clublog","enabled":false}]}`
+	body := `{"forwarders":[{"name":"clublog","type":"clublog","enabled":false,"action_filter":["insert","delete"]}]}`
 	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -93,7 +97,7 @@ func credWarnRecords(t *testing.T, buf *strings.Builder, sub string) []map[strin
 func TestForwarderCreds_CorruptBlobPreservedAcrossSave(t *testing.T) {
 	srv, _ := corruptCredServer(t, a11CorruptCred)
 
-	if w := putForwarderDisable(t, srv); w.Code != http.StatusOK {
+	if w := putForwarderUnrelated(t, srv); w.Code != http.StatusOK {
 		t.Fatalf("fixture: the save must COMMIT or the rule proves nothing; got %d: %s",
 			w.Code, w.Body.String())
 	}
@@ -103,8 +107,8 @@ func TestForwarderCreds_CorruptBlobPreservedAcrossSave(t *testing.T) {
 		t.Fatalf("fixture: want 1 stored forwarder, got %d: %+v", len(stored), stored)
 	}
 	// The save really applied (not a no-op that would prove nothing)…
-	if stored[0].Enabled {
-		t.Fatalf("fixture: the save did not apply; forwarder still enabled: %+v", stored[0])
+	if len(stored[0].ActionFilter) != 2 {
+		t.Fatalf("fixture: the save did not apply; action_filter unchanged: %+v", stored[0])
 	}
 	// …and the stored credential bytes are unchanged, not blanked.
 	if got := string(stored[0].Credentials); got != a11CorruptCred {
@@ -119,7 +123,7 @@ func TestForwarderCreds_CorruptBlobPreservedAcrossSave(t *testing.T) {
 func TestForwarderCreds_CorruptBlobLogsWarningWithoutLeaking(t *testing.T) {
 	srv, buf := corruptCredServer(t, a11CorruptCred)
 
-	if w := putForwarderDisable(t, srv); w.Code != http.StatusOK {
+	if w := putForwarderUnrelated(t, srv); w.Code != http.StatusOK {
 		t.Fatalf("fixture: the save must COMMIT; got %d: %s", w.Code, w.Body.String())
 	}
 
@@ -152,7 +156,7 @@ func TestForwarderCreds_CorruptBlobLogsWarningWithoutLeaking(t *testing.T) {
 func TestForwarderCreds_ValidBlobPreservedNoWarning(t *testing.T) {
 	srv, buf := corruptCredServer(t, `{"email":"a@b.com","callsign":"7Q5MLV"}`)
 
-	if w := putForwarderDisable(t, srv); w.Code != http.StatusOK {
+	if w := putForwarderUnrelated(t, srv); w.Code != http.StatusOK {
 		t.Fatalf("fixture: the save must COMMIT; got %d: %s", w.Code, w.Body.String())
 	}
 

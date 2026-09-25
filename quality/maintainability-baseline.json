@@ -130,7 +130,7 @@
       "path": "cmd/smd/import.go",
       "function": "runImport",
       "direction": "maximum",
-      "value": 52
+      "value": 40
     },
     {
       "language": "go",
@@ -154,7 +154,7 @@
       "path": "internal/api/handler_config.go",
       "function": "(*Server).handlePutConfig",
       "direction": "maximum",
-      "value": 64
+      "value": 55
     },
     {
       "language": "go",
@@ -250,7 +250,7 @@
       "path": "cmd/smd/import.go",
       "function": "runImport",
       "direction": "maximum",
-      "value": 39
+      "value": 35
     },
     {
       "language": "go",
@@ -274,7 +274,7 @@
       "path": "internal/api/handler_config.go",
       "function": "(*Server).handlePutConfig",
       "direction": "maximum",
-      "value": 40
+      "value": 37
     },
     {
       "language": "go",
@@ -370,7 +370,7 @@
       "path": "cmd/smd/import.go",
       "function": "runImport",
       "direction": "minimum",
-      "value": 15
+      "value": 16
     },
     {
       "language": "go",
@@ -394,7 +394,7 @@
       "path": "internal/api/handler_config.go",
       "function": "(*Server).handlePutConfig",
       "direction": "minimum",
-      "value": 16
+      "value": 18
     },
     {
       "language": "go",

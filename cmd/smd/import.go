@@ -15,6 +15,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/enums/modes"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/events"
+	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	"github.com/ColonelBlimp/station-manager/internal/iocdi"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/qsoservice"
@@ -179,7 +180,6 @@ func runImport(args []string) error {
 		return errors.New(op).WithErr(err)
 	}
 	defer closeDBs()
-	qsoSvc.SetArchive(paths.Entry) // the interim forwarding gate keys on the TARGET archive
 
 	// ---- Resolve target logbook.
 	if logbookID, err = targetLogbook(logbookID, dbSvc, paths, cfg); err != nil {
@@ -189,43 +189,23 @@ func runImport(args []string) error {
 		return errors.New(op).WithErr(ferr).WithMsgf("target logbook id=%d does not exist", logbookID)
 	}
 
-	// ---- --forward: forwarder names to QUEUE the imported QSOs for upload to.
+	// ---- Routing: the target archive's bindings, resolved against the
+	// station accounts (ADR 0082). An archive the daemon has never started on
+	// this build holds no bindings yet, and a new archive holds none by design.
+	snap, err := resolveDestinationRoutes(context.Background(), dbSvc, cfg, loggerSvc)
+	if err != nil {
+		return errors.New(op).WithErr(err)
+	}
+	routes := snap.routes
+	qsoSvc.SetDestinationRoutes(routes)
+
+	// ---- --forward: binding names to QUEUE the imported QSOs for upload to.
 	// DEFAULT IS NONE — import uploads nothing unless the operator opts in here,
 	// so seeding a historical log never re-sends it (operator-driven backfill,
-	// the rule ADR 0039 keeps from ADR 0022). Validate each name against the
-	// configured forwarders, matched case-insensitively; passed to SubmitImport
-	// as forwardTo. NB under ADR 0039 `enabled` gates enqueue and the daemon
-	// discards a disabled forwarder's queued rows at startup, so --forward to a
-	// *disabled* forwarder is futile — the loop below rejects it.
-	var forwardTo []string
-	if s := strings.TrimSpace(forwardFwds); s != "" {
-		present := map[string]bool{}
-		enabled := map[string]bool{}
-		for _, f := range cfg.Forwarders {
-			key := strings.ToLower(strings.TrimSpace(f.Name))
-			present[key] = true
-			enabled[key] = f.Enabled
-		}
-		for _, raw := range strings.Split(s, ",") {
-			name := strings.TrimSpace(raw)
-			if name == "" {
-				continue
-			}
-			key := strings.ToLower(name)
-			if !present[key] {
-				return errors.New(op).WithMsgf(
-					"--forward: no forwarder named %q in config (check forwarders[].name)", name)
-			}
-			// ADR 0039: `enabled` gates enqueue and the daemon discards a
-			// disabled forwarder's queued rows at startup, so importing to a
-			// disabled forwarder would queue rows that never upload. Require it
-			// be enabled rather than silently seed rows that get swept away.
-			if !enabled[key] {
-				return errors.New(op).WithMsgf(
-					"--forward: forwarder %q is disabled — enable it to queue imported QSOs (ADR 0039)", name)
-			}
-			forwardTo = append(forwardTo, name)
-		}
+	// the rule ADR 0039 keeps from ADR 0022).
+	forwardTo, err := importForwardNames(forwardFwds, routes, logbookID)
+	if err != nil {
+		return errors.New(op).WithErr(err)
 	}
 
 	loggerSvc.InfoWith().
@@ -312,4 +292,44 @@ func normalizeImportedMode(rec *adif.Record) {
 		rec.Submode = upper
 	}
 	rec.Mode = parent.String()
+}
+
+// importForwardNames validates `--forward`: each comma-separated name must be
+// an ENABLED binding of the TARGET logbook (matched case-insensitively). A
+// disabled binding has no worker and its queued rows are discarded at the next
+// start, and another logbook's binding never carries this logbook's QSOs.
+func importForwardNames(raw string, routes []forwarding.BoundForwarder, logbookID int64) ([]string, error) {
+	const op errors.Op = "smd.import"
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	present := map[string]bool{}
+	enabled := map[string]bool{}
+	for _, r := range routes {
+		if r.LogbookID != logbookID {
+			continue
+		}
+		key := strings.ToLower(strings.TrimSpace(r.Config.Name))
+		present[key] = true
+		enabled[key] = r.Config.Enabled
+	}
+	var forwardTo []string
+	for _, item := range strings.Split(raw, ",") {
+		name := strings.TrimSpace(item)
+		if name == "" {
+			continue
+		}
+		key := strings.ToLower(name)
+		if !present[key] {
+			return nil, errors.New(op).WithMsgf(
+				"--forward: no binding named %q for logbook %d in this archive (the daemon seeds the adopted archive's bindings from config.forwarders at its first start on this build; a new archive starts with none; bindings are then set on the active archive's Forwarding tab)", name, logbookID)
+		}
+		if !enabled[key] {
+			return nil, errors.New(op).WithMsgf(
+				"--forward: binding %q is disabled — enable it to queue imported QSOs (ADR 0039)", name)
+		}
+		forwardTo = append(forwardTo, name)
+	}
+	return forwardTo, nil
 }

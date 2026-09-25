@@ -31,8 +31,9 @@ type SeedLogbookDestinationsResult struct {
 
 // ListLogbookDestinationsWithContext returns every binding of a LIVE logbook
 // (a soft-deleted logbook's bindings are inert, never a worker), ordered by
-// logbook then destination. Credentials come back verbatim: callers that put
-// them on a wire mask them.
+// logbook then insertion — the seed inserts in config order, so the adopted
+// archive's fan-out keeps the order config.json had (the 5A pin). Credentials
+// come back verbatim: callers that put them on a wire mask them.
 func (s *Service) ListLogbookDestinationsWithContext(ctx context.Context) ([]types.LogbookDestination, error) {
 	const op errors.Op = "sqlite.Service.ListLogbookDestinationsWithContext"
 	if err := checkService(op, s); err != nil {
@@ -50,7 +51,7 @@ func (s *Service) ListLogbookDestinationsWithContext(ctx context.Context) ([]typ
 		FROM logbook_destination d
 		         JOIN logbook l ON l.id = d.logbook_id
 		WHERE l.deleted_at IS NULL
-		ORDER BY d.logbook_id, d.destination`)
+		ORDER BY d.logbook_id, d.id`)
 	if err != nil {
 		return nil, errors.New(op).WithErr(err).WithMsg("list logbook destinations")
 	}

@@ -69,10 +69,7 @@ func (s *Service) SubmitImportBatch(
 
 	// Before ANY record is stored: a forwardTo naming a no-bulk-backfill
 	// destination refuses the whole run (review 2026-08-07 #1).
-	if len(forwardTo) > 0 && !s.ForwardingAdmitted() {
-		return ImportBatchResult{}, errForwardingGated()
-	}
-	if err := refuseBulkBackfillImport(forwardTo, s.Config.Forwarders()); err != nil {
+	if err := refuseBulkBackfillImport(forwardTo, s.routesFor(logbookID)); err != nil {
 		return ImportBatchResult{}, err
 	}
 
@@ -86,7 +83,7 @@ func (s *Service) SubmitImportBatch(
 
 	var res ImportBatchResult
 	contacts := make(map[string]types.ContactedStation) // unique call → station (last wins)
-	forwarders := s.forwardersForEnqueue()
+	forwarders := s.routesFor(logbookID)
 
 	for start := 0; start < len(recs); start += batchSize {
 		end := start + batchSize

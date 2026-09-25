@@ -16,6 +16,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -27,6 +28,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/events"
+	"github.com/ColonelBlimp/station-manager/internal/forwarding/stub"
 	"github.com/ColonelBlimp/station-manager/internal/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/iocdi"
 	"github.com/ColonelBlimp/station-manager/internal/lifecycle/orchestrator"
@@ -261,12 +263,17 @@ func TestLifecycle_FailedStartRollsBackAndReleasesResources(t *testing.T) {
 
 // C6 (codex 1fbbd41d P2): the workers node's Rollback must drain the forwarder workers WITHOUT
 // cancelling the orchestrator's rollback context — otherwise runBounded sees rollback as timed out
-// and halts the unwind, leaving the predecessor DBs (and logger) open. A bad forwarder type fails
-// startWorkers after the DBs opened; rollback must still reach and close them.
+// and halts the unwind, leaving the predecessor DBs (and logger) open. A forwarder whose
+// constructor rejects its credentials fails startWorkers after the DBs opened (an unregistered
+// TYPE is refused earlier now, by the binding seed — ADR 0082); rollback must still reach and
+// close them.
 func TestLifecycle_WorkerStartFailureStillRollsBackPredecessors(t *testing.T) {
 	d, orch := newOrchestratedDaemon(t, func(c *config.Config) {
+		c.SetupComplete = true
+		c.DefaultLogbookID = 1
+		c.LoggingStation.StationCallsign = "7Q5MLV"
 		c.Forwarders = []types.ForwarderConfig{
-			{Name: "bad", Type: "definitely-not-a-registered-forwarder", Enabled: true},
+			{Name: "bad", Type: stub.Type, Enabled: true, Credentials: json.RawMessage(`{"mode":"bogus"}`)},
 		}
 	})
 	if err := orch.Start(d.workerCtx); err == nil {

@@ -345,6 +345,7 @@ func TestImport_ForwardFlagQueuesNamedForwarder(t *testing.T) {
 		}}
 	})
 	adifPath := writeADIF(t, tmp, "input.adi", noLogidRecord)
+	seedTestbedBindings(t, tmp) // the daemon's first start would have seeded these
 
 	if err := runImport([]string{"--forward", "QRZ-MAIN", adifPath}); err != nil { // case-insensitive
 		t.Fatalf("import: %v", err)
@@ -385,8 +386,8 @@ func TestImport_ForwardFlag_UnknownForwarderFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error when --forward names an unconfigured forwarder")
 	}
-	if !strings.Contains(err.Error(), "no forwarder named") {
-		t.Errorf("error = %v, want it to mention 'no forwarder named'", err)
+	if !strings.Contains(err.Error(), "no binding named") {
+		t.Errorf("error = %v, want it to mention 'no binding named'", err)
 	}
 }
 
@@ -401,6 +402,7 @@ func TestImport_ForwardFlag_DisabledForwarderFails(t *testing.T) {
 		}}
 	})
 	adifPath := writeADIF(t, tmp, "input.adi", noLogidRecord)
+	seedTestbedBindings(t, tmp) // seeded disabled, with its key kept
 
 	err := runImport([]string{"--forward", "qrz-main", adifPath})
 	if err == nil {
@@ -432,5 +434,47 @@ func TestNormalizeImportedMode(t *testing.T) {
 			t.Errorf("normalizeImportedMode(%q): got mode %q sub %q; want mode %q sub %q",
 				c.in, rec.Mode, rec.Submode, c.wantMode, c.wantSub)
 		}
+	}
+}
+
+// seedTestbedBindings does on the testbed's file what the daemon's first start
+// under ADR 0082 does to the adopted archive: writes its identity and seeds one
+// binding per config entry on logbook 1, then closes the file for runImport.
+func seedTestbedBindings(t *testing.T, tmp string) {
+	t.Helper()
+	cfg, err := config.Load(filepath.Join(tmp, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfgSvc := config.New(cfg)
+	if err := cfgSvc.Initialize(); err != nil {
+		t.Fatal(err)
+	}
+	logSvc := &logging.Service{WorkingDir: cfgSvc.WorkingDir(), ConfigService: cfgSvc}
+	if err := logSvc.Initialize(); err != nil {
+		t.Fatal(err)
+	}
+	db := &sqlite.Service{ConfigService: cfgSvc, LoggerService: logSvc}
+	if err := db.Initialize(); err != nil {
+		t.Fatal(err)
+	}
+	db.SetMigrationSets(sqlite.MigrationSetLog)
+	if err := db.Open(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close(); _ = logSvc.Close() }()
+	if err := db.Migrate(); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := db.EnsureArchiveIdentityWithContext(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	seeds, err := destinationSeeds(cfg.Forwarders)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SeedLogbookDestinationsWithContext(ctx, seeds); err != nil {
+		t.Fatal(err)
 	}
 }

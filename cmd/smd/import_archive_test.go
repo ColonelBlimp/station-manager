@@ -318,10 +318,10 @@ func giveIdentity(t *testing.T, cfg config.Config, path, id string) {
 	_ = db.Close()
 }
 
-// `smd import --forward` into an archive other than the adopted one is refused
-// with the gate's reason (W-0021 slice 2B): the named forwarder's credentials
-// belong to the home archive.
-func TestImport_ForwardIntoAGatedArchiveIsRefused(t *testing.T) {
+// `smd import --forward` into a managed archive is refused by name (ADR 0082):
+// a new archive holds no bindings, and the station's forwarder entries are
+// accounts, not routes — the named forwarder's credentials belong to Home.
+func TestImport_ForwardIntoAnUnboundArchiveIsRefused(t *testing.T) {
 	var legacyPath string
 	tmp := setupImportTestbed(t, func(c *config.Config) {
 		legacyPath = c.Datastore.Path
@@ -340,8 +340,8 @@ func TestImport_ForwardIntoAGatedArchiveIsRefused(t *testing.T) {
 	managedPath := provisionManagedFile(t, cfg, archB)
 	adifPath := writeADIF(t, tmp, "input.adi", sampleRecord)
 	err = runImport([]string{"--archive", archB, "--forward", "qrz", adifPath})
-	if err == nil || !strings.Contains(err.Error(), "forwarding_gated") {
-		t.Fatalf("import --forward into a managed archive = %v; want forwarding_gated", err)
+	if err == nil || !strings.Contains(err.Error(), `no binding named "qrz"`) {
+		t.Fatalf("import --forward into a managed archive = %v; want a refusal naming the missing binding", err)
 	}
 	b := openArchiveFile(t, cfg, managedPath)
 	if q, _ := b.FetchQsoSliceByLogbookIdWithContext(context.Background(), 1); len(q) != 0 {

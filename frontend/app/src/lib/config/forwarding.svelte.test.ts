@@ -59,7 +59,9 @@ const TYPES = {
             supported_actions: ['insert'],
             credential_fields: [
                 { key: 'url', label: 'URL', kind: 'text', scope: 'station' },
-                // The one real clearable field: New() defaults it to "main".
+                // A station-scoped clearable field (fixture): the one this tab may reset.
+                { key: 'region', label: 'Region', kind: 'text', clearable: true, scope: 'station' },
+                // The real clearable field is logbook-scoped: binding-owned, never sent.
                 {
                     key: 'logbook',
                     label: 'Cloud logbook',
@@ -159,11 +161,11 @@ describe('forwardingState credential safety', () => {
     // must be different wire outcomes, not different intentions.
     it('F3: a retyped credential is sent', async () => {
         const puts = await loadFresh();
-        const qrz = forwardingState.drafts.find((d) => d.name === 'qrz')!;
-        qrz.credentials.api_key = 'NEWKEY123';
+        const smcloud = forwardingState.drafts.find((d) => d.name === 'smcloud')!;
+        smcloud.credentials.url = 'https://new.example.org';
         await forwardingState.save();
 
-        expect(creds(puts[0], 'qrz')?.api_key).toBe('NEWKEY123');
+        expect(creds(puts[0], 'smcloud')?.url).toBe('https://new.example.org');
     });
 
     // F4 — AN EXPLICIT RESET IS SENT AS "", AND IS DISTINGUISHABLE FROM F2.
@@ -171,11 +173,11 @@ describe('forwardingState credential safety', () => {
     // criterion's third clause, and it is what the config SPA cannot express.
     it('F4: clearing a clearable field sends an empty value', async () => {
         const puts = await loadFresh();
-        forwardingState.clear('smcloud', 'logbook');
+        forwardingState.clear('smcloud', 'region');
         await forwardingState.save();
 
-        expect(creds(puts[0], 'smcloud')).toHaveProperty('logbook');
-        expect(creds(puts[0], 'smcloud')?.logbook).toBe('');
+        expect(creds(puts[0], 'smcloud')).toHaveProperty('region');
+        expect(creds(puts[0], 'smcloud')?.region).toBe('');
     });
 
     // F5 — A NON-CLEARABLE FIELD CANNOT BE RESET. Emptying a required credential
@@ -183,7 +185,9 @@ describe('forwardingState credential safety', () => {
     // — not merely be discouraged in the UI.
     it('F5: clearable() is false for password and required fields', async () => {
         await loadFresh();
-        expect(forwardingState.clearable('smcloud', 'logbook')).toBe(true);
+        expect(forwardingState.clearable('smcloud', 'region')).toBe(true);
+        // Clearable in Go but logbook-scoped: binding-owned, not resettable here.
+        expect(forwardingState.clearable('smcloud', 'logbook')).toBe(false);
         expect(forwardingState.clearable('qrz', 'api_key')).toBe(false);
         expect(forwardingState.clearable('smcloud', 'url')).toBe(false);
     });
@@ -209,8 +213,8 @@ describe('forwardingState credential safety', () => {
     it('F8: emptying a box by hand does not clear the field', async () => {
         const puts = await loadFresh();
         const smcloud = forwardingState.drafts.find((d) => d.name === 'smcloud')!;
-        smcloud.credentials.logbook = 'contest';
-        smcloud.credentials.logbook = ''; // thought better of it
+        smcloud.credentials.region = 'us';
+        smcloud.credentials.region = ''; // thought better of it
         smcloud.enabled = false; // keep the save dirty
         await forwardingState.save();
 
@@ -222,12 +226,12 @@ describe('forwardingState credential safety', () => {
     it('F8b: reset after an abandoned edit still clears', async () => {
         const puts = await loadFresh();
         const smcloud = forwardingState.drafts.find((d) => d.name === 'smcloud')!;
-        smcloud.credentials.logbook = 'contest';
-        smcloud.credentials.logbook = '';
-        forwardingState.clear('smcloud', 'logbook');
+        smcloud.credentials.region = 'us';
+        smcloud.credentials.region = '';
+        forwardingState.clear('smcloud', 'region');
         await forwardingState.save();
 
-        expect(creds(puts[0], 'smcloud')?.logbook).toBe('');
+        expect(creds(puts[0], 'smcloud')?.region).toBe('');
     });
 
     // F5c — THE REFUSAL IS RECORDED AT THE STATE LEVEL, NOT ONLY AT THE WIRE.
@@ -264,7 +268,7 @@ describe('forwardingState credential safety', () => {
         // 3. a pending reset, on a destination with nothing else changed
         forwardingState.reset();
         expect(forwardingState.hasEdits('smcloud')).toBe(false);
-        forwardingState.clear('smcloud', 'logbook');
+        forwardingState.clear('smcloud', 'region');
         expect(forwardingState.hasEdits('smcloud')).toBe(true);
     });
 
@@ -283,6 +287,28 @@ describe('forwardingState credential safety', () => {
     // F6 — AN UNKNOWN TYPE SURVIVES THE SAVE. The forwarders block is replaced
     // WHOLE, so a destination dropped from the payload is a destination removed
     // from config until the daemon re-seeds it at restart.
+    // F10 — THE WIRE NEVER CARRIES A BINDING-OWNED FIELD (ADR 0082 transition):
+    // `enabled` goes out exactly as the daemon stored it whatever the draft says,
+    // and a logbook-scoped key is dropped even when typed — the daemon refuses a
+    // PUT that carries either, so the store must not put them on the wire.
+    it('F10: enabled rides as stored and logbook-scoped keys are never sent', async () => {
+        const puts = await loadFresh();
+        const qrz = forwardingState.drafts.find((d) => d.name === 'qrz')!;
+        const smcloud = forwardingState.drafts.find((d) => d.name === 'smcloud')!;
+        qrz.enabled = !qrz.enabled; // a draft toggle (no UI path does this now)
+        qrz.credentials.api_key = 'TYPED-ANYWAY';
+        smcloud.credentials.logbook = 'contest';
+        smcloud.credentials.url = 'https://ok.example.org';
+        await forwardingState.save();
+
+        const sentQrz = (
+            puts[0] as { forwarders: { name: string; enabled: boolean }[] }
+        ).forwarders.find((f) => f.name === 'qrz')!;
+        expect(sentQrz.enabled).toBe(true); // the STORED value (fixture: true), not the draft's false
+        expect(creds(puts[0], 'qrz')).toBeUndefined();
+        expect(creds(puts[0], 'smcloud')).toEqual({ url: 'https://ok.example.org' });
+    });
+
     it('F6: a forwarder whose type this build lacks still round-trips', async () => {
         const puts = await loadFresh();
         const qrz = forwardingState.drafts.find((d) => d.name === 'qrz')!;
@@ -521,19 +547,19 @@ describe('forwardingState — timed-out reconciliation (F-04c)', () => {
         const spy = stubReconcile([CONFIG, CONFIG]); // re-read unchanged
 
         await forwardingState.load();
-        draftNamed('qrz')!.credentials.api_key = 'NEWKEY'; // typed secret
-        forwardingState.clear('smcloud', 'logbook'); // explicit reset intent
+        draftNamed('smcloud')!.credentials.url = 'https://typed'; // typed station value
+        forwardingState.clear('smcloud', 'region'); // explicit reset intent
 
         await forwardingState.save();
 
         expect(spy.mock.calls.length).toBe(4); // load config+types, timed-out PUT, reconcile GET
-        expect(draftNamed('qrz')!.credentials.api_key).toBe('NEWKEY'); // preserved
-        expect(draftNamed('smcloud')!.cleared).toContain('logbook'); // preserved
+        expect(draftNamed('smcloud')!.credentials.url).toBe('https://typed'); // preserved
+        expect(draftNamed('smcloud')!.cleared).toContain('region'); // preserved
         expect(warn).toHaveBeenCalledOnce();
         // and the intents still ride on a resave
         const payload = forwardingState.buildPayload();
-        expect(payload.find((f) => f.name === 'qrz')?.credentials?.api_key).toBe('NEWKEY');
-        expect(payload.find((f) => f.name === 'smcloud')?.credentials?.logbook).toBe('');
+        expect(payload.find((f) => f.name === 'smcloud')?.credentials?.url).toBe('https://typed');
+        expect(payload.find((f) => f.name === 'smcloud')?.credentials?.region).toBe('');
     });
 
     it('when the reconciling re-read ALSO fails, stays outcome-unknown, keeps edits, does not rebaseline', async () => {

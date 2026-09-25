@@ -8,8 +8,8 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/events"
+	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
-	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 const ServiceName = "qsoservice"
@@ -26,11 +26,14 @@ type Service struct {
 	RefDB  *sqlite.Service  `di.inject:"referencedb"`
 	Logger *logging.Service `di.inject:"loggingservice"`
 	Config *config.Service  `di.inject:"configservice"`
-	// archive is the catalogue entry this service writes (nil = the not-yet-
-	// adopted file); see SetArchive and the interim forwarding gate.
-	archive   *types.QsoArchiveConfig
-	archiveMu sync.RWMutex
-	Hub       *events.Hub `di.inject:"eventhub"`
+	// routes is the start-time snapshot of the active archive's destination
+	// bindings resolved against their station accounts (ADR 0082 parts 5–6):
+	// every enqueue site routes a QSO by its logbook from this set, which is
+	// also the worker set, so every queued row has a worker by construction.
+	// Set once by cmd/smd via SetDestinationRoutes; edits apply at the next start.
+	routes   []forwarding.BoundForwarder
+	routesMu sync.RWMutex
+	Hub      *events.Hub `di.inject:"eventhub"`
 
 	// activeRigID pins MY_RIG attribution to the rig the bridge connected to at
 	// startup — set once by cmd/smd via SetActiveRig, before serving. NOT

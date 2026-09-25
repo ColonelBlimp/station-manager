@@ -15,6 +15,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/events"
+	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	"github.com/ColonelBlimp/station-manager/internal/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/qsoservice"
@@ -262,6 +263,7 @@ func createTestLogbook(t *testing.T, srv *Server, name, callsign string) int64 {
 	if err := unmarshalJSON(w.Body.String(), &resp); err != nil || resp.ID < 1 {
 		t.Fatalf("createTestLogbook: failed to decode id from %s (err=%v)", w.Body.String(), err)
 	}
+	bindRoutesFromConfig(t, srv)
 	return resp.ID
 }
 
@@ -1737,4 +1739,28 @@ func TestDeleteQso_FreesDedupeKey(t *testing.T) {
 	if !strings.Contains(w.Body.String(), `"status":"stored"`) {
 		t.Fatalf("resubmit body = %q, want stored", w.Body.String())
 	}
+}
+
+// bindRoutesFromConfig installs, on the server's QSO service, the routes the
+// daemon's seed would produce for the config's forwarder entries (ADR 0082
+// part 4): every logbook × every entry, the lowest-id logbook keeping the
+// entry's name, any other named `<type>.<logbook uuid>`. Tests that want an
+// unbound logbook call srv.qso.SetDestinationRoutes(nil) afterwards.
+func bindRoutesFromConfig(t *testing.T, srv *Server) {
+	t.Helper()
+	lbs, err := srv.db.FetchAllLogbooksWithContext(context.Background())
+	if err != nil {
+		t.Fatalf("bindRoutesFromConfig: %v", err)
+	}
+	var routes []forwarding.BoundForwarder
+	for i, lb := range lbs {
+		for _, fc := range srv.cfg.Forwarders() {
+			c := fc
+			if i > 0 {
+				c.Name = fc.Type + "." + lb.UUID
+			}
+			routes = append(routes, forwarding.BoundForwarder{LogbookID: lb.ID, Config: c})
+		}
+	}
+	srv.qso.SetDestinationRoutes(routes)
 }

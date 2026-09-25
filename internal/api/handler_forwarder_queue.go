@@ -4,8 +4,6 @@ import (
 	"net/http"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
-	"github.com/ColonelBlimp/station-manager/internal/qsoservice"
-	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 // forwarderQueueCount is one forwarder's entry in the GET /v1/forwarder-queues
@@ -22,13 +20,11 @@ type forwarderQueueCount struct {
 	InFlight  int64  `json:"in_flight"`
 }
 
-// forwarderQueuesResponse also states the interim forwarding gate (W-0021
-// slice 2B): in an archive other than the adopted one nothing is ever queued,
-// and the card must say why rather than show empty queues.
+// forwarderQueuesResponse lists the counts per configured forwarder name. The
+// interim forwarding gate of W-0021 slice 2B is gone (ADR 0082): an archive
+// forwards exactly what its enabled bindings say, so there is no gate to state.
 type forwarderQueuesResponse struct {
-	Forwarders      []forwarderQueueCount `json:"forwarders"`
-	ForwardingGated bool                  `json:"forwarding_gated"`
-	GateReason      string                `json:"gate_reason,omitempty"`
+	Forwarders []forwarderQueueCount `json:"forwarders"`
 }
 
 // clearForwarderQueueResponse is the POST /v1/forwarder/{name}/queue/clear result.
@@ -42,10 +38,10 @@ type retryForwarderQueueResponse struct {
 }
 
 // handleForwarderQueues serves GET /v1/forwarder-queues — the Settings →
-// Forwarding queue readout. Every CONFIGURED forwarder appears (in config order,
-// enabled or not), each with its clearable/in-flight counts; a forwarder with no
-// queued rows reads {0,0}. Merged in the handler so the SPA renders a count next
-// to every forwarder it already lists.
+// Forwarding queue readout. Every BINDING of the active archive appears (in
+// listing order, enabled or not — ADR 0082), each with its clearable/in-flight
+// counts; a name with no queued rows reads {0,0}. Merged in the handler so the
+// SPA renders a count next to every destination it lists.
 func (s *Server) handleForwarderQueues(w http.ResponseWriter, r *http.Request) {
 	const op errors.Op = "api.handleForwarderQueues"
 
@@ -55,16 +51,12 @@ func (s *Server) handleForwarderQueues(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fwds := s.cfg.Forwarders()
-	out := forwarderQueuesResponse{Forwarders: make([]forwarderQueueCount, 0, len(fwds))}
-	if !s.qso.ForwardingAdmitted() {
-		out.ForwardingGated = true
-		out.GateReason = qsoservice.ForwardingGateReason
-	}
-	for _, f := range fwds {
-		c := counts[f.Name] // zero value {0,0} when the forwarder has no rows
+	names := s.queueNames
+	out := forwarderQueuesResponse{Forwarders: make([]forwarderQueueCount, 0, len(names))}
+	for _, name := range names {
+		c := counts[name] // zero value {0,0} when the binding has no rows
 		out.Forwarders = append(out.Forwarders, forwarderQueueCount{
-			Name:      f.Name,
+			Name:      name,
 			Waiting:   c.Waiting,
 			Failed:    c.Failed,
 			Clearable: c.Clearable(),
@@ -82,7 +74,7 @@ func (s *Server) handleForwarderQueues(w http.ResponseWriter, r *http.Request) {
 //
 // Status codes:
 //   - 400 invalid_forwarder  empty name
-//   - 404 unknown_forwarder  name is not a configured forwarder
+//   - 404 unknown_forwarder  name is not a binding of the active archive
 //   - 200 {discarded}
 func (s *Server) handleClearForwarderQueue(w http.ResponseWriter, r *http.Request) {
 	const op errors.Op = "api.handleClearForwarderQueue"
@@ -98,8 +90,8 @@ func (s *Server) handleClearForwarderQueue(w http.ResponseWriter, r *http.Reques
 		s.writeError(w, http.StatusBadRequest, "invalid_forwarder", "forwarder name is required", op)
 		return
 	}
-	if !s.isConfiguredForwarder(name) {
-		s.writeError(w, http.StatusNotFound, "unknown_forwarder", "no such forwarder", op)
+	if !s.isQueueName(name) {
+		s.writeError(w, http.StatusNotFound, "unknown_forwarder", "no such destination binding in the active archive", op)
 		return
 	}
 
@@ -125,8 +117,8 @@ func (s *Server) handleClearForwarderQueue(w http.ResponseWriter, r *http.Reques
 //
 // Status codes:
 //   - 400 invalid_forwarder   empty name
-//   - 404 unknown_forwarder   name is not a configured forwarder
-//   - 400 forwarder_disabled  configured but not enabled
+//   - 404 unknown_forwarder   name is not a binding of the active archive
+//   - 400 forwarder_disabled  no running worker of that name
 //   - 200 {rearmed}
 func (s *Server) handleRetryForwarderQueue(w http.ResponseWriter, r *http.Request) {
 	const op errors.Op = "api.handleRetryForwarderQueue"
@@ -137,13 +129,8 @@ func (s *Server) handleRetryForwarderQueue(w http.ResponseWriter, r *http.Reques
 		s.writeError(w, http.StatusBadRequest, "invalid_forwarder", "forwarder name is required", op)
 		return
 	}
-	_, ok := s.configuredForwarder(name)
-	if !ok {
-		s.writeError(w, http.StatusNotFound, "unknown_forwarder", "no such forwarder", op)
-		return
-	}
-	if !s.qso.ForwardingAdmitted() {
-		s.writeError(w, http.StatusBadRequest, "forwarding_gated", qsoservice.ForwardingGateReason, op)
+	if !s.isQueueName(name) {
+		s.writeError(w, http.StatusNotFound, "unknown_forwarder", "no such destination binding in the active archive", op)
 		return
 	}
 	if _, running := s.startupForwarders[name]; !running {
@@ -160,18 +147,13 @@ func (s *Server) handleRetryForwarderQueue(w http.ResponseWriter, r *http.Reques
 	s.writeJSON(w, http.StatusOK, retryForwarderQueueResponse{Rearmed: n})
 }
 
-// isConfiguredForwarder reports whether name matches a configured forwarder.
-func (s *Server) isConfiguredForwarder(name string) bool {
-	_, ok := s.configuredForwarder(name)
-	return ok
-}
-
-// configuredForwarder resolves name (exact match) to its configured entry.
-func (s *Server) configuredForwarder(name string) (types.ForwarderConfig, bool) {
-	for _, f := range s.cfg.Forwarders() {
-		if f.Name == name {
-			return f, true
+// isQueueName reports whether name (exact match) is one the queue endpoints
+// know — a binding of the active archive.
+func (s *Server) isQueueName(name string) bool {
+	for _, n := range s.queueNames {
+		if n == name {
+			return true
 		}
 	}
-	return types.ForwarderConfig{}, false
+	return false
 }

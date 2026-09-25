@@ -8,8 +8,10 @@ weight: 90
 - Importing an ADIF file with `smctl import` (wraps the stop/import/restart
   database hand-off so you run one command).
 - **Uploads default to OFF:** import seeds your local logbook only and never
-  re-sends your history to QRZ/ClubLog. Opt in per-forwarder with `--forward
-  <name>` only when you actually want the imported log pushed to a service.
+  re-sends your history to QRZ/ClubLog. Opt in per destination with `--forward
+  <name>` only when you actually want the imported log pushed to a service — the
+  name must be an enabled destination of that logbook in that archive (a new
+  archive starts with none).
 - Bulk-forwarding an already-imported log to a newly-subscribed service is a
   one-click action in the logbook app — not a re-import.
 - The QRZ per-QSO logid (`app_qrzlog_logid`) is preserved as provenance on each

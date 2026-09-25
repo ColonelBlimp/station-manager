@@ -389,7 +389,11 @@ The API never echoes password or token values. It reports whether a secret is se
   `password_clear=true` explicitly removes it, and clear wins if both are sent.
 - Forwarders: credentials are merged by stable forwarder `name`. Omitted or blank
   fields keep stored secrets, except registry-declared clearable non-secret options
-  where blank intentionally restores the constructor default.
+  where blank intentionally restores the constructor default. During the ADR 0082
+  transition an entry's `enabled` flag and its logbook-scoped credential keys are
+  owned by the active archive's destination bindings: an API edit that changes
+  `enabled` or carries such a key is refused (`forwarder_field_binding_owned`);
+  station-scoped fields remain editable.
 - Replacing or removing a forwarder/provider entry removes the configuration owned
   by that entry. Lookup's callsign chain is replaced as a whole, not merged by
   missing provider name.

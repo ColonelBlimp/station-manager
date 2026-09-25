@@ -15,6 +15,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/events"
+	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/qsoservice"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -91,6 +92,13 @@ func TestSubmitImportBatch_UncertainRollbackAbortsWithoutFallback(t *testing.T) 
 				Config: newImportConfig(t, tc.forwarders...),
 				Hub:    hub,
 			}
+
+			// The daemon's start-time snapshot: one route per entry on logbook 1 (ADR 0082).
+			var routes []forwarding.BoundForwarder
+			for _, fc := range tc.forwarders {
+				routes = append(routes, forwarding.BoundForwarder{LogbookID: 1, Config: fc})
+			}
+			svc.SetDestinationRoutes(routes)
 
 			tc.expect(mock)
 

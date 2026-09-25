@@ -5,7 +5,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/ColonelBlimp/station-manager/internal/archive"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -63,42 +62,50 @@ func refuseBulkBackfillImport(forwardTo []string, forwarders []types.ForwarderCo
 	return nil
 }
 
-// SetArchive tells the service which archive it writes (the daemon resolves it
-// from the catalogue; nil is the not-yet-adopted file). It drives the interim
-// forwarding gate below.
-func (s *Service) SetArchive(entry *types.QsoArchiveConfig) {
-	s.archiveMu.Lock()
-	defer s.archiveMu.Unlock()
-	s.archive = entry
+// SetDestinationRoutes installs the start-time snapshot of the active
+// archive's bindings resolved against their station accounts (ADR 0082). The
+// daemon sets it once after the seed; the same set builds the workers. Every
+// binding is present, enabled or not — routesFor filters.
+func (s *Service) SetDestinationRoutes(routes []forwarding.BoundForwarder) {
+	s.routesMu.Lock()
+	defer s.routesMu.Unlock()
+	s.routes = append([]forwarding.BoundForwarder(nil), routes...)
 }
 
-// ForwardingAdmitted reports whether this archive may forward at all (W-0021
-// slice 2B, archive.ForwardingAdmitted): only the adopted file, until the ADR
-// 0056 per-logbook bindings replace the gate with explicit routing.
-func (s *Service) ForwardingAdmitted() bool {
-	s.archiveMu.RLock()
-	defer s.archiveMu.RUnlock()
-	return archive.ForwardingAdmitted(s.archive)
+// DestinationRoutes returns a copy of the installed snapshot.
+func (s *Service) DestinationRoutes() []forwarding.BoundForwarder {
+	s.routesMu.RLock()
+	defer s.routesMu.RUnlock()
+	return append([]forwarding.BoundForwarder(nil), s.routes...)
 }
 
-// forwardersForEnqueue is the destination list every enqueue path iterates:
-// the configured forwarders in the adopted archive, none anywhere else. One
-// gate, so no path — live submit, edit, delete, stamp sync, manual backfill,
-// import — can enqueue in an archive whose credentials are not its own.
-func (s *Service) forwardersForEnqueue() []types.ForwarderConfig {
-	if !s.ForwardingAdmitted() {
-		return nil
+// routesFor is the destination list every enqueue path iterates for a QSO of
+// logbookID: the ENABLED bindings of that logbook, in snapshot order. A logbook
+// with no enabled binding queues nowhere — no gate, no error, `forwarded_to: []`.
+func (s *Service) routesFor(logbookID int64) []types.ForwarderConfig {
+	s.routesMu.RLock()
+	defer s.routesMu.RUnlock()
+	var out []types.ForwarderConfig
+	for _, r := range s.routes {
+		if r.LogbookID == logbookID && r.Config.Enabled {
+			out = append(out, r.Config)
+		}
 	}
-	return s.Config.Forwarders()
+	return out
 }
 
-// ForwardingGateReason is the operator-facing sentence for the gate, exposed
-// here so the HTTP layer needs no new import (ADR 0043 keeps internal/api's
-// import breadth frozen; the QSO service is already its port to forwarding).
-const ForwardingGateReason = archive.ForwardingGateReason
-
-// errForwardingGated is the refusal a caller that ASKED for forwarding gets in a
-// gated archive (manual backfill, import --forward): named, never a silent skip.
-func errForwardingGated() error {
-	return &SubmitError{Code: "forwarding_gated", Message: archive.ForwardingGateReason}
+// routeByName resolves a binding by its forwarder_name (case-insensitive) and
+// returns it only if it is enabled and its action_filter covers act — the
+// eligibility gate for a manual backfill, which also learns the logbook the
+// binding serves.
+func (s *Service) routeByName(name string, act action.Action) (forwarding.BoundForwarder, bool) {
+	name = strings.TrimSpace(name)
+	s.routesMu.RLock()
+	defer s.routesMu.RUnlock()
+	for _, r := range s.routes {
+		if strings.EqualFold(r.Config.Name, name) && shouldEnqueue(r.Config, act) {
+			return r, true
+		}
+	}
+	return forwarding.BoundForwarder{}, false
 }

@@ -545,6 +545,23 @@ func RegisterForwarderType(typeName, displayName string, actions []Action, creds
 	}
 }
 
+// DescriptorFor returns a registered type's editor descriptor (a deep copy),
+// or false for a type that never called RegisterForwarderType.
+func DescriptorFor(typeName string) (TypeDescriptor, bool) {
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	d, ok := descriptors[typeName]
+	if !ok {
+		return TypeDescriptor{}, false
+	}
+	return TypeDescriptor{
+		Type:             d.Type,
+		DisplayName:      d.DisplayName,
+		SupportedActions: append([]string(nil), d.SupportedActions...),
+		CredentialFields: append([]CredentialField(nil), d.CredentialFields...),
+	}, true
+}
+
 // LogbookScopedKeys returns, in declaration order, the credential keys a
 // registered type declares with ScopeLogbook — the fields a binding row owns
 // (ADR 0082). The seed copies exactly these from a legacy config entry; the

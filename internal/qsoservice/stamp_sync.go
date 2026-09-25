@@ -38,10 +38,26 @@ func (s *Service) EnqueueStampSync(ctx context.Context, qsoIDs []int64) (int, er
 	if len(qsoIDs) == 0 {
 		return 0, nil
 	}
-	var targets []types.ForwarderConfig
-	for _, fc := range s.forwardersForEnqueue() {
-		if forwarding.IsRowMirror(fc.Type) && shouldEnqueue(fc, action.Update) {
-			targets = append(targets, fc)
+	// Routing is per QSO (ADR 0082 part 6): each row goes to the enabled
+	// row-mirror bindings of ITS logbook, so the logbook of every id is read first.
+	logbooks, err := s.DB.LogbookIDsByQsoIDsWithContext(ctx, qsoIDs)
+	if err != nil {
+		return 0, errors.New(op).WithErr(err).WithMsg("resolve logbooks of the stamped rows")
+	}
+	type target struct {
+		qsoID int64
+		fc    types.ForwarderConfig
+	}
+	var targets []target
+	for _, qsoID := range qsoIDs {
+		lb, ok := logbooks[qsoID]
+		if !ok {
+			continue // the row is gone; nothing to mirror
+		}
+		for _, fc := range s.routesFor(lb) {
+			if forwarding.IsRowMirror(fc.Type) && shouldEnqueue(fc, action.Update) {
+				targets = append(targets, target{qsoID: qsoID, fc: fc})
+			}
 		}
 	}
 	if len(targets) == 0 {
@@ -55,14 +71,12 @@ func (s *Service) EnqueueStampSync(ctx context.Context, qsoIDs []int64) (int, er
 	defer cancel()
 
 	n := 0
-	for _, fc := range targets {
-		for _, qsoID := range qsoIDs {
-			if err = s.DB.InsertQsoUploadTx(ctx, tx, qsoID, action.Update, fc.Name, fc.Type, origin.StampSync); err != nil {
-				s.rollbackTx(tx, op)
-				return 0, errors.New(op).WithErr(err).WithMsg("insert mirror upload-queue row")
-			}
-			n++
+	for _, tg := range targets {
+		if err = s.DB.InsertQsoUploadTx(ctx, tx, tg.qsoID, action.Update, tg.fc.Name, tg.fc.Type, origin.StampSync); err != nil {
+			s.rollbackTx(tx, op)
+			return 0, errors.New(op).WithErr(err).WithMsg("insert mirror upload-queue row")
 		}
+		n++
 	}
 	if err = tx.Commit(); err != nil {
 		return 0, errors.New(op).WithErr(err).WithMsg("commit transaction")

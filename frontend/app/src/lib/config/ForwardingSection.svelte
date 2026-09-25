@@ -22,7 +22,6 @@
         clearForwarderQueue,
         retryForwarderQueue,
         type ForwarderQueueCount,
-        type ForwardingGate,
     } from '../api/forwarder-queues';
     import { toasts } from '../ui/toasts.svelte';
     import { navigate, logbookMissingFromUrl } from '../router.svelte';
@@ -35,21 +34,18 @@
     // A load failure just leaves a forwarder's count absent (the line hides) — a
     // transient count error must not block editing config.
     let queues = $state<Record<string, ForwarderQueueCount>>({});
-    // The interim forwarding gate (ADR 0071): set from the same GET. When gated,
-    // no new rows are queued; any rows from before the gate remain visible and
-    // clearable. The section says so once; Retry is disabled because the daemon
-    // refuses it.
-    let gate = $state<ForwardingGate>({ gated: false, reason: '' });
-    // The banner's lead is the daemon's reason, capitalised — not a fixed prefix
-    // in front of it, which read "Forwarding is off in this archive: forwarding
-    // is off in this archive until…" on the station (drill 2, 2026-09-24).
-    const gateLead = $derived(
-        gate.reason
-            ? gate.reason.charAt(0).toUpperCase() + gate.reason.slice(1)
-            : 'Forwarding is off in this archive'
-    );
     let clearing = $state<Record<string, boolean>>({});
     let retrying = $state<Record<string, boolean>>({});
+    // Queue entries keyed by a binding name that matches no station account —
+    // an additional logbook's `<type>.<uuid>` binding, or a binding whose
+    // account is gone. They must still be visible, clearable and retryable
+    // (ADR 0082 transition: binding-keyed queue counts), so they get their own
+    // cards below the destinations, named by the binding until 5E.
+    const extraQueues = $derived(
+        Object.values(queues)
+            .filter((q) => !forwardingState.drafts.some((d) => d.name === q.name))
+            .sort((a, b) => a.name.localeCompare(b.name))
+    );
 
     async function loadQueues(): Promise<void> {
         const out = await fetchForwarderQueues();
@@ -57,7 +53,6 @@
             const next: Record<string, ForwarderQueueCount> = {};
             for (const q of out.forwarders) next[q.name] = q;
             queues = next;
-            gate = out.gate;
         }
     }
 
@@ -72,7 +67,6 @@
             const next: Record<string, ForwarderQueueCount> = {};
             for (const q of out.forwarders) next[q.name] = q;
             queues = next;
-            gate = out.gate;
             return true;
         }
         const rest = { ...queues };
@@ -193,24 +187,19 @@
     {:else}
         <div class="space-y-8">
             <p class="text-sm text-muted">
-                Every supported destination is listed below. Enable the ones you use and enter their
-                credentials — forwarding then uploads each <em>new</em> QSO to the enabled destinations.
-                Credentials are stored on the daemon and never sent back to the browser, so leaving a
-                field blank keeps the saved value. QSOs logged while a destination was off aren't sent
-                automatically — upload those from the logbook's backfill.
+                Every supported destination is listed below with the station account it uses. Which
+                destinations are <em>on</em>, and the per-logbook accounts (a QRZ key, a ClubLog
+                account, the SM Cloud logbook), belong to the active archive and are not editable
+                here yet — they become editable when the bindings editor lands. Station account
+                values are stored on the daemon and never sent back to the browser, so leaving a
+                field blank keeps the saved value. QSOs logged while a destination was off aren't
+                sent automatically — upload those from the logbook's backfill.
             </p>
-
-            {#if gate.gated}
-                <div
-                    class="rounded-md border border-warning bg-surface-muted px-3 py-2 text-sm text-warning"
-                    role="status"
-                >
-                    {gateLead}. QSOs logged here are kept but not uploaded anywhere; no new queue
-                    rows are created. Any existing rows remain visible and can be cleared. The
-                    destinations below are the station's settings; none of them receives QSOs from
-                    this archive.
-                </div>
-            {/if}
+            <p class="text-sm text-muted" data-testid="bindings-note" role="note">
+                Destination bindings (on/off and per-logbook accounts) are owned by the active
+                archive and cannot be edited until a later release; the queue counts below are the
+                active archive's.
+            </p>
 
             {#if forwardingState.drafts.length === 0}
                 <p class="text-sm text-muted">
@@ -284,26 +273,10 @@
                              information: ADR 0039 seeds one entry per type, so
                              it always equals the type and just repeats the
                              service name in a second font. -->
-                            <!-- Same pill as the active-rig badge (RigsSection.svelte:119):
-                             identical geometry and type, green when on. Disabled keeps
-                             the shape and drops to neutral, because unlike a rig — where
-                             exactly one is active and the rest offer a button — every
-                             destination shows its state, so the row has to read at a
-                             glance either way. Text is lower-case; the uppercase is CSS,
-                             matching the rig pill. -->
-                            {#if !gate.gated}
-                                <!-- Hidden while gated (operator ruling 2026-09-24): in an
-                                     archive that forwards nothing there is no per-destination
-                                     truth for a pill to tell, and the banner states the one
-                                     applicable fact; queue counts and the card stay. -->
-                                <span
-                                    class="rounded border px-1.5 py-0.5 text-[10px] font-semibold tracking-wide uppercase {f.enabled
-                                        ? 'border-green-500/40 bg-green-50 text-green-700 dark:bg-green-500/10 dark:text-green-400'
-                                        : 'border-line bg-surface-muted text-muted'}"
-                                >
-                                    {f.enabled ? 'enabled' : 'disabled'}
-                                </span>
-                            {/if}
+                            <!-- No on/off pill (ADR 0082 transition): whether this
+                                 destination is on is a binding of the active archive,
+                                 which this tab cannot read or write yet; a pill drawn
+                                 from the station entry's flag would mislead. -->
                             <!-- Live queue depth (W-0005): waiting backlog, failed
                                  rows and the in-flight batch, read APART (W-0010
                                  outcome 9 — one terminal failure sat as "1 queued"
@@ -324,22 +297,8 @@
                     </summary>
 
                     <div class="border-t border-line px-3 py-3">
-                        {#if gate.gated}
-                            <!-- The card edits the STATION's settings (one config.json), which
-                                 this archive does not use: say so above the checkbox that
-                                 otherwise reads as "live here" (drill 2 screenshot). -->
-                            <p class="mb-2 text-xs text-muted" data-testid="gated-card-note">
-                                Station-wide settings — not in effect in this archive.
-                            </p>
-                        {/if}
-                        <label class="flex w-fit items-center gap-1.5 text-sm text-ink">
-                            <input
-                                type="checkbox"
-                                bind:checked={f.enabled}
-                                class="cursor-pointer"
-                            />
-                            Enabled
-                        </label>
+                        <!-- No Enabled checkbox (ADR 0082 transition): on/off is
+                             binding-owned; the daemon refuses a PUT that changes it. -->
 
                         <!-- Retry failed (W-0010 outcome 9): re-arm this
                              destination's failed uploads. Same placement rules
@@ -352,7 +311,7 @@
                             <div class="mt-3">
                                 <button
                                     class="btn"
-                                    disabled={q.failed === 0 || retrying[f.name] || gate.gated}
+                                    disabled={q.failed === 0 || retrying[f.name]}
                                     onclick={() => onRetryFailed(f.name, label)}
                                 >
                                     {retrying[f.name] ? 'Retrying…' : `Retry failed (${q.failed})`}
@@ -409,9 +368,14 @@
                                 credentials can't be edited here. Its settings are preserved on
                                 save.
                             </p>
+                        {:else if forwardingState.stationFields(f.type).length === 0}
+                            <p class="mt-3 text-sm text-muted" data-testid="no-station-fields">
+                                No station-level settings for this destination: its account is per
+                                logbook and lives in the active archive's bindings.
+                            </p>
                         {:else}
                             <div class="mt-4 space-y-3">
-                                {#each td.credential_fields as field (field.key)}
+                                {#each forwardingState.stationFields(f.type) as field (field.key)}
                                     {@const cleared = f.cleared.includes(field.key)}
                                     <label class="flex flex-col gap-1">
                                         <span class="text-sm font-medium text-ink"
@@ -490,6 +454,44 @@
                     </div>
                 </details>
             {/each}
+
+            {#if extraQueues.length > 0}
+                <div class="space-y-2" data-testid="extra-queues">
+                    <p class="text-sm text-muted">
+                        Other destination bindings in this archive — a further logbook's own
+                        binding, or one whose station account is missing — with their queues:
+                    </p>
+                    {#each extraQueues as q (q.name)}
+                        <div class="rounded-md border border-line px-3 py-2">
+                            <span class="font-mono text-sm text-ink">{q.name}</span>
+                            <span
+                                class="ml-2 text-[11px] text-muted"
+                                title="Uploads waiting to send · failed and not retried · currently being sent"
+                            >
+                                {q.waiting} waiting · {q.failed} failed · {q.in_flight} in flight
+                            </span>
+                            <div class="mt-2 flex gap-2">
+                                <button
+                                    class="btn"
+                                    disabled={q.failed === 0 || retrying[q.name]}
+                                    onclick={() => onRetryFailed(q.name, q.name)}
+                                >
+                                    {retrying[q.name] ? 'Retrying…' : `Retry failed (${q.failed})`}
+                                </button>
+                                <button
+                                    class="btn"
+                                    disabled={q.clearable === 0 || clearing[q.name]}
+                                    onclick={() => onClearQueue(q.name, q.name)}
+                                >
+                                    {clearing[q.name]
+                                        ? 'Clearing…'
+                                        : `Clear queue (${q.clearable})`}
+                                </button>
+                            </div>
+                        </div>
+                    {/each}
+                </div>
+            {/if}
 
             {#if forwardingState.dirty}
                 <div

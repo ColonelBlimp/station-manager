@@ -862,6 +862,104 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      COLUMN form fails with the duplicate-column error; the sequence carry removed → id 3, not
      10 (restores verified before any gate ran). Models unchanged (same final schema); gates green; drill
      (15 vs 5A HEAD at 13) rerun on the rebuilt binary: ROWS IDENTICAL.
+     **Built 2026-09-25, 5B commit (b) — routing, workers and the adopted archive's seed by
+     binding; the gate retired.** `forwarding.BindingConfig` / `ResolveBindings` /
+     `BoundForwarder` / `BindingFault` / `DescriptorFor`: a binding resolved against its station
+     account is one synthesized `ForwarderConfig` (account's station-scoped keys + binding's
+     logbook-scoped keys, account's transport/cadence/retry/endpoints/label/action_filter,
+     binding's name and enabled state; a non-object blob on either side, a type mismatch or a
+     type without a descriptor is refused by name; a binding with no account is a named fault,
+     logged, no worker, rows untouched). `sqlite.LogbookIDsByQsoIDsWithContext`,
+     `QueuedForwarderNamesWithContext`. `qsoservice.SetDestinationRoutes` / `DestinationRoutes`
+     / `routesFor(logbookID)` / `routeByName`: `submit`, `submit_batch`, `update`, `delete`,
+     `stamp_sync` (per QSO's logbook), backfill and delete-backfill (by binding name; a QSO of
+     another logbook lands in `skipped_other_logbook`), `import --forward` all route from the
+     snapshot; `SetArchive`, `ForwardingAdmitted`, `ForwardingGateReason`, `forwarding_gated`
+     and `internal/archive/gate.go` are gone. `cmd/smd/archive_bindings.go`: `destinationSeeds`
+     (refuses non-object blobs — a string or an array inside a valid config — and types without a
+     descriptor, by name, BEFORE the seed transaction: operator finding 2 on 5B(a)),
+     `seedDestinationBindings` (legacy seeds with `legacy_name`; managed/external mark only),
+     `resolveDestinationRoutes`, `routeConfigs`; `startQso` seeds then installs the snapshot;
+     `startWorkers` builds from the snapshot (discard for disabled bindings AND for queued names
+     no binding carries, re-arm and spawn per enabled binding), the boot-time SM Cloud reconciler
+     keys on the DEFAULT logbook's enabled smcloud binding (its synthesized config), `initHTTP`
+     hands the running names to the API (`Server.SetRunningForwarders`; the queues readout and
+     retry gate no longer state a gate). `smd import`: routes from the archive's bindings,
+     `--forward` names must be enabled bindings of the target logbook (`importForwardNames`,
+     extracted — observatory ratchet on `runImport`: cognitive 52→40, cyclomatic 39→35, MI
+     15→16); a file the daemon never started under this build has no bindings and the message
+     names that. SPA: the queues decoder, the tab's banner, gated pill hiding, card note and
+     retry gating removed with their tests; `uploads.ts` decodes `skipped_other_logbook`. Docs:
+     `api-endpoints.md` (backfill bucket and errors, queues readout, retry gating),
+     `install.md` and the manual's importing chapter (`--forward` names bindings). Test
+     fixtures mirror the seed: `seedLogbook` (qsoservice), `createTestLogbook` (api) and the
+     qrzcq acceptance harness install routes from the config entries; the pt5 import rollback
+     test routes by binding; a `stub2`/`stub3` registration keeps the station-shaped pin at one
+     entry per type. Tests: `routing_test.go` (no bindings → nothing queued, backfill refused
+     by name, disabled binding not a route; two logbooks fan out to their own bindings only,
+     backfill and delete-backfill skip the other logbook; stamp sync per logbook; import
+     --forward to an unbound name queues nothing), `binding_test.go`, `queue_routing_test.go`,
+     daemon seed/refusal/no-binding/managed tests, the API running-set test, the retargeted
+     import refusal. The 5A pins pass with their assertions unchanged (fixtures bound from
+     config). Proofs (non-empty mutations, restores verified): routing ignores the logbook →
+     two-logbook and stamp-sync tests fail; both enabled guards dropped together (routesFor and
+     shouldEnqueue) → a disabled binding queues; backfill's logbook check dropped → the other
+     logbook's QSO is enqueued; unknown-name discard dropped → rows survive in a bindingless
+     archive; non-object blob accepted → the refusal test fails. Gates: whole-tree vet + tests,
+     gofmt, observatory 0 regressions (baseline ratcheted), frontend lint/format/svelte-check/
+     vitest (1,831). Drill (new at 15 vs 5A HEAD at 13) on the final build: the scrubbed copy
+     seeds 4 bindings (all disabled, credentials scrubbed) and starts no worker; 15→13; ROWS
+     IDENTICAL. Behaviour note: the SM Cloud reconciler still follows the default logbook until
+     5F; a binding whose station account was removed keeps its rows and gets no worker.
+     **Operator review of the first (b) draft (2026-09-25), six findings, all fixed:** (1) P1
+     scope crossing — `BindingConfig` now takes ONLY the account's station-scoped keys and ONLY
+     the binding's logbook-scoped keys, per the descriptor (an undeclared key is dropped from
+     both); proof: an SM Cloud binding carrying `url` cannot replace the station's URL. (2) P1 an
+     unresolved binding lost its rows — the workers node judges the unknown-name discard against
+     the file's full binding-name set (`destinationSnapshot`), not the resolved routes; proof: a
+     binding whose account was removed keeps its pending row while an orphan name is discarded.
+     (3) P1 the tab was misleading — the transitional view the plan named is in: no on/off pill,
+     no Enabled checkbox, only station-scoped credential fields (a destination with none says
+     so), a note that bindings are owned by the active archive and not editable yet; the store
+     sends `enabled` exactly as stored and only station-scoped keys, and refuses a reset of a
+     logbook-scoped field; `PUT /v1/config` refuses a changed `enabled` (or one set on a new
+     entry) and any logbook-scoped key, blank or not, with `forwarder_field_binding_owned`
+     naming entry and field (`refuseBindingOwnedForwarderEdit`; `completeSetupDryRun` extracted
+     for the observatory — `handlePutConfig` ratcheted 64→55 / 40→37 / 16→18); thirteen config
+     PUT tests retargeted to station-scoped fields and unchanged `enabled`; new
+     `TestHandlePutConfig_RefusesBindingOwnedForwarderEdits`, U20, F10. (4) P2 queue endpoints
+     by binding names — `Server.SetForwarderQueueNames` (every binding in listing order,
+     resolved or not); the readout lists them and clear/retry accept only them (404 otherwise);
+     test `TestForwarderQueues_KeyedByBindingNames`. (5) P2 ordering — the listing orders by
+     `logbook_id, id` (insertion = config order), so Home's `forwarded_to` order is what
+     config.json had; test `TestListLogbookDestinations_KeepsInsertionOrder`; the drill's seed
+     line now reads clublog, qrz, smcloud, qrzcq (the station's order). (6) P2 the outcome logs
+     carry `skipped_other_logbook`. Proofs (non-empty mutations, restores verified): scope
+     switch admits binding keys → override test fails; discard judged against routes → kept-row
+     test fails; PUT guard neutralised → guard test fails; listing by destination → order test
+     fails. Gates rerun: whole-tree vet + tests, gofmt, observatory 0 regressions (ratcheted),
+     frontend lint/format/svelte-check/vitest (1,833); drill rerun on the final build: ROWS
+     IDENTICAL, 4 bindings seeded disabled on the scrubbed copy in config order.
+     **Second review round on (b) (2026-09-25), two findings, both fixed:** (1) P1 a DISABLED
+     binding whose account cannot resolve kept its rows because the disabled discard iterated
+     the resolved routes — the snapshot now carries every disabled binding's name, resolved or
+     not, and the workers node discards for all of them; an ENABLED unresolved binding still
+     keeps its rows. Test: two account-less bindings, `keep` enabled and `drop` disabled — keep's
+     two rows survive, drop's row is discarded. Proof: discard restricted to resolved names →
+     the test fails (restored). (2) P2 the tab rendered queue counts only for station-account
+     names — queue entries keyed by any other binding name (an additional logbook's
+     `<type>.<uuid>`, a binding whose account is gone) now get their own cards under the
+     destinations, named by the binding, with counts, Retry failed and Clear queue (U21). Gates
+     rerun: whole-tree vet + tests, gofmt, observatory 0 regressions, frontend gates (1,834);
+     drill rerun on the final build: ROWS IDENTICAL.
+     **Third review round on (b) (2026-09-25), two P2s, both fixed:** (1) the unresolved-binding
+     log claimed "rows are kept" for every fault while a disabled one's rows were then discarded —
+     the message now follows the binding's own state ("kept" when enabled, "discarded like any
+     disabled binding's" when disabled), the snapshot and resolver comments say the same, and the
+     disabled-unresolved test asserts the log lines match the fate of each binding. (2)
+     `api-endpoints.md` still called `{name}` a config name and the queue list "configured
+     forwarders in config order" in the backfill, queues, clear and retry entries — all four now
+     state the binding-name contract.
    - **5C — config v6 and the station account.** Legacy binding-owned keys (`name`, `enabled`,
      logbook-scoped credentials) known but deprecated at v6 (ADR 0075's shape). The version bump may
      retain those keys; only the adopted Home archive's committed seed marker permits the file-first

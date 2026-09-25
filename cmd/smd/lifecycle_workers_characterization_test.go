@@ -29,10 +29,11 @@ import (
 // re-armed, and that the SM Cloud entry gets its reconciler. The 5B seed must
 // reproduce all of it from bindings named identically.
 //
-// The three enabled stub-typed entries carry the station's NAMES: every rule
-// pinned here is keyed by forwarder_name, not by type. SM Cloud is the real
-// type (its reconciler is type-keyed); a loopback http URL builds without a
-// network and the reconciler's first run is two minutes out.
+// The enabled stub-typed entries carry the station's NAMES (qrz on the stub,
+// clublog on a second stub-backed type — one entry per type, ADR 0082 part 3):
+// every rule pinned here is keyed by forwarder_name. SM Cloud is the real type
+// (its reconciler is type-keyed); a loopback http URL builds without a network
+// and the reconciler's first run is two minutes out.
 
 // seedStationQueue migrates the log file ahead of orch.Start and plants three
 // rows: a credential-rejected `qrz` row, a pending `qrzcq` row and a pending
@@ -76,8 +77,8 @@ func seedStationQueue(t *testing.T, logDB string) (qrzQso, qrzcqQso, clublogQso 
 		}
 	}
 	seed(1, "qrz", stub.Type, "failed", "auth")
-	seed(2, "qrzcq", stub.Type, "pending", nil)
-	seed(3, "clublog", stub.Type, "pending", nil)
+	seed(2, "qrzcq", stub3Type, "pending", nil)
+	seed(3, "clublog", stub2Type, "pending", nil)
 	return 1, 2, 3
 }
 
@@ -113,15 +114,20 @@ func TestCharacterization_HomeStartsStationWorkerSet(t *testing.T) {
 	var logDB string
 	d, orch := newOrchestratedDaemon(t, func(c *config.Config) {
 		logDB = c.Datastore.Path
+		// The station's shape: setup complete, one default logbook (row 1, the
+		// seeded fixture's), so the legacy seed binds it.
+		c.SetupComplete = true
+		c.DefaultLogbookID = 1
+		c.LoggingStation.StationCallsign = "7Q5MLV"
 		cloud, err := json.Marshal(map[string]string{"url": "http://127.0.0.1:9", "token": "t"})
 		if err != nil {
 			t.Fatal(err)
 		}
 		c.Forwarders = []types.ForwarderConfig{
 			{Name: "qrz", Type: stub.Type, Enabled: true, Credentials: stubCreds(t), TickIntervalSec: 1, BatchSize: 1},
-			{Name: "clublog", Type: stub.Type, Enabled: true, Credentials: stubCreds(t), TickIntervalSec: 1, BatchSize: 1},
+			{Name: "clublog", Type: stub2Type, Enabled: true, Credentials: stubCreds(t), TickIntervalSec: 1, BatchSize: 1},
 			{Name: "smcloud", Type: smcloud.Type, Enabled: true, Credentials: cloud, TickIntervalSec: 1, BatchSize: 1},
-			{Name: "qrzcq", Type: stub.Type, Enabled: false, Credentials: stubCreds(t), TickIntervalSec: 1, BatchSize: 1},
+			{Name: "qrzcq", Type: stub3Type, Enabled: false, Credentials: stubCreds(t), TickIntervalSec: 1, BatchSize: 1},
 		}
 	})
 	qrzQso, qrzcqQso, clublogQso := seedStationQueue(t, logDB)

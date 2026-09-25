@@ -294,7 +294,7 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte, s
 	// invariant. If the destination's filter is ["insert"] (LoTW-style write-
 	// once), no row is inserted for it and the edit simply doesn't propagate
 	// there — which matches the operator's declared intent.
-	for _, fwd := range s.forwardersForEnqueue() {
+	for _, fwd := range s.routesFor(merged.LogbookID) {
 		if !shouldEnqueue(fwd, action.Update) {
 			continue
 		}

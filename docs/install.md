@@ -280,8 +280,11 @@ smctl import --forward qrz /path/to/log.adi          # one forwarder (by name)
 smctl import --forward qrz,clublog /path/to/log.adi  # several
 ```
 
-The names are your `forwarders[].name` values (matched case-insensitively); an
-unknown name fails the import up front. Without `--forward`, the summary reports
+The names are the target logbook's destination **bindings** in that archive
+(ADR 0082), matched case-insensitively: on the adopted Home archive they are your
+`forwarders[].name` values, seeded once at the daemon's first start; a new archive
+starts with none and a disabled binding is refused. An unknown or disabled name
+fails the import up front. Without `--forward`, the summary reports
 `uploads: none`. If you only later subscribe to a service (say ClubLog) and want
 your existing log sent then, that's a one-click bulk action in the logbook app —
 not something you redo the import for.

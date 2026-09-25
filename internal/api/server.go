@@ -33,12 +33,21 @@ type Server struct {
 	httpServer *http.Server
 	listener   net.Listener
 	cfg        *config.Service
-	// startupForwarders mirrors the enabled worker set built from cfg at daemon
+	// startupForwarders is the set of forwarder names with a running worker:
+	// derived from cfg at construction as a default, replaced by the daemon
+	// with the active archive's enabled bindings (SetRunningForwarders).
+	// It mirrors the enabled worker set built from cfg at daemon
 	// startup. PUT /v1/config updates cfg immediately; workers change on restart.
 	startupForwarders map[string]struct{}
-	qso               *qsoservice.Service
-	db                *sqlite.Service
-	logger            *logging.Service
+	// queueNames is the ordered set of names the queue endpoints know: the
+	// active archive's bindings (ADR 0082), resolved or not, in listing order;
+	// derived from cfg at construction as a default, replaced by the daemon
+	// (SetForwarderQueueNames). The readout lists them; clear and retry accept
+	// only them.
+	queueNames []string
+	qso        *qsoservice.Service
+	db         *sqlite.Service
+	logger     *logging.Service
 	// logHealth reports whether the durable log writer is currently failing, for
 	// /v1/healthz. Wired from logger (the real implementer) in New; a test can
 	// override it to drive the degraded branch without a failing file. Nil is
@@ -130,7 +139,9 @@ type Server struct {
 // protocol) and the forwarder worker set; config saves do not restart workers.
 func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *qsoservice.Service, db *sqlite.Service, logger *logging.Service, hub *events.Hub, enrich *lookup.Orchestrator, mailer *email.Service, br *bridge.Service, ft8Svc *ft8.Service) *Server {
 	startupForwarders := make(map[string]struct{})
+	queueNames := make([]string, 0, len(cfg.Forwarders))
 	for _, f := range cfg.Forwarders {
+		queueNames = append(queueNames, f.Name)
 		if f.Enabled {
 			startupForwarders[f.Name] = struct{}{}
 		}
@@ -138,6 +149,7 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 	s := &Server{
 		cfg:               cfgSvc,
 		startupForwarders: startupForwarders,
+		queueNames:        queueNames,
 		qso:               qso,
 		db:                db,
 		logger:            logger,
@@ -682,4 +694,24 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		s.logger.InfoWith().Msg("HTTP server shutdown complete")
 	}
 	return err
+}
+
+// SetRunningForwarders replaces the running-worker set with the names of the
+// active archive's enabled bindings (ADR 0082): the workers node builds one
+// worker per enabled binding, so a queue retry is admitted only for one of
+// these names. Called by cmd/smd after the workers node has its snapshot.
+func (s *Server) SetRunningForwarders(names []string) {
+	set := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		set[n] = struct{}{}
+	}
+	s.startupForwarders = set
+}
+
+// SetForwarderQueueNames replaces the names the queue endpoints know with the
+// active archive's binding names in listing order (ADR 0082): every binding,
+// enabled or not, resolved or not — a binding that could not be resolved still
+// has rows to show and to clear. Called by cmd/smd after the seed.
+func (s *Server) SetForwarderQueueNames(names []string) {
+	s.queueNames = append([]string(nil), names...)
 }

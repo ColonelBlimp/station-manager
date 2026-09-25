@@ -11,6 +11,7 @@ import {
     fetchForwarders,
     fetchForwarderTypes,
     saveForwarders,
+    type CredentialField,
     type ForwarderEntry,
     type ForwarderPayload,
     type ForwarderType,
@@ -167,9 +168,30 @@ class ForwardingState {
         );
     }
 
-    /** True when this field may be reset to its default (declared in Go). */
+    /**
+     * True when this field may be reset to its default (declared in Go) AND is
+     * station-scoped: a logbook-scoped field is owned by the active archive's
+     * bindings (ADR 0082) and cannot be reset from here.
+     */
     clearable(type: string, key: string): boolean {
-        return this.typeFor(type)?.credential_fields.find((f) => f.key === key)?.clearable === true;
+        const f = this.typeFor(type)?.credential_fields.find((f) => f.key === key);
+        return f?.clearable === true && f.scope === 'station';
+    }
+
+    /**
+     * The credential fields this tab may edit: the type's STATION-scoped ones
+     * (ADR 0082). Logbook-scoped fields — a QRZ key, a ClubLog account, the SM
+     * Cloud logbook name — belong to the active archive's bindings and are not
+     * rendered; the daemon refuses a PUT that carries them.
+     */
+    stationFields(type: string): CredentialField[] {
+        return (this.typeFor(type)?.credential_fields ?? []).filter((f) => f.scope === 'station');
+    }
+
+    /** The stored enabled state of a destination, as the daemon last reported it. */
+    storedEnabled(name: string): boolean | undefined {
+        return (JSON.parse(this.#pristineEntries) as ForwarderEntry[]).find((e) => e.name === name)
+            ?.enabled;
     }
 
     async load(): Promise<void> {
@@ -315,9 +337,13 @@ class ForwardingState {
      */
     buildPayload(): ForwarderPayload[] {
         return this.drafts.map((d) => {
+            // ADR 0082 transition: only station-scoped keys ride the wire, and
+            // `enabled` is sent exactly as stored — both are binding-owned now
+            // and the daemon refuses a PUT that changes them (F10).
+            const station = new Set(this.stationFields(d.type).map((f) => f.key));
             const creds: Record<string, string> = {};
             for (const [k, v] of Object.entries(d.credentials)) {
-                if (v.trim() !== '') creds[k] = v;
+                if (v.trim() !== '' && station.has(k)) creds[k] = v;
             }
             for (const k of d.cleared) {
                 if (this.clearable(d.type, k)) creds[k] = '';
@@ -325,7 +351,7 @@ class ForwardingState {
             const out: ForwarderPayload = {
                 name: d.name,
                 type: d.type,
-                enabled: d.enabled,
+                enabled: this.storedEnabled(d.name) ?? d.enabled,
                 action_filter: d.action_filter,
             };
             if (Object.keys(creds).length > 0) out.credentials = creds;

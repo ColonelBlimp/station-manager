@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/svelte';
+import { render, screen, fireEvent, within } from '@testing-library/svelte';
 import ForwardingSection from './ForwardingSection.svelte';
 import { forwardingState } from './forwarding.svelte';
 import { toastsState, _resetForTests as resetToasts } from '../ui/toasts.svelte';
@@ -50,6 +50,17 @@ const TYPES = {
             supported_actions: ['insert'],
             credential_fields: [
                 { key: 'url', label: 'URL', kind: 'text', scope: 'station' },
+                { key: 'token', label: 'Bearer token', kind: 'password', scope: 'station' },
+                // A station-scoped clearable field (fixture): the one reset control.
+                {
+                    key: 'region',
+                    label: 'Region',
+                    kind: 'text',
+                    clearable: true,
+                    help: 'Defaults to "eu".',
+                    scope: 'station',
+                },
+                // Logbook-scoped AND clearable: owned by the bindings, never rendered.
                 {
                     key: 'logbook',
                     label: 'Cloud logbook',
@@ -66,7 +77,12 @@ const TYPES = {
 const CONFIG = {
     forwarders: [
         { name: 'qrz', type: 'qrz', enabled: true, credentials_set: ['api_key'] },
-        { name: 'smcloud', type: 'smcloud', enabled: true, credentials_set: ['url', 'logbook'] },
+        {
+            name: 'smcloud',
+            type: 'smcloud',
+            enabled: true,
+            credentials_set: ['url', 'token', 'logbook'],
+        },
         { name: 'mystery', type: 'mystery', enabled: false, credentials_set: ['token'] },
     ],
 };
@@ -112,7 +128,6 @@ function mockForwardingWithQueues(
         retryResult?: { status: number; body: unknown };
         refreshFails?: boolean;
         deferRefresh?: boolean;
-        gated?: boolean;
     } = {}
 ) {
     const clearResult = opts.clearResult ?? { status: 200, body: { discarded: 0 } };
@@ -128,10 +143,6 @@ function mockForwardingWithQueues(
             headers: { 'Content-Type': 'application/json' },
         });
     const queueBody = () => ({
-        forwarding_gated: opts.gated === true,
-        gate_reason: opts.gated
-            ? 'forwarding is off in this archive until per-logbook bindings exist'
-            : undefined,
         // Clear zeroes ONLY clearable (waiting + failed); in_flight is preserved.
         // A retry moves failed into waiting.
         forwarders: initialQueues.map((q) => {
@@ -216,8 +227,8 @@ describe('ForwardingSection', () => {
         const resets = screen.queryAllByRole('button', { name: /reset to default/i });
         expect(resets).toHaveLength(1);
 
-        // …and it belongs to the clearable field, not merely to the same card.
-        const label = screen.getByText('Cloud logbook').closest('label');
+        // …and it belongs to the clearable STATION field, not merely to the same card.
+        const label = screen.getByText('Region').closest('label');
         expect(label?.textContent).toContain('Reset to default');
         expect(screen.getByText('URL').closest('label')?.textContent).not.toContain(
             'Reset to default'
@@ -233,12 +244,12 @@ describe('ForwardingSection', () => {
 
         expect(screen.getByText(/will reset to the default on save/i)).toBeTruthy();
         const smcloud = forwardingState.drafts.find((d) => d.name === 'smcloud');
-        expect(smcloud?.cleared).toContain('logbook');
+        expect(smcloud?.cleared).toContain('region');
 
         await fireEvent.click(screen.getByRole('button', { name: /undo/i }));
         expect(screen.queryByText(/will reset to the default on save/i)).toBeNull();
         expect(forwardingState.drafts.find((d) => d.name === 'smcloud')?.cleared).not.toContain(
-            'logbook'
+            'region'
         );
     });
 
@@ -247,7 +258,7 @@ describe('ForwardingSection', () => {
     // blank box is what preserves the stored value.
     it('U4: a stored credential is advertised as set, with keep-on-blank stated', async () => {
         await renderLoaded();
-        const apiKey = screen.getByText('API key').closest('label');
+        const apiKey = screen.getByText('Bearer token').closest('label');
         const input = apiKey?.querySelector('input');
         expect(input?.getAttribute('placeholder')).toMatch(/set — leave blank to keep/);
         // Masked, and never pre-filled with anything resembling the secret.
@@ -292,7 +303,7 @@ describe('ForwardingSection', () => {
     // list is fixed and grows with every new online service, so the page must
     // not grow with it. Collapsing is only safe if the closed row still says
     // which service it is and whether it is on.
-    it('U6: each destination is a collapsed disclosure showing name and state', async () => {
+    it('U6: each destination is a collapsed disclosure showing its name', async () => {
         await renderLoaded();
         const cards = document.querySelectorAll('details');
         expect(cards).toHaveLength(3);
@@ -303,15 +314,9 @@ describe('ForwardingSection', () => {
         // NOT the raw `name` key: with one entry per type it always equals the
         // type, so it added a second rendering of the same word.
         expect(qrzSummary?.textContent).not.toMatch(/\bqrz\b/);
-        // The pill's text is lower-case and CSS upper-cases it, matching the
-        // active-rig badge — so assert the DOM text, not the rendered casing.
-        // Both states are asserted: a pill that read the same either way would
-        // tell the operator nothing while still containing the word.
-        expect(qrzSummary?.textContent).toContain('enabled');
-        const mysterySummary = screen
-            .getByText('mystery', { selector: 'span.font-semibold' })
-            .closest('summary');
-        expect(mysterySummary?.textContent).toContain('disabled');
+        // No on/off pill (ADR 0082 transition): the state is a binding of the
+        // active archive this tab cannot read yet, so nothing claims it.
+        expect(qrzSummary?.textContent).not.toMatch(/\b(enabled|disabled)\b/);
         expect(
             screen.getByText('mystery', { selector: 'span.font-semibold' }).closest('summary')
                 ?.textContent
@@ -326,7 +331,9 @@ describe('ForwardingSection', () => {
         await renderLoaded();
         await fireEvent.click(screen.getByRole('button', { name: /reset to default/i }));
 
-        const smcloudSummary = screen.getByText(/SM Cloud/).closest('summary')!;
+        const smcloudSummary = screen
+            .getByText('SM Cloud', { selector: 'span.font-semibold' })
+            .closest('summary')!;
         expect(smcloudSummary.textContent).toContain('*');
         const card = smcloudSummary.parentElement as HTMLDetailsElement;
         expect(card.open).toBe(true);
@@ -468,33 +475,7 @@ describe('ForwardingSection', () => {
         expect(takeLogbookMissingFrom()).toBe('qrz');
     });
 
-    // U19 — THE INTERIM FORWARDING GATE (ADR 0071): in a non-adopted archive the
-    // section says so once, the zero counts read as the rule, and Retry stays
-    // disabled even with failed rows (the daemon refuses it anyway).
-    it('U19: a gated archive shows the reason once and disables retry', async () => {
-        mockForwardingWithQueues(
-            [{ name: 'qrz', waiting: 0, failed: 2, clearable: 2, in_flight: 0 }],
-            { gated: true }
-        );
-        render(ForwardingSection);
-        const status = await vi.waitFor(() => screen.getByRole('status'));
-        expect(status.textContent).toMatch(/forwarding is off in this archive/i);
-        expect(status.textContent).toMatch(/per-logbook bindings/i);
-        // The daemon's reason is the lead, said ONCE (drill 2: a fixed prefix
-        // doubled it on the station).
-        expect(status.textContent?.match(/forwarding is off in this archive/gi)).toHaveLength(1);
-        expect(status.textContent).toMatch(/^\s*Forwarding is off/);
-        // While gated there is NO pill on any row (operator ruling 2026-09-24): the
-        // banner carries the one fact; the queue counts and the card note stay.
-        expect(screen.queryByText('enabled')).toBeNull();
-        expect(screen.queryByText('disabled')).toBeNull();
-        expect(screen.queryByText('not forwarding here')).toBeNull();
-        expect(screen.getByText('0 waiting · 2 failed · 0 in flight')).toBeInTheDocument();
-        expect(screen.getAllByTestId('gated-card-note').length).toBeGreaterThan(0);
-        expect(screen.getByRole('button', { name: /retry failed \(2\)/i })).toBeDisabled();
-    });
-
-    it('U19b: the adopted archive shows no gate notice', async () => {
+    it('U19: no gate notice — an archive forwards what its bindings say (ADR 0082)', async () => {
         mockForwardingWithQueues([
             { name: 'qrz', waiting: 1, failed: 0, clearable: 1, in_flight: 0 },
         ]);
@@ -503,6 +484,39 @@ describe('ForwardingSection', () => {
             expect(screen.getByText('1 waiting · 0 failed · 0 in flight')).toBeInTheDocument()
         );
         expect(screen.queryByRole('status')).toBeNull();
+    });
+
+    // U20 — THE TRANSITIONAL VIEW (ADR 0082, 5B): no Enabled checkbox, no
+    // logbook-scoped credential field (the QRZ key, the SM Cloud logbook), a
+    // note that bindings are not editable yet, station fields still editable.
+    it('U20: binding-owned controls are absent and the note says why', async () => {
+        await renderLoaded();
+        expect(screen.getByTestId('bindings-note')).toBeInTheDocument();
+        expect(screen.queryByLabelText(/^enabled$/i)).toBeNull();
+        expect(screen.queryByText('API key')).toBeNull();
+        expect(screen.queryByText('Cloud logbook')).toBeNull();
+        expect(screen.getByText('URL')).toBeInTheDocument();
+        expect(screen.getByText('Bearer token')).toBeInTheDocument();
+        // qrz has only logbook-scoped fields: it says so instead of showing nothing.
+        expect(screen.getAllByTestId('no-station-fields').length).toBeGreaterThan(0);
+    });
+
+    // U21 — BINDING-KEYED QUEUES THAT MATCH NO STATION ACCOUNT ARE STILL SHOWN
+    // (operator review of 5B(b), second round, P2): an additional logbook's
+    // `<type>.<uuid>` binding, or one whose account is gone, gets its counts and
+    // its Retry / Clear controls under the destinations.
+    it('U21: a queue keyed by a binding with no station account is listed with its controls', async () => {
+        const extra = 'qrz.01920000-0000-7000-8000-00000000000b';
+        mockForwardingWithQueues([
+            { name: 'qrz', waiting: 0, failed: 0, clearable: 0, in_flight: 0 },
+            { name: extra, waiting: 1, failed: 2, clearable: 3, in_flight: 0 },
+        ]);
+        render(ForwardingSection);
+        const section = await vi.waitFor(() => screen.getByTestId('extra-queues'));
+        expect(section.textContent).toContain(extra);
+        expect(section.textContent).toContain('1 waiting · 2 failed · 0 in flight');
+        expect(within(section).getByRole('button', { name: /retry failed \(2\)/i })).toBeEnabled();
+        expect(within(section).getByRole('button', { name: /clear queue \(3\)/i })).toBeEnabled();
     });
 
     it('U18b: no gap link when nothing has failed', async () => {

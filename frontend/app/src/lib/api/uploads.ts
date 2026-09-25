@@ -27,6 +27,8 @@ export interface EnqueueResult {
      *  queued live uploads only (ClubLog — realtime.php forbids catch-up
      *  batches); these need an ADIF export uploaded on the destination's site. */
     skipped_no_history?: string[];
+    /** QSOs of another logbook than the one the named binding serves (ADR 0082). */
+    skipped_other_logbook?: string[];
 }
 
 export type EnqueueOutcome =
@@ -92,6 +94,9 @@ export async function enqueueUploads(
             not_found: Array.isArray(body.not_found) ? (body.not_found as string[]) : undefined,
             skipped_no_history: Array.isArray(body.skipped_no_history)
                 ? (body.skipped_no_history as string[])
+                : undefined,
+            skipped_other_logbook: Array.isArray(body.skipped_other_logbook)
+                ? (body.skipped_other_logbook as string[])
                 : undefined,
         },
     };

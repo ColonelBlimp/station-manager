@@ -192,3 +192,30 @@ func TestSeedLogbookDestinations_ExistingBindingKeepsItsNameAndTheRowsFollowIt(t
 		t.Fatal("a queue row carries a computed name no binding has")
 	}
 }
+
+// Operator review of 5B(b), P2: the listing keeps the seed's insertion order —
+// config order — so the adopted archive's fan-out order is what config.json had.
+func TestListLogbookDestinations_KeepsInsertionOrder(t *testing.T) {
+	svc := testService(t)
+	seedTwoLogbookFile(t, svc, 1, lbUUID2)
+	seeds := []DestinationSeed{
+		{Destination: "clublog", LegacyName: "clublog", Enabled: true},
+		{Destination: "qrz", LegacyName: "qrz", Enabled: true},
+		{Destination: "smcloud", LegacyName: "smcloud", Enabled: true},
+		{Destination: "qrzcq", LegacyName: "qrzcq", Enabled: false},
+	}
+	if _, err := svc.SeedLogbookDestinationsWithContext(context.Background(), seeds); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := svc.ListLogbookDestinationsWithContext(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, r := range rows {
+		got = append(got, fmt.Sprintf("%d:%s", r.LogbookID, r.Destination))
+	}
+	if want := "[1:clublog 1:qrz 1:smcloud 1:qrzcq 2:clublog 2:qrz 2:smcloud 2:qrzcq]"; fmt.Sprint(got) != want {
+		t.Fatalf("order = %v\nwant %s", got, want)
+	}
+}

@@ -39,6 +39,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/events"
 	"github.com/ColonelBlimp/station-manager/internal/evidence"
+	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding/smcloud"
 	"github.com/ColonelBlimp/station-manager/internal/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/inhibit"
@@ -101,6 +102,15 @@ type daemon struct {
 	mailer     *email.Service
 	server     *api.Server
 	smcloudRec *smcloud.Reconciler
+	// routes is the start-time snapshot of the active archive's bindings
+	// resolved against their station accounts (ADR 0082): the QSO service's
+	// routing set and the workers node's worker set are this one slice.
+	routes []forwarding.BoundForwarder
+	// bindingNames is every binding name the active archive holds, resolved or
+	// not: the set the workers node's unknown-name discard is judged against.
+	bindingNames  map[string]struct{}
+	queueNames    []string
+	disabledNames []string
 
 	// Worker context + drains (owned by run(); the fleet binds long-lived work to workerCtx).
 	workerCtx    context.Context
@@ -320,15 +330,22 @@ func (d *daemon) startQso(context.Context) error {
 		return errors.New(op).WithErr(err).WithMsg("adopt archive")
 	}
 	d.cfg = d.cfgSvc.Snapshot()
-	// The file's destination bindings are decided once (ADR 0082): a managed or
-	// external archive records none (the adopted archive's seed lands with
-	// routing by binding).
-	if err := seedDestinationBindings(context.Background(), d.db, d.paths, d.logger); err != nil {
+	// The file's destination bindings are decided once (ADR 0082): the adopted
+	// archive seeds from the legacy forwarder entries, any other records none.
+	if err := seedDestinationBindings(context.Background(), d.db, d.cfg, d.paths, d.logger); err != nil {
 		return errors.New(op).WithErr(err)
 	}
-	// The QSO service learns which archive it writes: the interim forwarding
-	// gate (archive.ForwardingAdmitted) keys on it.
-	d.qso.SetArchive(d.paths.Entry)
+	// Then the one routing snapshot: every enqueue site routes a QSO by its
+	// logbook from it, and the workers node builds the same set.
+	snap, err := resolveDestinationRoutes(context.Background(), d.db, d.cfg, d.logger)
+	if err != nil {
+		return errors.New(op).WithErr(err)
+	}
+	d.routes = snap.routes
+	d.bindingNames = snap.bindingNames
+	d.queueNames = snap.orderedNames
+	d.disabledNames = snap.disabledNames
+	d.qso.SetDestinationRoutes(snap.routes)
 	// Leftovers of an interrupted archive creation are named at every start;
 	// they are never archives and the operator removes them (ADR 0071).
 	d.creatingArtefacts = archive.DiagnoseCreatingArtefacts(d.cfg, d.logger)
@@ -663,28 +680,45 @@ func (d *daemon) startWorkers(ctx context.Context) error {
 	if n > 0 {
 		d.logger.InfoWith().Int64("reset", n).Msg("forwarder: orphaned in_progress rows reset to pending")
 	}
-	// Interim forwarding gate (W-0021 slice 2B): in an archive other than the
-	// adopted one nothing is enqueued, so no worker, no re-arm and no SM Cloud
-	// reconciler — the reconciler would push this archive's rows into the home
-	// archive's cloud logbook. One log line says so.
-	if !archive.ForwardingAdmitted(d.paths.Entry) {
-		d.logger.InfoWith().Str("archive_id", d.paths.Entry.ID).Str("ownership", string(d.paths.Entry.Ownership)).
-			Msg("forwarder: " + archive.ForwardingGateReason + "; no workers or reconciler started")
-		return nil
+	// The worker set is the active archive's bindings (ADR 0082 part 5): a
+	// disabled binding, and any queued name no binding carries, has no worker —
+	// its undrained rows are discarded loudly (ADR 0039's rule, per binding);
+	// `uploaded` rows keep their upstream ids. A new archive has no bindings and
+	// so starts no worker, no re-arm and no reconciler.
+	fwds := routeConfigs(d.routes)
+	bound := d.bindingNames // every binding the file holds, resolved or not
+	namesCtx, namesCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	queued, qerr := d.db.QueuedForwarderNamesWithContext(namesCtx)
+	namesCancel()
+	if qerr != nil {
+		return errors.New(op).WithErr(qerr).WithMsg("list queued forwarder names")
 	}
-	for _, fc := range d.cfg.Forwarders {
-		if fc.Enabled {
-			continue
-		}
+	discardFor := func(name, why string) error {
 		discardCtx, discardCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		discarded, derr := d.db.DiscardQueuedUploadsForForwarderWithContext(discardCtx, fc.Name)
+		discarded, derr := d.db.DiscardQueuedUploadsForForwarderWithContext(discardCtx, name)
 		discardCancel()
 		if derr != nil {
-			return errors.New(op).WithErr(derr).WithMsgf("discard queued uploads for disabled forwarder %q", fc.Name)
+			return errors.New(op).WithErr(derr).WithMsgf("discard queued uploads for %s %q", why, name)
 		}
 		if discarded > 0 {
-			d.logger.WarnWith().Str("forwarder", fc.Name).Int64("discarded", discarded).
-				Msg("forwarder disabled; discarded queued uploads (re-upload via the logbook app)")
+			d.logger.WarnWith().Str("forwarder", name).Int64("discarded", discarded).
+				Msg("forwarder: " + why + "; discarded queued uploads (re-upload via the logbook app)")
+		}
+		return nil
+	}
+	for _, name := range queued {
+		if _, ok := bound[name]; !ok {
+			if err := discardFor(name, "no binding of this name in the active archive"); err != nil {
+				return err
+			}
+		}
+	}
+	// Every disabled binding, whether or not its station account resolves: an
+	// enabled binding without an account keeps its rows for the day the account
+	// is fixed, a disabled one has chosen not to upload (ADR 0039, per binding).
+	for _, name := range d.disabledNames {
+		if err := discardFor(name, "binding disabled"); err != nil {
+			return err
 		}
 	}
 
@@ -693,7 +727,7 @@ func (d *daemon) startWorkers(ctx context.Context) error {
 	// start loaded. Done here — after the orphan sweep and disabled discard,
 	// before any worker can claim — and never on a config save, since the
 	// running worker still holds the old credential until the restart.
-	for _, fc := range d.cfg.Forwarders {
+	for _, fc := range fwds {
 		if !fc.Enabled {
 			continue
 		}
@@ -709,7 +743,7 @@ func (d *daemon) startWorkers(ctx context.Context) error {
 		}
 	}
 
-	if err := spawnForwarderWorkers(fctx, &d.workerWG, d.cfg.Forwarders, d.db, d.qso, d.logger, d.hub); err != nil {
+	if err := spawnForwarderWorkers(fctx, &d.workerWG, fwds, d.db, d.qso, d.logger, d.hub); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("spawn forwarder workers")
 	}
 
@@ -738,8 +772,12 @@ func (d *daemon) workerPrepareStop() {
 }
 
 func (d *daemon) startReconciler(ctx context.Context) {
-	for _, fc := range d.cfg.Forwarders {
-		if !fc.Enabled || fc.Type != smcloud.Type {
+	// Until 5F the reconciler stays the boot-time default-logbook one, now keyed
+	// on the DEFAULT LOGBOOK's enabled SM Cloud binding (its synthesized config
+	// carries the station's URL and token and the binding's cloud logbook name).
+	for _, r := range d.routes {
+		fc := r.Config
+		if !fc.Enabled || fc.Type != smcloud.Type || r.LogbookID != d.cfg.DefaultLogbookID {
 			continue
 		}
 		if d.cfg.DefaultLogbookID < 1 {
@@ -769,6 +807,14 @@ func (d *daemon) startReconciler(ctx context.Context) {
 func (d *daemon) initHTTP() error {
 	d.server = api.New(d.cfg, buildinfo.Version, d.cfgSvc, d.qso, d.db, d.logger, d.hub, d.enrich, d.mailer, d.bridge, d.ft8)
 	d.server.SetEvidence(d.evidence)
+	running := make([]string, 0, len(d.routes))
+	for _, r := range d.routes {
+		if r.Config.Enabled {
+			running = append(running, r.Config.Name)
+		}
+	}
+	d.server.SetRunningForwarders(running)
+	d.server.SetForwarderQueueNames(d.queueNames)
 	if d.smcloudRec != nil {
 		d.server.SetSmcloudReconcile(func(ctx context.Context) (any, error) {
 			return d.smcloudRec.RunOnce(ctx, smcloud.TriggerManual)

@@ -10,7 +10,6 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/status"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
-	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
 
@@ -30,6 +29,10 @@ type EnqueueResult struct {
 	// now would be catch-up backfill, which belongs to an ADIF upload on the
 	// destination's website.
 	SkippedNoHistory []string `json:"skipped_no_history,omitempty"`
+	// SkippedOtherLogbook carries UUIDs of QSOs that belong to a logbook other
+	// than the one the named binding serves (ADR 0082): a binding uploads its
+	// own logbook's QSOs to its own account, never another logbook's.
+	SkippedOtherLogbook []string `json:"skipped_other_logbook,omitempty"`
 }
 
 // EnqueueUploads queues already-stored QSOs (by UUID) for upload to one ENABLED
@@ -65,16 +68,14 @@ type EnqueueResult struct {
 func (s *Service) EnqueueUploads(ctx context.Context, forwarderName string, uuids []string, force bool, org origin.Origin) (EnqueueResult, error) {
 	const op errors.Op = "qsoservice.EnqueueUploads"
 
-	if !s.ForwardingAdmitted() {
-		return EnqueueResult{}, errForwardingGated()
-	}
-	fwd, ok := s.findEnabledInsertForwarder(forwarderName)
+	route, ok := s.routeByName(forwarderName, action.Insert)
 	if !ok {
 		return EnqueueResult{}, &SubmitError{
 			Code:    "forwarder_unavailable",
-			Message: "forwarder is unknown, disabled, or does not forward new QSOs",
+			Message: "no enabled binding of that name forwards new QSOs in this archive",
 		}
 	}
+	fwd := route.Config
 
 	// Some upstreams forbid catch-up batches on the realtime endpoint the
 	// forwarder uses (ClubLog's realtime.php rule — batch catch-up there gets
@@ -143,6 +144,11 @@ func (s *Service) EnqueueUploads(ctx context.Context, forwarderName string, uuid
 				continue
 			}
 			return EnqueueResult{}, errors.New(op).WithErr(err).WithMsg("fetch QSO by uuid")
+		}
+
+		if qso.LogbookID != route.LogbookID {
+			res.SkippedOtherLogbook = append(res.SkippedOtherLogbook, uuid)
+			continue
 		}
 
 		if !force && hasStamp {
@@ -236,36 +242,19 @@ func (s *Service) logEnqueueResult(fwdName, fwdType string, requested int, force
 		Int("skipped_deleted", len(res.SkippedDeleted)).
 		Int("not_found", len(res.NotFound)).
 		Int("skipped_no_history", len(res.SkippedNoHistory)).
+		Int("skipped_other_logbook", len(res.SkippedOtherLogbook)).
 		Bool("force", force).
 		Msg("upload backfill result")
-}
-
-// findEnabledInsertForwarder resolves a forwarder by name (case-insensitive) and
-// returns it only if it is enabled and forwards inserts — the eligibility gate
-// for a manual backfill (mirrors the submit-path shouldEnqueue check).
-func (s *Service) findEnabledInsertForwarder(name string) (types.ForwarderConfig, bool) {
-	return s.findEnabledForwarderFor(name, action.Insert)
-}
-
-// findEnabledForwarderFor resolves a forwarder by name (case-insensitive) and
-// returns it only if it is enabled and its action_filter covers act.
-func (s *Service) findEnabledForwarderFor(name string, act action.Action) (types.ForwarderConfig, bool) {
-	name = strings.TrimSpace(name)
-	for _, fc := range s.forwardersForEnqueue() {
-		if strings.EqualFold(fc.Name, name) && shouldEnqueue(fc, act) {
-			return fc, true
-		}
-	}
-	return types.ForwarderConfig{}, false
 }
 
 // EnqueueDeleteResult summarises an EnqueueDeleteUploads call. SkippedLive
 // carries UUIDs that turned out NOT to be soft-deleted — a delete row for a
 // live QSO would wrongly remove it upstream, so they are refused per-row.
 type EnqueueDeleteResult struct {
-	Enqueued    int      `json:"enqueued"`
-	SkippedLive []string `json:"skipped_live,omitempty"`
-	NotFound    []string `json:"not_found,omitempty"`
+	Enqueued            int      `json:"enqueued"`
+	SkippedLive         []string `json:"skipped_live,omitempty"`
+	NotFound            []string `json:"not_found,omitempty"`
+	SkippedOtherLogbook []string `json:"skipped_other_logbook,omitempty"` // see EnqueueResult
 }
 
 // EnqueueDeleteUploads queues delete-action upload rows for already
@@ -279,16 +268,14 @@ type EnqueueDeleteResult struct {
 func (s *Service) EnqueueDeleteUploads(ctx context.Context, forwarderName string, uuids []string, org origin.Origin) (EnqueueDeleteResult, error) {
 	const op errors.Op = "qsoservice.EnqueueDeleteUploads"
 
-	if !s.ForwardingAdmitted() {
-		return EnqueueDeleteResult{}, errForwardingGated()
-	}
-	fwd, ok := s.findEnabledForwarderFor(forwarderName, action.Delete)
+	route, ok := s.routeByName(forwarderName, action.Delete)
 	if !ok {
 		return EnqueueDeleteResult{}, &SubmitError{
 			Code:    "forwarder_unavailable",
-			Message: "forwarder is unknown, disabled, or does not forward deletes",
+			Message: "no enabled binding of that name forwards deletes in this archive",
 		}
 	}
+	fwd := route.Config
 
 	var res EnqueueDeleteResult
 	enqueueIDs := make([]int64, 0, len(uuids))
@@ -318,6 +305,10 @@ func (s *Service) EnqueueDeleteUploads(ctx context.Context, forwarderName string
 				continue
 			}
 			return EnqueueDeleteResult{}, errors.New(op).WithErr(err).WithMsg("fetch QSO by uuid")
+		}
+		if qso.LogbookID != route.LogbookID {
+			res.SkippedOtherLogbook = append(res.SkippedOtherLogbook, uuid)
+			continue
 		}
 		enqueueIDs = append(enqueueIDs, qso.ID)
 	}
@@ -363,5 +354,6 @@ func (s *Service) logEnqueueDeleteResult(fwdName, fwdType string, requested int,
 		Int("enqueued", res.Enqueued).
 		Int("skipped_live", len(res.SkippedLive)).
 		Int("not_found", len(res.NotFound)).
+		Int("skipped_other_logbook", len(res.SkippedOtherLogbook)).
 		Msg("delete upload backfill result")
 }

@@ -99,15 +99,14 @@ func TestCharacterization_HomeFanOut_LiveSubmitEditDelete(t *testing.T) {
 		`"forwarded_to":["qrz","clublog","smcloud"]`)
 }
 
-// The adopted file is the legacy archive by name or by absence: an explicit
-// legacy catalogue entry changes nothing above. (5B's seed keys on this entry.)
+// The adopted archive's routes are its seeded bindings, named after the
+// station's entries: the fan-out is the same set as before the seed.
 func TestCharacterization_LegacyEntryFansOutLikeHome(t *testing.T) {
 	s := newTestService(t, stationForwarders()...)
-	s.SetArchive(&types.QsoArchiveConfig{
-		ID: "019fd5c5-efcc-7193-be4f-1fee532ee316", Label: "Home",
-		Ownership: types.QsoArchiveOwnershipLegacy, Path: "/var/lib/sm/station-manager.db",
-	})
 	lbID := seedLogbook(t, s, "Main", "M0ABC")
+	routes := s.DestinationRoutes()
+	require.Len(t, routes, 4, "one route per station entry on the one logbook")
+	require.Equal(t, "qrz", routes[0].Config.Name, "the adopted logbook keeps the legacy names")
 
 	res, err := s.Submit(context.Background(), lbID, fanoutRec("K1AAA"), false)
 	require.NoError(t, err)
@@ -119,15 +118,12 @@ func TestCharacterization_LegacyEntryFansOutLikeHome(t *testing.T) {
 }
 
 // A NEW managed archive queues nowhere — submit, edit and delete alike — and
-// says so with an explicit empty list. After 5B this is "no bindings" rather
-// than the gate; the observable must not move.
+// says so with an explicit empty list: it has no bindings, whatever the
+// station's config entries say. The observable did not move across 5B.
 func TestCharacterization_NewManagedArchive_QueuesNowhere(t *testing.T) {
 	s := newTestService(t, stationForwarders()...)
-	s.SetArchive(&types.QsoArchiveConfig{
-		ID: "019fd5c5-efcc-7193-be4f-1fee532ee317", Label: "Contest",
-		Ownership: types.QsoArchiveOwnershipManaged,
-	})
 	lbID := seedLogbook(t, s, "Contest", "M0ABC")
+	s.SetDestinationRoutes(nil) // a new archive: no bindings
 	buf := logbuf(s)
 	ctx := context.Background()
 

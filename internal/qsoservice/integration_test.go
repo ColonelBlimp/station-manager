@@ -10,6 +10,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/enums/source"
 	"github.com/ColonelBlimp/station-manager/internal/events"
+	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/stretchr/testify/require"
@@ -60,7 +61,30 @@ func seedLogbook(t *testing.T, s *Service, name, callsign string) int64 {
 	t.Helper()
 	id, err := s.DB.InsertLogbook(types.Logbook{Name: name, Callsign: callsign})
 	require.NoError(t, err)
+	bindFromConfig(t, s)
 	return id
+}
+
+// bindFromConfig installs the routes the daemon's seed would produce for this
+// service's config entries (ADR 0082 part 4): every live logbook × every entry,
+// the lowest-id logbook keeping the entry's name, any other logbook named
+// `<type>.<logbook uuid>`; enabled state and action filters carried. Tests that
+// want a logbook UNBOUND call s.SetDestinationRoutes(nil) afterwards.
+func bindFromConfig(t *testing.T, s *Service) {
+	t.Helper()
+	lbs, err := s.DB.FetchAllLogbooksWithContext(context.Background())
+	require.NoError(t, err)
+	var routes []forwarding.BoundForwarder
+	for i, lb := range lbs {
+		for _, fc := range s.Config.Forwarders() {
+			c := fc
+			if i > 0 {
+				c.Name = fc.Type + "." + lb.UUID
+			}
+			routes = append(routes, forwarding.BoundForwarder{LogbookID: lb.ID, Config: c})
+		}
+	}
+	s.SetDestinationRoutes(routes)
 }
 
 // TestInitialize_RequiresDependencies guards review 2026-06-19 L1: Initialize

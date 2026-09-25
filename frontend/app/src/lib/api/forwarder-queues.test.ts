@@ -152,7 +152,6 @@ describe('fetchForwarderQueues — waiting/failed split', () => {
         expect(out).toEqual({
             kind: 'ok',
             forwarders: [{ name: 'qrz', waiting: 4, failed: 1, clearable: 5, in_flight: 2 }],
-            gate: { gated: false, reason: '' },
         });
     });
 
@@ -166,27 +165,6 @@ describe('fetchForwarderQueues — waiting/failed split', () => {
             clearable: 5,
             in_flight: 2,
         });
-    });
-});
-
-describe('fetchForwarderQueues — the interim forwarding gate', () => {
-    it('reads forwarding_gated and its reason', async () => {
-        stubJson(200, {
-            forwarders: [],
-            forwarding_gated: true,
-            gate_reason: 'forwarding is off in this archive until per-logbook bindings exist',
-        });
-        const out = await fetchForwarderQueues();
-        expect(out.kind === 'ok' && out.gate).toEqual({
-            gated: true,
-            reason: 'forwarding is off in this archive until per-logbook bindings exist',
-        });
-    });
-
-    it('reads an ungated archive as not gated with an empty reason', async () => {
-        stubJson(200, { forwarders: [], forwarding_gated: false });
-        const out = await fetchForwarderQueues();
-        expect(out.kind === 'ok' && out.gate).toEqual({ gated: false, reason: '' });
     });
 });
 

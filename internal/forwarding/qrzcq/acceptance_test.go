@@ -249,6 +249,8 @@ func acceptanceDurableWorkerUpload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insert logbook: %v", err)
 	}
+	// The daemon's start-time snapshot: the entry bound to the one logbook (ADR 0082).
+	qsoSvc.SetDestinationRoutes([]forwarding.BoundForwarder{{LogbookID: logbookID, Config: fc}})
 	logged, err := qsoSvc.Submit(context.Background(), logbookID,
 		adif.QsoToRecord(sampleQSO()), false)
 	if err != nil {
