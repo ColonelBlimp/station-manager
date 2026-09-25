@@ -850,6 +850,31 @@ cross-archive query.
   into the scratch directory, and the drill asserts every resolved database path — QSO,
   reference, evidence, backups — lies under the scratch root before either binary is started;
   a path outside it aborts the drill.
+- **2026-09-25, slice 5 opens with its own ADR (directed 2026-09-24; accepted 2026-09-25).**
+  [ADR 0082](../decisions/0082-per-logbook-destination-bindings-in-the-archive.md): a
+  `logbook_destination` row per (logical logbook × destination type) inside the archive file, the
+  operator's one-switch-per-destination as an aggregate (`on`/`off`/`mixed`) over those rows, no
+  archive-level row and no implicit binding for a new logbook; logbook-scoped fields (QRZ key, QRZCQ
+  call+key, ClubLog email/application password/callsign, SM Cloud legacy logbook name) in the
+  binding, station accounts (SM Cloud URL/token, transport, cadence, retry; ClubLog application key
+  build-injected) in `config.json` with `action_filter` retained, `enabled` retired and one entry per
+  type; idempotent Home seed of enabled and disabled entries on each logbook present, then a
+  file-first config strip with v6 keeping the old keys known but deprecated. The default logbook
+  keeps each legacy `forwarder_name`; additional logbooks receive UUID-derived names and their queue
+  rows are renamed in the same transaction, while duplicate legacy entries of one type are refused
+  before mutation. The data-aware 6 → 5 config down runs before 0014 down, reconstitutes exactly
+  representable v5 entries, and restores legacy queue names; binding edits are restart-required, one
+  worker per binding, with ADR 0039 discard/re-arm per binding; all four destinations route by the
+  QSO's logbook inside the existing atomic transaction; SM Cloud identity by UUID with an explicit
+  idempotent adoption call and the last gate remnant scoped to "no SM Cloud binding outside the
+  adopted archive until the server and adopted mapping are identity-ready"; bindings are never
+  exported, restored, logged or served unmasked, and explicit clearing requires the binding to be
+  off; the Forwarding tab is rewritten for the ACTIVE archive
+  (`PUT /v1/qso-archives/{uuid}/bindings`, 409 otherwise) with a station-accounts section and no
+  pills; a characterization commit pins Home's fan-out before migration 0014. **Ruled 2026-09-25:**
+  (i) a new logbook starts unbound even for SM Cloud; (ii) binding edits are restart-required in this
+  slice; (iii) bindings are editable on the active archive only, with `409` otherwise. The ADR is
+  accepted; no slice 5 code, migration or detailed implementation plan exists yet.
 
 ## Review findings on the plan (2026-09-22)
 
