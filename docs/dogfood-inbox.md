@@ -45,3 +45,4 @@ Raw dogfooding notes for later triage.
 - [2026-09-26] Settings->Archives remove the 'Each archive...' add (i) link to the details in the manual
 - [2026-09-26] Settings->New archive - move the 'Create an empty...' text to the manual and add a (i) link
 - [2026-09-26] Settings->Archives - heading Archives, a row (e.g. Drill) which has some text (i.e. Last activation failed...') could this be moved to a title attribute and a warning glyph added after Drill?
+- [2026-09-26] Settings->Forwarding - 'Shared by every archive'  text can be removed to the manual
