@@ -108,6 +108,7 @@ type Call = { url: string; method: string; body: unknown };
 let calls: Call[] = [];
 let putAnswer: () => Promise<Response> = () => Promise.resolve(json(view()));
 let getView: () => unknown = () => view();
+let getAnswer: () => Promise<Response> = () => Promise.resolve(json(getView()));
 
 function json(body: unknown, status = 200): Response {
     return new Response(JSON.stringify(body), {
@@ -120,6 +121,7 @@ beforeEach(() => {
     calls = [];
     putAnswer = () => Promise.resolve(json(view()));
     getView = () => view();
+    getAnswer = () => Promise.resolve(json(getView()));
     vi.stubGlobal(
         'fetch',
         vi.fn((input: string, init?: RequestInit) => {
@@ -134,7 +136,7 @@ beforeEach(() => {
                 return Promise.resolve(json({ instance: 'i1', archive: { id: 'A1' } }));
             if (url === '/v1/forwarder-types') return Promise.resolve(json(TYPES));
             if (url === '/v1/qso-archives/A1/bindings') {
-                return method === 'PUT' ? putAnswer() : Promise.resolve(json(getView()));
+                return method === 'PUT' ? putAnswer() : getAnswer();
             }
             return Promise.resolve(json({}, 404));
         })
@@ -442,6 +444,75 @@ describe('bindingsState', () => {
         release();
         await first;
         expect(bindingsState.saving).toBe(false);
+    });
+
+    it('B13: binding drafts cannot change while their save is pending', async () => {
+        await bindingsState.load();
+        let release!: () => void;
+        const gate = new Promise<void>((r) => (release = r));
+        putAnswer = async () => {
+            await gate;
+            return json(view());
+        };
+        vi.spyOn(toasts, 'info').mockImplementation(() => 0);
+        bindingsState.setRow('qrz', 1, false);
+        const saving = bindingsState.save();
+        await vi.waitFor(() => expect(bindingsState.saving).toBe(true));
+
+        // These controls remain mounted while the PUT is in flight. Their
+        // state boundary must refuse a late event rather than accept work that
+        // the successful response will then erase.
+        bindingsState.setRow('qrz', 2, true);
+        bindingsState.setField('qrz', 2, 'api_key', 'typed-after-dispatch');
+        bindingsState.clear('qrz', 1, 'api_key');
+        expect(bindingsState.drafts[rowKey('qrz', 2)].enabled).toBe(false);
+        expect(bindingsState.drafts[rowKey('qrz', 2)].credentials.api_key).toBeUndefined();
+        expect(bindingsState.drafts[rowKey('qrz', 1)].cleared).toEqual([]);
+
+        release();
+        await saving;
+    });
+
+    it('B14: a late queue refresh cannot replace a newer saved binding baseline', async () => {
+        await bindingsState.load();
+        let releaseRefresh!: (response: Response) => void;
+        getAnswer = () => new Promise<Response>((resolve) => (releaseRefresh = resolve));
+
+        // The queue refresh samples the old ON row and remains in flight.
+        const old = view();
+        const refreshing = bindingsState.refresh();
+
+        // A binding save then commits OFF and its response becomes the current
+        // baseline, including the restart warning.
+        const saved = view({
+            restart_required: true,
+            destinations: old.destinations.map((dest, i) =>
+                i === 0
+                    ? {
+                          ...dest,
+                          state: 'off',
+                          logbooks: dest.logbooks.map((r) =>
+                              r.logbook_id === 1 ? { ...r, enabled: false } : r
+                          ),
+                      }
+                    : dest
+            ),
+        });
+        putAnswer = () => Promise.resolve(json(saved));
+        vi.spyOn(toasts, 'info').mockImplementation(() => 0);
+        bindingsState.setRow('qrz', 1, false);
+        await bindingsState.save();
+        expect(bindingsState.dirty).toBe(false);
+
+        // The older GET arrives last. It may refresh queue counts, but must not
+        // restore ON, remove restart_required, or invent a dirty draft.
+        releaseRefresh(json(old));
+        await refreshing;
+        const main = bindingsState.view!.destinations[0].logbooks[0];
+        expect(main.enabled).toBe(false);
+        expect(bindingsState.view!.restart_required).toBe(true);
+        expect(bindingsState.drafts[rowKey('qrz', 1)].enabled).toBe(false);
+        expect(bindingsState.dirty).toBe(false);
     });
 
     it('B10: a refused load says why and is not loaded', async () => {

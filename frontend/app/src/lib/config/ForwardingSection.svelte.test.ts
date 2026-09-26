@@ -502,4 +502,88 @@ describe('ForwardingSection', () => {
             if (!had) delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
         }
     });
+
+    it('U13: saving a station account refreshes its destination reason without losing drafts', async () => {
+        let accountSaved = false;
+        let bindingGets = 0;
+        const incomplete = 'its station account is incomplete: a required station field is not set';
+        const configBefore = {
+            forwarders: CONFIG.forwarders.map((f) =>
+                f.type === 'smcloud' ? { ...f, credentials_set: ['url'] } : f
+            ),
+        };
+        const configAfter = {
+            forwarders: CONFIG.forwarders.map((f) =>
+                f.type === 'smcloud' ? { ...f, credentials_set: ['url', 'token'] } : f
+            ),
+        };
+        const destinationsNow = (): Dest[] =>
+            DESTS.map((d) =>
+                d.type === 'smcloud'
+                    ? {
+                          ...d,
+                          account: {
+                              configured: accountSaved,
+                              fields_set: accountSaved ? ['url', 'token'] : ['url'],
+                          },
+                          reason: accountSaved ? '' : incomplete,
+                      }
+                    : d
+            );
+        const response = (body: unknown, status = 200) =>
+            new Response(JSON.stringify(body), {
+                status,
+                headers: { 'Content-Type': 'application/json' },
+            });
+        vi.stubGlobal(
+            'fetch',
+            vi.fn((url: string, init?: RequestInit) => {
+                const method = init?.method ?? 'GET';
+                if (url === '/v1/version')
+                    return Promise.resolve(response({ instance: 'i', archive: { id: 'A1' } }));
+                if (url === '/v1/forwarder-types') return Promise.resolve(response(TYPES));
+                if (url === '/v1/qso-archives/A1/bindings') {
+                    bindingGets++;
+                    return Promise.resolve(response(bindingsView(destinationsNow())));
+                }
+                if (url === '/v1/config' && method === 'PUT') {
+                    accountSaved = true;
+                    return Promise.resolve(response(configAfter));
+                }
+                if (url === '/v1/config') return Promise.resolve(response(configBefore));
+                return Promise.resolve(response({}, 404));
+            })
+        );
+        render(ForwardingSection);
+        await vi.waitFor(() => {
+            expect(forwardingState.loaded).toBe(true);
+            expect(bindingsState.loaded).toBe(true);
+        });
+
+        // An unrelated destination draft must survive the account refresh.
+        await fireEvent.click(
+            within(destinations()).getByRole('checkbox', { name: 'QRZ.com for Main' })
+        );
+        const smcloudSwitch = within(destinations()).getByRole<HTMLInputElement>('checkbox', {
+            name: 'SM Cloud for Main',
+        });
+        expect(smcloudSwitch).toBeDisabled();
+
+        const token = within(accountCard('SM Cloud'))
+            .getByText('Bearer token')
+            .closest('label')!
+            .querySelector('input')!;
+        await fireEvent.input(token, { target: { value: 'new-token' } });
+        await fireEvent.click(within(station()).getByRole('button', { name: /^save$/i }));
+
+        await vi.waitFor(() => expect(bindingGets).toBe(2));
+        expect(smcloudSwitch).toBeEnabled();
+        expect(within(destinations()).queryByTestId('destination-reason')).toBeNull();
+        expect(bindingsState.dirty).toBe(true);
+        expect(
+            within(destinations()).getByRole<HTMLInputElement>('checkbox', {
+                name: 'QRZ.com for Main',
+            }).checked
+        ).toBe(true);
+    });
 });

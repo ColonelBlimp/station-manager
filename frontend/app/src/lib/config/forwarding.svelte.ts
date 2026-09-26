@@ -219,11 +219,11 @@ class ForwardingState {
         this.loaded = true;
     }
 
-    async save(): Promise<void> {
+    async save(): Promise<boolean> {
         // Whole-list writes require a successfully loaded baseline. The
         // component hides Save while unloaded; this is the last line before
         // the wire if another caller or a rendering race invokes it anyway.
-        if (this.saving || !this.loaded || !this.dirty) return;
+        if (this.saving || !this.loaded || !this.dirty) return false;
         this.saving = true;
         // Captured BEFORE the write: a timed-out save is judged against the saved
         // baseline (`before`) and exactly what THIS save carried (`sent`), never
@@ -237,15 +237,16 @@ class ForwardingState {
                 // failure (F-04c, ADR 0078); every other error keeps its wording.
                 if (res.timedOut) {
                     await this.#reconcileAfterTimeout(before, sent);
-                    return;
+                    return false;
                 }
                 toasts.error(`Save failed: ${res.message}`);
-                return;
+                return false;
             }
             this.#apply(res.forwarders);
             if (!noteConfigDurability(res.durabilityUnconfirmed ?? false)) {
                 toasts.info('Forwarding settings saved. Restart the daemon to apply.');
             }
+            return true;
         } finally {
             this.saving = false;
         }

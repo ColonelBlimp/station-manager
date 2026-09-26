@@ -20,6 +20,7 @@
     import { bindingsState } from './bindings.svelte';
     import DestinationsSection from './DestinationsSection.svelte';
     import MaskedField from './MaskedField.svelte';
+    import { toasts } from '../ui/toasts.svelte';
 
     onMount(() => {
         void forwardingState.load();
@@ -68,6 +69,15 @@
     // it is the only thing the placeholder may claim.
     function placeholderFor(setKeys: string[], key: string): string {
         return isSet(setKeys, key) ? '•••••••• (set — leave blank to keep)' : '';
+    }
+
+    async function saveAccounts(): Promise<void> {
+        if (!(await forwardingState.save())) return;
+        if (!(await bindingsState.refreshEligibility())) {
+            toasts.warn(
+                'Station account saved, but the destinations could not be refreshed; reload the tab before turning one on.'
+            );
+        }
     }
 </script>
 
@@ -303,7 +313,7 @@
                 <button
                     class="btn btn-primary"
                     disabled={!forwardingState.dirty || forwardingState.saving}
-                    onclick={() => forwardingState.save()}
+                    onclick={() => saveAccounts()}
                 >
                     {forwardingState.saving ? 'Saving…' : 'Save'}
                 </button>

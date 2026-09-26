@@ -272,7 +272,8 @@
                                 class="cursor-pointer"
                                 checked={draft === 'on'}
                                 indeterminate={draft === 'mixed'}
-                                disabled={dest.reason !== '' && draft === 'off'}
+                                disabled={bindingsState.saving ||
+                                    (dest.reason !== '' && draft === 'off')}
                                 aria-label={`${label}: every logbook in this archive`}
                                 onchange={(e) =>
                                     bindingsState.setAll(dest.type, e.currentTarget.checked)}
@@ -294,7 +295,8 @@
                                         type="checkbox"
                                         class="cursor-pointer"
                                         checked={d.enabled}
-                                        disabled={dest.reason !== '' && !d.enabled}
+                                        disabled={bindingsState.saving ||
+                                            (dest.reason !== '' && !d.enabled)}
                                         aria-label={`${label} for ${row.logbook_name}`}
                                         onchange={(e) =>
                                             bindingsState.setRow(
@@ -328,7 +330,7 @@
                                                     <MaskedField
                                                         value={d.credentials[field.key] ?? ''}
                                                         invalid={marked}
-                                                        disabled={removing}
+                                                        disabled={bindingsState.saving || removing}
                                                         oninput={(v: string) =>
                                                             bindingsState.setField(
                                                                 dest.type,
@@ -348,7 +350,7 @@
                                                         class="input w-full"
                                                         class:input-error={marked}
                                                         aria-invalid={marked || undefined}
-                                                        disabled={removing}
+                                                        disabled={bindingsState.saving || removing}
                                                         value={d.credentials[field.key] ?? ''}
                                                         oninput={(e) =>
                                                             bindingsState.setField(
@@ -384,6 +386,7 @@
                                                             <button
                                                                 type="button"
                                                                 class="underline"
+                                                                disabled={bindingsState.saving}
                                                                 onclick={() =>
                                                                     bindingsState.uncleared(
                                                                         dest.type,
@@ -396,6 +399,7 @@
                                                         <button
                                                             type="button"
                                                             class="self-start text-xs text-muted underline hover:text-ink"
+                                                            disabled={bindingsState.saving}
                                                             onclick={() =>
                                                                 bindingsState.clear(
                                                                     dest.type,

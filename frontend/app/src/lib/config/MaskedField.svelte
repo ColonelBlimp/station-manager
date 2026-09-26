@@ -44,6 +44,7 @@
     />
     <button
         type="button"
+        {disabled}
         onclick={() => (show = !show)}
         aria-label={show ? 'Hide value' : 'Show value'}
         aria-pressed={show}

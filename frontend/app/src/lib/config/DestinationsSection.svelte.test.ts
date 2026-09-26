@@ -117,7 +117,7 @@ function view(over: Record<string, unknown> = {}) {
 type Call = { url: string; method: string; body: unknown };
 let calls: Call[] = [];
 let current: () => unknown = () => view();
-let putAnswer: () => Response = () => json(view());
+let putAnswer: () => Response | Promise<Response> = () => json(view());
 
 function json(body: unknown, status = 200): Response {
     return new Response(JSON.stringify(body), {
@@ -329,6 +329,45 @@ describe('DestinationsSection', () => {
                 },
             ],
         });
+    });
+
+    it('D5b: every binding editor is disabled for the whole save', async () => {
+        await renderLoaded();
+        let release!: () => void;
+        const gate = new Promise<void>((r) => (release = r));
+        putAnswer = async () => {
+            await gate;
+            return json(view());
+        };
+        vi.spyOn(toasts, 'info').mockImplementation(() => 0);
+        await fireEvent.click(screen.getByRole('checkbox', { name: 'QRZ Logbook for Main' }));
+        await fireEvent.click(screen.getByRole('button', { name: 'Save destinations' }));
+        await vi.waitFor(() =>
+            expect(screen.getByRole('button', { name: 'Saving…' })).toBeDisabled()
+        );
+
+        expect(
+            screen.getByRole('checkbox', { name: 'QRZ Logbook: every logbook in this archive' })
+        ).toBeDisabled();
+        expect(screen.getByRole('checkbox', { name: 'QRZ Logbook for Second' })).toBeDisabled();
+        for (const input of within(card('QRZ Logbook')).getAllByLabelText('API key')) {
+            expect(input).toBeDisabled();
+        }
+        for (const button of within(card('QRZ Logbook')).getAllByRole('button', {
+            name: 'Show value',
+        })) {
+            expect(button).toBeDisabled();
+        }
+        expect(
+            within(card('QRZ Logbook')).getByRole('button', {
+                name: 'Remove the stored value',
+            })
+        ).toBeDisabled();
+
+        release();
+        await vi.waitFor(() =>
+            expect(screen.getByRole('button', { name: 'Save destinations' })).toBeDisabled()
+        );
     });
 
     it('D6: each binding carries its own queue: retry and clear go to ITS name and refresh the counts', async () => {

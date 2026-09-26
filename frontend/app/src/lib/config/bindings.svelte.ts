@@ -155,12 +155,14 @@ class BindingsState {
     /** Turn every logbook's binding of a destination on or off. Turning on is
      *  refused where the daemon said this destination cannot be turned on. */
     setAll(type: string, on: boolean): void {
+        if (this.saving) return;
         const dest = this.#dest(type);
         if (!dest || (on && dest.reason !== '')) return;
         for (const r of dest.logbooks) this.#setDraft(dest, r.logbook_id, on);
     }
 
     setRow(type: string, logbookId: number, on: boolean): void {
+        if (this.saving) return;
         const dest = this.#dest(type);
         if (!dest || (on && dest.reason !== '')) return;
         this.#setDraft(dest, logbookId, on);
@@ -169,6 +171,7 @@ class BindingsState {
     /** Record what the operator typed into a per-logbook field; typing into a
      *  field a refused save marked drops the mark. */
     setField(type: string, logbookId: number, key: string, value: string): void {
+        if (this.saving) return;
         const k = rowKey(type, logbookId);
         const d = this.drafts[k];
         if (!d) return;
@@ -181,6 +184,7 @@ class BindingsState {
     /** Mark a STORED per-logbook field for removal — only on a row that ends
      *  off (the daemon refuses a removal from a row that ends on). */
     clear(type: string, logbookId: number, key: string): void {
+        if (this.saving) return;
         const k = rowKey(type, logbookId);
         const found = this.#row(k);
         const d = this.drafts[k];
@@ -192,6 +196,7 @@ class BindingsState {
     }
 
     uncleared(type: string, logbookId: number, key: string): void {
+        if (this.saving) return;
         const d = this.drafts[rowKey(type, logbookId)];
         if (d) d.cleared = d.cleared.filter((x) => x !== key);
     }
@@ -294,20 +299,52 @@ class BindingsState {
         this.missing = {};
     }
 
-    /** Re-read the view (fresh queue counts) keeping the operator's drafts. */
+    /** Re-read only the live queue counts. A queue request can finish after a
+     *  binding save, so it must not replace that save's newer baseline. */
     async refresh(): Promise<boolean> {
         if (this.archiveId === '') return false;
         const out = await fetchArchiveBindings(this.archiveId);
         if (out.kind !== 'ok') return false;
-        const drafts = { ...this.drafts };
-        for (const d of out.bindings.destinations) {
-            for (const r of d.logbooks) {
-                const k = rowKey(d.type, r.logbook_id);
-                if (!drafts[k]) drafts[k] = draftFrom(r);
-            }
-        }
-        this.view = out.bindings;
-        this.drafts = drafts;
+        const current = this.view;
+        if (!current) return false;
+        const fresh = new Map(out.bindings.destinations.map((d) => [d.type, d]));
+        this.view = {
+            ...current,
+            destinations: current.destinations.map((dest) => {
+                const rows = fresh.get(dest.type)?.logbooks ?? [];
+                return {
+                    ...dest,
+                    logbooks: dest.logbooks.map((row) => {
+                        const next = rows.find(
+                            (candidate) =>
+                                candidate.logbook_id === row.logbook_id &&
+                                candidate.forwarder_name === row.forwarder_name
+                        );
+                        return next ? { ...row, queue: next.queue } : row;
+                    }),
+                };
+            }),
+        };
+        return true;
+    }
+
+    /** Re-read only station-account eligibility after config.json changes.
+     *  Binding rows, their drafts, queue counts and restart state belong to a
+     *  different save boundary and remain untouched. */
+    async refreshEligibility(): Promise<boolean> {
+        if (this.archiveId === '' || !this.view) return false;
+        const out = await fetchArchiveBindings(this.archiveId);
+        if (out.kind !== 'ok') return false;
+        const current = this.view;
+        if (!current) return false;
+        const fresh = new Map(out.bindings.destinations.map((d) => [d.type, d]));
+        this.view = {
+            ...current,
+            destinations: current.destinations.map((dest) => {
+                const next = fresh.get(dest.type);
+                return next ? { ...dest, account: next.account, reason: next.reason } : dest;
+            }),
+        };
         return true;
     }
 
@@ -409,6 +446,7 @@ class BindingsState {
 
     /** Discard every edit (Cancel), back to the daemon's rows. */
     reset(): void {
+        if (this.saving) return;
         this.refusal = '';
         if (this.view) this.#apply(this.view);
         else {
