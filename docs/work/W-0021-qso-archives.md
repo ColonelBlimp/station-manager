@@ -1247,6 +1247,42 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      test could not see it — strengthened); Remove everywhere; help not on focus; client and daemon
      refusals not error toasts; marked card collapsing; idle rows showing the queue; the row star
      back; the banner button inert; the pointer beside a refusal; the plain station title.
+     **Re-run on `-74` (2026-09-26):** A passed (saved status lines right). Capitalisation fixed
+     to "✓ Saved" (`a6ad1bec`). During C.2 the operator ruled (build after the drills): (1) a
+     refused save — the SPA's or the daemon's — leaves every switch as the operator set it; the
+     card stays starred as unsaved and its pill shows what the daemon holds. **A deliberate
+     departure from ADR 0082 part 9** ("restores the last persisted switch state… never claims
+     more than the daemon saved"): that rule predates the state pill, which now carries the
+     daemon's truth, and restoring made the operator re-find the switch after typing the key. (2)
+     The "Required to turn this on." line goes; the reason becomes the marked field's placeholder,
+     in the same red as the ring (colour alone would not say why; a screen reader reads the
+     placeholder).
+     **Design exchange (2026-09-26, during C.3–C.4): the Forwarding tab frames the wrong thing.**
+     The operator read the per-logbook row "Drill 7Q5MLV" as the archive — the Drill archive's
+     only logbook is also named "Drill" (Home's is "Default"). Found: the tab is destination-first
+     and archive-framed ("Destinations for Drill"), while the unit that decides where uploads go is
+     the LOGBOOK with its callsign; the same logbook row repeats in every destination card; the
+     rows never say "logbook"; the every-logbook switch reinforces archive thinking; logbooks cannot
+     be managed in Settings at all. An archive has NO callsign — each logbook has its own. Options
+     weighed: A relabel rows ("Logbook: Drill (7Q5MLV)") keeping the layout; **B logbook-first** —
+     choose a logbook (name + callsign, the Logbook view's selector) and list that logbook's
+     destinations, the every-logbook switch becoming "copy to another logbook"; C a logbooks ×
+     destinations grid. **Operator favours B** ("if I am confused, users will definitely be
+     confused"). It changes the layout ADR 0082 part 9 decided, so it takes a NEW ADR, likely
+     built as the Forwarding part of Settings → Logbooks; the data model is already per logbook.
+     Not yet scheduled.
+     **B's details (same exchange, recorded for its ADR):** a logbook picker at the top — tabs
+     "Main · 7Q5MLV | Portable · 7Q5MLV/P" for a few logbooks, a dropdown beyond that; with one
+     logbook a plain line "Logbook: Drill · 7Q5MLV"; the heading names the selection ("Where
+     logbook Main (7Q5MLV) uploads", archive as small context); edits kept across logbook
+     switches, a star on each logbook with unsaved edits, one Save. ClubLog's callsign becomes an
+     override behind the logbook's own: one line "Uploads to your Club Log log for 7Q5MLV — this
+     logbook's callsign" with "Use a different Club Log log"; an override always shows the
+     mismatch ("…for 7Q5MLV/P, not this logbook's 7Q5MLV"). Open question for the ADR: keep
+     persisting the defaulted callsign at save (the morning ruling; a changed logbook callsign then
+     shows the mismatch until confirmed) — leaned — or follow the logbook and store only an
+     explicit override. **Interim (operator, same day): option A now** — rows labelled as
+     logbooks and the heading naming the archive plainly, until B replaces the layout.
    - **5C — config v6 and the station account.** Legacy binding-owned keys (`name`, `enabled`,
      logbook-scoped credentials) known but deprecated at v6 (ADR 0075's shape). The version bump may
      retain those keys; only the adopted Home archive's committed seed marker permits the file-first

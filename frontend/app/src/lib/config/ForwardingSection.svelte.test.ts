@@ -8,7 +8,7 @@ import { _resetForTests as resetToasts } from '../ui/toasts.svelte';
 /*
     FORWARDING TAB — WHAT THE OPERATOR SEES (ADR 0082, W-0021 5E).
 
-    The tab holds two sections. "Destinations for <archive>" — the on/off
+    The tab holds two sections. "Where each logbook in archive <archive> uploads" — the on/off
     switches, each logbook's own account fields and its queue — is pinned by
     DestinationsSection.svelte.test.ts. These rules pin the other one, "Station
     accounts": what every archive shares, from config.json.
@@ -193,7 +193,7 @@ async function renderLoaded(opts: { config?: unknown; dests?: Dest[] } = {}) {
 
 const station = (): HTMLElement => screen.getByRole('region', { name: 'Station accounts' });
 const destinations = (): HTMLElement =>
-    screen.getByRole('region', { name: 'Destinations for Home' });
+    screen.getByRole('region', { name: 'Where each logbook in archive Home uploads' });
 
 // Rendered text with template line breaks collapsed, as a reader sees it.
 const flat = (el: Element | null): string => (el?.textContent ?? '').replace(/\s+/g, ' ');

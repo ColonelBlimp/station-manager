@@ -17,8 +17,9 @@ LoTW is planned but not yet available — see the end of this chapter.
 
 Everything is on **Settings → Forwarding**, in two parts:
 
-- **Destinations for Home** (named after the active archive) — which services it
-  uploads to, logbook by logbook, and each logbook's own account for each
+- **Where each logbook in archive Home uploads** (named after the active
+  archive) — which services each of its logbooks uploads to — every row is
+  one logbook, shown as *Logbook: name · callsign* — and each logbook's own account for each
   service: a QRZ logbook key, a Club Log login. These belong to the archive
   (see the QSO Archives chapter): activating another archive brings its own
   destinations, and a new archive starts with every destination off.

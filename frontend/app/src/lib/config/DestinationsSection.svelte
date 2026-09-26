@@ -171,7 +171,9 @@
          2026-09-26), and each point of action carries its own note. -->
     <div class="flex items-center gap-2">
         <h2 id="destinations-heading" class="text-base font-semibold text-ink">
-            Destinations for {bindingsState.view?.archive_label || 'this archive'}
+            Where each logbook in {bindingsState.view?.archive_label
+                ? `archive ${bindingsState.view.archive_label}`
+                : 'this archive'} uploads
         </h2>
         <ManualLink anchor="forwarding" label="How forwarding works" />
     </div>
@@ -325,9 +327,16 @@
                                                 e.currentTarget.checked
                                             )}
                                     />
-                                    <span class="font-medium">{row.logbook_name}</span>
-                                    <span class="font-mono text-xs text-muted"
-                                        >{row.logbook_callsign}</span
+                                    <!-- Interim (operator 2026-09-26, until the logbook-first
+                                         layout): the row says it is a LOGBOOK — an archive and
+                                         its logbook can share a name ("Drill"). -->
+                                    <span data-testid="row-logbook"
+                                        ><span class="text-muted">Logbook:</span>
+                                        <span class="font-medium">{row.logbook_name}</span>
+                                        ·
+                                        <span class="font-mono text-xs text-muted"
+                                            >{row.logbook_callsign}</span
+                                        ></span
                                     >
                                 </label>
 

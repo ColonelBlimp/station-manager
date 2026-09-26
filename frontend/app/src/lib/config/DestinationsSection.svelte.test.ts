@@ -6,7 +6,7 @@ import { toasts, toastsState, _resetForTests as resetToasts } from '../ui/toasts
 import { takeLogbookMissingFrom, takeLogbookHandoffLogbook } from '../router.svelte';
 
 /*
-    ADR 0082 part 9 (W-0021 5E): the rendered "Destinations for <archive>".
+    ADR 0082 part 9 (W-0021 5E): the rendered "Where each logbook in archive <archive> uploads".
     The pill is what the daemon holds; the switches are the draft; a switch
     never claims more than the daemon saved; per-logbook fields are masked;
     the queue belongs to each logbook's binding.
@@ -197,7 +197,7 @@ describe('DestinationsSection', () => {
     it('D1a: the heading names the active archive, with no paragraph under it', async () => {
         await renderLoaded();
         const heading = screen.getByRole('heading', { level: 2 });
-        expect(heading.textContent?.trim()).toBe('Destinations for Home');
+        expect(heading.textContent?.trim()).toBe('Where each logbook in archive Home uploads');
         expect(heading.closest('section')!.textContent).not.toMatch(/logbook by logbook/);
     });
 
@@ -213,16 +213,27 @@ describe('DestinationsSection', () => {
         expect(link.getAttribute('rel')).toBe('noopener');
         expect(link.getAttribute('title')).toBe('How forwarding works');
         expect(link.closest('h2')).toBeNull();
-        expect(screen.getByRole('region', { name: 'Destinations for Home' })).toContainElement(
-            link
-        );
+        expect(
+            screen.getByRole('region', { name: 'Where each logbook in archive Home uploads' })
+        ).toContainElement(link);
     });
 
     it('D1c: before the daemon names the archive, the heading says "this archive"', async () => {
         current = () => view({ archive_label: '' });
         await renderLoaded();
         expect(screen.getByRole('heading', { level: 2 }).textContent?.trim()).toBe(
-            'Destinations for this archive'
+            'Where each logbook in this archive uploads'
+        );
+    });
+
+    // Interim step (operator 2026-09-26, until the logbook-first layout): a
+    // row says it is a LOGBOOK, with its callsign — the Drill archive's only
+    // logbook is also named "Drill", and the bare row read as the archive.
+    it('D1h: each row names itself as a logbook with its callsign', async () => {
+        await renderLoaded();
+        const rows = within(card('QRZ Logbook')).getAllByTestId('binding-row');
+        expect(within(rows[0]).getByTestId('row-logbook').textContent?.trim()).toBe(
+            'Logbook: Main · M0ABC'
         );
     });
 
