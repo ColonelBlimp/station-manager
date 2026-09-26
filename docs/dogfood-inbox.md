@@ -42,3 +42,6 @@ Raw dogfooding notes for later triage.
 - [2026-09-24] Drill 5: a FAILED archive activation (candidate rolled back at start, last-known-good served) is recorded only in smd.log and on the archive's catalogue entry — it is NOT a Station Event. It is an alarm-family, operator-facing outcome like forward.failed; add `archive.activation_failed` (and arguably `archive.activated`) to the Station Events recorder so it shows in the events log with the reason.
 
 - [2026-09-24] the Drill error message also pushes all the other columns to the right
+- [2026-09-26] Settings->Archives remove the 'Each archive...' add (i) link to the details in the manual
+- [2026-09-26] Settings->New archive - move the 'Create an empty...' text to the manual and add a (i) link
+- [2026-09-26] Settings->Archives - heading Archives, a row (e.g. Drill) which has some text (i.e. Last activation failed...') could this be moved to a title attribute and a warning glyph added after Drill?
