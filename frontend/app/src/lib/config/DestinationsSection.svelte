@@ -14,17 +14,25 @@
     import { toasts } from '../ui/toasts.svelte';
     import { navigate, logbookMissingFromUrl } from '../router.svelte';
     import { hasUploadStamp } from '../logbook/uploadStatus';
-    import MaskedField from './MaskedField.svelte';
+    import StoredSecretField from './StoredSecretField.svelte';
     import ManualLink from './ManualLink.svelte';
 
     let {
         hasAccountCard = () => false,
         onOpenAccount = () => undefined,
+        accountTitle = (type: string) => type,
+        onRestart = () => undefined,
+        restarting = false,
     }: {
         /** Whether the Station accounts section below has a card for the type. */
         hasAccountCard?: (type: string) => boolean;
         /** Open and reveal that card. */
         onOpenAccount?: (type: string) => void;
+        /** That card's title, e.g. "SM Cloud service and token". */
+        accountTitle?: (type: string) => string;
+        /** Settings' own Restart daemon, for the restart banner. */
+        onRestart?: () => void;
+        restarting?: boolean;
     } = $props();
 
     let clearing = $state<Record<string, boolean>>({});
@@ -80,15 +88,10 @@
         return t;
     }
 
-    // "set" is all the daemon ever says about a stored value. A field the
-    // daemon defaults from the logbook's callsign (the descriptor marker, ADR
-    // 0082 part 3) names that callsign while nothing is stored.
-    function placeholderFor(
-        setKeys: string[],
-        field: CredentialField,
-        logbookCallsign: string
-    ): string {
-        if (setKeys.includes(field.key)) return '•••••••• (set — leave blank to keep)';
+    // What an EMPTY field (nothing stored) shows: a field the daemon defaults
+    // from the logbook's callsign (the descriptor marker, ADR 0082 part 3)
+    // names that callsign.
+    function emptyPlaceholderFor(field: CredentialField, logbookCallsign: string): string {
         if (field.defaults_to === 'logbook_callsign' && logbookCallsign.trim() !== '') {
             return `${logbookCallsign} — the logbook’s callsign unless you type another`;
         }
@@ -184,6 +187,11 @@
         {#each bindingsState.view.destinations as dest (dest.type)}
             {@const label = destinationLabel(dest)}
             {@const edited = bindingsState.destinationEdited(dest)}
+            <!-- A card holding a field a refused save marked stays open, so the
+                 field the toast names is on screen (station drill C.5). -->
+            {@const marked = dest.logbooks.some(
+                (r) => (bindingsState.missing[rowKey(dest.type, r.logbook_id)] ?? []).length > 0
+            )}
             {@const pill = PILL[dest.state]}
             {@const t = totals(dest)}
             <!-- A total that includes a stale count is stale too (U14). -->
@@ -192,7 +200,7 @@
             {@const fields = bindingsState.logbookFields(dest.type)}
             <details
                 class="rounded-md border border-line"
-                open={edited || undefined}
+                open={edited || marked || undefined}
                 data-testid="destination-card"
             >
                 <summary
@@ -255,6 +263,21 @@
                             {/if}
                         </p>
                     {/if}
+                    <!-- With a complete station account there is no refusal to carry
+                         the link, so the card says where its account lives (ruling
+                         2026-09-26, station drill C.4). -->
+                    {#if dest.account.configured && hasAccountCard(dest.type)}
+                        <p class="text-sm text-muted" data-testid="account-pointer">
+                            {accountTitle(dest.type)}: shared by every archive, under Station
+                            accounts.
+                            <button
+                                type="button"
+                                class="underline hover:text-ink"
+                                aria-label="Show {accountTitle(dest.type)}"
+                                onclick={() => onOpenAccount(dest.type)}>Show</button
+                            >
+                        </p>
+                    {/if}
                     {#if dest.account.build_key === 'absent'}
                         <p class="text-sm text-warning" data-testid="build-key-absent">
                             This build of Station Manager carries no {label} application key: its uploads
@@ -306,112 +329,53 @@
                                     <span class="font-mono text-xs text-muted"
                                         >{row.logbook_callsign}</span
                                     >
-                                    {#if bindingsState.rowEdited(dest.type, row)}<span
-                                            class="text-warning"
-                                            title="Unsaved changes">*</span
-                                        >{/if}
                                 </label>
 
                                 {#if fields.length > 0}
                                     <div class="mt-3 space-y-3">
                                         {#each fields as field (field.key)}
-                                            {@const marked =
-                                                bindingsState.missing[k]?.includes(field.key) ??
-                                                false}
-                                            {@const removing = d.cleared.includes(field.key)}
-                                            <label class="flex flex-col gap-1">
-                                                <span class="text-sm font-medium text-ink"
-                                                    >{field.label}</span
-                                                >
-                                                {#if field.kind === 'password'}
-                                                    <MaskedField
-                                                        value={d.credentials[field.key] ?? ''}
-                                                        invalid={marked}
-                                                        disabled={bindingsState.saving || removing}
-                                                        oninput={(v: string) =>
-                                                            bindingsState.setField(
-                                                                dest.type,
-                                                                row.logbook_id,
-                                                                field.key,
-                                                                v
-                                                            )}
-                                                        placeholder={placeholderFor(
-                                                            row.credentials_set,
-                                                            field,
-                                                            row.logbook_callsign
-                                                        )}
-                                                    />
-                                                {:else}
-                                                    <input
-                                                        type="text"
-                                                        class="input w-full"
-                                                        class:input-error={marked}
-                                                        aria-invalid={marked || undefined}
-                                                        disabled={bindingsState.saving || removing}
-                                                        value={d.credentials[field.key] ?? ''}
-                                                        oninput={(e) =>
-                                                            bindingsState.setField(
-                                                                dest.type,
-                                                                row.logbook_id,
-                                                                field.key,
-                                                                e.currentTarget.value
-                                                            )}
-                                                        placeholder={placeholderFor(
-                                                            row.credentials_set,
-                                                            field,
-                                                            row.logbook_callsign
-                                                        )}
-                                                        autocomplete="off"
-                                                        spellcheck="false"
-                                                    />
-                                                {/if}
-                                                {#if marked}
-                                                    <span class="text-xs text-invalid"
-                                                        >Required to turn this on.</span
-                                                    >
-                                                {/if}
-                                                <!-- Removing a stored value is offered only on
-                                                     a row that is off: the daemon refuses a
-                                                     removal from a row that stays on. -->
-                                                {#if row.credentials_set.includes(field.key) && !d.enabled}
-                                                    {#if removing}
-                                                        <span
-                                                            class="flex items-center gap-2 text-xs text-warning"
-                                                        >
-                                                            The stored value will be removed on
-                                                            save.
-                                                            <button
-                                                                type="button"
-                                                                class="underline"
-                                                                disabled={bindingsState.saving}
-                                                                onclick={() =>
-                                                                    bindingsState.uncleared(
-                                                                        dest.type,
-                                                                        row.logbook_id,
-                                                                        field.key
-                                                                    )}>Undo</button
-                                                            >
-                                                        </span>
-                                                    {:else}
-                                                        <button
-                                                            type="button"
-                                                            class="self-start text-xs text-muted underline hover:text-ink"
-                                                            disabled={bindingsState.saving}
-                                                            onclick={() =>
-                                                                bindingsState.clear(
-                                                                    dest.type,
-                                                                    row.logbook_id,
-                                                                    field.key
-                                                                )}>Remove the stored value</button
-                                                        >
-                                                    {/if}
-                                                {/if}
-                                                {#if field.help}
-                                                    <span class="text-xs text-muted"
-                                                        >{field.help}</span
-                                                    >
-                                                {/if}
-                                            </label>
+                                            <!-- A stored value is a status line with Replace
+                                                 and Remove (ruling 2026-09-26). Remove only on
+                                                 a row that is off: the daemon refuses a removal
+                                                 from a row that stays on. -->
+                                            <StoredSecretField
+                                                label={field.label}
+                                                kind={field.kind}
+                                                stored={row.credentials_set.includes(field.key)}
+                                                value={d.credentials[field.key] ?? ''}
+                                                cleared={d.cleared.includes(field.key)}
+                                                removable={!d.enabled}
+                                                removedNote="Removed when you save."
+                                                emptyPlaceholder={emptyPlaceholderFor(
+                                                    field,
+                                                    row.logbook_callsign
+                                                )}
+                                                help={field.help ?? ''}
+                                                invalid={bindingsState.missing[k]?.includes(
+                                                    field.key
+                                                ) ?? false}
+                                                invalidNote="Required to turn this on."
+                                                disabled={bindingsState.saving}
+                                                oninput={(v: string) =>
+                                                    bindingsState.setField(
+                                                        dest.type,
+                                                        row.logbook_id,
+                                                        field.key,
+                                                        v
+                                                    )}
+                                                onremove={() =>
+                                                    bindingsState.clear(
+                                                        dest.type,
+                                                        row.logbook_id,
+                                                        field.key
+                                                    )}
+                                                onundo={() =>
+                                                    bindingsState.uncleared(
+                                                        dest.type,
+                                                        row.logbook_id,
+                                                        field.key
+                                                    )}
+                                            />
                                         {/each}
                                     </div>
                                 {/if}
@@ -421,7 +385,10 @@
                                         This queue's count couldn't be refreshed; it will show again
                                         on the next load.
                                     </p>
-                                {:else if row.bound}
+                                {:else if row.bound && row.queue.waiting + row.queue.failed + row.queue.in_flight > 0}
+                                    <!-- Only a row with work shows its queue: an idle row's
+                                         "0 waiting…" and disabled buttons were noise
+                                         (declutter ruling 2026-09-26). -->
                                     {@const q = row.queue}
                                     {@const name = row.forwarder_name}
                                     {@const rowLabel = `${label} for ${row.logbook_name}`}
@@ -497,17 +464,18 @@
                 role="status"
                 data-testid="bindings-restart"
             >
-                ⚠ The saved destinations differ from the ones the daemon is running with; they apply
-                when it restarts (Restart daemon, above).
-            </div>
-        {/if}
-        {#if bindingsState.refusal}
-            <div
-                class="rounded-md border border-warning bg-surface-muted px-3 py-2 text-sm text-warning"
-                role="alert"
-                data-testid="bindings-refusal"
-            >
-                {bindingsState.refusal}
+                <!-- One short line with its own button (declutter ruling
+                     2026-09-26), so nobody hunts for the one in the header. -->
+                <span class="flex flex-wrap items-center gap-3"
+                    >⚠ Saved changes apply after a restart.
+                    <button
+                        type="button"
+                        class="btn"
+                        disabled={restarting}
+                        onclick={() => onRestart()}
+                        >{restarting ? 'Restarting…' : 'Restart daemon'}</button
+                    ></span
+                >
             </div>
         {/if}
 

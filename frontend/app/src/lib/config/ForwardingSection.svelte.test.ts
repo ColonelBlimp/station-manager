@@ -100,7 +100,9 @@ const CONFIG = {
             name: 'smcloud',
             type: 'smcloud',
             enabled: true,
-            credentials_set: ['url', 'token', 'logbook'],
+            // region stored: Reset is offered only on a stored value (ruling
+            // 2026-09-26 — a control on nothing appears to work and does nothing).
+            credentials_set: ['url', 'token', 'region', 'logbook'],
         },
         { name: 'clublog', type: 'clublog', enabled: false, credentials_set: [] },
         { name: 'mystery', type: 'mystery', enabled: false, credentials_set: ['token'] },
@@ -216,8 +218,10 @@ describe('ForwardingSection', () => {
     // cannot edit, which is round-tripped on save rather than dropped.
     it('U1: station accounts list the shared entries and name the unsupported one', async () => {
         await renderLoaded();
+        // The station card says what it holds, so it no longer reads as a
+        // second "SM Cloud" beside the destination (station drill C.4).
         expect(within(station()).getAllByTestId('account-card').map(titleOf)).toEqual([
-            'SM Cloud',
+            'SM Cloud service and token',
             'mystery',
         ]);
         expect(within(station()).getByText(/can't be edited here/)).toBeTruthy();
@@ -235,11 +239,10 @@ describe('ForwardingSection', () => {
         expect(resets).toHaveLength(1);
 
         // …and it belongs to the clearable STATION field, not merely to the same card.
-        const label = within(station()).getByText('Region').closest('label');
-        expect(label?.textContent).toContain('Reset to default');
-        expect(within(station()).getByText('URL').closest('label')?.textContent).not.toContain(
-            'Reset to default'
-        );
+        expect(resets[0].getAttribute('aria-label')).toBe('Reset to default Region');
+        expect(
+            within(station()).queryByRole('button', { name: 'Reset to default URL' })
+        ).toBeNull();
     });
 
     // U3 — A PENDING RESET IS VISIBLE BEFORE SAVING, and reversible. Otherwise
@@ -249,12 +252,16 @@ describe('ForwardingSection', () => {
         await renderLoaded();
         await fireEvent.click(within(station()).getByRole('button', { name: /reset to default/i }));
 
-        expect(within(station()).getByText(/will reset to the default on save/i)).toBeTruthy();
+        expect(within(station()).getByTestId('removal-pending').textContent).toMatch(
+            /Resets to the default when you save/
+        );
         const smcloud = forwardingState.drafts.find((d) => d.name === 'smcloud');
         expect(smcloud?.cleared).toContain('region');
 
-        await fireEvent.click(within(station()).getByRole('button', { name: /undo/i }));
-        expect(within(station()).queryByText(/will reset to the default on save/i)).toBeNull();
+        await fireEvent.click(
+            within(station()).getByRole('button', { name: 'Undo removing Region' })
+        );
+        expect(within(station()).queryByTestId('removal-pending')).toBeNull();
         expect(forwardingState.drafts.find((d) => d.name === 'smcloud')?.cleared).not.toContain(
             'region'
         );
@@ -263,14 +270,16 @@ describe('ForwardingSection', () => {
     // U4 — A SET CREDENTIAL SAYS SO WITHOUT REVEALING ANYTHING. The placeholder
     // is the ONLY signal the daemon gives, and it must say "keep", because a
     // blank box is what preserves the stored value.
-    it('U4: a stored credential is advertised as set, with keep-on-blank stated', async () => {
+    it('U4: a stored credential reads as saved, with Replace; replacing it is masked and empty', async () => {
         await renderLoaded();
-        const token = within(station()).getByText('Bearer token').closest('label');
-        const input = token?.querySelector('input');
-        expect(input?.getAttribute('placeholder')).toMatch(/set — leave blank to keep/);
+        const card = accountCard('SM Cloud service and token');
+        expect(within(card).queryByLabelText('Bearer token')).toBeNull();
+        expect(document.body.textContent).not.toMatch(/leave blank to keep/);
+        await fireEvent.click(within(card).getByRole('button', { name: 'Replace Bearer token' }));
+        const input = within(card).getByLabelText('Bearer token');
         // Masked, and never pre-filled with anything resembling the secret.
-        expect(input?.getAttribute('type')).toBe('password');
-        expect(input?.getAttribute('value') ?? '').toBe('');
+        expect(input.getAttribute('type')).toBe('password');
+        expect(input.getAttribute('value') ?? '').toBe('');
     });
 
     // U5 — THE RESTART CAVEAT APPEARS ONLY WHEN THERE IS SOMETHING TO APPLY.
@@ -293,7 +302,7 @@ describe('ForwardingSection', () => {
         expect(cards).toHaveLength(2);
         for (const c of cards) expect(c.open).toBe(false);
 
-        const summary = accountCard('SM Cloud').querySelector('summary');
+        const summary = accountCard('SM Cloud service and token').querySelector('summary');
         // The service name, deliberately NOT the raw `name` key: with one entry
         // per type it always equals the type, a second rendering of one word.
         expect(summary?.textContent).not.toMatch(/\bsmcloud\b/);
@@ -312,7 +321,7 @@ describe('ForwardingSection', () => {
         await renderLoaded();
         await fireEvent.click(within(station()).getByRole('button', { name: /reset to default/i }));
 
-        const card = accountCard('SM Cloud');
+        const card = accountCard('SM Cloud service and token');
         const summary = card.querySelector('summary')!;
         expect(summary.textContent).toContain('*');
         expect(card.open).toBe(true);
@@ -339,7 +348,9 @@ describe('ForwardingSection', () => {
     // U7b — AND AN UNEDITED CARD IS NOT STARRED, or the marker means nothing.
     it('U7b: an untouched account carries no marker', async () => {
         await renderLoaded();
-        expect(accountCard('SM Cloud').querySelector('summary')?.textContent).not.toContain('*');
+        expect(
+            accountCard('SM Cloud service and token').querySelector('summary')?.textContent
+        ).not.toContain('*');
     });
 
     // U8 — THE OPERATOR'S config.json LABEL WINS OVER THE BUILT-IN NAME, and an
@@ -356,7 +367,7 @@ describe('ForwardingSection', () => {
             },
         });
         expect(within(station()).getAllByTestId('account-card').map(titleOf)).toEqual([
-            'Shack cloud',
+            'Shack cloud service and token',
         ]);
     });
 
@@ -471,6 +482,21 @@ describe('ForwardingSection', () => {
         expect(link.closest('h2')).toBeNull();
     });
 
+    // U16 — THE SM CLOUD DESTINATION POINTS AT ITS STATION CARD (ruling
+    // 2026-09-26): with a complete account there is no refusal to carry the
+    // link, so a pointer line says where its service and token live and opens
+    // that card.
+    it('U16: the SM Cloud destination points at its service and token card', async () => {
+        await renderLoaded();
+        const pointer = within(destinations()).getByTestId('account-pointer');
+        expect(flat(pointer)).toMatch(/under Station accounts/);
+        await fireEvent.click(
+            within(pointer).getByRole('button', { name: 'Show SM Cloud service and token' })
+        );
+        await vi.waitFor(() => expect(accountCard('SM Cloud service and token').open).toBe(true));
+        expect(within(destinations()).getAllByTestId('account-pointer')).toHaveLength(1);
+    });
+
     // U11 — A DESTINATION REFUSED FOR AN INCOMPLETE STATION ACCOUNT LINKS TO
     // THE CARD THAT FIXES IT: the link opens the card and brings it into view.
     // A destination without a station card (QRZ) gets no link, whatever its
@@ -490,7 +516,7 @@ describe('ForwardingSection', () => {
                     : d
             );
             await renderLoaded({ dests });
-            expect(accountCard('SM Cloud').open).toBe(false);
+            expect(accountCard('SM Cloud service and token').open).toBe(false);
 
             const smNote = within(destinations())
                 .getAllByTestId('destination-reason')
@@ -502,16 +528,20 @@ describe('ForwardingSection', () => {
             await fireEvent.click(
                 within(smNote!).getByRole('button', { name: 'Open its station account' })
             );
-            await vi.waitFor(() => expect(accountCard('SM Cloud').open).toBe(true));
+            await vi.waitFor(() =>
+                expect(accountCard('SM Cloud service and token').open).toBe(true)
+            );
             expect(scrolled).toEqual(['account-smcloud']);
 
             // Collapsed by the operator, the card opens again on the next click.
-            await fireEvent.click(accountCard('SM Cloud').querySelector('summary')!);
-            expect(accountCard('SM Cloud').open).toBe(false);
+            await fireEvent.click(
+                accountCard('SM Cloud service and token').querySelector('summary')!
+            );
+            expect(accountCard('SM Cloud service and token').open).toBe(false);
             await fireEvent.click(
                 within(smNote!).getByRole('button', { name: 'Open its station account' })
             );
-            expect(accountCard('SM Cloud').open).toBe(true);
+            expect(accountCard('SM Cloud service and token').open).toBe(true);
             expect(scrolled).toEqual(['account-smcloud', 'account-smcloud']);
 
             const qrzNote = within(destinations())
@@ -592,10 +622,9 @@ describe('ForwardingSection', () => {
         });
         expect(smcloudSwitch).toBeDisabled();
 
-        const token = within(accountCard('SM Cloud'))
-            .getByText('Bearer token')
-            .closest('label')!
-            .querySelector('input')!;
+        const token = within(accountCard('SM Cloud service and token')).getByLabelText(
+            'Bearer token'
+        );
         await fireEvent.input(token, { target: { value: 'new-token' } });
         await fireEvent.click(within(station()).getByRole('button', { name: /^save$/i }));
 

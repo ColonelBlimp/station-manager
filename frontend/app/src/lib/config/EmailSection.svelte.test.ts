@@ -73,40 +73,44 @@ describe('EmailSection', () => {
     // it is the ONLY thing the daemon tells us about the value.
     it('U1: says a password is stored without showing one', async () => {
         await renderLoaded(true);
-        const box = screen.getByPlaceholderText(/set — leave blank to keep/i);
-        expect((box as HTMLInputElement).value).toBe('');
+        // A status, not an empty box (ruling 2026-09-26).
+        expect(screen.getByTestId('saved-status').textContent).toMatch(/✓\s*saved/);
+        expect(screen.queryByLabelText('Password')).toBeNull();
     });
 
     // U1b — and says nothing when none is stored, so the hint cannot be read as
     // decoration that is always there.
-    it('U1b: shows no "set" hint when no password is stored', async () => {
+    it('U1b: shows the input, and no saved status, when no password is stored', async () => {
         await renderLoaded(false);
-        expect(screen.queryByPlaceholderText(/set — leave blank to keep/i)).toBeNull();
+        expect(screen.queryByTestId('saved-status')).toBeNull();
+        expect(screen.getByLabelText('Password')).toBeInTheDocument();
     });
 
     // U2 — E8. Offered only when there is something to remove.
     it('U2: offers Remove only when a password is stored', async () => {
         await renderLoaded(false);
-        expect(screen.queryByRole('button', { name: /remove stored password/i })).toBeNull();
+        expect(screen.queryByRole('button', { name: 'Remove Password' })).toBeNull();
     });
 
     it('U2b: offers Remove when one is stored', async () => {
         await renderLoaded(true);
-        expect(screen.getByRole('button', { name: /remove stored password/i })).toBeTruthy();
+        expect(screen.getByRole('button', { name: 'Remove Password' })).toBeTruthy();
     });
 
     // U3 — E8's discriminator. After pressing Remove the operator must be able
     // to SEE that this save deletes the password, and be able to back out.
     it('U3: shows a pending removal, and can undo it', async () => {
         await renderLoaded(true);
-        await fireEvent.click(screen.getByRole('button', { name: /remove stored password/i }));
+        await fireEvent.click(screen.getByRole('button', { name: 'Remove Password' }));
 
-        expect(screen.getByText(/will be removed when you save/i)).toBeTruthy();
+        expect(screen.getByTestId('removal-pending').textContent).toMatch(
+            /Removed when you save — the account will then connect without authentication/
+        );
         expect(emailState.draft.passwordCleared).toBe(true);
 
-        await fireEvent.click(screen.getByRole('button', { name: /keep stored password/i }));
+        await fireEvent.click(screen.getByRole('button', { name: 'Undo removing Password' }));
         expect(emailState.draft.passwordCleared).toBe(false);
-        expect(screen.queryByText(/will be removed when you save/i)).toBeNull();
+        expect(screen.queryByTestId('removal-pending')).toBeNull();
     });
 
     // U4 — Q2. A blank number says which default it will take. Without this the

@@ -270,6 +270,8 @@ describe('DestinationsSection', () => {
             within(note).getByRole('button', { name: 'Open its station account' })
         );
         expect(opened).toEqual(['smcloud']);
+        // The refusal carries the link, so no second pointer repeats it.
+        expect(within(card('SM Cloud backup')).queryByTestId('account-pointer')).toBeNull();
         // Without a card to open, no button promises one.
         _resetBindingsForTests();
         document.body.innerHTML = '';
@@ -314,13 +316,70 @@ describe('DestinationsSection', () => {
             ),
         });
         await renderLoaded();
-        const inputs = within(card('ClubLog'))
-            .getAllByText('Callsign')
-            .map((l) => l.closest('label')!.querySelector('input')!);
-        expect(inputs[0].getAttribute('placeholder')).toBe(
+        const rows = within(card('ClubLog')).getAllByTestId('binding-row');
+        expect(within(rows[0]).getByLabelText('Callsign').getAttribute('placeholder')).toBe(
             'M0ABC — the logbook’s callsign unless you type another'
         );
-        expect(inputs[1].getAttribute('placeholder')).toMatch(/set — leave blank to keep/);
+        // Stored: a status line, no box to put a placeholder in (ruling 2026-09-26).
+        expect(within(rows[1]).queryByLabelText('Callsign')).toBeNull();
+        expect(within(rows[1]).getAllByTestId('saved-status')).toHaveLength(1);
+    });
+
+    // Declutter ruling 2026-09-26: an idle row (nothing queued, failed or in
+    // flight) shows no queue line and no disabled Retry (0) / Clear (0).
+    it('D1e: an idle row shows no queue line; a row with work shows it', async () => {
+        await renderLoaded();
+        const rows = within(card('QRZ Logbook')).getAllByTestId('binding-row');
+        expect(flat(rows[0])).toMatch(/1 waiting · 2 failed · 0 in flight/);
+        expect(within(rows[1]).queryByText(/waiting ·/)).toBeNull();
+        expect(within(rows[1]).queryByRole('button', { name: /Retry failed/ })).toBeNull();
+    });
+
+    // Declutter ruling 2026-09-26: one unsaved-change star, on the card title.
+    it('D1f: an edit stars the card title only, not the row as well', async () => {
+        await renderLoaded();
+        await fireEvent.click(screen.getByRole('checkbox', { name: 'QRZ Logbook for Second' }));
+        const stars = within(card('QRZ Logbook')).getAllByTitle('Unsaved changes');
+        expect(stars).toHaveLength(1);
+        expect(stars[0].closest('summary')).not.toBeNull();
+    });
+
+    // Declutter ruling 2026-09-26: the restart banner is one short line with
+    // its own Restart daemon button, handed down from Settings.
+    it('D1g: the restart banner is one line with its own Restart daemon button', async () => {
+        current = () => view({ restart_required: true });
+        let restarts = 0;
+        await renderLoaded({ onRestart: () => restarts++ });
+        const banner = screen.getByTestId('bindings-restart');
+        expect(flat(banner).trim()).toMatch(
+            /^⚠?\s*Saved changes apply after a restart\.\s*Restart daemon$/
+        );
+        await fireEvent.click(within(banner).getByRole('button', { name: 'Restart daemon' }));
+        expect(restarts).toBe(1);
+    });
+
+    // Ruling 2026-09-26: with a complete station account there is no refusal
+    // to carry the link, so the card points at where its account lives.
+    it('D3d: a destination with a station card points at it; one without a card does not', async () => {
+        const base = view();
+        current = () => ({
+            ...base,
+            destinations: base.destinations.map((d) =>
+                d.type === 'smcloud' ? { ...d, account: { configured: true }, reason: '' } : d
+            ),
+        });
+        const opened: string[] = [];
+        await renderLoaded({
+            hasAccountCard: (t: string) => t === 'smcloud',
+            accountTitle: () => 'SM Cloud service and token',
+            onOpenAccount: (t: string) => opened.push(t),
+        });
+        const pointer = within(card('SM Cloud backup')).getByTestId('account-pointer');
+        await fireEvent.click(
+            within(pointer).getByRole('button', { name: 'Show SM Cloud service and token' })
+        );
+        expect(opened).toEqual(['smcloud']);
+        expect(within(card('QRZ Logbook')).queryByTestId('account-pointer')).toBeNull();
     });
 
     it('D4: turning a row on without its key marks the field, restores the switch, and sends nothing', async () => {
@@ -332,27 +391,39 @@ describe('DestinationsSection', () => {
         await fireEvent.click(screen.getByRole('button', { name: 'Save destinations' }));
         expect(calls.some((c) => c.method === 'PUT')).toBe(false);
         expect(second.checked).toBe(false);
-        expect(flat(screen.getByTestId('bindings-refusal'))).toMatch(
-            /QRZ Logbook for Second: API key is required/
+        // An outcome is a toast (ruling 2026-09-26); no inline box.
+        await vi.waitFor(() =>
+            expect(
+                toastSaid(
+                    'error',
+                    (m) =>
+                        m ===
+                        'Save failed: QRZ Logbook for Second: API key is required to turn it on.'
+                )
+            ).toBe(true)
         );
+        expect(screen.queryByTestId('bindings-refusal')).toBeNull();
+        // The switch went back, but the card stays OPEN: it holds the marked
+        // field the message names (station drill C.5 found it collapsing).
+        expect((card('QRZ Logbook') as HTMLDetailsElement).open).toBe(true);
         const rows = within(card('QRZ Logbook')).getAllByTestId('binding-row');
-        const keyInput = within(rows[1]).getByPlaceholderText('');
+        const keyInput = within(rows[1]).getByLabelText('API key');
         expect(keyInput.getAttribute('aria-invalid')).toBe('true');
         expect(within(rows[1]).getByText('Required to turn this on.')).toBeInTheDocument();
     });
 
-    it('D5: a stored key is masked; a save sends the changed rows and the restart banner follows', async () => {
+    it('D5: a stored key reads as saved, not as a box; a save sends the changed rows and the restart banner follows', async () => {
         await renderLoaded();
         putAnswer = () => json(view({ restart_required: true }));
         vi.spyOn(toasts, 'info').mockImplementation(() => 0);
         const rows = within(card('QRZ Logbook')).getAllByTestId('binding-row');
-        const stored = within(rows[0]).getByPlaceholderText('•••••••• (set — leave blank to keep)');
-        expect(stored.getAttribute('type')).toBe('password');
-        expect(stored.getAttribute('value') ?? '').toBe('');
+        expect(within(rows[0]).getByTestId('saved-status').textContent).toMatch(/✓\s*saved/);
+        expect(within(rows[0]).queryByLabelText('API key')).toBeNull();
+        expect(document.body.textContent).not.toMatch(/leave blank to keep/);
         await fireEvent.click(screen.getByRole('checkbox', { name: 'QRZ Logbook for Second' }));
-        await fireEvent.input(within(rows[1]).getByPlaceholderText(''), {
-            target: { value: 'KEY-2' },
-        });
+        const typed = within(rows[1]).getByLabelText('API key');
+        expect(typed.getAttribute('type')).toBe('password');
+        await fireEvent.input(typed, { target: { value: 'KEY-2' } });
         await fireEvent.click(screen.getByRole('button', { name: 'Save destinations' }));
         await screen.findByTestId('bindings-restart');
         const put = calls.find((c) => c.method === 'PUT');
@@ -394,9 +465,10 @@ describe('DestinationsSection', () => {
             expect(button).toBeDisabled();
         }
         expect(
-            within(card('QRZ Logbook')).getByRole('button', {
-                name: 'Remove the stored value',
-            })
+            within(card('QRZ Logbook')).getByRole('button', { name: 'Remove API key' })
+        ).toBeDisabled();
+        expect(
+            within(card('QRZ Logbook')).getByRole('button', { name: 'Replace API key' })
         ).toBeDisabled();
 
         release();
@@ -417,10 +489,10 @@ describe('DestinationsSection', () => {
         await vi.waitFor(() =>
             expect(calls.some((c) => c.url === '/v1/forwarder/qrz/queue/retry')).toBe(true)
         );
-        const clearSecond = screen.getByRole('button', {
-            name: 'Clear the queue for QRZ Logbook for Second',
-        });
-        expect(clearSecond).toBeDisabled(); // nothing waiting
+        // Nothing queued for Second: no queue controls at all (declutter ruling).
+        expect(
+            screen.queryByRole('button', { name: 'Clear the queue for QRZ Logbook for Second' })
+        ).toBeNull();
         await fireEvent.click(
             screen.getByRole('button', { name: 'Clear the queue for QRZ Logbook for Main' })
         );
@@ -455,14 +527,12 @@ describe('DestinationsSection', () => {
     it('D9: a stored value can be removed only from a row that is off', async () => {
         await renderLoaded();
         const rows = within(card('QRZ Logbook')).getAllByTestId('binding-row');
-        expect(
-            within(rows[0]).queryByRole('button', { name: 'Remove the stored value' })
-        ).toBeNull();
+        expect(within(rows[0]).queryByRole('button', { name: 'Remove API key' })).toBeNull();
         await fireEvent.click(screen.getByRole('checkbox', { name: 'QRZ Logbook for Main' }));
-        await fireEvent.click(
-            within(rows[0]).getByRole('button', { name: 'Remove the stored value' })
+        await fireEvent.click(within(rows[0]).getByRole('button', { name: 'Remove API key' }));
+        expect(within(rows[0]).getByTestId('removal-pending').textContent).toMatch(
+            /Removed when you save/
         );
-        expect(within(rows[0]).getByText(/will be removed on save/)).toBeInTheDocument();
     });
 });
 

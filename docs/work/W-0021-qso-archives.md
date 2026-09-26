@@ -1182,6 +1182,71 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      failed activation is a ⚠ after the label whose tooltip and accessible name carry the reason
      (also fixes the 2026-09-24 note that the text pushed the columns); Station accounts loses
      "Shared by every archive.".
+     **Station drills 2026-09-26 (in progress, build `-71`):** B deferred (off air). C.4 passed on
+     its criteria (Drill: SM Cloud destination "disabled", the adopted-Home reason, switch
+     disabled, no account link) but surfaced a naming defect: two cards titled "SM Cloud" — the
+     destination (per-logbook switch, cloud logbook name, state pill) and the station account
+     (URL and token, no pill by design) — read as a duplicate with a missing pill. **Ruled:** do
+     both, after the drills finish — rename the station card "SM Cloud service and token", and add
+     a pointer line on the SM Cloud destination card to Station accounts. Also seen, not ruled: the
+     refused destination's "Cloud logbook name" stays editable; the Service URL is masked like the
+     token.
+     C.5 behaved as designed (nothing saved, switch restored, no banner) but surfaced two defects:
+     the refusal is an inline banner where every other Settings section reports a refused save as
+     a "Save failed: …" error toast; and the refused card collapses when its switch is restored,
+     hiding the field it marks. **Ruled (build after the drills, with the rename):** outcome
+     messages (refused, failed, saved) are toasts in the existing wording — a SPA or daemon refusal
+     becomes "Save failed: <destination> for <logbook>: <field> is required to turn it on." and the
+     inline refusal banner goes; standing conditions (restart required, "Can't be turned on here")
+     stay inline; a card holding a marked field opens itself and the mark stays until typed into. A
+     refused form save is not a Station Event (nothing changed in the station).
+     C.6–C.8 passed (ClubLog callsign placeholder 7Q5MLV; discard restored everything; a Drill QSO
+     queued nothing — Drill has no bindings, so no queues). D steps 1–2 passed (Drill's QRZ row
+     saved off with its key stored, restart pending, banner shown). D surfaced: the masked field's
+     eye reveals only what was typed — a stored value never reaches the browser — so on an empty
+     field it looks broken. **Ruled (after the drills):** `MaskedField` hides the eye while the field
+     is empty (all four users: Station accounts, destinations, Email, Enrichment).
+     **Superseded the same day (operator ruling):** the "•••••••• (set — leave blank to keep)"
+     placeholder packed a status, a rule and an instruction into an empty-looking box. A field with
+     a stored value shows no input — a status line "<Label>: ✓ saved" with **Replace** (opens an
+     empty input with the eye, plus Cancel) and **Remove** (offered only where removal is allowed
+     today); a field with nothing stored shows the input directly. Applies everywhere stored
+     secrets appear (destinations, Station accounts, Email, Enrichment); it replaces the hide-the-eye
+     fix. Build after the drills.
+     **Declutter ruling (2026-09-26, during D; build after the drills):** the operator found the
+     card with a pending removal noisy and hard to interpret. On top of the status line and the
+     refusal toast: (3) a field's help line moves behind an ⓘ/tooltip (was an inbox note); (4) a
+     row's queue counts and Retry/Clear appear only when something is queued or failed; (5) one
+     unsaved-change star, on the card title only; (6) the restart banner becomes one short line,
+     "Saved changes apply after a restart", with its own Restart daemon button. Target: a QRZ card
+     showing only the row switch, "API key: ✓ saved [Replace] [Remove]" and the ⓘ.
+     D step 3 passed (the pending removal saved; Drill's QRZ row off with no key; restart pending).
+     **Operator direction:** re-run the whole drill set (C–F, and B once on air) on the build that
+     lands the rulings above; these results stand only for build `-71`.
+     E passed (the leave prompt named Forwarding; Cancel kept the edit; the confirm half was not
+     run — covered by the guard suite and the re-run). F passed: Home active again, no restart
+     pending, QRZ/ClubLog/SM Cloud on with keys stored, QRZCQ off, queues empty, only the legacy
+     queue names (nothing of Drill's leaked into Home); Drill's ⚠ cleared by its successful
+     activation. Seen during F, not investigated: Drill's "Last written" stayed at 2026-09-24
+     14:43 after today's writes — inference: the column shows the main file's mtime, which SQLite's
+     WAL mode updates only at checkpoint/close. The window.confirm dialogs look dated; a styled
+     in-app dialog is logged as the next item after the declutter build.
+     **Built 2026-09-26, the declutter (all rulings above):** `StoredSecretField` — a stored value is
+     "✓ saved" with Replace (an empty input, with Cancel that sends a blank so the saved value is
+     kept) and Remove where allowed; a pending removal is its own line with Undo; used by the
+     destinations, Station accounts ("Reset to default" only on a STORED clearable field), Email and
+     Enrichment (their own removal notes). `HelpTip` — a field's help behind a focusable ⓘ.
+     Destinations: refused saves are "Save failed: …" error toasts (the inline box and the store's
+     `refusal` state are gone); a card holding a marked field stays open; an idle row shows no
+     queue line; one unsaved star (card title); the restart banner is "Saved changes apply after a
+     restart." with Settings' own Restart daemon handed down. Station card titled "<name> service
+     and token" (the suffix fits the one station-scoped type; revisit with a second); the SM Cloud
+     destination with a complete account points at it ("Show"), never beside a refusal that
+     already links. Manual: saved-value, restart and queue wording. Proofs (restores verified), each
+     failing its own test: saved field still an input; Cancel keeping the typed value (the first
+     test could not see it — strengthened); Remove everywhere; help not on focus; client and daemon
+     refusals not error toasts; marked card collapsing; idle rows showing the queue; the row star
+     back; the banner button inert; the pointer beside a refusal; the plain station title.
    - **5C — config v6 and the station account.** Legacy binding-owned keys (`name`, `enabled`,
      logbook-scoped credentials) known but deprecated at v6 (ADR 0075's shape). The version bump may
      retain those keys; only the adopted Home archive's committed seed marker permits the file-first

@@ -18,13 +18,38 @@
     import { forwardingState } from './forwarding.svelte';
     import { bindingsState } from './bindings.svelte';
     import DestinationsSection from './DestinationsSection.svelte';
-    import MaskedField from './MaskedField.svelte';
+    import StoredSecretField from './StoredSecretField.svelte';
     import ManualLink from './ManualLink.svelte';
     import { toasts } from '../ui/toasts.svelte';
+
+    let {
+        onRestart = () => undefined,
+        restarting = false,
+    }: {
+        /** Settings' Restart daemon, handed to the destinations' banner. */
+        onRestart?: () => void;
+        restarting?: boolean;
+    } = $props();
 
     onMount(() => {
         void forwardingState.load();
     });
+
+    // A station card says what it holds — "SM Cloud service and token" — so it
+    // does not read as a second "SM Cloud" beside the destination (ruling
+    // 2026-09-26, station drill C.4). The suffix fits the one station-scoped
+    // type today (a service URL and a token); revisit with a second one. An
+    // entry this build cannot describe keeps its plain name.
+    function accountTitleOf(f: { type: string; label?: string }): string {
+        const td = forwardingState.typeFor(f.type);
+        const name = f.label || td?.display_name || f.type;
+        return td ? `${name} service and token` : name;
+    }
+
+    function accountTitleFor(type: string): string {
+        const f = forwardingState.drafts.find((d) => d.type === type);
+        return f ? accountTitleOf(f) : type;
+    }
 
     // A station entry belongs in this section when it has station-wide
     // fields, or no descriptor at all (explained, and round-tripped on save).
@@ -55,16 +80,6 @@
         card.scrollIntoView?.({ block: 'start' });
     }
 
-    function isSet(setKeys: string[], key: string): boolean {
-        return setKeys.includes(key);
-    }
-
-    // "set" is the only thing the daemon ever tells us about a stored value, so
-    // it is the only thing the placeholder may claim.
-    function placeholderFor(setKeys: string[], key: string): string {
-        return isSet(setKeys, key) ? '•••••••• (set — leave blank to keep)' : '';
-    }
-
     async function saveAccounts(): Promise<void> {
         if (!(await forwardingState.save())) return;
         if (!(await bindingsState.refreshEligibility())) {
@@ -87,7 +102,13 @@
          load and hold their own drafts, so a reload of the config.json half
          must neither remount them (reloading over the operator's edits) nor
          hide them when only that half failed to load. -->
-    <DestinationsSection {hasAccountCard} onOpenAccount={openAccount} />
+    <DestinationsSection
+        {hasAccountCard}
+        onOpenAccount={openAccount}
+        accountTitle={accountTitleFor}
+        {onRestart}
+        {restarting}
+    />
 
     <section id="station-accounts" aria-labelledby="station-accounts-heading" class="space-y-4">
         <div class="flex items-center gap-2">
@@ -165,7 +186,7 @@
                              backup"). Falls back to the built-in, then to the
                              raw type, so a destination is never nameless. -->
                             <span class="font-semibold text-ink">
-                                {f.label || td?.display_name || f.type}{#if edited}<span
+                                {accountTitleOf(f)}{#if edited}<span
                                         class="text-warning"
                                         title="Unsaved changes">*</span
                                     >{/if}
@@ -191,78 +212,26 @@
                         {:else if forwardingState.stationFields(f.type).length > 0}
                             <div class="mt-4 space-y-3">
                                 {#each forwardingState.stationFields(f.type) as field (field.key)}
-                                    {@const cleared = f.cleared.includes(field.key)}
-                                    <label class="flex flex-col gap-1">
-                                        <span class="text-sm font-medium text-ink"
-                                            >{field.label}</span
-                                        >
-
-                                        {#if field.kind === 'password'}
-                                            <MaskedField
-                                                value={f.credentials[field.key] ?? ''}
-                                                oninput={(v: string) =>
-                                                    (f.credentials[field.key] = v)}
-                                                placeholder={placeholderFor(
-                                                    f.credentialsSet,
-                                                    field.key
-                                                )}
-                                            />
-                                        {:else}
-                                            <input
-                                                type="text"
-                                                class="input w-full"
-                                                disabled={cleared}
-                                                value={f.credentials[field.key] ?? ''}
-                                                oninput={(e) =>
-                                                    (f.credentials[field.key] =
-                                                        e.currentTarget.value)}
-                                                placeholder={placeholderFor(
-                                                    f.credentialsSet,
-                                                    field.key
-                                                )}
-                                                autocomplete="off"
-                                                spellcheck="false"
-                                            />
-                                        {/if}
-
-                                        <!-- Reset appears ONLY for a field the daemon declares
-                                     Clearable. It is not a delete: those fields have a
-                                     constructor default, and emptying any OTHER credential
-                                     is a daemon that won't restart. -->
-                                        {#if field.clearable}
-                                            {#if cleared}
-                                                <span
-                                                    class="flex items-center gap-2 text-xs text-warning"
-                                                >
-                                                    Will reset to the default on save.
-                                                    <button
-                                                        type="button"
-                                                        class="underline"
-                                                        onclick={() =>
-                                                            forwardingState.uncleared(
-                                                                f.name,
-                                                                field.key
-                                                            )}
-                                                    >
-                                                        Undo
-                                                    </button>
-                                                </span>
-                                            {:else}
-                                                <button
-                                                    type="button"
-                                                    class="self-start text-xs text-muted underline hover:text-ink"
-                                                    onclick={() =>
-                                                        forwardingState.clear(f.name, field.key)}
-                                                >
-                                                    Reset to default
-                                                </button>
-                                            {/if}
-                                        {/if}
-
-                                        {#if field.help}
-                                            <span class="text-xs text-muted">{field.help}</span>
-                                        {/if}
-                                    </label>
+                                    <!-- A stored value is a status line (ruling
+                                         2026-09-26). Reset appears ONLY for a field the
+                                         daemon declares Clearable, and only when a value
+                                         is stored: it is not a delete — those fields have
+                                         a constructor default, and emptying any OTHER
+                                         credential is a daemon that won't restart. -->
+                                    <StoredSecretField
+                                        label={field.label}
+                                        kind={field.kind}
+                                        stored={f.credentialsSet.includes(field.key)}
+                                        value={f.credentials[field.key] ?? ''}
+                                        cleared={f.cleared.includes(field.key)}
+                                        removable={field.clearable === true}
+                                        removeLabel="Reset to default"
+                                        removedNote="Resets to the default when you save."
+                                        help={field.help ?? ''}
+                                        oninput={(v: string) => (f.credentials[field.key] = v)}
+                                        onremove={() => forwardingState.clear(f.name, field.key)}
+                                        onundo={() => forwardingState.uncleared(f.name, field.key)}
+                                    />
                                 {/each}
                             </div>
                         {/if}

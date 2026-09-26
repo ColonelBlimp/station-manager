@@ -92,8 +92,6 @@ class BindingsState {
     drafts = $state<Record<string, RowDraft>>({});
     /** Required fields a refused save marked, per row key. */
     missing = $state<Record<string, string[]>>({});
-    /** The last refusal — the SPA's own, or the daemon's message. */
-    refusal = $state('');
     #eligibilityRefreshGeneration = 0;
 
     dirty = $derived(this.#anyChanged());
@@ -370,7 +368,7 @@ class BindingsState {
                 `${destinationLabel(found.dest)} for ${found.row.logbook_name}: ${labels.join(', ')} ${labels.length === 1 ? 'is' : 'are'} required to turn it on`
             );
         }
-        return `Not saved. ${parts.join('; ')}.`;
+        return `Save failed: ${parts.join('; ')}.`;
     }
 
     /** Every switch back to what the daemon holds; typed values stay. A row
@@ -396,11 +394,11 @@ class BindingsState {
                 if (found && d) d.enabled = found.row.enabled;
             }
             this.missing = missing;
-            this.refusal = this.#missingMessage(missing);
+            // An outcome is a toast, as on every Settings tab (ruling 2026-09-26).
+            toasts.error(this.#missingMessage(missing));
             return;
         }
         this.missing = {};
-        this.refusal = '';
         this.saving = true;
         try {
             const res = await saveArchiveBindings(this.archiveId, this.buildRequest());
@@ -417,7 +415,7 @@ class BindingsState {
                 await this.#reconcileAfterTimeout();
                 return;
             }
-            this.refusal = `Not saved. ${res.message}`;
+            toasts.error(`Save failed: ${res.message}`);
             this.#restoreSwitches();
         } finally {
             this.saving = false;
@@ -456,7 +454,6 @@ class BindingsState {
     /** Discard every edit (Cancel), back to the daemon's rows. */
     reset(): void {
         if (this.saving) return;
-        this.refusal = '';
         if (this.view) this.#apply(this.view);
         else {
             this.drafts = {};

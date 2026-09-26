@@ -3,7 +3,7 @@
     // from the standalone config SPA's Email tab (ADR 0044).
     import { onMount } from 'svelte';
     import { emailState } from './email.svelte';
-    import MaskedField from './MaskedField.svelte';
+    import StoredSecretField from './StoredSecretField.svelte';
 
     onMount(() => void emailState.load());
 
@@ -105,58 +105,26 @@
                         bind:value={emailState.draft.username}
                     />
                 </label>
-                <label class="flex w-72 flex-col gap-1">
-                    <span class="text-sm font-medium text-ink">Password</span>
-                    <MaskedField
+                <!-- A stored password is a status line with Replace and Remove
+                     (ruling 2026-09-26). Remove is offered only when one is
+                     stored: with nothing to remove the daemon treats the flag as
+                     a no-op, and a control that appears to work and does nothing
+                     teaches the operator it worked. Unauthenticated submission
+                     is a legitimate setup — plenty of local relays want no
+                     credentials — which is why removal exists at all. -->
+                <div class="w-72">
+                    <StoredSecretField
+                        label="Password"
+                        stored={emailState.draft.passwordSet}
                         value={emailState.draft.password}
+                        cleared={emailState.draft.passwordCleared}
+                        removable={true}
+                        removedNote="Removed when you save — the account will then connect without authentication."
                         oninput={(v: string) => emailState.setPassword(v)}
-                        placeholder={emailState.draft.passwordSet
-                            ? '•••••••• (set — leave blank to keep)'
-                            : ''}
+                        onremove={() => emailState.clearPassword()}
+                        onundo={() => emailState.keepPassword()}
                     />
-                </label>
-
-                <!-- Removal is a THIRD state, and it needs its own control
-                     because the box looks identical in all three: empty and
-                     keeping, empty and about to be wiped, or typed. Blank
-                     deliberately means keep (see email.svelte.ts), so nothing
-                     the operator does to the input alone can express this.
-
-                     Offered only when a password is actually stored: with
-                     nothing to remove the daemon treats the flag as a no-op, so
-                     a button here would appear to work, do nothing, and teach
-                     the operator that the password had been removed.
-
-                     Unauthenticated submission is a legitimate setup — plenty
-                     of local relays want no credentials — which is why removal
-                     exists at all rather than only replacement. -->
-                {#if emailState.draft.passwordSet}
-                    {#if emailState.draft.passwordCleared}
-                        <div
-                            class="flex w-72 flex-col gap-2 rounded-md border border-warning bg-surface-muted px-3 py-2"
-                        >
-                            <span class="text-xs text-warning">
-                                The stored password will be removed when you save. The account will
-                                connect without authentication.
-                            </span>
-                            <button
-                                class="btn self-start"
-                                type="button"
-                                onclick={() => emailState.keepPassword()}
-                            >
-                                Keep stored password
-                            </button>
-                        </div>
-                    {:else}
-                        <button
-                            class="btn self-start"
-                            type="button"
-                            onclick={() => emailState.clearPassword()}
-                        >
-                            Remove stored password
-                        </button>
-                    {/if}
-                {/if}
+                </div>
             </section>
 
             <section class="space-y-3">

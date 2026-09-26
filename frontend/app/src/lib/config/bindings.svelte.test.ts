@@ -183,12 +183,17 @@ describe('bindingsState', () => {
 
     it('B4: a row turned on without its required field is refused before the wire', async () => {
         await bindingsState.load();
+        // A refused save is an OUTCOME: an error toast in the Settings wording
+        // (ruling 2026-09-26), never an inline box.
+        const error = vi.spyOn(toasts, 'error').mockImplementation(() => 0);
         bindingsState.setField('qrz', 1, 'api_key', 'NEW-FOR-MAIN'); // a valid sibling edit
         bindingsState.setRow('qrz', 2, true); // Second has no API key set
         await bindingsState.save();
         expect(puts()).toHaveLength(0);
         expect(bindingsState.missing[rowKey('qrz', 2)]).toEqual(['api_key']);
-        expect(bindingsState.refusal).toMatch(/QRZ Logbook for Second: API key is required/);
+        expect(error).toHaveBeenCalledWith(
+            'Save failed: QRZ Logbook for Second: API key is required to turn it on.'
+        );
         // The offending switch shows what the daemon holds; the sibling keeps its draft.
         expect(bindingsState.drafts[rowKey('qrz', 2)].enabled).toBe(false);
         expect(bindingsState.drafts[rowKey('qrz', 1)].credentials.api_key).toBe('NEW-FOR-MAIN');
@@ -235,12 +240,15 @@ describe('bindingsState', () => {
                     400
                 )
             );
+        const error = vi.spyOn(toasts, 'error').mockImplementation(() => 0);
         bindingsState.setRow('qrz', 1, false);
         bindingsState.setRow('qrz', 2, true);
         bindingsState.setField('qrz', 2, 'api_key', 'BAD');
         await bindingsState.save();
         expect(puts()).toHaveLength(1);
-        expect(bindingsState.refusal).toMatch(/cannot be turned on/);
+        expect(error).toHaveBeenCalledWith(
+            'Save failed: QRZ Logbook for logbook "Second" cannot be turned on'
+        );
         expect(bindingsState.drafts[rowKey('qrz', 1)].enabled).toBe(true);
         expect(bindingsState.drafts[rowKey('qrz', 2)].enabled).toBe(false);
         expect(bindingsState.drafts[rowKey('qrz', 2)].credentials.api_key).toBe('BAD');

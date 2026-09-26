@@ -177,7 +177,7 @@
         <Ft8Section />
     </div>
     <div class:hidden={active !== 'forwarding'}>
-        <ForwardingSection />
+        <ForwardingSection onRestart={doRestart} {restarting} />
     </div>
     <div class:hidden={active !== 'email'}>
         <EmailSection />

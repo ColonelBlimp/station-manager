@@ -265,8 +265,8 @@ describe('EnrichmentSection disclosures', () => {
         const { container } = await renderLoadedWithContainer(true);
         const unknown = within(card(container, 'hamqth'));
 
-        expect(unknown.getByPlaceholderText(/set — leave blank to keep/i)).toBeTruthy();
-        expect(unknown.getByRole('button', { name: /remove stored password/i })).toBeTruthy();
+        expect(unknown.getByTestId('saved-status')).toBeTruthy();
+        expect(unknown.getByRole('button', { name: 'Remove Password' })).toBeTruthy();
     });
 
     // D6b — while a source the daemon says is anonymous gets none, so D6 is not
@@ -275,8 +275,9 @@ describe('EnrichmentSection disclosures', () => {
         const { container } = await renderLoadedWithContainer(true);
         const hamnut = within(card(container, 'Hamnut'));
 
-        expect(hamnut.queryByPlaceholderText(/set — leave blank to keep/i)).toBeNull();
-        expect(hamnut.queryByRole('button', { name: /remove stored password/i })).toBeNull();
+        expect(hamnut.queryByTestId('saved-status')).toBeNull();
+        expect(hamnut.queryByLabelText('Password')).toBeNull();
+        expect(hamnut.queryByRole('button', { name: 'Remove Password' })).toBeNull();
     });
 
     // D3 — an unrecognised source is LABELLED as such, so "no fields to edit"
@@ -295,20 +296,20 @@ describe('EnrichmentSection disclosures', () => {
 });
 
 describe('EnrichmentSection', () => {
-    // U1 — N1. The stored-or-not distinction, carried by the placeholder.
+    // U1 — N1. The stored-or-not distinction, carried by the saved status.
     it('U1: says a QRZ password is stored without showing one', async () => {
         const { container } = await renderLoadedWithContainer(true);
-        const box = within(card(container, QRZ_CARD)).getByPlaceholderText(
-            /set — leave blank to keep/i
-        );
-        expect((box as HTMLInputElement).value).toBe('');
+        // A status, not an empty box (ruling 2026-09-26).
+        const qrz = within(card(container, QRZ_CARD));
+        expect(qrz.getByTestId('saved-status').textContent).toMatch(/✓\s*saved/);
+        expect(qrz.queryByLabelText('Password')).toBeNull();
     });
 
-    it('U1b: shows no "set" hint when none is stored', async () => {
+    it('U1b: shows the input, and no saved status, when none is stored', async () => {
         const { container } = await renderLoadedWithContainer(false);
-        expect(
-            within(card(container, QRZ_CARD)).queryByPlaceholderText(/set — leave blank to keep/i)
-        ).toBeNull();
+        const qrz = within(card(container, QRZ_CARD));
+        expect(qrz.queryByTestId('saved-status')).toBeNull();
+        expect(qrz.getByLabelText('Password')).toBeTruthy();
     });
 
     // U2 — J1. Remove is offered only when there is something to remove; a
@@ -318,7 +319,7 @@ describe('EnrichmentSection', () => {
         const { container } = await renderLoadedWithContainer(false);
         expect(
             within(card(container, QRZ_CARD)).queryByRole('button', {
-                name: /remove stored password/i,
+                name: 'Remove Password',
             })
         ).toBeNull();
     });
@@ -327,7 +328,7 @@ describe('EnrichmentSection', () => {
         const { container } = await renderLoadedWithContainer(true);
         expect(
             within(card(container, QRZ_CARD)).getByRole('button', {
-                name: /remove stored password/i,
+                name: 'Remove Password',
             })
         ).toBeTruthy();
     });
@@ -337,19 +338,19 @@ describe('EnrichmentSection', () => {
         const { container } = await renderLoadedWithContainer(true);
         const qrz = () => within(card(container, QRZ_CARD));
 
-        await fireEvent.click(qrz().getByRole('button', { name: /remove stored password/i }));
-        expect(qrz().getByText(/will be removed when you save/i)).toBeTruthy();
+        await fireEvent.click(qrz().getByRole('button', { name: 'Remove Password' }));
+        expect(qrz().getByTestId('removal-pending').textContent).toMatch(/Removed when you save/);
         expect(qrzDraft().passwordCleared).toBe(true);
 
-        await fireEvent.click(qrz().getByRole('button', { name: /keep stored password/i }));
+        await fireEvent.click(qrz().getByRole('button', { name: 'Undo removing Password' }));
         expect(qrzDraft().passwordCleared).toBe(false);
-        expect(qrz().queryByText(/will be removed when you save/i)).toBeNull();
+        expect(qrz().queryByTestId('removal-pending')).toBeNull();
 
         // The OTHER credentialed source is untouched — a per-card control must
         // not be a page-wide one wearing a card's clothes.
         expect(
             within(card(container, 'hamqth')).getByRole('button', {
-                name: /remove stored password/i,
+                name: 'Remove Password',
             })
         ).toBeTruthy();
     });
@@ -405,7 +406,7 @@ describe('EnrichmentSection', () => {
     async function pressRemove(container: HTMLElement): Promise<void> {
         await fireEvent.click(
             within(card(container, QRZ_CARD)).getByRole('button', {
-                name: /remove stored password/i,
+                name: 'Remove Password',
             })
         );
     }
@@ -450,7 +451,7 @@ describe('EnrichmentSection', () => {
 
         await fireEvent.click(
             within(card(container, QRZ_CARD)).getByRole('button', {
-                name: /keep stored password/i,
+                name: 'Undo removing Password',
             })
         );
 

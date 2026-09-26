@@ -16,7 +16,7 @@
     // the presentation is unknown, not the form.
     import { onMount } from 'svelte';
     import { enrichmentState } from './enrichment.svelte';
-    import MaskedField from './MaskedField.svelte';
+    import StoredSecretField from './StoredSecretField.svelte';
 
     onMount(() => void enrichmentState.load());
 
@@ -193,50 +193,23 @@
                                     bind:value={p.username}
                                 />
                             </label>
-                            <label class="flex w-72 flex-col gap-1">
-                                <span class="text-sm font-medium text-ink">Password</span>
-                                <MaskedField
+                            <!-- A stored password is a status line with Replace and
+                                 Remove (ruling 2026-09-26). Remove only when something
+                                 is stored — a control that appears to work and does
+                                 nothing teaches the operator that it worked. -->
+                            <div class="w-72">
+                                <StoredSecretField
+                                    label="Password"
+                                    stored={p.passwordSet}
                                     value={p.password}
+                                    cleared={p.passwordCleared}
+                                    removable={true}
+                                    removedNote="Removed when you save — this source is switched off, as it can't run without a login. Enter a new password to use it again."
                                     oninput={(v: string) => enrichmentState.setPassword(p.name, v)}
-                                    placeholder={p.passwordSet
-                                        ? '•••••••• (set — leave blank to keep)'
-                                        : ''}
+                                    onremove={() => enrichmentState.clearPassword(p.name)}
+                                    onundo={() => enrichmentState.keepPassword(p.name)}
                                 />
-                            </label>
-
-                            <!-- Removal is a third state the box cannot express:
-                                 it looks identical whether blank means "keep" or
-                                 "erase". Offered only when something is stored —
-                                 a control that appears to work and does nothing
-                                 teaches the operator that it worked. -->
-                            {#if p.passwordSet}
-                                {#if p.passwordCleared}
-                                    <div
-                                        class="flex w-72 flex-col gap-2 rounded-md border border-warning bg-surface-muted px-3 py-2"
-                                    >
-                                        <span class="text-xs text-warning">
-                                            The stored password will be removed when you save, and
-                                            this source has been switched off — it can't run without
-                                            a login. Enter a new password to use it again.
-                                        </span>
-                                        <button
-                                            class="btn self-start"
-                                            type="button"
-                                            onclick={() => enrichmentState.keepPassword(p.name)}
-                                        >
-                                            Keep stored password
-                                        </button>
-                                    </div>
-                                {:else}
-                                    <button
-                                        class="btn self-start"
-                                        type="button"
-                                        onclick={() => enrichmentState.clearPassword(p.name)}
-                                    >
-                                        Remove stored password
-                                    </button>
-                                {/if}
-                            {/if}
+                            </div>
                         {/if}
                     </div>
                 </details>

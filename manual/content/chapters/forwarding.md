@@ -26,12 +26,15 @@ Everything is on **Settings → Forwarding**, in two parts:
   address and token.
 
 Station Manager never shows a stored password or key again. A field that
-holds one reads `•••••••• (set — leave blank to keep)`: leave it blank to
-keep the stored value, or type a new one to replace it.
+holds one reads **✓ saved**, with **Replace** to type a new value and, where
+it can be removed, **Remove**. Replace opens an empty box; **Cancel** closes
+it again and keeps the saved value. The same applies on the Email and
+Enrichment tabs.
 
-**Changes apply when the daemon restarts.** After you save, the tab says the
-saved destinations differ from the ones the daemon is running with. Press
-**Restart daemon** at the top right of Settings to apply them.
+**Changes apply when the daemon restarts.** After you save, the tab shows
+*Saved changes apply after a restart* with a **Restart daemon** button; press
+it when you are ready. If a save is refused — a required field left blank,
+say — a message says why and the field is marked.
 
 ### Station accounts
 
@@ -156,7 +159,8 @@ automatically. You send those yourself — see "Catching up" below.
 
 ### The queue: retrying and clearing
 
-Every logbook with a destination shows its queue under that destination,
+A logbook with uploads waiting, failed or in flight shows its queue under that
+destination (an idle logbook shows none),
 for example *12 waiting · 1 failed · 3 in flight*: **waiting** is the
 backlog still to send, **failed** is uploads the service refused and that
 won't be retried on their own, and **in flight** is the small batch the
