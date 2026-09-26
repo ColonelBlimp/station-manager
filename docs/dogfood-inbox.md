@@ -48,3 +48,7 @@ Raw dogfooding notes for later triage.
 - [2026-09-26] Settings->Forwarding - 'Shared by every archive'  text can be removed to the manual
 - [2026-09-26] Settings->Archives - Archives list, the warning glyph should be yellow - make it standout
 - [2026-09-26] Settings->Enrichment - can any of the help text be moved to the manual and a (i) link added
+- [2026-09-26] log the RX level summary periodically
+- [2026-09-26] C.4 - no pill to indicate the status of SM Cloud (enabled/disabled)
+- [2026-09-26] the info/help text is cluttering the UI again - add (i) and move help text to manual or title attrib (seen on Settings->Forwarding destination fields, drill C.6)
+- [2026-09-26] NEXT after the W-0021 declutter build (operator, 2026-09-26): replace the browser's window.confirm dialogs with one styled in-app ConfirmDialog (native <dialog>, no new dependency) — Settings leave guard, Restart daemon, Activate archive, destination Clear queue, Rigs duplicate-model and delete. The leave guard becomes asynchronous: rework the router guard incl. browser Back (address bar already moved) with its suite + reversion proofs. Tab close/reload keeps the browser's own beforeunload warning (browsers forbid custom dialogs there).
