@@ -33,6 +33,18 @@ keep the stored value, or type a new one to replace it.
 saved destinations differ from the ones the daemon is running with. Press
 **Restart daemon** at the top right of Settings to apply them.
 
+### Station accounts
+
+Station accounts are the settings every archive shares. They live in
+`config.json`, not in an archive, so they stay the same whichever archive is
+active. Today that is SM Cloud's **Service URL** and **Bearer token**. Press
+the section's own **Save**; like destinations, changes apply when the daemon
+restarts.
+
+Club Log is not listed here. Its application key is built into Station
+Manager, and its application password belongs to your Club Log account, so
+you enter it per logbook under the destinations.
+
 ### Turning a destination on
 
 1. Open the destination's card — each card shows whether it is **enabled**

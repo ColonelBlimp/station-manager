@@ -19,6 +19,7 @@
     import { bindingsState } from './bindings.svelte';
     import DestinationsSection from './DestinationsSection.svelte';
     import MaskedField from './MaskedField.svelte';
+    import ManualLink from './ManualLink.svelte';
     import { toasts } from '../ui/toasts.svelte';
 
     onMount(() => {
@@ -90,9 +91,12 @@
 
     <section id="station-accounts" aria-labelledby="station-accounts-heading" class="space-y-4">
         <div>
-            <h2 id="station-accounts-heading" class="text-base font-semibold text-ink">
-                Station accounts
-            </h2>
+            <div class="flex items-center gap-2">
+                <h2 id="station-accounts-heading" class="text-base font-semibold text-ink">
+                    Station accounts
+                </h2>
+                <ManualLink anchor="station-accounts" label="How station accounts work" />
+            </div>
             <p class="mt-0.5 text-sm text-muted">Shared by every archive.</p>
         </div>
 

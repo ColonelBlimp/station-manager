@@ -1172,6 +1172,9 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      https://clublog.freshdesk.com/support/solutions/articles/3000057171-what-are-application-passwords-).
      Neither is a station-wide account setting, so ClubLog appears only under the destinations,
      where a build without the key is already stated on its card.
+     (3) Station accounts gets the same ⓘ ("How station accounts work", `/manual/#station-accounts`)
+     with a new short manual section of that name; the icon is one shared `ManualLink` component
+     used by both headings. Both anchors verified unique in a built manual.
    - **5C — config v6 and the station account.** Legacy binding-owned keys (`name`, `enabled`,
      logbook-scoped credentials) known but deprecated at v6 (ADR 0075's shape). The version bump may
      retain those keys; only the adopted Home archive's committed seed marker permits the file-first

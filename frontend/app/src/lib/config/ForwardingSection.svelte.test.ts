@@ -453,8 +453,22 @@ describe('ForwardingSection', () => {
         expect(links).toHaveLength(1);
         expect(destinations().contains(links[0])).toBe(true);
         expect(document.body.textContent).not.toMatch(/Forwarding uploads each/);
-        const intro = station().querySelector('h2')!.nextElementSibling!;
+        const intro = station().querySelector('p')!;
         expect(intro.textContent?.trim()).toBe('Shared by every archive.');
+    });
+
+    // U15 — STATION ACCOUNTS GETS ITS OWN ⓘ (operator ruling 2026-09-26): the
+    // manual's Station accounts section, in a new tab like the sidebar's
+    // Manual link, beside the heading and outside it so the section keeps its
+    // name.
+    it('U15: an ⓘ beside the Station accounts heading links its manual section', async () => {
+        await renderLoaded();
+        const link = within(station()).getByRole('link', { name: 'How station accounts work' });
+        expect(link.getAttribute('href')).toBe('/manual/#station-accounts');
+        expect(link.getAttribute('target')).toBe('_blank');
+        expect(link.getAttribute('rel')).toBe('noopener');
+        expect(link.getAttribute('title')).toBe('How station accounts work');
+        expect(link.closest('h2')).toBeNull();
     });
 
     // U11 — A DESTINATION REFUSED FOR AN INCOMPLETE STATION ACCOUNT LINKS TO
