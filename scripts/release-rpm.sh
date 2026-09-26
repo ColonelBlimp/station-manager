@@ -27,16 +27,14 @@ fi
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
-# PUBLIC (distributable) build path (ST-7): this bakes NO ClubLog key, so the RPM is
-# safe to publish (subject to the GPL source obligation). .env is still loaded (it may
-# carry other build settings), but if it — or the environment — provides CLUBLOG_API_KEY,
-# FAIL: a public release must never carry the shared confidential key. Keyed dogfood
-# builds are the PRIVATE path, scripts/dev-rpm.sh.
+# PUBLIC (distributable) build path. Every distributed build carries the ClubLog
+# application key (ADR 0083): it identifies Station Manager to ClubLog and is required
+# for real-time uploading. It is injected at build time from .env or the environment,
+# never kept in Git; embedding it in the compiled binary is not publication (ADR 0054).
 if [[ -f .env ]]; then set -a; . ./.env; set +a; fi
-if [[ -n "${CLUBLOG_API_KEY:-}" ]]; then
-  echo "error: release-rpm.sh is the PUBLIC (distributable) build path and must not bake a" >&2
-  echo "       ClubLog key, but CLUBLOG_API_KEY is set. Unset it (or use scripts/dev-rpm.sh" >&2
-  echo "       for a keyed dogfood build)." >&2
+if [[ -z "${CLUBLOG_API_KEY:-}" ]]; then
+  echo "error: a release build must carry the ClubLog application key (ADR 0083), but" >&2
+  echo "       CLUBLOG_API_KEY is empty. Set it in .env (never commit it)." >&2
   exit 1
 fi
 
@@ -108,11 +106,10 @@ mkdir -p build/bin
 # carrier buildinfo.Version (cmd/smd no longer declares its own)
 # which feeds both the User-Agent header on outbound HTTP and the
 # PROGRAMVERSION field on ADIF exports.
-# NO ClubLog key is injected here (ST-7): a public build leaves clublog.InjectedAPIKey
-# empty, so the shipped ClubLog forwarder is inert until the operator supplies runtime
-# credentials. BuildScope=public marks the binary as key-free and distributable.
+# The ClubLog application key is injected here (ADR 0083), as in the dev build.
+# BuildScope=public marks the binary as a distributable release (not a dogfood build).
 CGO_ENABLED=$CGO_VAL go build -trimpath "${TAGS_ARG[@]}" \
-    -ldflags="-s -w -X github.com/ColonelBlimp/station-manager/internal/buildinfo.Version=${VERSION} -X github.com/ColonelBlimp/station-manager/internal/buildinfo.Env=release -X github.com/ColonelBlimp/station-manager/internal/buildinfo.BuildScope=public" \
+    -ldflags="-s -w -X github.com/ColonelBlimp/station-manager/internal/buildinfo.Version=${VERSION} -X github.com/ColonelBlimp/station-manager/internal/buildinfo.Env=release -X github.com/ColonelBlimp/station-manager/internal/buildinfo.BuildScope=public -X github.com/ColonelBlimp/station-manager/internal/forwarding/clublog.InjectedAPIKey=${CLUBLOG_API_KEY}" \
     -o build/bin/smd ./cmd/smd
 
 echo "── [3/3] Packaging RPM → build/release/ (RPM version: ${RPM_VERSION}) ──"

@@ -172,8 +172,8 @@ tasks:
       injected as internal/buildinfo.Version → daemon User-Agent and ADIF
       PROGRAMVERSION). For a one-command build→install→restart, use
       `task deploy:local:dev` instead. CGO-free/static by default; for the
-      PocketFFT (CGO) variant use rpm:dev:pocketfft. Keyless, distributable RPMs
-      come from `task rpm:release` (the public path).
+      PocketFFT (CGO) variant use rpm:dev:pocketfft. Distributable RPMs come
+      from `task rpm:release` (the public path, also keyed — ADR 0083).
     cmds:
       - scripts/dev-rpm.sh
 
@@ -186,7 +186,8 @@ tasks:
       entrypoint. Usage: task rpm:release RELEASE_VERSION=2.0.0-alpha.3
       Output: build/release/station-manager-<version>-1.x86_64.rpm. Needs
       podman, Go and Node on the host, and network on the first run (it builds
-      and caches the builder image). No ClubLog key, by design (ST-7).
+      and caches the builder image). Carries the ClubLog application key from
+      .env (ADR 0083) — refuses to build without it; never commit the key.
     requires:
       vars: [RELEASE_VERSION]
     cmds:

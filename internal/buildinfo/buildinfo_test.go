@@ -1,8 +1,8 @@
 package buildinfo
 
-// ST-7 — BuildScope defaults to "public" (a keyless build) and IsPrivateBuild reports the
-// keyed dogfood scope. The build system stamps "private" via -ldflags on the private path;
-// the end-to-end binary behaviour is covered by scripts/test-build-boundary.sh.
+// ADR 0083 — BuildScope defaults to "public" (a distributable build) and IsPrivateBuild
+// reports the dogfood scope. The build system stamps "private" via -ldflags on the private
+// path; the end-to-end key boundary is covered by scripts/test-build-boundary.sh.
 
 import "testing"
 

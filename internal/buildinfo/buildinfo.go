@@ -37,24 +37,18 @@ func IsDev() bool { return Env != "release" }
 // difference between a build that matches its tag and one that does not.
 var Version = "dev"
 
-// BuildScope records whether this binary was built on the PRIVATE (keyed) or PUBLIC
-// (keyless) path (ST-7 — docs/reviews/internal-security-trust-boundary-audit.md).
+// BuildScope records whether this binary is a distributable release or a private
+// dogfood build (ADR 0083, which superseded ST-7's key-free rule).
 //
-//   - "public"  — the default, and what every keyless build (generic `go build`,
-//     `task build`, the public release path) reports. Carries no confidential
-//     build-injected secret and is safe to distribute (subject to the GPL source
-//     obligation).
-//   - "private" — a keyed dogfood build: the private build path stamps this via
-//     -ldflags "-X …/internal/buildinfo.BuildScope=private" alongside the ClubLog
-//     application key. The shared key is extractable with `strings`, so a
-//     private-scope binary MUST NOT be published (ADR 0054). The `PRIVATE-BUILD-
-//     DO-NOT-DISTRIBUTE` marker file inside a private RPM says the same at the
-//     package layer.
+//   - "public"  — the default: a distributable build. A release (scripts/release.sh)
+//     carries the ClubLog application key injected at build time (ADR 0083); a bare
+//     `go build` / `task build` / CI build carries none and its ClubLog uploads wait.
+//   - "private" — a dogfood build (scripts/dev-rpm.sh): the `dev` tag, the stub
+//     destination and a git-derived version; the PRIVATE-BUILD-DO-NOT-DISTRIBUTE
+//     marker inside a private RPM says the same at the package layer.
 //
-// This is the in-binary half of the ST-7 boundary: a build that bakes the key marks
-// itself so the boundary is greppable, not merely a filename convention.
+// Neither ever puts the key in source: it is compiled in, never published (ADR 0054).
 var BuildScope = "public"
 
-// IsPrivateBuild reports whether this binary carries the confidential build-injected
-// ClubLog key and therefore must not be published.
+// IsPrivateBuild reports whether this binary is a dogfood build, not for distribution.
 func IsPrivateBuild() bool { return BuildScope == "private" }

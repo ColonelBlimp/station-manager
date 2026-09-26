@@ -31,15 +31,14 @@ VERSION="$1"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
-# PUBLIC (distributable) release (ST-7): this produces a key-free RPM. .env is still
-# loaded (it may carry other build settings) but the ClubLog key is NOT passed into the
-# container, and if the host env provides CLUBLOG_API_KEY we FAIL — a public release must
-# never bake the shared confidential key. Keyed dogfood builds are scripts/dev-rpm.sh.
+# Every distributed build carries the ClubLog application key (ADR 0083): it
+# identifies Station Manager to ClubLog and is required for real-time uploading. It
+# comes from .env or the environment, never from Git, and is handed to the build
+# container BY NAME (-e CLUBLOG_API_KEY below), so it never appears on a command line.
 if [[ -f .env ]]; then set -a; . ./.env; set +a; fi
-if [[ -n "${CLUBLOG_API_KEY:-}" ]]; then
-  echo "error: release.sh builds a PUBLIC (distributable) RPM and must not carry a ClubLog" >&2
-  echo "       key, but CLUBLOG_API_KEY is set. Unset it (or use scripts/dev-rpm.sh for a" >&2
-  echo "       keyed dogfood build)." >&2
+if [[ -z "${CLUBLOG_API_KEY:-}" ]]; then
+  echo "error: a release build must carry the ClubLog application key (ADR 0083), but" >&2
+  echo "       CLUBLOG_API_KEY is empty. Set it in .env (never commit it)." >&2
   exit 1
 fi
 
@@ -99,6 +98,7 @@ fi
   -w /src \
   "${MOUNT_GOMODCACHE[@]}" \
   -e SM_FFT=pocketfft \
+  -e CLUBLOG_API_KEY \
   -e SM_SKIP_SPA=1 \
   -e SM_SKIP_MANUAL=1 \
   "$IMAGE" \
