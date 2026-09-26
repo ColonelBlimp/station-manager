@@ -94,6 +94,7 @@ import { installSettingsGuards, leavePrompt, unsavedSections } from './unsaved';
 import { stationState } from './station.svelte';
 import { rigsState } from './rigs.svelte';
 import { forwardingState } from './forwarding.svelte';
+import { bindingsState, _resetBindingsForTests } from './bindings.svelte';
 import { emailState } from './email.svelte';
 import { enrichmentState } from './enrichment.svelte';
 import { ft8SettingsState } from './ft8.svelte';
@@ -114,6 +115,7 @@ function makeAllClean(): void {
     rigsState.baselines = {};
     rigsState.selectedId = null;
     emailState.saving = false;
+    _resetBindingsForTests();
 }
 
 /**
@@ -228,6 +230,44 @@ function dirtyRigOnScreen(): void {
     rigsState.selectedId = 1;
 }
 
+/**
+ * The Forwarding tab's OTHER store (ADR 0082): one logbook's QRZ switch flipped
+ * on in the active archive's bindings, while the station accounts stay clean.
+ * Proves the fixture: a guard reading forwardingState alone says nothing here.
+ */
+function dirtyBinding(): void {
+    bindingsState.view = {
+        archive_id: 'A1',
+        archive_label: 'Home',
+        restart_required: false,
+        destinations: [
+            {
+                type: 'qrz',
+                display_name: 'QRZ Logbook',
+                account: { configured: true, label: '', fields_set: [], build_key: '' },
+                state: 'off',
+                reason: '',
+                logbooks: [
+                    {
+                        logbook_id: 1,
+                        logbook_uuid: 'u1',
+                        logbook_name: 'Main',
+                        logbook_callsign: 'M0ABC',
+                        bound: true,
+                        enabled: false,
+                        forwarder_name: 'qrz',
+                        credentials_set: ['api_key'],
+                        queue: { waiting: 0, failed: 0, in_flight: 0 },
+                    },
+                ],
+            },
+        ],
+    };
+    bindingsState.drafts = { 'qrz/1': { enabled: true, credentials: {}, cleared: [] } };
+    expect(bindingsState.dirty).toBe(true);
+    expect(forwardingState.dirty).toBe(false);
+}
+
 describe('which sections have unsaved edits', () => {
     afterEach(makeAllClean);
 
@@ -278,6 +318,11 @@ describe('which sections have unsaved edits', () => {
         dirtyEmail();
         emailState.saving = false; // the save returned; the draft is left as typed
         expect(unsavedSections()).toEqual(['Email']);
+    });
+
+    it('R6b: counts the Forwarding tab’s destination edits, not only its station accounts', () => {
+        dirtyBinding();
+        expect(unsavedSections()).toEqual(['Forwarding']);
     });
 
     it('R7: lists every dirty section, in the order the tabs are shown', () => {
@@ -384,6 +429,28 @@ describe('leaving Settings', () => {
         navigate('logbook');
         expect(rigsState.anyDirty).toBe(false);
         expect(unsavedSections()).toEqual([]);
+    });
+
+    it('R20b: a confirmed leave discards the destination edits too', () => {
+        dirtyBinding();
+        vi.spyOn(window, 'confirm').mockReturnValue(true);
+        navigate('logbook');
+        expect(bindingsState.dirty).toBe(false);
+        expect(unsavedSections()).toEqual([]);
+    });
+
+    it('R21b: a destinations save in flight refuses the leave like any other', () => {
+        // The flag is what the guard reads; the store holds it for the whole PUT
+        // (bindings.svelte.test.ts). A bindings PUT on the wire lands just as
+        // surely as the email one in R21.
+        dirtyBinding();
+        bindingsState.saving = true;
+        const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+        navigate('logbook');
+        expect(confirm).not.toHaveBeenCalled();
+        expect(router.view).toBe('config');
+        expect(bindingsState.dirty).toBe(true); // nothing discarded
+        bindingsState.saving = false;
     });
 
     it('R21: refuses to leave while a save is in flight, and discards nothing', async () => {

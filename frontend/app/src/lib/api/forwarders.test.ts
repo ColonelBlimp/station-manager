@@ -113,3 +113,43 @@ describe('fetchForwarderTypes — credential field scope (ADR 0082)', () => {
         expect(out.types[0].credential_fields.map((f) => f.key)).toEqual(['c']);
     });
 });
+
+// ADR 0082 part 3 (ruled 2026-09-26): a field may default to the logbook's
+// callsign in the daemon. Only the one known source passes; anything else is
+// dropped to "no default", so the field stays required.
+describe('fetchForwarderTypes — defaults_to', () => {
+    it('carries logbook_callsign and ignores an unknown source', async () => {
+        mockJSON(200, {
+            types: [
+                {
+                    type: 'clublog',
+                    display_name: 'ClubLog',
+                    supported_actions: ['insert'],
+                    credential_fields: [
+                        {
+                            key: 'callsign',
+                            label: 'Callsign',
+                            kind: 'text',
+                            scope: 'logbook',
+                            defaults_to: 'logbook_callsign',
+                        },
+                        {
+                            key: 'email',
+                            label: 'Email',
+                            kind: 'text',
+                            scope: 'logbook',
+                            defaults_to: 'logbook_name',
+                        },
+                    ],
+                },
+            ],
+        });
+        const out = await fetchForwarderTypes();
+        expect(out.kind).toBe('ok');
+        if (out.kind !== 'ok') return;
+        expect(out.types[0].credential_fields.map((f) => [f.key, f.defaults_to])).toEqual([
+            ['callsign', 'logbook_callsign'],
+            ['email', undefined],
+        ]);
+    });
+});

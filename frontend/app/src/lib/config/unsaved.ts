@@ -34,6 +34,7 @@
 
 import { setLeaveGuard } from '../router.svelte';
 import { toasts } from '../ui/toasts.svelte';
+import { bindingsState } from './bindings.svelte';
 import { emailState } from './email.svelte';
 import { enrichmentState } from './enrichment.svelte';
 import { forwardingState } from './forwarding.svelte';
@@ -76,10 +77,17 @@ const SECTIONS: Section[] = [
         discard: () => ft8SettingsState.reset(),
     },
     {
+        // Two stores on one tab (ADR 0082): the station accounts in config.json
+        // and the active archive's destination bindings. The remount's load()
+        // re-applies both from the daemon, so either one's edits are lost the
+        // same way, and either one's PUT on the wire cannot be recalled.
         label: 'Forwarding',
-        dirty: () => forwardingState.dirty,
-        saving: () => forwardingState.saving,
-        discard: () => forwardingState.reset(),
+        dirty: () => forwardingState.dirty || bindingsState.dirty,
+        saving: () => forwardingState.saving || bindingsState.saving,
+        discard: () => {
+            forwardingState.reset();
+            bindingsState.reset();
+        },
     },
     {
         label: 'Email',

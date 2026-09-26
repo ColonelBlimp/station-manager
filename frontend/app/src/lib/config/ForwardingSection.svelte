@@ -1,161 +1,63 @@
 <script lang="ts">
-    // Forwarding section — the operator's upload destinations (QRZ, ClubLog, SM
-    // Cloud …). Ported from the standalone config SPA's Forwarding tab (ADR
-    // 0044).
+    // Forwarding (ADR 0082, W-0021 5E) — two sections on one tab:
     //
-    // Per ADR 0039 the list is NON-SPARSE: the daemon seeds an entry for every
-    // supported destination and re-adds any missing one at load, so this is a
-    // FIXED list with no add/remove. A destination is turned off by disabling
-    // it — deleting an entry would just be re-seeded at the next restart.
+    //   - "Destinations for this archive" (DestinationsSection): which
+    //     destinations the ACTIVE archive uploads to, per logbook, with each
+    //     logbook's own account fields and queue. Owned by the archive.
+    //   - "Station accounts" (below): what every archive shares — the SM Cloud
+    //     service URL and token, and whether this build carries ClubLog's
+    //     application key. Owned by config.json. No on/off here: whether a
+    //     destination is on is a binding of the archive, never of the account.
     //
-    // Credential inputs are data-driven from GET /v1/forwarder-types, so adding
-    // a forwarder type in Go needs no change here.
-    //
-    // The three blank states this UI must keep distinct (see
+    // Station-account inputs are data-driven from GET /v1/forwarder-types
+    // (station-scoped fields only), so adding a forwarder type in Go needs no
+    // change here. The three blank states this UI must keep distinct (see
     // forwarding.svelte.ts buildPayload): never touched, typed-then-erased, and
     // explicitly reset. Only the last sends "" — and only the last gets a
     // control, shown solely for fields the daemon declares Clearable.
     import { onMount } from 'svelte';
     import { forwardingState } from './forwarding.svelte';
-    import {
-        fetchForwarderQueues,
-        clearForwarderQueue,
-        retryForwarderQueue,
-        type ForwarderQueueCount,
-    } from '../api/forwarder-queues';
-    import { toasts } from '../ui/toasts.svelte';
-    import { navigate, logbookMissingFromUrl } from '../router.svelte';
-    import { hasUploadStamp } from '../logbook/uploadStatus';
+    import { bindingsState } from './bindings.svelte';
+    import DestinationsSection from './DestinationsSection.svelte';
     import MaskedField from './MaskedField.svelte';
-
-    // Live upload-queue counts, keyed by forwarder name. This is DAEMON-live
-    // state, deliberately separate from the config draft/save/restart lifecycle:
-    // it reflects the currently-running worker's queue, not the drafted `enabled`.
-    // A load failure just leaves a forwarder's count absent (the line hides) — a
-    // transient count error must not block editing config.
-    let queues = $state<Record<string, ForwarderQueueCount>>({});
-    let clearing = $state<Record<string, boolean>>({});
-    let retrying = $state<Record<string, boolean>>({});
-    // Queue entries keyed by a binding name that matches no station account —
-    // an additional logbook's `<type>.<uuid>` binding, or a binding whose
-    // account is gone. They must still be visible, clearable and retryable
-    // (ADR 0082 transition: binding-keyed queue counts), so they get their own
-    // cards below the destinations, named by the binding until 5E.
-    const extraQueues = $derived(
-        Object.values(queues)
-            .filter((q) => !forwardingState.drafts.some((d) => d.name === q.name))
-            .sort((a, b) => a.name.localeCompare(b.name))
-    );
-
-    async function loadQueues(): Promise<void> {
-        const out = await fetchForwarderQueues();
-        if (out.kind === 'ok') {
-            const next: Record<string, ForwarderQueueCount> = {};
-            for (const q of out.forwarders) next[q.name] = q;
-            queues = next;
-        }
-    }
-
-    // Reconcile one forwarder's count with a fresh GET after a clear whose effect
-    // we can't trust from the POST alone (a success to confirm, or an ambiguous
-    // timeout that may have committed). On success the counts refresh; on failure
-    // we DROP this forwarder's count so no stale "Clear queue (N)" survives for a
-    // second, wrongly-scoped click. Returns whether the GET succeeded.
-    async function reconcileQueue(name: string): Promise<boolean> {
-        const out = await fetchForwarderQueues();
-        if (out.kind === 'ok') {
-            const next: Record<string, ForwarderQueueCount> = {};
-            for (const q of out.forwarders) next[q.name] = q;
-            queues = next;
-            return true;
-        }
-        const rest = { ...queues };
-        delete rest[name];
-        queues = rest;
-        return false;
-    }
 
     onMount(() => {
         void forwardingState.load();
-        void loadQueues();
     });
 
-    // Discard a forwarder's clearable (pending+failed) backlog. Confirmed because
-    // it's irreversible; in-flight uploads finish, so the wording promises that.
-    async function onClearQueue(name: string, label: string): Promise<void> {
-        const n = queues[name]?.clearable ?? 0;
-        if (
-            !window.confirm(
-                `Discard ${n} queued upload${n === 1 ? '' : 's'} for ${label}? ` +
-                    `In-flight uploads finish; upload history is kept. This can't be undone.`
-            )
-        ) {
-            return;
-        }
-        // Hold the disabled latch through the POST *and* the refetch: releasing it
-        // before loadQueues() resolves would briefly re-enable the button showing a
-        // stale count, letting a second clear fire against already-cleared rows.
-        clearing = { ...clearing, [name]: true };
-        try {
-            const out = await clearForwarderQueue(name);
-            if (out.kind === 'ok') {
-                toasts.info(
-                    `Cleared ${out.discarded} queued upload${out.discarded === 1 ? '' : 's'} from ${label}.`
-                );
-                if (!(await reconcileQueue(name))) {
-                    toasts.warn(
-                        `Couldn't refresh ${label}'s queue count — it'll update on the next load.`
-                    );
-                }
-            } else if (out.indeterminate) {
-                // The clear may have committed despite the error — the daemon
-                // deletes before it responds, so any post-dispatch failure is
-                // ambiguous. Reconcile, report "unknown" (never a plain failure),
-                // and never leave a stale count a retry could act on.
-                const confirmed = await reconcileQueue(name);
-                toasts.warn(
-                    confirmed
-                        ? `Clearing ${label} didn't confirm cleanly; its queue count has been refreshed to its current state.`
-                        : `Clearing ${label} didn't confirm and its queue couldn't be re-read — whether it cleared is unknown.`
-                );
-            } else {
-                toasts.error(out.message);
-            }
-        } finally {
-            clearing = { ...clearing, [name]: false };
-        }
+    // The application-key presence the daemon reports for a type ('' = the
+    // type needs none, or the bindings view is not loaded).
+    function buildKeyOf(type: string): '' | 'present' | 'absent' {
+        return (
+            bindingsState.view?.destinations.find((d) => d.type === type)?.account.build_key ?? ''
+        );
     }
 
-    // Re-arm a forwarder's failed uploads for one more attempt (W-0010 outcome 9,
-    // ruling (a)). No confirm: it is not destructive — a still-rejected upload
-    // fails again, an accepted one is never re-sent. Same latch-through-refetch
-    // discipline as the clear, so no stale "Retry failed (N)" survives a click.
-    async function onRetryFailed(name: string, label: string): Promise<void> {
-        retrying = { ...retrying, [name]: true };
-        try {
-            const out = await retryForwarderQueue(name);
-            if (out.kind === 'ok') {
-                toasts.info(
-                    `Re-queued ${out.rearmed} failed upload${out.rearmed === 1 ? '' : 's'} for ${label}.`
-                );
-                if (!(await reconcileQueue(name))) {
-                    toasts.warn(
-                        `Couldn't refresh ${label}'s queue count — it'll update on the next load.`
-                    );
-                }
-            } else if (out.indeterminate) {
-                const confirmed = await reconcileQueue(name);
-                toasts.warn(
-                    confirmed
-                        ? `Retrying ${label} didn't confirm cleanly; its queue count has been refreshed to its current state.`
-                        : `Retrying ${label} didn't confirm and its queue couldn't be re-read — whether it re-queued is unknown.`
-                );
-            } else {
-                toasts.error(out.message);
-            }
-        } finally {
-            retrying = { ...retrying, [name]: false };
-        }
+    // A station entry belongs in this section when it has something station-
+    // wide to show: station-scoped fields, an application key built into the
+    // daemon, or no descriptor at all (explained, and round-tripped on save).
+    function inStationAccounts(type: string): boolean {
+        if (!forwardingState.typeFor(type)) return true;
+        return forwardingState.stationFields(type).length > 0 || buildKeyOf(type) !== '';
+    }
+
+    const accounts = $derived(forwardingState.drafts.filter((f) => inStationAccounts(f.type)));
+
+    // A destination's "incomplete station account" is fixed in its card here.
+    function hasAccountCard(type: string): boolean {
+        return accounts.some(
+            (f) => f.type === type && forwardingState.stationFields(type).length > 0
+        );
+    }
+
+    // "Open its station account": open that card and bring it into view. The
+    // element's own `open` is set, not a forced-open state, so a card the
+    // operator collapsed afterwards opens again on the next click.
+    function openAccount(type: string): void {
+        const card = document.getElementById(`account-${type}`);
+        if (!(card instanceof HTMLDetailsElement)) return;
+        card.open = true;
+        card.scrollIntoView?.({ block: 'start' });
     }
 
     function isSet(setKeys: string[], key: string): boolean {
@@ -172,58 +74,64 @@
 <!-- Shape matches StationSection deliberately, so the tabs read as one page:
      the same mx-auto max-w-3xl shell (the strip's own container is max-w-5xl,
      so an unwrapped section sits wider and left of its neighbours), the same
-     loading / error-card / body branch order, the same space-y-8 rhythm, and
-     the same border-t save footer. The per-destination CARDS are the one
+     loading / error-card / body branch order (here inside Station accounts),
+     the same space-y-8 rhythm, and the same border-t save footer. The per-account CARDS are the one
      deliberate departure — these are repeated entities, not named sections, so
      Station's <h2> headings would be inventing titles for them. -->
-<div class="mx-auto max-w-3xl">
-    {#if !forwardingState.loaded && forwardingState.loading}
-        <p class="text-sm text-muted">Loading…</p>
-    {:else if !forwardingState.loaded && forwardingState.error}
-        <div class="card">
-            <p class="text-sm text-ink">Couldn’t load forwarding: {forwardingState.error}</p>
-            <button class="btn mt-3" onclick={() => forwardingState.load()}>Retry</button>
-        </div>
-    {:else}
-        <div class="space-y-8">
-            <p class="text-sm text-muted">
-                Every supported destination is listed below with the station account it uses. Which
-                destinations are <em>on</em>, and the per-logbook accounts (a QRZ key, a ClubLog
-                account, the SM Cloud logbook), belong to the active archive and are not editable
-                here yet — they become editable when the bindings editor lands. Station account
-                values are stored on the daemon and never sent back to the browser, so leaving a
-                field blank keeps the saved value. QSOs logged while a destination was off aren't
-                sent automatically — upload those from the logbook's backfill.
-            </p>
-            <p class="text-sm text-muted" data-testid="bindings-note" role="note">
-                Destination bindings (on/off and per-logbook accounts) are owned by the active
-                archive and cannot be edited until a later release; the queue counts below are the
-                active archive's.
-            </p>
+<div class="mx-auto max-w-3xl space-y-8">
+    <p class="text-sm text-muted">
+        Forwarding uploads each <em>new</em> QSO to the destinations its archive is bound to. QSOs logged
+        while a destination was off aren't sent automatically — upload those from the logbook's backfill.
+    </p>
 
-            {#if forwardingState.drafts.length === 0}
-                <p class="text-sm text-muted">
-                    No forwarder destinations available from the daemon.
+    <!-- Outside the station-account load branches below: the destinations
+         load and hold their own drafts, so a reload of the config.json half
+         must neither remount them (reloading over the operator's edits) nor
+         hide them when only that half failed to load. -->
+    <DestinationsSection {hasAccountCard} onOpenAccount={openAccount} />
+
+    <section id="station-accounts" aria-labelledby="station-accounts-heading" class="space-y-4">
+        <div>
+            <h2 id="station-accounts-heading" class="text-base font-semibold text-ink">
+                Station accounts
+            </h2>
+            <p class="mt-0.5 text-sm text-muted">
+                Shared by every archive: the SM Cloud service and its token, and ClubLog's
+                application key built into this daemon. Values are stored on the daemon and never
+                sent back to the browser, so leaving a field blank keeps the saved value.
+            </p>
+        </div>
+
+        {#if !forwardingState.loaded && forwardingState.loading}
+            <p class="text-sm text-muted">Loading…</p>
+        {:else if !forwardingState.loaded && forwardingState.error}
+            <div class="card">
+                <p class="text-sm text-ink">
+                    Couldn’t load the station accounts: {forwardingState.error}
                 </p>
+                <button class="btn mt-3" onclick={() => forwardingState.load()}>Retry</button>
+            </div>
+        {:else}
+            {#if accounts.length === 0}
+                <p class="text-sm text-muted">No station-wide settings for any destination.</p>
             {/if}
 
-            {#each forwardingState.drafts as f (f.type + ':' + f.name)}
+            {#each accounts as f (f.type + ':' + f.name)}
                 {@const td = forwardingState.typeFor(f.type)}
-                <!-- One disclosure per destination, the LoggingCard "Contact
-                     details" pattern (operate/LoggingCard.svelte:290). The list
-                     is fixed and grows with every new online service, so
-                     everything expanded is a page that only gets longer.
-
-                     The summary has to carry enough that collapsing loses
-                     nothing an operator scans for: which service, whether it is
-                     on, whether this build can edit it, and — because a
+                <!-- One disclosure per station account, the LoggingCard
+                     "Contact details" pattern (operate/LoggingCard.svelte).
+                     The summary carries what collapsing must not hide: which
+                     service, whether this build can edit it, and — because a
                      collapsed card can hide an edit the footer only reports in
-                     aggregate — whether it has unsaved changes. The Enabled
-                     TOGGLE lives inside: an interactive control in <summary>
-                     fights the disclosure for the click. -->
+                     aggregate — whether it has unsaved changes. -->
                 {@const edited = forwardingState.hasEdits(f.name)}
-                {@const q = queues[f.name]}
-                <details class="rounded-md border border-line" open={edited || undefined}>
+                {@const buildKey = buildKeyOf(f.type)}
+                <details
+                    id={`account-${f.type}`}
+                    class="rounded-md border border-line"
+                    open={edited || undefined}
+                    data-testid="account-card"
+                >
                     <!-- A card with unsaved edits CANNOT be collapsed: hiding a
                          pending change behind a closed disclosure is how an
                          operator saves something they have forgotten they
@@ -273,23 +181,6 @@
                              information: ADR 0039 seeds one entry per type, so
                              it always equals the type and just repeats the
                              service name in a second font. -->
-                            <!-- No on/off pill (ADR 0082 transition): whether this
-                                 destination is on is a binding of the active archive,
-                                 which this tab cannot read or write yet; a pill drawn
-                                 from the station entry's flag would mislead. -->
-                            <!-- Live queue depth (W-0005): waiting backlog, failed
-                                 rows and the in-flight batch, read APART (W-0010
-                                 outcome 9 — one terminal failure sat as "1 queued"
-                                 for five weeks). Reads at a glance on the collapsed
-                                 card, beside the on/off pill. -->
-                            {#if q}
-                                <span
-                                    class="text-[11px] text-muted"
-                                    title="Uploads waiting to send · failed and not retried · currently being sent"
-                                >
-                                    {q.waiting} waiting · {q.failed} failed · {q.in_flight} in flight
-                                </span>
-                            {/if}
                             {#if !td}
                                 <span class="text-xs text-warning">unsupported</span>
                             {/if}
@@ -297,69 +188,18 @@
                     </summary>
 
                     <div class="border-t border-line px-3 py-3">
-                        <!-- No Enabled checkbox (ADR 0082 transition): on/off is
-                             binding-owned; the daemon refuses a PUT that changes it. -->
-
-                        <!-- Retry failed (W-0010 outcome 9): re-arm this
-                             destination's failed uploads. Same placement rules
-                             as the clear below. The gap link is offered only
-                             for a type that stamps per-QSO upload status — the
-                             daemon rejects the filter for the rest (SM Cloud) —
-                             and says what that view really lists. -->
-                        {#if q}
-                            {@const label = f.label || td?.display_name || f.type}
-                            <div class="mt-3">
-                                <button
-                                    class="btn"
-                                    disabled={q.failed === 0 || retrying[f.name]}
-                                    onclick={() => onRetryFailed(f.name, label)}
-                                >
-                                    {retrying[f.name] ? 'Retrying…' : `Retry failed (${q.failed})`}
-                                </button>
-                                <p class="mt-1 text-xs text-muted">
-                                    Re-queues this destination's failed uploads for one more attempt
-                                    — after correcting a rejected credential, for instance. An
-                                    upload the destination still rejects fails again.
-                                </p>
-                                {#if q.failed > 0 && hasUploadStamp(f.type)}
-                                    <p class="mt-1 text-xs text-muted">
-                                        <a
-                                            class="underline hover:text-ink"
-                                            href={logbookMissingFromUrl(f.name)}
-                                            onclick={(e) => {
-                                                e.preventDefault();
-                                                navigate('logbook', { missingFrom: f.name });
-                                            }}>Show the QSOs not on {label}</a
-                                        >
-                                        — that view lists every QSO not on {label}, not only the
-                                        failed uploads.
-                                    </p>
+                        {#if buildKey !== ''}
+                            <p class="text-sm text-ink" data-testid="build-key">
+                                Application key:
+                                {#if buildKey === 'present'}
+                                    built into this daemon.
+                                {:else}
+                                    <span class="text-warning"
+                                        >not in this build — uploads wait in the queue until a build
+                                        with the key is installed.</span
+                                    >
                                 {/if}
-                            </div>
-                        {/if}
-
-                        <!-- Clear queue (W-0005): drop this destination's
-                             pending+failed backlog. A live daemon action, kept
-                             OUT of <summary> (click conflict) and out of the
-                             draft/Save machinery. Disabled when nothing is
-                             clearable or a clear is in flight. -->
-                        {#if q}
-                            <div class="mt-3">
-                                <button
-                                    class="btn"
-                                    disabled={q.clearable === 0 || clearing[f.name]}
-                                    onclick={() =>
-                                        onClearQueue(f.name, f.label || td?.display_name || f.type)}
-                                >
-                                    {clearing[f.name]
-                                        ? 'Clearing…'
-                                        : `Clear queue (${q.clearable})`}
-                                </button>
-                                <p class="mt-1 text-xs text-muted">
-                                    Drops queued (not-yet-sent) uploads for this destination.
-                                    In-flight uploads finish and upload history is kept.
-                                </p>
-                            </div>
+                            </p>
                         {/if}
 
                         {#if !td}
@@ -368,12 +208,7 @@
                                 credentials can't be edited here. Its settings are preserved on
                                 save.
                             </p>
-                        {:else if forwardingState.stationFields(f.type).length === 0}
-                            <p class="mt-3 text-sm text-muted" data-testid="no-station-fields">
-                                No station-level settings for this destination: its account is per
-                                logbook and lives in the active archive's bindings.
-                            </p>
-                        {:else}
+                        {:else if forwardingState.stationFields(f.type).length > 0}
                             <div class="mt-4 space-y-3">
                                 {#each forwardingState.stationFields(f.type) as field (field.key)}
                                     {@const cleared = f.cleared.includes(field.key)}
@@ -455,50 +290,12 @@
                 </details>
             {/each}
 
-            {#if extraQueues.length > 0}
-                <div class="space-y-2" data-testid="extra-queues">
-                    <p class="text-sm text-muted">
-                        Other destination bindings in this archive — a further logbook's own
-                        binding, or one whose station account is missing — with their queues:
-                    </p>
-                    {#each extraQueues as q (q.name)}
-                        <div class="rounded-md border border-line px-3 py-2">
-                            <span class="font-mono text-sm text-ink">{q.name}</span>
-                            <span
-                                class="ml-2 text-[11px] text-muted"
-                                title="Uploads waiting to send · failed and not retried · currently being sent"
-                            >
-                                {q.waiting} waiting · {q.failed} failed · {q.in_flight} in flight
-                            </span>
-                            <div class="mt-2 flex gap-2">
-                                <button
-                                    class="btn"
-                                    disabled={q.failed === 0 || retrying[q.name]}
-                                    onclick={() => onRetryFailed(q.name, q.name)}
-                                >
-                                    {retrying[q.name] ? 'Retrying…' : `Retry failed (${q.failed})`}
-                                </button>
-                                <button
-                                    class="btn"
-                                    disabled={q.clearable === 0 || clearing[q.name]}
-                                    onclick={() => onClearQueue(q.name, q.name)}
-                                >
-                                    {clearing[q.name]
-                                        ? 'Clearing…'
-                                        : `Clear queue (${q.clearable})`}
-                                </button>
-                            </div>
-                        </div>
-                    {/each}
-                </div>
-            {/if}
-
             {#if forwardingState.dirty}
                 <div
                     class="rounded-md border border-warning bg-surface-muted px-3 py-2 text-sm text-warning"
                 >
-                    ⚠ Forwarding changes apply when the daemon restarts — the worker binds its
-                    destinations at startup.
+                    ⚠ Station account changes apply when the daemon restarts — the workers bind
+                    their accounts at startup.
                 </div>
             {/if}
 
@@ -521,6 +318,6 @@
                     <span class="text-xs text-muted">Unsaved changes</span>
                 {/if}
             </div>
-        </div>
-    {/if}
+        {/if}
+    </section>
 </div>

@@ -28,6 +28,10 @@ logs under, then **Create archive**. The file is created under Station
 Manager's data directory; you never choose a path. The new archive is
 inactive until you activate it.
 
+A new archive uploads nowhere: every destination starts off, SM Cloud
+included. Once it is active, turn on the ones it should use on **Settings →
+Forwarding** (see the Forwarding chapter).
+
 ## Switching archives
 
 **Activate** restarts the daemon — that is how the switch happens; the
@@ -61,6 +65,12 @@ until the restart completes.
 ## What stays shared
 
 Callsign lookups, the enrichment cache and the FT8 evidence file are
-station-wide and do not change with the archive. Forwarding to online
-services runs only in the Home archive for now; in any other archive
-nothing is queued, and **Settings → Forwarding** says so.
+station-wide and do not change with the archive, and so are the station
+accounts on **Settings → Forwarding**: SM Cloud's service and token, and Club
+Log's built-in application key.
+
+Where each archive uploads is its own. Each archive keeps its destinations,
+logbook by logbook, with each logbook's own account for each service; the
+Forwarding tab edits those of the active archive only. SM Cloud is the one
+exception for now: it can be turned on only in the Home archive, and its
+card says so in any other.

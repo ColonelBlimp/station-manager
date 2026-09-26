@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { fetchForwarderQueues, clearForwarderQueue, retryForwarderQueue } from './forwarder-queues';
+import { clearForwarderQueue, retryForwarderQueue } from './forwarder-queues';
 
 const urlOf = (input: RequestInfo | URL): string =>
     typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
@@ -20,47 +20,6 @@ function stubJson(status: number, body: unknown): void {
 
 afterEach(() => {
     vi.unstubAllGlobals();
-});
-
-describe('fetchForwarderQueues', () => {
-    it('returns the per-forwarder counts on a 200 envelope', async () => {
-        stubJson(200, {
-            forwarders: [
-                { name: 'qrz', clearable: 3, in_flight: 1 },
-                { name: 'clublog', clearable: 0, in_flight: 0 },
-            ],
-        });
-        const out = await fetchForwarderQueues();
-        expect(out.kind).toBe('ok');
-        if (out.kind === 'ok') {
-            expect(out.forwarders).toHaveLength(2);
-            expect(out.forwarders[0]).toEqual({
-                name: 'qrz',
-                waiting: 0,
-                failed: 0,
-                clearable: 3,
-                in_flight: 1,
-            });
-        }
-    });
-
-    it('maps a transport failure to an error', async () => {
-        vi.stubGlobal(
-            'fetch',
-            vi.fn(() => Promise.reject(new Error('connection refused')))
-        );
-        expect((await fetchForwarderQueues()).kind).toBe('error');
-    });
-
-    it('maps a non-2xx status to an error', async () => {
-        stubJson(500, { code: 'queue_counts_failed' });
-        expect((await fetchForwarderQueues()).kind).toBe('error');
-    });
-
-    it('rejects a non-envelope body', async () => {
-        stubJson(200, [{ name: 'qrz' }]); // bare array, not {forwarders:[]}
-        expect((await fetchForwarderQueues()).kind).toBe('error');
-    });
 });
 
 describe('clearForwarderQueue', () => {
@@ -140,34 +99,8 @@ describe('clearForwarderQueue', () => {
     });
 });
 
-// W-0010 outcome 9: the readout carries waiting and failed APART (the card must
-// never show a terminal failure as a live backlog), and "Retry failed" re-arms
-// the named forwarder's failed rows through its own endpoint.
-describe('fetchForwarderQueues — waiting/failed split', () => {
-    it('reads waiting and failed beside clearable and in_flight', async () => {
-        stubJson(200, {
-            forwarders: [{ name: 'qrz', waiting: 4, failed: 1, clearable: 5, in_flight: 2 }],
-        });
-        const out = await fetchForwarderQueues();
-        expect(out).toEqual({
-            kind: 'ok',
-            forwarders: [{ name: 'qrz', waiting: 4, failed: 1, clearable: 5, in_flight: 2 }],
-        });
-    });
-
-    it('defaults an absent waiting/failed to 0 rather than dropping the entry', async () => {
-        stubJson(200, { forwarders: [{ name: 'qrz', clearable: 5, in_flight: 2 }] });
-        const out = await fetchForwarderQueues();
-        expect(out.kind === 'ok' && out.forwarders[0]).toEqual({
-            name: 'qrz',
-            waiting: 0,
-            failed: 0,
-            clearable: 5,
-            in_flight: 2,
-        });
-    });
-});
-
+// W-0010 outcome 9: "Retry failed" re-arms the named forwarder's failed rows
+// through its own endpoint.
 describe('retryForwarderQueue', () => {
     it('returns the re-armed count on 200', async () => {
         stubJson(200, { rearmed: 3 });

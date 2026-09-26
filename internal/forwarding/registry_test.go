@@ -520,3 +520,66 @@ func TestLogbookScopedKeys(t *testing.T) {
 		t.Fatalf("LogbookScopedKeys(unknown) = %v, want nil", got)
 	}
 }
+
+// ---- RegisterBuildKey / BuildKeyPresent (ADR 0082 part 9, W-0021 5E) ----
+
+// A type that authenticates as an APPLICATION with a key built into the daemon
+// (ClubLog's, ADR 0054) reports only whether this build carries it; a type
+// that needs none reports not-applicable.
+func TestRegisterBuildKey_AndPresence(t *testing.T) {
+	carried := false
+	RegisterBuildKey("buildkey-test", func() bool { return carried })
+	if present, applicable := BuildKeyPresent("buildkey-test"); !applicable || present {
+		t.Fatalf("absent key = (%v, %v); want (false, true)", present, applicable)
+	}
+	carried = true
+	if present, applicable := BuildKeyPresent("buildkey-test"); !applicable || !present {
+		t.Fatalf("present key = (%v, %v); want (true, true)", present, applicable)
+	}
+	if _, applicable := BuildKeyPresent("no-build-key-type"); applicable {
+		t.Fatal("a type without a registered build key must report not-applicable")
+	}
+	for name, fn := range map[string]func(){
+		"empty type": func() { RegisterBuildKey("", func() bool { return true }) },
+		"nil probe":  func() { RegisterBuildKey("buildkey-nil", nil) },
+		"duplicate":  func() { RegisterBuildKey("buildkey-test", func() bool { return true }) },
+	} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("%s: expected a panic", name)
+				}
+			}()
+			fn()
+		}()
+	}
+}
+
+// ---- DefaultsTo (ADR 0082 part 3, ruled 2026-09-26) ----
+
+// A field may declare that the daemon fills it from the logbook when a binding
+// is saved enabled without it. Only the one known source is accepted, and only
+// on a logbook-scoped field whose blank is not already meaningful (Clearable).
+func TestRegisterForwarderType_DefaultsTo(t *testing.T) {
+	RegisterForwarderType("defaults-ok", "Defaults OK", []Action{action.Insert}, []CredentialField{
+		{Key: "callsign", Label: "Callsign", Kind: "text", Scope: ScopeLogbook, DefaultsTo: DefaultsToLogbookCallsign},
+	})
+	d, ok := DescriptorFor("defaults-ok")
+	if !ok || d.CredentialFields[0].DefaultsTo != "logbook_callsign" {
+		t.Fatalf("descriptor = %+v; want defaults_to logbook_callsign", d)
+	}
+	for name, field := range map[string]CredentialField{
+		"unknown source": {Key: "c", Label: "C", Kind: "text", Scope: ScopeLogbook, DefaultsTo: "logbook_name"},
+		"station scope":  {Key: "c", Label: "C", Kind: "text", Scope: ScopeStation, DefaultsTo: DefaultsToLogbookCallsign},
+		"clearable too":  {Key: "c", Label: "C", Kind: "text", Scope: ScopeLogbook, Clearable: true, DefaultsTo: DefaultsToLogbookCallsign},
+	} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("%s: expected a panic", name)
+				}
+			}()
+			RegisterForwarderType("defaults-bad-"+strings.ReplaceAll(name, " ", "-"), "X", []Action{action.Insert}, []CredentialField{field})
+		}()
+	}
+}

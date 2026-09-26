@@ -154,6 +154,10 @@ var DefaultRetry = types.RetryConfig{
 func init() {
 	forwarding.Register(Type, New)
 	forwarding.RegisterDefaultRetry(Type, DefaultRetry)
+	// Only PRESENCE of the application key is ever reported (the station
+	// accounts view, ADR 0082 part 9): without it the forwarder still
+	// constructs and its uploads wait in the queue for a keyed build.
+	forwarding.RegisterBuildKey(Type, func() bool { return strings.TrimSpace(InjectedAPIKey) != "" })
 	// The ADIF stamp prefix the worker writes on a successful upload — so the
 	// daemon can resolve clublog → its "uploaded to X?" stamp field without
 	// building the forwarder (manual-backfill skip-check + missing_from filter,
@@ -193,7 +197,10 @@ func init() {
 			{Key: "email", Label: "Account email", Kind: "text", Scope: forwarding.ScopeLogbook},
 			{Key: "password", Label: "Application password", Kind: "password", Scope: forwarding.ScopeLogbook,
 				Help: "A ClubLog Application Password — create one in your ClubLog settings; NOT your main account password."},
-			{Key: "callsign", Label: "Callsign", Kind: "text", Scope: forwarding.ScopeLogbook},
+			// Defaults to the logbook's callsign when a binding is saved enabled
+			// without one (ADR 0082 part 3, ruled 2026-09-26).
+			{Key: "callsign", Label: "Callsign", Kind: "text", Scope: forwarding.ScopeLogbook,
+				DefaultsTo: forwarding.DefaultsToLogbookCallsign},
 		})
 }
 

@@ -14,12 +14,15 @@
         placeholder = '',
         id,
         disabled = false,
+        invalid = false,
     }: {
         value: string;
         oninput: (value: string) => void;
         placeholder?: string;
         id?: string;
         disabled?: boolean;
+        /** Marked by a refused save (a required field left blank). */
+        invalid?: boolean;
     } = $props();
 
     let show = $state(false);
@@ -36,6 +39,8 @@
         autocomplete="off"
         spellcheck="false"
         class="input w-full pr-9"
+        class:input-error={invalid}
+        aria-invalid={invalid || undefined}
     />
     <button
         type="button"

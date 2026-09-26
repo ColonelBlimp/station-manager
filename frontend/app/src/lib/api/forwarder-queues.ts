@@ -1,15 +1,13 @@
 /*
     Operator-triggered forwarder queue actions (W-0005, W-0010 outcome 9).
 
-    GET  /v1/forwarder-queues             → per-forwarder {waiting, failed, clearable, in_flight}
     POST /v1/forwarder/{name}/queue/clear → drop the pending+failed backlog
     POST /v1/forwarder/{name}/queue/retry → re-arm the failed rows for one more attempt
 
-    `waiting` is the pending backlog still to be sent and `failed` the terminal
-    rows only a retry re-arms — read apart so a failure never shows as a live
-    backlog; `clearable` is their sum, what a clear removes; `in_flight` is the
-    in_progress batch a live worker is processing and never clears. All of it is
-    live daemon state, independent of the config draft/save/restart lifecycle.
+    `name` is a binding's opaque forwarder_name (ADR 0082). The counts these act
+    on — waiting, failed, in flight — arrive per logbook with the active
+    archive's bindings (archive-bindings.ts), not from a separate list read.
+    Both are live daemon state, independent of the draft/save/restart lifecycle.
 */
 
 import {
@@ -19,20 +17,6 @@ import {
     safeFetch,
     WRITE_TIMEOUT_MS,
 } from './_helpers';
-
-export interface ForwarderQueueCount {
-    name: string;
-    waiting: number;
-    failed: number;
-    clearable: number;
-    in_flight: number;
-}
-
-/** The interim forwarding gate (ADR 0071 / W-0021): in an archive other than the
- *  adopted one nothing is ever queued to any destination, and the daemon says why. */
-
-export type QueuesOutcome =
-    { kind: 'ok'; forwarders: ForwarderQueueCount[] } | { kind: 'error'; message: string };
 
 export type ClearOutcome =
     | { kind: 'ok'; discarded: number }
@@ -47,34 +31,6 @@ export type ClearOutcome =
     | { kind: 'error'; message: string; indeterminate?: boolean };
 
 const num = (v: unknown): number => (typeof v === 'number' ? v : 0);
-
-function toCount(v: unknown): ForwarderQueueCount | null {
-    if (!isPlainObject(v) || typeof v.name !== 'string') return null;
-    return {
-        name: v.name,
-        waiting: num(v.waiting),
-        failed: num(v.failed),
-        clearable: num(v.clearable),
-        in_flight: num(v.in_flight),
-    };
-}
-
-/** Read every configured forwarder's clearable/in-flight queue counts. */
-export async function fetchForwarderQueues(signal?: AbortSignal): Promise<QueuesOutcome> {
-    const fetched = await safeFetch('/v1/forwarder-queues', { signal });
-    if (!fetched.ok) return { kind: 'error', message: fetched.message };
-    if (!fetched.response.ok) return { kind: 'error', message: `HTTP ${fetched.response.status}` };
-    const body = await readJsonBody(fetched.response);
-    if (!isPlainObject(body) || !Array.isArray(body.forwarders)) {
-        return { kind: 'error', message: 'malformed /v1/forwarder-queues response' };
-    }
-    return {
-        kind: 'ok',
-        forwarders: body.forwarders
-            .map(toCount)
-            .filter((f): f is ForwarderQueueCount => f !== null),
-    };
-}
 
 /** Discard forwarder `name`'s pending+failed backlog; returns the count removed.
  *  The name is URL-encoded so the daemon can round-trip it verbatim (a name with

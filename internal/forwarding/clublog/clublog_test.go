@@ -502,3 +502,36 @@ func TestBandID(t *testing.T) {
 		}
 	}
 }
+
+// ADR 0082 part 9 (W-0021 5E): the station accounts view learns only whether
+// this build carries the application key.
+func TestBuildKeyPresence(t *testing.T) {
+	saved := InjectedAPIKey
+	t.Cleanup(func() { InjectedAPIKey = saved })
+	InjectedAPIKey = "  "
+	if present, applicable := forwarding.BuildKeyPresent(Type); !applicable || present {
+		t.Fatalf("blank key = (%v, %v); want (false, true)", present, applicable)
+	}
+	InjectedAPIKey = "k"
+	if present, applicable := forwarding.BuildKeyPresent(Type); !applicable || !present {
+		t.Fatalf("key = (%v, %v); want (true, true)", present, applicable)
+	}
+}
+
+// ADR 0082 part 3 (ruled 2026-09-26): the callsign defaults to the logbook's,
+// declared by the generic descriptor marker — the SPA holds no ClubLog rule.
+func TestDescriptor_CallsignDefaultsToLogbookCallsign(t *testing.T) {
+	d, ok := forwarding.DescriptorFor(Type)
+	if !ok {
+		t.Fatal("clublog descriptor missing")
+	}
+	for _, f := range d.CredentialFields {
+		want := ""
+		if f.Key == "callsign" {
+			want = forwarding.DefaultsToLogbookCallsign
+		}
+		if f.DefaultsTo != want {
+			t.Fatalf("%s defaults_to = %q; want %q", f.Key, f.DefaultsTo, want)
+		}
+	}
+}

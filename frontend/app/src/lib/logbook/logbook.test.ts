@@ -719,6 +719,40 @@ describe('mount with a missing-from handoff', () => {
         navigate('operate');
     });
 
+    it('init opens the handed-off LOGBOOK with its destination (ADR 0082)', async () => {
+        const extra = 'qrz.01920000-0000-7000-8000-00000000000b';
+        const urls: string[] = [];
+        vi.stubGlobal(
+            'fetch',
+            vi.fn((input: RequestInfo | URL) => {
+                const url = urlText(input);
+                urls.push(url);
+                const json = (body: unknown) =>
+                    Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+                if (url.startsWith('/v1/config')) return json({ mailer: { enabled: false } });
+                if (url === '/v1/logbook/2/destinations')
+                    return json({ destinations: [{ name: extra, type: 'qrz', enabled: true }] });
+                if (url === '/v1/logbook')
+                    return json([
+                        { id: 1, name: 'Main', callsign: 'G4ABC' },
+                        { id: 2, name: 'Second', callsign: 'G4XYZ' },
+                    ]);
+                if (url.startsWith('/v1/logbook/2/qso'))
+                    return json({ items: [], next_cursor: null });
+                if (url.startsWith('/v1/logbook/2/count')) return json({ count: 0 });
+                return Promise.resolve(new Response('{}', { status: 404 }));
+            })
+        );
+        navigate('logbook', { missingFrom: extra, logbookId: 2 });
+        await logbookState.init();
+        expect(logbookState.selectedId).toBe(2);
+        expect(logbookState.selectedDestination).toBe(extra);
+        const pageUrls = urls.filter((u) => u.startsWith('/v1/logbook/2/qso'));
+        expect(pageUrls.length).toBeGreaterThan(0);
+        for (const u of pageUrls) expect(u).toContain('missing_from=' + encodeURIComponent(extra));
+        expect(urls.some((u) => u.startsWith('/v1/logbook/1/'))).toBe(false);
+    });
+
     it('init applies the handed-off destination before the first page load', async () => {
         const urls: string[] = [];
         vi.stubGlobal(

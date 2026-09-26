@@ -14,6 +14,8 @@ import {
     setModeChangeHook,
     isFtMode,
     takeLogbookMissingFrom,
+    takeLogbookHandoffLogbook,
+    logbookMissingFromUrl,
 } from './router.svelte';
 
 describe('router base-path handling', () => {
@@ -188,6 +190,7 @@ describe('FT4 as a third operating mode', () => {
 describe('logbook missing-from handoff', () => {
     afterEach(() => {
         takeLogbookMissingFrom();
+        takeLogbookHandoffLogbook();
         navigate('operate');
     });
 
@@ -218,5 +221,37 @@ describe('logbook missing-from handoff', () => {
     it('a plain /logbook has nothing pending', () => {
         navigate('logbook');
         expect(takeLogbookMissingFrom()).toBeUndefined();
+        expect(takeLogbookHandoffLogbook()).toBeUndefined();
+    });
+
+    // ADR 0082 (W-0021 5E): a destination binding belongs to ONE logbook, so the
+    // handoff names the logbook too — or the view opens the first logbook with a
+    // name that is not its binding.
+    it('carries the logbook with the destination, taken once', () => {
+        expect(urlOf('logbook', 'phone', '', 'qrz.u', 2)).toBe(
+            '/logbook?missing_from=qrz.u&logbook=2'
+        );
+        expect(urlOf('logbook', 'phone', '', undefined, 2)).toBe('/logbook');
+        expect(logbookMissingFromUrl('qrz.u', 2)).toContain('missing_from=qrz.u&logbook=2');
+        navigate('logbook', { missingFrom: 'qrz.u', logbookId: 2 });
+        expect(window.location.search).toBe('?missing_from=qrz.u&logbook=2');
+        expect(takeLogbookMissingFrom()).toBe('qrz.u');
+        expect(takeLogbookHandoffLogbook()).toBe(2);
+        expect(takeLogbookHandoffLogbook()).toBeUndefined();
+    });
+
+    it('a deep link carries the logbook; a malformed one is ignored', () => {
+        window.history.pushState({}, '', '/logbook?missing_from=clublog&logbook=3');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+        expect(takeLogbookHandoffLogbook()).toBe(3);
+        for (const bad of ['abc', '0', '-1', '1.5']) {
+            window.history.pushState({}, '', `/logbook?missing_from=clublog&logbook=${bad}`);
+            window.dispatchEvent(new PopStateEvent('popstate'));
+            expect(takeLogbookHandoffLogbook()).toBeUndefined();
+        }
+        // Without a destination the logbook is no handoff (urlOf never writes one).
+        window.history.pushState({}, '', '/logbook?logbook=3');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+        expect(takeLogbookHandoffLogbook()).toBeUndefined();
     });
 });

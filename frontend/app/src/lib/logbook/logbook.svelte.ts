@@ -25,7 +25,7 @@ import { fetchMailer, fetchLogbookDestinations } from '../api/config-blocks';
 import { enqueueUploads } from '../api/uploads';
 import { enrichCallsign } from '../api/enrichment';
 import { forwarderLabel, hasUploadStamp, type ForwarderInfo } from './uploadStatus';
-import { takeLogbookMissingFrom } from '../router.svelte';
+import { takeLogbookMissingFrom, takeLogbookHandoffLogbook } from '../router.svelte';
 
 const PAGE_SIZES = [25, 50, 100] as const;
 
@@ -344,6 +344,9 @@ export class LogbookState {
         this.error = null;
         void this.loadMailer();
         const handoff = takeLogbookMissingFrom();
+        // The logbook the handed-off binding serves (ADR 0082): opened instead
+        // of the first one, so its own binding name filters its own rows.
+        const handoffLogbook = takeLogbookHandoffLogbook();
         if (handoff !== undefined) {
             // Arrived from Settings → Forwarding's failed count (W-0010 outcome
             // 9). selectLogbook loads the logbook's bindings BEFORE its first
@@ -362,7 +365,8 @@ export class LogbookState {
         this.logbooks = out.logbooks;
         this.loading = false;
         if (out.logbooks.length > 0) {
-            await this.selectLogbook(out.logbooks[0].id);
+            const named = out.logbooks.find((l) => l.id === handoffLogbook);
+            await this.selectLogbook((named ?? out.logbooks[0]).id);
         }
     }
 

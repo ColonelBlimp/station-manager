@@ -84,18 +84,26 @@ export function subPathOf(pathname: string, base: string): string {
 }
 
 // The full URL (base + route) to push/replace into the address bar. Pure + base-explicit.
-// `missingFrom` names a forwarder for the logbook's "not on X" view (below); it is
-// written only for the logbook route.
-export function urlOf(view: View, mode: OpMode, base: string, missingFrom?: string): string {
+// `missingFrom` names a destination binding for the logbook's "not on X" view
+// (below) and `logbookId` the logbook that binding serves (ADR 0082: a binding
+// belongs to one logbook); both are written only for the logbook route, and the
+// logbook only beside a destination.
+export function urlOf(
+    view: View,
+    mode: OpMode,
+    base: string,
+    missingFrom?: string,
+    logbookId?: number
+): string {
     const url = base + pathFor(view, mode);
-    return view === 'logbook' && missingFrom
-        ? `${url}?missing_from=${encodeURIComponent(missingFrom)}`
-        : url;
+    if (view !== 'logbook' || !missingFrom) return url;
+    const logbook = logbookId !== undefined ? `&logbook=${logbookId}` : '';
+    return `${url}?missing_from=${encodeURIComponent(missingFrom)}${logbook}`;
 }
 
 const subPath = (): string => subPathOf(window.location.pathname, BASE);
-const urlFor = (view: View, mode: OpMode, missingFrom?: string): string =>
-    urlOf(view, mode, BASE, missingFrom);
+const urlFor = (view: View, mode: OpMode, missingFrom?: string, logbookId?: number): string =>
+    urlOf(view, mode, BASE, missingFrom, logbookId);
 
 /*
     Logbook "missing from" handoff (W-0010 outcome 9, slice 4). Settings →
@@ -107,10 +115,31 @@ const urlFor = (view: View, mode: OpMode, missingFrom?: string): string =>
     (takeLogbookMissingFrom), and the URL is canonicalised back to /logbook.
 */
 let pendingMissingFrom: string | undefined;
+// The logbook the handed-off destination belongs to, when the link named one.
+let pendingLogbookId: number | undefined;
 
 function missingFromOf(search: string): string | undefined {
     const v = new URLSearchParams(search).get('missing_from');
     return v ? v : undefined;
+}
+
+function logbookIdOf(search: string): number | undefined {
+    const v = new URLSearchParams(search).get('logbook');
+    const n = v === null || v === '' ? NaN : Number(v);
+    return Number.isInteger(n) && n > 0 ? n : undefined;
+}
+
+// The logbook counts only beside a destination, as urlOf writes it: a bare
+// ?logbook= is not a handoff, and nothing would canonicalise it away.
+function logbookBeside(missingFrom: string | undefined, search: string): number | undefined {
+    return missingFrom !== undefined ? logbookIdOf(search) : undefined;
+}
+
+/** The logbook a "not on X" link named, if any. Taken once, like the destination. */
+export function takeLogbookHandoffLogbook(): number | undefined {
+    const v = pendingLogbookId;
+    pendingLogbookId = undefined;
+    return v;
 }
 
 /** The pending "not on X" destination, if a logbook link carried one. Taking it
@@ -124,15 +153,19 @@ export function takeLogbookMissingFrom(): string | undefined {
     return v;
 }
 
-/** The href for the logbook's "not on `name`" view, for a real link. */
-export function logbookMissingFromUrl(name: string): string {
-    return urlFor('logbook', router.mode, name);
+/** The href for the logbook's "not on `name`" view, for a real link; `logbookId`
+ *  names the logbook the binding serves. */
+export function logbookMissingFromUrl(name: string, logbookId?: number): string {
+    return urlFor('logbook', router.mode, name, logbookId);
 }
 
 const initial = parse(subPath(), storedMode());
 export const router = $state<Loc>(initial);
 storageSet(MODE_KEY, router.mode); // remember a deep-linked mode
-if (initial.view === 'logbook') pendingMissingFrom = missingFromOf(window.location.search);
+if (initial.view === 'logbook') {
+    pendingMissingFrom = missingFromOf(window.location.search);
+    pendingLogbookId = logbookBeside(pendingMissingFrom, window.location.search);
+}
 
 // Normalise the URL (e.g. a bare /operate → /operate/phone) to the canonical path
 // without adding a history entry.
@@ -187,11 +220,12 @@ function mayLeave(to: View): boolean {
     return leaveGuard === null || leaveGuard();
 }
 
-export function navigate(view: View, opts?: { missingFrom?: string }): void {
+export function navigate(view: View, opts?: { missingFrom?: string; logbookId?: number }): void {
     if (!mayLeave(view)) return;
     router.view = view;
     pendingMissingFrom = view === 'logbook' ? opts?.missingFrom : undefined;
-    const url = urlFor(view, router.mode, pendingMissingFrom);
+    pendingLogbookId = view === 'logbook' && opts?.missingFrom ? opts.logbookId : undefined;
+    const url = urlFor(view, router.mode, pendingMissingFrom, pendingLogbookId);
     if (window.location.pathname + window.location.search !== url) {
         window.history.pushState({}, '', url);
     }
@@ -226,5 +260,6 @@ window.addEventListener('popstate', () => {
     router.view = loc.view;
     router.mode = loc.mode;
     pendingMissingFrom = loc.view === 'logbook' ? missingFromOf(window.location.search) : undefined;
+    pendingLogbookId = logbookBeside(pendingMissingFrom, window.location.search);
     modeChanged(from, loc.mode);
 });

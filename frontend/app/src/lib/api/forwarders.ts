@@ -44,6 +44,12 @@ export interface CredentialField {
      * render the split yet. Declared by the type in Go — the SPA never decides it.
      */
     scope: CredentialScope;
+    /**
+     * The daemon fills this field from the logbook when a binding is saved
+     * enabled without it, and stores the value with the binding (ADR 0082
+     * part 3). A client treats it as satisfied and sends nothing for it.
+     */
+    defaults_to?: 'logbook_callsign';
 }
 
 export type CredentialScope = 'station' | 'logbook';
@@ -149,6 +155,12 @@ export async function fetchForwarderTypes(signal?: AbortSignal): Promise<TypesOu
                       help: typeof f.help === 'string' ? f.help : undefined,
                       clearable: f.clearable === true,
                       scope: toScope(f.scope),
+                      // Only the one known source; anything else leaves the
+                      // field required rather than guessing a default.
+                      defaults_to:
+                          f.defaults_to === 'logbook_callsign'
+                              ? ('logbook_callsign' as const)
+                              : undefined,
                   }))
                   // A field with no key cannot be bound to a credential at all, and
                   // a field with no known scope cannot be placed in either store

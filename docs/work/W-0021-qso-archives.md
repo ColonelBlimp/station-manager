@@ -1071,6 +1071,83 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      clear test fails. Gates: whole-tree vet + tests, gofmt, observatory 0 regressions.
      `api-endpoints.md` states serialization, the build rule, the clear rules and
      `binding_unusable`.
+     **Built 2026-09-25, 5E — the Forwarding tab on the bindings API:** daemon: ClubLog registers
+     an application-key presence probe (`forwarding.RegisterBuildKey` / `BuildKeyPresent`; only
+     presence leaves the package) and the station account view reports `build_key`
+     `present`/`absent` for such a type; the enable reason now names which gap — no entry in
+     `config.json`, or an entry with a station field unset — so the tab can offer the fix only where
+     it exists. SPA: `lib/api/archive-bindings.ts` (GET/PUT client; rows without a numeric logbook id
+     and destinations without a type are dropped; an unknown aggregate reads `off`; a timed-out PUT
+     is ambiguous), `bindings.svelte.ts` (drafts per row; the pill is the daemon's state and the
+     switches the draft; client validation marks a required field, restores the switch and sends
+     nothing; a daemon refusal restores every switch and keeps typed values; a timeout re-reads and
+     keeps typed values; removal marks survive only on a row that is off with the key stored),
+     `DestinationsSection.svelte` (one card per destination: state pill, "off for …" naming the
+     logbooks of a mixed destination (ADR part 2), the every-logbook switch only when the archive
+     has more than one logbook — with one it would duplicate the row's switch — per-logbook rows
+     with masked fields, queue counts, Retry failed / Clear queue and the gap link carrying the
+     logbook; the reason note, with "Open its station account" only when the station account is the
+     gap; the restart banner), `ForwardingSection.svelte` reduced to the host plus "Station accounts"
+     (only entries with station fields, a build key, or no descriptor; no switch or pill; ClubLog
+     says whether this build carries its key), loading apart from the destinations so a station
+     reload never remounts them over the operator's drafts. The router hands the logbook id with a
+     "not on X" link (`?missing_from=…&logbook=N`, the logbook only beside a destination) and the
+     logbook view opens that logbook. The Settings leave guard counts, discards and waits on the
+     destination drafts too. The archive creation form states that a new archive uploads nowhere.
+     The queue tests of the old tab were ported to the binding rows (D10–D19); the unused
+     queue-list client (`fetchForwarderQueues`) and its tests were removed. **Judgement to confirm:**
+     ADR part 9 asks for "the link to where it is fixed" also for SM Cloud outside the adopted
+     archive; that gap is fixed by the identity-aware server (5F), not on this tab, so the card
+     states the reason without a link rather than send the operator to a card that cannot fix it.
+     **Not built (ADR part 3):** ClubLog `callsign` defaulting to the logbook's callsign — today
+     the field is required when a row is turned on; where the default lives (daemon merge, or a
+     descriptor hint the SPA pre-fills) wants a ruling. Self-review found and fixed before
+     presenting: "Open its station account" opened a card only on the first click (a forced-open
+     state that never changed again) — the card's own `open` is set now; a stale count after a
+     failed refresh still showed in the card's summary total; removal marks survived a refusal or
+     timeout that left the row on. Proofs (compiling, restores verified by hash; each fails its own
+     test): ClubLog presence probe forced true; the no-entry reason collapsed into the incomplete
+     one; the account link offered on a complete account; "off for" naming the on logbooks; every
+     station entry listed; the account link never opening, and opening only the first time; the
+     build-key texts swapped; the leave guard ignoring destination edits, skipping their discard,
+     and ignoring a destinations save in flight; the saving flag not raised; the new-archive
+     sentence dropped; validation ignoring a missing required key; the router dropping the logbook,
+     and taking a bare `?logbook=`; the logbook view ignoring the handed-off logbook; the decoder
+     keeping id-less rows (its fixture first lacked such a row — fixed); a stale count kept, and its
+     summary total shown; a marked field never marked invalid; removal marks kept on an on row, and
+     for a key no longer stored; the destinations coupled to the station-account load. Gates:
+     frontend lint, format, svelte-check, vitest; Go whole-tree vet and tests, gofmt, observatory 0
+     regressions. Docs: `api-endpoints.md` (`build_key`, reason wording); manual `forwarding.md`
+     rewritten for the tab, `qso-archives.md` (a new archive uploads nowhere; destinations are per
+     archive, SM Cloud Home-only until 5F).
+     **Found while gating 5E:** CI had been red since the 5B routing commit (`7990011b`, through
+     `4f42ce2a` and `c8ca2a7a`): the SM Cloud reconcile end-to-end tests build a reconciler over a
+     local stack with no routing snapshot, so every heal row was refused `forwarder_unavailable`.
+     They skip without Postgres, so local gates never ran them. Fixed test-side in its own commit
+     before this one (`bindLogbook` installs the seeded binding wherever a reconciler runs); the
+     Postgres suites and both CI Go steps pass locally with the dev database.
+     **Operator rulings (2026-09-26) on the two 5E questions:** (1) the non-Home SM Cloud identity
+     refusal stays unlinked until 5F — no current screen can fix it; closed with no code change.
+     (2) ClubLog's `callsign` defaults IN THE DAEMON when a binding is saved that ends enabled and
+     has neither a stored nor a typed callsign: the logbook's callsign is persisted with the
+     binding in the same transaction, so a later logbook callsign change never silently retargets
+     uploads; an explicit stored or typed value always wins; disabled rows are untouched. The
+     descriptor carries a generic marker (`defaults_to: "logbook_callsign"`), and the SPA uses it
+     — never ClubLog-specific logic — to treat the field as satisfied in validation, show the
+     logbook callsign as the placeholder, and leave the value out of the request so the daemon
+     stays authoritative.
+     **Built 2026-09-26 per ruling (2):** `CredentialField.DefaultsTo` / `defaults_to` with the one
+     source `logbook_callsign` (registration refuses another source, a station-scoped or a
+     clearable field); ClubLog's `callsign` carries it; `mergeBindingCredentials` fills such a field
+     from the logbook's callsign for a row ending enabled with neither stored nor typed value
+     (`fillDefaults`), inside the same upsert, before the required check and the build. SPA: the
+     decoder passes only the known source; validation treats the field as satisfied when the
+     logbook has a callsign; the request carries nothing for it; the placeholder names the
+     callsign. Proofs (restores verified): registry check off; ClubLog marker removed; no default
+     filled; default overwriting a stored/typed value; disabled rows defaulted; decoder accepting
+     any source; SPA still requiring the field; SPA defaulting without a logbook callsign; no
+     placeholder — each fails its own test. Docs: `api-endpoints.md` (`defaults_to`, the PUT rule);
+     manual `forwarding.md` (Club Log callsign).
    - **5C — config v6 and the station account.** Legacy binding-owned keys (`name`, `enabled`,
      logbook-scoped credentials) known but deprecated at v6 (ADR 0075's shape). The version bump may
      retain those keys; only the adopted Home archive's committed seed marker permits the file-first

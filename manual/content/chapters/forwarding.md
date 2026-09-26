@@ -1,71 +1,62 @@
 ---
-title: Forwarding Your Log (QRZ, ClubLog, and QRZCQ)
+title: Forwarding Your Log (QRZ, Club Log, QRZCQ, and SM Cloud)
 weight: 80
 ---
 
 Forwarding sends each QSO you log to your online services automatically.
 When you log a contact, Station Manager records it locally first — that
 never depends on the network — and then, in the background, uploads it to
-whichever destinations you have configured. If your internet is slow or
-drops out, the upload waits and retries; your logging is never blocked.
+the destinations its logbook is bound to. If your internet is slow or drops
+out, the upload waits and retries; your logging is never blocked.
 
-Three destinations are supported today: **QRZ.com**, **Club Log**, and
-**QRZCQ**.
-(LoTW is planned but not yet available — see the end of this chapter.)
+Four destinations are supported today: **QRZ.com**, **Club Log**,
+**QRZCQ**, and **SM Cloud backup** (for an SM Cloud service you run).
+LoTW is planned but not yet available — see the end of this chapter.
 
-### Where forwarding is configured
+### Where forwarding is set up
 
-Forwarding is set up in `config.json`, in the `forwarders` list. On a
-normal install the file lives at:
+Everything is on **Settings → Forwarding**, in two parts:
 
-```
-~/.local/share/station-manager/config.json
-```
+- **Destinations for this archive** — which services the active archive
+  uploads to, logbook by logbook, and each logbook's own account for each
+  service: a QRZ logbook key, a Club Log login. These belong to the archive
+  (see the QSO Archives chapter): activating another archive brings its own
+  destinations, and a new archive starts with every destination off.
+- **Station accounts** — what every archive shares: the SM Cloud service
+  address and token, and whether this build of Station Manager carries Club
+  Log's application key.
 
-> **Stop the daemon before you edit `config.json`.**
-> While Station Manager is running it rewrites the whole file from memory
-> whenever a setting changes in the app, which will overwrite edits you
-> made by hand. Always: stop the daemon → edit the file → start it again.
->
-> ```
-> systemctl --user stop smd
-> # edit config.json
-> systemctl --user start smd
-> ```
+Station Manager never shows a stored password or key again. A field that
+holds one reads `•••••••• (set — leave blank to keep)`: leave it blank to
+keep the stored value, or type a new one to replace it.
 
-Each entry in `forwarders` describes one destination:
+**Changes apply when the daemon restarts.** After you save, the tab says the
+saved destinations differ from the ones the daemon is running with. Press
+**Restart daemon** at the top right of Settings to apply them.
 
-| Field | Meaning |
-|-------|---------|
-| `name` | A label you choose (e.g. `"qrz"`). Used in logs and status. |
-| `type` | The service: `"qrz"`, `"clublog"`, or `"qrzcq"`. |
-| `enabled` | `true` to upload new QSOs to this service. `false` means *don't queue anything* for it — see "Turning a destination off" below. |
-| `credentials` | The login details for that service (differs per type — see below). |
-| `action_filter` | Which changes to send: `"insert"`, `"update"`, `"delete"`. Optional — if you leave it out, it defaults to what the service actually supports. |
-| `tick_interval_sec` | How often the uploader checks for new QSOs. Usually `120`; QRZCQ defaults to `90`. |
-| `batch_size` | How many QSOs to send per check. Usually `5`; QRZCQ defaults to `1`. |
+### Turning a destination on
 
-The defaults for `tick_interval_sec` and `batch_size` are deliberately
-gentle — they suit a slow or unreliable connection. You rarely need to
-change them. Most destinations use 120 seconds and five rows; QRZCQ uses
-90 seconds and one row to respect its stricter request limit.
+1. Open the destination's card — each card shows whether it is **enabled**
+   for every logbook, **disabled**, or **mixed**: on for some logbooks, with
+   the ones it is off for named beside it.
+2. Tick the switch for the logbook that should upload. With several
+   logbooks in the archive, the destination's own switch sets them all at
+   once.
+3. Fill that logbook's account fields, described per service below. A
+   logbook switched on without a required field is not saved: the field is
+   marked *Required to turn this on*.
+4. Press **Save destinations**, then restart the daemon.
+
+If a destination can't be turned on in this archive, its card says why and
+the switches stay off. When the missing piece is a station account, the note
+offers **Open its station account**, which opens that card below.
 
 ### QRZ.com
 
-QRZ needs a single **logbook API key**. Each QRZ logbook has its own key,
-found on the logbook's settings page on QRZ.com. That one key both
-authenticates you and selects which logbook the QSO lands in.
-
-```json
-{
-  "name": "qrz",
-  "type": "qrz",
-  "enabled": true,
-  "credentials": {
-    "api_key": "XXXX-XXXX-XXXX-XXXX"
-  }
-}
-```
+QRZ needs a **logbook API key** per logbook. Each QRZ logbook has its own
+key, found on the logbook's settings page on QRZ.com. That one key both
+authenticates you and selects which QRZ logbook the QSO lands in, so two
+Station Manager logbooks can upload to two different QRZ logbooks.
 
 QRZ supports the full lifecycle, so if you later edit or delete a QSO in
 Station Manager, that change is forwarded too.
@@ -75,40 +66,27 @@ Station Manager, that change is forwarded too.
 Club Log needs **two separate credentials**, and this trips people up
 because the names sound alike:
 
-- **Your account login** — `email` plus `password`. Use a Club Log
-  **Application Password** (generate one in your Club Log account
-  settings) rather than your main login password, so it can be revoked
-  on its own. This is what tells Club Log *whose* log the QSO belongs to.
-- **The application API key** — `api`. This identifies *Station Manager
-  as a piece of software*, not you. It does **not** replace your login —
-  Club Log needs both. You obtain one key at
-  [clublog.org/requestapikey.php](https://clublog.org/requestapikey.php).
-
-`callsign` selects which of your account's logs receives the QSO.
-
-```json
-{
-  "name": "clublog",
-  "type": "clublog",
-  "enabled": true,
-  "credentials": {
-    "email": "you@example.com",
-    "password": "your-application-password",
-    "callsign": "7Q5MLV",
-    "api": "your-clublog-application-api-key"
-  }
-}
-```
+- **Your account login**, per logbook — **Account email** plus
+  **Application password**. Use a Club Log Application Password (generate
+  one in your Club Log account settings) rather than your main login
+  password, so it can be revoked on its own. This tells Club Log *whose*
+  log the QSO belongs to. **Callsign** selects which of your account's logs
+  receives it. Leave it blank to use the logbook's own callsign: Station
+  Manager fills it in when you save and keeps it, so changing the logbook's
+  callsign later does not move your uploads to another Club Log log.
+- **The application API key**, which identifies *Station Manager as a piece
+  of software*, not you. It is built into Station Manager when it is
+  compiled, so there is nothing to type. The Club Log card under
+  **Station accounts** says whether your build carries it. Without it, Club
+  Log uploads wait in the queue until a build with the key is installed;
+  nothing is lost.
 
 #### Club Log only uploads and deletes — it does not edit
 
 Club Log's real-time interface can **add** a QSO and **delete** a QSO,
 but it cannot change the fields of one already in your log (re-sending an
-edited QSO is just treated as a duplicate). Station Manager knows this:
-if you leave `action_filter` out, Club Log defaults to
-`["insert", "delete"]` automatically — so editing a QSO won't pile up
-failed uploads. If you set `action_filter` by hand, don't include
-`"update"` for Club Log; the daemon will refuse to start and tell you why.
+edited QSO is just treated as a duplicate). Station Manager knows this, so
+editing a QSO won't pile up failed Club Log uploads.
 
 #### If your credentials are wrong
 
@@ -116,38 +94,31 @@ If Club Log rejects your login, it requires software to **stop sending
 immediately** — otherwise your address can be temporarily blocked.
 Station Manager honours this: the first rejection halts further Club Log
 uploads until you fix the credentials and restart the daemon. So if Club
-Log uploads stop, check `email` / `password` / `api`, correct them (with
-the daemon stopped), and start it again.
+Log uploads stop, check the logbook's Club Log fields on **Settings →
+Forwarding**, correct them, save, and restart.
 
 ### QRZCQ
 
-QRZCQ's account API accepts an ADIF log wrapped in JSON. It requires the
-callsign of your QRZCQ account and that account's API key:
-
-```json
-{
-  "name": "qrzcq",
-  "type": "qrzcq",
-  "enabled": true,
-  "credentials": {
-    "call": "7Q5MLV",
-    "key": "your-qrzcq-api-key"
-  }
-}
-```
+QRZCQ needs, per logbook, the **QRZCQ callsign** of your account and that
+account's **API key**.
 
 QRZCQ asks clients not to post more than once per minute. Station Manager is
-deliberately gentler: the destination defaults to one QSO every **90 seconds**
-(`tick_interval_sec: 90`, `batch_size: 1`), and the forwarder enforces that
-minimum interval internally even if those worker settings are changed by hand.
-A backlog therefore drains gradually without holding up local logging.
+deliberately gentler: it sends one QSO every **90 seconds**, and enforces
+that minimum interval even if the pacing is changed by hand. A backlog
+therefore drains gradually without holding up local logging.
 
 The published QRZCQ developer API documents adding log records, but documents
-no edit or delete operation. Station Manager does not invent those semantics:
-the default action filter is consequently `["insert"]`, so later edits and
-deletes remain local and are not sent to QRZCQ. QRZCQ describes this
-authenticated JSON account API as alpha, so its wire format may change
-upstream.
+no edit or delete operation. Station Manager does not invent those semantics,
+so later edits and deletes remain local and are not sent to QRZCQ. QRZCQ
+describes this authenticated JSON account API as alpha, so its wire format may
+change upstream.
+
+### SM Cloud backup
+
+SM Cloud's **Service URL** and **Bearer token** are a station account: set
+them once under **Station accounts**. Each logbook may name its **Cloud
+logbook**; leave it empty for `main`. For now SM Cloud can be turned on only
+in the Home archive, and its card says so in any other.
 
 ### How to tell a QSO was uploaded
 
@@ -161,53 +132,49 @@ ADIF defines no equivalent QRZCQ upload-status field. A successful QRZCQ upload
 is therefore recorded in Station Manager's durable upload history, but it does
 not add a portable QRZCQ status tag to an ADIF export.
 
-<!-- DRAFT NOTE for the later manual pass — the mechanism below is built and
-     working in the daemon (ADR 0038/0039); the logbook-app screens that expose
-     it visually are still being built, so describe the workflow once the UI
-     lands. Rebuild the embedded manual (cd manual && hugo --quiet --minify)
-     when finalising. -->
-
 ### Turning a destination off
 
-Setting `enabled: false` means Station Manager **stops queuing** new QSOs
-for that service. It is *not* a pause-and-catch-up: any QSOs already
-waiting to upload to that service are dropped from the queue (the contacts
-themselves are untouched in your log — only the pending upload is
-cleared). This is deliberate — it's the clean way to keep a batch of QSOs
-(say, a contest) off a service. When you turn the destination back on,
-new QSOs queue again, but the ones logged while it was off do **not** get
-sent automatically. You send those yourself — see "Catching up" below.
+Switching a logbook's destination off means Station Manager **stops
+queuing** that logbook's new QSOs for that service once the daemon restarts.
+It is *not* a pause-and-catch-up: that logbook's uploads still waiting for
+the service are dropped from the queue at the restart (the contacts
+themselves are untouched in your log — only the pending upload is cleared).
+This is deliberate — it's the clean way to keep a batch of QSOs (say, a
+contest) off a service. When you turn the destination back on, new QSOs
+queue again, but the ones logged while it was off do **not** get sent
+automatically. You send those yourself — see "Catching up" below.
 
-### Clearing a queued backlog
+### The queue: retrying and clearing
 
-If uploads to a destination have piled up — a contest batch you would rather not
-send, or a destination you have stopped using but whose backlog is still
-waiting — you can empty that one destination's queue on demand from **Settings →
-Forwarding**.
+Every logbook with a destination shows its queue under that destination,
+for example *12 waiting · 1 failed · 3 in flight*: **waiting** is the
+backlog still to send, **failed** is uploads the service refused and that
+won't be retried on their own, and **in flight** is the small batch the
+uploader is sending right now.
 
-Each destination shows its queue at a glance, for example *12 queued · 3 in
-flight*: **queued** is the backlog still waiting to send, and **in flight** is
-the small batch the uploader is sending right now. **Clear queue** discards the
-*queued* backlog for that destination only. It does not touch your logged
-contacts, anything already uploaded, or the batch in flight — an upload already
-being sent finishes normally, and only the not-yet-started backlog is dropped.
-The button reports how many waiting uploads it removed.
+- **Retry failed** puts that logbook's failed uploads back in the queue —
+  useful once you have corrected the cause, such as a wrong key.
+- **Clear queue** discards that logbook's waiting and failed uploads for
+  that destination, after asking you to confirm. It does not touch your
+  logged contacts, anything already uploaded, or the batch in flight. It
+  reports how many uploads it removed.
 
-This is the immediate lever to empty a backlog: turning a destination off (or
-restarting the daemon) also clears its queue, but Clear queue does it now, per
-destination, without a restart. The opposite direction — *sending* past QSOs to
-a service — is backfill; see "Catching up" below.
+For a service that stamps its uploads (QRZ.com, Club Log), a logbook with
+failed uploads also offers **Show the QSOs of … not on …**. It opens that
+logbook in the Logbook view, listing every QSO not yet on the service — not
+only the failed ones — ready for "Catching up" below.
 
 ### Catching up: sending past QSOs to a service (backfill)
 
-QSOs logged while a service was disabled, logged before you added it, or
+QSOs logged while a service was off, logged before you added it, or
 imported from another log won't have been uploaded to that service. You
-can send them yourself from the logbook app:
+can send them yourself from the Logbook view:
 
-1. Pick the destination (e.g. QRZ) and the app shows you the contacts
+1. Pick the destination (e.g. QRZ) and the view shows you the contacts
    **not yet uploaded** to it — judged by the upload stamp described
    above, so a contact already on the service (even one imported with its
-   stamp intact) is correctly treated as done, not offered again.
+   stamp intact) is correctly treated as done, not offered again. The
+   destinations offered are the ones that logbook is bound to.
 2. Select the contacts you want to send and upload them to that service.
 
 Uploading is safe to repeat: a contact already on the service is skipped
@@ -228,8 +195,24 @@ instead, since retrying won't help.) Either way your local log already has
 the contact, so forwarding never holds up logging — which is what makes a
 no-internet field laptop or a DXpedition viable.
 
+### Advanced: upload pacing
+
+How often each service's uploader checks for new QSOs and how many it
+sends at a time are file-only settings, kept per service in the
+`forwarders` list of `config.json` (`tick_interval_sec`, `batch_size`, and
+`action_filter` for which changes to send). The defaults suit a slow or
+unreliable connection and rarely need changing. An action a service can't
+perform is refused when the file is loaded — `"update"` for Club Log, say —
+and the daemon says which. If you do change them, stop the daemon first:
+while it runs it rewrites the whole file from memory whenever a setting
+changes in the app.
+
+```
+systemctl --user stop smd
+# edit ~/.local/share/station-manager/config.json
+systemctl --user start smd
+```
+
 ### Not yet available: LoTW
 
-ARRL Logbook of the World is on the roadmap but not implemented yet. Only
-`qrz` and `clublog` are valid `type` values today; any other type will be
-rejected at startup.
+ARRL Logbook of the World is on the roadmap but not implemented yet.

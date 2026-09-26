@@ -195,6 +195,16 @@ describe('ArchivesSection', () => {
         expect(vi.mocked(createQsoArchive).mock.calls[0][0].logbookCallsign).toBe('7Q5MLV');
     });
 
+    // ADR 0082: a new archive's logbooks start unbound — SM Cloud included —
+    // and bindings are edited only on the active archive. Said before the
+    // operator creates one, so an archive that uploads nowhere is expected.
+    it('the create form says a new archive starts with every destination off', async () => {
+        await renderLoaded();
+        expect(screen.getByTestId('new-archive-destinations')).toHaveTextContent(
+            /every destination starts off.*Forwarding tab once it is active/
+        );
+    });
+
     it('a created archive clears the form', async () => {
         await renderLoaded();
         vi.mocked(createQsoArchive).mockResolvedValue({

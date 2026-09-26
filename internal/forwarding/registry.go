@@ -29,6 +29,7 @@ var (
 	adifPrefixMap       = map[string]string{}
 	rowMirrorTypes      = map[string]struct{}{}
 	noBulkBackfillTypes = map[string]struct{}{}
+	buildKeys           = map[string]func() bool{}
 )
 
 // WorkerDefaults carries a forwarder type's preferred queue-drain cadence.
@@ -480,7 +481,19 @@ type CredentialField struct {
 	// split is an enumerated allowlist the SPA renders from rather than a table it
 	// keeps.
 	Scope string `json:"scope"`
+	// DefaultsTo names where the daemon takes this field's value when a
+	// binding is saved ENABLED without it (neither stored nor typed): the
+	// value is then persisted with the binding, so a later change at the
+	// source never silently retargets uploads (ADR 0082 part 3, ruled
+	// 2026-09-26). Clients treat the field as satisfied and leave it out.
+	// Only DefaultsToLogbookCallsign exists; only on a logbook-scoped field
+	// that is not Clearable.
+	DefaultsTo string `json:"defaults_to,omitempty"`
 }
+
+// DefaultsToLogbookCallsign: the binding's logbook callsign (ClubLog's
+// callsign, which picks the log in the account).
+const DefaultsToLogbookCallsign = "logbook_callsign"
 
 // Credential field scopes — the complete set RegisterForwarderType accepts.
 const (
@@ -523,6 +536,10 @@ func RegisterForwarderType(typeName, displayName string, actions []Action, creds
 		if c.Scope != ScopeStation && c.Scope != ScopeLogbook {
 			panic("forwarding.RegisterForwarderType: bad credential scope " + strconv.Quote(c.Scope) + " for " + typeName + "." + c.Key)
 		}
+		if c.DefaultsTo != "" && (c.DefaultsTo != DefaultsToLogbookCallsign || c.Scope != ScopeLogbook || c.Clearable) {
+			panic("forwarding.RegisterForwarderType: defaults_to " + strconv.Quote(c.DefaultsTo) +
+				" needs a known source on a logbook-scoped, non-clearable field: " + typeName + "." + c.Key)
+		}
 		if _, dup := seen[c.Key]; dup {
 			panic("forwarding.RegisterForwarderType: duplicate credential key " + c.Key + " for " + typeName)
 		}
@@ -543,6 +560,38 @@ func RegisterForwarderType(typeName, displayName string, actions []Action, creds
 		SupportedActions: sa,
 		CredentialFields: append([]CredentialField(nil), creds...),
 	}
+}
+
+// RegisterBuildKey records that typeName authenticates as an APPLICATION with
+// a key built into the daemon (ClubLog's, ADR 0054) and how to tell whether
+// this build carries it. Only presence is ever reported (the station accounts
+// view, ADR 0082 part 9); the key itself never leaves its package. Panics on
+// an empty type, a nil probe or a duplicate — all binary bugs.
+func RegisterBuildKey(typeName string, present func() bool) {
+	if typeName == "" {
+		panic("forwarding.RegisterBuildKey: empty type name")
+	}
+	if present == nil {
+		panic("forwarding.RegisterBuildKey: nil probe for " + typeName)
+	}
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	if _, dup := buildKeys[typeName]; dup {
+		panic("forwarding.RegisterBuildKey: already registered: " + typeName)
+	}
+	buildKeys[typeName] = present
+}
+
+// BuildKeyPresent reports whether this build carries typeName's application
+// key; applicable is false for a type that needs none.
+func BuildKeyPresent(typeName string) (present, applicable bool) {
+	registryMu.Lock()
+	probe, ok := buildKeys[typeName]
+	registryMu.Unlock()
+	if !ok {
+		return false, false
+	}
+	return probe(), true
 }
 
 // DescriptorFor returns a registered type's editor descriptor (a deep copy),

@@ -41,6 +41,15 @@ func init() {
 		})
 	// ClubLog-like: two logbook-scoped fields, so two operators can edit
 	// DISJOINT fields of one binding at once.
+	// ClubLog-like with a callsign that defaults to the logbook's (ADR 0082
+	// part 3): the constructor requires it, as clublog.New does.
+	forwarding.Register("bindview-callsign", requireStrings("email", "callsign"))
+	forwarding.RegisterForwarderType("bindview-callsign", "Callsign-like",
+		[]forwarding.Action{action.Insert},
+		[]forwarding.CredentialField{
+			{Key: "email", Label: "Account email", Kind: "text", Scope: forwarding.ScopeLogbook},
+			{Key: "callsign", Label: "Callsign", Kind: "text", Scope: forwarding.ScopeLogbook, DefaultsTo: forwarding.DefaultsToLogbookCallsign},
+		})
 	forwarding.Register("bindview-club", requireStrings("email", "password"))
 	forwarding.RegisterForwarderType("bindview-club", "Club-like",
 		[]forwarding.Action{action.Insert},
@@ -527,5 +536,132 @@ func TestManager_ConcurrentDisjointFieldEditsBothSurvive(t *testing.T) {
 	}
 	if creds["email"] != "new@example.org" || creds["password"] != "NEWPW" {
 		t.Fatalf("after two disjoint concurrent edits: email %q password %q; want both new values", creds["email"], creds["password"])
+	}
+}
+
+// 5E: the station account reports whether this build carries a type's
+// application key (present/absent), without which a destination still
+// constructs but cannot upload; a type that needs none reports nothing.
+// The enable reason distinguishes a missing station entry from an incomplete one.
+func TestBindings_AccountReportsBuildKeyAndReasonNamesTheGap(t *testing.T) {
+	db := bindingsDB(t)
+	twoLogbooks(t, db)
+	ctx := context.Background()
+	carried := false
+	forwarding.Register("bindview-appkey", requireStrings("email"))
+	forwarding.RegisterForwarderType("bindview-appkey", "AppKey-like",
+		[]forwarding.Action{action.Insert},
+		[]forwarding.CredentialField{{Key: "email", Label: "Account email", Kind: "text", Scope: forwarding.ScopeLogbook}})
+	forwarding.RegisterBuildKey("bindview-appkey", func() bool { return carried })
+	cfg := config.Config{Forwarders: []types.ForwarderConfig{{Name: "appkey", Type: "bindview-appkey"}}}
+	v, err := BindingsView(ctx, db, cfg, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := destView(t, v, "bindview-appkey"); d.Account.BuildKey != "absent" {
+		t.Fatalf("build key without the key = %q; want absent", d.Account.BuildKey)
+	}
+	carried = true
+	v, _ = BindingsView(ctx, db, cfg, nil, nil)
+	if d := destView(t, v, "bindview-appkey"); d.Account.BuildKey != "present" {
+		t.Fatalf("build key with the key = %q; want present", d.Account.BuildKey)
+	}
+	if d := destView(t, v, "bindview-qrz"); d.Account.BuildKey != "" {
+		t.Fatalf("a type that needs no build key reports %q", d.Account.BuildKey)
+	}
+	// No station entry at all, versus an entry missing a station field.
+	if d := destView(t, v, "bindview-cloud"); !strings.Contains(d.Reason, "no station account") {
+		t.Fatalf("no entry: reason %q", d.Reason)
+	}
+	half := config.Config{Forwarders: []types.ForwarderConfig{{Name: "cloud", Type: "bindview-cloud", Credentials: json.RawMessage(`{"url":"https://c"}`)}}}
+	v, _ = BindingsView(ctx, db, half, nil, nil)
+	if d := destView(t, v, "bindview-cloud"); !strings.Contains(d.Reason, "incomplete") {
+		t.Fatalf("incomplete entry: reason %q", d.Reason)
+	}
+}
+
+// ADR 0082 part 3, ruled 2026-09-26: a defaultable field missing from a row
+// that ENDS ENABLED is filled from the logbook's callsign and PERSISTED with
+// the binding (so a later logbook callsign change cannot retarget uploads); a
+// stored or typed value wins; a disabled row is untouched; a logbook without a
+// callsign still refuses the enable by the field's name.
+func TestBindings_CallsignDefaultsToTheLogbookWhenEnabled(t *testing.T) {
+	db := bindingsDB(t)
+	a, b := twoLogbooks(t, db)
+	ctx := context.Background()
+	legacy := &types.QsoArchiveConfig{ID: "x", Label: "Home", Ownership: types.QsoArchiveOwnershipLegacy}
+	cfg := config.Config{Forwarders: []types.ForwarderConfig{{Name: "cs", Type: "bindview-callsign"}}}
+	put := func(edits ...types.LogbookBindingEdit) error {
+		_, err := applyBindings(ctx, nil, db, cfg, legacy, nil, types.ArchiveBindingsRequest{Destinations: []types.DestinationBindingEdit{{
+			Type: "bindview-callsign", Logbooks: edits}}})
+		return err
+	}
+	stored := func(lb int64) map[string]string {
+		t.Helper()
+		rows, err := db.ListLogbookDestinationsWithContext(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range rows {
+			if r.LogbookID == lb && r.Destination == "bindview-callsign" {
+				m := map[string]string{}
+				if len(r.Credentials) > 0 {
+					if err := json.Unmarshal(r.Credentials, &m); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return m
+			}
+		}
+		t.Fatalf("no row for logbook %d", lb)
+		return nil
+	}
+
+	// Disabled, no callsign: untouched.
+	if err := put(types.LogbookBindingEdit{LogbookID: a, Enabled: false, Credentials: map[string]string{"email": "a@example.org"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, has := stored(a)["callsign"]; has {
+		t.Fatalf("a disabled row gained a callsign: %v", stored(a))
+	}
+	// Enabled with neither stored nor typed: the logbook's callsign, persisted.
+	if err := put(types.LogbookBindingEdit{LogbookID: a, Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := stored(a)["callsign"]; got != "M0ABC" {
+		t.Fatalf("defaulted callsign = %q; want the logbook's M0ABC", got)
+	}
+	// A typed value wins.
+	if err := put(types.LogbookBindingEdit{LogbookID: b, Enabled: true, Credentials: map[string]string{"email": "b@example.org", "callsign": "G4TYPED"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := stored(b)["callsign"]; got != "G4TYPED" {
+		t.Fatalf("typed callsign = %q; want G4TYPED", got)
+	}
+	// A stored value wins, and a later logbook callsign change does not move it.
+	if err := db.UpdateLogbookWithContext(ctx, types.Logbook{ID: b, Name: "Second", Callsign: "M0NEW"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := put(types.LogbookBindingEdit{LogbookID: b, Enabled: true, Credentials: map[string]string{"email": "b2@example.org"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := stored(b)["callsign"]; got != "G4TYPED" {
+		t.Fatalf("stored callsign after an edit = %q; want G4TYPED kept", got)
+	}
+	if got := stored(a)["callsign"]; got != "M0ABC" {
+		t.Fatalf("persisted default moved to %q", got)
+	}
+}
+
+func TestBindings_CallsignDefaultNeedsALogbookCallsign(t *testing.T) {
+	td, _ := forwarding.DescriptorFor("bindview-callsign")
+	_, refusal := mergeBindingCredentials(td, nil, map[string]string{"email": "e@example.org"}, nil, true, "  ")
+	if refusal == nil || refusal.code != "binding_field_required" {
+		t.Fatalf("blank logbook callsign: %v; want binding_field_required", refusal)
+	}
+	// Disabled: nothing is required, nothing is filled.
+	out, refusal := mergeBindingCredentials(td, nil, map[string]string{"email": "e@example.org"}, nil, false, "M0ABC")
+	if refusal != nil || strings.Contains(string(out), "callsign") {
+		t.Fatalf("disabled row: %s %v; want no callsign", out, refusal)
 	}
 }

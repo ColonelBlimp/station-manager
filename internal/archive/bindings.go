@@ -80,7 +80,8 @@ func BindingsView(ctx context.Context, db BindingsDB, cfg config.Config, entry *
 	for _, td := range forwarding.ForwarderTypes() {
 		dv := types.DestinationBindingView{Type: td.Type, DisplayName: td.DisplayName}
 		dv.Account = accountView(td, accounts[td.Type])
-		if reason := enableRefusal(td.Type, dv.Account, entry); reason != "" {
+		_, hasEntry := accounts[td.Type]
+		if reason := enableRefusal(td.Type, dv.Account, hasEntry, entry); reason != "" {
 			dv.Reason = reason
 		}
 		enabled, total := 0, 0
@@ -146,6 +147,7 @@ func applyBindings(ctx context.Context, log *logging.Service, db BindingsDB, cfg
 			return types.ArchiveBindingsView{}, &RequestError{Code: "invalid_field_value", Message: fmt.Sprintf("destination %q is not a type this build knows", d.Type)}
 		}
 		account := accountView(td, accounts[d.Type])
+		_, hasEntry := accounts[d.Type]
 		for _, e := range d.Logbooks {
 			key := fmt.Sprintf("%d/%s", e.LogbookID, d.Type)
 			if _, dup := seen[key]; dup {
@@ -157,11 +159,11 @@ func applyBindings(ctx context.Context, log *logging.Service, db BindingsDB, cfg
 				return types.ArchiveBindingsView{}, &RequestError{Code: "logbook_not_found", Message: fmt.Sprintf("logbook %d does not exist in this archive", e.LogbookID)}
 			}
 			if e.Enabled {
-				if reason := enableRefusal(d.Type, account, entry); reason != "" {
+				if reason := enableRefusal(d.Type, account, hasEntry, entry); reason != "" {
 					return types.ArchiveBindingsView{}, &RequestError{Code: "binding_not_enableable", Message: fmt.Sprintf("%s for logbook %q: %s", td.DisplayName, lb.Name, reason)}
 				}
 			}
-			merged, err := mergeBindingCredentials(td, existing[key].Credentials, e.Credentials, e.CredentialsClear, e.Enabled)
+			merged, err := mergeBindingCredentials(td, existing[key].Credentials, e.Credentials, e.CredentialsClear, e.Enabled, lb.Callsign)
 			if err != nil {
 				return types.ArchiveBindingsView{}, &RequestError{Code: err.code, Message: fmt.Sprintf("%s for logbook %q: %s", td.DisplayName, lb.Name, err.msg)}
 			}
@@ -218,7 +220,7 @@ func (e *bindingRefusal) Error() string { return e.code + ": " + e.msg }
 // the cleared ones (only when the row ends disabled), keeps only the type's
 // LOGBOOK-scoped keys, and — when the row ends enabled — requires every
 // logbook-scoped field that is not Clearable to hold a value.
-func mergeBindingCredentials(td forwarding.TypeDescriptor, stored json.RawMessage, typed map[string]string, clear []string, enabled bool) (json.RawMessage, *bindingRefusal) {
+func mergeBindingCredentials(td forwarding.TypeDescriptor, stored json.RawMessage, typed map[string]string, clear []string, enabled bool, logbookCallsign string) (json.RawMessage, *bindingRefusal) {
 	merged := map[string]json.RawMessage{}
 	if len(stored) > 0 && string(stored) != "null" {
 		if err := json.Unmarshal(stored, &merged); err != nil {
@@ -265,6 +267,7 @@ func mergeBindingCredentials(td forwarding.TypeDescriptor, stored json.RawMessag
 		delete(merged, k)
 	}
 	if enabled {
+		fillDefaults(td, merged, logbookCallsign)
 		for _, f := range td.CredentialFields {
 			if f.Scope != forwarding.ScopeLogbook || f.Clearable {
 				continue
@@ -284,11 +287,36 @@ func mergeBindingCredentials(td forwarding.TypeDescriptor, stored json.RawMessag
 	return out, nil
 }
 
+// fillDefaults sets each field declaring DefaultsTo that holds no value from
+// its source, for a row that ENDS ENABLED (ADR 0082 part 3, ruled
+// 2026-09-26). The value is written into the stored blob, so it commits with
+// the binding and a later change at the source never retargets uploads; a
+// stored or typed value is never replaced. A blank source fills nothing, and
+// the required check then names the field.
+func fillDefaults(td forwarding.TypeDescriptor, merged map[string]json.RawMessage, logbookCallsign string) {
+	source := strings.TrimSpace(logbookCallsign)
+	for _, f := range td.CredentialFields {
+		if f.DefaultsTo != forwarding.DefaultsToLogbookCallsign || source == "" {
+			continue
+		}
+		if v, ok := merged[f.Key]; ok && strings.TrimSpace(strings.Trim(string(v), `"`)) != "" {
+			continue
+		}
+		b, _ := json.Marshal(source)
+		merged[f.Key] = b
+	}
+}
+
 // enableRefusal names why a destination cannot be turned on in this archive:
-// no station account, or SM Cloud outside the adopted archive (5F remnant).
-func enableRefusal(typ string, account types.StationAccountView, entry *types.QsoArchiveConfig) string {
+// no station entry in config.json at all, an entry missing a station field,
+// or SM Cloud outside the adopted archive (5F remnant). The wording states the
+// gap only; the SPA adds the way to fix it where one exists here.
+func enableRefusal(typ string, account types.StationAccountView, hasEntry bool, entry *types.QsoArchiveConfig) string {
+	if !hasEntry {
+		return "this destination has no station account in config.json"
+	}
 	if !account.Configured {
-		return "no station account for this destination; add it under Station accounts first"
+		return "its station account is incomplete: a required station field is not set"
 	}
 	adopted := entry == nil || entry.Ownership == types.QsoArchiveOwnershipLegacy
 	if typ == "smcloud" && !adopted {
@@ -309,8 +337,15 @@ func accountsByType(cfg config.Config) map[string]types.ForwarderConfig {
 // holds an entry of the type AND every station-scoped field that is not
 // Clearable holds a value.
 func accountView(td forwarding.TypeDescriptor, fc types.ForwarderConfig) types.StationAccountView {
+	buildKey := ""
+	if present, applicable := forwarding.BuildKeyPresent(td.Type); applicable {
+		buildKey = "absent"
+		if present {
+			buildKey = "present"
+		}
+	}
 	if fc.Type == "" {
-		return types.StationAccountView{}
+		return types.StationAccountView{BuildKey: buildKey}
 	}
 	set := keysSet(fc.Credentials)
 	setMap := map[string]struct{}{}
@@ -329,7 +364,7 @@ func accountView(td forwarding.TypeDescriptor, fc types.ForwarderConfig) types.S
 			configured = false
 		}
 	}
-	return types.StationAccountView{Configured: configured, Label: fc.Label, FieldsSet: stationSet}
+	return types.StationAccountView{Configured: configured, Label: fc.Label, FieldsSet: stationSet, BuildKey: buildKey}
 }
 
 // keysSet lists the keys of a credential blob that hold a non-empty string,

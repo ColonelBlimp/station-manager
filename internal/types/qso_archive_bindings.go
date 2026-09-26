@@ -37,6 +37,11 @@ type StationAccountView struct {
 	Label      string `json:"label,omitempty"`
 	// FieldsSet lists the station-scoped credential keys that hold a value.
 	FieldsSet []string `json:"fields_set,omitempty"`
+	// BuildKey is "present" or "absent" for a type that authenticates as an
+	// application with a key built into the daemon (ClubLog, ADR 0054);
+	// omitted for a type that needs none. Without it the destination still
+	// constructs, and its uploads wait in the queue for a keyed build.
+	BuildKey string `json:"build_key,omitempty"`
 }
 
 // LogbookBindingView is one logbook's binding to a destination; Bound is false

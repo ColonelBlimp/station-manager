@@ -186,6 +186,10 @@
         <p class="mt-0.5 mb-3 text-sm text-muted">
             Creates an empty archive with one logbook, inactive until you activate it. The file is
             kept by Station Manager under its data directory.
+            <span data-testid="new-archive-destinations"
+                >A new archive uploads nowhere: every destination starts off. Turn on the ones it
+                should use on the Forwarding tab once it is active.</span
+            >
         </p>
         <form class="flex flex-wrap items-end gap-3" onsubmit={onCreate}>
             <label class="flex w-56 flex-col gap-1 text-sm text-ink">
