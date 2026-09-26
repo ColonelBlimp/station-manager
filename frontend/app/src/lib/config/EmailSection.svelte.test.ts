@@ -74,7 +74,7 @@ describe('EmailSection', () => {
     it('U1: says a password is stored without showing one', async () => {
         await renderLoaded(true);
         // A status, not an empty box (ruling 2026-09-26).
-        expect(screen.getByTestId('saved-status').textContent).toMatch(/✓\s*saved/);
+        expect(screen.getByTestId('saved-status').textContent).toMatch(/✓\s*Saved/);
         expect(screen.queryByLabelText('Password')).toBeNull();
     });
 

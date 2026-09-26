@@ -301,7 +301,7 @@ describe('EnrichmentSection', () => {
         const { container } = await renderLoadedWithContainer(true);
         // A status, not an empty box (ruling 2026-09-26).
         const qrz = within(card(container, QRZ_CARD));
-        expect(qrz.getByTestId('saved-status').textContent).toMatch(/✓\s*saved/);
+        expect(qrz.getByTestId('saved-status').textContent).toMatch(/✓\s*Saved/);
         expect(qrz.queryByLabelText('Password')).toBeNull();
     });
 

@@ -26,7 +26,7 @@ Everything is on **Settings → Forwarding**, in two parts:
   address and token.
 
 Station Manager never shows a stored password or key again. A field that
-holds one reads **✓ saved**, with **Replace** to type a new value and, where
+holds one reads **✓ Saved**, with **Replace** to type a new value and, where
 it can be removed, **Remove**. Replace opens an empty box; **Cancel** closes
 it again and keeps the saved value. The same applies on the Email and
 Enrichment tabs.

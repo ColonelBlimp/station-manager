@@ -5,7 +5,7 @@ import StoredSecretField from './StoredSecretField.svelte';
 /*
     A stored credential as a STATUS, not an empty box (operator ruling
     2026-09-26). The daemon never sends a stored value back, so a saved field
-    shows "✓ saved" with Replace (and Remove where allowed) and no input; the
+    shows "✓ Saved" with Replace (and Remove where allowed) and no input; the
     input appears only when there is something to type — nothing stored, or
     Replace pressed. A pending removal is its own line with Undo. Help sits
     behind an ⓘ, not a line under the field.
@@ -44,7 +44,8 @@ describe('StoredSecretField', () => {
 
     it('S2: a stored value is a status line with Replace and Remove, and no input', () => {
         setup({ stored: true });
-        expect(screen.getByTestId('saved-status').textContent).toMatch(/✓\s*saved/);
+        // Sentence case, like every line start in the app (station review).
+        expect(screen.getByTestId('saved-status').textContent).toBe('✓ Saved');
         expect(screen.queryByLabelText('API key')).toBeNull();
         expect(screen.getByRole('button', { name: 'Replace API key' })).toBeInTheDocument();
         expect(screen.getByRole('button', { name: 'Remove API key' })).toBeInTheDocument();

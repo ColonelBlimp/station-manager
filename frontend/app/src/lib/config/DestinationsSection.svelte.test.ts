@@ -417,7 +417,7 @@ describe('DestinationsSection', () => {
         putAnswer = () => json(view({ restart_required: true }));
         vi.spyOn(toasts, 'info').mockImplementation(() => 0);
         const rows = within(card('QRZ Logbook')).getAllByTestId('binding-row');
-        expect(within(rows[0]).getByTestId('saved-status').textContent).toMatch(/✓\s*saved/);
+        expect(within(rows[0]).getByTestId('saved-status').textContent).toMatch(/✓\s*Saved/);
         expect(within(rows[0]).queryByLabelText('API key')).toBeNull();
         expect(document.body.textContent).not.toMatch(/leave blank to keep/);
         await fireEvent.click(screen.getByRole('checkbox', { name: 'QRZ Logbook for Second' }));

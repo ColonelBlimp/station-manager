@@ -4,7 +4,7 @@
     // keep)" placeholder packed a status, a rule and an instruction into an
     // empty-looking box. Instead:
     //   - nothing stored        → the labelled input;
-    //   - stored                → "✓ saved" with Replace (and Remove where the
+    //   - stored                → "✓ Saved" with Replace (and Remove where the
     //                              caller allows it), no input;
     //   - Replace, or a typed   → the input with Cancel; Cancel drops what was
     //     value over a stored     typed, so blank still means keep on the wire;
@@ -81,7 +81,7 @@
         </span>
     {:else if !editing}
         <span class="flex items-center gap-3 text-sm">
-            <span class="text-ink" data-testid="saved-status">✓ saved</span>
+            <span class="text-ink" data-testid="saved-status">✓ Saved</span>
             <button
                 type="button"
                 class="text-muted underline hover:text-ink"
