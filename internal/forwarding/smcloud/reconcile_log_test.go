@@ -77,6 +77,7 @@ func logReconciler(t *testing.T, cloudURL string) (*Reconciler, *strings.Builder
 	qsoSvc, dbSvc, logSvc, fc := newLocalStack(t, cloudURL)
 	lbID, err := dbSvc.InsertLogbook(types.Logbook{Name: "Main", Callsign: "7Q5MLV"})
 	require.NoError(t, err)
+	bindLogbook(qsoSvc, lbID, fc)
 	rec, err := NewReconciler(fc, lbID, dbSvc, qsoSvc, logSvc)
 	require.NoError(t, err)
 	var buf strings.Builder

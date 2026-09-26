@@ -81,6 +81,15 @@ func newLocalStack(t *testing.T, cloudURL string) (*qsoservice.Service, *sqlite.
 	return &qsoservice.Service{DB: dbSvc, Logger: logSvc, Config: cfgSvc, Hub: hub}, dbSvc, logSvc, fc
 }
 
+// bindLogbook installs the daemon's start-time routing snapshot (ADR 0082):
+// the smcloud entry bound to lbID, as the seeded adopted archive holds it. The
+// daemon builds a reconciler only for an enabled binding, and every enqueue
+// resolves its forwarder name through that snapshot — without it the
+// reconciler's heal rows are refused as forwarder_unavailable.
+func bindLogbook(qsoSvc *qsoservice.Service, lbID int64, fc types.ForwarderConfig) {
+	qsoSvc.SetDestinationRoutes([]forwarding.BoundForwarder{{LogbookID: lbID, Config: fc}})
+}
+
 // newCloudStack stands up the real cloud service over Postgres (same
 // skip-gate + advisory lock as the other smcloud suites).
 func newCloudStack(t *testing.T) *httptest.Server {
@@ -171,6 +180,7 @@ func TestReconciler_EndToEnd(t *testing.T) {
 
 	lbID, err := dbSvc.InsertLogbook(types.Logbook{Name: "Main", Callsign: "7Q5MLV"})
 	require.NoError(t, err)
+	bindLogbook(qsoSvc, lbID, fc)
 
 	rec, err := NewReconciler(fc, lbID, dbSvc, qsoSvc, logSvc)
 	require.NoError(t, err)
@@ -251,6 +261,7 @@ func reconcileOriginStack(t *testing.T) (
 	qsoSvc, dbSvc, logSvc, fc := newLocalStack(t, cloud.URL)
 	lbID, err := dbSvc.InsertLogbook(types.Logbook{Name: "Main", Callsign: "7Q5MLV"})
 	require.NoError(t, err)
+	bindLogbook(qsoSvc, lbID, fc)
 	rec, err := NewReconciler(fc, lbID, dbSvc, qsoSvc, logSvc)
 	require.NoError(t, err)
 	fwd, err := New(fc)

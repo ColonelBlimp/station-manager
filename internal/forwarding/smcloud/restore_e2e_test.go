@@ -96,6 +96,7 @@ func TestRestore_FullCycle(t *testing.T) {
 
 	// ---- The closing proof: machine 2 reconciles IN SYNC with the cloud —
 	// possible only if every modified_at survived backup → restore verbatim.
+	bindLogbook(qsoSvc2, lb2, fc)
 	rec, err := NewReconciler(fc, lb2, db2, qsoSvc2, logSvc2)
 	require.NoError(t, err)
 	sum, err := rec.RunOnce(ctx, TriggerManual)
