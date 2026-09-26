@@ -282,6 +282,19 @@ describe('ForwardingSection', () => {
         expect(input.getAttribute('value') ?? '').toBe('');
     });
 
+    it('U4b: cancelling an untouched replacement restores the pristine station draft', async () => {
+        await renderLoaded();
+        const card = accountCard('SM Cloud service and token');
+        await fireEvent.click(within(card).getByRole('button', { name: 'Replace Bearer token' }));
+        await fireEvent.click(
+            within(card).getByRole('button', { name: 'Cancel replacing Bearer token' })
+        );
+
+        expect(forwardingState.dirty).toBe(false);
+        expect(forwardingState.drafts.find((d) => d.name === 'smcloud')?.credentials).toEqual({});
+        expect(within(station()).getByRole('button', { name: /^save$/i })).toBeDisabled();
+    });
+
     // U5 — THE RESTART CAVEAT APPEARS ONLY WHEN THERE IS SOMETHING TO APPLY.
     // The workers bind their accounts at startup, so a saved change that is
     // not yet live is a state the operator has to be told about.

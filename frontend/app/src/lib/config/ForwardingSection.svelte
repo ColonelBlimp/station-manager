@@ -228,7 +228,10 @@
                                         removeLabel="Reset to default"
                                         removedNote="Resets to the default when you save."
                                         help={field.help ?? ''}
-                                        oninput={(v: string) => (f.credentials[field.key] = v)}
+                                        oninput={(v: string) => {
+                                            if (v === '') delete f.credentials[field.key];
+                                            else f.credentials[field.key] = v;
+                                        }}
                                         onremove={() => forwardingState.clear(f.name, field.key)}
                                         onundo={() => forwardingState.uncleared(f.name, field.key)}
                                     />
