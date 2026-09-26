@@ -173,9 +173,24 @@ tasks:
       PROGRAMVERSION). For a one-command build→install→restart, use
       `task deploy:local:dev` instead. CGO-free/static by default; for the
       PocketFFT (CGO) variant use rpm:dev:pocketfft. Keyless, distributable RPMs
-      come from scripts/release-rpm.sh (the public path).
+      come from `task rpm:release` (the public path).
     cmds:
       - scripts/dev-rpm.sh
+
+  rpm:release:
+    desc: |
+      Build the PUBLIC (distributable, key-free) release RPM — the CGO +
+      PocketFFT (live FT8) build, compiled in an AlmaLinux 8 container so it
+      runs on every RPM distro from RHEL 8 / glibc 2.28 up (Fedora, RHEL,
+      Rocky, Alma, recent openSUSE). Wraps scripts/release.sh, the release
+      entrypoint. Usage: task rpm:release RELEASE_VERSION=2.0.0-alpha.3
+      Output: build/release/station-manager-<version>-1.x86_64.rpm. Needs
+      podman, Go and Node on the host, and network on the first run (it builds
+      and caches the builder image). No ClubLog key, by design (ST-7).
+    requires:
+      vars: [RELEASE_VERSION]
+    cmds:
+      - scripts/release.sh {{.RELEASE_VERSION}}
 
   rpm:dev:pocketfft:
     desc: |
