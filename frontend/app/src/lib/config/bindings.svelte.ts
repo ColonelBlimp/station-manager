@@ -94,6 +94,7 @@ class BindingsState {
     missing = $state<Record<string, string[]>>({});
     /** The last refusal — the SPA's own, or the daemon's message. */
     refusal = $state('');
+    #eligibilityRefreshGeneration = 0;
 
     dirty = $derived(this.#anyChanged());
 
@@ -262,6 +263,9 @@ class BindingsState {
 
     async load(): Promise<void> {
         if (this.loading) return;
+        // A full reload supersedes any narrower eligibility read already in
+        // flight; that older snapshot must not patch the newly loaded view.
+        this.#eligibilityRefreshGeneration++;
         this.loading = true;
         // Invalidate first: a pending reload's list is not known-current.
         this.loaded = false;
@@ -333,7 +337,12 @@ class BindingsState {
      *  different save boundary and remain untouched. */
     async refreshEligibility(): Promise<boolean> {
         if (this.archiveId === '' || !this.view) return false;
+        const generation = ++this.#eligibilityRefreshGeneration;
         const out = await fetchArchiveBindings(this.archiveId);
+        // A later account save (or a full load) owns a newer read. Treat this
+        // response as superseded: it neither applies stale data nor reports a
+        // stale failure after the newer read has already settled the view.
+        if (generation !== this.#eligibilityRefreshGeneration) return true;
         if (out.kind !== 'ok') return false;
         const current = this.view;
         if (!current) return false;

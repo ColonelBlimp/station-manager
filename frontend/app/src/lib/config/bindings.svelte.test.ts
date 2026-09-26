@@ -515,6 +515,54 @@ describe('bindingsState', () => {
         expect(bindingsState.dirty).toBe(false);
     });
 
+    it('B15: an older eligibility read cannot overwrite a newer one', async () => {
+        await bindingsState.load();
+        const replies: ((response: Response) => void)[] = [];
+        getAnswer = () =>
+            new Promise<Response>((resolve) => {
+                replies.push(resolve);
+            });
+
+        const incomplete = view();
+        const complete = view({
+            destinations: incomplete.destinations.map((dest) =>
+                dest.type === 'smcloud'
+                    ? { ...dest, account: { configured: true }, reason: '' }
+                    : dest
+            ),
+        });
+        const older = bindingsState.refreshEligibility();
+        const newer = bindingsState.refreshEligibility();
+
+        // The read started after the newer account save wins even when its
+        // response arrives before the older save's read.
+        replies[1](json(complete));
+        await newer;
+        expect(bindingsState.view!.destinations[1].reason).toBe('');
+        replies[0](json(incomplete));
+        await older;
+        expect(bindingsState.view!.destinations[1].reason).toBe('');
+
+        bindingsState.setRow('smcloud', 1, true);
+        expect(bindingsState.drafts[rowKey('smcloud', 1)].enabled).toBe(true);
+    });
+
+    it('B16: an obsolete failed eligibility read does not report the newer view stale', async () => {
+        await bindingsState.load();
+        const replies: ((response: Response) => void)[] = [];
+        getAnswer = () =>
+            new Promise<Response>((resolve) => {
+                replies.push(resolve);
+            });
+
+        const older = bindingsState.refreshEligibility();
+        const newer = bindingsState.refreshEligibility();
+        replies[1](json(view()));
+        expect(await newer).toBe(true);
+        replies[0](json({ message: 'obsolete read failed' }, 500));
+        expect(await older).toBe(true);
+    });
+
     it('B10: a refused load says why and is not loaded', async () => {
         getView = () => ({});
         vi.stubGlobal(
