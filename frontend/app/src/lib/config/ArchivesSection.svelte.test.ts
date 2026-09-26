@@ -72,15 +72,19 @@ describe('ArchivesSection', () => {
         await renderLoaded();
         expect(screen.getByTestId('state-a')).toHaveTextContent('Active');
         expect(screen.getByTestId('state-b')).toHaveTextContent('Inactive');
-        // A failed activation is a warning glyph after the label whose tooltip
-        // and accessible name carry the reason (inbox 2026-09-24/26): the text
-        // no longer sits in the row, so it cannot push the columns.
-        const glyph = screen.getByRole('img', {
-            name: /Last activation failed: .*holds archive y/,
-        });
-        expect(glyph.getAttribute('title')).toMatch(/^Last activation failed: .*holds archive y/);
-        expect(glyph.closest('td')!.textContent).not.toMatch(/holds archive y/);
-        expect(screen.getAllByRole('img', { name: /Last activation failed/ })).toHaveLength(1);
+        // A failed activation is a ⚠ after the label (inbox 2026-09-24/26): the
+        // reason is out of the row's flow, so it cannot push the columns. It is a
+        // BUTTON, so a keyboard reaches it (Codex P2 on 23508984), described by a
+        // tooltip that hover and focus both reveal.
+        const glyph = screen.getByRole('button', { name: 'Last activation failed' });
+        const tip = document.getElementById(glyph.getAttribute('aria-describedby')!)!;
+        expect(tip.getAttribute('role')).toBe('tooltip');
+        expect(tip.textContent).toMatch(/^Last activation failed: .*holds archive y/);
+        expect(tip.className).toMatch(/\bhidden\b/);
+        expect(tip.className).toMatch(/peer-focus:block/);
+        expect(tip.className).toMatch(/peer-hover:block/);
+        expect(tip.className).toMatch(/\babsolute\b/);
+        expect(screen.getAllByRole('button', { name: 'Last activation failed' })).toHaveLength(1);
         expect(screen.queryByRole('button', { name: 'Activate Home' })).toBeNull();
         expect(screen.getByRole('button', { name: 'Activate Contest' })).toBeEnabled();
         expect(screen.getByText('2 KB')).toBeInTheDocument();

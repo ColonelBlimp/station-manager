@@ -145,16 +145,27 @@
                         <tr class="border-t border-line align-top">
                             <td class="py-2 pr-3 font-medium text-ink">
                                 {a.label}
-                                <!-- The reason rides the glyph's tooltip and accessible
-                                     name, not the row, so it cannot push the columns. -->
+                                <!-- The reason sits in a tooltip out of the row's flow, so it
+                                     cannot push the columns. The glyph is a BUTTON so the
+                                     keyboard reaches it (Codex P2 on 23508984); hover and
+                                     focus (a tap focuses it) both reveal the reason, and
+                                     aria-describedby reads it to a screen reader. -->
                                 {#if a.lastActivationError}
-                                    <span
-                                        role="img"
-                                        class="ml-1 cursor-help text-warning"
-                                        title="Last activation failed: {a.lastActivationError}"
-                                        aria-label="Last activation failed: {a.lastActivationError}"
-                                        data-testid="activation-error">⚠</span
-                                    >
+                                    <span class="relative ml-1 inline-block">
+                                        <button
+                                            type="button"
+                                            class="peer cursor-help text-warning"
+                                            aria-label="Last activation failed"
+                                            aria-describedby="activation-failed-{a.id}">⚠</button
+                                        >
+                                        <span
+                                            id="activation-failed-{a.id}"
+                                            role="tooltip"
+                                            class="absolute top-full left-0 z-10 mt-1 hidden w-72 rounded-md border border-line bg-surface px-2 py-1 text-xs font-normal text-ink shadow peer-hover:block peer-focus:block"
+                                            data-testid="activation-error"
+                                            >Last activation failed: {a.lastActivationError}</span
+                                        >
+                                    </span>
                                 {/if}
                             </td>
                             <td class="py-2 pr-3 text-ink" data-testid="state-{a.id}"
