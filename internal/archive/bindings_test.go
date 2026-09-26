@@ -270,11 +270,14 @@ func TestBindings_EnableRefusals(t *testing.T) {
 	db := bindingsDB(t)
 	a, _ := twoLogbooks(t, db)
 	ctx := context.Background()
-	// No station account for the type → the switch says why and a PUT refuses.
+	// No station account for the type and no binding → not listed at all (the
+	// app cannot give it one; fresh install 2026-09-26), and a PUT still refuses.
 	noAccount := config.Config{}
 	v, _ := BindingsView(ctx, db, noAccount, nil, nil)
-	if d := destView(t, v, "bindview-qrz"); d.Reason == "" || d.Account.Configured {
-		t.Fatalf("no-account destination = %+v; want a reason", d)
+	for _, d := range v.Destinations {
+		if d.Type == "bindview-qrz" {
+			t.Fatalf("no-account, unbound destination is listed: %+v", d)
+		}
 	}
 	_, err := applyBindings(ctx, nil, db, noAccount, nil, nil, types.ArchiveBindingsRequest{Destinations: []types.DestinationBindingEdit{{
 		Type: "bindview-qrz", Logbooks: []types.LogbookBindingEdit{{LogbookID: a, Enabled: true, Credentials: map[string]string{"api_key": "k"}}}}}})
@@ -545,7 +548,7 @@ func TestManager_ConcurrentDisjointFieldEditsBothSurvive(t *testing.T) {
 // The enable reason distinguishes a missing station entry from an incomplete one.
 func TestBindings_AccountReportsBuildKeyAndReasonNamesTheGap(t *testing.T) {
 	db := bindingsDB(t)
-	twoLogbooks(t, db)
+	a, _ := twoLogbooks(t, db)
 	ctx := context.Background()
 	carried := false
 	forwarding.Register("bindview-appkey", requireStrings("email"))
@@ -553,7 +556,10 @@ func TestBindings_AccountReportsBuildKeyAndReasonNamesTheGap(t *testing.T) {
 		[]forwarding.Action{action.Insert},
 		[]forwarding.CredentialField{{Key: "email", Label: "Account email", Kind: "text", Scope: forwarding.ScopeLogbook}})
 	forwarding.RegisterBuildKey("bindview-appkey", func() bool { return carried })
-	cfg := config.Config{Forwarders: []types.ForwarderConfig{{Name: "appkey", Type: "bindview-appkey"}}}
+	cfg := config.Config{Forwarders: []types.ForwarderConfig{
+		{Name: "appkey", Type: "bindview-appkey"},
+		{Name: "qrz", Type: "bindview-qrz"},
+	}}
 	v, err := BindingsView(ctx, db, cfg, nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -569,7 +575,15 @@ func TestBindings_AccountReportsBuildKeyAndReasonNamesTheGap(t *testing.T) {
 	if d := destView(t, v, "bindview-qrz"); d.Account.BuildKey != "" {
 		t.Fatalf("a type that needs no build key reports %q", d.Account.BuildKey)
 	}
-	// No station entry at all, versus an entry missing a station field.
+	// No station entry at all, versus an entry missing a station field. A
+	// destination with no entry is listed only while it holds a binding (fresh
+	// install, 2026-09-26), so bind one row to see its reason.
+	if err := db.UpsertLogbookDestinationsWithContext(ctx, []sqlite.DestinationUpsert{
+		{LogbookID: a, Destination: "bindview-cloud", ForwarderName: "cloud", Enabled: false},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	v, _ = BindingsView(ctx, db, cfg, nil, nil)
 	if d := destView(t, v, "bindview-cloud"); !strings.Contains(d.Reason, "no station account") {
 		t.Fatalf("no entry: reason %q", d.Reason)
 	}
@@ -663,5 +677,45 @@ func TestBindings_CallsignDefaultNeedsALogbookCallsign(t *testing.T) {
 	out, refusal := mergeBindingCredentials(td, nil, map[string]string{"email": "e@example.org"}, nil, false, "M0ABC")
 	if refusal != nil || strings.Contains(string(out), "callsign") {
 		t.Fatalf("disabled row: %s %v; want no callsign", out, refusal)
+	}
+}
+
+// Fresh install (operator, 2026-09-26): a destination with NO station entry in
+// config.json and NO binding in this archive is left out of the view — the
+// app cannot give it an account, so listing it offered only an unactionable
+// "no station account in config.json" (SM Cloud is never auto-seeded: it has
+// no canonical URL). One that holds a binding stays listed, so its rows and
+// queue never disappear.
+func TestBindings_ViewOmitsADestinationWithNoAccountAndNoBinding(t *testing.T) {
+	db := bindingsDB(t)
+	a, _ := twoLogbooks(t, db)
+	ctx := context.Background()
+	cfg := config.Config{Forwarders: []types.ForwarderConfig{{Name: "qrz", Type: "bindview-qrz"}}}
+	listed := func(v types.ArchiveBindingsView, typ string) bool {
+		for _, d := range v.Destinations {
+			if d.Type == typ {
+				return true
+			}
+		}
+		return false
+	}
+	v, err := BindingsView(ctx, db, cfg, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if listed(v, "bindview-cloud") {
+		t.Fatal("a destination with no station entry and no binding is listed")
+	}
+	if !listed(v, "bindview-qrz") {
+		t.Fatal("a destination WITH a station entry is missing")
+	}
+	if err := db.UpsertLogbookDestinationsWithContext(ctx, []sqlite.DestinationUpsert{
+		{LogbookID: a, Destination: "bindview-cloud", ForwarderName: "cloud", Enabled: false},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	v, _ = BindingsView(ctx, db, cfg, nil, nil)
+	if !listed(v, "bindview-cloud") {
+		t.Fatal("a destination that holds a binding must stay listed even with no station entry")
 	}
 }

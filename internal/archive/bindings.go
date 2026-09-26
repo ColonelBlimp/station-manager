@@ -99,6 +99,14 @@ func BindingsView(ctx context.Context, db BindingsDB, cfg config.Config, entry *
 			total++
 			dv.Logbooks = append(dv.Logbooks, row)
 		}
+		// A destination with no station entry and no binding here is left out:
+		// the app cannot give it an account (SM Cloud is never auto-seeded — it
+		// has no canonical URL), so listing it offered only an unactionable
+		// "no station account" (fresh install, 2026-09-26). A bound one stays,
+		// so its rows and queue never disappear.
+		if !hasEntry && !anyBound(dv.Logbooks) {
+			continue
+		}
 		switch {
 		case total > 0 && enabled == total:
 			dv.State = BindingStateOn
@@ -110,6 +118,15 @@ func BindingsView(ctx context.Context, db BindingsDB, cfg config.Config, entry *
 		view.Destinations = append(view.Destinations, dv)
 	}
 	return view, nil
+}
+
+func anyBound(rows []types.LogbookBindingView) bool {
+	for _, r := range rows {
+		if r.Bound {
+			return true
+		}
+	}
+	return false
 }
 
 // applyBindings validates the WHOLE candidate of a PUT against the stored
