@@ -5,8 +5,7 @@
     //     destinations the ACTIVE archive uploads to, per logbook, with each
     //     logbook's own account fields and queue. Owned by the archive.
     //   - "Station accounts" (below): what every archive shares — the SM Cloud
-    //     service URL and token, and whether this build carries ClubLog's
-    //     application key. Owned by config.json. No on/off here: whether a
+    //     service URL and token. Owned by config.json. No on/off here: whether a
     //     destination is on is a binding of the archive, never of the account.
     //
     // Station-account inputs are data-driven from GET /v1/forwarder-types
@@ -26,20 +25,14 @@
         void forwardingState.load();
     });
 
-    // The application-key presence the daemon reports for a type ('' = the
-    // type needs none, or the bindings view is not loaded).
-    function buildKeyOf(type: string): '' | 'present' | 'absent' {
-        return (
-            bindingsState.view?.destinations.find((d) => d.type === type)?.account.build_key ?? ''
-        );
-    }
-
-    // A station entry belongs in this section when it has something station-
-    // wide to show: station-scoped fields, an application key built into the
-    // daemon, or no descriptor at all (explained, and round-tripped on save).
+    // A station entry belongs in this section when it has station-wide
+    // fields, or no descriptor at all (explained, and round-tripped on save).
+    // ClubLog is not one (operator ruling 2026-09-26): its API key identifies
+    // the software and is built in; its application password is the user's,
+    // per logbook. A build without the key is stated on its destination card.
     function inStationAccounts(type: string): boolean {
         if (!forwardingState.typeFor(type)) return true;
-        return forwardingState.stationFields(type).length > 0 || buildKeyOf(type) !== '';
+        return forwardingState.stationFields(type).length > 0;
     }
 
     const accounts = $derived(forwardingState.drafts.filter((f) => inStationAccounts(f.type)));
@@ -89,17 +82,6 @@
      deliberate departure — these are repeated entities, not named sections, so
      Station's <h2> headings would be inventing titles for them. -->
 <div class="mx-auto max-w-3xl space-y-8">
-    <!-- The how lives in the manual's Forwarding chapter, opened like the
-         sidebar's Manual link (station review 2026-09-26). -->
-    <p class="text-sm">
-        <a
-            class="underline hover:text-ink"
-            href="/manual/#forwarding"
-            target="_blank"
-            rel="noopener">How forwarding works</a
-        >
-    </p>
-
     <!-- Outside the station-account load branches below: the destinations
          load and hold their own drafts, so a reload of the config.json half
          must neither remount them (reloading over the operator's edits) nor
@@ -137,7 +119,6 @@
                      collapsed card can hide an edit the footer only reports in
                      aggregate — whether it has unsaved changes. -->
                 {@const edited = forwardingState.hasEdits(f.name)}
-                {@const buildKey = buildKeyOf(f.type)}
                 <details
                     id={`account-${f.type}`}
                     class="rounded-md border border-line"
@@ -200,20 +181,6 @@
                     </summary>
 
                     <div class="border-t border-line px-3 py-3">
-                        {#if buildKey !== ''}
-                            <p class="text-sm text-ink" data-testid="build-key">
-                                Application key:
-                                {#if buildKey === 'present'}
-                                    built into this daemon.
-                                {:else}
-                                    <span class="text-warning"
-                                        >not in this build — uploads wait in the queue until a build
-                                        with the key is installed.</span
-                                    >
-                                {/if}
-                            </p>
-                        {/if}
-
                         {#if !td}
                             <p class="mt-3 text-sm text-warning">
                                 This forwarder type isn't supported by this daemon build — its

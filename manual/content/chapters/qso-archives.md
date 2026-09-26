@@ -66,8 +66,7 @@ until the restart completes.
 
 Callsign lookups, the enrichment cache and the FT8 evidence file are
 station-wide and do not change with the archive, and so are the station
-accounts on **Settings → Forwarding**: SM Cloud's service and token, and Club
-Log's built-in application key.
+accounts on **Settings → Forwarding**: SM Cloud's service and token.
 
 Where each archive uploads is its own. Each archive keeps its destinations,
 logbook by logbook, with each logbook's own account for each service; the

@@ -23,8 +23,7 @@ Everything is on **Settings → Forwarding**, in two parts:
   (see the QSO Archives chapter): activating another archive brings its own
   destinations, and a new archive starts with every destination off.
 - **Station accounts** — what every archive shares: the SM Cloud service
-  address and token, and whether this build of Station Manager carries Club
-  Log's application key.
+  address and token.
 
 Station Manager never shows a stored password or key again. A field that
 holds one reads `•••••••• (set — leave blank to keep)`: leave it blank to
@@ -76,10 +75,9 @@ because the names sound alike:
   callsign later does not move your uploads to another Club Log log.
 - **The application API key**, which identifies *Station Manager as a piece
   of software*, not you. It is built into Station Manager when it is
-  compiled, so there is nothing to type. The Club Log card under
-  **Station accounts** says whether your build carries it. Without it, Club
-  Log uploads wait in the queue until a build with the key is installed;
-  nothing is lost.
+  compiled, so there is nothing to type. If your build lacks it, the Club
+  Log destination card says so. Without it, Club Log uploads wait in the
+  queue until a build with the key is installed; nothing is lost.
 
 #### Club Log only uploads and deletes — it does not edit
 

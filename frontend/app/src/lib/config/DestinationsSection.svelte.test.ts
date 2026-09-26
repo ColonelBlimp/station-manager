@@ -201,6 +201,23 @@ describe('DestinationsSection', () => {
         expect(heading.closest('section')!.textContent).not.toMatch(/logbook by logbook/);
     });
 
+    // Operator ruling 2026-09-26: the manual link is an ⓘ beside the heading,
+    // named "How forwarding works" (tooltip and accessible name), opening the
+    // Forwarding chapter in a new tab like the sidebar's Manual link — and it
+    // sits OUTSIDE the h2, so the section's name stays the heading alone.
+    it('D1d: an ⓘ beside the heading links the manual chapter in a new tab', async () => {
+        await renderLoaded();
+        const link = screen.getByRole('link', { name: 'How forwarding works' });
+        expect(link.getAttribute('href')).toBe('/manual/#forwarding');
+        expect(link.getAttribute('target')).toBe('_blank');
+        expect(link.getAttribute('rel')).toBe('noopener');
+        expect(link.getAttribute('title')).toBe('How forwarding works');
+        expect(link.closest('h2')).toBeNull();
+        expect(screen.getByRole('region', { name: 'Destinations for Home' })).toContainElement(
+            link
+        );
+    });
+
     it('D1c: before the daemon names the archive, the heading says "this archive"', async () => {
         current = () => view({ archive_label: '' });
         await renderLoaded();

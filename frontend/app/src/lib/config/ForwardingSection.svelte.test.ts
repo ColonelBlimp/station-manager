@@ -218,7 +218,6 @@ describe('ForwardingSection', () => {
         await renderLoaded();
         expect(within(station()).getAllByTestId('account-card').map(titleOf)).toEqual([
             'SM Cloud',
-            'ClubLog',
             'mystery',
         ]);
         expect(within(station()).getByText(/can't be edited here/)).toBeTruthy();
@@ -291,7 +290,7 @@ describe('ForwardingSection', () => {
     it('U6: each station account is a collapsed disclosure showing its name', async () => {
         await renderLoaded();
         const cards = within(station()).getAllByTestId<HTMLDetailsElement>('account-card');
-        expect(cards).toHaveLength(3);
+        expect(cards).toHaveLength(2);
         for (const c of cards) expect(c.open).toBe(false);
 
         const summary = accountCard('SM Cloud').querySelector('summary');
@@ -358,7 +357,6 @@ describe('ForwardingSection', () => {
         });
         expect(within(station()).getAllByTestId('account-card').map(titleOf)).toEqual([
             'Shack cloud',
-            'ClubLog',
         ]);
     });
 
@@ -377,27 +375,24 @@ describe('ForwardingSection', () => {
         expect(forwardingState.drafts.map((d) => d.name)).toContain('qrz');
     });
 
-    // U10 — CLUBLOG'S CARD SAYS WHETHER THIS BUILD CARRIES ITS APPLICATION KEY.
-    // The key is compiled in, not configured, so the card has nothing to edit
-    // — and without it ClubLog uploads wait in the queue however complete the
-    // per-logbook account is.
-    it('U10: ClubLog reports its built-in application key, with no fields to edit', async () => {
+    // U10 — CLUBLOG IS NOT A STATION ACCOUNT (operator ruling 2026-09-26, a
+    // departure from ADR 0082 part 9). Its API key identifies the SOFTWARE and
+    // is built in; its application password is the USER's, per logbook. With
+    // the key present nothing is said; without it, ClubLog's own destination
+    // card says so — never a station card.
+    it('U10: ClubLog is never a station account, with or without the built-in key', async () => {
         await renderLoaded();
-        const card = accountCard('ClubLog');
-        expect(flat(within(card).getByTestId('build-key'))).toMatch(
-            /Application key: built into this daemon\./
-        );
-        expect(within(card).queryByRole('textbox')).toBeNull();
+        expect(within(station()).queryByText('ClubLog')).toBeNull();
+        expect(within(destinations()).queryByTestId('build-key-absent')).toBeNull();
     });
 
-    it('U10b: a build without the key says so, and what happens to the uploads', async () => {
+    it('U10b: a build without the key says so on ClubLog’s destination card only', async () => {
         const dests = DESTS.map((d) =>
             d.type === 'clublog' ? { ...d, account: { configured: true, build_key: 'absent' } } : d
         );
         await renderLoaded({ dests });
-        expect(flat(within(accountCard('ClubLog')).getByTestId('build-key'))).toMatch(
-            /not in this build — uploads wait in the queue until a build with the key is installed/
-        );
+        expect(within(station()).queryByText('ClubLog')).toBeNull();
+        expect(within(destinations()).getByTestId('build-key-absent')).toBeInTheDocument();
     });
 
     // U12 — THE TWO HALVES LOAD APART. A failed config.json read must not hide
@@ -449,15 +444,14 @@ describe('ForwardingSection', () => {
     });
 
     // U14 — THE TAB EXPLAINS BY LINK, NOT BY PARAGRAPH (station review
-    // 2026-09-26): one "How forwarding works" link to the manual's Forwarding
-    // chapter, opened like the sidebar's Manual link; the station section says
-    // only what it is. Refusals, key status and the restart banner stay put.
-    it('U14: the tab links the manual instead of explaining, and Station accounts is one line', async () => {
+    // 2026-09-26, second pass): the one "How forwarding works" link is the ⓘ
+    // beside the destinations heading — no line of its own above the sections —
+    // and the station section says only what it is.
+    it('U14: one manual link, beside the destinations heading; Station accounts is one line', async () => {
         await renderLoaded();
-        const link = screen.getByRole('link', { name: 'How forwarding works' });
-        expect(link.getAttribute('href')).toBe('/manual/#forwarding');
-        expect(link.getAttribute('target')).toBe('_blank');
-        expect(link.getAttribute('rel')).toBe('noopener');
+        const links = screen.getAllByRole('link', { name: 'How forwarding works' });
+        expect(links).toHaveLength(1);
+        expect(destinations().contains(links[0])).toBe(true);
         expect(document.body.textContent).not.toMatch(/Forwarding uploads each/);
         const intro = station().querySelector('h2')!.nextElementSibling!;
         expect(intro.textContent?.trim()).toBe('Shared by every archive.');

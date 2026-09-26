@@ -1159,6 +1159,19 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      built manual) in a new tab like the sidebar's Manual link. Refusals, ClubLog key status and the
      restart banner stay. Proofs: label ignored, link to the manual root, same-tab link, grown
      station text — each fails its own test.
+     **Operator rulings (2026-09-26, second pass):** (1) the "How forwarding works" line goes; the
+     link becomes an ⓘ icon beside the "Destinations for <archive>" heading (tooltip and accessible
+     name "How forwarding works", manual Forwarding chapter in a new tab) — a native `title`
+     tooltip cannot hold a clickable link, so the icon is itself the link. (2) **ClubLog is not a
+     station account** — a deliberate departure from ADR 0082 part 9, which listed "the ClubLog
+     application key as present/absent" under Station accounts. The API key identifies the
+     software and is built into the daemon; the application password is the user's, tied to the
+     callsigns of their account (operator's citations: Club Log help, "API keys",
+     https://clublog.freshdesk.com/support/solutions/articles/54910-api-keys, and "What are
+     application passwords?",
+     https://clublog.freshdesk.com/support/solutions/articles/3000057171-what-are-application-passwords-).
+     Neither is a station-wide account setting, so ClubLog appears only under the destinations,
+     where a build without the key is already stated on its card.
    - **5C — config v6 and the station account.** Legacy binding-owned keys (`name`, `enabled`,
      logbook-scoped credentials) known but deprecated at v6 (ADR 0075's shape). The version bump may
      retain those keys; only the adopted Home archive's committed seed marker permits the file-first

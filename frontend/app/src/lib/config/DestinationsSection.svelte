@@ -165,9 +165,38 @@
     <!-- Named by the daemon's archive label; "this archive" until it is
          known. No explanation here: the tab links the manual (station review
          2026-09-26), and each point of action carries its own note. -->
-    <h2 id="destinations-heading" class="text-base font-semibold text-ink">
-        Destinations for {bindingsState.view?.archive_label || 'this archive'}
-    </h2>
+    <!-- The manual link is an icon beside the heading (operator ruling
+         2026-09-26): a native tooltip cannot hold a link, so the icon IS the
+         link, named by its title. Outside the h2, so the section's name stays
+         the heading alone. Opens like the sidebar's Manual link. -->
+    <div class="flex items-center gap-2">
+        <h2 id="destinations-heading" class="text-base font-semibold text-ink">
+            Destinations for {bindingsState.view?.archive_label || 'this archive'}
+        </h2>
+        <a
+            href="/manual/#forwarding"
+            target="_blank"
+            rel="noopener"
+            title="How forwarding works"
+            aria-label="How forwarding works"
+            class="text-muted hover:text-ink"
+        >
+            <svg
+                class="size-4"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke-width="1.5"
+                stroke="currentColor"
+                aria-hidden="true"
+            >
+                <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="m11.25 11.25.041-.02a.75.75 0 0 1 1.063.852l-.708 2.836a.75.75 0 0 0 1.063.853l.041-.021M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9-3.75h.008v.008H12V8.25Z"
+                />
+            </svg>
+        </a>
+    </div>
 
     {#if !bindingsState.loaded && bindingsState.loading}
         <p class="text-sm text-muted">Loading…</p>
