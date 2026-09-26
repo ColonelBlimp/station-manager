@@ -1175,6 +1175,13 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      (3) Station accounts gets the same ⓘ ("How station accounts work", `/manual/#station-accounts`)
      with a new short manual section of that name; the icon is one shared `ManualLink` component
      used by both headings. Both anchors verified unique in a built manual.
+     **Settings explanations to the manual (inbox 2026-09-26, operator-agreed order):** the
+     Archives list and the New archive form lose their paragraphs for ⓘ links (`#qso-archives`,
+     `#creating-an-archive`); the form's "a new archive uploads nowhere" sentence (ADR 0082
+     part 9) now lives only in the manual's "Creating an archive", which already carried it; a
+     failed activation is a ⚠ after the label whose tooltip and accessible name carry the reason
+     (also fixes the 2026-09-24 note that the text pushed the columns); Station accounts loses
+     "Shared by every archive.".
    - **5C — config v6 and the station account.** Legacy binding-owned keys (`name`, `enabled`,
      logbook-scoped credentials) known but deprecated at v6 (ADR 0075's shape). The version bump may
      retain those keys; only the adopted Home archive's committed seed marker permits the file-first

@@ -55,8 +55,8 @@ page loads while the daemon is unreachable; it clears itself with a reload
 as soon as the daemon answers. Any other Station Manager
 tab you have open — another Operate view, the Logbook, a map on a second
 screen — notices the change when it reconnects and reloads itself too. If the new archive could not be opened, the previous one stays
-active and the archive you chose shows **Last activation failed** with the
-reason.
+active and the archive you chose shows a ⚠ after its label. Point at it to
+read **Last activation failed** with the reason.
 
 While a switch is pending, transmit is sealed: arming FT8, sending, starting
 a contact or keying the tune carrier is refused with *archive switch pending*

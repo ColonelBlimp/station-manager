@@ -72,7 +72,15 @@ describe('ArchivesSection', () => {
         await renderLoaded();
         expect(screen.getByTestId('state-a')).toHaveTextContent('Active');
         expect(screen.getByTestId('state-b')).toHaveTextContent('Inactive');
-        expect(screen.getByTestId('activation-error')).toHaveTextContent('holds archive y');
+        // A failed activation is a warning glyph after the label whose tooltip
+        // and accessible name carry the reason (inbox 2026-09-24/26): the text
+        // no longer sits in the row, so it cannot push the columns.
+        const glyph = screen.getByRole('img', {
+            name: /Last activation failed: .*holds archive y/,
+        });
+        expect(glyph.getAttribute('title')).toMatch(/^Last activation failed: .*holds archive y/);
+        expect(glyph.closest('td')!.textContent).not.toMatch(/holds archive y/);
+        expect(screen.getAllByRole('img', { name: /Last activation failed/ })).toHaveLength(1);
         expect(screen.queryByRole('button', { name: 'Activate Home' })).toBeNull();
         expect(screen.getByRole('button', { name: 'Activate Contest' })).toBeEnabled();
         expect(screen.getByText('2 KB')).toBeInTheDocument();
@@ -168,41 +176,22 @@ describe('ArchivesSection', () => {
         expect(archivesState.creating).toBe(false);
     });
 
-    it('a malformed callsign marks the field and holds the submit; a valid one releases it', async () => {
+    // Inbox 2026-09-26: the tab explains by ⓘ link, not by paragraph. The list
+    // links the QSO Archives chapter; the create form links "Creating an
+    // archive", which carries what the form used to say — including that a
+    // new archive uploads nowhere (ADR 0082 part 9, moved to the manual).
+    it('each section links its manual section instead of explaining', async () => {
         await renderLoaded();
-        await fireEvent.input(screen.getByLabelText('Label'), { target: { value: 'Drill' } });
-        await fireEvent.input(screen.getByLabelText('First logbook'), {
-            target: { value: 'Drill' },
-        });
-        const field = screen.getByLabelText('Logbook callsign');
-        await fireEvent.input(field, { target: { value: 'g' } });
-        expect(screen.getByTestId('callsign-error')).toBeInTheDocument();
-        expect(field).toHaveAttribute('aria-invalid', 'true');
-        expect(screen.getByRole('button', { name: 'Create archive' })).toBeDisabled();
-        await fireEvent.input(field, { target: { value: 'abcdef' } }); // letters only: no digit
-        expect(screen.getByRole('button', { name: 'Create archive' })).toBeDisabled();
-        await fireEvent.input(field, { target: { value: '7q5mlv' } });
-        expect(screen.queryByTestId('callsign-error')).toBeNull();
-        expect(screen.getByRole('button', { name: 'Create archive' })).toBeEnabled();
-        vi.mocked(createQsoArchive).mockResolvedValue({
-            kind: 'refused',
-            code: 'x',
-            message: 'no',
-        });
-        await fireEvent.click(screen.getByRole('button', { name: 'Create archive' }));
-        await flush();
-        expect(createQsoArchive).toHaveBeenCalledTimes(1);
-        expect(vi.mocked(createQsoArchive).mock.calls[0][0].logbookCallsign).toBe('7Q5MLV');
-    });
-
-    // ADR 0082: a new archive's logbooks start unbound — SM Cloud included —
-    // and bindings are edited only on the active archive. Said before the
-    // operator creates one, so an archive that uploads nowhere is expected.
-    it('the create form says a new archive starts with every destination off', async () => {
-        await renderLoaded();
-        expect(screen.getByTestId('new-archive-destinations')).toHaveTextContent(
-            /every destination starts off.*Forwarding tab once it is active/
-        );
+        const list = screen.getByRole('link', { name: 'How archives work' });
+        expect(list.getAttribute('href')).toBe('/manual/#qso-archives');
+        const create = screen.getByRole('link', { name: 'How creating an archive works' });
+        expect(create.getAttribute('href')).toBe('/manual/#creating-an-archive');
+        for (const l of [list, create]) {
+            expect(l.getAttribute('target')).toBe('_blank');
+            expect(l.closest('h2')).toBeNull();
+        }
+        expect(document.body.textContent).not.toMatch(/Each archive is a separate/);
+        expect(document.body.textContent).not.toMatch(/Creates an empty archive/);
     });
 
     it('a created archive clears the form', async () => {

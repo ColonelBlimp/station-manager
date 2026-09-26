@@ -6,6 +6,7 @@
     // restart is the switch); creation provisions an inactive managed archive
     // named by its semantics — never a path.
     import { onMount } from 'svelte';
+    import ManualLink from './ManualLink.svelte';
     import {
         activateArchive,
         archivesState,
@@ -95,12 +96,10 @@
 
 <div class="space-y-8">
     <section>
-        <h2 class="text-base font-semibold text-ink">Archives</h2>
-        <p class="mt-0.5 mb-3 text-sm text-muted">
-            Each archive is a separate QSO database with its own logbooks. One is active at a time;
-            switching restarts the daemon, so transmit must be idle. The state shown is the daemon’s
-            own.
-        </p>
+        <div class="mb-3 flex items-center gap-2">
+            <h2 class="text-base font-semibold text-ink">Archives</h2>
+            <ManualLink anchor="qso-archives" label="How archives work" />
+        </div>
         {#if !archivesState.loaded && archivesState.loading}
             <p class="text-sm text-muted">Loading…</p>
         {:else if !archivesState.loaded && archivesState.error}
@@ -146,13 +145,16 @@
                         <tr class="border-t border-line align-top">
                             <td class="py-2 pr-3 font-medium text-ink">
                                 {a.label}
+                                <!-- The reason rides the glyph's tooltip and accessible
+                                     name, not the row, so it cannot push the columns. -->
                                 {#if a.lastActivationError}
-                                    <div
-                                        class="mt-0.5 text-xs text-muted"
-                                        data-testid="activation-error"
+                                    <span
+                                        role="img"
+                                        class="ml-1 cursor-help text-warning"
+                                        title="Last activation failed: {a.lastActivationError}"
+                                        aria-label="Last activation failed: {a.lastActivationError}"
+                                        data-testid="activation-error">⚠</span
                                     >
-                                        Last activation failed: {a.lastActivationError}
-                                    </div>
                                 {/if}
                             </td>
                             <td class="py-2 pr-3 text-ink" data-testid="state-{a.id}"
@@ -182,15 +184,12 @@
     </section>
 
     <section>
-        <h2 class="text-base font-semibold text-ink">New archive</h2>
-        <p class="mt-0.5 mb-3 text-sm text-muted">
-            Creates an empty archive with one logbook, inactive until you activate it. The file is
-            kept by Station Manager under its data directory.
-            <span data-testid="new-archive-destinations"
-                >A new archive uploads nowhere: every destination starts off. Turn on the ones it
-                should use on the Forwarding tab once it is active.</span
-            >
-        </p>
+        <!-- What the form used to explain — including that a new archive uploads
+             nowhere (ADR 0082 part 9) — is in the manual's "Creating an archive". -->
+        <div class="mb-3 flex items-center gap-2">
+            <h2 class="text-base font-semibold text-ink">New archive</h2>
+            <ManualLink anchor="creating-an-archive" label="How creating an archive works" />
+        </div>
         <form class="flex flex-wrap items-end gap-3" onsubmit={onCreate}>
             <label class="flex w-56 flex-col gap-1 text-sm text-ink">
                 Label

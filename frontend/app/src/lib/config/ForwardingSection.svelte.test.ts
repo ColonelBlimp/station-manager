@@ -447,14 +447,14 @@ describe('ForwardingSection', () => {
     // 2026-09-26, second pass): the one "How forwarding works" link is the ⓘ
     // beside the destinations heading — no line of its own above the sections —
     // and the station section says only what it is.
-    it('U14: one manual link, beside the destinations heading; Station accounts is one line', async () => {
+    it('U14: one manual link, beside the destinations heading; Station accounts explains nothing itself', async () => {
         await renderLoaded();
         const links = screen.getAllByRole('link', { name: 'How forwarding works' });
         expect(links).toHaveLength(1);
         expect(destinations().contains(links[0])).toBe(true);
         expect(document.body.textContent).not.toMatch(/Forwarding uploads each/);
-        const intro = station().querySelector('p')!;
-        expect(intro.textContent?.trim()).toBe('Shared by every archive.');
+        // Inbox 2026-09-26: not even one line — the ⓘ's manual section says it.
+        expect(station().textContent).not.toMatch(/Shared by every archive/);
     });
 
     // U15 — STATION ACCOUNTS GETS ITS OWN ⓘ (operator ruling 2026-09-26): the
