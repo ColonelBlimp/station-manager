@@ -6,7 +6,7 @@ import { toasts, toastsState, _resetForTests as resetToasts } from '../ui/toasts
 import { takeLogbookMissingFrom, takeLogbookHandoffLogbook } from '../router.svelte';
 
 /*
-    ADR 0082 part 9 (W-0021 5E): the rendered "Destinations for this archive".
+    ADR 0082 part 9 (W-0021 5E): the rendered "Destinations for <archive>".
     The pill is what the daemon holds; the switches are the draft; a switch
     never claims more than the daemon saved; per-logbook fields are masked;
     the queue belongs to each logbook's binding.
@@ -188,6 +188,24 @@ describe('DestinationsSection', () => {
         // The collapsed summary carries the destination's totals across its logbooks.
         expect(flat(card('QRZ Logbook').querySelector('summary'))).toContain(
             '1 waiting · 2 failed · 0 in flight'
+        );
+    });
+
+    // Station review 2026-09-26: the heading names the archive itself (the
+    // daemon's label) and carries no explanation paragraph — the manual owns
+    // the how (the tab links it). The old paragraph also rendered "archiveHome".
+    it('D1a: the heading names the active archive, with no paragraph under it', async () => {
+        await renderLoaded();
+        const heading = screen.getByRole('heading', { level: 2 });
+        expect(heading.textContent?.trim()).toBe('Destinations for Home');
+        expect(heading.closest('section')!.textContent).not.toMatch(/logbook by logbook/);
+    });
+
+    it('D1c: before the daemon names the archive, the heading says "this archive"', async () => {
+        current = () => view({ archive_label: '' });
+        await renderLoaded();
+        expect(screen.getByRole('heading', { level: 2 }).textContent?.trim()).toBe(
+            'Destinations for this archive'
         );
     });
 

@@ -1148,6 +1148,17 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      any source; SPA still requiring the field; SPA defaulting without a logbook callsign; no
      placeholder — each fails its own test. Docs: `api-endpoints.md` (`defaults_to`, the PUT rule);
      manual `forwarding.md` (Club Log callsign).
+     **Station review after the deploy (2026-09-26, build `-62`, schema 15):** read-only checks
+     passed (schema 15 clean; the seed ran once on this start — 4 bindings, 0 queue rows renamed;
+     every queue empty; QRZ/ClubLog/SM Cloud on, QRZCQ off; no restart pending; a `stub` card shows
+     because the station build carries the `dev` tag). The operator found the destinations intro
+     rendering "archiveHome" and ruled the explanation out of the tab: the heading names the archive
+     from the daemon's label ("Destinations for Home", "this archive" until known), its paragraph
+     goes, Station accounts reads "Shared by every archive.", and the tab intro becomes a "How
+     forwarding works" link to the manual's Forwarding chapter (`/manual/#forwarding`, verified in a
+     built manual) in a new tab like the sidebar's Manual link. Refusals, ClubLog key status and the
+     restart banner stay. Proofs: label ignored, link to the manual root, same-tab link, grown
+     station text — each fails its own test.
    - **5C — config v6 and the station account.** Legacy binding-owned keys (`name`, `enabled`,
      logbook-scoped credentials) known but deprecated at v6 (ADR 0075's shape). The version bump may
      retain those keys; only the adopted Home archive's committed seed marker permits the file-first

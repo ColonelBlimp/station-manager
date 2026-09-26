@@ -1,7 +1,7 @@
 <script lang="ts">
     // Forwarding (ADR 0082, W-0021 5E) — two sections on one tab:
     //
-    //   - "Destinations for this archive" (DestinationsSection): which
+    //   - "Destinations for <archive>" (DestinationsSection): which
     //     destinations the ACTIVE archive uploads to, per logbook, with each
     //     logbook's own account fields and queue. Owned by the archive.
     //   - "Station accounts" (below): what every archive shares — the SM Cloud
@@ -89,9 +89,15 @@
      deliberate departure — these are repeated entities, not named sections, so
      Station's <h2> headings would be inventing titles for them. -->
 <div class="mx-auto max-w-3xl space-y-8">
-    <p class="text-sm text-muted">
-        Forwarding uploads each <em>new</em> QSO to the destinations its archive is bound to. QSOs logged
-        while a destination was off aren't sent automatically — upload those from the logbook's backfill.
+    <!-- The how lives in the manual's Forwarding chapter, opened like the
+         sidebar's Manual link (station review 2026-09-26). -->
+    <p class="text-sm">
+        <a
+            class="underline hover:text-ink"
+            href="/manual/#forwarding"
+            target="_blank"
+            rel="noopener">How forwarding works</a
+        >
     </p>
 
     <!-- Outside the station-account load branches below: the destinations
@@ -105,11 +111,7 @@
             <h2 id="station-accounts-heading" class="text-base font-semibold text-ink">
                 Station accounts
             </h2>
-            <p class="mt-0.5 text-sm text-muted">
-                Shared by every archive: the SM Cloud service and its token, and ClubLog's
-                application key built into this daemon. Values are stored on the daemon and never
-                sent back to the browser, so leaving a field blank keeps the saved value.
-            </p>
+            <p class="mt-0.5 text-sm text-muted">Shared by every archive.</p>
         </div>
 
         {#if !forwardingState.loaded && forwardingState.loading}

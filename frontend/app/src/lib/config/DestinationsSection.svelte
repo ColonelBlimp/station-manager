@@ -1,5 +1,5 @@
 <script lang="ts">
-    // Destinations for this archive (ADR 0082 part 9, W-0021 5E): which
+    // Destinations for <archive> (ADR 0082 part 9, W-0021 5E): which
     // destinations the ACTIVE archive uploads new QSOs to, per logbook. One
     // card per destination type with a switch over every logbook, then one row
     // per logbook with its own switch, its per-logbook account fields (masked —
@@ -162,19 +162,12 @@
 </script>
 
 <section aria-labelledby="destinations-heading" class="space-y-4">
-    <div>
-        <h2 id="destinations-heading" class="text-base font-semibold text-ink">
-            Destinations for this archive
-        </h2>
-        <p class="mt-0.5 text-sm text-muted">
-            Where the active archive{#if bindingsState.view?.archive_label}
-                <strong class="text-ink">{bindingsState.view.archive_label}</strong>{/if} uploads each
-            <em>new</em> QSO, logbook by logbook. A new archive starts with every destination off. The
-            per-logbook account (a QRZ key, a ClubLog account) is kept with the archive, never sent back
-            to the browser: leaving a field blank keeps the saved value. Changes apply when the daemon
-            restarts.
-        </p>
-    </div>
+    <!-- Named by the daemon's archive label; "this archive" until it is
+         known. No explanation here: the tab links the manual (station review
+         2026-09-26), and each point of action carries its own note. -->
+    <h2 id="destinations-heading" class="text-base font-semibold text-ink">
+        Destinations for {bindingsState.view?.archive_label || 'this archive'}
+    </h2>
 
     {#if !bindingsState.loaded && bindingsState.loading}
         <p class="text-sm text-muted">Loading…</p>

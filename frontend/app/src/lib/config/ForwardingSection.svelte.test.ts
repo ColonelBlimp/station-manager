@@ -8,7 +8,7 @@ import { _resetForTests as resetToasts } from '../ui/toasts.svelte';
 /*
     FORWARDING TAB — WHAT THE OPERATOR SEES (ADR 0082, W-0021 5E).
 
-    The tab holds two sections. "Destinations for this archive" — the on/off
+    The tab holds two sections. "Destinations for <archive>" — the on/off
     switches, each logbook's own account fields and its queue — is pinned by
     DestinationsSection.svelte.test.ts. These rules pin the other one, "Station
     accounts": what every archive shares, from config.json.
@@ -191,7 +191,7 @@ async function renderLoaded(opts: { config?: unknown; dests?: Dest[] } = {}) {
 
 const station = (): HTMLElement => screen.getByRole('region', { name: 'Station accounts' });
 const destinations = (): HTMLElement =>
-    screen.getByRole('region', { name: 'Destinations for this archive' });
+    screen.getByRole('region', { name: 'Destinations for Home' });
 
 // Rendered text with template line breaks collapsed, as a reader sees it.
 const flat = (el: Element | null): string => (el?.textContent ?? '').replace(/\s+/g, ' ');
@@ -446,6 +446,21 @@ describe('ForwardingSection', () => {
                 name: 'QRZ.com for Main',
             }).checked
         ).toBe(true);
+    });
+
+    // U14 — THE TAB EXPLAINS BY LINK, NOT BY PARAGRAPH (station review
+    // 2026-09-26): one "How forwarding works" link to the manual's Forwarding
+    // chapter, opened like the sidebar's Manual link; the station section says
+    // only what it is. Refusals, key status and the restart banner stay put.
+    it('U14: the tab links the manual instead of explaining, and Station accounts is one line', async () => {
+        await renderLoaded();
+        const link = screen.getByRole('link', { name: 'How forwarding works' });
+        expect(link.getAttribute('href')).toBe('/manual/#forwarding');
+        expect(link.getAttribute('target')).toBe('_blank');
+        expect(link.getAttribute('rel')).toBe('noopener');
+        expect(document.body.textContent).not.toMatch(/Forwarding uploads each/);
+        const intro = station().querySelector('h2')!.nextElementSibling!;
+        expect(intro.textContent?.trim()).toBe('Shared by every archive.');
     });
 
     // U11 — A DESTINATION REFUSED FOR AN INCOMPLETE STATION ACCOUNT LINKS TO
