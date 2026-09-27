@@ -1278,11 +1278,19 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      switches, a star on each logbook with unsaved edits, one Save. ClubLog's callsign becomes an
      override behind the logbook's own: one line "Uploads to your Club Log log for 7Q5MLV — this
      logbook's callsign" with "Use a different Club Log log"; an override always shows the
-     mismatch ("…for 7Q5MLV/P, not this logbook's 7Q5MLV"). Open question for the ADR: keep
-     persisting the defaulted callsign at save (the morning ruling; a changed logbook callsign then
-     shows the mismatch until confirmed) — leaned — or follow the logbook and store only an
-     explicit override. **Interim (operator, same day): option A now** — rows labelled as
+     mismatch ("…for 7Q5MLV/P, not this logbook's 7Q5MLV"). **Settled by review (2026-09-26):**
+     keep persisting the defaulted callsign at save — the morning ruling's safety property (uploads
+     never silently move to another Club Log log) is not reopened by a presentation change; a
+     changed logbook callsign shows the mismatch until confirmed. A reversal would need the
+     operator's explicit approval and its migration semantics. **Interim (operator, same day): option A now** — rows labelled as
      logbooks and the heading naming the archive plainly, until B replaces the layout.
+     **Review of the 26 September packet (outcomes):** (a) the "service and token" station-card
+     suffix stays while SM Cloud is the only station-scoped type — revisit when a second one
+     appears; (b) leaving unconfigurable destinations out of `GET /v1/qso-archives/{uuid}/bindings`
+     stays server-side: that endpoint is an actionable view, while `GET /v1/forwarder-types`
+     remains the complete type catalogue; (c) the ClubLog callsign stays persisted at save (above).
+     Findings fixed the same day: the packet's pushed/local wording, the archive-summary rules
+     (inbox), the capsule refresh; the reboot-persistence routing awaits an operator ruling (inbox).
    - **5C — config v6 and the station account.** Legacy binding-owned keys (`name`, `enabled`,
      logbook-scoped credentials) known but deprecated at v6 (ADR 0075's shape). The version bump may
      retain those keys; only the adopted Home archive's committed seed marker permits the file-first
