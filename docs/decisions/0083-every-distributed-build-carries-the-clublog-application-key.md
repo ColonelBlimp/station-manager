@@ -81,6 +81,27 @@ detects and revokes.
 - ST-7's "public releases are key-free" rule is superseded; its record stays as
   written.
 
+## Amendment (2026-09-27) — an external-distribution gate until ClubLog confirms
+
+A review of the decision found that ClubLog's guidance supports the reading above
+without stating it: keys are application-specific and "not meant to be secret as
+such", but a key "passed around" can be blocked for every product using it, and
+nothing on the page says an extractable key may be embedded in binaries given to
+users. Operator ruling, 2026-09-27:
+
+- Keyed builds run only on machines the operator controls. Handing an RPM or a
+  binary to anyone else is distribution, even to one person (the ZA visitor
+  included). Letting a visitor operate an operator-owned machine, without
+  receiving the artifact, is not.
+- Before a keyed artifact is transferred, one of two things must be true: ClubLog
+  has confirmed in writing that the same application key may be embedded, though
+  extractable, in compiled binaries distributed to users (the reply is cited
+  here), or the recipient gets a keyless build, whose ClubLog destination stays
+  unavailable.
+
+Until that reply is cited here, the Decision above holds for operator-controlled
+machines only.
+
 ## Triggers to revisit
 
 - ClubLog states that application keys must not be embedded in distributed
