@@ -204,11 +204,12 @@ tasks:
 
   deploy:local:dev:
     desc: |
-      One-command local-dogfood update: builds the dev RPM, stops the
-      user-level smd daemon (if running), reinstalls the RPM via
+      One-command local-dogfood install or update: builds the dev RPM,
+      stops the user-level smd daemon (if running), reinstalls the RPM via
       `sudo rpm -Uvh --replacepkgs` (handles the same-NVR case the
       "dev" version string forces), runs systemd daemon-reload, and
-      starts smd back up. Final step checks systemctl is-active and
+      enables and starts smd (enable is idempotent; it makes a first
+      install start at login). Lingering stays your explicit choice. Final step checks systemctl is-active and
       points you at journalctl on failure. Sudo prompts for the
       package install only — systemctl commands run as your user.
       Defaults to the PocketFFT (CGO) backend so live FT8 capture + decode

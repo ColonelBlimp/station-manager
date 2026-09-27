@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# One-command local-dogfood update: build dev RPM → stop daemon →
-# reinstall RPM → start daemon. Use after a code change to update the
+# One-command local-dogfood install or update: build dev RPM → stop daemon →
+# reinstall RPM → enable and start daemon. Use after a code change to update the
 # locally-installed copy with minimum ceremony.
 #
 # What runs:
@@ -16,7 +16,11 @@
 #       the same commit with a dirty tree keeps the same NVR and would
 #       otherwise be a no-op).
 #   4. systemctl --user daemon-reload  (cheap; catches smd.service edits)
-#   5. systemctl --user start smd
+#   5. systemctl --user enable smd, then start it. Enabling is idempotent and
+#      only changes anything on a first install (or after reset:local:dev):
+#      without it the daemon would not start at the next login (ruling
+#      2026-09-27). Lingering — running with no login session — stays the
+#      operator's explicit choice (`loginctl enable-linger`), never set here.
 #   6. systemctl --user is-active smd  (final smoke)
 #
 # The systemd unit is user-level (per nfpm.yaml: smd.service installs
@@ -106,7 +110,8 @@ sudo rpm -Uvh --replacepkgs "$RPM_PATH"
 step "4/5  systemd daemon-reload (catches smd.service edits)"
 systemctl --user daemon-reload
 
-step "5/5  Start daemon"
+step "5/5  Enable and start daemon"
+systemctl --user enable smd
 systemctl --user start smd
 
 # Brief wait so the post-start active check isn't racing the unit's
