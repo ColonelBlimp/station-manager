@@ -102,6 +102,23 @@ users. Operator ruling, 2026-09-27:
 Until that reply is cited here, the Decision above holds for operator-controlled
 machines only.
 
+### Resolution (2026-09-27) — ClubLog confirmed; the gate is lifted
+
+The operator asked ClubLog that question by email (subject "Embedding an
+application API key in distributed binaries"). Michael G7VJR of ClubLog replied
+on 2026-09-27 at 10:14:
+
+> No problem, you're doing everything correctly. Embed the key in the binary! The
+> keys are not passwords, but useful to ensure API usage owners can be contacted
+> when needed if there's a problem. Trying not to reveal them to search engines is
+> sufficient.
+
+This is the written confirmation the amendment required. The Decision above now
+holds for distributed builds, and a keyed artifact may be handed to users. The
+condition that remains is the one the reply names: keep the key out of reach of
+search engines. As ADR 0054 already requires, the key is injected at build time
+and never committed, and ClubLog auto-deletes a key it finds published.
+
 ## Triggers to revisit
 
 - ClubLog states that application keys must not be embedded in distributed
