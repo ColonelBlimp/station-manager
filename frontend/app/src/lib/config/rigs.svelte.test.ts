@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { rigsState } from './rigs.svelte';
 import { toasts } from '../ui/toasts.svelte';
+import { bridgeEnabledState } from './bridgeEnabled.svelte';
 
 afterEach(() => {
     vi.restoreAllMocks();
@@ -19,6 +20,9 @@ afterEach(() => {
     rigsState.audioAvailable = false;
     rigsState.capture = [];
     rigsState.playback = [];
+    rigsState.newRig = null;
+    bridgeEnabledState.loaded = false;
+    bridgeEnabledState.enabled = false;
 });
 
 // Route-aware fetch mock: /v1/rigs (GET), /v1/hardware (GET), /v1/config (PUT).
@@ -763,62 +767,115 @@ describe('rigsState', () => {
         expect(puts.length).toBe(0); // save refused — no overlapping connection PUT
     });
 
-    it('nextRigModel picks the first unused catalogue model, falling back to the first', async () => {
+    // Fresh-install ruling 2026-09-26: '+ Add rig' opens a model picker, and
+    // picking opens an UNSAVED draft. Nothing is written until Save; Cancel leaves
+    // the rig list and the default exactly as they were. (Supersedes the
+    // 2026-08-19 immediate-write add, which created an uncancellable rig.)
+    const twoModels = [
+        { id: 'ic7300', name: 'IC-7300' },
+        { id: 'ftdx10', name: 'FTdx10' },
+    ];
+
+    it('startNewRig opens an unsaved draft: no PUT, list and default unchanged, dirty', async () => {
+        const puts = mockCluster({
+            default_rig_id: 1,
+            rigs: [{ id: 1, model: 'ic7300', port: '/dev/a' }],
+            catalogue: twoModels,
+        });
+        await rigsState.load();
+        rigsState.startNewRig('ftdx10');
+
+        expect(puts).toHaveLength(0);
+        expect(rigsState.rigs.map((r) => r.id)).toEqual([1]);
+        expect(rigsState.defaultRigId).toBe(1);
+        expect(rigsState.newRig?.model).toBe('ftdx10');
+        expect(rigsState.draft?.model).toBe('ftdx10'); // the editor edits the new draft
+        expect(rigsState.dirty).toBe(true); // Save and Cancel are live
+        expect(rigsState.anyDirty).toBe(true); // the exit guard asks before losing it
+    });
+
+    it('Cancel on a new-rig draft discards it: no PUT, list, default and selection unchanged', async () => {
+        const puts = mockCluster({
+            default_rig_id: 1,
+            rigs: [{ id: 1, model: 'ic7300', port: '/dev/a' }],
+            catalogue: twoModels,
+        });
+        await rigsState.load();
+        rigsState.startNewRig('ftdx10');
+        rigsState.setDraftPort('/dev/new');
+        rigsState.resetDraft();
+
+        expect(puts).toHaveLength(0);
+        expect(rigsState.newRig).toBeNull();
+        expect(rigsState.rigs.map((r) => r.id)).toEqual([1]);
+        expect(rigsState.defaultRigId).toBe(1);
+        expect(rigsState.selectedId).toBe(1);
+        expect(rigsState.draft?.port).toBe('/dev/a'); // back on rig 1, untouched
+        expect(rigsState.anyDirty).toBe(false);
+    });
+
+    it('Cancel on the FIRST rig draft leaves a rig-less config rig-less', async () => {
+        const puts = mockCluster({ default_rig_id: 0, rigs: [], catalogue: twoModels });
+        await rigsState.load();
+        rigsState.startNewRig('ic7300');
+        rigsState.resetDraft();
+
+        expect(puts).toHaveLength(0);
+        expect(rigsState.rigs).toHaveLength(0);
+        expect(rigsState.defaultRigId).toBe(0);
+        expect(rigsState.draft).toBeNull();
+    });
+
+    it('the picker allows a model that is already configured (no refusal)', async () => {
         mockCluster({
             default_rig_id: 1,
             rigs: [{ id: 1, model: 'ic7300', port: '/dev/a' }],
-            catalogue: [
-                { id: 'ic7300', name: 'IC-7300' },
-                { id: 'ftdx10', name: 'FTdx10' },
-            ],
+            catalogue: twoModels,
         });
         await rigsState.load();
-        expect(rigsState.nextRigModel()).toBe('ftdx10'); // ic7300 in use ⇒ first unused
-
-        // every model in use ⇒ fall back to the first catalogue entry
-        rigsState.rigs = [
-            { id: 1, model: 'ic7300', port: '/dev/a' },
-            { id: 2, model: 'ftdx10', port: '/dev/b' },
-        ];
-        expect(rigsState.nextRigModel()).toBe('ic7300');
+        rigsState.startNewRig('ic7300');
+        expect(rigsState.newRig?.model).toBe('ic7300');
     });
 
-    it('addRig appends a rig with id = max(fresh)+1, blank port, and PUTs the whole list', async () => {
+    it('Save of a new-rig draft appends id = max(fresh)+1 with its edits; the default is untouched', async () => {
         const puts = mockCluster({
             default_rig_id: 1,
             rigs: [
                 { id: 1, model: 'ic7300', port: '/dev/a' },
                 { id: 3, model: 'ftdx10', port: '/dev/b' }, // sparse ids — max is 3, not length
             ],
-            catalogue: [
-                { id: 'ic7300', name: 'IC-7300' },
-                { id: 'ftdx10', name: 'FTdx10' },
-            ],
+            catalogue: twoModels,
         });
         await rigsState.load();
-        await rigsState.addRig('ic7300');
+        rigsState.startNewRig('ftdx10');
+        rigsState.setDraftPort('/dev/new');
+        rigsState.setDraftAudio('rx', 'USB Audio');
+        await rigsState.save();
 
         expect(puts).toHaveLength(1);
         const sent = JSON.parse(puts[0]) as {
             rigs: Array<Record<string, unknown>>;
             default_rig_id?: number;
         };
-        expect(sent.rigs.map((r) => r.id)).toEqual([1, 3, 4]); // max(1,3)+1 = 4
-        expect(sent.rigs.find((r) => r.id === 4)).toEqual({ id: 4, model: 'ic7300', port: '' });
+        expect(sent.rigs.map((r) => r.id)).toEqual([1, 3, 4]);
+        expect(sent.rigs.find((r) => r.id === 4)).toEqual({
+            id: 4,
+            model: 'ftdx10',
+            port: '/dev/new',
+            audio: { rx: 'USB Audio' },
+        });
         expect('default_rig_id' in sent).toBe(false); // existing default resolves ⇒ untouched
-        expect(rigsState.selectedId).toBe(4); // new rig focused for configuration
-        expect(rigsState.dirty).toBe(false); // fresh draft == baseline (not spuriously dirty)
+        expect(rigsState.newRig).toBeNull();
+        expect(rigsState.selectedId).toBe(4); // the saved rig stays on screen
+        expect(rigsState.draft?.port).toBe('/dev/new');
+        expect(rigsState.dirty).toBe(false);
     });
 
-    it('adding the FIRST rig makes it the active default (default_rig_id sent)', async () => {
-        const puts = mockCluster({
-            default_rig_id: 0,
-            rigs: [],
-            catalogue: [{ id: 'ftdx10', name: 'FTdx10' }],
-        });
+    it('the FIRST saved rig becomes the default (default_rig_id sent)', async () => {
+        const puts = mockCluster({ default_rig_id: 0, rigs: [], catalogue: twoModels });
         await rigsState.load();
-        expect(rigsState.rigs).toHaveLength(0);
-        await rigsState.addRig('ftdx10');
+        rigsState.startNewRig('ftdx10');
+        await rigsState.save();
 
         const sent = JSON.parse(puts[0]) as {
             rigs: Array<{ id: number }>;
@@ -829,34 +886,27 @@ describe('rigsState', () => {
         expect(rigsState.defaultRigId).toBe(1);
     });
 
-    it('addRig appends onto the FRESH list, preserving a concurrent add', async () => {
+    it('Save of a new rig appends onto the FRESH list, preserving a concurrent add', async () => {
         let get = 0;
         const puts = mockCluster(() => {
             get++;
             const rigs: Array<Record<string, unknown>> = [
                 { id: 1, model: 'ic7300', port: '/dev/a' },
             ];
-            // between load (get 1) and the add re-fetch (get 2) another client added rig 5
+            // between load (get 1) and the save re-fetch (get 2) another client added rig 5
             if (get >= 2) rigs.push({ id: 5, model: 'ftdx10', port: '/dev/CONCURRENT' });
-            return {
-                default_rig_id: 1,
-                rigs,
-                catalogue: [
-                    { id: 'ic7300', name: 'IC-7300' },
-                    { id: 'ftdx10', name: 'FTdx10' },
-                ],
-            };
+            return { default_rig_id: 1, rigs, catalogue: twoModels };
         });
         await rigsState.load();
-        await rigsState.addRig('ic7300');
+        rigsState.startNewRig('ic7300');
+        await rigsState.save();
 
         const sent = JSON.parse(puts[0]) as { rigs: Array<{ id: number; port?: string }> };
-        // the concurrent rig 5 survives, and the new id is max(1,5)+1 = 6
         expect(sent.rigs.map((r) => r.id)).toEqual([1, 5, 6]);
         expect(sent.rigs.find((r) => r.id === 5)?.port).toBe('/dev/CONCURRENT');
     });
 
-    it('addRig surfaces a daemon rejection and does not add the rig locally', async () => {
+    it('a rejected new-rig Save keeps the draft so it can be fixed', async () => {
         vi.stubGlobal(
             'fetch',
             vi.fn((url: string, init?: RequestInit) => {
@@ -873,7 +923,7 @@ describe('rigsState', () => {
                     : {
                           default_rig_id: 1,
                           rigs: [{ id: 1, model: 'ic7300', port: '/dev/a' }],
-                          catalogue: [{ id: 'ic7300', name: 'IC-7300' }],
+                          catalogue: twoModels,
                       };
                 return Promise.resolve(
                     new Response(JSON.stringify(body), {
@@ -884,24 +934,50 @@ describe('rigsState', () => {
             })
         );
         await rigsState.load();
-        await rigsState.addRig('ic7300');
-        expect(rigsState.rigs.map((r) => r.id)).toEqual([1]); // unchanged — the add was rejected
-        expect(rigsState.saving).toBe(false); // and the section isn't stuck saving
+        rigsState.startNewRig('ic7300');
+        rigsState.setDraftPort('/dev/new');
+        await rigsState.save();
+        expect(rigsState.rigs.map((r) => r.id)).toEqual([1]); // not added locally
+        expect(rigsState.newRig?.port).toBe('/dev/new'); // the operator's draft survives
+        expect(rigsState.saving).toBe(false);
     });
 
-    it('addRig is a no-op when there is no model to add (empty catalogue)', async () => {
-        const puts = mockCluster({ default_rig_id: 0, rigs: [], catalogue: [] });
+    it('select() is refused while a new-rig draft is open (it would silently drop it)', async () => {
+        mockCluster({
+            default_rig_id: 1,
+            rigs: [
+                { id: 1, model: 'ic7300', port: '/dev/a' },
+                { id: 2, model: 'ftdx10', port: '/dev/b' },
+            ],
+            catalogue: twoModels,
+        });
         await rigsState.load();
-        await rigsState.addRig(rigsState.nextRigModel()); // '' ⇒ no-op
-        expect(puts).toHaveLength(0);
+        rigsState.startNewRig('ic7300');
+        rigsState.select(2);
+        expect(rigsState.newRig?.model).toBe('ic7300');
+        expect(rigsState.selectedId).toBe(1); // the selection under the draft didn't move
+        rigsState.resetDraft(); // Cancel returns to where the operator was
+        expect(rigsState.draft?.id).toBe(1);
     });
 
-    // The immediate add is NON-idempotent (each call assigns a new id), so an
+    it('discardDrafts (the exit guard) drops an open new-rig draft', async () => {
+        mockCluster({
+            default_rig_id: 1,
+            rigs: [{ id: 1, model: 'ic7300', port: '/dev/a' }],
+            catalogue: twoModels,
+        });
+        await rigsState.load();
+        rigsState.startNewRig('ftdx10');
+        rigsState.discardDrafts();
+        expect(rigsState.newRig).toBeNull();
+        expect(rigsState.anyDirty).toBe(false);
+    });
+
+    // Saving a new rig is NON-idempotent (each save assigns a new id), so an
     // AMBIGUOUS timeout — the PUT committed but its response was lost — must NOT be
     // treated as a plain failure: a blind retry would append a SECOND rig of the
-    // same model. addRig re-reads and reconciles, mirroring the CAT switch's
-    // #reconcileAfterTimeout (clean-room review 7b5ed1d2 P2).
-    it('addRig adopts a timed-out PUT that COMMITTED (reconcile, no double-add)', async () => {
+    // same model. Save re-reads and reconciles (clean-room review 7b5ed1d2 P2).
+    it('a new-rig Save adopts a timed-out PUT that COMMITTED (reconcile, no double-add)', async () => {
         let get = 0;
         const ok = (body: unknown) =>
             Promise.resolve(
@@ -922,7 +998,7 @@ describe('rigsState', () => {
                     return ok({ serial_ports: [], audio: { available: false } });
                 }
                 get++;
-                // GET 1 = load, GET 2 = the add's fresh re-fetch → both [1];
+                // GET 1 = load, GET 2 = the save's fresh re-fetch → both [1];
                 // GET 3 = the reconcile re-read → [1,2] (the add DID commit).
                 const rigs =
                     get <= 2
@@ -939,14 +1015,16 @@ describe('rigsState', () => {
             })
         );
         await rigsState.load();
-        await rigsState.addRig('ic7300'); // PUT times out; reconcile sees rig 2 landed
+        rigsState.startNewRig('ic7300');
+        await rigsState.save(); // PUT times out; reconcile sees rig 2 landed
 
         expect(rigsState.rigs.map((r) => r.id)).toEqual([1, 2]); // adopted the committed rig
-        expect(rigsState.selectedId).toBe(2); // focused for configuration
+        expect(rigsState.newRig).toBeNull(); // no draft left to save a second time
+        expect(rigsState.selectedId).toBe(2);
         expect(rigsState.saving).toBe(false);
     });
 
-    it('addRig reports a timed-out PUT that did NOT commit (state unchanged, safe retry)', async () => {
+    it('a new-rig Save reports a timed-out PUT that did NOT commit (draft kept, safe retry)', async () => {
         const ok = (body: unknown) =>
             Promise.resolve(
                 new Response(JSON.stringify(body), {
@@ -974,18 +1052,19 @@ describe('rigsState', () => {
             })
         );
         await rigsState.load();
-        await rigsState.addRig('ic7300'); // times out; reconcile shows no new rig
+        rigsState.startNewRig('ic7300');
+        await rigsState.save(); // times out; reconcile shows no new rig
 
         expect(rigsState.rigs.map((r) => r.id)).toEqual([1]); // no phantom rig appended
+        expect(rigsState.newRig?.model).toBe('ic7300'); // draft kept for the retry
         expect(rigsState.saving).toBe(false);
     });
 
-    it('addRig with a timed-out PUT AND an unreadable reconcile keeps state + reports unknown', async () => {
+    it('a new-rig Save with a timed-out PUT AND an unreadable reconcile keeps state + reports unknown', async () => {
         // The formal residual (a delayed PUT + a failed reconcile) must NOT invite a
-        // blind retry: local state is preserved, saving clears, and the message tells
-        // the operator to reload rather than retry (clean-room review 0c3abf9f P1,
-        // accept + harden). The reconcile GET failing is the safe fallback for a
-        // genuinely stuck daemon.
+        // blind retry: the draft is dropped (a retry could double-add), saving
+        // clears, and the message tells the operator to reload rather than retry
+        // (clean-room review 0c3abf9f P1, accept + harden).
         const err = vi.spyOn(toasts, 'error');
         let get = 0;
         const ok = (body: unknown) =>
@@ -1007,8 +1086,6 @@ describe('rigsState', () => {
                     return ok({ serial_ports: [], audio: { available: false } });
                 }
                 get++;
-                // GET 1 = load, GET 2 = the add's fresh re-fetch → ok [1];
-                // GET 3 = the reconcile re-read → FAILS (daemon unreadable).
                 if (get >= 3) return Promise.resolve(new Response('{}', { status: 503 }));
                 return ok({
                     default_rig_id: 1,
@@ -1018,14 +1095,16 @@ describe('rigsState', () => {
             })
         );
         await rigsState.load();
-        await rigsState.addRig('ic7300'); // PUT times out; reconcile GET fails ⇒ unknown
+        rigsState.startNewRig('ic7300');
+        await rigsState.save(); // PUT times out; reconcile GET fails ⇒ unknown
 
         expect(rigsState.rigs.map((r) => r.id)).toEqual([1]); // local state preserved (no phantom)
-        expect(rigsState.saving).toBe(false); // not stuck saving
-        expect(rigsState.loaded).toBe(true); // still the last good load — not torn down
+        expect(rigsState.newRig).toBeNull(); // no Save left that could double-add
+        expect(rigsState.saving).toBe(false);
+        expect(rigsState.loaded).toBe(true);
         expect(err).toHaveBeenCalledTimes(1);
-        expect(err.mock.calls[0][0]).toMatch(/state unknown/i); // "unknown", not "did not commit"
-        expect(err.mock.calls[0][0]).toMatch(/reload/i); // reload, NOT a blind retry
+        expect(err.mock.calls[0][0]).toMatch(/state unknown/i);
+        expect(err.mock.calls[0][0]).toMatch(/reload/i);
     });
 
     it('deleteRig removes a non-default rig and PUTs the reduced list (omits default_rig_id)', async () => {
@@ -1128,16 +1207,77 @@ describe('rigsState', () => {
         expect(sent.rigs.find((r) => r.id === 1)?.port).toBe('/dev/CONCURRENT'); // fresh, not stale
     });
 
-    it('deleteRig is refused for the only rig (no PUT)', async () => {
+    // Fresh-install ruling 2026-09-26 + daemon check 2026-09-28: the LAST rig may
+    // be deleted — one PUT of an empty list with default_rig_id 0 — but only with
+    // CAT off. With CAT on the daemon refuses (validateBridge needs a port), so the
+    // store refuses first and never switches CAT off for the operator.
+    it('deleteRig removes the LAST rig with CAT off: one PUT of rigs [] and default 0', async () => {
         const puts = mockCluster({
             default_rig_id: 1,
             rigs: [{ id: 1, model: 'ic7300', port: '/dev/a' }],
             catalogue: [],
         });
+        bridgeEnabledState.loaded = true;
+        bridgeEnabledState.enabled = false;
         await rigsState.load();
         await rigsState.deleteRig(1);
+
+        expect(puts).toHaveLength(1);
+        expect(JSON.parse(puts[0])).toEqual({ rigs: [], default_rig_id: 0 });
+        expect(rigsState.rigs).toHaveLength(0);
+        expect(rigsState.defaultRigId).toBe(0);
+        expect(rigsState.selectedId).toBeNull();
+        expect(rigsState.anyDirty).toBe(false);
+    });
+
+    it('deleteRig does not delete a rig that a concurrent delete made the LAST one', async () => {
+        let get = 0;
+        const puts = mockCluster(() => {
+            get++;
+            // load sees [1,2]; by the delete re-fetch another client removed rig 1
+            // and made rig 2 the default — the operator confirmed deleting one of two.
+            return get === 1
+                ? {
+                      default_rig_id: 1,
+                      rigs: [
+                          { id: 1, model: 'ic7300', port: '/dev/a' },
+                          { id: 2, model: 'ftdx10', port: '/dev/b' },
+                      ],
+                      catalogue: [],
+                  }
+                : {
+                      default_rig_id: 2,
+                      rigs: [{ id: 2, model: 'ftdx10', port: '/dev/b' }],
+                      catalogue: [],
+                  };
+        });
+        bridgeEnabledState.loaded = true;
+        bridgeEnabledState.enabled = false;
+        await rigsState.load();
+        await rigsState.deleteRig(2);
+
         expect(puts).toHaveLength(0);
-        expect(rigsState.rigs.map((r) => r.id)).toEqual([1]);
+        expect(rigsState.rigs.map((r) => r.id)).toEqual([2]); // shows the fresh list
+        expect(rigsState.saving).toBe(false);
+    });
+
+    it('deleteRig refuses the last rig while CAT is on, or its state is unknown (no PUT)', async () => {
+        for (const [loaded, enabled] of [
+            [true, true],
+            [false, false],
+        ]) {
+            const puts = mockCluster({
+                default_rig_id: 1,
+                rigs: [{ id: 1, model: 'ic7300', port: '/dev/a' }],
+                catalogue: [],
+            });
+            bridgeEnabledState.loaded = loaded;
+            bridgeEnabledState.enabled = enabled;
+            await rigsState.load();
+            await rigsState.deleteRig(1);
+            expect(puts).toHaveLength(0);
+            expect(rigsState.rigs.map((r) => r.id)).toEqual([1]);
+        }
     });
 
     it('deleteRig on a rig already removed concurrently is a safe no-op (no PUT)', async () => {

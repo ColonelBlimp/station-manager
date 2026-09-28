@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/svelte';
+import { render, screen, fireEvent, within } from '@testing-library/svelte';
 import { flushSync } from 'svelte';
 import RigsSection from './RigsSection.svelte';
 import { rigsState } from './rigs.svelte';
+import { bridgeEnabledState } from './bridgeEnabled.svelte';
 
 // Reset the rigsState singleton between cases (RigsSection.onMount → load()).
 afterEach(() => {
@@ -22,9 +23,15 @@ afterEach(() => {
     rigsState.audioAvailable = false;
     rigsState.capture = [];
     rigsState.playback = [];
+    rigsState.newRig = null;
+    bridgeEnabledState.loaded = false;
+    bridgeEnabledState.enabled = false;
 });
 
-function mockCluster(rigsBody: object): void {
+// GET /v1/config answers the CAT switch (bridge_enabled); the returned array
+// collects PUT bodies.
+function mockCluster(rigsBody: object, catOn = false): string[] {
+    const puts: string[] = [];
     const resp = (body: unknown) =>
         Promise.resolve(
             new Response(JSON.stringify(body), {
@@ -35,12 +42,17 @@ function mockCluster(rigsBody: object): void {
     vi.stubGlobal(
         'fetch',
         vi.fn((url: string, init?: RequestInit) => {
-            if ((init?.method ?? 'GET') === 'PUT') return resp({});
+            if ((init?.method ?? 'GET') === 'PUT') {
+                puts.push(init?.body as string);
+                return resp({});
+            }
             if (url.includes('/v1/hardware'))
                 return resp({ serial_ports: [], audio: { available: false } });
+            if (url.includes('/v1/config')) return resp({ bridge_enabled: catOn });
             return resp(rigsBody);
         })
     );
+    return puts;
 }
 
 describe('RigsSection advanced editors', () => {
@@ -188,22 +200,54 @@ describe('RigsSection advanced editors', () => {
         expect(del1.title).toBe('Delete this rig');
     });
 
-    // The only rig is necessarily undeletable AND (normally) the default. The two
-    // reasons differ in what they ask the operator to do, and "set another rig as
-    // default" is impossible with one rig, so the only-rig reason must win.
-    it('the only rig keeps the only-rig reason, not the default-rig reason', async () => {
-        mockCluster({
+    // Fresh-install ruling 2026-09-26 + 2026-09-28: the last rig is deletable, but
+    // only with CAT off — the daemon refuses an enabled bridge with no rig. With CAT
+    // on the button is disabled and its tooltip names the one thing that unlocks
+    // it; it is never the default-rig reason ("set another rig as default" is
+    // impossible with one rig).
+    it('the only rig: Delete enabled with CAT off, disabled with the CAT reason with CAT on', async () => {
+        const body = {
             default_rig_id: 1,
             rigs: [{ id: 1, model: 'ftdx10', port: '/dev/a' }],
             catalogue: [{ id: 'ftdx10', name: 'FTdx10', rig_modes: ['DATA-U'] }],
-        });
-        render(RigsSection);
+        };
+        mockCluster(body, true);
+        const { unmount } = render(RigsSection);
+        await vi.waitFor(() => expect(bridgeEnabledState.loaded).toBe(true));
         await vi.waitFor(() => expect(rigsState.loaded).toBe(true));
         flushSync();
         const del = screen.getByRole('button', { name: 'Delete' });
         expect(del).toBeDisabled();
-        expect(del.title).toBe('Cannot delete the only rig');
-        expect(screen.queryByText(/set another rig as default first/i)).toBeNull();
+        expect(del.title).toBe('Turn off the rig connection (CAT) first');
+        unmount();
+
+        mockCluster(body, false);
+        render(RigsSection);
+        await vi.waitFor(() => expect(bridgeEnabledState.loaded).toBe(true));
+        await vi.waitFor(() => expect(rigsState.loaded).toBe(true));
+        flushSync();
+        const del2 = screen.getByRole('button', { name: 'Delete' });
+        expect(del2).not.toBeDisabled();
+        expect(del2.title).toBe('Delete this rig');
+    });
+
+    it('deleting the last rig (CAT off, confirmed) clears the list to the empty state', async () => {
+        const puts = mockCluster({
+            default_rig_id: 1,
+            rigs: [{ id: 1, model: 'ftdx10', port: '/dev/a' }],
+            catalogue: [{ id: 'ftdx10', name: 'FTdx10' }],
+        });
+        const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+        render(RigsSection);
+        await vi.waitFor(() => expect(bridgeEnabledState.loaded).toBe(true));
+        await vi.waitFor(() => expect(rigsState.loaded).toBe(true));
+        flushSync();
+        await fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+        await vi.waitFor(() => expect(puts).toHaveLength(1));
+        expect(confirm.mock.calls[0][0]).toMatch(/only rig/i);
+        expect(JSON.parse(puts[0])).toEqual({ rigs: [], default_rig_id: 0 });
+        flushSync();
+        expect(screen.getByText('No rigs configured.')).toBeInTheDocument();
     });
 
     it('the detail names the rig once: no manufacturer · model subtitle, no description', async () => {
@@ -231,5 +275,98 @@ describe('RigsSection advanced editors', () => {
         expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('Yaesu FTdx10');
         expect(screen.queryByText('Yaesu · FTdx10')).toBeNull();
         expect(screen.queryByText('HF/50 MHz SDR transceiver')).toBeNull();
+    });
+});
+
+// Fresh-install ruling 2026-09-26: '+ Add rig' opens a picker of the catalogue
+// models (an already-added model marked, still pickable); picking opens an
+// UNSAVED draft. Cancel changes nothing; Save creates it; the first saved rig
+// becomes the default. Found: one Add click created an IC-7300 default with no
+// port that could not be cancelled or deleted.
+describe('RigsSection add-rig picker', () => {
+    const catalogue = [
+        { id: 'ic7300', name: 'IC-7300' },
+        { id: 'ftdx10', name: 'FTdx10' },
+    ];
+
+    it('lists the models, marks one already added, and Cancel on the draft writes nothing', async () => {
+        const puts = mockCluster({
+            default_rig_id: 1,
+            rigs: [{ id: 1, model: 'ic7300', port: '/dev/a' }],
+            catalogue,
+        });
+        render(RigsSection);
+        await vi.waitFor(() => expect(rigsState.loaded).toBe(true));
+        flushSync();
+
+        await fireEvent.click(screen.getByRole('button', { name: '+ Add rig' }));
+        flushSync();
+        const picker = screen.getByRole('group', { name: 'Choose a rig model' });
+        const ic = within(picker).getByRole('button', { name: /IC-7300/ });
+        expect(ic).toHaveTextContent(/already added/i); // marked…
+        expect(ic).not.toBeDisabled(); // …still pickable
+        expect(within(picker).getByRole('button', { name: /FTdx10/ })).not.toHaveTextContent(
+            /already added/i
+        );
+
+        await fireEvent.click(within(picker).getByRole('button', { name: /FTdx10/ }));
+        flushSync();
+        expect(screen.queryByRole('group', { name: 'Choose a rig model' })).toBeNull();
+        expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('FTdx10');
+        expect(screen.getByText('not saved — Save to add it')).toBeInTheDocument();
+        // No default / delete controls on a rig that doesn't exist yet.
+        expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
+        expect(screen.queryByText('Set as default')).toBeNull();
+        // The list can't switch away and silently drop the draft.
+        for (const b of document.querySelectorAll('ul button')) expect(b).toBeDisabled();
+
+        await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+        flushSync();
+        expect(puts).toHaveLength(0);
+        expect(rigsState.rigs.map((r) => r.id)).toEqual([1]);
+        expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('IC-7300');
+    });
+
+    it('closing the picker without choosing changes nothing', async () => {
+        const puts = mockCluster({
+            default_rig_id: 1,
+            rigs: [{ id: 1, model: 'ic7300', port: '/dev/a' }],
+            catalogue,
+        });
+        render(RigsSection);
+        await vi.waitFor(() => expect(rigsState.loaded).toBe(true));
+        flushSync();
+        await fireEvent.click(screen.getByRole('button', { name: '+ Add rig' }));
+        flushSync();
+        const picker = screen.getByRole('group', { name: 'Choose a rig model' });
+        await fireEvent.click(within(picker).getByRole('button', { name: 'Cancel' }));
+        flushSync();
+        expect(screen.queryByRole('group', { name: 'Choose a rig model' })).toBeNull();
+        expect(rigsState.newRig).toBeNull();
+        expect(puts).toHaveLength(0);
+    });
+
+    it('from no rigs: pick, Save, and the first rig becomes the default', async () => {
+        const puts = mockCluster({ default_rig_id: 0, rigs: [], catalogue });
+        render(RigsSection);
+        await vi.waitFor(() => expect(rigsState.loaded).toBe(true));
+        flushSync();
+        await fireEvent.click(screen.getByRole('button', { name: 'Add rig' }));
+        flushSync();
+        const picker = screen.getByRole('group', { name: 'Choose a rig model' });
+        await fireEvent.click(within(picker).getByRole('button', { name: /IC-7300/ }));
+        flushSync();
+        expect(puts).toHaveLength(0); // picking writes nothing
+        expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('IC-7300');
+
+        await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+        await vi.waitFor(() => expect(puts).toHaveLength(1));
+        expect(JSON.parse(puts[0])).toEqual({
+            rigs: [{ id: 1, model: 'ic7300', port: '' }],
+            default_rig_id: 1,
+        });
+        flushSync();
+        expect(screen.queryAllByText(/not saved/i)).toHaveLength(0);
+        expect(rigsState.defaultRigId).toBe(1);
     });
 });

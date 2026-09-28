@@ -34,6 +34,7 @@
 import { fetchRigs, saveRigs, setDefaultRig, type RigConfig, type RigDef } from '../api/rigs';
 import { noteConfigDurability } from './durability';
 import { fetchHardware, type SerialPort, type AudioDevice } from '../api/hardware';
+import { bridgeEnabledState } from './bridgeEnabled.svelte';
 import { toasts } from '../ui/toasts.svelte';
 
 // A full-fidelity clone (rigs are pure JSON, so a JSON round-trip is lossless
@@ -52,6 +53,19 @@ function normalizedAudio(audio: RigConfig['audio']): RigConfig['audio'] | undefi
     if (audio?.rx) out.rx = audio.rx;
     if (audio?.tx) out.tx = audio.tx;
     return out.rx || out.tx ? out : undefined;
+}
+
+// The form a new rig is saved in: the draft under its assigned id, with empty
+// audio and empty override maps dropped so it matches the daemon's omitempty
+// shape and reloads not-dirty.
+function savedFormOf(draft: RigConfig, id: number): RigConfig {
+    const out = cloneRig({ ...draft, id });
+    const audio = normalizedAudio(out.audio);
+    if (audio) out.audio = audio;
+    else delete out.audio;
+    if (out.mode_mappings && Object.keys(out.mode_mappings).length === 0) delete out.mode_mappings;
+    if (out.overrides && Object.keys(out.overrides).length === 0) delete out.overrides;
+    return out;
 }
 
 // Mirror an optional string override (ft8_mode / my_rig) from the draft onto the
@@ -128,18 +142,29 @@ class RigsState {
     // change (review 2026-07-20 Rigs-editor #6).
     baselines = $state<Record<number, RigConfig>>({});
 
+    // A rig picked from '+ Add rig' but not yet saved (fresh-install ruling
+    // 2026-09-26). It is NOT in `rigs` and has no id until Save assigns one on the
+    // fresh list, so Cancel leaves the rig list and the default untouched. While it
+    // is open the editor edits it instead of the selection.
+    newRig = $state<RigConfig | null>(null);
+
     // The pristine selected rig, or null (no rigs / none selected).
     selected = $derived(this.rigs.find((r) => r.id === this.selectedId) ?? null);
 
-    // The editable draft for the current selection (the form binds via setters).
-    draft = $derived(this.selectedId !== null ? (this.drafts[this.selectedId] ?? null) : null);
+    // The editable draft on screen (the form binds via setters): the unsaved new
+    // rig when one is open, else the selection's draft.
+    draft = $derived(
+        this.newRig ?? (this.selectedId !== null ? (this.drafts[this.selectedId] ?? null) : null)
+    );
 
-    // Unsaved connection edits: the current draft differs from ITS OWN baseline
-    // (the snapshot it was cloned from), not from this.selected.
+    // Unsaved edits on screen. A new rig is unsaved by definition, so Save and
+    // Cancel are live from the moment it is picked; otherwise the draft differs
+    // from ITS OWN baseline (the snapshot it was cloned from), not this.selected.
     dirty = $derived(
-        this.draft && this.selectedId !== null && this.baselines[this.selectedId]
-            ? JSON.stringify(this.draft) !== JSON.stringify(this.baselines[this.selectedId])
-            : false
+        this.newRig !== null ||
+            (this.draft && this.selectedId !== null && this.baselines[this.selectedId]
+                ? JSON.stringify(this.draft) !== JSON.stringify(this.baselines[this.selectedId])
+                : false)
     );
 
     // Unsaved edits on ANY rig, not just the one on screen. Drafts persist per
@@ -149,21 +174,26 @@ class RigsState {
     // needs this one; anything driving the editor's own Save/Cancel wants
     // `dirty`.
     anyDirty = $derived(
-        Object.keys(this.drafts).some((k) => {
-            const id = Number(k);
-            const b = this.baselines[id];
-            return b !== undefined && JSON.stringify(this.drafts[id]) !== JSON.stringify(b);
-        })
+        this.newRig !== null ||
+            Object.keys(this.drafts).some((k) => {
+                const id = Number(k);
+                const b = this.baselines[id];
+                return b !== undefined && JSON.stringify(this.drafts[id]) !== JSON.stringify(b);
+            })
     );
 
     // Of the SELECTED rig's unsaved edits, do any require a daemon restart? True
     // when the draft differs from its baseline in a field OTHER than my_rig (see
     // restartRelevant). Gates the "restart to apply" note + save toast so a pure
     // MY_RIG edit — resolved live per QSO — doesn't prompt a needless restart.
+    // A new rig needs a restart only when it will become the default (the first
+    // rig); any other added rig is not the one the daemon connects to.
     restartDirty = $derived(
-        this.draft && this.selectedId !== null && this.baselines[this.selectedId]
-            ? restartRelevant(this.draft) !== restartRelevant(this.baselines[this.selectedId])
-            : false
+        this.newRig !== null
+            ? !this.rigs.some((r) => r.id === this.defaultRigId)
+            : this.draft && this.selectedId !== null && this.baselines[this.selectedId]
+              ? restartRelevant(this.draft) !== restartRelevant(this.baselines[this.selectedId])
+              : false
     );
 
     defFor(rig: RigConfig): RigDef | undefined {
@@ -173,17 +203,13 @@ class RigsState {
         return this.catalogue[rig.model]?.name ?? rig.model;
     }
 
-    // The model a newly-added rig should default to: the first catalogue rigdef
-    // not already configured (so Add doesn't silently clone a model), falling back
-    // to the first catalogue entry when every model is in use, or '' when the
-    // catalogue is empty (Add is then disabled). The Rigs section confirms before
-    // adding when this returns an in-use model. Mirrors the config SPA's
-    // nextRigModel; "used" is the committed list (unsaved model edits are transient
-    // and the add re-fetches anyway).
-    nextRigModel(): string {
-        const used = new Set(this.rigs.map((r) => r.model));
-        const keys = Object.keys(this.catalogue);
-        return keys.find((k) => !used.has(k)) ?? keys[0] ?? '';
+    // Open an unsaved rig of the picked catalogue model. A model already
+    // configured is allowed (two of the same rig is legitimate); the picker marks
+    // it instead. Nothing is written until save().
+    startNewRig(model: string): void {
+        if (this.saving || this.settingDefault || !this.loaded || this.newRig) return;
+        if (!this.catalogue[model]) return;
+        this.newRig = { id: 0, model, port: '' };
     }
 
     // The effective FT8-mode label. Ft8Mode is *string daemon-side with THREE
@@ -227,6 +253,7 @@ class RigsState {
         }
         this.drafts = {}; // fresh load discards any stale drafts
         this.baselines = {};
+        this.newRig = null;
         this.#ensureDraft();
         this.loaded = true;
     }
@@ -238,12 +265,16 @@ class RigsState {
     // it to the next mount. Not resetDraft(): that covers only the SELECTED
     // rig, and edits persist per rig id.
     discardDrafts(): void {
+        this.newRig = null;
         this.drafts = {};
         this.baselines = {};
         this.#ensureDraft();
     }
 
+    // Refused while a new rig is open: switching would drop it without asking. The
+    // list is disabled then too; Save or Cancel the new rig first.
     select(id: number): void {
+        if (this.newRig) return;
         this.selectedId = id;
         this.#ensureDraft(); // keep an existing draft for this rig (don't discard edits)
     }
@@ -254,7 +285,12 @@ class RigsState {
     // the stale baseline, so reverting to it would show an obsolete value as
     // clean; Cancel should surface what's actually on the server now (review
     // 2026-07-20 Rigs-editor #7).
+    // For an unsaved new rig, Cancel discards it and returns to the selection.
     resetDraft(): void {
+        if (this.newRig) {
+            this.newRig = null;
+            return;
+        }
         const id = this.selectedId;
         if (id !== null && this.selected) {
             this.drafts[id] = cloneRig(this.selected);
@@ -277,6 +313,10 @@ class RigsState {
     // mode_mappings/overrides are NOT auto-cleared on a model swap (matching the
     // config SPA — they stay the operator's to adjust).
     setDraftModel(model: string): void {
+        if (this.newRig) {
+            this.newRig = { ...cloneRig(this.newRig), model };
+            return;
+        }
         const id = this.selectedId;
         const d = this.draft;
         if (id === null || !d) return;
@@ -312,18 +352,23 @@ class RigsState {
         else d.my_rig = v;
     }
 
+    // A connection save may start: loaded, dirty, and no write in flight.
+    // settingDefault is checked BOTH ways (setDefault also refuses while saving)
+    // so a connection save and a set-default can't overlap — otherwise a save
+    // that re-fetched the OLD default could apply it via #applyFetched after
+    // set-default moved the badge, reverting it (codex e539a080 P2).
+    #canSaveEdits(): boolean {
+        return !this.saving && !this.settingDefault && this.loaded && this.dirty;
+    }
+
     // BASELINE DEBT 2026-07-31 (complexity 38) — validation across the whole rig-def
     // surface before a write.
     // eslint-disable-next-line complexity
     async save(): Promise<void> {
+        if (this.newRig) return this.#saveNew();
         const id = this.selectedId;
         const d = this.draft;
-        // settingDefault is checked BOTH ways (setDefault also refuses while saving)
-        // so a connection save and a set-default can't overlap — otherwise a save
-        // that re-fetched the OLD default could apply it via #applyFetched after
-        // set-default moved the badge, reverting it (codex e539a080 P2).
-        if (this.saving || this.settingDefault || !this.loaded || !this.dirty || !d || id === null)
-            return;
+        if (!this.#canSaveEdits() || !d || id === null) return;
         this.saving = true;
         // Re-fetch so we merge onto the CURRENT catalogue, not the mount snapshot
         // — otherwise the whole-replace would overwrite a concurrent change to
@@ -450,29 +495,27 @@ class RigsState {
         announceRigSaved(outcome, 'Default rig set — restart to connect to it.');
     }
 
-    // Add a rig — an IMMEDIATE structural write (operator ruling 2026-08-19: the
-    // app's per-rig field-merge model has no section Save, and Set-default already
-    // writes immediately, so Add follows that pattern rather than a pending draft).
-    // Creates a blank rig; the operator then configures its connection and Saves via
-    // the normal per-rig editor. `model` comes from nextRigModel via the section's
-    // duplicate-confirm handler.
+    // Save the unsaved new rig — the only point an add writes (fresh-install ruling
+    // 2026-09-26, superseding the 2026-08-19 immediate-write add).
     //
     // Data safety: RE-FETCH first and append onto the FRESH list (never the mount
     // snapshot), exactly like save(), so a concurrent add/edit to another rig
     // survives the whole-replace. The re-fetch→PUT is not atomic — same accepted
     // last-writer-wins window as save() (a second client in the millisecond gap).
-    async addRig(model: string): Promise<void> {
-        if (this.saving || this.settingDefault || !this.loaded || model === '') return;
+    // On failure the draft stays open so the operator can fix and retry.
+    async #saveNew(): Promise<void> {
+        const draft = this.newRig;
+        if (!draft || this.saving || this.settingDefault || !this.loaded) return;
         this.saving = true;
         const fresh = await fetchRigs();
         if (fresh.kind === 'error') {
             this.saving = false;
-            toasts.error(`Couldn't add a rig: refreshing the list failed (${fresh.message}).`);
+            toasts.error(`Couldn't add the rig: refreshing the list failed (${fresh.message}).`);
             return;
         }
         // Client-assigned id: max over the FRESH list + 1 (ids are >0 and unique).
         const id = fresh.data.rigs.reduce((m, r) => Math.max(m, r.id), 0) + 1;
-        const newRig: RigConfig = { id, model, port: '' };
+        const newRig = savedFormOf(draft, id);
         const nextRigs = [...fresh.data.rigs, newRig];
         // First rig becomes the active default: the daemon 400s on an unresolvable
         // default_rig_id, so when the fresh default doesn't resolve (empty list, or
@@ -483,27 +526,33 @@ class RigsState {
         const outcome = await saveRigs(nextRigs, nextDefault);
         if (outcome.kind === 'error') {
             if (outcome.timedOut) {
-                // Ambiguous: the PUT may already have committed. The immediate add
+                // Ambiguous: the PUT may already have committed. Saving a new rig
                 // is NON-idempotent (a retry assigns a NEW id and appends a second
                 // rig), so re-read the authoritative list and reconcile instead of
-                // leaving stale state a blind retry would double-add against
-                // (clean-room review 7b5ed1d2 P2; mirrors #reconcileAfterTimeout).
-                await this.#reconcileAfterAdd(id, model);
+                // leaving a draft a blind retry would double-add from (clean-room
+                // review 7b5ed1d2 P2).
+                await this.#reconcileAfterAdd(id, newRig.model);
                 return;
             }
             this.saving = false;
-            toasts.error(`Couldn't add a rig: ${outcome.message}`);
+            toasts.error(`Couldn't add the rig: ${outcome.message}`);
             return;
         }
         this.saving = false;
+        this.newRig = null;
         this.#applyFetched({
             rigs: nextRigs,
             defaultRigId: nextDefault ?? fresh.data.defaultRigId,
             catalogue: fresh.data.catalogue,
         });
-        this.selectedId = id; // focus the new rig so the operator can configure it
+        this.selectedId = id; // the saved rig stays on screen
         this.#ensureDraft();
-        announceRigSaved(outcome, 'Rig added — set its connection, then Save.');
+        announceRigSaved(
+            outcome,
+            nextDefault === undefined
+                ? 'Rig added.'
+                : 'Rig added as the default — restart the daemon to connect to it.'
+        );
     }
 
     // Settle an add whose PUT timed out by re-reading the rig list. If our rig (the
@@ -532,6 +581,9 @@ class RigsState {
         const reread = await fetchRigs();
         this.saving = false;
         if (reread.kind === 'error') {
+            // State unknown: drop the draft so no Save can double-add; the message
+            // sends the operator to reload.
+            this.newRig = null;
             toasts.error(
                 'Add timed out and the rig list could not be re-read — state unknown. ' +
                     'Reload Settings before trying again.'
@@ -541,27 +593,37 @@ class RigsState {
         this.#applyFetched(reread.data);
         const landed = reread.data.rigs.some((r) => r.id === id && r.model === model);
         if (landed) {
+            this.newRig = null;
             this.selectedId = id;
             this.#ensureDraft();
-            toasts.warn('Add timed out, but the rig was created — set its connection, then Save.');
+            toasts.warn('Add timed out, but the rig was saved.');
         } else {
             toasts.warn('Add timed out and did not take effect — try again.');
         }
     }
 
-    // Delete a rig — an IMMEDIATE structural write, the mirror of addRig (operator
-    // ruling 2026-08-19). RE-FETCH first and remove from the FRESH list so a
-    // concurrent edit to another rig survives the whole-replace. Never deletes the
-    // only rig, and never the default rig: the operator sets another rig as default
-    // first (alpha.2 dogfood Finding 3, W-0012 — this replaced the earlier
-    // auto-repoint of default_rig_id to the first survivor). The button is disabled
-    // for both; the store refuses regardless. Unlike Add, delete is IDEMPOTENT on
+    // The last rig can be deleted only with CAT off: the daemon refuses an enabled
+    // bridge with no rig to take a port from (validateBridge; daemon check
+    // 2026-09-28). Unknown CAT state counts as on. The operator turns CAT off
+    // themselves — deleting never switches it off for them (ruling 2026-09-28).
+    get catBlocksLastDelete(): boolean {
+        return !bridgeEnabledState.loaded || bridgeEnabledState.enabled;
+    }
+
+    // Delete a rig — an IMMEDIATE, confirmed structural write. RE-FETCH first and
+    // remove from the FRESH list so a concurrent edit to another rig survives the
+    // whole-replace. The default rig is not deletable while other rigs exist: the
+    // operator sets another rig as default first (alpha.2 dogfood Finding 3,
+    // W-0012). The LAST rig is deletable with CAT off, clearing the rigs and the
+    // default in one PUT (fresh-install ruling 2026-09-26). The button is disabled
+    // for the refused cases; the store refuses regardless. Delete is IDEMPOTENT on
     // retry (removing an already-gone rig is a no-op), so a timed-out delete needs
     // no reconcile — a retry is safe.
     async deleteRig(id: number): Promise<void> {
-        if (this.saving || this.settingDefault || !this.loaded) return;
-        if (this.rigs.length <= 1) return; // never delete the only rig
-        if (id === this.defaultRigId) return; // never delete the default rig
+        if (this.saving || this.settingDefault || !this.loaded || this.newRig) return;
+        const last = this.rigs.length <= 1;
+        if (last && this.catBlocksLastDelete) return;
+        if (!last && id === this.defaultRigId) return; // never delete the default rig
         this.saving = true;
         const fresh = await fetchRigs();
         if (fresh.kind === 'error') {
@@ -569,34 +631,40 @@ class RigsState {
             toasts.error(`Couldn't delete the rig: refreshing the list failed (${fresh.message}).`);
             return;
         }
-        // A concurrent delete may already have removed it, or left a single rig.
+        // A concurrent delete may already have removed it.
         if (!fresh.data.rigs.some((r) => r.id === id)) {
             this.saving = false;
             this.#applyFetched(fresh.data);
             toasts.info('That rig was already removed.');
             return;
         }
-        if (fresh.data.rigs.length <= 1) {
+        const freshLast = fresh.data.rigs.length === 1;
+        // The operator confirmed deleting one of several rigs; a concurrent delete
+        // has since made this the last one. Deleting it now would leave no rig
+        // without their having agreed to that — show the new list instead.
+        if (freshLast && !last) {
             this.saving = false;
             this.#applyFetched(fresh.data);
-            toasts.error("Can't delete the only rig.");
+            toasts.info(
+                'The rig list changed — this is now your only rig. Check it and try again.'
+            );
             return;
         }
         // Checked on the FRESH state too: a concurrent default change can make the
         // target the default after the button was pressed. Sending the PUT anyway
         // would omit default_rig_id and the daemon would 400 on the unresolvable
         // default — the rule is stated here instead.
-        if (fresh.data.defaultRigId === id) {
+        if (!freshLast && fresh.data.defaultRigId === id) {
             this.saving = false;
             this.#applyFetched(fresh.data);
             toasts.error("Can't delete the default rig — set another rig as default first.");
             return;
         }
         const nextRigs = fresh.data.rigs.filter((r) => r.id !== id);
-        // The default is never the target here, so it keeps resolving → OMIT
-        // default_rig_id so a concurrent default change isn't clobbered
-        // (presence-aware, like save()).
-        const outcome = await saveRigs(nextRigs);
+        // The last rig takes the default with it (0 = no rig, valid only with no
+        // rigs). Otherwise the default is never the target, so it keeps resolving →
+        // OMIT default_rig_id so a concurrent default change isn't clobbered.
+        const outcome = await saveRigs(nextRigs, freshLast ? 0 : undefined);
         this.saving = false;
         if (outcome.kind === 'error') {
             toasts.error(`Couldn't delete the rig: ${outcome.message}`);
@@ -610,7 +678,7 @@ class RigsState {
         // drafts the survivor (so the editor stays visible — see its note).
         this.#applyFetched({
             rigs: nextRigs,
-            defaultRigId: fresh.data.defaultRigId,
+            defaultRigId: freshLast ? 0 : fresh.data.defaultRigId,
             catalogue: fresh.data.catalogue,
         });
         announceRigSaved(outcome, 'Rig deleted.');

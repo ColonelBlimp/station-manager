@@ -3,10 +3,11 @@
     // master-detail: the rig list on the left, a details panel on the right. The
     // model, per-rig FT8-mode / MY_RIG overrides, and the CONNECTION (serial port +
     // audio RX/TX via /v1/hardware pickers) are editable, saved via a whole-catalogue
-    // PUT (see rigs.svelte.ts data-safety note). Add and Delete are immediate
-    // structural writes (Add creates a blank rig to configure; Delete is confirmed
-    // and removes it). The default rig is never deletable: the operator sets
-    // another rig as default first (alpha.2 dogfood Finding 3, W-0012).
+    // PUT (see rigs.svelte.ts data-safety note). '+ Add rig' opens a model picker
+    // and then an UNSAVED rig that Cancel discards (fresh-install ruling
+    // 2026-09-26). Delete is an immediate, confirmed write. The default rig is not
+    // deletable while other rigs exist (alpha.2 dogfood Finding 3, W-0012); the
+    // last rig is, with CAT off (ruling 2026-09-28).
     import { onMount } from 'svelte';
     import { rigsState } from './rigs.svelte';
     import { bridgeEnabledState } from './bridgeEnabled.svelte';
@@ -19,46 +20,70 @@
         void bridgeEnabledState.load();
     });
 
-    // Add a rig — an immediate structural write (rigsState.addRig re-fetches + PUTs
-    // a blank rig, then the operator configures + Saves it). nextRigModel picks an
-    // unused catalogue model; if only in-use models remain, confirm before adding a
-    // same-model clone (matches the config SPA's onAddRig). The confirm lives here,
-    // not in the state module, so the state stays free of DOM globals.
-    async function onAddRig() {
-        const model = rigsState.nextRigModel();
-        if (!model) return; // empty catalogue — nothing to add (the button is disabled too)
-        if (rigsState.rigs.some((r) => r.model === model)) {
-            const name = rigsState.catalogue[model]?.name ?? model;
-            if (
-                !window.confirm(`A "${name}" is already configured. Add another of the same model?`)
-            ) {
-                return;
-            }
-        }
-        await rigsState.addRig(model);
+    // The model picker '+ Add rig' opens. Picking starts an unsaved rig; nothing
+    // is written until its Save.
+    let pickerOpen = $state(false);
+
+    function pickModel(model: string) {
+        pickerOpen = false;
+        rigsState.startNewRig(model);
     }
 
-    // Delete a rig — an immediate structural write with NO undo (unlike the config
-    // SPA's pending-draft delete that a Cancel could discard), so confirm first. The
-    // button is disabled for the only rig and for the default rig; deleteRig also
-    // refuses both.
+    // Delete a rig — an immediate structural write with NO undo, so confirm first.
+    // The button is disabled for the default rig while others exist, and for the
+    // last rig while CAT is on; deleteRig also refuses both.
     async function onDeleteRig(id: number) {
         const rig = rigsState.rigs.find((r) => r.id === id);
         const name = rig ? rigsState.nameFor(rig) : 'this rig';
-        if (
-            !window.confirm(
-                `Delete "${name}"? This removes its connection settings and can't be undone.`
-            )
-        ) {
+        const consequence =
+            rigsState.rigs.length <= 1
+                ? "It's your only rig, so no rig will be set up."
+                : 'This removes its connection settings.';
+        if (!window.confirm(`Delete "${name}"? ${consequence} This can't be undone.`)) {
             return;
         }
         await rigsState.deleteRig(id);
+    }
+
+    function deleteTitle(id: number): string {
+        if (rigsState.rigs.length <= 1) {
+            return rigsState.catBlocksLastDelete
+                ? 'Turn off the rig connection (CAT) first'
+                : 'Delete this rig';
+        }
+        return id === rigsState.defaultRigId
+            ? 'Cannot delete the default rig — set another rig as default first'
+            : 'Delete this rig';
     }
 </script>
 
 {#snippet row(label: string, value: string, mono = false)}
     <dt class="text-muted">{label}</dt>
     <dd class="truncate text-ink {mono ? 'font-mono text-xs' : ''}" title={value}>{value}</dd>
+{/snippet}
+
+<!-- The '+ Add rig' model picker: every catalogue model, one already configured
+     marked but still pickable (two of the same rig is legitimate). -->
+{#snippet modelPicker()}
+    <div
+        role="group"
+        aria-label="Choose a rig model"
+        class="mt-2 space-y-1 rounded-md border border-line p-2 text-left"
+    >
+        <p class="px-1 text-xs text-muted">Choose the rig to add:</p>
+        {#each Object.entries(rigsState.catalogue) as [id, d] (id)}
+            <button
+                class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-ink hover:bg-surface-muted"
+                onclick={() => pickModel(id)}
+            >
+                {d.name}
+                {#if rigsState.rigs.some((r) => r.model === id)}
+                    <span class="ml-auto text-xs text-muted">already added</span>
+                {/if}
+            </button>
+        {/each}
+        <button class="btn mt-1 w-full" onclick={() => (pickerOpen = false)}>Cancel</button>
+    </div>
 {/snippet}
 
 {#snippet audioPicker(
@@ -134,22 +159,25 @@
             <p class="text-sm text-ink">Couldn’t load rigs: {rigsState.error}</p>
             <button class="btn mt-3" onclick={() => rigsState.load()}>Retry</button>
         </div>
-    {:else if rigsState.rigs.length === 0}
+    {:else if rigsState.rigs.length === 0 && !rigsState.newRig}
         <div
             class="grid min-h-[40vh] place-items-center rounded-xl border border-dashed border-line"
         >
             <div class="text-center">
                 <p class="text-sm text-muted">No rigs configured.</p>
-                <!-- Add the FIRST rig: addRig makes it the active default (the daemon
-                     400s on an unresolvable default_rig_id). Disabled with no catalogue
-                     (nextRigModel would return '' and addRig would no-op). -->
-                <button
-                    class="btn btn-primary mt-3"
-                    disabled={rigsState.saving || Object.keys(rigsState.catalogue).length === 0}
-                    onclick={onAddRig}
-                >
-                    {rigsState.saving ? 'Adding…' : 'Add rig'}
-                </button>
+                <!-- The first rig saved becomes the default (the daemon 400s on an
+                     unresolvable default_rig_id). Disabled with no catalogue. -->
+                {#if pickerOpen}
+                    {@render modelPicker()}
+                {:else}
+                    <button
+                        class="btn btn-primary mt-3"
+                        disabled={rigsState.saving || Object.keys(rigsState.catalogue).length === 0}
+                        onclick={() => (pickerOpen = true)}
+                    >
+                        Add rig
+                    </button>
+                {/if}
             </div>
         </div>
     {:else}
@@ -164,7 +192,7 @@
                                 rig.id
                                     ? 'border-focus bg-surface-muted'
                                     : 'border-line hover:bg-surface-muted'}"
-                                disabled={rigsState.saving}
+                                disabled={rigsState.saving || rigsState.newRig !== null}
                                 onclick={() => rigsState.select(rig.id)}
                             >
                                 <div class="flex items-center gap-2">
@@ -194,23 +222,35 @@
                             </button>
                         </li>
                     {/each}
+                    {#if rigsState.newRig}
+                        <li
+                            class="rounded-md border border-focus bg-surface-muted px-3 py-2 font-medium text-ink"
+                        >
+                            {rigsState.nameFor(rigsState.newRig)}
+                            <span class="text-xs font-normal text-muted">— not saved</span>
+                        </li>
+                    {/if}
                 </ul>
-                <!-- + Add rig — immediate write (onAddRig). Sits under the list like
-                     the config SPA; disabled while a save/add is in flight. -->
-                <button
-                    class="mt-2 w-full rounded-md border border-dashed border-line px-3 py-2 text-sm font-medium text-muted hover:border-focus hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-60"
-                    disabled={rigsState.saving}
-                    onclick={onAddRig}
-                >
-                    {rigsState.saving ? 'Adding…' : '+ Add rig'}
-                </button>
+                <!-- + Add rig opens the model picker; hidden while a new rig is open
+                     (Save or Cancel it first). -->
+                {#if pickerOpen}
+                    {@render modelPicker()}
+                {:else if !rigsState.newRig}
+                    <button
+                        class="mt-2 w-full rounded-md border border-dashed border-line px-3 py-2 text-sm font-medium text-muted hover:border-focus hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-60"
+                        disabled={rigsState.saving || Object.keys(rigsState.catalogue).length === 0}
+                        onclick={() => (pickerOpen = true)}
+                    >
+                        + Add rig
+                    </button>
+                {/if}
             </div>
 
             <!-- Detail: model + per-rig FT8-mode/MY_RIG + the CONNECTION (port +
                  audio, via /v1/hardware pickers) are editable; Delete (immediate,
                  confirmed) sits in the header. -->
             <div class="min-w-0 flex-1">
-                {#if rigsState.selected && rigsState.draft}
+                {#if (rigsState.newRig || rigsState.selected) && rigsState.draft}
                     {@const rig = rigsState.selected}
                     {@const draft = rigsState.draft}
                     <!-- def / name follow the DRAFT's model (not the pristine rig) so a
@@ -219,7 +259,10 @@
                     {@const def = rigsState.defFor(draft)}
                     <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
                         <h2 class="text-lg font-semibold text-ink">{rigsState.nameFor(draft)}</h2>
-                        {#if rig.id === rigsState.defaultRigId}
+                        {#if rigsState.newRig || !rig}
+                            <!-- An unsaved new rig: no default or delete until it exists. -->
+                            <span class="text-xs text-muted">not saved — Save to add it</span>
+                        {:else if rig.id === rigsState.defaultRigId}
                             <!-- "default", NOT "active" — this branch tests
                                  default_rig_id, which is the rig the daemon will
                                  connect to at its NEXT start. The rig it actually has
@@ -246,27 +289,27 @@
                                 {rigsState.settingDefault ? 'Setting…' : 'Set as default'}
                             </button>
                         {/if}
-                        <!-- Delete — immediate + confirmed. Disabled for the only rig and
-                             for the default rig (deleteRig refuses both); ml-auto pushes it
-                             to the right. The only-rig reason wins: "set another rig as
-                             default" is impossible with one rig. The tooltip carries the
-                             reason alone — no panel line repeats it (operator ruling
-                             2026-09-09, alpha.2 record entry 32). -->
-                        <button
-                            class="ml-auto rounded-md px-2 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:text-muted disabled:hover:bg-transparent dark:text-red-400 dark:hover:bg-red-500/10"
-                            disabled={rigsState.rigs.length <= 1 ||
-                                rig.id === rigsState.defaultRigId ||
-                                rigsState.saving ||
-                                rigsState.settingDefault}
-                            title={rigsState.rigs.length <= 1
-                                ? 'Cannot delete the only rig'
-                                : rig.id === rigsState.defaultRigId
-                                  ? 'Cannot delete the default rig — set another rig as default first'
-                                  : 'Delete this rig'}
-                            onclick={() => onDeleteRig(rig.id)}
-                        >
-                            Delete
-                        </button>
+                        {#if rig && !rigsState.newRig}
+                            <!-- Delete — immediate + confirmed. Disabled for the default rig
+                                 while others exist, and for the last rig while CAT is on
+                                 (deleteRig refuses both); ml-auto pushes it right. The
+                                 last-rig reason wins: "set another rig as default" is
+                                 impossible with one rig. The tooltip carries the reason
+                                 alone — no panel line repeats it (operator ruling
+                                 2026-09-09, alpha.2 record entry 32). -->
+                            <button
+                                class="ml-auto rounded-md px-2 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:text-muted disabled:hover:bg-transparent dark:text-red-400 dark:hover:bg-red-500/10"
+                                disabled={(rigsState.rigs.length <= 1
+                                    ? rigsState.catBlocksLastDelete
+                                    : rig.id === rigsState.defaultRigId) ||
+                                    rigsState.saving ||
+                                    rigsState.settingDefault}
+                                title={deleteTitle(rig.id)}
+                                onclick={() => onDeleteRig(rig.id)}
+                            >
+                                Delete
+                            </button>
+                        {/if}
                     </div>
                     <!-- No manufacturer · model subtitle and no description under the
                          heading: every rigdef's name is "<manufacturer> <model>" and the

@@ -58,7 +58,7 @@
       "path": "frontend/app/src/lib/config/rigs.svelte.ts",
       "function": "save",
       "direction": "maximum",
-      "value": 41
+      "value": 39
     },
     {
       "language": "frontend",
