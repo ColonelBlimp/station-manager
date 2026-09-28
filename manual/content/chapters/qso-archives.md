@@ -32,6 +32,11 @@ A new archive uploads nowhere: every destination starts off, SM Cloud
 included. Once it is active, turn on the ones it should use on **Settings →
 Forwarding** (see the Forwarding chapter).
 
+SM Cloud is the exception for now: it can be turned on only in **Home**, the
+original archive. In an archive you created, its QSOs stay local, and SM Cloud's
+destination card on **Settings → Forwarding** says so. A later release lifts
+this.
+
 ## Switching archives
 
 **Activate** restarts the daemon — that is how the switch happens; the

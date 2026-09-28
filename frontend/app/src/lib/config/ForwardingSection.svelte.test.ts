@@ -652,3 +652,42 @@ describe('ForwardingSection', () => {
         ).toBe(true);
     });
 });
+
+// Fresh-install ruling 2026-09-26: Station accounts holds only SM Cloud today, and
+// SM Cloud is never auto-seeded, so on every fresh install the section was an empty
+// heading ('No station-wide settings for any destination.'). With no card it is
+// not shown at all; it reappears on its own once an SM Cloud entry exists. A load
+// failure still shows, with its Retry — hiding it would hide the fault.
+describe('Station accounts with no card', () => {
+    const noStationAccounts = {
+        forwarders: [
+            { name: 'qrz', type: 'qrz', enabled: true, credentials_set: ['api_key'] },
+            { name: 'clublog', type: 'clublog', enabled: false, credentials_set: [] },
+        ],
+    };
+
+    it('is not shown at all: no heading, no empty-state line, no Save', async () => {
+        await renderLoaded({ config: noStationAccounts });
+        expect(screen.queryByRole('region', { name: 'Station accounts' })).toBeNull();
+        expect(screen.queryByText(/No station-wide settings/)).toBeNull();
+        expect(screen.queryByRole('link', { name: 'How station accounts work' })).toBeNull();
+        // The destinations above are unaffected.
+        expect(destinations()).toBeInTheDocument();
+    });
+
+    it('is shown once an SM Cloud entry exists', async () => {
+        await renderLoaded();
+        expect(station()).toBeInTheDocument();
+        expect(within(station()).getAllByTestId('account-card').length).toBeGreaterThan(0);
+    });
+
+    it('still shows a load failure with its Retry', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => Promise.resolve(new Response('{}', { status: 500 })))
+        );
+        render(ForwardingSection);
+        await vi.waitFor(() => expect(forwardingState.error).not.toBe(''));
+        expect(within(station()).getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    });
+});

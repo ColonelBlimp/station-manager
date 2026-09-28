@@ -110,44 +110,45 @@
         {restarting}
     />
 
-    <section id="station-accounts" aria-labelledby="station-accounts-heading" class="space-y-4">
-        <div class="flex items-center gap-2">
-            <h2 id="station-accounts-heading" class="text-base font-semibold text-ink">
-                Station accounts
-            </h2>
-            <ManualLink anchor="station-accounts" label="How station accounts work" />
-        </div>
-
-        {#if !forwardingState.loaded && forwardingState.loading}
-            <p class="text-sm text-muted">Loading…</p>
-        {:else if !forwardingState.loaded && forwardingState.error}
-            <div class="card">
-                <p class="text-sm text-ink">
-                    Couldn’t load the station accounts: {forwardingState.error}
-                </p>
-                <button class="btn mt-3" onclick={() => forwardingState.load()}>Retry</button>
+    <!-- Not shown at all with no card (fresh-install ruling 2026-09-26): only SM
+         Cloud lives here today and it is never auto-seeded, so on a fresh install
+         the section was an empty heading. It reappears on its own once an SM
+         Cloud entry exists; loading and a load failure still show. -->
+    {#if !(forwardingState.loaded && accounts.length === 0)}
+        <section id="station-accounts" aria-labelledby="station-accounts-heading" class="space-y-4">
+            <div class="flex items-center gap-2">
+                <h2 id="station-accounts-heading" class="text-base font-semibold text-ink">
+                    Station accounts
+                </h2>
+                <ManualLink anchor="station-accounts" label="How station accounts work" />
             </div>
-        {:else}
-            {#if accounts.length === 0}
-                <p class="text-sm text-muted">No station-wide settings for any destination.</p>
-            {/if}
 
-            {#each accounts as f (f.type + ':' + f.name)}
-                {@const td = forwardingState.typeFor(f.type)}
-                <!-- One disclosure per station account, the LoggingCard
+            {#if !forwardingState.loaded && forwardingState.loading}
+                <p class="text-sm text-muted">Loading…</p>
+            {:else if !forwardingState.loaded && forwardingState.error}
+                <div class="card">
+                    <p class="text-sm text-ink">
+                        Couldn’t load the station accounts: {forwardingState.error}
+                    </p>
+                    <button class="btn mt-3" onclick={() => forwardingState.load()}>Retry</button>
+                </div>
+            {:else}
+                {#each accounts as f (f.type + ':' + f.name)}
+                    {@const td = forwardingState.typeFor(f.type)}
+                    <!-- One disclosure per station account, the LoggingCard
                      "Contact details" pattern (operate/LoggingCard.svelte).
                      The summary carries what collapsing must not hide: which
                      service, whether this build can edit it, and — because a
                      collapsed card can hide an edit the footer only reports in
                      aggregate — whether it has unsaved changes. -->
-                {@const edited = forwardingState.hasEdits(f.name)}
-                <details
-                    id={`account-${f.type}`}
-                    class="rounded-md border border-line"
-                    open={edited || undefined}
-                    data-testid="account-card"
-                >
-                    <!-- A card with unsaved edits CANNOT be collapsed: hiding a
+                    {@const edited = forwardingState.hasEdits(f.name)}
+                    <details
+                        id={`account-${f.type}`}
+                        class="rounded-md border border-line"
+                        open={edited || undefined}
+                        data-testid="account-card"
+                    >
+                        <!-- A card with unsaved edits CANNOT be collapsed: hiding a
                          pending change behind a closed disclosure is how an
                          operator saves something they have forgotten they
                          typed. preventDefault on the summary click stops the
@@ -156,120 +157,123 @@
                          Save or Cancel is the way out — both clear hasEdits,
                          and Cancel is always available, so a card cannot get
                          stuck open. -->
-                    <!-- The <summary> itself keeps its DEFAULT display, which is
+                        <!-- The <summary> itself keeps its DEFAULT display, which is
                          what renders the browser's native disclosure triangle —
                          same as Rigs → Mode mappings. Putting `flex` on the
                          summary suppresses that marker (it belongs to
                          display:list-item), so the row layout lives on an
                          inline-flex wrapper inside instead. -->
-                    <summary
-                        class="cursor-pointer px-3 py-2 select-none"
-                        title={edited ? 'Save or cancel before collapsing' : undefined}
-                        onclick={(e) => {
-                            if (
-                                edited &&
-                                e.currentTarget.parentElement instanceof HTMLDetailsElement &&
-                                e.currentTarget.parentElement.open
-                            ) {
-                                e.preventDefault();
-                            }
-                        }}
-                    >
-                        <!-- inline-flex so the row sits BESIDE the native
+                        <summary
+                            class="cursor-pointer px-3 py-2 select-none"
+                            title={edited ? 'Save or cancel before collapsing' : undefined}
+                            onclick={(e) => {
+                                if (
+                                    edited &&
+                                    e.currentTarget.parentElement instanceof HTMLDetailsElement &&
+                                    e.currentTarget.parentElement.open
+                                ) {
+                                    e.preventDefault();
+                                }
+                            }}
+                        >
+                            <!-- inline-flex so the row sits BESIDE the native
                              triangle rather than below it: a block-level child
                              would start its own line box and push the content
                              under the marker. -->
-                        <span class="inline-flex items-center gap-2 align-middle">
-                            <!-- The operator's config.json label wins over the name
+                            <span class="inline-flex items-center gap-2 align-middle">
+                                <!-- The operator's config.json label wins over the name
                              baked into the binary, which is a build+deploy to
                              change and already dates (smcloud's "SM Cloud
                              backup"). Falls back to the built-in, then to the
                              raw type, so a destination is never nameless. -->
-                            <span class="font-semibold text-ink">
-                                {accountTitleOf(f)}{#if edited}<span
-                                        class="text-warning"
-                                        title="Unsaved changes">*</span
-                                    >{/if}
-                            </span>
-                            <!-- No mono `name` here. It is the durable key
+                                <span class="font-semibold text-ink">
+                                    {accountTitleOf(f)}{#if edited}<span
+                                            class="text-warning"
+                                            title="Unsaved changes">*</span
+                                        >{/if}
+                                </span>
+                                <!-- No mono `name` here. It is the durable key
                              (qso_upload.forwarder_name) but it is not operator
                              information: ADR 0039 seeds one entry per type, so
                              it always equals the type and just repeats the
                              service name in a second font. -->
-                            {#if !td}
-                                <span class="text-xs text-warning">unsupported</span>
-                            {/if}
-                        </span>
-                    </summary>
+                                {#if !td}
+                                    <span class="text-xs text-warning">unsupported</span>
+                                {/if}
+                            </span>
+                        </summary>
 
-                    <div class="border-t border-line px-3 py-3">
-                        {#if !td}
-                            <p class="mt-3 text-sm text-warning">
-                                This forwarder type isn't supported by this daemon build — its
-                                credentials can't be edited here. Its settings are preserved on
-                                save.
-                            </p>
-                        {:else if forwardingState.stationFields(f.type).length > 0}
-                            <div class="mt-4 space-y-3">
-                                {#each forwardingState.stationFields(f.type) as field (field.key)}
-                                    <!-- A stored value is a status line (ruling
+                        <div class="border-t border-line px-3 py-3">
+                            {#if !td}
+                                <p class="mt-3 text-sm text-warning">
+                                    This forwarder type isn't supported by this daemon build — its
+                                    credentials can't be edited here. Its settings are preserved on
+                                    save.
+                                </p>
+                            {:else if forwardingState.stationFields(f.type).length > 0}
+                                <div class="mt-4 space-y-3">
+                                    {#each forwardingState.stationFields(f.type) as field (field.key)}
+                                        <!-- A stored value is a status line (ruling
                                          2026-09-26). Reset appears ONLY for a field the
                                          daemon declares Clearable, and only when a value
                                          is stored: it is not a delete — those fields have
                                          a constructor default, and emptying any OTHER
                                          credential is a daemon that won't restart. -->
-                                    <StoredSecretField
-                                        label={field.label}
-                                        kind={field.kind}
-                                        stored={f.credentialsSet.includes(field.key)}
-                                        value={f.credentials[field.key] ?? ''}
-                                        cleared={f.cleared.includes(field.key)}
-                                        removable={field.clearable === true}
-                                        removeLabel="Reset to default"
-                                        removedNote="Resets to the default when you save."
-                                        help={field.help ?? ''}
-                                        oninput={(v: string) => {
-                                            if (v === '') delete f.credentials[field.key];
-                                            else f.credentials[field.key] = v;
-                                        }}
-                                        onremove={() => forwardingState.clear(f.name, field.key)}
-                                        onundo={() => forwardingState.uncleared(f.name, field.key)}
-                                    />
-                                {/each}
-                            </div>
-                        {/if}
-                    </div>
-                </details>
-            {/each}
+                                        <StoredSecretField
+                                            label={field.label}
+                                            kind={field.kind}
+                                            stored={f.credentialsSet.includes(field.key)}
+                                            value={f.credentials[field.key] ?? ''}
+                                            cleared={f.cleared.includes(field.key)}
+                                            removable={field.clearable === true}
+                                            removeLabel="Reset to default"
+                                            removedNote="Resets to the default when you save."
+                                            help={field.help ?? ''}
+                                            oninput={(v: string) => {
+                                                if (v === '') delete f.credentials[field.key];
+                                                else f.credentials[field.key] = v;
+                                            }}
+                                            onremove={() =>
+                                                forwardingState.clear(f.name, field.key)}
+                                            onundo={() =>
+                                                forwardingState.uncleared(f.name, field.key)}
+                                        />
+                                    {/each}
+                                </div>
+                            {/if}
+                        </div>
+                    </details>
+                {/each}
 
-            {#if forwardingState.dirty}
-                <div
-                    class="rounded-md border border-warning bg-surface-muted px-3 py-2 text-sm text-warning"
-                >
-                    ⚠ Station account changes apply when the daemon restarts — the workers bind
-                    their accounts at startup.
+                {#if forwardingState.dirty}
+                    <div
+                        class="rounded-md border border-warning bg-surface-muted px-3 py-2 text-sm text-warning"
+                    >
+                        ⚠ Station account changes apply when the daemon restarts — the workers bind
+                        their accounts at startup.
+                    </div>
+                {/if}
+
+                <div class="flex items-center gap-3 border-t border-line pt-4">
+                    <button
+                        class="btn btn-primary"
+                        disabled={!forwardingState.dirty || forwardingState.saving}
+                        onclick={() => saveAccounts()}
+                    >
+                        {forwardingState.saving ? 'Saving…' : 'Save'}
+                    </button>
+                    <button
+                        class="btn"
+                        disabled={!forwardingState.dirty || forwardingState.saving}
+                        onclick={() => forwardingState.reset()}
+                    >
+                        Cancel
+                    </button>
+                    {#if forwardingState.dirty}
+                        <span class="text-xs text-muted">Unsaved changes</span>
+                    {/if}
                 </div>
             {/if}
-
-            <div class="flex items-center gap-3 border-t border-line pt-4">
-                <button
-                    class="btn btn-primary"
-                    disabled={!forwardingState.dirty || forwardingState.saving}
-                    onclick={() => saveAccounts()}
-                >
-                    {forwardingState.saving ? 'Saving…' : 'Save'}
-                </button>
-                <button
-                    class="btn"
-                    disabled={!forwardingState.dirty || forwardingState.saving}
-                    onclick={() => forwardingState.reset()}
-                >
-                    Cancel
-                </button>
-                {#if forwardingState.dirty}
-                    <span class="text-xs text-muted">Unsaved changes</span>
-                {/if}
-            </div>
-        {/if}
-    </section>
+        </section>
+    {/if}
 </div>

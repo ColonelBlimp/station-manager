@@ -43,7 +43,8 @@ Station accounts are the settings every archive shares. They live in
 `config.json`, not in an archive, so they stay the same whichever archive is
 active. Today that is SM Cloud's **Service URL** and **Bearer token**. Press
 the section's own **Save**; like destinations, changes apply when the daemon
-restarts.
+restarts. Until SM Cloud has been set up there is nothing to show, so the
+section does not appear — a new installation has none.
 
 Club Log is not listed here. Its application key is built into Station
 Manager, and its application password belongs to your Club Log account, so

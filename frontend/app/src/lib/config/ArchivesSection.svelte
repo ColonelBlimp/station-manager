@@ -128,12 +128,13 @@
                     sealed until then.
                 </p>
             {/if}
+            <!-- No Ownership column (fresh-install ruling 2026-09-26): legacy vs managed
+                 means nothing to a user; its one effect is in the manual (Archives ⓘ). -->
             <table class="w-full text-left text-sm">
                 <thead class="text-xs text-muted">
                     <tr>
                         <th class="py-1 pr-3 font-semibold">Label</th>
                         <th class="py-1 pr-3 font-semibold">State</th>
-                        <th class="py-1 pr-3 font-semibold">Ownership</th>
                         <th class="py-1 pr-3 font-semibold">Size</th>
                         <th class="py-1 pr-3 font-semibold">Last written</th>
                         <th class="py-1 pr-3 font-semibold"><span class="sr-only">Actions</span></th
@@ -171,7 +172,6 @@
                             <td class="py-2 pr-3 text-ink" data-testid="state-{a.id}"
                                 >{stateLabel(a)}</td
                             >
-                            <td class="py-2 pr-3 text-muted">{a.ownership}</td>
                             <td class="py-2 pr-3 text-muted">{bytesFmt(a.sizeBytes)}</td>
                             <td class="py-2 pr-3 text-muted">{whenFmt(a.modifiedAt)}</td>
                             <td class="py-2 text-right">

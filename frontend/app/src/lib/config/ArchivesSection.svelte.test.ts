@@ -90,6 +90,24 @@ describe('ArchivesSection', () => {
         expect(screen.getByText('2 KB')).toBeInTheDocument();
     });
 
+    // Fresh-install ruling 2026-09-26: 'legacy' vs 'managed' means nothing to a
+    // user and reads as wrong on a fresh install where nothing is legacy. The
+    // value stays in code, config and the API; its one effect (SM Cloud only on
+    // the original archive until 5F) is in the manual behind the Archives ⓘ.
+    it('shows no Ownership column and no legacy/managed wording', async () => {
+        await renderLoaded();
+        expect(screen.queryByRole('columnheader', { name: 'Ownership' })).toBeNull();
+        const table = screen.getByRole('table');
+        expect(table.textContent).not.toMatch(/\blegacy\b|\bmanaged\b/i);
+        expect(screen.getAllByRole('columnheader').map((h) => h.textContent?.trim())).toEqual([
+            'Label',
+            'State',
+            'Size',
+            'Last written',
+            'Actions',
+        ]);
+    });
+
     it('a failed re-read shows the retained list as stale, with Retry, and disables Activate', async () => {
         await renderLoaded();
         vi.mocked(fetchQsoArchives).mockResolvedValue({ kind: 'error', message: 'daemon away' });
