@@ -229,10 +229,14 @@ persisted to `localStorage` (survives reload). The two FT modes render `Ft8View`
 which claims its profile, then opens the `/v1/ft8/events` stream on mount and
 closes it on leave.
 
-**With `ft8_enabled` false** the daemon registers no FT8 routes, so the SPA offers
-no FT mode (fresh-install ruling 2026-09-26; `router.svelte.ts` `ftFeature` /
+**When the daemon is not serving FT8** — `ft8_running` false on `GET /v1/config`:
+the daemon started with `ft8_enabled` off, so it registered no FT8 routes — the SPA
+offers no FT mode (fresh-install ruling 2026-09-26; `router.svelte.ts` `ftFeature` /
 `setFtEnabled`, set from the boot config in `main.ts` `applyStationContext` before
-the shell first renders):
+the shell first renders). The gate reads `ft8_running`, never the saved
+`ft8_enabled`: a save changes the switch at once but the routes only at restart, so
+a reload between the two must follow what the daemon actually serves (clean-room
+review 3ac5dada P2):
 
 - the sidebar's Operate item shows only Phone/CW;
 - an `/operate/ft8` or `/operate/ft4` URL (a bookmark, Back/Forward), a remembered

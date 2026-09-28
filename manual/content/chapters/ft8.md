@@ -15,9 +15,9 @@ To use FT8 your transmitter must support CAT and be connected to the hardware wh
 See [Enabling CAT](#cat) for details.
 
 FT8 and FT4 are switched on together, in **Settings → FT8 / FT4 → Enable FT8 and FT4**. The change takes
-effect after a restart: save, then click **Restart daemon**. While the switch is off, the sidebar lists only
-**Phone / CW**, and a bookmark or a remembered FT8 or FT4 view opens Phone / CW with a note saying FT8 and FT4
-are turned off.
+effect after a restart: save, then click **Restart daemon**; until then the sidebar keeps showing what the
+running Station Manager serves. Once it runs with the switch off, the sidebar lists only **Phone / CW**, and a
+bookmark or a remembered FT8 or FT4 view opens Phone / CW with a note saying FT8 and FT4 are turned off.
 
 ### FT8 or FT4
 

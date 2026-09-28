@@ -196,6 +196,10 @@ type ConfigResponse struct {
 	// port+driver (validateBridge) — a 400 otherwise.
 	BridgeEnabled *bool `json:"bridge_enabled,omitempty"`
 	Ft8Enabled    *bool `json:"ft8_enabled,omitempty"`
+	// Ft8Running is READ-ONLY (ignored on PUT): whether this daemon registered the
+	// FT8 routes at startup (ft8RoutesServed). It differs from ft8_enabled between
+	// a save and the restart that applies it; the SPA gates its FT links on it.
+	Ft8Running *bool `json:"ft8_running,omitempty"`
 	// RestoreRigOnModeSwitch: whether a Phone/CW ↔ FT8 switch auto re-tunes a
 	// CAT-live rig to that mode's last freq/mode (SPA behaviour). Always set on GET
 	// (resolved — true when unset, so consumers get a definite bool); presence-aware
@@ -1126,6 +1130,8 @@ func (s *Server) buildConfigResponse(r *http.Request, cfg config.Config) (Config
 	ft8Enabled := cfg.Ft8.Enabled
 	resp.BridgeEnabled = &bridgeEnabled
 	resp.Ft8Enabled = &ft8Enabled
+	ft8Running := ft8RoutesServed(s.ft8)
+	resp.Ft8Running = &ft8Running
 
 	// Mode-switch rig-restore preference — served RESOLVED (true when unset) so the
 	// SPA gets a definite bool. Default is ON; only an explicit false disables it.

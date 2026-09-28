@@ -235,6 +235,14 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 // struct literal above it — so it is the natural seam. Middleware composition
 // deliberately stays in New: that one HAS an order that matters, and reading it
 // beside the server it wraps is the point.
+// ft8RoutesServed is the ONE gate for the FT8 routes (ft8.Service.Enabled is fixed
+// when the service is built, so it answers for this process). GET /v1/config reports
+// it as ft8_running, so the SPA can tell the running daemon's FT8 surface apart
+// from a saved ft8_enabled still awaiting a restart.
+func ft8RoutesServed(svc *ft8.Service) bool {
+	return svc != nil && svc.Enabled()
+}
+
 func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *logging.Service, br *bridge.Service, ft8Svc *ft8.Service) *http.ServeMux {
 	// apiMux owns the /v1/ namespace only — never the SPA catch-all — so its built-in
 	// 404/405 classification (and Allow header) stay accurate.
@@ -383,7 +391,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *l
 	apiMux.HandleFunc("GET /v1/evidence/status", s.handleEvidenceStatus)
 
 	// idle and the stream simply carries keepalives until a slot is processed.
-	if ft8Svc != nil && ft8Svc.Enabled() {
+	if ft8RoutesServed(ft8Svc) {
 		apiMux.Handle("GET /v1/ft8/events", s.limitEventSubscribers(ft8Svc.HTTPHandler(s.shutdownCh)))
 		// FT8 transmit (ADR 0030 step e1) — arm/disarm the TX path and queue a
 		// message on the next slot. Same enablement gate as the SSE route;

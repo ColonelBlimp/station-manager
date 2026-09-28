@@ -266,7 +266,7 @@ const ctx: StationContext = {
     operator: '',
     logbookId: 0,
     catEnabled: false,
-    ft8Enabled: false,
+    ft8Running: false,
     modeMappings: {},
     ops: [],
     tune: false,
@@ -332,9 +332,9 @@ function applyStationIdentity(operator: string, grid: string, stationCallsign: s
 
 function applyStationContext(c: StationContext): void {
     Object.assign(ctx, c);
-    // FT8/FT4 off ⇒ no FT links and no FT view; set before the shell first renders
-    // (setup.status leaves 'loading' after this). An unreached config says nothing.
-    if (c.configOk) setFtEnabled(c.ft8Enabled);
+    // FT8/FT4 not served ⇒ no FT links and no FT view; set before the shell first
+    // renders (setup.status leaves 'loading' after this). An unreached config says nothing.
+    if (c.configOk) setFtEnabled(c.ft8Running);
     // The operator's "CAT enabled" intent gates the stream (shipping rule):
     // when false the SPA stays manual and never opens it. Config is fetched
     // once at boot, so no enable/disable tracking here — this SPA's config

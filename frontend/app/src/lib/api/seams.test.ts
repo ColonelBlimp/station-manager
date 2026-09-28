@@ -167,13 +167,16 @@ describe('fetchStationContext bridge block (stubbed fetch)', () => {
         expect(ctx.modeMappings).toEqual({});
     });
 
-    it('reads ft8_enabled; only an explicit true turns FT8/FT4 on', async () => {
-        mockConfig({ logging_station: { station_callsign: '7Q5MLV' }, ft8_enabled: true });
-        expect((await fetchStationContext()).ft8Enabled).toBe(true);
-        mockConfig({ logging_station: { station_callsign: '7Q5MLV' }, ft8_enabled: false });
-        expect((await fetchStationContext()).ft8Enabled).toBe(false);
-        mockConfig({ logging_station: { station_callsign: '7Q5MLV' } });
-        expect((await fetchStationContext()).ft8Enabled).toBe(false);
+    // The gate follows what the running daemon serves, not the saved switch: the
+    // two differ between a save and the restart (clean-room review 3ac5dada P2).
+    it('reads ft8_running, not the saved ft8_enabled; only an explicit true is on', async () => {
+        const ls = { station_callsign: '7Q5MLV' };
+        mockConfig({ logging_station: ls, ft8_running: true, ft8_enabled: false });
+        expect((await fetchStationContext()).ft8Running).toBe(true); // saved off, still running
+        mockConfig({ logging_station: ls, ft8_running: false, ft8_enabled: true });
+        expect((await fetchStationContext()).ft8Running).toBe(false); // saved on, not yet running
+        mockConfig({ logging_station: ls });
+        expect((await fetchStationContext()).ft8Running).toBe(false);
     });
 
     it('reads station.operating_bands (empty when the station block is absent)', async () => {

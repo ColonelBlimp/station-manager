@@ -1,6 +1,7 @@
 // PRODUCTION-BOUNDARY PIN for the FT8/FT4 switch (fresh-install ruling
 // 2026-09-26). Imports the REAL main.ts with only the transport stubbed, on a
-// station whose config says ft8_enabled false, arriving by a bookmark to
+// daemon NOT serving FT8 (ft8_running false) although the switch was just saved
+// on (ft8_enabled true, awaiting a restart), arriving by a bookmark to
 // /operate/ft8 with FT8 as the stored last mode. Found on the fresh install: the
 // FT view opened onto 'no such API route' beside live-looking Call CQ / Enable TX
 // controls. The boot must land on Phone / CW with the note, never mount the FT
@@ -32,7 +33,8 @@ function fakeFetch(input: RequestInfo | URL): Promise<Response> {
                 setup_complete: true,
                 default_logbook: { id: 1, name: 'Default', callsign: '7Q5MLV' },
                 bridge: { enabled: false },
-                ft8_enabled: false,
+                ft8_enabled: true,
+                ft8_running: false,
             })
         );
     }
