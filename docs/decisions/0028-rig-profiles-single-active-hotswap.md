@@ -152,6 +152,26 @@ process problem. Keeping it out of the daemon preserves narrow single-daemon sco
   invalidated — they describe how the *one bound* rig behaves, which is unchanged.
   This ADR sits above them: it decides *which* rig is bound and how that changes.
 
+## Amendment (2026-09-28) — no active rig is a deliberate setup state
+
+The Decision says exactly one rig is active at a time. Operator ruling 2026-09-28
+(fresh-install onboarding test) recognises a second state: **at most one** rig is
+active, and `DefaultRigID` `0` — **no default rig** — is valid with rigs configured.
+Adding a rig creates a profile; "Set as default" is the one act that selects the rig
+the bridge binds and QSOs attribute to, and so the one that needs a restart. Before
+this, the first rig added became the default as a side effect, and only that add
+asked for a restart, which read as inconsistent beside every later add.
+
+What changes: `validateRigs` accepts `0` with rigs; `applyDefaults` no longer stamps
+rig `1` over a `0` selector (it made "no default" vanish at the next start), while the
+legacy fold still selects its synthesised rig `1`. What holds: with no default rig the
+projections are empty, stale loose bridge/FT8 fields included — `ActiveBridge()` has no driver or port, so enabling CAT is
+refused (`validateBridge`); `ActiveFt8()` has no rig audio; QSOs carry no `MY_RIG`.
+The SPA sends no `default_rig_id` when adding, says "No default rig — set one to use
+it." while none is set, lets the default rig be deleted with CAT confirmed off
+(clearing the selector), and gates turning CAT on until a default rig with a serial
+port exists. config.md §10.1 carries the current rule.
+
 ## Triggers to revisit
 
 - If the operator genuinely needs two rigs *live at once on the same host* (e.g.

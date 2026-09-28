@@ -879,8 +879,10 @@ func TestApplyRigProfiles_MigratesLegacy(t *testing.T) {
 			Cat:    &types.BridgeCatConfig{Driver: "yaesu-ftdx10"},
 			Serial: &types.BridgeSerialConfig{Port: "/dev/ttyUSB0"},
 		},
-		Ft8:          types.Ft8Config{Device: "USB Audio CODEC"},
-		DefaultRigID: 1, // applyDefaults would have stamped this before us
+		Ft8: types.Ft8Config{Device: "USB Audio CODEC"},
+		// 0: applyDefaults no longer defaults the rig, so the migration itself
+		// must select the rig it synthesises (ruling 2026-09-28).
+		DefaultRigID: 0,
 	}
 	if err := applyRigProfiles(&cfg); err != nil {
 		t.Fatalf("applyRigProfiles: %v", err)

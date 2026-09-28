@@ -739,6 +739,21 @@ describe('rigsState', () => {
         expect(rigsState.defaultRigId).toBe(2); // optimistic badge move
     });
 
+    // Ruling 2026-09-28: 'Set as default' is the one act that selects the rig in
+    // use, so it is the one that says a restart is needed — in plain words.
+    it('setDefault says a restart is needed', async () => {
+        const info = vi.spyOn(toasts, 'info');
+        mockCluster({
+            default_rig_id: 0,
+            rigs: [{ id: 1, model: 'ftdx10', port: '/dev/a' }],
+            catalogue: [{ id: 'ftdx10', name: 'FTdx10' }],
+        });
+        await rigsState.load();
+        await rigsState.setDefault(1);
+        expect(info).toHaveBeenLastCalledWith('Default rig set — restart needed.');
+        expect(rigsState.hasDefault).toBe(true);
+    });
+
     it('setDefault is a no-op when the rig is already the default', async () => {
         const puts = mockCluster({
             default_rig_id: 1,
@@ -792,6 +807,23 @@ describe('rigsState', () => {
         expect(rigsState.draft?.model).toBe('ftdx10'); // the editor edits the new draft
         expect(rigsState.dirty).toBe(true); // Save and Cancel are live
         expect(rigsState.anyDirty).toBe(true); // the exit guard asks before losing it
+    });
+
+    // Adding never selects the default (ruling 2026-09-28), so a new rig's draft
+    // never claims a restart — with or without a default set.
+    it('a new-rig draft is never restart-relevant', async () => {
+        for (const def of [0, 1]) {
+            mockCluster({
+                default_rig_id: def,
+                rigs: [{ id: 1, model: 'ic7300', port: '/dev/a' }],
+                catalogue: twoModels,
+            });
+            await rigsState.load();
+            rigsState.startNewRig('ftdx10');
+            rigsState.setDraftPort('/dev/new');
+            expect(rigsState.restartDirty, `default ${def}`).toBe(false);
+            rigsState.resetDraft();
+        }
     });
 
     it('Cancel on a new-rig draft discards it: no PUT, list, default and selection unchanged', async () => {
@@ -871,40 +903,21 @@ describe('rigsState', () => {
         expect(rigsState.dirty).toBe(false);
     });
 
-    it('the FIRST saved rig becomes the default (default_rig_id sent)', async () => {
+    // Ruling 2026-09-28: adding creates a rig profile and never picks the default
+    // — the first rig included — so it sends no default_rig_id and says nothing
+    // about a restart. 'Set as default' is the one act that selects the rig.
+    it('adding never sets the default: the first rig sends no default_rig_id and leaves none', async () => {
+        const info = vi.spyOn(toasts, 'info');
         const puts = mockCluster({ default_rig_id: 0, rigs: [], catalogue: twoModels });
         await rigsState.load();
         rigsState.startNewRig('ftdx10');
         await rigsState.save();
 
-        const sent = JSON.parse(puts[0]) as {
-            rigs: Array<{ id: number }>;
-            default_rig_id?: number;
-        };
+        const sent = JSON.parse(puts[0]) as { rigs: Array<{ id: number }> };
         expect(sent.rigs.map((r) => r.id)).toEqual([1]);
-        expect(sent.default_rig_id).toBe(1); // daemon 400s on an unresolvable default_rig_id
-        expect(rigsState.defaultRigId).toBe(1);
-    });
-
-    // Operator 2026-09-28: plain words, no "daemon". The first rig does need a
-    // restart — the running daemon pinned "no rig" for MY_RIG at startup — but the
-    // toast says only that; a further rig is not the one in use, so none.
-    it('the first saved rig says a restart is needed; a further rig does not', async () => {
-        const info = vi.spyOn(toasts, 'info');
-        mockCluster({ default_rig_id: 0, rigs: [], catalogue: twoModels });
-        await rigsState.load();
-        rigsState.startNewRig('ftdx10');
-        await rigsState.save();
-        expect(info).toHaveBeenLastCalledWith('Rig added — restart needed.');
-
-        mockCluster({
-            default_rig_id: 1,
-            rigs: [{ id: 1, model: 'ftdx10', port: '' }],
-            catalogue: twoModels,
-        });
-        await rigsState.load();
-        rigsState.startNewRig('ic7300');
-        await rigsState.save();
+        expect('default_rig_id' in sent).toBe(false);
+        expect(rigsState.defaultRigId).toBe(0);
+        expect(rigsState.hasDefault).toBe(false);
         expect(info).toHaveBeenLastCalledWith('Rig added.');
     });
 
@@ -1266,12 +1279,11 @@ describe('rigsState', () => {
         expect(rigsState.rigs.map((r) => r.id)).toEqual([1]);
     });
 
-    // alpha.2 dogfood Finding 3 (W-0012): the default rig is never deleted; the
-    // operator sets another rig as default first. This replaces the earlier
-    // auto-repoint (delete the default → default_rig_id moved to the first
-    // survivor in the same PUT), which was mechanically safe but a policy the
-    // operator rejected. The button is disabled too; the store refuses regardless.
-    it('deleteRig refuses the DEFAULT rig (no PUT, list and default untouched)', async () => {
+    // Ruling 2026-09-28 (replaces alpha.2 Finding 3's 'set another rig as default
+    // first'): 'no default rig' is a valid setup state, so the default rig can be
+    // deleted — with CAT confirmed off, since CAT needs a default rig — sending
+    // the reduced catalogue with default_rig_id 0.
+    it('deleteRig removes the DEFAULT rig with CAT confirmed off: reduced list + default 0', async () => {
         const puts = mockCluster({
             default_rig_id: 1,
             rigs: [
@@ -1280,25 +1292,67 @@ describe('rigsState', () => {
             ],
             catalogue: [],
         });
+        bridgeEnabledState.loaded = true;
+        bridgeEnabledState.enabled = false;
         await rigsState.load();
-        await rigsState.deleteRig(1); // rig 1 IS the default
+        await rigsState.deleteRig(1);
 
-        expect(puts).toHaveLength(0);
-        expect(rigsState.rigs.map((r) => r.id)).toEqual([1, 2]);
-        expect(rigsState.defaultRigId).toBe(1);
-        expect(rigsState.saving).toBe(false);
+        expect(puts).toHaveLength(1);
+        expect(JSON.parse(puts[0])).toEqual({
+            rigs: [{ id: 2, model: 'ftdx10', port: '/dev/b' }],
+            default_rig_id: 0,
+        });
+        expect(rigsState.rigs.map((r) => r.id)).toEqual([2]);
+        expect(rigsState.defaultRigId).toBe(0);
+        expect(rigsState.hasDefault).toBe(false);
     });
 
-    // The refusal must hold on the FRESH state, not the mount snapshot: another
-    // client can make the target the default between the button press and the
-    // re-fetch. Without this check the PUT would drop the rig and omit
-    // default_rig_id, and the daemon would 400 on the now-unresolvable default —
-    // a confusing failure for a rule the SPA is supposed to state plainly.
+    it('deleteRig refuses the DEFAULT rig while CAT is on or its state is unknown (no PUT)', async () => {
+        for (const [loaded, enabled] of [
+            [true, true],
+            [false, false],
+        ]) {
+            const puts = mockCluster({
+                default_rig_id: 1,
+                rigs: [
+                    { id: 1, model: 'ic7300', port: '/dev/a' },
+                    { id: 2, model: 'ftdx10', port: '/dev/b' },
+                ],
+                catalogue: [],
+            });
+            bridgeEnabledState.loaded = loaded;
+            bridgeEnabledState.enabled = enabled;
+            await rigsState.load();
+            await rigsState.deleteRig(1);
+            expect(puts).toHaveLength(0);
+            expect(rigsState.defaultRigId).toBe(1);
+        }
+    });
+
+    it('a non-default rig deletes with CAT on (it is not the rig in use)', async () => {
+        const puts = mockCluster({
+            default_rig_id: 1,
+            rigs: [
+                { id: 1, model: 'ic7300', port: '/dev/a' },
+                { id: 2, model: 'ftdx10', port: '/dev/b' },
+            ],
+            catalogue: [],
+        });
+        bridgeEnabledState.loaded = true;
+        bridgeEnabledState.enabled = true;
+        await rigsState.load();
+        await rigsState.deleteRig(2);
+        expect(puts).toHaveLength(1);
+        expect('default_rig_id' in JSON.parse(puts[0])).toBe(false);
+    });
+
+    // The operator confirmed deleting a rig that was NOT the default; another
+    // client has since made it the default. Deleting it now would also clear the
+    // default, which they did not agree to — show the fresh state instead.
     it('deleteRig refuses when the FRESH default is the target (concurrent default change)', async () => {
         let get = 0;
         const puts = mockCluster(() => {
             get++;
-            // load sees default 1; the delete re-fetch sees rig 2 made the default
             return {
                 default_rig_id: get === 1 ? 1 : 2,
                 rigs: [
@@ -1308,17 +1362,32 @@ describe('rigsState', () => {
                 catalogue: [],
             };
         });
-        const err = vi.spyOn(toasts, 'error');
+        bridgeEnabledState.loaded = true;
+        bridgeEnabledState.enabled = false;
+        const info = vi.spyOn(toasts, 'info');
         await rigsState.load();
         await rigsState.deleteRig(2); // not the default at mount; the default on re-fetch
 
         expect(puts).toHaveLength(0);
-        expect(err).toHaveBeenCalledTimes(1);
-        expect(err.mock.calls[0][0]).toMatch(/default rig/i);
-        expect(err.mock.calls[0][0]).toMatch(/set another rig as default/i);
+        expect(info.mock.calls.at(-1)?.[0]).toMatch(/now the default/i);
         expect(rigsState.defaultRigId).toBe(2); // adopts the fresh state
-        expect(rigsState.rigs.map((r) => r.id)).toEqual([1, 2]);
         expect(rigsState.saving).toBe(false);
+    });
+
+    // CAT needs a default rig with a serial port (validateBridge). The switch is
+    // gated only when turning it ON, and says which of the two is missing.
+    it('catEnableBlocker names what is missing before CAT can be turned on', async () => {
+        mockCluster({
+            default_rig_id: 0,
+            rigs: [{ id: 1, model: 'ic7300', port: '' }],
+            catalogue: [],
+        });
+        await rigsState.load();
+        expect(rigsState.catEnableBlocker).toBe('Set a default rig first');
+        rigsState.defaultRigId = 1;
+        expect(rigsState.catEnableBlocker).toBe('Choose a serial port for the default rig first');
+        rigsState.rigs = [{ id: 1, model: 'ic7300', port: '/dev/a' }];
+        expect(rigsState.catEnableBlocker).toBe('');
     });
 
     it('deleteRig removes from the FRESH list, preserving a concurrent edit on another rig', async () => {

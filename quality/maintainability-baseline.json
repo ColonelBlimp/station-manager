@@ -186,7 +186,7 @@
       "path": "internal/config/config.go",
       "function": "applyDefaults",
       "direction": "maximum",
-      "value": 63
+      "value": 61
     },
     {
       "language": "go",
@@ -306,7 +306,7 @@
       "path": "internal/config/config.go",
       "function": "applyDefaults",
       "direction": "maximum",
-      "value": 52
+      "value": 50
     },
     {
       "language": "go",

@@ -71,7 +71,6 @@ const (
 	// Station knobs + default selectors.
 	defaultAmpMultiplier = 1.0
 	defaultLogbookID     = 1
-	defaultRigID         = 1
 
 	// Forwarder cadence.
 	defaultForwarderTickIntervalSec = 120

@@ -78,7 +78,7 @@ configuration.
 | `operators` / `default_operator` | `[]types.Operator` / `string` | Operator roster and default roster selector. |
 | `setup_complete` | `bool` | Server-managed first-run completion flag. |
 | `default_logbook_id` | `int64` | Selector for a database-owned logbook row. |
-| `default_rig_id` | `int64` | Selector for one entry in `rigs`; `0` is valid only when no rigs exist. |
+| `default_rig_id` | `int64` | Selector for one entry in `rigs`; `0` means no default rig, valid with or without rigs (never defaulted at load). |
 | `restore_rig_on_mode_switch` | `*bool` | SPA behavior; absent means enabled. |
 | `station` | `types.StationConfig` | Non-ADIF operating preferences: amplifier, fallback power, and operating bands. |
 | `qsl` | `types.QslDefaults` | Standing outgoing QSL defaults, stamped only into otherwise-empty QSO fields. |
@@ -276,7 +276,7 @@ Every loaded or API-mutated candidate is normalized, then passed to
 
 - listener protocol, positive HTTP limits, page-limit ordering, and network
   posture;
-- unique positive rig IDs, known rig models, a resolving `default_rig_id`, and
+- unique positive rig IDs, known rig models, a `default_rig_id` that is `0` or resolves, and
   valid ADIF mode mappings;
 - registered and usable forwarders, lookup ordering/policy, SMTP, PSK Reporter,
   map, bridge, and evidence dependencies;
@@ -467,7 +467,7 @@ make one profile the owner of another.
   FST4W, JS8 or Q65 as main modes (before 2026-09-11) keeps the daemon bootable; and
 - optional `my_rig` override.
 
-`default_rig_id` selects the active instance. `Config.ActiveBridge()` projects its
+`default_rig_id` selects the active instance, or is `0` for no default rig. `Config.ActiveBridge()` projects its
 model, port, and serial overrides into a runtime bridge configuration.
 `Config.ActiveFt8()` projects its RX/TX audio names and resolved FT8 mode into the
 runtime FT8 configuration. Stored `bridge.serial`, `bridge.cat`, `ft8.device`, and
@@ -481,9 +481,17 @@ rig definition's display name, while explicit empty suppresses the field.
 
 ### 10.1 Catalogue validity
 
-IDs must be positive and unique, models must be known, and `default_rig_id` must
-resolve. The only rig-less state is an empty catalogue with selector `0`. Per-rig
-mapping modes and submodes must be valid ADIF values.
+IDs must be positive and unique, models must be known, and `default_rig_id` must be
+`0` or resolve to a rig. `0` is **no default rig**, a deliberate setup state with or
+without rigs (ruling 2026-09-28; ADR 0028 amendment): adding a rig creates a profile,
+and setting a default is the one act that selects the rig in use. Load never defaults
+the selector — `applyDefaults` used to stamp rig `1`, which made "no default" vanish at
+the next start; only the legacy fold (§10.3) selects its synthesised rig. With no
+default rig the projections are empty — stale loose `bridge.serial`/`bridge.cat`/`ft8`
+device and mode values are not used in its place: `ActiveBridge()` carries no driver or port (so
+`bridge.enabled` is refused — CAT needs the default rig's port and driver),
+`ActiveFt8()` carries no rig audio, and QSOs carry no `MY_RIG`. Per-rig mapping modes
+and submodes must be valid ADIF values.
 
 ### 10.2 Inheritance
 

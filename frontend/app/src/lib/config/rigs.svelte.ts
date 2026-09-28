@@ -185,6 +185,20 @@ class RigsState {
     // The pristine selected rig, or null (no rigs / none selected).
     selected = $derived(this.rigs.find((r) => r.id === this.selectedId) ?? null);
 
+    // Whether a default rig is set. 'No default rig' is a deliberate setup state
+    // (ruling 2026-09-28): rigs are profiles until one is set as default.
+    hasDefault = $derived(this.rigs.some((r) => r.id === this.defaultRigId));
+
+    // Why CAT cannot be turned ON yet, or '' when it can. The connection uses the
+    // default rig's saved port and driver (validateBridge), so name what is
+    // missing rather than let the daemon refuse the switch.
+    catEnableBlocker = $derived.by(() => {
+        const d = this.rigs.find((r) => r.id === this.defaultRigId);
+        if (!d) return 'Set a default rig first';
+        if (d.port === '') return 'Choose a serial port for the default rig first';
+        return '';
+    });
+
     // The editable draft on screen (the form binds via setters): the unsaved new
     // rig when one is open, else the selection's draft.
     draft = $derived(
@@ -220,11 +234,11 @@ class RigsState {
     // when the draft differs from its baseline in a field OTHER than my_rig (see
     // restartRelevant). Gates the "restart to apply" note + save toast so a pure
     // MY_RIG edit — resolved live per QSO — doesn't prompt a needless restart.
-    // A new rig needs a restart only when it will become the default (the first
-    // rig); any other added rig is not the one the daemon connects to.
+    // A new rig never needs a restart: adding never selects the default (ruling
+    // 2026-09-28) — 'Set as default' is the act that does, and says so.
     restartDirty = $derived(
         this.newRig !== null
-            ? !this.rigs.some((r) => r.id === this.defaultRigId)
+            ? false
             : this.draft && this.selectedId !== null && this.baselines[this.selectedId]
               ? restartRelevant(this.draft) !== restartRelevant(this.baselines[this.selectedId])
               : false
@@ -529,7 +543,7 @@ class RigsState {
             return;
         }
         this.defaultRigId = id;
-        announceRigSaved(outcome, 'Default rig set — restart to connect to it.');
+        announceRigSaved(outcome, 'Default rig set — restart needed.');
     }
 
     // Save the unsaved new rig — the only point an add writes (fresh-install ruling
@@ -560,13 +574,11 @@ class RigsState {
         const id = fresh.data.rigs.reduce((m, r) => Math.max(m, r.id), 0) + 1;
         const newRig = savedFormOf(draft, id);
         const nextRigs = [...fresh.data.rigs, newRig];
-        // First rig becomes the active default: the daemon 400s on an unresolvable
-        // default_rig_id, so when the fresh default doesn't resolve (empty list, or
-        // a dangling id) point it at the new rig. Otherwise OMIT default_rig_id so a
-        // concurrent active-rig change isn't clobbered (presence-aware, like save()).
-        const defaultResolves = fresh.data.rigs.some((r) => r.id === fresh.data.defaultRigId);
-        const nextDefault = defaultResolves ? undefined : id;
-        const outcome = await saveRigs(nextRigs, nextDefault);
+        // Adding never picks the default, the first rig included (ruling
+        // 2026-09-28): 'Set as default' is the one act that selects the rig in
+        // use. OMIT default_rig_id, so a concurrent default change isn't
+        // clobbered either (presence-aware, like save()).
+        const outcome = await saveRigs(nextRigs);
         if (outcome.kind === 'error') {
             if (outcome.timedOut) {
                 // Ambiguous: the PUT may already have committed. Saving a new rig
@@ -589,15 +601,13 @@ class RigsState {
         this.newRig = null;
         this.#applyFetched({
             rigs: nextRigs,
-            defaultRigId: nextDefault ?? fresh.data.defaultRigId,
+            defaultRigId: fresh.data.defaultRigId,
             catalogue: fresh.data.catalogue,
         });
         this.selectedId = id; // the saved rig stays on screen
         this.#ensureDraft();
-        announceRigSaved(
-            outcome,
-            nextDefault === undefined ? 'Rig added.' : 'Rig added — restart needed.'
-        );
+        // No restart: a rig that is not the default is not in use.
+        announceRigSaved(outcome, 'Rig added.');
     }
 
     // Settle an add whose PUT timed out by re-reading the rig list: 'landed' when
@@ -649,28 +659,28 @@ class RigsState {
         return 'landed';
     }
 
-    // The last rig can be deleted only with CAT off: the daemon refuses an enabled
-    // bridge with no rig to take a port from (validateBridge; daemon check
-    // 2026-09-28). Unknown CAT state counts as on. The operator turns CAT off
+    // The DEFAULT rig can be deleted only with CAT confirmed off: the connection
+    // uses the default rig (validateBridge), so deleting it with CAT on is
+    // refused. Unknown CAT state counts as on. The operator turns CAT off
     // themselves — deleting never switches it off for them (ruling 2026-09-28).
-    get catBlocksLastDelete(): boolean {
+    get catBlocksDefaultDelete(): boolean {
         return !bridgeEnabledState.loaded || bridgeEnabledState.enabled;
     }
 
     // Delete a rig — an IMMEDIATE, confirmed structural write. RE-FETCH first and
     // remove from the FRESH list so a concurrent edit to another rig survives the
-    // whole-replace. The default rig is not deletable while other rigs exist: the
-    // operator sets another rig as default first (alpha.2 dogfood Finding 3,
-    // W-0012). The LAST rig is deletable with CAT off, clearing the rigs and the
-    // default in one PUT (fresh-install ruling 2026-09-26). The button is disabled
-    // for the refused cases; the store refuses regardless. Delete is IDEMPOTENT on
-    // retry (removing an already-gone rig is a no-op), so a timed-out delete needs
-    // no reconcile — a retry is safe.
+    // whole-replace. A rig that is not the default deletes freely (it is not in
+    // use). The default rig deletes with CAT confirmed off, clearing the default
+    // (default_rig_id 0) in the same PUT: 'no default rig' is a valid setup state
+    // (ruling 2026-09-28, replacing alpha.2 Finding 3's 'set another rig as
+    // default first'). The button is disabled for the refused case; the store
+    // refuses regardless. Delete is IDEMPOTENT on retry (removing an already-gone
+    // rig is a no-op), so a timed-out delete needs no reconcile — a retry is safe.
     async deleteRig(id: number): Promise<void> {
         if (this.saving || this.settingDefault || !this.loaded || this.newRig) return;
         const last = this.rigs.length <= 1;
-        if (last && this.catBlocksLastDelete) return;
-        if (!last && id === this.defaultRigId) return; // never delete the default rig
+        const isDefault = id === this.defaultRigId;
+        if (isDefault && this.catBlocksDefaultDelete) return;
         this.saving = true;
         const fresh = await fetchRigs();
         if (fresh.kind === 'error') {
@@ -685,11 +695,10 @@ class RigsState {
             toasts.info('That rig was already removed.');
             return;
         }
-        const freshLast = fresh.data.rigs.length === 1;
         // The operator confirmed deleting one of several rigs; a concurrent delete
         // has since made this the last one. Deleting it now would leave no rig
         // without their having agreed to that — show the new list instead.
-        if (freshLast && !last) {
+        if (fresh.data.rigs.length === 1 && !last) {
             this.saving = false;
             this.#applyFetched(fresh.data);
             toasts.info(
@@ -697,21 +706,20 @@ class RigsState {
             );
             return;
         }
-        // Checked on the FRESH state too: a concurrent default change can make the
-        // target the default after the button was pressed. Sending the PUT anyway
-        // would omit default_rig_id and the daemon would 400 on the unresolvable
-        // default — the rule is stated here instead.
-        if (!freshLast && fresh.data.defaultRigId === id) {
+        // Checked on the FRESH state too: another client can make the target the
+        // default after the button was pressed. Deleting it would then also clear
+        // the default, which the operator did not agree to — show the fresh state.
+        const freshIsDefault = fresh.data.defaultRigId === id;
+        if (freshIsDefault && !isDefault) {
             this.saving = false;
             this.#applyFetched(fresh.data);
-            toasts.error("Can't delete the default rig — set another rig as default first.");
+            toasts.info('That rig is now the default — check it and try again.');
             return;
         }
         const nextRigs = fresh.data.rigs.filter((r) => r.id !== id);
-        // The last rig takes the default with it (0 = no rig, valid only with no
-        // rigs). Otherwise the default is never the target, so it keeps resolving →
-        // OMIT default_rig_id so a concurrent default change isn't clobbered.
-        const outcome = await saveRigs(nextRigs, freshLast ? 0 : undefined);
+        // Deleting the default clears it (0 = no default rig). Otherwise OMIT
+        // default_rig_id so a concurrent default change isn't clobbered.
+        const outcome = await saveRigs(nextRigs, freshIsDefault ? 0 : undefined);
         this.saving = false;
         if (outcome.kind === 'error') {
             toasts.error(`Couldn't delete the rig: ${outcome.message}`);
@@ -725,7 +733,7 @@ class RigsState {
         // drafts the survivor (so the editor stays visible — see its note).
         this.#applyFetched({
             rigs: nextRigs,
-            defaultRigId: freshLast ? 0 : fresh.data.defaultRigId,
+            defaultRigId: freshIsDefault ? 0 : fresh.data.defaultRigId,
             catalogue: fresh.data.catalogue,
         });
         announceRigSaved(outcome, 'Rig deleted.');

@@ -345,6 +345,7 @@ The station-global archive catalogue (`config.md` §3): the archive the daemon s
   - `RigDefSummary` = `{id, name, manufacturer, model, family, description?, ft8_mode?, rig_modes?, mode_mappings?, serial}` — the editor-facing projection of a rigdef; **omits the large `commands`/`states` CAT tables**.
   - The SPA joins `rig.model` → `catalogue[].id` to compute default-vs-override per field, and derives the default MY_RIG from the matched `catalogue[].name`.
 - **Errors:** None on the wire (always 200).
+  - `default_rig_id` is `0` when no default rig is set — valid with rigs configured (config.md §10.1); a PUT of `default_rig_id: 0` clears the default, refused while `bridge_enabled` is true (CAT needs the default rig).
 - **Notes:** **Read-only.** The **write path is `PUT /v1/config`** (presence-aware `rigs` + `default_rig_id` — see above), used by the config SPA's Rigs tab: it GETs the catalogue here, edits a whole-catalogue draft, and PUTs it back. The SPA re-GETs this endpoint after a save (the PUT response doesn't carry the catalogue) to re-hydrate the canonical view.
 
 ### `GET /v1/lookup-types`

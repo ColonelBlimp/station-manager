@@ -246,11 +246,12 @@ func validateRigs(cfg Config) []Finding {
 			}
 		}
 	}
-	// default_rig_id must resolve to a defined rig. The sole exception is a
-	// rig-less config (fresh install before CAT is set up): id 0 with no rigs
-	// means "no active rig" and is valid. A non-zero id resolving to nothing —
-	// or any id once rigs exist — is a dangling pointer.
-	if cfg.RigByID(cfg.DefaultRigID) == nil && !(len(cfg.Rigs) == 0 && cfg.DefaultRigID == 0) {
+	// default_rig_id is 0 ("no default rig") or resolves to a defined rig. 0 is
+	// valid with or without rigs: adding a rig creates a profile, and 'Set as
+	// default' is the one act that selects the rig in use (ruling 2026-09-28;
+	// ADR 0028 amendment). A non-zero id resolving to nothing is a dangling
+	// pointer. CAT on still needs a default rig (validateBridge).
+	if cfg.DefaultRigID != 0 && cfg.RigByID(cfg.DefaultRigID) == nil {
 		out = append(out, rigErr("default_rig_id",
 			fmt.Sprintf("default_rig_id %d does not match any defined rig", cfg.DefaultRigID)))
 	}

@@ -65,12 +65,28 @@ PTT source will transmit continuously for as long as the daemon is connected.
 > and caused a tune carrier that would not stop. If you run an older build, set
 > `RPTT SELECT` to **DAKY** on the rig.
 
+## Adding your rig and choosing the default
+
+In **Settings → Rigs**, press **+ Add rig** and choose your model. The rig opens
+unsaved: choose its **Serial port** (and its audio devices, for FT8 and FT4), then
+**Save**. **Cancel** leaves nothing behind. You can add more than one rig, including
+two of the same model.
+
+A rig you add is a profile. Station Manager uses the **default** rig: the one it
+connects to and the one it records on your contacts. Press **Set as default** on the
+rig you use; that needs a restart. Until one is set, the rig list says **No default
+rig — set one to use it.**
+
+**Enable rig connection (CAT)** waits until the default rig has a serial port; the
+line under the switch says what is missing. A rig that is not the default can be
+deleted at any time. The default rig can be deleted once the rig connection is off,
+and then no rig is in use until you set another as default.
+
 ---
 
 *Draft outline — remaining content to be written.*
 
 - What CAT gives you: live frequency, mode, and rig control from the browser.
-- Choosing your rig and serial port.
 - Adding yourself to the serial device group (find the real group — don't assume `dialout`).
 - Rig-control shortcuts (band, VFO, frequency step).
 - Supported rigs.

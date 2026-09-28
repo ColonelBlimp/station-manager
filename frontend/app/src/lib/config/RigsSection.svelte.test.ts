@@ -143,61 +143,102 @@ describe('RigsSection advanced editors', () => {
         expect(screen.getByText('Set as default')).toBeTruthy();
     });
 
-    // alpha.2 dogfood Finding 3 (W-0012): the default rig must not be deletable;
-    // the operator changes the default first. Before this pin the SPA let the
-    // default be deleted and silently repointed default_rig_id to the first
-    // survivor — mechanically safe (the daemon refuses an unresolvable default),
-    // but a policy the operator rejected. The pin walks the whole ruling as the
-    // operator sees it: disabled with the reason on the default, enabled on a
-    // non-default rig, and enabled on the former default once "Set as default"
-    // has moved the badge — the explicit change the reason asks for.
-    it('Delete is disabled on the default rig with the reason in its tooltip only, and enabled once the default moves', async () => {
-        mockCluster({
+    // Ruling 2026-09-28 (replaces alpha.2 Finding 3's 'set another rig as default
+    // first'): 'no default rig' is a valid setup state, so the default rig is
+    // deletable — clearing the default — once CAT is off; CAT needs the default
+    // rig. The tooltip names the one thing that unlocks it; a rig that is not the
+    // default is not in use and deletes with CAT on.
+    it('Delete on the default rig: disabled with the CAT reason while CAT is on, enabled with it off', async () => {
+        const body = {
             default_rig_id: 1,
             rigs: [
                 { id: 1, model: 'ftdx10', port: '/dev/a' },
                 { id: 2, model: 'ftdx10', port: '/dev/b' },
             ],
             catalogue: [{ id: 'ftdx10', name: 'FTdx10', rig_modes: ['DATA-U'] }],
+        };
+        mockCluster(body, true);
+        const { unmount } = render(RigsSection);
+        await vi.waitFor(() => expect(bridgeEnabledState.loaded).toBe(true));
+        await vi.waitFor(() => expect(rigsState.loaded).toBe(true));
+        flushSync();
+        expect(rigsState.selectedId).toBe(1); // load pre-selects the default
+        const del = screen.getByRole('button', { name: 'Delete' });
+        expect(del).toBeDisabled();
+        expect(del.title).toBe('Turn off the rig connection (CAT) first');
+        // A non-default rig deletes with CAT on — it is not the rig in use.
+        await fireEvent.click(document.querySelectorAll('ul button')[1]);
+        flushSync();
+        expect(screen.getByRole('button', { name: 'Delete' })).not.toBeDisabled();
+        unmount();
+
+        mockCluster(body, false);
+        render(RigsSection);
+        await vi.waitFor(() => expect(bridgeEnabledState.loaded).toBe(true));
+        await vi.waitFor(() => expect(rigsState.loaded).toBe(true));
+        flushSync();
+        const delOff = screen.getByRole('button', { name: 'Delete' });
+        expect(delOff).not.toBeDisabled();
+        expect(delOff.title).toBe('Delete this rig');
+    });
+
+    // Ruling 2026-09-28: rigs are profiles until one is set as default. With none
+    // set the list says so and what to do; it goes once one is.
+    it('says "No default rig — set one to use it." until a default is set', async () => {
+        mockCluster({
+            default_rig_id: 0,
+            rigs: [{ id: 1, model: 'ftdx10', port: '/dev/a' }],
+            catalogue: [{ id: 'ftdx10', name: 'FTdx10' }],
         });
         render(RigsSection);
         await vi.waitFor(() => expect(rigsState.loaded).toBe(true));
         flushSync();
-        expect(rigsState.selectedId).toBe(1); // load pre-selects the default
-
-        // On the default: disabled, and the reason names the action that unlocks it.
-        const del = screen.getByRole('button', { name: 'Delete' });
-        expect(del).toBeDisabled();
-        expect(del.title).toMatch(/default rig/i);
-        expect(del.title).toMatch(/set another rig as default/i);
-        // The tooltip carries the reason alone (operator ruling 2026-09-09, record
-        // entry 32): no panel line under the header repeats it.
-        expect(screen.queryByText(/set another rig as default first/i)).toBeNull();
-
-        // A non-default rig deletes as before. Selected by position: both rigs are
-        // the same model, so nameFor() renders them identically.
-        const rigButtons = document.querySelectorAll('ul button');
-        await fireEvent.click(rigButtons[1]);
-        flushSync();
-        expect(rigsState.selectedId).toBe(2);
-        const del2 = screen.getByRole('button', { name: 'Delete' });
-        expect(del2).not.toBeDisabled();
-        expect(del2.title).toBe('Delete this rig');
-        expect(screen.queryByText(/set another rig as default first/i)).toBeNull();
-
-        // The explicit default change: rig 2 becomes the default, so rig 1 is now
-        // an ordinary rig and its Delete comes back.
+        expect(screen.getByText('No default rig — set one to use it.')).toBeInTheDocument();
         await fireEvent.click(screen.getByText('Set as default'));
-        await vi.waitFor(() => expect(rigsState.defaultRigId).toBe(2));
+        await vi.waitFor(() => expect(rigsState.defaultRigId).toBe(1));
         flushSync();
-        const del2Now = screen.getByRole('button', { name: 'Delete' });
-        expect(del2Now).toBeDisabled(); // rig 2 is the default now
-        await fireEvent.click(rigButtons[0]);
+        expect(screen.queryByText('No default rig — set one to use it.')).toBeNull();
+    });
+
+    // CAT needs the default rig's serial port (validateBridge). Turning it ON is
+    // blocked, with the missing step named, until both exist; turning it OFF never is.
+    it('the CAT switch: turning it on waits for a default rig with a port; turning it off never waits', async () => {
+        const cat = () => screen.getByRole('checkbox', { name: /Enable rig connection/ });
+        mockCluster({
+            default_rig_id: 0,
+            rigs: [{ id: 1, model: 'ftdx10', port: '' }],
+            catalogue: [{ id: 'ftdx10', name: 'FTdx10' }],
+        });
+        const { unmount } = render(RigsSection);
+        await vi.waitFor(() => expect(bridgeEnabledState.loaded).toBe(true));
+        await vi.waitFor(() => expect(rigsState.loaded).toBe(true));
         flushSync();
-        expect(rigsState.selectedId).toBe(1);
-        const del1 = screen.getByRole('button', { name: 'Delete' });
-        expect(del1).not.toBeDisabled();
-        expect(del1.title).toBe('Delete this rig');
+        expect(cat()).toBeDisabled();
+        expect(screen.getByText('Set a default rig first')).toBeInTheDocument();
+
+        rigsState.defaultRigId = 1;
+        flushSync();
+        expect(cat()).toBeDisabled();
+        expect(
+            screen.getByText('Choose a serial port for the default rig first')
+        ).toBeInTheDocument();
+
+        rigsState.rigs = [{ id: 1, model: 'ftdx10', port: '/dev/a' }];
+        flushSync();
+        expect(cat()).not.toBeDisabled();
+        expect(screen.queryByText(/first$/)).toBeNull();
+        unmount();
+
+        // Already on (a hand-edited config, say) with no default: it can still go off.
+        mockCluster(
+            { default_rig_id: 0, rigs: [{ id: 1, model: 'ftdx10', port: '' }], catalogue: [] },
+            true
+        );
+        render(RigsSection);
+        await vi.waitFor(() => expect(bridgeEnabledState.loaded).toBe(true));
+        await vi.waitFor(() => expect(rigsState.loaded).toBe(true));
+        flushSync();
+        expect(cat()).not.toBeDisabled();
     });
 
     // Fresh-install ruling 2026-09-26 + 2026-09-28: the last rig is deletable, but
@@ -346,7 +387,7 @@ describe('RigsSection add-rig picker', () => {
         expect(puts).toHaveLength(0);
     });
 
-    it('from no rigs: pick, Save, and the first rig becomes the default', async () => {
+    it('from no rigs: pick and Save adds a profile, not a default', async () => {
         const puts = mockCluster({ default_rig_id: 0, rigs: [], catalogue });
         render(RigsSection);
         await vi.waitFor(() => expect(rigsState.loaded).toBe(true));
@@ -361,13 +402,12 @@ describe('RigsSection add-rig picker', () => {
 
         await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
         await vi.waitFor(() => expect(puts).toHaveLength(1));
-        expect(JSON.parse(puts[0])).toEqual({
-            rigs: [{ id: 1, model: 'ic7300', port: '' }],
-            default_rig_id: 1,
-        });
+        expect(JSON.parse(puts[0])).toEqual({ rigs: [{ id: 1, model: 'ic7300', port: '' }] });
         flushSync();
         expect(screen.queryAllByText(/not saved/i)).toHaveLength(0);
-        expect(rigsState.defaultRigId).toBe(1);
+        expect(rigsState.defaultRigId).toBe(0);
+        expect(screen.getByText('No default rig — set one to use it.')).toBeInTheDocument();
+        expect(screen.getByText('Set as default')).toBeInTheDocument();
     });
 });
 
@@ -386,5 +426,73 @@ describe('RigsSection connection pickers', () => {
         const port = screen.getByRole('combobox', { name: 'Serial port' });
         expect(port.className).not.toMatch(/font-mono|text-xs/);
         expect(port.className).toBe(screen.getByRole('combobox', { name: 'Model' }).className);
+    });
+});
+
+// Review of the no-default slice (P2): the CAT and rig requests run at once, so
+// until the rigs have loaded — or if they failed — whether a default rig with a
+// port exists is unknown. Unknown blocks turning CAT on; an already-on switch can
+// still be turned off.
+describe('RigsSection CAT switch before the rigs load', () => {
+    function mockRigsFailing(catOn: boolean): void {
+        const resp = (body: unknown, status = 200) =>
+            Promise.resolve(
+                new Response(JSON.stringify(body), {
+                    status,
+                    headers: { 'Content-Type': 'application/json' },
+                })
+            );
+        vi.stubGlobal(
+            'fetch',
+            vi.fn((url: string) => {
+                if (url.includes('/v1/config')) return resp({ bridge_enabled: catOn });
+                if (url.includes('/v1/hardware'))
+                    return resp({ serial_ports: [], audio: { available: false } });
+                return resp({ message: 'boom' }, 500);
+            })
+        );
+    }
+
+    it('rigs failed to load: turning CAT on is blocked, with a reason', async () => {
+        mockRigsFailing(false);
+        render(RigsSection);
+        await vi.waitFor(() => expect(bridgeEnabledState.loaded).toBe(true));
+        await vi.waitFor(() => expect(rigsState.error).not.toBe(''));
+        flushSync();
+        expect(screen.getByRole('checkbox', { name: /Enable rig connection/ })).toBeDisabled();
+        expect(screen.getByText('Load the rigs first')).toBeInTheDocument();
+    });
+
+    it('rigs failed to load: an already-on switch can still be turned off', async () => {
+        mockRigsFailing(true);
+        render(RigsSection);
+        await vi.waitFor(() => expect(bridgeEnabledState.loaded).toBe(true));
+        await vi.waitFor(() => expect(rigsState.error).not.toBe(''));
+        flushSync();
+        expect(screen.getByRole('checkbox', { name: /Enable rig connection/ })).not.toBeDisabled();
+    });
+});
+
+// Review of the no-default slice (P2): a new rig's draft showed 'Changes take
+// effect after a daemon restart' — adding never selects the default.
+describe('RigsSection new-rig draft', () => {
+    it('shows no restart note on a new rig', async () => {
+        mockCluster({
+            default_rig_id: 0,
+            rigs: [],
+            catalogue: [{ id: 'ic7300', name: 'IC-7300' }],
+        });
+        render(RigsSection);
+        await vi.waitFor(() => expect(rigsState.loaded).toBe(true));
+        flushSync();
+        await fireEvent.click(screen.getByRole('button', { name: 'Add rig' }));
+        flushSync();
+        await fireEvent.click(
+            within(screen.getByRole('group', { name: 'Choose a rig model' })).getByRole('button', {
+                name: /IC-7300/,
+            })
+        );
+        flushSync();
+        expect(screen.queryByText(/Changes take effect after a daemon restart/)).toBeNull();
     });
 });

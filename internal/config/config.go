@@ -407,6 +407,13 @@ func (c Config) ActiveBridge() types.BridgeConfig {
 		catCfg.Driver = rc.Model
 		serialCfg.Port = rc.Port
 		serialCfg.Overrides = rc.Overrides // per-rig serial overrides (config.md §10, B2)
+	} else if len(c.Rigs) > 0 {
+		// Rigs configured, no default rig (ADR 0028 amendment 2026-09-28): the
+		// catalogue is authoritative, so stale loose rig identity must not stand
+		// in for a default — CAT would validate and bind the old hardware.
+		catCfg.Driver = ""
+		serialCfg.Port = ""
+		serialCfg.Overrides = types.RigOverrides{}
 	}
 	b.Serial = &serialCfg
 	b.Cat = &catCfg
@@ -420,6 +427,18 @@ func (c Config) ActiveFt8() types.Ft8Config {
 	f := c.Ft8
 	rc := c.RigByID(c.DefaultRigID)
 	if rc == nil {
+		if len(c.Rigs) > 0 {
+			// No default rig with rigs configured: no rig-owned audio or FT8 mode,
+			// not the stale loose values (same rule as ActiveBridge). Copy TX so
+			// the stored config is never mutated.
+			f.Device = ""
+			if f.TX != nil {
+				tx := *f.TX
+				tx.Device = ""
+				tx.Mode = ""
+				f.TX = &tx
+			}
+		}
 		return f
 	}
 	// The active rig's audio device NAME wins per direction WHEN SET; an unset
@@ -1464,18 +1483,14 @@ func applyDefaults(cfg *Config, baseDir string) {
 	// Default-pointer defaults. The default logbook is always 1 — the
 	// first-run logbook row is seeded to id=1 by the /v1/config setup
 	// transition, so the pointer is valid even before setup completes.
-	// The default rig, by contrast, is only set when a rig catalogue
-	// exists: a rig-less fresh install must leave DefaultRigID at 0
-	// ("no active rig"), never dangle it at a non-existent rig 1 — that
-	// left a fresh install with a default_rig_id matching no rig (and the
-	// Phone/CW panel with no rig to display). The pre-catalogue migration
-	// path sets it explicitly in applyRigProfiles after synthesising the
-	// id-1 rig.
+	// The default rig is NEVER defaulted: 0 means "no default rig", a
+	// deliberate setup state even with rigs configured — 'Set as default' is
+	// the one act that selects the rig in use (ruling 2026-09-28). Stamping
+	// rig 1 here made that state vanish at the next start. The pre-catalogue
+	// migration still selects its synthesised rig explicitly, in
+	// applyRigProfiles.
 	if cfg.DefaultLogbookID == 0 {
 		cfg.DefaultLogbookID = defaultLogbookID
-	}
-	if cfg.DefaultRigID == 0 && len(cfg.Rigs) > 0 {
-		cfg.DefaultRigID = defaultRigID
 	}
 
 	SeedOperatorRoster(cfg)

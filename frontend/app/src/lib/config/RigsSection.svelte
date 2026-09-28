@@ -5,9 +5,10 @@
     // audio RX/TX via /v1/hardware pickers) are editable, saved via a whole-catalogue
     // PUT (see rigs.svelte.ts data-safety note). '+ Add rig' opens a model picker
     // and then an UNSAVED rig that Cancel discards (fresh-install ruling
-    // 2026-09-26). Delete is an immediate, confirmed write. The default rig is not
-    // deletable while other rigs exist (alpha.2 dogfood Finding 3, W-0012); the
-    // last rig is, with CAT off (ruling 2026-09-28).
+    // 2026-09-26). Adding never selects the default: 'Set as default' does, and is
+    // the act that needs a restart (ruling 2026-09-28). Delete is an immediate,
+    // confirmed write; the default rig deletes only with CAT off, clearing the
+    // default.
     import { onMount } from 'svelte';
     import { rigsState } from './rigs.svelte';
     import { bridgeEnabledState } from './bridgeEnabled.svelte';
@@ -30,31 +31,47 @@
     }
 
     // Delete a rig — an immediate structural write with NO undo, so confirm first.
-    // The button is disabled for the default rig while others exist, and for the
-    // last rig while CAT is on; deleteRig also refuses both.
+    // The button is disabled for the default rig while CAT is on or unknown;
+    // deleteRig refuses it too.
     async function onDeleteRig(id: number) {
         const rig = rigsState.rigs.find((r) => r.id === id);
         const name = rig ? rigsState.nameFor(rig) : 'this rig';
         const consequence =
             rigsState.rigs.length <= 1
                 ? "It's your only rig, so no rig will be set up."
-                : 'This removes its connection settings.';
+                : id === rigsState.defaultRigId
+                  ? "It's the default rig, so no rig is in use until you set another as default."
+                  : 'This removes its connection settings.';
         if (!window.confirm(`Delete "${name}"? ${consequence} This can't be undone.`)) {
             return;
         }
         await rigsState.deleteRig(id);
     }
 
-    function deleteTitle(id: number): string {
-        if (rigsState.rigs.length <= 1) {
-            return rigsState.catBlocksLastDelete
-                ? 'Turn off the rig connection (CAT) first'
-                : 'Delete this rig';
-        }
-        return id === rigsState.defaultRigId
-            ? 'Cannot delete the default rig — set another rig as default first'
-            : 'Delete this rig';
+    // The default rig is the one CAT uses, so it deletes only with CAT off; any
+    // other rig is not in use and deletes freely (ruling 2026-09-28).
+    function deleteBlocked(id: number): boolean {
+        return id === rigsState.defaultRigId && rigsState.catBlocksDefaultDelete;
     }
+
+    function deleteTitle(id: number): string {
+        return deleteBlocked(id) ? 'Turn off the rig connection (CAT) first' : 'Delete this rig';
+    }
+
+    // Turning CAT ON waits for a default rig with a saved serial port (the daemon
+    // refuses it otherwise); turning it OFF never waits. Until the rigs have loaded
+    // that is unknown, and unknown blocks turning it on too (the CAT and rig
+    // requests run at once, and the rig one can fail).
+    const catEnableReason = $derived(
+        !rigsState.loaded
+            ? rigsState.loading
+                ? ''
+                : 'Load the rigs first'
+            : rigsState.catEnableBlocker
+    );
+    const catEnableBlocked = $derived(
+        !bridgeEnabledState.enabled && (!rigsState.loaded || catEnableReason !== '')
+    );
 </script>
 
 {#snippet row(label: string, value: string, mono = false)}
@@ -129,14 +146,17 @@
                     type="checkbox"
                     class="cursor-pointer disabled:cursor-not-allowed"
                     checked={bridgeEnabledState.enabled}
-                    disabled={bridgeEnabledState.saving}
+                    disabled={bridgeEnabledState.saving || catEnableBlocked}
                     onchange={(e) => bridgeEnabledState.setEnabled(e.currentTarget.checked)}
                 />
                 Enable rig connection (CAT)
                 <span class="font-normal text-muted">
-                    — connect Station Manager to the active rig's serial port
+                    — connect Station Manager to the default rig's serial port
                 </span>
             </label>
+            {#if catEnableBlocked && catEnableReason !== ''}
+                <p class="mt-1 text-xs text-muted">{catEnableReason}</p>
+            {/if}
             {#if bridgeEnabledState.restartPending}
                 <p class="mt-1 text-xs text-muted">Restart the daemon to apply the CAT change.</p>
             {/if}
@@ -165,8 +185,8 @@
         >
             <div class="text-center">
                 <p class="text-sm text-muted">No rigs configured.</p>
-                <!-- The first rig saved becomes the default (the daemon 400s on an
-                     unresolvable default_rig_id). Disabled with no catalogue. -->
+                <!-- A saved rig is a profile until 'Set as default' (ruling
+                     2026-09-28). Disabled with no catalogue. -->
                 {#if pickerOpen}
                     {@render modelPicker()}
                 {:else}
@@ -184,6 +204,11 @@
         <div class="flex gap-6">
             <!-- Master: rig list + Add -->
             <div class="w-64 shrink-0">
+                {#if !rigsState.hasDefault}
+                    <!-- Rigs are profiles until one is set as default (ruling
+                         2026-09-28): say so, and what to do, while none is. -->
+                    <p class="mb-2 text-xs text-warning">No default rig — set one to use it.</p>
+                {/if}
                 <ul class="space-y-1">
                     {#each rigsState.rigs as rig (rig.id)}
                         <li>
@@ -291,17 +316,13 @@
                         {/if}
                         {#if rig && !rigsState.newRig}
                             <!-- Delete — immediate + confirmed. Disabled for the default rig
-                                 while others exist, and for the last rig while CAT is on
-                                 (deleteRig refuses both); ml-auto pushes it right. The
-                                 last-rig reason wins: "set another rig as default" is
-                                 impossible with one rig. The tooltip carries the reason
+                                 while CAT is on or unknown (deleteRig refuses it too);
+                                 ml-auto pushes it right. The tooltip carries the reason
                                  alone — no panel line repeats it (operator ruling
                                  2026-09-09, alpha.2 record entry 32). -->
                             <button
                                 class="ml-auto rounded-md px-2 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:text-muted disabled:hover:bg-transparent dark:text-red-400 dark:hover:bg-red-500/10"
-                                disabled={(rigsState.rigs.length <= 1
-                                    ? rigsState.catBlocksLastDelete
-                                    : rig.id === rigsState.defaultRigId) ||
+                                disabled={deleteBlocked(rig.id) ||
                                     rigsState.saving ||
                                     rigsState.settingDefault}
                                 title={deleteTitle(rig.id)}
