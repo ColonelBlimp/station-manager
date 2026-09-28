@@ -1374,6 +1374,42 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      say per occasion (a real key uploads a dummy QSO to a real logbook); the rollback drill on
      copies; the two-archive SM Cloud proof after 5F.
 
+   - **Archive contents (ADR 0084; ruled 2026-09-28).** Settings → Archives lists each
+     archive's logbooks under its row, nested on the table's grid (name under Label,
+     callsign under State, count under Size), muted and indented:
+
+     ```
+     Home             Active      148 KB    28/09/2026, 14:28:17
+        Default       7Q5MLV      7,468 QSOs
+        Contest       7Q5MLV      312 QSOs
+     Drill            Inactive    96 KB     26/09/2026, 11:02:40   [Activate]
+        Drill         7Q5MLV      1 QSO
+     New archive      Inactive    40 KB     27/09/2026, 09:15:00   [Activate]
+        Not known until it has been opened
+     ```
+
+     Rulings: the count carries its unit ("7,468 QSOs", singular "1 QSO") — the
+     nested lines have no heading; EVERY logbook is listed (no "+N more": collapsing
+     would hide the contents this view exists to show). An archive whose file changed
+     since its summary was taken says "Counts may be out of date — the file changed
+     since it was last open"; one with no summary yet says "Not known until it has
+     been opened"; one with no logbooks, "No logbooks". The active archive is always
+     current. Three slices, each test-first:
+     1. **Sidecar store** (`internal/archive`): the versioned, UUID-keyed file at
+        `<data_dir>/db/qso-archive-summaries.json` (via `GlobalDir`) — read (missing,
+        corrupt or unsupported-version = cache miss with a reason, never an error that
+        stops startup), atomic 0600 write, and the change signature (device, inode,
+        ctime; size and mtime for diagnostics) with the stale comparison. Pinned: a
+        same-size replacement with a preserved mtime reads stale.
+     2. **Keeping it current** (daemon): build the active archive's summary on open;
+        a bounded, coalescing post-commit observer for submit, delete, batch import,
+        restore and logbook create/rename/delete, off the QSO response path (a blocked
+        summary writer must not delay a QSO response); persist after a clean
+        checkpoint (`wal_checkpoint(TRUNCATE)`) and close, and after an offline import
+        or restore; serve the summaries on `GET /v1/qso-archives` (api-endpoints.md).
+     3. **SPA + manual**: the nested logbook lines and the three states above; the
+        manual's QSO Archives chapter.
+
 Deferred by the ADR and not planned here: archive delete, external attach CLI, in-process switch,
 cross-archive query.
 
