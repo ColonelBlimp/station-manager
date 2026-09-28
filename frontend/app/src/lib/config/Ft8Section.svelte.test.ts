@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/svelte';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/svelte';
 import Ft8Section from './Ft8Section.svelte';
 import { ft8SettingsState } from './ft8.svelte';
 
@@ -42,6 +42,7 @@ afterEach(() => {
     ft8SettingsState.loading = false;
     ft8SettingsState.saving = false;
     ft8SettingsState.error = '';
+    ft8SettingsState.restartOwed = false;
 });
 
 const CONFIG = {
@@ -98,24 +99,88 @@ describe('Ft8Section', () => {
         expect(screen.getByLabelText<HTMLInputElement>('Repeat cap').value).toBe('7');
     });
 
-    it('U2: the restart notice marks restart-only edits, and only those (A3)', async () => {
+    // U2, revised (fresh-install ruling 2026-09-26): the notice used to show only
+    // while a restart-only edit was UNSAVED and vanished on Save, exactly when a
+    // restart was still owed. Now, Forwarding's pattern: after a save that touched
+    // the switch, PSK Reporter or the decode log, 'Saved changes apply after a
+    // restart.' with its own Restart daemon button, until the restart (the reload
+    // clears it). A live edit (display prefs, repeat cap) never raises it.
+    it('U2: after saving a restart-only edit, the notice and its Restart button stay (A3)', async () => {
+        const onRestart = vi.fn();
         mockDaemon();
-        await renderLoaded();
+        render(Ft8Section, { props: { onRestart } });
+        await waitFor(() => expect(ft8SettingsState.loaded).toBe(true));
+        const notice = () => screen.queryByTestId('ft8-restart');
 
-        // A display pref — applied to the running view on save.
-        await fireEvent.input(screen.getByLabelText('Row cap'), { target: { value: '500' } });
-        expect(ft8SettingsState.dirty).toBe(true);
-        expect(screen.queryByText(/restart/i)).toBeNull();
-
-        // The repeat cap — applied live to the running sequencer (ruling 2026-09-16).
-        await fireEvent.input(screen.getByLabelText('Repeat cap'), { target: { value: '3' } });
-        expect(screen.queryByText(/restart/i)).toBeNull();
-
-        // A startup-only block — the daemon reads it when it binds.
+        // Unsaved edits of either kind: no notice yet.
         await fireEvent.input(screen.getByLabelText('PSK Reporter host'), {
             target: { value: 'other.example.org' },
         });
-        expect(screen.getByText(/restart/i)).toBeTruthy();
+        expect(notice()).toBeNull();
+
+        await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+        await waitFor(() => expect(notice()).not.toBeNull());
+        expect(notice()).toHaveTextContent('Saved changes apply after a restart.');
+        expect(ft8SettingsState.dirty).toBe(false); // saved, and the notice stays
+        await fireEvent.click(
+            within(notice() as HTMLElement).getByRole('button', { name: 'Restart daemon' })
+        );
+        expect(onRestart).toHaveBeenCalledTimes(1);
+    });
+
+    it('U2b: saving only live edits raises no restart notice', async () => {
+        mockDaemon();
+        await renderLoaded();
+        await fireEvent.input(screen.getByLabelText('Row cap'), { target: { value: '500' } });
+        await fireEvent.input(screen.getByLabelText('Repeat cap'), { target: { value: '3' } });
+        await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+        await waitFor(() => expect(ft8SettingsState.dirty).toBe(false));
+        expect(screen.queryByTestId('ft8-restart')).toBeNull();
+        expect(screen.queryByText(/restart/i)).toBeNull();
+    });
+
+    // Fresh-install ruling 2026-09-26: the tab explains by ⓘ, not by paragraph —
+    // the intro, the switch's explanation and the PSK Reporter and decode-log
+    // paragraphs live in the manual; field help sits behind the field's ⓘ, in plain
+    // words. The decode-log paragraph was also WRONG ('grows without bound'): it
+    // rotates at 10 MB and keeps 5 compressed backups (internal/ft8/decodelog.go).
+    it('U7: the paragraphs moved to the manual, each behind an ⓘ', async () => {
+        mockDaemon();
+        await renderLoaded();
+        const text = document.body.textContent ?? '';
+        for (const gone of [
+            /The FT8 subsystem: whether it runs/,
+            /no audio device is claimed/,
+            /Upload what you HEAR/,
+            /grows without bound/,
+            /port 14739/,
+            /next to smd\.log/,
+        ]) {
+            expect(text, String(gone)).not.toMatch(gone);
+        }
+        for (const [name, anchor] of [
+            ['How the FT8 and FT4 settings work', 'settings-for-ft8-and-ft4'],
+            ['How PSK Reporter sharing works', 'psk-reporter'],
+            ['How the decode log works', 'decode-log'],
+        ]) {
+            const link = screen.getByRole('link', { name });
+            expect(link.getAttribute('href')).toBe(`/manual/#${anchor}`);
+        }
+    });
+
+    it('U8: field help sits behind the field ⓘ, in plain words', async () => {
+        mockDaemon();
+        await renderLoaded();
+        const tip = (label: string) =>
+            document.getElementById(
+                screen.getByRole('button', { name: label }).getAttribute('aria-describedby') ?? ''
+            )?.textContent;
+        expect(tip('About Host and Port')).toBe(
+            'Leave both empty to report to PSK Reporter as normal.'
+        );
+        expect(tip('About the file path')).toBe(
+            "Leave empty to keep it with Station Manager's other logs."
+        );
     });
 
     it('U3: renders no colour pickers — a control this app cannot honour', async () => {

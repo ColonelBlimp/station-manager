@@ -172,6 +172,12 @@ class Ft8SettingsState {
      * for the same reason: the daemon pushes it into the running sequencer on
      * the PUT itself (handler_config.go applyCommittedFt8MaxRepeats).
      */
+    /** A save stored the switch, PSK Reporter or the decode log, so a restart is
+     *  owed (fresh-install ruling 2026-09-26). Set only by a save the daemon holds;
+     *  never cleared here — the restart reloads the page, which clears it, and a
+     *  Settings remount (load) is not a restart. */
+    restartOwed = $state(false);
+
     restartRequired = $derived.by(() => {
         const base = JSON.parse(this.#pristine) as Ft8Draft;
         const d = this.draft;
@@ -242,6 +248,7 @@ class Ft8SettingsState {
                 return;
             }
             this.#apply(res.settings);
+            if (needsRestart) this.restartOwed = true;
             // Push what the daemon STORED, never what was typed: it clamps the
             // row cap (10..2000) and normalises the feed mode, so the draft can
             // differ from reality by the time this runs. Only on success —
@@ -339,6 +346,7 @@ class Ft8SettingsState {
         this.#pristine = JSON.stringify(stored);
         switch (verdict) {
             case 'all':
+                if (needsRestart) this.restartOwed = true;
                 toasts.warn(
                     needsRestart
                         ? 'Save timed out, but the daemon does have your FT8 settings — restart the daemon to apply them.'

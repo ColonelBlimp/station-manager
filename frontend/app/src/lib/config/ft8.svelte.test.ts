@@ -72,6 +72,7 @@ afterEach(() => {
     ft8SettingsState.loading = false;
     ft8SettingsState.saving = false;
     ft8SettingsState.error = '';
+    ft8SettingsState.restartOwed = false;
     setFt8PrefsSaved(() => {});
     toastsState.items = [];
 });
@@ -307,10 +308,9 @@ describe('ft8 settings — restart required (A3)', () => {
 
 describe('ft8 settings — what the save CONFIRMATION says (A3)', () => {
     /*
-        The in-page banner is gated on `dirty`, so it disappears the instant a
-        save lands — at which point the confirmation is the only thing left that
-        can say a restart is still owed. Reading `restartRequired` to decide
-        that is a trap: #apply has already rebaselined the draft, so it is false
+        The confirmation toast says whether a restart is owed, beside the in-page
+        notice `restartOwed` raises (see 'a restart owed after saving' below).
+        Reading `restartRequired` to decide either is a trap: #apply has already rebaselined the draft, so it is false
         by then whatever was saved. Both directions, because a confirmation that
         always mentions a restart carries no more information than one that
         never does.
@@ -970,5 +970,78 @@ describe('ft8 settings — the repeat cap (applied live)', () => {
         expect(lastToast()).toBe('FT8 settings saved.');
         expect(ft8SettingsState.draft.maxRepeats).toBe('4');
         expect(ft8SettingsState.dirty).toBe(false);
+    });
+});
+
+/*
+    RESTART OWED (fresh-install ruling 2026-09-26). The in-page notice used to be
+    gated on UNSAVED restart-only edits, so it vanished on Save — exactly when the
+    restart was still owed. `restartOwed` is set by a save that stored the switch,
+    PSK Reporter or the decode log, and stays for the page's life: the restart
+    reloads the page, which is what clears it. A Settings remount (load) must not
+    clear it — the restart has not happened.
+*/
+describe('ft8 settings — a restart owed after saving', () => {
+    it('RO1: a saved restart-only edit owes a restart, and a reload of the form keeps it owed', async () => {
+        mockDaemon();
+        await ft8SettingsState.load();
+        ft8SettingsState.draft.pskHost = 'other.example.org';
+        await ft8SettingsState.save();
+        expect(ft8SettingsState.restartOwed).toBe(true);
+        await ft8SettingsState.load(); // Settings remounted — no restart happened
+        expect(ft8SettingsState.restartOwed).toBe(true);
+    });
+
+    it('RO2: saving only live edits owes nothing', async () => {
+        mockDaemon();
+        await ft8SettingsState.load();
+        ft8SettingsState.draft.cqToTop = false;
+        ft8SettingsState.draft.maxRepeats = '3';
+        await ft8SettingsState.save();
+        expect(ft8SettingsState.restartOwed).toBe(false);
+    });
+
+    it('RO3: a refused save owes nothing', async () => {
+        mockDaemon(CONFIG, { message: 'bad' }, 400);
+        await ft8SettingsState.load();
+        ft8SettingsState.draft.enabled = false;
+        await ft8SettingsState.save();
+        expect(ft8SettingsState.restartOwed).toBe(false);
+    });
+
+    function timedOutThen(reconcile: Body): void {
+        let gets = 0;
+        vi.stubGlobal(
+            'fetch',
+            vi.fn((_url: string, init?: RequestInit) => {
+                if (init?.method === 'PUT') {
+                    const e = new Error('timed out');
+                    e.name = 'TimeoutError';
+                    return Promise.reject(e);
+                }
+                gets++;
+                return Promise.resolve(
+                    new Response(JSON.stringify(gets === 1 ? CONFIG : reconcile), {
+                        status: 200,
+                        headers: { 'Content-Type': 'application/json' },
+                    })
+                );
+            })
+        );
+    }
+
+    it('RO4: a timed-out save that DID land owes the restart; one that did not, does not', async () => {
+        timedOutThen({ ...CONFIG, ft8_enabled: false });
+        await ft8SettingsState.load();
+        ft8SettingsState.draft.enabled = false;
+        await ft8SettingsState.save();
+        expect(ft8SettingsState.restartOwed).toBe(true);
+
+        ft8SettingsState.restartOwed = false;
+        timedOutThen(CONFIG);
+        await ft8SettingsState.load();
+        ft8SettingsState.draft.enabled = false;
+        await ft8SettingsState.save();
+        expect(ft8SettingsState.restartOwed).toBe(false);
     });
 });

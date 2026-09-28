@@ -210,7 +210,7 @@
         <RigsSection />
     </div>
     <div class:hidden={active !== 'ft8'}>
-        <Ft8Section />
+        <Ft8Section onRestart={doRestart} {restarting} />
     </div>
     <div class:hidden={active !== 'forwarding'}>
         <ForwardingSection onRestart={doRestart} {restarting} />

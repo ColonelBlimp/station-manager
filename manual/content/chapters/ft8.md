@@ -120,6 +120,37 @@ case where the computer cannot help you, and sleep is exactly that case.
 - Calling CQ and working answerers.
 - The Session tab and where your FT8 QSOs go.
 
+### Settings for FT8 and FT4
+
+**Settings → FT8 / FT4** holds everything about the two modes: whether they run
+at all, how Band Activity looks, how long a contact keeps calling a station that
+has stopped answering, and two optional extras — sharing what you hear with
+PSK Reporter, and a decode log.
+
+**Enable FT8 and FT4** turns both on or off. While it is off, Station Manager
+does not use the rig's audio and decodes nothing; the other settings on the tab
+still save.
+
+Some settings apply the moment you save: Band Activity and the repeat cap. The
+switch, PSK Reporter and the decode log apply after a restart. When you save one
+of those, the tab says *Saved changes apply after a restart* with a **Restart
+daemon** button; press it when you are ready.
+
+#### PSK Reporter
+
+Shares the stations you hear on the public PSK Reporter map, using your callsign
+and locator from **Station**. Off unless you turn it on.
+
+Leave **Host** and **Port** empty to report to PSK Reporter as normal.
+
+#### Decode log
+
+Keeps a text record of everything decoded and sent, handy for checking a contact
+later. It stays small by itself: old entries are compressed and the oldest
+removed.
+
+Leave **File path** empty to keep it with Station Manager's other logs.
+
 ## Operating FT8
 
 ### Answering a CQ

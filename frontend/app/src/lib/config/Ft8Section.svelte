@@ -4,9 +4,21 @@
     // repeat cap share one Save because they are one page to the operator; they
     // differ in WHEN they take effect, which is what the restart notice at the
     // bottom exists to say. See ft8.svelte.ts for why there are no colour
-    // pickers here.
+    // pickers here. Explanations live in the manual behind an ⓘ, field help
+    // behind the field's ⓘ (fresh-install ruling 2026-09-26).
     import { onMount } from 'svelte';
     import { ft8SettingsState } from './ft8.svelte';
+    import ManualLink from './ManualLink.svelte';
+    import HelpTip from './HelpTip.svelte';
+
+    let {
+        onRestart = () => undefined,
+        restarting = false,
+    }: {
+        /** Settings' own Restart daemon, for the restart notice. */
+        onRestart?: () => void;
+        restarting?: boolean;
+    } = $props();
 
     onMount(() => void ft8SettingsState.load());
 
@@ -40,13 +52,7 @@
         </div>
     {:else}
         <div class="space-y-8">
-            <p class="text-sm text-muted">
-                The FT8 subsystem: whether it runs at all, how the Band Activity feed is presented,
-                how long a contact keeps calling an unanswered station, and two optional outputs —
-                reception spots to PSK Reporter and a local decode log.
-            </p>
-
-            <section>
+            <section class="flex items-center gap-2">
                 <label class="flex items-center gap-2 text-sm text-ink">
                     <input
                         type="checkbox"
@@ -55,11 +61,10 @@
                     />
                     Enable FT8 and FT4
                 </label>
-                <p class="mt-2 text-xs text-muted">
-                    Off: no audio device is claimed and no decoders run. The display preferences
-                    below still save. A build without CGO leaves the subsystem idle whatever this
-                    says.
-                </p>
+                <ManualLink
+                    anchor="settings-for-ft8-and-ft4"
+                    label="How the FT8 and FT4 settings work"
+                />
             </section>
 
             <section class="space-y-3">
@@ -144,12 +149,10 @@
             </section>
 
             <section class="space-y-3">
-                <h2 class="text-base font-semibold text-ink">PSK Reporter</h2>
-                <p class="text-sm text-muted">
-                    Upload what you HEAR to PSK Reporter, the public map of who is hearing whom.
-                    Opt-in, and it publishes your callsign and grid from Station identity — there is
-                    no separate receiver identity to enter here.
-                </p>
+                <div class="flex items-center gap-2">
+                    <h2 class="text-base font-semibold text-ink">PSK Reporter</h2>
+                    <ManualLink anchor="psk-reporter" label="How PSK Reporter sharing works" />
+                </div>
                 <label class="flex items-center gap-2 text-sm text-ink">
                     <input
                         type="checkbox"
@@ -158,7 +161,7 @@
                     />
                     Upload reception spots
                 </label>
-                <div class="flex flex-wrap gap-x-4 gap-y-3">
+                <div class="flex flex-wrap items-end gap-x-4 gap-y-3">
                     <label class="flex w-72 flex-col gap-1">
                         <span class="text-sm font-medium text-ink">Host</span>
                         <input
@@ -182,21 +185,20 @@
                                 digitsOnly(e, (v) => (ft8SettingsState.draft.pskPort = v))}
                         />
                     </label>
+                    <span class="pb-2">
+                        <HelpTip
+                            label="About Host and Port"
+                            text="Leave both empty to report to PSK Reporter as normal."
+                        />
+                    </span>
                 </div>
-                <p class="text-xs text-muted">
-                    Leave both blank for the production collector. To exercise the path without
-                    writing the live database, keep the host and use port 14739.
-                </p>
             </section>
 
             <section class="space-y-3">
-                <h2 class="text-base font-semibold text-ink">Decode log</h2>
-                <p class="text-sm text-muted">
-                    Append every decode and every transmission to a WSJT-X <code>ALL.TXT</code
-                    >-style file — a durable record for reconstructing an exchange after the fact.
-                    It grows without bound and nothing prunes it; clear it yourself when it gets
-                    large.
-                </p>
+                <div class="flex items-center gap-2">
+                    <h2 class="text-base font-semibold text-ink">Decode log</h2>
+                    <ManualLink anchor="decode-log" label="How the decode log works" />
+                </div>
                 <label class="flex items-center gap-2 text-sm text-ink">
                     <input
                         type="checkbox"
@@ -207,7 +209,12 @@
                     Write a decode log
                 </label>
                 <label class="flex flex-col gap-1">
-                    <span class="text-sm font-medium text-ink">File path</span>
+                    <span class="flex items-center gap-1 text-sm font-medium text-ink"
+                        >File path <HelpTip
+                            label="About the file path"
+                            text="Leave empty to keep it with Station Manager's other logs."
+                        /></span
+                    >
                     <input
                         class="input"
                         aria-label="Decode log file path"
@@ -216,23 +223,31 @@
                         spellcheck="false"
                         bind:value={ft8SettingsState.draft.decodeLogPath}
                     />
-                    <span class="text-xs text-muted">
-                        Blank uses the default, next to <code>smd.log</code> in the data directory.
-                    </span>
                 </label>
             </section>
 
-            <!-- Shown only for the blocks the daemon reads at startup. The
-                 display prefs are pushed into the running FT8 view on save, so
-                 claiming they need a restart would be false — and would leave
-                 the operator unable to tell which of their edits is already
-                 live. Nothing else in this section may use the word. -->
-            {#if ft8SettingsState.restartRequired}
+            <!-- Forwarding's pattern (fresh-install ruling 2026-09-26): shown once a
+                 save has stored a block the daemon reads at startup, until the
+                 restart's page reload — not while edits are unsaved, when it
+                 vanished on Save exactly as the restart became owed. The display
+                 prefs and the repeat cap apply live, so they never raise it.
+                 Nothing else in this section may use the word. -->
+            {#if ft8SettingsState.restartOwed}
                 <div
                     class="rounded-md border border-warning bg-surface-muted px-3 py-2 text-sm text-warning"
+                    role="status"
+                    data-testid="ft8-restart"
                 >
-                    ⚠ The FT8 switch, PSK Reporter and the decode log take effect when the daemon
-                    restarts — the subsystem binds at startup.
+                    <span class="flex flex-wrap items-center gap-3"
+                        >⚠ Saved changes apply after a restart.
+                        <button
+                            type="button"
+                            class="btn"
+                            disabled={restarting}
+                            onclick={() => onRestart()}
+                            >{restarting ? 'Restarting…' : 'Restart daemon'}</button
+                        ></span
+                    >
                 </div>
             {/if}
 
