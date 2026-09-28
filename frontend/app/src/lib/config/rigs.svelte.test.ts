@@ -1060,12 +1060,12 @@ describe('rigsState', () => {
         expect(rigsState.saving).toBe(false);
     });
 
-    it('a new-rig Save with a timed-out PUT AND an unreadable reconcile keeps state + reports unknown', async () => {
-        // The formal residual (a delayed PUT + a failed reconcile) must NOT invite a
-        // blind retry: the draft is dropped (a retry could double-add), saving
-        // clears, and the message tells the operator to reload rather than retry
-        // (clean-room review 0c3abf9f P1, accept + harden).
-        const err = vi.spyOn(toasts, 'error');
+    // The formal residual (a delayed PUT + a failed reconcile) must NOT invite a
+    // blind retry, and must NOT drop the draft either: it is the only copy of the
+    // operator's entries (clean-room review 3fc11918 P2). The draft stays, and the
+    // next Save re-checks for the timed-out id before it adds anything.
+    function unknownThen(afterRecovery: 'landed' | 'absent') {
+        const puts: string[] = [];
         let get = 0;
         const ok = (body: unknown) =>
             Promise.resolve(
@@ -1074,37 +1074,88 @@ describe('rigsState', () => {
                     headers: { 'Content-Type': 'application/json' },
                 })
             );
+        const one = [{ id: 1, model: 'ic7300', port: '/dev/a' }];
         vi.stubGlobal(
             'fetch',
             vi.fn((url: string, init?: RequestInit) => {
                 if (init?.method === 'PUT') {
-                    const e = new Error('timed out');
-                    e.name = 'TimeoutError';
-                    return Promise.reject(e);
+                    puts.push(init?.body as string);
+                    if (puts.length === 1) {
+                        const e = new Error('timed out');
+                        e.name = 'TimeoutError';
+                        return Promise.reject(e);
+                    }
+                    return ok({});
                 }
                 if (url.includes('/v1/hardware')) {
                     return ok({ serial_ports: [], audio: { available: false } });
                 }
                 get++;
-                if (get >= 3) return Promise.resolve(new Response('{}', { status: 503 }));
+                // GET 1 = load, GET 2 = the save's re-fetch; GET 3 = the reconcile
+                // re-read → FAILS. From GET 4 (the next Save's re-check) the daemon
+                // answers again, with or without the timed-out rig 2.
+                if (get === 3) return Promise.resolve(new Response('{}', { status: 503 }));
+                const rigs =
+                    get >= 4 && afterRecovery === 'landed'
+                        ? [...one, { id: 2, model: 'ic7300', port: '/dev/new' }]
+                        : one;
                 return ok({
                     default_rig_id: 1,
-                    rigs: [{ id: 1, model: 'ic7300', port: '/dev/a' }],
+                    rigs,
                     catalogue: [{ id: 'ic7300', name: 'IC-7300' }],
                 });
             })
         );
+        return puts;
+    }
+
+    it('a new-rig Save with a timed-out PUT AND an unreadable reconcile keeps the draft + reports unknown', async () => {
+        const err = vi.spyOn(toasts, 'error');
+        unknownThen('absent');
         await rigsState.load();
         rigsState.startNewRig('ic7300');
+        rigsState.setDraftPort('/dev/new');
         await rigsState.save(); // PUT times out; reconcile GET fails ⇒ unknown
 
-        expect(rigsState.rigs.map((r) => r.id)).toEqual([1]); // local state preserved (no phantom)
-        expect(rigsState.newRig).toBeNull(); // no Save left that could double-add
+        expect(rigsState.rigs.map((r) => r.id)).toEqual([1]); // no phantom rig
+        expect(rigsState.newRig?.port).toBe('/dev/new'); // the entries survive
         expect(rigsState.saving).toBe(false);
         expect(rigsState.loaded).toBe(true);
         expect(err).toHaveBeenCalledTimes(1);
-        expect(err.mock.calls[0][0]).toMatch(/state unknown/i);
-        expect(err.mock.calls[0][0]).toMatch(/reload/i);
+        expect(err.mock.calls[0][0]).toMatch(/may or may not/i);
+        expect(err.mock.calls[0][0]).toMatch(/entries are kept/i);
+    });
+
+    it('after an unknown add, the next Save finds the rig landed: no second PUT, later edits kept', async () => {
+        const puts = unknownThen('landed');
+        await rigsState.load();
+        rigsState.startNewRig('ic7300');
+        rigsState.setDraftPort('/dev/new');
+        await rigsState.save(); // unknown
+        rigsState.setDraftAudio('rx', 'USB Audio'); // edited while it was unknown
+        await rigsState.save(); // re-check finds rig 2
+
+        expect(puts).toHaveLength(1); // never added twice
+        expect(rigsState.newRig).toBeNull();
+        expect(rigsState.rigs.map((r) => r.id)).toEqual([1, 2]);
+        expect(rigsState.selectedId).toBe(2);
+        expect(rigsState.draft?.audio?.rx).toBe('USB Audio'); // carried as an unsaved edit
+        expect(rigsState.dirty).toBe(true);
+    });
+
+    it('after an unknown add, the next Save finds it absent and adds it exactly once', async () => {
+        const puts = unknownThen('absent');
+        await rigsState.load();
+        rigsState.startNewRig('ic7300');
+        rigsState.setDraftPort('/dev/new');
+        await rigsState.save(); // unknown
+        await rigsState.save(); // re-check: absent ⇒ add
+
+        expect(puts).toHaveLength(2);
+        const sent = JSON.parse(puts[1]) as { rigs: Array<{ id: number; port: string }> };
+        expect(sent.rigs.map((r) => r.id)).toEqual([1, 2]);
+        expect(rigsState.newRig).toBeNull();
+        expect(rigsState.rigs.map((r) => r.id)).toEqual([1, 2]);
     });
 
     it('deleteRig removes a non-default rig and PUTs the reduced list (omits default_rig_id)', async () => {

@@ -148,6 +148,12 @@ class RigsState {
     // is open the editor edits it instead of the selection.
     newRig = $state<RigConfig | null>(null);
 
+    // A new-rig save whose PUT timed out and whose reconcile re-read also failed:
+    // the rig may or may not exist. The draft is kept (it is the only copy of the
+    // operator's entries), and the next Save re-checks for this id before adding,
+    // so a retry cannot double-add (clean-room review 3fc11918 P2).
+    #unsettledAdd: { id: number; model: string } | null = null;
+
     // The pristine selected rig, or null (no rigs / none selected).
     selected = $derived(this.rigs.find((r) => r.id === this.selectedId) ?? null);
 
@@ -254,6 +260,7 @@ class RigsState {
         this.drafts = {}; // fresh load discards any stale drafts
         this.baselines = {};
         this.newRig = null;
+        this.#unsettledAdd = null;
         this.#ensureDraft();
         this.loaded = true;
     }
@@ -266,6 +273,7 @@ class RigsState {
     // rig, and edits persist per rig id.
     discardDrafts(): void {
         this.newRig = null;
+        this.#unsettledAdd = null;
         this.drafts = {};
         this.baselines = {};
         this.#ensureDraft();
@@ -289,6 +297,7 @@ class RigsState {
     resetDraft(): void {
         if (this.newRig) {
             this.newRig = null;
+            this.#unsettledAdd = null;
             return;
         }
         const id = this.selectedId;
@@ -507,6 +516,13 @@ class RigsState {
         const draft = this.newRig;
         if (!draft || this.saving || this.settingDefault || !this.loaded) return;
         this.saving = true;
+        if (this.#unsettledAdd) {
+            const { id, model } = this.#unsettledAdd;
+            if ((await this.#reconcileAfterAdd(id, model)) !== 'absent') {
+                this.saving = false;
+                return;
+            }
+        }
         const fresh = await fetchRigs();
         if (fresh.kind === 'error') {
             this.saving = false;
@@ -531,7 +547,11 @@ class RigsState {
                 // rig), so re-read the authoritative list and reconcile instead of
                 // leaving a draft a blind retry would double-add from (clean-room
                 // review 7b5ed1d2 P2).
-                await this.#reconcileAfterAdd(id, newRig.model);
+                const settled = await this.#reconcileAfterAdd(id, newRig.model);
+                this.saving = false;
+                if (settled === 'absent') {
+                    toasts.warn('Add timed out and did not take effect — try again.');
+                }
                 return;
             }
             this.saving = false;
@@ -555,9 +575,10 @@ class RigsState {
         );
     }
 
-    // Settle an add whose PUT timed out by re-reading the rig list. If our rig (the
-    // id we assigned + our model) landed, adopt it; if not, report that it didn't
-    // take effect. This is trustworthy — though NOT claimed infallible — because of
+    // Settle an add whose PUT timed out by re-reading the rig list: 'landed' when
+    // our rig (the id we assigned + our model) is there — adopt it; 'absent' when
+    // it isn't — the caller may add; 'unknown' when the re-read fails — keep the
+    // draft and re-check at the next Save. This is trustworthy — though NOT claimed infallible — because of
     // the daemon's lock ordering: the PUT persists INSIDE config.Service.Update,
     // which holds the config WRITE lock (config.go:2079) across both the disk write
     // and the in-memory swap, and only then does the handler write its 200
@@ -577,29 +598,28 @@ class RigsState {
     // retry would double-add. Finite polling can't close it (it can't prove
     // non-commit); the complete fix is server-side idempotency, disproportionate for
     // a local single-operator config editor (operator ruling 2026-08-19).
-    async #reconcileAfterAdd(id: number, model: string): Promise<void> {
+    async #reconcileAfterAdd(id: number, model: string): Promise<'landed' | 'absent' | 'unknown'> {
         const reread = await fetchRigs();
-        this.saving = false;
         if (reread.kind === 'error') {
-            // State unknown: drop the draft so no Save can double-add; the message
-            // sends the operator to reload.
-            this.newRig = null;
+            this.#unsettledAdd = { id, model };
             toasts.error(
-                'Add timed out and the rig list could not be re-read — state unknown. ' +
-                    'Reload Settings before trying again.'
+                'Add timed out and the rig list could not be re-read, so the rig may or may ' +
+                    'not have been added. Your entries are kept; Save checks again before adding.'
             );
-            return;
+            return 'unknown';
         }
+        this.#unsettledAdd = null;
         this.#applyFetched(reread.data);
-        const landed = reread.data.rigs.some((r) => r.id === id && r.model === model);
-        if (landed) {
-            this.newRig = null;
-            this.selectedId = id;
-            this.#ensureDraft();
-            toasts.warn('Add timed out, but the rig was saved.');
-        } else {
-            toasts.warn('Add timed out and did not take effect — try again.');
-        }
+        if (!reread.data.rigs.some((r) => r.id === id && r.model === model)) return 'absent';
+        // It landed. Show the saved rig, carrying any entries made since the timed-out
+        // save as its unsaved edits rather than dropping them.
+        const draft = this.newRig;
+        this.newRig = null;
+        this.selectedId = id;
+        this.#ensureDraft();
+        if (draft) this.drafts[id] = savedFormOf(draft, id);
+        toasts.warn('Add timed out, but the rig was saved.');
+        return 'landed';
     }
 
     // The last rig can be deleted only with CAT off: the daemon refuses an enabled
