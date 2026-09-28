@@ -18,6 +18,7 @@
     import { toasts } from '../ui/toasts.svelte';
     import { reloadPage } from '../utils/reload';
     import { draftInProgress } from '../operate/qso.svelte';
+    import { takeSettingsTab } from '../router.svelte';
 
     // Strip order groups the station and how it operates (Station, Rigs, FT8)
     // ahead of the outside services it talks to (Forwarding, Email,
@@ -28,7 +29,8 @@
     const sections: { id: SectionId; label: string }[] = [
         { id: 'station', label: 'Station' },
         { id: 'rigs', label: 'Rigs' },
-        { id: 'ft8', label: 'FT8' },
+        // One switch serves both FT modes (fresh-install ruling 2026-09-26).
+        { id: 'ft8', label: 'FT8 / FT4' },
         { id: 'forwarding', label: 'Forwarding' },
         { id: 'email', label: 'Email' },
         { id: 'enrichment', label: 'Enrichment' },
@@ -39,7 +41,9 @@
         // used tab — a switch is an occasional act (operator ruling 2026-09-24).
         { id: 'archives', label: 'Archives' },
     ];
-    let active = $state<SectionId>('station');
+    // Another view may ask for a tab (the Phone / CW 'FT8 and FT4 are turned off'
+    // note links here); taken once, at mount.
+    let active = $state<SectionId>(takeSettingsTab() ?? 'station');
 
     // A confirmed restart reloads the page, as archive activation does
     // (fresh-install ruling 2026-09-26): the SPA reads restart-bound state once at

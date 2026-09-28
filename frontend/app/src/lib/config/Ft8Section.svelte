@@ -53,7 +53,7 @@
                         class="cursor-pointer"
                         bind:checked={ft8SettingsState.draft.enabled}
                     />
-                    Enable FT8
+                    Enable FT8 and FT4
                 </label>
                 <p class="mt-2 text-xs text-muted">
                     Off: no audio device is claimed and no decoders run. The display preferences

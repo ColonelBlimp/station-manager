@@ -71,7 +71,7 @@ const SECTIONS: Section[] = [
         discard: () => rigsState.discardDrafts(),
     },
     {
-        label: 'FT8',
+        label: 'FT8 / FT4',
         dirty: () => ft8SettingsState.dirty,
         saving: () => ft8SettingsState.saving,
         discard: () => ft8SettingsState.reset(),

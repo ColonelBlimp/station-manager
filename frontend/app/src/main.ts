@@ -71,7 +71,7 @@ import { toasts } from './lib/ui/toasts.svelte';
 import { setup, setSetupSave } from './lib/setup.svelte';
 import { setStationSaved } from './lib/config/station.svelte';
 import { setFt8PrefsSaved } from './lib/config/ft8.svelte';
-import { router, setModeChangeHook } from './lib/router.svelte';
+import { router, setModeChangeHook, setFtEnabled } from './lib/router.svelte';
 import {
     onOperatingModeChange,
     setRestoreOnModeSwitch,
@@ -266,6 +266,7 @@ const ctx: StationContext = {
     operator: '',
     logbookId: 0,
     catEnabled: false,
+    ft8Enabled: false,
     modeMappings: {},
     ops: [],
     tune: false,
@@ -331,6 +332,9 @@ function applyStationIdentity(operator: string, grid: string, stationCallsign: s
 
 function applyStationContext(c: StationContext): void {
     Object.assign(ctx, c);
+    // FT8/FT4 off ⇒ no FT links and no FT view; set before the shell first renders
+    // (setup.status leaves 'loading' after this). An unreached config says nothing.
+    if (c.configOk) setFtEnabled(c.ft8Enabled);
     // The operator's "CAT enabled" intent gates the stream (shipping rule):
     // when false the SPA stays manual and never opens it. Config is fetched
     // once at boot, so no enable/disable tracking here — this SPA's config

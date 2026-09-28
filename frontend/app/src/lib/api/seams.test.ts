@@ -167,6 +167,15 @@ describe('fetchStationContext bridge block (stubbed fetch)', () => {
         expect(ctx.modeMappings).toEqual({});
     });
 
+    it('reads ft8_enabled; only an explicit true turns FT8/FT4 on', async () => {
+        mockConfig({ logging_station: { station_callsign: '7Q5MLV' }, ft8_enabled: true });
+        expect((await fetchStationContext()).ft8Enabled).toBe(true);
+        mockConfig({ logging_station: { station_callsign: '7Q5MLV' }, ft8_enabled: false });
+        expect((await fetchStationContext()).ft8Enabled).toBe(false);
+        mockConfig({ logging_station: { station_callsign: '7Q5MLV' } });
+        expect((await fetchStationContext()).ft8Enabled).toBe(false);
+    });
+
     it('reads station.operating_bands (empty when the station block is absent)', async () => {
         mockConfig({
             logging_station: { station_callsign: '7Q5MLV' },

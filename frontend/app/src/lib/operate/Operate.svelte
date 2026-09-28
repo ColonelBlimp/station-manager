@@ -18,6 +18,7 @@
     import RigPanel from './RigPanel.svelte';
     import { isVisible, AMBIENT_TILES, WORKFLOW_TILES, TILES } from './layout.svelte';
     import { ft8SelectBand } from './rig.svelte';
+    import FtOffNotice from './FtOffNotice.svelte';
 </script>
 
 {#if router.mode === 'phone'}
@@ -25,6 +26,7 @@
          data-card marker is the test seam for "this panel is on the surface";
          nothing positions by it. -->
     <div data-surface="workflow" class="mx-auto flex w-full max-w-3xl flex-col gap-3 px-3 py-3">
+        <FtOffNotice />
         {#each WORKFLOW_TILES as id (id)}
             {#if isVisible(id)}
                 {@const Card = TILES[id].component}

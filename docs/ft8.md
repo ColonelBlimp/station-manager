@@ -139,7 +139,7 @@ on any PUT):
   silent contact and, since 2026-07-17, first re-scans that slot's decodes for
   another live answerer — the pile-up kept calling while we worked the silent one —
   working them immediately and only resuming CQ when nobody else is calling).
-  Edited from **Settings → FT8 → Contacts → Repeat cap** (`Ft8Section.svelte`, ruling
+  Edited from **Settings → FT8 / FT4 → Contacts → Repeat cap** (`Ft8Section.svelte`, ruling
   2026-09-16): a whole number 1–10 with no blank-means-default — the form refuses
   to save a blank or out-of-range value, since the daemon's 400 would reject the
   whole FT8 save — sent as `ft8_max_repeats` beside the four FT8 blocks and
@@ -228,6 +228,25 @@ The sidebar's **Operate** item chooses Phone/CW, FT8 or FT4; the choice is
 persisted to `localStorage` (survives reload). The two FT modes render `Ft8View`,
 which claims its profile, then opens the `/v1/ft8/events` stream on mount and
 closes it on leave.
+
+**With `ft8_enabled` false** the daemon registers no FT8 routes, so the SPA offers
+no FT mode (fresh-install ruling 2026-09-26; `router.svelte.ts` `ftFeature` /
+`setFtEnabled`, set from the boot config in `main.ts` `applyStationContext` before
+the shell first renders):
+
+- the sidebar's Operate item shows only Phone/CW;
+- an `/operate/ft8` or `/operate/ft4` URL (a bookmark, Back/Forward), a remembered
+  FT mode in `localStorage`, or an FT click lands on Phone/CW instead — the URL is
+  corrected, the remembered mode becomes Phone/CW, and Phone/CW shows a note
+  ("FT8 and FT4 are turned off — Settings → FT8 / FT4", `FtOffNotice`) whose link
+  opens that Settings tab;
+- the fallback does not invoke the mode-change hook, so the CAT re-tune below
+  (`modeRestore`) never runs for it, and `Ft8View` is never mounted, so nothing is
+  claimed and no FT8 stream opens.
+
+Switching FT8/FT4 on takes effect after a daemon restart; the page reload that
+follows a confirmed restart brings the FT modes back. An unreachable config leaves
+the FT modes available.
 
 **Operating state is remembered across a mode switch — BOTH ways** (`LoggingCard` +
 `rigControl.snapshotOperatingState`/`restoreOperatingState`): on every Phone/CW ↔ FT8
@@ -1049,7 +1068,7 @@ config.
 ### Config — `ft8.display.*` (Band Activity preferences)
 
 Operator display settings, served resolved on `/v1/config` (`ft8_display`) and PUT back
-to persist. Edited from **Settings → FT8** in the app shell
+to persist. Edited from **Settings → FT8 / FT4** in the app shell
 (`frontend/app/src/lib/config/Ft8Section.svelte`) — the only writer. The Band Activity
 **filter funnel** merely reflects `hide_hashed_calls` in its "active" cue; it is
 read-only there (the auto-save-on-toggle funnel belonged to the retired logging SPA). The
@@ -1073,7 +1092,7 @@ ruling, 2026-08-05). Their only consumer was the retired logging SPA (removed
 2026-07-21); the app shell's Band Activity uses a **theme-aware palette** instead
 (`Ft8BandActivity.svelte` `rowClass`), because a single operator-picked hex cannot
 serve both light and dark — a row tint chosen for one is unreadable on the other. So
-Settings → FT8 deliberately offers **no colour pickers**: a control the app cannot
+Settings → FT8 / FT4 deliberately offers **no colour pickers**: a control the app cannot
 honour is indistinguishable from a broken one. They are still **round-tripped
 verbatim** on every save (`ft8_display` is a whole-block replace daemon-side, so
 omitting them would erase a hand-set config.json value), and `ResolveFt8Display` still

@@ -14,6 +14,11 @@ the [PSK reporter online service](https://pskreporter.info/) is also built-in.
 To use FT8 your transmitter must support CAT and be connected to the hardware where SM is installed and running.
 See [Enabling CAT](#cat) for details.
 
+FT8 and FT4 are switched on together, in **Settings → FT8 / FT4 → Enable FT8 and FT4**. The change takes
+effect after a restart: save, then click **Restart daemon**. While the switch is off, the sidebar lists only
+**Phone / CW**, and a bookmark or a remembered FT8 or FT4 view opens Phone / CW with a note saying FT8 and FT4
+are turned off.
+
 ### FT8 or FT4
 
 The **Operate** entry in the sidebar lists three modes: **Phone / CW**, **FT8** and **FT4**. FT8 and FT4 share
@@ -154,7 +159,7 @@ a session.
    transmissions interleaved with the other station's — with the current step
    highlighted. The standard exchange advances automatically through the signal reports
    to the closing **RR73 / 73**. If the other station stops answering, Station Manager
-   re-sends the current message up to the **repeat cap** (Settings → FT8 → Contacts;
+   re-sends the current message up to the **repeat cap** (Settings → FT8 / FT4 → Contacts;
    5 by default) and then gives up on the contact.
 4. When the exchange completes, the contact is **logged** and appears in the **Session**
    tab (shared with your Phone/CW session log, ready for email-out).

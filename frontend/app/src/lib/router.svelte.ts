@@ -212,6 +212,51 @@ function modeChanged(from: OpMode, to: OpMode): void {
     if (from !== to) modeChangeHook?.(from, to);
 }
 
+/*
+    FT8/FT4 availability (config ft8.enabled). With the switch off the daemon
+    registers no FT8 routes, so the FT view would open onto a raw 'no such API
+    route' beside live-looking Call CQ / Enable TX controls (fresh-install
+    ruling 2026-09-26). Every way into an FT mode — a bookmark, the stored last
+    mode, Back/Forward, a click — lands on Phone / CW instead and raises
+    `offNotice`, which Phone / CW shows as a note linking to the setting.
+
+    `enabled` starts true and is set from the boot config before the shell
+    renders (main.ts applyStationContext), so a Phone/CW-only station never
+    flashes the FT view. The fallback is NOT an operator mode switch: it does
+    not fire the mode-change hook, which would re-tune a CAT-live rig to a mode
+    the operator never left. Switching on takes effect after a restart; the
+    restart reload brings the links back.
+*/
+export const ftFeature = $state({ enabled: true, offNotice: false });
+
+export function setFtEnabled(enabled: boolean): void {
+    ftFeature.enabled = enabled;
+    if (!enabled && isFtMode(router.mode)) fallBackFromFt();
+}
+
+function fallBackFromFt(): void {
+    router.mode = 'phone';
+    storageSet(MODE_KEY, 'phone');
+    ftFeature.offNotice = true;
+    if (router.view === 'operate') window.history.replaceState({}, '', urlFor('operate', 'phone'));
+}
+
+// A Settings tab another view asked to open (the note's link). Settings takes it
+// once, on mount; its tab strip is local state and does not route.
+export type SettingsTab = 'ft8';
+let pendingSettingsTab: SettingsTab | undefined;
+
+export function showFtSettings(): void {
+    pendingSettingsTab = 'ft8';
+    navigate('config');
+}
+
+export function takeSettingsTab(): SettingsTab | undefined {
+    const t = pendingSettingsTab;
+    pendingSettingsTab = undefined;
+    return t;
+}
+
 // Asked only when config is genuinely being LEFT. Re-navigating to config (the
 // Settings tab strip does not route, but the sidebar item is clickable while
 // already there) is not leaving, and must not prompt.
@@ -237,6 +282,12 @@ export function setMode(mode: OpMode): void {
     // navigate(). Guarding only navigate() would leave this door open.
     if (!mayLeave('operate')) return;
     const from = router.mode;
+    // Off, a click on FT8/FT4 lands on Phone / CW as an ordinary navigation (the
+    // view may be changing, so it pushes); the mode was already Phone / CW.
+    if (isFtMode(mode) && !ftFeature.enabled) {
+        ftFeature.offNotice = true;
+        mode = 'phone';
+    }
     router.view = 'operate';
     router.mode = mode;
     storageSet(MODE_KEY, mode);
@@ -258,8 +309,12 @@ window.addEventListener('popstate', () => {
     }
     const from = router.mode;
     router.view = loc.view;
-    router.mode = loc.mode;
     pendingMissingFrom = loc.view === 'logbook' ? missingFromOf(window.location.search) : undefined;
     pendingLogbookId = logbookBeside(pendingMissingFrom, window.location.search);
+    if (isFtMode(loc.mode) && !ftFeature.enabled) {
+        fallBackFromFt();
+        return;
+    }
+    router.mode = loc.mode;
     modeChanged(from, loc.mode);
 });

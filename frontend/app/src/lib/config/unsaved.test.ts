@@ -334,7 +334,7 @@ describe('which sections have unsaved edits', () => {
         dirtyFt8();
         dirtyEmail();
         enrichmentState.draft.countryTtlDays = '5';
-        expect(unsavedSections()).toEqual(['Station', 'FT8', 'Email', 'Enrichment']);
+        expect(unsavedSections()).toEqual(['Station', 'FT8 / FT4', 'Email', 'Enrichment']);
     });
 });
 

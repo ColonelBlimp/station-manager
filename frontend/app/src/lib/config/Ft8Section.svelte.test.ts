@@ -85,7 +85,7 @@ describe('Ft8Section', () => {
         mockDaemon();
         await renderLoaded();
 
-        expect(screen.getByLabelText<HTMLInputElement>('Enable FT8').checked).toBe(true);
+        expect(screen.getByLabelText<HTMLInputElement>('Enable FT8 and FT4').checked).toBe(true);
         expect(screen.getByLabelText<HTMLInputElement>('Row cap').value).toBe('250');
         expect(screen.getByLabelText<HTMLSelectElement>('Feed mode').value).toBe('single');
         expect(screen.getByLabelText<HTMLInputElement>('PSK Reporter host').value).toBe(

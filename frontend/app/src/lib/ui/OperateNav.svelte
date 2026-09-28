@@ -4,7 +4,7 @@
     // it discloses inline sub-items; in the narrow rail the sub-items move to a
     // hover flyout (CSS, gated on [data-nav='narrow']). Parent is never
     // highlighted — the active sub-mode carries the highlight (TWP convention).
-    import { router, navigate, setMode, type OpMode } from '../router.svelte';
+    import { router, navigate, setMode, ftFeature, isFtMode, type OpMode } from '../router.svelte';
 
     // Start expanded when we're already on Operate.
     let open = $state(router.view === 'operate');
@@ -15,11 +15,14 @@
     // (parent or flyout item); the pointer leaving the item re-arms hover.
     let flyoutSuppressed = $state(false);
 
-    const modes: { mode: OpMode; label: string }[] = [
+    const allModes: { mode: OpMode; label: string }[] = [
         { mode: 'phone', label: 'Phone / CW' },
         { mode: 'ft8', label: 'FT8' },
         { mode: 'ft4', label: 'FT4' },
     ];
+    // With FT8/FT4 turned off there are no FT links at all (fresh-install ruling
+    // 2026-09-26); the daemon serves no FT8 routes then.
+    const modes = $derived(allModes.filter((m) => ftFeature.enabled || !isFtMode(m.mode)));
 
     function isActive(mode: OpMode): boolean {
         return router.view === 'operate' && router.mode === mode;

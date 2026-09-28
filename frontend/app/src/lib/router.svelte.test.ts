@@ -16,6 +16,10 @@ import {
     takeLogbookMissingFrom,
     takeLogbookHandoffLogbook,
     logbookMissingFromUrl,
+    ftFeature,
+    setFtEnabled,
+    showFtSettings,
+    takeSettingsTab,
 } from './router.svelte';
 
 describe('router base-path handling', () => {
@@ -253,5 +257,90 @@ describe('logbook missing-from handoff', () => {
         window.history.pushState({}, '', '/logbook?logbook=3');
         window.dispatchEvent(new PopStateEvent('popstate'));
         expect(takeLogbookHandoffLogbook()).toBeUndefined();
+    });
+});
+
+// Fresh-install ruling 2026-09-26: with the FT8/FT4 switch off the daemon
+// registers no FT8 routes, so the FT view would open onto 'no such API route'
+// beside live-looking Call CQ / Enable TX controls. A bookmark, a stored last
+// mode, Back/Forward or a click that would land on FT8/FT4 falls back to
+// Phone / CW with a note instead. The fallback is not an operator mode switch:
+// it must not fire the mode-change hook, which re-tunes a CAT-live rig.
+describe('FT8/FT4 turned off', () => {
+    const hook = vi.fn();
+    beforeEach(() => {
+        setFtEnabled(true);
+        ftFeature.offNotice = false;
+        setModeChangeHook(hook);
+        hook.mockClear();
+    });
+    afterEach(() => {
+        setFtEnabled(true);
+        ftFeature.offNotice = false;
+        setModeChangeHook(null);
+    });
+
+    it('turning it off while on an FT view falls back to Phone / CW, replacing the URL, without the hook', () => {
+        setMode('ft8');
+        hook.mockClear();
+        const entries = window.history.length;
+        setFtEnabled(false);
+        expect(router.view).toBe('operate');
+        expect(router.mode).toBe('phone');
+        expect(window.location.pathname).toBe('/operate/phone');
+        expect(window.history.length).toBe(entries); // replaced, not pushed
+        expect(ftFeature.offNotice).toBe(true);
+        expect(hook).not.toHaveBeenCalled(); // no rig re-tune for a mode the operator never left
+        expect(window.localStorage.getItem('sm-op-mode')).toBe('phone'); // not stored as FT
+    });
+
+    it('a stored FT mode while on another view falls back quietly to Phone / CW, noting it', () => {
+        setMode('ft4');
+        navigate('logbook');
+        setFtEnabled(false);
+        expect(router.view).toBe('logbook'); // the operator stays where they are
+        expect(router.mode).toBe('phone');
+        expect(window.location.pathname).toBe('/logbook');
+        expect(ftFeature.offNotice).toBe(true);
+    });
+
+    it('with it off, a click on FT8 or FT4 lands on Phone / CW with the note', () => {
+        setMode('phone');
+        setFtEnabled(false);
+        hook.mockClear();
+        setMode('ft8');
+        expect(router.mode).toBe('phone');
+        expect(window.location.pathname).toBe('/operate/phone');
+        expect(ftFeature.offNotice).toBe(true);
+        expect(hook).not.toHaveBeenCalled();
+    });
+
+    it('with it off, Back/Forward to /operate/ft8 lands on Phone / CW and corrects the URL', () => {
+        setMode('phone');
+        setFtEnabled(false);
+        window.history.pushState({}, '', '/operate/ft8');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+        expect(router.mode).toBe('phone');
+        expect(window.location.pathname).toBe('/operate/phone');
+        expect(ftFeature.offNotice).toBe(true);
+    });
+
+    it('turning it off while on Phone / CW needs no note', () => {
+        setMode('phone');
+        setFtEnabled(false);
+        expect(ftFeature.offNotice).toBe(false);
+    });
+
+    it('on, FT modes route as before', () => {
+        setMode('ft8');
+        expect(router.mode).toBe('ft8');
+        expect(ftFeature.offNotice).toBe(false);
+    });
+
+    it("the note's link opens Settings on the FT8 / FT4 tab, taken once", () => {
+        showFtSettings();
+        expect(router.view).toBe('config');
+        expect(takeSettingsTab()).toBe('ft8');
+        expect(takeSettingsTab()).toBeUndefined();
     });
 });

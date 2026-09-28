@@ -136,6 +136,9 @@ export interface StationContext {
     operator: string;
     logbookId: number;
     catEnabled: boolean;
+    /** The FT8/FT4 switch (config `ft8_enabled`). Off, the daemon registers no
+     *  FT8 routes, so the SPA hides the FT links and falls back to Phone / CW. */
+    ft8Enabled: boolean;
     modeMappings: Record<string, AdifModePair>;
     /** Bridge capability advertisement (BridgeInfo, ADR 0026): which rig-control
      *  ops the configured rig exposes (`set_freq`, `swap_vfo`, …), whether it
@@ -224,6 +227,7 @@ export async function fetchStationContext(): Promise<StationContext> {
         operator: '',
         logbookId: 0,
         catEnabled: false,
+        ft8Enabled: false,
         modeMappings: {},
         ops: [],
         tune: false,
@@ -271,6 +275,7 @@ export async function fetchStationContext(): Promise<StationContext> {
         operator: str(ls.operator),
         logbookId: typeof lb.id === 'number' ? lb.id : 0,
         catEnabled: br.enabled === true,
+        ft8Enabled: body.ft8_enabled === true,
         modeMappings: toModeMappings(br.mode_mappings),
         // ops/tune/rig_modes carry `omitempty`, so they're simply absent when
         // the rig exposes none — toStringArray/=== true default them closed.

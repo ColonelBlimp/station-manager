@@ -23,6 +23,7 @@ import Settings from './Settings.svelte';
 import { restartDaemon, fetchDaemonInstance, waitForDaemonBack } from '../api/restart';
 import { reloadPage } from '../utils/reload';
 import { draft, clearDraft } from '../operate/qso.svelte';
+import { showFtSettings, takeSettingsTab } from '../router.svelte';
 import { toastsState, _resetForTests } from '../ui/toasts.svelte';
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
@@ -216,5 +217,26 @@ describe('Settings restart — reload once the new daemon answers', () => {
 
         expect(vi.mocked(restartDaemon)).not.toHaveBeenCalled();
         expect(vi.mocked(reloadPage)).not.toHaveBeenCalled();
+    });
+});
+
+// Fresh-install ruling 2026-09-26: the tab is 'FT8 / FT4' (one switch serves
+// both), and the Phone / CW note's link opens Settings on it.
+describe('Settings — the FT8 / FT4 tab', () => {
+    afterEach(() => takeSettingsTab());
+
+    it('is named FT8 / FT4', () => {
+        render(Settings);
+        expect(screen.getByRole('button', { name: 'FT8 / FT4' })).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'FT8' })).toBeNull();
+    });
+
+    it('opens on FT8 / FT4 when the note asked for it, and on Station otherwise', () => {
+        showFtSettings();
+        const { unmount } = render(Settings);
+        expect(screen.getByRole('button', { name: 'FT8 / FT4' }).className).toMatch(/border-focus/);
+        unmount();
+        render(Settings); // the handoff was taken once
+        expect(screen.getByRole('button', { name: 'Station' }).className).toMatch(/border-focus/);
     });
 });
