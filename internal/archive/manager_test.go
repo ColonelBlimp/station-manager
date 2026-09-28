@@ -556,3 +556,56 @@ func TestDiagnoseCreatingArtefacts_NeverReportsACataloguedLegacyFile(t *testing.
 		t.Fatal("the live archive was logged as removable")
 	}
 }
+
+// ADR 0084 slice 2a: a created archive's contents are known at once — its one
+// logbook, 0 QSOs — recorded in the sidecar against the file as it was placed,
+// so Settings lists it without opening it. Derived state: a failed sidecar write
+// is logged, never a failed creation.
+func TestCreate_RecordsTheNewArchiveSummary(t *testing.T) {
+	m, cfgSvc, _ := testManager(t)
+	res, err := m.Create(context.Background(), CreateRequest{
+		RequestKey: "req-sum", Label: "Contest", LogbookName: "CQWW", LogbookCallsign: "7q5mlv",
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	sums, miss := ReadSummaries(SummariesPath(cfgSvc.Snapshot()))
+	if miss != "" {
+		t.Fatalf("sidecar: miss %q", miss)
+	}
+	got, ok := sums[res.Entry.ID]
+	if !ok || len(got.Logbooks) != 1 {
+		t.Fatalf("summary for the new archive = %+v (present %v); want one logbook", got, ok)
+	}
+	lb := got.Logbooks[0]
+	if lb.Name != "CQWW" || lb.Callsign != "7Q5MLV" || lb.QSOCount != 0 || !utils.IsValidUUIDv7(lb.UUID) {
+		t.Fatalf("logbook summary = %+v; want CQWW / 7Q5MLV / 0 QSOs with its UUID", lb)
+	}
+	now, err := SignatureOf(res.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Current(now) {
+		t.Fatalf("the new archive's summary reads stale against its own file (%+v vs %+v)", got.Signature, now)
+	}
+}
+
+func TestCreate_ASidecarFailureDoesNotFailTheCreation(t *testing.T) {
+	m, cfgSvc, buf := testManager(t)
+	// A directory where the sidecar belongs: every write to it fails.
+	if err := os.MkdirAll(SummariesPath(cfgSvc.Snapshot()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	res, err := m.Create(context.Background(), CreateRequest{
+		RequestKey: "req-nosum", Label: "Drill", LogbookName: "Drill", LogbookCallsign: "7Q5MLV",
+	})
+	if err != nil {
+		t.Fatalf("create failed on a sidecar fault: %v", err)
+	}
+	if !strings.Contains(buf.String(), "archive summary") {
+		t.Fatalf("the sidecar fault was not logged: %s", buf.String())
+	}
+	if _, err := os.Stat(res.Path); err != nil {
+		t.Fatalf("archive file: %v", err)
+	}
+}

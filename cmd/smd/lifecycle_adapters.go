@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -84,7 +85,10 @@ type daemon struct {
 	// creatingArtefacts names the .creating files an interrupted archive creation
 	// left in the managed directory, as diagnosed at this start (never archives).
 	creatingArtefacts []string
-	refPath           string
+	// activeLogbooks is what the active archive holds (ADR 0084): each logbook and
+	// its QSO count, built when the archive opens. Nil when that failed.
+	activeLogbooks []archive.LogbookSummary
+	refPath        string
 
 	// Fleet. bridge + ft8 are constructed pre-orchestrator; evidence + psk in their node Initialize.
 	bridge        *bridge.Service
@@ -165,7 +169,7 @@ func (d *daemon) registerLifecycle(c *iocdi.Container) (*orchestrator.Orchestrat
 		{NodeID: nodeLogging, Initialize: d.logger.Initialize, Start: d.startLogging,
 			Stop: stopErr(d.stopLogging), Rollback: rollbackVia(d.logger.Close)},
 		{NodeID: nodeLogDB, Initialize: d.db.Initialize, Start: d.startLogDB,
-			Stop: stopErr(d.db.Close), Rollback: rollbackVia(d.db.Close)},
+			Stop: d.stopLogDB, Rollback: rollbackVia(d.db.Close)},
 		{NodeID: nodeRefDB, Initialize: d.refDB.Initialize, Start: d.startRefDB,
 			Stop: stopErr(d.refDB.Close), Rollback: rollbackVia(d.refDB.Close)},
 		{NodeID: nodeQso, Initialize: d.initQso, Start: d.startQso},
@@ -286,6 +290,49 @@ func (d *daemon) startLogDB(context.Context) error {
 	return nil
 }
 
+// checkpointArchive is the pre-close checkpoint, a seam so a test can make it fail.
+var checkpointArchive = func(ctx context.Context, db *sqlite.Service) error {
+	return db.CheckpointTruncateWithContext(ctx)
+}
+
+// stopLogDB closes the log database. On a CLEAN shutdown — every writer has
+// drained by now: this node's dependents stop first — it first records what the
+// archive holds (ADR 0084): a final recount and the file's own identity, a
+// wal_checkpoint(TRUNCATE), the close, and only then the file's signature and the
+// sidecar merge, so the next start reads the summary as current. It works within
+// ctx, the orchestrator's shutdown budget. If the checkpoint does not complete,
+// WAL frames the main file's signature does not cover survive while the recount
+// included them, so nothing is recorded. Every summary step is derived state: a
+// failure is logged, never the close's error.
+func (d *daemon) stopLogDB(ctx context.Context) error {
+	if !d.cleanShutdown {
+		return d.db.Close()
+	}
+	logbooks, err := archive.BuildLogbookSummaries(ctx, d.db)
+	var identity sqlite.ArchiveIdentity
+	if err == nil {
+		identity, err = d.db.ArchiveIdentityWithContext(ctx)
+	}
+	if err == nil {
+		if err = checkpointArchive(ctx, d.db); err != nil {
+			err = fmt.Errorf("checkpoint before close did not complete: %w", err)
+		}
+	}
+	if cerr := d.db.Close(); cerr != nil {
+		return cerr
+	}
+	if err != nil {
+		d.logger.WarnWith().Err(err).Msg("archive: the archive summary was not recorded at close")
+		return nil
+	}
+	if rerr := archive.RecordClosedArchive(archive.SummariesPath(d.cfgSvc.Snapshot()),
+		identity.ArchiveUUID, d.paths.QSO, logbooks, time.Now()); rerr != nil {
+		d.logger.WarnWith().Err(rerr).Str("archive_id", identity.ArchiveUUID).
+			Msg("archive: could not record the archive summary at close")
+	}
+	return nil
+}
+
 // startRefDB opens + migrates reference.db, then secures both DB files (both connections are open by
 // now: this node waits on the log-DB node).
 func (d *daemon) startRefDB(context.Context) error {
@@ -351,6 +398,13 @@ func (d *daemon) startQso(context.Context) error {
 	// Leftovers of an interrupted archive creation are named at every start;
 	// they are never archives and the operator removes them (ADR 0071).
 	d.creatingArtefacts = archive.DiagnoseCreatingArtefacts(d.cfg, d.logger)
+	// What the active archive holds (ADR 0084), built on open: derived state, so a
+	// failure costs the summary, never the start.
+	if lbs, err := archive.BuildLogbookSummaries(context.Background(), d.db); err != nil {
+		d.logger.WarnWith().Err(err).Msg("archive: could not summarise the active archive")
+	} else {
+		d.activeLogbooks = lbs
+	}
 	return nil
 }
 

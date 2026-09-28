@@ -1,12 +1,17 @@
 package archive
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/config"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 // ADR 0084 slice 1: the archive summaries live in a discardable, versioned,
@@ -18,8 +23,8 @@ func sampleSummaries() Summaries {
 	return Summaries{
 		"0199aaaa-0000-7000-8000-000000000001": {
 			Logbooks: []LogbookSummary{
-				{UUID: "lb-1", Name: "Default", Callsign: "7Q5MLV", QSOs: 7468},
-				{UUID: "lb-2", Name: "Contest", Callsign: "7Q5MLV", QSOs: 1},
+				{UUID: "lb-1", Name: "Default", Callsign: "7Q5MLV", QSOCount: 7468},
+				{UUID: "lb-2", Name: "Contest", Callsign: "7Q5MLV", QSOCount: 1},
 			},
 			Signature: FileSignature{Dev: 1, Ino: 2, CtimeNs: 3, Size: 4, MtimeNs: 5},
 			TakenAt:   time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC),
@@ -50,7 +55,7 @@ func TestSummaries_RoundTripIsOwnerOnlyAndAtomic(t *testing.T) {
 		t.Fatalf("read: miss %q", miss)
 	}
 	id := "0199aaaa-0000-7000-8000-000000000001"
-	if len(got) != 1 || len(got[id].Logbooks) != 2 || got[id].Logbooks[0].QSOs != 7468 ||
+	if len(got) != 1 || len(got[id].Logbooks) != 2 || got[id].Logbooks[0].QSOCount != 7468 ||
 		got[id].Signature != want[id].Signature || !got[id].TakenAt.Equal(want[id].TakenAt) {
 		t.Fatalf("round trip = %+v, want %+v", got, want)
 	}
@@ -137,5 +142,99 @@ func TestWriteSummaries_SyncsTheDirectoryAfterTheRename(t *testing.T) {
 	}
 	if len(synced) != 1 || synced[0] != dir {
 		t.Fatalf("synced %v, want exactly the sidecar's directory", synced)
+	}
+}
+
+// ---- slice 2a: building a summary and merging it into the sidecar ----
+
+type fakeSummarySource struct {
+	logbooks []types.Logbook
+	counts   map[int64]int64
+	err      error
+}
+
+func (f fakeSummarySource) FetchAllLogbooksWithContext(context.Context) ([]types.Logbook, error) {
+	return f.logbooks, f.err
+}
+
+func (f fakeSummarySource) FetchQsoCountByLogbookIdWithContext(_ context.Context, id int64, _ string, _ bool) (int64, error) {
+	return f.counts[id], nil
+}
+
+func TestBuildLogbookSummaries_OneEntryPerLogbookWithItsCount(t *testing.T) {
+	src := fakeSummarySource{
+		logbooks: []types.Logbook{
+			{ID: 1, UUID: "lb-1", Name: "Default", Callsign: "7Q5MLV"},
+			{ID: 2, UUID: "lb-2", Name: "Contest", Callsign: "7Q5MLV"},
+		},
+		counts: map[int64]int64{1: 7468, 2: 1},
+	}
+	got, err := BuildLogbookSummaries(context.Background(), src)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	want := []LogbookSummary{
+		{UUID: "lb-1", Name: "Default", Callsign: "7Q5MLV", QSOCount: 7468},
+		{UUID: "lb-2", Name: "Contest", Callsign: "7Q5MLV", QSOCount: 1},
+	}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("summaries = %+v, want %+v", got, want)
+	}
+
+	none, err := BuildLogbookSummaries(context.Background(), fakeSummarySource{})
+	if err != nil || none == nil || len(none) != 0 {
+		t.Fatalf("no logbooks = %#v (%v); want an empty, non-nil list", none, err)
+	}
+	if _, err := BuildLogbookSummaries(context.Background(), fakeSummarySource{err: errors.New("boom")}); err == nil {
+		t.Fatal("a failed logbook read built a summary")
+	}
+}
+
+func TestMergeSummary_KeepsTheOtherArchives(t *testing.T) {
+	path := filepath.Join(t.TempDir(), SummariesFileName)
+	if err := WriteSummaries(path, sampleSummaries()); err != nil {
+		t.Fatal(err)
+	}
+	if err := MergeSummary(path, "other", ArchiveSummary{Logbooks: []LogbookSummary{{Name: "Drill", QSOCount: 3}}}); err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	got, miss := ReadSummaries(path)
+	if miss != "" || len(got) != 2 || got["other"].Logbooks[0].Name != "Drill" ||
+		got["0199aaaa-0000-7000-8000-000000000001"].Logbooks[0].QSOCount != 7468 {
+		t.Fatalf("after merge: %+v (miss %q)", got, miss)
+	}
+}
+
+// Derived state: an unreadable sidecar is replaced, not a reason to fail.
+func TestMergeSummary_ReplacesAnUnreadableFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), SummariesFileName)
+	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := MergeSummary(path, "a", ArchiveSummary{}); err != nil {
+		t.Fatalf("merge over a corrupt file: %v", err)
+	}
+	if got, miss := ReadSummaries(path); miss != "" || len(got) != 1 {
+		t.Fatalf("after merge: %+v (miss %q)", got, miss)
+	}
+}
+
+// Merges are read-modify-write; serialised, concurrent ones lose nothing.
+func TestMergeSummary_ConcurrentMergesLoseNothing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), SummariesFileName)
+	const n = 24
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if err := MergeSummary(path, fmt.Sprintf("archive-%02d", i), ArchiveSummary{}); err != nil {
+				t.Errorf("merge %d: %v", i, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+	if got, _ := ReadSummaries(path); len(got) != n {
+		t.Fatalf("%d archives after %d concurrent merges; entries were lost", len(got), n)
 	}
 }

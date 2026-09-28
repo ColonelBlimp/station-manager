@@ -1409,6 +1409,21 @@ the compatibility promise that a daemon at any slice boundary starts the existin
         or restore; serve the summaries on `GET /v1/qso-archives` (api-endpoints.md).
      3. **SPA + manual**: the nested logbook lines and the three states above; the
         manual's QSO Archives chapter.
+     **Slice 2 rulings (2026-09-28).** Wire: each `QsoArchiveView` gains `logbooks`
+     (`[{uuid, name, callsign, qso_count}]`, always present, `[]` when none) and
+     `contents_status` (`current` | `stale` | `unknown`). The sidecar is written only on
+     clean close, archive creation, and offline import and restore — never
+     periodically; every failure is non-fatal (derived state). Sidecar
+     read-modify-write merges are serialised so concurrent archive operations cannot
+     lose entries. Split: **2a** builds and persists internally (no API exposure until
+     2b keeps the active summary current) — on shutdown, after the writers drain: a
+     final recount, `wal_checkpoint(TRUNCATE)`, close, the signature, then the merge;
+     creation writes the new archive's summary. **2b** — a directly injected,
+     non-blocking dirty notifier called after QSO commits and from the logbook handlers
+     (not the hub: its subscriber can be evicted); a notification during a recount
+     schedules another; the active summary reads `stale` while dirty or recounting and
+     `current` only after a successful recount; then the API exposure. **2c** — `smd
+     import` / `smd restore` rebuild the target archive's summary after close.
 
 Deferred by the ADR and not planned here: archive delete, external attach CLI, in-process switch,
 cross-archive query.

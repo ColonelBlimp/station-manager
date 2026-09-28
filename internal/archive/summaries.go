@@ -1,15 +1,18 @@
 package archive
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/config"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 // Archive summaries (ADR 0084): what each archive holds — its logbooks, their
@@ -44,7 +47,7 @@ type LogbookSummary struct {
 	UUID     string `json:"uuid"`
 	Name     string `json:"name"`
 	Callsign string `json:"callsign"`
-	QSOs     int64  `json:"qsos"`
+	QSOCount int64  `json:"qso_count"`
 }
 
 // FileSignature identifies the archive file a summary was taken from. The
@@ -148,4 +151,55 @@ func WriteSummaries(path string, s Summaries) error {
 		return fmt.Errorf("sync %s: %w", dir, err)
 	}
 	return nil
+}
+
+// SummarySource is what a summary is built from: the open archive's logbooks
+// and their live QSO counts (the sqlite service satisfies it).
+type SummarySource interface {
+	FetchAllLogbooksWithContext(ctx context.Context) ([]types.Logbook, error)
+	FetchQsoCountByLogbookIdWithContext(ctx context.Context, id int64, missingFromPrefix string, notEmailed bool) (int64, error)
+}
+
+// BuildLogbookSummaries reads each logbook and its QSO count from an open
+// archive, in the store's logbook order. An archive with no logbooks is an
+// empty, non-nil list.
+func BuildLogbookSummaries(ctx context.Context, src SummarySource) ([]LogbookSummary, error) {
+	lbs, err := src.FetchAllLogbooksWithContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read logbooks: %w", err)
+	}
+	out := make([]LogbookSummary, 0, len(lbs))
+	for _, lb := range lbs {
+		n, err := src.FetchQsoCountByLogbookIdWithContext(ctx, lb.ID, "", false)
+		if err != nil {
+			return nil, fmt.Errorf("count QSOs in logbook %d: %w", lb.ID, err)
+		}
+		out = append(out, LogbookSummary{UUID: lb.UUID, Name: lb.Name, Callsign: lb.Callsign, QSOCount: n})
+	}
+	return out, nil
+}
+
+// mergeMu serialises the sidecar's read-modify-write: two archive operations
+// merging at once (a close and a creation, say) must not lose an entry.
+var mergeMu sync.Mutex
+
+// MergeSummary records one archive's summary in the sidecar, keeping every
+// other archive's. An unreadable sidecar is replaced (derived state).
+func MergeSummary(path, archiveID string, s ArchiveSummary) error {
+	mergeMu.Lock()
+	defer mergeMu.Unlock()
+	all, _ := ReadSummaries(path)
+	all[archiveID] = s
+	return WriteSummaries(path, all)
+}
+
+// RecordClosedArchive merges the summary of an archive whose file is closed and
+// final: the signature is taken now, so it must be called after the checkpoint
+// and close, or the next open reads the summary as stale.
+func RecordClosedArchive(sidecar, archiveID, dbPath string, logbooks []LogbookSummary, at time.Time) error {
+	sig, err := SignatureOf(dbPath)
+	if err != nil {
+		return fmt.Errorf("archive file signature: %w", err)
+	}
+	return MergeSummary(sidecar, archiveID, ArchiveSummary{Logbooks: logbooks, Signature: sig, TakenAt: at.UTC()})
 }

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
@@ -147,7 +148,8 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (CreateResult, 
 		return CreateResult{}, err
 	}
 
-	if err := m.build(ctx, snap, tmp, id, req); err != nil {
+	logbooks, err := m.build(ctx, snap, tmp, id, req)
+	if err != nil {
 		return CreateResult{}, m.withCleanup(err, tmp)
 	}
 	if err := os.Chmod(tmp, 0o600); err != nil {
@@ -178,6 +180,12 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (CreateResult, 
 		return CreateResult{}, m.withCleanup(fmt.Errorf("record the archive in the catalogue: %w", err), final)
 	}
 	res := CreateResult{Entry: entry, Path: final}
+	// The new archive's contents, known at once (ADR 0084): recorded against the
+	// file as placed, so Settings lists it without opening it. Derived state — a
+	// failure costs the summary ("not known until opened"), never the archive.
+	if err := RecordClosedArchive(SummariesPath(snap), id, final, logbooks, time.Now()); err != nil {
+		m.logger.WarnWith().Err(err).Str("archive_id", id).Msg("archive: could not record the new archive summary")
+	}
 	ev := m.logger.InfoWith().Str("archive_id", id).Str("label", req.Label).Str("path", final)
 	if dur == config.DurabilityUncertain {
 		ev = ev.Bool("durability_uncertain", true)
@@ -319,17 +327,19 @@ func ensureContainedManagedDir(workDir, dir string) error {
 
 // build migrates the .creating file with the LOG set only, seeds the initial
 // logbook and the identity, checks integrity, and closes to a single file.
-func (m *Manager) build(ctx context.Context, snap config.Config, tmp, id string, req CreateRequest) error {
+// It returns the new archive's logbook summaries, read before the close, for the
+// summaries sidecar (ADR 0084).
+func (m *Manager) build(ctx context.Context, snap config.Config, tmp, id string, req CreateRequest) ([]LogbookSummary, error) {
 	c := snap
 	c.Datastore.Path = tmp
 	c.Datastore.Options = nil
 	svc := &sqlite.Service{ConfigService: config.New(c), LoggerService: m.logger}
 	if err := svc.Initialize(); err != nil {
-		return fmt.Errorf("provision: %w", err)
+		return nil, fmt.Errorf("provision: %w", err)
 	}
 	svc.SetMigrationSets(sqlite.MigrationSetLog)
 	if err := svc.Open(); err != nil {
-		return fmt.Errorf("provision: open: %w", err)
+		return nil, fmt.Errorf("provision: open: %w", err)
 	}
 	closed := false
 	defer func() {
@@ -338,33 +348,37 @@ func (m *Manager) build(ctx context.Context, snap config.Config, tmp, id string,
 		}
 	}()
 	if err := svc.Migrate(); err != nil {
-		return fmt.Errorf("provision: migrate: %w", err)
+		return nil, fmt.Errorf("provision: migrate: %w", err)
 	}
 	lbID, err := svc.InsertLogbookWithContext(ctx, types.Logbook{Name: req.LogbookName, Callsign: req.LogbookCallsign})
 	if err != nil {
-		return fmt.Errorf("provision: seed logbook: %w", err)
+		return nil, fmt.Errorf("provision: seed logbook: %w", err)
 	}
 	if _, err := svc.WriteArchiveIdentityWithContext(ctx, id, lbID); err != nil {
-		return fmt.Errorf("provision: write identity: %w", err)
+		return nil, fmt.Errorf("provision: write identity: %w", err)
 	}
 	// A new archive starts with no destination bindings (ADR 0082 part 1); the
 	// seed decision is recorded here so no later start seeds it from config.
 	if _, err := svc.SeedLogbookDestinationsWithContext(ctx, nil); err != nil {
-		return fmt.Errorf("provision: record the empty binding seed: %w", err)
+		return nil, fmt.Errorf("provision: record the empty binding seed: %w", err)
 	}
 	if err := svc.CheckIntegrityWithContext(ctx); err != nil {
-		return fmt.Errorf("provision: %w", err)
+		return nil, fmt.Errorf("provision: %w", err)
+	}
+	logbooks, err := BuildLogbookSummaries(ctx, svc)
+	if err != nil {
+		return nil, fmt.Errorf("provision: summarise: %w", err)
 	}
 	closed = true
 	if err := svc.Close(); err != nil {
-		return fmt.Errorf("provision: close: %w", err)
+		return nil, fmt.Errorf("provision: close: %w", err)
 	}
 	for _, side := range []string{tmp + "-wal", tmp + "-shm"} {
 		if _, statErr := os.Stat(side); statErr == nil {
-			return fmt.Errorf("provision: %s survived the close; the file is not self-contained", filepath.Base(side))
+			return nil, fmt.Errorf("provision: %s survived the close; the file is not self-contained", filepath.Base(side))
 		}
 	}
-	return nil
+	return logbooks, nil
 }
 
 // withCleanup removes a failed creation's file (and sidecars) and folds a
