@@ -596,9 +596,7 @@ class RigsState {
         this.#ensureDraft();
         announceRigSaved(
             outcome,
-            nextDefault === undefined
-                ? 'Rig added.'
-                : 'Rig added as the default — restart the daemon to connect to it.'
+            nextDefault === undefined ? 'Rig added.' : 'Rig added — restart needed.'
         );
     }
 

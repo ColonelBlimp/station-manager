@@ -370,3 +370,21 @@ describe('RigsSection add-rig picker', () => {
         expect(rigsState.defaultRigId).toBe(1);
     });
 });
+
+// Operator 2026-09-28: the serial-port select had its own monospace, smaller
+// font; it matches the audio selects beside it.
+describe('RigsSection connection pickers', () => {
+    it('the serial port select uses the same font as the audio selects', async () => {
+        mockCluster({
+            default_rig_id: 1,
+            rigs: [{ id: 1, model: 'ftdx10', port: '/dev/a' }],
+            catalogue: [{ id: 'ftdx10', name: 'FTdx10' }],
+        });
+        render(RigsSection);
+        await vi.waitFor(() => expect(rigsState.loaded).toBe(true));
+        flushSync();
+        const port = screen.getByRole('combobox', { name: 'Serial port' });
+        expect(port.className).not.toMatch(/font-mono|text-xs/);
+        expect(port.className).toBe(screen.getByRole('combobox', { name: 'Model' }).className);
+    });
+});

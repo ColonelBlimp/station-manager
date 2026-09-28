@@ -67,6 +67,17 @@ describe('requiresCat (FT8 host)', () => {
         expect(screen.queryByRole('button', { name: /Confirm/i })).toBeNull();
     });
 
+    // Operator 2026-09-28: the note sits on the Mode / Frequency row, right-aligned
+    // and wrapping to two lines, instead of a row of its own that grew the card.
+    it('CAT off — the note shares the Mode / Frequency row, not a row below it', () => {
+        rig.cat = 'off';
+        render(RigPanel, { props: { requiresCat: true } });
+        const note = screen.getByText(/FT8 needs a live CAT connection/);
+        const row = screen.getByTestId('rig-row');
+        expect(row.contains(note)).toBe(true);
+        expect(row.contains(screen.getByLabelText('Frequency (MHz)'))).toBe(true);
+    });
+
     it('CAT lost — same lockout, keeps the lost pill, no go-manual Confirm', () => {
         rig.cat = 'lost';
         render(RigPanel, { props: { requiresCat: true } });

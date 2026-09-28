@@ -277,7 +277,7 @@
         </div>
     </div>
 
-    <div class="flex items-end gap-x-4">
+    <div class="flex items-end gap-x-4" data-testid="rig-row">
         <div>
             {#if ftReadout}
                 <span class="block text-sm font-medium text-ink">Mode</span>
@@ -408,6 +408,15 @@
                 </button>
             </div>
         {/if}
+
+        <!-- On the Mode / Frequency row, right-aligned and wrapping to two lines,
+             rather than a row of its own that grew the card (operator
+             2026-09-28). -->
+        {#if catMissing}
+            <p class="ml-auto max-w-72 self-center text-right text-xs text-muted">
+                {modeLabel} needs a live CAT connection — controls are disabled until the rig connects.
+            </p>
+        {/if}
     </div>
 
     <!-- Validation messages sit in their own row BELOW the inputs, so the error
@@ -418,16 +427,12 @@
 
     <!-- Gate affordances at the card's bottom-right: message ABOVE the button.
          Link status is in the tile header (title · rig name · CAT pill). -->
-    {#if catMissing || rigGate() === 'unconfirmed' || rigGate() === 'lost' || rig.linkError !== ''}
+    {#if (!catMissing && (rigGate() === 'unconfirmed' || rigGate() === 'lost')) || rig.linkError !== ''}
         <div class="mt-4 flex flex-col items-end gap-y-1">
             {#if rig.linkError !== ''}
                 <p class="max-w-56 text-right text-xs text-invalid">Bridge: {rig.linkError}</p>
             {/if}
-            {#if catMissing}
-                <p class="max-w-56 text-right text-xs text-muted">
-                    {modeLabel} needs a live CAT connection — controls are disabled until the rig connects.
-                </p>
-            {:else if rigGate() === 'unconfirmed' || rigGate() === 'lost'}
+            {#if !catMissing && (rigGate() === 'unconfirmed' || rigGate() === 'lost')}
                 <!-- Confirm (ADR 0044): the operator asserts the QSO settings
                      (band / mode / freq) are right — once per band per session.
                      Changing band does NOT move the freq, so this confirms the

@@ -374,7 +374,7 @@
                         <label class="flex flex-col gap-1">
                             <span class="text-sm font-medium text-ink">Serial port</span>
                             <select
-                                class="input font-mono text-xs"
+                                class="input"
                                 value={draft.port}
                                 disabled={rigsState.saving}
                                 onchange={(e) => rigsState.setDraftPort(e.currentTarget.value)}

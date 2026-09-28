@@ -886,6 +886,28 @@ describe('rigsState', () => {
         expect(rigsState.defaultRigId).toBe(1);
     });
 
+    // Operator 2026-09-28: plain words, no "daemon". The first rig does need a
+    // restart — the running daemon pinned "no rig" for MY_RIG at startup — but the
+    // toast says only that; a further rig is not the one in use, so none.
+    it('the first saved rig says a restart is needed; a further rig does not', async () => {
+        const info = vi.spyOn(toasts, 'info');
+        mockCluster({ default_rig_id: 0, rigs: [], catalogue: twoModels });
+        await rigsState.load();
+        rigsState.startNewRig('ftdx10');
+        await rigsState.save();
+        expect(info).toHaveBeenLastCalledWith('Rig added — restart needed.');
+
+        mockCluster({
+            default_rig_id: 1,
+            rigs: [{ id: 1, model: 'ftdx10', port: '' }],
+            catalogue: twoModels,
+        });
+        await rigsState.load();
+        rigsState.startNewRig('ic7300');
+        await rigsState.save();
+        expect(info).toHaveBeenLastCalledWith('Rig added.');
+    });
+
     it('Save of a new rig appends onto the FRESH list, preserving a concurrent add', async () => {
         let get = 0;
         const puts = mockCluster(() => {
