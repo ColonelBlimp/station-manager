@@ -67,9 +67,14 @@ func lifecycleNodes() []iocdi.Node {
 		// the hub), plus the enrichment refresher — so they DrainAfter {hub, enrichment}. If a consumer
 		// does not drain (e.g. a hung ft8), the hub is Skipped and the DB is Skipped too: left open for
 		// process reclamation rather than closed under a live writer (safer than the old deferred close).
-		{Name: nodeLogDB, DrainAfter: []string{nodeHub, nodeEnrichment, nodeEvents}},
+		// It also drains after qso, whose archive summary worker recounts it (ADR 0084): a qso
+		// node that does not stop leaves the DB open rather than closed beneath the worker.
+		{Name: nodeLogDB, DrainAfter: []string{nodeHub, nodeEnrichment, nodeEvents, nodeQso}},
 		{Name: nodeRefDB, StartAfter: []string{nodeLogDB}, DrainAfter: []string{nodeHub, nodeEnrichment}},
-		{Name: nodeQso},
+		// qso owns the active archive's summary worker (ADR 0084), notified by every QSO commit: it
+		// drains after the QSO writers — HTTP handlers and the FT8 completed-QSO logger — so their
+		// last commits are counted before the log DB's final recount.
+		{Name: nodeQso, DrainAfter: []string{nodeHTTP, nodeQsoLog}},
 
 		// The RF fence. Needs the logger + config; keys TX exclusively at shutdown.
 		{Name: nodeBridge, StartAfter: []string{nodeLogging, nodeConfig, nodeEvents}, StopPriority: iocdi.RFCritical},

@@ -578,7 +578,7 @@ func TestCreate_RecordsTheNewArchiveSummary(t *testing.T) {
 		t.Fatalf("summary for the new archive = %+v (present %v); want one logbook", got, ok)
 	}
 	lb := got.Logbooks[0]
-	if lb.Name != "CQWW" || lb.Callsign != "7Q5MLV" || lb.QSOCount != 0 || !utils.IsValidUUIDv7(lb.UUID) {
+	if lb.Name != "CQWW" || lb.Callsign != "7Q5MLV" || lb.QsoCount != 0 || !utils.IsValidUUIDv7(lb.UUID) {
 		t.Fatalf("logbook summary = %+v; want CQWW / 7Q5MLV / 0 QSOs with its UUID", lb)
 	}
 	now, err := SignatureOf(res.Path)

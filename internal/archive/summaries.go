@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/config"
+	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
@@ -42,13 +43,9 @@ func SummariesPath(cfg config.Config) string {
 	return filepath.Join(GlobalDir(cfg), SummariesFileName)
 }
 
-// LogbookSummary is one logbook as the archive held it.
-type LogbookSummary struct {
-	UUID     string `json:"uuid"`
-	Name     string `json:"name"`
-	Callsign string `json:"callsign"`
-	QSOCount int64  `json:"qso_count"`
-}
+// LogbookSummary is one logbook as the archive held it — the wire shape itself,
+// so the sidecar and GET /v1/qso-archives cannot drift apart.
+type LogbookSummary = types.QsoArchiveLogbook
 
 // FileSignature identifies the archive file a summary was taken from. The
 // comparison is device, inode and ctime: an ordinary write and any metadata
@@ -174,7 +171,7 @@ func BuildLogbookSummaries(ctx context.Context, src SummarySource) ([]LogbookSum
 		if err != nil {
 			return nil, fmt.Errorf("count QSOs in logbook %d: %w", lb.ID, err)
 		}
-		out = append(out, LogbookSummary{UUID: lb.UUID, Name: lb.Name, Callsign: lb.Callsign, QSOCount: n})
+		out = append(out, LogbookSummary{UUID: lb.UUID, Name: lb.Name, Callsign: lb.Callsign, QsoCount: n})
 	}
 	return out, nil
 }
@@ -202,4 +199,24 @@ func RecordClosedArchive(sidecar, archiveID, dbPath string, logbooks []LogbookSu
 		return fmt.Errorf("archive file signature: %w", err)
 	}
 	return MergeSummary(sidecar, archiveID, ArchiveSummary{Logbooks: logbooks, Signature: sig, TakenAt: at.UTC()})
+}
+
+// DiagnoseSummaries reads the sidecar once and logs why it cannot be used, if it
+// cannot: the daemon calls it at startup, so a missing, corrupt or unsupported
+// file is reported once rather than on every archive listing (ADR 0084). Missing
+// is ordinary — nothing has closed yet — so it is informational; corrupt or an
+// unsupported format is a warning. Either way the archives it would describe read
+// as unknown until they close or are created. Returns the reason ("" when usable).
+func DiagnoseSummaries(path string, logger *logging.Service) string {
+	_, miss := ReadSummaries(path)
+	switch miss {
+	case "":
+	case MissMissing:
+		logger.InfoWith().Str("reason", miss).
+			Msg("archive: no archive summaries recorded yet; archives read as unknown until they close or are created")
+	default:
+		logger.WarnWith().Str("reason", miss).
+			Msg("archive: the archive summaries file could not be used; it is rewritten as archives close or are created")
+	}
+	return miss
 }

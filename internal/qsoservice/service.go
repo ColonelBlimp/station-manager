@@ -3,6 +3,7 @@ package qsoservice
 import (
 	stderr "errors"
 	"sync"
+	"sync/atomic"
 
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
@@ -41,6 +42,23 @@ type Service struct {
 	// See config.ResolveMyRigFor / codex e539a080 P1.
 	activeRigID     int64
 	activeRigPinned bool
+
+	// commitNotifier is called after a commit that changes the archive's QSO
+	// counts (a store or a delete) — the active archive summary's dirty signal
+	// (ADR 0084). Injected directly, not via the hub, whose subscribers can be
+	// evicted; it must not block. Nil (offline commands, tests) is a no-op.
+	commitNotifier atomic.Pointer[func()]
+}
+
+// SetCommitNotifier wires the post-commit dirty signal (see commitNotifier).
+func (s *Service) SetCommitNotifier(f func()) {
+	s.commitNotifier.Store(&f)
+}
+
+func (s *Service) notifyCommitted() {
+	if f := s.commitNotifier.Load(); f != nil && *f != nil {
+		(*f)()
+	}
 }
 
 // refCacheDB returns the connection for best-effort enrichment-cache writes:

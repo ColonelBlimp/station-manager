@@ -68,6 +68,12 @@ type Manager struct {
 	// daemon wires it — the bindings routes then answer bindings_unavailable.
 	activeDB BindingsDB
 	atStart  BindingFingerprint
+
+	// activeSummary is the live summary of the ACTIVE archive (SetActiveSummary,
+	// ADR 0084); nil until wired, when the active archive lists from the sidecar
+	// like any other.
+	summaryMu     sync.Mutex
+	activeSummary ActiveSummaryView
 	// bindingsMu serializes every bindings PUT end to end (ApplyBindings).
 	// Separate from mu so a slow write never holds up activation.
 	bindingsMu sync.Mutex

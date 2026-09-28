@@ -85,10 +85,13 @@ type daemon struct {
 	// creatingArtefacts names the .creating files an interrupted archive creation
 	// left in the managed directory, as diagnosed at this start (never archives).
 	creatingArtefacts []string
-	// activeLogbooks is what the active archive holds (ADR 0084): each logbook and
-	// its QSO count, built when the archive opens. Nil when that failed.
-	activeLogbooks []archive.LogbookSummary
-	refPath        string
+	// activeSummary is what the active archive holds (ADR 0084), built when the
+	// archive opens and kept current by its worker (summaryStop / summaryDone),
+	// which QSO commits and logbook changes notify.
+	activeSummary *archive.ActiveSummary
+	summaryStop   context.CancelFunc
+	summaryDone   chan struct{}
+	refPath       string
 
 	// Fleet. bridge + ft8 are constructed pre-orchestrator; evidence + psk in their node Initialize.
 	bridge        *bridge.Service
@@ -172,7 +175,8 @@ func (d *daemon) registerLifecycle(c *iocdi.Container) (*orchestrator.Orchestrat
 			Stop: d.stopLogDB, Rollback: rollbackVia(d.db.Close)},
 		{NodeID: nodeRefDB, Initialize: d.refDB.Initialize, Start: d.startRefDB,
 			Stop: stopErr(d.refDB.Close), Rollback: rollbackVia(d.refDB.Close)},
-		{NodeID: nodeQso, Initialize: d.initQso, Start: d.startQso},
+		{NodeID: nodeQso, Initialize: d.initQso, Start: d.startQso,
+			Stop: stopVoid(d.stopArchiveSummary), Rollback: rollbackVia(func() error { d.stopArchiveSummary(); return nil })},
 
 		// --- Fleet + promoted infra ---
 		{NodeID: nodeBridge, Active: d.bridge.Enabled, Initialize: d.bridge.Initialize,
@@ -290,6 +294,46 @@ func (d *daemon) startLogDB(context.Context) error {
 	return nil
 }
 
+// summarySource is what the active archive's summary RECOUNTS from (the opening
+// build reads the database directly), a seam so a test can hold a recount.
+var summarySource = func(d *daemon) archive.SummarySource { return d.db }
+
+// startArchiveSummary builds what the active archive holds (ADR 0084) and starts
+// the worker that keeps it current: QSO commits and logbook changes notify it,
+// directly and without blocking. Keyed by the file's own archive id. Derived
+// state: a failed build starts "unknown" and is recounted, never a failed start.
+func (d *daemon) startArchiveSummary() {
+	ctx := context.Background()
+	// Once per start: an unusable sidecar costs only other archives' contents.
+	archive.DiagnoseSummaries(archive.SummariesPath(d.cfg), d.logger)
+	id := d.cfg.ActiveQsoArchiveID
+	if ident, err := d.db.ArchiveIdentityWithContext(ctx); err == nil {
+		id = ident.ArchiveUUID
+	}
+	lbs, err := archive.BuildLogbookSummaries(ctx, d.db)
+	if err != nil {
+		d.logger.WarnWith().Err(err).Msg("archive: could not summarise the active archive")
+	}
+	d.activeSummary = archive.NewActiveSummary(id, summarySource(d), lbs, err)
+	d.activeSummary.Logger = d.logger
+	d.qso.SetCommitNotifier(d.activeSummary.Notify)
+	runCtx, stop := context.WithCancel(context.Background())
+	d.summaryStop, d.summaryDone = stop, make(chan struct{})
+	go func() {
+		defer close(d.summaryDone)
+		d.activeSummary.Run(runCtx)
+	}()
+}
+
+// stopArchiveSummary ends the summary worker before the log database closes (this
+// node's Stop runs before the log DB's).
+func (d *daemon) stopArchiveSummary() {
+	if d.summaryStop != nil {
+		d.summaryStop()
+		<-d.summaryDone
+	}
+}
+
 // checkpointArchive is the pre-close checkpoint, a seam so a test can make it fail.
 var checkpointArchive = func(ctx context.Context, db *sqlite.Service) error {
 	return db.CheckpointTruncateWithContext(ctx)
@@ -398,13 +442,7 @@ func (d *daemon) startQso(context.Context) error {
 	// Leftovers of an interrupted archive creation are named at every start;
 	// they are never archives and the operator removes them (ADR 0071).
 	d.creatingArtefacts = archive.DiagnoseCreatingArtefacts(d.cfg, d.logger)
-	// What the active archive holds (ADR 0084), built on open: derived state, so a
-	// failure costs the summary, never the start.
-	if lbs, err := archive.BuildLogbookSummaries(context.Background(), d.db); err != nil {
-		d.logger.WarnWith().Err(err).Msg("archive: could not summarise the active archive")
-	} else {
-		d.activeLogbooks = lbs
-	}
+	d.startArchiveSummary()
 	return nil
 }
 
@@ -897,6 +935,10 @@ func (d *daemon) initHTTP() error {
 	// this generation started with (restart_required is judged against them).
 	d.archives.SetActiveBindings(d.db, d.bindingsAtStart)
 	d.server.SetArchiveManager(d.archives)
+	if d.activeSummary != nil {
+		d.archives.SetActiveSummary(d.activeSummary)
+		d.server.SetArchiveSummaryNotifier(d.activeSummary.Notify)
+	}
 	return nil
 }
 

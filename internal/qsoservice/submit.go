@@ -519,6 +519,7 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 		QsoID:     qsoID,
 		LogbookID: logbookID,
 	})
+	s.notifyCommitted()
 
 	// Best-effort contacted_station upsert — the second write path
 	// per ADR 0017 #10. Outside the QSO transaction (cache writes

@@ -117,6 +117,7 @@ func (s *Service) Delete(ctx context.Context, existing types.Qso, src source.Sou
 		QsoID:     existing.ID,
 		LogbookID: logbookID,
 	})
+	s.notifyCommitted()
 
 	return nil
 }

@@ -237,6 +237,16 @@ func TestLifecycleGraph_DrainEdgesAreSafetyOnly(t *testing.T) {
 			t.Errorf("%s must DrainAfter {hub, enrichment} (consumers write it during shutdown); got %v", db, drainAfter[db])
 		}
 	}
+	// ADR 0084: the qso node owns the archive summary worker, which recounts the
+	// log DB after every QSO commit. It drains after the QSO writers (HTTP, the FT8
+	// completed-QSO logger) so their last commits are counted, and the log DB
+	// drains after it so the worker never recounts a closed database.
+	if !has(nodeQso, nodeHTTP) || !has(nodeQso, nodeQsoLog) {
+		t.Errorf("qso must DrainAfter its QSO writers {http, qso-log}; got %v", drainAfter[nodeQso])
+	}
+	if !has(nodeLogDB, nodeQso) {
+		t.Errorf("log-db must DrainAfter qso (the summary worker reads it); got %v", drainAfter[nodeLogDB])
+	}
 	// PSK drains after ft8 (ft8's decode loop feeds AddSpot until ft8 stops).
 	if !has(nodePsk, nodeFt8) {
 		t.Errorf("psk must DrainAfter ft8 (or last decodes drop); got %v", drainAfter[nodePsk])

@@ -84,6 +84,22 @@ type QsoArchiveView struct {
 	// write, not a "last opened" — nothing tracks that.
 	SizeBytes  int64  `json:"size_bytes,omitempty"`
 	ModifiedAt string `json:"modified_at,omitempty"`
+	// Logbooks is what the archive holds (ADR 0084): each logbook with its QSO
+	// count, never null — [] when nothing is known or there are none. For the
+	// active archive it is kept current as QSOs are logged; for any other it is
+	// the summary recorded when that archive last closed.
+	Logbooks []QsoArchiveLogbook `json:"logbooks"`
+	// ContentsStatus says whether Logbooks can be trusted: "current", "stale"
+	// (the last known; the archive changed since), or "unknown" (no summary yet).
+	ContentsStatus string `json:"contents_status"`
+}
+
+// QsoArchiveLogbook is one logbook in an archive's summary (ADR 0084).
+type QsoArchiveLogbook struct {
+	UUID     string `json:"uuid"`
+	Name     string `json:"name"`
+	Callsign string `json:"callsign"`
+	QsoCount int64  `json:"qso_count"`
 }
 
 // QsoArchiveCreated is the POST /v1/qso-archives response: the archive, and

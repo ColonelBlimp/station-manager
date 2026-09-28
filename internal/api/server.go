@@ -92,6 +92,10 @@ type Server struct {
 	// archives is the QSO archive port (ADR 0071). Injected by cmd/smd via
 	// SetArchiveManager; nil → the /v1/qso-archives routes answer 503.
 	archives ArchiveManager
+	// archiveSummaryNotifier is the active archive summary's dirty signal (ADR
+	// 0084): called after a logbook is created, renamed or deleted. Non-blocking;
+	// nil until SetArchiveSummaryNotifier.
+	archiveSummaryNotifier atomic.Pointer[func()]
 	// shutdownCh is closed by Shutdown to signal long-lived handlers
 	// (the SSE event stream) that they should return promptly. r.Context()
 	// alone does NOT fire on http.Server.Shutdown — only on connection
@@ -241,6 +245,17 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 // from a saved ft8_enabled still awaiting a restart.
 func ft8RoutesServed(svc *ft8.Service) bool {
 	return svc != nil && svc.Enabled()
+}
+
+// SetArchiveSummaryNotifier wires the active archive summary's dirty signal.
+func (s *Server) SetArchiveSummaryNotifier(f func()) {
+	s.archiveSummaryNotifier.Store(&f)
+}
+
+func (s *Server) notifyArchiveSummary() {
+	if f := s.archiveSummaryNotifier.Load(); f != nil && *f != nil {
+		(*f)()
+	}
 }
 
 func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *logging.Service, br *bridge.Service, ft8Svc *ft8.Service) *http.ServeMux {

@@ -90,6 +90,7 @@ func (s *Server) handleCreateLogbook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.notifyArchiveSummary()
 	s.writeJSON(w, http.StatusCreated, map[string]any{"id": id})
 }
 
@@ -157,6 +158,7 @@ func (s *Server) handleUpdateLogbook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.notifyArchiveSummary()
 	// Respond with the COMMITTED row, not the stale pre-update object.
 	s.writeJSON(w, http.StatusOK, updated)
 }
@@ -193,6 +195,7 @@ func (s *Server) handleDeleteLogbook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.notifyArchiveSummary()
 	w.WriteHeader(http.StatusNoContent)
 }
 

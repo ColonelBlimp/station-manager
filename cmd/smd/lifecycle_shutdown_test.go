@@ -139,6 +139,11 @@ func TestLifecycleShutdown_RealGraphHappyPartialOrder(t *testing.T) {
 	before(nodeHTTP, nodeHub)
 	before(nodeWorkers, nodeHub)
 	before(nodeQsoLog, nodeHub)
+	// ADR 0084: the qso node (the archive summary worker) stops after the QSO
+	// writers and before the log DB it recounts.
+	before(nodeHTTP, nodeQso)
+	before(nodeQsoLog, nodeQso)
+	before(nodeQso, nodeLogDB)
 	// The databases outlive every shutdown-time writer.
 	for _, w := range []string{nodeFt8, nodeQsoLog, nodeHTTP, nodeWorkers, nodeHub, nodeEnrichment} {
 		before(w, nodeLogDB)
@@ -188,6 +193,53 @@ func TestLifecycleShutdown_RealGraphFt8FailSkipsDependentsAndLogging(t *testing.
 	}
 	if indexIn(rec.snapshot(), nodeLogging) >= 0 {
 		t.Error("logging Stop ran though logging was Skipped; the logger must be left open")
+	}
+}
+
+// ADR 0084: a qso node that fails to stop may leave the summary worker reading the
+// log DB, so the log DB is Skipped and left open — never closed beneath it. And
+// the qso node itself waits for HTTP: a writer that did not drain skips it.
+func TestLifecycleShutdown_QsoStopFailureLeavesTheLogDBOpen(t *testing.T) {
+	rec, o := realGraphOrch(t, map[string]func(context.Context) error{
+		nodeQso: func(context.Context) error { return errors.New("summary worker stuck") },
+	})
+	rep := o.Shutdown(2*time.Second, nil)
+	if oc := outcomeOf(rep, nodeQso); oc.Result != orchestrator.Failed {
+		t.Fatalf("qso outcome = %+v, want Failed", oc)
+	}
+	if oc := outcomeOf(rep, nodeLogDB); oc.Result != orchestrator.Skipped || indexIn(oc.BlockedBy, nodeQso) < 0 {
+		t.Errorf("log-db outcome = %+v, want Skipped BlockedBy [qso]", oc)
+	}
+	if indexIn(rec.snapshot(), nodeLogDB) >= 0 {
+		t.Error("log-db Stop ran beneath a qso node that did not stop")
+	}
+}
+
+func TestLifecycleShutdown_HTTPStopFailureSkipsTheQsoNode(t *testing.T) {
+	rec, o := realGraphOrch(t, map[string]func(context.Context) error{
+		nodeHTTP: func(context.Context) error { return errors.New("http stuck") },
+	})
+	rep := o.Shutdown(2*time.Second, nil)
+	if oc := outcomeOf(rep, nodeQso); oc.Result != orchestrator.Skipped || indexIn(oc.BlockedBy, nodeHTTP) < 0 {
+		t.Errorf("qso outcome = %+v, want Skipped BlockedBy [http]", oc)
+	}
+	if indexIn(rec.snapshot(), nodeQso) >= 0 {
+		t.Error("the qso node stopped while an HTTP writer may still commit QSOs")
+	}
+}
+
+// The FT8 completed-QSO logger is a QSO writer too: if it does not drain, the qso
+// node (the summary worker) is Skipped.
+func TestLifecycleShutdown_QsoLogStopFailureSkipsTheQsoNode(t *testing.T) {
+	rec, o := realGraphOrch(t, map[string]func(context.Context) error{
+		nodeQsoLog: func(context.Context) error { return errors.New("qso-log stuck") },
+	})
+	rep := o.Shutdown(2*time.Second, nil)
+	if oc := outcomeOf(rep, nodeQso); oc.Result != orchestrator.Skipped || indexIn(oc.BlockedBy, nodeQsoLog) < 0 {
+		t.Errorf("qso outcome = %+v, want Skipped BlockedBy [qso-log]", oc)
+	}
+	if indexIn(rec.snapshot(), nodeQso) >= 0 {
+		t.Error("the qso node stopped while the FT8 QSO logger may still commit")
 	}
 }
 

@@ -33,11 +33,60 @@ func (m *Manager) SetActivation(tx, rig Seal, restart func() error) {
 // last_activation_error — never active (ADR 0071 honest state).
 func (m *Manager) List() []types.QsoArchiveView {
 	snap := m.cfg.Snapshot()
+	sums, _ := ReadSummaries(SummariesPath(snap))
+	active := m.liveSummary()
 	out := make([]types.QsoArchiveView, 0, len(snap.QsoArchives))
 	for _, e := range snap.QsoArchives {
-		out = append(out, viewOf(snap, e))
+		v := viewOf(snap, e)
+		v.Logbooks, v.ContentsStatus = contentsOf(snap, e, sums, active)
+		out = append(out, v)
 	}
 	return out
+}
+
+// ActiveSummaryView is the live summary of the active archive (ActiveSummary).
+type ActiveSummaryView interface {
+	Snapshot() (archiveID string, logbooks []LogbookSummary, status string)
+}
+
+// SetActiveSummary wires the active archive's live summary (ADR 0084 slice 2b).
+func (m *Manager) SetActiveSummary(a ActiveSummaryView) {
+	m.summaryMu.Lock()
+	defer m.summaryMu.Unlock()
+	m.activeSummary = a
+}
+
+func (m *Manager) liveSummary() ActiveSummaryView {
+	m.summaryMu.Lock()
+	defer m.summaryMu.Unlock()
+	return m.activeSummary
+}
+
+// contentsOf is what an archive holds and whether that can be trusted: the
+// active archive's live summary when the tracker is for it; otherwise the
+// sidecar's, current only while the file still matches the signature it was
+// taken against. Never nil logbooks.
+func contentsOf(snap config.Config, e types.QsoArchiveConfig, sums Summaries, active ActiveSummaryView) ([]types.QsoArchiveLogbook, string) {
+	if active != nil && e.ID == snap.ActiveQsoArchiveID {
+		if id, lbs, status := active.Snapshot(); id == e.ID {
+			if lbs == nil {
+				lbs = []types.QsoArchiveLogbook{}
+			}
+			return lbs, status
+		}
+	}
+	s, ok := sums[e.ID]
+	if !ok {
+		return []types.QsoArchiveLogbook{}, ContentsUnknown
+	}
+	lbs := s.Logbooks
+	if lbs == nil {
+		lbs = []types.QsoArchiveLogbook{}
+	}
+	if now, err := SignatureOf(PathFor(snap, e)); err == nil && s.Current(now) {
+		return lbs, ContentsCurrent
+	}
+	return lbs, ContentsStale
 }
 
 func viewOf(snap config.Config, e types.QsoArchiveConfig) types.QsoArchiveView {
@@ -65,7 +114,11 @@ func (m *Manager) CreateArchive(ctx context.Context, req types.QsoArchiveCreateR
 	if err != nil {
 		return types.QsoArchiveCreated{}, err
 	}
-	return types.QsoArchiveCreated{Archive: viewOf(m.cfg.Snapshot(), res.Entry), Reused: res.Reused}, nil
+	snap := m.cfg.Snapshot()
+	v := viewOf(snap, res.Entry)
+	sums, _ := ReadSummaries(SummariesPath(snap))
+	v.Logbooks, v.ContentsStatus = contentsOf(snap, res.Entry, sums, m.liveSummary())
+	return types.QsoArchiveCreated{Archive: v, Reused: res.Reused}, nil
 }
 
 // Activate requests that the next daemon start serve archive `id` (ADR 0071):

@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/config"
+	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
@@ -23,8 +25,8 @@ func sampleSummaries() Summaries {
 	return Summaries{
 		"0199aaaa-0000-7000-8000-000000000001": {
 			Logbooks: []LogbookSummary{
-				{UUID: "lb-1", Name: "Default", Callsign: "7Q5MLV", QSOCount: 7468},
-				{UUID: "lb-2", Name: "Contest", Callsign: "7Q5MLV", QSOCount: 1},
+				{UUID: "lb-1", Name: "Default", Callsign: "7Q5MLV", QsoCount: 7468},
+				{UUID: "lb-2", Name: "Contest", Callsign: "7Q5MLV", QsoCount: 1},
 			},
 			Signature: FileSignature{Dev: 1, Ino: 2, CtimeNs: 3, Size: 4, MtimeNs: 5},
 			TakenAt:   time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC),
@@ -55,7 +57,7 @@ func TestSummaries_RoundTripIsOwnerOnlyAndAtomic(t *testing.T) {
 		t.Fatalf("read: miss %q", miss)
 	}
 	id := "0199aaaa-0000-7000-8000-000000000001"
-	if len(got) != 1 || len(got[id].Logbooks) != 2 || got[id].Logbooks[0].QSOCount != 7468 ||
+	if len(got) != 1 || len(got[id].Logbooks) != 2 || got[id].Logbooks[0].QsoCount != 7468 ||
 		got[id].Signature != want[id].Signature || !got[id].TakenAt.Equal(want[id].TakenAt) {
 		t.Fatalf("round trip = %+v, want %+v", got, want)
 	}
@@ -174,8 +176,8 @@ func TestBuildLogbookSummaries_OneEntryPerLogbookWithItsCount(t *testing.T) {
 		t.Fatalf("build: %v", err)
 	}
 	want := []LogbookSummary{
-		{UUID: "lb-1", Name: "Default", Callsign: "7Q5MLV", QSOCount: 7468},
-		{UUID: "lb-2", Name: "Contest", Callsign: "7Q5MLV", QSOCount: 1},
+		{UUID: "lb-1", Name: "Default", Callsign: "7Q5MLV", QsoCount: 7468},
+		{UUID: "lb-2", Name: "Contest", Callsign: "7Q5MLV", QsoCount: 1},
 	}
 	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("summaries = %+v, want %+v", got, want)
@@ -195,12 +197,12 @@ func TestMergeSummary_KeepsTheOtherArchives(t *testing.T) {
 	if err := WriteSummaries(path, sampleSummaries()); err != nil {
 		t.Fatal(err)
 	}
-	if err := MergeSummary(path, "other", ArchiveSummary{Logbooks: []LogbookSummary{{Name: "Drill", QSOCount: 3}}}); err != nil {
+	if err := MergeSummary(path, "other", ArchiveSummary{Logbooks: []LogbookSummary{{Name: "Drill", QsoCount: 3}}}); err != nil {
 		t.Fatalf("merge: %v", err)
 	}
 	got, miss := ReadSummaries(path)
 	if miss != "" || len(got) != 2 || got["other"].Logbooks[0].Name != "Drill" ||
-		got["0199aaaa-0000-7000-8000-000000000001"].Logbooks[0].QSOCount != 7468 {
+		got["0199aaaa-0000-7000-8000-000000000001"].Logbooks[0].QsoCount != 7468 {
 		t.Fatalf("after merge: %+v (miss %q)", got, miss)
 	}
 }
@@ -236,5 +238,45 @@ func TestMergeSummary_ConcurrentMergesLoseNothing(t *testing.T) {
 	wg.Wait()
 	if got, _ := ReadSummaries(path); len(got) != n {
 		t.Fatalf("%d archives after %d concurrent merges; entries were lost", len(got), n)
+	}
+}
+
+// Acceptance criterion 7 (ADR 0084): an unusable sidecar never affects startup,
+// and the log says why — once, at start (List reads it on every request and must
+// not repeat it). Missing is ordinary (nothing has closed yet); corrupt or an
+// unsupported format is a warning.
+func TestDiagnoseSummaries_SaysWhyOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, wantLevel, wantReason string
+	}{
+		{"missing", "", `"level":"info"`, MissMissing},
+		{"corrupt", "{not json", `"level":"warn"`, MissCorrupt},
+		{"unsupported", `{"format": 99}`, `"level":"warn"`, MissUnsupported},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), SummariesFileName)
+			if tc.body != "" {
+				if err := os.WriteFile(path, []byte(tc.body), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			buf := &strings.Builder{}
+			if got := DiagnoseSummaries(path, logging.NewForWriter(buf)); got != tc.wantReason {
+				t.Fatalf("reason = %q, want %q", got, tc.wantReason)
+			}
+			out := buf.String()
+			if strings.Count(out, "\n") != 1 || !strings.Contains(out, tc.wantLevel) || !strings.Contains(out, tc.wantReason) {
+				t.Fatalf("log = %q; want one %s line naming %q", out, tc.wantLevel, tc.wantReason)
+			}
+		})
+	}
+	// A usable file says nothing.
+	path := filepath.Join(t.TempDir(), SummariesFileName)
+	if err := WriteSummaries(path, sampleSummaries()); err != nil {
+		t.Fatal(err)
+	}
+	buf := &strings.Builder{}
+	if got := DiagnoseSummaries(path, logging.NewForWriter(buf)); got != "" || buf.Len() != 0 {
+		t.Fatalf("a usable sidecar: reason %q, log %q; want neither", got, buf.String())
 	}
 }

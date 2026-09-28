@@ -902,6 +902,7 @@ func (s *Server) seedDefaultLogbook(r *http.Request, defaultID int64, callsign s
 		return 0, err
 	}
 	s.recordDefaultInArchive(r, id)
+	s.notifyArchiveSummary()
 	return id, nil
 }
 
