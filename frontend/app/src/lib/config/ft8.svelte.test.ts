@@ -1009,7 +1009,7 @@ describe('ft8 settings — a restart owed after saving', () => {
         expect(ft8SettingsState.restartOwed).toBe(false);
     });
 
-    function timedOutThen(reconcile: Body): void {
+    function timedOutThen(reconcile: Body, initial: Body = CONFIG): void {
         let gets = 0;
         vi.stubGlobal(
             'fetch',
@@ -1021,7 +1021,7 @@ describe('ft8 settings — a restart owed after saving', () => {
                 }
                 gets++;
                 return Promise.resolve(
-                    new Response(JSON.stringify(gets === 1 ? CONFIG : reconcile), {
+                    new Response(JSON.stringify(gets === 1 ? initial : reconcile), {
                         status: 200,
                         headers: { 'Content-Type': 'application/json' },
                     })
@@ -1043,5 +1043,22 @@ describe('ft8 settings — a restart owed after saving', () => {
         ft8SettingsState.draft.enabled = false;
         await ft8SettingsState.save();
         expect(ft8SettingsState.restartOwed).toBe(false);
+    });
+
+    // Clean-room review 08bef531 P2: a fully committed save reads 'some' when the
+    // daemon clamps a live field (row cap 5 → 10). The switch DID change, so the
+    // restart is owed — and a retry would carry only the live edit, so losing it
+    // here would lose it for good.
+    it('RO5: a timed-out save judged "some" still owes the restart when a startup field moved', async () => {
+        const atFloor = { ...CONFIG, ft8_display: { ...CONFIG.ft8_display, history_max: 10 } };
+        // The row cap starts at the daemon's floor, so the clamped 5 comes back as
+        // the unchanged 10 — the cap did not move, the switch did: 'some'.
+        timedOutThen({ ...atFloor, ft8_enabled: false }, atFloor);
+        await ft8SettingsState.load();
+        ft8SettingsState.draft.enabled = false;
+        ft8SettingsState.draft.historyMax = '5';
+        await ft8SettingsState.save();
+        expect(lastToast()).toMatch(/could not be confirmed/i); // the 'some' verdict
+        expect(ft8SettingsState.restartOwed).toBe(true);
     });
 });

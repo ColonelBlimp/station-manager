@@ -137,6 +137,21 @@ function draftFrom(s: Ft8Settings): Ft8Draft {
     };
 }
 
+/** Whether two drafts differ in a field the daemon reads only at startup — the
+ *  FT8 switch, PSK Reporter or the decode log. The display prefs and the repeat
+ *  cap apply live, so they never count. One definition for "this edit needs a
+ *  restart" and "the daemon's change owes one". */
+function restartFieldsDiffer(a: Ft8Draft, b: Ft8Draft): boolean {
+    return (
+        a.enabled !== b.enabled ||
+        a.pskEnabled !== b.pskEnabled ||
+        a.pskHost !== b.pskHost ||
+        a.pskPort !== b.pskPort ||
+        a.decodeLogEnabled !== b.decodeLogEnabled ||
+        a.decodeLogPath !== b.decodeLogPath
+    );
+}
+
 class Ft8SettingsState {
     loading = $state(false);
     saving = $state(false);
@@ -178,18 +193,9 @@ class Ft8SettingsState {
      *  Settings remount (load) is not a restart. */
     restartOwed = $state(false);
 
-    restartRequired = $derived.by(() => {
-        const base = JSON.parse(this.#pristine) as Ft8Draft;
-        const d = this.draft;
-        return (
-            d.enabled !== base.enabled ||
-            d.pskEnabled !== base.pskEnabled ||
-            d.pskHost !== base.pskHost ||
-            d.pskPort !== base.pskPort ||
-            d.decodeLogEnabled !== base.decodeLogEnabled ||
-            d.decodeLogPath !== base.decodeLogPath
-        );
-    });
+    restartRequired = $derived.by(() =>
+        restartFieldsDiffer(this.draft, JSON.parse(this.#pristine) as Ft8Draft)
+    );
 
     async load(): Promise<void> {
         if (this.loading) return;
@@ -344,9 +350,15 @@ class Ft8SettingsState {
         // the daemon may no longer hold.
         this.draft = mergeEdits(before, sent, this.draft, stored, verdict);
         this.#pristine = JSON.stringify(stored);
+        // A restart is owed whenever the daemon now holds a startup-read field
+        // other than the one it started from — whatever the verdict. A save that
+        // fully committed reads 'some' when the daemon normalises a live field
+        // (it clamps the row cap), and a retry would then carry only live edits,
+        // so tying this to 'all' lost the reminder for good (clean-room review
+        // 08bef531 P2).
+        if (restartFieldsDiffer(before, stored)) this.restartOwed = true;
         switch (verdict) {
             case 'all':
-                if (needsRestart) this.restartOwed = true;
                 toasts.warn(
                     needsRestart
                         ? 'Save timed out, but the daemon does have your FT8 settings — restart the daemon to apply them.'
