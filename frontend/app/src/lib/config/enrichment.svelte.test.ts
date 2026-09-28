@@ -790,4 +790,16 @@ describe('enrichmentState — a restart owed after saving', () => {
         await enrichmentState.save();
         expect(enrichmentState.restartOwed).toBe(false);
     });
+
+    // Clean-room review bd6765f8 P2: a replaced password is masked on the re-read
+    // (password_set true before and after), so a stored replacement looks exactly
+    // like one that never landed. The restart is owed in case it did.
+    it('EO4: a timed-out save that carried a new password owes the restart, the masked re-read notwithstanding', async () => {
+        vi.spyOn(toasts, 'warn').mockImplementation(() => 0);
+        stubReconcile([CONFIG, CONFIG]); // masked: indistinguishable from before
+        await enrichmentState.load();
+        enrichmentState.setPassword('qrzlookupservice', 'new-secret');
+        await enrichmentState.save();
+        expect(enrichmentState.restartOwed).toBe(true);
+    });
 });

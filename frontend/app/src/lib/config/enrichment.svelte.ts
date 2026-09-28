@@ -395,7 +395,14 @@ class EnrichmentState {
         const stored = draftFrom(out.lookup);
         // Whatever the verdict, the daemon now holding something other than the
         // pre-save baseline is a change the running lookups have not picked up.
-        if (JSON.stringify(stored) !== JSON.stringify(before)) this.restartOwed = true;
+        // A replacement password is invisible to that comparison — the re-read is
+        // masked, so password_set reads true either way — so a save that carried
+        // one may have stored it: owe the restart rather than lose the notice
+        // (clean-room review bd6765f8 P2).
+        const sentPassword = sent.providers.some((p) => p.password !== '');
+        if (sentPassword || JSON.stringify(stored) !== JSON.stringify(before)) {
+            this.restartOwed = true;
+        }
         const merged = mergeEnrichmentDraft(before, sent, this.draft, stored);
         this.#apply(out.lookup); // baseline ← stored
         this.draft = merged; // restore the operator's merged edits over stored
