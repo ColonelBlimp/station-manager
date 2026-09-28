@@ -52,6 +52,7 @@ func init() {
 		Name:              ServiceName,
 		DisplayName:       "Hamnut",
 		Help:              "Resolves DXCC / CQ / ITU zones from the callsign prefix. Free and anonymous — no credentials needed.",
+		Summary:           "country and zones, free",
 		Kind:              lookupdef.KindCountry,
 		NeedsCredentials:  false,
 		DefaultURL:        types.HamNutLookupDefaultURL,

@@ -14,9 +14,23 @@
     // uses, so adding a provider in Go needs no change here. A provider the
     // daemon does not describe still renders: the wire shape is uniform, so only
     // the presentation is unknown, not the form.
+    //
+    // The tab explains by ⓘ, not by paragraph (fresh-install ruling 2026-09-26):
+    // the intro, each source's description, and the two sections' help live in
+    // the manual; a collapsed source carries only its name and a short summary.
     import { onMount } from 'svelte';
     import { enrichmentState } from './enrichment.svelte';
     import StoredSecretField from './StoredSecretField.svelte';
+    import ManualLink from './ManualLink.svelte';
+
+    let {
+        onRestart = () => undefined,
+        restarting = false,
+    }: {
+        /** Settings' own Restart daemon, for the restart notice. */
+        onRestart?: () => void;
+        restarting?: boolean;
+    } = $props();
 
     onMount(() => void enrichmentState.load());
 
@@ -34,8 +48,8 @@
     // cache is affected rather than making the operator work it out.
     const zeroTtls = $derived(
         [
-            { label: 'Country TTL', v: enrichmentState.draft.countryTtlDays },
-            { label: 'Station TTL', v: enrichmentState.draft.stationTtlDays },
+            { label: 'Country details', v: enrichmentState.draft.countryTtlDays },
+            { label: 'Station details', v: enrichmentState.draft.stationTtlDays },
         ]
             .filter((t) => t.v === '0')
             .map((t) => t.label)
@@ -54,12 +68,10 @@
         </div>
     {:else}
         <div class="space-y-8">
-            <p class="text-sm text-muted">
-                Where Station Manager fills in a contacted station’s details. Lookups never block
-                logging — when a source is unreachable the QSO is logged with whatever is known.
-                Passwords are stored on the daemon and never sent back to the browser, so leaving
-                one blank keeps the saved value.
-            </p>
+            <div class="flex items-center gap-2">
+                <h2 class="text-base font-semibold text-ink">Lookup sources</h2>
+                <ManualLink anchor="enrichment" label="How enrichment works" />
+            </div>
 
             {#each enrichmentState.draft.providers as p (p.name)}
                 {@const meta = enrichmentState.metaFor(p.name)}
@@ -97,6 +109,9 @@
                                         title="Unsaved changes">*</span
                                     >{/if}
                             </span>
+                            {#if meta?.summary}
+                                <span class="text-sm text-muted">— {meta.summary}</span>
+                            {/if}
                             <!-- Same pill as Forwarding's, so the two sections
                                  read as one page. -->
                             <span
@@ -116,8 +131,11 @@
                     </summary>
 
                     <div class="space-y-3 border-t border-line px-3 py-3">
-                        {#if meta?.help}
-                            <p class="text-sm text-muted">{meta.help}</p>
+                        {#if meta}
+                            <ManualLink
+                                anchor={`lookup-${p.name}`}
+                                label={`How ${enrichmentState.labelFor(p)} works`}
+                            />
                         {:else}
                             <p class="text-sm text-warning">
                                 This lookup source is not recognised by this build, so there is no
@@ -216,12 +234,13 @@
             {/each}
 
             <section>
-                <h2 class="mb-2 text-base font-semibold text-ink">Fallback completion</h2>
-                <p class="mb-3 text-sm text-muted">
-                    A lower-priority callsign source is consulted while any selected field is blank.
-                    When that call is needed, it fills any other blank fields it knows too, without
-                    replacing data from a higher-priority source.
-                </p>
+                <div class="mb-3 flex items-center gap-2">
+                    <h2 class="text-base font-semibold text-ink">Fill gaps from other sources</h2>
+                    <ManualLink
+                        anchor="fill-gaps-from-other-sources"
+                        label="How filling gaps works"
+                    />
+                </div>
                 {#if enrichmentState.completionFields.length > 0}
                     <div class="flex flex-wrap gap-x-5 gap-y-2">
                         {#each enrichmentState.completionFields as field (field.name)}
@@ -251,10 +270,18 @@
             </section>
 
             <section>
-                <h2 class="mb-3 text-base font-semibold text-ink">Cache freshness</h2>
+                <div class="mb-3 flex items-center gap-2">
+                    <h2 class="text-base font-semibold text-ink">
+                        How long to keep looked-up details
+                    </h2>
+                    <ManualLink
+                        anchor="how-long-to-keep-looked-up-details"
+                        label="How keeping looked-up details works"
+                    />
+                </div>
                 <div class="flex flex-wrap gap-x-4 gap-y-3">
                     <label class="flex w-40 flex-col gap-1">
-                        <span class="text-sm font-medium text-ink">Country TTL (days)</span>
+                        <span class="text-sm font-medium text-ink">Country details (days)</span>
                         <input
                             class="input"
                             inputmode="numeric"
@@ -265,7 +292,7 @@
                         />
                     </label>
                     <label class="flex w-40 flex-col gap-1">
-                        <span class="text-sm font-medium text-ink">Station TTL (days)</span>
+                        <span class="text-sm font-medium text-ink">Station details (days)</span>
                         <input
                             class="input"
                             inputmode="numeric"
@@ -276,7 +303,7 @@
                         />
                     </label>
                     <label class="flex w-40 flex-col gap-1">
-                        <span class="text-sm font-medium text-ink">Max refresh in flight</span>
+                        <span class="text-sm font-medium text-ink">Lookups at once</span>
                         <input
                             class="input"
                             inputmode="numeric"
@@ -290,10 +317,6 @@
                         />
                     </label>
                 </div>
-                <p class="mt-2 text-xs text-muted">
-                    A TTL decides when a cached country or station record is re-fetched on next use.
-                    Leave a box blank to use the default shown.
-                </p>
 
                 <!-- 0 and blank are OPPOSITE instructions in the same box —
                      blank takes the daemon default, 0 disables staleness
@@ -309,12 +332,26 @@
                 {/if}
             </section>
 
-            {#if enrichmentState.dirty}
+            <!-- Forwarding's pattern (fresh-install ruling 2026-09-26): shown once a
+                 save is stored, until the restart's page reload — not while edits
+                 are unsaved, when it vanished on Save exactly as the restart became
+                 owed. Every enrichment setting binds at startup. -->
+            {#if enrichmentState.restartOwed}
                 <div
                     class="rounded-md border border-warning bg-surface-muted px-3 py-2 text-sm text-warning"
+                    role="status"
+                    data-testid="enrichment-restart"
                 >
-                    ⚠ Enrichment changes apply when the daemon restarts — the lookup providers bind
-                    at startup.
+                    <span class="flex flex-wrap items-center gap-3"
+                        >⚠ Saved changes apply after a restart.
+                        <button
+                            type="button"
+                            class="btn"
+                            disabled={restarting}
+                            onclick={() => onRestart()}
+                            >{restarting ? 'Restarting…' : 'Restart daemon'}</button
+                        ></span
+                    >
                 </div>
             {/if}
 

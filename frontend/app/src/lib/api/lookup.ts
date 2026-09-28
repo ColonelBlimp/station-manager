@@ -90,6 +90,9 @@ export interface LookupType {
     name: string;
     display_name: string;
     help?: string;
+    /** Short plain phrase shown after the name on a collapsed source
+     *  ("country and zones, free"; ruling 2026-09-26). */
+    summary?: string;
     /** "country" (the single prefix provider) | "callsign" (the chain). */
     kind: string;
     /** False for a provider anonymous BY DESIGN — it gets no credential inputs. */
@@ -117,6 +120,7 @@ function toType(v: unknown): LookupType | null {
         name: v.name,
         display_name: v.display_name,
         help: typeof v.help === 'string' ? v.help : undefined,
+        summary: typeof v.summary === 'string' ? v.summary : undefined,
         kind: typeof v.kind === 'string' ? v.kind : '',
         needs_credentials: v.needs_credentials === true,
     };

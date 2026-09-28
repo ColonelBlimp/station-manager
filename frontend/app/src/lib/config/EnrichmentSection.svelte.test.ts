@@ -45,6 +45,7 @@ afterEach(() => {
     enrichmentState.loading = false;
     enrichmentState.saving = false;
     enrichmentState.error = '';
+    enrichmentState.restartOwed = false;
 });
 
 /** What GET /v1/lookup-types serves — the daemon's provider descriptors. The
@@ -57,6 +58,7 @@ const TYPES = {
             name: 'hamnutlookupservice',
             display_name: 'Hamnut',
             help: 'Resolves DXCC / CQ / ITU zones from the callsign prefix.',
+            summary: 'country and zones, free',
             kind: 'country',
             needs_credentials: false,
         },
@@ -64,13 +66,14 @@ const TYPES = {
             name: 'qrzlookupservice',
             display_name: 'QRZ.com',
             help: 'Fills name, grid and address from QRZ.',
+            summary: 'name, locator and address, paid subscription',
             kind: 'callsign',
             needs_credentials: true,
         },
     ],
     completion_fields: [
         { name: 'name', display_name: 'Name' },
-        { name: 'gridsquare', display_name: 'Gridsquare' },
+        { name: 'gridsquare', display_name: 'Locator' },
     ],
 };
 
@@ -505,13 +508,30 @@ describe('EnrichmentSection', () => {
         expect(qrzToggle(container).checked).toBe(true);
     });
 
-    // U5 — restart-only, so "saved" is not read as "in effect".
-    it('U5: warns that changes apply at daemon restart', async () => {
-        await renderLoaded(true);
-        expect(screen.queryByText(/apply when the daemon restarts/i)).toBeNull();
+    // U5 — restart-only, so "saved" is not read as "in effect". Revised by the
+    // fresh-install ruling 2026-09-26: the warning showed only while edits were
+    // UNSAVED and vanished on Save, exactly when the restart was owed. Now
+    // Forwarding's pattern: after a save, 'Saved changes apply after a restart.'
+    // with its own Restart daemon button, until the restart's reload.
+    it('U5: after a save, says changes apply after a restart, with its own button', async () => {
+        const onRestart = vi.fn();
+        mockConfig(true);
+        render(EnrichmentSection, { props: { onRestart } });
+        await vi.waitFor(() => expect(enrichmentState.loaded).toBe(true));
+        const notice = () => screen.queryByTestId('enrichment-restart');
+
         // Two providers each carry an "Enabled" toggle; [0] is QRZ's.
         await fireEvent.click(screen.getAllByLabelText(/enabled/i)[0]);
-        expect(screen.getByText(/apply when the daemon restarts/i)).toBeTruthy();
+        expect(notice()).toBeNull(); // unsaved: nothing to restart for yet
+        expect(screen.queryByText(/restart/i)).toBeNull();
+
+        await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+        await vi.waitFor(() => expect(notice()).not.toBeNull());
+        expect(notice()).toHaveTextContent('Saved changes apply after a restart.');
+        await fireEvent.click(
+            within(notice() as HTMLElement).getByRole('button', { name: 'Restart daemon' })
+        );
+        expect(onRestart).toHaveBeenCalledTimes(1);
     });
 
     it('U9: shows one exclusive priority control for each callsign provider', async () => {
@@ -533,12 +553,72 @@ describe('EnrichmentSection', () => {
     it('U10: exposes the chain-wide name and gridsquare completion policy', async () => {
         await renderLoaded(true);
         const name = screen.getByLabelText<HTMLInputElement>('Name');
-        const grid = screen.getByLabelText<HTMLInputElement>('Gridsquare');
+        const grid = screen.getByLabelText<HTMLInputElement>('Locator');
 
         expect(name.checked).toBe(true);
         expect(grid.checked).toBe(true);
         await fireEvent.click(name);
         expect(enrichmentState.draft.continueIfBlank).toEqual(['gridsquare']);
-        expect(screen.getByText(/fills any other blank fields/i)).toBeTruthy();
+    });
+
+    // Fresh-install ruling 2026-09-26 (2): each collapsed source carries a short
+    // plain summary after its name — from the daemon's descriptor, so a new
+    // provider needs no SPA change (ADR 0062). An unrecognised source has none.
+    it('U11: each source header reads "<name> — <summary>"', async () => {
+        const { container } = await renderLoadedWithContainer(true);
+        const summary = (label: string) =>
+            (card(container, label).querySelector('summary')?.textContent ?? '').replace(
+                /\s+/g,
+                ' '
+            );
+        expect(summary('Hamnut')).toContain('Hamnut — country and zones, free');
+        expect(summary(QRZ_CARD)).toContain(
+            'QRZ (club account) — name, locator and address, paid subscription'
+        );
+        expect(summary('hamqth')).not.toContain('—');
+    });
+
+    // Ruling (1) and (3): the explanations live in the manual behind ⓘs — the
+    // tab's, each source's, and each section's — and the words are plain.
+    it('U12: explanations moved behind ⓘs; sections and fields use plain names', async () => {
+        await renderLoaded(true);
+        const text = document.body.textContent ?? '';
+        for (const gone of [
+            /Lookups never block logging/,
+            /Passwords are stored on the daemon/,
+            /Resolves DXCC/,
+            /Fills name, grid and address/,
+            /fills any other blank fields/,
+            /A TTL decides when/,
+            /Fallback completion/,
+            /Cache freshness/,
+            /TTL/,
+        ]) {
+            expect(text, String(gone)).not.toMatch(gone);
+        }
+        expect(screen.getByRole('heading', { name: 'Fill gaps from other sources' })).toBeTruthy();
+        expect(
+            screen.getByRole('heading', { name: 'How long to keep looked-up details' })
+        ).toBeTruthy();
+        for (const label of [
+            'Country details (days)',
+            'Station details (days)',
+            'Lookups at once',
+        ]) {
+            expect(screen.getByLabelText(label), label).toBeTruthy();
+        }
+        for (const [name, anchor] of [
+            ['How enrichment works', 'enrichment'],
+            ['How Hamnut works', 'lookup-hamnutlookupservice'],
+            ['How QRZ (club account) works', 'lookup-qrzlookupservice'],
+            ['How filling gaps works', 'fill-gaps-from-other-sources'],
+            ['How keeping looked-up details works', 'how-long-to-keep-looked-up-details'],
+        ]) {
+            expect(screen.getByRole('link', { name }).getAttribute('href'), name).toBe(
+                `/manual/#${anchor}`
+            );
+        }
+        // No manual section for a source this build does not know.
+        expect(screen.queryByRole('link', { name: 'How hamqth works' })).toBeNull();
     });
 });

@@ -37,9 +37,14 @@ type ProviderDescriptor struct {
 	// DisplayName is the built-in human name. The operator's config.json
 	// `label` overrides it for display; this is the fallback.
 	DisplayName string `json:"display_name"`
-	// Help is the one-line description shown under the provider's heading.
-	Help string       `json:"help,omitempty"`
-	Kind ProviderKind `json:"kind"`
+	// Help is the one-line description of the provider.
+	Help string `json:"help,omitempty"`
+	// Summary is the short plain phrase Settings → Enrichment shows after the
+	// name on a collapsed source ("Hamnut — country and zones, free"; ruling
+	// 2026-09-26): what it fills in and what it costs, lower-case, no full stop.
+	// The longer explanation lives in the operator manual.
+	Summary string       `json:"summary,omitempty"`
+	Kind    ProviderKind `json:"kind"`
 
 	// NeedsCredentials is false for a provider that is anonymous BY DESIGN
 	// (hamnut). When true the config validator refuses to save the provider

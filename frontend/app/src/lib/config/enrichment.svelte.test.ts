@@ -46,6 +46,7 @@ afterEach(() => {
     enrichmentState.loading = false;
     enrichmentState.saving = false;
     enrichmentState.error = '';
+    enrichmentState.restartOwed = false;
 });
 
 const CONFIG = {
@@ -743,5 +744,50 @@ describe('enrichmentState — timed-out reconciliation (F-04c)', () => {
         expect(error).toHaveBeenCalledOnce();
         expect(String(error.mock.calls[0][0])).toMatch(/Save failed/);
         expect(spy.mock.calls.length).toBe(afterLoad + 1); // only the failed PUT; no re-read
+    });
+});
+
+/*
+    RESTART OWED (fresh-install ruling 2026-09-26). Every enrichment setting binds
+    at daemon start, so a save the daemon holds owes a restart. The warning used
+    to be gated on UNSAVED edits and vanished on Save — exactly when the restart
+    was owed. The flag lives for the page: the restart reloads it away, and a
+    Settings remount (load) is not a restart.
+*/
+describe('enrichmentState — a restart owed after saving', () => {
+    it('EO1: a successful save owes a restart, and a reload of the form keeps it owed', async () => {
+        await loadFresh();
+        qrzDraft().username = 'M0XYZ';
+        await enrichmentState.save();
+        expect(enrichmentState.restartOwed).toBe(true);
+        await enrichmentState.load();
+        expect(enrichmentState.restartOwed).toBe(true);
+    });
+
+    it('EO2: a refused save owes nothing', async () => {
+        await loadFresh({ message: 'bad' }, 400);
+        qrzDraft().username = 'M0XYZ';
+        await enrichmentState.save();
+        expect(enrichmentState.restartOwed).toBe(false);
+    });
+
+    it('EO3: a timed-out save owes the restart only if the daemon now holds something else', async () => {
+        vi.spyOn(toasts, 'warn').mockImplementation(() => 0);
+        const landed = {
+            ...CONFIG.lookup,
+            chain: [{ ...CONFIG.lookup.chain[0], username: 'M0XYZ' }, CONFIG.lookup.chain[1]],
+        };
+        stubReconcile([CONFIG, withLookup(landed)]);
+        await enrichmentState.load();
+        qrzDraft().username = 'M0XYZ';
+        await enrichmentState.save();
+        expect(enrichmentState.restartOwed).toBe(true);
+
+        enrichmentState.restartOwed = false;
+        stubReconcile([CONFIG, CONFIG]); // did not land
+        await enrichmentState.load();
+        qrzDraft().username = 'M0XYZ';
+        await enrichmentState.save();
+        expect(enrichmentState.restartOwed).toBe(false);
     });
 });

@@ -43,6 +43,7 @@ func init() {
 		Name:              ServiceName,
 		DisplayName:       "QRZCQ.com",
 		Help:              "Fills name, grid and address from QRZCQ. Needs a premium QRZCQ account with XML access.",
+		Summary:           "name, locator and address, premium account",
 		Kind:              lookupdef.KindCallsign,
 		NeedsCredentials:  true,
 		MinUsernameLen:    minUsernameLen,

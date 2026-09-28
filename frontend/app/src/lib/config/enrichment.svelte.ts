@@ -259,6 +259,12 @@ class EnrichmentState {
 
     #pristine = $state(JSON.stringify(draftFrom(BLANK)));
 
+    /** A save the daemon holds owes a restart: every enrichment setting binds at
+     *  startup (fresh-install ruling 2026-09-26). Never cleared here — the
+     *  restart reloads the page, which clears it, and a remount (load) is not a
+     *  restart. */
+    restartOwed = $state(false);
+
     dirty = $derived(JSON.stringify(this.draft) !== this.#pristine);
 
     /**
@@ -357,6 +363,7 @@ class EnrichmentState {
                 return;
             }
             this.#apply(res.lookup);
+            this.restartOwed = true;
             if (!noteConfigDurability(res.durabilityUnconfirmed ?? false)) {
                 toasts.info('Enrichment settings saved. Restart the daemon to apply.');
             }
@@ -385,7 +392,11 @@ class EnrichmentState {
         }
         // Compute the merged draft from the CURRENT draft BEFORE #apply overwrites
         // it with the stored values.
-        const merged = mergeEnrichmentDraft(before, sent, this.draft, draftFrom(out.lookup));
+        const stored = draftFrom(out.lookup);
+        // Whatever the verdict, the daemon now holding something other than the
+        // pre-save baseline is a change the running lookups have not picked up.
+        if (JSON.stringify(stored) !== JSON.stringify(before)) this.restartOwed = true;
+        const merged = mergeEnrichmentDraft(before, sent, this.draft, stored);
         this.#apply(out.lookup); // baseline ← stored
         this.draft = merged; // restore the operator's merged edits over stored
         toasts.warn(`${OUTCOME_UNKNOWN_LEAD} ${CONFIG_TIMEOUT_TAIL_RECONCILED}`);

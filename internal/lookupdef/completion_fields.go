@@ -15,7 +15,7 @@ const (
 
 var completionFields = []CompletionField{
 	{Name: CompletionFieldName, DisplayName: "Name"},
-	{Name: CompletionFieldGridsquare, DisplayName: "Gridsquare"},
+	{Name: CompletionFieldGridsquare, DisplayName: "Locator"},
 }
 
 // CompletionFields returns the supported fields in stable UI order.

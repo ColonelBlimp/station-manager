@@ -219,7 +219,7 @@
         <EmailSection />
     </div>
     <div class:hidden={active !== 'enrichment'}>
-        <EnrichmentSection />
+        <EnrichmentSection onRestart={doRestart} {restarting} />
     </div>
     <div class:hidden={active !== 'general'}>
         <GeneralSection />

@@ -106,7 +106,7 @@ func TestHandleLookupTypes_CarriesCredentialFacts(t *testing.T) {
 		},
 		lookupdef.ProviderDescriptor{
 			Name: "credprov", DisplayName: "Credentialed Callsign", Kind: lookupdef.KindCallsign,
-			Help: "needs a subscription", NeedsCredentials: true,
+			Help: "needs a subscription", Summary: "name, paid", NeedsCredentials: true,
 		},
 	)
 	srv := testServer(t)
@@ -135,6 +135,9 @@ func TestHandleLookupTypes_CarriesCredentialFacts(t *testing.T) {
 	}
 	if got := byName["credprov"]["help"]; got != "needs a subscription" {
 		t.Errorf("help not served: %v", got)
+	}
+	if got := byName["credprov"]["summary"]; got != "name, paid" {
+		t.Errorf("summary not served: %v", got)
 	}
 }
 
