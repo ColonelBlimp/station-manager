@@ -1257,6 +1257,15 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      The "Required to turn this on." line goes; the reason becomes the marked field's placeholder,
      in the same red as the ring (colour alone would not say why; a screen reader reads the
      placeholder).
+     **Built 2026-09-28, the post-test bundle (fresh-install rulings, inbox):** rig picker with an
+     unsaved draft and the last rig deletable with CAT off (`3fc11918`, `91a3939d`, `49bf6dc4`);
+     reload after a confirmed restart, never over an unlogged QSO (`8b100ef2`, `1df0cfe9`); FT8/FT4
+     off hides the FT links and lands every way in on Phone / CW, gated on `ft8_running`
+     (`3ac5dada`, `e0f8ea5d`); Station accounts hidden when empty and no Ownership column
+     (`cb735e7b`); the FT8 / FT4 and Enrichment tabs explain by ⓘ with a restart notice that stays
+     after Save (`08bef531`, `a75f0654`, `bd6765f8`, `9f2a35d0`). Not deployed yet. Still open from
+     the `-74` re-run: the C.2 ruling (a refused save keeps the switches as set; the reason as the
+     field's red placeholder).
      **Design exchange (2026-09-26, during C.3–C.4): the Forwarding tab frames the wrong thing.**
      The operator read the per-logbook row "Drill 7Q5MLV" as the archive — the Drill archive's
      only logbook is also named "Drill" (Home's is "Default"). Found: the tab is destination-first
