@@ -68,6 +68,34 @@ function savedFormOf(draft: RigConfig, id: number): RigConfig {
     return out;
 }
 
+// The saved rig as the server now has it, plus only the fields the operator
+// changed after `submitted` was sent. Used when a timed-out add turns out to have
+// landed: a field untouched since the submit keeps the server's value, so a change
+// made meanwhile (another tab) is shown and never written back over (clean-room
+// review 91a3939d P2). Field granularity matches save(): audio RX and TX
+// independently, every other field whole — save() then diffs against the server rig.
+function withEditsSince(server: RigConfig, submitted: RigConfig, current: RigConfig): RigConfig {
+    const out = cloneRig(server) as unknown as Record<string, unknown>;
+    const sub = submitted as unknown as Record<string, unknown>;
+    const cur = current as unknown as Record<string, unknown>;
+    for (const k of new Set([...Object.keys(sub), ...Object.keys(cur)])) {
+        if (k === 'id' || k === 'audio' || JSON.stringify(sub[k]) === JSON.stringify(cur[k])) {
+            continue;
+        }
+        if (cur[k] === undefined) delete out[k];
+        else out[k] = JSON.parse(JSON.stringify(cur[k])) as unknown;
+    }
+    const audio = { rx: server.audio?.rx, tx: server.audio?.tx };
+    for (const which of ['rx', 'tx'] as const) {
+        const now = current.audio?.[which] ?? '';
+        if (now !== (submitted.audio?.[which] ?? '')) audio[which] = now || undefined;
+    }
+    const merged = normalizedAudio(audio);
+    if (merged) out.audio = merged;
+    else delete out.audio;
+    return out as unknown as RigConfig;
+}
+
 // Mirror an optional string override (ft8_mode / my_rig) from the draft onto the
 // patched fresh rig, but only when it CHANGED vs the baseline: set when present,
 // delete when the operator cleared it. The setters delete the key on clear, so an
@@ -152,7 +180,7 @@ class RigsState {
     // the rig may or may not exist. The draft is kept (it is the only copy of the
     // operator's entries), and the next Save re-checks for this id before adding,
     // so a retry cannot double-add (clean-room review 3fc11918 P2).
-    #unsettledAdd: { id: number; model: string } | null = null;
+    #unsettledAdd: RigConfig | null = null; // the form that was sent, id included
 
     // The pristine selected rig, or null (no rigs / none selected).
     selected = $derived(this.rigs.find((r) => r.id === this.selectedId) ?? null);
@@ -517,8 +545,7 @@ class RigsState {
         if (!draft || this.saving || this.settingDefault || !this.loaded) return;
         this.saving = true;
         if (this.#unsettledAdd) {
-            const { id, model } = this.#unsettledAdd;
-            if ((await this.#reconcileAfterAdd(id, model)) !== 'absent') {
+            if ((await this.#reconcileAfterAdd(this.#unsettledAdd)) !== 'absent') {
                 this.saving = false;
                 return;
             }
@@ -547,7 +574,7 @@ class RigsState {
                 // rig), so re-read the authoritative list and reconcile instead of
                 // leaving a draft a blind retry would double-add from (clean-room
                 // review 7b5ed1d2 P2).
-                const settled = await this.#reconcileAfterAdd(id, newRig.model);
+                const settled = await this.#reconcileAfterAdd(newRig);
                 this.saving = false;
                 if (settled === 'absent') {
                     toasts.warn('Add timed out and did not take effect — try again.');
@@ -598,10 +625,11 @@ class RigsState {
     // retry would double-add. Finite polling can't close it (it can't prove
     // non-commit); the complete fix is server-side idempotency, disproportionate for
     // a local single-operator config editor (operator ruling 2026-08-19).
-    async #reconcileAfterAdd(id: number, model: string): Promise<'landed' | 'absent' | 'unknown'> {
+    async #reconcileAfterAdd(submitted: RigConfig): Promise<'landed' | 'absent' | 'unknown'> {
+        const { id, model } = submitted;
         const reread = await fetchRigs();
         if (reread.kind === 'error') {
-            this.#unsettledAdd = { id, model };
+            this.#unsettledAdd = submitted;
             toasts.error(
                 'Add timed out and the rig list could not be re-read, so the rig may or may ' +
                     'not have been added. Your entries are kept; Save checks again before adding.'
@@ -610,14 +638,15 @@ class RigsState {
         }
         this.#unsettledAdd = null;
         this.#applyFetched(reread.data);
-        if (!reread.data.rigs.some((r) => r.id === id && r.model === model)) return 'absent';
+        const landed = reread.data.rigs.find((r) => r.id === id && r.model === model);
+        if (!landed) return 'absent';
         // It landed. Show the saved rig, carrying any entries made since the timed-out
         // save as its unsaved edits rather than dropping them.
         const draft = this.newRig;
         this.newRig = null;
         this.selectedId = id;
         this.#ensureDraft();
-        if (draft) this.drafts[id] = savedFormOf(draft, id);
+        if (draft) this.drafts[id] = withEditsSince(landed, submitted, savedFormOf(draft, id));
         toasts.warn('Add timed out, but the rig was saved.');
         return 'landed';
     }

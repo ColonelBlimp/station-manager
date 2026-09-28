@@ -1064,7 +1064,13 @@ describe('rigsState', () => {
     // blind retry, and must NOT drop the draft either: it is the only copy of the
     // operator's entries (clean-room review 3fc11918 P2). The draft stays, and the
     // next Save re-checks for the timed-out id before it adds anything.
-    function unknownThen(afterRecovery: 'landed' | 'absent') {
+    // `landedPort` is the port the daemon reports for the landed rig — another tab
+    // may have changed it meanwhile.
+    function unknownThen(
+        afterRecovery: 'landed' | 'absent',
+        landedPort = '/dev/new',
+        landedAudio?: { rx?: string; tx?: string }
+    ) {
         const puts: string[] = [];
         let get = 0;
         const ok = (body: unknown) =>
@@ -1097,7 +1103,15 @@ describe('rigsState', () => {
                 if (get === 3) return Promise.resolve(new Response('{}', { status: 503 }));
                 const rigs =
                     get >= 4 && afterRecovery === 'landed'
-                        ? [...one, { id: 2, model: 'ic7300', port: '/dev/new' }]
+                        ? [
+                              ...one,
+                              {
+                                  id: 2,
+                                  model: 'ic7300',
+                                  port: landedPort,
+                                  ...(landedAudio ? { audio: landedAudio } : {}),
+                              },
+                          ]
                         : one;
                 return ok({
                     default_rig_id: 1,
@@ -1141,6 +1155,54 @@ describe('rigsState', () => {
         expect(rigsState.selectedId).toBe(2);
         expect(rigsState.draft?.audio?.rx).toBe('USB Audio'); // carried as an unsaved edit
         expect(rigsState.dirty).toBe(true);
+    });
+
+    it('a change made meanwhile to the landed rig is shown, not overwritten by the stale draft', async () => {
+        const puts = unknownThen('landed', '/dev/concurrent');
+        await rigsState.load();
+        rigsState.startNewRig('ic7300');
+        rigsState.setDraftPort('/dev/new');
+        await rigsState.save(); // unknown
+        rigsState.setDraftAudio('rx', 'USB Audio'); // the only edit since
+        await rigsState.save(); // re-check finds rig 2, whose port another tab changed
+
+        expect(puts).toHaveLength(1);
+        expect(rigsState.draft?.port).toBe('/dev/concurrent'); // server value, not stale
+        expect(rigsState.draft?.audio?.rx).toBe('USB Audio');
+        await rigsState.save(); // saves the audio edit only
+        expect(puts).toHaveLength(2);
+        const sent = JSON.parse(puts[1]) as {
+            rigs: Array<{ id: number; port: string; audio?: { rx?: string } }>;
+        };
+        const rig2 = sent.rigs.find((r) => r.id === 2);
+        expect(rig2?.port).toBe('/dev/concurrent');
+        expect(rig2?.audio?.rx).toBe('USB Audio');
+    });
+
+    // Reciprocal concurrency, per audio direction (save()'s contract): the server's
+    // TX changed meanwhile, the operator changed only RX — both must survive.
+    it('audio directions merge independently: a concurrent TX change and a local RX edit both survive', async () => {
+        const puts = unknownThen('landed', '/dev/new', { rx: 'Old RX', tx: 'Concurrent TX' });
+        await rigsState.load();
+        rigsState.startNewRig('ic7300');
+        rigsState.setDraftPort('/dev/new');
+        rigsState.setDraftAudio('rx', 'Old RX');
+        rigsState.setDraftAudio('tx', 'Old TX');
+        await rigsState.save(); // unknown
+        rigsState.setDraftAudio('rx', 'New RX'); // the only edit since
+        await rigsState.save(); // re-check finds rig 2, whose TX another tab changed
+
+        expect(puts).toHaveLength(1);
+        expect(rigsState.draft?.audio).toEqual({ rx: 'New RX', tx: 'Concurrent TX' });
+        await rigsState.save();
+        expect(puts).toHaveLength(2);
+        const sent = JSON.parse(puts[1]) as {
+            rigs: Array<{ id: number; audio?: { rx?: string; tx?: string } }>;
+        };
+        expect(sent.rigs.find((r) => r.id === 2)?.audio).toEqual({
+            rx: 'New RX',
+            tx: 'Concurrent TX',
+        });
     });
 
     it('after an unknown add, the next Save finds it absent and adds it exactly once', async () => {
