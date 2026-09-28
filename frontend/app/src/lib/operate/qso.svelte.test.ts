@@ -21,6 +21,7 @@ import {
     qsoClock,
     noteModeSwitchForDraft,
     draftAgeText,
+    draftInProgress,
     DEFAULT_RST_VOICE,
     DEFAULT_RST_CW,
     type QsoDraft,
@@ -359,5 +360,48 @@ describe('draft survives a mode switch: original Time On kept, age shown', () =>
         clearDraft();
         expect(qsoClock.survivedSwitch).toBe(false);
         expect(draftAgeText(Date.now())).toBe('');
+    });
+});
+
+// Anything the operator would lose to a page reload: an entered field, a changed
+// report, or a started QSO clock. The mode-default RSTs alone are not work
+// (clean-room review 8b100ef2 P2: the restart reload must not discard a draft).
+describe('draftInProgress: is there unlogged work a reload would lose?', () => {
+    it('a blank draft with the default reports is not in progress', () => {
+        expect(draftInProgress()).toBe(false);
+    });
+
+    it('each operator-entered field counts on its own', () => {
+        const fields: Array<keyof QsoDraft> = [
+            'callsign',
+            'name',
+            'qth',
+            'gridsquare',
+            'dateOn',
+            'timeOn',
+            'dateOff',
+            'timeOff',
+            'comment',
+            'rig',
+            'notes',
+            'rxPwr',
+        ];
+        for (const f of fields) {
+            clearDraft();
+            draft[f] = 'x';
+            expect(draftInProgress(), f).toBe(true);
+        }
+    });
+
+    it('a report changed from the mode default counts', () => {
+        draft.rstRcvd = '57';
+        expect(draftInProgress()).toBe(true);
+    });
+
+    it('a started QSO clock counts, and clearing the draft ends it', () => {
+        startQso();
+        expect(draftInProgress()).toBe(true);
+        clearDraft();
+        expect(draftInProgress()).toBe(false);
     });
 });

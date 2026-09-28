@@ -22,6 +22,7 @@ vi.mock('../utils/reload', () => ({ reloadPage: vi.fn() }));
 import Settings from './Settings.svelte';
 import { restartDaemon, fetchDaemonInstance, waitForDaemonBack } from '../api/restart';
 import { reloadPage } from '../utils/reload';
+import { draft, clearDraft } from '../operate/qso.svelte';
 import { toastsState, _resetForTests } from '../ui/toasts.svelte';
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
@@ -152,6 +153,26 @@ describe('Settings restart — reload once the new daemon answers', () => {
 
         expect(vi.mocked(waitForDaemonBack)).toHaveBeenCalledWith('inst-A');
         expect(vi.mocked(reloadPage)).toHaveBeenCalledTimes(1);
+    });
+
+    // Clean-room review 8b100ef2 P2: the Phone/CW draft lives only in memory and
+    // the leave guard covers Settings sections only, so a reload would silently
+    // discard an unlogged QSO. With one in progress the page stays; the operator
+    // is told to log or clear it, then reload.
+    it('a confirmed restart does not reload over an unlogged QSO draft', async () => {
+        vi.mocked(restartDaemon).mockResolvedValue({ kind: 'accepted' });
+        vi.mocked(waitForDaemonBack).mockResolvedValue(true);
+        draft.callsign = 'DL3YA';
+        try {
+            await clickRestart();
+        } finally {
+            clearDraft();
+        }
+
+        expect(vi.mocked(reloadPage)).not.toHaveBeenCalled();
+        expect(hasToast('warn', /unlogged QSO/)).toBe(true);
+        expect(hasToast('warn', /reload/i)).toBe(true);
+        expect(screen.getByRole('button', { name: 'Restart daemon' })).not.toBeDisabled();
     });
 
     it('an accepted restart with NO baseline instance does not reload (the old daemon could answer)', async () => {

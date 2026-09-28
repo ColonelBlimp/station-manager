@@ -17,6 +17,7 @@
     import { OUTCOME_UNKNOWN_LEAD } from '../api/_helpers';
     import { toasts } from '../ui/toasts.svelte';
     import { reloadPage } from '../utils/reload';
+    import { draftInProgress } from '../operate/qso.svelte';
 
     // Strip order groups the station and how it operates (Station, Rigs, FT8)
     // ahead of the outside services it talks to (Forwarding, Email,
@@ -45,8 +46,18 @@
     // boot — main.ts reads catEnabled at load and opens the rig stream only if it
     // was on — so without a reload the header and the restart notes describe the
     // old daemon. Only after a NEW instance answered; never on an unknown outcome.
-    // If the operator holds unsaved edits, the leave guard asks first.
+    // If the operator holds unsaved Settings edits, the leave guard asks first.
+    // An unlogged Phone/CW QSO is outside that guard and lives only in memory, so
+    // with one in progress the page stays and the operator reloads after logging
+    // or clearing it (clean-room review 8b100ef2 P2). Checked when the restart
+    // is confirmed, so a draft started on Operate while the restart ran counts.
     function restarted(): void {
+        if (draftInProgress()) {
+            toasts.warn(
+                'Daemon restarted. You have an unlogged QSO on Phone / CW — log or clear it, then reload the page to finish applying the restart.'
+            );
+            return;
+        }
         toasts.info('Daemon restarted — reloading…');
         reloadPage();
     }

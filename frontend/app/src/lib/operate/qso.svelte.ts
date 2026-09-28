@@ -186,6 +186,15 @@ $effect.root(() => {
     });
 });
 
+/** Unlogged work a page reload would lose: any entered field — a started QSO
+ *  clock has stamped Time On — or a report changed from the mode default (the
+ *  defaults alone are not work). The draft lives only in this module, so
+ *  anything that reloads the page asks this first (clean-room review 8b100ef2 P2). */
+export function draftInProgress(): boolean {
+    const empty = blank();
+    return (Object.keys(empty) as Array<keyof QsoDraft>).some((k) => draft[k] !== empty[k]);
+}
+
 export function resetDraft(): void {
     Object.assign(draft, blank());
 }
