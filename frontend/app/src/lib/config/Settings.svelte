@@ -16,6 +16,7 @@
     import { restartDaemon, waitForDaemonBack, fetchDaemonInstance } from '../api/restart';
     import { OUTCOME_UNKNOWN_LEAD } from '../api/_helpers';
     import { toasts } from '../ui/toasts.svelte';
+    import { reloadPage } from '../utils/reload';
 
     // Strip order groups the station and how it operates (Station, Rigs, FT8)
     // ahead of the outside services it talks to (Forwarding, Email,
@@ -38,6 +39,17 @@
         { id: 'archives', label: 'Archives' },
     ];
     let active = $state<SectionId>('station');
+
+    // A confirmed restart reloads the page, as archive activation does
+    // (fresh-install ruling 2026-09-26): the SPA reads restart-bound state once at
+    // boot — main.ts reads catEnabled at load and opens the rig stream only if it
+    // was on — so without a reload the header and the restart notes describe the
+    // old daemon. Only after a NEW instance answered; never on an unknown outcome.
+    // If the operator holds unsaved edits, the leave guard asks first.
+    function restarted(): void {
+        toasts.info('Daemon restarted — reloading…');
+        reloadPage();
+    }
 
     // Manual daemon restart — applies the "Requires a restart" config changes
     // (active rig, connection, mappings, overrides). Refused while transmitting.
@@ -65,7 +77,7 @@
         toasts.info('Restarting the daemon…');
         const back = await waitForDaemonBack(before);
         if (back) {
-            toasts.info('Daemon restarted.');
+            restarted();
         } else {
             toasts.warn(
                 `${OUTCOME_UNKNOWN_LEAD} Wait for Station Manager to reconnect or verify its status before trying again.`
@@ -93,13 +105,22 @@
                 // the SSE clients reconnect on their own, but the Settings component
                 // isn't remounted, so nothing else would clear `restarting` (codex
                 // 088bdb84 P2).
+                // With no baseline instance (the pre-restart /v1/version read
+                // failed) there is nothing to diff against: waitForDaemonBack('')
+                // accepts ANY reachable instance, the unchanged old one included,
+                // so it cannot confirm the new daemon answered and must not drive
+                // the reload. The 202 proves only that a restart was requested.
+                if (before === '') {
+                    toasts.info(
+                        'Restart requested — reload the page once Station Manager has reconnected.'
+                    );
+                    restarting = false;
+                    break;
+                }
                 toasts.info('Restarting the daemon…');
                 const back = await waitForDaemonBack(before);
-                toasts.info(
-                    back
-                        ? 'Daemon restarted.'
-                        : 'Restart is taking a while — reload the page if it seems stuck.'
-                );
+                if (back) restarted();
+                else toasts.info('Restart is taking a while — reload the page if it seems stuck.');
                 restarting = false;
                 break;
             }
