@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/config"
+	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
+	smerrors "github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
@@ -153,6 +155,20 @@ type fakeSummarySource struct {
 	logbooks []types.Logbook
 	counts   map[int64]int64
 	err      error
+	// identity is the file's identity row; identityErr defaults to not found
+	// (a file no identity-aware daemon has started) when identity is nil.
+	identity    *sqlite.ArchiveIdentity
+	identityErr error
+}
+
+func (f fakeSummarySource) ArchiveIdentityWithContext(context.Context) (sqlite.ArchiveIdentity, error) {
+	if f.identityErr != nil {
+		return sqlite.ArchiveIdentity{}, f.identityErr
+	}
+	if f.identity == nil {
+		return sqlite.ArchiveIdentity{}, smerrors.ErrNotFound
+	}
+	return *f.identity, nil
 }
 
 func (f fakeSummarySource) FetchAllLogbooksWithContext(context.Context) ([]types.Logbook, error) {
@@ -189,6 +205,41 @@ func TestBuildLogbookSummaries_OneEntryPerLogbookWithItsCount(t *testing.T) {
 	}
 	if _, err := BuildLogbookSummaries(context.Background(), fakeSummarySource{err: errors.New("boom")}); err == nil {
 		t.Fatal("a failed logbook read built a summary")
+	}
+}
+
+// Operator ruling 2026-09-29 (option B): each summary marks the logbook its
+// archive logs to when active — the file's own default pointer — so Settings →
+// Archives can tag it Default on every archive, not only the active one.
+func TestBuildLogbookSummaries_MarksTheArchivesDefaultLogbook(t *testing.T) {
+	logbooks := []types.Logbook{
+		{ID: 1, UUID: "lb-1", Name: "Default", Callsign: "7Q5MLV"},
+		{ID: 2, UUID: "lb-2", Name: "Contest", Callsign: "7Q5MLV"},
+	}
+	src := fakeSummarySource{logbooks: logbooks, identity: &sqlite.ArchiveIdentity{DefaultLogbookID: 2}}
+	got, err := BuildLogbookSummaries(context.Background(), src)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if len(got) != 2 || got[0].Default || !got[1].Default {
+		t.Fatalf("summaries = %+v; want only Contest (the file's default, id 2) marked", got)
+	}
+
+	// No identity row yet (never started by an identity-aware daemon), or no
+	// default recorded: nothing is marked, and the summary still builds.
+	for name, s := range map[string]fakeSummarySource{
+		"no identity": {logbooks: logbooks},
+		"no default":  {logbooks: logbooks, identity: &sqlite.ArchiveIdentity{}},
+	} {
+		got, err := BuildLogbookSummaries(context.Background(), s)
+		if err != nil || len(got) != 2 || got[0].Default || got[1].Default {
+			t.Fatalf("%s: summaries = %+v (%v); want both, unmarked", name, got, err)
+		}
+	}
+	// Any other identity failure is a failed build, like a failed count.
+	if _, err := BuildLogbookSummaries(context.Background(),
+		fakeSummarySource{logbooks: logbooks, identityErr: errors.New("disk")}); err == nil {
+		t.Fatal("an identity read failure built a summary")
 	}
 }
 

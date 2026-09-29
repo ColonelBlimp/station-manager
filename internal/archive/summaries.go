@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/config"
+	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
+	smerrors "github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
@@ -150,20 +152,27 @@ func WriteSummaries(path string, s Summaries) error {
 	return nil
 }
 
-// SummarySource is what a summary is built from: the open archive's logbooks
-// and their live QSO counts (the sqlite service satisfies it).
+// SummarySource is what a summary is built from: the open archive's logbooks,
+// their live QSO counts and the file's identity row, which holds its default
+// logbook (the sqlite service satisfies it).
 type SummarySource interface {
 	FetchAllLogbooksWithContext(ctx context.Context) ([]types.Logbook, error)
 	FetchQsoCountByLogbookIdWithContext(ctx context.Context, id int64, missingFromPrefix string, notEmailed bool) (int64, error)
+	ArchiveIdentityWithContext(ctx context.Context) (sqlite.ArchiveIdentity, error)
 }
 
 // BuildLogbookSummaries reads each logbook and its QSO count from an open
-// archive, in the store's logbook order. An archive with no logbooks is an
-// empty, non-nil list.
+// archive, in the store's logbook order, marking the file's default logbook — the
+// one the archive logs to when active. A file with no identity row yet marks
+// none. An archive with no logbooks is an empty, non-nil list.
 func BuildLogbookSummaries(ctx context.Context, src SummarySource) ([]LogbookSummary, error) {
 	lbs, err := src.FetchAllLogbooksWithContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("read logbooks: %w", err)
+	}
+	ident, err := src.ArchiveIdentityWithContext(ctx)
+	if err != nil && !errors.Is(err, smerrors.ErrNotFound) {
+		return nil, fmt.Errorf("read the archive's default logbook: %w", err)
 	}
 	out := make([]LogbookSummary, 0, len(lbs))
 	for _, lb := range lbs {
@@ -171,7 +180,8 @@ func BuildLogbookSummaries(ctx context.Context, src SummarySource) ([]LogbookSum
 		if err != nil {
 			return nil, fmt.Errorf("count QSOs in logbook %d: %w", lb.ID, err)
 		}
-		out = append(out, LogbookSummary{UUID: lb.UUID, Name: lb.Name, Callsign: lb.Callsign, QsoCount: n})
+		out = append(out, LogbookSummary{UUID: lb.UUID, Name: lb.Name, Callsign: lb.Callsign, QsoCount: n,
+			Default: ident.DefaultLogbookID != 0 && lb.ID == ident.DefaultLogbookID})
 	}
 	return out, nil
 }

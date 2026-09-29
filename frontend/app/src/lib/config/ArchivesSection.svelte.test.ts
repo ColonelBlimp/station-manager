@@ -36,8 +36,8 @@ const HOME = {
     sizeBytes: 2048,
     modifiedAt: '2026-09-23T10:00:00Z',
     logbooks: [
-        { uuid: 'lb-1', name: 'Default', callsign: '7Q5MLV', qsoCount: 7468 },
-        { uuid: 'lb-2', name: 'Contest', callsign: '7Q5MLV', qsoCount: 1 },
+        { uuid: 'lb-1', name: 'Default', callsign: '7Q5MLV', qsoCount: 7468, isDefault: true },
+        { uuid: 'lb-2', name: 'Contest', callsign: '7Q5MLV', qsoCount: 1, isDefault: false },
     ],
     contentsStatus: 'current',
 } as const;
@@ -50,7 +50,7 @@ const CONTEST = {
     lastActivationCode: '',
     sizeBytes: null,
     modifiedAt: null,
-    logbooks: [{ uuid: 'lb-3', name: 'CQWW', callsign: 'G4ABC', qsoCount: 312 }],
+    logbooks: [{ uuid: 'lb-3', name: 'CQWW', callsign: 'G4ABC', qsoCount: 312, isDefault: true }],
     contentsStatus: 'stale',
 } as const;
 
@@ -142,14 +142,21 @@ describe('ArchivesSection', () => {
                 .getAllByRole('cell')
                 .map((cell) => cell.textContent?.trim());
         expect(cells('archive-logbook-a-lb-1')).toEqual([
-            'Default',
+            // The name, then its Default tag (spaced by margin, not text).
+            'DefaultDefault',
             '7Q5MLV',
             '7,468 QSOs',
             '',
             '',
         ]);
         expect(cells('archive-logbook-a-lb-2')).toEqual(['Contest', '7Q5MLV', '1 QSO', '', '']);
-        expect(cells('archive-logbook-b-lb-3')).toEqual(['CQWW', 'G4ABC', '312 QSOs', '', '']);
+        expect(cells('archive-logbook-b-lb-3')).toEqual([
+            'CQWWDefault',
+            'G4ABC',
+            '312 QSOs',
+            '',
+            '',
+        ]);
         expect(screen.getByTestId('archive-stale-b')).toHaveTextContent(
             'Counts may be out of date — the file changed since it was last open'
         );
@@ -158,6 +165,16 @@ describe('ArchivesSection', () => {
         );
         expect(screen.getByTestId('archive-contents-d')).toHaveTextContent('No logbooks');
         expect(document.body.textContent).not.toContain('+1 more');
+    });
+
+    // Operator ruling 2026-09-29 (option B): every archive tags the logbook it
+    // logs to when active — the active archive's is where logging goes now.
+    it('tags each archive’s default logbook Default, and no other', async () => {
+        await renderLoaded();
+        expect(screen.getByTestId('archive-default-a-lb-1')).toHaveTextContent('Default');
+        expect(screen.queryByTestId('archive-default-a-lb-2')).toBeNull();
+        expect(screen.getByTestId('archive-default-b-lb-3')).toHaveTextContent('Default');
+        expect(screen.getAllByText('Default', { selector: 'span' })).toHaveLength(2);
     });
 
     // Review of the slice-3 worktree, finding 1: the list was read once at page

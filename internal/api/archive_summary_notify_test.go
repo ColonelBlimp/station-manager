@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 func createLogbook(t *testing.T, srv *Server, body string) *httptest.ResponseRecorder {
@@ -91,5 +93,32 @@ func TestSetup_CreatingTheDefaultLogbookNotifiesTheArchiveSummary(t *testing.T) 
 	}
 	if calls.Load() != 1 {
 		t.Fatalf("setup created the Default logbook with %d notifications, want 1", calls.Load())
+	}
+}
+
+// Setup that adopts an existing, matching logbook at the default id still
+// records it as the archive's default — which the summary marks — so it notifies
+// too (operator ruling 2026-09-29: the Default tag).
+func TestSetup_AdoptingAnExistingDefaultLogbookNotifiesTheArchiveSummary(t *testing.T) {
+	srv := testServer(t)
+	id, err := srv.db.InsertLogbookWithContext(context.Background(), types.Logbook{Name: "Home", Callsign: "M0XYZ"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != srv.cfg.Snapshot().DefaultLogbookID {
+		t.Fatalf("fixture: inserted logbook %d, want it at the default id %d", id, srv.cfg.Snapshot().DefaultLogbookID)
+	}
+	var calls atomic.Int32
+	srv.SetArchiveSummaryNotifier(func() { calls.Add(1) })
+	req := httptest.NewRequest(http.MethodPut, "/v1/config",
+		strings.NewReader(`{"logging_station":{"station_callsign":"M0XYZ"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("setup PUT = %d %s", w.Code, w.Body.String())
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("setup adopted the default logbook with %d notifications, want 1", calls.Load())
 	}
 }

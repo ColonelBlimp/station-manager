@@ -32,8 +32,8 @@ const HOME = {
     size_bytes: 12,
     modified_at: '2026-09-23T10:00:00Z',
     logbooks: [
-        { uuid: 'lb-1', name: 'Default', callsign: '7Q5MLV', qso_count: 7468 },
-        { uuid: 'lb-2', name: 'Contest', callsign: '7Q5MLV', qso_count: 1 },
+        { uuid: 'lb-1', name: 'Default', callsign: '7Q5MLV', qso_count: 7468, default: true },
+        { uuid: 'lb-2', name: 'Contest', callsign: '7Q5MLV', qso_count: 1, default: false },
     ],
     contents_status: 'current',
 };
@@ -67,8 +67,20 @@ describe('fetchQsoArchives', () => {
             lastActivationError: '',
             lastActivationCode: '',
             logbooks: [
-                { uuid: 'lb-1', name: 'Default', callsign: '7Q5MLV', qsoCount: 7468 },
-                { uuid: 'lb-2', name: 'Contest', callsign: '7Q5MLV', qsoCount: 1 },
+                {
+                    uuid: 'lb-1',
+                    name: 'Default',
+                    callsign: '7Q5MLV',
+                    qsoCount: 7468,
+                    isDefault: true,
+                },
+                {
+                    uuid: 'lb-2',
+                    name: 'Contest',
+                    callsign: '7Q5MLV',
+                    qsoCount: 1,
+                    isDefault: false,
+                },
             ],
             contentsStatus: 'current',
         });
@@ -243,7 +255,17 @@ describe('toArchive', () => {
         expect(
             toArchive({
                 ...HOME,
-                logbooks: [{ uuid: 'lb', name: 'L', callsign: 'G4ABC', qso_count: -1 }],
+                logbooks: [
+                    { uuid: 'lb', name: 'L', callsign: 'G4ABC', qso_count: -1, default: false },
+                ],
+            })
+        ).toBeNull();
+        // The Default tag (operator ruling 2026-09-29): the daemon always sends
+        // whether a logbook is its archive's default; a row without it is refused.
+        expect(
+            toArchive({
+                ...HOME,
+                logbooks: [{ uuid: 'lb', name: 'L', callsign: 'G4ABC', qso_count: 3 }],
             })
         ).toBeNull();
     });

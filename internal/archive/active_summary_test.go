@@ -2,13 +2,16 @@ package archive
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/config"
+	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
@@ -26,6 +29,10 @@ type gatedSource struct {
 	fail   bool
 	gate   chan struct{} // nil: never blocks
 	inside chan struct{} // signalled when a recount reaches the gate
+}
+
+func (g *gatedSource) ArchiveIdentityWithContext(context.Context) (sqlite.ArchiveIdentity, error) {
+	return sqlite.ArchiveIdentity{DefaultLogbookID: 1}, nil
 }
 
 func (g *gatedSource) FetchAllLogbooksWithContext(ctx context.Context) ([]types.Logbook, error) {
@@ -274,6 +281,29 @@ func TestList_ContentsOfEachArchive(t *testing.T) {
 	}
 	if v := got[unknown.Entry.ID]; v.ContentsStatus != ContentsUnknown || v.Logbooks == nil || len(v.Logbooks) != 0 {
 		t.Fatalf("no-summary inactive = %#v; want [] and unknown", v)
+	}
+}
+
+// A created archive's summary marks its seeded logbook as the default — the
+// logbook it logs to once active — and the wire names that "default".
+func TestList_ACreatedArchiveMarksItsDefaultLogbook(t *testing.T) {
+	m, _, _ := testManager(t)
+	res, err := m.Create(context.Background(), CreateRequest{
+		RequestKey: "default", Label: "Drill", LogbookName: "Drill", LogbookCallsign: "7Q5MLV",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := listByID(m)[res.Entry.ID]
+	if len(v.Logbooks) != 1 || !v.Logbooks[0].Default {
+		t.Fatalf("created archive logbooks = %+v; want its one logbook marked default", v.Logbooks)
+	}
+	raw, err := json.Marshal(v.Logbooks[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"default":true`) {
+		t.Fatalf("wire logbook = %s; want \"default\":true", raw)
 	}
 }
 

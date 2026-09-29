@@ -210,7 +210,14 @@
                                     class="text-muted"
                                     data-testid="archive-logbook-{a.id}-{logbook.uuid}"
                                 >
-                                    <td class="py-1 pr-3 pl-4">{logbook.name}</td>
+                                    <td class="py-1 pr-3 pl-4"
+                                        >{logbook.name}{#if logbook.isDefault}<span
+                                                class="ml-1 rounded border border-line px-1 text-xs"
+                                                title="The logbook this archive logs to when it is active"
+                                                data-testid="archive-default-{a.id}-{logbook.uuid}"
+                                                >Default</span
+                                            >{/if}</td
+                                    >
                                     <td class="py-1 pr-3 font-mono">{logbook.callsign}</td>
                                     <td class="py-1 pr-3">{qsoCountFmt(logbook.qsoCount)}</td>
                                     <td class="py-1 pr-3"></td>

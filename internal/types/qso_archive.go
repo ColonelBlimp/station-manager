@@ -100,6 +100,11 @@ type QsoArchiveLogbook struct {
 	Name     string `json:"name"`
 	Callsign string `json:"callsign"`
 	QsoCount int64  `json:"qso_count"`
+	// Default marks the logbook this archive logs to when it is active — the
+	// file's own default pointer (operator ruling 2026-09-29). A summary
+	// recorded before this field existed reads false until its archive next
+	// closes.
+	Default bool `json:"default"`
 }
 
 // QsoArchiveCreated is the POST /v1/qso-archives response: the archive, and

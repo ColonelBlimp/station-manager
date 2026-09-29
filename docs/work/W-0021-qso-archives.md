@@ -1452,6 +1452,16 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      loss is derived state only: that archive reads `unknown` (or its older
      summary, judged by signature) until it next closes or is imported into.
      Cross-process locking is out of scope for this change.
+     **Default tag, 2026-09-29 (operator ruling, option B):** each summary
+     logbook carries `default` — the file's own default pointer, read from its
+     identity row by `BuildLogbookSummaries`, so every archive's summary (live,
+     at close, create, import and restore) marks the logbook it logs to when
+     active; a file with no identity row marks none, and any other identity read
+     failure fails the build like a failed count. The sidecar keeps format 1: a
+     summary recorded before the field reads unmarked until its archive next
+     closes. Setup that adopts an existing default logbook now notifies the
+     summary too (the notify moved into `recordDefaultInArchive`). The SPA
+     refuses a logbook row without the flag and tags it **Default**.
 
 Deferred by the ADR and not planned here: archive delete, external attach CLI, in-process switch,
 cross-archive query.

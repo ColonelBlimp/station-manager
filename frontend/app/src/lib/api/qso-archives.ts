@@ -29,6 +29,8 @@ export interface QsoArchiveLogbook {
     name: string;
     callsign: string;
     qsoCount: number;
+    /** The logbook this archive logs to when it is active (its default). */
+    isDefault: boolean;
 }
 
 export interface QsoArchive {
@@ -110,7 +112,8 @@ function toLogbook(v: unknown): QsoArchiveLogbook | null {
         typeof v.callsign !== 'string' ||
         typeof v.qso_count !== 'number' ||
         !Number.isSafeInteger(v.qso_count) ||
-        v.qso_count < 0
+        v.qso_count < 0 ||
+        typeof v.default !== 'boolean'
     ) {
         return null;
     }
@@ -119,6 +122,7 @@ function toLogbook(v: unknown): QsoArchiveLogbook | null {
         name: v.name,
         callsign: v.callsign,
         qsoCount: v.qso_count,
+        isDefault: v.default,
     };
 }
 

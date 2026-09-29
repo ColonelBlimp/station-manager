@@ -19,7 +19,9 @@ active at a time, and everything you log goes into it.
 - **Inactive** — available, not open.
 
 Indented below each archive are all of its logbooks: the logbook name, its
-callsign and its QSO count. The list never hides extra logbooks. **1 QSO** is
+callsign and its QSO count. The list never hides extra logbooks. **Default**
+marks the logbook the archive logs to while it is active — on the active
+archive, the logbook your QSOs go to now. **1 QSO** is
 singular; larger counts include their thousands separator and **QSOs**.
 
 The active archive's counts are kept current as you log and edit. For an

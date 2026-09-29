@@ -902,7 +902,6 @@ func (s *Server) seedDefaultLogbook(r *http.Request, defaultID int64, callsign s
 		return 0, err
 	}
 	s.recordDefaultInArchive(r, id)
-	s.notifyArchiveSummary()
 	return id, nil
 }
 
@@ -917,6 +916,9 @@ func (s *Server) recordDefaultInArchive(r *http.Request, logbookID int64) {
 		s.logger.WarnWith().Err(err).Int64("default_logbook_id", logbookID).
 			Msg("config: the archive's default logbook could not be recorded; the next start reconciles it")
 	}
+	// The archive summary marks the default logbook (ADR 0084), and setup may
+	// have created that logbook too: either way it is recounted.
+	s.notifyArchiveSummary()
 }
 
 // buildConfigResponse projects a Config snapshot into the wire shape.

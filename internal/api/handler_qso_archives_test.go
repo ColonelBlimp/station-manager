@@ -177,11 +177,12 @@ func TestQsoArchives_Activate(t *testing.T) {
 }
 
 // ADR 0084 wire names: each archive carries logbooks — never null, [] when none
-// or unknown — with qso_count, and contents_status.
+// or unknown — with qso_count and default (the archive's default logbook), and
+// contents_status.
 func TestQsoArchives_ListServesContentsOnTheWire(t *testing.T) {
 	f := &fakeArchives{views: []types.QsoArchiveView{
 		{ID: "a", Label: "Home", State: types.QsoArchiveStateActive, ContentsStatus: "current",
-			Logbooks: []types.QsoArchiveLogbook{{UUID: "lb-1", Name: "Default", Callsign: "7Q5MLV", QsoCount: 7468}}},
+			Logbooks: []types.QsoArchiveLogbook{{UUID: "lb-1", Name: "Default", Callsign: "7Q5MLV", QsoCount: 7468, Default: true}}},
 		{ID: "b", Label: "New", State: types.QsoArchiveStateInactive, ContentsStatus: "unknown",
 			Logbooks: []types.QsoArchiveLogbook{}},
 	}}
@@ -190,7 +191,7 @@ func TestQsoArchives_ListServesContentsOnTheWire(t *testing.T) {
 	srv.handleListQsoArchives(w, httptest.NewRequest(http.MethodGet, "/v1/qso-archives", nil))
 	raw := w.Body.String()
 	for _, want := range []string{
-		`"logbooks":[{"uuid":"lb-1","name":"Default","callsign":"7Q5MLV","qso_count":7468}]`,
+		`"logbooks":[{"uuid":"lb-1","name":"Default","callsign":"7Q5MLV","qso_count":7468,"default":true}]`,
 		`"contents_status":"current"`,
 		`"logbooks":[]`,
 		`"contents_status":"unknown"`,
