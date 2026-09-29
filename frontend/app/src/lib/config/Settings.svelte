@@ -204,7 +204,7 @@
         <StationSection />
     </div>
     <div class:hidden={active !== 'archives'}>
-        <ArchivesSection />
+        <ArchivesSection visible={active === 'archives'} />
     </div>
     <div class:hidden={active !== 'rigs'}>
         <RigsSection />

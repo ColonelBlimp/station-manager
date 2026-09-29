@@ -277,6 +277,55 @@ func TestList_ContentsOfEachArchive(t *testing.T) {
 	}
 }
 
+// A committed WAL write can leave the main database file's signature unchanged.
+// An inactive archive with those uncheckpointed frames must not claim that the
+// persisted summary is current. An absent or empty WAL is not evidence of drift.
+func TestList_NonemptyWALMakesAnInactiveArchiveStale(t *testing.T) {
+	m, cfgSvc, _ := testManager(t)
+	res, err := m.Create(context.Background(), CreateRequest{
+		RequestKey: "wal", Label: "Drill", LogbookName: "Drill", LogbookCallsign: "7Q5MLV",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := listByID(m)[res.Entry.ID]; v.ContentsStatus != ContentsCurrent {
+		t.Fatalf("closed archive with no WAL = %s, want current", v.ContentsStatus)
+	}
+	if err := os.WriteFile(res.Path+"-wal", nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if v := listByID(m)[res.Entry.ID]; v.ContentsStatus != ContentsCurrent {
+		t.Fatalf("closed archive with an empty WAL = %s, want current", v.ContentsStatus)
+	}
+	if err := os.Remove(res.Path + "-wal"); err != nil {
+		t.Fatal(err)
+	}
+
+	db := openManaged(t, cfgSvc.Snapshot(), res.Path)
+	if _, err := db.InsertLogbookWithContext(context.Background(), types.Logbook{Name: "Late", Callsign: "7Q5MLV"}); err != nil {
+		t.Fatal(err)
+	}
+	wal, err := os.Stat(res.Path + "-wal")
+	if err != nil || wal.Size() == 0 {
+		t.Fatalf("fixture: committed change left no WAL frames (%v)", err)
+	}
+	sums, miss := ReadSummaries(SummariesPath(cfgSvc.Snapshot()))
+	if miss != "" {
+		t.Fatalf("read summaries: %s", miss)
+	}
+	now, err := SignatureOf(res.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sums[res.Entry.ID].Current(now) {
+		t.Fatalf("fixture: the main-file signature changed despite the WAL-only commit: saved %+v now %+v", sums[res.Entry.ID].Signature, now)
+	}
+
+	if v := listByID(m)[res.Entry.ID]; v.ContentsStatus != ContentsStale {
+		t.Fatalf("inactive archive with a nonempty WAL = %+v; want its last-known contents, stale", v)
+	}
+}
+
 // A tracker for another archive (a stale wiring, a switch in flight) must never
 // label this one: the active archive then reads from the sidecar like any other.
 func TestList_ATrackerForAnotherArchiveIsIgnored(t *testing.T) {

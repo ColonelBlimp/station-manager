@@ -25,6 +25,7 @@ import { reloadPage } from '../utils/reload';
 import { draft, clearDraft } from '../operate/qso.svelte';
 import { showFtSettings, takeSettingsTab } from '../router.svelte';
 import { toastsState, _resetForTests } from '../ui/toasts.svelte';
+import { archivesState, _resetArchivesForTests } from './archives.svelte';
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
@@ -238,5 +239,52 @@ describe('Settings — the FT8 / FT4 tab', () => {
         unmount();
         render(Settings); // the handoff was taken once
         expect(screen.getByRole('button', { name: 'Station' }).className).toMatch(/border-focus/);
+    });
+});
+
+// Review of the slice-3 worktree, finding 1: the sections stay mounted and
+// hidden, so the Archives list must be read on every opening of its tab, not
+// only on first load (operator ruling 2026-09-29: on open, not by polling).
+describe('Settings — the Archives tab', () => {
+    const isArchivesUrl = (url: unknown): boolean =>
+        (typeof url === 'string'
+            ? url
+            : url instanceof URL
+              ? url.href
+              : url instanceof Request
+                ? url.url
+                : ''
+        ).includes('/v1/qso-archives');
+    const archiveReads = (): number =>
+        vi.mocked(fetch).mock.calls.filter(([url]) => isArchivesUrl(url)).length;
+
+    it('reads the archive list each time the tab opens, and not while it is hidden', async () => {
+        // A real (empty) catalogue, so the list counts as loaded: a read that is
+        // skipped once loaded must not pass this test.
+        _resetArchivesForTests();
+        vi.mocked(fetch).mockImplementation((url) =>
+            Promise.resolve(
+                new Response(isArchivesUrl(url) ? '{"archives":[]}' : '{}', {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                })
+            )
+        );
+        render(Settings);
+        await flush();
+        expect(archivesState.loaded).toBe(true);
+        const atMount = archiveReads();
+
+        await fireEvent.click(screen.getByRole('button', { name: 'Archives' }));
+        await flush();
+        expect(archiveReads()).toBe(atMount + 1);
+
+        await fireEvent.click(screen.getByRole('button', { name: 'Station' }));
+        await flush();
+        expect(archiveReads()).toBe(atMount + 1);
+
+        await fireEvent.click(screen.getByRole('button', { name: 'Archives' }));
+        await flush();
+        expect(archiveReads()).toBe(atMount + 2);
     });
 });

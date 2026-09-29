@@ -18,6 +18,18 @@ active at a time, and everything you log goes into it.
   to open it.
 - **Inactive** — available, not open.
 
+Indented below each archive are all of its logbooks: the logbook name, its
+callsign and its QSO count. The list never hides extra logbooks. **1 QSO** is
+singular; larger counts include their thousands separator and **QSOs**.
+
+The active archive's counts are kept current as you log and edit. For an
+inactive archive, Station Manager remembers the contents from its last clean
+close, creation, import or restore. If the file has changed since that summary,
+the list keeps the last-known logbooks and says **Counts may be out of date —
+the file changed since it was last open**. **Not known until it has been
+opened** means no summary exists yet; **No logbooks** means the archive is known
+to be empty.
+
 The header also shows the active archive above the logbook name. Picking
 another archive there does the same as **Activate** in Settings.
 

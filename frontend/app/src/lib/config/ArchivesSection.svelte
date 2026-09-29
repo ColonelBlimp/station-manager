@@ -1,11 +1,11 @@
 <script lang="ts">
-    // Archives section (ADR 0071, W-0021 slice 4): the station's QSO archives —
+    // Archives section (ADR 0071 and 0084): the station's QSO archives —
     // separate database files, one active at a time. The list shows the daemon's
     // own state for each (active / pending / inactive): a candidate is pending
     // until the restart proves it. Activation restarts the daemon (the attended
     // restart is the switch); creation provisions an inactive managed archive
     // named by its semantics — never a path.
-    import { onMount } from 'svelte';
+    import { onMount, untrack } from 'svelte';
     import ManualLink from './ManualLink.svelte';
     import {
         activateArchive,
@@ -18,8 +18,17 @@
     import type { QsoArchive } from '../api/qso-archives';
     import { isValidCallsign } from '../validators/callsign';
 
+    // visible: Settings keeps every section mounted and hides the inactive ones.
+    // The list is read again on every opening of the tab — never by polling — so
+    // the active archive's counts are as of that opening, not of page load
+    // (operator ruling 2026-09-29). A hidden mount reads it only if nothing has.
+    let { visible = true }: { visible?: boolean } = $props();
+
     onMount(() => {
-        if (!archivesState.loaded) void loadArchives();
+        if (!visible && !archivesState.loaded) void loadArchives();
+    });
+    $effect(() => {
+        if (visible) untrack(() => void loadArchives());
     });
 
     // The create form. requestKey is minted when the form is first touched and
@@ -92,6 +101,7 @@
     };
     const stateLabel = (a: QsoArchive): string =>
         a.state === 'active' ? 'Active' : a.state === 'pending' ? 'Pending restart' : 'Inactive';
+    const qsoCountFmt = (n: number): string => `${n.toLocaleString()} ${n === 1 ? 'QSO' : 'QSOs'}`;
 </script>
 
 <div class="space-y-8">
@@ -186,8 +196,47 @@
                                 {/if}
                             </td>
                         </tr>
+                        {#if a.contentsStatus === 'unknown'}
+                            <tr data-testid="archive-contents-{a.id}">
+                                <td colspan="5" class="pb-2 pl-4 text-xs text-muted">
+                                    {a.state === 'active'
+                                        ? 'Current counts are not available'
+                                        : 'Not known until it has been opened'}
+                                </td>
+                            </tr>
+                        {:else}
+                            {#each a.logbooks as logbook (logbook.uuid)}
+                                <tr
+                                    class="text-muted"
+                                    data-testid="archive-logbook-{a.id}-{logbook.uuid}"
+                                >
+                                    <td class="py-1 pr-3 pl-4">{logbook.name}</td>
+                                    <td class="py-1 pr-3 font-mono">{logbook.callsign}</td>
+                                    <td class="py-1 pr-3">{qsoCountFmt(logbook.qsoCount)}</td>
+                                    <td class="py-1 pr-3"></td>
+                                    <td class="py-1"></td>
+                                </tr>
+                            {:else}
+                                <tr data-testid="archive-contents-{a.id}">
+                                    <td colspan="5" class="pb-2 pl-4 text-xs text-muted">
+                                        No logbooks
+                                    </td>
+                                </tr>
+                            {/each}
+                            {#if a.contentsStatus === 'stale'}
+                                <tr data-testid="archive-stale-{a.id}">
+                                    <td colspan="5" class="pb-2 pl-4 text-xs text-muted">
+                                        <!-- The active archive is open: its stale is a recount
+                                             in flight, not a file changed while closed. -->
+                                        {a.state === 'active'
+                                            ? 'Counts are being updated'
+                                            : 'Counts may be out of date — the file changed since it was last open'}
+                                    </td>
+                                </tr>
+                            {/if}
+                        {/if}
                     {:else}
-                        <tr><td colspan="6" class="py-2 text-muted">No archives yet.</td></tr>
+                        <tr><td colspan="5" class="py-2 text-muted">No archives yet.</td></tr>
                     {/each}
                 </tbody>
             </table>

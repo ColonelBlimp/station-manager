@@ -140,6 +140,83 @@ func TestImport_TargetsTheActiveArchiveOrTheNamedOne(t *testing.T) {
 	}
 }
 
+// ADR 0084 slice 2c: an offline import rebuilds the NAMED target archive's
+// summary, then closes/checkpoints the database before stamping its signature.
+func TestImport_RebuildsTheTargetArchiveSummaryAfterClose(t *testing.T) {
+	var legacyPath string
+	tmp := setupImportTestbed(t, func(c *config.Config) {
+		legacyPath = c.Datastore.Path
+		c.QsoArchives = []types.QsoArchiveConfig{
+			{ID: archA, Label: "Home", Ownership: types.QsoArchiveOwnershipLegacy, Path: legacyPath},
+			{ID: archB, Label: "Contest", Ownership: types.QsoArchiveOwnershipManaged},
+		}
+		c.ActiveQsoArchiveID = archA
+	})
+	cfg, err := config.Load(filepath.Join(tmp, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	managedPath := provisionManagedFile(t, cfg, archB)
+	adifPath := writeADIF(t, tmp, "input.adi", sampleRecord)
+
+	if err := runImport([]string{"--archive", archB, adifPath}); err != nil {
+		t.Fatalf("import --archive: %v", err)
+	}
+	sums, miss := archive.ReadSummaries(archive.SummariesPath(cfg))
+	if miss != "" {
+		t.Fatalf("read summaries: %s", miss)
+	}
+	got, ok := sums[archB]
+	if !ok || len(got.Logbooks) != 1 || got.Logbooks[0].Name != "Contest" || got.Logbooks[0].QsoCount != 1 {
+		t.Fatalf("target summary = %+v (present %v); want Contest with 1 QSO", got, ok)
+	}
+	if _, ok := sums[archA]; ok {
+		t.Fatal("import into Contest rebuilt Home's summary")
+	}
+	if _, err := os.Stat(managedPath + "-wal"); err == nil {
+		t.Fatal("target archive's WAL survived the import close")
+	}
+	now, err := archive.SignatureOf(managedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Current(now) {
+		t.Fatalf("target summary was not stamped after close: saved %+v now %+v", got.Signature, now)
+	}
+}
+
+// The summary is discardable derived state: even a sidecar path that cannot be
+// replaced must not turn a successfully stored import into a command failure.
+func TestImport_ASummaryWriteFailureDoesNotFailTheImport(t *testing.T) {
+	var archivePath string
+	tmp := setupImportTestbed(t, func(c *config.Config) {
+		archivePath = c.Datastore.Path
+		c.QsoArchives = []types.QsoArchiveConfig{{
+			ID: archA, Label: "Home", Ownership: types.QsoArchiveOwnershipLegacy, Path: archivePath,
+		}}
+		c.ActiveQsoArchiveID = archA
+	})
+	cfg, err := config.Load(filepath.Join(tmp, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	giveIdentity(t, cfg, archivePath, archA)
+	// A directory at the sidecar's filename makes its atomic rename fail.
+	if err := os.Mkdir(archive.SummariesPath(cfg), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	adifPath := writeADIF(t, tmp, "input.adi", sampleRecord)
+
+	if err := runImport([]string{adifPath}); err != nil {
+		t.Fatalf("summary write failure escaped the successful import: %v", err)
+	}
+	db := openArchiveFile(t, cfg, archivePath)
+	qsos, err := db.FetchQsoSliceByLogbookIdWithContext(context.Background(), 1)
+	if err != nil || len(qsos) != 1 {
+		t.Fatalf("stored QSOs = %d (%v), want 1 despite the summary failure", len(qsos), err)
+	}
+}
+
 // reference.db is station-global: with an EXTERNAL QSO file and no catalogue
 // (pre-adoption), import must create it under <data_dir>/db, not beside the QSO file.
 func TestImport_ReferenceDBIsGlobalNotBesideAnExternalQsoFile(t *testing.T) {

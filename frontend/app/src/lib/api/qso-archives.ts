@@ -22,6 +22,14 @@ import {
 
 export type ArchiveOwnership = 'managed' | 'legacy' | 'external';
 export type ArchiveState = 'active' | 'pending' | 'inactive';
+export type ArchiveContentsStatus = 'current' | 'stale' | 'unknown';
+
+export interface QsoArchiveLogbook {
+    uuid: string;
+    name: string;
+    callsign: string;
+    qsoCount: number;
+}
 
 export interface QsoArchive {
     id: string;
@@ -36,6 +44,10 @@ export interface QsoArchive {
     sizeBytes: number | null;
     /** The file's last write (RFC 3339, UTC); null when unknown. Not a "last opened". */
     modifiedAt: string | null;
+    /** Every last-known logbook in the archive; [] when known empty or unknown. */
+    logbooks: readonly QsoArchiveLogbook[];
+    /** Whether logbooks/counts describe the archive as it is now. */
+    contentsStatus: ArchiveContentsStatus;
 }
 
 export interface CreateArchiveInput {
@@ -88,12 +100,40 @@ export async function fetchDaemonIdentity(signal?: AbortSignal): Promise<DaemonI
 
 const OWNERSHIPS: ArchiveOwnership[] = ['managed', 'legacy', 'external'];
 const STATES: ArchiveState[] = ['active', 'pending', 'inactive'];
+const CONTENTS_STATUSES: ArchiveContentsStatus[] = ['current', 'stale', 'unknown'];
+
+function toLogbook(v: unknown): QsoArchiveLogbook | null {
+    if (
+        !isPlainObject(v) ||
+        typeof v.uuid !== 'string' ||
+        typeof v.name !== 'string' ||
+        typeof v.callsign !== 'string' ||
+        typeof v.qso_count !== 'number' ||
+        !Number.isSafeInteger(v.qso_count) ||
+        v.qso_count < 0
+    ) {
+        return null;
+    }
+    return {
+        uuid: v.uuid,
+        name: v.name,
+        callsign: v.callsign,
+        qsoCount: v.qso_count,
+    };
+}
 
 export function toArchive(v: unknown): QsoArchive | null {
     if (!isPlainObject(v) || typeof v.id !== 'string' || typeof v.label !== 'string') return null;
     const ownership = OWNERSHIPS.find((o) => o === v.ownership);
     const state = STATES.find((s) => s === v.state);
-    if (!ownership || !state) return null;
+    const contentsStatus = CONTENTS_STATUSES.find((s) => s === v.contents_status);
+    if (!ownership || !state || !contentsStatus || !Array.isArray(v.logbooks)) return null;
+    const logbooks: QsoArchiveLogbook[] = [];
+    for (const raw of v.logbooks) {
+        const logbook = toLogbook(raw);
+        if (!logbook) return null;
+        logbooks.push(logbook);
+    }
     return {
         id: v.id,
         label: v.label,
@@ -105,6 +145,8 @@ export function toArchive(v: unknown): QsoArchive | null {
             typeof v.last_activation_code === 'string' ? v.last_activation_code : '',
         sizeBytes: typeof v.size_bytes === 'number' ? v.size_bytes : null,
         modifiedAt: typeof v.modified_at === 'string' ? v.modified_at : null,
+        logbooks,
+        contentsStatus,
     };
 }
 

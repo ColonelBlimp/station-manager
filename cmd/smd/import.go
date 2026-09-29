@@ -179,7 +179,7 @@ func runImport(args []string) error {
 	if err != nil {
 		return errors.New(op).WithErr(err)
 	}
-	defer closeDBs()
+	defer closeArchiveDatabasesAndRecordSummary(cfg, paths, dbSvc, closeDBs, loggerSvc)
 
 	// ---- Resolve target logbook.
 	if logbookID, err = targetLogbook(logbookID, dbSvc, paths, cfg); err != nil {

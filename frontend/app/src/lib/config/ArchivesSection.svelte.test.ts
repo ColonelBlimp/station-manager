@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/svelte';
+import { render, screen, fireEvent, within } from '@testing-library/svelte';
 import { flushSync } from 'svelte';
 
 vi.mock('../api/qso-archives', () => ({
@@ -35,6 +35,11 @@ const HOME = {
     lastActivationCode: '',
     sizeBytes: 2048,
     modifiedAt: '2026-09-23T10:00:00Z',
+    logbooks: [
+        { uuid: 'lb-1', name: 'Default', callsign: '7Q5MLV', qsoCount: 7468 },
+        { uuid: 'lb-2', name: 'Contest', callsign: '7Q5MLV', qsoCount: 1 },
+    ],
+    contentsStatus: 'current',
 } as const;
 const CONTEST = {
     id: 'b',
@@ -45,6 +50,8 @@ const CONTEST = {
     lastActivationCode: '',
     sizeBytes: null,
     modifiedAt: null,
+    logbooks: [{ uuid: 'lb-3', name: 'CQWW', callsign: 'G4ABC', qsoCount: 312 }],
+    contentsStatus: 'stale',
 } as const;
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
@@ -106,6 +113,115 @@ describe('ArchivesSection', () => {
             'Last written',
             'Actions',
         ]);
+    });
+
+    it('nests every logbook and distinguishes stale, unknown and known-empty contents', async () => {
+        await renderLoaded([
+            HOME,
+            CONTEST,
+            {
+                ...CONTEST,
+                id: 'c',
+                label: 'New archive',
+                lastActivationError: '',
+                logbooks: [],
+                contentsStatus: 'unknown',
+            },
+            {
+                ...CONTEST,
+                id: 'd',
+                label: 'Empty archive',
+                lastActivationError: '',
+                logbooks: [],
+                contentsStatus: 'current',
+            },
+        ]);
+
+        const cells = (id: string) =>
+            within(screen.getByTestId(id))
+                .getAllByRole('cell')
+                .map((cell) => cell.textContent?.trim());
+        expect(cells('archive-logbook-a-lb-1')).toEqual([
+            'Default',
+            '7Q5MLV',
+            '7,468 QSOs',
+            '',
+            '',
+        ]);
+        expect(cells('archive-logbook-a-lb-2')).toEqual(['Contest', '7Q5MLV', '1 QSO', '', '']);
+        expect(cells('archive-logbook-b-lb-3')).toEqual(['CQWW', 'G4ABC', '312 QSOs', '', '']);
+        expect(screen.getByTestId('archive-stale-b')).toHaveTextContent(
+            'Counts may be out of date — the file changed since it was last open'
+        );
+        expect(screen.getByTestId('archive-contents-c')).toHaveTextContent(
+            'Not known until it has been opened'
+        );
+        expect(screen.getByTestId('archive-contents-d')).toHaveTextContent('No logbooks');
+        expect(document.body.textContent).not.toContain('+1 more');
+    });
+
+    // Review of the slice-3 worktree, finding 1: the list was read once at page
+    // load, so the active archive's counts froze at their boot value. Every
+    // opening of the tab reads it again (operator ruling 2026-09-29: on open, not
+    // by polling); a hidden tab reads nothing.
+    it('reads the list again each time the tab opens, so the active counts are current', async () => {
+        const withDefault = (qsoCount: number) => ({
+            ...HOME,
+            logbooks: [{ ...HOME.logbooks[0], qsoCount }],
+        });
+        const countCell = () =>
+            within(screen.getByTestId('archive-logbook-a-lb-1')).getAllByRole('cell')[2];
+        // The page-load read.
+        vi.mocked(fetchQsoArchives).mockResolvedValue({
+            kind: 'ok',
+            archives: [withDefault(7468)],
+        } as never);
+        await loadArchives();
+
+        // QSOs were logged since; the tab opens for the first time.
+        vi.mocked(fetchQsoArchives).mockResolvedValue({
+            kind: 'ok',
+            archives: [withDefault(7473)],
+        } as never);
+        const { rerender } = render(ArchivesSection, { props: { visible: true } });
+        await flush();
+        flushSync();
+        expect(countCell()).toHaveTextContent('7,473 QSOs');
+
+        await rerender({ visible: false });
+        await flush();
+        const readsWhileHidden = vi.mocked(fetchQsoArchives).mock.calls.length;
+        vi.mocked(fetchQsoArchives).mockResolvedValue({
+            kind: 'ok',
+            archives: [withDefault(7480)],
+        } as never);
+        await flush();
+        expect(vi.mocked(fetchQsoArchives).mock.calls.length).toBe(readsWhileHidden);
+
+        await rerender({ visible: true });
+        await flush();
+        flushSync();
+        expect(countCell()).toHaveTextContent('7,480 QSOs');
+        expect(vi.mocked(fetchQsoArchives).mock.calls.length).toBe(readsWhileHidden + 1);
+    });
+
+    // The inactive wording speaks of a closed file; the active archive is open,
+    // so its own states read differently (operator ruling 2026-09-29).
+    it('words the active archive’s stale contents for an open archive', async () => {
+        await renderLoaded([{ ...HOME, contentsStatus: 'stale' }, CONTEST]);
+        expect(screen.getByTestId('archive-stale-a')).toHaveTextContent('Counts are being updated');
+        expect(screen.getByTestId('archive-stale-a')).not.toHaveTextContent('last open');
+        expect(screen.getByTestId('archive-stale-b')).toHaveTextContent(
+            'Counts may be out of date — the file changed since it was last open'
+        );
+    });
+
+    it('words the active archive’s unknown contents for an open archive', async () => {
+        await renderLoaded([{ ...HOME, logbooks: [], contentsStatus: 'unknown' }]);
+        expect(screen.getByTestId('archive-contents-a')).toHaveTextContent(
+            'Current counts are not available'
+        );
+        expect(screen.getByTestId('archive-contents-a')).not.toHaveTextContent('opened');
     });
 
     it('a failed re-read shows the retained list as stale, with Retry, and disables Activate', async () => {

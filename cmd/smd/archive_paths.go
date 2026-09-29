@@ -5,6 +5,7 @@ import (
 	stderr "errors"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/archive"
 	"github.com/ColonelBlimp/station-manager/internal/config"
@@ -39,9 +40,11 @@ func resolveArchivePaths(cfg config.Config, id string, report io.Writer) (archiv
 // and migrate the QSO file and the station-global reference database, and
 // apply the ST-6 modes — exactly what the daemon's own startup does, so a
 // command can never open a different file than the daemon would. The returned
-// func closes both databases; the caller defers it.
+// func closes both databases and reports only whether the QSO database closed;
+// the caller defers it directly or wraps it with
+// closeArchiveDatabasesAndRecordSummary.
 func openArchiveDatabases(cfg config.Config, cfgSvc *config.Service, archiveID string,
-	dbSvc, refDbSvc *sqlite.Service, loggerSvc *logging.Service, report io.Writer) (archive.Paths, func(), error) {
+	dbSvc, refDbSvc *sqlite.Service, loggerSvc *logging.Service, report io.Writer) (archive.Paths, func() error, error) {
 	const op errors.Op = "smd.openArchiveDatabases"
 	paths, err := resolveArchivePaths(cfg, archiveID, report)
 	if err != nil {
@@ -55,10 +58,12 @@ func openArchiveDatabases(cfg config.Config, cfgSvc *config.Service, archiveID s
 	if err := sqlite.BootstrapReferenceSplit(paths.QSO, paths.Reference, paths.Backups, loggerSvc); err != nil {
 		return paths, nil, errors.New(op).WithErr(err).WithMsg("bootstrap reference split")
 	}
-	closeLogged := func(svc *sqlite.Service, what string) {
+	closeLogged := func(svc *sqlite.Service, what string) error {
 		if cerr := svc.Close(); cerr != nil {
 			loggerSvc.ErrorWith().Err(cerr).Msg(what + " close error")
+			return cerr
 		}
+		return nil
 	}
 	dbSvc.SetMigrationSets(sqlite.MigrationSetLog)
 	dbSvc.SetDatabasePath(paths.QSO)
@@ -66,28 +71,64 @@ func openArchiveDatabases(cfg config.Config, cfgSvc *config.Service, archiveID s
 		return paths, nil, errors.New(op).WithErr(err).WithMsg("open database")
 	}
 	if err := dbSvc.Migrate(); err != nil {
-		closeLogged(dbSvc, "database")
+		_ = closeLogged(dbSvc, "database")
 		return paths, nil, errors.New(op).WithErr(err).WithMsg("run migrations")
 	}
 	refDbSvc.SetMigrationSets(sqlite.MigrationSetReference)
 	refDbSvc.SetDatabasePath(paths.Reference)
 	if err := refDbSvc.Open(); err != nil {
-		closeLogged(dbSvc, "database")
+		_ = closeLogged(dbSvc, "database")
 		return paths, nil, errors.New(op).WithErr(err).WithMsg("open reference database")
 	}
-	closeBoth := func() { closeLogged(refDbSvc, "reference database"); closeLogged(dbSvc, "database") }
+	closeBoth := func() error {
+		_ = closeLogged(refDbSvc, "reference database")
+		return closeLogged(dbSvc, "database")
+	}
 	if err := refDbSvc.Migrate(); err != nil {
-		closeBoth()
+		_ = closeBoth()
 		return paths, nil, errors.New(op).WithErr(err).WithMsg("run reference migrations")
 	}
 	// ST-6: a command opens/writes the same databases, so it must make them
 	// owner-private too (else a permissive-umask run leaves readable QSO data
 	// until a later daemon start).
 	if err := sqlite.SecureDataFiles(cfgSvc.WorkingDir(), paths.Backups, loggerSvc, dbSvc.DatabaseConfig.Path, paths.Reference); err != nil {
-		closeBoth()
+		_ = closeBoth()
 		return paths, nil, errors.New(op).WithErr(err).WithMsg("secure database files")
 	}
 	return paths, closeBoth, nil
+}
+
+// closeArchiveDatabasesAndRecordSummary finalises an offline import or restore
+// (ADR 0084 slice 2c). Recount and checkpoint happen while the target is open;
+// its summary is stamped only after the QSO database closed successfully. Every
+// summary failure is derived-state-only: diagnose it, but never change the
+// command's data outcome. A pre-adoption target has no stable archive id yet.
+func closeArchiveDatabasesAndRecordSummary(cfg config.Config, paths archive.Paths, dbSvc *sqlite.Service,
+	closeDBs func() error, loggerSvc *logging.Service) {
+	if paths.Entry == nil {
+		_ = closeDBs()
+		return
+	}
+
+	ctx := context.Background()
+	logbooks, summaryErr := archive.BuildLogbookSummaries(ctx, dbSvc)
+	if summaryErr == nil {
+		if summaryErr = dbSvc.CheckpointTruncateWithContext(ctx); summaryErr != nil {
+			summaryErr = fmt.Errorf("checkpoint before close did not complete: %w", summaryErr)
+		}
+	}
+	if closeErr := closeDBs(); closeErr != nil {
+		return
+	}
+	if summaryErr != nil {
+		loggerSvc.WarnWith().Err(summaryErr).Str("archive_id", paths.Entry.ID).
+			Msg("archive: the archive summary was not recorded after the offline command")
+		return
+	}
+	if err := archive.RecordClosedArchive(archive.SummariesPath(cfg), paths.Entry.ID, paths.QSO, logbooks, time.Now()); err != nil {
+		loggerSvc.WarnWith().Err(err).Str("archive_id", paths.Entry.ID).
+			Msg("archive: could not record the archive summary after the offline command")
+	}
 }
 
 // verifyArchiveIdentity proves, BEFORE any split, migration or write, that the

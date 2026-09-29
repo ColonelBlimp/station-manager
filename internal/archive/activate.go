@@ -65,7 +65,7 @@ func (m *Manager) liveSummary() ActiveSummaryView {
 // contentsOf is what an archive holds and whether that can be trusted: the
 // active archive's live summary when the tracker is for it; otherwise the
 // sidecar's, current only while the file still matches the signature it was
-// taken against. Never nil logbooks.
+// taken against and no committed changes remain in its WAL. Never nil logbooks.
 func contentsOf(snap config.Config, e types.QsoArchiveConfig, sums Summaries, active ActiveSummaryView) ([]types.QsoArchiveLogbook, string) {
 	if active != nil && e.ID == snap.ActiveQsoArchiveID {
 		if id, lbs, status := active.Snapshot(); id == e.ID {
@@ -83,10 +83,22 @@ func contentsOf(snap config.Config, e types.QsoArchiveConfig, sums Summaries, ac
 	if lbs == nil {
 		lbs = []types.QsoArchiveLogbook{}
 	}
-	if now, err := SignatureOf(PathFor(snap, e)); err == nil && s.Current(now) {
+	path := PathFor(snap, e)
+	if now, err := SignatureOf(path); err == nil && s.Current(now) && walEmptyOrMissing(path) {
 		return lbs, ContentsCurrent
 	}
 	return lbs, ContentsStale
+}
+
+// walEmptyOrMissing reports whether the main-file signature covers the whole
+// archive. SQLite may commit into a nonempty WAL without changing that signature;
+// any other stat failure also leaves freshness unproven.
+func walEmptyOrMissing(dbPath string) bool {
+	fi, err := os.Stat(dbPath + "-wal")
+	if err != nil {
+		return os.IsNotExist(err)
+	}
+	return fi.Size() == 0
 }
 
 func viewOf(snap config.Config, e types.QsoArchiveConfig) types.QsoArchiveView {

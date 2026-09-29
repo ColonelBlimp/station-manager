@@ -51,6 +51,8 @@ const HOME = {
     lastActivationCode: '',
     sizeBytes: 1,
     modifiedAt: null,
+    logbooks: [],
+    contentsStatus: 'current',
 } as const;
 const CONTEST = {
     id: 'b',
@@ -61,6 +63,8 @@ const CONTEST = {
     lastActivationCode: '',
     sizeBytes: 1,
     modifiedAt: null,
+    logbooks: [],
+    contentsStatus: 'current',
 } as const;
 
 const hasToast = (level: string, re: RegExp): boolean =>

@@ -31,6 +31,11 @@ const HOME = {
     state: 'active',
     size_bytes: 12,
     modified_at: '2026-09-23T10:00:00Z',
+    logbooks: [
+        { uuid: 'lb-1', name: 'Default', callsign: '7Q5MLV', qso_count: 7468 },
+        { uuid: 'lb-2', name: 'Contest', callsign: '7Q5MLV', qso_count: 1 },
+    ],
+    contents_status: 'current',
 };
 const CONTEST = {
     id: 'b',
@@ -38,6 +43,8 @@ const CONTEST = {
     ownership: 'managed',
     state: 'inactive',
     last_activation_error: 'x',
+    logbooks: [],
+    contents_status: 'unknown',
 };
 
 describe('fetchQsoArchives', () => {
@@ -59,6 +66,11 @@ describe('fetchQsoArchives', () => {
             modifiedAt: '2026-09-23T10:00:00Z',
             lastActivationError: '',
             lastActivationCode: '',
+            logbooks: [
+                { uuid: 'lb-1', name: 'Default', callsign: '7Q5MLV', qsoCount: 7468 },
+                { uuid: 'lb-2', name: 'Contest', callsign: '7Q5MLV', qsoCount: 1 },
+            ],
+            contentsStatus: 'current',
         });
         expect(out.archives[1]).toMatchObject({
             state: 'inactive',
@@ -66,6 +78,8 @@ describe('fetchQsoArchives', () => {
             modifiedAt: null,
             lastActivationError: 'x',
             lastActivationCode: '',
+            logbooks: [],
+            contentsStatus: 'unknown',
         });
     });
 
@@ -214,8 +228,23 @@ describe('fetchDaemonIdentity', () => {
 });
 
 describe('toArchive', () => {
-    it('refuses a row without a known state or ownership', () => {
+    it('refuses a row without a known state, ownership or complete contents', () => {
         expect(toArchive({ id: 'a', label: 'x', ownership: 'managed', state: 'later' })).toBeNull();
         expect(toArchive({ id: 'a', label: 'x', ownership: 'cloud', state: 'active' })).toBeNull();
+        expect(
+            toArchive({ id: 'a', label: 'x', ownership: 'managed', state: 'active' })
+        ).toBeNull();
+        expect(
+            toArchive({
+                ...HOME,
+                contents_status: 'fresh',
+            })
+        ).toBeNull();
+        expect(
+            toArchive({
+                ...HOME,
+                logbooks: [{ uuid: 'lb', name: 'L', callsign: 'G4ABC', qso_count: -1 }],
+            })
+        ).toBeNull();
     });
 });

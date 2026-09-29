@@ -214,6 +214,8 @@ describe('Header archive selector', () => {
         lastActivationCode: '',
         sizeBytes: null,
         modifiedAt: null,
+        logbooks: [],
+        contentsStatus: 'current',
     } as const;
     const CONTEST = {
         id: 'b',
@@ -224,6 +226,8 @@ describe('Header archive selector', () => {
         lastActivationCode: '',
         sizeBytes: null,
         modifiedAt: null,
+        logbooks: [],
+        contentsStatus: 'current',
     } as const;
 
     it('is absent until the catalogue is known, then names the active archive', () => {

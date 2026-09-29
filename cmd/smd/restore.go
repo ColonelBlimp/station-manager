@@ -21,6 +21,10 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
+// fetchSMCloudExport is the restore command's network boundary. Kept as a seam
+// so command tests can exercise the real restore/database/close path offline.
+var fetchSMCloudExport = smcloud.FetchExport
+
 // runRestore is the entry point for `smd restore` — the SM Cloud restore
 // path (ADR 0040 S5): pull GET /v1/export from the operator's smcloud
 // service and insert every QSO of one cloud logbook into a LOCAL logbook
@@ -87,7 +91,7 @@ func runRestore(args []string) error {
 
 	// ---- Pull the export.
 	_, _ = fmt.Fprintf(os.Stderr, "fetching export via forwarder %q…\n", fc.Name)
-	export, err := smcloud.FetchExport(context.Background(), *fc)
+	export, err := fetchSMCloudExport(context.Background(), *fc)
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("fetch export")
 	}
@@ -184,7 +188,7 @@ func runRestore(args []string) error {
 	if err != nil {
 		return errors.New(op).WithErr(err)
 	}
-	defer closeDBs()
+	defer closeArchiveDatabasesAndRecordSummary(cfg, paths, dbSvc, closeDBs, loggerSvc)
 
 	// ---- Resolve the LOCAL target logbook.
 	if logbookID, err = targetLogbook(logbookID, dbSvc, paths, cfg); err != nil {

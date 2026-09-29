@@ -1424,6 +1424,34 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      schedules another; the active summary reads `stale` while dirty or recounting and
      `current` only after a successful recount; then the API exposure. **2c** — `smd
      import` / `smd restore` rebuild the target archive's summary after close.
+     **Built 2026-09-29 (2b review fix, 2c and slice 3):** an inactive archive
+     with a non-empty WAL now reads stale even when its main-file signature still
+     matches (absent and zero-byte WALs remain current); both offline commands
+     recount their selected target, checkpoint and close it before recording the
+     final signature, with every summary failure remaining non-fatal; the SPA
+     strictly decodes the contents wire and renders every logbook plus the ruled
+     stale, unknown and known-empty messages; the manual explains the list.
+     Reversion proofs removed the WAL predicate, both command finalisers, the
+     decoder mapping and the nested iteration: each reached its intended new
+     assertion before restoration. Focused Go packages and all frontend gates
+     passed (1,973 frontend tests; zero Svelte warnings); `task ci:local` then
+     passed the full race, non-race, build and boundary gate.
+     **Review of that worktree, 2026-09-29 (rulings the same day):** the SPA read
+     the catalogue once at page load, so the active archive's counts froze at
+     their boot value; the Archives tab now reads it again on every opening,
+     never by polling, and a hidden tab reads nothing. The active archive's
+     statuses have their own wording, because it is open: `stale` reads **Counts
+     are being updated** and `unknown` reads **Current counts are not available**.
+     Inactive archives keep the closed-file wording. Reversion proofs covered the
+     reload (the section and the Settings tab), and each wording.
+     **Deferred risk, bounded (ruled not to fix here):** `smd import` / `smd
+     restore` assume the daemon is stopped but do not enforce it. Run against an
+     inactive archive while the daemon runs, the command and the daemon can both
+     merge into `qso-archive-summaries.json`; `MergeSummary`'s lock serializes
+     only within one process, so one merge can overwrite the other's entry. The
+     loss is derived state only: that archive reads `unknown` (or its older
+     summary, judged by signature) until it next closes or is imported into.
+     Cross-process locking is out of scope for this change.
 
 Deferred by the ADR and not planned here: archive delete, external attach CLI, in-process switch,
 cross-archive query.
