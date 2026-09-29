@@ -1538,6 +1538,23 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      edits can come to nothing (every edit, the end of any save including a
      refused one, a discard, the end of a load), not only on Discard. Reversion
      proofs for each rule failed their intended tests.
+     **New archive form in the leave guard (inbox gap, ruled 2026-09-29).** The
+     form's draft (label, first logbook, callsign, request key) moved from
+     `ArchivesSection.svelte` into `archiveDraft` in `archives.svelte.ts`, and
+     Archives joined the guard, last, as on the tab strip: an empty form (or a
+     request key alone) is not an edit; any typed field is; a confirmed discard
+     clears the fields and the key; a creation in flight refuses the leave; a
+     successful creation clears only the draft it submitted, and a newer one
+     typed meanwhile keeps its fields with a fresh request key (the old key
+     names the archive just made). Reversion proofs for each rule — and for
+     the section's position — failed their intended tests.
+     Review (P2): the key, now in a module singleton, outlived an emptied form
+     — a create whose response was lost, the fields erased, a clean exit, then
+     a different archive submitted under the old key and answered with the
+     first. The key now belongs to one draft's retries: it is retired the
+     moment every field is empty and on every exit from Settings with nothing
+     at stake (a `leaving` hook in the guard); a kept, typed draft keeps it.
+     Reversion proofs for each retirement point failed their intended tests.
 
 Deferred by the ADR and not planned here: archive delete, external attach CLI, in-process switch,
 cross-archive query.

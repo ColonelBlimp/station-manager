@@ -34,6 +34,12 @@
 
 import { setLeaveGuard } from '../router.svelte';
 import { toasts } from '../ui/toasts.svelte';
+import {
+    archiveDraftDirty,
+    archivesState,
+    clearArchiveDraft,
+    retireEmptyDraftKey,
+} from './archives.svelte';
 import { bindingsState } from './bindings.svelte';
 import { emailState } from './email.svelte';
 import { enrichmentState } from './enrichment.svelte';
@@ -52,6 +58,8 @@ interface Section {
     saving: () => boolean;
     /** Drop the draft back to its last loaded values. */
     discard: () => void;
+    /** Settles what leaving means for a section with nothing at stake. */
+    leaving?: () => void;
 }
 
 // Tab order, matching Settings.svelte — the prompt reads as a walk across the
@@ -119,6 +127,18 @@ const SECTIONS: Section[] = [
         saving: () => generalState.saving,
         discard: () => generalState.reset(),
     },
+    {
+        // The New archive form (operator ruling 2026-09-29, the Logbooks
+        // rules): a typed field is work at stake; a creation on the wire
+        // refuses the leave like any save.
+        label: 'Archives',
+        dirty: () => archiveDraftDirty(),
+        saving: () => archivesState.creating,
+        discard: () => clearArchiveDraft(),
+        // A key left by an unconfirmed create, with the form since emptied,
+        // must not survive the exit to answer a different archive later.
+        leaving: () => retireEmptyDraftKey(),
+    },
 ];
 
 /** The sections an exit would cost the operator, in tab order. */
@@ -155,7 +175,10 @@ export function installSettingsGuards(): () => void {
             return false;
         }
         const unsaved = atRisk();
-        if (unsaved.length === 0) return true;
+        if (unsaved.length === 0) {
+            SECTIONS.forEach((s) => s.leaving?.());
+            return true;
+        }
         if (!window.confirm(leavePrompt(unsaved.map((s) => s.label)))) return false;
         // Keep the promise NOW rather than on return. The remount's load()
         // would clear these anyway, but until then the app holds edits it has
@@ -163,6 +186,7 @@ export function installSettingsGuards(): () => void {
         // those same edits a second time, which is precisely the false alarm
         // this guard is supposed to be worth trusting about.
         unsaved.forEach((s) => s.discard());
+        SECTIONS.forEach((s) => s.leaving?.());
         return true;
     });
 

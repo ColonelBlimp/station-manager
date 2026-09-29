@@ -16,7 +16,12 @@ vi.mock('../api/restart', () => ({
 import ArchivesSection from './ArchivesSection.svelte';
 import { activateQsoArchive, createQsoArchive, fetchQsoArchives } from '../api/qso-archives';
 import { fetchDaemonInstance, waitForDaemonBack } from '../api/restart';
-import { archivesState, loadArchives, _resetArchivesForTests } from './archives.svelte';
+import {
+    archivesState,
+    clearArchiveDraft,
+    loadArchives,
+    _resetArchivesForTests,
+} from './archives.svelte';
 import { _resetForTests as resetToasts } from '../ui/toasts.svelte';
 
 /*
@@ -70,6 +75,7 @@ beforeEach(() => {
     vi.mocked(fetchDaemonInstance).mockReset();
     vi.mocked(waitForDaemonBack).mockReset();
     _resetArchivesForTests();
+    clearArchiveDraft();
     resetToasts();
 });
 afterEach(() => vi.restoreAllMocks());
@@ -241,6 +247,20 @@ describe('ArchivesSection', () => {
         expect(screen.getByTestId('archive-contents-a')).not.toHaveTextContent('opened');
     });
 
+    // Operator ruling 2026-09-29: switching tabs inside Settings keeps the New
+    // archive draft, unprompted — including across the tab's own re-read.
+    it('keeps a typed New archive draft across a tab switch', async () => {
+        vi.mocked(fetchQsoArchives).mockResolvedValue({ kind: 'ok', archives: [HOME] } as never);
+        const { rerender } = render(ArchivesSection, { props: { visible: true } });
+        await flush();
+        await fireEvent.input(screen.getByLabelText('Label'), { target: { value: 'Field day' } });
+        await rerender({ visible: false });
+        await rerender({ visible: true });
+        await flush();
+        flushSync();
+        expect(screen.getByLabelText('Label')).toHaveValue('Field day');
+    });
+
     it('a failed re-read shows the retained list as stale, with Retry, and disables Activate', async () => {
         await renderLoaded();
         vi.mocked(fetchQsoArchives).mockResolvedValue({ kind: 'error', message: 'daemon away' });
@@ -329,6 +349,38 @@ describe('ArchivesSection', () => {
         await flush();
         expect(vi.mocked(createQsoArchive).mock.calls[1][0].requestKey).toBe(first.requestKey);
         expect(archivesState.creating).toBe(false);
+    });
+
+    // Review (P2): a key kept for the retry of one draft must not outlive that
+    // draft. Erasing every field ends it, so a different archive typed next is
+    // created under its own key — never answered with the earlier creation.
+    it('erasing the whole form retires the request key a lost response left', async () => {
+        await renderLoaded();
+        vi.mocked(createQsoArchive).mockResolvedValue({
+            kind: 'network',
+            message: 'timed out',
+            timedOut: true,
+        } as never);
+        const fill = async (label: string) => {
+            await fireEvent.input(screen.getByLabelText('Label'), { target: { value: label } });
+            await fireEvent.input(screen.getByLabelText('First logbook'), {
+                target: { value: label },
+            });
+            await fireEvent.input(screen.getByLabelText('Logbook callsign'), {
+                target: { value: 'G4ABC' },
+            });
+        };
+        await fill('First');
+        await fireEvent.click(screen.getByRole('button', { name: 'Create archive' }));
+        await flush();
+        const first = vi.mocked(createQsoArchive).mock.calls[0][0].requestKey;
+        for (const name of ['Label', 'First logbook', 'Logbook callsign']) {
+            await fireEvent.input(screen.getByLabelText(name), { target: { value: '' } });
+        }
+        await fill('Second');
+        await fireEvent.click(screen.getByRole('button', { name: 'Create archive' }));
+        await flush();
+        expect(vi.mocked(createQsoArchive).mock.calls[1][0].requestKey).not.toBe(first);
     });
 
     // Inbox 2026-09-26: the tab explains by ⓘ link, not by paragraph. The list

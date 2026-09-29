@@ -24,6 +24,11 @@ import {
     archiveSwitchGate,
     archivesState,
     createArchive,
+    archiveDraft,
+    archiveDraftDirty,
+    clearArchiveDraft,
+    retireEmptyDraftKey,
+    submitArchiveDraft,
     loadArchives,
     mintRequestKey,
     bootArchiveScoped,
@@ -551,5 +556,112 @@ describe('createArchive', () => {
     });
     it('mints a distinct request key per attempt', () => {
         expect(mintRequestKey()).not.toBe(mintRequestKey());
+    });
+});
+
+// The New archive form's draft lives in the store so the Settings leave guard
+// can see and discard it (operator ruling 2026-09-29, the Logbooks rules). A
+// success clears only the draft it submitted; a newer one typed while the
+// request was on the wire stays, with a fresh request key of its own.
+describe('the New archive draft', () => {
+    const typed = (label: string) => {
+        archiveDraft.label = label;
+        archiveDraft.logbookName = 'Contest';
+        archiveDraft.logbookCallsign = 'g4abc';
+    };
+    const created = () =>
+        vi.mocked(createQsoArchive).mockResolvedValue({
+            kind: 'ok',
+            archive: CONTEST,
+            reused: false,
+        });
+
+    it('an untouched form is not an edit; any typed field is', () => {
+        clearArchiveDraft();
+        expect(archiveDraftDirty()).toBe(false);
+        archiveDraft.requestKey = 'k'; // a key alone is not work at stake
+        expect(archiveDraftDirty()).toBe(false);
+        for (const field of ['label', 'logbookName', 'logbookCallsign'] as const) {
+            clearArchiveDraft();
+            archiveDraft[field] = 'x';
+            expect(archiveDraftDirty()).toBe(true);
+        }
+        clearArchiveDraft();
+        archiveDraft.label = '   ';
+        expect(archiveDraftDirty()).toBe(false);
+    });
+
+    it('submits the trimmed draft with one request key, uppercased callsign, and clears it', async () => {
+        clearArchiveDraft();
+        typed(' Contest ');
+        created();
+        expect(await submitArchiveDraft()).toBe(true);
+        const sent = vi.mocked(createQsoArchive).mock.calls[0][0];
+        expect(sent).toMatchObject({
+            label: 'Contest',
+            logbookName: 'Contest',
+            logbookCallsign: 'G4ABC',
+        });
+        expect(sent.requestKey).not.toBe('');
+        expect(archiveDraftDirty()).toBe(false);
+        expect(archiveDraft.requestKey).toBe('');
+    });
+
+    it('a refusal keeps the draft and its key for the retry', async () => {
+        clearArchiveDraft();
+        typed('Contest');
+        vi.mocked(createQsoArchive).mockResolvedValue({
+            kind: 'refused',
+            code: 'invalid_field_value',
+            message: 'no',
+        });
+        expect(await submitArchiveDraft()).toBe(false);
+        const key = archiveDraft.requestKey;
+        expect(key).not.toBe('');
+        expect(archiveDraft.label).toBe('Contest');
+        await submitArchiveDraft();
+        expect(vi.mocked(createQsoArchive).mock.calls[1][0].requestKey).toBe(key);
+    });
+
+    it('keeps a newer draft typed while the create was on the wire, with a new key', async () => {
+        clearArchiveDraft();
+        typed('First');
+        let answer: (v: unknown) => void = () => {};
+        vi.mocked(createQsoArchive).mockImplementation(
+            () => new Promise((r) => (answer = r)) as never
+        );
+        const pending = submitArchiveDraft();
+        const firstKey = archiveDraft.requestKey;
+        archiveDraft.label = 'Second';
+        answer({ kind: 'ok', archive: CONTEST, reused: false });
+        expect(await pending).toBe(true);
+        expect(archiveDraft.label).toBe('Second');
+        expect(archiveDraftDirty()).toBe(true);
+        // The created archive's key must not be reused for a different one.
+        expect(archiveDraft.requestKey).not.toBe(firstKey);
+    });
+
+    it('an emptied form retires its key; a kept draft keeps it for the retry', () => {
+        typed('Contest');
+        archiveDraft.requestKey = 'k';
+        retireEmptyDraftKey();
+        expect(archiveDraft.requestKey).toBe('k');
+        archiveDraft.label = '';
+        archiveDraft.logbookName = ' ';
+        archiveDraft.logbookCallsign = '';
+        retireEmptyDraftKey();
+        expect(archiveDraft.requestKey).toBe('');
+    });
+
+    it('a discard clears the fields and the key', () => {
+        typed('Contest');
+        archiveDraft.requestKey = 'k';
+        clearArchiveDraft();
+        expect(archiveDraft).toEqual({
+            label: '',
+            logbookName: '',
+            logbookCallsign: '',
+            requestKey: '',
+        });
     });
 });

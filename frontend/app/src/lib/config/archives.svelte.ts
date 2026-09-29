@@ -172,6 +172,65 @@ export async function createArchive(input: CreateArchiveInput): Promise<boolean>
     }
 }
 
+/** The New archive form's draft. It lives here, not in the component, so the
+ *  Settings leave guard (unsaved.ts) can see and discard it (operator ruling
+ *  2026-09-29, the Logbooks rules). requestKey is minted at the first submit and
+ *  kept across a refused or unconfirmed one, so a retry reuses a creation that
+ *  did land instead of making a second archive. */
+export const archiveDraft: {
+    label: string;
+    logbookName: string;
+    logbookCallsign: string;
+    requestKey: string;
+} = $state({ label: '', logbookName: '', logbookCallsign: '', requestKey: '' });
+
+/** Any typed field is work at stake; an empty form or a key alone is not. */
+export function archiveDraftDirty(): boolean {
+    return (
+        archiveDraft.label.trim() !== '' ||
+        archiveDraft.logbookName.trim() !== '' ||
+        archiveDraft.logbookCallsign.trim() !== ''
+    );
+}
+
+export function clearArchiveDraft(): void {
+    archiveDraft.label = '';
+    archiveDraft.logbookName = '';
+    archiveDraft.logbookCallsign = '';
+    archiveDraft.requestKey = '';
+}
+
+/** The request key belongs to one draft's retries: once every field is empty
+ *  there is no draft left to retry, so a different archive typed next must not
+ *  be answered with the earlier creation (review P2). Called as the fields are
+ *  edited and on every exit from Settings. */
+export function retireEmptyDraftKey(): void {
+    if (!archiveDraftDirty()) archiveDraft.requestKey = '';
+}
+
+/** Create an archive from the draft; true when the daemon has it. A success
+ *  clears only the draft it submitted: one typed while the request was on the
+ *  wire stays, with a fresh key, since the old one names the archive just made. */
+export async function submitArchiveDraft(): Promise<boolean> {
+    if (archivesState.creating) return false;
+    if (archiveDraft.requestKey === '') archiveDraft.requestKey = mintRequestKey();
+    const sent: CreateArchiveInput = {
+        requestKey: archiveDraft.requestKey,
+        label: archiveDraft.label.trim(),
+        logbookName: archiveDraft.logbookName.trim(),
+        logbookCallsign: archiveDraft.logbookCallsign.trim().toUpperCase(),
+    };
+    const ok = await createArchive(sent);
+    if (!ok) return false;
+    const unchanged =
+        archiveDraft.label.trim() === sent.label &&
+        archiveDraft.logbookName.trim() === sent.logbookName &&
+        archiveDraft.logbookCallsign.trim().toUpperCase() === sent.logbookCallsign;
+    if (unchanged) clearArchiveDraft();
+    else archiveDraft.requestKey = '';
+    return true;
+}
+
 /** The confirmation the operator answers before the daemon restarts. */
 export function activateConfirmText(label: string): string {
     return (

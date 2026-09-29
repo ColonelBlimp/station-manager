@@ -99,6 +99,7 @@ import { emailState } from './email.svelte';
 import { enrichmentState } from './enrichment.svelte';
 import { ft8SettingsState } from './ft8.svelte';
 import { logbooksState, _resetLogbooksForTests } from './logbooks.svelte';
+import { archiveDraft, archivesState, clearArchiveDraft } from './archives.svelte';
 import { navigate, router, setMode } from '../router.svelte';
 
 // Each state back to not-dirty. Uses their OWN reset() — which restores the
@@ -118,6 +119,8 @@ function makeAllClean(): void {
     emailState.saving = false;
     _resetBindingsForTests();
     _resetLogbooksForTests();
+    clearArchiveDraft();
+    archivesState.creating = false;
 }
 
 /**
@@ -411,6 +414,24 @@ describe('the Logbooks tab’s drafts', () => {
     });
 });
 
+// Settings → Archives' New archive form (operator ruling 2026-09-29, the
+// Logbooks rules): an empty form is not an edit; any typed field is; its tab is
+// last on the strip, so it is listed last.
+describe('the New archive form’s draft', () => {
+    afterEach(makeAllClean);
+
+    it('A1: an untouched form is not an edit, a typed one is, listed last', () => {
+        expect(unsavedSections()).toEqual([]);
+        archiveDraft.label = 'Contest';
+        expect(unsavedSections()).toEqual(['Archives']);
+        stationState.form = { station_callsign: '7Q5MLV' };
+        logbooksState.stationCallsign = '7Q5MLV';
+        logbooksState.addCallsign = '7Q5MLV';
+        logbooksState.addName = 'Portable';
+        expect(unsavedSections()).toEqual(['Station', 'Logbooks', 'Archives']);
+    });
+});
+
 describe('the prompt names what is at stake', () => {
     it('R8: reads naturally for one, two and three sections', () => {
         expect(leavePrompt(['Email'])).toContain('Unsaved changes in Email will be discarded');
@@ -608,6 +629,44 @@ describe('leaving Settings', () => {
         logbooksState.busy = false;
     });
 
+    it('A2: a confirmed leave clears the New archive draft and its key', () => {
+        archiveDraft.label = 'Contest';
+        archiveDraft.requestKey = 'k';
+        vi.spyOn(window, 'confirm').mockReturnValue(true);
+        navigate('logbook');
+        expect(archiveDraft.label).toBe('');
+        expect(archiveDraft.requestKey).toBe('');
+        expect(unsavedSections()).toEqual([]);
+    });
+
+    it('A3: an archive creation in flight refuses the leave, and discards nothing', () => {
+        archiveDraft.label = 'Contest';
+        archivesState.creating = true;
+        const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+        navigate('logbook');
+        expect(confirm).not.toHaveBeenCalled();
+        expect(router.view).toBe('config');
+        expect(archiveDraft.label).toBe('Contest');
+        archivesState.creating = false;
+    });
+
+    it('A5: a clean exit with an empty New archive form retires its request key', () => {
+        archiveDraft.requestKey = 'k'; // left by a create whose response was lost
+        const confirm = vi.spyOn(window, 'confirm');
+        navigate('logbook');
+        expect(confirm).not.toHaveBeenCalled(); // nothing at stake: no prompt
+        expect(archiveDraft.requestKey).toBe('');
+    });
+
+    it('A6: a cancelled leave keeps a typed draft and its key for the retry', () => {
+        archiveDraft.label = 'Contest';
+        archiveDraft.requestKey = 'k';
+        vi.spyOn(window, 'confirm').mockReturnValue(false);
+        navigate('logbook');
+        expect(router.view).toBe('config');
+        expect(archiveDraft.requestKey).toBe('k');
+    });
+
     it('R14: moving between Settings tabs is not leaving', () => {
         dirtyEmail();
         const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
@@ -647,6 +706,11 @@ describe('closing the tab', () => {
         prefilledLogbooks();
         expect(unload()).toBe(false);
         logbooksState.addName = 'Contest';
+        expect(unload()).toBe(true);
+    });
+
+    it('A4: warns for a typed New archive draft', () => {
+        archiveDraft.logbookCallsign = 'G4ABC';
         expect(unload()).toBe(true);
     });
 

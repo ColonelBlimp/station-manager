@@ -9,10 +9,11 @@
     import ManualLink from './ManualLink.svelte';
     import {
         activateArchive,
+        archiveDraft,
         archivesState,
-        createArchive,
         loadArchives,
-        mintRequestKey,
+        retireEmptyDraftKey,
+        submitArchiveDraft,
         pendingArchive,
     } from './archives.svelte';
     import type { QsoArchive } from '../api/qso-archives';
@@ -31,49 +32,34 @@
         if (visible) untrack(() => void loadArchives());
     });
 
-    // The create form. requestKey is minted when the form is first touched and
-    // kept across a refused or ambiguous submit, so a retry reuses a creation
-    // that did land instead of making a second archive.
-    let label = $state('');
-    let logbookName = $state('');
-    let logbookCallsign = $state('');
-    let requestKey = $state('');
+    // The create form. Its draft lives in the store (archiveDraft), where the
+    // Settings leave guard sees it; see submitArchiveDraft for the request key.
     // A callsign is uppercase as typed (drill 1, 2026-09-24): the same rule the
     // logging card applies, so the field never shows a value the daemon would
     // not store.
     function upperCallsign(): void {
-        logbookCallsign = logbookCallsign.toUpperCase();
+        archiveDraft.logbookCallsign = archiveDraft.logbookCallsign.toUpperCase();
+        retireEmptyDraftKey();
     }
     // The callsign is validated as typed with the SPA's shared rule (3–32
     // chars, a letter and a digit — the daemon's rule): a malformed value marks
     // the field and holds the submit (drill 1, 2026-09-24: the form accepted a
     // one-character callsign and left the refusal to the daemon).
     const callsignBad = $derived(
-        logbookCallsign.trim() !== '' && isValidCallsign(logbookCallsign) !== null
+        archiveDraft.logbookCallsign.trim() !== '' &&
+            isValidCallsign(archiveDraft.logbookCallsign) !== null
     );
     const canSubmit = $derived(
-        label.trim() !== '' &&
-            logbookName.trim() !== '' &&
-            logbookCallsign.trim() !== '' &&
+        archiveDraft.label.trim() !== '' &&
+            archiveDraft.logbookName.trim() !== '' &&
+            archiveDraft.logbookCallsign.trim() !== '' &&
             !callsignBad
     );
 
     async function onCreate(e: SubmitEvent): Promise<void> {
         e.preventDefault();
         if (!canSubmit || archivesState.creating) return;
-        if (requestKey === '') requestKey = mintRequestKey();
-        const ok = await createArchive({
-            requestKey,
-            label: label.trim(),
-            logbookName: logbookName.trim(),
-            logbookCallsign: logbookCallsign.trim().toUpperCase(),
-        });
-        if (ok) {
-            label = '';
-            logbookName = '';
-            logbookCallsign = '';
-            requestKey = '';
-        }
+        await submitArchiveDraft();
     }
 
     const pending = $derived(pendingArchive());
@@ -260,11 +246,21 @@
         <form class="flex flex-wrap items-end gap-3" onsubmit={onCreate}>
             <label class="flex w-56 flex-col gap-1 text-sm text-ink">
                 Label
-                <input class="input" bind:value={label} maxlength="80" />
+                <input
+                    class="input"
+                    bind:value={archiveDraft.label}
+                    oninput={retireEmptyDraftKey}
+                    maxlength="80"
+                />
             </label>
             <label class="flex w-56 flex-col gap-1 text-sm text-ink">
                 First logbook
-                <input class="input" bind:value={logbookName} maxlength="80" />
+                <input
+                    class="input"
+                    bind:value={archiveDraft.logbookName}
+                    oninput={retireEmptyDraftKey}
+                    maxlength="80"
+                />
             </label>
             <label class="flex w-40 flex-col gap-1 text-sm text-ink">
                 Logbook callsign
@@ -272,7 +268,7 @@
                     class="input font-mono uppercase"
                     class:input-error={callsignBad}
                     aria-invalid={callsignBad}
-                    bind:value={logbookCallsign}
+                    bind:value={archiveDraft.logbookCallsign}
                     oninput={upperCallsign}
                     autocapitalize="characters"
                 />
