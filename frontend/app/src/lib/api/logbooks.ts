@@ -5,12 +5,25 @@
       - GET /v1/logbook/{id}/qso         → cursor-paginated QSO page
                                            (?limit, ?after; → {items, next_cursor})
 
+    And the write surface Settings → Logbooks uses (W-0021, ruling 2026-09-29),
+    always on the ACTIVE archive — the only file the daemon has open:
+      - POST   /v1/logbook       → create {name, callsign} → {id}
+      - PATCH  /v1/logbook/{id}  → rename {name}
+      - DELETE /v1/logbook/{id}  → delete (refused: has_qsos, default_logbook)
+
     Cursor pagination is forward-only: each page carries a `next_cursor` (null when
     no more rows); the SPA keeps the per-page cursors to walk Next/Prev (no
     page-number jumps — the daemon has no offset endpoint, by design).
 */
 
-import { daemonErrorMessage, isPlainObject, readJsonBody, safeFetch } from './_helpers';
+import {
+    daemonErrorMessage,
+    isPlainObject,
+    readJsonBody,
+    safeFetch,
+    WRITE_TIMEOUT_MS,
+    type FetchOutcome,
+} from './_helpers';
 
 /** One logbook (mirrors types.Logbook; only the fields the SPA shows). */
 export interface Logbook {
@@ -203,4 +216,68 @@ export async function fetchQsoPage(
     const items = decodeRecords(body.items, isLogbookQso, (q) => q.uuid, 'logbook-page');
     const nextCursor = decodeCursor(body.next_cursor, 'logbook-page');
     return { kind: 'ok', items, nextCursor };
+}
+
+export type LogbookWriteOutcome<T extends object = object> =
+    | ({ kind: 'ok' } & T)
+    /** `code` is the daemon's refusal code when it answered; `timedOut` marks a
+     *  write whose response never came, so it may have committed (ADR 0078). */
+    | { kind: 'error'; message: string; code?: string; timedOut?: boolean };
+
+async function writeFailure(
+    fetched: FetchOutcome
+): Promise<{ kind: 'error'; message: string; code?: string; timedOut?: boolean } | null> {
+    if (!fetched.ok) {
+        return {
+            kind: 'error',
+            message: transportMessage(fetched.kind),
+            timedOut: fetched.kind === 'network' && fetched.timedOut === true,
+        };
+    }
+    if (fetched.response.ok) return null;
+    const body = await readJsonBody(fetched.response);
+    const code = isPlainObject(body) && typeof body.code === 'string' ? body.code : undefined;
+    return { kind: 'error', message: daemonErrorMessage(fetched.response.status, body), code };
+}
+
+const jsonWrite = (method: string, body: unknown): RequestInit => ({
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+});
+
+/** Create a logbook in the active archive. No AbortSignal: a write must not be
+ *  cancelled mid-flight. */
+export async function createLogbook(input: {
+    name: string;
+    callsign: string;
+}): Promise<LogbookWriteOutcome<{ id: number }>> {
+    const fetched = await safeFetch('/v1/logbook', jsonWrite('POST', input), {
+        timeoutMs: WRITE_TIMEOUT_MS,
+    });
+    const failed = await writeFailure(fetched);
+    if (failed) return failed;
+    const body = fetched.ok ? await readJsonBody(fetched.response) : null;
+    if (!isPlainObject(body) || typeof body.id !== 'number') {
+        return { kind: 'error', message: 'Unexpected create-logbook response.' };
+    }
+    return { kind: 'ok', id: body.id };
+}
+
+/** Rename a logbook (its callsign is not editable). */
+export async function renameLogbook(id: number, name: string): Promise<LogbookWriteOutcome> {
+    const failed = await writeFailure(
+        await safeFetch(`/v1/logbook/${id}`, jsonWrite('PATCH', { name }), {
+            timeoutMs: WRITE_TIMEOUT_MS,
+        })
+    );
+    return failed ?? { kind: 'ok' };
+}
+
+/** Delete a logbook; the daemon refuses one holding QSOs or the default. */
+export async function deleteLogbook(id: number): Promise<LogbookWriteOutcome> {
+    const failed = await writeFailure(
+        await safeFetch(`/v1/logbook/${id}`, { method: 'DELETE' }, { timeoutMs: WRITE_TIMEOUT_MS })
+    );
+    return failed ?? { kind: 'ok' };
 }

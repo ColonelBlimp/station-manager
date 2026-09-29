@@ -98,6 +98,7 @@ import { bindingsState, _resetBindingsForTests } from './bindings.svelte';
 import { emailState } from './email.svelte';
 import { enrichmentState } from './enrichment.svelte';
 import { ft8SettingsState } from './ft8.svelte';
+import { logbooksState, _resetLogbooksForTests } from './logbooks.svelte';
 import { navigate, router, setMode } from '../router.svelte';
 
 // Each state back to not-dirty. Uses their OWN reset() — which restores the
@@ -116,6 +117,18 @@ function makeAllClean(): void {
     rigsState.selectedId = null;
     emailState.saving = false;
     _resetBindingsForTests();
+    _resetLogbooksForTests();
+}
+
+/**
+ * Settings → Logbooks as the page leaves it after a load: the Add form prefilled
+ * with the station callsign, untouched. Prefilled is NOT an edit (ruling
+ * 2026-09-29) — the fixture proves the starting point is clean.
+ */
+function prefilledLogbooks(): void {
+    logbooksState.stationCallsign = '7Q5MLV';
+    logbooksState.addCallsign = '7Q5MLV';
+    expect(logbooksState.dirty).toBe(false);
 }
 
 /**
@@ -326,7 +339,7 @@ describe('which sections have unsaved edits', () => {
     });
 
     it('R7: lists every dirty section, in the order the tabs are shown', () => {
-        // FT8 sits third on the strip, so this pins its POSITION and not merely
+        // FT8 sits after Rigs on the strip, not last, so this pins its POSITION and not merely
         // that it is counted — a section appended to the end of SECTIONS would
         // still be listed, just in an order that no longer reads as a walk
         // across the tabs.
@@ -335,6 +348,66 @@ describe('which sections have unsaved edits', () => {
         dirtyEmail();
         enrichmentState.draft.countryTtlDays = '5';
         expect(unsavedSections()).toEqual(['Station', 'FT8 / FT4', 'Email', 'Enrichment']);
+    });
+});
+
+// Settings → Logbooks' drafts (operator ruling 2026-09-29): the Add form and a
+// changed Rename join the guard. The form arrives prefilled with the station
+// callsign and a Rename arrives filled with the current name, so neither of
+// those alone is an edit — a guard firing on them is the false alarm R2 guards.
+describe('the Logbooks tab’s drafts', () => {
+    afterEach(makeAllClean);
+
+    it('L1: an untouched, prefilled Add form and a merely opened Rename are not edits', () => {
+        prefilledLogbooks();
+        logbooksState.startRename({ id: 2, name: 'Portable', callsign: '7Q5MLV', count: 0 });
+        expect(logbooksState.renameName).toBe('Portable');
+        expect(unsavedSections()).toEqual([]);
+    });
+
+    it('L2: a typed name, a changed callsign, a ticked SM Cloud or a changed rename is one', () => {
+        prefilledLogbooks();
+        logbooksState.addName = 'Contest';
+        expect(unsavedSections()).toEqual(['Logbooks']);
+        makeAllClean();
+
+        prefilledLogbooks();
+        logbooksState.setAddCallsign('7q8ac');
+        expect(logbooksState.addCallsign).toBe('7Q8AC');
+        expect(unsavedSections()).toEqual(['Logbooks']);
+        // Typed back to the prefill: nothing is at stake again.
+        logbooksState.setAddCallsign('7Q5MLV');
+        expect(unsavedSections()).toEqual([]);
+        makeAllClean();
+
+        prefilledLogbooks();
+        logbooksState.addSmcloud = true;
+        expect(unsavedSections()).toEqual(['Logbooks']);
+        makeAllClean();
+
+        prefilledLogbooks();
+        logbooksState.startRename({ id: 2, name: 'Portable', callsign: '7Q5MLV', count: 0 });
+        logbooksState.renameName = 'Field day';
+        expect(unsavedSections()).toEqual(['Logbooks']);
+    });
+
+    it('L3: sits between Station and Rigs in the order the tabs are shown', () => {
+        stationState.form = { station_callsign: '7Q5MLV' };
+        prefilledLogbooks();
+        logbooksState.addName = 'Contest';
+        dirtyRigOnScreen();
+        expect(unsavedSections()).toEqual(['Station', 'Logbooks', 'Rigs']);
+    });
+
+    it('L4: a later load keeps a typed callsign, and prefills only an untouched one', () => {
+        prefilledLogbooks();
+        logbooksState.setAddCallsign('7Q8AC');
+        logbooksState.prefillCallsign('7Q5MLV');
+        expect(logbooksState.addCallsign).toBe('7Q8AC');
+        makeAllClean();
+        logbooksState.prefillCallsign('7Q5MLV');
+        expect(logbooksState.addCallsign).toBe('7Q5MLV');
+        expect(logbooksState.dirty).toBe(false);
     });
 });
 
@@ -500,6 +573,41 @@ describe('leaving Settings', () => {
         expect(router.view).toBe('config');
     });
 
+    it('L5: a confirmed leave clears the Add form and cancels the rename', () => {
+        prefilledLogbooks();
+        logbooksState.addName = 'Contest';
+        logbooksState.addSmcloud = true;
+        logbooksState.startRename({ id: 2, name: 'Portable', callsign: '7Q5MLV', count: 0 });
+        logbooksState.renameName = 'Field day';
+        vi.spyOn(window, 'confirm').mockReturnValue(true);
+        navigate('logbook');
+        expect(logbooksState.addName).toBe('');
+        expect(logbooksState.addSmcloud).toBe(false);
+        expect(logbooksState.addCallsign).toBe('7Q5MLV');
+        expect(logbooksState.renameId).toBe(0);
+        expect(unsavedSections()).toEqual([]);
+    });
+
+    it('L6: a create, rename or delete in flight refuses the leave, and discards nothing', () => {
+        prefilledLogbooks();
+        logbooksState.addName = 'Contest';
+        logbooksState.busy = true;
+        const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+        navigate('logbook');
+        expect(confirm).not.toHaveBeenCalled();
+        expect(router.view).toBe('config');
+        expect(logbooksState.addName).toBe('Contest');
+        logbooksState.busy = false;
+    });
+
+    it('L6b: a delete in flight refuses the leave even with no draft', () => {
+        prefilledLogbooks();
+        logbooksState.busy = true;
+        navigate('logbook');
+        expect(router.view).toBe('config');
+        logbooksState.busy = false;
+    });
+
     it('R14: moving between Settings tabs is not leaving', () => {
         dirtyEmail();
         const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
@@ -532,6 +640,13 @@ describe('closing the tab', () => {
 
     it('R16: warns for Rigs too — module state dies with the page', () => {
         dirtyRigOffScreen();
+        expect(unload()).toBe(true);
+    });
+
+    it('L7: warns for a Logbooks draft, and not for the untouched prefilled form', () => {
+        prefilledLogbooks();
+        expect(unload()).toBe(false);
+        logbooksState.addName = 'Contest';
         expect(unload()).toBe(true);
     });
 

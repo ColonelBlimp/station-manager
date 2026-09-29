@@ -40,6 +40,7 @@ import { enrichmentState } from './enrichment.svelte';
 import { forwardingState } from './forwarding.svelte';
 import { ft8SettingsState } from './ft8.svelte';
 import { generalState } from './general.svelte';
+import { logbooksState } from './logbooks.svelte';
 import { rigsState } from './rigs.svelte';
 import { stationState } from './station.svelte';
 
@@ -61,6 +62,17 @@ const SECTIONS: Section[] = [
         dirty: () => stationState.dirty,
         saving: () => stationState.saving,
         discard: () => stationState.reset(),
+    },
+    {
+        // Not a whole-block PUT and not reloaded over on return, but its drafts
+        // (the Add form, a changed rename) are still work that leaving or a
+        // reload would lose (operator ruling 2026-09-29). The prefilled form and
+        // a merely opened Rename are not edits; a create, rename or delete on
+        // the wire refuses the leave like any save.
+        label: 'Logbooks',
+        dirty: () => logbooksState.dirty,
+        saving: () => logbooksState.saving,
+        discard: () => logbooksState.reset(),
     },
     {
         // anyDirty, not dirty: `dirty` covers only the SELECTED rig, so a rig

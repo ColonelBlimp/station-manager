@@ -13,6 +13,7 @@
     import EnrichmentSection from './EnrichmentSection.svelte';
     import GeneralSection from './GeneralSection.svelte';
     import ArchivesSection from './ArchivesSection.svelte';
+    import LogbooksSection from './LogbooksSection.svelte';
     import { restartDaemon, waitForDaemonBack, fetchDaemonInstance } from '../api/restart';
     import { OUTCOME_UNKNOWN_LEAD } from '../api/_helpers';
     import { toasts } from '../ui/toasts.svelte';
@@ -25,9 +26,20 @@
     // Enrichment). unsaved.ts walks the same order, so the leave prompt reads
     // as a walk across the tabs — keep the two in step.
     type SectionId =
-        'station' | 'archives' | 'rigs' | 'ft8' | 'forwarding' | 'email' | 'enrichment' | 'general';
+        | 'station'
+        | 'logbooks'
+        | 'archives'
+        | 'rigs'
+        | 'ft8'
+        | 'forwarding'
+        | 'email'
+        | 'enrichment'
+        | 'general';
     const sections: { id: SectionId; label: string }[] = [
         { id: 'station', label: 'Station' },
+        // The active archive's logbooks (first slice, operator ruling 2026-09-29),
+        // beside the station identity whose callsign they carry.
+        { id: 'logbooks', label: 'Logbooks' },
         { id: 'rigs', label: 'Rigs' },
         // One switch serves both FT modes (fresh-install ruling 2026-09-26).
         { id: 'ft8', label: 'FT8 / FT4' },
@@ -202,6 +214,9 @@
          Rigs #1 / #3). Each section still loads once, on first render. -->
     <div class:hidden={active !== 'station'}>
         <StationSection />
+    </div>
+    <div class:hidden={active !== 'logbooks'}>
+        <LogbooksSection visible={active === 'logbooks'} />
     </div>
     <div class:hidden={active !== 'archives'}>
         <ArchivesSection visible={active === 'archives'} />

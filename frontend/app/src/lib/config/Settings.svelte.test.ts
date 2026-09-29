@@ -288,3 +288,32 @@ describe('Settings — the Archives tab', () => {
         expect(archiveReads()).toBe(atMount + 2);
     });
 });
+
+// Settings → Logbooks, first slice (operator ruling 2026-09-29): its own tab,
+// beside Station, read on every opening like Archives.
+describe('Settings — the Logbooks tab', () => {
+    const logbookReads = (): number =>
+        vi
+            .mocked(fetch)
+            .mock.calls.filter(([url]) => typeof url === 'string' && url === '/v1/logbook').length;
+
+    it('sits after Station and reads the logbooks each time it opens', async () => {
+        render(Settings);
+        await flush();
+        const tabs = screen
+            .getAllByRole('button')
+            .map((b) => b.textContent?.trim())
+            .filter((t) => t === 'Station' || t === 'Logbooks' || t === 'Rigs');
+        expect(tabs).toEqual(['Station', 'Logbooks', 'Rigs']);
+
+        const atMount = logbookReads();
+        await fireEvent.click(screen.getByRole('button', { name: 'Logbooks' }));
+        await flush();
+        expect(logbookReads()).toBe(atMount + 1);
+        await fireEvent.click(screen.getByRole('button', { name: 'Station' }));
+        await flush();
+        await fireEvent.click(screen.getByRole('button', { name: 'Logbooks' }));
+        await flush();
+        expect(logbookReads()).toBe(atMount + 2);
+    });
+});

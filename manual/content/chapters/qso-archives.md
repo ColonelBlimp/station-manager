@@ -30,10 +30,33 @@ close, creation, import or restore. If the file has changed since that summary,
 the list keeps the last-known logbooks and says **Counts may be out of date —
 the file changed since it was last open**. **Not known until it has been
 opened** means no summary exists yet; **No logbooks** means the archive is known
-to be empty.
+to be empty. The active archive is open, so it says **Counts are being
+updated** while a change is recounted, and **Current counts are not available**
+if its counts could not be read.
 
 The header also shows the active archive above the logbook name. Picking
 another archive there does the same as **Activate** in Settings.
+
+## Logbooks
+
+**Settings → Logbooks** manages the logbooks of the **active** archive — the
+one Station Manager has open. To add a logbook to another archive, activate
+that archive first.
+
+- **Add logbook** takes a name and a callsign. The callsign starts as your
+  station callsign; any valid callsign is accepted. Adding a logbook does not
+  switch archives, does not make it the Default, and turns on no uploads you
+  did not choose.
+- **Live contacts keep going to the Default logbook.** A new logbook receives
+  QSOs by import or restore (see [Importing](#importing)). A logbook whose
+  callsign differs from your station callsign cannot receive live contacts
+  yet.
+- **Upload to SM Cloud** appears, unticked, only when this archive can upload
+  to SM Cloud. Ticked, the new logbook's SM Cloud uploads start after a
+  restart. Other services are set up per logbook on the **Forwarding** tab.
+- **Rename** changes the name; a logbook's callsign cannot be changed.
+- **Delete** works only on an empty logbook that is not the Default; the
+  button's tooltip says why when it is unavailable.
 
 ## Creating an archive
 

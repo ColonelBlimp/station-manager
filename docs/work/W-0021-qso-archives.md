@@ -1462,6 +1462,64 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      closes. Setup that adopts an existing default logbook now notifies the
      summary too (the notify moved into `recordDefaultInArchive`). The SPA
      refuses a logbook row without the flag and tags it **Default**.
+     **Settings → Logbooks, first slice (operator ruling 2026-09-29; inbox).**
+     Bounded: it manages logbooks in the ACTIVE archive only, through the
+     existing `POST`/`PATCH`/`DELETE /v1/logbook`; creating one never activates an
+     archive, makes it the default or enables uploads implicitly. Acceptance
+     criteria (operator-observable):
+     1. A **Logbooks** tab names the active archive's label and lists its
+        logbooks: name, callsign, QSO count, a read-only **Default** tag. The
+        list is read again each time the tab opens.
+     2. **Add logbook**: Name and Callsign (any valid callsign, prefilled with
+        the station callsign, uppercased as typed). The form says live contacts
+        keep going to the Default logbook; with a callsign other than the
+        station's, it adds that such a logbook cannot receive live contacts yet.
+     3. SM Cloud appears as an explicit, unticked option only when this archive
+        can turn it on (the bindings view lists it with no `reason`); no other
+        destination is offered and none is enabled implicitly. Ticked, the
+        logbook is created and then its SM Cloud binding enabled; if that second
+        step fails, the logbook stays and the message says SM Cloud was not
+        turned on. A binding applies after a restart, and the message says so.
+     4. **Rename** edits the name in place (the callsign is not editable).
+        Renaming the default logbook also updates the header's logbook name.
+     5. **Delete** asks first; it is disabled, with the reason as a tooltip, for
+        the default logbook, one holding QSOs, and one whose count is unknown.
+        A daemon refusal (`has_qsos`, `default_logbook`, `not_found`,
+        `duplicate_name`) is shown and the list re-read.
+     6. A timed-out create, rename or delete is reported as an unknown outcome
+        and the list re-read — never as a failure or a success.
+     7. Every write is refused while an archive switch is in flight or
+        unresolved (the archive-switch gate).
+     8. After any change, Settings → Forwarding's rows are re-read when it has
+        no unsaved edits; with unsaved edits they are left, not overwritten.
+     9. (Ruling 2026-09-29, after review.) The Add form and a changed rename
+        join the Settings leave guard, between Station and Rigs: switching tabs
+        keeps them unprompted; leaving Settings or reloading warns; the
+        untouched prefilled form and a merely opened Rename are not edits; a
+        typed name, a changed callsign, a ticked SM Cloud or a changed rename
+        is; a confirmed discard clears the Add form and cancels the rename; a
+        create, rename or delete in flight refuses the leave until it resolves.
+     Nearest confusable outcome: a logbook that looks usable for live logging.
+     It is not — only the Default logbook receives live contacts until default
+     selection exists (out of scope, with multi-callsign operating and
+     contesting).
+     **Built 2026-09-29 (uncommitted):** `createLogbook` / `renameLogbook` /
+     `deleteLogbook` in `api/logbooks.ts` keep the refusal code and mark a
+     timeout; `config/logbooks.svelte.ts` holds the rules (the switch gate,
+     unknown outcomes, SM Cloud only as ticked, the header rename, the
+     Forwarding re-read, and a read generation so an older read that answers
+     last never replaces a newer list); `LogbooksSection.svelte` is the tab,
+     placed after Station. The manual's QSO Archives chapter gains a Logbooks
+     section (and the active archive's two count messages). No daemon change.
+     Reversion proofs: API writes; SM Cloud implicit; the switch gate; timeout
+     as unknown; Forwarding's unsaved edits; the Default not deletable; the SM
+     Cloud reason; the header rename; the different-callsign note; the SM Cloud
+     option's visibility; the read generation; and for criterion 9, the
+     prefilled form counted as an edit, an opened rename counted, the discard
+     keeping the Add form, an in-flight write ignored, the section unguarded, a
+     load overwriting a typed callsign, and Logbooks placed after Rigs — each
+     failed its intended test. The drafts moved from the component into
+     `logbooksState` so the guard can read and discard them.
 
 Deferred by the ADR and not planned here: archive delete, external attach CLI, in-process switch,
 cross-archive query.
