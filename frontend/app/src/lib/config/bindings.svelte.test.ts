@@ -571,6 +571,114 @@ describe('bindingsState', () => {
         expect(await older).toBe(true);
     });
 
+    // Review 412cca37 P2: a logbook change on Settings → Logbooks asks for the
+    // rows again. With unsaved Forwarding edits the re-read would overwrite them,
+    // so it is OWED — paid when those edits are discarded (reset() alone restores
+    // the old snapshot, where a new logbook is missing) and cleared by any fresh
+    // view (a save's response or a load).
+    it('B17: a re-read requested with no edits happens now', async () => {
+        await bindingsState.load();
+        const gets = () => calls.filter((c) => c.method === 'GET' && c.url.endsWith('/bindings'));
+        const before = gets().length;
+        getView = () => view({ archive_label: 'Home (fresh)' });
+        bindingsState.requestReload();
+        await vi.waitFor(() => expect(bindingsState.view?.archive_label).toBe('Home (fresh)'));
+        expect(gets().length).toBe(before + 1);
+    });
+
+    it('B18: with unsaved edits it waits, keeps them, and reloads once they are discarded', async () => {
+        await bindingsState.load();
+        bindingsState.setRow('qrz', 2, true);
+        expect(bindingsState.dirty).toBe(true);
+        getView = () => view({ archive_label: 'Home (fresh)' });
+        bindingsState.requestReload();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(bindingsState.drafts[rowKey('qrz', 2)].enabled).toBe(true); // kept
+        expect(bindingsState.view?.archive_label).toBe('Home');
+        bindingsState.reset();
+        await vi.waitFor(() => expect(bindingsState.view?.archive_label).toBe('Home (fresh)'));
+        expect(bindingsState.dirty).toBe(false);
+    });
+
+    it('B19: a save’s fresh view settles the owed re-read', async () => {
+        await bindingsState.load();
+        bindingsState.setRow('qrz', 2, true);
+        bindingsState.setField('qrz', 2, 'api_key', 'k');
+        bindingsState.requestReload();
+        putAnswer = () => Promise.resolve(json(view({ archive_label: 'Home (saved)' })));
+        await bindingsState.save();
+        expect(bindingsState.view?.archive_label).toBe('Home (saved)');
+        const gets = () => calls.filter((c) => c.method === 'GET' && c.url.endsWith('/bindings'));
+        const before = gets().length;
+        bindingsState.reset(); // nothing owed any more: no extra read
+        await new Promise((r) => setTimeout(r, 0));
+        expect(gets().length).toBe(before);
+    });
+
+    it('B21: a request during a load in flight reads again once that load ends', async () => {
+        await bindingsState.load();
+        let release: () => void = () => {};
+        getAnswer = () => new Promise<Response>((r) => (release = () => r(json(view())))); // the older read
+        const gets = () => calls.filter((c) => c.method === 'GET' && c.url.endsWith('/bindings'));
+        const before = gets().length;
+        const inFlight = bindingsState.load();
+        // The older read must be on the wire before the logbooks change.
+        await vi.waitFor(() => expect(gets().length).toBe(before + 1));
+        getAnswer = () => Promise.resolve(json(view({ archive_label: 'Home (fresh)' })));
+        bindingsState.requestReload(); // the logbooks changed after that read went out
+        release();
+        await inFlight;
+        await vi.waitFor(() => expect(bindingsState.view?.archive_label).toBe('Home (fresh)'));
+    });
+
+    // Review of the 412cca37 fixes: a fresh view settles only the requests made
+    // before it was read, and a re-read owed is paid whenever the edits come to
+    // nothing — not only on Discard.
+    it('B22: a save sampled before a logbook change does not settle that change', async () => {
+        await bindingsState.load();
+        bindingsState.setRow('qrz', 2, true);
+        bindingsState.setField('qrz', 2, 'api_key', 'k');
+        let release: () => void = () => {};
+        putAnswer = () => new Promise<Response>((r) => (release = () => r(json(view()))));
+        const saving = bindingsState.save();
+        await vi.waitFor(() => expect(puts().length).toBe(1)); // on the wire
+        getView = () => view({ archive_label: 'Home (fresh)' });
+        bindingsState.requestReload(); // a logbook added after the PUT was answered
+        release();
+        await saving;
+        await vi.waitFor(() => expect(bindingsState.view?.archive_label).toBe('Home (fresh)'));
+    });
+
+    it('B23: undoing the last edit pays a re-read owed meanwhile', async () => {
+        await bindingsState.load();
+        bindingsState.setRow('qrz', 2, true);
+        getView = () => view({ archive_label: 'Home (fresh)' });
+        bindingsState.requestReload();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(bindingsState.view?.archive_label).toBe('Home');
+        bindingsState.setRow('qrz', 2, false); // back to the daemon's value
+        await vi.waitFor(() => expect(bindingsState.view?.archive_label).toBe('Home (fresh)'));
+    });
+
+    it('B24: a refused save that restores the last switch pays a re-read owed meanwhile', async () => {
+        await bindingsState.load();
+        bindingsState.setRow('qrz', 2, true);
+        bindingsState.setField('qrz', 2, 'api_key', 'k');
+        getView = () => view({ archive_label: 'Home (fresh)' });
+        bindingsState.requestReload();
+        bindingsState.setField('qrz', 2, 'api_key', ''); // only the switch left
+        putAnswer = () => Promise.resolve(json({ code: 'refused', message: 'no' }, 400));
+        // Refused before the wire: a switch on without its required key.
+        await bindingsState.save();
+        await vi.waitFor(() => expect(bindingsState.view?.archive_label).toBe('Home (fresh)'));
+    });
+
+    it('B20: a request before the tab ever loaded reads nothing (its first load will)', async () => {
+        bindingsState.requestReload();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(calls.length).toBe(0);
+    });
+
     it('B10: a refused load says why and is not loaded', async () => {
         getView = () => ({});
         vi.stubGlobal(

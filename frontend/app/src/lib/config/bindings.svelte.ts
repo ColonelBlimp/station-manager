@@ -93,6 +93,12 @@ class BindingsState {
     /** Required fields a refused save marked, per row key. */
     missing = $state<Record<string, string[]>>({});
     #eligibilityRefreshGeneration = 0;
+    // Re-reads the logbooks asked for (review 412cca37 P2). A fresh view — a
+    // load, a save's response, a timeout's re-read — covers only the requests
+    // made before it was read; the rest stay owed and are paid by #settle()
+    // whenever nothing is unsaved.
+    #reloadRequested = 0;
+    #reloadCovered = 0;
 
     dirty = $derived(this.#anyChanged());
 
@@ -154,6 +160,11 @@ class BindingsState {
     /** Turn every logbook's binding of a destination on or off. Turning on is
      *  refused where the daemon said this destination cannot be turned on. */
     setAll(type: string, on: boolean): void {
+        this.#setAll(type, on);
+        this.#settle();
+    }
+
+    #setAll(type: string, on: boolean): void {
         if (this.saving) return;
         const dest = this.#dest(type);
         if (!dest || (on && dest.reason !== '')) return;
@@ -161,6 +172,11 @@ class BindingsState {
     }
 
     setRow(type: string, logbookId: number, on: boolean): void {
+        this.#setRow(type, logbookId, on);
+        this.#settle();
+    }
+
+    #setRow(type: string, logbookId: number, on: boolean): void {
         if (this.saving) return;
         const dest = this.#dest(type);
         if (!dest || (on && dest.reason !== '')) return;
@@ -170,6 +186,11 @@ class BindingsState {
     /** Record what the operator typed into a per-logbook field; typing into a
      *  field a refused save marked drops the mark. */
     setField(type: string, logbookId: number, key: string, value: string): void {
+        this.#setField(type, logbookId, key, value);
+        this.#settle();
+    }
+
+    #setField(type: string, logbookId: number, key: string, value: string): void {
         if (this.saving) return;
         const k = rowKey(type, logbookId);
         const d = this.drafts[k];
@@ -183,6 +204,11 @@ class BindingsState {
     /** Mark a STORED per-logbook field for removal — only on a row that ends
      *  off (the daemon refuses a removal from a row that ends on). */
     clear(type: string, logbookId: number, key: string): void {
+        this.#clear(type, logbookId, key);
+        this.#settle();
+    }
+
+    #clear(type: string, logbookId: number, key: string): void {
         if (this.saving) return;
         const k = rowKey(type, logbookId);
         const found = this.#row(k);
@@ -195,6 +221,11 @@ class BindingsState {
     }
 
     uncleared(type: string, logbookId: number, key: string): void {
+        this.#uncleared(type, logbookId, key);
+        this.#settle();
+    }
+
+    #uncleared(type: string, logbookId: number, key: string): void {
         if (this.saving) return;
         const d = this.drafts[rowKey(type, logbookId)];
         if (d) d.cleared = d.cleared.filter((x) => x !== key);
@@ -264,6 +295,7 @@ class BindingsState {
         // A full reload supersedes any narrower eligibility read already in
         // flight; that older snapshot must not patch the newly loaded view.
         this.#eligibilityRefreshGeneration++;
+        const covers = this.#reloadRequested;
         this.loading = true;
         // Invalidate first: a pending reload's list is not known-current.
         this.loaded = false;
@@ -285,10 +317,14 @@ class BindingsState {
             this.archiveId = identity.archiveId;
             this.types = types.kind === 'ok' ? types.types : [];
             this.#apply(view.bindings);
+            this.#covered(covers);
             this.loaded = true;
         } finally {
             this.loading = false;
         }
+        // A re-read requested while this one was on the wire: its rows may
+        // predate that change.
+        this.#settle();
     }
 
     #apply(v: ArchiveBindings): void {
@@ -385,6 +421,11 @@ class BindingsState {
     }
 
     async save(): Promise<void> {
+        await this.#save();
+        this.#settle();
+    }
+
+    async #save(): Promise<void> {
         if (this.saving || !this.loaded || !this.dirty || !this.view) return;
         const missing = this.validate();
         if (Object.keys(missing).length > 0) {
@@ -401,9 +442,11 @@ class BindingsState {
         this.missing = {};
         this.saving = true;
         try {
+            const covers = this.#reloadRequested;
             const res = await saveArchiveBindings(this.archiveId, this.buildRequest());
             if (res.kind === 'ok') {
                 this.#apply(res.bindings);
+                this.#covered(covers); // the PUT answers with the view as of its send
                 toasts.info(
                     res.bindings.restart_required
                         ? 'Bindings saved. They apply when the daemon restarts.'
@@ -425,6 +468,7 @@ class BindingsState {
     /** A save whose response never came may have committed (ADR 0078): re-read,
      *  show the daemon's switches, keep what the operator typed. */
     async #reconcileAfterTimeout(): Promise<void> {
+        const covers = this.#reloadRequested;
         const out = await fetchArchiveBindings(this.archiveId);
         if (out.kind !== 'ok') {
             toasts.warn(
@@ -446,6 +490,7 @@ class BindingsState {
         }
         this.view = out.bindings;
         this.drafts = drafts;
+        this.#covered(covers);
         toasts.warn(
             `${OUTCOME_UNKNOWN_LEAD} The switches now show what Station Manager holds; what you typed is kept — check it and save again if needed.`
         );
@@ -459,6 +504,31 @@ class BindingsState {
             this.drafts = {};
             this.missing = {};
         }
+        // The restored snapshot may predate a logbook change made meanwhile.
+        this.#settle();
+    }
+
+    /** The logbooks changed elsewhere (Settings → Logbooks): re-read the rows —
+     *  now when nothing is unsaved, else once the edits are discarded, so a
+     *  re-read never overwrites them. Before the first load there is nothing to
+     *  refresh: that load reads the current rows. */
+    requestReload(): void {
+        if (!this.loaded && !this.loading) return;
+        this.#reloadRequested++;
+        this.#settle();
+    }
+
+    #covered(upTo: number): void {
+        this.#reloadCovered = Math.max(this.#reloadCovered, upTo);
+    }
+
+    /** Pay an owed re-read once nothing is unsaved and nothing is on the wire.
+     *  Called wherever edits can come to nothing: every edit, a save's end
+     *  (refused ones restore switches), a discard, and a load's end. */
+    #settle(): void {
+        if (this.#reloadRequested <= this.#reloadCovered) return;
+        if (!this.loaded || this.dirty || this.saving || this.loading) return;
+        void this.load();
     }
 }
 

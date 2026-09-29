@@ -25,9 +25,9 @@ vi.mock('./archives.svelte', () => ({
     archiveSwitchGate: vi.fn(() => null),
     archivesState: { list: [] },
 }));
-const bindingsLoad = vi.hoisted(() => vi.fn());
+const bindingsReload = vi.hoisted(() => vi.fn());
 vi.mock('./bindings.svelte', () => ({
-    bindingsState: { loaded: false, dirty: false, saving: false, load: bindingsLoad },
+    bindingsState: { requestReload: bindingsReload },
 }));
 vi.mock('../operate/station.svelte', () => ({ setStationInfo: vi.fn() }));
 
@@ -42,7 +42,6 @@ import { fetchStationContext } from '../api/seams';
 import { fetchDaemonIdentity } from '../api/qso-archives';
 import { fetchArchiveBindings, saveArchiveBindings } from '../api/archive-bindings';
 import { archiveSwitchGate } from './archives.svelte';
-import { bindingsState } from './bindings.svelte';
 import { setStationInfo } from '../operate/station.svelte';
 import { logbooksState, _resetLogbooksForTests } from './logbooks.svelte';
 import { toastsState, _resetForTests as resetToasts } from '../ui/toasts.svelte';
@@ -102,7 +101,6 @@ const toast = (level: string, re: RegExp): boolean =>
 beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(archiveSwitchGate).mockReturnValue(null);
-    Object.assign(bindingsState, { loaded: false, dirty: false, saving: false });
     _resetLogbooksForTests();
     resetToasts();
 });
@@ -332,21 +330,85 @@ describe('logbooksState.remove', () => {
 });
 
 describe('Settings → Forwarding stays in step', () => {
-    it('re-reads the Forwarding rows after a change when they hold no unsaved edits', async () => {
+    // Review 412cca37 P2: whether Forwarding can re-read now (no unsaved edits)
+    // or must owe it until they are discarded is the bindings store's call
+    // (bindings.svelte.test.ts B17–B20); every logbook write asks.
+    it('asks Forwarding to re-read its rows after every write', async () => {
         daemonHas({});
         await logbooksState.load();
         vi.mocked(createLogbook).mockResolvedValue({ kind: 'ok', id: 3 });
-        Object.assign(bindingsState, { loaded: true, dirty: false, saving: false });
         await logbooksState.create({ name: 'Contest', callsign: '7Q5MLV', smcloud: false });
-        expect(bindingsLoad).toHaveBeenCalledTimes(1);
+        expect(bindingsReload).toHaveBeenCalledTimes(1);
+        vi.mocked(renameLogbook).mockResolvedValue({ kind: 'ok' });
+        await logbooksState.rename(2, 'Field');
+        expect(bindingsReload).toHaveBeenCalledTimes(2);
+        vi.mocked(deleteLogbook).mockResolvedValue({ kind: 'ok' });
+        await logbooksState.remove(2);
+        expect(bindingsReload).toHaveBeenCalledTimes(3);
+    });
+});
+
+// Review 412cca37 P2: the editors stay usable while a write is on the wire, so
+// a success clears only the draft it submitted — a newer one typed meanwhile is
+// kept, and stays guarded as unsaved.
+describe('a draft typed while a write is pending', () => {
+    it('create keeps a newer Add draft, and clears the one it submitted', async () => {
+        daemonHas({});
+        await logbooksState.load();
+        let answer: (v: unknown) => void = () => {};
+        vi.mocked(createLogbook).mockImplementation(
+            () => new Promise((r) => (answer = r)) as never
+        );
+        logbooksState.addName = 'First';
+        const pending = logbooksState.create({ name: 'First', callsign: '7Q5MLV', smcloud: false });
+        logbooksState.addName = 'Second';
+        answer({ kind: 'ok', id: 3 });
+        await pending;
+        expect(logbooksState.addName).toBe('Second');
+        expect(logbooksState.dirty).toBe(true);
+
+        vi.mocked(createLogbook).mockResolvedValue({ kind: 'ok', id: 4 });
+        await logbooksState.create({ name: 'Second', callsign: '7Q5MLV', smcloud: false });
+        expect(logbooksState.addName).toBe('');
+        expect(logbooksState.dirty).toBe(false);
     });
 
-    it('leaves Forwarding’s unsaved edits alone', async () => {
+    it('rename keeps a newer rename draft, and closes the one it submitted', async () => {
         daemonHas({});
         await logbooksState.load();
-        vi.mocked(createLogbook).mockResolvedValue({ kind: 'ok', id: 3 });
-        Object.assign(bindingsState, { loaded: true, dirty: true, saving: false });
-        await logbooksState.create({ name: 'Contest', callsign: '7Q5MLV', smcloud: false });
-        expect(bindingsLoad).not.toHaveBeenCalled();
+        let answer: (v: unknown) => void = () => {};
+        vi.mocked(renameLogbook).mockImplementation(
+            () => new Promise((r) => (answer = r)) as never
+        );
+        logbooksState.startRename({ id: 2, name: 'Portable', callsign: '7Q5MLV/P', count: 0 });
+        logbooksState.renameName = 'Field';
+        const pending = logbooksState.rename(2, 'Field');
+        logbooksState.renameName = 'Field day';
+        answer({ kind: 'ok' });
+        await pending;
+        expect(logbooksState.renameId).toBe(2);
+        expect(logbooksState.renameName).toBe('Field day');
+
+        vi.mocked(renameLogbook).mockResolvedValue({ kind: 'ok' });
+        await logbooksState.rename(2, 'Field day');
+        expect(logbooksState.renameId).toBe(0);
+    });
+
+    it('a kept rename draft measures against the name just saved', async () => {
+        daemonHas({});
+        await logbooksState.load();
+        let answer: (v: unknown) => void = () => {};
+        vi.mocked(renameLogbook).mockImplementation(
+            () => new Promise((r) => (answer = r)) as never
+        );
+        logbooksState.startRename({ id: 2, name: 'Portable', callsign: '7Q5MLV/P', count: 0 });
+        logbooksState.renameName = 'Field';
+        const pending = logbooksState.rename(2, 'Field');
+        logbooksState.renameName = 'Portable'; // typed back while saving
+        answer({ kind: 'ok' });
+        await pending;
+        expect(logbooksState.renameId).toBe(2);
+        expect(logbooksState.renameFrom).toBe('Field');
+        expect(logbooksState.dirty).toBe(true); // "Portable" is now a change
     });
 });

@@ -144,6 +144,15 @@ class LogbooksState {
         this.addCallsign = value.toUpperCase();
     }
 
+    #addDraftIs(input: { name: string; callsign: string; smcloud: boolean }): boolean {
+        return (
+            this.addName.trim() === input.name &&
+            this.addCallsign.trim().toUpperCase() === input.callsign.toUpperCase() &&
+            // As the form submits it: a tick counts only while SM Cloud is offered.
+            (this.addSmcloud && this.smcloudAvailable) === input.smcloud
+        );
+    }
+
     clearAdd(): void {
         this.addName = '';
         this.addSmcloud = false;
@@ -190,7 +199,9 @@ class LogbooksState {
             }
             if (input.smcloud) await this.#enableSmCloud(out.id, input.name);
             else toasts.info(`Logbook “${input.name}” added.`);
-            this.clearAdd();
+            // Only the draft it submitted: one typed while the request was on
+            // the wire stays, and stays guarded (review 412cca37 P2).
+            if (this.#addDraftIs(input)) this.clearAdd();
             return true;
         } finally {
             await this.#afterWrite();
@@ -227,7 +238,12 @@ class LogbooksState {
             // The header names the Default logbook; keep it in step.
             if (id === this.defaultId) setStationInfo({ logbookName: name });
             toasts.info(`Logbook renamed “${name}”.`);
-            this.cancelRename();
+            if (this.renameId === id) {
+                // A draft typed while saving stays open, measured against the
+                // name just saved (not the one it replaced).
+                if (this.renameName.trim() === name) this.cancelRename();
+                else this.renameFrom = name;
+            }
             return true;
         } finally {
             await this.#afterWrite();
@@ -266,15 +282,12 @@ class LogbooksState {
         else toasts.error(out.message);
     }
 
-    // Every write re-reads the list, whatever its outcome, and re-reads the
-    // Forwarding rows unless they hold unsaved edits (those are never
-    // overwritten; their save merges by row).
+    // Every write re-reads the list, whatever its outcome, and asks Forwarding
+    // to re-read its rows (now, or once its unsaved edits are discarded).
     async #afterWrite(): Promise<void> {
         this.busy = false;
         await this.load();
-        if (bindingsState.loaded && !bindingsState.dirty && !bindingsState.saving) {
-            void bindingsState.load();
-        }
+        bindingsState.requestReload();
     }
 }
 

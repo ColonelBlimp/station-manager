@@ -1520,6 +1520,24 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      load overwriting a typed callsign, and Logbooks placed after Rigs — each
      failed its intended test. The drafts moved from the component into
      `logbooksState` so the guard can read and discard them.
+     **Review 412cca37 (Codex, two P2s, fixed 2026-09-29):** (a) a successful
+     create or rename cleared the draft even when the operator had typed a newer
+     one while the request was on the wire — now it clears only the draft it
+     submitted, so a newer one stays and stays guarded; (b) a logbook change
+     made while Forwarding held unsaved edits skipped Forwarding's re-read for
+     good, and discarding those edits restored the old snapshot without the new
+     logbook — the bindings store now owes the re-read (`requestReload`),
+     reading at once when nothing is unsaved, paying the debt when edits are
+     discarded or when a load that was already on the wire ends, and settling
+     it on a save's fresh view. **Review of those fixes (three P2s, fixed the
+     same day):** a kept rename draft now measures against the name just saved;
+     a fresh view (load, save response, timeout re-read) settles only the
+     re-read requests made before it was read — requests and coverage are
+     counters, not a flag, so a save sampled before a logbook change no longer
+     erases that change's re-read; and an owed re-read is paid wherever the
+     edits can come to nothing (every edit, the end of any save including a
+     refused one, a discard, the end of a load), not only on Discard. Reversion
+     proofs for each rule failed their intended tests.
 
 Deferred by the ADR and not planned here: archive delete, external attach CLI, in-process switch,
 cross-archive query.
