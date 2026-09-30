@@ -12,12 +12,13 @@
       N5  A failed deletion keeps the entry visible and says so.
       N6  Unreadable browser storage is said, not silently shown as nothing.
           (Storage that does not exist at all holds nothing: see draftStore.)
+      N7  A re-read that fails keeps the entries already shown, beside the error.
 */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/svelte';
 import SavedDraftsNotice from './SavedDraftsNotice.svelte';
 import { _setDraftStoreForTests, memoryDraftStore } from './draftStore';
-import { _resetSavedDraftsForTests } from './savedDrafts.svelte';
+import { _resetSavedDraftsForTests, loadSavedDrafts } from './savedDrafts.svelte';
 import { sampleRecord } from './savedDraft.fixture';
 import { toastsState, _resetForTests as resetToasts } from '../ui/toasts.svelte';
 
@@ -118,5 +119,15 @@ describe('SavedDraftsNotice', () => {
         expect(await screen.findByTestId('saved-drafts-error')).toHaveTextContent(
             'the storage read failed'
         );
+    });
+
+    it('N7 a failed re-read keeps the entries shown beside the error', async () => {
+        await seed(sampleRecord());
+        render(SavedDraftsNotice);
+        await screen.findByTestId('saved-draft-d-1');
+        vi.spyOn(mem, 'list').mockRejectedValueOnce(new Error('the storage read failed'));
+        await loadSavedDrafts();
+        expect(await screen.findByTestId('saved-drafts-error')).toBeInTheDocument();
+        expect(screen.getByTestId('saved-draft-d-1')).toBeInTheDocument();
     });
 });

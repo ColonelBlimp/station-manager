@@ -6,6 +6,7 @@
 
 import { draft, draftInProgress, logOutcomeUnknown, type QsoDraft } from '../operate/qso.svelte';
 import { rigReadingForSave } from '../operate/rigSnapshot.svelte';
+import { announceDraftsChanged } from './draftChannel';
 import { draftStore } from './draftStore';
 import type { SavedDraft } from './savedDraft';
 
@@ -66,11 +67,12 @@ async function run(archive: DraftSource | null, station: StationSource): Promise
     }
     try {
         await draftStore().put(record);
-        return { kind: 'saved', record };
     } catch (e) {
         const detail = e instanceof Error ? e.message : String(e);
         return { kind: 'failed', record, reason: `Browser storage did not keep it (${detail}).` };
     }
+    announceDraftsChanged(); // committed: the other tabs re-read
+    return { kind: 'saved', record };
 }
 
 /** Save the current draft, if there is one, with its original source. */

@@ -6,9 +6,10 @@
     import { onMount } from 'svelte';
     import SavedDraftDetails from './SavedDraftDetails.svelte';
     import { savedDraftHeadline, savedDraftSummary, type SavedDraft } from './savedDraft';
-    import { discardSavedDraft, loadSavedDrafts, savedDrafts } from './savedDrafts.svelte';
+    import { discardSavedDraft, savedDrafts, watchSavedDrafts } from './savedDrafts.svelte';
 
-    onMount(() => void loadSavedDrafts());
+    // Kept current across tabs: re-read on another tab's change and on becoming visible.
+    onMount(() => watchSavedDrafts());
 
     let open = $state<Record<string, boolean>>({});
 
@@ -28,7 +29,8 @@
     >
         Saved QSO drafts could not be read from this browser’s storage ({savedDrafts.error}).
     </div>
-{:else if savedDrafts.list.length > 0}
+{/if}
+{#if savedDrafts.list.length > 0}
     <section
         class="border-b border-line bg-surface-muted px-4 py-2 sm:px-6 lg:px-8"
         aria-label="Saved QSO drafts"
