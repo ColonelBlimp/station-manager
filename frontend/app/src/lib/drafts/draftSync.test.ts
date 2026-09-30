@@ -11,6 +11,8 @@
           before the discard and ends after it is dropped.
       S6  Overlapping reads: only the newest read's result is applied.
       S7  A failed re-read keeps the list shown and says so.
+      S8  Only a committed save leaves the one-time announcement for the tab's
+          reload (ADR 0086); a failed save leaves none.
     These announcements are change notices only — they do not give any tab
     ownership of a record (Restore's exclusive ownership is separate).
 */
@@ -20,6 +22,7 @@ import { _resetRigSnapshotForTests } from '../operate/rigSnapshot.svelte';
 import { _setDraftStoreForTests, memoryDraftStore } from './draftStore';
 import { _setDraftChannelForTests, type DraftChannel } from './draftChannel';
 import {
+    consumePreservedAnnouncement,
     discardSavedDraft,
     loadSavedDrafts,
     savedDrafts,
@@ -160,5 +163,24 @@ describe('saved QSOs across tabs', () => {
         await loadSavedDrafts();
         expect(savedDrafts.list.map((r) => r.id)).toEqual(['d-1']);
         expect(savedDrafts.error).toMatch(/storage read failed/);
+    });
+
+    it('S8 only a committed save leaves the one-time announcement', async () => {
+        const station = {
+            logbookUuid: 'lb-a',
+            logbookId: 1,
+            logbookName: 'Home log',
+            stationCallsign: '7Q5MLV',
+            operator: '7Q5MLV',
+            myGrid: 'KH66',
+        };
+        sessionStorage.clear();
+        draft.callsign = 'G0ABC';
+        vi.spyOn(mem, 'put').mockRejectedValueOnce(new Error('QuotaExceededError'));
+        await preserveDraft({ archiveId: 'a', archiveLabel: 'Home' }, station);
+        expect(consumePreservedAnnouncement()).toBeNull();
+        await preserveDraft({ archiveId: 'a', archiveLabel: 'Home' }, station);
+        expect(consumePreservedAnnouncement()?.message).toMatch(/Unlogged QSO saved from ‘Home’/);
+        expect(consumePreservedAnnouncement()).toBeNull(); // once
     });
 });

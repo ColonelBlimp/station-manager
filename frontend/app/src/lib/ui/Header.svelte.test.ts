@@ -11,6 +11,9 @@ import { rig } from '../operate/rig.svelte';
 import { router } from '../router.svelte';
 import { isVisible, toggleTile } from '../operate/layout.svelte';
 import { archivesState, _resetArchivesForTests } from '../config/archives.svelte';
+import { _setDraftStoreForTests, memoryDraftStore } from '../drafts/draftStore';
+import { _resetSavedDraftsForTests } from '../drafts/savedDrafts.svelte';
+import { sampleRecord } from '../drafts/savedDraft.fixture';
 
 vi.mock('../api/qso-archives', () => ({
     fetchQsoArchives: vi.fn(),
@@ -277,5 +280,24 @@ describe('Header archive selector', () => {
         await fireEvent.change(sel, { target: { value: 'b' } });
         await new Promise((r) => setTimeout(r, 0));
         expect(activateQsoArchive).toHaveBeenCalledWith('b');
+    });
+});
+
+// ADR 0086: Saved QSOs sit in the header beside Logbook, and stay reachable on
+// the narrowest widths, where the identity block (Archive/Logbook/Rig) is hidden.
+describe('Header Saved QSOs control', () => {
+    it('is in the header and outside the block hidden on narrow screens', async () => {
+        const mem = memoryDraftStore();
+        await mem.put(sampleRecord());
+        _setDraftStoreForTests(mem);
+        _resetSavedDraftsForTests();
+        try {
+            render(Header);
+            const control = await screen.findByRole('button', { name: 'Saved QSOs (1)' });
+            expect(control.closest('header')).not.toBeNull();
+            expect(control.closest('.hidden')).toBeNull();
+        } finally {
+            _setDraftStoreForTests(null);
+        }
     });
 });

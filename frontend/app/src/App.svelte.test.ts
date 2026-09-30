@@ -11,7 +11,10 @@ import { navigate } from './lib/router.svelte';
 import { archivesState, _resetArchivesForTests } from './lib/config/archives.svelte';
 import { screen } from '@testing-library/svelte';
 import { _setDraftStoreForTests, memoryDraftStore } from './lib/drafts/draftStore';
-import { _resetSavedDraftsForTests } from './lib/drafts/savedDrafts.svelte';
+import {
+    _resetSavedDraftsForTests,
+    rememberPreservedForAnnouncement,
+} from './lib/drafts/savedDrafts.svelte';
 import { sampleRecord } from './lib/drafts/savedDraft.fixture';
 
 describe('App tab title on the first-run surface', () => {
@@ -77,9 +80,9 @@ describe('ArchiveSwitchGate covers the Map branch', () => {
     });
 });
 
-// The saved-QSO notice is on EVERY page (operator ruling 2026-09-30) — the
-// full-window Map tab included, which has no header (review 2026-09-30).
-describe('the saved-QSO notice on the Map route', () => {
+// Saved QSOs are reachable on EVERY page (ADR 0086) — the full-window Map tab
+// included, which has no header: the control sits in the map's own toolbar.
+describe('the Saved QSOs control on the Map route', () => {
     beforeEach(() => {
         _resetSetupForTests();
         _resetArchivesForTests();
@@ -90,15 +93,36 @@ describe('the saved-QSO notice on the Map route', () => {
         navigate('operate');
     });
 
-    it('shows a saved QSO over the map', async () => {
+    it('shows the saved-QSO count in the map toolbar', async () => {
         const mem = memoryDraftStore();
         await mem.put(sampleRecord());
         _setDraftStoreForTests(mem);
         setup.status = 'complete';
         navigate('map');
         render(App);
-        expect(await screen.findByTestId('saved-draft-d-1')).toHaveTextContent(
-            'Unlogged QSO saved from ‘Home’ — not logged.'
-        );
+        expect(
+            await screen.findByRole('button', { name: 'Saved QSOs (1)' }, { timeout: 3000 })
+        ).toBeInTheDocument();
+    });
+
+    // Review 2026-09-30: the Map branch mounted no toast renderer, so the
+    // announcement was consumed and never shown (Copy and a failed Discard
+    // were silent too). Checked in the DOM, not in toast state.
+    it('shows the one-time announcement on the map', async () => {
+        const mem = memoryDraftStore();
+        const record = sampleRecord();
+        await mem.put(record);
+        _setDraftStoreForTests(mem);
+        sessionStorage.clear();
+        rememberPreservedForAnnouncement(record);
+        setup.status = 'complete';
+        navigate('map');
+        render(App);
+        await screen.findByRole('button', { name: 'Saved QSOs (1)' }, { timeout: 3000 });
+        expect(
+            await screen.findByText(
+                'Unlogged QSO saved from ‘Home’ — not logged. It is under Saved QSOs.'
+            )
+        ).toBeInTheDocument();
     });
 });

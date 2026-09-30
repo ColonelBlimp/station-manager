@@ -10,6 +10,7 @@
     picker, plotted-count line, live indicator, error surface.
 -->
 <script lang="ts">
+    import SavedQsosControl from '../drafts/SavedQsosControl.svelte';
     import WorldMap from './WorldMap.svelte';
     import { mapData, setDuration, startMapData, DURATIONS } from './mapData.svelte';
     import { bandColor, bandRank, normalizeBand } from './bandColors';
@@ -167,6 +168,9 @@
         {/if}
 
         <div class="ml-auto flex items-center gap-x-3 text-xs text-muted">
+            <!-- Saved QSOs (ADR 0086): the header's control, in the map's own
+                 toolbar — this full-window tab has no header. -->
+            <SavedQsosControl />
             {#if mapData.status === 'ok'}
                 <span data-testid="plotted">
                     {visible.length} of {mapData.total} plotted{unplotted > 0

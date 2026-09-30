@@ -7,13 +7,17 @@
 import { toasts } from '../ui/toasts.svelte';
 import { announceDraftsChanged, onDraftsChanged } from './draftChannel';
 import { draftStore, listSavedDrafts } from './draftStore';
-import type { SavedDraft } from './savedDraft';
+import { savedDraftHeadline, type SavedDraft } from './savedDraft';
 
 export const savedDrafts: { list: SavedDraft[]; error: string; removing: string } = $state({
     list: [],
     error: '',
     removing: '',
 });
+
+/** The overlay panel's open state (ADR 0086). While it is open the Phone / CW
+ *  card's shortcuts stand down, as they do for the Export dialog. */
+export const savedQsosPanel: { open: boolean } = $state({ open: false });
 
 // Every read is numbered and only the newest may apply its result: an older
 // read — begun before a discard, answering after it — must not resurrect the
@@ -52,9 +56,59 @@ export async function discardSavedDraft(id: string): Promise<boolean> {
     return true;
 }
 
+// The one-time announcement (ADR 0086): a committed save leaves it in this
+// tab's sessionStorage, which survives the reload that follows; the first view
+// to watch the list after that reload takes it and shows an ordinary toast.
+// Taking it removes it, so later reloads and cross-tab refreshes never repeat it.
+const ANNOUNCE_KEY = 'station-manager.saved-qso-announcement';
+
+export interface PreservedAnnouncement {
+    message: string;
+    level: 'info' | 'warn';
+}
+
+/** Leave the announcement for this tab's reload. Called only after a save
+ *  COMMITTED; the wording keeps an unknown logging outcome. */
+export function rememberPreservedForAnnouncement(r: SavedDraft): void {
+    const a: PreservedAnnouncement = {
+        message: `${savedDraftHeadline(r)} It is under Saved QSOs.`,
+        level: r.outcome === 'unknown' ? 'warn' : 'info',
+    };
+    try {
+        sessionStorage.setItem(ANNOUNCE_KEY, JSON.stringify(a));
+    } catch {
+        // No session storage: the Saved QSOs control still shows the record.
+    }
+}
+
+/** Take the pending announcement, if any; it is gone afterwards. */
+export function consumePreservedAnnouncement(): PreservedAnnouncement | null {
+    try {
+        const raw = sessionStorage.getItem(ANNOUNCE_KEY);
+        if (raw === null) return null;
+        sessionStorage.removeItem(ANNOUNCE_KEY);
+        const a: unknown = JSON.parse(raw);
+        if (
+            typeof a === 'object' &&
+            a !== null &&
+            typeof (a as PreservedAnnouncement).message === 'string' &&
+            ((a as PreservedAnnouncement).level === 'info' ||
+                (a as PreservedAnnouncement).level === 'warn')
+        ) {
+            return a as PreservedAnnouncement;
+        }
+        return null;
+    } catch {
+        return null;
+    }
+}
+
 /** Keep the list current while a view shows it: read now, then again on
- *  another tab's announcement and whenever this tab becomes visible. */
+ *  another tab's announcement and whenever this tab becomes visible. The
+ *  first watch after a reload also shows any pending announcement, once. */
 export function watchSavedDrafts(): () => void {
+    const pending = consumePreservedAnnouncement();
+    if (pending !== null) toasts[pending.level](pending.message);
     void loadSavedDrafts();
     const unsubscribe = onDraftsChanged(() => void loadSavedDrafts());
     const onVisible = (): void => {
@@ -69,6 +123,7 @@ export function watchSavedDrafts(): () => void {
 
 export function _resetSavedDraftsForTests(): void {
     generation = 0;
+    savedQsosPanel.open = false;
     savedDrafts.list = [];
     savedDrafts.error = '';
     savedDrafts.removing = '';

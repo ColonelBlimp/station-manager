@@ -8,6 +8,7 @@ import { draft, draftInProgress, logOutcomeUnknown, type QsoDraft } from '../ope
 import { rigReadingForSave } from '../operate/rigSnapshot.svelte';
 import { announceDraftsChanged } from './draftChannel';
 import { draftStore } from './draftStore';
+import { rememberPreservedForAnnouncement } from './savedDrafts.svelte';
 import type { SavedDraft } from './savedDraft';
 
 export interface DraftSource {
@@ -72,6 +73,7 @@ async function run(archive: DraftSource | null, station: StationSource): Promise
         return { kind: 'failed', record, reason: `Browser storage did not keep it (${detail}).` };
     }
     announceDraftsChanged(); // committed: the other tabs re-read
+    rememberPreservedForAnnouncement(record); // announced once after this tab's reload
     return { kind: 'saved', record };
 }
 
