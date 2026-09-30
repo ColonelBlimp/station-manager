@@ -104,6 +104,19 @@ screen — notices the change when it reconnects and reloads itself too. If the 
 active and the archive you chose shows a ⚠ after its label. Point at it to
 read **Last activation failed** with the reason.
 
+If a tab that reloads this way holds an unlogged Phone / CW QSO, it saves it in this
+browser before it reloads, together with the archive and logbook it belongs
+to and the rig frequency, band and mode it had. After the reload a notice
+at the top of every page — under the header, and above the map on the map
+tab — lists each saved QSO: **Show details** shows every value so
+you can read or **Copy** it, and **Discard** removes the saved copy (only the
+copy in this browser — nothing in any logbook changes). A QSO whose Log
+attempt had an unknown outcome says so: check the Logbook in its archive
+before logging it again. Saved QSOs are never logged automatically. If the
+browser cannot save the QSO, that tab does not reload: it shows the QSO in
+full, with **Retry save** and **Discard and reload**, and stop controls stay
+available.
+
 While a switch is pending, transmit is sealed: arming FT8, sending, starting
 a contact or keying the tune carrier is refused with *archive switch pending*
 until the restart completes.

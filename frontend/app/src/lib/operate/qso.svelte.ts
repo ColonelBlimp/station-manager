@@ -9,6 +9,7 @@ import { isValidCallsign } from '../validators/callsign';
 import { isValidRs, isValidRst, isValidSignalReport } from '../validators/rst';
 import { usesSignalReport } from '../utils/mode';
 import { rig, rigReady } from './rig.svelte';
+import { rigSnapshotHeld } from './rigSnapshot.svelte';
 import { toasts } from '../ui/toasts.svelte';
 import { commentHistory } from './commentHistory.svelte';
 
@@ -178,9 +179,18 @@ const defaultRst = $derived(rstDefaultFor(rig.mode));
     submits — the daemon default-fills '59' for non-FT8 blanks, the decided
     posture (2026-07-08 review, finding 3 skipped).
 */
+// Held-reading guard (ADR 0085; review 2026-09-30): while a rig reading from
+// before a connection loss is held, a mode report is the RECONNECT's, not a
+// change the draft's reports belong with — the draft may yet be saved with the
+// held reading — so the refill waits. Once the reading is retired it refills
+// only if the default really moved (appliedRst), never merely because the
+// hold ended.
+let appliedRst = '';
 $effect.root(() => {
     $effect(() => {
         const d = defaultRst;
+        if (rigSnapshotHeld() || d === appliedRst) return;
+        appliedRst = d;
         draft.rstSent = d;
         draft.rstRcvd = d;
     });
@@ -207,6 +217,7 @@ export function clearDraft(): void {
     resetClock();
     submitState.error = '';
     submitState.duplicate = false;
+    submitState.uncertain = false;
 }
 
 // Format checks for the card's free-text date/time fields (what the ADIF
@@ -277,7 +288,10 @@ export function canLog(): boolean {
 // never imports the real submit path, so it stays relocatable + testable in
 // isolation. `duplicate` marks the one refusal with a follow-up action (the
 // daemon supports force), so the card can offer "Log anyway".
-export type SubmitResult = { ok: true } | { ok: false; message: string; duplicate?: boolean };
+// uncertain: the request left and no answer proves either way (a transport
+// failure on a write) — the QSO may be in the log.
+export type SubmitResult =
+    { ok: true } | { ok: false; message: string; duplicate?: boolean; uncertain?: boolean };
 type SubmitFn = (qso: QsoDraft, opts?: { force?: boolean }) => Promise<SubmitResult>;
 let submit: SubmitFn | null = null;
 
@@ -314,7 +328,16 @@ export function entryLock(): string | null {
 // nothing reflows the card. busy doubles as the double-click latch: a write
 // POST is ambiguous on timeout, so firing a second submit while one is in
 // flight risks a double log.
-export const submitState = $state({ busy: false, error: '', duplicate: false });
+// uncertain: a log attempt for THIS draft had an unknown outcome (ADR 0085).
+// Sticky until the draft is cleared: a later definite refusal does not prove
+// the earlier attempt failed.
+export const submitState = $state({ busy: false, error: '', duplicate: false, uncertain: false });
+
+/** A log attempt for the current draft has an unknown outcome — one reported
+ *  as uncertain, or one still in flight whose answer is not yet known. */
+export function logOutcomeUnknown(): boolean {
+    return submitState.uncertain || submitState.busy;
+}
 
 /** Returns true when the QSO was stored (callers refocus the callsign field
  *  on success); false on refusal or when the gate/busy latch blocked it. */
@@ -363,6 +386,7 @@ export async function logDraft(force = false): Promise<boolean> {
         toasts.info(`Logged ${call}`);
         return true;
     }
+    if (res.uncertain) submitState.uncertain = true;
     if (res.duplicate) {
         // Card-local: the refusal with a follow-up action. Draft preserved.
         submitState.error = res.message;

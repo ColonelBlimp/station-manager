@@ -23,6 +23,11 @@ import {
     activeArchive,
     archiveEntryLock,
     archiveSwitchGate,
+    discardAndReload,
+    reloadNow,
+    retireSnapshotIfSameArchive,
+    retrySave,
+    setDraftPreserver,
     archivesState,
     createArchive,
     archiveDraft,
@@ -40,6 +45,14 @@ import {
 } from './archives.svelte';
 import { toastsState, _resetForTests as resetToasts } from '../ui/toasts.svelte';
 import { draft, clearDraft } from '../operate/qso.svelte';
+import { rig } from '../operate/rig.svelte';
+import {
+    noteRigDrop,
+    rigReadingForSave,
+    _resetRigSnapshotForTests,
+} from '../operate/rigSnapshot.svelte';
+import type { PreserveResult } from '../drafts/preserve';
+import { sampleRecord } from '../drafts/savedDraft.fixture';
 
 /*
     ARCHIVES STATE — the one activation flow both the Settings tab and the header
@@ -85,6 +98,8 @@ beforeEach(() => {
     vi.mocked(fetchDaemonInstance).mockReset();
     vi.mocked(waitForDaemonBack).mockReset();
     _resetArchivesForTests();
+    setDraftPreserver(null);
+    _resetRigSnapshotForTests();
     clearDraft();
     resetToasts();
     reloads = 0;
@@ -409,6 +424,207 @@ describe('activateArchive — unlogged Phone / CW work', () => {
         archivesState.verifying = true;
         expect(archiveSwitchGate()).not.toBeNull(); // submits still wait for it
         expect(archiveEntryLock()).toBeNull();
+    });
+});
+
+/*
+    REBIND RELOADS PRESERVE UNLOGGED WORK (ADR 0085, rule 3 slice 1).
+      V1  Every rebind reload first saves the draft through the injected
+          preserver, and reloads only once that save has completed.
+      V2  A failed save HOLDS the reload: the gate stays latched and the
+          failure (reason + the record, for display) is kept.
+      V3  Reload now, and a later automatic rebind, go through the same save;
+          while it still fails nothing reloads.
+      V4  Retry save that succeeds reloads and clears the failure.
+      V5  Discard and reload reloads without saving.
+      V6  The source handed to the preserver is the archive this page booted
+          on; an unproven boot hands none (the preserver then holds).
+      V7  A verified same-archive recovery retires the held rig reading; a
+          rig reconnect to the SAME daemon instance does too, a different one
+          does not.
+*/
+describe('rebind reloads preserve unlogged work', () => {
+    const FAILED: PreserveResult = {
+        kind: 'failed',
+        record: sampleRecord(),
+        reason: 'Browser storage did not keep it (QuotaExceededError).',
+    };
+    const SAVED: PreserveResult = { kind: 'saved', record: sampleRecord() };
+
+    it('V1 the reload waits for the save', async () => {
+        await loadArchives();
+        _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i2', archiveId: 'b' });
+        let finish: (r: PreserveResult) => void = () => {};
+        const preserver = vi.fn(() => new Promise<PreserveResult>((r) => (finish = r)));
+        setDraftPreserver(preserver);
+        const run = verifyArchiveGeneration();
+        for (let i = 0; i < 10; i++) await Promise.resolve();
+        expect(preserver).toHaveBeenCalledTimes(1);
+        expect(reloads).toBe(0);
+        finish(SAVED);
+        await run;
+        expect(reloads).toBe(1);
+    });
+
+    it('V2 a failed save holds the reload, gated, with the failure kept', async () => {
+        await loadArchives();
+        _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i2', archiveId: 'b' });
+        setDraftPreserver(() => Promise.resolve(FAILED));
+        await verifyArchiveGeneration();
+        expect(reloads).toBe(0);
+        expect(archivesState.switchUnresolved).toBe(true);
+        expect(archivesState.saveFailed?.reason).toMatch(/QuotaExceededError/);
+        expect(archivesState.saveFailed?.record.fields.callsign).toBe('g0abc');
+    });
+
+    it('V3 Reload now and a later automatic rebind still hold while saving fails', async () => {
+        await loadArchives();
+        vi.mocked(fetchDaemonInstance).mockResolvedValue('inst-1');
+        vi.mocked(activateQsoArchive).mockResolvedValue({
+            kind: 'accepted',
+            id: 'b',
+            durability: 'durable',
+        });
+        vi.mocked(waitForDaemonBack).mockResolvedValue(true);
+        const preserver = vi.fn(() => Promise.resolve(FAILED));
+        setDraftPreserver(preserver);
+        await activateArchive('b', () => true); // automatic: the new instance is seen
+        expect(reloads).toBe(0);
+        reloadNow();
+        for (let i = 0; i < 10; i++) await Promise.resolve();
+        expect(preserver).toHaveBeenCalledTimes(2);
+        expect(reloads).toBe(0);
+        expect(archivesState.saveFailed).not.toBeNull();
+    });
+
+    it('V4 a successful Retry save reloads and clears the failure', async () => {
+        _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i2', archiveId: 'b' });
+        const preserver = vi
+            .fn<() => Promise<PreserveResult>>()
+            .mockResolvedValueOnce(FAILED)
+            .mockResolvedValueOnce(SAVED);
+        setDraftPreserver(preserver);
+        await verifyArchiveGeneration();
+        expect(reloads).toBe(0);
+        await retrySave();
+        expect(reloads).toBe(1);
+        expect(archivesState.saveFailed).toBeNull();
+    });
+
+    it('V5 Discard and reload reloads without saving', async () => {
+        _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i2', archiveId: 'b' });
+        const preserver = vi.fn(() => Promise.resolve(FAILED));
+        setDraftPreserver(preserver);
+        await verifyArchiveGeneration();
+        discardAndReload();
+        expect(preserver).toHaveBeenCalledTimes(1);
+        expect(reloads).toBe(1);
+    });
+
+    it('V6 the source is the booted archive; an unproven page hands none', async () => {
+        await loadArchives();
+        _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i2', archiveId: 'b' });
+        const preserver = vi.fn((_src: unknown) => Promise.resolve(SAVED));
+        setDraftPreserver(preserver);
+        await verifyArchiveGeneration();
+        expect(preserver).toHaveBeenLastCalledWith({ archiveId: 'a', archiveLabel: 'Home' });
+
+        _resetArchivesForTests();
+        setDraftPreserver(preserver);
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i3', archiveId: 'b' });
+        await verifyArchiveGeneration(); // no proven baseline: rebind
+        expect(preserver).toHaveBeenLastCalledWith(null);
+    });
+
+    it('V8 every automatic reload path saves first and holds on failure', async () => {
+        const preserver = vi.fn(() => Promise.resolve(FAILED));
+        setDraftPreserver(preserver);
+
+        // The switch watch: the wait expires, then the new instance is seen.
+        await loadArchives();
+        vi.mocked(fetchDaemonInstance).mockResolvedValue('inst-1');
+        vi.mocked(activateQsoArchive).mockResolvedValue({
+            kind: 'accepted',
+            id: 'b',
+            durability: 'durable',
+        });
+        vi.mocked(waitForDaemonBack).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+        await activateArchive('b', () => true);
+        for (let i = 0; i < 10; i++) await Promise.resolve();
+        expect(preserver).toHaveBeenCalledTimes(1);
+
+        // The unproven-boot watch: the daemon answers again.
+        _resetArchivesForTests();
+        setDraftPreserver(preserver);
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue(null);
+        vi.mocked(waitForDaemonBack).mockResolvedValue(true);
+        await bootArchiveScoped(() => Promise.resolve(0));
+        for (let i = 0; i < 10; i++) await Promise.resolve();
+        expect(preserver).toHaveBeenCalledTimes(2);
+
+        // The boot bracket straddling a change.
+        _resetArchivesForTests();
+        setDraftPreserver(preserver);
+        vi.mocked(fetchDaemonIdentity)
+            .mockResolvedValueOnce({ instance: 'i1', archiveId: 'a' })
+            .mockResolvedValueOnce({ instance: 'i2', archiveId: 'b' });
+        await bootArchiveScoped(() => Promise.resolve(0));
+        expect(preserver).toHaveBeenCalledTimes(3);
+
+        expect(reloads).toBe(0);
+        expect(archivesState.saveFailed).not.toBeNull();
+    });
+
+    // Review 2026-09-30: an identity answer that started before a later loss
+    // replaced the held 14.255 MHz reading with the reconnect's 7.074 MHz.
+    for (const [label, check] of [
+        ['rig reconnect', retireSnapshotIfSameArchive],
+        ['archive reconnect', verifyArchiveGeneration],
+    ] as const) {
+        it(`V9 ${label}: a late same-archive answer cannot retire a newer loss's reading`, async () => {
+            _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
+            rig.freq = '14.255.000';
+            rig.band = '20m';
+            rig.mode = 'USB';
+            let reply: (v: { instance: string; archiveId: string }) => void = () => {};
+            vi.mocked(fetchDaemonIdentity).mockReturnValue(new Promise((r) => (reply = r)));
+            const pending = check();
+            noteRigDrop(Date.parse('2026-09-30T12:00:00Z'));
+            rig.freq = '7.074.000';
+            rig.band = '40m';
+            rig.mode = 'CW';
+            reply({ instance: 'i1', archiveId: 'a' });
+            await pending;
+            expect(rigReadingForSave().freqHz).toBe(14_255_000);
+        });
+    }
+
+    it('V7 a verified same-archive recovery retires the held rig reading', async () => {
+        rig.freq = '14.255.000';
+        noteRigDrop(Date.parse('2026-09-30T12:00:00Z'));
+        _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i2', archiveId: 'a' });
+        await verifyArchiveGeneration();
+        expect(rigReadingForSave().basis).toBe('when-saved');
+    });
+
+    it('V7 a rig reconnect to the same archive retires it (a restart included); another archive keeps it', async () => {
+        _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
+        noteRigDrop(Date.parse('2026-09-30T12:00:00Z'));
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i2', archiveId: 'b' });
+        await retireSnapshotIfSameArchive();
+        expect(rigReadingForSave().basis).toBe('before-drop');
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue(null);
+        await retireSnapshotIfSameArchive();
+        expect(rigReadingForSave().basis).toBe('before-drop');
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i2', archiveId: 'a' });
+        await retireSnapshotIfSameArchive();
+        expect(rigReadingForSave().basis).toBe('when-saved');
     });
 });
 

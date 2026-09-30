@@ -2,7 +2,7 @@
 // view router still named a view (then "dashboard"), so the tab read "Dashboard · Station Manager"
 // over the welcome card (alpha.2 dogfood Finding #8, W-0012). The title must follow
 // the same gate that chooses the welcome card: setup needed, or just completed.
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render } from '@testing-library/svelte';
 import { flushSync } from 'svelte';
 import App from './App.svelte';
@@ -10,6 +10,9 @@ import { setup, _resetSetupForTests } from './lib/setup.svelte';
 import { navigate } from './lib/router.svelte';
 import { archivesState, _resetArchivesForTests } from './lib/config/archives.svelte';
 import { screen } from '@testing-library/svelte';
+import { _setDraftStoreForTests, memoryDraftStore } from './lib/drafts/draftStore';
+import { _resetSavedDraftsForTests } from './lib/drafts/savedDrafts.svelte';
+import { sampleRecord } from './lib/drafts/savedDraft.fixture';
 
 describe('App tab title on the first-run surface', () => {
     beforeEach(() => {
@@ -71,5 +74,31 @@ describe('ArchiveSwitchGate covers the Map branch', () => {
         archivesState.switchUnresolved = false;
         flushSync();
         expect(inertDivs()).toHaveLength(0);
+    });
+});
+
+// The saved-QSO notice is on EVERY page (operator ruling 2026-09-30) — the
+// full-window Map tab included, which has no header (review 2026-09-30).
+describe('the saved-QSO notice on the Map route', () => {
+    beforeEach(() => {
+        _resetSetupForTests();
+        _resetArchivesForTests();
+        _resetSavedDraftsForTests();
+    });
+    afterEach(() => {
+        _setDraftStoreForTests(null);
+        navigate('operate');
+    });
+
+    it('shows a saved QSO over the map', async () => {
+        const mem = memoryDraftStore();
+        await mem.put(sampleRecord());
+        _setDraftStoreForTests(mem);
+        setup.status = 'complete';
+        navigate('map');
+        render(App);
+        expect(await screen.findByTestId('saved-draft-d-1')).toHaveTextContent(
+            'Unlogged QSO saved from ‘Home’ — not logged.'
+        );
     });
 });

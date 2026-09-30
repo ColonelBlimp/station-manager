@@ -3,6 +3,8 @@ import App from './App.svelte';
 import { enrich, prefs, setEnricher, setMyGrid } from './lib/operate/enrich.svelte';
 import { setHistory } from './lib/operate/worked.svelte';
 import { setEntryGate, setSubmit, setSubmitGate } from './lib/operate/qso.svelte';
+import { noteRigDrop } from './lib/operate/rigSnapshot.svelte';
+import { preserveDraft } from './lib/drafts/preserve';
 import { addSessionQso, session, sessionModeLiteral } from './lib/operate/session.svelte';
 import { setMailer } from './lib/operate/mailer.svelte';
 import {
@@ -47,6 +49,8 @@ import {
     archiveEntryLock,
     archiveSwitchGate,
     bootArchiveScoped,
+    retireSnapshotIfSameArchive,
+    setDraftPreserver,
     verifyArchiveGeneration,
 } from './lib/config/archives.svelte';
 import { setFt8AudioWindow } from './lib/operate/audioLevel.svelte';
@@ -290,6 +294,7 @@ const ctx: StationContext = {
     mapBandColors: {},
     restoreRigOnModeSwitch: true,
     logbookName: '',
+    logbookUuid: '',
     rigName: '',
 };
 
@@ -433,8 +438,10 @@ function applyStationContext(c: StationContext): void {
             onOpen: () => {
                 catLink.onOpen();
                 noteStreamReopen();
+                void retireSnapshotIfSameArchive(); // same archive: the held reading is retired
             },
             onTransportError: () => {
+                noteRigDrop(); // first, before anything reacts to the loss (ADR 0085)
                 catLink.onTransportError();
                 noteStreamError();
             },
@@ -465,6 +472,18 @@ setFt8AdmissionGate(archiveSwitchGate);
 setTuneGate(archiveSwitchGate);
 // Phone / CW entry is locked while the switch's reload is pending (ADR 0085).
 setEntryGate(archiveEntryLock);
+// A rebind reload first saves any unlogged Phone / CW draft with the archive and
+// logbook it belongs to (ADR 0085); ctx is read at save time.
+setDraftPreserver((source) =>
+    preserveDraft(source, {
+        logbookUuid: ctx.logbookUuid,
+        logbookId: ctx.logbookId,
+        logbookName: ctx.logbookName,
+        stationCallsign: ctx.stationCallsign,
+        operator: ctx.operator,
+        myGrid: ctx.myGrid,
+    })
+);
 
 // The archive-scoped boot reads — the station context (default logbook id, name,
 // count) and the archive catalogue for the header selector — run inside the
@@ -631,10 +650,13 @@ setSubmit(async (q, opts) => {
         // unknown and point at the surface that resolves it: the LOGBOOK
         // (fetched from the daemon) — the Session list only gains a row on a
         // confirmed response, so it is guaranteed absent in exactly this case.
-        return refuse(
-            'Cannot confirm the outcome — the connection to the daemon failed mid-submit; ' +
-                'the QSO may still have been logged. Check the Logbook before retrying.'
-        );
+        return {
+            ...refuse(
+                'Cannot confirm the outcome — the connection to the daemon failed mid-submit; ' +
+                    'the QSO may still have been logged. Check the Logbook before retrying.'
+            ),
+            uncertain: true, // carried with a saved draft (ADR 0085)
+        };
     }
     return refuse(`QSO not logged: ${out.message}`);
 });

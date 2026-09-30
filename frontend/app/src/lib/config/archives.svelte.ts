@@ -19,6 +19,9 @@ import { fetchDaemonInstance, waitForDaemonBack } from '../api/restart';
 import { OUTCOME_UNKNOWN_LEAD } from '../api/_helpers';
 import { toasts } from '../ui/toasts.svelte';
 import { draftInProgress } from '../operate/qso.svelte';
+import { retireRigSnapshot, rigDropEpoch } from '../operate/rigSnapshot.svelte';
+import type { DraftSource, PreserveResult } from '../drafts/preserve';
+import type { SavedDraft } from '../drafts/savedDraft';
 
 export const archivesState: {
     list: QsoArchive[];
@@ -42,6 +45,10 @@ export const archivesState: {
      *  flight: the binding is unproven until it settles, so operations are
      *  refused meanwhile (review P1) without raising the overlay. */
     verifying: boolean;
+    /** A rebind reload is HELD because the unlogged Phone / CW draft could not
+     *  be saved first (ADR 0085): the reason, and the draft as it would have
+     *  been saved, for the gate to show. Cleared by a successful save. */
+    saveFailed: { reason: string; record: SavedDraft } | null;
 } = $state({
     list: [],
     loaded: false,
@@ -53,6 +60,7 @@ export const archivesState: {
     switchUnresolved: false,
     switchDetail: '',
     verifying: false,
+    saveFailed: null,
 });
 
 /** The message that blocks an archive-scoped operation (QSO submit, FT8
@@ -98,18 +106,61 @@ function refuseOverUnloggedWork(): boolean {
 // (jsdom cannot reload).
 let reloadPage: () => void = () => window.location.reload();
 
+// Saves the unlogged Phone / CW draft before a rebind reload (ADR 0085).
+// Injected by main.ts, which holds the station context; the default has
+// nothing to save.
+type Preserver = (source: DraftSource | null) => Promise<PreserveResult>;
+const nothingToSave: Preserver = () => Promise.resolve({ kind: 'none' });
+let preserver: Preserver = nothingToSave;
+export function setDraftPreserver(fn: Preserver | null): void {
+    preserver = fn ?? nothingToSave;
+}
+
+/** The archive this page's stores were proven against; null when unproven. */
+function sourceArchive(): DraftSource | null {
+    if (bootIdentity === null || bootIdentity.archiveId === '') return null;
+    const id = bootIdentity.archiveId;
+    return {
+        archiveId: id,
+        archiveLabel: archivesState.list.find((a) => a.id === id)?.label ?? id,
+    };
+}
+
 /** Every reload the store requests goes through here: the gate is LATCHED
  *  first (review P1), so an unload the operator cancels — the Settings
  *  leave-guard prompts when it holds unsaved edits — leaves a page that is
  *  still gated, never one running on stale bindings with the gate open. */
-function requestReload(detail: string): void {
+async function requestReload(detail: string): Promise<void> {
     archivesState.switchUnresolved = true;
     archivesState.switchDetail = detail;
+    await reloadAfterSaving();
+}
+
+/** The one path to a rebind reload: save any unlogged draft first and reload
+ *  only once that save has completed; a failed save HOLDS the reload (the
+ *  gate stays up, showing the draft) — operator ruling 2026-09-30. */
+async function reloadAfterSaving(): Promise<void> {
+    const out = await preserver(sourceArchive());
+    if (out.kind === 'failed') {
+        archivesState.saveFailed = { reason: out.reason, record: out.record };
+        return;
+    }
+    archivesState.saveFailed = null;
     reloadPage();
 }
 
-/** The gate's own way out: reload now. */
+/** The gate's own way out: reload now — through the same save. */
 export function reloadNow(): void {
+    void reloadAfterSaving();
+}
+
+/** The held gate's Retry save. */
+export function retrySave(): Promise<void> {
+    return reloadAfterSaving();
+}
+
+/** The held gate's explicit, destructive way out: reload without saving. */
+export function discardAndReload(): void {
     reloadPage();
 }
 
@@ -333,7 +384,9 @@ export async function activateArchive(
 async function settleRestart(before: string): Promise<void> {
     if (before !== '' && (await waitForDaemonBack(before))) {
         toasts.info('Daemon restarted. Reloading…');
-        requestReload('The daemon restarted on another archive; this page must reload to rebind.');
+        await requestReload(
+            'The daemon restarted on another archive; this page must reload to rebind.'
+        );
         return;
     }
     archivesState.switchUnresolved = true;
@@ -349,7 +402,7 @@ async function keepWatching(before: string): Promise<void> {
     for (let round = 0; round < WATCH_ROUNDS && archivesState.switchUnresolved; round++) {
         if (await waitForDaemonBack(before)) {
             toasts.info('Daemon restarted. Reloading…');
-            requestReload(
+            await requestReload(
                 'The daemon restarted on another archive; this page must reload to rebind.'
             );
             return;
@@ -409,7 +462,7 @@ export async function bootArchiveScoped<T>(reads: () => Promise<T>): Promise<T> 
         } else {
             bootIdentity = null;
             toasts.info('The daemon changed while the page was loading. Reloading…');
-            requestReload(
+            await requestReload(
                 'The daemon changed while the page was loading; this page must reload to rebind.'
             );
         }
@@ -429,7 +482,7 @@ export async function bootArchiveScoped<T>(reads: () => Promise<T>): Promise<T> 
 async function watchForDaemon(): Promise<void> {
     for (let round = 0; round < WATCH_ROUNDS && archivesState.switchUnresolved; round++) {
         if (await waitForDaemonBack('')) {
-            requestReload(
+            await requestReload(
                 'The daemon answered again; this page must reload to prove its archive binding.'
             );
             return;
@@ -453,6 +506,7 @@ async function readIdentityWithRetries(): Promise<DaemonIdentity | null> {
  */
 export async function verifyArchiveGeneration(): Promise<void> {
     if (archivesState.switchUnresolved) return;
+    const since = rigDropEpoch(); // before the await: a later loss is not ours
     beginCheck();
     let now: DaemonIdentity | null;
     try {
@@ -470,15 +524,32 @@ export async function verifyArchiveGeneration(): Promise<void> {
         // No proven baseline (the boot bracket could not read or agree): the
         // stores may belong to an earlier archive. Rebind — never adopt.
         toasts.info('Reconnected to the daemon; reloading to rebind.');
-        requestReload(
+        await requestReload(
             'This page reconnected without a proven archive binding; it must reload to rebind.'
         );
         return;
     }
     if (now.archiveId !== bootIdentity.archiveId) {
         toasts.info('The daemon now serves another archive. Reloading…');
-        requestReload('The daemon now serves another archive; this page must reload to rebind.');
+        await requestReload(
+            'The daemon now serves another archive; this page must reload to rebind.'
+        );
+        return;
     }
+    // A verified same-archive recovery: the rig reading held from before the
+    // connection loss belongs to no switch, so it is retired (ADR 0085).
+    retireRigSnapshot(since);
+}
+
+/** The rig stream reopened (after its last failed retry): if the daemon still
+ *  serves the archive this page booted on, the loss was no switch and the held
+ *  rig reading is retired — an ordinary restart included. Another archive, or
+ *  no answer, keeps it for the rebind check to use. */
+export async function retireSnapshotIfSameArchive(): Promise<void> {
+    if (bootIdentity === null || bootIdentity.archiveId === '') return;
+    const since = rigDropEpoch(); // before the await: a later loss is not ours
+    const now = await fetchDaemonIdentity();
+    if (now !== null && now.archiveId === bootIdentity.archiveId) retireRigSnapshot(since);
 }
 
 /** Test seams. */
@@ -498,6 +569,7 @@ export function _resetArchivesForTests(): void {
     archivesState.switchUnresolved = false;
     archivesState.switchDetail = '';
     archivesState.verifying = false;
+    archivesState.saveFailed = null;
 }
 export function _setReloadForTests(fn: () => void): void {
     reloadPage = fn;

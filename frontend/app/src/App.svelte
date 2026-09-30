@@ -4,6 +4,7 @@
     import TxAlarmBanner from './lib/ui/TxAlarmBanner.svelte';
     import DriveAlarmBanner from './lib/ui/DriveAlarmBanner.svelte';
     import ArchiveSwitchGate from './lib/ui/ArchiveSwitchGate.svelte';
+    import SavedDraftsNotice from './lib/drafts/SavedDraftsNotice.svelte';
     import { archivesState } from './lib/config/archives.svelte';
     import DriveMonitorNotice from './lib/ui/DriveMonitorNotice.svelte';
     import Toasts from './lib/ui/Toasts.svelte';
@@ -111,9 +112,16 @@
          monitor) from the Session tile, so sidebar/header would be dead
          weight here. Lazy import = its own chunk (ADR 0044 code-splitting):
          the bundled basemap + d3-geo never load unless the map is opened. -->
-        {#await import('./lib/map/MapView.svelte') then mapModule}
-            <mapModule.default />
-        {/await}
+        <!-- The saved-QSO notice is on every page (ADR 0085), this one too:
+             above the map, whose column takes the rest of the window. -->
+        <div class="flex h-screen flex-col">
+            <SavedDraftsNotice />
+            <div class="min-h-0 flex-1">
+                {#await import('./lib/map/MapView.svelte') then mapModule}
+                    <mapModule.default />
+                {/await}
+            </div>
+        </div>
     {:else}
         <Sidebar />
 
@@ -123,6 +131,8 @@
 
         <div class="content-wrap flex h-screen flex-col pl-[var(--sidebar-w)]">
             <Header />
+            <!-- Unlogged QSOs saved across an archive switch (ADR 0085). -->
+            <SavedDraftsNotice />
             <TxAlarmBanner />
             <DriveAlarmBanner />
             <DriveMonitorNotice />
