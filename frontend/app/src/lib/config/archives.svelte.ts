@@ -18,6 +18,7 @@ import {
 import { fetchDaemonInstance, waitForDaemonBack } from '../api/restart';
 import { OUTCOME_UNKNOWN_LEAD } from '../api/_helpers';
 import { toasts } from '../ui/toasts.svelte';
+import { draftInProgress } from '../operate/qso.svelte';
 
 export const archivesState: {
     list: QsoArchive[];
@@ -68,6 +69,23 @@ export function archiveSwitchGate(): string | null {
         return 'Station Manager is confirming which archive the daemon serves — try again in a moment.';
     }
     return null;
+}
+
+/** Why Phone / CW entry is locked (ADR 0085), or null. From the request until
+ *  its outcome the reload may discard anything typed; an unresolved switch
+ *  keeps it locked under the overlay. A reconnect's identity check does not
+ *  lock: it runs on every stream reconnect and the draft survives it. */
+export function archiveEntryLock(): string | null {
+    if (!archivesState.activating && !archivesState.switchUnresolved) return null;
+    return archiveSwitchGate();
+}
+
+/** A switch reloads the page and the Phone / CW draft lives only in memory:
+ *  any unlogged work refuses it (ADR 0085). True when refused. */
+function refuseOverUnloggedWork(): boolean {
+    if (!draftInProgress()) return false;
+    toasts.error('You have an unlogged QSO on Phone / CW — log or clear it, then switch.');
+    return true;
 }
 
 // A full page reload is how the SPA rebinds EVERY archive-scoped store after a
@@ -262,7 +280,10 @@ export async function activateArchive(
         return false;
     }
     if (target.state === 'active') return false;
+    if (refuseOverUnloggedWork()) return false;
     if (!confirm(activateConfirmText(target.label))) return false;
+    // Checked again: a QSO may have been started while the prompt was open.
+    if (refuseOverUnloggedWork()) return false;
     archivesState.activating = true;
     try {
         // Capture the current instance BEFORE the request so the wait is for a

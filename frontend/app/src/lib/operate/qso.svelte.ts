@@ -294,6 +294,20 @@ export function setSubmitGate(fn: (() => string | null) | null): void {
     submitGate = fn;
 }
 
+// The entry lock (ADR 0085): while an archive switch is in flight the page is
+// about to reload and discard this draft, so the card takes no entry and its
+// shortcuts are inert. Injected like the submit gate; $state so the card
+// re-renders when it is wired.
+let entryGate = $state<(() => string | null) | null>(null);
+export function setEntryGate(fn: (() => string | null) | null): void {
+    entryGate = fn;
+}
+
+/** Why Phone / CW entry is locked, or null when the operator may type. */
+export function entryLock(): string | null {
+    return entryGate?.() ?? null;
+}
+
 // Submit progress + the ONE outcome that stays card-local: the duplicate
 // refusal (its "Log anyway" action belongs next to the Log button). All
 // other outcomes — success, non-duplicate refusals — go through toasts so

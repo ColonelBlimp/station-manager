@@ -2,7 +2,7 @@ import { mount } from 'svelte';
 import App from './App.svelte';
 import { enrich, prefs, setEnricher, setMyGrid } from './lib/operate/enrich.svelte';
 import { setHistory } from './lib/operate/worked.svelte';
-import { setSubmit, setSubmitGate } from './lib/operate/qso.svelte';
+import { setEntryGate, setSubmit, setSubmitGate } from './lib/operate/qso.svelte';
 import { addSessionQso, session, sessionModeLiteral } from './lib/operate/session.svelte';
 import { setMailer } from './lib/operate/mailer.svelte';
 import {
@@ -44,6 +44,7 @@ import {
 import { setStationInfo, setLogbookCount } from './lib/operate/station.svelte';
 import {
     loadArchives,
+    archiveEntryLock,
     archiveSwitchGate,
     bootArchiveScoped,
     verifyArchiveGeneration,
@@ -462,6 +463,8 @@ void loadBuildIdentity();
 setSubmitGate(archiveSwitchGate);
 setFt8AdmissionGate(archiveSwitchGate);
 setTuneGate(archiveSwitchGate);
+// Phone / CW entry is locked while the switch's reload is pending (ADR 0085).
+setEntryGate(archiveEntryLock);
 
 // The archive-scoped boot reads — the station context (default logbook id, name,
 // count) and the archive catalogue for the header selector — run inside the

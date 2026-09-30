@@ -31,10 +31,14 @@
         have decided not to work.
     */
     import { callsignStack } from './callsignStack.svelte';
-    import { draft } from './qso.svelte';
+    import { draft, entryLock } from './qso.svelte';
     import { focusCallsign, operate, setCallStack } from './state.svelte';
 
+    // No load while entry is locked (ADR 0085): the switch's reload would drop it.
+    const locked = $derived(entryLock() !== null);
+
     function pop(index: number): void {
+        if (locked) return; // a dispatched click still reaches a disabled button's handler
         const call = callsignStack.popAt(index);
         if (call === undefined) return;
         draft.callsign = call;
@@ -98,6 +102,7 @@
                                 type="button"
                                 class="flex-1 cursor-pointer truncate px-2 py-1 text-left font-mono text-sm text-ink hover:bg-surface-muted"
                                 title="Load {call} — takes it off the pile-up"
+                                disabled={locked}
                                 onclick={() => pop(index)}>{call}</button
                             >
                             <button

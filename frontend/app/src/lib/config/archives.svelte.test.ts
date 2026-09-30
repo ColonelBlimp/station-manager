@@ -21,6 +21,7 @@ import { fetchDaemonInstance, waitForDaemonBack } from '../api/restart';
 import {
     activateArchive,
     activeArchive,
+    archiveEntryLock,
     archiveSwitchGate,
     archivesState,
     createArchive,
@@ -38,6 +39,7 @@ import {
     _setReloadForTests,
 } from './archives.svelte';
 import { toastsState, _resetForTests as resetToasts } from '../ui/toasts.svelte';
+import { draft, clearDraft } from '../operate/qso.svelte';
 
 /*
     ARCHIVES STATE — the one activation flow both the Settings tab and the header
@@ -83,6 +85,7 @@ beforeEach(() => {
     vi.mocked(fetchDaemonInstance).mockReset();
     vi.mocked(waitForDaemonBack).mockReset();
     _resetArchivesForTests();
+    clearDraft();
     resetToasts();
     reloads = 0;
     _setReloadForTests(() => reloads++);
@@ -321,6 +324,91 @@ describe('activateArchive', () => {
         release({ kind: 'accepted', id: 'b', durability: 'durable' });
         await first;
         expect(activateQsoArchive).toHaveBeenCalledTimes(1);
+    });
+});
+
+/*
+    UNLOGGED WORK (ADR 0085; operator rulings 2026-09-30). The switch reloads the
+    page and the Phone / CW draft lives only in memory, so:
+      U1  Any unlogged work — a partial entry counts — refuses the switch before
+          the confirmation is asked, and nothing is sent. Apart from a switch
+          that reloads the page over the QSO being typed.
+      U2  A QSO started while the confirmation is open is caught by a second
+          check after it, before the request. Apart from a check made only
+          before a prompt the operator may sit on.
+      U3  From the moment the request goes out until the outcome, entry is
+          LOCKED (archiveEntryLock names why); a definite refusal unlocks it;
+          an uncertain outcome keeps the page gated (the lock stays, under the
+          existing overlay). Apart from a form that accepts typing the reload
+          is about to discard.
+      U4  A reconnect's identity check (verifying) does NOT lock entry: it runs
+          on every stream reconnect and the draft survives it.
+*/
+describe('activateArchive — unlogged Phone / CW work', () => {
+    const REFUSAL = /You have an unlogged QSO on Phone \/ CW — log or clear it, then switch\./;
+
+    it('U1 a partial entry refuses the switch before the confirmation; nothing is sent', async () => {
+        await loadArchives();
+        draft.name = 'Bob'; // no callsign yet: still unlogged work
+        const confirm = vi.fn(() => true);
+        expect(await activateArchive('b', confirm)).toBe(false);
+        expect(confirm).not.toHaveBeenCalled();
+        expect(fetchDaemonInstance).not.toHaveBeenCalled();
+        expect(activateQsoArchive).not.toHaveBeenCalled();
+        expect(hasToast('error', REFUSAL)).toBe(true);
+        expect(draft.name).toBe('Bob');
+    });
+
+    it('U2 a QSO started while the confirmation is open is refused after it', async () => {
+        await loadArchives();
+        // Answers ready, so a missing check would reach the request.
+        vi.mocked(fetchDaemonInstance).mockResolvedValue('inst-1');
+        vi.mocked(activateQsoArchive).mockResolvedValue({
+            kind: 'refused',
+            code: 'tx_busy',
+            message: 'transmit is armed',
+        });
+        const confirm = vi.fn(() => {
+            draft.callsign = 'ZS6BOS';
+            return true;
+        });
+        expect(await activateArchive('b', confirm)).toBe(false);
+        expect(confirm).toHaveBeenCalledTimes(1);
+        expect(fetchDaemonInstance).not.toHaveBeenCalled();
+        expect(activateQsoArchive).not.toHaveBeenCalled();
+        expect(hasToast('error', REFUSAL)).toBe(true);
+        expect(archivesState.activating).toBe(false);
+    });
+
+    it('U3 entry is locked while the request is in flight and unlocked by a definite refusal', async () => {
+        await loadArchives();
+        expect(archiveEntryLock()).toBeNull();
+        vi.mocked(fetchDaemonInstance).mockResolvedValue('inst-1');
+        let answer: (v: { kind: 'refused'; code: string; message: string }) => void = () => {};
+        vi.mocked(activateQsoArchive).mockReturnValue(new Promise((r) => (answer = r)));
+        const run = activateArchive('b', () => true);
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(archiveEntryLock()).toMatch(/archive switch is in progress/);
+        answer({ kind: 'refused', code: 'tx_busy', message: 'transmit is armed' });
+        await run;
+        expect(archiveEntryLock()).toBeNull();
+    });
+
+    it('U3 an uncertain outcome keeps entry locked with the gate', async () => {
+        await loadArchives();
+        vi.mocked(fetchDaemonInstance).mockResolvedValue('inst-1');
+        vi.mocked(activateQsoArchive).mockResolvedValue({ kind: 'network', message: 'reset' });
+        vi.mocked(waitForDaemonBack).mockResolvedValue(false);
+        await activateArchive('b', () => true);
+        expect(archivesState.activating).toBe(false);
+        expect(archiveEntryLock()).toMatch(/unresolved/);
+    });
+
+    it('U4 a reconnect identity check does not lock entry', () => {
+        archivesState.verifying = true;
+        expect(archiveSwitchGate()).not.toBeNull(); // submits still wait for it
+        expect(archiveEntryLock()).toBeNull();
     });
 });
 

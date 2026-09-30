@@ -27,6 +27,7 @@
         draftProblems,
         qsoClock,
         draftAgeText,
+        entryLock,
     } from './qso.svelte';
     import DuplicateDialog from './DuplicateDialog.svelte';
     import { observeWorked, openWorkedForQso } from './worked.svelte';
@@ -98,6 +99,7 @@
     //                operator is fixing things).
     //   Escape     — clear the draft and start over at the callsign field.
     let callInput: HTMLInputElement | undefined;
+    const lock = $derived(entryLock());
 
     async function logAndRefocus(): Promise<void> {
         // Comment-history recording lives in logDraft's shared success path (so a
@@ -142,6 +144,9 @@
         // so Phone/CW could inherit it SET with no drawer on screen to explain
         // the silence. The drawer is now FT8-only (Operate.svelte) and this card
         // is Phone/CW-only, so the two can no longer be on screen together.
+        // Entry locked (ADR 0085): an archive switch will reload the page, so no
+        // shortcut may start, change, stack or log a draft meanwhile.
+        if (lock !== null) return;
         if (e.key === 'Enter' && e.ctrlKey && !e.altKey && !e.shiftKey) {
             e.preventDefault();
             void logAndRefocus();
@@ -331,7 +336,12 @@
      instead of underneath it. Still under the drawers (z-20) and the ambient
      host (z-40). -->
 <div class="card relative z-10 mx-auto w-(--card-w)">
-    <div class="flex flex-col">
+    {#if lock}
+        <p class="mb-2 text-sm text-ink" role="status" data-testid="entry-lock">{lock}</p>
+    {/if}
+    <!-- A disabled fieldset disables every field and button inside it: the
+         entry lock (ADR 0085) in one place. -->
+    <fieldset class="flex flex-col" disabled={lock !== null}>
         <div class="flex flex-row gap-x-6">
             <div class="flex flex-col">
                 <div class="flex items-end gap-x-2">
@@ -672,5 +682,5 @@
         <div class="mt-4" data-action-row class:invisible={detailsOpen}>
             {@render actionRow()}
         </div>
-    </div>
+    </fieldset>
 </div>

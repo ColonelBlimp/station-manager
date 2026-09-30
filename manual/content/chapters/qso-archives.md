@@ -82,6 +82,10 @@ running daemon never swaps databases underneath you. Before you confirm:
 - stop any transmission and **disarm FT8**. A switch is refused while FT8
   is armed, a message is in flight, a contact is in progress, or the tune
   carrier is keyed, and it says which.
+- log or clear the QSO you are typing on **Phone / CW**. A switch is refused
+  while this page holds one, even a partly typed one, and the Phone / CW form
+  is locked while the switch runs so nothing new is typed into a page about
+  to reload.
 - expect the connection to drop for about five seconds, after which the
   page reloads on its own so everything — the logbook name and count, the
   contact form, the log view — belongs to the new archive. Unsaved Settings
