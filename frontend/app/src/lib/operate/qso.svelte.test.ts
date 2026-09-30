@@ -226,6 +226,21 @@ describe('report default-fill while a pre-loss rig reading is held', () => {
         expect([draft.rstSent, draft.rstRcvd]).toEqual(['57', '56']);
     });
 
+    // Codex review ebe244dc P2: an untouched form kept at the held mode's
+    // defaults read as unlogged work once the reconnect changed the mode.
+    it('H4 an untouched form stays untouched across a held reconnect mode change', () => {
+        clearDraft();
+        flushSync();
+        expect(draftInProgress()).toBe(false);
+        noteRigDrop();
+        rig.mode = 'CW';
+        flushSync();
+        expect([draft.rstSent, draft.rstRcvd]).toEqual(['59', '59']);
+        expect(draftInProgress()).toBe(false);
+        draft.rstSent = '57';
+        expect(draftInProgress()).toBe(true);
+    });
+
     it('H3 retired after a real mode change, the mode-flip refill resumes', () => {
         noteRigDrop();
         rig.mode = 'CW';

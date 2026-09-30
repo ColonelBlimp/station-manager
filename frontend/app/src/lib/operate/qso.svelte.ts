@@ -202,7 +202,17 @@ $effect.root(() => {
  *  anything that reloads the page asks this first (clean-room review 8b100ef2 P2). */
 export function draftInProgress(): boolean {
     const empty = blank();
-    return (Object.keys(empty) as Array<keyof QsoDraft>).some((k) => draft[k] !== empty[k]);
+    return (Object.keys(empty) as Array<keyof QsoDraft>).some(
+        (k) => draft[k] !== empty[k] && !isRetainedDefault(k)
+    );
+}
+
+// A report still at the default last filled in is not work, even when the
+// current mode's default differs: while a pre-loss rig reading is held the
+// refill waits, so an untouched form keeps the held mode's default (Codex
+// review ebe244dc P2 — it read as a phantom unlogged QSO).
+function isRetainedDefault(k: keyof QsoDraft): boolean {
+    return (k === 'rstSent' || k === 'rstRcvd') && draft[k] === appliedRst;
 }
 
 export function resetDraft(): void {

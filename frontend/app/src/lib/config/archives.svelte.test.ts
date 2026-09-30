@@ -25,7 +25,7 @@ import {
     archiveSwitchGate,
     discardAndReload,
     reloadNow,
-    retireSnapshotIfSameArchive,
+    verifyAfterRigReconnect,
     retrySave,
     setDraftPreserver,
     archivesState,
@@ -583,7 +583,7 @@ describe('rebind reloads preserve unlogged work', () => {
     // Review 2026-09-30: an identity answer that started before a later loss
     // replaced the held 14.255 MHz reading with the reconnect's 7.074 MHz.
     for (const [label, check] of [
-        ['rig reconnect', retireSnapshotIfSameArchive],
+        ['rig reconnect', verifyAfterRigReconnect],
         ['archive reconnect', verifyArchiveGeneration],
     ] as const) {
         it(`V9 ${label}: a late same-archive answer cannot retire a newer loss's reading`, async () => {
@@ -613,18 +613,49 @@ describe('rebind reloads preserve unlogged work', () => {
         expect(rigReadingForSave().basis).toBe('when-saved');
     });
 
-    it('V7 a rig reconnect to the same archive retires it (a restart included); another archive keeps it', async () => {
+    it('V7 a rig reconnect to the same archive retires it, a restart included', async () => {
         _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
         noteRigDrop(Date.parse('2026-09-30T12:00:00Z'));
-        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i2', archiveId: 'b' });
-        await retireSnapshotIfSameArchive();
-        expect(rigReadingForSave().basis).toBe('before-drop');
-        vi.mocked(fetchDaemonIdentity).mockResolvedValue(null);
-        await retireSnapshotIfSameArchive();
-        expect(rigReadingForSave().basis).toBe('before-drop');
         vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i2', archiveId: 'a' });
-        await retireSnapshotIfSameArchive();
+        await verifyAfterRigReconnect();
         expect(rigReadingForSave().basis).toBe('when-saved');
+        expect(archivesState.switchUnresolved).toBe(false);
+        expect(reloads).toBe(0);
+    });
+
+    /*
+      V10 (Codex review ebe244dc P2): a rig reconnect whose identity cannot be
+          read is retried, then FAILS CLOSED — the tab is gated as a log-stream
+          reconnect is — never left silently holding an old reading while the
+          operator carries on. Another archive reloads through the save.
+          During boot (no proven baseline yet) it does nothing.
+    */
+    it('V10 an unreadable identity is retried, then gates; the reading stays held', async () => {
+        _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
+        noteRigDrop(Date.parse('2026-09-30T12:00:00Z'));
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue(null);
+        await verifyAfterRigReconnect();
+        expect(fetchDaemonIdentity).toHaveBeenCalledTimes(3);
+        expect(archivesState.switchUnresolved).toBe(true);
+        expect(archivesState.switchDetail).toMatch(/rig connection came back/);
+        expect(rigReadingForSave().basis).toBe('before-drop');
+    });
+
+    it('V10 another archive reloads through the save', async () => {
+        _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
+        const preserver = vi.fn(() => Promise.resolve({ kind: 'none' as const }));
+        setDraftPreserver(preserver);
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i2', archiveId: 'b' });
+        await verifyAfterRigReconnect();
+        expect(preserver).toHaveBeenCalledTimes(1);
+        expect(reloads).toBe(1);
+    });
+
+    it('V10 before the boot bracket proves a baseline it does nothing', async () => {
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue(null);
+        await verifyAfterRigReconnect();
+        expect(fetchDaemonIdentity).not.toHaveBeenCalled();
+        expect(archivesState.switchUnresolved).toBe(false);
     });
 });
 

@@ -49,7 +49,7 @@ import {
     archiveEntryLock,
     archiveSwitchGate,
     bootArchiveScoped,
-    retireSnapshotIfSameArchive,
+    verifyAfterRigReconnect,
     setDraftPreserver,
     verifyArchiveGeneration,
 } from './lib/config/archives.svelte';
@@ -438,7 +438,7 @@ function applyStationContext(c: StationContext): void {
             onOpen: () => {
                 catLink.onOpen();
                 noteStreamReopen();
-                void retireSnapshotIfSameArchive(); // same archive: the held reading is retired
+                void verifyAfterRigReconnect(); // which archive now? retire, rebind or gate
             },
             onTransportError: () => {
                 noteRigDrop(); // first, before anything reacts to the loss (ADR 0085)

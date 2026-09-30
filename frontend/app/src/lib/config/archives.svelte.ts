@@ -541,15 +541,38 @@ export async function verifyArchiveGeneration(): Promise<void> {
     retireRigSnapshot(since);
 }
 
-/** The rig stream reopened (after its last failed retry): if the daemon still
- *  serves the archive this page booted on, the loss was no switch and the held
- *  rig reading is retired — an ordinary restart included. Another archive, or
- *  no answer, keeps it for the rebind check to use. */
-export async function retireSnapshotIfSameArchive(): Promise<void> {
+/** The rig stream reopened (after its last failed retry). The daemon's served
+ *  archive decides, read with retries as a log-stream reconnect is (Codex
+ *  review ebe244dc P2): the boot archive → the loss was no switch, and the
+ *  held rig reading is retired (an ordinary restart included); another
+ *  archive → rebind through the save; no answer → fail closed, gated, never
+ *  left silently holding an old reading. Before the boot bracket has proven a
+ *  baseline it does nothing: the boot path owns that state. */
+export async function verifyAfterRigReconnect(): Promise<void> {
     if (bootIdentity === null || bootIdentity.archiveId === '') return;
+    if (archivesState.switchUnresolved) return;
     const since = rigDropEpoch(); // before the await: a later loss is not ours
-    const now = await fetchDaemonIdentity();
-    if (now !== null && now.archiveId === bootIdentity.archiveId) retireRigSnapshot(since);
+    beginCheck();
+    let now: DaemonIdentity | null;
+    try {
+        now = await readIdentityWithRetries();
+    } finally {
+        endCheck();
+    }
+    if (now === null) {
+        archivesState.switchUnresolved = true;
+        archivesState.switchDetail =
+            'The rig connection came back but the daemon’s identity could not be read, so this tab cannot tell which archive it serves.';
+        return;
+    }
+    if (now.archiveId !== bootIdentity.archiveId) {
+        toasts.info('The daemon now serves another archive. Reloading…');
+        await requestReload(
+            'The daemon now serves another archive; this page must reload to rebind.'
+        );
+        return;
+    }
+    retireRigSnapshot(since);
 }
 
 /** Test seams. */
