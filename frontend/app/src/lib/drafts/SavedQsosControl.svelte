@@ -56,9 +56,15 @@
     // released and pressed again — which behaves as usual. Keyed on `repeat`
     // rather than on keyup, so a keyup lost to a focus change cannot leave
     // Escape suppressed.
+    //
+    // A modal dialog in front of the panel (Export, Duplicate, a session edit,
+    // the archive gate — each marked aria-modal) owns Escape: the panel steps
+    // aside so that dialog closes, not the panel hidden behind it (Codex
+    // review 894b5359). The panel itself is an overlay, not aria-modal.
     let swallowEscapeRepeats = false;
     function onKeydownCapture(e: KeyboardEvent): void {
         if (e.key !== 'Escape') return;
+        if (document.querySelector('[aria-modal="true"]') !== null) return;
         if (swallowEscapeRepeats && e.repeat) {
             e.preventDefault();
             e.stopImmediatePropagation();

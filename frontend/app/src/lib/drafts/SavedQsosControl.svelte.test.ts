@@ -19,6 +19,9 @@
           while the panel is open. Holding Escape (its auto-repeat) after the
           dismissal does not reach the card either; a fresh Escape, after the
           key is released, clears the draft as usual (review 2026-09-30).
+      C10 A modal dialog in front of the panel (Export, Duplicate, a session
+          edit, the archive gate) owns Escape: it closes that dialog, and the
+          panel behind it stays open (Codex review 894b5359).
       C9  Work newly preserved before a reload is announced ONCE in that tab with
           an ordinary toast, keeping an unknown outcome's wording; the panel does
           not open by itself; a later mount does not repeat it.
@@ -28,6 +31,8 @@ import { render, screen, fireEvent, within } from '@testing-library/svelte';
 import { flushSync } from 'svelte';
 import SavedQsosControl from './SavedQsosControl.svelte';
 import LoggingCard from '../operate/LoggingCard.svelte';
+import ExportDialog from '../operate/ExportDialog.svelte';
+import { operate } from '../operate/state.svelte';
 import { _setDraftStoreForTests, memoryDraftStore } from './draftStore';
 import { _setDraftChannelForTests } from './draftChannel';
 import {
@@ -235,5 +240,27 @@ describe('SavedQsosControl', () => {
         render(SavedQsosControl);
         await screen.findByRole('button', { name: 'Saved QSOs (1)' });
         expect(toastsState.items).toHaveLength(0);
+    });
+
+    it('C10 a modal in front of the panel owns Escape; the panel stays open', async () => {
+        await seed(sampleRecord());
+        render(LoggingCard);
+        render(ExportDialog);
+        render(SavedQsosControl);
+        draft.callsign = 'G0ABC';
+        flushSync();
+        await openPanel();
+        operate.exportOpen = true;
+        flushSync();
+        expect(screen.getByRole('dialog', { name: /export/i })).toBeInTheDocument();
+
+        document.activeElement?.dispatchEvent(
+            new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })
+        );
+        flushSync();
+        expect(operate.exportOpen).toBe(false);
+        expect(savedQsosPanel.open).toBe(true);
+        expect(screen.getByRole('dialog', { name: 'Saved QSOs' })).toBeInTheDocument();
+        expect(draft.callsign).toBe('G0ABC');
     });
 });

@@ -116,9 +116,6 @@
         // LOG it. The retired SPA's handleKeydown opened with exactly this
         // guard; the port dropped it (keyboard audit 2026-08-06, A27).
         if (sessionEdit.row !== null) return;
-        // Saved QSOs panel open (ADR 0086): it overlays the card, so the card's
-        // shortcuts stand down; its own Escape is captured before reaching here.
-        if (savedQsosPanel.open) return;
         // Export modal open: it owns the keys. Esc closes it; the log/clear
         // shortcuts are inert so they can't act on the card behind the modal.
         if (operate.exportOpen) {
@@ -139,6 +136,11 @@
             }
             return;
         }
+        // Saved QSOs panel open (ADR 0086): it overlays the card, so the card's
+        // shortcuts stand down. Below the Export and Duplicate branches on
+        // purpose: a modal opened over the panel keeps its own Escape (Codex
+        // review 894b5359); the panel's Escape is captured before reaching here.
+        if (savedQsosPanel.open) return;
         // NO `operate.pileup` GUARD HERE. It used to stand the logging
         // shortcuts down whenever FT8's pile-up drawer was open, on the
         // reasoning that the drawer owns its own Escape. Sound in FT8 — but
