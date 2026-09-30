@@ -14,8 +14,12 @@
      without its own auto margins — same defect and fix as LoggingCard, whose
      comment carries the full ADR 0058 story. Centring keeps this on the
      logging card's vertical axis; the widths differ by design (a table needs
-     the room). -->
-<div class="card mx-auto w-2xl">
+     the room).
+     isolate: the sticky <thead> below carries z-10, and without a stacking
+     context of its own that z-10 competed with the logging card's and, later
+     in the page, painted over the open Contact details (operator screenshot
+     2026-09-30). Isolated, it orders only this panel's content. -->
+<div class="card isolate mx-auto w-2xl">
     <div class="flex items-center justify-between">
         <h3 class="text-sm font-semibold text-ink">Worked</h3>
         <div class="flex items-center gap-x-2">

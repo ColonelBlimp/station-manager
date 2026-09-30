@@ -164,4 +164,31 @@ describe('Operate surface without the tile board', () => {
             unmount();
         }
     });
+
+    // W3 — NOTHING INSIDE A LOWER WORKFLOW CARD PAINTS OVER THE LOGGING CARD
+    // (operator screenshot, 2026-09-30: the Worked panel's sticky column header
+    // cut across the open Contact details). The logging card's z-10 is only
+    // "greater" against siblings with no z of their own. The Worked panel's
+    // sticky <thead> carries z-10 too; with no stacking context of its own the
+    // panel let that z-10 compete with the card's at the same level, and the
+    // later element in the page won. Every workflow card below the logging card
+    // therefore ISOLATES its stacking: its inner z-indices order its own
+    // content and cannot reach the card. jsdom does no painting, so this pins
+    // the mechanism.
+    it('W3: every lower workflow card isolates its own stacking', async () => {
+        render(Operate);
+        showTile('worked');
+        await flush();
+
+        const roots = [...document.querySelectorAll('[data-card] > .card')].filter(
+            (r) => r.parentElement?.getAttribute('data-card') !== 'logging'
+        );
+        expect(roots.length, 'a lower workflow card is on the surface').toBeGreaterThan(0);
+        for (const root of roots) {
+            const id = root.parentElement?.getAttribute('data-card');
+            expect(root.classList.contains('isolate'), `${id} must isolate its stacking`).toBe(
+                true
+            );
+        }
+    });
 });
