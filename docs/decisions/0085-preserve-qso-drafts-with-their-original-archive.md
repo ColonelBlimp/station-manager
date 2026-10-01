@@ -159,6 +159,138 @@ under the existing archive-identity boot bracket. Missing identity must not
 fall back to a numeric ID or a label. Numeric IDs remain valid for local API
 submission after resolving the saved UUID within the proven active archive.
 
+## Slice 2 implementation assessment — 2026-10-01
+
+The operator has approved exclusive per-record ownership across navigation,
+with Clear/Escape saving recovered edits before emptying the form and releasing
+the claim. The additional implementation rulings below, including pre-submit
+persistence, are recorded as adopted in the 2026-10-01 inbox follow-up. These
+describe the selected behavior, not implementation completion. The subsequent
+attribution recommendation is distinguished below.
+
+### Ownership and availability
+
+Use an exclusive Web Lock named for the saved-record UUID, requested with
+`ifAvailable: true`. Keep its callback pending while the tab owns the recovered
+draft. A competing Restore refuses immediately; it never queues a later
+restoration or steals ownership. Discard must acquire the same lock before
+deleting an unowned record; the owning tab uses its existing claim. Re-read
+the record and recheck the destination and empty form after acquisition.
+`locks.query()` supplies display hints only: its snapshot cannot authorise a
+mutation. The Web Locks specification releases locks during document unload
+cleanup; application-controlled release waits for the final save.
+
+Prefer this to a persistent IndexedDB lease: the lease would introduce expiry,
+crash-recovery delays and stale-owner fencing policy without a selected need.
+Detect actual Web Locks availability and handle acquisition errors. Where
+exclusive ownership cannot be obtained, explain why Restore is unavailable
+and retain reading/copying. Do not infer availability from the server bind:
+Web Locks requires a secure browser context; loopback HTTP is potentially
+trustworthy, ordinary LAN HTTP is not, and the page's actual origin determines
+the context. Switching addresses does not migrate origin-bound saved records.
+Sources: [Web Locks specification](https://w3c.github.io/web-locks/),
+[query snapshots](https://developer.mozilla.org/en-US/docs/Web/API/LockManager/query),
+[secure contexts](https://developer.mozilla.org/en-US/docs/Web/Security/Defenses/Secure_Contexts).
+
+### Edits, release and contact context
+
+- Save on each change without a debounce timer. Serialise writes, coalescing
+  edits made during a write into the next latest snapshot. A failed write
+  leaves visible unsaved work and a retry path. Clear/Escape keeps the form
+  and claim until the final revision commits; older completions must not
+  clear newer edits or resurrect a discarded/logged record.
+- Automatic tab closure is not an application-controlled save barrier.
+  Preserve the latest committed revision and warn about pending/failed
+  writes on ordinary close/reload where possible. Do not promise an unload
+  transaction will finish or that a crash preserves an uncommitted keystroke
+  ([IndexedDB shutdown limits](https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API/Using_IndexedDB#warning_about_browser_shutdown)).
+- Always show recovered frequency, band, mode/submode and their provenance;
+  require explicit confirmation or correction before Log on each Restore.
+  Changing those values invalidates confirmation. Missing or inconsistent
+  values require correction; confirmation cannot waive validation.
+- Bypass only the live-rig readiness gate for the recovered submission.
+  Archive identity, active Default logbook UUID, claim ownership, recovered
+  context confirmation, field validation and submit-in-flight checks still
+  apply. Reports are validated against the recovered mode. Live rig updates
+  cannot refill reports or change recovered timestamps or contact context.
+- Assemble the recovered submission using its saved/corrected context and
+  original operator/grid. Prove the stored result, not merely the outgoing
+  ADIF: the current service stamps STATION_CALLSIGN from the logbook, defaults
+  an empty OPERATOR from current configuration, and stamps MY_RIG from the
+  running rig. The saved record does not capture MY_RIG today. These existing
+  server rules must be accounted for before claiming full historical
+  attribution preservation; do not silently substitute a newly configured
+  operator for an unknown original one
+  ([submit service](../../internal/qsoservice/submit.go), Submit and prepareQso).
+
+### Submission outcome and cleanup
+
+The proposed delete-then-mark-logged fallback alone leaves a gap: after both
+writes fail, the disk record could still say unlogged. The duplicate check is
+not a saved-draft identity check. It hashes editable contact values and force
+submits use a random key
+([dedupe](../../internal/qsoservice/dedupe.go), ComputeDedupeKey;
+[submit service](../../internal/qsoservice/submit.go), prepareQso).
+
+Adopted refinement: while holding the claim, commit the exact attempted
+submission and an unresolved outcome before sending its POST. If that commit
+fails, retain the form and do not send this recovered submission. Subsequent
+edit saves must preserve the unresolved attempt independently of editable
+fields. After confirmed logging, delete the saved record; if deletion fails,
+persist a terminal logged outcome with the returned QSO UUID. If both cleanup
+writes fail, the pre-existing unresolved record survives, so a later tab must
+check the original Logbook rather than see a definitely-unlogged QSO. The
+current tab must still report the confirmed success accurately and offer
+cleanup retry, never resubmission as cleanup.
+
+A lost response, malformed success response, or tab closure during submission
+retains the unresolved state. A definite refusal of the current attempt does
+not settle an older uncertain attempt. No automatic retry or force-submit
+resolves uncertainty. Distinguish this from server-side idempotency, which
+would require its own API/storage design.
+
+Acceptance must cover competing Restore/Discard, closure during a pending
+edit or POST, an edit arriving during final save, failure to persist the
+attempt (no POST), both post-success cleanup writes failing, and reloading
+after each boundary. Use real browser contexts for ownership/closure proofs
+and a stored-QSO assertion for recovered context and attribution.
+
+### Attribution recommendation — 2026-10-01
+
+Select the inbox's option 1: expose effective Phone / CW submit attribution in
+the station-context read, preserve it with the saved draft, and refuse Restore
+when the saved MY_RIG differs from the value the running submit service would
+stamp. Show both values and retain the record for reading/copying. An
+acknowledgement accepting today's different MY_RIG would change the contact's
+attribution; leave that outside this recovery slice. Letting the client
+override MY_RIG would bypass the server's authoritative stamping and is not
+selected.
+
+The projection must use the same resolution as Submit: the startup-pinned rig
+identity with its current per-rig override, including an explicitly empty
+override. Neither bridge.rig_name nor the pending default_rig_id is a
+substitute. Include effective OPERATOR and MY_NAME (the latter can change with
+the roster); save and submit their known values explicitly. Distinguish
+known-empty values from unavailable attribution or an older saved record
+without it. Never backfill missing historical attribution from today's
+configuration. A known-empty field must not silently pick up a new server
+default on recovery.
+
+A successful context read is not a reservation. Check eligibility at Restore,
+then enforce the expected attribution in the recovered-submit path on the
+server using the same resolved values that will be stamped. The client states
+an expectation; it does not choose MY_RIG. A change between the read and POST
+must refuse before storing any QSO or upload row. Match the resolved ADIF value
+exactly; this proves the value to be logged, not unique physical-rig identity.
+
+Ship the Go/API prerequisite with api-endpoints.md before the Restore UI.
+Characterize existing stamping first, then prove the projection agrees with
+the stored QSO for a pending default-rig change, per-rig overrides and explicit
+empty overrides, explicit versus default operators, and roster-derived names.
+The recovered-submit guard also needs a read-to-submit change case that proves
+refusal without writes. Existing records with missing attribution remain
+readable/copyable; their missing values cannot satisfy a proven match.
+
 ## Triggers to revisit
 
 Revisit if the operator wants to move unfinished contacts between archives,
