@@ -267,6 +267,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *l
 	// bucket). See docs/v2-design/api.md §6 for the threat model.
 	apiMux.Handle("POST /v1/qso", s.limitSubmitRate(http.HandlerFunc(s.handleSubmitQso)))
 	apiMux.HandleFunc("GET /v1/qso/{uuid}", s.handleGetQso)
+	apiMux.HandleFunc("GET /v1/submit-attribution", s.handleGetSubmitAttribution)
 	apiMux.HandleFunc("PATCH /v1/qso/{uuid}", s.handleUpdateQso)
 	apiMux.HandleFunc("DELETE /v1/qso/{uuid}", s.handleDeleteQso)
 	apiMux.HandleFunc("GET /v1/qso/{uuid}/uploads", s.handleListQsoUploads)

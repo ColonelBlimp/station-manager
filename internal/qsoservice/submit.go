@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/adif"
+	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/enums/bands"
 	"github.com/ColonelBlimp/station-manager/internal/enums/modes"
@@ -50,17 +51,60 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	// and the FT8 e4 sink. SubmitImport deliberately does NOT stamp (it preserves
 	// an imported QSO's own MY_RIG). Config is required (Initialize enforces it)
 	// and submit() dereferences it unconditionally, so there's no nil-guard here.
-	// Pin MY_RIG to the rig the bridge actually connected to at startup, not the
-	// live default_rig_id — a runtime "Set as default" only reconnects the bridge
-	// on the next restart, so following the live default would mis-attribute QSOs
-	// still made on the connected rig (codex e539a080 P1). Unpinned (tests) → live.
+	rec.MyRig = s.stampedMyRig(s.Config.Snapshot())
+	return s.submit(ctx, logbookID, rec, force, false, nil, nil)
+}
+
+// SubmitExpecting is Submit for a RECOVERED Phone / CW draft (ADR 0085): the
+// client states the attribution the QSO was made with, and the submit is
+// refused — writing nothing — unless the values it is about to store match it
+// exactly. The server's stamping stays authoritative; the expectation is only
+// checked, never applied. Compared on the prepared QSO, so a configuration
+// change between the client's read and this submit is caught.
+func (s *Service) SubmitExpecting(ctx context.Context, logbookID int64, rec adif.Record, force bool, expect types.SubmitAttribution) (SubmitResult, error) {
+	rec.MyRig = s.stampedMyRig(s.Config.Snapshot())
+	return s.submit(ctx, logbookID, rec, force, false, nil, &expect)
+}
+
+// LiveAttribution is the attribution a live submit stamps right now when the
+// record supplies `operator` (empty: none) and no MY_NAME — the same rules as
+// Submit, so what a client reads here is what a QSO is stored with.
+func (s *Service) LiveAttribution(operator string) types.SubmitAttribution {
 	snap := s.Config.Snapshot()
+	op, name := effectiveOperatorAndName(snap, operator, "")
+	return types.SubmitAttribution{MyRig: s.stampedMyRig(snap), Operator: op, MyName: name}
+}
+
+// stampedMyRig is the MY_RIG a live submit stamps (config.md §10). Pinned to the
+// rig the bridge actually connected to at startup, not the live default_rig_id —
+// a runtime "Set as default" only reconnects the bridge on the next restart, so
+// following the live default would mis-attribute QSOs still made on the
+// connected rig (codex e539a080 P1). Unpinned (tests) → live.
+func (s *Service) stampedMyRig(snap config.Config) string {
 	if s.activeRigPinned {
-		rec.MyRig = snap.ResolveMyRigFor(s.activeRigID)
-	} else {
-		rec.MyRig = snap.ResolveMyRig()
+		return snap.ResolveMyRigFor(s.activeRigID)
 	}
-	return s.submit(ctx, logbookID, rec, force, false, nil)
+	return snap.ResolveMyRig()
+}
+
+// effectiveOperatorAndName applies ADR 0055's live-submit defaults: OPERATOR
+// from default_operator when the record omits it (a supplied OPERATOR wins);
+// MY_NAME from the roster entry matching the EFFECTIVE operator whenever the
+// record omits it, even if OPERATOR itself was supplied (codex review of
+// c391ff3b).
+func effectiveOperatorAndName(cfg config.Config, operator, myName string) (string, string) {
+	if strings.TrimSpace(operator) == "" {
+		operator = strings.TrimSpace(cfg.DefaultOperator)
+	}
+	if op := strings.TrimSpace(operator); op != "" && strings.TrimSpace(myName) == "" {
+		for i := range cfg.Operators {
+			if strings.EqualFold(cfg.Operators[i].Callsign, op) {
+				myName = cfg.Operators[i].Name
+				break
+			}
+		}
+	}
+	return operator, myName
 }
 
 // SubmitImport is the restore/import entry point (cmd/smd import). Unlike
@@ -82,7 +126,7 @@ func (s *Service) SubmitImport(ctx context.Context, logbookID int64, rec adif.Re
 	if err := refuseBulkBackfillImport(forwardTo, s.routesFor(logbookID)); err != nil {
 		return SubmitResult{}, err
 	}
-	return s.submit(ctx, logbookID, rec, force, true, forwardTo)
+	return s.submit(ctx, logbookID, rec, force, true, forwardTo, nil)
 }
 
 // resolveSubmitUUID applies the UUID policy (ADR 0016; review 2026-06-04 H1):
@@ -270,18 +314,8 @@ func (s *Service) prepareQso(rec adif.Record, logbookID int64, logbookCallsign s
 	// fills from the roster entry matching the EFFECTIVE OPERATOR whenever it's
 	// absent, even if OPERATOR itself was supplied.
 	if !isImport && s.Config != nil {
-		cfg := s.Config.Snapshot()
-		if strings.TrimSpace(qso.LoggingStation.Operator) == "" {
-			qso.LoggingStation.Operator = strings.TrimSpace(cfg.DefaultOperator)
-		}
-		if op := strings.TrimSpace(qso.LoggingStation.Operator); op != "" && strings.TrimSpace(qso.LoggingStation.MyName) == "" {
-			for i := range cfg.Operators {
-				if strings.EqualFold(cfg.Operators[i].Callsign, op) {
-					qso.LoggingStation.MyName = cfg.Operators[i].Name
-					break
-				}
-			}
-		}
+		qso.LoggingStation.Operator, qso.LoggingStation.MyName = effectiveOperatorAndName(
+			s.Config.Snapshot(), qso.LoggingStation.Operator, qso.LoggingStation.MyName)
 	}
 
 	if strings.TrimSpace(qso.ContactedStation.Country) == "" {
@@ -336,7 +370,7 @@ func (s *Service) prepareQso(rec adif.Record, logbookID int64, logbookCallsign s
 // callsign), and enqueues upload rows only for forwarders named in forwardTo
 // (default none) — importing a historical logbook must never auto-upload
 // (retrospective backfill is operator-driven, never automatic; ADR 0022).
-func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, force, isImport bool, forwardTo []string) (SubmitResult, error) {
+func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, force, isImport bool, forwardTo []string, expect *types.SubmitAttribution) (SubmitResult, error) {
 	const op errors.Op = "qsoservice.Submit"
 
 	// Logbook must exist; the callsign-match check (live submits only) lives in
@@ -352,6 +386,9 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 
 	qso, dedupeKey, err := s.prepareQso(rec, logbookID, logbookCallsign, force, isImport)
 	if err != nil {
+		return SubmitResult{}, err
+	}
+	if err := checkAttribution(qso, expect); err != nil {
 		return SubmitResult{}, err
 	}
 	call := qso.ContactedStation.Call
@@ -573,4 +610,29 @@ func (s *Service) logDuplicateRefused(logbookID int64, call, qsoDate, timeOn, ex
 		Str("existing_uuid", existingUUID).
 		Int64("existing_qso_id", existingID).
 		Msg("QSO duplicate refused")
+}
+
+// checkAttribution refuses a recovered submit whose prepared QSO would be stored
+// with an attribution other than the one the client expected (ADR 0085). The
+// comparison is EXACT on the values about to be stored — no normalisation, or a
+// changed value differing only in whitespace would pass (review 2026-10-01).
+// Checked before the dedupe lookup and the transaction, so a refusal writes
+// nothing.
+func checkAttribution(qso types.Qso, expect *types.SubmitAttribution) error {
+	if expect == nil {
+		return nil
+	}
+	got := types.SubmitAttribution{
+		MyRig:    qso.LoggingStation.MyRig,
+		Operator: qso.LoggingStation.Operator,
+		MyName:   qso.LoggingStation.MyName,
+	}
+	if got == *expect {
+		return nil
+	}
+	return &SubmitError{
+		Code: "attribution_changed",
+		Message: fmt.Sprintf("the station's attribution changed: MY_RIG %q, OPERATOR %q, MY_NAME %q now, expected %q, %q, %q",
+			got.MyRig, got.Operator, got.MyName, expect.MyRig, expect.Operator, expect.MyName),
+	}
 }

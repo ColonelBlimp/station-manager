@@ -268,7 +268,7 @@ func (s *Service) importBatchFallback(
 	const op errors.Op = "qsoservice.SubmitImportBatch"
 	for i, rec := range batch {
 		idx := baseIndex + i
-		r, err := s.submit(ctx, logbookID, rec, false, true, forwardTo)
+		r, err := s.submit(ctx, logbookID, rec, false, true, forwardTo, nil)
 		if err != nil {
 			if se := IsSubmitError(err); se != nil {
 				res.Errors = append(res.Errors, ImportError{Index: idx, Call: rec.Call, Reason: se.Code + ": " + se.Message})
