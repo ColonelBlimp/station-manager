@@ -1685,6 +1685,46 @@ pending refresh, AS2 B after C, AS3 after unresolved) and the four `safeFetch` c
 reversion proofs fail their intended assertions (two tests were strengthened after their
 first proofs: one timed out instead of failing, one passed under the reversion). `main.ts`
 baseline re-keyed to line@577.
+COMMITTED `21feafae` (code) + `0933ca82` (docs), 2026-10-02. Codex review of `21feafae`: two
+P2s, both real, OPEN pending the operator's choice of mechanism (both need a server change).
+(1) Another tab or another browser can change config (e.g. the pinned rig's `my_rig`
+override) without passing through this tab's `safeFetch`; the cached attribution then stays
+stale indefinitely — a same-archive reconnect only retries a failed read. (2) The endpoint
+computes attribution for the daemon's `logging_station.operator`, but a Phone / CW submit
+sends this tab's `ctx.operator`; a Station save whose response timed out (write landed, the
+reconciliation read failed, `onSaved` not called) leaves the cache at B while `ctx.operator`
+is still A, and a save records operator A beside attribution B. Facts: no config revision
+and no config-changed event exist (`internal/config` `Service.Update`; `/v1/events` carries
+`qso.*`/`forward.*`). Proposed: (1) the daemon publishes `config.updated` on `/v1/events`
+after every successful config write from any client; the SPA invalidates on it and re-reads,
+and also re-reads after EVERY proven same-archive reconnect (an event missed while
+disconnected), not only a pending retry — a same-browser BroadcastChannel alone would miss
+other browsers. (2) `GET /v1/submit-attribution?operator=<the operator the tab sends>`
+returns the attribution for exactly that operator; the cache records which operator it was
+read for, and a save records the attribution only when it was read for the current
+`ctx.operator`, else MISSING.
+RULED 2026-10-02: build both; contract recorded in ADR 0085 § Attribution freshness contract.
+BUILT 2026-10-02 (uncommitted, two commits). Go: `config.Service.SetOnChanged` — called once,
+outside the lock, after a write made a new config live (`Update` durable or uncertain,
+`UpdateIfChanged` when changed or forced, `UpdateInMemoryThenPersist` even when its disk write
+fails), never for a rejected write; `api.New` wires it to publish `config.updated` (empty
+payload) on the hub. `GET /v1/submit-attribution` takes `?operator=` (present-empty → the
+default-operator fallback; absent → `logging_station.operator`) and parses its query strictly.
+Tests L1–L5 (config), W7–W10 (api); eight reversion proofs fail their intended assertions.
+SPA: `attributionSource.ts` files each read under the operator it was REQUESTED for and returns
+it only for that operator; `setRequestedOperator` (called by `applyStationIdentity`, so the
+startup context and every Station save) invalidates and re-reads; `noteConfigUpdated`,
+`noteDisconnected` and the page's own config writes clear it and drop reads in flight; every
+proven reconnect re-reads (`noteReconnectProven`). The boot read is made inside the identity
+bracket for `ctx.operator`, after the context named it. `log-events.ts` dispatches
+`config.updated`; `fetchSubmitAttribution(operator)` always sends `operator=`. Tests AS1–AS12,
+the events dispatch, the requested-operator URL, and `main.attributionboot.test.ts` (M1 boot
+read for the sent operator, M2 config.updated re-reads, M3 a proven reconnect re-reads). Eleven
+frontend proofs: ten fail their intended assertions; one (config.updated without the epoch step
+in `invalidate`) passed — an equivalent mutation, since `noteConfigUpdated` always calls
+`refreshAttribution`, which advances the epoch itself and so drops the in-flight read anyway.
+In all: **18 successful reversion proofs, one equivalent mutation (F3)**. `main.ts` baseline
+re-keyed to line@581. Restore stays unavailable.
 
 Deferred by the ADR and not planned here: archive delete, external attach CLI, in-process switch,
 cross-archive query.

@@ -360,6 +360,30 @@ paths. Alternatively, combine the dependent behavior into one releasable
 commit. Each earlier commit must remain usable with the existing saved-QSO
 read, copy and discard behavior.
 
+## Attribution freshness contract — 2026-10-02
+
+Settled by the operator after Codex review of `21feafae` (another client's config change
+left a saved draft's attribution stale; a timed-out Station save could pair operator A with
+attribution resolved for B).
+
+- **Config events.** The daemon publishes `config.updated` on `/v1/events` once a config
+  write has made a new config live — a durable or durability-uncertain write, and an
+  in-memory change whose disk write failed — independently of whether the writer receives
+  its response; never for a rejected write. The payload carries no config values.
+- **Invalidation.** An event clears the page's attribution and invalidates any read in
+  flight; a disconnect of the events stream clears it too; every proven reconnect re-reads
+  it. The page's own config writes, read ordering and the archive-binding guard are kept.
+- **Requested operator.** `GET /v1/submit-attribution?operator=` resolves exactly as a
+  submit carrying that OPERATOR: present-but-empty is an empty submitted operator, so the
+  `default_operator` fallback applies; absent keeps the original `logging_station.operator`
+  behaviour.
+- **Cache identity.** The page remembers the operator it REQUESTED, separately from the
+  effective operator returned, and returns the attribution only for that operator. A change
+  of the page's operator (startup context, Station save) invalidates and re-reads. Until a
+  matching read completes, a save records attribution as missing — and saving still works.
+- **Boundary.** SSE gives eventual invalidation, not instant knowledge of a remote write.
+  The server's submit-time expectation check remains the final protection.
+
 ## Triggers to revisit
 
 Revisit if the operator wants to move unfinished contacts between archives,
