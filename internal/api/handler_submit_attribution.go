@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/url"
 
+	"github.com/ColonelBlimp/station-manager/internal/adif"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
@@ -30,7 +31,10 @@ func (s *Server) handleGetSubmitAttribution(w http.ResponseWriter, r *http.Reque
 	if query.Has("operator") {
 		operator = query.Get("operator")
 	}
-	s.writeJSON(w, http.StatusOK, s.qso.LiveAttribution(operator))
+	// The operator reaches a submit as an ADIF value, which the parser right-trims:
+	// resolve the form that will be stored, or a matching expectation would be
+	// refused as attribution_changed (Codex review 4a27711e).
+	s.writeJSON(w, http.StatusOK, s.qso.LiveAttribution(adif.NormalizeValue(operator)))
 }
 
 // expectedAttribution reads POST /v1/qso's optional expect_my_rig /

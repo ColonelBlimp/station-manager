@@ -306,3 +306,29 @@ func TestConfigUpdated_PublishedForALiveWriteOnly(t *testing.T) {
 		t.Fatal("a live write published nothing")
 	}
 }
+
+// W11 (Codex review 4a27711e): the requested operator is normalized as the ADIF
+// parser normalizes a submitted value (right-trimmed), so what the endpoint
+// reports is what a submit carrying that operator stores — no false 409.
+func TestSubmitAttribution_RequestedOperatorNormalizedAsSubmitted(t *testing.T) {
+	srv, lbID := attributionServer(t, func(cfg *config.Config) {
+		cfg.Operators = append(cfg.Operators, types.Operator{Callsign: "G0XYZ", Name: "Guest"})
+	})
+	got := decodeAttribution(t, getAttributionQuery(t, srv, "operator=G0XYZ%20%09"))
+	if got.Operator != "G0XYZ" || got.MyName != "Guest" {
+		t.Fatalf("operator=\"G0XYZ \\t\" → %+v, want the right-trimmed G0XYZ", got)
+	}
+	q := url.Values{}
+	q.Set("logbook", fmt.Sprint(lbID))
+	for k, v := range expectParams(got) {
+		q.Set(k, v)
+	}
+	rec := strings.Replace(attributionADIF, "<OPERATOR:5>G4ABC", "<OPERATOR:7>G0XYZ \t", 1)
+	req := httptest.NewRequest(http.MethodPost, "/v1/qso?"+q.Encode(), strings.NewReader(rec))
+	req.Header.Set("Content-Type", "application/x-adif")
+	w := httptest.NewRecorder()
+	srv.handleSubmitQso(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("submit status = %d, body = %s", w.Code, w.Body.String())
+	}
+}

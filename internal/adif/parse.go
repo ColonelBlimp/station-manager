@@ -75,7 +75,7 @@ func Parse(data []byte) (Adif, error) {
 			// point where the parser is NOT byte-faithful to the length prefix;
 			// a future strict/import mode would make the trim opt-out (review
 			// 2026-06-19 M2).
-			val := strings.TrimRightFunc(string(data[valStart:valEnd]), unicode.IsSpace)
+			val := NormalizeValue(string(data[valStart:valEnd]))
 			if inBody {
 				if cur == nil {
 					cur = make(map[string][]string)
@@ -253,4 +253,12 @@ func computeRecordSetters(t reflect.Type, basePath []int) []recordSetter {
 		})
 	}
 	return out
+}
+
+// NormalizeValue is the normalization the parser applies to every value: right-
+// trimmed of whitespace (see Parse). Exported so a value that will reach the
+// daemon as ADIF can be compared in the form it will be stored in — the submit
+// attribution endpoint resolves a requested OPERATOR through it (ADR 0085).
+func NormalizeValue(v string) string {
+	return strings.TrimRightFunc(v, unicode.IsSpace)
 }
