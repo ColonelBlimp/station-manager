@@ -1734,6 +1734,55 @@ default operator alike. Test W11 (a "G0XYZ \t" request reports G0XYZ, and a subm
 that padded OPERATOR with the reported expectation stores); its reversion proof fails its
 intended assertion.
 
+**Restore commit 2 — claim and recovered form (COMMITTED 2026-10-02: `5ebb09ca`).**
+`drafts/draftLock.ts` reserves the saved-record UUID with an exclusive, non-queued Web Lock;
+its callback stays pending for the tab's ownership. `restoreSession.ts` rechecks entry,
+destination and MY_RIG after acquisition and after re-reading storage, and refuses a removed,
+damaged or changed record. A pending claim cannot overwrite newly typed work or admit a
+second Restore in the same tab. Discard takes the same lock and holds it through the delete;
+an acquisition error refuses. Browsers without Web Locks retain existing Discard behavior,
+since they cannot Restore.
+
+The recovered context lives outside component lifetimes. The card shows the source archive,
+frequency, band, mode/submode and saved-reading basis, with correction and explicit
+confirmation; missing/inconsistent values cannot be confirmed, and a correction withdraws
+confirmation. Corrections do not command the rig. Saved fields (including blank end times)
+survive clock entry, live report refills and enrichment, including a late response and
+retraction of an identical value written by an earlier lookup. Report validation follows the
+recovered mode. Stack keys, the stack button and pile-up Load cannot replace recovered work.
+
+Build boundary retained: no public Restore action or production caller of `restoreSavedDraft`.
+Ordinary Log (including force), Clear and reset cannot consume a recovered form. Commit 3
+supplies edit persistence and protected Clear/Discard; commit 4 supplies recovered submission
+and public entry. The existing ordinary-form tests remain green.
+
+Evidence: L1–L2, C1–C9 and R1–R10 (41 cases), with 196 focused tests passing. Eighteen reversion
+proofs each verified the mutation applied, reached an intended failing assertion, and restored
+the implementation: lock options/lifetime, foreign Discard, form/destination/record rechecks,
+clock/end stamping, RST refill, report validation, confirmation invalidation/validation,
+stack keys/Load, enrichment fill/retraction, ordinary-submit exclusion and correction display
+after remount. `SKIP_NPM_CI=1 task ci:local` PASSED: 2,209 SPA tests, lint/format/Svelte checks,
+SPA/manual builds, Go vet/lint, maintainability (zero regressions), race/full tests, static and
+CGO builds, FT8 decode tests and the build-boundary checks. The first run hit the sandbox's
+read-only Go build cache; the passing run had the required cache access. No dependency changed.
+
+**RS8 and RS11 remain OPEN for the operator's two-window drill.** The deterministic lock fake
+and component unmount/remount tests establish application decisions only; they do not prove
+browser scheduling, closure or reload. No hardware or RF experiment was run.
+
+Review of commit 2 (2026-10-02, before commit): no defect in this commit — every new guard is
+inert until a recovered record exists, and nothing in production installs one. Carried into
+commits 3–4, which must close them: (a) a rebind reload while a recovered form is on the card
+would run the ordinary preserver and save it as a NEW record with today's attribution and rig
+reading — preservation must instead flush the final edit to the record already owned (same id,
+original archive, logbook, attribution and rig) and save nothing new; (b) Discard of the record
+this tab owns currently asks for the same lock and is refused as "In use in another tab" —
+ruling 3 (owning-tab Discard) belongs to commit 3; (c) Clear / Escape on a recovered form is a
+silent no-op until commit 3 gives it the save-then-release path; (d) the recovered card shows
+the reading's capture time as raw ISO — format it as the saved-QSO details do.
+The operator reran the drafts and operate suites: 775 tests passed; the context check passed.
+Post-commit Codex review of `5ebb09ca` (2026-10-02): no actionable findings.
+
 Deferred by the ADR and not planned here: archive delete, external attach CLI, in-process switch,
 cross-archive query.
 
