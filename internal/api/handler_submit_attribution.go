@@ -4,17 +4,33 @@ import (
 	"net/http"
 	"net/url"
 
+	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 // handleGetSubmitAttribution reports the attribution a Phone / CW submit is
 // stored with right now (ADR 0085): MY_RIG — the pinned startup rig with its
-// per-rig override — and the effective OPERATOR and MY_NAME for the
-// logging_station.operator the SPA sends. A saved draft records it; Restore
-// sends it back as an expectation on POST /v1/qso. Its own read, not a
+// per-rig override — and the effective OPERATOR and MY_NAME. With ?operator=X
+// it is for a submit carrying OPERATOR X, resolved exactly as the submit
+// resolves it (present-but-empty = an empty submitted operator, so the
+// default_operator fallback applies); without the parameter, for
+// logging_station.operator (the original behaviour). A saved draft records it;
+// Restore sends it back as an expectation on POST /v1/qso. Its own read, not a
 // /v1/config field: that surface stays narrow (review 2026-06-19 L1).
-func (s *Server) handleGetSubmitAttribution(w http.ResponseWriter, _ *http.Request) {
-	s.writeJSON(w, http.StatusOK, s.qso.LiveAttribution(s.cfg.Snapshot().LoggingStation.Operator))
+func (s *Server) handleGetSubmitAttribution(w http.ResponseWriter, r *http.Request) {
+	const op errors.Op = "api.handleGetSubmitAttribution"
+	// Parsed strictly: a dropped pair would silently answer for another operator.
+	query, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid_query_param",
+			"the query string could not be parsed", op)
+		return
+	}
+	operator := s.cfg.Snapshot().LoggingStation.Operator
+	if query.Has("operator") {
+		operator = query.Get("operator")
+	}
+	s.writeJSON(w, http.StatusOK, s.qso.LiveAttribution(operator))
 }
 
 // expectedAttribution reads POST /v1/qso's optional expect_my_rig /

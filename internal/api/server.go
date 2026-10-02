@@ -150,6 +150,15 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 			startupForwarders[f.Name] = struct{}{}
 		}
 	}
+	// Every config write that makes a new config live — from any client — is
+	// announced on /v1/events (ADR 0085), so a page invalidates what it derived
+	// from the old one. After the change is live, whether or not the writer ever
+	// sees its response; never for a rejected write (config.Service.SetOnChanged).
+	if cfgSvc != nil && hub != nil {
+		cfgSvc.SetOnChanged(func() {
+			hub.Publish(events.NameConfigUpdated, events.ConfigUpdatedPayload{})
+		})
+	}
 	s := &Server{
 		cfg:               cfgSvc,
 		startupForwarders: startupForwarders,

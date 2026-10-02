@@ -193,3 +193,116 @@ func TestSubmitQso_MalformedQueryIs400AndStoresNothing(t *testing.T) {
 		t.Fatalf("stored %d QSOs, want 0", n)
 	}
 }
+
+// Config events and the requested operator (ADR 0085; operator ruling
+// 2026-10-02).
+//
+//   W7  ?operator=X returns the attribution a submit carrying OPERATOR X is
+//       stored with — the same resolution rules as the submit.
+//   W8  ?operator= (present, empty) is an empty submitted operator: the
+//       default_operator fallback applies, as it does for the submit.
+//   W9  A malformed query is a 400, never a silent fallback to the default.
+//   W10 A config write that made a new config live publishes config.updated
+//       with a payload free of config values; a rejected write publishes none.
+
+func getAttributionQuery(t *testing.T, srv *Server, rawQuery string) *httptest.ResponseRecorder {
+	t.Helper()
+	w := httptest.NewRecorder()
+	srv.handleGetSubmitAttribution(w, httptest.NewRequest(http.MethodGet, "/v1/submit-attribution?"+rawQuery, nil))
+	return w
+}
+
+func decodeAttribution(t *testing.T, w *httptest.ResponseRecorder) types.SubmitAttribution {
+	t.Helper()
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var a types.SubmitAttribution
+	if err := json.Unmarshal(w.Body.Bytes(), &a); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return a
+}
+
+func TestSubmitAttribution_RequestedOperatorResolvesAsSubmitDoes(t *testing.T) {
+	srv, lbID := attributionServer(t, func(cfg *config.Config) {
+		cfg.Operators = append(cfg.Operators, types.Operator{Callsign: "G0XYZ", Name: "Guest"})
+		cfg.DefaultOperator = "G0XYZ"
+	})
+	// G0XYZ differs from logging_station.operator (G4ABC): the answer must
+	// follow the REQUESTED operator, not the daemon's configured one.
+	got := decodeAttribution(t, getAttributionQuery(t, srv, "operator=G0XYZ"))
+	if got.Operator != "G0XYZ" || got.MyName != "Guest" {
+		t.Fatalf("operator=G0XYZ → %+v", got)
+	}
+	// What the endpoint reports for an explicit operator is what a submit
+	// carrying that operator is stored with.
+	q := url.Values{}
+	q.Set("logbook", fmt.Sprint(lbID))
+	for k, v := range expectParams(got) {
+		q.Set(k, v)
+	}
+	rec := strings.Replace(attributionADIF, "<OPERATOR:5>G4ABC", "<OPERATOR:5>G0XYZ", 1)
+	req := httptest.NewRequest(http.MethodPost, "/v1/qso?"+q.Encode(), strings.NewReader(rec))
+	req.Header.Set("Content-Type", "application/x-adif")
+	w := httptest.NewRecorder()
+	srv.handleSubmitQso(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("submit status = %d, body = %s", w.Code, w.Body.String())
+	}
+}
+
+func TestSubmitAttribution_ExplicitEmptyOperatorUsesTheDefault(t *testing.T) {
+	srv, _ := attributionServer(t, func(cfg *config.Config) {
+		cfg.Operators = append(cfg.Operators, types.Operator{Callsign: "G0XYZ", Name: "Guest"})
+		cfg.DefaultOperator = "G0XYZ"
+	})
+	got := decodeAttribution(t, getAttributionQuery(t, srv, "operator="))
+	if got.Operator != "G0XYZ" || got.MyName != "Guest" {
+		t.Fatalf("operator= → %+v, want the default_operator fallback", got)
+	}
+	// Absent keeps the logging_station.operator behaviour (compatible).
+	absent := decodeAttribution(t, getAttributionQuery(t, srv, ""))
+	if absent.Operator != "G4ABC" {
+		t.Fatalf("absent → %+v, want logging_station.operator", absent)
+	}
+}
+
+func TestSubmitAttribution_MalformedQueryIs400(t *testing.T) {
+	srv, _ := attributionServer(t, nil)
+	w := getAttributionQuery(t, srv, "operator=a;b")
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), `"invalid_query_param"`) {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+}
+
+func TestConfigUpdated_PublishedForALiveWriteOnly(t *testing.T) {
+	srv, _ := attributionServer(t, nil)
+	ch, unsub := srv.hub.Subscribe()
+	defer unsub()
+
+	if w := putConfig(t, srv, `{"logging_station":{"station_callsign":"not a callsign!!"}}`); w.Code == http.StatusOK {
+		t.Fatalf("the invalid save was accepted: %s", w.Body.String())
+	}
+	select {
+	case ev := <-ch:
+		t.Fatalf("a rejected write published %q", ev.Name)
+	default:
+	}
+
+	if w := putConfig(t, srv, `{"logging_station":{"station_callsign":"G4ABC","operator":"G0XYZ"}}`); w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	select {
+	case ev := <-ch:
+		if ev.Name != "config.updated" {
+			t.Fatalf("event %q, want config.updated", ev.Name)
+		}
+		body, _ := json.Marshal(ev.Payload)
+		if string(body) != "{}" {
+			t.Fatalf("payload %s, want {} (no config values)", body)
+		}
+	default:
+		t.Fatal("a live write published nothing")
+	}
+}

@@ -56,6 +56,14 @@ on graceful shutdown. Comment lines carry no event and are ignored by every cons
 **`v2.0.0-alpha.3`**. `logbook_id` stays numeric (the public logbook key). New consumers
 key on `qso_uuid`; the addition is backward-compatible (both ids are present in alpha.2).
 
+**Config change notice (ADR 0085).** `/v1/events` also carries `config.updated`, data `{}`,
+published once after every config write that made a new config live — from any client,
+whether or not the writer receives its response: a durable or durability-uncertain write
+counts, a rejected one does not. The payload carries no config values; a client re-reads what
+it derived from the config through the ordinary endpoints. It is eventual invalidation, not
+instant knowledge: a client disconnected at the time learns nothing from the event and must
+re-read after it reconnects.
+
 **Gating.** "Always-on" = registered whenever the server runs. Subsystem routes are
 registered only when their subsystem is enabled (bridge / FT8 / profiling / SPA); when
 unregistered, the path is a **404**. The `/v1/` API namespace is routed on its own mux
@@ -92,9 +100,9 @@ items return a QSO through a boundary projection of `types.Qso`: the canonical *
 ### `GET /v1/submit-attribution`
 - **Purpose:** The attribution a Phone / CW submit is stored with right now (ADR 0085) — what a saved draft records, and what a recovered submit sends back as `expect_*` on `POST /v1/qso`.
 - **Gating:** Always-on.
-- **Request:** None.
-- **Response:** **200**, body `{"my_rig": string, "operator": string, "my_name": string}`. `my_rig` is the MY_RIG a live submit stamps — the rig the bridge connected to at startup, with its per-rig `my_rig` override (`""` when that override suppresses it); `operator` and `my_name` are the effective OPERATOR and MY_NAME for a record carrying `logging_station.operator` (empty → `default_operator`; MY_NAME from the roster entry for the effective operator). Every field is present; `""` is a known-empty value.
-- **Notes:** Its own read rather than a `/v1/config` field, which keeps that surface narrow (no `my_rig` there — review 2026-06-19 L1). A configuration change between this read and the submit is caught by the submit's own check.
+- **Request:** Query `operator` (optional): the OPERATOR the client's submit will carry. Present, the attribution is for exactly that submit, resolved as the submit resolves it — present-but-empty is an empty submitted operator, so the `default_operator` fallback applies. Absent, it is for `logging_station.operator`. The query is parsed strictly: a malformed one is **400 `invalid_query_param`**.
+- **Response:** **200**, body `{"my_rig": string, "operator": string, "my_name": string}`. `my_rig` is the MY_RIG a live submit stamps — the rig the bridge connected to at startup, with its per-rig `my_rig` override (`""` when that override suppresses it); `operator` and `my_name` are the effective OPERATOR and MY_NAME for the requested operator (empty → `default_operator`; MY_NAME from the roster entry for the effective operator). Every field is present; `""` is a known-empty value.
+- **Notes:** Its own read rather than a `/v1/config` field, which keeps that surface narrow (no `my_rig` there — review 2026-06-19 L1). A client re-reads it on `config.updated` and after every reconnect; a configuration change between this read and the submit is caught by the submit's own check, which stays the final protection.
 
 ### `GET /v1/qso/{uuid}`
 - **Purpose:** Fetch one QSO by canonical UUIDv7 (SPA edit/detail).
