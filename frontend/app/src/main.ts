@@ -13,9 +13,12 @@ import {
     attributionSettled,
     configureAttribution,
     currentAttribution,
+    noteConfigUpdated,
     noteConfigWriteSettled,
     noteConfigWriteStarted,
-    retryAttributionIfPending,
+    noteDisconnected,
+    noteReconnectProven,
+    setRequestedOperator,
 } from './lib/drafts/attributionSource';
 import { addSessionQso, session, sessionModeLiteral } from './lib/operate/session.svelte';
 import { setMailer } from './lib/operate/mailer.svelte';
@@ -341,6 +344,8 @@ let rigEventsOpen = false;
 // update missed setMyGrid, desyncing the displayed bearing from the logged one).
 function applyStationIdentity(operator: string, grid: string, stationCallsign: string): void {
     ctx.operator = operator;
+    // The attribution is read FOR the operator a submit sends (ADR 0085).
+    void setRequestedOperator(operator);
     ctx.myGrid = grid;
     ctx.stationCallsign = stationCallsign;
     setMyGrid(grid); // enrichment bearing/distance display ('' hides the row)
@@ -502,7 +507,8 @@ setDraftPreserver((source) =>
         stationCallsign: ctx.stationCallsign,
         operator: ctx.operator,
         myGrid: ctx.myGrid,
-        attribution: currentAttribution(),
+        // Only an attribution read FOR the operator this page's submit sends.
+        attribution: currentAttribution(ctx.operator),
     })
 );
 
@@ -513,20 +519,18 @@ setDraftPreserver((source) =>
 // against; every reconnect of the always-on stream compares against it and
 // reloads (or gates) when the daemon serves another archive.
 let bootAttribution: SubmitAttribution | null = null;
-const bootAttributionSince = attributionEpoch();
+let bootAttributionSince = -1;
 void bootArchiveScoped(async () => {
-    const [c, attribution] = await Promise.all([
-        fetchStationContext(),
-        fetchSubmitAttribution(),
-        loadArchives(),
-    ]);
-    bootAttribution = attribution;
+    const [c] = await Promise.all([fetchStationContext(), loadArchives()]);
     applyStationContext(c);
+    // Read for the operator this page will send, after the context named it.
+    bootAttributionSince = attributionEpoch();
+    bootAttribution = await fetchSubmitAttribution(ctx.operator);
     // First-run gate: only a REACHED config saying setup_complete=false shows
     // setup — a daemon outage falls through to the fail-soft shell instead of
     // greeting a configured operator with the welcome card.
     setup.status = c.configOk && !c.setupComplete ? 'needed' : 'complete';
-}).then(() => applyBootAttribution(bootAttribution, bootAttributionSince)); // only once proven
+}).then(() => applyBootAttribution(bootAttribution, bootAttributionSince, ctx.operator)); // only once proven
 
 // First-run save (injected per ADR 0045 — the setup module never imports
 // lib/api): PUT the callsign, then re-fetch + re-wire the station context so
@@ -702,12 +706,14 @@ setSubmit(async (q, opts) => {
 // maintainability baseline on purpose.
 openLogEvents({
     onOpen: () => {},
-    onTransportError: () => {},
+    // A saved draft's attribution (ADR 0085): cleared when the stream drops,
+    // re-read after every proven reconnect and on every config.updated.
+    onTransportError: () => noteDisconnected(),
     onQsoChanged: () => {},
+    onConfigUpdated: () => void noteConfigUpdated(),
     onReconnect: () => {
         refreshLogbookCount();
-        // A binding proven again re-reads an attribution that was dropped meanwhile.
-        void verifyArchiveGeneration().then(() => retryAttributionIfPending());
+        void verifyArchiveGeneration().then(() => noteReconnectProven());
     },
 });
 

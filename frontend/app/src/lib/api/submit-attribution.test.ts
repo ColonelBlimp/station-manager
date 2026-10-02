@@ -26,7 +26,7 @@ function respond(status: number, body: unknown): void {
 describe('fetchSubmitAttribution', () => {
     it('reads all three fields, known-empty included', async () => {
         respond(200, { my_rig: '', operator: '7Q5MLV', my_name: 'Marc' });
-        expect(await fetchSubmitAttribution()).toEqual({
+        expect(await fetchSubmitAttribution('7Q5MLV')).toEqual({
             myRig: '',
             operator: '7Q5MLV',
             myName: 'Marc',
@@ -34,12 +34,20 @@ describe('fetchSubmitAttribution', () => {
     });
     it('a missing or non-string field is a failed read, not a guess', async () => {
         respond(200, { my_rig: 'FTdx10', operator: '7Q5MLV' });
-        expect(await fetchSubmitAttribution()).toBeNull();
+        expect(await fetchSubmitAttribution('7Q5MLV')).toBeNull();
         respond(200, { my_rig: 'FTdx10', operator: '7Q5MLV', my_name: null });
-        expect(await fetchSubmitAttribution()).toBeNull();
+        expect(await fetchSubmitAttribution('7Q5MLV')).toBeNull();
     });
     it('an HTTP failure is a failed read', async () => {
         respond(503, { code: 'server_busy' });
-        expect(await fetchSubmitAttribution()).toBeNull();
+        expect(await fetchSubmitAttribution('7Q5MLV')).toBeNull();
+    });
+    it('asks for the operator the submit sends — empty included', async () => {
+        respond(200, { my_rig: '', operator: 'G0XYZ', my_name: 'Guest' });
+        const f = vi.mocked(fetch);
+        await fetchSubmitAttribution('');
+        expect(f.mock.calls[0][0]).toBe('/v1/submit-attribution?operator=');
+        await fetchSubmitAttribution('G0/XYZ');
+        expect(f.mock.calls[1][0]).toBe('/v1/submit-attribution?operator=G0%2FXYZ');
     });
 });

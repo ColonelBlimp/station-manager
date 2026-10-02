@@ -13,10 +13,14 @@ export interface SubmitAttribution {
     myName: string;
 }
 
+/** `operator` is the OPERATOR this page's submit sends — always sent, even
+ *  empty, so the answer is resolved exactly as that submit would be. */
 export async function fetchSubmitAttribution(
+    operator: string,
     signal?: AbortSignal
 ): Promise<SubmitAttribution | null> {
-    const fetched = await safeFetch('/v1/submit-attribution', { method: 'GET', signal });
+    const url = `/v1/submit-attribution?operator=${encodeURIComponent(operator)}`;
+    const fetched = await safeFetch(url, { method: 'GET', signal });
     if (!fetched.ok || !fetched.response.ok) return null;
     const body = await readJsonBody(fetched.response);
     if (
