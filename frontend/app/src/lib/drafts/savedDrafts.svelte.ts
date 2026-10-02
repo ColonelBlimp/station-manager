@@ -8,6 +8,7 @@ import { toasts } from '../ui/toasts.svelte';
 import { announceDraftsChanged, onDraftsChanged } from './draftChannel';
 import { draftStore, listSavedDrafts } from './draftStore';
 import { savedDraftHeadline, type SavedDraft } from './savedDraft';
+import { draftLocksAvailable, reserveSavedDraft, type DraftReservation } from './draftLock';
 
 export const savedDrafts: { list: SavedDraft[]; error: string; removing: string } = $state({
     list: [],
@@ -41,13 +42,18 @@ export async function loadSavedDrafts(): Promise<void> {
 /** Remove one saved record. True when it is gone; on failure it stays shown. */
 export async function discardSavedDraft(id: string): Promise<boolean> {
     savedDrafts.removing = id;
+    let claim: DraftReservation | null = null;
     try {
+        // Without Web Locks Restore cannot run here; retain the existing
+        // read/copy/discard behavior. An available but denied lock fails closed.
+        if (draftLocksAvailable()) claim = await reserveSavedDraft(id);
         await draftStore().remove(id);
     } catch (e) {
         const detail = e instanceof Error ? e.message : String(e);
         toasts.error(`The saved QSO could not be discarded (${detail}); it is still kept.`);
         return false;
     } finally {
+        await claim?.release();
         savedDrafts.removing = '';
     }
     savedDrafts.list = savedDrafts.list.filter((r) => r.id !== id);

@@ -12,6 +12,8 @@ import { rig, rigReady } from './rig.svelte';
 import { rigSnapshotHeld } from './rigSnapshot.svelte';
 import { toasts } from '../ui/toasts.svelte';
 import { commentHistory } from './commentHistory.svelte';
+import { recovered } from '../drafts/recovered.svelte';
+import type { SavedDraft } from '../drafts/savedDraft';
 
 export interface QsoDraft {
     callsign: string;
@@ -71,6 +73,7 @@ function nowUtc(): { date: string; time: string } {
 }
 
 export function stampOn(): void {
+    if (recovered.record !== null) return;
     const { date, time } = nowUtc();
     draft.dateOn = date;
     draft.timeOn = time;
@@ -104,6 +107,7 @@ function tickOff(): void {
 }
 
 export function startQso(): void {
+    if (recovered.record !== null) return;
     if (qsoClock.started) return; // typo-fix re-Tab: the QSO already began
     qsoClock.started = true;
     qsoClock.ticking = true;
@@ -150,12 +154,25 @@ export function draftAgeText(nowMs: number): string {
 // Fill-if-empty: a manually entered off date/time (backlogging, correcting an
 // end time) must survive submit — only blank fields get "now".
 export function stampOff(): void {
+    if (recovered.record !== null) return;
     const { date, time } = nowUtc();
     if (draft.dateOff === '') draft.dateOff = date;
     if (draft.timeOff === '') draft.timeOff = time;
 }
 
 export const draft = $state<QsoDraft>(blank());
+
+/** Called only after Restore owns the UUID and rechecks the empty form. */
+export function installRecoveredDraft(record: SavedDraft): void {
+    resetClock();
+    recovered.record = structuredClone(record);
+    recovered.rig = { ...record.rig };
+    recovered.confirmed = false;
+    Object.assign(draft, record.fields);
+    submitState.error = '';
+    submitState.duplicate = false;
+    submitState.uncertain = record.outcome === 'unknown';
+}
 
 // Memoized on purpose: the fill effect below tracks THIS, not rig.mode, so it
 // only re-fires when the default actually changes (mode crosses the CW ↔
@@ -189,7 +206,7 @@ let appliedRst = '';
 $effect.root(() => {
     $effect(() => {
         const d = defaultRst;
-        if (rigSnapshotHeld() || d === appliedRst) return;
+        if (recovered.record !== null || rigSnapshotHeld() || d === appliedRst) return;
         appliedRst = d;
         draft.rstSent = d;
         draft.rstRcvd = d;
@@ -216,6 +233,7 @@ function isRetainedDefault(k: keyof QsoDraft): boolean {
 }
 
 export function resetDraft(): void {
+    if (recovered.record !== null) return;
     Object.assign(draft, blank());
 }
 
@@ -223,6 +241,7 @@ export function resetDraft(): void {
 // next QSO's times stamp when its callsign is committed (Tab) — until then
 // canLog() blocks on the empty date/time, so a blank start can never log.
 export function clearDraft(): void {
+    if (recovered.record !== null) return;
     resetDraft();
     resetClock();
     submitState.error = '';
@@ -260,14 +279,14 @@ export interface DraftProblems {
 /** Per-field validity (true = malformed) for the card's red outlines. */
 export function draftProblems(): DraftProblems {
     const bad = (re: RegExp, v: string): boolean => v !== '' && !re.test(v.trim());
-    // The report validator tracks the rig's mode (the one rig read in this
-    // module — mode drives validation, it never enters the draft): WSJT-X
-    // weak-signal modes report a signed dB SNR ("-12"); CW reports RST (tone
-    // optional); everything else reports RS — the tone digit only exists on
-    // CW, so 599 on USB is malformed.
-    const report = usesSignalReport(rig.mode)
+    // Recovery validates against its saved/corrected context. Ordinary entry
+    // follows the live rig: weak-signal modes use signed dB SNR, CW uses RST
+    // (tone optional), and the remaining modes use RS.
+    const mode =
+        recovered.rig === null ? rig.mode : recovered.rig.subMode || recovered.rig.adifMode;
+    const report = usesSignalReport(mode)
         ? isValidSignalReport
-        : rig.mode === 'CW'
+        : mode === 'CW' || recovered.rig?.adifMode === 'CW'
           ? isValidRst
           : isValidRs;
     return {
@@ -288,6 +307,9 @@ export function draftProblems(): DraftProblems {
 // confirm gate is added with the Rig panel; enrichment never gates —
 // invariant.)
 export function canLog(): boolean {
+    // Commit 4 supplies the recovered submit path; never send one through
+    // the ordinary rig/current-station assembly in the meantime.
+    if (recovered.record !== null) return false;
     if (draft.callsign.trim() === '' || draft.dateOn === '' || draft.timeOn === '') return false;
     const p = draftProblems();
     return !Object.values(p).some(Boolean);

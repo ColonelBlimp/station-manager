@@ -30,6 +30,8 @@
         entryLock,
     } from './qso.svelte';
     import DuplicateDialog from './DuplicateDialog.svelte';
+    import RecoveredContext from '../drafts/RecoveredContext.svelte';
+    import { recovered } from '../drafts/recovered.svelte';
     import { observeWorked, openWorkedForQso } from './worked.svelte';
     import { rigReady, rigGate } from './rig.svelte';
     import { operate, closeExport, registerCallsignInput } from './state.svelte';
@@ -212,6 +214,7 @@
     // a pile-up can be worked from either end. Split out of windowKeydown to
     // keep either half readable, not to satisfy a complexity budget.
     function pileupKeydown(e: KeyboardEvent): void {
+        if (recovered.record !== null) return;
         if (e.key === 'Enter' && e.shiftKey && !e.ctrlKey && !e.metaKey) {
             // Only from the callsign field, or from no field at all. In Notes
             // Shift+Enter is an ordinary NEWLINE, and stacking there also ran
@@ -245,6 +248,7 @@
     // Capture the typed call. Validated the same way logging is — an empty or
     // malformed field is a silent no-op rather than a junk stack entry.
     function stackCall(): void {
+        if (recovered.record !== null) return;
         const call = draft.callsign.trim().toUpperCase();
         if (call === '' || isValidCallsign(call) !== null) return;
         callsignStack.push(call);
@@ -270,7 +274,7 @@
         const fresh = !qsoClock.started;
         startQso();
         openWorkedForQso(draft.callsign);
-        if (fresh && !rigReady()) {
+        if (fresh && recovered.record === null && !rigReady()) {
             toasts.warn(
                 rigGate() === 'lost'
                     ? 'CAT link lost — confirm the rig in the Rig panel before you can log this QSO.'
@@ -348,6 +352,7 @@
     <!-- A disabled fieldset disables every field and button inside it: the
          entry lock (ADR 0085) in one place. -->
     <fieldset class="flex flex-col" disabled={lock !== null}>
+        <RecoveredContext />
         <div class="flex flex-row gap-x-6">
             <div class="flex flex-col">
                 <div class="flex items-end gap-x-2">
@@ -380,6 +385,7 @@
                                 tabindex={-1}
                                 title="Stack callsign (Shift+Enter)"
                                 aria-label="Stack callsign"
+                                disabled={recovered.record !== null}
                                 onclick={stackCall}
                                 class="absolute inset-y-0 right-0 flex items-center px-2 leading-none text-muted hover:text-ink"
                             >
