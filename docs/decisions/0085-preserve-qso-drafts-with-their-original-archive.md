@@ -291,6 +291,75 @@ The recovered-submit guard also needs a read-to-submit change case that proves
 refusal without writes. Existing records with missing attribution remain
 readable/copyable; their missing values cannot satisfy a proven match.
 
+### Outcome and discard recommendations — RS1–RS23 review, 2026-10-01
+
+These recommendations answer the three open questions in the W-0021 acceptance
+draft; they do not claim implementation or operator adoption.
+
+1. **An unknown outcome permits Restore under the ordinary recovery gates.**
+   Before another submit, require explicit confirmation that the operator has
+   checked the original archive/logbook and the contact is not already logged.
+   Cancellation sends nothing. This authorises one new attempt, not unattended
+   retries, and does not turn the previous unknown outcome into a proven
+   failure. Keep its attempted payload available independently of subsequent
+   edits. A further unknown result requires a fresh check before another try.
+   Refusing all recovery would strand a contact whose first request never
+   committed; an ordinary unqualified Log would invite accidental duplication.
+2. **A duplicate response keeps the form and saved record for an explicit
+   decision.** Do not retire the saved record automatically against the returned
+   UUID: the key ignores reports, notes, attribution and seconds within a minute
+   ([ComputeDedupeKey](../../internal/qsoservice/dedupe.go)). Make that existing
+   QSO available for checking. Retain an explicit Log anyway path only for the
+   operator's decision that this is a separate contact; it is not a way to
+   resolve uncertainty about whether the same contact was stored. A forced
+   attempt still needs the claim, all recovered-submit gates and a committed
+   attempt record. Cancel keeps all work. If the operator finds the same
+   contact already logged, confirmed Discard retires only the browser copy.
+3. **The owning tab may Discard directly with confirmation.** No prior Clear
+   is required. Settle outstanding saves and prevent queued/late saves from
+   recreating the record, then delete it. Clear the recovered form and release
+   the claim only after deletion commits. Failure retains the form, record
+   and claim; cancellation changes nothing. Disable Clear/Discard while a
+   submit is actively in flight. An unknown past outcome does not prevent
+   explicit discard, but its confirmation must retain the fact that a QSO may
+   already exist; discarding never deletes anything in the Logbook.
+
+The acceptance draft must also preserve v1 records' existing unknown outcomes,
+send saved MY_NAME and MY_GRIDSQUARE as well as OPERATOR, and distinguish the
+saved operator/name from today's defaults: only MY_RIG is unconditionally
+server-stamped; the expectation compares the actual prepared QSO. Persist an
+exact attempt, not just a boolean mark, and preserve older uncertainty through
+a later definite refusal. Malformed success responses and closure during POST
+belong to the unknown-outcome cases. A confirmed success is terminal in the
+current tab even if both cleanup writes fail: show its UUID, disable submit,
+and offer cleanup retry without sending another QSO.
+
+### Browser verification and build boundaries — RS1–RS25 review, 2026-10-01
+
+Use the scripted operator drill plus jsdom tests for this slice. Adding
+Playwright, browser binaries and CI coverage is a separate tooling decision;
+it would improve repeatability but is not required to begin the record-format
+work. The jsdom lock/channel fakes prove application decisions and failure
+handling, not actual browser ownership or tab-lifecycle behavior.
+
+Keep the real-browser parts of RS8 and RS11 pending until observed on the
+candidate. Use two windows/tabs in the same browser profile and at the same
+origin, with synthetic saved records. Coordinate competing Restore attempts;
+a second attempt only after an established claim does not exercise the race.
+Record the single winner and unchanged losing form, refusal of foreign
+Discard, retention across panel close and in-app navigation, and release on
+both owner closure and reload with the latest committed revision preserved.
+Retain the candidate, browser/version and observed results in the work item's
+evidence; mocked results do not substitute for this drill.
+
+The proposed four commits may separate record/panel preparation, claim/form
+internals, edit/release handling, and recovered submission. Keep the public
+Restore action unavailable until all four are integrated: an intermediate
+commit must not expose a recovered form to ordinary Log, Clear or stack/load
+paths. Alternatively, combine the dependent behavior into one releasable
+commit. Each earlier commit must remain usable with the existing saved-QSO
+read, copy and discard behavior.
+
 ## Triggers to revisit
 
 Revisit if the operator wants to move unfinished contacts between archives,

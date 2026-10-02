@@ -1556,6 +1556,136 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      at stake (a `leaving` hook in the guard); a kept, typed draft keeps it.
      Reversion proofs for each retirement point failed their intended tests.
 
+**ADR 0085 rule 3 slice 2 — Restore: acceptance criteria (proposed 2026-10-01; corrected
+and RULED the same day — ADR 0085 records the rulings).** Built on the ADR 0086 panel and
+the attribution prerequisite (`c204e32f`). Each line is tested — several need more than one
+case; "apart from" names the nearest wrong outcome.
+
+*Record.* RS1 A save records the attribution read from `GET /v1/submit-attribution` inside
+the boot identity bracket; a failed read records it as missing (`null`), never a value from
+later configuration. Missing attribution reads "Original attribution unavailable" (a failed
+read or an older record alike). RS2 A record carries a state — `draft`, or `logged` with the
+returned QSO UUID — and, when a submission was attempted, the EXACT attempted submission. A
+v1 record keeps its `outcome`: `unknown` stays unknown — apart from a migration that makes it
+read as definitely unlogged.
+
+*Offering Restore (panel).* RS3 Restore is offered only on a `draft` record, in a browser
+with Web Locks; otherwise the entry says why and keeps Show details / Copy. RS4 On Phone / CW
+Restore needs the record's archive to be the one this page booted on and its logbook UUID to
+be the active default's; otherwise it names the source and never switches. RS5 MY_RIG must
+equal today's server stamp — a mismatch is a hard refusal showing saved and current; missing
+attribution refuses as "Original attribution unavailable". Saved OPERATOR / MY_NAME are NOT
+compared with today's defaults: Restore supplies them explicitly and the server checks all
+three on the prepared QSO. RS6 Other pages offer "Go to Phone / CW", which only navigates.
+RS7 A `logged` record shows its QSO UUID and Discard only.
+
+*Claiming.* RS8 Restore takes an exclusive Web Lock on the record's UUID with `ifAvailable`;
+two tabs restoring at once leave exactly one winner; the other form is unchanged and says
+"In use in another tab". RS9 With the lock held, the form, destination, MY_RIG and the record
+(re-read from storage) are checked again; any change releases and refuses — apart from filling
+a form typed into while the claim was pending. RS10 The lock stays with its tab across panel
+close and navigation; Discard elsewhere must acquire the same lock and is refused while held
+(`locks.query()` is display only). RS11 Closing or reloading the owning tab releases it; the
+record keeps its latest committed revision.
+
+*The restored form.* RS12 Every saved field is restored with its original times; the QSO
+clock neither runs nor restamps, and a blank recovered end time does NOT become "now" at Log.
+RS13 The card shows "Recovered QSO from ‘Home’" with the saved frequency, band, mode/submode
+and their basis; Log stays disabled until they are confirmed or corrected; changing any
+withdraws the confirmation; a missing or inconsistent value must be corrected. No rig command
+is sent. RS14 While a recovered QSO is on the form, rig reports neither rewrite its reports
+nor restart its clock, and the stack/load shortcuts (Shift+Enter, Shift+↑/↓, the pile-up
+Load) cannot replace or clear it without going through Clear's protection. RS15 Report
+validation uses the recovered mode.
+
+*Saving edits.* RS16 Each edit is saved: one write in flight, the newest edit coalesced into
+the next, no timer; a failed save is shown and retried by the next edit. RS17 Clear / Escape
+waits for the latest edit — including one arriving DURING that final save — to commit, then
+empties the form and releases; a failed save keeps the form, says so and keeps the lock.
+
+*Discard in the owning tab (ruling 3).* RS17a Allowed directly, with confirmation: outstanding
+saves are settled and later writes cannot recreate the record; the delete is awaited; only
+then is the form emptied and the lock released. A failure keeps everything. Clear and Discard
+are disabled while a submission is in flight.
+
+*Logging.* RS18 Log is gated by the archive gate, the active default logbook's UUID, the lock,
+the confirmed rig values, validation and the in-flight latch — NOT by the CAT link. RS19
+Before the request, the EXACT submission about to be sent is persisted and the write awaited;
+a failed write sends nothing. Later edits keep that snapshot. RS20 The request carries the
+saved frequency, band, mode, submode, OPERATOR, MY_NAME and MY_GRIDSQUARE explicitly (not the
+rig's or today's), and `expect_*` from the saved attribution; the stored QSO's values are
+asserted. RS21 A 409 `attribution_changed` keeps form and record and shows saved and current
+values. RS22 A confirmed store deletes the record, else marks it `logged` with the QSO UUID;
+whatever cleanup does, this tab can no longer submit it — the confirmed UUID is shown with a
+cleanup retry, and cleanup never resubmits. Only a reload, if both cleanup writes failed, falls
+back to the persisted unknown state. RS23 A transport failure, a malformed success response,
+an interruption after sending, or a tab closed mid-request leaves the persisted attempt: the
+record reads "logging outcome unknown" from then on, is never retried automatically or called
+"not logged", and a later definite refusal does not erase it.
+
+*Unknown outcome (ruling 1).* RS24 An unknown-outcome record may be restored under the usual
+gates; Log first requires "I checked the original Logbook; this contact is not already
+logged." Cancel sends nothing; confirming authorises ONE attempt and keeps the earlier
+uncertainty recorded.
+
+*Duplicate response (ruling 2).* RS25 A recovered submit answered "duplicate" keeps the form
+and the record, offers the existing QSO for inspection, and keeps "Log anyway" only as an
+explicit "this is a separate contact" decision; it never marks the draft logged (the dedupe
+key ignores reports, notes, attribution and seconds — internal/qsoservice/dedupe.go:91).
+
+*Real browsers (ruled 2026-10-01).* Option 2: a scripted real-browser drill — two windows
+in the same profile and origin — plus jsdom tests; Playwright stays a separate decision. RS8
+and RS11 stay pending until the drill passes: competing Restore attempts (not sequential
+clicks after ownership), foreign Discard refusal, the claim kept across navigation, and
+release on close and on reload. Restore stays unavailable until commit 4 integrates the
+whole path; earlier commits expose nothing to ordinary Log, Clear or stack/load.
+
+*Commit 1 — record format and panel preparation (BUILT 2026-10-01, uncommitted).* Record
+version 2 (`attribution`, `state`, `loggedQsoUuid`, `attempt` — the exact attempted
+submission, shape only until commit 4); `readSavedDraft` reads version 1 as version 2 with
+attribution MISSING and the outcome kept, and refuses unknown or damaged records
+(`drafts/savedDraft.ts`). `fetchSubmitAttribution` reads `GET /v1/submit-attribution`
+strictly — a missing or non-string field is a failed read (`api/submit-attribution.ts`).
+`main.ts` reads it inside the boot identity bracket and again after a Station save unless a
+switch is in flight; the preserver records it, `null` when the read failed. The details and
+the failed-save gate show the attribution — "(none)" for known-empty, "Original attribution
+unavailable" when missing — and a `logged` record reads "Logged as QSO <uuid> — this
+browser's saved copy could not be removed." `drafts/restore.ts` holds the RS3–RS7 decision
+as a pure function, wired to nothing. Tests D5–D10, P9, the attribution read ×3, E1–E8;
+seven reversion proofs fail their intended assertions. Not covered by a unit test: the
+`main.ts` wiring (the bracket read and the Station-save refresh), as for the rest of that
+file. The operator's SPA has no roster or default-operator editor, so a mid-session change
+to those comes only from outside this tab; the server's own check on a recovered submit
+covers it.
+Operator review of commit 1 (2026-10-01; commits HELD, to resolve 2026-10-02 after a
+scheduled power cut). Two issues. (1) Stale attribution survives a Station change: the
+previous attribution stays in use while the refresh is pending, or when the guard skips
+it — reproduced a record preserved with operator B but attribution for A. Fix: invalidate
+the attribution immediately on a Station save; a preservation records MISSING attribution
+until a valid refresh completes. The recovered-submit expectation would not catch this:
+the wrongly saved operator/name sent explicitly can satisfy the same wrong expectation.
+(2) Refreshes can apply out of order or after the archive guard closes: the Station-save
+callback discards the refresh promise, bypassing the save latch — reproduced an older B
+response overwriting C, and a response applying after the archive became unresolved. Fix:
+await the refresh through the latch; drop a response whose request is no longer the latest
+or whose archive binding is no longer valid. Plan: extract the coordinator from `main.ts`
+into a tested module and add regression tests for the three sequences (stale-in-flight
+save, B-after-C, applied-after-unresolved).
+FIXED 2026-10-02 (uncommitted). The attribution moved out of `main.ts` into
+`drafts/attributionSource.ts`: every config write invalidates it AT ONCE — reported by
+`safeFetch` (`setConfigWriteListener`), the one path every request takes, so a `my_rig`
+override changed in Settings → Rigs counts as well as a Station save; a read applies only if
+it is the newest, no config write started since it began or is still in flight, and the
+archive binding is still valid (`archiveSwitchGate() === null`); a dropped or failed read
+leaves it missing and marks a retry, taken after the next proven reconnect. The boot read is
+made inside the identity bracket and applied only after the bracket proved the binding and
+nothing started since. The Station save holds its latch on the re-read
+(`attributionSettled`). Tests AS1–AS7 (the three reproduced sequences: AS1 save during a
+pending refresh, AS2 B after C, AS3 after unresolved) and the four `safeFetch` cases; nine
+reversion proofs fail their intended assertions (two tests were strengthened after their
+first proofs: one timed out instead of failing, one passed under the reversion). `main.ts`
+baseline re-keyed to line@577.
+
 Deferred by the ADR and not planned here: archive delete, external attach CLI, in-process switch,
 cross-archive query.
 
