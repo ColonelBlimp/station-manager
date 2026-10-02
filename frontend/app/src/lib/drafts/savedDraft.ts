@@ -6,9 +6,21 @@
 
 import type { QsoDraft } from '../operate/qso.svelte';
 import type { RigReading } from '../operate/rigSnapshot.svelte';
+import type { SubmitAttribution } from '../api/submit-attribution';
 
+/** The exact submission a recovered Log sent or was about to send (ADR 0085
+ *  RS19): persisted before the request, kept through later edits. */
+export interface AttemptedSubmission {
+    at: string;
+    logbookId: number;
+    adif: string;
+    expect: SubmitAttribution;
+}
+
+/** Version 2. A version 1 record (ADR 0085 slice 1) is read as this with its
+ *  attribution MISSING and its outcome kept (RS2). */
 export interface SavedDraft {
-    version: 1;
+    version: 2;
     id: string;
     savedAt: string;
     archiveId: string;
@@ -23,6 +35,14 @@ export interface SavedDraft {
     rig: RigReading;
     /** unknown: a log attempt's outcome is unknown — the QSO may be logged. */
     outcome: 'unlogged' | 'unknown';
+    /** What the original submit would have been stored with; null = MISSING
+     *  (a failed read, or a record saved before attribution was recorded). */
+    attribution: SubmitAttribution | null;
+    /** logged: a recovered Log stored it (loggedQsoUuid) but this browser copy
+     *  could not be removed. */
+    state: 'draft' | 'logged';
+    loggedQsoUuid: string;
+    attempt: AttemptedSubmission | null;
 }
 
 const FIELD_KEYS: Array<keyof QsoDraft> = [
@@ -46,10 +66,22 @@ const isObj = (v: unknown): v is Record<string, unknown> =>
     typeof v === 'object' && v !== null && !Array.isArray(v);
 const isStr = (v: unknown): v is string => typeof v === 'string';
 
-/** Shape check for a record read back from browser storage: anything else
- *  (an older or damaged record) is not shown as a saved QSO. */
-export function isSavedDraft(v: unknown): v is SavedDraft {
-    if (!isObj(v) || v.version !== 1) return false;
+function isAttribution(v: unknown): v is SubmitAttribution {
+    return isObj(v) && isStr(v.myRig) && isStr(v.operator) && isStr(v.myName);
+}
+
+function isAttempt(v: unknown): v is AttemptedSubmission {
+    return (
+        isObj(v) &&
+        isStr(v.at) &&
+        typeof v.logbookId === 'number' &&
+        isStr(v.adif) &&
+        isAttribution(v.expect)
+    );
+}
+
+/** The fields every version shares. */
+function isCommon(v: Record<string, unknown>): boolean {
     const strs = [
         v.id,
         v.savedAt,
@@ -74,6 +106,36 @@ export function isSavedDraft(v: unknown): v is SavedDraft {
     );
 }
 
+/** A record read back from browser storage, as version 2 — or null for an
+ *  unknown or damaged one, which is not shown as a saved QSO. A version 1
+ *  record keeps its outcome (an unknown one stays unknown) and gets no
+ *  attribution: none was recorded, and none is invented (RS1–RS2). */
+export function readSavedDraft(v: unknown): SavedDraft | null {
+    if (!isObj(v) || !isCommon(v)) return null;
+    if (v.version === 1) {
+        return {
+            ...(v as unknown as Omit<
+                SavedDraft,
+                'version' | 'attribution' | 'state' | 'loggedQsoUuid' | 'attempt'
+            >),
+            version: 2,
+            attribution: null,
+            state: 'draft',
+            loggedQsoUuid: '',
+            attempt: null,
+        };
+    }
+    if (v.version !== 2) return null;
+    if (v.attribution !== null && !isAttribution(v.attribution)) return null;
+    if (v.attempt !== null && !isAttempt(v.attempt)) return null;
+    if (v.state === 'draft') {
+        if (v.loggedQsoUuid !== '') return null;
+    } else if (v.state !== 'logged' || !isStr(v.loggedQsoUuid) || v.loggedQsoUuid === '') {
+        return null;
+    }
+    return v as unknown as SavedDraft;
+}
+
 function utc(iso: string): string {
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return iso;
@@ -91,6 +153,9 @@ export function savedDraftHeadline(r: SavedDraft, state: SaveState = 'saved'): s
     const label = r.archiveLabel;
     const from = `‘${label}’`;
     const unknown = r.outcome === 'unknown';
+    if (r.state === 'logged') {
+        return `Logged as QSO ${r.loggedQsoUuid} — this browser’s saved copy could not be removed.`;
+    }
     if (state === 'saved') {
         return unknown
             ? `QSO draft saved from ${from} — logging outcome unknown. Check the Logbook in ${from} before logging it.`
@@ -134,7 +199,7 @@ export function savedDraftLines(
         ['Archive', r.archiveLabel],
         ['Logbook', r.logbookName],
         ['Station callsign', r.stationCallsign],
-        ['Operator', r.operator],
+        ...attributionRows(r),
         ['My grid', r.myGrid],
         ['Callsign', f.callsign.trim().toUpperCase()],
         ['Date on', f.dateOn],
@@ -157,6 +222,24 @@ export function savedDraftLines(
         ['Saved', state === 'saved' ? utc(r.savedAt) : ''],
     ];
     return rows.filter(([, v]) => v !== '');
+}
+
+// What the original submit would have been stored with. A known-empty value is
+// "(none)"; missing attribution is said, never filled in.
+function attributionRows(r: SavedDraft): Array<[string, string]> {
+    const a = r.attribution;
+    if (a === null) {
+        return [
+            ['Operator', r.operator],
+            ['Attribution', 'Original attribution unavailable'],
+        ];
+    }
+    const shown = (s: string): string => (s === '' ? '(none)' : s);
+    return [
+        ['Operator', shown(a.operator)],
+        ['Operator name', shown(a.myName)],
+        ['My rig', shown(a.myRig)],
+    ];
 }
 
 /** Plain text for the clipboard: the headline, then every row. */

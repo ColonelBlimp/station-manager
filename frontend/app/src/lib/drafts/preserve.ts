@@ -10,6 +10,7 @@ import { announceDraftsChanged } from './draftChannel';
 import { draftStore } from './draftStore';
 import { rememberPreservedForAnnouncement } from './savedDrafts.svelte';
 import type { SavedDraft } from './savedDraft';
+import type { SubmitAttribution } from '../api/submit-attribution';
 
 export interface DraftSource {
     archiveId: string;
@@ -23,6 +24,9 @@ export interface StationSource {
     stationCallsign: string;
     operator: string;
     myGrid: string;
+    /** From GET /v1/submit-attribution inside the boot identity bracket; null
+     *  when that read failed — recorded as missing, never guessed (RS1). */
+    attribution: SubmitAttribution | null;
 }
 
 export type PreserveResult =
@@ -44,7 +48,7 @@ function build(archive: DraftSource | null, station: StationSource): SavedDraft 
     const now = new Date();
     const fields: QsoDraft = { ...draft };
     return {
-        version: 1,
+        version: 2,
         id: recordId,
         savedAt: now.toISOString(),
         archiveId: archive?.archiveId ?? '',
@@ -53,6 +57,9 @@ function build(archive: DraftSource | null, station: StationSource): SavedDraft 
         fields,
         rig: rigReadingForSave(now.getTime()),
         outcome: logOutcomeUnknown() ? 'unknown' : 'unlogged',
+        state: 'draft',
+        loggedQsoUuid: '',
+        attempt: null,
     };
 }
 

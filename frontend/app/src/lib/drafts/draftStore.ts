@@ -3,7 +3,7 @@
 // A write resolves only once its transaction has COMPLETED (strict durability),
 // so the reload that follows a save cannot outrun it.
 
-import { isSavedDraft, type SavedDraft } from './savedDraft';
+import { readSavedDraft, type SavedDraft } from './savedDraft';
 
 export interface DraftStore {
     put(record: SavedDraft): Promise<void>;
@@ -76,10 +76,13 @@ export function draftStore(): DraftStore {
     return store;
 }
 
-/** Saved drafts, oldest first; a damaged or foreign record is skipped. */
+/** Saved drafts, oldest first, as version 2; a damaged or foreign record is skipped. */
 export async function listSavedDrafts(): Promise<SavedDraft[]> {
     const rows = await store.list();
-    return rows.filter(isSavedDraft).sort((a, b) => a.savedAt.localeCompare(b.savedAt));
+    return rows
+        .map(readSavedDraft)
+        .filter((r): r is SavedDraft => r !== null)
+        .sort((a, b) => a.savedAt.localeCompare(b.savedAt));
 }
 
 /** Test seam: jsdom has no IndexedDB. null restores the real store. */

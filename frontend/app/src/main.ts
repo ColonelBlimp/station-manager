@@ -5,6 +5,18 @@ import { setHistory } from './lib/operate/worked.svelte';
 import { setEntryGate, setSubmit, setSubmitGate } from './lib/operate/qso.svelte';
 import { noteRigDrop } from './lib/operate/rigSnapshot.svelte';
 import { preserveDraft } from './lib/drafts/preserve';
+import { fetchSubmitAttribution, type SubmitAttribution } from './lib/api/submit-attribution';
+import { setConfigWriteListener } from './lib/api/_helpers';
+import {
+    applyBootAttribution,
+    attributionEpoch,
+    attributionSettled,
+    configureAttribution,
+    currentAttribution,
+    noteConfigWriteSettled,
+    noteConfigWriteStarted,
+    retryAttributionIfPending,
+} from './lib/drafts/attributionSource';
 import { addSessionQso, session, sessionModeLiteral } from './lib/operate/session.svelte';
 import { setMailer } from './lib/operate/mailer.svelte';
 import {
@@ -472,6 +484,14 @@ setFt8AdmissionGate(archiveSwitchGate);
 setTuneGate(archiveSwitchGate);
 // Phone / CW entry is locked while the switch's reload is pending (ADR 0085).
 setEntryGate(archiveEntryLock);
+// The attribution a saved draft records (ADR 0085 RS1; attributionSource.ts):
+// read inside the boot identity bracket below, invalidated by every config write
+// and re-read once it settles, and applied only while the archive binding holds.
+configureAttribution({ bindingValid: () => archiveSwitchGate() === null });
+setConfigWriteListener({
+    started: noteConfigWriteStarted,
+    settled: () => void noteConfigWriteSettled(),
+});
 // A rebind reload first saves any unlogged Phone / CW draft with the archive and
 // logbook it belongs to (ADR 0085); ctx is read at save time.
 setDraftPreserver((source) =>
@@ -482,6 +502,7 @@ setDraftPreserver((source) =>
         stationCallsign: ctx.stationCallsign,
         operator: ctx.operator,
         myGrid: ctx.myGrid,
+        attribution: currentAttribution(),
     })
 );
 
@@ -491,14 +512,21 @@ setDraftPreserver((source) =>
 // so the archive this tab records is provably the one these stores were built
 // against; every reconnect of the always-on stream compares against it and
 // reloads (or gates) when the daemon serves another archive.
+let bootAttribution: SubmitAttribution | null = null;
+const bootAttributionSince = attributionEpoch();
 void bootArchiveScoped(async () => {
-    const [c] = await Promise.all([fetchStationContext(), loadArchives()]);
+    const [c, attribution] = await Promise.all([
+        fetchStationContext(),
+        fetchSubmitAttribution(),
+        loadArchives(),
+    ]);
+    bootAttribution = attribution;
     applyStationContext(c);
     // First-run gate: only a REACHED config saying setup_complete=false shows
     // setup — a daemon outage falls through to the fail-soft shell instead of
     // greeting a configured operator with the welcome card.
     setup.status = c.configOk && !c.setupComplete ? 'needed' : 'complete';
-});
+}).then(() => applyBootAttribution(bootAttribution, bootAttributionSince)); // only once proven
 
 // First-run save (injected per ADR 0045 — the setup module never imports
 // lib/api): PUT the callsign, then re-fetch + re-wire the station context so
@@ -524,6 +552,9 @@ setStationSaved((station) => {
         station.my_gridsquare ?? '',
         station.station_callsign || ctx.stationCallsign
     );
+    // Held inside the Station save latch until the attribution the write
+    // invalidated has been read again (review 2026-10-01).
+    return attributionSettled();
 });
 
 // Settings → FT8 save: push the just-saved Band Activity display prefs into the
@@ -675,7 +706,8 @@ openLogEvents({
     onQsoChanged: () => {},
     onReconnect: () => {
         refreshLogbookCount();
-        void verifyArchiveGeneration();
+        // A binding proven again re-reads an attribution that was dropped meanwhile.
+        void verifyArchiveGeneration().then(() => retryAttributionIfPending());
     },
 });
 

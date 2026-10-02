@@ -30,6 +30,7 @@ const STATION: StationSource = {
     stationCallsign: '7Q5MLV',
     operator: '7Q5MLV',
     myGrid: 'KH66',
+    attribution: { myRig: 'FTdx10 (home)', operator: '7Q5MLV', myName: 'Marc' },
 };
 let mem = memoryDraftStore();
 
@@ -67,7 +68,10 @@ describe('preserveDraft', () => {
         expect(out.kind).toBe('saved');
         const [rec] = [...mem.rows.values()];
         expect(rec).toMatchObject({
-            version: 1,
+            version: 2,
+            attribution: { myRig: 'FTdx10 (home)', operator: '7Q5MLV', myName: 'Marc' },
+            state: 'draft',
+            attempt: null,
             archiveId: 'arch-a',
             archiveLabel: 'Home',
             logbookUuid: 'lb-a',
@@ -184,5 +188,12 @@ describe('preserveDraft', () => {
         const saved = [...mem.rows.values()][0];
         expect(saved.rig.mode).toBe('USB');
         expect([saved.fields.rstSent, saved.fields.rstRcvd]).toEqual(['57', '56']);
+    });
+
+    // RS1: a failed attribution read is recorded as missing, never guessed.
+    it('P9 missing attribution is saved as missing', async () => {
+        typeDraft();
+        await preserveDraft(ARCHIVE, { ...STATION, attribution: null });
+        expect([...mem.rows.values()][0].attribution).toBeNull();
     });
 });

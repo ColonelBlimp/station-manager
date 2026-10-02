@@ -96,6 +96,7 @@ describe('saved QSOs across tabs', () => {
             stationCallsign: '7Q5MLV',
             operator: '7Q5MLV',
             myGrid: 'KH66',
+            attribution: null,
         };
         draft.callsign = 'G0ABC';
         vi.spyOn(mem, 'put').mockRejectedValueOnce(new Error('QuotaExceededError'));
@@ -173,6 +174,7 @@ describe('saved QSOs across tabs', () => {
             stationCallsign: '7Q5MLV',
             operator: '7Q5MLV',
             myGrid: 'KH66',
+            attribution: null,
         };
         sessionStorage.clear();
         draft.callsign = 'G0ABC';
