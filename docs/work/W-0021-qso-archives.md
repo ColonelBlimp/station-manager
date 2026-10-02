@@ -1725,6 +1725,14 @@ in `invalidate`) passed — an equivalent mutation, since `noteConfigUpdated` al
 `refreshAttribution`, which advances the epoch itself and so drops the in-flight read anyway.
 In all: **18 successful reversion proofs, one equivalent mutation (F3)**. `main.ts` baseline
 re-keyed to line@581. Restore stays unavailable.
+COMMITTED 2026-10-02: `4a27711e` (Go), `3668c3d1` (SPA), `386c7981` (docs). Codex: `3668c3d1`
+clean; `4a27711e` one P2, FIXED (uncommitted) — `?operator=` was resolved verbatim while the
+ADIF parser right-trims a submitted OPERATOR, so a trailing space made the endpoint's own
+answer fail the submit's expectation (409). The parser's normalization is now one exported
+helper, `adif.NormalizeValue`, used by the parser and by the endpoint for the requested and the
+default operator alike. Test W11 (a "G0XYZ \t" request reports G0XYZ, and a submit carrying
+that padded OPERATOR with the reported expectation stores); its reversion proof fails its
+intended assertion.
 
 Deferred by the ADR and not planned here: archive delete, external attach CLI, in-process switch,
 cross-archive query.
