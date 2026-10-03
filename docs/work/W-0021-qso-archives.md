@@ -1780,8 +1780,126 @@ this tab owns currently asks for the same lock and is refused as "In use in anot
 ruling 3 (owning-tab Discard) belongs to commit 3; (c) Clear / Escape on a recovered form is a
 silent no-op until commit 3 gives it the save-then-release path; (d) the recovered card shows
 the reading's capture time as raw ISO — format it as the saved-QSO details do.
+
 The operator reran the drafts and operate suites: 775 tests passed; the context check passed.
 Post-commit Codex review of `5ebb09ca` (2026-10-02): no actionable findings.
+
+**Restore commit 3 — edits, Clear, Discard (BUILT 2026-10-02, uncommitted).**
+`drafts/recoveredSave.svelte.ts` watches the recovered form and saves every edit to the record
+it came from (same id; its original archive, logbook, attribution and rig reading kept): one
+write in flight, newer edits coalesced into the next, no timer; a failed write is shown on the
+card and retried by the next edit; installing the record writes nothing. Clear / Escape
+(`requestClearDraft`, the card's two entry points) wait until every edit — one made during
+that final save included — is stored, then detach the QSO and empty the form synchronously and
+release the reservation (`restoreSession.finishRecovered`); a failed final save keeps the form
+and the lock and says so; refused while a submission is in flight. Discard of the record this
+tab owns (operator ruling 3; `discardSavedDraft` delegates to `discardRecovered`): no new
+writes, the one in flight settled, the delete awaited, then the form emptied and the lock
+released; a failed delete keeps everything; refused while a submission is in flight. A rebind
+save with a recovered QSO on the form flushes to the owned record and creates no new one; if
+the flush fails, the save fails and the reload is held. The recovered card shows its save
+error, a "saving before clearing" note, and the capture time as UTC. Review notes (a)–(d)
+above are closed. Corrected rig values: see the ruling below (first built without them).
+
+Evidence: RS16a–d, RS17a–d, requestClearDraft, DA1, DA1b, DA2, DA3, PR1, PR2 and the card's
+Escape / failed Clear / UTC time (18 cases). Sixteen reversion proofs plus two redone after
+strengthening: RS16d now counts writes (it first checked only stored content, which an
+identical rewrite leaves unchanged) and DA1b was added (an edit typed while the delete is in
+flight; DA1 alone did not reach it). One mutation survived as EQUIVALENT: dropping the
+revision check from the flush loop, since every edit starts a write at once and keeps `loop`
+non-null, so the flush cannot return before it lands. In all: **16 successful reversion
+proofs, one equivalent mutation**. Gates: lint, format, svelte-check, 2,227 SPA tests,
+maintainability (0 regressions). Restore stays unavailable until commit 4.
+
+Pre-commit review (2026-10-02) found and fixed two additional boundaries. Restoring the same
+UUID after another owner edited it triggered an unnecessary installation write: the edit
+baseline now belongs to each installed record, not its UUID. An edit typed while Discard's
+delete was pending remained unsaved after that delete failed: the failure now resumes queued
+writes without requiring another keystroke. RS16e and DA2b failed on their intended assertions
+before the fixes and under verified reversions afterward. The earlier R6 guard test no longer
+expects Clear / Escape to do nothing; commit 3's card tests own their save-then-release behavior.
+Drafts and operate suites: 795 tests passed. This adds two cases and two successful reversion
+proofs to the evidence above (20 new cases, 18 proofs, one equivalent mutation).
+The subsequent `SKIP_NPM_CI=1 task ci:local` passed: 2,229 SPA tests, lint/format/Svelte checks,
+SPA/manual builds, Go vet/lint, maintainability (zero regressions), race/full tests, static and
+CGO builds, FT8 decode tests and build-boundary checks. The context check passed after the
+documentation update. RS8/RS11 remain open for the operator's two-window drill.
+
+RULED 2026-10-02 (operator): correction persistence belongs in commit 3. BUILT: record version
+3 adds `rigCorrection` (null when nothing is corrected), kept apart from `rig`, the original
+reading; versions 1 and 2 read as version 3 with no correction. The edit-saving loop treats a
+correction (frequency, band, ADIF mode, submode) as an edit and stores it; correcting back to
+the original stores null. Restore loads the saved correction as the working values and starts
+UNCONFIRMED — the confirmation is never stored. The card shows "Corrected from the original
+reading: …"; the saved-QSO details add a "Corrected rig values" row while keeping the original
+reading's rows. Tests D11–D13, CP1–CP3 and the card's original-reading line (7 cases); D5's
+"unknown version" example moved from 3 to 4. Eight reversion proofs, each failing its intended
+assertion: correction not written, correction not counted as an edit, back-to-original stored,
+Restore ignoring the saved correction, version 2 not read, correction unvalidated, correction
+not shown in the details, original line not shown on the card. Gates: lint, format,
+svelte-check, 2,236 SPA tests, maintainability (0 regressions). Running total for commit 3:
+27 new cases, 26 successful reversion proofs, one equivalent mutation.
+Review (2026-10-03, commit held): P2 — the owning tab's Saved QSOs list stayed stale after its
+own recovered edits (the change notice reaches only other tabs), so Details / Copy showed old
+values and a later Restore from that entry was refused as changed. FIXED: after each
+committed write the save loop awaits a re-read of this tab's list
+(`setRecoveredWrittenListener`, wired by `savedDrafts.svelte.ts`, so no import cycle); a
+flush resolves only once the list is current. Tests SL1 (stored edit and correction reach the
+list), SL2 (the listed record then restores) and SL3 (a flush waits for the re-read); three
+reversion proofs fail their intended assertions (no refresh, refresh not awaited, listener not
+wired) — the await proof first passed and SL3 was added to reach it. P3 — the capsule's
+"decide when to persist rig corrections" was stale; `docs/current.md` updated. Running total
+for commit 3: 30 new cases, 29 successful reversion proofs, one equivalent mutation.
+Review (2026-10-03, commit held again): P2 — awaiting the local re-read did not mean the list
+was current: the loader resolved when a newer read superseded it (Clear completed while the
+newer read was pending) and when its read failed. FIXED: `loadSavedDrafts` now reports
+`applied` / `superseded` / `failed`; `refreshSavedDraftsNow` follows the newest read when its
+own is superseded and is false on failure. The save loop keeps a committed write separate from
+list freshness: a failed refresh records `listError` ("Saved, but the Saved QSOs list could not
+be refreshed…"), never an unsaved edit; `flushRecoveredEdits` (Clear) retries the refresh
+without another edit and keeps the QSO if it still fails; `flushRecoveredWrites` (the rebind
+save) needs only the committed write, so a stale list never holds a reload. Tests SL4
+(superseded), SL5 (failed twice: QSO kept, list message, retry on the next Clear), SL6
+(rebind unaffected). Six reversion proofs fail their intended assertions; the rebind proof was
+first a non-compiling swap (ReferenceError) and was redone as a compiling mutation. Running
+total for commit 3: 33 new cases, 35 successful reversion proofs, one equivalent mutation.
+Review (2026-10-03, third hold): P2 — the rebind save still waited on a PENDING list read: the
+write loop awaited its refresh, and the writes-only flush awaited the loop (SL6 used a read that
+rejects at once). FIXED: a committed write starts the list refresh and does not await it; only
+the newest refresh decides the list's state (a token), and Clear's flush waits for that refresh
+separately — retrying a stale list once per Clear, then keeping the QSO. P3 — "Saved, but the
+list…" survived a later unsaved edit: it is now cleared whenever a newer edit is noted (the
+refresh after that edit's write sets it again). Tests SL7 (the rebind save resolves while the
+list read is still pending) and SL8 (a later failed write leaves no "Saved, but…"). Proofs: the
+write awaiting its refresh fails SL7; keeping the message beside a new edit fails SL8; Clear
+skipping the pending refresh fails SL3. Two mutations EQUIVALENT: clearing the message on the
+write-failure path as well (a failed write always follows an edit, which already cleared it —
+that line was removed), and letting an older refresh decide (a superseded refresh follows the
+newest read, so it reaches the same result). Running total for commit 3: 35 new cases, 38
+successful reversion proofs, three equivalent mutations.
+Review (2026-10-03, fourth hold): two overlap cases. P2 — Clear awaited the refresh promise it
+captured, so after a newer edit committed and its read updated the list, Clear stayed blocked
+until the obsolete read finished. FIXED: Clear waits on a "newest refresh finished" signal
+(`listSettled`), woken by whichever refresh is newest when it completes. P3 — an older refresh,
+still the newest because a failed write starts none, could set "Saved, but…" back beside the
+newer unsaved edit when it failed late. FIXED: its completion shows the message only when every
+edit is stored (`committed >= revision`). Tests SL9 and SL10 (the reviewer's reproductions);
+two reversion proofs fail their intended assertions (Clear waiting on the captured promise;
+the message ignoring newer edits). Running total for commit 3: 37 new cases, 40 successful
+reversion proofs, three equivalent mutations.
+Review (2026-10-03, fifth hold): the same P2 on two more paths. Clear's retry awaited the retry
+promise directly, and `refreshSavedDraftsNow` waited for its own read before noticing a newer
+one — so a newer edit's refresh, or a visibility / other-tab read, could update the list while
+Clear stayed blocked on the obsolete read. FIXED: the loader announces every completed read to
+listeners, and the barrier resolves true as soon as ANY read begun at or after it sets the
+list (false only when the newest such read fails), never waiting on its own; Clear's retry is
+started and then waits on the newest-refresh signal. Tests SL11 (a pending retry read) and SL12
+(a read made for another reason) — SL12's "released" check moved before the old read is
+answered, so a reversion fails that assertion instead of hanging. The barrier proof (waiting
+on its own read only) fails SL12. The retry proof (awaiting the retry directly) PASSED and is
+EQUIVALENT: with the new barrier, the awaited retry itself resolves as soon as the newer read
+lands. Running total for commit 3: 39 new cases, 41 successful reversion proofs, four
+equivalent mutations.
 
 Deferred by the ADR and not planned here: archive delete, external attach CLI, in-process switch,
 cross-archive query.
