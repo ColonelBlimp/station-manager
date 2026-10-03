@@ -9,6 +9,8 @@ import { announceDraftsChanged, onDraftsChanged } from './draftChannel';
 import { draftStore, listSavedDrafts } from './draftStore';
 import { savedDraftHeadline, type SavedDraft } from './savedDraft';
 import { draftLocksAvailable, reserveSavedDraft, type DraftReservation } from './draftLock';
+import { ownsRecoveredRecord } from './restoreSession';
+import { discardRecovered, setRecoveredWrittenListener } from './recoveredSave.svelte';
 
 export const savedDrafts: { list: SavedDraft[]; error: string; removing: string } = $state({
     list: [],
@@ -20,27 +22,81 @@ export const savedDrafts: { list: SavedDraft[]; error: string; removing: string 
  *  card's shortcuts stand down, as they do for the Export dialog. */
 export const savedQsosPanel: { open: boolean } = $state({ open: false });
 
+// A recovered QSO's saved edits refresh this tab's own list (the change notice
+// reaches only the other tabs).
+setRecoveredWrittenListener(() => refreshSavedDraftsNow());
+
 // Every read is numbered and only the newest may apply its result: an older
 // read — begun before a discard, answering after it — must not resurrect the
 // discarded entry, and overlapping re-reads must not land out of order.
 let generation = 0;
 
+/** What became of one read: it set the list, a newer read superseded it, or
+ *  it failed (the list kept, the error shown). */
+export type ListReadOutcome = 'applied' | 'superseded' | 'failed';
+
+// Every completed read is announced, whatever started it (a refresh, a
+// visibility change, another tab's notice), so a barrier can observe newer reads
+// without waiting on its own (review 2026-10-03).
+type ReadDone = (generationOfRead: number, outcome: ListReadOutcome) => void;
+let readListeners: ReadDone[] = [];
+
 /** Read the list. A failed read keeps what is shown and says so. */
-export async function loadSavedDrafts(): Promise<void> {
+export function loadSavedDrafts(): Promise<ListReadOutcome> {
     const mine = ++generation;
-    try {
-        const list = await listSavedDrafts();
-        if (mine !== generation) return;
-        savedDrafts.list = list;
-        savedDrafts.error = '';
-    } catch (e) {
-        if (mine !== generation) return;
-        savedDrafts.error = e instanceof Error ? e.message : String(e);
-    }
+    const read = (async (): Promise<ListReadOutcome> => {
+        try {
+            const list = await listSavedDrafts();
+            if (mine !== generation) return 'superseded';
+            savedDrafts.list = list;
+            savedDrafts.error = '';
+            return 'applied';
+        } catch (e) {
+            if (mine !== generation) return 'superseded';
+            savedDrafts.error = e instanceof Error ? e.message : String(e);
+            return 'failed';
+        }
+    })();
+    void read.then((outcome) => {
+        for (const listener of readListeners.slice()) listener(mine, outcome);
+    });
+    return read;
+}
+
+/** Read the list and resolve true once it holds what storage held when this
+ *  was called: as soon as ANY read begun at or after this call sets the list —
+ *  its own, or a newer one for another reason — without waiting on its own
+ *  read; false when the newest such read fails (review 2026-10-03). */
+export function refreshSavedDraftsNow(): Promise<boolean> {
+    const start = generation + 1; // the read started below, and every later one
+    return new Promise<boolean>((resolve) => {
+        const listener: ReadDone = (gen, outcome) => {
+            if (gen < start || outcome === 'superseded') return; // older, or overtaken
+            readListeners = readListeners.filter((l) => l !== listener);
+            // Any read begun at or after this call that sets the list saw at least
+            // what storage held now; a failure is reported only by the newest.
+            resolve(outcome === 'applied');
+        };
+        readListeners.push(listener);
+        void loadSavedDrafts();
+    });
 }
 
 /** Remove one saved record. True when it is gone; on failure it stays shown. */
 export async function discardSavedDraft(id: string): Promise<boolean> {
+    // The record this tab has restored (operator ruling 3): its own path settles
+    // the edits and the reservation; the lock request below would refuse it.
+    if (ownsRecoveredRecord(id)) {
+        savedDrafts.removing = id;
+        try {
+            if (!(await discardRecovered(id))) return false;
+        } finally {
+            savedDrafts.removing = '';
+        }
+        savedDrafts.list = savedDrafts.list.filter((r) => r.id !== id);
+        void loadSavedDrafts();
+        return true;
+    }
     savedDrafts.removing = id;
     let claim: DraftReservation | null = null;
     try {
@@ -129,6 +185,7 @@ export function watchSavedDrafts(): () => void {
 
 export function _resetSavedDraftsForTests(): void {
     generation = 0;
+    readListeners = [];
     savedQsosPanel.open = false;
     savedDrafts.list = [];
     savedDrafts.error = '';

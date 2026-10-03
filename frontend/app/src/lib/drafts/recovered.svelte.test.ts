@@ -162,7 +162,7 @@ describe('recovered form', () => {
         expect(await logDraft(true)).toBe(false);
         expect(submit).not.toHaveBeenCalled();
     });
-    it('R6 Clear, Escape, stack shortcuts, stack button and pile-up Load keep recovered work', async () => {
+    it('R6 ordinary reset, stack shortcuts, stack button and pile-up Load keep recovered work', async () => {
         installRecoveredDraft(sampleRecord());
         render(LoggingCard);
         operate.callStack = true;
@@ -176,8 +176,6 @@ describe('recovered form', () => {
         expect(draft).toEqual(before);
         resetDraft();
         expect(draft).toEqual(before);
-        await fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
-        await fireEvent.keyDown(window, { key: 'Escape' });
         await fireEvent.keyDown(screen.getByLabelText('Callsign'), {
             key: 'Enter',
             shiftKey: true,

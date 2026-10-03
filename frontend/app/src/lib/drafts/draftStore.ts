@@ -76,7 +76,7 @@ export function draftStore(): DraftStore {
     return store;
 }
 
-/** Saved drafts, oldest first, as version 2; a damaged or foreign record is skipped. */
+/** Saved drafts, oldest first, as version 3; a damaged or foreign record is skipped. */
 export async function listSavedDrafts(): Promise<SavedDraft[]> {
     const rows = await store.list();
     return rows

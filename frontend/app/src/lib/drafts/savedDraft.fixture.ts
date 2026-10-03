@@ -3,7 +3,7 @@ import type { SavedDraft } from './savedDraft';
 
 export function sampleRecord(over: Partial<SavedDraft> = {}): SavedDraft {
     return {
-        version: 2,
+        version: 3,
         id: 'd-1',
         savedAt: '2026-09-30T12:10:00.000Z',
         archiveId: 'arch-a',
@@ -44,6 +44,7 @@ export function sampleRecord(over: Partial<SavedDraft> = {}): SavedDraft {
         state: 'draft',
         loggedQsoUuid: '',
         attempt: null,
+        rigCorrection: null,
         ...over,
     };
 }
@@ -51,6 +52,19 @@ export function sampleRecord(over: Partial<SavedDraft> = {}): SavedDraft {
 /** The same record as slice 1 stored it (version 1: no attribution, state or
  *  attempt). */
 export function sampleV1Record(over: Record<string, unknown> = {}): Record<string, unknown> {
-    const { attribution: _a, state: _s, loggedQsoUuid: _l, attempt: _t, ...rest } = sampleRecord();
+    const {
+        attribution: _a,
+        state: _s,
+        loggedQsoUuid: _l,
+        attempt: _t,
+        rigCorrection: _c,
+        ...rest
+    } = sampleRecord();
     return { ...rest, version: 1, ...over };
+}
+
+/** The same record as version 2 stored it (no rig correction). */
+export function sampleV2Record(over: Record<string, unknown> = {}): Record<string, unknown> {
+    const { rigCorrection: _c, ...rest } = sampleRecord();
+    return { ...rest, version: 2, ...over };
 }

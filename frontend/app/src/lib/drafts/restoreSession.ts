@@ -79,6 +79,24 @@ export async function restoreSavedDraft(
     }
 }
 
+/** This tab holds the reservation for the recovered record `id`. */
+export function ownsRecoveredRecord(id: string): boolean {
+    return reservation !== null && recovered.record?.id === id;
+}
+
+/** Let go of the recovered QSO: detach it and empty the form synchronously —
+ *  nothing typed after this lands in the recovered record — then release the
+ *  reservation. Callers settle the record's storage first (commit 3). */
+export async function finishRecovered(): Promise<void> {
+    const claim = reservation;
+    reservation = null;
+    recovered.record = null;
+    recovered.rig = null;
+    recovered.confirmed = false;
+    clearDraft();
+    await claim?.release();
+}
+
 export async function _resetRestoreForTests(): Promise<void> {
     await reservation?.release();
     reservation = null;

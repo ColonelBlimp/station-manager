@@ -9,13 +9,19 @@
           and a missing one reads "unknown", never a default.
       D4  The copy text carries the headline and every row.
       D5  A damaged or foreign record read back from storage is not a saved draft.
-      D7  A version 1 record (slice 1) is read as version 2 with its attribution
+      D7  A version 1 record (slice 1) is read as version 3 with its attribution
           MISSING and its outcome KEPT: an unknown outcome stays unknown (RS2).
       D8  Missing attribution reads "Original attribution unavailable"; known
           attribution is shown, a known-empty value as "(none)" (RS1).
       D9  A record logged but not removed says so with its QSO UUID (RS7).
-      D10 The version 2 shape is checked: attribution null or complete; state;
+      D10 The version 3 shape is checked: attribution null or complete; state;
           the logged UUID; the attempted submission null or complete.
+      D11 A version 2 record is read as version 3 with NO rig correction; its
+          attribution and outcome are kept.
+      D12 A saved rig correction is null or a complete reading; anything else
+          is a damaged record.
+      D13 With a saved correction the details show the corrected values beside
+          the original reading, which is kept.
       D6  A draft that could NOT be saved never claims it was: it reads "not
           saved", keeps an unknown logging outcome, has no Saved time, and
           still names its archive when known (review 2026-09-30).
@@ -28,7 +34,7 @@ import {
     savedDraftSummary,
     savedDraftText,
 } from './savedDraft';
-import { sampleRecord, sampleV1Record } from './savedDraft.fixture';
+import { sampleRecord, sampleV1Record, sampleV2Record } from './savedDraft.fixture';
 
 describe('saved draft wording', () => {
     it('D1 unlogged', () => {
@@ -89,7 +95,7 @@ describe('saved draft wording', () => {
 
     it('D5 shape check', () => {
         expect(readSavedDraft(sampleRecord())).toEqual(sampleRecord());
-        expect(readSavedDraft({ ...sampleRecord(), version: 3 })).toBeNull();
+        expect(readSavedDraft({ ...sampleRecord(), version: 4 })).toBeNull(); // an unknown version
         expect(readSavedDraft({ ...sampleRecord(), outcome: 'maybe' })).toBeNull();
         expect(readSavedDraft({ ...sampleRecord(), logbookUuid: 3 })).toBeNull();
         const noField = sampleRecord();
@@ -104,8 +110,9 @@ describe('saved draft wording', () => {
     it('D7 a version 1 record keeps its outcome and has no attribution', () => {
         const plain = readSavedDraft(sampleV1Record());
         expect(plain).toMatchObject({
-            version: 2,
+            version: 3,
             attribution: null,
+            rigCorrection: null,
             state: 'draft',
             attempt: null,
             outcome: 'unlogged',
@@ -144,7 +151,7 @@ describe('saved draft wording', () => {
         expect(savedDraftHeadline(r)).not.toMatch(/not logged|unknown/);
     });
 
-    it('D10 version 2 shape', () => {
+    it('D10 version 3 shape', () => {
         expect(readSavedDraft({ ...sampleRecord(), attribution: { myRig: 'x' } })).toBeNull();
         expect(readSavedDraft({ ...sampleRecord(), state: 'done' })).toBeNull();
         expect(
@@ -180,6 +187,36 @@ describe('saved draft wording', () => {
         const unproven = sampleRecord({ archiveLabel: '', outcome: 'unknown' });
         expect(savedDraftHeadline(unproven, 'unsaved')).toBe(
             'QSO draft — not saved. Logging outcome unknown. Check the Logbook before logging it.'
+        );
+    });
+
+    it('D11 a version 2 record reads as version 3 with no correction', () => {
+        const r = readSavedDraft(sampleV2Record({ outcome: 'unknown' }));
+        expect(r).toMatchObject({ version: 3, rigCorrection: null, outcome: 'unknown' });
+        expect(r?.attribution).toEqual(sampleRecord().attribution);
+    });
+
+    it('D12 a rig correction is null or a complete reading', () => {
+        const corrected = { ...sampleRecord().rig, freqHz: 14_200_000 };
+        expect(readSavedDraft(sampleRecord({ rigCorrection: corrected }))?.rigCorrection).toEqual(
+            corrected
+        );
+        expect(
+            readSavedDraft({ ...sampleRecord(), rigCorrection: { freqHz: 14_200_000 } })
+        ).toBeNull();
+        const { rigCorrection: _c, ...missing } = sampleRecord();
+        expect(readSavedDraft(missing)).toBeNull(); // version 3 must carry the field
+    });
+
+    it('D13 corrected values are shown beside the original reading', () => {
+        const r = sampleRecord({
+            rigCorrection: { ...sampleRecord().rig, freqHz: 14_200_000, band: '20m' },
+        });
+        const rows = Object.fromEntries(savedDraftLines(r));
+        expect(rows.Frequency).toBe('14.255000 MHz'); // the original reading, kept
+        expect(rows['Corrected rig values']).toBe('14.200000 MHz · 20m · SSB / USB');
+        expect(Object.fromEntries(savedDraftLines(sampleRecord()))['Corrected rig values']).toBe(
+            undefined
         );
     });
 });

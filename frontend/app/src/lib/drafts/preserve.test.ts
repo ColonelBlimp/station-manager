@@ -68,7 +68,8 @@ describe('preserveDraft', () => {
         expect(out.kind).toBe('saved');
         const [rec] = [...mem.rows.values()];
         expect(rec).toMatchObject({
-            version: 2,
+            version: 3,
+            rigCorrection: null,
             attribution: { myRig: 'FTdx10 (home)', operator: '7Q5MLV', myName: 'Marc' },
             state: 'draft',
             attempt: null,

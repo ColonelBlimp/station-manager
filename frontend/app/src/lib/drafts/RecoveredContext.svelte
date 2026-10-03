@@ -7,6 +7,8 @@
         recoveredRigProblem,
     } from './recovered.svelte';
     import { parseFrequency } from '../validators/frequency';
+    import { formatUtc } from './savedDraft';
+    import { recoveredSave } from './recoveredSave.svelte';
 
     // Text remains editable even when it is incomplete or malformed. The
     // recovered numeric reading becomes missing until the input parses.
@@ -27,8 +29,19 @@
         <p class="text-xs text-muted">
             {recovered.record.rig.basis === 'before-drop'
                 ? 'Last reading before the connection dropped'
-                : 'Reading when saved'} · {recovered.record.rig.capturedAt}
+                : 'Reading when saved'} · {formatUtc(recovered.record.rig.capturedAt)}
         </p>
+        {#if recovered.record.rigCorrection !== null}
+            <p class="text-xs text-muted" data-testid="recovered-original">
+                Corrected from the original reading: {recovered.record.rig.freqHz === null
+                    ? 'unknown'
+                    : `${(recovered.record.rig.freqHz / 1e6).toFixed(6)} MHz`} · {recovered.record
+                    .rig.band || 'unknown'} · {recovered.record.rig.adifMode || 'unknown'}{recovered
+                    .record.rig.subMode
+                    ? ` / ${recovered.record.rig.subMode}`
+                    : ''}
+            </p>
+        {/if}
         <div class="grid grid-cols-2 gap-2">
             <label class="block"
                 >Recovered frequency (MHz)
@@ -73,6 +86,15 @@
                 />
             </label>
         </div>
+        {#if recoveredSave.error}
+            <p role="alert" data-testid="recovered-save-error">{recoveredSave.error}</p>
+        {/if}
+        {#if recoveredSave.listError}
+            <p role="status" data-testid="recovered-list-error">{recoveredSave.listError}</p>
+        {/if}
+        {#if recoveredSave.clearing}
+            <p role="status">Saving the latest edit before clearing…</p>
+        {/if}
         {#if problem !== null}
             <p role="status">{problem}</p>
         {:else if recovered.confirmed}

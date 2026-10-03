@@ -166,7 +166,9 @@ export const draft = $state<QsoDraft>(blank());
 export function installRecoveredDraft(record: SavedDraft): void {
     resetClock();
     recovered.record = structuredClone(record);
-    recovered.rig = { ...record.rig };
+    // A saved correction comes back as the working values (the original reading
+    // stays in record.rig); its confirmation was never saved — confirm again.
+    recovered.rig = { ...(record.rigCorrection ?? record.rig) };
     recovered.confirmed = false;
     Object.assign(draft, record.fields);
     submitState.error = '';

@@ -9,6 +9,7 @@ import { rigReadingForSave } from '../operate/rigSnapshot.svelte';
 import { announceDraftsChanged } from './draftChannel';
 import { draftStore } from './draftStore';
 import { rememberPreservedForAnnouncement } from './savedDrafts.svelte';
+import { flushRecoveredWrites, recoveredRecordNow } from './recoveredSave.svelte';
 import type { SavedDraft } from './savedDraft';
 import type { SubmitAttribution } from '../api/submit-attribution';
 
@@ -48,7 +49,7 @@ function build(archive: DraftSource | null, station: StationSource): SavedDraft 
     const now = new Date();
     const fields: QsoDraft = { ...draft };
     return {
-        version: 2,
+        version: 3,
         id: recordId,
         savedAt: now.toISOString(),
         archiveId: archive?.archiveId ?? '',
@@ -60,10 +61,28 @@ function build(archive: DraftSource | null, station: StationSource): SavedDraft 
         state: 'draft',
         loggedQsoUuid: '',
         attempt: null,
+        rigCorrection: null,
     };
 }
 
 async function run(archive: DraftSource | null, station: StationSource): Promise<PreserveResult> {
+    // A recovered QSO already has its record — with its ORIGINAL archive,
+    // logbook, attribution and rig reading. Flush the latest edit to it; never
+    // save it again as a new record with today's values.
+    const owned = recoveredRecordNow();
+    if (owned !== null) {
+        if (!(await flushRecoveredWrites())) {
+            return {
+                kind: 'failed',
+                record: owned,
+                reason: 'The recovered QSO’s latest edit was not saved.',
+            };
+        }
+        const record = recoveredRecordNow() ?? owned;
+        announceDraftsChanged();
+        rememberPreservedForAnnouncement(record);
+        return { kind: 'saved', record };
+    }
     if (!draftInProgress()) return { kind: 'none' };
     const record = build(archive, station);
     if (record.archiveId === '' || record.logbookUuid === '') {

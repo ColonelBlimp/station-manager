@@ -32,6 +32,7 @@
     import DuplicateDialog from './DuplicateDialog.svelte';
     import RecoveredContext from '../drafts/RecoveredContext.svelte';
     import { recovered } from '../drafts/recovered.svelte';
+    import { requestClearDraft } from '../drafts/recoveredSave.svelte';
     import { observeWorked, openWorkedForQso } from './worked.svelte';
     import { rigReady, rigGate } from './rig.svelte';
     import { operate, closeExport, registerCallsignInput } from './state.svelte';
@@ -162,7 +163,7 @@
         }
         if (e.key === 'Escape') {
             e.preventDefault();
-            clearDraft();
+            requestClearDraft(); // a recovered QSO keeps its edits first (ADR 0085 RS17)
             callInput?.focus();
             return;
         }
@@ -673,7 +674,7 @@
                     class="btn"
                     title="Esc"
                     onclick={() => {
-                        clearDraft();
+                        requestClearDraft();
                         callInput?.focus();
                     }}>Clear</button
                 >

@@ -17,10 +17,11 @@ export interface AttemptedSubmission {
     expect: SubmitAttribution;
 }
 
-/** Version 2. A version 1 record (ADR 0085 slice 1) is read as this with its
- *  attribution MISSING and its outcome kept (RS2). */
+/** Version 3. A version 1 record (ADR 0085 slice 1) is read as this with its
+ *  attribution MISSING and its outcome kept (RS2); a version 2 record with no
+ *  rig correction. */
 export interface SavedDraft {
-    version: 2;
+    version: 3;
     id: string;
     savedAt: string;
     archiveId: string;
@@ -43,6 +44,10 @@ export interface SavedDraft {
     state: 'draft' | 'logged';
     loggedQsoUuid: string;
     attempt: AttemptedSubmission | null;
+    /** The operator's corrected rig values (Restore), kept apart from `rig`, the
+     *  original reading; null when nothing was corrected. A correction is never
+     *  confirmed in storage: every Restore asks again. */
+    rigCorrection: RigReading | null;
 }
 
 const FIELD_KEYS: Array<keyof QsoDraft> = [
@@ -97,7 +102,10 @@ function isCommon(v: Record<string, unknown>): boolean {
     if (v.outcome !== 'unlogged' && v.outcome !== 'unknown') return false;
     const f = v.fields;
     if (!isObj(f) || !FIELD_KEYS.every((k) => isStr(f[k]))) return false;
-    const r = v.rig;
+    return isRigReading(v.rig);
+}
+
+function isRigReading(r: unknown): r is RigReading {
     return (
         isObj(r) &&
         (r.freqHz === null || typeof r.freqHz === 'number') &&
@@ -106,7 +114,7 @@ function isCommon(v: Record<string, unknown>): boolean {
     );
 }
 
-/** A record read back from browser storage, as version 2 — or null for an
+/** A record read back from browser storage, as version 3 — or null for an
  *  unknown or damaged one, which is not shown as a saved QSO. A version 1
  *  record keeps its outcome (an unknown one stays unknown) and gets no
  *  attribution: none was recorded, and none is invented (RS1–RS2). */
@@ -116,16 +124,22 @@ export function readSavedDraft(v: unknown): SavedDraft | null {
         return {
             ...(v as unknown as Omit<
                 SavedDraft,
-                'version' | 'attribution' | 'state' | 'loggedQsoUuid' | 'attempt'
+                'version' | 'attribution' | 'state' | 'loggedQsoUuid' | 'attempt' | 'rigCorrection'
             >),
-            version: 2,
+            version: 3,
             attribution: null,
             state: 'draft',
             loggedQsoUuid: '',
             attempt: null,
+            rigCorrection: null,
         };
     }
-    if (v.version !== 2) return null;
+    if (v.version === 2) {
+        const upgraded = readSavedDraft({ ...v, version: 3, rigCorrection: null });
+        return upgraded;
+    }
+    if (v.version !== 3) return null;
+    if (v.rigCorrection !== null && !isRigReading(v.rigCorrection)) return null;
     if (v.attribution !== null && !isAttribution(v.attribution)) return null;
     if (v.attempt !== null && !isAttempt(v.attempt)) return null;
     if (v.state === 'draft') {
@@ -136,7 +150,8 @@ export function readSavedDraft(v: unknown): SavedDraft | null {
     return v as unknown as SavedDraft;
 }
 
-function utc(iso: string): string {
+/** An ISO instant as `YYYY-MM-DD HH:MM:SS UTC` (the iso string when unparseable). */
+export function formatUtc(iso: string): string {
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return iso;
     return `${d.toISOString().slice(0, 10)} ${d.toISOString().slice(11, 19)} UTC`;
@@ -191,10 +206,10 @@ export function savedDraftLines(
               : `${r.rig.adifMode} / ${r.rig.subMode}`;
     const reading =
         r.rig.basis === 'before-drop'
-            ? `last reading before the connection dropped, ${utc(r.rig.capturedAt)}`
+            ? `last reading before the connection dropped, ${formatUtc(r.rig.capturedAt)}`
             : state === 'saved'
-              ? `reading when saved, ${utc(r.rig.capturedAt)}`
-              : `reading at the attempted save, ${utc(r.rig.capturedAt)}`;
+              ? `reading when saved, ${formatUtc(r.rig.capturedAt)}`
+              : `reading at the attempted save, ${formatUtc(r.rig.capturedAt)}`;
     const rows: Array<[string, string]> = [
         ['Archive', r.archiveLabel],
         ['Logbook', r.logbookName],
@@ -212,6 +227,7 @@ export function savedDraftLines(
         ['Band', unknown(r.rig.band)],
         ['Mode', mode],
         ['Rig values', reading],
+        ['Corrected rig values', correctionText(r.rigCorrection)],
         ['Name', f.name],
         ['QTH', f.qth],
         ['Grid', f.gridsquare],
@@ -219,9 +235,22 @@ export function savedDraftLines(
         ['Their rig', f.rig],
         ['Notes', f.notes],
         ['RX power', f.rxPwr],
-        ['Saved', state === 'saved' ? utc(r.savedAt) : ''],
+        ['Saved', state === 'saved' ? formatUtc(r.savedAt) : ''],
     ];
     return rows.filter(([, v]) => v !== '');
+}
+
+// The corrected values beside the original reading (which the rows above keep).
+function correctionText(c: RigReading | null): string {
+    if (c === null) return '';
+    const freq = c.freqHz === null ? 'unknown' : `${(c.freqHz / 1e6).toFixed(6)} MHz`;
+    const mode =
+        c.adifMode === ''
+            ? 'unknown'
+            : c.subMode === ''
+              ? c.adifMode
+              : `${c.adifMode} / ${c.subMode}`;
+    return `${freq} · ${c.band === '' ? 'unknown' : c.band} · ${mode}`;
 }
 
 // What the original submit would have been stored with. A known-empty value is
