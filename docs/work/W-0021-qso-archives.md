@@ -2010,6 +2010,72 @@ Follow-up review (2026-10-04, pasted), fixed before commit:
   - **Gates:** lint, format, svelte-check (0/0), 2,293 SPA tests, maintainability
     (0 regressions).
 
+Codex review of `c551c828` (2026-10-04), two P2 findings:
+
+- **Finding 1: edits made while a recovered Log is in flight are lost.** The ADIF is built
+  before the attempt is stored and sent. A correction typed during either wait was saved to
+  the record, but the older snapshot was logged, and cleanup then deleted the record.
+  - **Operator ruling (2026-10-04): freeze the recovered form.** Rejected alternative:
+    detect changes, refuse before the send, and keep a "logged" record carrying the edits.
+  - **The freeze starts before the first asynchronous save.** It covers the fields, the
+    rig corrections, the shortcuts and the automatic field fills.
+  - **It holds through the submission and the cleanup.**
+  - **After a failure, a refusal or an unknown outcome,** editing returns, and the recorded
+    attempt and its uncertainty are kept.
+  - **After confirmed storage with a failed cleanup,** the contact stays read-only:
+    corrections belong on the logged QSO.
+  - **Acceptance:** mutations are attempted during both the persistence and the POST. The
+    ordinary Log is unchanged.
+  - **Built (committed `899bda8c` 2026-10-04).** `recovered.frozen` is set before the first save. It is
+    released afterwards unless the Log was confirmed and the cleanup failed; a later
+    successful cleanup releases it when the form is let go.
+    - **Card:** every bound field, the rig-correction inputs and the comment field (with its
+      recent-comment picker) are read-only while frozen.
+    - **Model:** `correctRecoveredRig` refuses while frozen.
+    - **Already standing down:** the shortcuts and automatic fills (stamps, RST, enrichment,
+      pile-up, callsign stack) already stood down for a recovered QSO. Clear and Discard are
+      held off by the latch.
+  - **Evidence:**
+    - **New cases (6):** LG18 (4), LC7 (fields, rig inputs and shortcuts during both the store
+      and the request; editable after a refusal) and a CommentField read-only case.
+    - **Ten successful reversion proofs (P48–P57),** each failing its intended assertion: never
+      frozen; frozen only after a wait; never or always given back; corrections not refused;
+      let-go keeping the freeze; comment field, picker, card fields or rig inputs editable.
+    - **Removed rather than kept untested:** two unreachable guards (confirmation while frozen,
+      and the reset on install).
+    - **Gates:** lint, format, svelte-check (0/0), 2,299 SPA tests, maintainability
+      (0 regressions).
+- **Finding 2: a recovered QSO is missing from the Session panel, export and email.**
+  **Operator ruling (2026-10-04): add it when the Log returns a confirmed `stored`.** Its
+  original contact time stays intact; it was logged during this session.
+  - **Exactly one row,** using the returned UUID and the submitted snapshot: the fields, the
+    corrected band, mode and submode, the original time on, and the enrichment actually sent.
+  - **Independent of the browser cleanup:** the row is added whether the cleanup succeeds or
+    fails. Cleanup retries never add another row.
+  - **Refusals, duplicates and unknown outcomes add nothing.** An explicitly forced
+    submission adds a row only when it is confirmed stored.
+  - **Export and email include it normally,** through the existing UUID-based flows.
+  - **Tests:** today's rig and enrichment are made deliberately different. Cover cleanup
+    failure and retry, and every non-stored outcome, and assert that the UUID reaches the
+    export and email selection.
+  - **Built (committed `899bda8c` 2026-10-04).** `settle` adds the row on `stored`, before the
+    cleanup, from the snapshot the request was built from:
+    - `fields`, the corrected rig (mode shown by `sessionModeLiteral`) and the extras carried.
+    - It is never added on a cleanup retry, and never from today's rig or lookup.
+    - The export and email flows pick it up unchanged.
+  - **Evidence:**
+    - **New cases (4, LG19):** the row's values with today's rig (15m CW) and lookup (Spain)
+      deliberately different; a failed cleanup and both retries leave exactly one row;
+      validation, duplicate, network, server, abort and a forced duplicate add none, while a
+      forced stored Log adds one; the UUID reaches both `/v1/session/export` and
+      `/v1/session/email`.
+    - **Four successful reversion proofs (P58–P61):** no row; a row for every answer; mode
+      from the captured literal; country looked up again.
+    - **One equivalent mutation (P62):** fields read from the live form, which the freeze
+      keeps equal to the snapshot.
+    - **Gates:** lint, format, svelte-check (0/0), 2,303 SPA tests, maintainability
+      (0 regressions).
+
 **RS8 and RS11 remain OPEN for the operator's two-window drill**, now against the public entry.
 No hardware or RF experiment was run; no daemon was restarted.
 
