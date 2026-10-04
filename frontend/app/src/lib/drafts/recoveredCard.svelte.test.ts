@@ -14,6 +14,9 @@
       LC5 Confirmed but both cleanup writes fail: the UUID is shown, Log is
           disabled, and Retry cleanup cleans without sending.
       LC6 An ambiguous outcome says the outcome is unknown.
+      LC7 While the Log is in flight — the attempt being stored, then the
+          request — every field and rig correction on the card is read-only and
+          its shortcuts change nothing; a refusal makes them editable again.
 */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/svelte';
@@ -186,6 +189,46 @@ describe('logging the recovered QSO from the card', () => {
         await vi.waitFor(() => expect(recovered.record).toBeNull());
         expect(sent).toHaveLength(1);
         expect(ordinary).not.toHaveBeenCalled();
+    });
+
+    it('LC7 the form is read-only while the Log is in flight', async () => {
+        const { container } = render(LoggingCard);
+        await fireEvent.click(screen.getByRole('button', { name: 'Confirm recovered rig values' }));
+        const fields = (): Element[] => [...container.querySelectorAll('input, textarea')];
+        const editable = (): Element[] => fields().filter((f) => !f.hasAttribute('readonly'));
+        expect(fields().length).toBeGreaterThan(10);
+        expect(editable()).toEqual(fields());
+        let storeAttempt!: () => void;
+        const realPut = mem.put.bind(mem);
+        vi.spyOn(mem, 'put').mockImplementationOnce(
+            (r) => new Promise<void>((done) => (storeAttempt = () => void realPut(r).then(done)))
+        );
+        let finish!: (o: SubmitOutcome) => void;
+        answer = () => new Promise((r) => (finish = r));
+        await fireEvent.click(logButton());
+        await vi.waitFor(() => expect(storeAttempt).toBeTypeOf('function'));
+        expect(editable()).toEqual([]); // while the attempt is stored
+        storeAttempt();
+        await vi.waitFor(() => expect(sent).toHaveLength(1));
+        flushSync();
+        expect(editable()).toEqual([]); // while the request is out
+        // Nor do the card's shortcuts change it.
+        const before = { ...draft };
+        for (const init of [
+            { key: 'Escape' },
+            { key: 'Enter', shiftKey: true },
+            { key: 'F3' },
+            { key: 'Enter', ctrlKey: true },
+        ]) {
+            window.dispatchEvent(new KeyboardEvent('keydown', { ...init, bubbles: true }));
+        }
+        flushSync();
+        await Promise.resolve();
+        expect({ ...draft }).toEqual(before);
+        expect(recovered.record).not.toBeNull();
+        expect(sent).toHaveLength(1);
+        finish({ kind: 'validation', code: 'invalid_field_value', message: 'bad report' });
+        await vi.waitFor(() => expect(editable()).toEqual(fields()));
     });
 
     it('LC2 Log is disabled until the rig values are confirmed', () => {

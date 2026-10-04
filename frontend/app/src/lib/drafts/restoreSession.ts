@@ -114,6 +114,7 @@ export async function finishRecovered(): Promise<void> {
     recovered.record = null;
     recovered.rig = null;
     recovered.confirmed = false;
+    recovered.frozen = false;
     clearDraft();
     await claim?.release();
 }
@@ -125,5 +126,6 @@ export async function _resetRestoreForTests(): Promise<void> {
     recovered.record = null;
     recovered.rig = null;
     recovered.confirmed = false;
+    recovered.frozen = false;
     clearDraft();
 }

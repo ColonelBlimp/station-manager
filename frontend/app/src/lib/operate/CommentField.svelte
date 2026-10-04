@@ -13,9 +13,18 @@
         /** Recently-logged comments, newest first. Empty ⇒ trigger disabled. */
         items: string[];
         class?: string;
+        /** No typing and no picking (a recovered QSO being logged, ADR 0085). */
+        readonly?: boolean;
     }
 
-    let { id, label, value = $bindable(''), items, class: className = '' }: Props = $props();
+    let {
+        id,
+        label,
+        value = $bindable(''),
+        items,
+        class: className = '',
+        readonly = false,
+    }: Props = $props();
 
     let open = $state(false);
     let rootEl: HTMLDivElement | undefined = $state();
@@ -25,6 +34,7 @@
     const listId = $derived(`${id}-history-list`);
 
     function pick(text: string): void {
+        if (readonly) return;
         value = text; // replace, matching the retired SPA's QsoPanel behaviour
         open = false;
         // Return focus to the input so the operator can keep editing the pasted
@@ -63,7 +73,7 @@
         <button
             id={triggerId}
             type="button"
-            disabled={items.length === 0}
+            disabled={items.length === 0 || readonly}
             onclick={() => (open = !open)}
             class="cursor-pointer leading-none text-muted hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
             aria-haspopup="menu"
@@ -89,7 +99,7 @@
         </button>
     </div>
     <div class="relative mt-1">
-        <input {id} class="input w-full" autocomplete="off" bind:value />
+        <input {id} class="input w-full" autocomplete="off" {readonly} bind:value />
 
         {#if open && items.length > 0}
             <!-- Popover under the field. tabindex=-1 so the $effect can focus it

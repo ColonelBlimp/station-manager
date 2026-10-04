@@ -373,6 +373,7 @@
                         >
                         <div class="relative">
                             <input
+                                readonly={recovered.frozen}
                                 id="lc-call"
                                 class="input w-32 pr-7 uppercase"
                                 class:input-error={p.callsign}
@@ -409,6 +410,7 @@
                             >RST Sent</label
                         >
                         <input
+                            readonly={recovered.frozen}
                             id="lc-rst-s"
                             class="input w-15"
                             class:input-error={p.rstSent}
@@ -420,6 +422,7 @@
                             >RST Rcvd</label
                         >
                         <input
+                            readonly={recovered.frozen}
                             id="lc-rst-r"
                             class="input w-15"
                             class:input-error={p.rstRcvd}
@@ -433,6 +436,7 @@
                             >Date On</label
                         >
                         <input
+                            readonly={recovered.frozen}
                             id="lc-date-on"
                             class="input w-32"
                             class:input-error={p.dateOn}
@@ -445,6 +449,7 @@
                             >Time On</label
                         >
                         <input
+                            readonly={recovered.frozen}
                             id="lc-time-on"
                             class="input w-24"
                             class:input-error={p.timeOn}
@@ -465,6 +470,7 @@
                             >Date Off</label
                         >
                         <input
+                            readonly={recovered.frozen}
                             id="lc-date-off"
                             class="input w-32"
                             class:input-error={p.dateOff}
@@ -478,6 +484,7 @@
                             >Time Off</label
                         >
                         <input
+                            readonly={recovered.frozen}
                             id="lc-time-off"
                             class="input w-24"
                             class:input-error={p.timeOff}
@@ -496,6 +503,7 @@
             <div class="flex-1">
                 <label for="lc-name" class="block text-sm font-medium text-ink">Name</label>
                 <input
+                    readonly={recovered.frozen}
                     id="lc-name"
                     class="input w-full"
                     autocomplete="off"
@@ -507,6 +515,7 @@
                 label="Comment"
                 class="flex-1"
                 items={commentHistory.items}
+                readonly={recovered.frozen}
                 bind:value={draft.comment}
             />
         </div>
@@ -603,6 +612,7 @@
                             >Gridsquare</label
                         >
                         <input
+                            readonly={recovered.frozen}
                             id="lc-grid"
                             class="input w-full uppercase"
                             class:input-error={gridInvalid}
@@ -619,6 +629,7 @@
                     <div>
                         <label for="lc-qth" class="block text-sm font-medium text-ink">QTH</label>
                         <input
+                            readonly={recovered.frozen}
                             id="lc-qth"
                             class="input w-full"
                             autocomplete="off"
@@ -632,6 +643,7 @@
                                 >Rig</label
                             >
                             <input
+                                readonly={recovered.frozen}
                                 id="lc-rig"
                                 class="input w-full"
                                 autocomplete="off"
@@ -643,6 +655,7 @@
                                 >RX Power (W)</label
                             >
                             <input
+                                readonly={recovered.frozen}
                                 id="lc-rxpwr"
                                 class="input w-24"
                                 class:input-error={p.rxPwr}
@@ -658,6 +671,7 @@
                             >Notes</label
                         >
                         <textarea
+                            readonly={recovered.frozen}
                             id="lc-notes"
                             class="input w-full resize-y"
                             rows="2"

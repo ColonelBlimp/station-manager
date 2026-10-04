@@ -36,6 +36,18 @@
            was let go (by an earlier retry) is never erased; Clear and Discard
            stand down while a cleanup runs, as they do for the request — also
            for a retry queued before the Log itself settles.
+      LG18 The recovered form is frozen from before the first save, through
+           the request and the cleanup (operator ruling 2026-10-04): rig
+           corrections and their confirmation are refused. A refusal, a
+           duplicate, an unknown outcome or a block gives editing back, keeping
+           the attempt; a confirmed log whose cleanup fails stays read-only.
+      LG19 A confirmed stored Log adds exactly one Session row from what was
+           sent — fields, corrected band/mode/submode, original time on, the
+           enrichment carried — never today's rig or lookup; whatever the
+           cleanup does, and never again on a cleanup retry. Refusals,
+           duplicates and unknown outcomes add none; a forced Log adds one only
+           when stored. Its UUID reaches export and email (operator ruling
+           2026-10-04).
       LG17 Either cleanup outcome refreshes this tab's own Saved QSOs list (the
            change notice reaches only the other tabs).
 */
@@ -47,7 +59,7 @@ import { _setDraftStoreForTests, memoryDraftStore } from './draftStore';
 import { _setDraftChannelForTests } from './draftChannel';
 import { sampleRecord } from './savedDraft.fixture';
 import { fakeDraftLocks } from './draftLock.fixture';
-import { confirmRecoveredRig, recovered } from './recovered.svelte';
+import { confirmRecoveredRig, correctRecoveredRig, recovered } from './recovered.svelte';
 import { restoreSavedDraft, _resetRestoreForTests } from './restoreSession';
 import {
     clearRecovered,
@@ -68,6 +80,12 @@ import {
     type RecoveredSendOptions,
 } from './recoveredSubmit.svelte';
 import { loadSavedDrafts, savedDrafts, _resetSavedDraftsForTests } from './savedDrafts.svelte';
+import { render, screen, fireEvent } from '@testing-library/svelte';
+import { session, _resetSessionForTests } from '../operate/session.svelte';
+import { enrich, type Enrichment } from '../operate/enrich.svelte';
+import { operate, closeExport } from '../operate/state.svelte';
+import { setMailer } from '../operate/mailer.svelte';
+import ExportDialog from '../operate/ExportDialog.svelte';
 import type { SubmitOutcome } from '../api/qso';
 import type { SavedDraft } from './savedDraft';
 import { _resetForTests as resetToasts } from '../ui/toasts.svelte';
@@ -115,6 +133,7 @@ beforeEach(async () => {
     _resetRecoveredSaveForTests();
     _resetRecoveredSubmitForTests();
     _resetSavedDraftsForTests();
+    _resetSessionForTests();
     env = {
         switchGate: null,
         bootArchiveId: 'arch-a',
@@ -506,5 +525,183 @@ describe('unknown outcome and races', () => {
         expect(stored()?.attempt).not.toBeNull(); // not erased by the later write
         finish({ kind: 'network', message: 'reset' });
         expect(await logging).toBe('unknown');
+    });
+});
+
+describe('the form while a Log is in flight', () => {
+    // A correction attempted now must change nothing that could be sent.
+    function tryToCorrect(): void {
+        const before = $state.snapshot(recovered.rig);
+        correctRecoveredRig({ band: '20m', freqHz: 14_200_000 });
+        expect($state.snapshot(recovered.rig)).toEqual(before);
+        expect(recovered.confirmed).toBe(true);
+        expect(confirmRecoveredRig()).toBe(true);
+    }
+
+    it('LG18 frozen before the first save, through the store and the request', async () => {
+        expect(recovered.frozen).toBe(false);
+        let storeAttempt!: () => void;
+        const realPut = mem.put.bind(mem);
+        vi.spyOn(mem, 'put').mockImplementationOnce(
+            (r) => new Promise<void>((done) => (storeAttempt = () => void realPut(r).then(done)))
+        );
+        let finish!: (o: SubmitOutcome) => void;
+        answer = () => new Promise((r) => (finish = r));
+        const logging = logRecovered({});
+        expect(recovered.frozen).toBe(true); // before any await
+        await vi.waitFor(() => expect(storeAttempt).toBeTypeOf('function'));
+        tryToCorrect(); // during the store
+        storeAttempt();
+        await vi.waitFor(() => expect(sent).toHaveLength(1));
+        expect(recovered.frozen).toBe(true);
+        tryToCorrect(); // during the request
+        finish({ kind: 'stored', uuid: UUIDish });
+        expect(await logging).toBe('stored');
+        expect(recovered.record).toBeNull();
+        expect(recovered.frozen).toBe(false);
+    });
+
+    it('LG18 a refusal, a duplicate and an unknown outcome give editing back', async () => {
+        const outcomes: SubmitOutcome[] = [
+            { kind: 'validation', code: 'invalid_field_value', message: 'bad' },
+            { kind: 'duplicate', uuid: 'qso-old' },
+            { kind: 'network', message: 'reset' },
+        ];
+        for (const out of outcomes) {
+            answer = () => Promise.resolve(out);
+            await logRecovered({ confirm: () => true });
+            expect(recovered.frozen).toBe(false);
+        }
+        await vi.waitFor(() => expect(stored()?.outcome).toBe('unknown'));
+        expect(stored()?.attempt).not.toBeNull(); // the uncertainty is kept
+        correctRecoveredRig({ band: '20m', freqHz: 14_200_000 });
+        expect(recovered.rig?.band).toBe('20m'); // editable again
+    });
+
+    it('LG18 a block after the freeze gives editing back', async () => {
+        const realPut = mem.put.bind(mem);
+        vi.spyOn(mem, 'put').mockImplementationOnce(async (r) => {
+            env.switchGate = 'An archive switch is in progress';
+            return realPut(r);
+        });
+        expect(await logRecovered({})).toBe('blocked');
+        expect(recovered.frozen).toBe(false);
+    });
+
+    it('LG18 a confirmed log whose cleanup fails stays read-only', async () => {
+        vi.spyOn(mem, 'remove').mockRejectedValueOnce(new Error('busy'));
+        const put = vi.spyOn(mem, 'put').mockImplementation((r) => {
+            if (r.state === 'logged') return Promise.reject(new Error('busy'));
+            mem.rows.set(r.id, structuredClone(r));
+            return Promise.resolve();
+        });
+        expect(await logRecovered({})).toBe('stored');
+        expect(recovered.record).not.toBeNull();
+        expect(recovered.frozen).toBe(true);
+        tryToCorrect();
+        put.mockRestore();
+        expect(await retryRecoveredCleanup()).toBe(true);
+        expect(recovered.record).toBeNull();
+        expect(recovered.frozen).toBe(false); // the next QSO starts editable
+    });
+});
+
+describe('the Session after a recovered Log', () => {
+    it("LG19 a stored Log adds one row from what was sent, not today's rig or lookup", async () => {
+        rig.band = '15m'; // today's rig and lookup differ from the recovered QSO
+        rig.mode = 'CW';
+        enrich.data = { country: 'Spain' } as Enrichment;
+        correctRecoveredRig({ freqHz: 14_200_000, band: '20m', adifMode: 'SSB', subMode: 'LSB' });
+        expect(confirmRecoveredRig()).toBe(true);
+        let lookups = 0;
+        setRecoveredExtras(() => (lookups++ === 0 ? { country: 'Japan' } : { country: 'Spain' }));
+        expect(await logRecovered({})).toBe('stored');
+        expect(sent[0].adif).toContain('<COUNTRY:5>Japan');
+        expect(session.qsos).toEqual([
+            {
+                id: expect.any(Number) as number,
+                uuid: UUIDish,
+                callsign: 'G0ABC',
+                timeOn: '12:00:00',
+                band: '20m',
+                mode: 'LSB',
+                rstSent: '59',
+                rstRcvd: '57',
+                name: 'Bob',
+                country: 'Japan',
+                comment: 'tnx',
+            },
+        ]);
+    });
+
+    it('LG19 a failed cleanup still adds the row, and retries add none', async () => {
+        vi.spyOn(mem, 'remove').mockRejectedValueOnce(new Error('busy'));
+        const put = vi.spyOn(mem, 'put').mockImplementation((r) => {
+            if (r.state === 'logged') return Promise.reject(new Error('busy'));
+            mem.rows.set(r.id, structuredClone(r));
+            return Promise.resolve();
+        });
+        expect(await logRecovered({})).toBe('stored');
+        expect(recoveredSubmit.cleanupError).not.toBe('');
+        expect(session.qsos.map((q) => q.uuid)).toEqual([UUIDish]);
+        vi.spyOn(mem, 'remove').mockRejectedValueOnce(new Error('busy'));
+        expect(await retryRecoveredCleanup()).toBe(false);
+        put.mockRestore();
+        expect(await retryRecoveredCleanup()).toBe(true);
+        expect(session.qsos.map((q) => q.uuid)).toEqual([UUIDish]);
+    });
+
+    it('LG19 no stored answer, no row; a forced Log adds one only when stored', async () => {
+        const answers: SubmitOutcome[] = [
+            { kind: 'validation', code: 'invalid_field_value', message: 'bad' },
+            { kind: 'duplicate', uuid: 'qso-old' },
+            { kind: 'network', message: 'reset' },
+            { kind: 'server', code: 'malformed_response', message: 'malformed' },
+            { kind: 'aborted', message: 'aborted' },
+        ];
+        for (const out of answers) {
+            answer = () => Promise.resolve(out);
+            await logRecovered({ confirm: () => true });
+        }
+        answer = () => Promise.resolve({ kind: 'duplicate', uuid: 'qso-old' });
+        await logRecovered({ force: true, confirm: () => true });
+        expect(session.qsos).toEqual([]);
+        answer = () => Promise.resolve({ kind: 'stored', uuid: 'qso-2' });
+        expect(await logRecovered({ force: true, confirm: () => true })).toBe('stored');
+        expect(sent.at(-1)?.opts.force).toBe(true);
+        expect(session.qsos.map((q) => q.uuid)).toEqual(['qso-2']);
+    });
+
+    it('LG19 its UUID reaches the session export and the email', async () => {
+        expect(await logRecovered({})).toBe('stored');
+        const requested: string[] = [];
+        vi.stubGlobal(
+            'fetch',
+            vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+                const url =
+                    typeof input === 'string'
+                        ? input
+                        : input instanceof URL
+                          ? input.href
+                          : input.url;
+                // The export and the email; not the failure notice a refused export records.
+                if (url.startsWith('/v1/session/'))
+                    requested.push(`${url} ${init?.body as string}`);
+                return Promise.resolve(new Response('{}', { status: 500 }));
+            })
+        );
+        setMailer(true, 'qsl@example.com');
+        operate.exportOpen = true;
+        render(ExportDialog);
+        flushSync();
+        await fireEvent.click(screen.getByRole('button', { name: 'ADIF' }));
+        await fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+        await vi.waitFor(() => expect(requested).toHaveLength(2));
+        expect(requested).toEqual([
+            expect.stringMatching(new RegExp(`^/v1/session/export .*${UUIDish}`)),
+            expect.stringMatching(new RegExp(`^/v1/session/email .*${UUIDish}`)),
+        ]);
+        closeExport();
+        setMailer(false, '');
     });
 });

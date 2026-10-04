@@ -7,9 +7,14 @@
 //   - Gates: archive gate, source archive and logbook UUID, ownership, confirmed
 //     rig values, validation, the in-flight latch, attribution present — NOT the
 //     CAT link. Checked before, and again after every wait.
+//   - The form is frozen before the first save and stays so through the
+//     request and the cleanup (operator ruling 2026-10-04): what is sent is
+//     what is shown. Editing returns after a refusal, a duplicate, an unknown
+//     outcome or a block; a confirmed log stays read-only.
 //   - Before the POST the EXACT request is stored as the record's attempt with
 //     outcome "unknown"; a failed store sends nothing.
-//   - Confirmed: the UUID is terminal in this tab; the record is deleted, else
+//   - Confirmed: one Session row from what was sent (operator ruling
+//     2026-10-04), whatever the cleanup does. The UUID is terminal in this tab; the record is deleted, else
 //     marked logged; if both fail the UUID is shown and only cleanup is retried —
 //     never the submit. Cleanups run one at a time, each for the QSO it was
 //     asked for, and let the form go only while this tab still holds that QSO.
@@ -21,7 +26,9 @@
 
 import type { SubmitAttribution } from '../api/submit-attribution';
 import type { SubmitOutcome } from '../api/qso';
-import { draft, draftProblems, submitState } from '../operate/qso.svelte';
+import { draft, draftProblems, submitState, type QsoDraft } from '../operate/qso.svelte';
+import { addSessionQso, sessionModeLiteral } from '../operate/session.svelte';
+import type { RigReading } from '../operate/rigSnapshot.svelte';
 import { toasts } from '../ui/toasts.svelte';
 import { announceDraftsChanged } from './draftChannel';
 import { draftStore } from './draftStore';
@@ -161,6 +168,7 @@ export async function logRecovered(opts: {
 
     recoveredSubmit.busy = true;
     submitState.busy = true; // Clear / Discard stand down while the request is out
+    recovered.frozen = true; // before the first save: nothing typed now can diverge
     recoveredSubmit.refusal = '';
     recoveredSubmit.duplicateUuid = '';
     try {
@@ -176,13 +184,15 @@ export async function logRecovered(opts: {
         const env = readEnv();
         const call = draft.callsign.trim().toUpperCase();
         const rig = $state.snapshot(recovered.rig)!;
+        const fields: QsoDraft = { ...draft };
+        const extras = extrasFor(call, record.myGrid);
         const attempt: AttemptedSubmission = {
             at: isoNow(),
             archiveId: record.archiveId,
             logbookUuid: record.logbookUuid,
             logbookId: env.activeLogbookId,
             force: opts.force === true,
-            adif: buildRecoveredAdif(record, { ...draft }, rig, extrasFor(call, record.myGrid)),
+            adif: buildRecoveredAdif(record, fields, rig, extras),
             expect: { ...record.attribution! },
         };
         const before = { attempt: record.attempt, outcome: record.outcome };
@@ -207,20 +217,24 @@ export async function logRecovered(opts: {
             force: attempt.force,
             expect: attempt.expect,
         });
-        return await settle(out, before, record);
+        return await settle(out, before, record, { call, fields, rig, extras });
     } finally {
         recoveredSubmit.busy = false;
         // A Retry cleanup queued meanwhile still holds the latch (review 2026-10-04).
         submitState.busy = cleanups > 0;
+        // Logged but not yet cleaned up: corrections belong on the logged QSO.
+        recovered.frozen = recovered.record !== null && recoveredSubmitView().confirmedUuid !== '';
     }
 }
 
 async function settle(
     out: SubmitOutcome,
     before: Pick<SavedDraft, 'attempt' | 'outcome'>,
-    record: SavedDraft
+    record: SavedDraft,
+    sentQso: SentQso
 ): Promise<RecoveredLogResult> {
     if (out.kind === 'stored') {
+        addSessionRow(out.uuid, sentQso); // once, here — never on a cleanup retry
         recoveredSubmit.confirmedUuid = out.uuid;
         submitState.uncertain = false;
         toasts.info(`Logged as QSO ${out.uuid}.`);
@@ -242,6 +256,32 @@ async function settle(
     }
     recoveredSubmit.refusal = 'message' in out ? out.message : 'Refused.';
     return 'refused';
+}
+
+// What a Log sent, for its Session row.
+interface SentQso {
+    call: string;
+    fields: QsoDraft;
+    rig: RigReading;
+    extras: RecoveredExtras;
+}
+
+// The row the ordinary Log would add — but from the recovered QSO as sent: its
+// fields and original time on, its corrected rig values, the enrichment the
+// request carried; never today's rig or lookup.
+function addSessionRow(uuid: string, q: SentQso): void {
+    addSessionQso({
+        uuid,
+        callsign: q.call,
+        timeOn: q.fields.timeOn,
+        band: q.rig.band,
+        mode: sessionModeLiteral(q.rig.adifMode, q.rig.subMode),
+        rstSent: q.fields.rstSent,
+        rstRcvd: q.fields.rstRcvd,
+        name: q.fields.name,
+        country: q.extras.country ?? '',
+        comment: q.fields.comment,
+    });
 }
 
 // One cleanup at a time (review 2026-10-04): overlapping retries each let go of

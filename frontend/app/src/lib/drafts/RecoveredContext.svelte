@@ -56,6 +56,7 @@
             <label class="block"
                 >Recovered frequency (MHz)
                 <input
+                    readonly={recovered.frozen}
                     class="input w-full"
                     value={frequency}
                     oninput={(e) => {
@@ -67,6 +68,7 @@
             <label class="block"
                 >Recovered band
                 <input
+                    readonly={recovered.frozen}
                     class="input w-full"
                     value={recovered.rig.band}
                     oninput={(e) =>
@@ -76,6 +78,7 @@
             <label class="block"
                 >Recovered mode
                 <input
+                    readonly={recovered.frozen}
                     class="input w-full"
                     value={recovered.rig.adifMode}
                     oninput={(e) =>
@@ -87,6 +90,7 @@
             <label class="block"
                 >Recovered submode
                 <input
+                    readonly={recovered.frozen}
                     class="input w-full"
                     value={recovered.rig.subMode}
                     oninput={(e) =>

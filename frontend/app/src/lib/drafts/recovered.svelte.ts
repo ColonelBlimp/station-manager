@@ -10,7 +10,10 @@ export const recovered = $state<{
     record: SavedDraft | null;
     rig: RigReading | null;
     confirmed: boolean;
-}>({ record: null, rig: null, confirmed: false });
+    /** Read-only while a Log of it is in flight, and for good once one is
+     *  confirmed (operator ruling 2026-10-04): what is sent is what is shown. */
+    frozen: boolean;
+}>({ record: null, rig: null, confirmed: false, frozen: false });
 
 /** Confirmation cannot waive a missing or inconsistent contact context. */
 export function recoveredRigProblem(): string | null {
@@ -44,7 +47,7 @@ export function correctRecoveredRig(
     change: Partial<Pick<RigReading, 'freqHz' | 'band' | 'adifMode' | 'subMode'>>
 ): void {
     const r = recovered.rig;
-    if (r === null) return;
+    if (r === null || recovered.frozen) return;
     recovered.confirmed = false;
     Object.assign(r, change);
     // The literal was captured for display; corrections use explicit ADIF
