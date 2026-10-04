@@ -2077,6 +2077,131 @@ Codex review of `c551c828` (2026-10-04), two P2 findings:
       (0 regressions).
 
 **RS8 and RS11 remain OPEN for the operator's two-window drill**, now against the public entry.
+
+**Two-window drill script (defined 2026-10-04, after the deploy of `a1ed4f89`).**
+- **Setup:**
+  - Two separate, visible windows of the same browser profile at the same origin. Not two
+    tabs: background tabs slow timers to about once a second.
+  - The record comes from the app's own path. Window A holds a Phone / CW draft. Window B,
+    with an empty form, switches the archive: A detects the new daemon instance, saves its
+    draft and reloads. B then switches back.
+  - **Corrected 2026-10-04 at S2.3.** The first version had A switch the archive itself;
+    that is correctly refused over unlogged work (`refuseOverUnloggedWork`).
+- **D1 race (RS8):** both windows click Restore at a shared whole-minute boundary, scheduled
+  from the console. Expect exactly one winner. The loser's form stays empty and it shows "In
+  use in another tab." `navigator.locks.query()` shows one held
+  `station-manager.saved-qso.<id>`. Run it three times, releasing with Escape between runs.
+- **D2 foreign Discard (RS10):** refused in the loser; the record is kept.
+- **D3 claim retained (RS10):** across a panel close and in-app navigation in the winner.
+- **D4 release on close (RS11):** the other window restores the record with its latest
+  committed edit.
+- **D5 release on reload (RS11):** the same, with a reload in place of the close.
+- **Cleanup:** Discard the drill record. Never Log it.
+- **Direction under discussion (2026-10-04, operator, during drill setup; NO decision).**
+  - **Proposal:**
+    - Allow an archive change (perhaps also a logbook change) only from Settings → Archives,
+      never while operating on Phone / CW or FT8 / FT4.
+    - Remove the saved-QSO machinery (ADR 0085 / 0086, Restore commits 1–4).
+    - Instead, warn any other browser that holds an unlogged QSO, like the restart alarm.
+  - **Facts checked:**
+    - The switch has two entry points today: the header selector (`Header.svelte`) and
+      Settings → Archives (`ArchivesSection`).
+    - The initiating page is already refused over unlogged work.
+    - A same-archive daemon restart does NOT reload a page holding a draft; it only warns
+      (`Settings.svelte` `restarted()`). Only an archive CHANGE forces the rebind reload
+      (`archives.svelte.ts` `verifyAfterRigReconnect` → `requestReload`).
+  - **Claude's analysis:**
+    - Restricting the entry point does not protect OTHER browsers: their reload is driven by
+      the daemon changing archive.
+    - The replacement for save-then-reload would be hold-and-warn: the page stays bound to
+      its boot archive, logging is gated, and the draft stays on screen. A switch back
+      lifts the gate; "Discard and reload" is the only other way out.
+    - Cost: the draft is memory-only again, so closing the tab or a browser crash while held
+      loses it. That durability is what ADR 0085 bought with IndexedDB, at the cost of the
+      Restore machinery and the expect_* API.
+    - The RS8/RS11 drill is moot if Restore goes.
+  - **Needs an ADR superseding 0085 / 0086 before any code.** Drill paused at S2.3 pending the
+    ruling.
+  - **Operator's simpler alternative for the second window (2026-10-04):** no cross-window
+    machinery at all. Plain wording at the switch says what happens to an unlogged QSO open in
+    another browser window.
+    - **Claude:** the outcome is not indeterminate. The other window reloads and its in-memory
+      draft is lost, so the wording can say exactly that.
+    - **Gap against the 2026-09-13 ruling ("never silently clear a draft"):** the other
+      window's operator would see the QSO vanish with no notice in that window.
+    - **Cheapest closure:** before the reload, that window shows a blocking notice listing the
+      unlogged QSO's values, which must be acknowledged. Memory-only; no storage, locks or
+      Restore.
+- **Third-party review of the options (2026-10-04).** Review brief:
+  https://claude.ai/artifact/WpeG7hzijqhRnBH86fXNNp. The response was pasted by the operator.
+  - **Recommendation:** A (keep the design; fix wording and discoverability) for the next
+    release. Re-run the discovery step with the operator before deciding whether the mechanism
+    goes. A corrected D is the simplest defensible replacement, but only if the operator
+    explicitly accepts losing recovery on tab close or crash. Lines and tests already written
+    should carry little weight.
+  - **Correction to D:** an acknowledgement before reload means holding the old page.
+    Displayed values are not a lasting record. Describe D as "hold for manual copying, then
+    explicitly discard and reload": keep every value and its source archive and logbook
+    visible, block stale submits, offer Copy, and label the action "Discard draft and
+    reload", not "could not be kept".
+  - **Correction to B:** a switch back does not prove that rig values, attribution or the
+    logbook binding still apply, because the ordinary Log reads the live context
+    (`main.ts:589`). B needs a context revalidation rule, which brings back recovery
+    complexity.
+  - **Every replacement needs an unknown-outcome case:** a POST in flight, or a lost
+    response, during the switch. C and D cannot always say "not logged".
+  - **Answers to the open questions:**
+    - **Durability:** memory-only is acceptable only if deliberately accepted.
+    - **Warning the switching window:** keep the local refusal and add a warning about other
+      windows. No daemon-side draft tracking.
+    - **Default logbook:** it is not selectable today. **Verified:** `logbooks.svelte.ts`
+      says default selection is out of scope, and only setup sets the pointer
+      (`handler_config.go:908`). A future default selector must define where existing drafts
+      go.
+    - **Existing records:** never strand or auto-delete them. A retirement keeps a
+      read/copy/export/discard surface with its identities and outcome wording.
+    - **`expect_*`:** keep it through any transition, and never silently ignore it for old
+      pages. It checks attribution, not the archive. **Verified:** `submit.go:615`.
+    - **Process:** choose the loss policy, then a superseding ADR, then the removal on its
+      own. Acceptance covers unlogged, in-flight/unknown, repeated switches, existing
+      records and old open pages.
+  - **Concrete A:** lead with "Not logged"; rename the control "Unlogged QSOs"; give the
+    message a direct action that opens it; keep distinct unknown-outcome wording.
+  - **Operator ruling (2026-10-04): option A for now.** The revisit is parked in the backlog
+    ("Revisit saved-QSO recovery"), so it is not lost.
+  - **Built (committed `c2600910` 2026-10-04):**
+    - **Wording leads with the outcome:**
+      - Kept, not logged: "Not logged — QSO from ‘X’, kept in this browser."
+      - Kept, outcome unknown: "Logging outcome unknown — QSO from ‘X’, kept in this browser.
+        Check the Logbook in ‘X’ before logging it."
+      - Unsaved: "Not logged, and not saved — …" or "Logging outcome unknown, and not saved — …".
+    - **The control is "Unlogged QSOs (n)",** and the panel is named the same.
+    - **The rebind announcement** ends "It is under Unlogged QSOs." and carries an "Open
+      Unlogged QSOs" action. It has no automatic timeout; the existing five-toast limit can still
+      evict it. Toasts gained an optional action, which dismisses the toast when used.
+    - **The panel focuses its Close button however it opens.**
+  - **Evidence:**
+    - **Tests:** the wording and name assertions were updated across 7 test files. C9 now checks
+      that the announcement has no timeout, opens the panel and moves focus there. Two renderer cases
+      cover the action button.
+    - **Eight successful reversion proofs (P63–P70).**
+    - **Gates:** lint, format, svelte-check (0/0), 2,305 SPA tests, maintainability
+      (0 regressions), context check.
+  - **Code review (2026-10-04, pasted):** clear. Keep the no-timeout announcement; the bounded
+    five-toast eviction stays. The cleanup-only "logged" exception is acceptable for this
+    interim change. Two documentation corrections were made before commit:
+    - **The embedded manual** (`manual/content/chapters/qso-archives.md`) now says Unlogged QSOs
+      and describes the direct action. It also gains the Restore paragraph that was missing
+      since `c551c828`.
+    - **"No automatic timeout"** replaces "stays until dismissed" in comments and here.
+  - **Note:** a "logged" record (both cleanup writes failed) also appears under "Unlogged QSOs",
+    with its own "Logged as QSO …" headline.
+  - **Next:** repeat the discovery step with the operator, then resume the drill.
+- **Drill results (2026-10-04):**
+  - **S2.3 PASS.** Window B switched the archive. Window A saved its draft and reloaded,
+    with the toast "Unlogged QSO saved from ‘Drill Arc’ — not logged. It is under Saved
+    QSOs."
+  - **Inbox:** two notes logged during setup.
 No hardware or RF experiment was run; no daemon was restarted.
 
 Deferred by the ADR and not planned here: archive delete, external attach CLI, in-process switch,

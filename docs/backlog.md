@@ -69,6 +69,16 @@ Open one workstream per active focus.
   2026-09-21 as W-0021 above; (4) **Settings → Logbooks** on the active-archive model (W-0014 exchange 2026-09-19; ADR 0056
   bindings in the archive-aware shape gate different-call logbooks); (5) **contesting** — contest
   mode (W-0011 ruling), scoring, export and different-call operation, its own ADR.
+- **Revisit saved-QSO recovery (ADR 0085 / 0086) · PARKED 2026-10-04 by operator request.** Option A
+  (keep the mechanism; fix "Not logged" wording and discoverability) was chosen for now.
+  - **To decide:** whether to keep the browser-held recovery or replace it. The main alternative
+    is switching archives only from Settings, with corrected option D: hold for manual copying,
+    then discard and reload.
+  - **The decision needs:** an explicit loss policy, then a superseding ADR, then the removal as
+    its own change.
+  - **Where the analysis lives:** options A–D, the independent review and the verified facts are
+    in [W-0021](work/W-0021-qso-archives.md), under "Direction under discussion" and "Third-party
+    review of the options".
 - **W-0014 · PARKED — [Deferred product workstreams](work/W-0014-deferred-product-workstreams.md).** Discovery inventory only; each member needs go-ahead and its own design/dossier before implementation.
 - **FT8 Field Day UI:** blocked until the relevant contest; not a 7Q8AC ship concern.
 - **Daemon-initiated FT8 sequencing:** out of scope. Sessions remain operator-initiated; an open event subscription is the presence signal, not proof that a person remains at the desk.
