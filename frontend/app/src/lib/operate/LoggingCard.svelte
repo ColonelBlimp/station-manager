@@ -33,6 +33,7 @@
     import RecoveredContext from '../drafts/RecoveredContext.svelte';
     import { recovered } from '../drafts/recovered.svelte';
     import { requestClearDraft } from '../drafts/recoveredSave.svelte';
+    import { logRecovered, recoveredLogBlock } from '../drafts/recoveredSubmit.svelte';
     import { observeWorked, openWorkedForQso } from './worked.svelte';
     import { rigReady, rigGate } from './rig.svelte';
     import { operate, closeExport, registerCallsignInput } from './state.svelte';
@@ -106,10 +107,19 @@
     const lock = $derived(entryLock());
 
     async function logAndRefocus(): Promise<void> {
+        // A recovered QSO never takes the ordinary assembly (live rig, today's
+        // station): its own path sends the saved values and attribution and is
+        // not gated by the CAT link (ADR 0085 RS18–RS20). Never forced from here.
+        if (recovered.record !== null) {
+            if ((await logRecovered({})) === 'stored') callInput?.focus();
+            return;
+        }
         // Comment-history recording lives in logDraft's shared success path (so a
         // forced-duplicate "Log anyway" records it too); this only refocuses.
         if (await logDraft()) callInput?.focus();
     }
+    // The recovered gate replaces canLog/rigReady (which read the live rig).
+    const recoveredBlock = $derived(recovered.record === null ? null : recoveredLogBlock());
 
     function windowKeydown(e: KeyboardEvent): void {
         // Session-edit modal open: it owns the keyboard OUTRIGHT (its own
@@ -686,8 +696,10 @@
                 <button
                     class="btn btn-primary"
                     onclick={() => logAndRefocus()}
-                    disabled={!canLog() || !rigReady() || submitState.busy}
-                    title={gateTitle ?? 'Ctrl+Enter'}
+                    disabled={recovered.record !== null
+                        ? recoveredBlock !== null
+                        : !canLog() || !rigReady() || submitState.busy}
+                    title={(recovered.record !== null ? recoveredBlock : gateTitle) ?? 'Ctrl+Enter'}
                     >{submitState.busy ? 'Logging…' : 'Log QSO'}</button
                 >
             </div>

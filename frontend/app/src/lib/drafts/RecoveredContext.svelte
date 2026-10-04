@@ -9,6 +9,14 @@
     import { parseFrequency } from '../validators/frequency';
     import { formatUtc } from './savedDraft';
     import { recoveredSave } from './recoveredSave.svelte';
+    import {
+        logRecovered,
+        recoveredSubmit,
+        recoveredSubmitView,
+        retryRecoveredCleanup,
+    } from './recoveredSubmit.svelte';
+    import { draft } from '../operate/qso.svelte';
+    import { openWorkedForQso } from '../operate/worked.svelte';
 
     // Text remains editable even when it is incomplete or malformed. The
     // recovered numeric reading becomes missing until the input parses.
@@ -21,6 +29,8 @@
         frequency = hz == null ? '' : (hz / 1e6).toFixed(6);
     });
     const problem = $derived(recoveredRigProblem());
+    // This QSO's Log messages only — never those of a QSO let go before it.
+    const said = $derived(recoveredSubmitView());
 </script>
 
 {#if recovered.record !== null && recovered.rig !== null}
@@ -86,6 +96,49 @@
                 />
             </label>
         </div>
+        {#if said.confirmedUuid !== ''}
+            <!-- RS22: terminal in this tab; only the cleanup is retried. -->
+            <div role="alert" data-testid="recovered-confirmed" class="space-y-1">
+                <p>Logged as QSO {said.confirmedUuid}.</p>
+                {#if said.cleanupError}<p>{said.cleanupError}</p>{/if}
+                <button
+                    type="button"
+                    class="btn text-xs"
+                    onclick={() => void retryRecoveredCleanup()}>Retry cleanup</button
+                >
+            </div>
+        {:else if said.duplicateUuid !== ''}
+            <!-- RS25: never marked logged; forcing is an explicit separate contact. -->
+            <div role="alert" data-testid="recovered-duplicate" class="space-y-1">
+                <p>
+                    The log already holds a matching contact (QSO {said.duplicateUuid}). This saved
+                    QSO is kept.
+                </p>
+                <div class="flex flex-wrap gap-2">
+                    <button
+                        type="button"
+                        class="btn text-xs"
+                        onclick={() => openWorkedForQso(draft.callsign)}
+                        >Show contacts with {draft.callsign.trim().toUpperCase()}</button
+                    >
+                    <button
+                        type="button"
+                        class="btn text-xs"
+                        disabled={recoveredSubmit.busy}
+                        onclick={() => void logRecovered({ force: true })}
+                        >Log anyway — this is a separate contact</button
+                    >
+                </div>
+            </div>
+        {/if}
+        {#if said.refusal}
+            <p role="alert" data-testid="recovered-submit-message">{said.refusal}</p>
+        {:else if recovered.record.outcome === 'unknown'}
+            <p role="status">
+                Logging outcome unknown: an earlier attempt may have been stored. Check the original
+                Logbook before logging it.
+            </p>
+        {/if}
         {#if recoveredSave.error}
             <p role="alert" data-testid="recovered-save-error">{recoveredSave.error}</p>
         {/if}

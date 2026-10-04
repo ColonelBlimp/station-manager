@@ -38,6 +38,7 @@ import {
     loadArchives,
     mintRequestKey,
     bootArchiveScoped,
+    bootArchiveId,
     verifyArchiveGeneration,
     _resetArchivesForTests,
     _setBootIdentityForTests,
@@ -998,5 +999,16 @@ describe('the New archive draft', () => {
             logbookCallsign: '',
             requestKey: '',
         });
+    });
+});
+
+describe('the booted archive (ADR 0085 RS18)', () => {
+    it('is the archive the identity bracket recorded, or null when none was', () => {
+        _setBootIdentityForTests(null);
+        expect(bootArchiveId()).toBeNull();
+        _setBootIdentityForTests({ instance: 'i1', archiveId: '' });
+        expect(bootArchiveId()).toBeNull();
+        _setBootIdentityForTests({ instance: 'i1', archiveId: 'arch-a' });
+        expect(bootArchiveId()).toBe('arch-a');
     });
 });

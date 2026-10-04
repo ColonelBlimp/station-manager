@@ -5,6 +5,13 @@ import { setHistory } from './lib/operate/worked.svelte';
 import { setEntryGate, setSubmit, setSubmitGate } from './lib/operate/qso.svelte';
 import { noteRigDrop } from './lib/operate/rigSnapshot.svelte';
 import { preserveDraft } from './lib/drafts/preserve';
+import type { RecoveredExtras } from './lib/drafts/recoveredRequest';
+import { setRestoreEnv } from './lib/drafts/restoreSession';
+import {
+    setRecoveredExtras,
+    setRecoveredSender,
+    setRecoveredSubmitEnv,
+} from './lib/drafts/recoveredSubmit.svelte';
 import { fetchSubmitAttribution, type SubmitAttribution } from './lib/api/submit-attribution';
 import { setConfigWriteListener } from './lib/api/_helpers';
 import {
@@ -19,7 +26,7 @@ import {
     noteDisconnected,
     noteReconnectProven,
     setRequestedOperator,
-} from './lib/drafts/attributionSource';
+} from './lib/drafts/attributionSource.svelte';
 import { addSessionQso, session, sessionModeLiteral } from './lib/operate/session.svelte';
 import { setMailer } from './lib/operate/mailer.svelte';
 import {
@@ -63,6 +70,7 @@ import {
     loadArchives,
     archiveEntryLock,
     archiveSwitchGate,
+    bootArchiveId,
     bootArchiveScoped,
     verifyAfterRigReconnect,
     setDraftPreserver,
@@ -575,8 +583,8 @@ setFt8PrefsSaved((p) => setFt8DisplayPrefs(p));
 // daemon's e4 sink (the modules never import each other). Refusals carry an
 // operator-facing message (draft preserved); a duplicate is marked so the
 // card can offer a force retry.
-// BASELINE DEBT 2026-07-31 (complexity 39) — the submit seam's error
-// fan-out: each failure mode maps to its own operator-facing message.
+// BASELINE DEBT 2026-07-31 (complexity 39; 23 once enrichmentExtras was split
+// out) — the submit seam's error fan-out: one operator message per failure.
 // eslint-disable-next-line complexity
 setSubmit(async (q, opts) => {
     const refuse = (message: string, duplicate = false) => ({
@@ -599,15 +607,6 @@ setSubmit(async (q, opts) => {
     // Only trust the enrichment if it is actually for this call (a fast log
     // can outrun the debounced lookup).
     const e = enrich.call === call ? enrich.data : null;
-    // ANT_AZ / ANT_PATH: the same bearing + path the enrichment card shows.
-    const path =
-        e !== null && e.grid !== '' && ctx.myGrid !== '' ? pathInfo(ctx.myGrid, e.grid) : null;
-    const bearing =
-        path === null
-            ? undefined
-            : prefs.path === 'sp'
-              ? path.shortPathBearing
-              : path.longPathBearing;
 
     // The rig state holds the operator-friendly literal (USB, PSK31); ADIF
     // wants the canonical (MODE, SUBMODE) pair — the daemon 400s on MODE=USB.
@@ -638,18 +637,10 @@ setSubmit(async (q, opts) => {
             q.gridsquare !== '' && isValidMaidenhead(q.gridsquare) === null
                 ? q.gridsquare
                 : undefined,
-        country: e?.country || undefined,
-        // ADIF DXCC is the numeric entity; our display value may be a prefix
-        // fallback (e.g. "G") — only emit real numbers.
-        dxcc: e !== null && /^\d+$/.test(e.dxcc) ? e.dxcc : undefined,
-        // Contacted-station zones from the country enrichment (display + log).
-        cqZone: e?.cqZone || undefined,
-        ituZone: e?.ituZone || undefined,
+        ...enrichmentExtras(call, ctx.myGrid),
         stationCallsign: ctx.stationCallsign,
         operator: ctx.operator || undefined,
         myGridSquare: ctx.myGrid || undefined,
-        antAz: bearing?.toFixed(1),
-        antPath: path === null ? undefined : prefs.path === 'sp' ? 'S' : 'L',
     });
 
     const out = await submitQso(adif, ctx.logbookId, { force: opts?.force });
@@ -695,6 +686,59 @@ setSubmit(async (q, opts) => {
     }
     return refuse(`QSO not logged: ${out.message}`);
 });
+
+// The contacted station's enrichment fields, shared by the ordinary and the
+// recovered Log. Only trusted when the lookup is for this call; ANT_AZ /
+// ANT_PATH are the bearing + path the enrichment card shows, from `myGrid` —
+// today's grid for an ordinary Log, the saved grid for a recovered one.
+function enrichmentExtras(call: string, myGrid: string): RecoveredExtras {
+    const e = enrich.call === call ? enrich.data : null;
+    const path = e !== null && e.grid !== '' && myGrid !== '' ? pathInfo(myGrid, e.grid) : null;
+    const bearing =
+        path === null
+            ? undefined
+            : prefs.path === 'sp'
+              ? path.shortPathBearing
+              : path.longPathBearing;
+    return {
+        country: e?.country || undefined,
+        // ADIF DXCC is the numeric entity; our display value may be a prefix
+        // fallback (e.g. "G") — only emit real numbers.
+        dxcc: e !== null && /^\d+$/.test(e.dxcc) ? e.dxcc : undefined,
+        // Contacted-station zones from the country enrichment (display + log).
+        cqZone: e?.cqZone || undefined,
+        ituZone: e?.ituZone || undefined,
+        antAz: bearing?.toFixed(1),
+        antPath: path === null ? undefined : prefs.path === 'sp' ? 'S' : 'L',
+    };
+}
+
+// Logging a recovered QSO (ADR 0085 RS18–RS25; drafts/recoveredSubmit): its
+// own request from the saved values and attribution, sent with expect_* to
+// the active default logbook, and allowed only in the archive and logbook the
+// record was saved from. Not gated by CAT.
+setRecoveredSender((adif, logbookId, opts) =>
+    submitQso(adif, logbookId, { force: opts.force, expect: opts.expect }).then((out) => {
+        if (out.kind === 'stored') refreshLogbookCount();
+        return out;
+    })
+);
+setRecoveredSubmitEnv(() => ({
+    switchGate: archiveSwitchGate(),
+    bootArchiveId: bootArchiveId(),
+    activeLogbookUuid: ctx.logbookUuid,
+    activeLogbookId: ctx.logbookId,
+}));
+setRecoveredExtras(enrichmentExtras);
+// The Saved QSOs panel's Restore (ADR 0085 RS3–RS7): the page's archive and
+// logbook, and today's attribution for the operator this page submits as.
+setRestoreEnv(() => ({
+    locksAvailable: true, // replaced by restoreSession with the browser's answer
+    onPhoneCw: router.view === 'operate' && router.mode === 'phone',
+    bootArchiveId: bootArchiveId(),
+    activeLogbookUuid: ctx.logbookUuid,
+    currentAttribution: currentAttribution(ctx.operator),
+}));
 
 // The shell's always-on transport (ADR 0079). /v1/events is served with or without
 // a rig, so it — not the CAT-gated rig stream — carries the reconnection signal the

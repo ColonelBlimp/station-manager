@@ -162,11 +162,19 @@ describe('saved draft wording', () => {
         ).toBeNull();
         const attempt = {
             at: '2026-10-01T10:00:00.000Z',
+            archiveId: 'arch-a',
+            logbookUuid: 'lb-a',
             logbookId: 1,
+            force: false,
             adif: '<CALL:5>G0ABC<EOR>',
             expect: { myRig: 'FTdx10 (home)', operator: '7Q5MLV', myName: 'Marc' },
         };
         expect(readSavedDraft({ ...sampleRecord(), attempt })?.attempt).toEqual(attempt);
+        // The exact request: its destination and force flag are part of it.
+        const { force: _f, ...noForce } = attempt;
+        expect(readSavedDraft({ ...sampleRecord(), attempt: noForce })).toBeNull();
+        const { logbookUuid: _l, ...noDest } = attempt;
+        expect(readSavedDraft({ ...sampleRecord(), attempt: noDest })).toBeNull();
     });
 
     it('D6 an unsaved draft says so, keeping the outcome', () => {

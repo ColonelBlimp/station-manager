@@ -46,7 +46,7 @@ import {
     refreshAttribution,
     setRequestedOperator,
     _resetAttributionForTests,
-} from './attributionSource';
+} from './attributionSource.svelte';
 
 const forOp = (op: string): SubmitAttribution => ({
     myRig: 'FTdx10',

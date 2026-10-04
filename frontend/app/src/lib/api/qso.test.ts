@@ -90,3 +90,30 @@ describe('submitQso response decoding (F-03)', () => {
         expect((out as { code?: string }).code).toBe('db_error');
     });
 });
+
+// A recovered submit states the attribution it was made with (ADR 0085 RS20):
+// all three expect_* parameters, empty values included — an empty value is a
+// known-empty value and must still be sent.
+describe('submitQso expected attribution', () => {
+    it('sends all three expect_* parameters, empty ones included', async () => {
+        mockFetch(201, { status: 'stored', uuid: UUID, id: 1 });
+        await submitQso('<EOR>', 7, {
+            force: true,
+            expect: { myRig: '', operator: '7Q5MLV', myName: '' },
+        });
+        const url = new URL(
+            (vi.mocked(fetch).mock.calls[0][0] as string).replace(/^\//, 'http://x/')
+        );
+        expect(url.searchParams.get('logbook')).toBe('7');
+        expect(url.searchParams.get('force')).toBe('1');
+        expect(url.searchParams.has('expect_my_rig')).toBe(true);
+        expect(url.searchParams.get('expect_my_rig')).toBe('');
+        expect(url.searchParams.get('expect_operator')).toBe('7Q5MLV');
+        expect(url.searchParams.has('expect_my_name')).toBe(true);
+    });
+    it('sends none when no expectation is given', async () => {
+        mockFetch(201, { status: 'stored', uuid: UUID, id: 1 });
+        await submitQso('<EOR>', 7);
+        expect(vi.mocked(fetch).mock.calls[0][0]).toBe('/v1/qso?logbook=7');
+    });
+});

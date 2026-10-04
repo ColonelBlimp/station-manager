@@ -12,7 +12,12 @@ import type { SubmitAttribution } from '../api/submit-attribution';
  *  RS19): persisted before the request, kept through later edits. */
 export interface AttemptedSubmission {
     at: string;
+    /** The destination exactly as sent: the numeric id in ?logbook=, and the
+     *  archive and logbook UUIDs it stood for. */
+    archiveId: string;
+    logbookUuid: string;
     logbookId: number;
+    force: boolean;
     adif: string;
     expect: SubmitAttribution;
 }
@@ -79,7 +84,10 @@ function isAttempt(v: unknown): v is AttemptedSubmission {
     return (
         isObj(v) &&
         isStr(v.at) &&
+        isStr(v.archiveId) &&
+        isStr(v.logbookUuid) &&
         typeof v.logbookId === 'number' &&
+        typeof v.force === 'boolean' &&
         isStr(v.adif) &&
         isAttribution(v.expect)
     );

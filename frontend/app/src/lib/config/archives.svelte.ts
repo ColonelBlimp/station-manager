@@ -117,9 +117,15 @@ export function setDraftPreserver(fn: Preserver | null): void {
 }
 
 /** The archive this page's stores were proven against; null when unproven. */
+/** The archive this page booted against (the identity bracket), or null. A
+ *  recovered QSO is logged only into the archive it was saved from (RS18). */
+export function bootArchiveId(): string | null {
+    return bootIdentity === null || bootIdentity.archiveId === '' ? null : bootIdentity.archiveId;
+}
+
 function sourceArchive(): DraftSource | null {
-    if (bootIdentity === null || bootIdentity.archiveId === '') return null;
-    const id = bootIdentity.archiveId;
+    const id = bootArchiveId();
+    if (id === null) return null;
     return {
         archiveId: id,
         archiveLabel: archivesState.list.find((a) => a.id === id)?.label ?? id,
@@ -417,7 +423,8 @@ async function keepWatching(before: string): Promise<void> {
 // archive means its stores belong to the old one — reload; an identity it
 // cannot read after retries means it cannot prove anything — gate.
 
-let bootIdentity: DaemonIdentity | null = null;
+// Reactive: the Saved QSOs panel's Restore offer follows it (ADR 0085).
+let bootIdentity = $state.raw<DaemonIdentity | null>(null);
 const IDENTITY_TRIES = 3;
 
 // Overlapping identity checks (successive reconnects launch one each, unawaited)

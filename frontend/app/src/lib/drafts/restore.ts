@@ -1,7 +1,6 @@
 // Whether a saved QSO may be restored here (ADR 0085 RS3–RS7; operator rulings
-// 2026-10-01). Pure, so every reason is tested. Not yet wired to any control:
-// Restore stays unavailable until the whole recovery path exists, so nothing
-// shown to the operator promises it before then.
+// 2026-10-01). Pure, so every reason is tested. The Saved QSOs panel reads it
+// to offer Restore; restoreSession applies it again when Restore is pressed.
 
 import type { SubmitAttribution } from '../api/submit-attribution';
 import type { SavedDraft } from './savedDraft';

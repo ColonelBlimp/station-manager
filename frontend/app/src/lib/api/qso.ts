@@ -30,6 +30,7 @@
 */
 
 import { isPlainObject, readJsonBody, safeFetch, WRITE_TIMEOUT_MS } from './_helpers';
+import type { SubmitAttribution } from './submit-attribution';
 
 export type SubmitOutcome =
     | { kind: 'stored'; uuid: string }
@@ -50,6 +51,8 @@ interface DaemonError {
 }
 
 export interface SubmitOptions {
+    /** A recovered submit's expected attribution (ADR 0085 RS20). */
+    expect?: SubmitAttribution;
     /**
      * When true, append `?force=1` so the daemon bypasses dedupe and
      * stores the QSO even if a matching row already exists. The
@@ -67,6 +70,13 @@ export async function submitQso(
 ): Promise<SubmitOutcome> {
     const params = new URLSearchParams({ logbook: String(logbookID) });
     if (options.force) params.set('force', '1');
+    // A recovered QSO's original attribution (ADR 0085): all three, empty ones
+    // included — the daemon refuses the submit unless it would store exactly these.
+    if (options.expect) {
+        params.set('expect_my_rig', options.expect.myRig);
+        params.set('expect_operator', options.expect.operator);
+        params.set('expect_my_name', options.expect.myName);
+    }
     const fetched = await safeFetch(
         `/v1/qso?${params.toString()}`,
         {

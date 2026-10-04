@@ -4,8 +4,9 @@
     // shows while any record exists (inactive archives and unknown outcomes
     // included) or while storage cannot be read, so a failed read never passes
     // for an empty collection. The overlay panel owns the list, details, Copy
-    // and confirmed Discard; closing it keeps every record. It offers no
-    // restore yet, so nothing here promises one.
+    // and confirmed Discard; closing it keeps every record. An eligible entry
+    // offers Restore on Phone / CW; elsewhere "Go to Phone / CW", which only
+    // navigates (ADR 0085, Restore commit 4).
     import { onMount, tick } from 'svelte';
     import SavedDraftDetails from './SavedDraftDetails.svelte';
     import { savedDraftHeadline, savedDraftSummary, type SavedDraft } from './savedDraft';
@@ -15,6 +16,10 @@
         savedQsosPanel,
         watchSavedDrafts,
     } from './savedDrafts.svelte';
+    import { restoreEligibility } from './restore';
+    import { readRestoreEnv, restoreFromPanel } from './restoreSession';
+    import { setMode } from '../router.svelte';
+    import { focusCallsign } from '../operate/state.svelte';
 
     // Kept current across tabs; the first watch after a reload also announces
     // newly preserved work, once.
@@ -82,6 +87,47 @@
         return () => window.removeEventListener('keydown', onKeydownCapture, { capture: true });
     });
 
+    // What each entry offers. Advisory only: restoreFromPanel decides again,
+    // against the environment as it is when pressed, after every wait.
+    function offer(r: SavedDraft): { kind: 'restore' | 'go' | 'none'; reason: string } {
+        const env = readRestoreEnv();
+        if (env === null) return { kind: 'none', reason: '' };
+        const e = restoreEligibility(r, env);
+        switch (e.kind) {
+            case 'eligible':
+                return { kind: 'restore', reason: '' };
+            case 'go-to-phone-cw':
+                return { kind: 'go', reason: '' };
+            case 'logged':
+                return { kind: 'none', reason: '' };
+            case 'unavailable':
+                return { kind: 'none', reason: e.reason };
+            case 'my-rig-changed':
+                return {
+                    kind: 'none',
+                    reason: `My rig differs: saved ‘${e.saved}’; current ‘${e.current}’.`,
+                };
+        }
+    }
+
+    let refusals = $state<Record<string, string>>({});
+    let restoring = $state(false);
+    async function restore(r: SavedDraft): Promise<void> {
+        restoring = true;
+        refusals[r.id] = '';
+        try {
+            const out = await restoreFromPanel(r);
+            if (!out.ok) {
+                refusals[r.id] = out.reason;
+                return;
+            }
+            savedQsosPanel.open = false;
+            focusCallsign();
+        } finally {
+            restoring = false;
+        }
+    }
+
     function discard(r: SavedDraft): void {
         const ok = window.confirm(
             `Discard the saved QSO ${savedDraftSummary(r)}? This removes only the copy saved in this browser; nothing in any logbook changes.`
@@ -126,10 +172,27 @@
         {/if}
         <ul class="flex flex-col gap-3">
             {#each savedDrafts.list as r (r.id)}
+                {@const o = offer(r)}
                 <li class="text-sm text-ink" data-testid="saved-draft-{r.id}">
                     <div class="font-mono font-semibold">{savedDraftSummary(r)}</div>
                     <div>{savedDraftHeadline(r)}</div>
+                    {#if o.reason}<div class="text-muted">{o.reason}</div>{/if}
+                    {#if refusals[r.id]}<div role="alert">{refusals[r.id]}</div>{/if}
                     <div class="mt-1 flex gap-2">
+                        {#if o.kind === 'restore'}
+                            <button
+                                type="button"
+                                class="btn btn-primary text-xs"
+                                disabled={restoring}
+                                onclick={() => void restore(r)}>Restore</button
+                            >
+                        {:else if o.kind === 'go'}
+                            <button
+                                type="button"
+                                class="btn text-xs"
+                                onclick={() => setMode('phone')}>Go to Phone / CW</button
+                            >
+                        {/if}
                         <button
                             type="button"
                             class="btn text-xs"

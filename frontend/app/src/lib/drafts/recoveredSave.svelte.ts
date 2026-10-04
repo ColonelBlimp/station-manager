@@ -271,6 +271,31 @@ export async function discardRecovered(id: string): Promise<boolean> {
     }
 }
 
+/** Change the owned record's attempt / outcome and store it through the same
+ *  write loop as the edits (Restore commit 4): every write after this one
+ *  carries the change, so a late autosave cannot erase it. True once stored;
+ *  on a failed write the change is undone in memory, so nothing claims what
+ *  storage does not hold. */
+export async function persistRecordChange(
+    change: Partial<Pick<SavedDraft, 'attempt' | 'outcome'>>
+): Promise<boolean> {
+    const r = recovered.record;
+    if (r === null || stopped) return false;
+    const before = { attempt: r.attempt, outcome: r.outcome };
+    Object.assign(r, change);
+    revision++;
+    if (await flushRecoveredWrites()) return true;
+    if (recovered.record === r) Object.assign(r, before);
+    return false;
+}
+
+/** Stop writing the owned record — for good, once a Log is confirmed: a later
+ *  autosave would put a draft back. Settles the write in flight first. */
+export async function stopRecoveredWrites(): Promise<void> {
+    stopped = true;
+    await loop;
+}
+
 /** The owned record as it now stands, for a rebind save. */
 export function recoveredRecordNow(): SavedDraft | null {
     if (recovered.record === null) return null;

@@ -21,7 +21,8 @@ interface Entry {
     attribution: SubmitAttribution;
 }
 
-let current: Entry | null = null;
+// Reactive: the Saved QSOs panel's Restore offer follows it (ADR 0085).
+let current = $state.raw<Entry | null>(null);
 let requested = '';
 let requestedKnown = false;
 let epoch = 0; // advanced by everything that invalidates, and by every read start

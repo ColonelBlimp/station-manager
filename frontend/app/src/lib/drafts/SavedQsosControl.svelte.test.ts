@@ -8,7 +8,7 @@
           empty collection.
       C4  The control opens an overlay panel; each saved QSO is its own entry —
           callsign, time, source archive — with the operator's wording; an
-          unknown outcome never says "not logged"; no restore is promised.
+          unknown outcome never says "not logged"; no archive switch is promised.
           Closing it keeps every record and returns focus to the control.
       C5  Show details reveals every value as selectable text, with Copy.
       C6  Discard is confirmed and removes only that record; declining keeps it;
@@ -22,6 +22,19 @@
       C10 A modal dialog in front of the panel (Export, Duplicate, a session
           edit, the archive gate) owns Escape: it closes that dialog, and the
           panel behind it stays open (Codex review 894b5359).
+      C11 Restore (ADR 0085, Restore commit 4): an eligible entry on Phone / CW
+          offers Restore; it fills the form with that QSO and closes the panel.
+      C12 Off Phone / CW the entry offers "Go to Phone / CW", which only
+          navigates — nothing is restored until Restore is pressed there.
+      C13 An entry from another archive or logbook, or whose MY_RIG differs,
+          says why and offers no Restore.
+      C14 A Restore refused at the moment it is pressed (a QSO being typed)
+          says why in that entry and keeps the panel open and the record.
+      C15 A logged entry offers no Restore.
+      C16 A page whose Restore is not wired offers none.
+      C17 The offer follows the page as it becomes known: a panel opened before
+          the boot identity and today's attribution are read offers Restore once
+          they are, without being reopened.
       C9  Work newly preserved before a reload is announced ONCE in that tab with
           an ordinary toast, keeping an unknown outcome's wording; the panel does
           not open by itself; a later mount does not repeat it.
@@ -45,6 +58,19 @@ import { sampleRecord } from './savedDraft.fixture';
 import { toastsState, _resetForTests as resetToasts } from '../ui/toasts.svelte';
 import { draft, clearDraft, setSubmit } from '../operate/qso.svelte';
 import { confirmRig, rig } from '../operate/rig.svelte';
+import { fakeDraftLocks } from './draftLock.fixture';
+import { recovered } from './recovered.svelte';
+import { setRestoreEnv, _resetRestoreForTests } from './restoreSession';
+import { _resetRecoveredSaveForTests } from './recoveredSave.svelte';
+import { router } from '../router.svelte';
+import type { RestoreEnv } from './restore';
+import {
+    applyBootAttribution,
+    attributionEpoch,
+    currentAttribution,
+    _resetAttributionForTests,
+} from './attributionSource.svelte';
+import { bootArchiveId, _setBootIdentityForTests } from '../config/archives.svelte';
 
 let mem = memoryDraftStore();
 
@@ -120,7 +146,7 @@ describe('SavedQsosControl', () => {
             'QSO draft saved from ‘Contest’ — logging outcome unknown. Check the Logbook in ‘Contest’ before logging it.'
         );
         expect(second).not.toHaveTextContent('not logged');
-        expect(panel).not.toHaveTextContent(/restore|switch back/i);
+        expect(panel).not.toHaveTextContent(/switch back/i);
         await fireEvent.click(within(panel).getByRole('button', { name: 'Close' }));
         expect(screen.queryByRole('dialog')).toBeNull();
         expect(mem.rows.size).toBe(2);
@@ -262,5 +288,139 @@ describe('SavedQsosControl', () => {
         expect(savedQsosPanel.open).toBe(true);
         expect(screen.getByRole('dialog', { name: 'Saved QSOs' })).toBeInTheDocument();
         expect(draft.callsign).toBe('G0ABC');
+    });
+});
+
+describe('Restore from the panel', () => {
+    let env: Omit<RestoreEnv, 'locksAvailable'>;
+    beforeEach(() => {
+        vi.stubGlobal('navigator', { locks: fakeDraftLocks().manager });
+        router.view = 'operate';
+        router.mode = 'phone';
+        env = {
+            onPhoneCw: true,
+            bootArchiveId: 'arch-a',
+            activeLogbookUuid: 'lb-a',
+            currentAttribution: sampleRecord().attribution,
+        };
+        setRestoreEnv(() => ({
+            ...env,
+            locksAvailable: true,
+            onPhoneCw: router.view === 'operate' && router.mode === 'phone',
+        }));
+    });
+    afterEach(async () => {
+        setRestoreEnv(null);
+        _resetRecoveredSaveForTests();
+        await _resetRestoreForTests();
+        vi.unstubAllGlobals();
+    });
+
+    it('C11 Restore fills the form with that QSO and closes the panel', async () => {
+        await seed(sampleRecord());
+        render(SavedQsosControl);
+        const panel = await openPanel();
+        const entry = within(panel).getByTestId('saved-draft-d-1');
+        await fireEvent.click(within(entry).getByRole('button', { name: 'Restore' }));
+        await vi.waitFor(() => expect(recovered.record?.id).toBe('d-1'));
+        expect(draft.callsign).toBe('g0abc');
+        expect(screen.queryByRole('dialog')).toBeNull();
+    });
+
+    it('C12 off Phone / CW the entry only navigates there', async () => {
+        router.mode = 'ft8';
+        await seed(sampleRecord());
+        render(SavedQsosControl);
+        const panel = await openPanel();
+        const entry = within(panel).getByTestId('saved-draft-d-1');
+        expect(within(entry).queryByRole('button', { name: 'Restore' })).toBeNull();
+        await fireEvent.click(within(entry).getByRole('button', { name: 'Go to Phone / CW' }));
+        expect(router.mode).toBe('phone');
+        expect(recovered.record).toBeNull();
+        expect(draft.callsign).toBe('');
+        expect(within(entry).getByRole('button', { name: 'Restore' })).toBeInTheDocument();
+    });
+
+    it('C13 another archive, or a changed MY_RIG, says why and offers no Restore', async () => {
+        env.currentAttribution = { ...sampleRecord().attribution!, myRig: 'FTdx10' };
+        await seed(sampleRecord(), SECOND());
+        render(SavedQsosControl);
+        const panel = await openPanel();
+        const other = within(panel).getByTestId('saved-draft-d-2');
+        expect(other).toHaveTextContent(/belongs to ‘Contest’/);
+        expect(within(other).queryByRole('button', { name: 'Restore' })).toBeNull();
+        const rigChanged = within(panel).getByTestId('saved-draft-d-1');
+        expect(rigChanged).toHaveTextContent(/My rig differs.*FTdx10/);
+        expect(within(rigChanged).queryByRole('button', { name: 'Restore' })).toBeNull();
+    });
+
+    it('C14 a Restore refused when pressed says why and keeps the panel and record', async () => {
+        await seed(sampleRecord());
+        render(SavedQsosControl);
+        const panel = await openPanel();
+        draft.callsign = 'K1ABC'; // typed after the panel opened
+        flushSync();
+        const entry = within(panel).getByTestId('saved-draft-d-1');
+        await fireEvent.click(within(entry).getByRole('button', { name: 'Restore' }));
+        expect(await within(entry).findByRole('alert')).toHaveTextContent(/Clear the current QSO/);
+        expect(recovered.record).toBeNull();
+        expect(draft.callsign).toBe('K1ABC');
+        expect(screen.getByRole('dialog', { name: 'Saved QSOs' })).toBeInTheDocument();
+        expect(mem.rows.has('d-1')).toBe(true);
+    });
+
+    it('C15 a logged entry offers no Restore', async () => {
+        await seed(sampleRecord({ state: 'logged', loggedQsoUuid: 'qso-1' }));
+        render(SavedQsosControl);
+        const panel = await openPanel();
+        const entry = within(panel).getByTestId('saved-draft-d-1');
+        expect(within(entry).queryByRole('button', { name: 'Restore' })).toBeNull();
+        expect(within(entry).queryByRole('button', { name: 'Go to Phone / CW' })).toBeNull();
+    });
+
+    it('C16 a page whose Restore is not wired offers none', async () => {
+        setRestoreEnv(null);
+        await seed(sampleRecord());
+        render(SavedQsosControl);
+        const panel = await openPanel();
+        expect(within(panel).queryByRole('button', { name: /Restore|Go to Phone/ })).toBeNull();
+    });
+});
+
+describe('Restore follows the page as it becomes known', () => {
+    beforeEach(() => {
+        vi.stubGlobal('navigator', { locks: fakeDraftLocks().manager });
+        router.view = 'operate';
+        router.mode = 'phone';
+        _resetAttributionForTests();
+        _setBootIdentityForTests(null);
+        setRestoreEnv(() => ({
+            locksAvailable: true,
+            onPhoneCw: true,
+            bootArchiveId: bootArchiveId(),
+            activeLogbookUuid: 'lb-a',
+            currentAttribution: currentAttribution('7Q5MLV'),
+        }));
+    });
+    afterEach(async () => {
+        setRestoreEnv(null);
+        _resetAttributionForTests();
+        _setBootIdentityForTests(null);
+        await _resetRestoreForTests();
+        vi.unstubAllGlobals();
+    });
+
+    it('C17 a panel opened early offers Restore once identity and attribution land', async () => {
+        await seed(sampleRecord());
+        render(SavedQsosControl);
+        const panel = await openPanel();
+        const entry = within(panel).getByTestId('saved-draft-d-1');
+        expect(within(entry).queryByRole('button', { name: 'Restore' })).toBeNull();
+        _setBootIdentityForTests({ instance: 'i1', archiveId: 'arch-a' });
+        flushSync();
+        expect(entry).toHaveTextContent(/could not be read/);
+        applyBootAttribution(sampleRecord().attribution, attributionEpoch(), '7Q5MLV');
+        flushSync();
+        expect(within(entry).getByRole('button', { name: 'Restore' })).toBeInTheDocument();
     });
 });

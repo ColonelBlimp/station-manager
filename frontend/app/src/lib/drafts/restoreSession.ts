@@ -1,4 +1,5 @@
-// Claim/form internals only: the public Restore action waits for commit 4.
+// Restoring a saved QSO onto the Phone / CW form (ADR 0085 RS3–RS11): the
+// reservation, the re-read, and the environment the panel's Restore reads.
 import {
     clearDraft,
     draftInProgress,
@@ -77,6 +78,26 @@ export async function restoreSavedDraft(
         await claim?.release();
         pending = false;
     }
+}
+
+// The page's Restore environment, wired by main.ts (it holds the station
+// context); null leaves the panel offering no Restore.
+let pageEnv: (() => RestoreEnv) | null = null;
+
+export function setRestoreEnv(fn: (() => RestoreEnv) | null): void {
+    pageEnv = fn;
+}
+
+/** The page's Restore environment now, or null when Restore is not wired. */
+export function readRestoreEnv(): RestoreEnv | null {
+    return pageEnv === null ? null : { ...pageEnv(), locksAvailable: draftLocksAvailable() };
+}
+
+/** Restore from the panel, against the page's environment. */
+export function restoreFromPanel(record: SavedDraft): Promise<RestoreResult> {
+    const env = pageEnv;
+    if (env === null) return Promise.resolve({ ok: false, reason: 'Restore is not available.' });
+    return restoreSavedDraft(record, env);
 }
 
 /** This tab holds the reservation for the recovered record `id`. */
