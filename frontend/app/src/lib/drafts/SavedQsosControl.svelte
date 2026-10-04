@@ -7,7 +7,7 @@
     // and confirmed Discard; closing it keeps every record. An eligible entry
     // offers Restore on Phone / CW; elsewhere "Go to Phone / CW", which only
     // navigates (ADR 0085, Restore commit 4).
-    import { onMount, tick } from 'svelte';
+    import { onMount } from 'svelte';
     import SavedDraftDetails from './SavedDraftDetails.svelte';
     import { savedDraftHeadline, savedDraftSummary, type SavedDraft } from './savedDraft';
     import {
@@ -34,18 +34,21 @@
     const count = $derived(savedDrafts.list.length);
     const shown = $derived(count > 0 || savedDrafts.error !== '');
     const label = $derived(
-        count === 0 && savedDrafts.error !== '' ? 'Saved QSOs (?)' : `Saved QSOs (${count})`
+        count === 0 && savedDrafts.error !== '' ? 'Unlogged QSOs (?)' : `Unlogged QSOs (${count})`
     );
 
     let trigger = $state<HTMLButtonElement | null>(null);
     let closeButton = $state<HTMLButtonElement | null>(null);
     let expanded = $state<Record<string, boolean>>({});
 
-    async function openPanel(): Promise<void> {
+    function openPanel(): void {
         savedQsosPanel.open = true;
-        await tick();
-        closeButton?.focus();
     }
+    // However the panel opened — its control, or the announcement's action —
+    // focus starts inside it.
+    $effect(() => {
+        closeButton?.focus();
+    });
     function closePanel(): void {
         savedQsosPanel.open = false;
         trigger?.focus();
@@ -143,7 +146,7 @@
         aria-haspopup="dialog"
         aria-expanded={savedQsosPanel.open}
         bind:this={trigger}
-        onclick={() => (savedQsosPanel.open ? closePanel() : void openPanel())}>{label}</button
+        onclick={() => (savedQsosPanel.open ? closePanel() : openPanel())}>{label}</button
     >
 {/if}
 
@@ -153,10 +156,10 @@
     <div
         class="card fixed top-18 right-4 z-30 max-h-[calc(100vh-6rem)] w-[min(40rem,calc(100vw-2rem))] overflow-y-auto shadow-xl"
         role="dialog"
-        aria-label="Saved QSOs"
+        aria-label="Unlogged QSOs"
     >
         <div class="mb-2 flex items-center justify-between">
-            <h2 class="text-sm font-semibold text-ink">Saved QSOs</h2>
+            <h2 class="text-sm font-semibold text-ink">Unlogged QSOs</h2>
             <button
                 type="button"
                 class="cursor-pointer rounded-md px-1 text-muted hover:text-ink"

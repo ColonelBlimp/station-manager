@@ -133,13 +133,13 @@ export interface PreservedAnnouncement {
  *  COMMITTED; the wording keeps an unknown logging outcome. */
 export function rememberPreservedForAnnouncement(r: SavedDraft): void {
     const a: PreservedAnnouncement = {
-        message: `${savedDraftHeadline(r)} It is under Saved QSOs.`,
+        message: `${savedDraftHeadline(r)} It is under Unlogged QSOs.`,
         level: r.outcome === 'unknown' ? 'warn' : 'info',
     };
     try {
         sessionStorage.setItem(ANNOUNCE_KEY, JSON.stringify(a));
     } catch {
-        // No session storage: the Saved QSOs control still shows the record.
+        // No session storage: the Unlogged QSOs control still shows the record.
     }
 }
 
@@ -170,7 +170,15 @@ export function consumePreservedAnnouncement(): PreservedAnnouncement | null {
  *  first watch after a reload also shows any pending announcement, once. */
 export function watchSavedDrafts(): () => void {
     const pending = consumePreservedAnnouncement();
-    if (pending !== null) toasts[pending.level](pending.message);
+    // No automatic timeout (the toast stack's bounded eviction still applies)
+    // and a direct way to the list (choice A, 2026-10-04): a self-dismissing
+    // "saved" note was read as "logged".
+    if (pending !== null) {
+        toasts[pending.level](pending.message, 0, {
+            label: 'Open Unlogged QSOs',
+            run: () => (savedQsosPanel.open = true),
+        });
+    }
     void loadSavedDrafts();
     const unsubscribe = onDraftsChanged(() => void loadSavedDrafts());
     const onVisible = (): void => {

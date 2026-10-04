@@ -170,8 +170,9 @@ export function formatUtc(iso: string): string {
  *  that did not happen). */
 export type SaveState = 'saved' | 'unsaved';
 
-/** The one-line statement of what the record is (operator wording 2026-09-30).
- *  An unknown logging outcome is never paired with "not logged". */
+/** The one-line statement of what the record is (operator wording 2026-09-30;
+ *  choice A 2026-10-04: lead with the logging outcome — "saved" first read as
+ *  "logged"). An unknown logging outcome is never paired with "not logged". */
 export function savedDraftHeadline(r: SavedDraft, state: SaveState = 'saved'): string {
     const label = r.archiveLabel;
     const from = `‘${label}’`;
@@ -181,14 +182,14 @@ export function savedDraftHeadline(r: SavedDraft, state: SaveState = 'saved'): s
     }
     if (state === 'saved') {
         return unknown
-            ? `QSO draft saved from ${from} — logging outcome unknown. Check the Logbook in ${from} before logging it.`
-            : `Unlogged QSO saved from ${from} — not logged.`;
+            ? `Logging outcome unknown — QSO from ${from}, kept in this browser. Check the Logbook in ${from} before logging it.`
+            : `Not logged — QSO from ${from}, kept in this browser.`;
     }
-    const origin = label === '' ? '' : ` from ${from}`;
+    const origin = label === '' ? '' : ` — QSO from ${from}`;
     const logbook = label === '' ? 'the Logbook' : `the Logbook in ${from}`;
     return unknown
-        ? `QSO draft${origin} — not saved. Logging outcome unknown. Check ${logbook} before logging it.`
-        : `Unlogged QSO${origin} — not saved, and not logged.`;
+        ? `Logging outcome unknown, and not saved${origin}. Check ${logbook} before logging it.`
+        : `Not logged, and not saved${origin}.`;
 }
 
 /** Callsign and QSO time, for telling several saved records apart. */

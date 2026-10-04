@@ -2,7 +2,7 @@
     Saved QSOs open from a header control (ADR 0086; operator rulings 2026-09-30).
 
       C1  Nothing saved and nothing wrong: no control.
-      C2  The control reads "Saved QSOs (N)" — records from inactive archives and
+      C2  The control reads "Unlogged QSOs (N)" (operator choice A, 2026-10-04) — records from inactive archives and
           with unknown outcomes count.
       C3  Storage that cannot be read shows the control with the error, never an
           empty collection.
@@ -108,21 +108,23 @@ const SECOND = () =>
     });
 
 async function openPanel(): Promise<HTMLElement> {
-    await fireEvent.click(await screen.findByRole('button', { name: /Saved QSOs/ }));
-    return screen.getByRole('dialog', { name: 'Saved QSOs' });
+    await fireEvent.click(await screen.findByRole('button', { name: /Unlogged QSOs/ }));
+    return screen.getByRole('dialog', { name: 'Unlogged QSOs' });
 }
 
 describe('SavedQsosControl', () => {
     it('C1 nothing saved, no control', async () => {
         render(SavedQsosControl);
         await loadSavedDrafts();
-        expect(screen.queryByRole('button', { name: /Saved QSOs/ })).toBeNull();
+        expect(screen.queryByRole('button', { name: /Unlogged QSOs/ })).toBeNull();
     });
 
     it('C2 counts every record, inactive archives and unknown outcomes included', async () => {
         await seed(sampleRecord(), SECOND());
         render(SavedQsosControl);
-        expect(await screen.findByRole('button', { name: 'Saved QSOs (2)' })).toBeInTheDocument();
+        expect(
+            await screen.findByRole('button', { name: 'Unlogged QSOs (2)' })
+        ).toBeInTheDocument();
     });
 
     it('C3 unreadable storage shows the control with the error, not an empty list', async () => {
@@ -141,16 +143,16 @@ describe('SavedQsosControl', () => {
         const first = within(panel).getByTestId('saved-draft-d-1');
         const second = within(panel).getByTestId('saved-draft-d-2');
         expect(first).toHaveTextContent('G0ABC · 2026-09-30 12:00:00 UTC');
-        expect(first).toHaveTextContent('Unlogged QSO saved from ‘Home’ — not logged.');
+        expect(first).toHaveTextContent('Not logged — QSO from ‘Home’, kept in this browser.');
         expect(second).toHaveTextContent(
-            'QSO draft saved from ‘Contest’ — logging outcome unknown. Check the Logbook in ‘Contest’ before logging it.'
+            'Logging outcome unknown — QSO from ‘Contest’, kept in this browser. Check the Logbook in ‘Contest’ before logging it.'
         );
         expect(second).not.toHaveTextContent('not logged');
         expect(panel).not.toHaveTextContent(/switch back/i);
         await fireEvent.click(within(panel).getByRole('button', { name: 'Close' }));
         expect(screen.queryByRole('dialog')).toBeNull();
         expect(mem.rows.size).toBe(2);
-        expect(screen.getByRole('button', { name: 'Saved QSOs (2)' })).toHaveFocus();
+        expect(screen.getByRole('button', { name: 'Unlogged QSOs (2)' })).toHaveFocus();
     });
 
     it('C5 details show every value, with Copy', async () => {
@@ -178,7 +180,7 @@ describe('SavedQsosControl', () => {
         await fireEvent.click(within(entry).getByRole('button', { name: 'Discard' }));
         await vi.waitFor(() => expect(screen.queryByTestId('saved-draft-d-1')).toBeNull());
         expect(mem.rows.has('d-2')).toBe(true);
-        expect(screen.getByRole('button', { name: 'Saved QSOs (1)' })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Unlogged QSOs (1)' })).toBeInTheDocument();
 
         vi.spyOn(mem, 'remove').mockRejectedValue(new Error('storage busy'));
         const other = screen.getByTestId('saved-draft-d-2');
@@ -229,7 +231,7 @@ describe('SavedQsosControl', () => {
         flushSync();
         expect(screen.queryByRole('dialog')).toBeNull();
         expect(draft.callsign).toBe('G0ABC');
-        expect(screen.getByRole('button', { name: 'Saved QSOs (1)' })).toHaveFocus();
+        expect(screen.getByRole('button', { name: 'Unlogged QSOs (1)' })).toHaveFocus();
 
         // Held: the key's auto-repeat must not reach the card.
         document.activeElement?.dispatchEvent(
@@ -249,22 +251,28 @@ describe('SavedQsosControl', () => {
         expect(draft.callsign).toBe('');
     });
 
-    it('C9 newly preserved work is announced once, without opening the panel', async () => {
+    it('C9 newly preserved work is announced once, with an action that opens the panel', async () => {
         const unknown = SECOND();
         await seed(unknown);
         rememberPreservedForAnnouncement(unknown);
         const first = render(SavedQsosControl);
-        await screen.findByRole('button', { name: 'Saved QSOs (1)' });
-        const toast = toastsState.items.find((t) => /Saved QSOs/.test(t.message));
+        await screen.findByRole('button', { name: 'Unlogged QSOs (1)' });
+        const toast = toastsState.items.find((t) => /Unlogged QSOs/.test(t.message));
         expect(toast?.message).toBe(
-            'QSO draft saved from ‘Contest’ — logging outcome unknown. Check the Logbook in ‘Contest’ before logging it. It is under Saved QSOs.'
+            'Logging outcome unknown — QSO from ‘Contest’, kept in this browser. Check the Logbook in ‘Contest’ before logging it. It is under Unlogged QSOs.'
         );
-        expect(toast?.ttl).toBeGreaterThan(0); // an ordinary, self-dismissing toast
+        // No automatic timeout, and its action opens the list (choice A).
+        expect(toast?.ttl).toBe(0);
+        expect(toast?.action?.label).toBe('Open Unlogged QSOs');
         expect(screen.queryByRole('dialog')).toBeNull();
+        toast?.action?.run();
+        expect(await screen.findByRole('dialog', { name: 'Unlogged QSOs' })).toBeInTheDocument();
+        await vi.waitFor(() => expect(screen.getByRole('button', { name: 'Close' })).toHaveFocus());
+        await fireEvent.click(screen.getByRole('button', { name: 'Close' }));
         first.unmount();
         resetToasts();
         render(SavedQsosControl);
-        await screen.findByRole('button', { name: 'Saved QSOs (1)' });
+        await screen.findByRole('button', { name: 'Unlogged QSOs (1)' });
         expect(toastsState.items).toHaveLength(0);
     });
 
@@ -286,7 +294,7 @@ describe('SavedQsosControl', () => {
         flushSync();
         expect(operate.exportOpen).toBe(false);
         expect(savedQsosPanel.open).toBe(true);
-        expect(screen.getByRole('dialog', { name: 'Saved QSOs' })).toBeInTheDocument();
+        expect(screen.getByRole('dialog', { name: 'Unlogged QSOs' })).toBeInTheDocument();
         expect(draft.callsign).toBe('G0ABC');
     });
 });
@@ -365,7 +373,7 @@ describe('Restore from the panel', () => {
         expect(await within(entry).findByRole('alert')).toHaveTextContent(/Clear the current QSO/);
         expect(recovered.record).toBeNull();
         expect(draft.callsign).toBe('K1ABC');
-        expect(screen.getByRole('dialog', { name: 'Saved QSOs' })).toBeInTheDocument();
+        expect(screen.getByRole('dialog', { name: 'Unlogged QSOs' })).toBeInTheDocument();
         expect(mem.rows.has('d-1')).toBe(true);
     });
 

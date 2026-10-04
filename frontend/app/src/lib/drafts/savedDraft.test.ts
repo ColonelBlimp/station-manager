@@ -1,10 +1,11 @@
 /*
     What a saved draft says about itself (ADR 0085; operator wording 2026-09-30).
 
-      D1  An unlogged record reads "Unlogged QSO saved from ‘Home’ — not logged."
+      D1  An unlogged record leads with its outcome (operator choice A,
+          2026-10-04): "Not logged — QSO from ‘Home’, kept in this browser."
       D2  A record whose logging outcome is unknown NEVER says "not logged": it
-          reads "QSO draft saved from ‘Home’ — logging outcome unknown. Check the
-          Logbook in ‘Home’ before logging it."
+          reads "Logging outcome unknown — QSO from ‘Home’, kept in this browser.
+          Check the Logbook in ‘Home’ before logging it."
       D3  Every saved value is shown; the rig values say which reading they are,
           and a missing one reads "unknown", never a default.
       D4  The copy text carries the headline and every row.
@@ -39,7 +40,7 @@ import { sampleRecord, sampleV1Record, sampleV2Record } from './savedDraft.fixtu
 describe('saved draft wording', () => {
     it('D1 unlogged', () => {
         expect(savedDraftHeadline(sampleRecord())).toBe(
-            'Unlogged QSO saved from ‘Home’ — not logged.'
+            'Not logged — QSO from ‘Home’, kept in this browser.'
         );
         expect(savedDraftSummary(sampleRecord())).toBe('G0ABC · 2026-09-30 12:00:00 UTC');
     });
@@ -47,7 +48,7 @@ describe('saved draft wording', () => {
     it('D2 an unknown outcome never says "not logged"', () => {
         const h = savedDraftHeadline(sampleRecord({ outcome: 'unknown' }));
         expect(h).toBe(
-            'QSO draft saved from ‘Home’ — logging outcome unknown. Check the Logbook in ‘Home’ before logging it.'
+            'Logging outcome unknown — QSO from ‘Home’, kept in this browser. Check the Logbook in ‘Home’ before logging it.'
         );
         expect(savedDraftText(sampleRecord({ outcome: 'unknown' }))).not.toMatch(/not logged/);
     });
@@ -88,7 +89,7 @@ describe('saved draft wording', () => {
 
     it('D4 copy text holds the headline and every row', () => {
         const t = savedDraftText(sampleRecord());
-        expect(t.split('\n')[0]).toBe('Unlogged QSO saved from ‘Home’ — not logged.');
+        expect(t.split('\n')[0]).toBe('Not logged — QSO from ‘Home’, kept in this browser.');
         expect(t).toContain('Frequency: 14.255000 MHz');
         expect(t).toContain('Comment: tnx');
     });
@@ -180,11 +181,11 @@ describe('saved draft wording', () => {
     it('D6 an unsaved draft says so, keeping the outcome', () => {
         const plain = sampleRecord();
         expect(savedDraftHeadline(plain, 'unsaved')).toBe(
-            'Unlogged QSO from ‘Home’ — not saved, and not logged.'
+            'Not logged, and not saved — QSO from ‘Home’.'
         );
         const unknown = sampleRecord({ outcome: 'unknown' });
         expect(savedDraftHeadline(unknown, 'unsaved')).toBe(
-            'QSO draft from ‘Home’ — not saved. Logging outcome unknown. Check the Logbook in ‘Home’ before logging it.'
+            'Logging outcome unknown, and not saved — QSO from ‘Home’. Check the Logbook in ‘Home’ before logging it.'
         );
         const text = savedDraftText(unknown, 'unsaved');
         expect(text).not.toMatch(/saved from|not logged/);
@@ -194,7 +195,7 @@ describe('saved draft wording', () => {
         );
         const unproven = sampleRecord({ archiveLabel: '', outcome: 'unknown' });
         expect(savedDraftHeadline(unproven, 'unsaved')).toBe(
-            'QSO draft — not saved. Logging outcome unknown. Check the Logbook before logging it.'
+            'Logging outcome unknown, and not saved. Check the Logbook before logging it.'
         );
     });
 

@@ -115,6 +115,17 @@
                                 <span class="sr-only">{levelLabel[toast.level]}</span
                                 >{toast.message}
                             </p>
+                            {#if toast.action}
+                                {@const action = toast.action}
+                                <button
+                                    type="button"
+                                    class="btn mt-2 text-xs"
+                                    onclick={() => {
+                                        dismissToast(toast.id);
+                                        action.run();
+                                    }}>{action.label}</button
+                                >
+                            {/if}
                         </div>
                         <div class="ml-4 flex shrink-0">
                             <button

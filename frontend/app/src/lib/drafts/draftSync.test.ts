@@ -182,7 +182,7 @@ describe('saved QSOs across tabs', () => {
         await preserveDraft({ archiveId: 'a', archiveLabel: 'Home' }, station);
         expect(consumePreservedAnnouncement()).toBeNull();
         await preserveDraft({ archiveId: 'a', archiveLabel: 'Home' }, station);
-        expect(consumePreservedAnnouncement()?.message).toMatch(/Unlogged QSO saved from ‘Home’/);
+        expect(consumePreservedAnnouncement()?.message).toMatch(/Not logged — QSO from ‘Home’/);
         expect(consumePreservedAnnouncement()).toBeNull(); // once
     });
 });

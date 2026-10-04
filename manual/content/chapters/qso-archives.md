@@ -106,16 +106,30 @@ read **Last activation failed** with the reason.
 
 If a tab that reloads this way holds an unlogged Phone / CW QSO, it saves it in this
 browser before it reloads, together with the archive and logbook it belongs
-to and the rig frequency, band and mode it had. After the reload a message
-says so once, and **Saved QSOs (N)** appears in the header beside Logbook (in
-the map tab, in its toolbar). It stays there on every page while any saved
-QSO remains, in this tab and any other Station Manager tab open in this
-browser. Open it to see each saved QSO: **Show details** shows every value so
+to and the rig frequency, band and mode it had. The QSO is **not logged**: it is
+kept only in this browser until you restore and log it or discard it. After the
+reload a message says so once, with an **Open Unlogged QSOs** button, and has no
+automatic timeout (like any message, it can still be pushed out when several
+arrive at once). **Unlogged QSOs (N)** appears in the header beside Logbook (in
+the map tab, in its toolbar). It stays there on every page while any kept QSO
+remains, in this tab and any other Station Manager tab open in this browser.
+Open it to see each QSO: **Show details** shows every value so
 you can read or **Copy** it, and **Discard** removes the saved copy (only the
 copy in this browser — nothing in any logbook changes). Closing the panel, or
 pressing Esc, keeps every saved QSO and never clears the QSO you are typing. A QSO whose Log
 attempt had an unknown outcome says so: check the Logbook in its archive
-before logging it again. Saved QSOs are never logged automatically. If the
+before logging it again. Unlogged QSOs are never logged automatically.
+
+To log one, open **Unlogged QSOs** on Phone / CW while the archive and logbook
+it came from are in use, and press **Restore**. The QSO returns to the form with
+its original times and the rig values it had. Confirm or correct those values,
+then log it as usual: it goes into its original logbook with the operator
+details it was saved with, and the form is read-only while it is being logged.
+Only one tab can hold a restored QSO at a time. A QSO from another archive or
+logbook says which one it belongs to and offers no Restore here. On other
+pages, **Go to Phone / CW** takes you there without restoring anything.
+
+If the
 browser cannot save the QSO, that tab does not reload: it shows the QSO in
 full, with **Retry save** and **Discard and reload**, and stop controls stay
 available.

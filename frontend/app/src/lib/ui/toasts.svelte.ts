@@ -20,12 +20,19 @@
 
 export type ToastLevel = 'info' | 'warn' | 'error';
 
+/** One button on the toast: running it also dismisses the toast. */
+export interface ToastAction {
+    label: string;
+    run: () => void;
+}
+
 export interface Toast {
     id: number;
     level: ToastLevel;
     message: string;
     createdAt: number;
     ttl: number; // milliseconds; 0 = sticky
+    action?: ToastAction;
 }
 
 const MAX_STACK = 5;
@@ -62,7 +69,12 @@ const timers = new Map<number, ReturnType<typeof setTimeout>>();
         before the new one is pushed (its timer, if any, is cleared so
         we don't dismiss it post-eviction).
 */
-export function pushToast(level: ToastLevel, message: string, ttl?: number): number {
+export function pushToast(
+    level: ToastLevel,
+    message: string,
+    ttl?: number,
+    action?: ToastAction
+): number {
     const id = nextId++;
     const resolvedTtl = ttl ?? DEFAULT_TTL[level];
     const toast: Toast = {
@@ -71,6 +83,7 @@ export function pushToast(level: ToastLevel, message: string, ttl?: number): num
         message,
         createdAt: Date.now(),
         ttl: resolvedTtl,
+        ...(action === undefined ? {} : { action }),
     };
 
     if (toastsState.items.length >= MAX_STACK) {
@@ -115,9 +128,12 @@ function clearScheduledDismiss(id: number): void {
     rather than `pushToast('error', '...')`.
 */
 export const toasts = {
-    info: (message: string, ttl?: number): number => pushToast('info', message, ttl),
-    warn: (message: string, ttl?: number): number => pushToast('warn', message, ttl),
-    error: (message: string, ttl?: number): number => pushToast('error', message, ttl),
+    info: (message: string, ttl?: number, action?: ToastAction): number =>
+        pushToast('info', message, ttl, action),
+    warn: (message: string, ttl?: number, action?: ToastAction): number =>
+        pushToast('warn', message, ttl, action),
+    error: (message: string, ttl?: number, action?: ToastAction): number =>
+        pushToast('error', message, ttl, action),
     dismiss: dismissToast,
 };
 

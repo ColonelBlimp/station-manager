@@ -293,7 +293,7 @@ describe('Header Saved QSOs control', () => {
         _resetSavedDraftsForTests();
         try {
             render(Header);
-            const control = await screen.findByRole('button', { name: 'Saved QSOs (1)' });
+            const control = await screen.findByRole('button', { name: 'Unlogged QSOs (1)' });
             expect(control.closest('header')).not.toBeNull();
             expect(control.closest('.hidden')).toBeNull();
         } finally {

@@ -163,7 +163,7 @@ it('SL5 a failed re-read keeps the QSO, says the list is stale, and Clear retrie
     expect(mem.rows.get('d-1')?.rigCorrection?.freqHz).toBe(14_200_000); // committed
     expect(recovered.record).not.toBeNull();
     expect(recoveredSave.error).toBe(''); // the edit is NOT reported unsaved
-    expect(recoveredSave.listError).toMatch(/Saved QSOs list could not be refreshed/);
+    expect(recoveredSave.listError).toMatch(/Unlogged QSOs list could not be refreshed/);
     // No further edit: the next Clear refreshes the list and lets the QSO go.
     expect(await clearRecovered()).toBe(true);
     expect(savedDrafts.list[0].rigCorrection?.freqHz).toBe(14_200_000);

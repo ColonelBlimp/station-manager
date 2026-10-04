@@ -27,7 +27,7 @@ export const recoveredSave = $state({
     discarding: false,
 });
 const LIST_STALE =
-    'Saved, but the Saved QSOs list could not be refreshed to show it, so the QSO stays here — try Clear again.';
+    'Saved, but the Unlogged QSOs list could not be refreshed to show it, so the QSO stays here — try Clear again.';
 
 let trackedRecord: SavedDraft | null = null;
 let lastSeen = '';

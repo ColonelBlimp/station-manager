@@ -101,7 +101,7 @@ describe('the Saved QSOs control on the Map route', () => {
         navigate('map');
         render(App);
         expect(
-            await screen.findByRole('button', { name: 'Saved QSOs (1)' }, { timeout: 3000 })
+            await screen.findByRole('button', { name: 'Unlogged QSOs (1)' }, { timeout: 3000 })
         ).toBeInTheDocument();
     });
 
@@ -118,10 +118,10 @@ describe('the Saved QSOs control on the Map route', () => {
         setup.status = 'complete';
         navigate('map');
         render(App);
-        await screen.findByRole('button', { name: 'Saved QSOs (1)' }, { timeout: 3000 });
+        await screen.findByRole('button', { name: 'Unlogged QSOs (1)' }, { timeout: 3000 });
         expect(
             await screen.findByText(
-                'Unlogged QSO saved from ‘Home’ — not logged. It is under Saved QSOs.'
+                'Not logged — QSO from ‘Home’, kept in this browser. It is under Unlogged QSOs.'
             )
         ).toBeInTheDocument();
     });

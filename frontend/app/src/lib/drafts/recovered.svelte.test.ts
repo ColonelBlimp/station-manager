@@ -275,7 +275,7 @@ describe('recovered form', () => {
         const card = render(LoggingCard);
         await loadSavedDrafts();
         render(SavedQsosControl);
-        await fireEvent.click(screen.getByRole('button', { name: 'Saved QSOs (1)' }));
+        await fireEvent.click(screen.getByRole('button', { name: 'Unlogged QSOs (1)' }));
         expect(savedQsosPanel.open).toBe(true);
         expect(screen.queryByRole('button', { name: 'Restore' })).toBeNull();
         await fireEvent.click(screen.getByRole('button', { name: 'Close' }));
