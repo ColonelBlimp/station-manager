@@ -1901,6 +1901,118 @@ EQUIVALENT: with the new barrier, the awaited retry itself resolves as soon as t
 lands. Running total for commit 3: 39 new cases, 41 successful reversion proofs, four
 equivalent mutations.
 
+**Restore commit 4 — recovered Log and public Restore (BUILT 2026-10-03; committed `c551c828` 2026-10-04 after two pre-commit review rounds).**
+Operator approval 2026-10-03 with boundaries: persist the exact request before the POST;
+after confirmed storage the UUID is terminal in this tab and cleanup never resubmits;
+ambiguous outcomes are distinct from definite refusals and a later refusal never erases
+earlier uncertainty; gates rechecked after every wait; CAT bypassed only for recovered
+submissions; Restore wired last, and "Go to Phone / CW" only navigates.
+
+`drafts/recoveredRequest.ts` builds the request from the record alone: saved fields and times
+(a blank end time stays blank), the recovered — possibly corrected — frequency, band, mode and
+submode, the record's station callsign and MY_GRIDSQUARE, and the saved OPERATOR / MY_NAME
+(a known-empty value is omitted; the daemon then applies today's default, and the `expect_*`
+check refuses the submit if that default no longer matches). `submitQso` sends
+`expect_my_rig` / `expect_operator` / `expect_my_name` (all three, empty included).
+The stored attempt (record v3) now carries the whole request: archive id, logbook UUID and id,
+force flag, ADIF and expected attribution; a record missing any of them is unreadable.
+
+`drafts/recoveredSubmit.svelte.ts` (`logRecovered`): gates — attribution present, archive
+switch gate, the record's archive and logbook UUID equal to the page's, this tab's reservation,
+confirmed rig values, callsign / date / time and field validation, the in-flight latch — and
+NOT the CAT link. It flushes outstanding edits, rechecks, stores the attempt with outcome
+"unknown" (`persistRecordChange`; memory rolls back if the write fails, and nothing is sent),
+rechecks again (a gate closing meanwhile withdraws the attempt and sends nothing), then sends.
+Confirmed: the UUID is held as terminal; edits stop; the record is deleted, else rewritten as
+`logged` with the UUID; if both fail the card shows the UUID with "Retry cleanup", Log is
+disabled and the lock kept (a reload falls back to the persisted unknown state, RS22).
+Ambiguous (transport failure, malformed success, abort): the attempt stays, outcome unknown,
+no retry. Definite (validation, `attribution_changed` shown verbatim — the daemon's message
+names current and expected values — and duplicate): the state before this request returns, so
+an earlier unknown outcome and its attempt survive. Duplicate: the record and form are kept,
+"Show contacts with <call>" opens the worked-before panel, and "Log anyway — this is a
+separate contact" resends with force; Ctrl+Enter never forces. An unknown-outcome record asks
+"I checked the original Logbook; this contact is not already logged." first (RS24). The
+Log's messages and confirmed UUID belong to the installed record they arose on: a QSO
+restored later — even the same saved record — starts clean and is not blocked.
+
+The card's Log button and Ctrl+Enter take this path whenever a recovered QSO is on the form;
+the button's disabled state and title come from `recoveredLogBlock`. `main.ts` wires the
+sender (refreshing the header count on success), the environment (`archiveSwitchGate`, the new
+`bootArchiveId()`, the active logbook) and the enrichment fields — factored with the ordinary
+Log into `enrichmentExtras(call, myGrid)`, whose bearing uses the RECORD's grid. That cut the
+ordinary submit's complexity from 39 to 23; its baseline key moved `line@581` → `line@589`.
+
+Public entry, wired last: each Saved QSOs entry shows Restore when eligible on Phone / CW,
+"Go to Phone / CW" elsewhere (navigation only), the reason when unavailable or MY_RIG
+differs, and nothing when logged or when the page has no Restore wired; a refusal at the
+moment of pressing is shown in that entry with the panel and record kept. `restoreSession`
+holds the page environment (`setRestoreEnv`, `restoreFromPanel`). The boot identity and the
+attribution cache became reactive (`attributionSource.ts` → `attributionSource.svelte.ts`)
+so an entry follows them as they are read, instead of showing a stale "could not be read".
+
+Evidence: 40 new cases — LG1–LG15 (19), RQ1–RQ4, LC1–LC6 (7), C11–C17 (7), the expect_*
+request (2) and `bootArchiveId` (1); D10 widened; C4 now promises no archive switch rather
+than no restore. **36 successful reversion proofs** each failing its intended assertion:
+CAT gating the button, Ctrl+Enter routing, attempt not stored first, failed store still
+sending, memory not rolled back, no recheck after the store, refusal erasing an earlier
+unknown, malformed/aborted treated as definite, confirmed UUID not blocking, writes not
+stopped before cleanup, fallback not `logged`, RS24 skipped, attribution gate, extras grid,
+Log anyway unforced, inspection inert, title, cleanup retry, outcome message, Restore not
+closing the panel, Go to Phone / CW restoring, unavailable / logged / unwired entries offering
+Restore, refusal not shown, `bootArchiveId`, both reactivity reverts, the per-record message
+view and its reset, the empty `expect_my_name`, attempt `force` / `logbookUuid` validation,
+blank end time, recovered frequency, enrichment extras. Two of them (confirmed-UUID gate,
+attribution gate) fail at the intended `expect` as a TypeError (`toMatch` given null).
+**One equivalent mutation:** dropping the empty-value guard on MY_NAME in the request, since
+`formatAdifRecord` already omits empty fields. Gates: lint, format, svelte-check (0/0), 2,288
+SPA tests in 164 files, maintainability (0 regressions), context check. No Go change, no
+dependency change. Not unit-tested: the `main.ts` wiring itself, as for the rest of that file.
+
+Pre-commit review (2026-10-04, pasted), both fixed before commit:
+
+- **P1, "Retry cleanup" could erase the next contact.** Overlapping retries each let go of the
+  form, so a later one emptied a contact begun after the first. Fix:
+  - Cleanups run one at a time, each for the QSO it was asked for.
+  - A cleanup lets go of the form only while this tab still holds that QSO.
+  - While any cleanup runs, the Log's latch (`submitState.busy`) stays held, so Clear and
+    Discard stand down, as they do for the request.
+  - Tracing the fix turned up the same race in the fallback: a Discard during the "logged"
+    write would have written the discarded record back. The latch closes that too.
+- **P2, the submitting tab's Saved QSOs list went stale after cleanup.** The change notice
+  reaches only the other tabs. Fix: either cleanup outcome now refreshes this tab's list.
+
+LC5 had restored storage while the first cleanup was still running, so it passed only because
+of the race. It now waits for the shown failure first.
+
+Evidence:
+- **New cases (4):** LG16 (overlapping retries; Clear and Discard standing down) and LG17
+  (the deleted and the "logged" outcome both reach this tab's list).
+- **Six successful reversion proofs**, each failing its intended assertion: no serialization,
+  no early let-go guard, no list refresh, no latch, latch never released, plus the
+  original-race RED.
+- **One equivalent mutation, recorded honestly:** the ownership check before letting go,
+  which the latch already makes unreachable. It is kept as defence in depth.
+- **Gates:** lint, format, svelte-check (0/0), 2,292 SPA tests, maintainability
+  (0 regressions).
+
+Follow-up review (2026-10-04, pasted), fixed before commit:
+
+- **P1, the latch was released under a queued cleanup.** The Log's own `finally` released the
+  latch unconditionally. So a Retry cleanup clicked while the Log's first cleanup was still
+  running outlived the Log, and ran with Clear and Discard allowed again. A Discard during it
+  let the retry's fallback write the discarded record back.
+- **Fix:** the Log keeps the latch while any cleanup remains.
+- **Evidence:**
+  - **New case (1):** LG16, a retry queued before the Log settles.
+  - **Reversion proof:** P47 (latch released unconditionally) fails at the intended
+    assertion.
+  - **Gates:** lint, format, svelte-check (0/0), 2,293 SPA tests, maintainability
+    (0 regressions).
+
+**RS8 and RS11 remain OPEN for the operator's two-window drill**, now against the public entry.
+No hardware or RF experiment was run; no daemon was restarted.
+
 Deferred by the ADR and not planned here: archive delete, external attach CLI, in-process switch,
 cross-archive query.
 
