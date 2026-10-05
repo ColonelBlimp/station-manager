@@ -71,6 +71,19 @@ state that unlogged work in any other window is lost.
      in flight or unresolved.
    - So does the instance-compare reload after a switch. Only the draft-saving step before the
      reload goes.
+8. **The Activate prompt (operator, 2026-10-05).**
+   - **Mechanism:** the browser's `window.confirm`, as Activate already uses. A styled dialog with
+     named buttons stays its own item.
+   - **Content:** the prompt names the destination archive.
+   - **Unlogged entry:** when this window holds one, including a partial one, the prompt names
+     it and states that OK discards this window's entry and switches.
+   - **Other windows:** it always warns that unlogged work in any other window will be lost.
+   - **Cancel** sends nothing and preserves everything.
+9. **A Log in flight (operator, 2026-10-05).**
+   - **Refused:** Activate is refused while this window's Log is in flight, checked both before
+     the confirmation and again before the activation starts.
+   - **Allowed:** once the outcome is unknown, switching is allowed. The prompt then says the
+     QSO **may already be logged** and should be checked in the original archive's Logbook.
 
 ## Alternatives considered
 

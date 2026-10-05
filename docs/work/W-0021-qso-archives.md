@@ -2322,6 +2322,238 @@ Codex review of `c551c828` (2026-10-04), two P2 findings:
     - The refusal is `409 reload_required` for any `expect_*` key.
     - Whether `config.updated` and `rigReadingForSave` stay is left to the removal change.
     - The removal is its own change, next.
+
+### ADR 0087 removal plan (2026-10-05, for operator review)
+
+**One releasable commit**, with tests and code together. The docs commit follows.
+
+**Caller evidence**
+- **`config.updated`.**
+  - Daemon side, its only publisher is `internal/api/server.go:158`. It goes through
+    `config.Service.SetOnChanged` / `announceIfLive` (`internal/config/config.go`). That is the
+    hook's only caller.
+  - SPA side, the only consumer is `log-events.ts:134` → `onConfigUpdated` → `main.ts:758` →
+    `noteConfigUpdated` (the attribution source).
+  - All of this was introduced by `4a27711e` for ADR 0085.
+  - **Remove:** the event, the payload, the hook, and the SPA listener and handler.
+- **`rigReadingForSave` / `rigSnapshot.svelte.ts`** (added by `ebe244dc` for ADR 0085).
+  - `rigReadingForSave`'s only caller is `preserve.ts:60`.
+  - The rest of the module serves only the held reading:
+    - `noteRigDrop` (`main.ts:470`).
+    - `rigDropEpoch` and `retireRigSnapshot` (`archives.svelte.ts:516/548/561/582`).
+    - `rigSnapshotHeld`, the RST-refill guard (`qso.svelte.ts:211`).
+  - **Remove the module.** The RST refill returns to its pre-ADR 0085 rule: refill on every
+    default change.
+  - **Keep `isRetainedDefault`** (`bbfcb608`). It still stops untouched default reports from
+    counting as unlogged work.
+- **Other code added only for recovery.** The commits are `ebe244dc`, `21feafae`, `899bda8c`
+  and Restore commits 1–4.
+  - **Remove:**
+    - `setConfigWriteListener` (`_helpers.ts`) and `lib/api/submit-attribution.ts`.
+    - The `recovered` hooks in `qso.svelte.ts`, `enrich.svelte.ts`, `CallsignStackPanel` and
+      `LoggingCard`.
+    - The `readonly` / `frozen` props on `LoggingCard`, `CommentField` and `RecoveredContext`.
+    - `SavedQsosControl` in `Header` and `MapView`.
+    - The held-save block in `ArchiveSwitchGate`.
+    - The preserver and `saveFailed` state in `archives.svelte.ts`.
+    - All of `lib/drafts/`.
+  - **Keep** `logOutcomeUnknown` (`ebe244dc`), now for the Activate prompt (see the
+    operator decision on in-flight logs below).
+- **Daemon (Go).**
+  - **Remove:**
+    - `GET /v1/submit-attribution` (`server.go:279`, `handler_submit_attribution.go`).
+    - `expectedAttribution`.
+    - `SubmitExpecting`, `LiveAttribution` and `checkAttribution`, plus the `expect` parameter
+      of `qsoservice.submit`.
+    - `types.SubmitAttribution`.
+  - **Keep:** `stampedMyRig` and `effectiveOperatorAndName`, the ordinary stamping, and the
+    strict query parse in `handler_qso.go`, which also guards `force`.
+
+**Behaviour, tests first. RED before code unless marked characterization (C).**
+- **C1 (Go) — ordinary attribution stamping is unchanged.**
+  - Port `TestLiveAttribution_MatchesWhatSubmitStores` to assert `Submit` alone:
+    - MY_RIG is pinned to the startup rig, including after a runtime default change.
+    - OPERATOR is the supplied value or the default.
+    - MY_NAME comes from the roster.
+  - Green before and after.
+  - Kept alongside `pin_myrig_test` and `TestSubmit_DefaultsOperatorFromRoster`.
+- **C2 (SPA) — navigation keeps the draft.** Fill the Phone / CW form, go Operate → Settings →
+  Archives → Operate, and the draft is intact. Green now; it guards "opening Settings clears
+  nothing".
+- **C3 (SPA) — RST refill.** A mode change refills both reports. Untouched default reports are
+  not unlogged work. Green before and after the module's removal.
+- **A1 — Activate with an empty form.**
+  - Confirm text adds the other-windows statement.
+  - OK sends the request.
+  - Cancel sends nothing.
+- **A2 — Activate with an unlogged QSO.**
+  - No refusal toast.
+  - The confirm names the QSO (call, Time On) and says it will be discarded, and repeats the
+    other-windows statement.
+  - OK sends the request; Cancel sends nothing and the draft is untouched.
+  - Reversion: restoring `refuseOverUnloggedWork` fails A2.
+- **A3 — the draft is discarded by the reload, not before the request.**
+  - **Definite refusal, or an uncoded answer that did not accept:** draft intact, no reload.
+  - **Accepted, with the new instance proven:** reload and nothing saved. The preserver is gone,
+    and no storage, lock or channel is touched.
+  - **Unknown outcome, unproven:** gated, draft intact.
+- **A4 — a log in flight or with an unknown outcome** (operator decision below).
+- **R1 — cross-window rebind.**
+  - Another archive on reconnect latches the gate BEFORE the reload, then reloads with no save
+    step and no held-reload state.
+  - The existing `verifyArchiveGeneration`, boot-bracket and gate tests are retained as
+    characterization.
+- **H1 — header.**
+  - The archive is shown as text with no selector, and nothing in the header activates.
+  - There is no Unlogged QSOs control in the header or on the Map.
+- **Q1 (Go) — `POST /v1/qso` with any `expect_`-prefixed query key → `409 reload_required`.**
+  - Cases: each of the three keys alone, all three, and an unknown `expect_x`.
+  - Nothing is stored: QSO rows and upload-queue rows are unchanged.
+  - A malformed query stays 400.
+  - Reversion: ignoring the keys fails Q1.
+- **Q2 (Go) — `GET /v1/submit-attribution` → 404** from the route fallback.
+- **O1 — orphaned records are untouched.**
+  - **Behavioural:** with spies on `indexedDB.open`, `navigator.locks.request` and
+    `BroadcastChannel`, booting the real `main.ts` and running an accepted switch plus a
+    foreign rebind calls none of them.
+  - **Structural (allowlist empty):** no non-test source under `src/` names `indexedDB`,
+    `navigator.locks`, `BroadcastChannel` or `saved-qso-drafts`.
+  - Reversion: re-adding a `draftStore` open at boot fails O1.
+
+**Tests deleted with the code they prove**
+- **SPA, whole files:**
+  - All 15 of `lib/drafts/*.test.ts`.
+  - `main.attributionboot.test.ts`.
+  - `lib/api/submit-attribution.test.ts`.
+  - `lib/operate/rigSnapshot.svelte.test.ts`.
+- **SPA, cases within files:**
+  - `archives.svelte.test.ts`: the "rebind reloads preserve unlogged work" block (V1–V10) and
+    U1/U2. U1/U2 are replaced by A2. U3/U4 are kept.
+  - `ArchiveSwitchGate.svelte.test.ts`: G1–G6. The stop-control and gate cases are kept.
+  - `Header.svelte.test.ts`: the selector cases (replaced by H1) and the Saved QSOs control.
+  - `App.svelte.test.ts`: the Saved QSOs on the Map cases. The gate-on-Map cases are kept.
+  - `log-events.test.ts`: the `config.updated` block.
+  - `CommentField.svelte.test.ts`: the read-only case.
+- **Go:**
+  - `qsoservice/attribution_test.go`, after C1 is ported.
+  - `api/handler_submit_attribution_test.go`. `TestSubmitQso_MalformedQueryIs400AndStoresNothing`
+    moves to the handler_qso tests and is kept.
+  - `config/config_live_hook_test.go`.
+
+**Docs in the same change**
+- **`api-endpoints.md`:** remove the `config.updated` notice, the endpoint and the `expect_*`
+  text, and add `409 reload_required`.
+- **Manual `qso-archives.md`:** the Settings-only switch, the Activate prompt and the loss
+  statement. Remove Unlogged QSOs.
+- **Baseline:** `quality/maintainability-baseline.json` if `main.ts` line keys move.
+
+**Gates**
+- SPA: lint, format, svelte-check, vitest.
+- Go: `gofmt` (whole tree), `go vet ./...`, `go test ./...`, the maintainability check.
+- Cloud tests with the database (`submit` signature change).
+- `task ci:local`.
+
+**Operator decisions needed**
+1. **Prompt mechanism.** `window.confirm` keeps the existing Activate confirm, with OK meaning
+   "discard it and switch" stated in the text. The alternative is a styled dialog with named
+   buttons. Recommendation: `window.confirm` now; styled dialogs stay their own item.
+2. **A log in flight.** Refuse Activate while a Log is in flight ("wait for the log to finish").
+   An unknown outcome is allowed, but the prompt says to check the Logbook in this archive
+   first. Recommendation: as stated.
+
+**Operator review of the plan (2026-10-05).**
+- **Decisions:** both recommendations accepted and recorded in ADR 0087 as items 8 and 9.
+  - The Activate refusal for a Log in flight is checked before the confirmation AND again before
+    the activation starts.
+  - With an unknown outcome, the prompt says the QSO "may already be logged" in the original
+    archive's Logbook.
+  - The prompt names the destination and covers partial drafts.
+- **Evidence:** the caller evidence is accepted. Both `config.updated` and the rig snapshot
+  module are removed.
+- **Corrections to the plan:**
+  1. **C3 needs its own failing test:** a disconnect followed by a changed mode default now
+     refills the reports immediately. An ordinary mode change alone cannot tell the removed
+     behaviour apart.
+  2. **V10 is not deleted wholesale.** Its unreadable-identity gate, foreign-archive reload and
+     unproven-boot assertions are retained. Only the preservation and held-reading assertions go.
+  3. **O1 also spies on `indexedDB.deleteDatabase`.**
+  4. **`api-endpoints.md` and the manual ship in the implementation commit.** The dossier and
+     handoff notes follow separately.
+
+**ADR 0087 removal built (2026-10-05, uncommitted at the time of writing).**
+- **RED on the old code, failing on the intended assertion:**
+  - Q1 (`reload_required`, all six key cases) and Q2 (the route still answered 200).
+  - C3b: a drop followed by a mode change left 59/59.
+  - R1/O1: the failed save held the reload.
+  - H1 header ×3.
+  - A1–A4 and R2.
+- **Characterization, passing before and after:**
+  - C1 stamping.
+  - C2 navigation keeps the draft.
+  - C3a mode-change refill.
+  - The malformed query is still 400.
+  - U3/U4, the retained V10 cases (unreadable identity gates, another archive reloads,
+    unproven boot does nothing), and the gate and stop-control tests.
+- **Guards that passed before the change (not discriminating; recorded honestly):**
+  - The Map page and the header showing no Unlogged QSOs control. App and Header never loaded
+    the saved list themselves; `main.ts` did, so O1 on the real boot is the discriminating test.
+- **Reversion proofs.** Each was applied with a unique anchor, verified, and restored to
+  green:
+  - **P1 (Go):** the `expect_` prefix check neutralised → Q1 fails "want 409 reload_required".
+  - **P2:** the old refusal over unlogged work restored → A2, A3, A4 and R2 fail.
+  - **P3:** the check after the prompt dropped → "A4 a Log started while the prompt is open"
+    fails (`activating`/request).
+  - **P4:** `indexedDB.open` at boot → O1 behavioural (`opens` = ['station-manager']) and the
+    structural guard fail.
+  - **P5:** `indexedDB.deleteDatabase` at boot → O1 fails on `deletes`.
+- **Removed beyond the plan's list:** each was introduced only by a recovery commit, and each
+  now has no consumer.
+  - The toast `action` (option A, `c2600910`).
+  - The Map branch's own toast renderer and the `h-screen` wrapper (`ebe244dc` / `894b5359`).
+  - `adif.NormalizeValue` (`9573017e`).
+  - The SPA `submitQso` `expect` option (`c551c828`).
+  - `StationContext.logbookUuid` and `isoAt` (`ebe244dc`).
+  - `bootArchiveId` (RS18).
+  - Each file was restored to its version before that commit wherever recovery was its only
+    change: `LoggingCard`, `ArchiveSwitchGate` (+ test), `CommentField` (+ test), `enrich`,
+    `log-events` (+ test), `_helpers` (+ test), `seams` (+ test), `time` (+ test), `App`,
+    `MapView`, `toasts` / `Toasts` (+ test), the SPA `qso` API (+ test), `config.go`
+    (byte-identical to before `4a27711e`), and `parse.go`.
+- **Kept:**
+  - The `enrichmentExtras` split in `main.ts`, so the submit seam stays at complexity 23. The
+    baseline is rekeyed `line@590` → `line@529`.
+  - `verifyAfterRigReconnect`, now without the rig-reading retirement.
+  - `submitState.uncertain` / `logOutcomeUnknown`, for the Activate prompt.
+  - `isRetainedDefault`.
+- **New, small:** the display-only header names a pending candidate ("Home (switching to
+  Contest)"), which the old selector showed as an option.
+- **Gates:**
+  - SPA lint, format, svelte-check (0/0) and vitest 2,080/2,080.
+  - Go: `gofmt` clean, `go vet`, and the whole-tree `go test`.
+  - The Postgres-gated cloud suites (`sm-pg` started for the run, then stopped).
+  - Maintainability 0 regressions after the rekey.
+  - `task ci:local`: PASS ("All CI gates passed locally").
+- **Review corrections (2026-10-05, before commit).**
+  - **Wording.** With an unknown Log outcome, the Activate prompt now says "a Phone / CW entry
+    whose Log outcome is unknown" and never "unlogged QSO". A4 asserts this and was RED first.
+  - **The old-page refusal** now reads "this page is out of date; reload it. This request stored
+    nothing — an earlier attempt may already be logged, so check the Logbook". It no longer tells
+    the page to log again.
+  - **Q1 strengthened:**
+    - An enabled insert forwarder is bound to the logbook. The plain-submit control stores 1
+      QSO AND queues 1 upload.
+    - Every refused case leaves both counts at 0.
+    - The decoded `message` must contain "reload" and "this request stored nothing", and must
+      not say "log … again". It failed RED on the old message.
+  - **P6, store-then-refuse:** submitting before the 409 fails Q1 with "stored 1 QSOs, want 0".
+    The queue assertion cannot fail on its own: QSO and upload rows commit in one transaction,
+    so the control is what proves the fixture can queue.
+  - **Gates after the corrections:**
+    - SPA lint, format, svelte-check (0/0) and vitest 2,080/2,080.
+    - Go `gofmt`, `vet` and `./internal/...`.
+    - Maintainability 0.
+    - `task ci:local` was not re-run.
+
   - **Option 1 selected and implemented (2026-10-05; uncommitted).** ADR 0085's dated
     update supersedes disconnect-clears: retain the last matching attribution for the
     switch-triggered save, unconfirmed until a successful proven re-read. Restore still
