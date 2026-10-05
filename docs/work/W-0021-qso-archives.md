@@ -2202,6 +2202,68 @@ Codex review of `c551c828` (2026-10-04), two P2 findings:
     with the toast "Unlogged QSO saved from ‘Drill Arc’ — not logged. It is under Saved
     QSOs."
   - **Inbox:** two notes logged during setup.
+  - **Discovery check of option A PASS (2026-10-05, after the deploy of `152fb36b`).**
+    - The existing 7Q7CT record showed under "Unlogged QSOs (1)" with the headline "Not
+      logged — QSO from ‘Drill Arc’, kept in this browser."
+    - A held a new `7Q7DT` draft; B switched to ‘Drill Arc’. A reloaded with the sticky
+      "Not logged — …" toast and its **Open Unlogged QSOs** action. The action opened the
+      panel with focus on Close, which listed 2 records. `7Q7DT` was then discarded.
+  - **S2.4 PASS** (B's switch back to ‘Drill Arc’ was the discovery switch).
+  - **S2.5 reported PASS, then corrected to FAIL at D1 (2026-10-05).** The operator's
+    screenshot shows the 7Q7CT entry on Phone / CW with ‘Drill Arc’ / ‘Drill Lb’ active,
+    offering only Show details and Discard, with the reason "Original attribution
+    unavailable." The record was saved with `attribution: null`.
+  - **Cause (traced in code; not yet proven by a test).**
+    - Window A, which did not start the switch, learns of it only on reconnect.
+    - The events-stream transport error calls `noteDisconnected()` first (`main.ts:755`),
+      which clears the page's attribution (`attributionSource.svelte.ts` `invalidate`).
+    - The rebind save then reads `currentAttribution(ctx.operator)` (`main.ts:519`) and
+      gets null. The re-read after the reconnect is gated by `bindingValid()` and cannot
+      apply on a daemon that serves another archive.
+    - So every save made by a window that did not start the switch records attribution as
+      missing. That window is the one RS8/RS11 exist for. The initiating window is refused
+      over unlogged work, and a same-archive restart does not save. So in practice no
+      app-made record is restorable. Unit fixtures always supply an attribution, which is
+      why the tests did not show this.
+    - This follows the 2026-10-02 contract in ADR 0085 ("a disconnect of the events stream
+      clears it too"). Its interaction with the rebind save was not weighed then.
+  - **Drill paused at D1** pending the operator's ruling on the contract.
+  - **Option 1 selected and implemented (2026-10-05; uncommitted).** ADR 0085's dated
+    update supersedes disconnect-clears: retain the last matching attribution for the
+    switch-triggered save, unconfirmed until a successful proven re-read. Restore still
+    uses only confirmed current attribution. Config writes, `config.updated`, and requested
+    operator changes still clear both uses immediately. Missing historical values are never
+    backfilled; the existing `7Q7CT` record still needs Discard and a fresh S2 record.
+  - **Cause proven test-first (2026-10-05).** M4 in `main.attributionboot.test.ts` imports
+    real `main.ts`, reads attribution through the stubbed HTTP transport, emits the events
+    drop, then reopens against another archive. The real preserver writes to the test's
+    memory store before its reload seam runs. Before the fix it reached
+    `expect(saved.attribution).toEqual(original)` with null; afterwards it preserves all
+    three values and the original archive/logbook, and passes Restore eligibility with
+    that original destination active again. Same-archive reconnect writes no record, and
+    the different-archive reconnect makes no attribution read from the new archive.
+  - **Reversion proofs:** independently reinstated disconnect-clears and the preserver's
+    confirmed-only getter. Both mutations were verified present; each failed M4 at that
+    exact saved-attribution assertion (null versus the three original values). Both were
+    restored. AS11–AS14 cover late responses, failed refresh, definite invalidation after
+    a drop, operator identity, known-empty/missing values and a boot read crossing a drop.
+    The focused attribution/preservation/eligibility/recovered-submit run passed 71 tests.
+    RS8/RS11 remain OPEN; none of this is a browser ownership or closure proof.
+  - **Validation and candidate (2026-10-05).** `SKIP_NPM_CI=1 task ci:local` PASS:
+    164 frontend files / 2,311 tests, lint/format/type checks, production build, Go vet/lint,
+    zero maintainability regressions, race/full Go tests, static/PocketFFT builds and the
+    build-boundary checks. The added import moved the existing `main.ts` complexity entry
+    from line 589 to 590; only its location changed, not its limit of 23. An unnecessary
+    test `async` was removed after lint caught it; the sandbox-blocked Go cache stage was
+    rerun with cache access. `SM_FFT=pocketfft task rpm:dev` PASS, producing
+    `build/private/station-manager-dev.x86_64.rpm`, version
+    `2.0.0-alpha.3-147-g152fb36b-dirty`.
+  - **Deployment and drill still pending.** The daemon was observed active; checking the
+    exact RPM install permission with `sudo -n -l` returned "a password is required."
+    Nothing was installed or restarted. Operator: run `task deploy:local:dev` in a terminal,
+    refresh both browser windows, Discard the old `7Q7CT` record, and repeat S2 using a fresh
+    app-created record before D1. No browser-control tool was available to discard that
+    origin-bound record here. S2.5 remains FAIL and RS8/RS11 remain OPEN until observed.
 No hardware or RF experiment was run; no daemon was restarted.
 
 Deferred by the ADR and not planned here: archive delete, external attach CLI, in-process switch,

@@ -384,6 +384,46 @@ attribution resolved for B).
 - **Boundary.** SSE gives eventual invalidation, not instant knowledge of a remote write.
   The server's submit-time expectation check remains the final protection.
 
+## Attribution retained across disconnect — 2026-10-05
+
+Adopt option 1 from the S2.5 failure review: retain the last attribution read for
+this page's requested operator when the events stream drops, marking it
+unconfirmed. This supersedes only the disconnect-clears rule above. A config
+write from this page, a `config.updated` event, or a change of requested operator
+still clears the value immediately and invalidates reads in flight.
+
+The two-window drill exposed an interaction missed on 2026-10-02: the window
+holding the draft discovers another archive after a disconnect. Clearing its
+attribution first means preservation always writes missing attribution, so the
+app's own saved record cannot offer Restore. S2.5 is FAIL; an empty lock list
+does not prove the ownership drill ran.
+
+The retained value is available to the switch-triggered save, not as confirmed
+current attribution for Restore. Disconnect invalidates in-flight reads so a
+late response cannot replace it. Every proven same-archive reconnect re-reads;
+a failed read leaves the retained value unconfirmed. An archive change cannot
+refresh it from the new archive. No successful prior read, or a definite
+invalidation without a successful replacement read, still means missing.
+Known-empty values remain distinct from missing values. Existing records with
+missing attribution are never backfilled.
+
+The weighed alternative was to keep clearing on disconnect and leave records
+from other windows read-and-copy only, bringing forward the parked recovery
+redesign. Retention is selected because it gives the existing Restore path an
+app-created record without changing destination or server stamping. A config
+change missed during the outage can make the retained value stale. Restore
+still checks the current rig attribution; Log sends the saved expectations,
+and the server refuses a mismatch with `attribution_changed`, storing nothing
+and leaving the form and record available.
+
+Acceptance: exercise the real boot read → events drop → another archive →
+preservation path, asserting the saved attribution and original identities;
+then evaluate Restore with the original archive/logbook active again. Merely
+showing a readable saved record is insufficient. Also cover late reads, failed
+same-archive refresh, definite invalidation, and missing versus known-empty
+values. RS8/RS11 still require a fresh record and the operator's browser drill;
+the old `7Q7CT` record cannot be repaired with today's attribution.
+
 ## Triggers to revisit
 
 Revisit if the operator wants to move unfinished contacts between archives,
