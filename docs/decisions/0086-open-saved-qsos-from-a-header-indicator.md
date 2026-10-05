@@ -1,11 +1,13 @@
 ---
 number: 0086
 title: Open saved QSOs from a header indicator
-status: Accepted
+status: Superseded by 0087
 date: 2026-09-30
 ---
 
 # 0086 — Open saved QSOs from a header indicator
+
+> **Superseded 2026-10-05 by ADR 0087**, which removes the saved-QSO recovery this indicator opened. Read 0087 for the current decision.
 
 ## Context
 

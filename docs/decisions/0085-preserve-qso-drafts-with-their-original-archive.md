@@ -1,11 +1,13 @@
 ---
 number: 0085
 title: Preserve QSO drafts with their original archive
-status: Accepted
+status: Superseded by 0087
 date: 2026-09-30
 ---
 
 # 0085 — Preserve QSO drafts with their original archive
+
+> **Superseded 2026-10-05 by ADR 0087.** Archives switch only from Settings → Archives, gated on Activate with Discard-and-switch; unlogged work in other windows is stated as lost, and the browser-held recovery this ADR defines is removed. Read 0087 for the current decision.
 
 ## Context
 

@@ -36,7 +36,7 @@ re-enrichment generation race) are all closed (2026-08-22).
 
 Open one workstream per active focus.
 
-1. **W-0021 · SELECTED 2026-09-21 — [First-class QSO archives (ADR 0071 programme)](work/W-0021-qso-archives.md).** Stable archive and logbook identities with in-place adoption, managed catalogue and provisioner with last-known-good startup, create/list/activate over the attended restart, the shell archive selector, SM Cloud keyed by UUIDs. Five slices planned in the dossier; slice 1 (identities and adoption, log migration 0012) awaits rulings (a)–(c).
+1. **W-0021 · SELECTED 2026-09-21 — [First-class QSO archives (ADR 0071 programme)](work/W-0021-qso-archives.md).** Stable archive and logbook identities with in-place adoption, managed catalogue and provisioner with last-known-good startup, create/list/activate over the attended restart, the shell archive selector, SM Cloud keyed by UUIDs. Next: the ADR 0087 removal of the saved-QSO recovery (ADR 0085 / 0086 superseded 2026-10-05).
 2. **W-0010 · SELECTED 2026-09-20 — [Improve forwarding, data, and synchronization reliability](work/W-0010-forwarding-data-and-sync-reliability.md).** Token rotation, duplicate-QSO resolution, legal bulk backfill, idempotent outcomes, and bounded reconciliation. **Outcome 9 CLOSED 2026-09-21** (failed-versus-waiting forwarder rows, `failure_class`, boot re-arm of auth failures, retry endpoint and card; accepted on test proof plus passive station evidence — the QRZ fixture had been discarded on 2026-09-12). Outcomes 1–8 stay unselected; the next selected work is the ADR 0071 archive programme.
 3. **W-0012 · OPEN — [Complete routed operator-experience follow-ups](work/W-0012-operator-experience-followups.md).** UI, map, onboarding, and diagnostic improvements not owned by W-0004. The three slices ruled 2026-09-19 (landing preference, "CQ run" header, Excel export) are independent post-freeze commits outside the data-model chain.
 4. **W-0020 · SELECTED 2026-09-14 — [Station Events](work/W-0020-station-events.md).** Replace the header
@@ -69,16 +69,6 @@ Open one workstream per active focus.
   2026-09-21 as W-0021 above; (4) **Settings → Logbooks** on the active-archive model (W-0014 exchange 2026-09-19; ADR 0056
   bindings in the archive-aware shape gate different-call logbooks); (5) **contesting** — contest
   mode (W-0011 ruling), scoring, export and different-call operation, its own ADR.
-- **Revisit saved-QSO recovery (ADR 0085 / 0086) · PARKED 2026-10-04 by operator request.** Option A
-  (keep the mechanism; fix "Not logged" wording and discoverability) was chosen for now.
-  - **To decide:** whether to keep the browser-held recovery or replace it. The main alternative
-    is switching archives only from Settings, with corrected option D: hold for manual copying,
-    then discard and reload.
-  - **The decision needs:** an explicit loss policy, then a superseding ADR, then the removal as
-    its own change.
-  - **Where the analysis lives:** options A–D, the independent review and the verified facts are
-    in [W-0021](work/W-0021-qso-archives.md), under "Direction under discussion" and "Third-party
-    review of the options".
 - **W-0014 · PARKED — [Deferred product workstreams](work/W-0014-deferred-product-workstreams.md).** Discovery inventory only; each member needs go-ahead and its own design/dossier before implementation.
 - **FT8 Field Day UI:** blocked until the relevant contest; not a 7Q8AC ship concern.
 - **Daemon-initiated FT8 sequencing:** out of scope. Sessions remain operator-initiated; an open event subscription is the presence signal, not proof that a person remains at the desk.

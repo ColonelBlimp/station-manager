@@ -2228,6 +2228,100 @@ Codex review of `c551c828` (2026-10-04), two P2 findings:
     - This follows the 2026-10-02 contract in ADR 0085 ("a disconnect of the events stream
       clears it too"). Its interaction with the rebind save was not weighed then.
   - **Drill paused at D1** pending the operator's ruling on the contract.
+  - **S2 re-run (2026-10-05, after the deploy of `dee99e79`; fresh record).**
+    - **S2.3 toast:** the wording is correct, with the Open action. But an unlogged record
+      raises an `info` toast, and `info` renders as a green check-circle (`Toasts.svelte`).
+      A success mark on "Not logged" contradicts the text that option A fixed.
+      - Possible fix: raise it at `warn` level (amber).
+      - The level is the operator's call; the drill continues meanwhile.
+    - **S2.3 side check FAIL on the deployed fix (`gdee99e79`, installed 10:27).** The
+      fresh record still shows "Original attribution unavailable."
+    - **Second cause (traced; not yet proven by a test).**
+      - B's activation persists the pending archive selector with `m.cfg.Update`
+        (`internal/archive/activate.go:200`). Every config write publishes `config.updated`
+        (`internal/api/server.go:159`).
+      - Window A receives that event BEFORE the restart. `noteConfigUpdated` → `invalidate`
+        clears the attribution outright and starts a re-read.
+      - The restart then drops the stream. `noteDisconnected` advances the epoch, so the
+        re-read in flight is dropped (or it fails against the stopping daemon). The rebind
+        save finds nothing.
+      - `8d50dd01` fixed only the disconnect half. The attribution source is the only
+        consumer of `config.updated` in the SPA.
+    - **S2.4 PASS; S2.5 FAIL.** Both windows on ‘Drill Arc’ / ‘Drill Lb’ show the record
+      (08:46:13 UTC) without Restore, with "Original attribution unavailable." This matches
+      the second cause.
+    - Drill paused at S2.5 pending the operator's ruling.
+- **Redesign opened (2026-10-05, operator).** "I don't want to spend any more effort on this.
+  Let's redesign." This un-parks the backlog revisit of ADR 0085 / 0086. The drill is abandoned,
+  and the second-cause fix (options 1 and 2 above) is not pursued.
+  - **Design point 1 (operator):** change the archive ONLY via Settings → Archives; navigating
+    to Settings clears anything in the QSO logging space.
+  - **Claude's view (discussion, no decision):**
+    - **Single entry point: agree.** The header selector becomes display-only.
+    - **Clear on navigation: disagree as stated.**
+      - The loss is tied to a navigation, not to the switch. Settings is visited mid-operation
+        for unrelated reasons (rig, station, forwarding), and a QSO half-entered on Phone / CW
+        would silently vanish.
+      - It also does not reach the case that drove ADR 0085: the draft in ANOTHER window.
+        Clearing window B's form leaves window A's QSO exactly where it is today.
+    - **Suggested form:** the gate sits on the Activate action, in the window that switches.
+      - Today `refuseOverUnloggedWork` (`archives.svelte.ts:93`) refuses with a toast when this
+        window holds a Phone / CW draft.
+      - Instead, Activate shows the unlogged QSO and offers "Discard it and switch" or
+        "Cancel". Navigation stays lossless.
+    - **Point 2 then decides the other windows:** an FT8 / FT4 run and a Phone / CW draft held
+      elsewhere. The backlog's "explicit loss policy" lives there.
+    - **To confirm in point 1:** "the QSO logging space" means the Phone / CW form (the only
+      unlogged state). Session rows are already logged and survive a reload.
+  - **Point 1 RULED (operator, 2026-10-05):** "agreed, gate on Activate with
+    discard-and-switch." Settings → Archives is the only switch; the header selector becomes
+    display-only.
+  - **Design point 2 (operator):** cover other windows with a clear manual statement, "something
+    like: any data in any secondary open browser window, may be lost or corrupted".
+  - **Claude's view (discussion, no decision):**
+    - **Agree:** a stated loss policy instead of browser-held recovery.
+    - **Say "lost", not "corrupted".**
+      - The rebind reload and the switch gate stay. They are what stop a stale window logging
+        into the wrong archive.
+      - What can happen is loss of unlogged work. Claiming corruption would be inaccurate and
+        alarming.
+    - **"Any other window", not "secondary".** No window is primary.
+    - **Name what is lost:**
+      - An unlogged Phone / CW QSO.
+      - An FT8 / FT4 exchange not yet completed. The switch seals transmit and restarts the
+        daemon.
+      - Unsaved Settings edits.
+      - Logged QSOs are never affected.
+    - **Optional:** one toast in the reloaded window, so the loss is not silent. For example:
+      "The archive changed to ‘X’ in another window; this window reloaded. Any unlogged QSO here
+      was discarded." It needs no storage; it would be raised only when a draft was actually
+      discarded.
+    - **Still to decide:**
+      - What removal does with records already in browsers' IndexedDB (drop the store, or
+        leave it orphaned).
+      - Whether `GET /v1/submit-attribution` and the submit `expect_*` check go with the
+        machinery.
+      - A superseding ADR comes before any code.
+  - **Rationale (operator, 2026-10-05):** "What we were working on 'looks' clever but is just a
+    pain to debug and support and with little used feature - really it is protecting against
+    something we only 'think' might be an issue." No observed loss motivated ADR 0085. Two drill
+    failures in a row came from interactions between its own parts (the disconnect, then
+    `config.updated`), not from operating. This goes in the superseding ADR's context.
+  - **Rulings (operator, 2026-10-05)** on the three open points:
+    1. **No toast.** The Activate warning and the manual statement carry it. No state crosses
+       the reload solely for a notification.
+    2. **Existing browser records are left orphaned.** All application access is removed, with
+       no automatic deletion or migration. The ADR says so explicitly.
+    3. **Remove the attribution endpoint and the recovery-only submit check.** Ordinary daemon
+       attribution stamping stays. Old pages that submit `expect_*` get an explicit refusal
+       telling them to reload; the expectations are never silently ignored.
+    - **Reaffirmed:** the archive-binding gate and the forced rebind stay. Accepting the loss of
+      an unfinished entry must not permit logging into the wrong archive.
+  - **[ADR 0087](../decisions/0087-switch-archives-only-from-settings-and-state-the-loss.md)
+    written (Accepted, 2026-10-05).** It supersedes ADR 0085 and ADR 0086.
+    - The refusal is `409 reload_required` for any `expect_*` key.
+    - Whether `config.updated` and `rigReadingForSave` stay is left to the removal change.
+    - The removal is its own change, next.
   - **Option 1 selected and implemented (2026-10-05; uncommitted).** ADR 0085's dated
     update supersedes disconnect-clears: retain the last matching attribution for the
     switch-triggered save, unconfirmed until a successful proven re-read. Restore still
