@@ -25,8 +25,9 @@ export interface StationSource {
     stationCallsign: string;
     operator: string;
     myGrid: string;
-    /** From GET /v1/submit-attribution inside the boot identity bracket; null
-     *  when that read failed — recorded as missing, never guessed (RS1). */
+    /** Last matching GET /v1/submit-attribution before rebind, retained across
+     *  disconnect; null when missing or invalidated by a config/operator change
+     *  — never backfilled from the new archive (RS1). */
     attribution: SubmitAttribution | null;
 }
 

@@ -1,13 +1,20 @@
 // PRODUCTION-BOUNDARY PIN for a saved draft's attribution (ADR 0085; operator
-// ruling 2026-10-02). Imports the REAL main.ts with only the transport stubbed,
-// and asserts at the request level, so removing a wiring line turns it red.
+// rulings 2026-10-02 and 2026-10-05). Imports the REAL main.ts with transport,
+// browser storage and reload seams, so removing a wiring line turns it red.
 //
 //   M1  Boot reads GET /v1/submit-attribution for the operator this page sends
 //       (logging_station.operator), inside the boot identity bracket.
 //   M2  A config.updated on /v1/events — another client's write — re-reads it.
 //   M3  A drop then a proven reopen of /v1/events re-reads it, although the
 //       earlier read succeeded.
+//   M4  A drop followed by another window's archive switch saves the last read
+//       attribution with the original source, eligible when that source returns.
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { _setDraftStoreForTests, memoryDraftStore } from './lib/drafts/draftStore';
+import { _setReloadForTests, bootArchiveId } from './lib/config/archives.svelte';
+import { currentAttribution, attributionSettled } from './lib/drafts/attributionSource.svelte';
+import { draft } from './lib/operate/qso.svelte';
+import { restoreEligibility } from './lib/drafts/restore';
 
 class FakeEventSource {
     static instances: FakeEventSource[] = [];
@@ -32,6 +39,9 @@ class FakeEventSource {
 }
 
 const requests: string[] = [];
+let identity = { instance: 'i1', archive: { id: 'arch-a', label: 'Home' } };
+const mem = memoryDraftStore();
+const reload = vi.fn();
 function json(body: unknown, status = 200): Response {
     return new Response(JSON.stringify(body), {
         status,
@@ -52,12 +62,16 @@ function fakeFetch(input: RequestInfo | URL): Promise<Response> {
         );
     }
     if (url === '/v1/version') {
-        return Promise.resolve(
-            json({ daemon: '2.0.0-test', instance: 'i1', archive: { id: 'arch-a', label: 'Home' } })
-        );
+        return Promise.resolve(json({ daemon: '2.0.0-test', ...identity }));
     }
     if (url.startsWith('/v1/submit-attribution')) {
-        return Promise.resolve(json({ my_rig: 'FTdx10', operator: 'G0XYZ', my_name: 'Guest' }));
+        return Promise.resolve(
+            json({
+                my_rig: identity.archive.id === 'arch-a' ? 'FTdx10' : 'OTHER ARCHIVE RIG',
+                operator: 'G0XYZ',
+                my_name: 'Guest',
+            })
+        );
     }
     if (url === '/v1/logbook/1/count') return Promise.resolve(json({ count: 1 }));
     if (url === '/v1/qso-archives') return Promise.resolve(json({ archives: [] }));
@@ -72,12 +86,15 @@ describe('main.ts: a saved draft’s attribution', () => {
     beforeAll(async () => {
         vi.stubGlobal('EventSource', FakeEventSource);
         vi.stubGlobal('fetch', fakeFetch);
+        _setDraftStoreForTests(mem);
+        _setReloadForTests(reload);
         document.body.innerHTML = '<div id="app"></div>';
         await import('./main');
         await vi.waitFor(() => expect(attributionReads().length).toBeGreaterThan(0));
     });
     afterAll(() => {
         vi.unstubAllGlobals();
+        _setDraftStoreForTests(null);
     });
 
     // One sequence: each step builds on the read count the previous one set.
@@ -97,11 +114,53 @@ describe('main.ts: a saved draft’s attribution', () => {
         await vi.waitFor(() => expect(attributionReads()).toHaveLength(2));
 
         // M3: a drop and a reopen, proven by the identity check, reads again.
+        // Keep an actual draft across this restart: no archive change, no save.
+        draft.callsign = '7Q7CT';
+        draft.dateOn = '2026-10-05';
+        draft.timeOn = '10:00:00';
         src!.emit('error');
+        identity = { ...identity, instance: 'i2' };
         src!.emit('open');
         await vi.waitFor(() => expect(attributionReads()).toHaveLength(3));
         expect(new Set(attributionReads())).toEqual(
             new Set(['/v1/submit-attribution?operator=G0XYZ'])
         );
+    });
+
+    it('M4 the disconnect then archive-switch save keeps attribution and offers Restore on return', async () => {
+        await attributionSettled();
+        const original = currentAttribution('G0XYZ');
+        expect(original).toEqual({ myRig: 'FTdx10', operator: 'G0XYZ', myName: 'Guest' });
+        expect(bootArchiveId()).toBe('arch-a');
+        expect(mem.rows.size).toBe(0); // the same-archive restart did not save
+        expect(reload).not.toHaveBeenCalled();
+
+        const src = sourceFor('/v1/events')!;
+        src.emit('error');
+        identity = { instance: 'i3', archive: { id: 'arch-b', label: 'Away' } };
+        const reads = attributionReads().length;
+        src.emit('open');
+        await vi.waitFor(() => expect(reload).toHaveBeenCalledOnce());
+        expect(mem.rows.size).toBe(1);
+        const [saved] = [...mem.rows.values()];
+        expect(saved).toMatchObject({
+            archiveId: 'arch-a',
+            logbookUuid: 'lb-a',
+            operator: 'G0XYZ',
+            fields: { callsign: '7Q7CT', dateOn: '2026-10-05', timeOn: '10:00:00' },
+        });
+        // This is the S2.5 regression: old code reaches here with null.
+        expect(saved.attribution).toEqual(original);
+        expect(attributionReads()).toHaveLength(reads); // never borrow the new archive's value
+        expect(currentAttribution('G0XYZ')).toBeNull(); // held value is not current
+        expect(
+            restoreEligibility(saved, {
+                locksAvailable: true,
+                onPhoneCw: true,
+                bootArchiveId: 'arch-a',
+                activeLogbookUuid: 'lb-a',
+                currentAttribution: original,
+            })
+        ).toEqual({ kind: 'eligible' });
     });
 });

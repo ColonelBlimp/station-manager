@@ -20,6 +20,7 @@ import {
     attributionSettled,
     configureAttribution,
     currentAttribution,
+    lastKnownAttribution,
     noteConfigUpdated,
     noteConfigWriteSettled,
     noteConfigWriteStarted,
@@ -515,8 +516,8 @@ setDraftPreserver((source) =>
         stationCallsign: ctx.stationCallsign,
         operator: ctx.operator,
         myGrid: ctx.myGrid,
-        // Only an attribution read FOR the operator this page's submit sends.
-        attribution: currentAttribution(ctx.operator),
+        // Keep the last read FOR this operator across the switch's disconnect.
+        attribution: lastKnownAttribution(ctx.operator),
     })
 );
 
@@ -750,7 +751,7 @@ setRestoreEnv(() => ({
 // maintainability baseline on purpose.
 openLogEvents({
     onOpen: () => {},
-    // A saved draft's attribution (ADR 0085): cleared when the stream drops,
+    // A saved draft's attribution (ADR 0085): unconfirmed when the stream drops,
     // re-read after every proven reconnect and on every config.updated.
     onTransportError: () => noteDisconnected(),
     onQsoChanged: () => {},

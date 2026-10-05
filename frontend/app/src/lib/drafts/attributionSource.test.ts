@@ -25,10 +25,15 @@
           page still sends (A), and B's resolution is never filed under A.
       AS10 A config.updated event (another client's write) clears it, DROPS a
           read in flight, and re-reads.
-      AS11 A disconnect clears it and drops a read in flight; every proven
+      AS11 A disconnect retains the last read for saving, but makes it
+          unconfirmed for Restore and drops a read in flight; every proven
           reconnect re-reads, even after a successful earlier read.
       AS12 The requested operator may be empty: it is passed on as such (the
           server applies the default-operator fallback).
+      AS13 A failed reconnect read keeps the unconfirmed value; a config write,
+          config.updated or operator change clears it, with no resurrection.
+      AS14 Disconnect cannot invent a missing read or lose known-empty values;
+          a boot read crossing the drop cannot confirm the held value.
 */
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { SubmitAttribution } from '../api/submit-attribution';
@@ -38,6 +43,7 @@ import {
     attributionSettled,
     configureAttribution,
     currentAttribution,
+    lastKnownAttribution,
     noteConfigUpdated,
     noteConfigWriteSettled,
     noteConfigWriteStarted,
@@ -98,6 +104,7 @@ describe('attribution source', () => {
         expect(currentAttribution('A')).toEqual(forOp('A'));
         noteConfigWriteStarted();
         expect(currentAttribution('A')).toBeNull();
+        expect(lastKnownAttribution('A')).toBeNull();
         const done = noteConfigWriteSettled();
         expect(currentAttribution('A')).toBeNull();
         net.answer(net.count() - 1, forOp('A'));
@@ -117,12 +124,13 @@ describe('attribution source', () => {
     });
 
     it('AS3 a response after the binding became invalid is dropped', async () => {
-        noteDisconnected(); // start from missing
-        const done = refreshAttribution();
+        noteConfigWriteStarted(); // start from missing
+        const done = noteConfigWriteSettled();
         bindingValid = false;
         net.answer(net.count() - 1, forOp('A'));
         await done;
         expect(currentAttribution('A')).toBeNull();
+        expect(lastKnownAttribution('A')).toBeNull();
     });
 
     it('AS4 no refresh applies while another write is in flight', async () => {
@@ -182,7 +190,10 @@ describe('attribution source', () => {
     });
 
     it('AS7 a failed read stays missing until a proven reconnect re-reads', async () => {
-        noteDisconnected();
+        noteConfigWriteStarted();
+        const failed = noteConfigWriteSettled();
+        net.answer(net.count() - 1, null);
+        await failed;
         await readWith(null);
         expect(currentAttribution('A')).toBeNull();
         const r = noteReconnectProven();
@@ -196,6 +207,7 @@ describe('attribution source', () => {
         expect(currentAttribution('B')).toBeNull();
         const r = setRequestedOperator('B');
         expect(currentAttribution('A')).toBeNull(); // invalidated at once
+        expect(lastKnownAttribution('A')).toBeNull();
         expect(net.asked.at(-1)).toBe('B');
         net.answer(net.count() - 1, forOp('B'));
         await r;
@@ -220,6 +232,7 @@ describe('attribution source', () => {
         const staleIdx = net.count() - 1;
         const fresh = noteConfigUpdated(); // another client changed the config
         expect(currentAttribution('A')).toBeNull();
+        expect(lastKnownAttribution('A')).toBeNull();
         net.answer(staleIdx, { ...forOp('A'), myRig: 'BEFORE THE CHANGE' });
         await stale;
         expect(currentAttribution('A')).toBeNull(); // dropped
@@ -228,19 +241,25 @@ describe('attribution source', () => {
         expect(currentAttribution('A')?.myRig).toBe('AFTER');
     });
 
-    it('AS11 a disconnect clears; every proven reconnect re-reads', async () => {
+    it('AS11 a disconnect keeps the last read unconfirmed; every proven reconnect re-reads', async () => {
         const inFlight = refreshAttribution();
         noteDisconnected();
         expect(currentAttribution('A')).toBeNull();
-        net.answer(net.count() - 1, forOp('A'));
+        expect(lastKnownAttribution('A')).toEqual(forOp('A'));
+        expect(lastKnownAttribution('B')).toBeNull();
+        net.answer(net.count() - 1, { ...forOp('A'), myRig: 'LATE RESPONSE' });
         await inFlight;
         expect(currentAttribution('A')).toBeNull(); // dropped
+        expect(lastKnownAttribution('A')).toEqual(forOp('A'));
         const asked = net.count();
         const r = noteReconnectProven();
         expect(net.count()).toBe(asked + 1);
+        expect(currentAttribution('A')).toBeNull();
+        expect(lastKnownAttribution('A')).toEqual(forOp('A'));
         net.answer(net.count() - 1, { ...forOp('A'), myRig: 'AFTER RECONNECT' });
         await r;
         expect(currentAttribution('A')?.myRig).toBe('AFTER RECONNECT');
+        expect(lastKnownAttribution('A')?.myRig).toBe('AFTER RECONNECT');
         const again = noteReconnectProven(); // even after a successful read
         expect(net.count()).toBe(asked + 2);
         net.answer(net.count() - 1, forOp('A'));
@@ -253,5 +272,48 @@ describe('attribution source', () => {
         net.answer(net.count() - 1, forOp(''));
         await r;
         expect(currentAttribution('')).toEqual(forOp(''));
+    });
+
+    it('AS13 a failed reconnect read retains the value only for saving', async () => {
+        noteDisconnected();
+        const r = noteReconnectProven();
+        net.answer(net.count() - 1, null);
+        await r;
+        expect(currentAttribution('A')).toBeNull();
+        expect(lastKnownAttribution('A')).toEqual(forOp('A'));
+    });
+
+    it.each(['write', 'event', 'operator'] as const)(
+        'AS13 %s clears the held value across a failed refresh and repeated disconnect',
+        async (change) => {
+            noteDisconnected();
+            if (change === 'write') noteConfigWriteStarted();
+            const r =
+                change === 'write'
+                    ? noteConfigWriteSettled()
+                    : change === 'event'
+                      ? noteConfigUpdated()
+                      : setRequestedOperator('B');
+            expect(lastKnownAttribution('A')).toBeNull();
+            net.answer(net.count() - 1, null);
+            await r;
+            noteDisconnected();
+            expect(lastKnownAttribution('A')).toBeNull();
+            expect(lastKnownAttribution('B')).toBeNull();
+        }
+    );
+
+    it('AS14 missing and known-empty attribution stay distinct across a drop', () => {
+        _resetAttributionForTests();
+        configure();
+        noteDisconnected();
+        expect(lastKnownAttribution('')).toBeNull();
+        const empty = { myRig: '', operator: '', myName: '' };
+        applyBootAttribution(empty, attributionEpoch(), '');
+        const since = attributionEpoch();
+        noteDisconnected();
+        applyBootAttribution(forOp(''), since, ''); // boot read crossed the drop
+        expect(currentAttribution('')).toBeNull();
+        expect(lastKnownAttribution('')).toEqual(empty);
     });
 });

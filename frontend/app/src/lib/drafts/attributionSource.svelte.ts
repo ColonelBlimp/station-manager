@@ -1,13 +1,15 @@
 // The attribution a saved draft records (ADR 0085 RS1; reviews 2026-10-01 and
-// Codex 21feafae, operator ruling 2026-10-02): what a Phone / CW submit from
+// Codex 21feafae, rulings 2026-10-02 and 2026-10-05): what a Phone / CW submit from
 // this page is stored with — read with GET /v1/submit-attribution?operator=
 // for the operator this page's submit SENDS, and filed under that requested
 // operator. Kept honest rather than merely recent:
 //   - it is returned only for the operator it was read for; a change of the
 //     requested operator invalidates it and re-reads;
-//   - a config write from this page (reported by safeFetch), a config.updated
-//     event (any client's write) and a disconnect each clear it AT ONCE and
-//     drop any read in flight; a save meanwhile records it as MISSING;
+//   - a config write from this page (reported by safeFetch) or a config.updated
+//     event (any client's write) clears it AT ONCE and drops any read in flight;
+//     a save meanwhile records it as MISSING;
+//   - a disconnect drops reads in flight but retains the last read for saving
+//     before an archive rebind; it is unconfirmed and cannot authorise Restore;
 //   - a read applies only if it is the newest, no config write is in flight or
 //     started since, and the archive binding is still valid;
 //   - every proven reconnect re-reads it.
@@ -23,6 +25,7 @@ interface Entry {
 
 // Reactive: the Saved QSOs panel's Restore offer follows it (ADR 0085).
 let current = $state.raw<Entry | null>(null);
+let confirmed = $state(false);
 let requested = '';
 let requestedKnown = false;
 let epoch = 0; // advanced by everything that invalidates, and by every read start
@@ -40,9 +43,14 @@ export function configureAttribution(opts: {
     if (opts.fetch) fetchFor = opts.fetch;
 }
 
-/** The attribution to record for a draft whose submit sends `operator`; null =
- *  missing (never one read for another operator). */
+/** Confirmed attribution for Restore; a disconnected value is not current. */
 export function currentAttribution(operator: string): SubmitAttribution | null {
+    return confirmed ? lastKnownAttribution(operator) : null;
+}
+
+/** The last read to preserve with a draft whose submit sends `operator`, even
+ *  after disconnect; null = missing (never one read for another operator). */
+export function lastKnownAttribution(operator: string): SubmitAttribution | null {
     return current !== null && current.requested === operator ? current.attribution : null;
 }
 
@@ -54,6 +62,7 @@ export function attributionEpoch(): number {
 function invalidate(): void {
     epoch++; // drops every read in flight
     current = null;
+    confirmed = false;
 }
 
 /** The operator this page's submit sends (ctx.operator). A change invalidates
@@ -85,9 +94,11 @@ export function noteConfigUpdated(): Promise<void> {
     return refreshAttribution();
 }
 
-/** The events stream dropped: nothing heard meanwhile can be trusted. */
+/** Keep the last read for the switch-triggered save, but require a proven
+ *  re-read before using it as current. Late responses cannot replace it. */
 export function noteDisconnected(): void {
-    invalidate();
+    epoch++;
+    confirmed = false;
 }
 
 /** A reconnect proved the binding again: always re-read (an event may have been
@@ -105,8 +116,9 @@ export function refreshAttribution(): Promise<void> {
     latest = (async () => {
         const a = await fetchFor(forOperator);
         if (mine !== epoch || writesInFlight > 0) return; // superseded or invalidated
-        if (!bindingValid() || a === null) return; // stays missing until a proven re-read
+        if (!bindingValid() || a === null) return; // missing/unconfirmed stays so
         current = { requested: forOperator, attribution: a };
+        confirmed = true;
     })();
     return latest;
 }
@@ -129,10 +141,12 @@ export function applyBootAttribution(
     requestedKnown = true;
     requested = operator;
     current = { requested: operator, attribution: a };
+    confirmed = true;
 }
 
 export function _resetAttributionForTests(): void {
     current = null;
+    confirmed = false;
     requested = '';
     requestedKnown = false;
     epoch = 0;
