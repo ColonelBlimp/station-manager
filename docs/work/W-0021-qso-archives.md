@@ -2553,6 +2553,16 @@ Codex review of `c551c828` (2026-10-04), two P2 findings:
     - Go `gofmt`, `vet` and `./internal/...`.
     - Maintainability 0.
     - `task ci:local` was not re-run.
+- **Codex review of `55178b58`: P2, fixed in `c31c0d7e`.**
+  - **Finding:** removing the Map branch's `<Toasts />` left a failed gate stop silent in a
+    Map window.
+  - **Ruling (operator):** show the failed stop on the gate itself.
+  - **Fix:** a failed stop now sets the gate's stop note; the toast stays.
+  - **Test:** through the gate's Stop tune button with no toast renderer mounted. It was RED
+    first. P7 (the toast-only path restored) fails on the missing note.
+  - **Gates:** SPA lint, format, svelte-check (0/0), vitest 2,081/2,081, maintainability 0.
+  - **Codex review of `c31c0d7e`:** no actionable findings.
+  - **CI:** the run on `70d006a9` does not cover `c31c0d7e`. Its CI comes after the push.
 
   - **Option 1 selected and implemented (2026-10-05; uncommitted).** ADR 0085's dated
     update supersedes disconnect-clears: retain the last matching attribution for the
