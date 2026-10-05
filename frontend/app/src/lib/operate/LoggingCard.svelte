@@ -30,10 +30,6 @@
         entryLock,
     } from './qso.svelte';
     import DuplicateDialog from './DuplicateDialog.svelte';
-    import RecoveredContext from '../drafts/RecoveredContext.svelte';
-    import { recovered } from '../drafts/recovered.svelte';
-    import { requestClearDraft } from '../drafts/recoveredSave.svelte';
-    import { logRecovered, recoveredLogBlock } from '../drafts/recoveredSubmit.svelte';
     import { observeWorked, openWorkedForQso } from './worked.svelte';
     import { rigReady, rigGate } from './rig.svelte';
     import { operate, closeExport, registerCallsignInput } from './state.svelte';
@@ -46,7 +42,6 @@
     import { commentHistory } from './commentHistory.svelte';
     import CommentField from './CommentField.svelte';
     import { sessionEdit } from './sessionEdit.svelte';
-    import { savedQsosPanel } from '../drafts/savedDrafts.svelte';
 
     // Contact-details disclosure (grid / QTH / rig / RX power / notes to edit; QRZ
     // page link + looked-up email + CQ/ITU zone to read — all for the contacted
@@ -107,19 +102,10 @@
     const lock = $derived(entryLock());
 
     async function logAndRefocus(): Promise<void> {
-        // A recovered QSO never takes the ordinary assembly (live rig, today's
-        // station): its own path sends the saved values and attribution and is
-        // not gated by the CAT link (ADR 0085 RS18–RS20). Never forced from here.
-        if (recovered.record !== null) {
-            if ((await logRecovered({})) === 'stored') callInput?.focus();
-            return;
-        }
         // Comment-history recording lives in logDraft's shared success path (so a
         // forced-duplicate "Log anyway" records it too); this only refocuses.
         if (await logDraft()) callInput?.focus();
     }
-    // The recovered gate replaces canLog/rigReady (which read the live rig).
-    const recoveredBlock = $derived(recovered.record === null ? null : recoveredLogBlock());
 
     function windowKeydown(e: KeyboardEvent): void {
         // Session-edit modal open: it owns the keyboard OUTRIGHT (its own
@@ -149,11 +135,6 @@
             }
             return;
         }
-        // Saved QSOs panel open (ADR 0086): it overlays the card, so the card's
-        // shortcuts stand down. Below the Export and Duplicate branches on
-        // purpose: a modal opened over the panel keeps its own Escape (Codex
-        // review 894b5359); the panel's Escape is captured before reaching here.
-        if (savedQsosPanel.open) return;
         // NO `operate.pileup` GUARD HERE. It used to stand the logging
         // shortcuts down whenever FT8's pile-up drawer was open, on the
         // reasoning that the drawer owns its own Escape. Sound in FT8 — but
@@ -163,7 +144,7 @@
         // so Phone/CW could inherit it SET with no drawer on screen to explain
         // the silence. The drawer is now FT8-only (Operate.svelte) and this card
         // is Phone/CW-only, so the two can no longer be on screen together.
-        // Entry locked (ADR 0085): an archive switch will reload the page, so no
+        // Entry locked (ADR 0087, item 7): an archive switch will reload the page, so no
         // shortcut may start, change, stack or log a draft meanwhile.
         if (lock !== null) return;
         if (e.key === 'Enter' && e.ctrlKey && !e.altKey && !e.shiftKey) {
@@ -173,7 +154,7 @@
         }
         if (e.key === 'Escape') {
             e.preventDefault();
-            requestClearDraft(); // a recovered QSO keeps its edits first (ADR 0085 RS17)
+            clearDraft();
             callInput?.focus();
             return;
         }
@@ -225,7 +206,6 @@
     // a pile-up can be worked from either end. Split out of windowKeydown to
     // keep either half readable, not to satisfy a complexity budget.
     function pileupKeydown(e: KeyboardEvent): void {
-        if (recovered.record !== null) return;
         if (e.key === 'Enter' && e.shiftKey && !e.ctrlKey && !e.metaKey) {
             // Only from the callsign field, or from no field at all. In Notes
             // Shift+Enter is an ordinary NEWLINE, and stacking there also ran
@@ -259,7 +239,6 @@
     // Capture the typed call. Validated the same way logging is — an empty or
     // malformed field is a silent no-op rather than a junk stack entry.
     function stackCall(): void {
-        if (recovered.record !== null) return;
         const call = draft.callsign.trim().toUpperCase();
         if (call === '' || isValidCallsign(call) !== null) return;
         callsignStack.push(call);
@@ -285,7 +264,7 @@
         const fresh = !qsoClock.started;
         startQso();
         openWorkedForQso(draft.callsign);
-        if (fresh && recovered.record === null && !rigReady()) {
+        if (fresh && !rigReady()) {
             toasts.warn(
                 rigGate() === 'lost'
                     ? 'CAT link lost — confirm the rig in the Rig panel before you can log this QSO.'
@@ -361,9 +340,8 @@
         <p class="mb-2 text-sm text-ink" role="status" data-testid="entry-lock">{lock}</p>
     {/if}
     <!-- A disabled fieldset disables every field and button inside it: the
-         entry lock (ADR 0085) in one place. -->
+         entry lock (ADR 0087) in one place. -->
     <fieldset class="flex flex-col" disabled={lock !== null}>
-        <RecoveredContext />
         <div class="flex flex-row gap-x-6">
             <div class="flex flex-col">
                 <div class="flex items-end gap-x-2">
@@ -373,7 +351,6 @@
                         >
                         <div class="relative">
                             <input
-                                readonly={recovered.frozen}
                                 id="lc-call"
                                 class="input w-32 pr-7 uppercase"
                                 class:input-error={p.callsign}
@@ -397,7 +374,6 @@
                                 tabindex={-1}
                                 title="Stack callsign (Shift+Enter)"
                                 aria-label="Stack callsign"
-                                disabled={recovered.record !== null}
                                 onclick={stackCall}
                                 class="absolute inset-y-0 right-0 flex items-center px-2 leading-none text-muted hover:text-ink"
                             >
@@ -410,7 +386,6 @@
                             >RST Sent</label
                         >
                         <input
-                            readonly={recovered.frozen}
                             id="lc-rst-s"
                             class="input w-15"
                             class:input-error={p.rstSent}
@@ -422,7 +397,6 @@
                             >RST Rcvd</label
                         >
                         <input
-                            readonly={recovered.frozen}
                             id="lc-rst-r"
                             class="input w-15"
                             class:input-error={p.rstRcvd}
@@ -436,7 +410,6 @@
                             >Date On</label
                         >
                         <input
-                            readonly={recovered.frozen}
                             id="lc-date-on"
                             class="input w-32"
                             class:input-error={p.dateOn}
@@ -449,7 +422,6 @@
                             >Time On</label
                         >
                         <input
-                            readonly={recovered.frozen}
                             id="lc-time-on"
                             class="input w-24"
                             class:input-error={p.timeOn}
@@ -470,7 +442,6 @@
                             >Date Off</label
                         >
                         <input
-                            readonly={recovered.frozen}
                             id="lc-date-off"
                             class="input w-32"
                             class:input-error={p.dateOff}
@@ -484,7 +455,6 @@
                             >Time Off</label
                         >
                         <input
-                            readonly={recovered.frozen}
                             id="lc-time-off"
                             class="input w-24"
                             class:input-error={p.timeOff}
@@ -503,7 +473,6 @@
             <div class="flex-1">
                 <label for="lc-name" class="block text-sm font-medium text-ink">Name</label>
                 <input
-                    readonly={recovered.frozen}
                     id="lc-name"
                     class="input w-full"
                     autocomplete="off"
@@ -515,7 +484,6 @@
                 label="Comment"
                 class="flex-1"
                 items={commentHistory.items}
-                readonly={recovered.frozen}
                 bind:value={draft.comment}
             />
         </div>
@@ -612,7 +580,6 @@
                             >Gridsquare</label
                         >
                         <input
-                            readonly={recovered.frozen}
                             id="lc-grid"
                             class="input w-full uppercase"
                             class:input-error={gridInvalid}
@@ -629,7 +596,6 @@
                     <div>
                         <label for="lc-qth" class="block text-sm font-medium text-ink">QTH</label>
                         <input
-                            readonly={recovered.frozen}
                             id="lc-qth"
                             class="input w-full"
                             autocomplete="off"
@@ -643,7 +609,6 @@
                                 >Rig</label
                             >
                             <input
-                                readonly={recovered.frozen}
                                 id="lc-rig"
                                 class="input w-full"
                                 autocomplete="off"
@@ -655,7 +620,6 @@
                                 >RX Power (W)</label
                             >
                             <input
-                                readonly={recovered.frozen}
                                 id="lc-rxpwr"
                                 class="input w-24"
                                 class:input-error={p.rxPwr}
@@ -671,7 +635,6 @@
                             >Notes</label
                         >
                         <textarea
-                            readonly={recovered.frozen}
                             id="lc-notes"
                             class="input w-full resize-y"
                             rows="2"
@@ -698,7 +661,7 @@
                     class="btn"
                     title="Esc"
                     onclick={() => {
-                        requestClearDraft();
+                        clearDraft();
                         callInput?.focus();
                     }}>Clear</button
                 >
@@ -710,10 +673,8 @@
                 <button
                     class="btn btn-primary"
                     onclick={() => logAndRefocus()}
-                    disabled={recovered.record !== null
-                        ? recoveredBlock !== null
-                        : !canLog() || !rigReady() || submitState.busy}
-                    title={(recovered.record !== null ? recoveredBlock : gateTitle) ?? 'Ctrl+Enter'}
+                    disabled={!canLog() || !rigReady() || submitState.busy}
+                    title={gateTitle ?? 'Ctrl+Enter'}
                     >{submitState.busy ? 'Logging…' : 'Log QSO'}</button
                 >
             </div>

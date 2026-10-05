@@ -9,11 +9,8 @@ import { isValidCallsign } from '../validators/callsign';
 import { isValidRs, isValidRst, isValidSignalReport } from '../validators/rst';
 import { usesSignalReport } from '../utils/mode';
 import { rig, rigReady } from './rig.svelte';
-import { rigSnapshotHeld } from './rigSnapshot.svelte';
 import { toasts } from '../ui/toasts.svelte';
 import { commentHistory } from './commentHistory.svelte';
-import { recovered } from '../drafts/recovered.svelte';
-import type { SavedDraft } from '../drafts/savedDraft';
 
 export interface QsoDraft {
     callsign: string;
@@ -73,7 +70,6 @@ function nowUtc(): { date: string; time: string } {
 }
 
 export function stampOn(): void {
-    if (recovered.record !== null) return;
     const { date, time } = nowUtc();
     draft.dateOn = date;
     draft.timeOn = time;
@@ -107,7 +103,6 @@ function tickOff(): void {
 }
 
 export function startQso(): void {
-    if (recovered.record !== null) return;
     if (qsoClock.started) return; // typo-fix re-Tab: the QSO already began
     qsoClock.started = true;
     qsoClock.ticking = true;
@@ -154,27 +149,12 @@ export function draftAgeText(nowMs: number): string {
 // Fill-if-empty: a manually entered off date/time (backlogging, correcting an
 // end time) must survive submit — only blank fields get "now".
 export function stampOff(): void {
-    if (recovered.record !== null) return;
     const { date, time } = nowUtc();
     if (draft.dateOff === '') draft.dateOff = date;
     if (draft.timeOff === '') draft.timeOff = time;
 }
 
 export const draft = $state<QsoDraft>(blank());
-
-/** Called only after Restore owns the UUID and rechecks the empty form. */
-export function installRecoveredDraft(record: SavedDraft): void {
-    resetClock();
-    recovered.record = structuredClone(record);
-    // A saved correction comes back as the working values (the original reading
-    // stays in record.rig); its confirmation was never saved — confirm again.
-    recovered.rig = { ...(record.rigCorrection ?? record.rig) };
-    recovered.confirmed = false;
-    Object.assign(draft, record.fields);
-    submitState.error = '';
-    submitState.duplicate = false;
-    submitState.uncertain = record.outcome === 'unknown';
-}
 
 // Memoized on purpose: the fill effect below tracks THIS, not rig.mode, so it
 // only re-fires when the default actually changes (mode crosses the CW ↔
@@ -198,17 +178,13 @@ const defaultRst = $derived(rstDefaultFor(rig.mode));
     submits — the daemon default-fills '59' for non-FT8 blanks, the decided
     posture (2026-07-08 review, finding 3 skipped).
 */
-// Held-reading guard (ADR 0085; review 2026-09-30): while a rig reading from
-// before a connection loss is held, a mode report is the RECONNECT's, not a
-// change the draft's reports belong with — the draft may yet be saved with the
-// held reading — so the refill waits. Once the reading is retired it refills
-// only if the default really moved (appliedRst), never merely because the
-// hold ended.
+// appliedRst: the default last filled in, so draftInProgress can tell an
+// untouched report from typed work.
 let appliedRst = '';
 $effect.root(() => {
     $effect(() => {
         const d = defaultRst;
-        if (recovered.record !== null || rigSnapshotHeld() || d === appliedRst) return;
+        if (d === appliedRst) return;
         appliedRst = d;
         draft.rstSent = d;
         draft.rstRcvd = d;
@@ -226,16 +202,13 @@ export function draftInProgress(): boolean {
     );
 }
 
-// A report still at the default last filled in is not work, even when the
-// current mode's default differs: while a pre-loss rig reading is held the
-// refill waits, so an untouched form keeps the held mode's default (Codex
-// review ebe244dc P2 — it read as a phantom unlogged QSO).
+// A report still at the default last filled in is not work (Codex review
+// ebe244dc P2 — it read as a phantom unlogged QSO).
 function isRetainedDefault(k: keyof QsoDraft): boolean {
     return (k === 'rstSent' || k === 'rstRcvd') && draft[k] === appliedRst;
 }
 
 export function resetDraft(): void {
-    if (recovered.record !== null) return;
     Object.assign(draft, blank());
 }
 
@@ -243,7 +216,6 @@ export function resetDraft(): void {
 // next QSO's times stamp when its callsign is committed (Tab) — until then
 // canLog() blocks on the empty date/time, so a blank start can never log.
 export function clearDraft(): void {
-    if (recovered.record !== null) return;
     resetDraft();
     resetClock();
     submitState.error = '';
@@ -281,14 +253,14 @@ export interface DraftProblems {
 /** Per-field validity (true = malformed) for the card's red outlines. */
 export function draftProblems(): DraftProblems {
     const bad = (re: RegExp, v: string): boolean => v !== '' && !re.test(v.trim());
-    // Recovery validates against its saved/corrected context. Ordinary entry
-    // follows the live rig: weak-signal modes use signed dB SNR, CW uses RST
-    // (tone optional), and the remaining modes use RS.
-    const mode =
-        recovered.rig === null ? rig.mode : recovered.rig.subMode || recovered.rig.adifMode;
-    const report = usesSignalReport(mode)
+    // The report validator tracks the rig's mode (the one rig read in this
+    // module — mode drives validation, it never enters the draft): WSJT-X
+    // weak-signal modes report a signed dB SNR ("-12"); CW reports RST (tone
+    // optional); everything else reports RS — the tone digit only exists on
+    // CW, so 599 on USB is malformed.
+    const report = usesSignalReport(rig.mode)
         ? isValidSignalReport
-        : mode === 'CW' || recovered.rig?.adifMode === 'CW'
+        : rig.mode === 'CW'
           ? isValidRst
           : isValidRs;
     return {
@@ -309,9 +281,6 @@ export function draftProblems(): DraftProblems {
 // confirm gate is added with the Rig panel; enrichment never gates —
 // invariant.)
 export function canLog(): boolean {
-    // Commit 4 supplies the recovered submit path; never send one through
-    // the ordinary rig/current-station assembly in the meantime.
-    if (recovered.record !== null) return false;
     if (draft.callsign.trim() === '' || draft.dateOn === '' || draft.timeOn === '') return false;
     const p = draftProblems();
     return !Object.values(p).some(Boolean);
@@ -342,7 +311,7 @@ export function setSubmitGate(fn: (() => string | null) | null): void {
     submitGate = fn;
 }
 
-// The entry lock (ADR 0085): while an archive switch is in flight the page is
+// The entry lock (ADR 0087, item 7): while an archive switch is in flight the page is
 // about to reload and discard this draft, so the card takes no entry and its
 // shortcuts are inert. Injected like the submit gate; $state so the card
 // re-renders when it is wired.
@@ -362,7 +331,8 @@ export function entryLock(): string | null {
 // nothing reflows the card. busy doubles as the double-click latch: a write
 // POST is ambiguous on timeout, so firing a second submit while one is in
 // flight risks a double log.
-// uncertain: a log attempt for THIS draft had an unknown outcome (ADR 0085).
+// uncertain: a log attempt for THIS draft had an unknown outcome — the Activate
+// prompt says it may already be logged (ADR 0087).
 // Sticky until the draft is cleared: a later definite refusal does not prove
 // the earlier attempt failed.
 export const submitState = $state({ busy: false, error: '', duplicate: false, uncertain: false });

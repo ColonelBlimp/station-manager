@@ -23,11 +23,7 @@ import {
     activeArchive,
     archiveEntryLock,
     archiveSwitchGate,
-    discardAndReload,
-    reloadNow,
     verifyAfterRigReconnect,
-    retrySave,
-    setDraftPreserver,
     archivesState,
     createArchive,
     archiveDraft,
@@ -38,26 +34,18 @@ import {
     loadArchives,
     mintRequestKey,
     bootArchiveScoped,
-    bootArchiveId,
     verifyArchiveGeneration,
     _resetArchivesForTests,
     _setBootIdentityForTests,
     _setReloadForTests,
 } from './archives.svelte';
 import { toastsState, _resetForTests as resetToasts } from '../ui/toasts.svelte';
-import { draft, clearDraft } from '../operate/qso.svelte';
-import { rig } from '../operate/rig.svelte';
-import {
-    noteRigDrop,
-    rigReadingForSave,
-    _resetRigSnapshotForTests,
-} from '../operate/rigSnapshot.svelte';
-import type { PreserveResult } from '../drafts/preserve';
-import { sampleRecord } from '../drafts/savedDraft.fixture';
+import { draft, clearDraft, submitState } from '../operate/qso.svelte';
+import { installBrowserStorageSpies } from '../utils/browserStorageSpies.fixture';
 
 /*
-    ARCHIVES STATE — the one activation flow both the Settings tab and the header
-    selector run. The rules: the daemon's state is the only truth (a 202 never
+    ARCHIVES STATE — the one activation flow, run from Settings → Archives (ADR
+    0087: the header only names the archive). The rules: the daemon's state is the only truth (a 202 never
     makes the list say "active"); a refusal shows the daemon's reason; the
     restart is awaited by the new-instance signal; an ambiguous timeout is never
     "failed".
@@ -99,8 +87,6 @@ beforeEach(() => {
     vi.mocked(fetchDaemonInstance).mockReset();
     vi.mocked(waitForDaemonBack).mockReset();
     _resetArchivesForTests();
-    setDraftPreserver(null);
-    _resetRigSnapshotForTests();
     clearDraft();
     resetToasts();
     reloads = 0;
@@ -145,7 +131,7 @@ describe('activateArchive', () => {
 
     it('the active archive is never re-activated', async () => {
         await loadArchives();
-        const confirm = vi.fn(() => true);
+        const confirm = vi.fn((_text: string) => true);
         expect(await activateArchive('a', confirm)).toBe(false);
         expect(confirm).not.toHaveBeenCalled();
         expect(activateQsoArchive).not.toHaveBeenCalled();
@@ -344,56 +330,181 @@ describe('activateArchive', () => {
 });
 
 /*
-    UNLOGGED WORK (ADR 0085; operator rulings 2026-09-30). The switch reloads the
-    page and the Phone / CW draft lives only in memory, so:
-      U1  Any unlogged work — a partial entry counts — refuses the switch before
-          the confirmation is asked, and nothing is sent. Apart from a switch
-          that reloads the page over the QSO being typed.
-      U2  A QSO started while the confirmation is open is caught by a second
-          check after it, before the request. Apart from a check made only
-          before a prompt the operator may sit on.
+    THE ACTIVATE GATE (ADR 0087; operator rulings 2026-10-05). Switching is
+    offered only from Settings → Archives, and a switch reloads every window, so
+    the confirmation itself is the gate:
+      A1  An empty form: the prompt names the destination and warns that
+          unlogged work in any other window will be lost; OK sends, Cancel sends
+          nothing.
+      A2  An unlogged entry — a partial one too — is NOT refused: the prompt
+          names it and says OK discards this window's entry and switches.
+          Cancel sends nothing and keeps the entry untouched.
+      A3  The entry is discarded by the reload, never before the request: a
+          definite refusal or an answer that did not accept leaves it in place
+          and reloads nothing; an accepted switch reloads with no save step; an
+          unproven outcome gates and keeps it.
+      A4  A Log in flight refuses Activate, checked before the prompt AND again
+          before the request. Once the outcome is unknown, switching is allowed
+          and the prompt says the QSO may already be logged, to be checked in
+          the original archive's Logbook.
       U3  From the moment the request goes out until the outcome, entry is
           LOCKED (archiveEntryLock names why); a definite refusal unlocks it;
-          an uncertain outcome keeps the page gated (the lock stays, under the
-          existing overlay). Apart from a form that accepts typing the reload
-          is about to discard.
-      U4  A reconnect's identity check (verifying) does NOT lock entry: it runs
-          on every stream reconnect and the draft survives it.
+          an uncertain outcome keeps the page gated.
+      U4  A reconnect's identity check (verifying) does NOT lock entry.
 */
-describe('activateArchive — unlogged Phone / CW work', () => {
-    const REFUSAL = /You have an unlogged QSO on Phone \/ CW — log or clear it, then switch\./;
+describe('activateArchive — the Activate gate', () => {
+    const OTHER_WINDOWS = /unlogged work in any other open window .* is lost/i;
 
-    it('U1 a partial entry refuses the switch before the confirmation; nothing is sent', async () => {
-        await loadArchives();
-        draft.name = 'Bob'; // no callsign yet: still unlogged work
-        const confirm = vi.fn(() => true);
-        expect(await activateArchive('b', confirm)).toBe(false);
-        expect(confirm).not.toHaveBeenCalled();
-        expect(fetchDaemonInstance).not.toHaveBeenCalled();
-        expect(activateQsoArchive).not.toHaveBeenCalled();
-        expect(hasToast('error', REFUSAL)).toBe(true);
-        expect(draft.name).toBe('Bob');
+    beforeEach(() => {
+        submitState.busy = false;
+        submitState.uncertain = false;
+    });
+    afterEach(() => {
+        submitState.busy = false;
+        submitState.uncertain = false;
     });
 
-    it('U2 a QSO started while the confirmation is open is refused after it', async () => {
+    it('A1 an empty form: the prompt names the destination and warns about other windows', async () => {
         await loadArchives();
-        // Answers ready, so a missing check would reach the request.
+        const confirm = vi.fn((_text: string) => false);
+        expect(await activateArchive('b', confirm)).toBe(false);
+        const text = confirm.mock.calls[0][0];
+        expect(text).toMatch(/“Contest”/);
+        expect(text).toMatch(OTHER_WINDOWS);
+        expect(text).not.toMatch(/discards/);
+        expect(activateQsoArchive).not.toHaveBeenCalled();
+    });
+
+    it('A2 an unlogged entry is offered for discard, named; Cancel keeps it and sends nothing', async () => {
+        await loadArchives();
+        draft.callsign = 'ZS6BOS';
+        draft.timeOn = '10:00:00';
+        const confirm = vi.fn((_text: string) => false);
+        expect(await activateArchive('b', confirm)).toBe(false);
+        expect(confirm).toHaveBeenCalledTimes(1);
+        const text = confirm.mock.calls[0][0];
+        expect(text).toMatch(/“Contest”/);
+        expect(text).toMatch(/ZS6BOS/);
+        expect(text).toMatch(/10:00:00/);
+        expect(text).toMatch(/OK discards this window’s entry and switches/);
+        expect(text).toMatch(OTHER_WINDOWS);
+        expect(fetchDaemonInstance).not.toHaveBeenCalled();
+        expect(activateQsoArchive).not.toHaveBeenCalled();
+        expect(toastsState.items).toEqual([]);
+        expect(draft.callsign).toBe('ZS6BOS');
+    });
+
+    it('A2 a partial entry (no callsign yet) is named as one; OK sends the request', async () => {
+        await loadArchives();
+        draft.name = 'Bob';
         vi.mocked(fetchDaemonInstance).mockResolvedValue('inst-1');
         vi.mocked(activateQsoArchive).mockResolvedValue({
             kind: 'refused',
             code: 'tx_busy',
             message: 'transmit is armed',
         });
-        const confirm = vi.fn(() => {
+        const confirm = vi.fn((_text: string) => true);
+        await activateArchive('b', confirm);
+        expect(confirm).toHaveBeenCalledTimes(1);
+        expect(confirm.mock.calls[0][0]).toMatch(/partial/);
+        expect(confirm.mock.calls[0][0]).toMatch(/OK discards this window’s entry and switches/);
+        expect(activateQsoArchive).toHaveBeenCalledTimes(1);
+    });
+
+    it('A3 a definite refusal or a non-accepting answer leaves the entry and reloads nothing', async () => {
+        await loadArchives();
+        draft.callsign = 'ZS6BOS';
+        vi.mocked(fetchDaemonInstance).mockResolvedValue('inst-1');
+        vi.mocked(activateQsoArchive).mockResolvedValueOnce({
+            kind: 'refused',
+            code: 'tx_busy',
+            message: 'transmit is armed',
+        });
+        expect(await activateArchive('b', () => true)).toBe(false);
+        vi.mocked(activateQsoArchive).mockResolvedValueOnce({ kind: 'error', message: 'HTTP 500' });
+        expect(await activateArchive('b', () => true)).toBe(false);
+        expect(draft.callsign).toBe('ZS6BOS');
+        expect(reloads).toBe(0);
+        expect(archivesState.switchUnresolved).toBe(false);
+    });
+
+    it('A3 an accepted switch reloads with no save step; an unproven one gates and keeps the entry', async () => {
+        const spies = installBrowserStorageSpies();
+        try {
+            await loadArchives();
             draft.callsign = 'ZS6BOS';
+            vi.mocked(fetchDaemonInstance).mockResolvedValue('inst-1');
+            vi.mocked(activateQsoArchive).mockResolvedValue({ kind: 'network', message: 'reset' });
+            vi.mocked(waitForDaemonBack).mockResolvedValue(false);
+            await activateArchive('b', () => true);
+            expect(archivesState.switchUnresolved).toBe(true);
+            expect(draft.callsign).toBe('ZS6BOS');
+            expect(reloads).toBe(0);
+
+            _resetArchivesForTests();
+            await loadArchives();
+            vi.mocked(activateQsoArchive).mockResolvedValue({
+                kind: 'accepted',
+                id: 'b',
+                durability: 'durable',
+            });
+            vi.mocked(waitForDaemonBack).mockResolvedValue(true);
+            expect(await activateArchive('b', () => true)).toBe(true);
+            expect(reloads).toBe(1);
+            expect(spies.opens).toEqual([]);
+            expect(spies.deletes).toEqual([]);
+            expect(spies.locks).toEqual([]);
+            expect(spies.channels).toEqual([]);
+        } finally {
+            spies.restore();
+        }
+    });
+
+    it('A4 a Log in flight refuses before the prompt', async () => {
+        await loadArchives();
+        draft.callsign = 'ZS6BOS';
+        submitState.busy = true;
+        const confirm = vi.fn((_text: string) => true);
+        expect(await activateArchive('b', confirm)).toBe(false);
+        expect(confirm).not.toHaveBeenCalled();
+        expect(activateQsoArchive).not.toHaveBeenCalled();
+        expect(hasToast('error', /being logged.*wait for it to finish/i)).toBe(true);
+    });
+
+    it('A4 a Log started while the prompt is open refuses before the request', async () => {
+        await loadArchives();
+        vi.mocked(fetchDaemonInstance).mockResolvedValue('inst-1');
+        vi.mocked(activateQsoArchive).mockResolvedValue({
+            kind: 'accepted',
+            id: 'b',
+            durability: 'durable',
+        });
+        const confirm = vi.fn((_text: string) => {
+            submitState.busy = true;
             return true;
         });
         expect(await activateArchive('b', confirm)).toBe(false);
         expect(confirm).toHaveBeenCalledTimes(1);
         expect(fetchDaemonInstance).not.toHaveBeenCalled();
         expect(activateQsoArchive).not.toHaveBeenCalled();
-        expect(hasToast('error', REFUSAL)).toBe(true);
+        expect(hasToast('error', /being logged.*wait for it to finish/i)).toBe(true);
         expect(archivesState.activating).toBe(false);
+    });
+
+    it('A4 an unknown Log outcome is allowed, saying it may already be logged in the original archive', async () => {
+        await loadArchives();
+        draft.callsign = 'ZS6BOS';
+        submitState.uncertain = true;
+        const confirm = vi.fn((_text: string) => false);
+        await activateArchive('b', confirm);
+        expect(confirm).toHaveBeenCalledTimes(1);
+        const text = confirm.mock.calls[0][0];
+        expect(text).toMatch(/may already be logged/);
+        expect(text).toMatch(/Logbook in “Home”/);
+        // Uncertain, so never called unlogged (review 2026-10-05).
+        expect(text).toMatch(/Phone \/ CW entry/);
+        expect(text).not.toMatch(/unlogged QSO/);
+        expect(text).toMatch(/OK discards this window’s entry and switches/);
     });
 
     it('U3 entry is locked while the request is in flight and unlocked by a definite refusal', async () => {
@@ -429,123 +540,18 @@ describe('activateArchive — unlogged Phone / CW work', () => {
 });
 
 /*
-    REBIND RELOADS PRESERVE UNLOGGED WORK (ADR 0085, rule 3 slice 1).
-      V1  Every rebind reload first saves the draft through the injected
-          preserver, and reloads only once that save has completed.
-      V2  A failed save HOLDS the reload: the gate stays latched and the
-          failure (reason + the record, for display) is kept.
-      V3  Reload now, and a later automatic rebind, go through the same save;
-          while it still fails nothing reloads.
-      V4  Retry save that succeeds reloads and clears the failure.
-      V5  Discard and reload reloads without saving.
-      V6  The source handed to the preserver is the archive this page booted
-          on; an unproven boot hands none (the preserver then holds).
-      V7  A verified same-archive recovery retires the held rig reading; a
-          rig reconnect to the SAME daemon instance does too, a different one
-          does not.
+    EVERY AUTOMATIC REBIND RELOADS AT ONCE (ADR 0087: no save step).
+      R2  The switch watch, the unproven-boot watch and a boot bracket that
+          straddles a change each reload directly — a held entry is not saved
+          and does not hold the reload.
+      V10 (Codex review ebe244dc P2, retained): a rig reconnect whose identity
+          cannot be read is retried, then FAILS CLOSED — gated as a log-stream
+          reconnect is. Another archive reloads. During boot (no proven
+          baseline yet) it does nothing.
 */
-describe('rebind reloads preserve unlogged work', () => {
-    const FAILED: PreserveResult = {
-        kind: 'failed',
-        record: sampleRecord(),
-        reason: 'Browser storage did not keep it (QuotaExceededError).',
-    };
-    const SAVED: PreserveResult = { kind: 'saved', record: sampleRecord() };
-
-    it('V1 the reload waits for the save', async () => {
-        await loadArchives();
-        _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
-        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i2', archiveId: 'b' });
-        let finish: (r: PreserveResult) => void = () => {};
-        const preserver = vi.fn(() => new Promise<PreserveResult>((r) => (finish = r)));
-        setDraftPreserver(preserver);
-        const run = verifyArchiveGeneration();
-        for (let i = 0; i < 10; i++) await Promise.resolve();
-        expect(preserver).toHaveBeenCalledTimes(1);
-        expect(reloads).toBe(0);
-        finish(SAVED);
-        await run;
-        expect(reloads).toBe(1);
-    });
-
-    it('V2 a failed save holds the reload, gated, with the failure kept', async () => {
-        await loadArchives();
-        _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
-        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i2', archiveId: 'b' });
-        setDraftPreserver(() => Promise.resolve(FAILED));
-        await verifyArchiveGeneration();
-        expect(reloads).toBe(0);
-        expect(archivesState.switchUnresolved).toBe(true);
-        expect(archivesState.saveFailed?.reason).toMatch(/QuotaExceededError/);
-        expect(archivesState.saveFailed?.record.fields.callsign).toBe('g0abc');
-    });
-
-    it('V3 Reload now and a later automatic rebind still hold while saving fails', async () => {
-        await loadArchives();
-        vi.mocked(fetchDaemonInstance).mockResolvedValue('inst-1');
-        vi.mocked(activateQsoArchive).mockResolvedValue({
-            kind: 'accepted',
-            id: 'b',
-            durability: 'durable',
-        });
-        vi.mocked(waitForDaemonBack).mockResolvedValue(true);
-        const preserver = vi.fn(() => Promise.resolve(FAILED));
-        setDraftPreserver(preserver);
-        await activateArchive('b', () => true); // automatic: the new instance is seen
-        expect(reloads).toBe(0);
-        reloadNow();
-        for (let i = 0; i < 10; i++) await Promise.resolve();
-        expect(preserver).toHaveBeenCalledTimes(2);
-        expect(reloads).toBe(0);
-        expect(archivesState.saveFailed).not.toBeNull();
-    });
-
-    it('V4 a successful Retry save reloads and clears the failure', async () => {
-        _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
-        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i2', archiveId: 'b' });
-        const preserver = vi
-            .fn<() => Promise<PreserveResult>>()
-            .mockResolvedValueOnce(FAILED)
-            .mockResolvedValueOnce(SAVED);
-        setDraftPreserver(preserver);
-        await verifyArchiveGeneration();
-        expect(reloads).toBe(0);
-        await retrySave();
-        expect(reloads).toBe(1);
-        expect(archivesState.saveFailed).toBeNull();
-    });
-
-    it('V5 Discard and reload reloads without saving', async () => {
-        _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
-        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i2', archiveId: 'b' });
-        const preserver = vi.fn(() => Promise.resolve(FAILED));
-        setDraftPreserver(preserver);
-        await verifyArchiveGeneration();
-        discardAndReload();
-        expect(preserver).toHaveBeenCalledTimes(1);
-        expect(reloads).toBe(1);
-    });
-
-    it('V6 the source is the booted archive; an unproven page hands none', async () => {
-        await loadArchives();
-        _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
-        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i2', archiveId: 'b' });
-        const preserver = vi.fn((_src: unknown) => Promise.resolve(SAVED));
-        setDraftPreserver(preserver);
-        await verifyArchiveGeneration();
-        expect(preserver).toHaveBeenLastCalledWith({ archiveId: 'a', archiveLabel: 'Home' });
-
-        _resetArchivesForTests();
-        setDraftPreserver(preserver);
-        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i3', archiveId: 'b' });
-        await verifyArchiveGeneration(); // no proven baseline: rebind
-        expect(preserver).toHaveBeenLastCalledWith(null);
-    });
-
-    it('V8 every automatic reload path saves first and holds on failure', async () => {
-        const preserver = vi.fn(() => Promise.resolve(FAILED));
-        setDraftPreserver(preserver);
-
+describe('automatic rebind reloads', () => {
+    it('R2 every automatic reload path reloads directly, a held entry included', async () => {
+        draft.callsign = 'ZS6BOS';
         // The switch watch: the wait expires, then the new instance is seen.
         await loadArchives();
         vi.mocked(fetchDaemonInstance).mockResolvedValue('inst-1');
@@ -557,99 +563,51 @@ describe('rebind reloads preserve unlogged work', () => {
         vi.mocked(waitForDaemonBack).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
         await activateArchive('b', () => true);
         for (let i = 0; i < 10; i++) await Promise.resolve();
-        expect(preserver).toHaveBeenCalledTimes(1);
+        expect(reloads).toBe(1);
 
         // The unproven-boot watch: the daemon answers again.
         _resetArchivesForTests();
-        setDraftPreserver(preserver);
         vi.mocked(fetchDaemonIdentity).mockResolvedValue(null);
         vi.mocked(waitForDaemonBack).mockResolvedValue(true);
         await bootArchiveScoped(() => Promise.resolve(0));
         for (let i = 0; i < 10; i++) await Promise.resolve();
-        expect(preserver).toHaveBeenCalledTimes(2);
+        expect(reloads).toBe(2);
 
         // The boot bracket straddling a change.
         _resetArchivesForTests();
-        setDraftPreserver(preserver);
         vi.mocked(fetchDaemonIdentity)
             .mockResolvedValueOnce({ instance: 'i1', archiveId: 'a' })
             .mockResolvedValueOnce({ instance: 'i2', archiveId: 'b' });
         await bootArchiveScoped(() => Promise.resolve(0));
-        expect(preserver).toHaveBeenCalledTimes(3);
-
-        expect(reloads).toBe(0);
-        expect(archivesState.saveFailed).not.toBeNull();
+        expect(reloads).toBe(3);
+        expect(draft.callsign).toBe('ZS6BOS'); // never saved, only lost to the real reload
     });
 
-    // Review 2026-09-30: an identity answer that started before a later loss
-    // replaced the held 14.255 MHz reading with the reconnect's 7.074 MHz.
-    for (const [label, check] of [
-        ['rig reconnect', verifyAfterRigReconnect],
-        ['archive reconnect', verifyArchiveGeneration],
-    ] as const) {
-        it(`V9 ${label}: a late same-archive answer cannot retire a newer loss's reading`, async () => {
-            _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
-            rig.freq = '14.255.000';
-            rig.band = '20m';
-            rig.mode = 'USB';
-            let reply: (v: { instance: string; archiveId: string }) => void = () => {};
-            vi.mocked(fetchDaemonIdentity).mockReturnValue(new Promise((r) => (reply = r)));
-            const pending = check();
-            noteRigDrop(Date.parse('2026-09-30T12:00:00Z'));
-            rig.freq = '7.074.000';
-            rig.band = '40m';
-            rig.mode = 'CW';
-            reply({ instance: 'i1', archiveId: 'a' });
-            await pending;
-            expect(rigReadingForSave().freqHz).toBe(14_255_000);
-        });
-    }
-
-    it('V7 a verified same-archive recovery retires the held rig reading', async () => {
-        rig.freq = '14.255.000';
-        noteRigDrop(Date.parse('2026-09-30T12:00:00Z'));
+    it('V10 a rig reconnect with an unreadable identity is retried, then gates', async () => {
         _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
-        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i2', archiveId: 'a' });
-        await verifyArchiveGeneration();
-        expect(rigReadingForSave().basis).toBe('when-saved');
-    });
-
-    it('V7 a rig reconnect to the same archive retires it, a restart included', async () => {
-        _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
-        noteRigDrop(Date.parse('2026-09-30T12:00:00Z'));
-        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i2', archiveId: 'a' });
-        await verifyAfterRigReconnect();
-        expect(rigReadingForSave().basis).toBe('when-saved');
-        expect(archivesState.switchUnresolved).toBe(false);
-        expect(reloads).toBe(0);
-    });
-
-    /*
-      V10 (Codex review ebe244dc P2): a rig reconnect whose identity cannot be
-          read is retried, then FAILS CLOSED — the tab is gated as a log-stream
-          reconnect is — never left silently holding an old reading while the
-          operator carries on. Another archive reloads through the save.
-          During boot (no proven baseline yet) it does nothing.
-    */
-    it('V10 an unreadable identity is retried, then gates; the reading stays held', async () => {
-        _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
-        noteRigDrop(Date.parse('2026-09-30T12:00:00Z'));
         vi.mocked(fetchDaemonIdentity).mockResolvedValue(null);
         await verifyAfterRigReconnect();
         expect(fetchDaemonIdentity).toHaveBeenCalledTimes(3);
         expect(archivesState.switchUnresolved).toBe(true);
         expect(archivesState.switchDetail).toMatch(/rig connection came back/);
-        expect(rigReadingForSave().basis).toBe('before-drop');
+        expect(reloads).toBe(0);
     });
 
-    it('V10 another archive reloads through the save', async () => {
+    it('V10 a rig reconnect to another archive reloads', async () => {
         _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
-        const preserver = vi.fn(() => Promise.resolve({ kind: 'none' as const }));
-        setDraftPreserver(preserver);
+        draft.callsign = 'ZS6BOS';
         vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i2', archiveId: 'b' });
         await verifyAfterRigReconnect();
-        expect(preserver).toHaveBeenCalledTimes(1);
         expect(reloads).toBe(1);
+        expect(archivesState.switchUnresolved).toBe(true);
+    });
+
+    it('V10 a rig reconnect to the same archive changes nothing, a restart included', async () => {
+        _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i2', archiveId: 'a' });
+        await verifyAfterRigReconnect();
+        expect(archivesState.switchUnresolved).toBe(false);
+        expect(reloads).toBe(0);
     });
 
     it('V10 before the boot bracket proves a baseline it does nothing', async () => {
@@ -999,16 +957,5 @@ describe('the New archive draft', () => {
             logbookCallsign: '',
             requestKey: '',
         });
-    });
-});
-
-describe('the booted archive (ADR 0085 RS18)', () => {
-    it('is the archive the identity bracket recorded, or null when none was', () => {
-        _setBootIdentityForTests(null);
-        expect(bootArchiveId()).toBeNull();
-        _setBootIdentityForTests({ instance: 'i1', archiveId: '' });
-        expect(bootArchiveId()).toBeNull();
-        _setBootIdentityForTests({ instance: 'i1', archiveId: 'arch-a' });
-        expect(bootArchiveId()).toBe('arch-a');
     });
 });

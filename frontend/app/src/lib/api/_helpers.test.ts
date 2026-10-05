@@ -1,13 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { daemonNowMs, _resetDaemonClockForTests } from './daemonClock.svelte';
-import {
-    DEFAULT_TIMEOUT_MS,
-    isPlainObject,
-    isShape,
-    readJsonBody,
-    safeFetch,
-    setConfigWriteListener,
-} from './_helpers';
+import { DEFAULT_TIMEOUT_MS, isPlainObject, isShape, readJsonBody, safeFetch } from './_helpers';
 
 afterEach(() => {
     vi.restoreAllMocks();
@@ -292,68 +285,5 @@ describe('safeFetch daemon-clock calibration', () => {
         await safeFetch('/v1/anything');
 
         expect(Math.abs(daemonNowMs() - calibrated)).toBeLessThan(2_000);
-    });
-});
-
-// Config writes are reported (ADR 0085 RS1; review 2026-10-01): a saved draft's
-// attribution must be invalidated the moment any config write is sent — from any
-// Settings section, not only Station — and re-read once it has settled.
-describe('safeFetch reports config writes', () => {
-    afterEach(() => setConfigWriteListener(null));
-
-    function listen(): string[] {
-        const seen: string[] = [];
-        setConfigWriteListener({
-            started: () => seen.push('started'),
-            settled: () => seen.push('settled'),
-        });
-        return seen;
-    }
-
-    it('a PUT to /v1/config is started before the request and settled after it', async () => {
-        const seen = listen();
-        vi.stubGlobal(
-            'fetch',
-            vi.fn(() => {
-                seen.push('request');
-                return Promise.resolve(new Response('{}', { status: 200 }));
-            })
-        );
-        await safeFetch('/v1/config', { method: 'PUT', body: '{}' });
-        expect(seen).toEqual(['started', 'request', 'settled']);
-    });
-
-    it('a failed config write still settles', async () => {
-        const seen = listen();
-        vi.stubGlobal(
-            'fetch',
-            vi.fn(() => Promise.reject(new TypeError('Failed to fetch')))
-        );
-        const out = await safeFetch('/v1/config', { method: 'PUT', body: '{}' });
-        expect(out.ok).toBe(false);
-        expect(seen).toEqual(['started', 'settled']);
-    });
-
-    it('reads and other paths are not config writes', async () => {
-        const seen = listen();
-        vi.stubGlobal(
-            'fetch',
-            vi.fn(() => Promise.resolve(new Response('{}', { status: 200 })))
-        );
-        await safeFetch('/v1/config', { method: 'GET' });
-        await safeFetch('/v1/config');
-        await safeFetch('/v1/logbook', { method: 'POST', body: '{}' });
-        await safeFetch('/v1/configuration', { method: 'PUT', body: '{}' });
-        expect(seen).toEqual([]);
-    });
-
-    it('a config write with a query string still counts', async () => {
-        const seen = listen();
-        vi.stubGlobal(
-            'fetch',
-            vi.fn(() => Promise.resolve(new Response('{}', { status: 200 })))
-        );
-        await safeFetch('/v1/config?x=1', { method: 'PUT', body: '{}' });
-        expect(seen).toEqual(['started', 'settled']);
     });
 });

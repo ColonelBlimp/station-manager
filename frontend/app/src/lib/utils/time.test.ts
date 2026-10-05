@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatDurationHms, isoAt } from './time';
+import { formatDurationHms } from './time';
 
 describe('formatDurationHms', () => {
     it('formats zero as 00:00:00', () => {
@@ -36,11 +36,5 @@ describe('formatDurationHms', () => {
 
     it('clamps negative inputs to 00:00:00', () => {
         expect(formatDurationHms(-1)).toBe('00:00:00');
-    });
-});
-
-describe('isoAt', () => {
-    it('renders an epoch-millisecond instant as ISO-8601 UTC', () => {
-        expect(isoAt(Date.UTC(2026, 8, 30, 12, 5, 0))).toBe('2026-09-30T12:05:00.000Z');
     });
 });

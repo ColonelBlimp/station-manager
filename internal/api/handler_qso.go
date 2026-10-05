@@ -203,8 +203,8 @@ func (s *Server) handleSubmitQso(w http.ResponseWriter, r *http.Request) {
 	// 2026-06-19 M3) so every submit caller (HTTP, FT8 e4 sink, …) shares
 	// it; Submit returns logbook_not_found / callsign_mismatch, mapped below.
 	// The query is parsed strictly: URL.Query() silently drops a pair it cannot
-	// parse (an unescaped ';', a bad %-escape), which would turn a guarded
-	// recovered submit — expect_* — into an ordinary one (review 2026-10-01).
+	// parse (an unescaped ';', a bad %-escape), which would turn a refused
+	// submit — an expect_* key, below — into a stored one (review 2026-10-01).
 	query, qerr := url.ParseQuery(r.URL.RawQuery)
 	if qerr != nil {
 		s.writeError(w, http.StatusBadRequest, "invalid_query_param",
@@ -243,13 +243,15 @@ func (s *Server) handleSubmitQso(w http.ResponseWriter, r *http.Request) {
 		}
 		force = v
 	}
-	// A recovered draft states the attribution it was made with (ADR 0085); the
-	// submit is refused, storing nothing, unless the QSO would be stored with it.
-	expect, ok := expectedAttribution(query)
-	if !ok {
-		s.writeError(w, http.StatusBadRequest, "invalid_query_param",
-			"expect_my_rig, expect_operator and expect_my_name go together: send all three or none", op)
-		return
+	// A page loaded before ADR 0087 may still log a recovered QSO with its
+	// expected attribution (expect_*). That check is gone, so the submit is
+	// refused, storing nothing, rather than stored without it: the page reloads.
+	for k := range query {
+		if strings.HasPrefix(k, "expect_") {
+			s.writeError(w, http.StatusConflict, "reload_required",
+				"this page is out of date; reload it. This request stored nothing — an earlier attempt may already be logged, so check the Logbook", op)
+			return
+		}
 	}
 	// Standing QSL defaults (config.json `qsl`) — fill QSL_VIA / QSLMSG /
 	// QSL_SENT_VIA where this submission left them empty (a future per-QSO form
@@ -258,23 +260,14 @@ func (s *Server) handleSubmitQso(w http.ResponseWriter, r *http.Request) {
 	// is left alone so imported QSOs keep their own QSL data.
 	rec.ApplyQslDefaults(s.cfg.Snapshot().Qsl)
 
-	var result qsoservice.SubmitResult
-	if expect != nil {
-		result, err = s.qso.SubmitExpecting(r.Context(), logbookID, rec, force, *expect)
-	} else {
-		result, err = s.qso.Submit(r.Context(), logbookID, rec, force)
-	}
+	result, err := s.qso.Submit(r.Context(), logbookID, rec, force)
 	if err != nil {
 		if se := qsoservice.IsSubmitError(err); se != nil {
 			// logbook_not_found is a 404 (the referenced logbook doesn't exist);
-			// attribution_changed a 409 (the station changed under a recovered
-			// draft); every other SubmitError is a 400 client error.
+			// every other SubmitError is a 400 client error.
 			status := http.StatusBadRequest
-			switch se.Code {
-			case "logbook_not_found":
+			if se.Code == "logbook_not_found" {
 				status = http.StatusNotFound
-			case "attribution_changed":
-				status = http.StatusConflict
 			}
 			s.writeError(w, status, se.Code, se.Message, op)
 			return

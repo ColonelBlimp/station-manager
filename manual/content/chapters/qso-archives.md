@@ -34,8 +34,8 @@ to be empty. The active archive is open, so it says **Counts are being
 updated** while a change is recounted, and **Current counts are not available**
 if its counts could not be read.
 
-The header also shows the active archive above the logbook name. Picking
-another archive there does the same as **Activate** in Settings.
+The header also shows the active archive above the logbook name. It only
+names it: archives are switched from **Settings → Archives** alone.
 
 ## Logbooks
 
@@ -82,10 +82,14 @@ running daemon never swaps databases underneath you. Before you confirm:
 - stop any transmission and **disarm FT8**. A switch is refused while FT8
   is armed, a message is in flight, a contact is in progress, or the tune
   carrier is keyed, and it says which.
-- log or clear the QSO you are typing on **Phone / CW**. A switch is refused
-  while this page holds one, even a partly typed one, and the Phone / CW form
-  is locked while the switch runs so nothing new is typed into a page about
-  to reload.
+- log or clear the QSO you are typing on **Phone / CW**. If this window holds
+  one, even a partly typed one, the confirmation names it: **OK** discards it
+  and switches, **Cancel** keeps it and switches nothing. A switch is refused
+  while a QSO is still being logged; wait for the Log to finish. If a Log's
+  outcome is unknown, the confirmation says the QSO **may already be logged**:
+  check the Logbook in the current archive before logging it again. The
+  Phone / CW form is locked while the switch runs so nothing new is typed into
+  a page about to reload. Opening Settings never clears the form.
 - expect the connection to drop for about five seconds, after which the
   page reloads on its own so everything — the logbook name and count, the
   contact form, the log view — belongs to the new archive. Unsaved Settings
@@ -104,35 +108,13 @@ screen — notices the change when it reconnects and reloads itself too. If the 
 active and the archive you chose shows a ⚠ after its label. Point at it to
 read **Last activation failed** with the reason.
 
-If a tab that reloads this way holds an unlogged Phone / CW QSO, it saves it in this
-browser before it reloads, together with the archive and logbook it belongs
-to and the rig frequency, band and mode it had. The QSO is **not logged**: it is
-kept only in this browser until you restore and log it or discard it. After the
-reload a message says so once, with an **Open Unlogged QSOs** button, and has no
-automatic timeout (like any message, it can still be pushed out when several
-arrive at once). **Unlogged QSOs (N)** appears in the header beside Logbook (in
-the map tab, in its toolbar). It stays there on every page while any kept QSO
-remains, in this tab and any other Station Manager tab open in this browser.
-Open it to see each QSO: **Show details** shows every value so
-you can read or **Copy** it, and **Discard** removes the saved copy (only the
-copy in this browser — nothing in any logbook changes). Closing the panel, or
-pressing Esc, keeps every saved QSO and never clears the QSO you are typing. A QSO whose Log
-attempt had an unknown outcome says so: check the Logbook in its archive
-before logging it again. Unlogged QSOs are never logged automatically.
-
-To log one, open **Unlogged QSOs** on Phone / CW while the archive and logbook
-it came from are in use, and press **Restore**. The QSO returns to the form with
-its original times and the rig values it had. Confirm or correct those values,
-then log it as usual: it goes into its original logbook with the operator
-details it was saved with, and the form is read-only while it is being logged.
-Only one tab can hold a restored QSO at a time. A QSO from another archive or
-logbook says which one it belongs to and offers no Restore here. On other
-pages, **Go to Phone / CW** takes you there without restoring anything.
-
-If the
-browser cannot save the QSO, that tab does not reload: it shows the QSO in
-full, with **Retry save** and **Discard and reload**, and stop controls stay
-available.
+**Every other open window loses its unlogged work.** Switching restarts
+Station Manager and reloads every open window. In any window other than the
+one you switched from, unlogged work is lost: a QSO typed on Phone / CW but
+not logged, an FT8 / FT4 exchange not yet completed, and unsaved Settings
+changes. Nothing warns that window; the confirmation is the warning. Logged
+QSOs are never affected. Before switching, log or clear your work in every
+window.
 
 While a switch is pending, transmit is sealed: arming FT8, sending, starting
 a contact or keying the tune carrier is refused with *archive switch pending*

@@ -1,6 +1,6 @@
 /*
-    Phone / CW entry is locked while an archive switch is in flight (ADR 0085,
-    operator ruling 2026-09-30, rule 2). The switch ends in a page reload, and
+    Phone / CW entry is locked while an archive switch is in flight (ADR 0085
+    rule 2, kept by ADR 0087 item 7). The switch ends in a page reload, and
     the draft lives only in memory, so anything typed meanwhile would be lost.
 
       E1  While the injected entry gate names a reason, every field and button

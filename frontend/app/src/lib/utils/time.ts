@@ -17,9 +17,3 @@ export function formatDurationHms(ms: number): string {
     const seconds = totalSeconds % 60;
     return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
 }
-
-/** An epoch-millisecond instant as an ISO-8601 UTC string. Kept out of runes
- *  modules, where a Date instance reads as reactive state to the linter. */
-export function isoAt(ms: number): string {
-    return new Date(ms).toISOString();
-}

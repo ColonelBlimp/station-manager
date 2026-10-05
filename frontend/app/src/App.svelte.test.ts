@@ -10,12 +10,8 @@ import { setup, _resetSetupForTests } from './lib/setup.svelte';
 import { navigate } from './lib/router.svelte';
 import { archivesState, _resetArchivesForTests } from './lib/config/archives.svelte';
 import { screen } from '@testing-library/svelte';
-import { _setDraftStoreForTests, memoryDraftStore } from './lib/drafts/draftStore';
-import {
-    _resetSavedDraftsForTests,
-    rememberPreservedForAnnouncement,
-} from './lib/drafts/savedDrafts.svelte';
-import { sampleRecord } from './lib/drafts/savedDraft.fixture';
+import { draft, resetDraft } from './lib/operate/qso.svelte';
+import { installBrowserStorageSpies } from './lib/utils/browserStorageSpies.fixture';
 
 describe('App tab title on the first-run surface', () => {
     beforeEach(() => {
@@ -80,49 +76,50 @@ describe('ArchiveSwitchGate covers the Map branch', () => {
     });
 });
 
-// Saved QSOs are reachable on EVERY page (ADR 0086) — the full-window Map tab
-// included, which has no header: the control sits in the map's own toolbar.
-describe('the Saved QSOs control on the Map route', () => {
+// ADR 0087: opening Settings clears nothing — only Activate's own prompt may
+// discard this window's entry — and the saved-QSO recovery is gone, so no page
+// offers an Unlogged QSOs control (the Map toolbar carried one).
+describe('ADR 0087 in the shell', () => {
     beforeEach(() => {
         _resetSetupForTests();
         _resetArchivesForTests();
-        _resetSavedDraftsForTests();
+        resetDraft();
     });
     afterEach(() => {
-        _setDraftStoreForTests(null);
+        resetDraft();
         navigate('operate');
     });
 
-    it('shows the saved-QSO count in the map toolbar', async () => {
-        const mem = memoryDraftStore();
-        await mem.put(sampleRecord());
-        _setDraftStoreForTests(mem);
+    it('C2 Operate → Settings → Operate keeps a Phone / CW entry', () => {
         setup.status = 'complete';
-        navigate('map');
+        navigate('operate');
         render(App);
-        expect(
-            await screen.findByRole('button', { name: 'Unlogged QSOs (1)' }, { timeout: 3000 })
-        ).toBeInTheDocument();
+        flushSync();
+        draft.callsign = '7Q7CT';
+        draft.comment = 'navigation';
+        flushSync();
+        navigate('config');
+        flushSync();
+        navigate('operate');
+        flushSync();
+        expect(draft.callsign).toBe('7Q7CT');
+        expect(draft.comment).toBe('navigation');
     });
 
-    // Review 2026-09-30: the Map branch mounted no toast renderer, so the
-    // announcement was consumed and never shown (Copy and a failed Discard
-    // were silent too). Checked in the DOM, not in toast state.
-    it('shows the one-time announcement on the map', async () => {
-        const mem = memoryDraftStore();
-        const record = sampleRecord();
-        await mem.put(record);
-        _setDraftStoreForTests(mem);
-        sessionStorage.clear();
-        rememberPreservedForAnnouncement(record);
-        setup.status = 'complete';
-        navigate('map');
-        render(App);
-        await screen.findByRole('button', { name: 'Unlogged QSOs (1)' }, { timeout: 3000 });
-        expect(
-            await screen.findByText(
-                'Not logged — QSO from ‘Home’, kept in this browser. It is under Unlogged QSOs.'
-            )
-        ).toBeInTheDocument();
+    it('H1/O1 the Map page offers no Unlogged QSOs control and never opens browser storage', async () => {
+        const spies = installBrowserStorageSpies();
+        try {
+            setup.status = 'complete';
+            navigate('map');
+            render(App);
+            flushSync();
+            await new Promise((r) => setTimeout(r, 50));
+            flushSync();
+            expect(screen.queryByRole('button', { name: /Unlogged QSOs/ })).toBeNull();
+            expect(spies.opens).toEqual([]);
+            expect(spies.deletes).toEqual([]);
+        } finally {
+            spies.restore();
+        }
     });
 });

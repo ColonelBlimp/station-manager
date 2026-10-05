@@ -150,15 +150,6 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 			startupForwarders[f.Name] = struct{}{}
 		}
 	}
-	// Every config write that makes a new config live — from any client — is
-	// announced on /v1/events (ADR 0085), so a page invalidates what it derived
-	// from the old one. After the change is live, whether or not the writer ever
-	// sees its response; never for a rejected write (config.Service.SetOnChanged).
-	if cfgSvc != nil && hub != nil {
-		cfgSvc.SetOnChanged(func() {
-			hub.Publish(events.NameConfigUpdated, events.ConfigUpdatedPayload{})
-		})
-	}
 	s := &Server{
 		cfg:               cfgSvc,
 		startupForwarders: startupForwarders,
@@ -276,7 +267,6 @@ func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *l
 	// bucket). See docs/v2-design/api.md §6 for the threat model.
 	apiMux.Handle("POST /v1/qso", s.limitSubmitRate(http.HandlerFunc(s.handleSubmitQso)))
 	apiMux.HandleFunc("GET /v1/qso/{uuid}", s.handleGetQso)
-	apiMux.HandleFunc("GET /v1/submit-attribution", s.handleGetSubmitAttribution)
 	apiMux.HandleFunc("PATCH /v1/qso/{uuid}", s.handleUpdateQso)
 	apiMux.HandleFunc("DELETE /v1/qso/{uuid}", s.handleDeleteQso)
 	apiMux.HandleFunc("GET /v1/qso/{uuid}/uploads", s.handleListQsoUploads)

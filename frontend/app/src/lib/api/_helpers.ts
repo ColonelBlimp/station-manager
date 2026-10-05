@@ -150,44 +150,7 @@ function withTimeout(caller: AbortSignal | undefined, timeoutMs: number): AbortS
  * flag, because the platform isn't entirely consistent about which exception
  * class shows up first.
  */
-// Config writes are reported to one listener (ADR 0085 RS1): a saved draft's
-// attribution depends on configuration any Settings section may change, so it
-// is invalidated the moment a write is sent and re-read once it has settled —
-// whatever the outcome, since an unconfirmed write may still have landed.
-export interface ConfigWriteListener {
-    started(): void;
-    settled(): void;
-}
-let configWriteListener: ConfigWriteListener | null = null;
-export function setConfigWriteListener(l: ConfigWriteListener | null): void {
-    configWriteListener = l;
-}
-
-function isConfigWrite(input: RequestInfo, init?: RequestInit): boolean {
-    const method = (
-        init?.method ?? (typeof input === 'string' ? 'GET' : input.method)
-    ).toUpperCase();
-    if (method === 'GET' || method === 'HEAD') return false;
-    const url = typeof input === 'string' ? input : input.url;
-    const path = new URL(url, 'http://station-manager.invalid').pathname;
-    return path === '/v1/config';
-}
-
 export async function safeFetch(
-    input: RequestInfo,
-    init?: RequestInit,
-    opts?: { timeoutMs?: number }
-): Promise<FetchOutcome> {
-    const listener = isConfigWrite(input, init) ? configWriteListener : null;
-    listener?.started();
-    try {
-        return await sendFetch(input, init, opts);
-    } finally {
-        listener?.settled();
-    }
-}
-
-async function sendFetch(
     input: RequestInfo,
     init?: RequestInit,
     opts?: { timeoutMs?: number }

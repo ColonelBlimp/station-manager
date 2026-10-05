@@ -11,9 +11,6 @@ import { rig } from '../operate/rig.svelte';
 import { router } from '../router.svelte';
 import { isVisible, toggleTile } from '../operate/layout.svelte';
 import { archivesState, _resetArchivesForTests } from '../config/archives.svelte';
-import { _setDraftStoreForTests, memoryDraftStore } from '../drafts/draftStore';
-import { _resetSavedDraftsForTests } from '../drafts/savedDrafts.svelte';
-import { sampleRecord } from '../drafts/savedDraft.fixture';
 
 vi.mock('../api/qso-archives', () => ({
     fetchQsoArchives: vi.fn(),
@@ -204,10 +201,10 @@ describe('Header CAT chip → Rig Control panel', () => {
     });
 });
 
-// The archive selector (ADR 0071): above the logbook, showing the DAEMON's active
-// archive; a pick runs the shared activate flow, a declined confirmation leaves
-// the selector on the active archive and sends nothing.
-describe('Header archive selector', () => {
+// The archive name (ADR 0071; ADR 0087): above the logbook, the DAEMON's active
+// archive — display only. Switching happens only from Settings → Archives, so
+// nothing in the header activates, and there is no Unlogged QSOs control.
+describe('Header archive name (H1)', () => {
     const HOME = {
         id: 'a',
         label: 'Home',
@@ -233,71 +230,34 @@ describe('Header archive selector', () => {
         contentsStatus: 'current',
     } as const;
 
-    it('is absent until the catalogue is known, then names the active archive', () => {
+    it('is absent until the catalogue is known, then names the active archive as text', () => {
         render(Header);
-        expect(screen.queryByLabelText('Active archive')).toBeNull();
+        expect(screen.queryByTestId('header-archive')).toBeNull();
         archivesState.list = [HOME, CONTEST];
         flushSync();
-        const sel: HTMLSelectElement = screen.getByLabelText('Active archive');
-        expect(sel.value).toBe('a');
-        expect(sel.options).toHaveLength(2);
+        expect(screen.getByTestId('header-archive')).toHaveTextContent('Home');
+        expect(screen.getByTestId('header-archive')).not.toHaveTextContent('Contest');
     });
 
-    it('is disabled while the list is stale (nothing is acted on from a retained list)', () => {
+    it('offers no control that switches archive', () => {
         archivesState.list = [HOME, CONTEST];
-        archivesState.loaded = true;
-        archivesState.stale = true;
-        render(Header);
-        expect(screen.getByLabelText('Active archive')).toBeDisabled();
+        const { container } = render(Header);
+        expect(screen.queryByLabelText('Active archive')).toBeNull();
+        expect(container.querySelector('header select')).toBeNull();
+        expect(screen.queryByRole('combobox')).toBeNull();
     });
 
-    it('a declined pick sends nothing and stays on the active archive', async () => {
-        archivesState.list = [HOME, CONTEST];
+    it('names a pending candidate while the restart is awaited', () => {
+        archivesState.list = [HOME, { ...CONTEST, state: 'pending' }];
         render(Header);
-        vi.spyOn(window, 'confirm').mockReturnValue(false);
-        const sel: HTMLSelectElement = screen.getByLabelText('Active archive');
-        await fireEvent.change(sel, { target: { value: 'b' } });
-        await new Promise((r) => setTimeout(r, 0));
-        expect(activateQsoArchive).not.toHaveBeenCalled();
-        expect(sel.value).toBe('a');
+        expect(screen.getByTestId('header-archive')).toHaveTextContent(
+            'Home (switching to Contest)'
+        );
     });
 
-    it('a confirmed pick requests the activation', async () => {
+    it('has no Unlogged QSOs control', () => {
         archivesState.list = [HOME, CONTEST];
         render(Header);
-        vi.spyOn(window, 'confirm').mockReturnValue(true);
-        vi.mocked(activateQsoArchive).mockResolvedValue({
-            kind: 'refused',
-            code: 'tx_busy',
-            message: 'busy',
-        });
-        vi.mocked(await import('../api/qso-archives')).fetchQsoArchives.mockResolvedValue({
-            kind: 'ok',
-            archives: [HOME, CONTEST],
-        });
-        vi.mocked(await import('../api/restart')).fetchDaemonInstance.mockResolvedValue('i1');
-        const sel: HTMLSelectElement = screen.getByLabelText('Active archive');
-        await fireEvent.change(sel, { target: { value: 'b' } });
-        await new Promise((r) => setTimeout(r, 0));
-        expect(activateQsoArchive).toHaveBeenCalledWith('b');
-    });
-});
-
-// ADR 0086: Saved QSOs sit in the header beside Logbook, and stay reachable on
-// the narrowest widths, where the identity block (Archive/Logbook/Rig) is hidden.
-describe('Header Saved QSOs control', () => {
-    it('is in the header and outside the block hidden on narrow screens', async () => {
-        const mem = memoryDraftStore();
-        await mem.put(sampleRecord());
-        _setDraftStoreForTests(mem);
-        _resetSavedDraftsForTests();
-        try {
-            render(Header);
-            const control = await screen.findByRole('button', { name: 'Unlogged QSOs (1)' });
-            expect(control.closest('header')).not.toBeNull();
-            expect(control.closest('.hidden')).toBeNull();
-        } finally {
-            _setDraftStoreForTests(null);
-        }
+        expect(screen.queryByRole('button', { name: /Unlogged QSOs/ })).toBeNull();
     });
 });

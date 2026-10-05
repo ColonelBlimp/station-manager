@@ -32,11 +32,10 @@
     */
     import { callsignStack } from './callsignStack.svelte';
     import { draft, entryLock } from './qso.svelte';
-    import { recovered } from '../drafts/recovered.svelte';
     import { focusCallsign, operate, setCallStack } from './state.svelte';
 
-    // No load while entry is locked (ADR 0085): the switch's reload would drop it.
-    const locked = $derived(entryLock() !== null || recovered.record !== null);
+    // No load while entry is locked (ADR 0087): the switch's reload would drop it.
+    const locked = $derived(entryLock() !== null);
 
     function pop(index: number): void {
         if (locked) return; // a dispatched click still reaches a disabled button's handler

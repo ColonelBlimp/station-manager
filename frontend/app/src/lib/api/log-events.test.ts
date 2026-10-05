@@ -263,29 +263,3 @@ describe('openLogEvents shares one connection per tab', () => {
         closeLater();
     });
 });
-
-// config.updated (ADR 0085): delivered to subscribers that ask for it; its data
-// is never read — the event says only that the config changed.
-describe('openLogEvents config.updated', () => {
-    beforeEach(() => {
-        FakeEventSource.instances = [];
-        vi.stubGlobal('EventSource', FakeEventSource);
-    });
-    afterEach(() => vi.unstubAllGlobals());
-
-    it('calls onConfigUpdated for each config.updated event', () => {
-        const onConfigUpdated = vi.fn();
-        const close = openLogEvents({
-            onOpen: vi.fn(),
-            onTransportError: vi.fn(),
-            onQsoChanged: vi.fn(),
-            onConfigUpdated,
-        });
-        const src = FakeEventSource.instances[0];
-        src.emit('open');
-        src.emit('config.updated', '{}');
-        src.emit('config.updated', 'not even json');
-        expect(onConfigUpdated).toHaveBeenCalledTimes(2);
-        close();
-    });
-});

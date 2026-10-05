@@ -47,9 +47,6 @@ export interface LogEventHandlers {
     /** Any of qso.stored / qso.updated / qso.deleted — consumers that only
      *  re-query don't care which mutation it was. */
     onQsoChanged: (event: string, payload: QsoEventPayload) => void;
-    /** config.updated: some client's config write made a new config live (ADR
-     *  0085). The event carries no config values — re-read what you derived. */
-    onConfigUpdated?: () => void;
 }
 
 /**
@@ -129,10 +126,6 @@ function connect(): SharedStream {
                 sub.sawError = true;
                 sub.handlers.onTransportError();
             });
-        });
-
-        src.addEventListener('config.updated', () => {
-            each((sub) => sub.handlers.onConfigUpdated?.());
         });
 
         for (const name of QSO_EVENTS) {

@@ -52,27 +52,7 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	// an imported QSO's own MY_RIG). Config is required (Initialize enforces it)
 	// and submit() dereferences it unconditionally, so there's no nil-guard here.
 	rec.MyRig = s.stampedMyRig(s.Config.Snapshot())
-	return s.submit(ctx, logbookID, rec, force, false, nil, nil)
-}
-
-// SubmitExpecting is Submit for a RECOVERED Phone / CW draft (ADR 0085): the
-// client states the attribution the QSO was made with, and the submit is
-// refused — writing nothing — unless the values it is about to store match it
-// exactly. The server's stamping stays authoritative; the expectation is only
-// checked, never applied. Compared on the prepared QSO, so a configuration
-// change between the client's read and this submit is caught.
-func (s *Service) SubmitExpecting(ctx context.Context, logbookID int64, rec adif.Record, force bool, expect types.SubmitAttribution) (SubmitResult, error) {
-	rec.MyRig = s.stampedMyRig(s.Config.Snapshot())
-	return s.submit(ctx, logbookID, rec, force, false, nil, &expect)
-}
-
-// LiveAttribution is the attribution a live submit stamps right now when the
-// record supplies `operator` (empty: none) and no MY_NAME — the same rules as
-// Submit, so what a client reads here is what a QSO is stored with.
-func (s *Service) LiveAttribution(operator string) types.SubmitAttribution {
-	snap := s.Config.Snapshot()
-	op, name := effectiveOperatorAndName(snap, operator, "")
-	return types.SubmitAttribution{MyRig: s.stampedMyRig(snap), Operator: op, MyName: name}
+	return s.submit(ctx, logbookID, rec, force, false, nil)
 }
 
 // stampedMyRig is the MY_RIG a live submit stamps (config.md §10). Pinned to the
@@ -126,7 +106,7 @@ func (s *Service) SubmitImport(ctx context.Context, logbookID int64, rec adif.Re
 	if err := refuseBulkBackfillImport(forwardTo, s.routesFor(logbookID)); err != nil {
 		return SubmitResult{}, err
 	}
-	return s.submit(ctx, logbookID, rec, force, true, forwardTo, nil)
+	return s.submit(ctx, logbookID, rec, force, true, forwardTo)
 }
 
 // resolveSubmitUUID applies the UUID policy (ADR 0016; review 2026-06-04 H1):
@@ -370,7 +350,7 @@ func (s *Service) prepareQso(rec adif.Record, logbookID int64, logbookCallsign s
 // callsign), and enqueues upload rows only for forwarders named in forwardTo
 // (default none) — importing a historical logbook must never auto-upload
 // (retrospective backfill is operator-driven, never automatic; ADR 0022).
-func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, force, isImport bool, forwardTo []string, expect *types.SubmitAttribution) (SubmitResult, error) {
+func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, force, isImport bool, forwardTo []string) (SubmitResult, error) {
 	const op errors.Op = "qsoservice.Submit"
 
 	// Logbook must exist; the callsign-match check (live submits only) lives in
@@ -386,9 +366,6 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 
 	qso, dedupeKey, err := s.prepareQso(rec, logbookID, logbookCallsign, force, isImport)
 	if err != nil {
-		return SubmitResult{}, err
-	}
-	if err := checkAttribution(qso, expect); err != nil {
 		return SubmitResult{}, err
 	}
 	call := qso.ContactedStation.Call
@@ -610,29 +587,4 @@ func (s *Service) logDuplicateRefused(logbookID int64, call, qsoDate, timeOn, ex
 		Str("existing_uuid", existingUUID).
 		Int64("existing_qso_id", existingID).
 		Msg("QSO duplicate refused")
-}
-
-// checkAttribution refuses a recovered submit whose prepared QSO would be stored
-// with an attribution other than the one the client expected (ADR 0085). The
-// comparison is EXACT on the values about to be stored — no normalisation, or a
-// changed value differing only in whitespace would pass (review 2026-10-01).
-// Checked before the dedupe lookup and the transaction, so a refusal writes
-// nothing.
-func checkAttribution(qso types.Qso, expect *types.SubmitAttribution) error {
-	if expect == nil {
-		return nil
-	}
-	got := types.SubmitAttribution{
-		MyRig:    qso.LoggingStation.MyRig,
-		Operator: qso.LoggingStation.Operator,
-		MyName:   qso.LoggingStation.MyName,
-	}
-	if got == *expect {
-		return nil
-	}
-	return &SubmitError{
-		Code: "attribution_changed",
-		Message: fmt.Sprintf("the station's attribution changed: MY_RIG %q, OPERATOR %q, MY_NAME %q now, expected %q, %q, %q",
-			got.MyRig, got.Operator, got.MyName, expect.MyRig, expect.Operator, expect.MyName),
-	}
 }

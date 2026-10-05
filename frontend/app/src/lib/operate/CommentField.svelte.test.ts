@@ -26,19 +26,6 @@ describe('CommentField picker', () => {
         expect(screen.queryByRole('menuitem', { name: 'QRN' })).toBeNull(); // closed
     });
 
-    it('read-only: the field cannot be typed in and no recent comment can be picked', () => {
-        render(CommentField, {
-            id: 'c',
-            label: 'Comment',
-            value: 'kept',
-            items: ['QRN'],
-            readonly: true,
-        });
-        expect(document.getElementById('c')).toHaveAttribute('readonly');
-        const trigger = screen.getByTitle<HTMLButtonElement>('Insert a recent comment');
-        expect(trigger.disabled).toBe(true);
-    });
-
     it('Escape closes the popover', async () => {
         render(CommentField, { id: 'c', label: 'Comment', value: '', items: ['QRN'] });
         await fireEvent.click(screen.getByTitle('Insert a recent comment'));

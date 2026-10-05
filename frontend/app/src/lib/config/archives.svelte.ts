@@ -1,7 +1,7 @@
 /*
-    QSO archives state (ADR 0071, W-0021 slice 4) — one flow, two entry points:
-    the Settings → Archives tab and the header's archive selector both call
-    `activate`. The attended restart is the switch: on a 202 the daemon restarts
+    QSO archives state (ADR 0071, W-0021 slice 4) — one flow, one entry point:
+    Settings → Archives calls `activate` (ADR 0087: the header only names the
+    archive). The attended restart is the switch: on a 202 the daemon restarts
     and the SPA waits for the NEW instance (the same reconciliation the Settings
     restart uses, ADR 0078), then reloads the catalogue. Nothing here ever calls
     an archive active on its own: the list shows the daemon's state (AC 4).
@@ -18,10 +18,7 @@ import {
 import { fetchDaemonInstance, waitForDaemonBack } from '../api/restart';
 import { OUTCOME_UNKNOWN_LEAD } from '../api/_helpers';
 import { toasts } from '../ui/toasts.svelte';
-import { draftInProgress } from '../operate/qso.svelte';
-import { retireRigSnapshot, rigDropEpoch } from '../operate/rigSnapshot.svelte';
-import type { DraftSource, PreserveResult } from '../drafts/preserve';
-import type { SavedDraft } from '../drafts/savedDraft';
+import { draft, draftInProgress, logOutcomeUnknown, submitState } from '../operate/qso.svelte';
 
 export const archivesState: {
     list: QsoArchive[];
@@ -45,10 +42,6 @@ export const archivesState: {
      *  flight: the binding is unproven until it settles, so operations are
      *  refused meanwhile (review P1) without raising the overlay. */
     verifying: boolean;
-    /** A rebind reload is HELD because the unlogged Phone / CW draft could not
-     *  be saved first (ADR 0085): the reason, and the draft as it would have
-     *  been saved, for the gate to show. Cleared by a successful save. */
-    saveFailed: { reason: string; record: SavedDraft } | null;
 } = $state({
     list: [],
     loaded: false,
@@ -60,7 +53,6 @@ export const archivesState: {
     switchUnresolved: false,
     switchDetail: '',
     verifying: false,
-    saveFailed: null,
 });
 
 /** The message that blocks an archive-scoped operation (QSO submit, FT8
@@ -79,7 +71,7 @@ export function archiveSwitchGate(): string | null {
     return null;
 }
 
-/** Why Phone / CW entry is locked (ADR 0085), or null. From the request until
+/** Why Phone / CW entry is locked (ADR 0087, item 7), or null. From the request until
  *  its outcome the reload may discard anything typed; an unresolved switch
  *  keeps it locked under the overlay. A reconnect's identity check does not
  *  lock: it runs on every stream reconnect and the draft survives it. */
@@ -88,11 +80,11 @@ export function archiveEntryLock(): string | null {
     return archiveSwitchGate();
 }
 
-/** A switch reloads the page and the Phone / CW draft lives only in memory:
- *  any unlogged work refuses it (ADR 0085). True when refused. */
-function refuseOverUnloggedWork(): boolean {
-    if (!draftInProgress()) return false;
-    toasts.error('You have an unlogged QSO on Phone / CW — log or clear it, then switch.');
+/** A Log in flight refuses the switch (ADR 0087): its answer would be lost to
+ *  the reload. Checked before the prompt and again before the request. */
+function refuseOverLogInFlight(): boolean {
+    if (!submitState.busy) return false;
+    toasts.error('A QSO is being logged on Phone / CW — wait for it to finish, then switch.');
     return true;
 }
 
@@ -106,67 +98,19 @@ function refuseOverUnloggedWork(): boolean {
 // (jsdom cannot reload).
 let reloadPage: () => void = () => window.location.reload();
 
-// Saves the unlogged Phone / CW draft before a rebind reload (ADR 0085).
-// Injected by main.ts, which holds the station context; the default has
-// nothing to save.
-type Preserver = (source: DraftSource | null) => Promise<PreserveResult>;
-const nothingToSave: Preserver = () => Promise.resolve({ kind: 'none' });
-let preserver: Preserver = nothingToSave;
-export function setDraftPreserver(fn: Preserver | null): void {
-    preserver = fn ?? nothingToSave;
-}
-
-/** The archive this page's stores were proven against; null when unproven. */
-/** The archive this page booted against (the identity bracket), or null. A
- *  recovered QSO is logged only into the archive it was saved from (RS18). */
-export function bootArchiveId(): string | null {
-    return bootIdentity === null || bootIdentity.archiveId === '' ? null : bootIdentity.archiveId;
-}
-
-function sourceArchive(): DraftSource | null {
-    const id = bootArchiveId();
-    if (id === null) return null;
-    return {
-        archiveId: id,
-        archiveLabel: archivesState.list.find((a) => a.id === id)?.label ?? id,
-    };
-}
-
 /** Every reload the store requests goes through here: the gate is LATCHED
  *  first (review P1), so an unload the operator cancels — the Settings
  *  leave-guard prompts when it holds unsaved edits — leaves a page that is
- *  still gated, never one running on stale bindings with the gate open. */
-async function requestReload(detail: string): Promise<void> {
+ *  still gated, never one running on stale bindings with the gate open. An
+ *  unlogged Phone / CW entry is not saved: the reload discards it (ADR 0087). */
+function requestReload(detail: string): void {
     archivesState.switchUnresolved = true;
     archivesState.switchDetail = detail;
-    await reloadAfterSaving();
-}
-
-/** The one path to a rebind reload: save any unlogged draft first and reload
- *  only once that save has completed; a failed save HOLDS the reload (the
- *  gate stays up, showing the draft) — operator ruling 2026-09-30. */
-async function reloadAfterSaving(): Promise<void> {
-    const out = await preserver(sourceArchive());
-    if (out.kind === 'failed') {
-        archivesState.saveFailed = { reason: out.reason, record: out.record };
-        return;
-    }
-    archivesState.saveFailed = null;
     reloadPage();
 }
 
-/** The gate's own way out: reload now — through the same save. */
+/** The gate's own way out: reload now. */
 export function reloadNow(): void {
-    void reloadAfterSaving();
-}
-
-/** The held gate's Retry save. */
-export function retrySave(): Promise<void> {
-    return reloadAfterSaving();
-}
-
-/** The held gate's explicit, destructive way out: reload without saving. */
-export function discardAndReload(): void {
     reloadPage();
 }
 
@@ -306,12 +250,39 @@ export async function submitArchiveDraft(): Promise<boolean> {
     return true;
 }
 
-/** The confirmation the operator answers before the daemon restarts. */
-export function activateConfirmText(label: string): string {
+/** This window's unlogged Phone / CW entry, as the prompt names it. */
+function entrySummary(): string {
+    const call = draft.callsign.trim().toUpperCase();
+    if (call === '') return 'a partial QSO entry (no callsign yet)';
+    return draft.timeOn !== '' ? `${call} (Time On ${draft.timeOn})` : call;
+}
+
+/** The confirmation the operator answers before the daemon restarts (ADR 0087
+ *  items 2, 8, 9). It names the destination; when this window holds unlogged
+ *  work — a partial entry included — it names that and says OK discards it;
+ *  an unknown Log outcome says the QSO may already be logged in `from`; and
+ *  it always warns that unlogged work in other windows is lost. */
+export function activateConfirmText(label: string, from = ''): string {
+    let entry = '';
+    if (draftInProgress() || logOutcomeUnknown()) {
+        if (logOutcomeUnknown()) {
+            // Uncertain, so never called unlogged (review 2026-10-05).
+            const where = from !== '' ? `the Logbook in “${from}”` : 'the Logbook';
+            entry =
+                `This window has a Phone / CW entry whose Log outcome is unknown: ${entrySummary()}. ` +
+                `It may already be logged; check ${where} before logging it again. `;
+        } else {
+            entry = `This window has an unlogged QSO on Phone / CW: ${entrySummary()}. `;
+        }
+        entry += 'OK discards this window’s entry and switches; Cancel keeps it.\n\n';
+    }
     return (
         `Switch to the archive “${label}”?\n\n` +
+        entry +
         'Station Manager restarts to open it (about 5 seconds; the connection drops briefly), ' +
-        'then this page reloads — unsaved Settings edits are lost. ' +
+        'then every open window reloads: unlogged work in any other open window — a Phone / CW QSO, ' +
+        'an FT8 / FT4 exchange not yet completed, unsaved Settings edits — is lost. ' +
+        'Logged QSOs are never affected. ' +
         'Transmit must be idle and FT8 disarmed; nothing transmits until the restart completes.'
     );
 }
@@ -337,10 +308,10 @@ export async function activateArchive(
         return false;
     }
     if (target.state === 'active') return false;
-    if (refuseOverUnloggedWork()) return false;
-    if (!confirm(activateConfirmText(target.label))) return false;
-    // Checked again: a QSO may have been started while the prompt was open.
-    if (refuseOverUnloggedWork()) return false;
+    if (refuseOverLogInFlight()) return false;
+    if (!confirm(activateConfirmText(target.label, activeArchive()?.label ?? ''))) return false;
+    // Checked again: a Log may have been started while the prompt was open.
+    if (refuseOverLogInFlight()) return false;
     archivesState.activating = true;
     try {
         // Capture the current instance BEFORE the request so the wait is for a
@@ -390,9 +361,7 @@ export async function activateArchive(
 async function settleRestart(before: string): Promise<void> {
     if (before !== '' && (await waitForDaemonBack(before))) {
         toasts.info('Daemon restarted. Reloading…');
-        await requestReload(
-            'The daemon restarted on another archive; this page must reload to rebind.'
-        );
+        requestReload('The daemon restarted on another archive; this page must reload to rebind.');
         return;
     }
     archivesState.switchUnresolved = true;
@@ -408,7 +377,7 @@ async function keepWatching(before: string): Promise<void> {
     for (let round = 0; round < WATCH_ROUNDS && archivesState.switchUnresolved; round++) {
         if (await waitForDaemonBack(before)) {
             toasts.info('Daemon restarted. Reloading…');
-            await requestReload(
+            requestReload(
                 'The daemon restarted on another archive; this page must reload to rebind.'
             );
             return;
@@ -423,8 +392,7 @@ async function keepWatching(before: string): Promise<void> {
 // archive means its stores belong to the old one — reload; an identity it
 // cannot read after retries means it cannot prove anything — gate.
 
-// Reactive: the Saved QSOs panel's Restore offer follows it (ADR 0085).
-let bootIdentity = $state.raw<DaemonIdentity | null>(null);
+let bootIdentity: DaemonIdentity | null = null;
 const IDENTITY_TRIES = 3;
 
 // Overlapping identity checks (successive reconnects launch one each, unawaited)
@@ -469,7 +437,7 @@ export async function bootArchiveScoped<T>(reads: () => Promise<T>): Promise<T> 
         } else {
             bootIdentity = null;
             toasts.info('The daemon changed while the page was loading. Reloading…');
-            await requestReload(
+            requestReload(
                 'The daemon changed while the page was loading; this page must reload to rebind.'
             );
         }
@@ -489,7 +457,7 @@ export async function bootArchiveScoped<T>(reads: () => Promise<T>): Promise<T> 
 async function watchForDaemon(): Promise<void> {
     for (let round = 0; round < WATCH_ROUNDS && archivesState.switchUnresolved; round++) {
         if (await waitForDaemonBack('')) {
-            await requestReload(
+            requestReload(
                 'The daemon answered again; this page must reload to prove its archive binding.'
             );
             return;
@@ -513,7 +481,6 @@ async function readIdentityWithRetries(): Promise<DaemonIdentity | null> {
  */
 export async function verifyArchiveGeneration(): Promise<void> {
     if (archivesState.switchUnresolved) return;
-    const since = rigDropEpoch(); // before the await: a later loss is not ours
     beginCheck();
     let now: DaemonIdentity | null;
     try {
@@ -531,34 +498,27 @@ export async function verifyArchiveGeneration(): Promise<void> {
         // No proven baseline (the boot bracket could not read or agree): the
         // stores may belong to an earlier archive. Rebind — never adopt.
         toasts.info('Reconnected to the daemon; reloading to rebind.');
-        await requestReload(
+        requestReload(
             'This page reconnected without a proven archive binding; it must reload to rebind.'
         );
         return;
     }
     if (now.archiveId !== bootIdentity.archiveId) {
         toasts.info('The daemon now serves another archive. Reloading…');
-        await requestReload(
-            'The daemon now serves another archive; this page must reload to rebind.'
-        );
+        requestReload('The daemon now serves another archive; this page must reload to rebind.');
         return;
     }
-    // A verified same-archive recovery: the rig reading held from before the
-    // connection loss belongs to no switch, so it is retired (ADR 0085).
-    retireRigSnapshot(since);
 }
 
 /** The rig stream reopened (after its last failed retry). The daemon's served
  *  archive decides, read with retries as a log-stream reconnect is (Codex
- *  review ebe244dc P2): the boot archive → the loss was no switch, and the
- *  held rig reading is retired (an ordinary restart included); another
- *  archive → rebind through the save; no answer → fail closed, gated, never
- *  left silently holding an old reading. Before the boot bracket has proven a
+ *  review ebe244dc P2): the boot archive → the loss was no switch (an ordinary
+ *  restart included); another archive → rebind; no answer → fail closed,
+ *  gated. Before the boot bracket has proven a
  *  baseline it does nothing: the boot path owns that state. */
 export async function verifyAfterRigReconnect(): Promise<void> {
     if (bootIdentity === null || bootIdentity.archiveId === '') return;
     if (archivesState.switchUnresolved) return;
-    const since = rigDropEpoch(); // before the await: a later loss is not ours
     beginCheck();
     let now: DaemonIdentity | null;
     try {
@@ -574,12 +534,9 @@ export async function verifyAfterRigReconnect(): Promise<void> {
     }
     if (now.archiveId !== bootIdentity.archiveId) {
         toasts.info('The daemon now serves another archive. Reloading…');
-        await requestReload(
-            'The daemon now serves another archive; this page must reload to rebind.'
-        );
+        requestReload('The daemon now serves another archive; this page must reload to rebind.');
         return;
     }
-    retireRigSnapshot(since);
 }
 
 /** Test seams. */
@@ -599,7 +556,6 @@ export function _resetArchivesForTests(): void {
     archivesState.switchUnresolved = false;
     archivesState.switchDetail = '';
     archivesState.verifying = false;
-    archivesState.saveFailed = null;
 }
 export function _setReloadForTests(fn: () => void): void {
     reloadPage = fn;

@@ -11,7 +11,6 @@
 // A failed lookup resolves to "done with nothing" — the operator can always log.
 
 import { draft } from './qso.svelte';
-import { recovered } from '../drafts/recovered.svelte';
 import { isValidCallsign } from '../validators/callsign';
 
 // The facets the UI renders. Mirrors the useful subset of the daemon's
@@ -143,10 +142,6 @@ export function observeCall(raw: string): void {
 let wrote = { name: '', grid: '', qth: '' };
 
 function retractWrites(): void {
-    if (recovered.record !== null) {
-        wrote = { name: '', grid: '', qth: '' };
-        return;
-    }
     if (wrote.grid !== '' && draft.gridsquare === wrote.grid) draft.gridsquare = '';
     if (wrote.name !== '' && draft.name === wrote.name) draft.name = '';
     if (wrote.qth !== '' && draft.qth === wrote.qth) draft.qth = '';
@@ -181,7 +176,7 @@ async function lookup(call: string): Promise<void> {
     // entered is never overwritten.
     if (draft.callsign.trim().toUpperCase() !== call) return;
     retractWrites();
-    if (result === null || recovered.record !== null) return;
+    if (result === null) return;
     if (result.grid !== '' && draft.gridsquare === '') {
         draft.gridsquare = result.grid;
         wrote.grid = result.grid;

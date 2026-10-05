@@ -28,12 +28,6 @@ import {
     type QsoDraft,
 } from './qso.svelte';
 import { rig, confirmRig } from './rig.svelte';
-import {
-    noteRigDrop,
-    retireRigSnapshot,
-    rigDropEpoch,
-    _resetRigSnapshotForTests,
-} from './rigSnapshot.svelte';
 import { commentHistory } from './commentHistory.svelte';
 import { toastsState, _resetForTests as resetToasts } from '../ui/toasts.svelte';
 
@@ -184,75 +178,8 @@ describe('the archive-switch gate (ADR 0071, fail closed)', () => {
     });
 });
 
-/*
-    Reports during a connection loss (ADR 0085; review 2026-09-30). While a rig
-    reading from before a loss is held, the replacement daemon's mode report
-    must not rewrite the draft's reports: they belong with the held reading,
-    and the draft may be saved with it.
-      H1  Typed reports survive a reconnect's mode change while a reading is held.
-      H2  Retired with the mode unchanged, typed reports are left alone.
-      H3  Retired after the mode really changed, the usual mode-flip refill
-          resumes.
-*/
-describe('report default-fill while a pre-loss rig reading is held', () => {
-    beforeEach(() => {
-        _resetRigSnapshotForTests();
-        rig.mode = 'USB';
-        flushSync();
-        clearDraft();
-        draft.callsign = 'G0ABC';
-        draft.rstSent = '57';
-        draft.rstRcvd = '56';
-        flushSync();
-    });
-    afterEach(() => {
-        _resetRigSnapshotForTests();
-        rig.mode = 'USB';
-        flushSync();
-        clearDraft();
-    });
-
-    it('H1 a reconnect mode report does not rewrite typed reports', () => {
-        noteRigDrop();
-        rig.mode = 'CW';
-        flushSync();
-        expect([draft.rstSent, draft.rstRcvd]).toEqual(['57', '56']);
-    });
-
-    it('H2 retired with the mode unchanged, typed reports stay', () => {
-        noteRigDrop();
-        retireRigSnapshot(rigDropEpoch());
-        flushSync();
-        expect([draft.rstSent, draft.rstRcvd]).toEqual(['57', '56']);
-    });
-
-    // Codex review ebe244dc P2: an untouched form kept at the held mode's
-    // defaults read as unlogged work once the reconnect changed the mode.
-    it('H4 an untouched form stays untouched across a held reconnect mode change', () => {
-        clearDraft();
-        flushSync();
-        expect(draftInProgress()).toBe(false);
-        noteRigDrop();
-        rig.mode = 'CW';
-        flushSync();
-        expect([draft.rstSent, draft.rstRcvd]).toEqual(['59', '59']);
-        expect(draftInProgress()).toBe(false);
-        draft.rstSent = '57';
-        expect(draftInProgress()).toBe(true);
-    });
-
-    it('H3 retired after a real mode change, the mode-flip refill resumes', () => {
-        noteRigDrop();
-        rig.mode = 'CW';
-        flushSync();
-        retireRigSnapshot(rigDropEpoch());
-        flushSync();
-        expect([draft.rstSent, draft.rstRcvd]).toEqual(['599', '599']);
-    });
-});
-
-// ADR 0085: a draft saved across an archive switch must say whether a log
-// attempt's outcome is unknown — carried as state, never read from toast text.
+// ADR 0087: the Activate prompt must say whether a log attempt's outcome is
+// unknown — carried as state, never read from toast text.
 describe('an unknown logging outcome is carried as state', () => {
     it('an uncertain refusal marks the outcome unknown; clearing the draft retires it', async () => {
         fillDraft();

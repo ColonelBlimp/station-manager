@@ -18,12 +18,9 @@ import { ft8State, setFt8TxActions, resetFt8ForTests } from '../operate/ft8.svel
 import { rig, setTuneSender } from '../operate/rig.svelte';
 import {
     archivesState,
-    setDraftPreserver,
     _resetArchivesForTests,
     _setReloadForTests,
 } from '../config/archives.svelte';
-import { sampleRecord } from '../drafts/savedDraft.fixture';
-import { toastsState, _resetForTests as resetToasts } from './toasts.svelte';
 
 // The unresolved-switch gate covers every view and offers exactly one way out.
 beforeEach(() => _resetArchivesForTests());
@@ -151,110 +148,5 @@ describe('ArchiveSwitchGate unconfirmed stops', () => {
         await vi.advanceTimersByTimeAsync(2000);
         flushSync();
         expect(screen.getByTestId('stop-note').textContent).not.toBe('');
-    });
-});
-
-/*
-    A HELD reload (ADR 0085, rule 3 slice 1; operator ruling 2026-09-30): the
-    unlogged QSO could not be saved before the rebind reload.
-      G1  The gate says so, gives the reason, and shows EVERY value as text to
-          select — the inert form behind it is not enough. Reload now is not
-          offered: its way out would lose the QSO.
-      G2  Retry save goes through the save again; success reloads.
-      G3  Discard and reload is explicit and confirmed; declining keeps the page.
-      G4  Copy puts the whole QSO on the clipboard; a refused clipboard says to
-          select the text instead.
-      G5  The stop controls stay reachable.
-      G6  An unknown logging outcome stays visible, and neither the gate nor
-          the copied text claims the QSO was saved (review 2026-09-30).
-*/
-describe('ArchiveSwitchGate with a held reload', () => {
-    let reloads = 0;
-    beforeEach(() => {
-        reloads = 0;
-        _setReloadForTests(() => reloads++);
-        resetToasts();
-        archivesState.switchUnresolved = true;
-        archivesState.switchDetail = 'The daemon now serves another archive.';
-        archivesState.saveFailed = {
-            reason: 'Browser storage did not keep it (QuotaExceededError).',
-            record: sampleRecord(),
-        };
-    });
-    afterEach(() => setDraftPreserver(null));
-
-    it('G1 says the QSO could not be saved and shows every value', () => {
-        render(ArchiveSwitchGate);
-        const dialog = screen.getByRole('alertdialog');
-        expect(dialog).toHaveTextContent('This QSO could not be saved');
-        expect(dialog).toHaveTextContent('QuotaExceededError');
-        const details = screen.getByTestId('saved-draft-details');
-        expect(details).toHaveTextContent('G0ABC');
-        expect(details).toHaveTextContent('14.255000 MHz');
-        expect(details).toHaveTextContent('Home log');
-        expect(screen.queryByRole('button', { name: 'Reload now' })).toBeNull();
-    });
-
-    it('G2 Retry save saves again and reloads on success', async () => {
-        const preserver = vi.fn(() =>
-            Promise.resolve({ kind: 'saved' as const, record: sampleRecord() })
-        );
-        setDraftPreserver(preserver);
-        render(ArchiveSwitchGate);
-        await fireEvent.click(screen.getByRole('button', { name: 'Retry save' }));
-        await vi.waitFor(() => expect(reloads).toBe(1));
-        expect(preserver).toHaveBeenCalledTimes(1);
-    });
-
-    it('G3 Discard and reload is confirmed', async () => {
-        const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
-        render(ArchiveSwitchGate);
-        const discard = screen.getByRole('button', { name: 'Discard and reload' });
-        await fireEvent.click(discard);
-        expect(confirm).toHaveBeenCalledTimes(1);
-        expect(reloads).toBe(0);
-        confirm.mockReturnValue(true);
-        await fireEvent.click(discard);
-        expect(reloads).toBe(1);
-    });
-
-    it('G4 Copy writes the whole QSO; a refused clipboard says to select it', async () => {
-        const writeText = vi.fn(() => Promise.resolve());
-        Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
-        render(ArchiveSwitchGate);
-        await fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
-        await vi.waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
-        expect(writeText.mock.calls[0]).toEqual([expect.stringContaining('Callsign: G0ABC')]);
-        writeText.mockRejectedValueOnce(new Error('NotAllowedError'));
-        await fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
-        await vi.waitFor(() =>
-            expect(toastsState.items.some((t) => /select the text/.test(t.message))).toBe(true)
-        );
-    });
-
-    it('G5 the stop controls stay reachable', () => {
-        rig.tuneActive = true;
-        render(ArchiveSwitchGate);
-        expect(screen.getByRole('button', { name: 'Stop tune' })).toBeInTheDocument();
-    });
-
-    it('G6 the unknown outcome is visible and nothing claims a save', async () => {
-        archivesState.saveFailed = {
-            reason: 'Browser storage did not keep it (QuotaExceededError).',
-            record: sampleRecord({ outcome: 'unknown' }),
-        };
-        const writeText = vi.fn(() => Promise.resolve());
-        Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
-        render(ArchiveSwitchGate);
-        const dialog = screen.getByRole('alertdialog');
-        expect(dialog).toHaveTextContent(/logging outcome unknown/i);
-        expect(dialog).not.toHaveTextContent(/saved from/);
-        expect(screen.getByTestId('saved-draft-details')).not.toHaveTextContent(/Saved/);
-        await fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
-        await vi.waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
-        const copied = (writeText.mock.calls[0] as unknown as [string])[0];
-        expect(copied).not.toContain('QSO saved from');
-        expect(copied).toMatch(/not saved/);
-        expect(copied).toMatch(/logging outcome unknown/i);
     });
 });

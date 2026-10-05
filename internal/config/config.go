@@ -2324,34 +2324,6 @@ type Service struct {
 	// (fsOrDefault resolves to osFS); a config-package test sets it to a fault injector
 	// to exercise the crash-durability outcomes (PT-6).
 	fs fsOps
-	// onChanged is told, outside the lock, each time a new config has become live
-	// (ADR 0085: clients invalidate what they derived from it). Nil = no listener.
-	onChanged func()
-}
-
-// SetOnChanged installs the live-change listener: called once after every write
-// that made a new config LIVE in memory — a durable or durability-uncertain
-// Update, a changed (or forced) UpdateIfChanged, and UpdateInMemoryThenPersist
-// even when its disk write fails — and never for a rejected write. Called
-// outside the lock, so it may read Snapshot.
-func (s *Service) SetOnChanged(fn func()) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.onChanged = fn
-}
-
-// announceIfLive runs the listener after a write method has released the lock;
-// deferred BEFORE the lock's own deferred Unlock so it runs after it.
-func (s *Service) announceIfLive(live *bool) {
-	if !*live {
-		return
-	}
-	s.mu.RLock()
-	fn := s.onChanged
-	s.mu.RUnlock()
-	if fn != nil {
-		fn()
-	}
 }
 
 // fsOrDefault returns the injected fsOps or the production osFS.
@@ -2440,8 +2412,6 @@ func (c Config) Clone() Config {
 // value, calls Update with a closure that copies the new value into
 // *cfg. Keeps the write window narrow and the mutation explicit.
 func (s *Service) Update(fn func(cfg *Config) error) (Durability, error) {
-	live := false
-	defer s.announceIfLive(&live)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -2470,7 +2440,6 @@ func (s *Service) Update(fn func(cfg *Config) error) (Durability, error) {
 	// renamed config.json into place (it is the live on-disk file), so in-memory must
 	// match it (PT-6). The caveat rides out in the Durability return.
 	s.Cfg = next
-	live = true
 	return dur, nil
 }
 
@@ -2485,8 +2454,6 @@ func (s *Service) Update(fn func(cfg *Config) error) (Durability, error) {
 // keys removed), which the typed before/after cannot see because both sides are
 // already the migrated Config. The caller names that reason.
 func (s *Service) UpdateIfChanged(forceWrite bool, fn func(cfg *Config) error) ([]FieldChange, Durability, error) {
-	live := false
-	defer s.announceIfLive(&live)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -2517,7 +2484,6 @@ func (s *Service) UpdateIfChanged(forceWrite bool, fn func(cfg *Config) error) (
 	}
 
 	s.Cfg = next
-	live = true
 	return changes, dur, nil
 }
 
@@ -2534,8 +2500,6 @@ func (s *Service) UpdateIfChanged(forceWrite bool, fn func(cfg *Config) error) (
 // the heal. For ordinary updates use Update, where the file is the source of
 // truth and a failed write leaves memory untouched.
 func (s *Service) UpdateInMemoryThenPersist(fn func(cfg *Config) error) (Durability, error) {
-	live := false
-	defer s.announceIfLive(&live)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -2554,7 +2518,6 @@ func (s *Service) UpdateInMemoryThenPersist(fn func(cfg *Config) error) (Durabil
 		return Durable, err
 	}
 	s.Cfg = next // memory wins regardless of the disk outcome below
-	live = true
 
 	if s.Path == "" {
 		return Durable, fmt.Errorf(

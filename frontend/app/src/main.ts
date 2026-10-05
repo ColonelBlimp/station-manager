@@ -3,31 +3,6 @@ import App from './App.svelte';
 import { enrich, prefs, setEnricher, setMyGrid } from './lib/operate/enrich.svelte';
 import { setHistory } from './lib/operate/worked.svelte';
 import { setEntryGate, setSubmit, setSubmitGate } from './lib/operate/qso.svelte';
-import { noteRigDrop } from './lib/operate/rigSnapshot.svelte';
-import { preserveDraft } from './lib/drafts/preserve';
-import type { RecoveredExtras } from './lib/drafts/recoveredRequest';
-import { setRestoreEnv } from './lib/drafts/restoreSession';
-import {
-    setRecoveredExtras,
-    setRecoveredSender,
-    setRecoveredSubmitEnv,
-} from './lib/drafts/recoveredSubmit.svelte';
-import { fetchSubmitAttribution, type SubmitAttribution } from './lib/api/submit-attribution';
-import { setConfigWriteListener } from './lib/api/_helpers';
-import {
-    applyBootAttribution,
-    attributionEpoch,
-    attributionSettled,
-    configureAttribution,
-    currentAttribution,
-    lastKnownAttribution,
-    noteConfigUpdated,
-    noteConfigWriteSettled,
-    noteConfigWriteStarted,
-    noteDisconnected,
-    noteReconnectProven,
-    setRequestedOperator,
-} from './lib/drafts/attributionSource.svelte';
 import { addSessionQso, session, sessionModeLiteral } from './lib/operate/session.svelte';
 import { setMailer } from './lib/operate/mailer.svelte';
 import {
@@ -71,10 +46,8 @@ import {
     loadArchives,
     archiveEntryLock,
     archiveSwitchGate,
-    bootArchiveId,
     bootArchiveScoped,
     verifyAfterRigReconnect,
-    setDraftPreserver,
     verifyArchiveGeneration,
 } from './lib/config/archives.svelte';
 import { setFt8AudioWindow } from './lib/operate/audioLevel.svelte';
@@ -318,7 +291,6 @@ const ctx: StationContext = {
     mapBandColors: {},
     restoreRigOnModeSwitch: true,
     logbookName: '',
-    logbookUuid: '',
     rigName: '',
 };
 
@@ -353,8 +325,6 @@ let rigEventsOpen = false;
 // update missed setMyGrid, desyncing the displayed bearing from the logged one).
 function applyStationIdentity(operator: string, grid: string, stationCallsign: string): void {
     ctx.operator = operator;
-    // The attribution is read FOR the operator a submit sends (ADR 0085).
-    void setRequestedOperator(operator);
     ctx.myGrid = grid;
     ctx.stationCallsign = stationCallsign;
     setMyGrid(grid); // enrichment bearing/distance display ('' hides the row)
@@ -464,10 +434,9 @@ function applyStationContext(c: StationContext): void {
             onOpen: () => {
                 catLink.onOpen();
                 noteStreamReopen();
-                void verifyAfterRigReconnect(); // which archive now? retire, rebind or gate
+                void verifyAfterRigReconnect(); // which archive now? rebind or gate
             },
             onTransportError: () => {
-                noteRigDrop(); // first, before anything reacts to the loss (ADR 0085)
                 catLink.onTransportError();
                 noteStreamError();
             },
@@ -496,30 +465,8 @@ void loadBuildIdentity();
 setSubmitGate(archiveSwitchGate);
 setFt8AdmissionGate(archiveSwitchGate);
 setTuneGate(archiveSwitchGate);
-// Phone / CW entry is locked while the switch's reload is pending (ADR 0085).
+// Phone / CW entry is locked while the switch's reload is pending (ADR 0087, item 7).
 setEntryGate(archiveEntryLock);
-// The attribution a saved draft records (ADR 0085 RS1; attributionSource.ts):
-// read inside the boot identity bracket below, invalidated by every config write
-// and re-read once it settles, and applied only while the archive binding holds.
-configureAttribution({ bindingValid: () => archiveSwitchGate() === null });
-setConfigWriteListener({
-    started: noteConfigWriteStarted,
-    settled: () => void noteConfigWriteSettled(),
-});
-// A rebind reload first saves any unlogged Phone / CW draft with the archive and
-// logbook it belongs to (ADR 0085); ctx is read at save time.
-setDraftPreserver((source) =>
-    preserveDraft(source, {
-        logbookUuid: ctx.logbookUuid,
-        logbookId: ctx.logbookId,
-        logbookName: ctx.logbookName,
-        stationCallsign: ctx.stationCallsign,
-        operator: ctx.operator,
-        myGrid: ctx.myGrid,
-        // Keep the last read FOR this operator across the switch's disconnect.
-        attribution: lastKnownAttribution(ctx.operator),
-    })
-);
 
 // The archive-scoped boot reads — the station context (default logbook id, name,
 // count) and the archive catalogue for the header selector — run inside the
@@ -527,19 +474,14 @@ setDraftPreserver((source) =>
 // so the archive this tab records is provably the one these stores were built
 // against; every reconnect of the always-on stream compares against it and
 // reloads (or gates) when the daemon serves another archive.
-let bootAttribution: SubmitAttribution | null = null;
-let bootAttributionSince = -1;
 void bootArchiveScoped(async () => {
     const [c] = await Promise.all([fetchStationContext(), loadArchives()]);
     applyStationContext(c);
-    // Read for the operator this page will send, after the context named it.
-    bootAttributionSince = attributionEpoch();
-    bootAttribution = await fetchSubmitAttribution(ctx.operator);
     // First-run gate: only a REACHED config saying setup_complete=false shows
     // setup — a daemon outage falls through to the fail-soft shell instead of
     // greeting a configured operator with the welcome card.
     setup.status = c.configOk && !c.setupComplete ? 'needed' : 'complete';
-}).then(() => applyBootAttribution(bootAttribution, bootAttributionSince, ctx.operator)); // only once proven
+});
 
 // First-run save (injected per ADR 0045 — the setup module never imports
 // lib/api): PUT the callsign, then re-fetch + re-wire the station context so
@@ -565,9 +507,6 @@ setStationSaved((station) => {
         station.my_gridsquare ?? '',
         station.station_callsign || ctx.stationCallsign
     );
-    // Held inside the Station save latch until the attribution the write
-    // invalidated has been read again (review 2026-10-01).
-    return attributionSettled();
 });
 
 // Settings → FT8 save: push the just-saved Band Activity display prefs into the
@@ -682,17 +621,15 @@ setSubmit(async (q, opts) => {
                 'Cannot confirm the outcome — the connection to the daemon failed mid-submit; ' +
                     'the QSO may still have been logged. Check the Logbook before retrying.'
             ),
-            uncertain: true, // carried with a saved draft (ADR 0085)
+            uncertain: true, // the Activate prompt says it may already be logged (ADR 0087)
         };
     }
     return refuse(`QSO not logged: ${out.message}`);
 });
 
-// The contacted station's enrichment fields, shared by the ordinary and the
-// recovered Log. Only trusted when the lookup is for this call; ANT_AZ /
-// ANT_PATH are the bearing + path the enrichment card shows, from `myGrid` —
-// today's grid for an ordinary Log, the saved grid for a recovered one.
-function enrichmentExtras(call: string, myGrid: string): RecoveredExtras {
+// The contacted station's enrichment fields. Only trusted when the lookup is for
+// this call; ANT_AZ / ANT_PATH are the bearing + path the enrichment card shows.
+function enrichmentExtras(call: string, myGrid: string) {
     const e = enrich.call === call ? enrich.data : null;
     const path = e !== null && e.grid !== '' && myGrid !== '' ? pathInfo(myGrid, e.grid) : null;
     const bearing =
@@ -714,33 +651,6 @@ function enrichmentExtras(call: string, myGrid: string): RecoveredExtras {
     };
 }
 
-// Logging a recovered QSO (ADR 0085 RS18–RS25; drafts/recoveredSubmit): its
-// own request from the saved values and attribution, sent with expect_* to
-// the active default logbook, and allowed only in the archive and logbook the
-// record was saved from. Not gated by CAT.
-setRecoveredSender((adif, logbookId, opts) =>
-    submitQso(adif, logbookId, { force: opts.force, expect: opts.expect }).then((out) => {
-        if (out.kind === 'stored') refreshLogbookCount();
-        return out;
-    })
-);
-setRecoveredSubmitEnv(() => ({
-    switchGate: archiveSwitchGate(),
-    bootArchiveId: bootArchiveId(),
-    activeLogbookUuid: ctx.logbookUuid,
-    activeLogbookId: ctx.logbookId,
-}));
-setRecoveredExtras(enrichmentExtras);
-// The Saved QSOs panel's Restore (ADR 0085 RS3–RS7): the page's archive and
-// logbook, and today's attribution for the operator this page submits as.
-setRestoreEnv(() => ({
-    locksAvailable: true, // replaced by restoreSession with the browser's answer
-    onPhoneCw: router.view === 'operate' && router.mode === 'phone',
-    bootArchiveId: bootArchiveId(),
-    activeLogbookUuid: ctx.logbookUuid,
-    currentAttribution: currentAttribution(ctx.operator),
-}));
-
 // The shell's always-on transport (ADR 0079). /v1/events is served with or without
 // a rig, so it — not the CAT-gated rig stream — carries the reconnection signal the
 // header "(n)" count needs after a daemon restart (`smctl import` restarts the
@@ -751,14 +661,11 @@ setRestoreEnv(() => ({
 // maintainability baseline on purpose.
 openLogEvents({
     onOpen: () => {},
-    // A saved draft's attribution (ADR 0085): unconfirmed when the stream drops,
-    // re-read after every proven reconnect and on every config.updated.
-    onTransportError: () => noteDisconnected(),
+    onTransportError: () => {},
     onQsoChanged: () => {},
-    onConfigUpdated: () => void noteConfigUpdated(),
     onReconnect: () => {
         refreshLogbookCount();
-        void verifyArchiveGeneration().then(() => noteReconnectProven());
+        void verifyArchiveGeneration();
     },
 });
 

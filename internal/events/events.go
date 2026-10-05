@@ -14,15 +14,7 @@ const (
 	NameQsoDeleted       = "qso.deleted"
 	NameForwardSucceeded = "forward.succeeded"
 	NameForwardFailed    = "forward.failed"
-	// NameConfigUpdated: a config write made a new config live (ADR 0085) —
-	// clients invalidate what they derived from it. Payload ConfigUpdatedPayload.
-	NameConfigUpdated = "config.updated"
 )
-
-// ConfigUpdatedPayload is the payload for NameConfigUpdated. Deliberately empty:
-// the event says only THAT the config changed — never a config value; a client
-// re-reads what it needs through the ordinary endpoints.
-type ConfigUpdatedPayload struct{}
 
 // Event is the envelope delivered to every subscriber.
 //

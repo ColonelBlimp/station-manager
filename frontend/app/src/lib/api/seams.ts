@@ -164,9 +164,6 @@ export interface StationContext {
      *  (`bridge.rig_name`). Config-sourced (not CAT), so both show even before the
      *  rig connects — the operator can always see which book + radio is in play. */
     logbookName: string;
-    /** The default logbook's UUID (ADR 0085): stable across archives, where the
-     *  integer id is not. '' when absent (pre-setup). */
-    logbookUuid: string;
     rigName: string;
     /** FT8 Band Activity display prefs (config.json ft8.display, daemon-resolved
      *  so always present on a current daemon). `feedMode` accumulate rolls slots
@@ -255,7 +252,6 @@ export async function fetchStationContext(): Promise<StationContext> {
         mapBandColors: {},
         restoreRigOnModeSwitch: true,
         logbookName: '',
-        logbookUuid: '',
         rigName: '',
     };
     const fetched = await safeFetch('/v1/config', { method: 'GET' });
@@ -311,7 +307,6 @@ export async function fetchStationContext(): Promise<StationContext> {
         // Only an explicit false disables it — see the field's doc above.
         restoreRigOnModeSwitch: body.restore_rig_on_mode_switch !== false,
         logbookName: str(lb.name),
-        logbookUuid: str(lb.uuid),
         rigName: str(br.rig_name),
     };
 }

@@ -111,16 +111,9 @@
          monitor) from the Session tile, so sidebar/header would be dead
          weight here. Lazy import = its own chunk (ADR 0044 code-splitting):
          the bundled basemap + d3-geo never load unless the map is opened. -->
-        <!-- h-screen here, h-full in MapView: the map fills the window. Saved
-             QSOs sit in the map's own toolbar (ADR 0086). -->
-        <div class="h-screen">
-            {#await import('./lib/map/MapView.svelte') then mapModule}
-                <mapModule.default />
-            {/await}
-        </div>
-        <!-- The map tab shows toasts too: the saved-QSO announcement, Copy and
-             a failed Discard report through them (review 2026-09-30). -->
-        <Toasts />
+        {#await import('./lib/map/MapView.svelte') then mapModule}
+            <mapModule.default />
+        {/await}
     {:else}
         <Sidebar />
 

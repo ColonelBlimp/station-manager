@@ -3,10 +3,10 @@
 // is covered in toasts.test.ts).
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/svelte';
+import { render, screen } from '@testing-library/svelte';
 import { flushSync } from 'svelte';
 import Toasts from './Toasts.svelte';
-import { toasts, toastsState, _resetForTests } from './toasts.svelte';
+import { toasts, _resetForTests } from './toasts.svelte';
 
 beforeEach(() => {
     _resetForTests();
@@ -20,27 +20,6 @@ describe('Toasts renderer', () => {
         const item = await screen.findByRole('status');
         expect(item.textContent).toContain('Logged DL3YA ✓');
         expect(item.textContent).toContain('Info:');
-    });
-
-    it('an action button runs its action and dismisses the toast', async () => {
-        render(Toasts);
-        let ran = 0;
-        toasts.info('Not logged — QSO kept.', 0, { label: 'Open it', run: () => ran++ });
-        flushSync();
-        const button = await screen.findByRole('button', { name: 'Open it' });
-        await fireEvent.click(button);
-        expect(ran).toBe(1);
-        expect(toastsState.items).toEqual([]); // dismissed (the fade-out may still run)
-    });
-
-    it('a toast without an action shows no action button', async () => {
-        render(Toasts);
-        toasts.info('plain');
-        flushSync();
-        await screen.findByRole('status');
-        expect(screen.getAllByRole('button').map((b) => b.textContent?.trim())).not.toContain(
-            'Open it'
-        );
     });
 
     it('renders errors as role=alert', async () => {

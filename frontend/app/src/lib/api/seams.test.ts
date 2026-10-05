@@ -316,21 +316,6 @@ describe('fetchStationContext bridge block (stubbed fetch)', () => {
         expect(ctx.rigName).toBe('FTdx10');
     });
 
-    // ADR 0085: a saved draft names its logbook by UUID — local integer ids
-    // collide across archives.
-    it('reads default_logbook.uuid; absent or malformed is empty', async () => {
-        mockConfig({
-            logging_station: { station_callsign: '7Q5MLV' },
-            default_logbook: { id: 3, name: 'Home', uuid: 'lb-uuid-1' },
-        });
-        expect((await fetchStationContext()).logbookUuid).toBe('lb-uuid-1');
-        mockConfig({
-            logging_station: { station_callsign: '7Q5MLV' },
-            default_logbook: { id: 3, uuid: 7 },
-        });
-        expect((await fetchStationContext()).logbookUuid).toBe('');
-    });
-
     it('defaults logbook/rig names to empty when the blocks are absent', async () => {
         mockConfig({ logging_station: { station_callsign: '7Q5MLV' } });
         const ctx = await fetchStationContext();
