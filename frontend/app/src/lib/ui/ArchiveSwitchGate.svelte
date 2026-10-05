@@ -16,14 +16,17 @@
     // deliberately bypass the admission gates (a disarm or a tune stop is never
     // refused), and each is offered only while it can be acted on.
     let stopping = $state(false);
-    // A stop whose confirmation never came (the request timed out and no push
-    // matched within the grace) is UNKNOWN: the transmission may still be up.
-    // It is said on the gate surface itself, not only as a toast, because this
-    // is the one place the operator can still act (review P2).
+    // A stop that FAILED, or whose confirmation never came (the request timed
+    // out and no push matched within the grace, so the transmission may still
+    // be up), is said on the gate surface itself, not only as a toast: this is
+    // the one place the operator can still act, and a window with no toast
+    // renderer (the full-window Map) would show nothing (review P2; codex
+    // 55178b58 P2).
     let stopNote = $state('');
     function noteStop(r: { status: string; message?: string }): void {
         if (r.status === 'failed') {
-            toasts.error(r.message ?? 'The stop request failed.');
+            stopNote = r.message ?? 'The stop request failed.';
+            toasts.error(stopNote);
         } else if (r.status === 'unknown') {
             stopNote = r.message ?? 'The stop could not be confirmed — check the rig.';
             toasts.warn(stopNote);

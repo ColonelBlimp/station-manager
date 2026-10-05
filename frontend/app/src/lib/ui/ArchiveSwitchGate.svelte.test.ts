@@ -150,3 +150,26 @@ describe('ArchiveSwitchGate unconfirmed stops', () => {
         expect(screen.getByTestId('stop-note').textContent).not.toBe('');
     });
 });
+
+// A FAILED stop is said on the gate too (codex 55178b58 P2): a window with no
+// toast renderer (the full-window Map) would otherwise show nothing, and the
+// gate is the one place the operator can act. Rendered without <Toasts />.
+describe('ArchiveSwitchGate failed stops', () => {
+    it('a refused tune stop shows its error on the gate, with no toast renderer', async () => {
+        setTuneSender(() =>
+            Promise.resolve({ kind: 'refused', message: 'bridge refused the tune stop (HTTP 503)' })
+        );
+        rig.tuneActive = true;
+        archivesState.switchUnresolved = true;
+        render(ArchiveSwitchGate);
+        flushSync();
+        await fireEvent.click(screen.getByRole('button', { name: 'Stop tune' }));
+        await new Promise((r) => setTimeout(r, 0));
+        flushSync();
+        const note = screen.getByTestId('stop-note');
+        expect(note).toBeVisible();
+        expect(note).toHaveTextContent('bridge refused the tune stop (HTTP 503)');
+        expect(screen.getByRole('alertdialog')).toContainElement(note);
+        expect(screen.getByRole('button', { name: 'Stop tune' })).toBeEnabled();
+    });
+});
