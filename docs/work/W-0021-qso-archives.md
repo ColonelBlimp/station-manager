@@ -1428,7 +1428,7 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      *Drill (pending):* config-first downgrade order; the Home file confirmed by its archive
      identity, not assumed from `datastore.path`; the old and new binaries each boot their OWN
      copy, so the new binary's upward migrations cannot touch the old binary's proof.
-     *Status:* built 2026-10-06 (`52077508`, `ba830078`, `25692f7a`, `6fadea1d`, `2f6a3677`); evidence below.
+     *Status:* built 2026-10-06 (`52077508`, `ba830078`, `25692f7a`, `6fadea1d`, `2f6a3677`, `2e4e49eb`); deployed; evidence below.
      **5C commit (a), characterization (2026-10-06, tests only, passing on v5):** synthetic,
      distinct values throughout, so reading the wrong source fails visibly.
      `cmd/smd/config_load_forwarders_characterization_test.go` — an explicit version-5 JSON file
@@ -1548,6 +1548,18 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      A1 gains both (and `"NAME"`, already refused — a guard), asserting 400
      `forwarder_field_binding_owned` with the stored account unchanged; proofs N3, N4. Codex clean;
      API package, whole-tree Go tests and maintainability re-run; no drill needed (API only).
+     **Deployed 2026-10-06 (`2.0.0-alpha.3-169-geb6e1af5`).** First start with Drill Arc active:
+     config v6, nothing stripped, no copy — and no log line, which read as a cleanup that never ran
+     (the capsule's "waits, logged" was wrong for this case). Operator ruling (b): log the wait —
+     `2e4e49eb` (T2 asserts the line, T2b its absence once stripped; proofs L1, L2; codex clean).
+     After switching to Home (16:12:40): "wrote the one-time v5 recovery copy" (source: the v6
+     file re-stamped, correctly — the deploy start had already persisted v6) and "config.json now
+     holds station accounts only"; `config.v5.json` 0600 with the v5 names, no staging leftovers;
+     `config.json` v6 with no names. Forwarding unchanged: Home holds NO bindings — its seed was
+     decided at the fresh-install test's first start (2026-09-28 12:40:56), before setup created
+     the Default logbook, so it seeded zero rows, and the logbook created afterwards stays unbound
+     by design (ADR 0082 part 2). Uploads are therefore set per logbook under Destinations; none
+     run today, before or after 5C.
      *Commit split (accepted):* (a) passing characterization tests first, pinning today's v5
      behaviour the change must keep (load of the station's shaped config; GET/PUT station fields; evidence sync and
      restore lookup); (b) the slice in one releasable commit with its docs references; (c) the
