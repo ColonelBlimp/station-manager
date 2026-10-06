@@ -41,6 +41,10 @@ func TestStationAccount_A1_NameOrEnabledPresenceRefused(t *testing.T) {
 		// An explicit null is still the key's presence (review 2026-10-06).
 		"a null name":    {`{"forwarders":[{"type":"smcloud","name":null,"action_filter":["insert"]}]}`, "name"},
 		"a null enabled": {`{"forwarders":[{"type":"smcloud","enabled":null,"action_filter":["insert"]}]}`, "enabled"},
+		// The decoder matches keys case-insensitively; so must presence.
+		"a null Name":    {`{"forwarders":[{"type":"smcloud","Name":null,"action_filter":["insert"]}]}`, "name"},
+		"a null ENABLED": {`{"forwarders":[{"type":"smcloud","ENABLED":null,"action_filter":["insert"]}]}`, "enabled"},
+		"a NAME":         {`{"forwarders":[{"type":"smcloud","NAME":"x","action_filter":["insert"]}]}`, "name"},
 	}
 	for label, c := range cases {
 		w := putConfig(t, srv, c.body)

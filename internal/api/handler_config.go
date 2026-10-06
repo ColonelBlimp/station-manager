@@ -318,7 +318,8 @@ type ForwarderInfo struct {
 }
 
 // UnmarshalJSON decodes as the plain struct would and also records whether the
-// binding-owned keys were present at all — `"name": null` included.
+// binding-owned keys were present at all — `"name": null` and case variants
+// included, matched as the decoder matches them.
 func (f *ForwarderInfo) UnmarshalJSON(b []byte) error {
 	type plain ForwarderInfo
 	var p plain
@@ -330,8 +331,13 @@ func (f *ForwarderInfo) UnmarshalJSON(b []byte) error {
 		return err
 	}
 	*f = ForwarderInfo(p)
-	_, f.nameSent = keys["name"]
-	_, f.enabledSent = keys["enabled"]
+	// encoding/json matches a key to a field case-insensitively ("Name",
+	// "ENABLED"), so presence must too, or a case variant carrying null
+	// slips past the refusal.
+	for k := range keys {
+		f.nameSent = f.nameSent || strings.EqualFold(k, "name")
+		f.enabledSent = f.enabledSent || strings.EqualFold(k, "enabled")
+	}
 	return nil
 }
 
