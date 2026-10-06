@@ -2563,6 +2563,12 @@ Codex review of `c551c828` (2026-10-04), two P2 findings:
   - **Gates:** SPA lint, format, svelte-check (0/0), vitest 2,081/2,081, maintainability 0.
   - **Codex review of `c31c0d7e`:** no actionable findings.
   - **CI:** the run on `70d006a9` does not cover `c31c0d7e`. Its CI comes after the push.
+- **CI and acceptance (2026-10-05).**
+  - **CI** passed on `c31c0d7e` (run 37307101145) and on `245b7dde` (run 37311006137).
+  - **Operator check after the deploy: PASS.** Three cases in Settings → Archives → Activate:
+    1. Empty form: the prompt names the destination and warns about other windows.
+    2. A QSO typed and not logged: the prompt names it, and OK discards it and switches.
+    3. Cancel: no switch, and the QSO stays in the form.
 
   - **Option 1 selected and implemented (2026-10-05; uncommitted).** ADR 0085's dated
     update supersedes disconnect-clears: retain the last matching attribution for the
