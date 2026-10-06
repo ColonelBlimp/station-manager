@@ -48,6 +48,11 @@ intent and converge without routine full-log churn or forbidden third-party API 
    alpha.2 Finding #19) is preserved untouched — not retried, not cleared — as this outcome's regression
    fixture; the work must distinguish failed from waiting items, identify the QSO, recover from
    authentication failures, and make a QRZ deletion without an upstream ID a no-op.
+10. Non-secret stored forwarder fields show their value (inbox 2026-09-26; routed by the triage of
+    2026-10-06, not selected). Settings → Forwarding shows only "✓ Saved" for fields such as SM
+    Cloud's "Cloud logbook name" and Service URL, because the daemon reports only that a value is
+    set. Showing the value needs an API contract change: the descriptor marks each field secret or
+    non-secret, and the view carries the value for non-secret fields only. Secrets stay write-only.
 
 ## Outcome 9 — slice plan (2026-09-20)
 

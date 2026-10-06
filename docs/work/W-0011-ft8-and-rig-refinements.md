@@ -313,6 +313,11 @@ single-flight keying, guaranteed stop, and operator-initiated session boundaries
 - **Safety-adjacent deferred evidence:** rig TOT surfacing/clamp, FT-710 meter-selector verification,
   meter-tail semantics, output-sink logging, playback reopen after a reproduced collapse, and
   persistent TX-state escalation only after an operator duration threshold.
+- **FT8 diagnostic logging (inbox triage 2026-10-06):** (1) "ft8 seq: rung deferred — decode
+  landed too late" (17 times in the 2026-09-13 contest, fire request 2.35–6.61 s into our slot)
+  does not say whether the request was an operator pick or a late decode; the two mean different
+  things for decode latency, so the line should carry the source. (2) Log the RX level summary
+  periodically (inbox 2026-09-26). Logging gaps, not defects.
 - **Later operating aids:** auto band-hop, semi-auto watch list, occupancy waterfall, CAT poll mode,
   `MY_RIG` from the connected rig, and one source for frequency-to-band data distinct from future
   regional band-plan policy.

@@ -2789,6 +2789,21 @@ cross-archive query.
   (i) a new logbook starts unbound even for SM Cloud; (ii) binding edits are restart-required in this
   slice; (iii) bindings are editable on the active archive only, with `409` otherwise. The ADR is
   accepted; no slice 5 code, migration or detailed implementation plan exists yet.
+- **2026-10-06, Settings → Logbooks and Forwarding notes routed here (inbox of 2026-10-05; not
+  selected).**
+  - **Logbook description:** Settings → Logbooks should offer a description field, and Settings →
+    Archives should show each logbook's description in its archive's list. Fact checked: the
+    daemon already stores and accepts it (`types.Logbook.Description`; `POST` and `PATCH
+    /v1/logbook` in `handler_logbook.go`). The archive summary (`types.QsoArchiveLogbook`) does not
+    carry it, so showing it for an inactive archive needs the ADR 0084 sidecar to record it.
+  - **Set the active logbook:** a Settings → Logbooks action that chooses the logbook live logging
+    goes to. This is the "Make default" that the 2026-09-29 first-slice ruling left out of scope (a
+    daemon change, with restart behaviour still to rule).
+  - **Forwarding is per logbook:** the operator's note says forwarding is a per-logbook setting,
+    because the callsign is often the key field. The data model already binds forwarding per
+    logbook (ADR 0082); the note concerns presentation, and is the logbook-first layout (option B)
+    of the 2026-09-26 design exchange on the Forwarding tab ("the Forwarding tab frames the wrong
+    thing"), which still needs its own ADR.
 
 ## Review findings on the plan (2026-09-22)
 

@@ -246,6 +246,42 @@ not compete with the app-shell, notification-history, or UI-cohesion dossiers.
   0067, and read as "a CQ is being keyed now"); the active button keeps "Calling CQ…". Nearest
   confusable outcome: the header changing per rung. Not part of the alpha.3 candidate.
 
+Routed by the inbox triage of 2026-10-06 (not selected; each still needs its acceptance criteria
+stated before a build):
+
+- **Contact details Notes field (inbox 2026-09-24):** the Notes textarea in the Phone/CW Contact
+  details foldout should NOT allow resize.
+- **"Daemon" in operator-facing wording (inbox 2026-09-28; partly done):** ruled — operator-facing
+  text stops saying "daemon" and says plainly what is needed. Done so far: the rig toasts only ("Rig
+  added." and "Default rig set — restart needed.", `4ffc727a`). Not started: the wider sweep of
+  toasts, notices, button labels such as "Restart daemon", and the manual; it needs its own pass and
+  a ruling on the replacement words (for example "Restart" or "Station Manager").
+- **Search and filter a logbook (inbox 2026-09-23):** there is no way to find a callsign or
+  otherwise filter a logbook.
+- **Header identity block is cramped (inbox 2026-09-24):** Archive, Logbook and Rig stack in a
+  column; re-lay them on one row or as a compact chip. ADR 0087 removed the archive selector, but
+  the three stacked lines remain (`Header.svelte`).
+- **Settings tab survives a reload (inbox 2026-09-24):** the active Settings tab is component
+  state, so any reload — including an archive switch's — lands on Station, not where the operator
+  was. Carry the section in the URL (hash or path) so a reload and a deep link land on the same tab.
+- **Styled confirm dialog (inbox 2026-09-26):** replace the browser's `window.confirm` with one
+  styled in-app ConfirmDialog (native `<dialog>`, no new dependency) for the Settings leave guard,
+  Restart daemon, Activate archive (ADR 0087's prompt), destination Clear queue, and Rigs
+  duplicate-model and delete. The leave guard becomes asynchronous, so the router guard, including
+  browser Back after the address bar has moved, is reworked with its suite and reversion proofs. Tab
+  close or reload keeps the browser's own `beforeunload` warning (browsers forbid custom dialogs
+  there).
+- **Settings tab widths (inbox 2026-10-05):** standardise the content width across the Settings
+  tabs; many differ today.
+- **Country for an unenriched QSO (inbox 2026-09-30):** there is no place to enter the remote
+  station's country when the QSO is not enriched over the internet.
+- **Re-enrich with no source enabled (inbox 2026-10-04):** on the Edit QSO card, "Re-enrich" is
+  enabled although no enrichment services are enabled. The condition is the station's enabled
+  services, not the QSO's missing enrichment — a QSO without enrichment is exactly when
+  re-enrichment helps.
+- **Settings "Restart daemon" button (inbox 2026-09-24; triage 2026-10-06):** keep it. It is the
+  config-apply restart for changes that need one; no move or per-section replacement is planned.
+
 ## Built follow-up — the contacts map rides the shell's event stream (inbox 2026-09-11 follow-up (a), built 2026-09-14)
 
 Acceptance criterion: with the Operate tab on FT8 and the map open in a second tab, the map loads
