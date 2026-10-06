@@ -180,7 +180,7 @@ attempt left behind never blocks a retry and is removed once a copy stands. It i
 material, never read back automatically, and not a lossless rollback after later
 edits. A copy that cannot be written defers the strip; a failed strip write
 leaves the file as it was; neither fails startup, and the next start retries.
-Nothing is stripped while another archive is active.
+Nothing is stripped while another archive is active; while the fields wait, each start logs `config v6: config.json keeps its deprecated forwarder fields until the Home archive is active`.
 
 `lookup.hamnut` is the country/prefix source. `lookup.chain` is the callsign
 provider chain. Provider `priority`, not JSON array position, is authoritative;

@@ -9,7 +9,10 @@ package main
 //   T1  Home seeded → config.json holds station accounts only; bindings and
 //       routes are unchanged; config.v5.json is the v5 bytes from before
 //       startup's persist, 0600.
-//   T2  another archive active → nothing is stripped and no copy is written.
+//   T2  another archive active → nothing is stripped and no copy is written, and
+//       the log says the fields wait for Home (operator, 2026-10-06: the wait
+//       was silent). T2b: once stripped, a start with another archive active
+//       does not log it.
 //   T3  a failed copy defers the strip; startup still succeeds; the next start
 //       copies and strips. T3b: staging files an interrupted copy left behind
 //       (secret-bearing) never block a retry and are removed by it.
@@ -204,6 +207,53 @@ func TestConfigV6Strip_T2_AnotherArchiveActiveStripsNothing(t *testing.T) {
 	assertUnstripped(t, "T2", d.cfgSvc.Path)
 	if _, err := os.Stat(copyPath(d.cfgSvc)); !os.IsNotExist(err) {
 		t.Fatalf("T2: a copy was written with no strip due (stat err %v)", err)
+	}
+	if n := waitLines(t, d); n != 1 {
+		t.Fatalf("T2: %d 'kept until Home' log line(s); want 1 naming the wait", n)
+	}
+}
+
+// waitLines counts the startup line that says the deprecated fields wait for
+// Home to be active.
+func waitLines(t *testing.T, d *daemon) int {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(d.cfgSvc.WorkingDir(), "log", "smd.log"))
+	if err != nil {
+		t.Fatalf("read smd.log: %v", err)
+	}
+	return strings.Count(string(data), "config v6: config.json keeps its deprecated forwarder fields until the Home archive is active")
+}
+
+func TestConfigV6Strip_T2b_AlreadyStrippedWithAnotherArchiveActiveIsQuiet(t *testing.T) {
+	const managed = "019fd5c5-efcc-7193-be4f-1fee532ee31c"
+	var managedPath string
+	d, orch := newOrchestratedDaemon(t, func(c *config.Config) {
+		c.SetupComplete = true
+		c.DefaultLogbookID = 1
+		c.LoggingStation.StationCallsign = "7Q5MLV"
+		// Already stripped: station accounts only.
+		c.Forwarders = []types.ForwarderConfig{{Type: stub.Type, Credentials: stubCreds(t), TickIntervalSec: 1, BatchSize: 1}}
+		managedPath = filepath.Join(c.DataDir, "db", "qso-archives", managed+".db")
+		c.QsoArchives = []types.QsoArchiveConfig{{ID: managed, Label: "Contest", Ownership: types.QsoArchiveOwnershipManaged}}
+		c.ActiveQsoArchiveID = managed
+	})
+	if err := os.MkdirAll(filepath.Dir(managedPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	seedFailedUploads(t, managedPath, "qrz")
+	raw, err := sql.Open("sqlite", "file:"+managedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`INSERT INTO archive_metadata (singleton, archive_uuid, default_logbook_id) VALUES (1, ?, 1)`, managed); err != nil {
+		t.Fatal(err)
+	}
+	_ = raw.Close()
+	if err := orch.Start(d.workerCtx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if n := waitLines(t, d); n != 0 {
+		t.Fatalf("T2b: a stripped file logged the wait %d time(s); want none", n)
 	}
 }
 

@@ -33,6 +33,12 @@ const v5RecoveryCopyName = "config.v5.json"
 // failure here fails the start: the bindings, not these fields, route uploads.
 func (d *daemon) stripLegacyForwarderFieldsAfterSeed(ctx context.Context) {
 	if d.paths.Entry != nil && d.paths.Entry.Ownership != types.QsoArchiveOwnershipLegacy {
+		// Say so, once per start, while there is something waiting — a silent
+		// wait looks like a cleanup that never ran (operator, 2026-10-06).
+		if hasLegacyForwarderFields(d.cfgSvc.Snapshot().Forwarders) {
+			d.logger.InfoWith().Str("active_archive", d.paths.Entry.Label).
+				Msg("config v6: config.json keeps its deprecated forwarder fields until the Home archive is active")
+		}
 		return
 	}
 	seededAt, err := d.db.DestinationBindingsSeededAtWithContext(ctx)
