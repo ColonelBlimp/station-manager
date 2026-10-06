@@ -1406,11 +1406,16 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      from the v5 bytes before that persistence. It is never overwritten, and its historical
      credentials are never substituted automatically for current bindings. A failed copy defers
      the strip; startup continues and a later start retries. It is historical recovery material,
-     not a guaranteed lossless rollback after later edits. Open detail for the build, to confirm
-     when presenting: a retry after a failed first copy finds the file already persisted as v6
-     but still unstripped; since v5→v6 is a stamp only, that document re-stamped as version 5 is
-     the v5 shape — or the strip waits for an operator action. The copy also takes the same ClubLog
-     `api` scrub `persistResolvedConfig` applies, so it carries no secret the live file has shed.
+     not a guaranteed lossless rollback after later edits. Settled 2026-10-06 (operator): a retry after a failed
+     first copy may re-stamp the persisted, still-unstripped v6 document as version 5 only when
+     that reconstruction is a complete v5-compatible document, validated against v5's
+     requirements — a stamp-only migration does not prove later v6 saves kept the shape; if it
+     cannot be represented faithfully, the deprecated fields stay and the strip is deferred. Such a
+     copy is described as recovered at retry time, not as the original pre-upgrade bytes. The copy
+     takes `persistResolvedConfig`'s ClubLog scrub with its existing guard (`cmd/smd/main.go:522`):
+     only `credentials.api`, and only when the build carries a nonblank injected key; the logbook
+     credentials stay. Tests for keyed and keyless builds with synthetic values; the reconstruction
+     and backup-failure tests ship with the implementation commit.
      (R4) Confirmed: evidence sync requires a complete SM Cloud station account; `evidence.sync`
      stays the consent switch. Binding enablement and the active archive never decide that consent.
      *Acceptance cases added before implementation (operator, 2026-10-06):*
@@ -1424,6 +1429,36 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      identity, not assumed from `datastore.path`; the old and new binaries each boot their OWN
      copy, so the new binary's upward migrations cannot touch the old binary's proof.
      *Status:* implementation, tests and drill results pending.
+     **5C commit (a), characterization (2026-10-06, tests only, passing on v5):** synthetic,
+     distinct values throughout, so reading the wrong source fails visibly.
+     `cmd/smd/config_load_forwarders_characterization_test.go` — an explicit version-5 JSON file
+     with all four destinations (QRZ, ClubLog, SM Cloud enabled; QRZCQ disabled), loaded through
+     `config.Load` with every forwarder package linked: L1 kept: exactly the four entries; L2
+     CHANGES: each keeps `name` and `enabled`; L3 CHANGES: every credential preserved exactly,
+     logbook-scoped keys included; L4 kept: label, action_filter, endpoints, tick, batch, retry,
+     allow_insecure_http. `internal/config/evidence_credentials_characterization_test.go` — E1
+     kept: the SM Cloud entry's url and token, beside QRZ; E2 CHANGES: a disabled complete entry
+     is refused today; E3 kept: an incomplete account refused, no value in the error; E4 CHANGES:
+     evidence.sync's finding for that disabled entry.
+     `internal/api/handler_config_station_accounts_characterization_test.go` — station-shaped
+     entries built directly: G1 kept: no credential value (every one, ClubLog `callsign` and QRZCQ
+     `call` included) in the GET body; G2 CHANGES: name, enabled and logbook-scoped keys served;
+     P1 kept: a new SM Cloud token replaces only that key, every other secret and enabled state
+     preserved; P2 kept: blank station keys keep their values on an enabled account; P2b kept: the
+     same on a DISABLED account, which no build check covers. The PUT cases hold QRZ disabled: the
+     api test binary does not link the QRZ package (an existing test registers its ADIF prefix by
+     hand), and a PUT builds every enabled entry; this does not claim to test QRZ construction.
+     `cmd/smd/restore_selection_characterization_test.go` (dry-run with the export seam): S1
+     CHANGES: no flags → the DISABLED SM Cloud entry and its logbook; S2 CHANGES: `--forwarder`
+     matches the entry name case-insensitively, a non-SM Cloud name is refused and nothing
+     fetched; S3 kept: `--cloud-logbook` overrides; S4 kept: an empty logbook restores the
+     cloud's "main". Sensitivity, each mutation restored and verified: M1 evidence ignoring
+     `enabled` fails E2 and E4; M2 a case-sensitive `--forwarder` match fails S2; M3 ignoring
+     `--cloud-logbook` fails S3; M4 an under-reported credentials_set fails G2; M5 a blank
+     overwriting a stored station key fails P2 at the PUT's build check and P2b at its
+     stored-value assertion; M6 load overwriting a station tick fails L4; M7 default seeding by
+     name instead of type fails L1. Gates: gofmt (whole tree), vet, `go test ./...`,
+     maintainability — all exit 0.
      *Commit split (accepted):* (a) passing characterization tests first, pinning today's v5
      behaviour the change must keep (load of the station's shaped config; GET/PUT station fields; evidence sync and
      restore lookup); (b) the slice in one releasable commit with its docs references; (c) the
