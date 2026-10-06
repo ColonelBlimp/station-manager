@@ -18,3 +18,12 @@ SM has many other features besides logging to make Amateur Radio operating easie
 - Extensive keyboard shortcuts.
 - Multiple logbooks.
 - ADIF import and export.
+
+## More than one window
+
+You can keep Station Manager open in several browser windows or tabs at once.
+Entries you are making — a QSO not yet logged, a confirmation, unsaved settings
+— belong to the window you make them in; other windows don't see them. What
+Station Manager has stored or is doing is shared. Switching archives discards
+every other window's unsaved entries (see [QSO Archives](#qso-archives),
+*Switching archives*).
