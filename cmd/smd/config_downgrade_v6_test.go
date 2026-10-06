@@ -235,3 +235,27 @@ func TestConfigDowngradeV6_D10_DeletedLogbooksBindingStillNamesTheEntry(t *testi
 		t.Fatalf("D10: qrz = %v; want a disabled entry under the collapse target qrz-home", e["qrz"])
 	}
 }
+
+// D11/D12 (review 2026-10-06): a v5 loader requires an ENABLED SM Cloud entry
+// while evidence.sync is on. With Home's SM Cloud binding off the downgrade is
+// refused, naming the conflict, writing nothing and changing neither the
+// consent nor the binding; with it on the result is accepted.
+func TestConfigDowngradeV6_D11_EvidenceSyncNeedsSmcloudOnInV5(t *testing.T) {
+	syncOn := func(c *config.Config) {
+		c.Evidence = types.EvidenceConfig{Capture: true, Sync: true, CapBytes: 524288000}
+	}
+	path := downgradeBed(t, syncOn, seeded, qrzHome, smcHome)
+	assertRefusedUnchanged(t, "D11", path, downgradeTo5(t, path), "evidence.sync", "smcloud")
+	if cfg, err := config.Load(path); err != nil || !cfg.Evidence.Sync {
+		t.Fatalf("D11: the consent changed or the file no longer loads: sync=%v err=%v", cfg.Evidence.Sync, err)
+	}
+
+	on := downgradeBed(t, syncOn, seeded, qrzHome,
+		`INSERT INTO logbook_destination (logbook_id, destination, forwarder_name, enabled, credentials, legacy_name) VALUES (1, 'smcloud', 'cloud-home', 1, '{"logbook":"d-book"}', 'cloud-home')`)
+	if err := downgradeTo5(t, on); err != nil {
+		t.Fatalf("D12: with SM Cloud on the downgrade must succeed: %v", err)
+	}
+	if _, e := entriesOf(t, on); e["smcloud"]["enabled"] != true {
+		t.Fatalf("D12: smcloud = %v; want it enabled", e["smcloud"])
+	}
+}

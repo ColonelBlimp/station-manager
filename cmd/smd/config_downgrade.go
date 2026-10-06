@@ -76,6 +76,11 @@ func runConfigDowngradeTo(out io.Writer, args []string) error {
 		if data, err = rebuildV5Forwarders(path, data); err != nil {
 			return errors.New(op).WithErr(err)
 		}
+		// Every older loader applies the rules v6 relaxed; refuse rather than
+		// write a file it would reject.
+		if err = checkV5Compatible(data); err != nil {
+			return errors.New(op).WithErr(err)
+		}
 	}
 	downgraded, err := config.DowngradeDocument(data, *target)
 	if err != nil {

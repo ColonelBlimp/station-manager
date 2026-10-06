@@ -169,9 +169,14 @@ rewrites `config.json` file-first so each entry keeps only its station-account
 fields. Before the first strip it writes `config.v5.json` beside `config.json`
 once, owner-only (`0600`), never overwriting it: the version-5 document as read
 before startup persisted the migrated file, or — when that is not available — the
-still-unstripped version-6 file re-stamped as version 5, used only when it
-validates as a complete version-5 document. It takes the same guarded ClubLog
-`credentials.api` scrub as startup persistence. It is historical recovery
+still-unstripped version-6 file re-stamped as version 5. Either source is
+written only when a version-5 loader would accept it: every entry named,
+uniquely, and — while `evidence.sync` is on — an `smcloud` entry enabled with
+`url` and `token` (version 5 ties sync to the enabled forwarder; version 6 to
+the complete account). Nothing is changed to make it pass. It takes the same
+guarded ClubLog `credentials.api` scrub as startup persistence; it is staged
+under a unique name and linked into place, so a staging file an interrupted
+attempt left behind never blocks a retry and is removed once a copy stands. It is historical recovery
 material, never read back automatically, and not a lossless rollback after later
 edits. A copy that cannot be written defers the strip; a failed strip write
 leaves the file as it was; neither fails startup, and the next start retries.
@@ -667,15 +672,19 @@ Version `5 -> 6` (ADR 0082 part 4, W-0021 5C) makes each forwarder entry a stati
 account (§3.3). The step stamps only and keeps `name`, `enabled` and logbook-scoped
 keys known, so a version-5 file loads unchanged; startup strips them after Home's
 binding seed. Its document down step, `6 -> 5`, can only stamp an unstripped file.
-For a stripped one, `smd config-downgrade --to 5` first rebuilds each entry from
-the adopted Home archive's bindings, read from its closed file and confirmed by its
-archive identity: the binding's state and per-logbook keys over the account, under
-migration 0015 down's collapse name (the legacy name, else the default logbook's
-binding name, else the first). It refuses, naming the destination and logbooks and
-writing nothing, when Home's live logbooks disagree on the state (an unbound logbook
-counts as off) or the bindings hold different credentials; an account with no
-binding becomes a disabled entry named after its type. Run it before `smd
-db-downgrade`, which removes the bindings.
+Once Home's seed has committed — stripped or not, since the bindings then own the
+fields — `smd config-downgrade --to 5` first rebuilds each entry from the adopted
+Home archive's bindings, read from its closed file and confirmed by its archive
+identity: the binding's state and per-logbook keys over the account. Before the
+seed the file still holds them and is stamped. It refuses, naming the destination
+and logbooks and writing nothing, when Home's live logbooks disagree on the state (an unbound logbook
+counts as off) or the bindings hold different credentials, and — without changing
+consent or a binding — when the result would hold `evidence.sync` on with no
+enabled `smcloud` entry, which every older loader refuses. The name is the one
+migration 0015 down renames the queue rows to, read with its own query over every
+binding (a deleted logbook's included); an account with no binding at all becomes a
+disabled entry named after its type. Run it before `smd db-downgrade`, which
+removes the bindings.
 
 ### 13.3 Pipeline placement
 

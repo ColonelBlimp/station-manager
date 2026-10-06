@@ -300,8 +300,10 @@ type LookupInfo struct {
 // actions), so it round-trips without daemon defaulting.
 type ForwarderInfo struct {
 	// Name and Enabled exist only so a PUT that still carries them — an open tab
-	// from before the upgrade, say — is refused by name rather than as an
-	// unknown field; GET leaves both nil, so they are never served.
+	// from before the upgrade, say — is refused by name rather than ignored;
+	// GET leaves both nil, so they are never served. Their PRESENCE is what is
+	// refused, which a nil pointer cannot tell from an explicit JSON null, so
+	// UnmarshalJSON records the keys themselves (nameSent, enabledSent).
 	Name         *string  `json:"name,omitempty"`
 	Type         string   `json:"type"`
 	Enabled      *bool    `json:"enabled,omitempty"`
@@ -311,6 +313,26 @@ type ForwarderInfo struct {
 	Label          string            `json:"label,omitempty"`
 	CredentialsSet []string          `json:"credentials_set,omitempty"`
 	Credentials    map[string]string `json:"credentials,omitempty"`
+
+	nameSent, enabledSent bool
+}
+
+// UnmarshalJSON decodes as the plain struct would and also records whether the
+// binding-owned keys were present at all — `"name": null` included.
+func (f *ForwarderInfo) UnmarshalJSON(b []byte) error {
+	type plain ForwarderInfo
+	var p plain
+	if err := json.Unmarshal(b, &p); err != nil {
+		return err
+	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(b, &keys); err != nil {
+		return err
+	}
+	*f = ForwarderInfo(p)
+	_, f.nameSent = keys["name"]
+	_, f.enabledSent = keys["enabled"]
+	return nil
 }
 
 // DefaultRigInfo is the SPA-visible subset of the active rig for GET
@@ -1567,10 +1589,10 @@ func (s *Server) refuseBindingOwnedForwarderEdit(w http.ResponseWriter, req *Con
 // type and the field, or ok=false when nothing is owned.
 func bindingOwnedForwarderEdit(incoming []ForwarderInfo) (typ, field string, owned bool) {
 	for _, in := range incoming {
-		if in.Name != nil {
+		if in.Name != nil || in.nameSent {
 			return in.Type, "name", true
 		}
-		if in.Enabled != nil {
+		if in.Enabled != nil || in.enabledSent {
 			return in.Type, "enabled", true
 		}
 		for _, k := range forwarding.LogbookScopedKeys(in.Type) {

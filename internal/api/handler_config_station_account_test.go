@@ -4,7 +4,7 @@ package api
 // 0082 parts 3, 4 and 8; operator rulings 2026-10-06).
 //
 //   A1  R1: a PUT entry that carries `name` or `enabled` — PRESENCE, an empty
-//       name and enabled:false included — is refused 400
+//       name, enabled:false and an explicit null included — is refused 400
 //       forwarder_field_binding_owned, naming the field and saying the tab needs
 //       reloading; nothing is written.
 //   A2  Acceptance case 8: a narrowed account save while Home's seed is still
@@ -38,6 +38,9 @@ func TestStationAccount_A1_NameOrEnabledPresenceRefused(t *testing.T) {
 		"an empty name": {`{"forwarders":[{"type":"smcloud","name":"","action_filter":["insert"]}]}`, "name"},
 		"enabled true":  {`{"forwarders":[{"type":"smcloud","enabled":true,"action_filter":["insert"]}]}`, "enabled"},
 		"enabled false": {`{"forwarders":[{"type":"smcloud","enabled":false,"action_filter":["insert"]}]}`, "enabled"},
+		// An explicit null is still the key's presence (review 2026-10-06).
+		"a null name":    {`{"forwarders":[{"type":"smcloud","name":null,"action_filter":["insert"]}]}`, "name"},
+		"a null enabled": {`{"forwarders":[{"type":"smcloud","enabled":null,"action_filter":["insert"]}]}`, "enabled"},
 	}
 	for label, c := range cases {
 		w := putConfig(t, srv, c.body)

@@ -431,7 +431,10 @@ still exist — `smd db-downgrade` below log schema 14 removes them. It refuses,
 naming the destination and logbooks and writing nothing, when Home's bindings
 cannot become one version-5 entry per destination: one logbook on and another
 off (a logbook with no binding counts as off), or different credentials on
-different logbooks. Make them agree in Settings → Forwarding, or restore
+different logbooks. It also refuses while evidence sync is on and the SM Cloud
+destination is off, because older builds require SM Cloud enabled for evidence
+sync; it never changes either for you. Make them agree in Settings → Forwarding
+(or turn evidence sync off), or restore
 `config.v5.json` — the copy of your version-5 `config.json` that the first
 version-6 start wrote beside it (owner-only, never overwritten). That copy is
 historical: settings saved since then are not in it.

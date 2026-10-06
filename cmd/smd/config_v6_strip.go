@@ -128,7 +128,13 @@ func credentialMap(raw json.RawMessage) (map[string]json.RawMessage, bool) {
 func ensureV5RecoveryCopy(cfgPath string, configAtStart []byte) (string, error) {
 	const op errors.Op = "smd.ensureV5RecoveryCopy"
 	dst := filepath.Join(filepath.Dir(cfgPath), v5RecoveryCopyName)
-	if _, err := os.Lstat(dst); err == nil {
+	if info, err := os.Lstat(dst); err == nil {
+		// Only a regular file is a copy; anything else under the name means no
+		// copy can be confirmed, and the strip must wait.
+		if !info.Mode().IsRegular() {
+			return "", errors.New(op).WithMsgf("%s exists but is not a regular file", v5RecoveryCopyName)
+		}
+		removeStaleStaging(dst)
 		return "", nil
 	} else if !os.IsNotExist(err) {
 		return "", errors.New(op).WithErr(err).WithMsg("check for an existing recovery copy")
@@ -143,13 +149,25 @@ func ensureV5RecoveryCopy(cfgPath string, configAtStart []byte) (string, error) 
 	if err := writeOnce(dst, doc); err != nil {
 		return "", errors.New(op).WithErr(err)
 	}
+	removeStaleStaging(dst)
 	return source, nil
 }
 
+// removeStaleStaging deletes staging files an interrupted copy left beside
+// the published one (they hold credentials); best-effort, regular files only.
+func removeStaleStaging(dst string) {
+	stale, _ := filepath.Glob(dst + "*.tmp")
+	for _, p := range stale {
+		if info, err := os.Lstat(p); err == nil && info.Mode().IsRegular() {
+			_ = os.Remove(p)
+		}
+	}
+}
+
 // v5RecoverySource picks the copy's content and checks that v5 could load it:
-// every forwarder entry carries a non-empty name, unique, and the document
-// otherwise validates as this build's config (a v5 shape is a v6 shape with
-// names). A document that fails either is not a faithful v5 copy.
+// the rules v6 relaxed hold (checkV5Compatible), and the document otherwise
+// validates as this build's config. A document that fails either is not a
+// faithful v5 copy.
 func v5RecoverySource(cfgPath string, configAtStart []byte) ([]byte, string, error) {
 	var doc []byte
 	var source string
@@ -175,24 +193,8 @@ func v5RecoverySource(cfgPath string, configAtStart []byte) ([]byte, string, err
 }
 
 func validateV5Document(doc []byte) error {
-	var shape struct {
-		Forwarders []struct {
-			Name string `json:"name"`
-			Type string `json:"type"`
-		} `json:"forwarders"`
-	}
-	if err := json.Unmarshal(doc, &shape); err != nil {
-		return fmt.Errorf("the v5 candidate does not parse: %w", err)
-	}
-	seen := map[string]bool{}
-	for i, f := range shape.Forwarders {
-		if f.Name == "" {
-			return fmt.Errorf("forwarder[%d] (%s) has no name; v5 requires one", i, f.Type)
-		}
-		if seen[f.Name] {
-			return fmt.Errorf("forwarder[%d]: duplicate name %q; v5 requires unique names", i, f.Name)
-		}
-		seen[f.Name] = true
+	if err := checkV5Compatible(doc); err != nil {
+		return err
 	}
 	// Validated in memory: the candidate holds credentials and is never staged
 	// anywhere but its own owner-only destination.
@@ -235,14 +237,15 @@ func scrubClubLogAppKey(doc []byte) ([]byte, error) {
 }
 
 // writeOnce creates dst with the given content, owner-only, and never replaces
-// an existing file: the content goes to a staging file created exclusively,
-// is synced, and is linked into place (a link fails when dst exists).
+// an existing file: the content goes to a uniquely named staging file (so one
+// an interrupted attempt left behind never blocks a retry), is synced, and is
+// linked into place — a link fails when dst exists.
 func writeOnce(dst string, content []byte) error {
-	tmp := dst + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	f, err := os.CreateTemp(filepath.Dir(dst), filepath.Base(dst)+".*.tmp") // created 0600
 	if err != nil {
 		return fmt.Errorf("stage the recovery copy: %w", err)
 	}
+	tmp := f.Name()
 	_, werr := f.Write(content)
 	if werr == nil {
 		werr = f.Sync()
@@ -263,6 +266,50 @@ func writeOnce(dst string, content []byte) error {
 	if dir, err := os.Open(filepath.Dir(dst)); err == nil {
 		_ = dir.Sync()
 		_ = dir.Close()
+	}
+	return nil
+}
+
+// checkV5Compatible enforces the rules config v6 relaxed that a v5 (or older)
+// loader still applies, so a document written for it — the recovery copy or a
+// downgrade's result — is one it accepts: every forwarder entry carries a
+// non-empty, unique name; and while evidence.sync is on, an smcloud entry is
+// ENABLED with url and token (v5 tied sync to the enabled forwarder; v6 to the
+// complete account, ruling R4). Nothing is changed to make it pass: consent
+// and binding states are the operator's.
+func checkV5Compatible(doc []byte) error {
+	var shape struct {
+		Evidence struct {
+			Sync bool `json:"sync"`
+		} `json:"evidence"`
+		Forwarders []struct {
+			Name        string         `json:"name"`
+			Type        string         `json:"type"`
+			Enabled     bool           `json:"enabled"`
+			Credentials map[string]any `json:"credentials"`
+		} `json:"forwarders"`
+	}
+	if err := json.Unmarshal(doc, &shape); err != nil {
+		return fmt.Errorf("the v5 candidate does not parse: %w", err)
+	}
+	seen := map[string]bool{}
+	smcloudOn := false
+	for i, f := range shape.Forwarders {
+		if f.Name == "" {
+			return fmt.Errorf("forwarder[%d] (%s) has no name; v5 requires one", i, f.Type)
+		}
+		if seen[f.Name] {
+			return fmt.Errorf("forwarder[%d]: duplicate name %q; v5 requires unique names", i, f.Name)
+		}
+		seen[f.Name] = true
+		if f.Type == "smcloud" && f.Enabled && f.Credentials["url"] != nil && f.Credentials["url"] != "" &&
+			f.Credentials["token"] != nil && f.Credentials["token"] != "" {
+			smcloudOn = true
+		}
+	}
+	if shape.Evidence.Sync && !smcloudOn {
+		return fmt.Errorf("evidence.sync is on, but v5 accepts it only with the smcloud forwarder enabled (url and token set); " +
+			"turn Home's SM Cloud destination on in Settings → Forwarding, or evidence sync off, and try again")
 	}
 	return nil
 }

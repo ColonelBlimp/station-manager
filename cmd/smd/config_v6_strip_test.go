@@ -11,7 +11,8 @@ package main
 //       startup's persist, 0600.
 //   T2  another archive active → nothing is stripped and no copy is written.
 //   T3  a failed copy defers the strip; startup still succeeds; the next start
-//       copies and strips.
+//       copies and strips. T3b: staging files an interrupted copy left behind
+//       (secret-bearing) never block a retry and are removed by it.
 //   T4  a failed strip write leaves the file as it was; startup still succeeds;
 //       the next start strips. An existing copy is never overwritten.
 //   T5  with no v5 bytes from this start, the copy is rebuilt from the
@@ -209,8 +210,9 @@ func TestConfigV6Strip_T2_AnotherArchiveActiveStripsNothing(t *testing.T) {
 func TestConfigV6Strip_T3_FailedCopyDefersTheStrip(t *testing.T) {
 	cfgSvc := seedOrchestratedConfig(t, stripFixture(t))
 	v5 := asV5(t, cfgSvc.Path)
-	// The copy's staging name is taken by a directory: the copy cannot be made.
-	blocker := copyPath(cfgSvc) + ".tmp"
+	// Something that is not a file holds the copy's name: no copy can be
+	// confirmed, so none is written and nothing is stripped.
+	blocker := copyPath(cfgSvc)
 	if err := os.Mkdir(blocker, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -220,9 +222,6 @@ func TestConfigV6Strip_T3_FailedCopyDefersTheStrip(t *testing.T) {
 		t.Fatalf("T3: a failed copy must not fail the start: %v", err)
 	}
 	assertUnstripped(t, "T3", cfgSvc.Path)
-	if _, err := os.Stat(copyPath(cfgSvc)); !os.IsNotExist(err) {
-		t.Fatalf("T3: config.v5.json exists after a failed copy (stat err %v)", err)
-	}
 	orch.Shutdown(2*time.Second, nil)
 
 	if err := os.Remove(blocker); err != nil {
@@ -362,5 +361,59 @@ func TestConfigV6Strip_T7_NamelessAccountsSeedUnderTheirType(t *testing.T) {
 		if fc.Name != "" || fc.Enabled {
 			t.Fatalf("T7: default account %q carries name %q / enabled %v; want neither", fc.Type, fc.Name, fc.Enabled)
 		}
+	}
+}
+
+func TestConfigV6Strip_T3b_InterruptedStagingNeverBlocksARetry(t *testing.T) {
+	cfgSvc := seedOrchestratedConfig(t, stripFixture(t))
+	v5 := asV5(t, cfgSvc.Path)
+	// What a crash mid-copy leaves: a staging file under the old fixed name and
+	// one under a unique name, both holding credentials.
+	leftovers := []string{copyPath(cfgSvc) + ".tmp", copyPath(cfgSvc) + ".123456.tmp"}
+	for _, p := range leftovers {
+		if err := os.WriteFile(p, []byte(`{"version":5,"token":"T3B-LEFTOVER"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d, orch := buildOrchestratedDaemon(t, cfgSvc, cfgSvc.Snapshot())
+	d.configAtStart = v5
+	if err := orch.Start(d.workerCtx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	assertStripped(t, "T3b", cfgSvc.Path)
+	if got, err := os.ReadFile(copyPath(cfgSvc)); err != nil || string(got) != string(v5) {
+		t.Fatalf("T3b: the copy = %q (%v); want the v5 bytes", got, err)
+	}
+	for _, p := range leftovers {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Fatalf("T3b: the interrupted staging file %s is still there (stat err %v)", filepath.Base(p), err)
+		}
+	}
+}
+
+// T8 (review 2026-10-06): the copy must be a document v5 ACCEPTS, and v5
+// requires an ENABLED SM Cloud entry while evidence.sync is on (v6 asks only
+// for a complete account, R4). With sync on and SM Cloud disabled no v5 copy
+// can be written without changing consent or a binding's state, so the strip
+// is deferred — from either source.
+func TestConfigV6Strip_T8_EvidenceSyncWithoutEnabledSmcloudDefers(t *testing.T) {
+	syncOn := func(c *config.Config) {
+		stripFixture(t)(c)
+		c.Evidence = types.EvidenceConfig{Capture: true, Sync: true, CapBytes: 524288000}
+	}
+	for _, src := range []string{"v5 bytes", "re-stamped v6"} {
+		t.Run(src, func(t *testing.T) {
+			d, orch := newOrchestratedDaemon(t, syncOn)
+			if src == "v5 bytes" {
+				d.configAtStart = asV5(t, d.cfgSvc.Path)
+			}
+			if err := orch.Start(d.workerCtx); err != nil {
+				t.Fatalf("start: %v", err)
+			}
+			assertUnstripped(t, "T8 "+src, d.cfgSvc.Path)
+			if _, err := os.Stat(copyPath(d.cfgSvc)); !os.IsNotExist(err) {
+				t.Fatalf("T8 %s: a copy v5 would refuse was written (stat err %v)", src, err)
+			}
+		})
 	}
 }
