@@ -1266,6 +1266,27 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      after Save (`08bef531`, `a75f0654`, `bd6765f8`, `9f2a35d0`). Not deployed yet. Still open from
      the `-74` re-run: the C.2 ruling (a refused save keeps the switches as set; the reason as the
      field's red placeholder).
+     **Built 2026-10-06 (`b02354e0`), the C.2 ruling (selected 2026-10-06, before 5C and 5F).** Acceptance: a
+     refused save — the SPA's for a blank required field, or the daemon's — keeps every drafted
+     switch, typed value and removal mark; the card stays starred as unsaved and its pill still
+     shows what the daemon holds; the marked field's reason is its own placeholder in the mark's
+     red, with no line under it. Nearest confusable outcome: the draft kept while the pill follows
+     it and reads as saved. `bindings.svelte.ts` drops both restores (`#restoreSwitches` and the
+     pre-wire switch reset); a re-read owed meanwhile now waits for a save or a discard, as for any
+     unsaved draft. `StoredSecretField` puts `invalidNote` in the placeholder, with
+     `placeholder:text-invalid` on the text input and in `MaskedField`. Manual: Forwarding step 3.
+     ADR 0082 gained a dated update for the departure. Tests, RED first: B4, B6, B8b (the kept
+     removal mark is resent by the next save), B24 (the owed re-read waits, then is paid on
+     discard), D4 (switch kept, star, pill `mixed`, placeholder, no line), D4b (daemon refusal:
+     switch kept, star, pill `mixed`), S7 and S7b. Guards that passed before the change: B6b
+     (discard after a refusal returns the daemon's switches) and S7c (an unmarked field keeps its
+     ordinary placeholder and colour). Reversion proofs, each failing its intended assertion with
+     the restore verified: P1 the pre-wire switch reset (B4, B24, D4); P2 the daemon-refusal
+     restore (B6, B8b, D4b); P3 the pill reading the draft (D2, D4, D4b); P4 the reason not used as
+     the placeholder (S7, S7b, D4); P5 and P6 the red class dropped from the text and masked inputs
+     (S7b; S7); P7 the separate line restored (S7, D4). Gates: lint, format, svelte-check, vitest
+     (148 files, 2,085 tests), maintainability, manual build — all exit 0. jsdom does not paint:
+     the red placeholder is the operator's visual check.
      **Design exchange (2026-09-26, during C.3–C.4): the Forwarding tab frames the wrong thing.**
      The operator read the per-logbook row "Drill 7Q5MLV" as the archive — the Drill archive's
      only logbook is also named "Drill" (Home's is "Default"). Found: the tab is destination-first

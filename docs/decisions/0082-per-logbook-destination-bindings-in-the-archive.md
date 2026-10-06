@@ -7,6 +7,14 @@ date: 2026-09-25
 
 # 0082 — Destination bindings live per logbook inside the archive; station accounts stay in config.json
 
+> **Dated update (2026-10-06, operator ruling 2026-09-26 during station drill C.2; built in W-0021).**
+> Part 9's refused save no longer "restores the last persisted switch state". A refused save — the
+> SPA's for a blank required field, or the daemon's — keeps every switch as the operator set it; the
+> card stays marked unsaved, and its state pill shows what the daemon holds. The pill postdates the
+> rule and now carries the daemon's truth, so the switch need not; restoring made the operator
+> re-find the switch after typing the key. The marked field's reason is its own placeholder, in the
+> mark's red, replacing the separate "Required to turn this on." line.
+
 > **Dated update (2026-09-25, Codex P2 on `c3df0e12`, fixed in 5B).** Part 4's collapse rule for
 > a downgrade — "the default logbook's binding name when present, otherwise the lexicographically
 > first" — infers the name an older, config-driven build drains, and the inference is wrong when
