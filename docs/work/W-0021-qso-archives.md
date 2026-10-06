@@ -1428,7 +1428,7 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      *Drill (pending):* config-first downgrade order; the Home file confirmed by its archive
      identity, not assumed from `datastore.path`; the old and new binaries each boot their OWN
      copy, so the new binary's upward migrations cannot touch the old binary's proof.
-     *Status:* built 2026-10-06 (`52077508`, `ba830078`, `25692f7a`, `6fadea1d`); evidence below.
+     *Status:* built 2026-10-06 (`52077508`, `ba830078`, `25692f7a`, `6fadea1d`, `2f6a3677`); evidence below.
      **5C commit (a), characterization (2026-10-06, tests only, passing on v5):** synthetic,
      distinct values throughout, so reading the wrong source fails visibly.
      `cmd/smd/config_load_forwarders_characterization_test.go` — an explicit version-5 JSON file
@@ -1542,6 +1542,12 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      on `6fadea1d`; whole-tree Go tests, vet and maintainability re-run (the release gate and the
      drill ran on `25692f7a`; the fix only widens which credential spellings pass, and the drill
      uses lower-case keys).
+     **Operator review, R1 case variants (2026-10-06), fixed in `2f6a3677`:** presence was recorded
+     under the exact lower-case keys while encoding/json matches keys case-insensitively, so
+     `"Name": null` / `"ENABLED": null` returned 200. Presence now matches as the decoder does.
+     A1 gains both (and `"NAME"`, already refused — a guard), asserting 400
+     `forwarder_field_binding_owned` with the stored account unchanged; proofs N3, N4. Codex clean;
+     API package, whole-tree Go tests and maintainability re-run; no drill needed (API only).
      *Commit split (accepted):* (a) passing characterization tests first, pinning today's v5
      behaviour the change must keep (load of the station's shaped config; GET/PUT station fields; evidence sync and
      restore lookup); (b) the slice in one releasable commit with its docs references; (c) the
