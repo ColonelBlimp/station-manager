@@ -70,6 +70,13 @@ func runConfigDowngradeTo(out io.Writer, args []string) error {
 	if err != nil {
 		return errors.New(op).WithErr(err)
 	}
+	// From config v6 the forwarder entries are rebuilt from Home's bindings
+	// first (W-0021 5C); the document steps then stamp and go on down.
+	if from == 6 && *target < 6 {
+		if data, err = rebuildV5Forwarders(path, data); err != nil {
+			return errors.New(op).WithErr(err)
+		}
+	}
 	downgraded, err := config.DowngradeDocument(data, *target)
 	if err != nil {
 		return errors.New(op).WithErr(err)

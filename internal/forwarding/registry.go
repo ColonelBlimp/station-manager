@@ -413,11 +413,12 @@ func ResolveEndpoint(m map[string]string, def string, keys ...string) string {
 // stub, or a future operator-must-supply-URL forwarder) is deliberately
 // excluded: it stays addable via its descriptor but is not auto-seeded into the
 // non-sparse config. It is the non-sparse default set ADR 0039 calls for: the
-// daemon seeds these into config so the operator toggles `enabled` + supplies
-// credentials rather than hand-adding an entry. Name defaults to the type
-// (single instance per type, per the ham-services-singleton model). Retry/tick/
-// batch are left zero so config.applyDefaults fills them; Endpoints carry the
-// registered defaults so they're visible + overridable.
+// daemon seeds these into config so a station account exists for every
+// destination rather than needing a hand-added entry. A seeded account is a
+// config v6 account: no name and no enabled state (ADR 0082 part 4 — both are
+// binding facts; the binding seed names an unnamed account after its type).
+// Retry/tick/batch are left zero so config.applyDefaults fills them; Endpoints
+// carry the registered defaults so they're visible + overridable.
 func DefaultForwarderConfigs() []types.ForwarderConfig {
 	descs := ForwarderTypes() // sorted, deep-copied
 	out := make([]types.ForwarderConfig, 0, len(descs))
@@ -431,9 +432,7 @@ func DefaultForwarderConfigs() []types.ForwarderConfig {
 			continue
 		}
 		out = append(out, types.ForwarderConfig{
-			Name:         d.Type,
 			Type:         d.Type,
-			Enabled:      false,
 			ActionFilter: append([]string(nil), d.SupportedActions...),
 			Endpoints:    eps,
 		})

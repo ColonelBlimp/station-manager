@@ -212,3 +212,40 @@ func TestDiff_UnknownPathIsRedacted(t *testing.T) {
 		t.Errorf("smtp.password is not marked secret: %+v", ch)
 	}
 }
+
+// D3 — A v6 STATION ACCOUNT IS IDENTIFIED BY ITS TYPE (W-0021 5C). Config v6
+// strips `name` from forwarder entries, so the list key falls back to `type`
+// and a credential change is still reported per account — presence only.
+func TestDiff_NamelessAccountIsKeyedByType(t *testing.T) {
+	const secret = "D3-ACCOUNT-SECRET"
+	before := DefaultConfig(t.TempDir())
+	before.Forwarders = []types.ForwarderConfig{{Type: "qrz", Credentials: json.RawMessage(`{"api_key":"old"}`)}}
+	after := before.Clone()
+	after.Forwarders[0].Credentials = json.RawMessage(`{"api_key":"` + secret + `"}`)
+
+	changes := diffFor(t, before, after)
+	rendered, _ := json.Marshal(changes)
+	if strings.Contains(string(rendered), secret) {
+		t.Fatalf("a credential value reached the record: %s", rendered)
+	}
+	if _, ok := findChange(changes, "forwarders[qrz].credentials.api_key"); !ok {
+		t.Fatalf("the account's change is not reported by type: %v", changes)
+	}
+}
+
+// D4 — A LIST OF OBJECTS WITH NO IDENTITY IS NEVER RENDERED WHOLE. The whole-list
+// comparison exists for scalar lists (action_filter); applied to objects it
+// would print every value under an allowlisted container path — how nameless
+// forwarder entries first reached the log in 5C's build (CS6 caught it).
+func TestDiff_UnkeyedObjectListIsRedacted(t *testing.T) {
+	const secret = "D4-OBJECT-SECRET"
+	var out []FieldChange
+	diffValue("forwarders",
+		[]any{map[string]any{"credentials": map[string]any{"k": "old"}}},
+		[]any{map[string]any{"credentials": map[string]any{"k": secret}}},
+		&out)
+	rendered, _ := json.Marshal(out)
+	if strings.Contains(string(rendered), secret) || len(out) != 1 || !out[0].Redacted {
+		t.Fatalf("an unkeyed object list = %s; want one redacted change and no value", rendered)
+	}
+}

@@ -1,19 +1,19 @@
 package config
 
-// Characterization (W-0021 5C, commit a): how evidence sync finds its SM Cloud
-// credentials TODAY, under config v5. These tests pass against the current code
-// and pin what 5C must keep or deliberately change:
+// Evidence sync's SM Cloud credentials. Characterized under config v5 (W-0021
+// 5C, commit a); the cases marked CHANGED took their 5C form with config v6
+// (ruling R4): evidence sync needs a complete SM Cloud station account, and
+// evidence.sync stays the consent switch — neither binding enablement nor the
+// active archive decides it.
 //
 //   E1  KEPT     — an enabled SM Cloud entry with url + token supplies exactly
 //                  those two values (never the logbook, never another entry's).
-//   E2  CHANGES  — a DISABLED but complete SM Cloud entry is refused today
-//                  ("no enabled smcloud forwarder"). 5C (ruling R4) makes evidence
-//                  sync depend on a complete SM Cloud station account; `enabled`
-//                  leaves the station entry, and evidence.sync stays the consent.
+//   E2  CHANGED  — a complete SM Cloud account supplies the credentials whether
+//                  or not a legacy `enabled` flag is set (v5 refused a disabled
+//                  entry); a stripped account, which has no flag, does too.
 //   E3  KEPT     — an incomplete account (url or token missing) is refused.
-//   E4  CHANGES  — Validate with evidence.sync on reports
-//                  evidence_sync_needs_smcloud for the disabled-but-complete
-//                  entry of E2; after 5C it reports nothing.
+//   E4  CHANGED  — Validate with evidence.sync on accepts the accounts of E2 and
+//                  still reports evidence_sync_needs_smcloud with no account.
 
 import (
 	"encoding/json"
@@ -55,12 +55,19 @@ func TestCharacterize_EvidenceSyncCredentials(t *testing.T) {
 		t.Fatalf("E1: resolved (%q, %q, %v); want the SM Cloud entry's url and token", url, token, err)
 	}
 
-	// E2 (5C CHANGES, R4): disabled but complete is refused today.
-	_, _, err = EvidenceSyncCredentials(Config{Forwarders: []types.ForwarderConfig{
-		charSMCEntry(false, charCompleteCreds()),
-	}})
-	if err == nil || !strings.Contains(err.Error(), "no enabled smcloud forwarder") {
-		t.Fatalf("E2: err = %v; today a disabled SM Cloud entry is not a credential source", err)
+	// E2 (CHANGED, R4): a complete account is the source, enabled or not.
+	for name, fc := range map[string]types.ForwarderConfig{
+		"legacy disabled": charSMCEntry(false, charCompleteCreds()),
+		"stripped":        {Type: "smcloud", Credentials: json.RawMessage(charCompleteCreds())},
+	} {
+		url, token, err := EvidenceSyncCredentials(Config{Forwarders: []types.ForwarderConfig{qrz, fc}})
+		if err != nil || url != charSMCURL || token != charSMCToken {
+			t.Fatalf("E2 %s: resolved (%q, %q, %v); want the account's url and token", name, url, token, err)
+		}
+	}
+	if _, _, err := EvidenceSyncCredentials(Config{Forwarders: []types.ForwarderConfig{qrz}}); err == nil ||
+		!strings.Contains(err.Error(), "no SM Cloud station account") {
+		t.Fatalf("E2: no SM Cloud account: err = %v; want it named", err)
 	}
 
 	// E3: an incomplete account is refused, naming what is missing — never a value.
@@ -94,8 +101,11 @@ func TestCharacterize_EvidenceSyncValidation(t *testing.T) {
 	if finding(charSMCEntry(true, charCompleteCreds())) {
 		t.Fatal("E4: an enabled, complete SM Cloud entry must satisfy evidence.sync")
 	}
-	// 5C CHANGES (R4): today the disabled-but-complete entry fails validation.
-	if !finding(charSMCEntry(false, charCompleteCreds())) {
-		t.Fatal("E4: today evidence.sync refuses a disabled SM Cloud entry")
+	// CHANGED (R4): a complete account satisfies evidence.sync, enabled or not.
+	if finding(charSMCEntry(false, charCompleteCreds())) {
+		t.Fatal("E4: a complete SM Cloud account must satisfy evidence.sync whatever its legacy enabled flag")
+	}
+	if !finding() {
+		t.Fatal("E4: evidence.sync without any SM Cloud account must still be refused")
 	}
 }

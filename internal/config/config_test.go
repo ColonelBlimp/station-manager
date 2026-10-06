@@ -748,11 +748,6 @@ func TestLoad_Forwarders_ValidationErrors(t *testing.T) {
 		wantErr string
 	}{
 		{
-			name:    "empty name",
-			body:    `{"forwarders":[{"name":"","type":"qrz"}]}`,
-			wantErr: "name is empty",
-		},
-		{
 			name:    "empty type",
 			body:    `{"forwarders":[{"name":"x","type":""}]}`,
 			wantErr: "type is empty",
@@ -1362,7 +1357,7 @@ func TestResolveMyRigFor_IndependentOfDefault(t *testing.T) {
 
 func TestValidate_CollectsErrorsAndWarnings(t *testing.T) {
 	cfg := DefaultConfig(t.TempDir())
-	cfg.Forwarders = []types.ForwarderConfig{{Type: "qrz"}} // empty name → error finding
+	cfg.Forwarders = []types.ForwarderConfig{{Name: "q"}} // empty type → error finding
 	cfg.Server.Protocol = "tcp"
 	cfg.SocketPath = "0.0.0.0:8080"        // non-loopback bind → advisory finding when acknowledged
 	cfg.Server.AllowInsecureNetwork = true // ST-3a: acknowledged, so the bind is advisory not fatal

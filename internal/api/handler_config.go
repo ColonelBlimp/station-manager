@@ -269,14 +269,17 @@ type LookupInfo struct {
 	RefreshMaxInFlight int       `json:"refresh_max_in_flight"`
 }
 
-// ForwarderInfo is the config SPA's view of one forwarding destination. It is
+// ForwarderInfo is the SPA's view of one destination's STATION ACCOUNT (config
+// v6, ADR 0082 parts 3 and 8): one per type, identified by type. It is
 // deliberately asymmetric to keep secrets off the wire (masked-on-GET):
 //
-//   - On GET: Name/Type/Enabled/ActionFilter + CredentialsSet (the credential
-//     keys that currently hold a non-empty value — NEVER the values). Credentials
-//     is nil/omitted.
-//   - On PUT: Name/Type/Enabled/ActionFilter + Credentials (key→new value, only
-//     the fields the operator typed). Omitted or BLANK both keep the stored value,
+//   - On GET: Type/Label/ActionFilter + CredentialsSet (the station-scoped
+//     credential keys that currently hold a non-empty value — NEVER the values).
+//     Credentials is nil/omitted; Name and Enabled are never served.
+//   - On PUT: Type/ActionFilter + Credentials (key→new value, only the
+//     station-scoped fields the operator typed). Name and Enabled are binding
+//     facts: their PRESENCE is refused (forwarder_field_binding_owned), as is any
+//     logbook-scoped credential key. Omitted or BLANK both keep the stored value,
 //     so a client never has to strip empties to avoid destroying a credential —
 //     except for fields the type marks CredentialField.Clearable, where empty is a
 //     meaningful value the constructor defaults (smcloud's `logbook` → "main").
@@ -296,9 +299,12 @@ type LookupInfo struct {
 // values. ActionFilter is sent by the SPA (derived from the type's supported
 // actions), so it round-trips without daemon defaulting.
 type ForwarderInfo struct {
-	Name         string   `json:"name"`
+	// Name and Enabled exist only so a PUT that still carries them — an open tab
+	// from before the upgrade, say — is refused by name rather than as an
+	// unknown field; GET leaves both nil, so they are never served.
+	Name         *string  `json:"name,omitempty"`
 	Type         string   `json:"type"`
-	Enabled      bool     `json:"enabled"`
+	Enabled      *bool    `json:"enabled,omitempty"`
 	ActionFilter []string `json:"action_filter,omitempty"`
 	// Label is READ-ONLY on this wire: served on GET so the SPA can display it,
 	// ignored on PUT because config.json is the only place it may be set.
@@ -597,7 +603,8 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	current := s.cfg.Snapshot()
-	if s.refuseBindingOwnedForwarderEdit(w, &req, current, op) {
+	probe, handled := s.forwarderPrecheck(r.Context(), w, &req, op)
+	if handled {
 		return
 	}
 
@@ -677,7 +684,7 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	completingSetup := !current.SetupComplete &&
 		req.LoggingStation != nil && req.LoggingStation.StationCallsign != ""
 	if completingSetup {
-		id, handled := s.completeSetupDryRun(w, r, current, &req, op)
+		id, handled := s.completeSetupDryRun(w, r, current, &req, probe, op)
 		if handled {
 			return
 		}
@@ -720,7 +727,7 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		// unconditionally would let one pre-existing bad destination block every
 		// unrelated save (station identity, FT8 settings…) until it was fixed.
 		if req.Forwarders != nil {
-			if f, cause := config.ForwarderStartupFinding(cfg.Forwarders); f != nil {
+			if f, cause := forwarderSaveFinding(*cfg, probe); f != nil {
 				blocking, forwarderCause = f, cause
 				return errPutValidation
 			}
@@ -1086,14 +1093,12 @@ func (s *Server) buildConfigResponse(r *http.Request, cfg config.Config) (Config
 			keys, decErr := credentialKeysSet(fc.Credentials)
 			// A corrupt stored blob shows as unset here (masked view can't enumerate
 			// it); log it once so the operator can fix config.json (A11b).
-			s.noteForwarderCredCorruption(fc.Name, fc.Type, decErr)
+			s.noteForwarderCredCorruption(fc.Type, fc.Type, decErr)
 			fwds = append(fwds, ForwarderInfo{
-				Name:           fc.Name,
 				Type:           fc.Type,
 				Label:          fc.Label,
-				Enabled:        fc.Enabled,
 				ActionFilter:   fc.ActionFilter,
-				CredentialsSet: keys,
+				CredentialsSet: stationCredentialKeys(fc.Type, keys),
 			})
 		}
 		resp.Forwarders = fwds
@@ -1391,28 +1396,32 @@ type credDecodeWarning struct {
 
 // mergeForwarders builds the new forwarder list from the SPA's PUT payload,
 // preserving secrets the masked-on-GET surface never exposed: credentials are
-// merged onto the stored entry (matched by name) — an omitted field always keeps
-// its stored value, and a blank one keeps it for password-kind fields — and the
-// advanced knobs (tick/batch/retry) carry over from the stored entry too. A
-// forwarder with no name match is treated as new (its supplied credentials stand
-// alone). A stored credential blob that cannot be decoded is PRESERVED verbatim
+// merged onto the stored account (matched by TYPE, one per type in config v6) —
+// an omitted field always keeps its stored value, and a blank one keeps it
+// unless the field is Clearable — and the advanced knobs (tick/batch/retry)
+// carry over from the stored account too. So do the deprecated v5 fields a
+// file keeps until Home's seed commits — the legacy name, the enabled state and
+// the logbook-scoped credentials — which the narrowed PUT never carries: a save
+// while the seed is deferred must not drop what the seed still needs (W-0021 5C,
+// acceptance case 8). An account with no type match is new (its supplied
+// credentials stand alone). A stored credential blob that cannot be decoded is PRESERVED verbatim
 // (never rebuilt from an empty base, which would drop it) and reported for logging.
 func mergeForwarders(incoming []ForwarderInfo, existing []types.ForwarderConfig) ([]types.ForwarderConfig, []credDecodeWarning) {
-	byName := make(map[string]types.ForwarderConfig, len(existing))
+	byType := make(map[string]types.ForwarderConfig, len(existing))
 	for _, fc := range existing {
-		byName[fc.Name] = fc
+		byType[fc.Type] = fc
 	}
 	out := make([]types.ForwarderConfig, 0, len(incoming))
 	var warnings []credDecodeWarning
 	for _, in := range incoming {
 		fc := types.ForwarderConfig{
-			Name:         in.Name,
 			Type:         in.Type,
-			Enabled:      in.Enabled,
 			ActionFilter: in.ActionFilter,
 		}
-		ex, matched := byName[in.Name]
+		ex, matched := byType[in.Type]
 		if matched {
+			fc.Name = ex.Name
+			fc.Enabled = ex.Enabled
 			fc.TickIntervalSec = ex.TickIntervalSec
 			fc.BatchSize = ex.BatchSize
 			fc.Retry = ex.Retry
@@ -1470,7 +1479,7 @@ func mergeForwarders(incoming []ForwarderInfo, existing []types.ForwarderConfig)
 				// warning never carries err.Error() or the blob.
 				fc.Credentials = ex.Credentials
 				warnings = append(warnings, credDecodeWarning{
-					Name: in.Name, Type: in.Type, Err: fmt.Sprintf("%T", err),
+					Name: ex.Name, Type: in.Type, Err: fmt.Sprintf("%T", err),
 				})
 				out = append(out, fc)
 				continue
@@ -1528,43 +1537,45 @@ func (s *Server) applyCommittedFt8MaxRepeats() {
 	}
 }
 
-// refuseBindingOwnedForwarderEdit answers a PUT that changes a binding-owned
-// forwarder field with 400 and reports true (ADR 0082 transition): a forwarder
-// entry's `enabled` and its logbook-scoped credential keys are owned by the
-// active archive's bindings now, and a save that cannot affect a binding must
-// not be accepted as if it could. Station-scoped fields (SM Cloud URL and
-// token…) stay editable; omitted masked fields stay preserved by the merge.
-func (s *Server) refuseBindingOwnedForwarderEdit(w http.ResponseWriter, req *ConfigResponse, current config.Config, op errors.Op) bool {
+// refuseBindingOwnedForwarderEdit answers a PUT that carries a binding-owned
+// forwarder field with 400 and reports true (config v6, ADR 0082 parts 3–4;
+// ruling R1 2026-10-06): an account's `name` and `enabled`, and its
+// logbook-scoped credential keys, belong to the active archive's destination
+// bindings, and a save that cannot affect a binding must not be accepted as if
+// it could. The check is on PRESENCE — an empty name and enabled:false
+// included — because only an out-of-date client sends them at all; the message
+// says the tab needs reloading (the refusal itself reloads nothing). Station
+// fields (SM Cloud URL and token…) stay editable; omitted masked fields stay
+// preserved by the merge.
+func (s *Server) refuseBindingOwnedForwarderEdit(w http.ResponseWriter, req *ConfigResponse, op errors.Op) bool {
 	if req.Forwarders == nil {
 		return false
 	}
-	name, field, owned := bindingOwnedForwarderEdit(req.Forwarders, current.Forwarders)
+	typ, field, owned := bindingOwnedForwarderEdit(req.Forwarders)
 	if !owned {
 		return false
 	}
 	s.writeError(w, http.StatusBadRequest, "forwarder_field_binding_owned",
-		fmt.Sprintf("forwarder %q: %s is owned by the active archive's destination bindings and cannot be changed here until the bindings editor lands; the station account fields remain editable", name, field), op)
+		fmt.Sprintf("the %s station account: %s is owned by the active archive's destination bindings (Settings → Forwarding, Destinations) and is not part of this save; "+
+			"if this page sent it, it is out of date — reload it", typ, field), op)
 	return true
 }
 
-// bindingOwnedForwarderEdit finds the first incoming forwarder entry that
-// changes a binding-owned field (ADR 0082 transition): an `enabled` flag that
-// differs from the stored entry (or is true for an entry the station does not
-// hold), or any credential key the type declares logbook-scoped, blank or not.
-// Returns the entry name and the field, or ok=false when nothing is owned.
-func bindingOwnedForwarderEdit(incoming []ForwarderInfo, existing []types.ForwarderConfig) (name, field string, owned bool) {
-	byName := make(map[string]types.ForwarderConfig, len(existing))
-	for _, fc := range existing {
-		byName[fc.Name] = fc
-	}
+// bindingOwnedForwarderEdit finds the first incoming account that carries a
+// binding-owned field: `name` or `enabled` present at all, or any credential
+// key the type declares logbook-scoped, blank or not. Returns the account's
+// type and the field, or ok=false when nothing is owned.
+func bindingOwnedForwarderEdit(incoming []ForwarderInfo) (typ, field string, owned bool) {
 	for _, in := range incoming {
-		ex, matched := byName[in.Name]
-		if (matched && in.Enabled != ex.Enabled) || (!matched && in.Enabled) {
-			return in.Name, "enabled", true
+		if in.Name != nil {
+			return in.Type, "name", true
+		}
+		if in.Enabled != nil {
+			return in.Type, "enabled", true
 		}
 		for _, k := range forwarding.LogbookScopedKeys(in.Type) {
 			if _, present := in.Credentials[k]; present {
-				return in.Name, "credentials." + k, true
+				return in.Type, "credentials." + k, true
 			}
 		}
 	}
@@ -1575,7 +1586,7 @@ func bindingOwnedForwarderEdit(incoming []ForwarderInfo, existing []types.Forwar
 // (extracted from handlePutConfig for the maintainability gate): dry-run the
 // overlaid config, probe an enabled forwarder, and seed the default logbook
 // OUTSIDE the config lock. handled is true when a response was written.
-func (s *Server) completeSetupDryRun(w http.ResponseWriter, r *http.Request, current config.Config, req *ConfigResponse, op errors.Op) (int64, bool) {
+func (s *Server) completeSetupDryRun(w http.ResponseWriter, r *http.Request, current config.Config, req *ConfigResponse, probe *bindingProbe, op errors.Op) (int64, bool) {
 	dry := current.Clone()
 	overlayConfig(&dry, req)
 	config.Normalize(&dry)
@@ -1592,7 +1603,7 @@ func (s *Server) completeSetupDryRun(w http.ResponseWriter, r *http.Request, cur
 	// and fail 409 default_logbook_callsign_mismatch, needing manual DB
 	// surgery. Gating here is what the dry run is for.
 	if req.Forwarders != nil {
-		if f, cause := config.ForwarderStartupFinding(dry.Forwarders); f != nil {
+		if f, cause := forwarderSaveFinding(dry, probe); f != nil {
 			s.logger.WarnWith().Err(cause).Str("code", f.Code).
 				Msg("config PUT rejected during setup: enabled forwarder cannot be started")
 			s.writeError(w, http.StatusBadRequest, f.Code, f.Message, op)

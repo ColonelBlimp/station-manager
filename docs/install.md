@@ -384,7 +384,10 @@ old daemon is still serving: it reports unknown keys (paths only, values
 omitted), anything the new version's validation would refuse (these
 diagnostics can name ordinary configured values such as a forwarder name or
 an action), and any enabled forwarder it could not construct (forwarder name
-and fault code only; the constructor's own message is never printed). Fix
+and fault code only; the constructor's own message is never printed). From
+config version 6 the on/off state of each destination lives in the archive's
+destination bindings, which config-check does not open; they are checked at
+startup. Fix
 whatever it names before the restart. A clean check does not test databases
 or listeners; the restart does.
 
@@ -412,11 +415,26 @@ older build after a newer one has migrated the file:
 
 ```
 systemctl --user stop smd
-smd db-downgrade --to <that build's schema version> --yes
 smd config-downgrade --to <that build's config version> --yes
+smd db-downgrade --to <that build's schema version> --yes
 sudo dnf install /path/to/station-manager-<older-version>.x86_64.rpm
 systemctl --user start smd
 ```
+
+**The order matters: `config-downgrade` first.** From config version 6 the
+forwarder entries in `config.json` are station accounts only; each
+destination's name, on/off state and per-logbook credentials live in the
+Home archive's destination bindings. `smd config-downgrade --to 5` rebuilds
+the version-5 entries from those bindings, reading Home's file (it checks the
+file is Home by its archive identity), so it must run while the bindings
+still exist — `smd db-downgrade` below log schema 14 removes them. It refuses,
+naming the destination and logbooks and writing nothing, when Home's bindings
+cannot become one version-5 entry per destination: one logbook on and another
+off (a logbook with no binding counts as off), or different credentials on
+different logbooks. Make them agree in Settings → Forwarding, or restore
+`config.v5.json` — the copy of your version-5 `config.json` that the first
+version-6 start wrote beside it (owner-only, never overwritten). That copy is
+historical: settings saved since then are not in it.
 
 `smd db-downgrade` migrates the QSO database's log schema DOWN to the named
 version on the config's own database (`--config <path>` for another file),

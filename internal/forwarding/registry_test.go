@@ -470,11 +470,10 @@ func TestDefaultForwarderConfigs_SeedsRegisteredType(t *testing.T) {
 	if seed == nil {
 		t.Fatal("DefaultForwarderConfigs did not include the registered seedtest type")
 	}
-	if seed.Name != "seedtest" {
-		t.Errorf("Name = %q, want the type name", seed.Name)
-	}
-	if seed.Enabled {
-		t.Error("seed entry must be disabled by default")
+	// A config v6 station account (W-0021 5C): no name, no enabled state —
+	// both are binding facts; the binding seed names it after its type.
+	if seed.Name != "" || seed.Enabled {
+		t.Errorf("seeded account carries name %q / enabled %v; want neither", seed.Name, seed.Enabled)
 	}
 	if strings.Join(seed.ActionFilter, ",") != "insert,delete" {
 		t.Errorf("ActionFilter = %v, want [insert delete] (the supported set)", seed.ActionFilter)

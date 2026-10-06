@@ -248,7 +248,7 @@ func run() error {
 	// QSOs with the in-memory UA value, the operator just doesn't see
 	// it persisted in config.json. Stderr is the only available
 	// channel here (structured logger isn't built yet).
-	startupChanges, uerr := persistResolvedConfig(cfgSvc, cfg.UserAgent)
+	startupChanges, configAtStart, uerr := persistResolvedConfigKeepingOriginal(cfgSvc, cfgPath, cfg.UserAgent)
 	if uerr != nil {
 		_, _ = fmt.Fprintf(os.Stderr,
 			"smd: could not persist resolved config (UserAgent / ClubLog key scrub) to config.json: %v (continuing with in-memory values)\n",
@@ -268,7 +268,7 @@ func run() error {
 	// legacy teardown — the rollback already owns it (operator ruling, phase 3a). A failed pending
 	// candidate gets one more generation, on the last-known-good archive (startGenerations).
 	d, orch, err := startGenerations(cfgSvc, paths, func(p archive.Paths) (*daemon, *orchestrator.Orchestrator, error) {
-		return buildDaemon(cfgSvc, cfgPath, firstRunPath, startupChanges, p)
+		return buildDaemon(cfgSvc, cfgPath, firstRunPath, startupChanges, configAtStart, p)
 	})
 	if err != nil {
 		logStartupFailure(err) // pre-logger, or the rollback closed the logger; mirror to smd.log
@@ -555,6 +555,15 @@ func persistResolvedConfig(cfgSvc *config.Service, userAgent string) ([]config.F
 		}
 	}
 	return changes, nil
+}
+
+// persistResolvedConfigKeepingOriginal is persistResolvedConfig that first
+// keeps config.json's bytes as they stood before this start rewrote them —
+// the source of config v6's one-time v5 recovery copy (daemon.configAtStart).
+func persistResolvedConfigKeepingOriginal(cfgSvc *config.Service, cfgPath, userAgent string) ([]config.FieldChange, []byte, error) {
+	original, _ := os.ReadFile(cfgPath)
+	changes, err := persistResolvedConfig(cfgSvc, userAgent)
+	return changes, original, err
 }
 
 func stripCredentialKey(raw json.RawMessage, key string) (json.RawMessage, bool) {
@@ -981,7 +990,7 @@ func (k ft8Keyer) TxReady() bool                                { return k.b.TxR
 // is once-initialised by design), so a start that must fall back to another
 // archive builds everything again rather than re-driving a rolled-back graph.
 func buildDaemon(cfgSvc *config.Service, cfgPath, firstRunPath string, startupChanges []config.FieldChange,
-	paths archive.Paths) (*daemon, *orchestrator.Orchestrator, error) {
+	configAtStart []byte, paths archive.Paths) (*daemon, *orchestrator.Orchestrator, error) {
 	const op errors.Op = "smd.buildDaemon"
 	cfg := cfgSvc.Snapshot()
 	var err error
@@ -1071,6 +1080,7 @@ func buildDaemon(cfgSvc *config.Service, cfgPath, firstRunPath string, startupCh
 		cfgPath:        cfgPath,
 		firstRunPath:   firstRunPath,
 		startupChanges: startupChanges,
+		configAtStart:  configAtStart,
 		logger:         loggerSvc,
 		hub:            hub,
 		db:             dbSvc,

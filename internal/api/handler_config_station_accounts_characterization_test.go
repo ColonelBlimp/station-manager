@@ -1,17 +1,17 @@
 package api
 
-// Characterization (W-0021 5C, commit a): the forwarders block of GET and PUT
-// /v1/config TODAY, under config v5, for a station-shaped config — QRZ, ClubLog
-// and SM Cloud enabled, QRZCQ present and disabled — with synthetic, distinct
-// credentials. These pass against the current code and pin what 5C keeps or
-// deliberately changes:
+// The forwarders block of GET and PUT /v1/config for a station-shaped config —
+// QRZ, ClubLog and SM Cloud enabled, QRZCQ present and disabled — with
+// synthetic, distinct credentials. Characterized under config v5 (W-0021 5C,
+// commit a); the case marked CHANGED took its 5C form with config v6, and the
+// PUT bodies are the v6 station-account shape (no name, no enabled):
 //
 //   G1  KEPT     — no credential VALUE appears anywhere in the GET body.
-//   G2  CHANGES  — each entry carries `name` and `enabled`, and credentials_set
-//                  lists logbook-scoped keys too (QRZ api_key, ClubLog email /
-//                  password / callsign, QRZCQ call / key, SM Cloud logbook). 5C
-//                  narrows the view to the station account: type, label,
-//                  station-scoped credentials_set, action_filter.
+//   G2  CHANGED  — the view is the station account: type, label, action_filter
+//                  and the STATION-scoped credentials_set. No `name` or `enabled`
+//                  key, and no logbook-scoped key (QRZ api_key, ClubLog email /
+//                  password / callsign, QRZCQ call / key, SM Cloud logbook), which
+//                  v5 served.
 //   P1  KEPT     — (QRZ held disabled: the api test binary cannot build it)
 //                  a station-scoped edit (a new SM Cloud token) replaces that key
 //                  only; every other stored secret, on that entry and the others,
@@ -121,28 +121,36 @@ func TestCharacterize_GetConfigForwarders(t *testing.T) {
 		}
 	}
 
-	// G2 (5C CHANGES): name, enabled and logbook-scoped keys are served today.
-	type view struct {
-		Name    string
-		Enabled bool
-		Set     []string
+	// G2 (CHANGED): the station account only.
+	var entries []map[string]any
+	var body struct {
+		Forwarders []map[string]any `json:"forwarders"`
 	}
-	got := map[string]view{}
+	if err := json.Unmarshal([]byte(raw), &body); err != nil {
+		t.Fatal(err)
+	}
+	entries = body.Forwarders
+	for _, e := range entries {
+		for _, k := range []string{"name", "enabled"} {
+			if _, ok := e[k]; ok {
+				t.Fatalf("G2: the %v account serves %q: %v", e["type"], k, e)
+			}
+		}
+	}
+	got := map[string]string{}
 	for _, f := range fwds {
 		set := append([]string(nil), f.CredentialsSet...)
 		sort.Strings(set)
-		got[f.Type] = view{f.Name, f.Enabled, set}
+		got[f.Type] = strings.Join(set, ",")
 	}
-	want := map[string]view{
-		"qrz":     {"qrz", true, []string{"api_key"}},
-		"clublog": {"clublog", true, []string{"callsign", "email", "password"}},
-		"qrzcq":   {"qrzcq", false, []string{"call", "key"}},
-		"smcloud": {"smcloud", true, []string{"logbook", "token", "url"}},
-	}
+	// Station-scoped keys as the registry declares them: SM Cloud url and token
+	// only (QRZ is not registered in this test binary, and its key is
+	// logbook-scoped anyway).
+	want := map[string]string{"qrz": "", "clublog": "", "qrzcq": "", "smcloud": "token,url"}
 	for typ, w := range want {
 		g, ok := got[typ]
-		if !ok || g.Name != w.Name || g.Enabled != w.Enabled || strings.Join(g.Set, ",") != strings.Join(w.Set, ",") {
-			t.Fatalf("G2 %s: got %+v (present %v), want %+v", typ, g, ok, w)
+		if !ok || g != w {
+			t.Fatalf("G2 %s: credentials_set %q (present %v), want %q", typ, g, ok, w)
 		}
 	}
 }
@@ -169,15 +177,16 @@ func TestCharacterize_PutConfigStationFieldMerge(t *testing.T) {
 			t.Fatalf("PUT status %d: %s", w.Code, w.Body.String())
 		}
 	}
-	// The whole list rides, as the SPA sends it: each entry echoed with its
-	// name, type, enabled and action_filter; only SM Cloud carries a credential.
-	echo := `{"name":"qrz","type":"qrz","enabled":false,"action_filter":["insert"]},` +
-		`{"name":"clublog","type":"clublog","enabled":true,"action_filter":["insert"]},` +
-		`{"name":"qrzcq","type":"qrzcq","enabled":false,"action_filter":["insert"]},`
+	// The whole list rides, as the SPA sends it: each account echoed with its
+	// type and action_filter (v6: no name, no enabled); only SM Cloud carries a
+	// credential.
+	echo := `{"type":"qrz","action_filter":["insert"]},` +
+		`{"type":"clublog","action_filter":["insert"]},` +
+		`{"type":"qrzcq","action_filter":["insert"]},`
 
 	// P1: a new token replaces only the token.
 	put(`{"forwarders":[` + echo +
-		`{"name":"smcloud","type":"smcloud","enabled":true,"action_filter":["insert"],"credentials":{"token":"SMC-TOKEN-CHAR-NEW"}}]}`)
+		`{"type":"smcloud","action_filter":["insert"],"credentials":{"token":"SMC-TOKEN-CHAR-NEW"}}]}`)
 	smc := charStoredCreds(t, srv, "smcloud")
 	if smc["token"] != "SMC-TOKEN-CHAR-NEW" || smc["url"] != charSecrets["smcloud url"] || smc["logbook"] != charSecrets["smcloud logbook"] {
 		t.Fatalf("P1: stored SM Cloud credentials = %v; want only the token replaced", smc)
@@ -199,7 +208,7 @@ func TestCharacterize_PutConfigStationFieldMerge(t *testing.T) {
 
 	// P2: a blank station key keeps the stored value.
 	put(`{"forwarders":[` + echo +
-		`{"name":"smcloud","type":"smcloud","enabled":true,"action_filter":["insert"],"credentials":{"url":"","token":""}}]}`)
+		`{"type":"smcloud","action_filter":["insert"],"credentials":{"url":"","token":""}}]}`)
 	smc = charStoredCreds(t, srv, "smcloud")
 	if smc["token"] != "SMC-TOKEN-CHAR-NEW" || smc["url"] != charSecrets["smcloud url"] {
 		t.Fatalf("P2: blank station keys changed the stored values: %v", smc)
@@ -218,10 +227,10 @@ func TestCharacterize_PutConfigBlankKeepsDisabledAccountKeys(t *testing.T) {
 		}
 	})
 	body := `{"forwarders":[` +
-		`{"name":"qrz","type":"qrz","enabled":false,"action_filter":["insert"]},` +
-		`{"name":"clublog","type":"clublog","enabled":true,"action_filter":["insert"]},` +
-		`{"name":"qrzcq","type":"qrzcq","enabled":false,"action_filter":["insert"]},` +
-		`{"name":"smcloud","type":"smcloud","enabled":false,"action_filter":["insert"],"credentials":{"url":"","token":""}}]}`
+		`{"type":"qrz","action_filter":["insert"]},` +
+		`{"type":"clublog","action_filter":["insert"]},` +
+		`{"type":"qrzcq","action_filter":["insert"]},` +
+		`{"type":"smcloud","action_filter":["insert"],"credentials":{"url":"","token":""}}]}`
 	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()

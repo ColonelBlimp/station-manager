@@ -11,7 +11,7 @@ import (
 // change alters the config shape. A config file with no `version` field is the
 // pre-versioning baseline — the catalogue-era shape, treated as v1. See
 // docs/v2-design/config.md §13.
-const currentConfigVersion = 5
+const currentConfigVersion = 6
 
 // CurrentSchemaVersion is the config schema version this build writes and
 // migrates up to — the public view of currentConfigVersion for callers (e.g.
@@ -55,11 +55,38 @@ type migration struct {
 //     fills the catalogue from the file's own identity — so it only stamps the
 //     version. Its DOWN step removes the three keys, which is what lets a tagged
 //     older build (unknown keys refused, newer version refused) read the file.
+//   - v5→v6 (ADR 0082 part 4, W-0021 5C): a forwarder entry becomes the station
+//     ACCOUNT — `name`, `enabled` and logbook-scoped credentials are binding facts.
+//     The step adds nothing and keeps those keys KNOWN but deprecated, so a v5
+//     file loads unchanged; startup strips them only after the adopted Home
+//     archive's binding seed has committed. Its document down step can only
+//     stamp an UNSTRIPPED file: a stripped one no longer holds the v5 shape and
+//     needs `smd config-downgrade`, which rebuilds it from Home's bindings.
 var migrations = []migration{
 	{from: 1, apply: migrateV1toV2},
 	{from: 2, apply: migrateV2toV3},
 	{from: 3, apply: migrateV3toV4, down: downgradeV4toV3},
 	{from: 4, apply: migrateV4toV5, down: downgradeV5toV4},
+	{from: 5, apply: migrateV5toV6, down: downgradeV6toV5},
+}
+
+func migrateV5toV6(map[string]any) error { return nil }
+
+// downgradeV6toV5 stamps a v6 document as v5 only when every forwarder entry
+// still carries the v5 shape's required `name` — i.e. the file was never
+// stripped. A stripped entry is refused: what it lost lives in Home's bindings,
+// which only `smd config-downgrade` reads.
+func downgradeV6toV5(doc map[string]any) error {
+	entries, _ := doc["forwarders"].([]any)
+	for i, e := range entries {
+		m, _ := e.(map[string]any)
+		if name, _ := m["name"].(string); name == "" {
+			typ, _ := m["type"].(string)
+			return fmt.Errorf("forwarder[%d] (%s) is a v6 station account without the v5 name; "+
+				"run smd config-downgrade, which rebuilds the v5 entries from Home's destination bindings", i, typ)
+		}
+	}
+	return nil
 }
 
 // v4→v5 (W-0021 slice 2C): `qso_archives[].request_key`, the creation

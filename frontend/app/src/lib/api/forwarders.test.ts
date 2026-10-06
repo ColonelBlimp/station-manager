@@ -5,7 +5,7 @@ afterEach(() => {
     vi.restoreAllMocks();
 });
 
-const PAYLOAD: ForwarderPayload[] = [{ name: 'qrz', type: 'qrz', enabled: true }];
+const PAYLOAD: ForwarderPayload[] = [{ type: 'smcloud', action_filter: ['insert'] }];
 
 function mockJSON(status: number, body: unknown) {
     vi.stubGlobal(

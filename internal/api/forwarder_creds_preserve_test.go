@@ -64,7 +64,7 @@ func corruptCredServer(t *testing.T, creds string) (*Server, *strings.Builder) {
 // config.ForwarderStartupFinding → 400).
 func putForwarderUnrelated(t *testing.T, srv *Server) *httptest.ResponseRecorder {
 	t.Helper()
-	body := `{"forwarders":[{"name":"clublog","type":"clublog","enabled":false,"action_filter":["insert","delete"]}]}`
+	body := `{"forwarders":[{"type":"clublog","action_filter":["insert","delete"]}]}`
 	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()

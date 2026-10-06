@@ -33,7 +33,12 @@ import "encoding/json"
 // constructor falls back to its package default const for any key the operator
 // left unset. The operator never needs to type a URL for the common case.
 type ForwarderConfig struct {
-	Name string `json:"name"`
+	// Name and Enabled are v5 fields kept KNOWN but deprecated in config v6 (ADR
+	// 0082 part 4): the durable queue name and the on/off state are binding
+	// facts. They are read as the one-time seed source and by the v5 down path;
+	// startup strips them once Home's seed has committed, and omitempty keeps a
+	// stripped account from writing them back.
+	Name string `json:"name,omitempty"`
 	Type string `json:"type"`
 	// Label is the operator's own display name for this destination, settable
 	// ONLY by hand in config.json — no API surface writes it and the SPA has no
@@ -46,7 +51,7 @@ type ForwarderConfig struct {
 	// is built on, so renaming THAT would make the daemon forget which QSOs it
 	// had already sent and re-upload them upstream. Nothing joins on Label.
 	Label           string            `json:"label,omitempty"`
-	Enabled         bool              `json:"enabled"`
+	Enabled         bool              `json:"enabled,omitempty"`
 	Credentials     json.RawMessage   `json:"credentials,omitempty"`
 	ActionFilter    []string          `json:"action_filter,omitempty"`
 	Endpoints       map[string]string `json:"endpoints,omitempty"`

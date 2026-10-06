@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,8 +30,8 @@ const v4Doc = `{"version":4,"data_dir":"/tmp/x","setup_complete":true,"default_l
 
 func TestMigrateV3toV4_StampsVersionAddsNoCatalogue(t *testing.T) {
 	m := migratedMap(t, v3Doc)
-	if v := m["version"]; v != float64(5) {
-		t.Fatalf("version after migration = %v, want 5 (the current head)", v)
+	if v := m["version"]; v != float64(CurrentSchemaVersion()) {
+		t.Fatalf("version after migration = %v, want %d (the current head)", v, CurrentSchemaVersion())
 	}
 	for _, k := range []string{"active_qso_archive_id", "pending_qso_archive_id", "qso_archives"} {
 		if _, present := m[k]; present {
@@ -42,9 +43,10 @@ func TestMigrateV3toV4_StampsVersionAddsNoCatalogue(t *testing.T) {
 		t.Errorf("3→4 disturbed existing keys: %v", m)
 	}
 	// Idempotent: a current-version document comes back byte-identical.
-	out, err := migrateDocument([]byte(v5Doc))
-	if err != nil || string(out) != v5Doc {
-		t.Fatalf("a v5 document must pass through unchanged (err %v)", err)
+	current := strings.Replace(v5Doc, `"version":5`, fmt.Sprintf(`"version":%d`, CurrentSchemaVersion()), 1)
+	out, err := migrateDocument([]byte(current))
+	if err != nil || string(out) != current {
+		t.Fatalf("a current-version document must pass through unchanged (err %v)", err)
 	}
 }
 
@@ -103,8 +105,8 @@ func TestLoad_V4CatalogueRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Version != 5 {
-		t.Fatalf("Version = %d, want 5 (a v4 file migrates up at load)", cfg.Version)
+	if cfg.Version != CurrentSchemaVersion() {
+		t.Fatalf("Version = %d, want %d (a v4 file migrates up at load)", cfg.Version, CurrentSchemaVersion())
 	}
 	if cfg.ActiveQsoArchiveID != "019fd5c5-efcc-7193-be4f-1fee532ee315" || cfg.PendingQsoArchiveID != "019fd5c5-efcc-7193-be4f-1fee532ee316" {
 		t.Fatalf("selection = active %q pending %q", cfg.ActiveQsoArchiveID, cfg.PendingQsoArchiveID)
@@ -138,8 +140,8 @@ const v5Doc = `{"version":5,"data_dir":"/tmp/x","setup_complete":true,"default_l
 
 func TestMigrateV4toV5_StampsOnly_DowngradeStripsRequestKey(t *testing.T) {
 	m := migratedMap(t, v4Doc)
-	if v := m["version"]; v != float64(5) {
-		t.Fatalf("version after migration = %v, want 5", v)
+	if v := m["version"]; v != float64(CurrentSchemaVersion()) {
+		t.Fatalf("version after migration = %v, want %d", v, CurrentSchemaVersion())
 	}
 	out, err := DowngradeDocument([]byte(v5Doc), 4)
 	if err != nil {

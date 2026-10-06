@@ -93,8 +93,13 @@ func runConfigCheckTo(out io.Writer, args []string) error {
 			enabled++
 		}
 	}
+	// From config v6 (W-0021 5C) an entry is enabled only while it still holds
+	// its deprecated v5 fields; uploads are decided by each archive's
+	// destination bindings, which live in the archive file and are checked at
+	// startup — so the count says what it counts.
 	fmt.Fprintf(out, "config-check: %s — no unrecognised keys; the file loads and validates as startup would; "+
-		"%d enabled forwarder(s) construct. Not checked: databases, listeners and other runtime dependencies.\n",
+		"%d enabled forwarder(s) construct (legacy entries; destination bindings live in each archive and are checked at startup). "+
+		"Not checked: databases, listeners and other runtime dependencies.\n",
 		path, enabled)
 	return nil
 }

@@ -271,7 +271,7 @@ func TestConfigSave_SecretsAreReportedButNeverValued(t *testing.T) {
 
 	const secret = "SUPERSECRETAPIKEY123"
 	body := fmt.Sprintf(
-		`{"forwarders":[{"name":"qrz","type":"qrz","enabled":false,"credentials":{"api_key":%q}}]}`,
+		`{"forwarders":[{"type":"qrz","credentials":{"api_key":%q}}]}`,
 		secret)
 	if w := putConfig(t, srv, body); w.Code != http.StatusOK {
 		t.Fatalf("fixture: PUT must commit, got %d: %s", w.Code, w.Body.String())

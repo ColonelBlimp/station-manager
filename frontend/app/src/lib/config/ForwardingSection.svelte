@@ -133,7 +133,7 @@
                     <button class="btn mt-3" onclick={() => forwardingState.load()}>Retry</button>
                 </div>
             {:else}
-                {#each accounts as f (f.type + ':' + f.name)}
+                {#each accounts as f (f.type)}
                     {@const td = forwardingState.typeFor(f.type)}
                     <!-- One disclosure per station account, the LoggingCard
                      "Contact details" pattern (operate/LoggingCard.svelte).
@@ -141,7 +141,7 @@
                      service, whether this build can edit it, and — because a
                      collapsed card can hide an edit the footer only reports in
                      aggregate — whether it has unsaved changes. -->
-                    {@const edited = forwardingState.hasEdits(f.name)}
+                    {@const edited = forwardingState.hasEdits(f.type)}
                     <details
                         id={`account-${f.type}`}
                         class="rounded-md border border-line"
@@ -234,9 +234,9 @@
                                                 else f.credentials[field.key] = v;
                                             }}
                                             onremove={() =>
-                                                forwardingState.clear(f.name, field.key)}
+                                                forwardingState.clear(f.type, field.key)}
                                             onundo={() =>
-                                                forwardingState.uncleared(f.name, field.key)}
+                                                forwardingState.uncleared(f.type, field.key)}
                                         />
                                     {/each}
                                 </div>

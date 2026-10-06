@@ -74,13 +74,14 @@ const TYPES = {
     ],
 };
 
+// Config v6 station accounts: keyed by type, no name, no enabled (W-0021 5C).
 const CONFIG = {
     forwarders: [
-        { name: 'qrz', type: 'qrz', enabled: true, credentials_set: ['api_key', 'username'] },
-        { name: 'smcloud', type: 'smcloud', enabled: true, credentials_set: ['url', 'logbook'] },
+        { type: 'qrz', credentials_set: ['api_key', 'username'] },
+        { type: 'smcloud', credentials_set: ['url', 'logbook'] },
         // A type this build does not know about (e.g. a forwarder from a newer
         // daemon). It has no descriptor, so its credentials are uneditable.
-        { name: 'mystery', type: 'mystery', enabled: false, credentials_set: ['token'] },
+        { type: 'mystery', credentials_set: ['token'] },
     ],
 };
 
@@ -112,11 +113,17 @@ function mockDaemon() {
     return puts;
 }
 
-function creds(payload: unknown, name: string): Record<string, string> | undefined {
+function creds(payload: unknown, type: string): Record<string, string> | undefined {
     const list = (
-        payload as { forwarders: { name: string; credentials?: Record<string, string> }[] }
+        payload as { forwarders: { type: string; credentials?: Record<string, string> }[] }
     ).forwarders;
-    return list.find((f) => f.name === name)?.credentials;
+    return list.find((f) => f.type === type)?.credentials;
+}
+
+// Makes the form dirty without anything that rides the wire: a typed
+// logbook-scoped key counts as an unsaved edit but is never sent (F10).
+function makeDirty() {
+    forwardingState.drafts.find((d) => d.type === 'qrz')!.credentials.username = 'dirty';
 }
 
 async function loadFresh() {
@@ -130,7 +137,7 @@ describe('forwardingState credential safety', () => {
     // are set; the form must start with empty inputs, never a pre-filled secret.
     it('F1: loads which keys are set, never their values', async () => {
         await loadFresh();
-        const qrz = forwardingState.drafts.find((d) => d.name === 'qrz');
+        const qrz = forwardingState.drafts.find((d) => d.type === 'qrz');
         expect(qrz?.credentialsSet).toEqual(['api_key', 'username']);
         expect(qrz?.credentials).toEqual({});
     });
@@ -139,8 +146,8 @@ describe('forwardingState credential safety', () => {
     // every save would reset every clearable field the operator never looked at.
     it('F2: saving without retyping sends no credential for the untouched key', async () => {
         const puts = await loadFresh();
-        const smcloud = forwardingState.drafts.find((d) => d.name === 'smcloud')!;
-        const qrz = forwardingState.drafts.find((d) => d.name === 'qrz')!;
+        const smcloud = forwardingState.drafts.find((d) => d.type === 'smcloud')!;
+        const qrz = forwardingState.drafts.find((d) => d.type === 'qrz')!;
         // Model what the component actually does: a `bind:value` on every
         // rendered input writes '' into the map for keys the operator never
         // focused. Asserting against an untouched EMPTY map instead would pass
@@ -149,7 +156,7 @@ describe('forwardingState credential safety', () => {
         smcloud.credentials.logbook = '';
         smcloud.credentials.url = '';
         qrz.credentials.api_key = '';
-        smcloud.enabled = false; // make it dirty WITHOUT typing a credential
+        makeDirty(); // dirty WITHOUT a credential that rides the wire
         await forwardingState.save();
 
         expect(puts).toHaveLength(1);
@@ -161,7 +168,7 @@ describe('forwardingState credential safety', () => {
     // must be different wire outcomes, not different intentions.
     it('F3: a retyped credential is sent', async () => {
         const puts = await loadFresh();
-        const smcloud = forwardingState.drafts.find((d) => d.name === 'smcloud')!;
+        const smcloud = forwardingState.drafts.find((d) => d.type === 'smcloud')!;
         smcloud.credentials.url = 'https://new.example.org';
         await forwardingState.save();
 
@@ -198,8 +205,7 @@ describe('forwardingState credential safety', () => {
     it('F5b: clearing a non-clearable field is refused', async () => {
         const puts = await loadFresh();
         forwardingState.clear('qrz', 'api_key');
-        const qrz = forwardingState.drafts.find((d) => d.name === 'qrz')!;
-        qrz.enabled = false; // ensure the save proceeds regardless
+        makeDirty(); // ensure the save proceeds regardless
         await forwardingState.save();
 
         expect(creds(puts[0], 'qrz')?.api_key).toBeUndefined();
@@ -212,20 +218,20 @@ describe('forwardingState credential safety', () => {
     // out of a half-typed edit silently resets a clearable field to its default.
     it('F8: emptying a box by hand does not clear the field', async () => {
         const puts = await loadFresh();
-        const smcloud = forwardingState.drafts.find((d) => d.name === 'smcloud')!;
+        const smcloud = forwardingState.drafts.find((d) => d.type === 'smcloud')!;
         smcloud.credentials.region = 'us';
         smcloud.credentials.region = ''; // thought better of it
-        smcloud.enabled = false; // keep the save dirty
+        makeDirty(); // keep the save dirty
         await forwardingState.save();
 
-        expect(creds(puts[0], 'smcloud')?.logbook).toBeUndefined();
+        expect(creds(puts[0], 'smcloud')?.region).toBeUndefined();
     });
 
     // F8b — AND AN EXPLICIT RESET STILL WINS AFTERWARDS, so the guard above
     // cannot be implemented by simply never sending blanks.
     it('F8b: reset after an abandoned edit still clears', async () => {
         const puts = await loadFresh();
-        const smcloud = forwardingState.drafts.find((d) => d.name === 'smcloud')!;
+        const smcloud = forwardingState.drafts.find((d) => d.type === 'smcloud')!;
         smcloud.credentials.region = 'us';
         smcloud.credentials.region = '';
         forwardingState.clear('smcloud', 'region');
@@ -242,7 +248,7 @@ describe('forwardingState credential safety', () => {
     it('F5c: clear() does not record a reset for a non-clearable field', async () => {
         await loadFresh();
         forwardingState.clear('qrz', 'api_key');
-        const qrz = forwardingState.drafts.find((d) => d.name === 'qrz')!;
+        const qrz = forwardingState.drafts.find((d) => d.type === 'qrz')!;
         expect(qrz.cleared).not.toContain('api_key');
     });
 
@@ -250,22 +256,18 @@ describe('forwardingState credential safety', () => {
     // into a disclosure creates a state that did not exist while everything was
     // on screen: an edit the operator cannot see. The footer says "Unsaved
     // changes" but not WHERE, so a collapsed card must be able to say for
-    // itself. Each of the three edit kinds counts.
+    // itself. Both edit kinds count (config v6: there is no enable toggle).
     it('F9: hasEdits reports per-destination, for every kind of edit', async () => {
         await loadFresh();
         expect(forwardingState.hasEdits('qrz')).toBe(false);
         expect(forwardingState.hasEdits('smcloud')).toBe(false);
 
-        // 1. a toggled enable
-        forwardingState.drafts.find((d) => d.name === 'qrz')!.enabled = false;
-        expect(forwardingState.hasEdits('qrz')).toBe(true);
-        expect(forwardingState.hasEdits('smcloud')).toBe(false); // not its neighbour's
-
-        // 2. a typed credential
-        forwardingState.drafts.find((d) => d.name === 'smcloud')!.credentials.url = 'https://x';
+        // 1. a typed credential
+        forwardingState.drafts.find((d) => d.type === 'smcloud')!.credentials.url = 'https://x';
         expect(forwardingState.hasEdits('smcloud')).toBe(true);
+        expect(forwardingState.hasEdits('qrz')).toBe(false); // not its neighbour's
 
-        // 3. a pending reset, on a destination with nothing else changed
+        // 2. a pending reset, on a destination with nothing else changed
         forwardingState.reset();
         expect(forwardingState.hasEdits('smcloud')).toBe(false);
         forwardingState.clear('smcloud', 'region');
@@ -278,7 +280,7 @@ describe('forwardingState credential safety', () => {
     // mean "you opened this", not "you changed this".
     it('F9b: a blank credential box is not an edit', async () => {
         await loadFresh();
-        const qrz = forwardingState.drafts.find((d) => d.name === 'qrz')!;
+        const qrz = forwardingState.drafts.find((d) => d.type === 'qrz')!;
         qrz.credentials.api_key = '';
         qrz.credentials.username = '';
         expect(forwardingState.hasEdits('qrz')).toBe(false);
@@ -287,36 +289,33 @@ describe('forwardingState credential safety', () => {
     // F6 — AN UNKNOWN TYPE SURVIVES THE SAVE. The forwarders block is replaced
     // WHOLE, so a destination dropped from the payload is a destination removed
     // from config until the daemon re-seeds it at restart.
-    // F10 — THE WIRE NEVER CARRIES A BINDING-OWNED FIELD (ADR 0082 transition):
-    // `enabled` goes out exactly as the daemon stored it whatever the draft says,
-    // and a logbook-scoped key is dropped even when typed — the daemon refuses a
-    // PUT that carries either, so the store must not put them on the wire.
-    it('F10: enabled rides as stored and logbook-scoped keys are never sent', async () => {
+    // F10 — THE WIRE NEVER CARRIES A BINDING-OWNED FIELD (config v6): no
+    // `name`, no `enabled`, and a logbook-scoped key is dropped even when typed
+    // — the daemon refuses a PUT that carries any of them (ruling R1).
+    it('F10: no name, no enabled and no logbook-scoped key is ever sent', async () => {
         const puts = await loadFresh();
-        const qrz = forwardingState.drafts.find((d) => d.name === 'qrz')!;
-        const smcloud = forwardingState.drafts.find((d) => d.name === 'smcloud')!;
-        qrz.enabled = !qrz.enabled; // a draft toggle (no UI path does this now)
+        const qrz = forwardingState.drafts.find((d) => d.type === 'qrz')!;
+        const smcloud = forwardingState.drafts.find((d) => d.type === 'smcloud')!;
         qrz.credentials.api_key = 'TYPED-ANYWAY';
         smcloud.credentials.logbook = 'contest';
         smcloud.credentials.url = 'https://ok.example.org';
         await forwardingState.save();
 
-        const sentQrz = (
-            puts[0] as { forwarders: { name: string; enabled: boolean }[] }
-        ).forwarders.find((f) => f.name === 'qrz')!;
-        expect(sentQrz.enabled).toBe(true); // the STORED value (fixture: true), not the draft's false
+        for (const f of (puts[0] as { forwarders: Record<string, unknown>[] }).forwarders) {
+            expect(Object.keys(f)).not.toContain('name');
+            expect(Object.keys(f)).not.toContain('enabled');
+        }
         expect(creds(puts[0], 'qrz')).toBeUndefined();
         expect(creds(puts[0], 'smcloud')).toEqual({ url: 'https://ok.example.org' });
     });
 
     it('F6: a forwarder whose type this build lacks still round-trips', async () => {
         const puts = await loadFresh();
-        const qrz = forwardingState.drafts.find((d) => d.name === 'qrz')!;
-        qrz.enabled = false;
+        makeDirty();
         await forwardingState.save();
 
-        const names = (puts[0] as { forwarders: { name: string }[] }).forwarders.map((f) => f.name);
-        expect(names).toContain('mystery');
+        const sent = (puts[0] as { forwarders: { type: string }[] }).forwarders.map((f) => f.type);
+        expect(sent).toContain('mystery');
         expect(forwardingState.typeFor('mystery')).toBeUndefined();
     });
 
@@ -325,8 +324,7 @@ describe('forwardingState credential safety', () => {
     // another tab between our GET and our PUT.
     it('F7: the PUT body carries forwarders and nothing else', async () => {
         const puts = await loadFresh();
-        const qrz = forwardingState.drafts.find((d) => d.name === 'qrz')!;
-        qrz.enabled = false;
+        makeDirty();
         await forwardingState.save();
 
         expect(Object.keys(puts[0] as object)).toEqual(['forwarders']);
@@ -397,7 +395,7 @@ describe('forwardingState credential safety', () => {
     // a future component regression exposes its Save control.
     it('F8c: save is refused while the section is not loaded', async () => {
         const puts = await loadFresh();
-        forwardingState.drafts[0].enabled = !forwardingState.drafts[0].enabled;
+        makeDirty();
         forwardingState.loaded = false;
 
         await forwardingState.save();
@@ -408,10 +406,10 @@ describe('forwardingState credential safety', () => {
 
 // F-04c (ADR 0078): a Forwarding save whose PUT TIMED OUT is outcome-unknown,
 // not failed. save() re-reads the authoritative forwarders block (a WHOLE-list
-// replace keyed by name) and lays the operator's OWN edits back over it, with
+// replace keyed by type) and lays the operator's OWN edits back over it, with
 // explicit collection membership/order rules:
-//   - a per-entry owned field (a toggled enable) is kept; an untouched field
-//     adopts the concurrent stored value;
+//   - the operator's typed credentials and resets are kept; every daemon-owned
+//     field adopts the concurrent stored value;
 //   - a newly stored entry is ADOPTED;
 //   - an entry the daemon removed concurrently is DROPPED if untouched, but
 //     RETAINED if it carries an operator edit (so unsaved work is never lost);
@@ -458,33 +456,28 @@ function stubReconcile(configBodies: unknown[], putReject: () => Error = timeout
     return spy;
 }
 
-const draftNamed = (name: string) => forwardingState.drafts.find((d) => d.name === name);
+const draftNamed = (type: string) => forwardingState.drafts.find((d) => d.type === type);
 
 describe('forwardingState — timed-out reconciliation (F-04c)', () => {
-    it('re-reads, keeps the operator toggle, adopts a concurrent untouched change, warns unknown, never "saved"', async () => {
+    it('re-reads, keeps the operator edit, adopts a concurrent untouched change, warns unknown, never "saved"', async () => {
         const warn = vi.spyOn(toasts, 'warn').mockImplementation(() => 0);
         const info = vi.spyOn(toasts, 'info').mockImplementation(() => 0);
         const error = vi.spyOn(toasts, 'error').mockImplementation(() => 0);
-        // Re-read: a second writer disabled the UNTOUCHED smcloud; qrz unchanged.
+        // Re-read: a second writer stored a token on the UNTOUCHED smcloud.
         const reread = configWith([
-            { name: 'qrz', type: 'qrz', enabled: true, credentials_set: ['api_key', 'username'] },
-            {
-                name: 'smcloud',
-                type: 'smcloud',
-                enabled: false,
-                credentials_set: ['url', 'logbook'],
-            },
-            { name: 'mystery', type: 'mystery', enabled: false, credentials_set: ['token'] },
+            { type: 'qrz', credentials_set: ['api_key', 'username'] },
+            { type: 'smcloud', credentials_set: ['url', 'logbook', 'token'] },
+            { type: 'mystery', credentials_set: ['token'] },
         ]);
         stubReconcile([CONFIG, reread]);
 
         await forwardingState.load();
-        draftNamed('qrz')!.enabled = false; // owned edit; smcloud untouched
+        draftNamed('qrz')!.credentials.username = 'mine'; // owned edit; smcloud untouched
 
         await forwardingState.save();
 
-        expect(draftNamed('qrz')!.enabled).toBe(false); // owned kept
-        expect(draftNamed('smcloud')!.enabled).toBe(false); // untouched adopts stored
+        expect(draftNamed('qrz')!.credentials.username).toBe('mine'); // owned kept
+        expect(draftNamed('smcloud')!.credentialsSet).toContain('token'); // untouched adopts stored
         expect(warn).toHaveBeenCalledOnce();
         expect(String(warn.mock.calls[0][0])).toMatch(/the outcome is unknown/);
         expect(String(warn.mock.calls[0][0])).toMatch(/review and save again/);
@@ -497,27 +490,27 @@ describe('forwardingState — timed-out reconciliation (F-04c)', () => {
         const warn = vi.spyOn(toasts, 'warn').mockImplementation(() => 0);
         const reread = configWith([
             ...CONFIG.forwarders,
-            { name: 'newdest', type: 'mystery', enabled: true, credentials_set: [] },
+            { type: 'newdest', label: 'New one', credentials_set: [] },
         ]);
         stubReconcile([CONFIG, reread]);
 
         await forwardingState.load();
-        draftNamed('qrz')!.enabled = false; // make the save dirty
+        makeDirty();
 
         await forwardingState.save();
 
         expect(draftNamed('newdest')).toBeDefined(); // adopted
-        expect(draftNamed('newdest')!.enabled).toBe(true);
+        expect(draftNamed('newdest')!.label).toBe('New one');
         expect(warn).toHaveBeenCalledOnce();
     });
 
     it('drops an untouched entry the daemon removed concurrently', async () => {
         const warn = vi.spyOn(toasts, 'warn').mockImplementation(() => 0);
-        const reread = configWith(CONFIG.forwarders.filter((f) => f.name !== 'mystery'));
+        const reread = configWith(CONFIG.forwarders.filter((f) => f.type !== 'mystery'));
         stubReconcile([CONFIG, reread]);
 
         await forwardingState.load();
-        draftNamed('qrz')!.enabled = false; // dirty; mystery untouched
+        makeDirty(); // mystery untouched
 
         await forwardingState.save();
 
@@ -528,7 +521,7 @@ describe('forwardingState — timed-out reconciliation (F-04c)', () => {
     it('retains a concurrently-removed entry that carries an operator edit', async () => {
         const warn = vi.spyOn(toasts, 'warn').mockImplementation(() => 0);
         // Re-read omits smcloud — but the operator has an unsaved edit on it.
-        const reread = configWith(CONFIG.forwarders.filter((f) => f.name !== 'smcloud'));
+        const reread = configWith(CONFIG.forwarders.filter((f) => f.type !== 'smcloud'));
         stubReconcile([CONFIG, reread]);
 
         await forwardingState.load();
@@ -558,8 +551,8 @@ describe('forwardingState — timed-out reconciliation (F-04c)', () => {
         expect(warn).toHaveBeenCalledOnce();
         // and the intents still ride on a resave
         const payload = forwardingState.buildPayload();
-        expect(payload.find((f) => f.name === 'smcloud')?.credentials?.url).toBe('https://typed');
-        expect(payload.find((f) => f.name === 'smcloud')?.credentials?.region).toBe('');
+        expect(payload.find((f) => f.type === 'smcloud')?.credentials?.url).toBe('https://typed');
+        expect(payload.find((f) => f.type === 'smcloud')?.credentials?.region).toBe('');
     });
 
     it('when the reconciling re-read ALSO fails, stays outcome-unknown, keeps edits, does not rebaseline', async () => {
@@ -593,7 +586,7 @@ describe('forwardingState — timed-out reconciliation (F-04c)', () => {
         );
 
         await forwardingState.load();
-        draftNamed('qrz')!.enabled = false;
+        makeDirty();
         await forwardingState.save();
 
         expect(error).toHaveBeenCalledOnce();
@@ -601,7 +594,7 @@ describe('forwardingState — timed-out reconciliation (F-04c)', () => {
         expect(String(error.mock.calls[0][0])).toMatch(
             /check its status before deciding whether to retry/
         );
-        expect(draftNamed('qrz')!.enabled).toBe(false); // kept
+        expect(draftNamed('qrz')!.credentials.username).toBe('dirty'); // kept
         expect(forwardingState.dirty).toBe(true);
         expect(forwardingState.loaded).toBe(true);
         expect(info).not.toHaveBeenCalled();
@@ -613,7 +606,7 @@ describe('forwardingState — timed-out reconciliation (F-04c)', () => {
 
         await forwardingState.load();
         const afterLoad = spy.mock.calls.length; // 2 (config + types)
-        draftNamed('qrz')!.enabled = false;
+        makeDirty();
         await forwardingState.save();
 
         expect(error).toHaveBeenCalledOnce();

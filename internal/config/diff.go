@@ -94,6 +94,16 @@ func diffValue(path string, before, after any, out *[]FieldChange) {
 		bKeyed, bOrder, bPlain := keyList(bList)
 		aKeyed, aOrder, aPlain := keyList(aList)
 		if bPlain || aPlain {
+			// A list of OBJECTS with no identity field cannot be compared
+			// leaf by leaf, and rendering it whole would print every value
+			// under the container's policy — credentials included. Report its
+			// presence only.
+			if hasObjects(bList) || hasObjects(aList) {
+				if fmt.Sprint(bList) != fmt.Sprint(aList) {
+					*out = append(*out, FieldChange{Field: path, From: listPresence(bList), To: listPresence(aList), Redacted: true})
+				}
+				return
+			}
 			// A list of scalars (action_filter, rig_modes) has no stable
 			// identity per element, so it is compared whole — reporting
 			// "[a b] -> [a c]" is more use than three positional edits.
@@ -277,9 +287,11 @@ func presence(v string) string {
 	return presenceSet
 }
 
-// listKey returns the field that identifies a list element across saves.
+// listKey returns the field that identifies a list element across saves. A
+// config v6 station account has no name (W-0021 5C) and is one per type, so
+// `type` identifies it.
 func listKey(m map[string]any) (string, bool) {
-	for _, field := range []string{"name", "callsign", "id"} {
+	for _, field := range []string{"name", "callsign", "id", "type"} {
 		if v, ok := m[field]; ok {
 			if s := renderScalar(v); s != "" {
 				return s, true
@@ -349,6 +361,25 @@ func sameSequence(a, b []string) bool {
 
 func renderKeyOrder(keys []string) string {
 	return "[" + strings.Join(keys, " ") + "]"
+}
+
+// listPresence reports a list as set when it has any element.
+func listPresence(list []any) string {
+	if len(list) == 0 {
+		return presenceUnset
+	}
+	return presenceSet
+}
+
+// hasObjects reports whether a list holds any object or nested list.
+func hasObjects(list []any) bool {
+	for _, v := range list {
+		switch v.(type) {
+		case map[string]any, []any:
+			return true
+		}
+	}
+	return false
 }
 
 func renderScalarList(list []any) string {

@@ -64,7 +64,9 @@ func TestRestore_RebuildsTheTargetArchiveSummaryAfterClose(t *testing.T) {
 	}
 	giveIdentity(t, cfg, archivePath, archA)
 
-	if err := runRestore(nil); err != nil {
+	// The cloud logbook is named outright: this rule is about the summary, not
+	// about which binding names the cloud logbook (config v6, R2).
+	if err := runRestore([]string{"--cloud-logbook", "main"}); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
 	sums, miss := archive.ReadSummaries(archive.SummariesPath(cfg))

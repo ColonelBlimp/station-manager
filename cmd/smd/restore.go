@@ -10,10 +10,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ColonelBlimp/station-manager/internal/archive"
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/events"
+	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding/smcloud"
 	"github.com/ColonelBlimp/station-manager/internal/iocdi"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
@@ -31,10 +33,14 @@ var fetchSMCloudExport = smcloud.FetchExport
 // with UUID + additional_data + modified_at + tombstones preserved. NEVER an
 // ADIF re-import (which mints new UUIDs and flattens additional_data).
 //
-// Credentials come from the config's smcloud forwarder entry (enabled or
-// not — restore only reads the cloud), so a freshly set-up install restores
-// with zero extra flags once the forwarder is configured. The daemon must
-// not be running (sqlite single-writer), same as `smd import`.
+// Credentials come from the SM Cloud station account in config.json (url and
+// token). The cloud logbook comes from Home's default-logbook SM Cloud binding,
+// read from Home's closed file — enabled or not: restoring only reads the cloud
+// and needs no upload consent (config v6, W-0021 5C ruling R2). --forwarder
+// names another SM Cloud binding in Home; --cloud-logbook names the cloud
+// logbook outright and reads no archive file at all. When neither resolves,
+// restore asks for --cloud-logbook rather than guessing. The daemon must not
+// be running (sqlite single-writer), same as `smd import`.
 //
 // Existing rows (by UUID, tombstones included) are SKIPPED — re-running is
 // idempotent and restore never overwrites; healing a diverged existing row
@@ -49,8 +55,8 @@ func runRestore(args []string) error {
 	var logbookID int64
 	var dryRun bool
 	fs.StringVar(&configPath, "config", "", "path to config.json (default: $SM_WORKING_DIR, else the XDG data dir, else the executable's directory)")
-	fs.StringVar(&forwarderName, "forwarder", "", "config name of the smcloud forwarder to read url/token from (default: the first type=\"smcloud\" entry)")
-	fs.StringVar(&cloudLogbook, "cloud-logbook", "", "cloud-side logbook name to restore from (default: the forwarder's configured logbook)")
+	fs.StringVar(&forwarderName, "forwarder", "", "name of an SM Cloud destination binding in the Home archive whose cloud logbook to restore (default: the binding on Home's default logbook)")
+	fs.StringVar(&cloudLogbook, "cloud-logbook", "", "cloud-side logbook name to restore from, overriding any binding (reads no archive file)")
 	fs.Int64Var(&logbookID, "logbook", 0, "LOCAL target logbook id (default: the target archive's default logbook)")
 	archiveID := fs.String("archive", "", "catalogue id (uuid) of the archive to restore into (default: the active archive); run with the daemon stopped")
 	fs.BoolVar(&dryRun, "dry-run", false, "fetch the export and report what would be restored — no DB writes")
@@ -62,36 +68,21 @@ func runRestore(args []string) error {
 		return err
 	}
 
-	// ---- Config + the smcloud forwarder entry (the credential source).
+	// ---- Config, the SM Cloud station account and the cloud logbook.
 	cfg, _, err := loadConfig(configPath)
 	if err != nil {
 		return err
 	}
 	cfgSvc := config.New(cfg)
 
-	var fc *types.ForwarderConfig
-	for i := range cfg.Forwarders {
-		f := &cfg.Forwarders[i]
-		if f.Type != smcloud.Type {
-			continue
-		}
-		if forwarderName == "" || strings.EqualFold(f.Name, forwarderName) {
-			fc = f
-			break
-		}
-	}
-	if fc == nil {
-		return errors.New(op).WithMsg("no smcloud forwarder in config.forwarders — add one (url + token) before restoring")
-	}
-	if cloudLogbook == "" {
-		if cloudLogbook, err = smcloud.CloudLogbookName(*fc); err != nil {
-			return errors.New(op).WithErr(err)
-		}
+	fc, via, err := restoreSource(cfg, forwarderName, &cloudLogbook)
+	if err != nil {
+		return errors.New(op).WithErr(err)
 	}
 
 	// ---- Pull the export.
-	_, _ = fmt.Fprintf(os.Stderr, "fetching export via forwarder %q…\n", fc.Name)
-	export, err := fetchSMCloudExport(context.Background(), *fc)
+	_, _ = fmt.Fprintf(os.Stderr, "fetching export via %s…\n", via)
+	export, err := fetchSMCloudExport(context.Background(), fc)
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("fetch export")
 	}
@@ -260,4 +251,70 @@ func runRestore(args []string) error {
 		return errors.New(op).WithMsgf("%d record(s) failed to restore", failed)
 	}
 	return nil
+}
+
+// restoreSource resolves what a restore reads: the SM Cloud station account
+// (url, token) and, unless *cloudLogbook is already set, the cloud logbook
+// named by a Home binding (R2). It returns the account to fetch with and a
+// description of where the logbook came from.
+func restoreSource(cfg config.Config, forwarderName string, cloudLogbook *string) (types.ForwarderConfig, string, error) {
+	var account types.ForwarderConfig
+	found := false
+	for _, f := range cfg.Forwarders {
+		if f.Type == smcloud.Type {
+			account, found = f, true
+			break
+		}
+	}
+	if !found {
+		return types.ForwarderConfig{}, "", fmt.Errorf("no SM Cloud station account in config.json — add one (url + token) before restoring")
+	}
+	if *cloudLogbook != "" {
+		if forwarderName != "" {
+			return types.ForwarderConfig{}, "", fmt.Errorf("--forwarder and --cloud-logbook both name the cloud logbook; give one")
+		}
+		return account, "the SM Cloud station account", nil
+	}
+	binding, err := restoreBinding(cfg, forwarderName)
+	if err != nil {
+		return types.ForwarderConfig{}, "", err
+	}
+	fc, err := forwarding.BindingConfig(binding, account)
+	if err != nil {
+		return types.ForwarderConfig{}, "", err
+	}
+	if *cloudLogbook, err = smcloud.CloudLogbookName(fc); err != nil {
+		return types.ForwarderConfig{}, "", err
+	}
+	return account, fmt.Sprintf("the SM Cloud station account (binding %q)", binding.ForwarderName), nil
+}
+
+// restoreBinding finds the SM Cloud binding in Home that names the cloud
+// logbook: the one --forwarder names (case-insensitively), else the one on
+// Home's default logbook. Either may be disabled. Neither found asks for
+// --cloud-logbook.
+func restoreBinding(cfg config.Config, forwarderName string) (types.LogbookDestination, error) {
+	const ask = "; name the cloud logbook with --cloud-logbook"
+	peek, err := archive.ReadHomeBindings(cfg)
+	if err != nil {
+		return types.LogbookDestination{}, fmt.Errorf("%w%s", err, ask)
+	}
+	if forwarderName != "" {
+		for _, b := range peek.Bindings {
+			if b.Destination == smcloud.Type && strings.EqualFold(b.ForwarderName, forwarderName) {
+				return b, nil
+			}
+		}
+		return types.LogbookDestination{}, fmt.Errorf("no SM Cloud destination binding named %q in the Home archive%s", forwarderName, ask)
+	}
+	defaultID := cfg.DefaultLogbookID
+	if peek.HasIdentity && peek.Identity.DefaultLogbookID > 0 {
+		defaultID = peek.Identity.DefaultLogbookID
+	}
+	for _, b := range peek.Bindings {
+		if b.Destination == smcloud.Type && b.LogbookID == defaultID {
+			return b, nil
+		}
+	}
+	return types.LogbookDestination{}, fmt.Errorf("the Home archive's default logbook has no SM Cloud destination binding%s", ask)
 }

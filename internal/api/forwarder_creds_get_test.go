@@ -1,8 +1,13 @@
 package api
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/ColonelBlimp/station-manager/internal/config"
+	"github.com/ColonelBlimp/station-manager/internal/logging"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 // A11b — THE MASKED GET SIDE OF THE CORRUPT-CREDENTIALS DEFECT.
@@ -63,18 +68,25 @@ func TestForwarderCreds_CorruptBlobGetLogsOnceMaskedUnset(t *testing.T) {
 // corruption warning apart from a normal masked view. (Green before and after the
 // fix by design — it guards against a false positive, it does not pin the fix.)
 func TestForwarderCreds_ValidBlobGetNoWarningKeysListed(t *testing.T) {
-	srv, buf := corruptCredServer(t, `{"email":"a@b.com","callsign":"7Q5MLV"}`)
+	// SM Cloud: its url and token are STATION-scoped, so the account's masked
+	// view lists them (config v6 lists station keys only — ClubLog has none).
+	buf := &strings.Builder{}
+	srv := testServerWithLogger(t, func(c *config.Config) {
+		c.Forwarders = []types.ForwarderConfig{{
+			Type: "smcloud", Credentials: json.RawMessage(`{"url":"https://a.example.test","token":"t"}`),
+		}}
+	}, nil, logging.NewForWriter(buf))
 
 	list := getConfigForwarders(t, srv)
 
 	if recs := credWarnRecords(t, buf, "masked view shows them unset"); len(recs) != 0 {
 		t.Fatalf("a valid credential blob produced %d masked-unset warning(s): %v", len(recs), recs)
 	}
-	cl, ok := findInfo(list, "clublog")
+	sm, ok := findInfo(list, "smcloud")
 	if !ok {
-		t.Fatalf("clublog missing from GET: %+v", list)
+		t.Fatalf("smcloud missing from GET: %+v", list)
 	}
-	if len(cl.CredentialsSet) == 0 {
-		t.Errorf("CredentialsSet empty for valid creds; want the keys listed (email, callsign)")
+	if strings.Join(sm.CredentialsSet, ",") != "token,url" {
+		t.Errorf("CredentialsSet = %v for valid creds; want the station keys listed (token, url)", sm.CredentialsSet)
 	}
 }

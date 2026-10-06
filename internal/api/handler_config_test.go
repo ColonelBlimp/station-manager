@@ -1208,7 +1208,7 @@ func TestHandlePutConfig_ForwardersMaskedAndMerged(t *testing.T) {
 	// config PUT may still write; the entry stays disabled because `enabled`
 	// is binding-owned and a PUT may not set it.
 	body1 := `{"logging_station":{},"station":{},"forwarders":[` +
-		`{"name":"cloud-main","type":"smcloud","enabled":false,"action_filter":["insert"],` +
+		`{"type":"smcloud","action_filter":["insert"],` +
 		`"credentials":{"url":"https://cloud.example.org","token":"SECRET123"}}]}`
 	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body1))
 	req.Header.Set("Content-Type", "application/json")
@@ -1239,7 +1239,7 @@ func TestHandlePutConfig_ForwardersMaskedAndMerged(t *testing.T) {
 
 	// 3. PUT changing only a station-scoped setting, omitting credentials → secret preserved.
 	body2 := `{"logging_station":{},"station":{},"forwarders":[` +
-		`{"name":"cloud-main","type":"smcloud","enabled":false,"action_filter":["insert","update"]}]}`
+		`{"type":"smcloud","action_filter":["insert","update"]}]}`
 	req2 := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body2))
 	req2.Header.Set("Content-Type", "application/json")
 	w2 := httptest.NewRecorder()
@@ -1286,7 +1286,7 @@ func TestHandlePutConfig_BlankCredentialKeepsStoredSecret(t *testing.T) {
 	// smcloud's url/token are station-scoped, so a config PUT may still write
 	// them (ADR 0082); the entry stays disabled — `enabled` is binding-owned.
 	body1 := `{"logging_station":{},"station":{},"forwarders":[` +
-		`{"name":"cloud-main","type":"smcloud","enabled":false,"action_filter":["insert"],` +
+		`{"type":"smcloud","action_filter":["insert"],` +
 		`"credentials":{"url":"https://cloud.example.org","token":"SECRET123"}}]}`
 	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body1))
 	req.Header.Set("Content-Type", "application/json")
@@ -1299,7 +1299,7 @@ func TestHandlePutConfig_BlankCredentialKeepsStoredSecret(t *testing.T) {
 	// A PUT that sends the key with an empty value — an untouched masked field on a
 	// client that doesn't strip blanks, or a hand-rolled request.
 	body2 := `{"logging_station":{},"station":{},"forwarders":[` +
-		`{"name":"cloud-main","type":"smcloud","enabled":false,"action_filter":["insert"],` +
+		`{"type":"smcloud","action_filter":["insert"],` +
 		`"credentials":{"url":"https://cloud.example.org","token":""}}]}`
 	req2 := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body2))
 	req2.Header.Set("Content-Type", "application/json")
@@ -1318,7 +1318,7 @@ func TestHandlePutConfig_BlankCredentialKeepsStoredSecret(t *testing.T) {
 	}
 	// Whitespace-only is the same "operator typed nothing" case.
 	body3 := `{"logging_station":{},"station":{},"forwarders":[` +
-		`{"name":"cloud-main","type":"smcloud","enabled":false,"action_filter":["insert"],` +
+		`{"type":"smcloud","action_filter":["insert"],` +
 		`"credentials":{"token":"   "}}]}`
 	req3 := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body3))
 	req3.Header.Set("Content-Type", "application/json")
@@ -1333,7 +1333,7 @@ func TestHandlePutConfig_BlankCredentialKeepsStoredSecret(t *testing.T) {
 	}
 	// A genuinely supplied value still replaces the stored one.
 	body4 := `{"logging_station":{},"station":{},"forwarders":[` +
-		`{"name":"cloud-main","type":"smcloud","enabled":false,"action_filter":["insert"],` +
+		`{"type":"smcloud","action_filter":["insert"],` +
 		`"credentials":{"token":"NEWSECRET"}}]}`
 	req4 := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body4))
 	req4.Header.Set("Content-Type", "application/json")
@@ -1362,7 +1362,7 @@ func TestHandlePutConfig_BlankRequiredCredentialKeeps(t *testing.T) {
 	srv := testServer(t)
 
 	body1 := `{"logging_station":{},"station":{},"forwarders":[` +
-		`{"name":"cloud","type":"smcloud","enabled":false,"action_filter":["insert"],` +
+		`{"type":"smcloud","action_filter":["insert"],` +
 		`"credentials":{"url":"https://cloud.example.org","token":"TOKEN123"}}]}`
 	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body1))
 	req.Header.Set("Content-Type", "application/json")
@@ -1375,7 +1375,7 @@ func TestHandlePutConfig_BlankRequiredCredentialKeeps(t *testing.T) {
 	// Blank every required station-scoped field — what a client following the
 	// old blank-means-unchanged contract sends for untouched inputs.
 	body2 := `{"logging_station":{},"station":{},"forwarders":[` +
-		`{"name":"cloud","type":"smcloud","enabled":false,"action_filter":["insert"],` +
+		`{"type":"smcloud","action_filter":["insert"],` +
 		`"credentials":{"url":"","token":""}}]}`
 	req2 := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body2))
 	req2.Header.Set("Content-Type", "application/json")
@@ -1405,7 +1405,7 @@ func TestHandlePutConfig_LogbookScopedKeyIsBindingOwned(t *testing.T) {
 	srv := testServer(t)
 
 	body1 := `{"logging_station":{},"station":{},"forwarders":[` +
-		`{"name":"cloud","type":"smcloud","enabled":false,"action_filter":["insert"],` +
+		`{"type":"smcloud","action_filter":["insert"],` +
 		`"credentials":{"url":"https://cloud.example.org","token":"TOKEN123"}}]}`
 	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body1))
 	req.Header.Set("Content-Type", "application/json")
@@ -1416,7 +1416,7 @@ func TestHandlePutConfig_LogbookScopedKeyIsBindingOwned(t *testing.T) {
 	}
 
 	body2 := `{"logging_station":{},"station":{},"forwarders":[` +
-		`{"name":"cloud","type":"smcloud","enabled":false,"action_filter":["insert"],` +
+		`{"type":"smcloud","action_filter":["insert"],` +
 		`"credentials":{"url":"https://cloud.example.org","token":"","logbook":""}}]}`
 	req2 := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body2))
 	req2.Header.Set("Content-Type", "application/json")
@@ -1428,7 +1428,7 @@ func TestHandlePutConfig_LogbookScopedKeyIsBindingOwned(t *testing.T) {
 	}
 
 	body3 := `{"logging_station":{},"station":{},"forwarders":[` +
-		`{"name":"cloud","type":"smcloud","enabled":false,"action_filter":["insert"],` +
+		`{"type":"smcloud","action_filter":["insert"],` +
 		`"credentials":{"url":"https://cloud.example.org","token":""}}]}`
 	req3 := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body3))
 	req3.Header.Set("Content-Type", "application/json")
@@ -1453,7 +1453,7 @@ func TestHandlePutConfig_StubModeIsClearable(t *testing.T) {
 	srv := testServer(t)
 
 	body1 := `{"logging_station":{},"station":{},"forwarders":[` +
-		`{"name":"st","type":"stub","enabled":false,"action_filter":["insert"],` +
+		`{"type":"stub","action_filter":["insert"],` +
 		`"credentials":{"mode":"always_terminal"}}]}`
 	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body1))
 	req.Header.Set("Content-Type", "application/json")
@@ -1464,7 +1464,7 @@ func TestHandlePutConfig_StubModeIsClearable(t *testing.T) {
 	}
 
 	body2 := `{"logging_station":{},"station":{},"forwarders":[` +
-		`{"name":"st","type":"stub","enabled":false,"action_filter":["insert"],` +
+		`{"type":"stub","action_filter":["insert"],` +
 		`"credentials":{"mode":""}}]}`
 	req2 := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body2))
 	req2.Header.Set("Content-Type", "application/json")
@@ -1482,7 +1482,7 @@ func TestHandlePutConfig_StubModeIsClearable(t *testing.T) {
 	// exactly — so a stored " " reaches its unknown-mode branch and the daemon
 	// refuses to start, from a PUT that returned 200.
 	body3 := `{"logging_station":{},"station":{},"forwarders":[` +
-		`{"name":"st","type":"stub","enabled":false,"action_filter":["insert"],` +
+		`{"type":"stub","action_filter":["insert"],` +
 		`"credentials":{"mode":"always_transient"}}]}`
 	req3 := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body3))
 	req3.Header.Set("Content-Type", "application/json")
@@ -1492,7 +1492,7 @@ func TestHandlePutConfig_StubModeIsClearable(t *testing.T) {
 		t.Fatalf("PUT 3 status = %d, body = %s", w3.Code, w3.Body.String())
 	}
 	body4 := `{"logging_station":{},"station":{},"forwarders":[` +
-		`{"name":"st","type":"stub","enabled":false,"action_filter":["insert"],` +
+		`{"type":"stub","action_filter":["insert"],` +
 		`"credentials":{"mode":"   "}}]}`
 	req4 := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body4))
 	req4.Header.Set("Content-Type", "application/json")
@@ -1528,7 +1528,7 @@ func TestHandlePutConfig_RejectsUnstartableForwarder(t *testing.T) {
 		}}
 	})
 	body := `{"logging_station":{},"station":{},"forwarders":[` +
-		`{"name":"cloud","type":"smcloud","enabled":true,"action_filter":["insert"],` +
+		`{"type":"smcloud","action_filter":["insert"],` +
 		`"credentials":{"url":"ftp://not-a-cloud"}}]}`
 	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -1569,7 +1569,7 @@ func TestHandlePutConfig_UnstartableForwarderDoesNotLeakCredentials(t *testing.T
 	// careless 400 body could echo.
 	const secretURL = "ftp://alice:s3cr3t-token@cloud.example.org"
 	body := `{"logging_station":{},"station":{},"forwarders":[` +
-		`{"name":"cloud","type":"smcloud","enabled":true,"action_filter":["insert"],` +
+		`{"type":"smcloud","action_filter":["insert"],` +
 		`"credentials":{"url":"` + secretURL + `"}}]}`
 	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -1596,16 +1596,23 @@ func TestHandlePutConfig_UnstartableForwarderDoesNotLeakCredentials(t *testing.T
 // and a retry under a corrected callsign then failed 409 on the stale row,
 // needing manual DB surgery.
 func TestHandlePutConfig_SetupRejectsForwarderBeforeSeedingLogbook(t *testing.T) {
-	srv := testServer(t)
+	// An ENABLED legacy entry (v6 keeps it until Home's seed; a PUT cannot set
+	// enabled) whose station-scoped URL the setup PUT breaks.
+	srv := testServerWithCfg(t, func(c *config.Config) {
+		c.Forwarders = []types.ForwarderConfig{{
+			Name: "cloud", Type: "smcloud", Enabled: true, ActionFilter: []string{"insert"},
+			Credentials: json.RawMessage(`{"url":"https://cloud.example.org","token":"TOKEN123"}`),
+		}}
+	})
 	if srv.cfg.Snapshot().SetupComplete {
 		t.Fatal("test server should start pre-setup")
 	}
 	lbID := srv.cfg.Snapshot().DefaultLogbookID
 
-	// A setup PUT (carries a callsign) that also enables an unbuildable forwarder.
+	// A setup PUT (carries a callsign) that also breaks the enabled entry.
 	body := `{"logging_station":{"station_callsign":"M0ABC"},"station":{},"forwarders":[` +
-		`{"name":"cl","type":"clublog","enabled":true,"action_filter":["insert"],` +
-		`"credentials":{"email":"op@example.com"}}]}`
+		`{"type":"smcloud","action_filter":["insert"],` +
+		`"credentials":{"url":"ftp://not-a-cloud"}}]}`
 	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -1630,7 +1637,7 @@ func TestHandlePutConfig_AllowsIncompleteDisabledForwarder(t *testing.T) {
 	srv := testServer(t)
 
 	body := `{"logging_station":{},"station":{},"forwarders":[` +
-		`{"name":"cloud","type":"smcloud","enabled":false,"action_filter":["insert"],` +
+		`{"type":"smcloud","action_filter":["insert"],` +
 		`"credentials":{"url":"https://cloud.example.org"}}]}`
 	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -1645,11 +1652,11 @@ func TestHandlePutConfig_AllowsIncompleteDisabledForwarder(t *testing.T) {
 	}
 }
 
-// ADR 0082 transition: `enabled` and every logbook-scoped credential key of a
-// forwarder entry are owned by the active archive's bindings. A PUT that
-// changes `enabled`, or carries such a key, is refused by name and field; a
-// station-scoped edit on the same entry is accepted; omitted masked fields
-// stay preserved.
+// ADR 0082: every logbook-scoped credential key of an account is owned by the
+// active archive's bindings. A PUT that carries one — typed or blank — is
+// refused by field; a station-scoped edit on the same account is accepted and
+// every other stored value, the deprecated legacy fields included, is kept.
+// (`name` and `enabled` presence: TestStationAccount_A1.)
 func TestHandlePutConfig_RefusesBindingOwnedForwarderEdits(t *testing.T) {
 	srv := testServerWithCfg(t, func(c *config.Config) {
 		c.Forwarders = []types.ForwarderConfig{{
@@ -1665,10 +1672,8 @@ func TestHandlePutConfig_RefusesBindingOwnedForwarderEdits(t *testing.T) {
 		return w
 	}
 	cases := []struct{ name, body, field string }{
-		{"enabled toggled", `{"forwarders":[{"name":"cloud","type":"smcloud","enabled":false,"action_filter":["insert"]}]}`, "enabled"},
-		{"logbook key typed", `{"forwarders":[{"name":"cloud","type":"smcloud","enabled":true,"action_filter":["insert"],"credentials":{"logbook":"contest"}}]}`, "credentials.logbook"},
-		{"logbook key blanked", `{"forwarders":[{"name":"cloud","type":"smcloud","enabled":true,"action_filter":["insert"],"credentials":{"logbook":""}}]}`, "credentials.logbook"},
-		{"new entry enabled", `{"forwarders":[{"name":"cloud","type":"smcloud","enabled":true,"action_filter":["insert"]},{"name":"q","type":"qrz","enabled":true}]}`, "enabled"},
+		{"logbook key typed", `{"forwarders":[{"type":"smcloud","action_filter":["insert"],"credentials":{"logbook":"contest"}}]}`, "credentials.logbook"},
+		{"logbook key blanked", `{"forwarders":[{"type":"smcloud","action_filter":["insert"],"credentials":{"logbook":""}}]}`, "credentials.logbook"},
 	}
 	for _, c := range cases {
 		w := put(c.body)
@@ -1680,7 +1685,7 @@ func TestHandlePutConfig_RefusesBindingOwnedForwarderEdits(t *testing.T) {
 		t.Fatalf("a refused PUT changed the stored entry: %s", creds)
 	}
 	// A station-scoped edit on the same entry is accepted and the rest preserved.
-	w := put(`{"forwarders":[{"name":"cloud","type":"smcloud","enabled":true,"action_filter":["insert"],"credentials":{"token":"NEWTOKEN"}}]}`)
+	w := put(`{"forwarders":[{"type":"smcloud","action_filter":["insert"],"credentials":{"token":"NEWTOKEN"}}]}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("station-scoped edit: status %d body %s; want 200", w.Code, w.Body.String())
 	}
@@ -1725,7 +1730,7 @@ func TestHandlePutConfig_BlankCredentialKeepsForUnknownType(t *testing.T) {
 	srv := testServer(t)
 
 	body1 := `{"logging_station":{},"station":{},"forwarders":[` +
-		`{"name":"mystery","type":"not-in-this-build","enabled":false,"action_filter":["insert"],` +
+		`{"type":"not-in-this-build","action_filter":["insert"],` +
 		`"credentials":{"secret":"KEEPME"}}]}`
 	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body1))
 	req.Header.Set("Content-Type", "application/json")
@@ -1736,7 +1741,7 @@ func TestHandlePutConfig_BlankCredentialKeepsForUnknownType(t *testing.T) {
 	}
 
 	body2 := `{"logging_station":{},"station":{},"forwarders":[` +
-		`{"name":"mystery","type":"not-in-this-build","enabled":false,"action_filter":["insert"],` +
+		`{"type":"not-in-this-build","action_filter":["insert"],` +
 		`"credentials":{"secret":""}}]}`
 	req2 := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body2))
 	req2.Header.Set("Content-Type", "application/json")

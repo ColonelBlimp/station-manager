@@ -95,17 +95,15 @@ const TYPES = {
 
 const CONFIG = {
     forwarders: [
-        { name: 'qrz', type: 'qrz', enabled: true, credentials_set: ['api_key'] },
+        { type: 'qrz', credentials_set: ['api_key'] },
         {
-            name: 'smcloud',
             type: 'smcloud',
-            enabled: true,
             // region stored: Reset is offered only on a stored value (ruling
             // 2026-09-26 — a control on nothing appears to work and does nothing).
             credentials_set: ['url', 'token', 'region', 'logbook'],
         },
-        { name: 'clublog', type: 'clublog', enabled: false, credentials_set: [] },
-        { name: 'mystery', type: 'mystery', enabled: false, credentials_set: ['token'] },
+        { type: 'clublog', credentials_set: [] },
+        { type: 'mystery', credentials_set: ['token'] },
     ],
 };
 
@@ -227,7 +225,7 @@ describe('ForwardingSection', () => {
         expect(within(station()).getByText(/can't be edited here/)).toBeTruthy();
         // The real rule: it is present AND flagged as uneditable, so the
         // operator is not left wondering why it has no fields.
-        expect(forwardingState.drafts.map((d) => d.name)).toContain('mystery');
+        expect(forwardingState.drafts.map((d) => d.type)).toContain('mystery');
     });
 
     // U2 — RESET IS OFFERED ONLY WHERE THE DAEMON WILL HONOUR IT. Exactly one
@@ -255,14 +253,14 @@ describe('ForwardingSection', () => {
         expect(within(station()).getByTestId('removal-pending').textContent).toMatch(
             /Resets to the default when you save/
         );
-        const smcloud = forwardingState.drafts.find((d) => d.name === 'smcloud');
+        const smcloud = forwardingState.drafts.find((d) => d.type === 'smcloud');
         expect(smcloud?.cleared).toContain('region');
 
         await fireEvent.click(
             within(station()).getByRole('button', { name: 'Undo removing Region' })
         );
         expect(within(station()).queryByTestId('removal-pending')).toBeNull();
-        expect(forwardingState.drafts.find((d) => d.name === 'smcloud')?.cleared).not.toContain(
+        expect(forwardingState.drafts.find((d) => d.type === 'smcloud')?.cleared).not.toContain(
             'region'
         );
     });
@@ -291,7 +289,7 @@ describe('ForwardingSection', () => {
         );
 
         expect(forwardingState.dirty).toBe(false);
-        expect(forwardingState.drafts.find((d) => d.name === 'smcloud')?.credentials).toEqual({});
+        expect(forwardingState.drafts.find((d) => d.type === 'smcloud')?.credentials).toEqual({});
         expect(within(station()).getByRole('button', { name: /^save$/i })).toBeDisabled();
     });
 
@@ -373,10 +371,7 @@ describe('ForwardingSection', () => {
     it('U8: a config.json label overrides the built-in display name', async () => {
         await renderLoaded({
             config: {
-                forwarders: [
-                    { name: 'smcloud', type: 'smcloud', enabled: true, label: 'Shack cloud' },
-                    { name: 'clublog', type: 'clublog', enabled: false },
-                ],
+                forwarders: [{ type: 'smcloud', label: 'Shack cloud' }, { type: 'clublog' }],
             },
         });
         expect(within(station()).getAllByTestId('account-card').map(titleOf)).toEqual([
@@ -396,7 +391,7 @@ describe('ForwardingSection', () => {
         expect(
             within(destinations()).getByRole('checkbox', { name: 'QRZ.com for Main' })
         ).toBeInTheDocument();
-        expect(forwardingState.drafts.map((d) => d.name)).toContain('qrz');
+        expect(forwardingState.drafts.map((d) => d.type)).toContain('qrz');
     });
 
     // U10 — CLUBLOG IS NOT A STATION ACCOUNT (operator ruling 2026-09-26, a
@@ -661,8 +656,8 @@ describe('ForwardingSection', () => {
 describe('Station accounts with no card', () => {
     const noStationAccounts = {
         forwarders: [
-            { name: 'qrz', type: 'qrz', enabled: true, credentials_set: ['api_key'] },
-            { name: 'clublog', type: 'clublog', enabled: false, credentials_set: [] },
+            { type: 'qrz', credentials_set: ['api_key'] },
+            { type: 'clublog', credentials_set: [] },
         ],
     };
 

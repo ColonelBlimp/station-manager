@@ -31,7 +31,14 @@ func destinationSeeds(fwds []types.ForwarderConfig) ([]sqlite.DestinationSeed, e
 		if _, ok := forwarding.DescriptorFor(fc.Type); !ok {
 			return nil, errors.New(op).WithMsgf("forwarder %q: type %q has no descriptor in this build; the binding seed cannot place its credentials", fc.Name, fc.Type)
 		}
-		seed := sqlite.DestinationSeed{Destination: fc.Type, LegacyName: fc.Name, Enabled: fc.Enabled}
+		// A v6 account has no name (a default account seeded at load, or a
+		// stripped file whose seed is undecided): its type is the name the
+		// v5 default seed gave it.
+		legacyName := fc.Name
+		if legacyName == "" {
+			legacyName = fc.Type
+		}
+		seed := sqlite.DestinationSeed{Destination: fc.Type, LegacyName: legacyName, Enabled: fc.Enabled}
 		if len(fc.Credentials) > 0 && string(fc.Credentials) != "null" {
 			var all map[string]json.RawMessage
 			if err := json.Unmarshal(fc.Credentials, &all); err != nil {

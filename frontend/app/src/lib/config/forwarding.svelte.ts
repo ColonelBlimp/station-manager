@@ -4,8 +4,12 @@
 
     Per ADR 0039 the forwarder list is NON-SPARSE: the daemon seeds an entry for
     every supported destination and re-adds any missing one at load, so this is a
-    FIXED list. There is deliberately no add/remove — a destination is turned off
-    by disabling it.
+    FIXED list. There is deliberately no add/remove.
+
+    Config v6 (W-0021 5C): each entry is a destination's STATION ACCOUNT, one
+    per type and keyed by type. Whether a logbook uploads, and its per-logbook
+    credentials, are destination bindings (bindings.svelte.ts); this tab never
+    sends `name` or `enabled` — the daemon refuses either.
 */
 import {
     fetchForwarders,
@@ -24,13 +28,11 @@ import {
 } from '../api/_helpers';
 import { toasts } from '../ui/toasts.svelte';
 
-/** One destination as the form holds it: the masked entry plus local edits. */
+/** One station account as the form holds it: the masked entry plus local edits. */
 export interface ForwarderDraft {
-    name: string;
     type: string;
     /** Operator's config.json label; '' means fall back to the built-in name. */
     label: string;
-    enabled: boolean;
     action_filter?: string[];
     /** Keys the daemon reports as holding a value. Read-only. */
     credentialsSet: string[];
@@ -43,10 +45,8 @@ export interface ForwarderDraft {
 /** A masked daemon entry as the form holds it — the shape #apply builds. */
 function entryToDraft(e: ForwarderEntry): ForwarderDraft {
     return {
-        name: e.name,
         type: e.type,
         label: e.label ?? '',
-        enabled: e.enabled,
         action_filter: e.action_filter,
         credentialsSet: e.credentials_set ?? [],
         credentials: {},
@@ -55,52 +55,40 @@ function entryToDraft(e: ForwarderEntry): ForwarderDraft {
 }
 
 // True when a draft carries unsaved operator work versus its loaded baseline: a
-// toggled enable, a typed credential, or a pending reset. A draft with no
-// baseline (e.g. one retained from an earlier reconcile) counts as edited.
+// typed credential or a pending reset. A draft with no baseline (e.g. one
+// retained from an earlier reconcile) counts as edited.
 function draftHasEdits(d: ForwarderDraft, before: ForwarderDraft | undefined): boolean {
     if (!before) return true;
-    return (
-        d.enabled !== before.enabled ||
-        d.cleared.length > 0 ||
-        Object.values(d.credentials).some((v) => v.trim() !== '')
-    );
+    return d.cleared.length > 0 || Object.values(d.credentials).some((v) => v.trim() !== '');
 }
 
 // Lay the operator's OWN edits back over a freshly re-read forwarders list after
 // a timed-out save (F-04c, ADR 0078). The block is a WHOLE-list replace keyed by
-// name, so membership and order come from `stored` (the daemon's current list),
+// type, so membership and order come from `stored` (the daemon's current list),
 // with these rules:
-//   - present in both → keep a toggled `enabled` iff the operator owns it
-//     (draft ≠ sent ∨ sent ≠ before); adopt stored for daemon-owned fields;
-//     PRESERVE typed credentials + `cleared` (never in the re-read); refresh
-//     `credentialsSet` from stored;
+//   - present in both → adopt stored for daemon-owned fields; PRESERVE typed
+//     credentials + `cleared` (never in the re-read); refresh `credentialsSet`
+//     from stored;
 //   - newly stored, not in the draft → ADOPT it;
 //   - a draft entry the daemon dropped → RETAIN it iff it carries an operator
 //     edit (unsaved work is never lost), else DROP it.
 function mergeForwarders(
     before: ForwarderDraft[],
-    sent: ForwarderDraft[],
     draft: ForwarderDraft[],
     stored: ForwarderEntry[]
 ): ForwarderDraft[] {
-    const index = (list: ForwarderDraft[]) => new Map(list.map((d) => [d.name, d]));
-    const beforeByName = index(before);
-    const sentByName = index(sent);
-    const draftByName = index(draft);
-    const storedNames = new Set(stored.map((e) => e.name));
+    const index = (list: ForwarderDraft[]) => new Map(list.map((d) => [d.type, d]));
+    const beforeByType = index(before);
+    const draftByType = index(draft);
+    const storedTypes = new Set(stored.map((e) => e.type));
 
     // 1. Walk the stored list (daemon membership + order); overlay owned edits.
     const merged: ForwarderDraft[] = stored.map((e) => {
-        const d = draftByName.get(e.name);
+        const d = draftByType.get(e.type);
         if (!d) return entryToDraft(e); // newly stored ⇒ adopt
-        const b = beforeByName.get(e.name);
-        const s = sentByName.get(e.name);
-        const enabledOwned = d.enabled !== s?.enabled || s?.enabled !== b?.enabled;
         return {
-            name: e.name,
             type: e.type,
             label: e.label ?? '',
-            enabled: enabledOwned ? d.enabled : e.enabled,
             action_filter: e.action_filter,
             credentialsSet: e.credentials_set ?? [],
             credentials: { ...d.credentials },
@@ -111,8 +99,8 @@ function mergeForwarders(
     // 2. A draft entry the daemon dropped: retain iff it carries an operator
     //    edit; otherwise drop it (adopt the daemon's removal).
     for (const d of draft) {
-        if (storedNames.has(d.name)) continue;
-        if (draftHasEdits(d, beforeByName.get(d.name))) merged.push(d);
+        if (storedTypes.has(d.type)) continue;
+        if (draftHasEdits(d, beforeByType.get(d.type))) merged.push(d);
     }
     return merged;
 }
@@ -126,8 +114,8 @@ class ForwardingState {
     drafts = $state<ForwarderDraft[]>([]);
 
     // TWO snapshots, deliberately. #pristine is the dirty-compare projection
-    // (name/enabled/credentials/cleared); #pristineEntries is the full daemon
-    // shape Cancel restores from.
+    // (type/credentials/cleared); #pristineEntries is the full daemon shape
+    // Cancel restores from.
     //
     // They were one field until F9 caught it: reset() parsed #pristine as
     // ForwarderEntry[], but that projection carries no `type` and no
@@ -145,8 +133,8 @@ class ForwardingState {
     }
 
     /**
-     * True when THIS destination has unsaved edits — a toggled enable, a typed
-     * credential, or a pending reset.
+     * True when THIS station account has unsaved edits — a typed credential or
+     * a pending reset.
      *
      * Exists because the section collapses each destination into a disclosure:
      * the footer can say "unsaved changes" but not where, so a collapsed card
@@ -154,18 +142,14 @@ class ForwardingState {
      * the component's inputs write '' for every rendered field, so counting key
      * presence would mark a card the moment it was merely opened.
      */
-    hasEdits(name: string): boolean {
-        const d = this.drafts.find((x) => x.name === name);
+    hasEdits(type: string): boolean {
+        const d = this.drafts.find((x) => x.type === type);
         if (!d) return false;
-        const base = (JSON.parse(this.#pristine) as { name: string; enabled: boolean }[]).find(
-            (p) => p.name === name
+        const base = (JSON.parse(this.#pristine) as { type: string }[]).find(
+            (p) => p.type === type
         );
         if (!base) return true; // unknown to the snapshot — treat as changed
-        return (
-            d.enabled !== base.enabled ||
-            d.cleared.length > 0 ||
-            Object.values(d.credentials).some((v) => v.trim() !== '')
-        );
+        return d.cleared.length > 0 || Object.values(d.credentials).some((v) => v.trim() !== '');
     }
 
     /**
@@ -186,12 +170,6 @@ class ForwardingState {
      */
     stationFields(type: string): CredentialField[] {
         return (this.typeFor(type)?.credential_fields ?? []).filter((f) => f.scope === 'station');
-    }
-
-    /** The stored enabled state of a destination, as the daemon last reported it. */
-    storedEnabled(name: string): boolean | undefined {
-        return (JSON.parse(this.#pristineEntries) as ForwarderEntry[]).find((e) => e.name === name)
-            ?.enabled;
     }
 
     async load(): Promise<void> {
@@ -229,14 +207,13 @@ class ForwardingState {
         // baseline (`before`) and exactly what THIS save carried (`sent`), never
         // drafts that may have moved while the PUT was in flight.
         const before = (JSON.parse(this.#pristineEntries) as ForwarderEntry[]).map(entryToDraft);
-        const sent = JSON.parse(JSON.stringify(this.drafts)) as ForwarderDraft[];
         try {
             const res = await saveForwarders(this.buildPayload());
             if (res.kind === 'error') {
                 // A timed-out PUT is reconciled by re-reading, not declared a
                 // failure (F-04c, ADR 0078); every other error keeps its wording.
                 if (res.timedOut) {
-                    await this.#reconcileAfterTimeout(before, sent);
+                    await this.#reconcileAfterTimeout(before);
                     return false;
                 }
                 toasts.error(`Save failed: ${res.message}`);
@@ -261,7 +238,7 @@ class ForwardingState {
      * never "saved". Only the forwarders config is re-read; the type descriptors
      * are static and stay loaded.
      */
-    async #reconcileAfterTimeout(before: ForwarderDraft[], sent: ForwarderDraft[]): Promise<void> {
+    async #reconcileAfterTimeout(before: ForwarderDraft[]): Promise<void> {
         const cfg = await fetchForwarders();
         if (cfg.kind === 'error') {
             // The re-read failed too — the whole-list state can't be refreshed
@@ -272,7 +249,7 @@ class ForwardingState {
         }
         // Compute the merged list from the CURRENT drafts BEFORE #apply overwrites
         // them with the stored entries.
-        const merged = mergeForwarders(before, sent, this.drafts, cfg.forwarders);
+        const merged = mergeForwarders(before, this.drafts, cfg.forwarders);
         this.#apply(cfg.forwarders); // baselines ← stored
         this.drafts = merged; // restore the operator's merged edits over stored
         toasts.warn(`${OUTCOME_UNKNOWN_LEAD} ${CONFIG_TIMEOUT_TAIL_RECONCILED}`);
@@ -290,8 +267,8 @@ class ForwardingState {
      * Also fails closed when the type descriptors could not be fetched, since
      * `clearable` is unknowable then.
      */
-    clear(name: string, key: string): void {
-        const d = this.drafts.find((x) => x.name === name);
+    clear(type: string, key: string): void {
+        const d = this.drafts.find((x) => x.type === type);
         if (!d || !this.clearable(d.type, key)) return;
         // Drop any half-typed value: reset and "set it to this" are different
         // intentions and the last one expressed wins.
@@ -300,8 +277,8 @@ class ForwardingState {
     }
 
     /** Undo a pending reset. */
-    uncleared(name: string, key: string): void {
-        const d = this.drafts.find((x) => x.name === name);
+    uncleared(type: string, key: string): void {
+        const d = this.drafts.find((x) => x.type === type);
         if (!d) return;
         d.cleared = d.cleared.filter((k) => k !== key);
     }
@@ -338,9 +315,9 @@ class ForwardingState {
      */
     buildPayload(): ForwarderPayload[] {
         return this.drafts.map((d) => {
-            // ADR 0082 transition: only station-scoped keys ride the wire, and
-            // `enabled` is sent exactly as stored — both are binding-owned now
-            // and the daemon refuses a PUT that changes them (F10).
+            // Config v6: only station-scoped keys ride the wire, and the account
+            // is identified by type alone — `name`, `enabled` and logbook-scoped
+            // keys are binding facts the daemon refuses here (F10).
             const station = new Set(this.stationFields(d.type).map((f) => f.key));
             const creds: Record<string, string> = {};
             for (const [k, v] of Object.entries(d.credentials)) {
@@ -350,9 +327,7 @@ class ForwardingState {
                 if (this.clearable(d.type, k)) creds[k] = '';
             }
             const out: ForwarderPayload = {
-                name: d.name,
                 type: d.type,
-                enabled: this.storedEnabled(d.name) ?? d.enabled,
                 action_filter: d.action_filter,
             };
             if (Object.keys(creds).length > 0) out.credentials = creds;
@@ -362,8 +337,7 @@ class ForwardingState {
 
     #comparable(): unknown {
         return this.drafts.map((d) => ({
-            name: d.name,
-            enabled: d.enabled,
+            type: d.type,
             credentials: d.credentials,
             cleared: d.cleared,
         }));

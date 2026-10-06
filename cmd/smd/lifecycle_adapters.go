@@ -76,6 +76,11 @@ type daemon struct {
 
 	// DB paths derived once the log-DB node initialises (its Initialize sets DatabaseConfig.Path).
 	paths archive.Paths // resolved from the catalogue before the graph is built (ADR 0071)
+	// configAtStart is config.json exactly as it was on disk before startup
+	// persisted the migrated document (config v6, W-0021 5C ruling R3): the
+	// source of the one-time v5 recovery copy taken before the strip. An
+	// unreadable file leaves it nil; the copy then recovers from the v6 file.
+	configAtStart []byte
 	// activationFailure is set on a last-known-good generation: the pending
 	// candidate this start was asked to activate did not come up (startGenerations).
 	activationFailure *activationFailure
@@ -427,6 +432,10 @@ func (d *daemon) startQso(context.Context) error {
 	if err := seedDestinationBindings(context.Background(), d.db, d.cfg, d.paths, d.logger); err != nil {
 		return errors.New(op).WithErr(err)
 	}
+	// Once Home's seed has committed, config.json sheds the fields the bindings
+	// now own (config v6); never fatal.
+	d.stripLegacyForwarderFieldsAfterSeed(context.Background())
+	d.cfg = d.cfgSvc.Snapshot()
 	// Then the one routing snapshot: every enqueue site routes a QSO by its
 	// logbook from it, and the workers node builds the same set.
 	snap, err := resolveDestinationRoutes(context.Background(), d.db, d.cfg, d.logger)

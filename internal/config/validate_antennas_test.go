@@ -199,7 +199,8 @@ func TestValidateEvidenceSync_RequiresSmcloudForwarder(t *testing.T) {
 		wantErr bool
 	}{
 		{"no forwarders at all", nil, true},
-		{"smcloud disabled", []types.ForwarderConfig{smcloudFwd(false, `{"url":"https://smc.example","token":"tok"}`)}, true},
+		// W-0021 5C (R4): a complete account satisfies sync; a legacy enabled flag does not count.
+		{"smcloud disabled but complete", []types.ForwarderConfig{smcloudFwd(false, `{"url":"https://smc.example","token":"tok"}`)}, false},
 		{"smcloud enabled but tokenless", []types.ForwarderConfig{smcloudFwd(true, `{"url":"https://smc.example"}`)}, true},
 		{"smcloud enabled with credentials", []types.ForwarderConfig{smcloudFwd(true, `{"url":"https://smc.example","token":"tok"}`)}, false},
 	}

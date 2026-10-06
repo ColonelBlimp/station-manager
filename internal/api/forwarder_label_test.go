@@ -68,9 +68,10 @@ func getConfigForwarders(t *testing.T, srv *Server) []ForwarderInfo {
 	return resp.Forwarders
 }
 
-func findInfo(list []ForwarderInfo, name string) (ForwarderInfo, bool) {
+// findInfo finds an account by type (config v6: accounts are identified by type).
+func findInfo(list []ForwarderInfo, typ string) (ForwarderInfo, bool) {
 	for _, f := range list {
-		if f.Name == name {
+		if f.Type == typ {
 			return f, true
 		}
 	}
@@ -115,7 +116,7 @@ func TestForwarderLabel_SurvivesASaveThatDoesNotCarryIt(t *testing.T) {
 
 	// Exactly what the Forwarding tab sends: name/type/enabled (unchanged —
 	// binding-owned under ADR 0082) and a station-scoped edit, no label.
-	body := `{"forwarders":[{"name":"smcloud","type":"smcloud","enabled":false,"action_filter":["insert","update"]}]}`
+	body := `{"forwarders":[{"type":"smcloud","action_filter":["insert","update"]}]}`
 	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -149,7 +150,7 @@ func TestForwarderEndpoints_SurviveASaveThatDoesNotCarryThem(t *testing.T) {
 		},
 	))
 
-	body := `{"forwarders":[{"name":"clublog","type":"clublog","enabled":false,"action_filter":["insert","delete"]}]}`
+	body := `{"forwarders":[{"type":"clublog","action_filter":["insert","delete"]}]}`
 	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()

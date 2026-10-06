@@ -445,13 +445,16 @@ func validateEvidence(e types.EvidenceConfig) []Finding {
 const maxAntennaFieldRunes = 128
 
 // EvidenceSyncCredentials resolves the §5 evidence-sync destination from
-// the enabled smcloud forwarder's credentials (operator ruling 2026-08-10:
-// one boolean, no second account or token surface). cmd/smd calls it to
-// fill evidence.Config; validateEvidenceSync refuses configs where it
-// errors, so a running daemon never reaches the error path.
+// the SM Cloud station account's url and token (operator ruling 2026-08-10:
+// one boolean, no second account or token surface). The account is the one
+// smcloud entry (one per type); a legacy `enabled` flag does not count —
+// evidence.sync is the consent, and neither a binding's state nor the active
+// archive decides it (W-0021 5C, ruling R4). cmd/smd calls it to fill
+// evidence.Config; validateEvidenceSync refuses configs where it errors, so a
+// running daemon never reaches the error path.
 func EvidenceSyncCredentials(cfg Config) (url, token string, err error) {
 	for _, fc := range cfg.Forwarders {
-		if fc.Type != "smcloud" || !fc.Enabled {
+		if fc.Type != "smcloud" {
 			continue
 		}
 		var creds struct {
@@ -460,15 +463,15 @@ func EvidenceSyncCredentials(cfg Config) (url, token string, err error) {
 		}
 		if len(fc.Credentials) > 0 {
 			if jerr := json.Unmarshal(fc.Credentials, &creds); jerr != nil {
-				return "", "", fmt.Errorf("smcloud forwarder %q credentials are not valid JSON", fc.Name)
+				return "", "", fmt.Errorf("the SM Cloud station account's credentials are not valid JSON")
 			}
 		}
 		if creds.URL == "" || creds.Token == "" {
-			return "", "", fmt.Errorf("smcloud forwarder %q is missing url or token in its credentials", fc.Name)
+			return "", "", fmt.Errorf("the SM Cloud station account is missing url or token in its credentials")
 		}
 		return creds.URL, creds.Token, nil
 	}
-	return "", "", fmt.Errorf("no enabled smcloud forwarder is configured")
+	return "", "", fmt.Errorf("no SM Cloud station account is configured")
 }
 
 // validateEvidenceSync is SY1's validation half: evidence.sync reuses the

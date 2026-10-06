@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Paired rollback drill (W-0021, ruling (e) 2026-09-22): prove on DISPOSABLE
-# copies that `smd db-downgrade` + `smd config-downgrade` let an OLDER build
+# copies that `smd config-downgrade` + `smd db-downgrade` (in that order) let an OLDER build
 # open the station's files, with every QSO / upload / history / logbook row
 # and UUID identical to the copy before the drill.
 #
@@ -28,7 +28,10 @@
 # consistent SQLite online backup, not a file copy, so a source daemon that is
 # still writing cannot leave the copy torn. Credentials are scrubbed from the
 # config before the scratch copy is written (every external path is off, so
-# none is needed); nothing secret is ever on disk in the scratch.
+# none is needed). The database copy is NOT scrubbed: from log schema 14 it
+# holds the destination bindings' per-logbook credentials, and from config v6
+# the config downgrade writes them back into the scratch config (0600, shredded
+# on exit); the scratch directory is 0700 and removed on exit.
 set -euo pipefail
 
 NEW=""; OLD=""; NEW_SCHEMA=""; NEW_CONFIG=""; OLD_SCHEMA=""; OLD_CONFIG=""; LABEL="old"; KEEP=0; MUTATE=0; EXPECT_DROPPED=""
@@ -252,16 +255,19 @@ expect "config version after new start" "$(config_version_of "$SCRATCH/config.js
 confine_check
 UP="$(fingerprint "$SCRATCH/db/station-manager.db")"; echo "$UP" | sed 's/^/  /'
 
-echo "drill[$LABEL]: phase 2 — downgrade db → schema $OLD_SCHEMA, config → v$OLD_CONFIG (NEW binary)"
-if [ "$NEW_SCHEMA" -gt "$OLD_SCHEMA" ]; then
-  SM_WORKING_DIR="$SCRATCH" "$NEW" db-downgrade --to "$OLD_SCHEMA" --yes --config "$SCRATCH/config.json" | sed 's/^/  /'
-else
-  echo "  schema unchanged between builds ($NEW_SCHEMA): the db step is not under test in this run"
-fi
+echo "drill[$LABEL]: phase 2 — downgrade config → v$OLD_CONFIG, then db → schema $OLD_SCHEMA (NEW binary)"
+# Config FIRST (install guide §7): from config v6 the downgrade rebuilds the
+# forwarder entries from Home's destination bindings, which the db step below
+# log schema 14 removes.
 if [ "$NEW_CONFIG" -gt "$OLD_CONFIG" ]; then
   SM_WORKING_DIR="$SCRATCH" "$NEW" config-downgrade --to "$OLD_CONFIG" --yes --config "$SCRATCH/config.json" | sed 's/^/  /'
 else
   echo "  config version unchanged between builds ($NEW_CONFIG): the config step is not under test in this run"
+fi
+if [ "$NEW_SCHEMA" -gt "$OLD_SCHEMA" ]; then
+  SM_WORKING_DIR="$SCRATCH" "$NEW" db-downgrade --to "$OLD_SCHEMA" --yes --config "$SCRATCH/config.json" | sed 's/^/  /'
+else
+  echo "  schema unchanged between builds ($NEW_SCHEMA): the db step is not under test in this run"
 fi
 if [ "$MUTATE" = 1 ]; then
   # Proof hook, never for a real drill: change ONE retained value in the scratch

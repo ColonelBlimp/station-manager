@@ -31,7 +31,7 @@ func TestHandlePutConfig_AllowInsecureHTTPPreservedNotWritable(t *testing.T) {
 
 	// A PUT that re-sends the forwarder (the wire type cannot carry allow_insecure_http)
 	// and omits credentials (kept). It does NOT try to enable/disable the ack — it can't.
-	body := `{"forwarders":[{"name":"cloud","type":"smcloud","enabled":true}]}`
+	body := `{"forwarders":[{"type":"smcloud"}]}`
 	w := putConfigSmtp(t, srv, body)
 	if w.Code != http.StatusOK {
 		t.Fatalf("PUT status = %d, body = %s (ack should have been preserved, keeping the config valid)",

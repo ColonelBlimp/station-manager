@@ -5,9 +5,12 @@
     Data-safety contract — VERIFIED against the daemon's overlayConfig +
     mergeForwarders (internal/api/handler_config.go:1241):
 
+      - Each entry is a destination's STATION ACCOUNT (config v6, W-0021 5C),
+        one per type and identified by type: no `name`, no `enabled` — both are
+        binding facts, and the daemon refuses a PUT that carries either.
       - The forwarders block is replaced WHOLE when present, so the full list
         must ride back on every save. Credentials survive that because
-        mergeForwarders merges by NAME onto the stored entry.
+        mergeForwarders merges by TYPE onto the stored account.
       - GET echoes no credential VALUES ever — only `credentials_set`, the list
         of keys currently holding one.
       - An OMITTED credential key keeps its stored value. A key sent BLANK also
@@ -65,23 +68,19 @@ export interface ForwarderType {
     credential_fields: CredentialField[];
 }
 
-/** A configured destination as GET /v1/config reports it — values masked. */
+/** A destination's station account as GET /v1/config reports it — values masked. */
 export interface ForwarderEntry {
-    name: string;
     type: string;
     /** Operator's own display name, set only in config.json. '' = use the built-in. */
     label: string;
-    enabled: boolean;
     action_filter?: string[];
     /** Which credential keys currently hold a value. Never the values. */
     credentials_set?: string[];
 }
 
-/** What a save sends per destination. `credentials` carries only real edits. */
+/** What a save sends per station account. `credentials` carries only real edits. */
 export interface ForwarderPayload {
-    name: string;
     type: string;
-    enabled: boolean;
     action_filter?: string[];
     credentials?: Record<string, string>;
 }
@@ -99,12 +98,10 @@ export type TypesOutcome =
     { kind: 'ok'; types: ForwarderType[] } | { kind: 'error'; message: string };
 
 function toEntry(v: unknown): ForwarderEntry | null {
-    if (!isPlainObject(v) || typeof v.name !== 'string' || typeof v.type !== 'string') return null;
+    if (!isPlainObject(v) || typeof v.type !== 'string' || v.type === '') return null;
     return {
-        name: v.name,
         type: v.type,
         label: typeof v.label === 'string' ? v.label : '',
-        enabled: v.enabled === true,
         action_filter: Array.isArray(v.action_filter)
             ? v.action_filter.filter((a): a is string => typeof a === 'string')
             : undefined,

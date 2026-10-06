@@ -81,8 +81,8 @@ func catalogueOnDisk(t *testing.T, cfgSvc *config.Service) config.Config {
 	if err := json.Unmarshal(data, &doc); err != nil {
 		t.Fatalf("parse config.json: %v", err)
 	}
-	if doc.Version != 5 {
-		t.Fatalf("config.json version = %d, want 5 after adoption", doc.Version)
+	if doc.Version != config.CurrentSchemaVersion() {
+		t.Fatalf("config.json version = %d, want %d after adoption", doc.Version, config.CurrentSchemaVersion())
 	}
 	return config.Config{ActiveQsoArchiveID: doc.Active, QsoArchives: doc.Entries}
 }

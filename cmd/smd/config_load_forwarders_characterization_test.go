@@ -8,11 +8,11 @@ package main
 // config.Load validates and fills defaults exactly as startup does.
 //
 //   L1  KEPT     — the file loads; the four entries, and only they, come back.
-//   L2  CHANGES  — each keeps its `name` and `enabled` state. 5C strips both from
-//                  the file after Home's seed commits (they are binding facts).
-//   L3  CHANGES  — every credential is preserved exactly, logbook-scoped keys
-//                  included. 5C strips the logbook-scoped keys after the seed;
-//                  the station-scoped ones (SM Cloud url, token) stay.
+//   L2  KEPT     — each keeps its `name` and `enabled` state. Loading never strips:
+//                  a v5 document keeps its legacy fields until Home's seed commits,
+//                  and only the later strip step changes the persisted file.
+//   L3  KEPT     — every credential is preserved exactly, logbook-scoped keys
+//                  included, for the same reason.
 //   L4  KEPT     — station settings survive: label, action_filter, endpoints,
 //                  tick, batch, retry and allow_insecure_http.
 

@@ -130,14 +130,22 @@ They are defaults, not retroactive edits: a QSO's explicit value wins.
 
 ### 3.3 Forwarders, lookup, SMTP, map, and PSK Reporter
 
-Forwarder details and retry semantics live in the forwarding reference. The
+Forwarder details and retry semantics live in the forwarding reference. From
+version `6` each `forwarders[]` entry is the destination's **station account**
+(ADR 0082 parts 3–4): at most one per `type`, identified by its type. Whether a
+logbook uploads, its durable upload name and its per-logbook credentials are
+destination bindings stored in the archive file, not configuration. The
 configuration contract is:
 
-- `name` is the stable instance key used by durable upload rows; changing it is
-  not a cosmetic rename;
-- `type` must name a registered implementation;
+- `type` must name a registered implementation, and at most one entry may name it;
+- `name` and `enabled` are version-5 fields kept known but deprecated: a version-5
+  file keeps them — and its logbook-scoped credential keys — until the adopted Home
+  archive's one-time binding seed has committed, after which startup strips them
+  (below). Where a `name` is present it must be unique; it is the legacy upload
+  key that seed carries;
 - `label` is an optional file-only display label;
-- `credentials` is type-owned opaque JSON and may contain secrets;
+- `credentials` is type-owned opaque JSON and may contain secrets; after the strip it
+  holds only the type's station-scoped keys (SM Cloud `url` and `token`);
 - `action_filter` accepts supported `insert`, `update`, and `delete` actions; an
   explicit unsupported action is rejected at load (the only exception is the
   alpha.1-written `qrzcq` all-actions default, reconciled by the `2 -> 3` migration,
@@ -152,8 +160,22 @@ host is rejected unless the operator explicitly sets the acknowledgement. The fi
 does not configure the `cmd/smcloud` listener and does not enable or disable TLS.
 
 SM Cloud has no canonical service URL, so it is not seeded into a fresh `smd`
-configuration, even as a disabled entry. The operator adds it explicitly; other
-registered forwarders with canonical endpoints may be seeded disabled.
+configuration. The operator adds it explicitly; other registered forwarders with
+canonical endpoints are seeded as station accounts with no name and no enabled
+state (the binding seed names such an account after its type).
+
+**The strip.** Once the adopted Home archive's binding seed has committed, startup
+rewrites `config.json` file-first so each entry keeps only its station-account
+fields. Before the first strip it writes `config.v5.json` beside `config.json`
+once, owner-only (`0600`), never overwriting it: the version-5 document as read
+before startup persisted the migrated file, or — when that is not available — the
+still-unstripped version-6 file re-stamped as version 5, used only when it
+validates as a complete version-5 document. It takes the same guarded ClubLog
+`credentials.api` scrub as startup persistence. It is historical recovery
+material, never read back automatically, and not a lossless rollback after later
+edits. A copy that cannot be written defers the strip; a failed strip write
+leaves the file as it was; neither fails startup, and the next start retries.
+Nothing is stripped while another archive is active.
 
 `lookup.hamnut` is the country/prefix source. `lookup.chain` is the callsign
 provider chain. Provider `priority`, not JSON array position, is authoritative;
@@ -185,7 +207,7 @@ station configuration.
 
 Evidence capture and synchronization are separately opt-in and default off.
 `cap_bytes` is the physical cap across the evidence database and its WAL/SHM
-siblings. `sync` reuses an enabled `smcloud` forwarder's URL and token; no second
+siblings. `sync` reuses the SM Cloud station account's URL and token; no second
 evidence credential surface exists.
 
 Each antenna declaration contains a lineage `name`, optional type/feedline/
@@ -284,8 +306,9 @@ Every loaded or API-mutated candidate is normalized, then passed to
 - station callsigns, Maidenhead locator, coordinate/locator consistency, zones,
   DXCC, amplifier multiplier, fallback power, and operating bands;
 - FT8 display, audio, occupancy, and Field Day values;
-- evidence cap, antenna declarations, and the evidence-sync dependency on an
-  enabled, credentialed SM Cloud forwarder; and
+- evidence cap, antenna declarations, and the evidence-sync dependency on a
+  complete SM Cloud station account (`url` and `token`; `evidence.sync` is the
+  consent, and no binding state or active archive decides it); and
 - datastore driver, path, connection-pool bounds, and context timeouts, plus the
   logging level, relative log directory, rotation bounds, skip-frame count, and
   shutdown timeout — mirrored 1:1 from the SQLite and logging consumers so a bad
@@ -387,13 +410,16 @@ The API never echoes password or token values. It reports whether a secret is se
 
 - SMTP and lookup: blank password means keep the stored value;
   `password_clear=true` explicitly removes it, and clear wins if both are sent.
-- Forwarders: credentials are merged by stable forwarder `name`. Omitted or blank
-  fields keep stored secrets, except registry-declared clearable non-secret options
-  where blank intentionally restores the constructor default. During the ADR 0082
-  transition an entry's `enabled` flag and its logbook-scoped credential keys are
-  owned by the active archive's destination bindings: an API edit that changes
-  `enabled` or carries such a key is refused (`forwarder_field_binding_owned`);
-  station-scoped fields remain editable.
+- Forwarders: each station account's credentials are merged onto the stored
+  account of the same `type`. Omitted or blank fields keep stored secrets, except
+  registry-declared clearable non-secret options where blank intentionally
+  restores the constructor default. The deprecated fields a version-5 file still
+  holds — `name`, `enabled`, logbook-scoped keys — are carried over untouched.
+  They are binding facts (ADR 0082): an API edit that carries `name` or `enabled`
+  at all, or any logbook-scoped key, is refused (`forwarder_field_binding_owned`).
+  A save carrying forwarders is also refused (`forwarder_unusable`, naming the
+  binding) when an enabled destination binding of the active archive could not be
+  built with the candidate account.
 - Replacing or removing a forwarder/provider entry removes the configuration owned
   by that entry. Lookup's callsign chain is replaced as a whole, not merged by
   missing provider name.
@@ -550,7 +576,7 @@ it does not imply every already-constructed service has been replaced.
 | Read at use | station/QSL/operator data and per-rig `MY_RIG` for the already-active rig | The next operation that explicitly reads a config snapshot. |
 | Explicit live side effect | `ft8.tx.max_repeats` | The PUT also calls the running sequencer's setter. This is the sole current `/v1/config` live side effect. |
 | Client-owned | FT8 display/map and restore-on-mode-switch preferences | When the app adopts/refetches the saved value; no daemon rebuild. |
-| Restart-required | listener/server, datastore, logging, user agent, forwarder and lookup/refresher construction, SMTP service, active-rig selection, bridge hardware/timeouts/tune, FT8 device/decoder/decode-log/PSK Reporter, evidence activation | After daemon restart. |
+| Restart-required | listener/server, datastore, logging, user agent, forwarder station accounts and lookup/refresher construction, SMTP service, active-rig selection, bridge hardware/timeouts/tune, FT8 device/decoder/decode-log/PSK Reporter, evidence activation | After daemon restart. |
 
 The configuration diff/restart hint may classify changes for the UI, but it does not
 make restart-only fields live. Rig hot-swap is not implemented.
@@ -589,7 +615,7 @@ accepted through the API must also survive the next startup.
 
 ### 13.1 Version field and ordered registry
 
-The current schema version is `5`. A missing version is the version-`1` baseline.
+The current schema version is `6`. A missing version is the version-`1` baseline.
 Migrations are registered and applied one version at a time. A step may also carry
 a down migration; only steps that add keys an older loader would refuse need one.
 
@@ -637,6 +663,20 @@ request's idempotency key, so a retried create — through a restarted daemon to
 returns the archive it already made. The step stamps only; `5 -> 4` strips the key
 from every entry.
 
+Version `5 -> 6` (ADR 0082 part 4, W-0021 5C) makes each forwarder entry a station
+account (§3.3). The step stamps only and keeps `name`, `enabled` and logbook-scoped
+keys known, so a version-5 file loads unchanged; startup strips them after Home's
+binding seed. Its document down step, `6 -> 5`, can only stamp an unstripped file.
+For a stripped one, `smd config-downgrade --to 5` first rebuilds each entry from
+the adopted Home archive's bindings, read from its closed file and confirmed by its
+archive identity: the binding's state and per-logbook keys over the account, under
+migration 0015 down's collapse name (the legacy name, else the default logbook's
+binding name, else the first). It refuses, naming the destination and logbooks and
+writing nothing, when Home's live logbooks disagree on the state (an unbound logbook
+counts as off) or the bindings hold different credentials; an account with no
+binding becomes a disabled entry named after its type. Run it before `smd
+db-downgrade`, which removes the bindings.
+
 ### 13.3 Pipeline placement
 
 Raw migration precedes typed unmarshal; the unknown-key gate (§5.4) runs between
@@ -647,7 +687,7 @@ write, and validates only the canonical current candidate.
 
 ### 13.4 Persistence and downgrade guard
 
-`Load` itself never writes. The in-memory value is current and carries version `5`.
+`Load` itself never writes. The in-memory value is current and carries version `6`.
 When the on-disk document was an older version, startup persists the migrated shape
 exactly once, under an explicit `schema_version` persistence reason (names the
 version, never a value); the next boot reads a current file and writes nothing. A
@@ -663,7 +703,9 @@ permission action even on such a no-op (§5.3).
 downgrade: with the daemon stopped it rewrites the file through the registered down
 steps, refuses a target at or above the file's version or any step without a down
 migration (naming the floor), and writes with the same crash-durable replacement and
-mode rules as the daemon. It pairs with `smd db-downgrade` (install guide §7).
+mode rules as the daemon. From version `6` it reads the adopted Home archive's
+bindings first (§13.2). It pairs with `smd db-downgrade`, and runs FIRST (install
+guide §7).
 
 Any future shape change must bump the version, add the next ordered migration, and
 test old shape, current shape, malformed input, idempotence, and downgrade refusal.

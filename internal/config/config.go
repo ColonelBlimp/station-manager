@@ -609,12 +609,26 @@ type ServerConfig struct {
 // Load reads a JSON config file and returns a populated Config with defaults
 // applied for any zero-valued fields.
 func Load(path string) (Config, error) {
-	var cfg Config
-
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return cfg, fmt.Errorf("reading config file: %w", err)
+		return Config{}, fmt.Errorf("reading config file: %w", err)
 	}
+	return loadDocument(path, data)
+}
+
+// CheckDocument runs a config document through everything Load does after
+// reading the file — migration, the unknown-key gate, defaults and validation —
+// without a file: the caller's bytes never leave memory. path names the file
+// the document would be (its directory resolves relative defaults; messages
+// cite it). Used to prove a v5 recovery copy would load (W-0021 5C, R3).
+func CheckDocument(path string, data []byte) error {
+	_, err := loadDocument(path, data)
+	return err
+}
+
+func loadDocument(path string, data []byte) (Config, error) {
+	var cfg Config
+	var err error
 
 	// Migrate the raw document up to the current schema version before
 	// unmarshalling (config.md §13). A newer-than-supported file is fatal here
@@ -1882,16 +1896,18 @@ func validateForwarders(fwds []types.ForwarderConfig) error {
 	names := make(map[string]struct{}, len(fwds))
 	byType := make(map[string]string, len(fwds))
 	for i, fc := range fwds {
-		if fc.Name == "" {
-			return fmt.Errorf("forwarder[%d]: name is empty", i)
-		}
 		if fc.Type == "" {
 			return fmt.Errorf("forwarder[%d] (%s): type is empty", i, fc.Name)
 		}
-		if _, dup := names[fc.Name]; dup {
-			return fmt.Errorf("forwarder[%d]: duplicate name %q", i, fc.Name)
+		// A v6 station account has no name (ADR 0082 part 4): the name is the
+		// deprecated v5 key, kept until the strip. Where one is present it is
+		// still the legacy queue key the seed carries, so it stays unique.
+		if fc.Name != "" {
+			if _, dup := names[fc.Name]; dup {
+				return fmt.Errorf("forwarder[%d]: duplicate name %q", i, fc.Name)
+			}
+			names[fc.Name] = struct{}{}
 		}
-		names[fc.Name] = struct{}{}
 		// One station account per destination type (ADR 0082 part 3): the
 		// per-logbook bindings hold one row per (logbook, destination), so a
 		// second entry of one type has no place in the model. Refused by the
