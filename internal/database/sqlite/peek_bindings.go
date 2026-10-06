@@ -30,6 +30,11 @@ type PeekedBindings struct {
 	// Bindings are every binding of a live logbook, as ListLogbookDestinations
 	// orders them (logbook, then insertion).
 	Bindings []types.LogbookDestination
+	// CollapseTargets is, per destination, the ONE name migration 0015's down
+	// step renames that destination's queue rows to — computed by the same
+	// SELECT over ALL bindings, a soft-deleted logbook's included, so a v5
+	// entry rebuilt under it drains exactly those rows (codex P1 on 52077508).
+	CollapseTargets map[string]string
 }
 
 // PeekDestinationBindings reads an archive file's identity, seed marker, live
@@ -81,7 +86,51 @@ func PeekDestinationBindings(path string) (PeekedBindings, error) {
 	if out.Bindings, err = peekBindings(ctx, db); err != nil {
 		return PeekedBindings{}, errors.New(op).WithErr(err)
 	}
+	if out.CollapseTargets, err = peekCollapseTargets(ctx, db); err != nil {
+		return PeekedBindings{}, errors.New(op).WithErr(err)
+	}
 	return out, nil
+}
+
+// peekCollapseTargets runs migration 0015 down's target SELECT read-only (keep
+// the two in step). At schema 14 there is no legacy_name, and the target is
+// the default logbook's binding, else the first name.
+func peekCollapseTargets(ctx context.Context, db *sql.DB) (map[string]string, error) {
+	legacy := "NULL"
+	var n int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('logbook_destination') WHERE name = 'legacy_name'`).Scan(&n); err != nil {
+		return nil, err
+	}
+	if n == 1 {
+		legacy = `(SELECT d0.legacy_name
+		           FROM logbook_destination d0
+		           WHERE d0.destination = d.destination AND d0.legacy_name IS NOT NULL
+		           ORDER BY d0.id
+		           LIMIT 1)`
+	}
+	rows, err := db.QueryContext(ctx, `
+		SELECT d.destination,
+		       COALESCE(`+legacy+`,
+		                (SELECT d2.forwarder_name
+		                 FROM logbook_destination d2
+		                          JOIN archive_metadata am ON am.singleton = 1 AND d2.logbook_id = am.default_logbook_id
+		                 WHERE d2.destination = d.destination),
+		                MIN(d.forwarder_name))
+		FROM logbook_destination d
+		GROUP BY d.destination`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]string{}
+	for rows.Next() {
+		var dest, target string
+		if err := rows.Scan(&dest, &target); err != nil {
+			return nil, err
+		}
+		out[dest] = target
+	}
+	return out, rows.Err()
 }
 
 func peekLiveLogbooks(ctx context.Context, db *sql.DB) ([]types.Logbook, error) {

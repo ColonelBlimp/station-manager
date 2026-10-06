@@ -199,3 +199,39 @@ func TestConfigDowngradeV6_D8_HomeConfirmedByIdentity(t *testing.T) {
 	}, seeded, qrzHome)
 	assertRefusedUnchanged(t, "D8", path, downgradeTo5(t, path), "identity")
 }
+
+// D9 (codex P1 on 52077508): the v5 name is migration 0015 down's collapse
+// target over ALL bindings — a soft-deleted logbook's included — so the config
+// name and the renamed queue rows agree. Sequence: Home's original logbook
+// holds the seeded qrz-home binding; a second logbook becomes the default with
+// binding qrz.second; the empty original logbook is deleted, its binding kept.
+func TestConfigDowngradeV6_D9_NameMatchesTheQueueCollapseTarget(t *testing.T) {
+	path := downgradeBed(t, nil,
+		second,
+		`INSERT INTO archive_metadata (singleton, archive_uuid, default_logbook_id, destination_bindings_seeded_at) VALUES (1, '`+homeUUID+`', 2, datetime('now'))`,
+		qrzHome, qrzSecond,
+		`UPDATE logbook SET deleted_at = datetime('now') WHERE id = 1`)
+	if err := downgradeTo5(t, path); err != nil {
+		t.Fatalf("D9: %v", err)
+	}
+	if _, e := entriesOf(t, path); e["qrz"]["name"] != "qrz-home" || e["qrz"]["enabled"] != true {
+		t.Fatalf("D9: qrz = %v; want the collapse target qrz-home (0015 down renames the queue to it), on", e["qrz"])
+	}
+}
+
+// D10: a destination whose only binding belongs to a deleted logbook still has
+// a collapse target (its queue rows are renamed to it): the disabled v5 entry
+// takes that name, not the type's.
+func TestConfigDowngradeV6_D10_DeletedLogbooksBindingStillNamesTheEntry(t *testing.T) {
+	path := downgradeBed(t, nil,
+		second,
+		`INSERT INTO archive_metadata (singleton, archive_uuid, default_logbook_id, destination_bindings_seeded_at) VALUES (1, '`+homeUUID+`', 2, datetime('now'))`,
+		qrzHome,
+		`UPDATE logbook SET deleted_at = datetime('now') WHERE id = 1`)
+	if err := downgradeTo5(t, path); err != nil {
+		t.Fatalf("D10: %v", err)
+	}
+	if _, e := entriesOf(t, path); e["qrz"]["name"] != "qrz-home" || e["qrz"]["enabled"] == true {
+		t.Fatalf("D10: qrz = %v; want a disabled entry under the collapse target qrz-home", e["qrz"])
+	}
+}

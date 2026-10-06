@@ -94,9 +94,10 @@ func documentStripped(data []byte) (bool, error) {
 // change an on/off state or a credential: every live logbook must be in one
 // state (an UNBOUND logbook counts as off; acceptance case 9), and every
 // binding must hold the same per-logbook credentials. The name is migration
-// 0015 down's collapse target: the first legacy name, else the default
-// logbook's binding, else the first binding name; an account with no binding
-// becomes a disabled entry named after its type.
+// 0015 down's collapse target, read from the file with the migration's own
+// SELECT over every binding (a deleted logbook's included), so the entry and
+// the renamed queue rows agree; an account with no binding at all becomes a
+// disabled entry named after its type.
 func recombineV5Forwarders(accounts []types.ForwarderConfig, peek sqlite.PeekedBindings, defaultID int64) ([]types.ForwarderConfig, error) {
 	names := make(map[int64]string, len(peek.Logbooks))
 	for _, lb := range peek.Logbooks {
@@ -117,6 +118,14 @@ func recombineV5Forwarders(accounts []types.ForwarderConfig, peek sqlite.PeekedB
 		if len(bindings) == 0 {
 			fc.Enabled = false
 			fc.Credentials = account.Credentials
+			// Only a deleted logbook's binding: its queue rows are still
+			// renamed to the collapse target, so the entry takes that name.
+			if target := peek.CollapseTargets[account.Type]; target != "" {
+				fc.Name = target
+				taken[target] = true
+				out = append(out, fc)
+				continue
+			}
 			out = append(out, fc)
 			unbound = append(unbound, len(out)-1)
 			continue
@@ -130,7 +139,10 @@ func recombineV5Forwarders(accounts []types.ForwarderConfig, peek sqlite.PeekedB
 			return nil, err
 		}
 		fc.Enabled = enabled
-		fc.Name = collapseName(bindings, defaultID)
+		fc.Name = peek.CollapseTargets[account.Type]
+		if fc.Name == "" {
+			fc.Name = collapseName(bindings, defaultID)
+		}
 		if fc.Credentials, err = v5Credentials(account, logbookKeys); err != nil {
 			return nil, err
 		}
@@ -216,8 +228,9 @@ func logbookScoped(typ string, raw json.RawMessage) (map[string]json.RawMessage,
 	return keys, string(b), nil
 }
 
-// collapseName mirrors migration 0015 down's target, so the queue rows the log
-// downgrade renames and the v5 entry agree.
+// collapseName is the fallback when the file reports no collapse target for a
+// destination (CollapseTargets, read with migration 0015 down's own SELECT,
+// is what normally names the entry): the same rule over the live bindings.
 func collapseName(bindings []types.LogbookDestination, defaultID int64) string {
 	byID := append([]types.LogbookDestination(nil), bindings...)
 	sort.Slice(byID, func(i, j int) bool { return byID[i].ID < byID[j].ID })
