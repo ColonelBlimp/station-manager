@@ -417,3 +417,22 @@ func TestConfigV6Strip_T8_EvidenceSyncWithoutEnabledSmcloudDefers(t *testing.T) 
 		})
 	}
 }
+
+// T9 (codex P2 on 25692f7a): the v5 check reads SM Cloud's credentials as v5
+// does — a tagged struct, whose keys encoding/json matches case-insensitively —
+// so an entry a v5 loader accepts is never refused here, and one it rejects is.
+func TestConfigV6Strip_T9_V5CheckDecodesCredentialsAsV5Does(t *testing.T) {
+	doc := func(creds string, enabled bool) []byte {
+		return []byte(`{"evidence":{"sync":true},"forwarders":[{"name":"cloud","type":"smcloud","enabled":` +
+			map[bool]string{true: "true", false: "false"}[enabled] + `,"credentials":` + creds + `}]}`)
+	}
+	if err := checkV5Compatible(doc(`{"URL":"https://t9.example.test","TOKEN":"T9"}`, true)); err != nil {
+		t.Fatalf("T9: upper-case keys v5 accepts were refused: %v", err)
+	}
+	if err := checkV5Compatible(doc(`{"url":"https://t9.example.test"}`, true)); err == nil {
+		t.Fatal("T9: an entry with no token, which v5 refuses for evidence sync, was accepted")
+	}
+	if err := checkV5Compatible(doc(`{"url":"https://t9.example.test","token":"T9"}`, false)); err == nil {
+		t.Fatal("T9: a disabled entry, which v5 refuses for evidence sync, was accepted")
+	}
+}

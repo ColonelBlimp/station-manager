@@ -283,10 +283,10 @@ func checkV5Compatible(doc []byte) error {
 			Sync bool `json:"sync"`
 		} `json:"evidence"`
 		Forwarders []struct {
-			Name        string         `json:"name"`
-			Type        string         `json:"type"`
-			Enabled     bool           `json:"enabled"`
-			Credentials map[string]any `json:"credentials"`
+			Name        string          `json:"name"`
+			Type        string          `json:"type"`
+			Enabled     bool            `json:"enabled"`
+			Credentials json.RawMessage `json:"credentials"`
 		} `json:"forwarders"`
 	}
 	if err := json.Unmarshal(doc, &shape); err != nil {
@@ -302,8 +302,7 @@ func checkV5Compatible(doc []byte) error {
 			return fmt.Errorf("forwarder[%d]: duplicate name %q; v5 requires unique names", i, f.Name)
 		}
 		seen[f.Name] = true
-		if f.Type == "smcloud" && f.Enabled && f.Credentials["url"] != nil && f.Credentials["url"] != "" &&
-			f.Credentials["token"] != nil && f.Credentials["token"] != "" {
+		if f.Type == "smcloud" && f.Enabled && smcloudCredentialsComplete(f.Credentials) {
 			smcloudOn = true
 		}
 	}
@@ -312,4 +311,18 @@ func checkV5Compatible(doc []byte) error {
 			"turn Home's SM Cloud destination on in Settings → Forwarding, or evidence sync off, and try again")
 	}
 	return nil
+}
+
+// smcloudCredentialsComplete reads SM Cloud's url and token exactly as v5's
+// EvidenceSyncCredentials did — a tagged struct, so encoding/json's
+// case-insensitive key matching applies (codex P2 on 25692f7a).
+func smcloudCredentialsComplete(raw json.RawMessage) bool {
+	var creds struct {
+		URL   string `json:"url"`
+		Token string `json:"token"`
+	}
+	if len(raw) > 0 && json.Unmarshal(raw, &creds) != nil {
+		return false
+	}
+	return creds.URL != "" && creds.Token != ""
 }
