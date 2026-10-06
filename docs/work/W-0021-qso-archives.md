@@ -1287,6 +1287,12 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      (S7b; S7); P7 the separate line restored (S7, D4). Gates: lint, format, svelte-check, vitest
      (148 files, 2,085 tests), maintainability, manual build — all exit 0. jsdom does not paint:
      the red placeholder is the operator's visual check.
+     **Accepted on screen 2026-10-06 (operator; deployed `2.0.0-alpha.3-169-geb6e1af5`, Home, Default
+     logbook):** ClubLog, QRZ Logbook and QRZCQ switched on without their keys and saved — refused
+     by the SPA; all three switches stayed on, each card kept its `*`, each pill still read
+     DISABLED; every missing required field showed *Required to turn this on.* as its red
+     placeholder inside the red outline, with no line beneath; ClubLog's callsign, which defaults
+     to the logbook's, was not marked; one toast named each destination and its missing fields.
      **Design exchange (2026-09-26, during C.3–C.4): the Forwarding tab frames the wrong thing.**
      The operator read the per-logbook row "Drill 7Q5MLV" as the archive — the Drill archive's
      only logbook is also named "Drill" (Home's is "Default"). Found: the tab is destination-first

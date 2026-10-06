@@ -3,7 +3,7 @@
 Updated: 2026-10-06
 
 - **Goal:** W-0021: QSO archives — finish the foundations: C.2, then 5C (config v6), then 5F (SM Cloud identity). [`backlog`](backlog.md) owns priority.
-- **State:** 5C deployed and stripped on Home (`52077508`…`2e4e49eb`); C.2 (`b02354e0`) awaits its on-screen check. C.2 (`b02354e0`) still awaits the on-screen placeholder check.
+- **State:** 5C deployed and stripped on Home (`52077508`…`2e4e49eb`); C.2 accepted on screen 2026-10-06. C.2 (`b02354e0`) still awaits the on-screen placeholder check.
 - **Next:** deploy `2e4e49eb` (logs the strip's wait when another archive is active), then 5F. **alpha.3 FROZEN** at `333427ea`; FT8-10 BLOCKED.
 - **Decisions not to revisit:** W-0004 palettes DECLINED. PT-6 `fsOps` package-private. FT8 timing stays +0.500/+0.660. `txConfirmTimeout` DEFERRED. ClubLog is not a station account; its callsign default stays persisted at save.
 - **Do not:** re-open a closed dossier (W-0001/W-0003/W-0004/W-0005/W-0019); initiate RF/hardware without per-occasion agreement; amend or push without operator direction.
