@@ -1428,7 +1428,7 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      *Drill (pending):* config-first downgrade order; the Home file confirmed by its archive
      identity, not assumed from `datastore.path`; the old and new binaries each boot their OWN
      copy, so the new binary's upward migrations cannot touch the old binary's proof.
-     *Status:* implementation, tests and drill results pending.
+     *Status:* built 2026-10-06 (`52077508`, `ba830078`, `25692f7a`, `6fadea1d`); evidence below.
      **5C commit (a), characterization (2026-10-06, tests only, passing on v5):** synthetic,
      distinct values throughout, so reading the wrong source fails visibly.
      `cmd/smd/config_load_forwarders_characterization_test.go` — an explicit version-5 JSON file
@@ -1459,6 +1459,89 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      stored-value assertion; M6 load overwriting a station tick fails L4; M7 default seeding by
      name instead of type fails L1. Gates: gofmt (whole tree), vet, `go test ./...`,
      maintainability — all exit 0.
+     **5C commit (b), the slice (2026-10-06, `52077508`; review fix `ba830078`).** The L2/L3 labels
+     were corrected to KEPT (operator): loading never strips — a v5 document keeps its legacy
+     fields until Home's seed commits, and only the later strip changes the file. What was built:
+     config v6 (stamp-only 5→6; `6→5` document step stamps only an unstripped file); `name`
+     optional in `validateForwarders`, `name`/`enabled` omitempty; the strip in `startQso` after
+     the seed, Home only (`config_v6_strip.go`); the once-only `config.v5.json` (v5 bytes read
+     before `persistResolvedConfig`, else the unstripped v6 file re-stamped and validated in
+     memory by `config.CheckDocument`; guarded ClubLog scrub; exclusive staging + link, never
+     overwritten); the narrowed `ForwarderInfo` (station-scoped `credentials_set`, `name` and
+     `enabled` pointers only to refuse their presence), the merge by type keeping the deprecated
+     fields, and the account-save probe of the active archive's enabled bindings
+     (`station_account.go`); evidence sync by a complete account; restore's source from Home's
+     bindings (`archive.ReadHomeBindings` → `sqlite.PeekDestinationBindings`, read-only,
+     identity-confirmed); the data-aware `config-downgrade` (`config_downgrade_v6.go`); the
+     default accounts without name/enabled and the seed's type-name fallback; the SPA station
+     accounts keyed by type; `config-check`'s count worded; `rollback-drill.sh` config-first.
+     Found while building: an existing guard (CS6) caught the config-save log printing a nameless
+     account's whole entry, credentials included — the diff now keys accounts by type and never
+     renders a list of objects whole (tests D3, D4 in `diff_test.go`).
+     Tests, RED first: `config_v6_test.go` V1–V4; evidence E2/E4 flipped (CHANGED);
+     `handler_config_station_account_test.go` A1 (R1 presence, incl. "" and false), A2 (case 8),
+     A3 (binding probe; disabled binding not probed); G2 flipped; `config_v6_strip_test.go` T1–T7
+     (T2 and T5's deferral were guards — green before); restore S1, S2, S4–S6 (S3 a guard);
+     `config_downgrade_v6_test.go` D1–D10 (D6 a guard; D5 sharpened to require the credentials
+     reason); SPA `forwarding.v6.svelte.test.ts` W1–W3, the store tests moved to the v6 wire.
+     Existing tests updated to the narrowed contract (bodies without name/enabled; the build-check
+     and setup tests now break an enabled legacy entry; the valid-blob test reads SM Cloud's
+     station keys). Reversion proofs, each failing its intended assertion, restore verified: R1,
+     A2, A3, G2, E2, diff D3/D4, V4, T1, T2, T3, T6 (guard removed; the first attempt did not
+     compile and printed nothing — redone so it compiles), T6b, T7, S1, S6, D4, D5, D7, D8, W1,
+     W2, C1, C2. Not separately provable: the copy's never-overwrite (an existing-copy check AND a
+     link that refuses an existing file — either alone holds) and T5's validation (the document
+     step refuses a nameless entry before the name check would).
+     **Codex P1 on `52077508`, fixed in `ba830078`:** the rebuilt name came from the live
+     bindings while migration 0015 down picks its queue target over ALL bindings (a deleted
+     logbook's included) keyed on the file's default logbook; after a default change and the
+     original logbook's deletion they diverged. The peek now runs the migration's own target
+     SELECT; a destination bound only on a deleted logbook takes its target too. Tests D9, D10;
+     proofs C1, C2. Codex clean on `ba830078`.
+     Gates: gofmt, vet, `go test ./...`, maintainability (`run` and `handlePutConfig` kept at their
+     floors by moving the new lines into helpers; `runRestore` ratcheted 62→53, 46→40, MI 15→16),
+     frontend lint, format, svelte-check, vitest (149 files, 2,088 tests); cloud tests against
+     `sm-pg` (smcloud, cloud, qsoservice; `-race`); `task ci:local` — all exit 0 (the release gate
+     ran before the wrong-order message and the P1 fix; both re-verified with whole-tree Go
+     tests and maintainability).
+     **Rollback drill (2026-10-06, synthetic station in a 0700 directory under $HOME, never the
+     operator's files; each binary booted its OWN copy):** P0 the pre-5C build (`d2ca1b42`, config
+     5 / schema 15) seeded Home's four bindings from a v5 file; P1 the new build stripped its copy
+     to station accounts (SM Cloud url and token only), wrote `config.v5.json` 0600 byte-equal to
+     the v5 file read before its start, left the bindings unchanged; P1b a second start changed
+     nothing; P2 `db-downgrade --to 13` first, then `config-downgrade --to 5`, was refused naming
+     the cause ("Home's file holds no destination bindings … was smd db-downgrade run first?"),
+     config untouched; P3 `config-downgrade --to 5` (catalogue Home id = the file's identity)
+     rebuilt the exact v5 entries (qrz-home on, clublog / cloud-home / qrzcq off, their keys), and
+     the pre-5C build booted its own copy with the bindings intact; P4 `config-downgrade --to 3`
+     then `db-downgrade --to 9`, and alpha.3 booted its own copy at schema 9. Work directories
+     shredded and removed.
+     **Operator review of `52077508`/`ba830078` (2026-10-06): three gaps, all fixed.** (P1) The
+     recovery copy and the downgrade could write a file v5 rejects: v6 relaxed TWO v5 rules, and
+     only the name rule had been restored — v5 also requires an ENABLED smcloud entry while
+     `evidence.sync` is on. `checkV5Compatible` now enforces both before either write; nothing is
+     changed to pass it (copy deferred; downgrade refused naming evidence.sync). Tests T8 (both
+     sources), D11/D12; proofs V1, V2. (P2) An interrupted copy's fixed `.tmp` staging file blocked
+     every retry: staging is now unique (`CreateTemp`), publication stays exclusive (link), and
+     stale staging files (they hold credentials) are removed once a copy stands. The rework of T3
+     exposed a further defect, fixed with it: a directory at `config.v5.json` counted as an
+     existing copy, so the strip ran with no copy — only a regular file counts now. Tests T3
+     (a non-file at the copy's name defers), T3b (leftover staging never blocks and is removed);
+     proofs S1, S2, S3. (P2) R1 missed explicit JSON nulls: `ForwarderInfo.UnmarshalJSON` records
+     key presence, so `"name": null` and `"enabled": null` are refused 400 with nothing written.
+     A1 null cases; proofs N1, N2. References updated (config.md §3.3, §13.2 — whose rebuild
+     condition now says "once Home's seed has committed, stripped or not"; install.md §7;
+     api-endpoints.md). Gates re-run: gofmt, vet, `go test ./...`, maintainability, `task ci:local`
+     — all exit 0. Drill re-run with two added phases: P1c an interrupted staging file present →
+     copy written, leftover removed; P3b evidence sync on with Home's SM Cloud binding off →
+     downgrade refused naming the conflict, file untouched; P0–P4 as before.
+     Committed `25692f7a`. **Codex P2 on `25692f7a`, fixed in `6fadea1d`:** the v5 check looked
+     up `url`/`token` case-sensitively, while v5 decodes them into a tagged struct (encoding/json
+     matches keys case-insensitively), so a v5-valid `URL`/`TOKEN` entry would have blocked the
+     copy and the downgrade; the check now decodes the same struct. Test T9; proof K1. Codex clean
+     on `6fadea1d`; whole-tree Go tests, vet and maintainability re-run (the release gate and the
+     drill ran on `25692f7a`; the fix only widens which credential spellings pass, and the drill
+     uses lower-case keys).
      *Commit split (accepted):* (a) passing characterization tests first, pinning today's v5
      behaviour the change must keep (load of the station's shaped config; GET/PUT station fields; evidence sync and
      restore lookup); (b) the slice in one releasable commit with its docs references; (c) the

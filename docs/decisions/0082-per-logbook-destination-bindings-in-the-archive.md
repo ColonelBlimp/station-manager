@@ -7,6 +7,18 @@ date: 2026-09-25
 
 # 0082 — Destination bindings live per logbook inside the archive; station accounts stay in config.json
 
+> **Dated update (2026-10-06, W-0021 5C built: `52077508`, `ba830078`, `25692f7a`, `6fadea1d`).** Part 4's config v6 is
+> built as decided, with the operator's 5C rulings: a PUT carrying `name` or `enabled` at all is
+> refused (R1); `smd restore` reads its cloud logbook from Home's default-logbook SM Cloud
+> binding, `--cloud-logbook` overriding without opening Home (R2); the strip writes a once-only
+> `config.v5.json` first (R3); evidence sync needs a complete SM Cloud account (R4). Part 4's
+> collapse name for the data-aware downgrade is the one migration 0015 down computes — read from
+> the file with the migration's own SELECT over every binding, a deleted logbook's included — not
+> a separate inference (codex P1 on `52077508`). The downgrade also counts an unbound live logbook
+> as off. Neither the downgrade nor the recovery copy writes a file an older loader would reject —
+> there, evidence sync requires an ENABLED SM Cloud entry — and neither changes consent or a
+> binding's state to pass that check (operator review; `25692f7a`, `6fadea1d`).
+
 > **Dated update (2026-10-06, operator ruling 2026-09-26 during station drill C.2; built in W-0021).**
 > Part 9's refused save no longer "restores the last persisted switch state". A refused save — the
 > SPA's for a blank required field, or the daemon's — keeps every switch as the operator set it; the
