@@ -38,7 +38,7 @@
         {placeholder}
         autocomplete="off"
         spellcheck="false"
-        class="input w-full pr-9"
+        class="input w-full pr-9 {invalid ? 'placeholder:text-invalid' : ''}"
         class:input-error={invalid}
         aria-invalid={invalid || undefined}
     />

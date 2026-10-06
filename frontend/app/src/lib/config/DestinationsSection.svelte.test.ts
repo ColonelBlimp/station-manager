@@ -393,7 +393,7 @@ describe('DestinationsSection', () => {
         expect(within(card('QRZ Logbook')).queryByTestId('account-pointer')).toBeNull();
     });
 
-    it('D4: turning a row on without its key marks the field, restores the switch, and sends nothing', async () => {
+    it('D4: turning a row on without its key marks the field, keeps the switch, and sends nothing', async () => {
         await renderLoaded();
         const second = screen.getByRole<HTMLInputElement>('checkbox', {
             name: 'QRZ Logbook for Second',
@@ -401,7 +401,6 @@ describe('DestinationsSection', () => {
         await fireEvent.click(second);
         await fireEvent.click(screen.getByRole('button', { name: 'Save destinations' }));
         expect(calls.some((c) => c.method === 'PUT')).toBe(false);
-        expect(second.checked).toBe(false);
         // An outcome is a toast (ruling 2026-09-26); no inline box.
         await vi.waitFor(() =>
             expect(
@@ -414,13 +413,39 @@ describe('DestinationsSection', () => {
             ).toBe(true)
         );
         expect(screen.queryByTestId('bindings-refusal')).toBeNull();
-        // The switch went back, but the card stays OPEN: it holds the marked
-        // field the message names (station drill C.5 found it collapsing).
-        expect((card('QRZ Logbook') as HTMLDetailsElement).open).toBe(true);
-        const rows = within(card('QRZ Logbook')).getAllByTestId('binding-row');
+        // C.2 (ruling 2026-09-26): the switch stays as set and the card stays
+        // starred as unsaved, while its pill still shows what the daemon holds.
+        const qrz = card('QRZ Logbook');
+        expect(second.checked).toBe(true);
+        expect(within(qrz).getByTitle('Unsaved changes')).toBeInTheDocument();
+        expect(within(qrz).getByTestId('destination-state').textContent).toBe('mixed');
+        // The card stays OPEN: it holds the marked field the message names
+        // (station drill C.5 found it collapsing).
+        expect((qrz as HTMLDetailsElement).open).toBe(true);
+        const rows = within(qrz).getAllByTestId('binding-row');
         const keyInput = within(rows[1]).getByLabelText('API key');
         expect(keyInput.getAttribute('aria-invalid')).toBe('true');
-        expect(within(rows[1]).getByText('Required to turn this on.')).toBeInTheDocument();
+        // The reason is the field's own placeholder, not a line under it.
+        expect(keyInput.getAttribute('placeholder')).toBe('Required to turn this on.');
+        expect(within(rows[1]).queryByText('Required to turn this on.')).toBeNull();
+    });
+
+    it('D4b: a daemon refusal keeps the switches as set; the pill stays what the daemon holds', async () => {
+        putAnswer = () => json({ code: 'binding_unusable', message: 'refused' }, 400);
+        await renderLoaded();
+        const main = screen.getByRole<HTMLInputElement>('checkbox', {
+            name: 'QRZ Logbook for Main',
+        });
+        await fireEvent.click(main); // Main is on: turn it off
+        await fireEvent.click(screen.getByRole('button', { name: 'Save destinations' }));
+        await vi.waitFor(() => expect(calls.some((c) => c.method === 'PUT')).toBe(true));
+        await vi.waitFor(() =>
+            expect(toastSaid('error', (m) => m === 'Save failed: refused')).toBe(true)
+        );
+        const qrz = card('QRZ Logbook');
+        expect(main.checked).toBe(false);
+        expect(within(qrz).getByTitle('Unsaved changes')).toBeInTheDocument();
+        expect(within(qrz).getByTestId('destination-state').textContent).toBe('mixed');
     });
 
     it('D5: a stored key reads as saved, not as a box; a save sends the changed rows and the restart banner follows', async () => {

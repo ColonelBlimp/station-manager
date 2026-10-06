@@ -55,6 +55,12 @@
     // The input shows when there is something to type into: nothing stored,
     // Replace pressed, a value already typed, or a mark to see.
     const editing = $derived(!cleared && (!stored || replacing || value !== '' || invalid));
+    // A marked field says why in its own placeholder, in the mark's red (C.2
+    // ruling 2026-09-26): colour alone would not say why, and a screen reader
+    // reads the placeholder.
+    const placeholder = $derived(
+        invalid && invalidNote ? invalidNote : stored ? '' : emptyPlaceholder
+    );
 
     function cancel(): void {
         oninput('');
@@ -108,19 +114,19 @@
                         {value}
                         {invalid}
                         {disabled}
-                        placeholder={stored ? '' : emptyPlaceholder}
+                        {placeholder}
                         {oninput}
                     />
                 {:else}
                     <input
                         id="field-{id}"
                         type="text"
-                        class="input w-full"
+                        class="input w-full {invalid ? 'placeholder:text-invalid' : ''}"
                         class:input-error={invalid}
                         aria-invalid={invalid || undefined}
                         {disabled}
                         {value}
-                        placeholder={stored ? '' : emptyPlaceholder}
+                        {placeholder}
                         oninput={(e) => oninput(e.currentTarget.value)}
                         autocomplete="off"
                         spellcheck="false"
@@ -137,8 +143,5 @@
                 >
             {/if}
         </div>
-        {#if invalid && invalidNote}
-            <span class="text-xs text-invalid">{invalidNote}</span>
-        {/if}
     {/if}
 </div>

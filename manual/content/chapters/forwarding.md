@@ -59,8 +59,10 @@ you enter it per logbook under the destinations.
    logbooks in the archive, the destination's own switch sets them all at
    once.
 3. Fill that logbook's account fields, described per service below. A
-   logbook switched on without a required field is not saved: the field is
-   marked *Required to turn this on*.
+   logbook switched on without a required field is not saved: the field says
+   *Required to turn this on* in red, and your switches stay as you set them.
+   The card stays marked unsaved (*) and its status label still shows what is
+   saved, until you fill the field and save, or discard.
 4. Press **Save destinations**, then restart the daemon.
 
 If a destination can't be turned on in this archive, its card says why and

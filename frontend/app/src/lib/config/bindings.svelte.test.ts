@@ -6,10 +6,11 @@ import { toasts } from '../ui/toasts.svelte';
     ADR 0082 part 9 (W-0021 5E): the Forwarding tab's "Destinations for this
     archive" state. Drafts are per logbook row; only changed rows ride a save;
     a row turned on without a required per-logbook field is refused BEFORE the
-    wire (the field is marked, that switch goes back to what the daemon holds,
-    sibling rows keep their drafts); a daemon refusal restores every switch
-    (nothing was saved) and keeps typed values; a timed-out save is re-read,
-    never reported as saved.
+    wire (the field is marked); a refused save — the SPA's or the daemon's —
+    keeps every drafted switch, typed value and removal mark, and the view
+    (the pill's source) stays what the daemon holds (C.2 ruling 2026-09-26, a
+    departure from ADR 0082 part 9); a timed-out save is re-read, never
+    reported as saved.
 */
 
 const TYPES = {
@@ -194,8 +195,14 @@ describe('bindingsState', () => {
         expect(error).toHaveBeenCalledWith(
             'Save failed: QRZ Logbook for Second: API key is required to turn it on.'
         );
-        // The offending switch shows what the daemon holds; the sibling keeps its draft.
-        expect(bindingsState.drafts[rowKey('qrz', 2)].enabled).toBe(false);
+        // C.2: the switch stays as the operator set it, still unsaved; the
+        // daemon's row (the pill's source) is untouched. The sibling keeps its draft.
+        expect(bindingsState.drafts[rowKey('qrz', 2)].enabled).toBe(true);
+        expect(bindingsState.dirty).toBe(true);
+        expect(
+            bindingsState.rowEdited('qrz', bindingsState.view!.destinations[0].logbooks[1])
+        ).toBe(true);
+        expect(bindingsState.view!.destinations[0].logbooks[1].enabled).toBe(false);
         expect(bindingsState.drafts[rowKey('qrz', 1)].credentials.api_key).toBe('NEW-FOR-MAIN');
         // Typing the missing field drops its mark.
         bindingsState.setField('qrz', 2, 'api_key', 'K2');
@@ -228,7 +235,7 @@ describe('bindingsState', () => {
         expect(bindingsState.drafts[rowKey('qrz', 2)].credentials).toEqual({});
     });
 
-    it('B6: a daemon refusal restores every switch and keeps typed values', async () => {
+    it("B6: a daemon refusal keeps every drafted switch and typed value; the view stays the daemon's", async () => {
         await bindingsState.load();
         putAnswer = () =>
             Promise.resolve(
@@ -249,9 +256,29 @@ describe('bindingsState', () => {
         expect(error).toHaveBeenCalledWith(
             'Save failed: QRZ Logbook for logbook "Second" cannot be turned on'
         );
-        expect(bindingsState.drafts[rowKey('qrz', 1)].enabled).toBe(true);
-        expect(bindingsState.drafts[rowKey('qrz', 2)].enabled).toBe(false);
+        expect(bindingsState.drafts[rowKey('qrz', 1)].enabled).toBe(false);
+        expect(bindingsState.drafts[rowKey('qrz', 2)].enabled).toBe(true);
         expect(bindingsState.drafts[rowKey('qrz', 2)].credentials.api_key).toBe('BAD');
+        expect(bindingsState.dirty).toBe(true);
+        // Nothing was saved: the daemon's rows, which the pill reads, are unchanged.
+        expect(bindingsState.view!.destinations[0].logbooks.map((r) => r.enabled)).toEqual([
+            true,
+            false,
+        ]);
+    });
+
+    it('B6b: discarding after a refusal returns every switch to what the daemon holds', async () => {
+        await bindingsState.load();
+        putAnswer = () =>
+            Promise.resolve(json({ code: 'binding_unusable', message: 'refused' }, 400));
+        vi.spyOn(toasts, 'error').mockImplementation(() => 0);
+        bindingsState.setRow('qrz', 2, true); // no key: refused before the wire
+        await bindingsState.save();
+        expect(bindingsState.missing[rowKey('qrz', 2)]).toEqual(['api_key']);
+        bindingsState.reset();
+        expect(bindingsState.drafts[rowKey('qrz', 2)].enabled).toBe(false);
+        expect(bindingsState.missing).toEqual({});
+        expect(bindingsState.dirty).toBe(false);
     });
 
     it('B7: a timed-out save is re-read, never reported as saved', async () => {
@@ -294,12 +321,11 @@ describe('bindingsState', () => {
         expect(bindingsState.drafts[rowKey('qrz', 1)].cleared).toEqual([]);
     });
 
-    it('B8b: a refusal that restores a row to ON drops its removal marks', async () => {
+    it('B8b: a refused save keeps a row switched off with its removal mark; the next save resends both', async () => {
         // Row 1 is on with a stored key: switched off and marked for removal,
-        // then the daemon refuses the save (another row's fault). The switch
-        // goes back on, so the removal — only possible from a row that ends
-        // off — cannot survive with it: kept, it would leave the key's field
-        // disabled with no Undo shown, and the next save refused.
+        // then the daemon refuses the save (another row's fault). C.2: the
+        // switch stays off as drafted, so the removal — possible only from a
+        // row that ends off — stays valid and pending.
         await bindingsState.load();
         putAnswer = () =>
             Promise.resolve(json({ code: 'binding_unusable', message: 'refused' }, 400));
@@ -309,9 +335,22 @@ describe('bindingsState', () => {
         bindingsState.setField('qrz', 2, 'api_key', 'K2');
         await bindingsState.save();
         const d = bindingsState.drafts[rowKey('qrz', 1)];
-        expect(d.enabled).toBe(true);
-        expect(d.cleared).toEqual([]);
-        expect(bindingsState.rowEdited('qrz', view().destinations[0].logbooks[0])).toBe(false);
+        expect(d.enabled).toBe(false);
+        expect(d.cleared).toEqual(['api_key']);
+        expect(bindingsState.rowEdited('qrz', view().destinations[0].logbooks[0])).toBe(true);
+        putAnswer = () => Promise.resolve(json(view()));
+        await bindingsState.save();
+        expect(puts()[1].body).toEqual({
+            destinations: [
+                {
+                    type: 'qrz',
+                    logbooks: [
+                        { logbook_id: 1, enabled: false, credentials_clear: ['api_key'] },
+                        { logbook_id: 2, enabled: true, credentials: { api_key: 'K2' } },
+                    ],
+                },
+            ],
+        });
     });
 
     it('B8c: after a timed-out save, removal marks survive only on a row still off with the key stored', async () => {
@@ -660,7 +699,7 @@ describe('bindingsState', () => {
         await vi.waitFor(() => expect(bindingsState.view?.archive_label).toBe('Home (fresh)'));
     });
 
-    it('B24: a refused save that restores the last switch pays a re-read owed meanwhile', async () => {
+    it('B24: a re-read owed during a refused save waits for the kept draft, and is paid when it is discarded', async () => {
         await bindingsState.load();
         bindingsState.setRow('qrz', 2, true);
         bindingsState.setField('qrz', 2, 'api_key', 'k');
@@ -668,8 +707,15 @@ describe('bindingsState', () => {
         bindingsState.requestReload();
         bindingsState.setField('qrz', 2, 'api_key', ''); // only the switch left
         putAnswer = () => Promise.resolve(json({ code: 'refused', message: 'no' }, 400));
-        // Refused before the wire: a switch on without its required key.
+        // Refused before the wire: a switch on without its required key. C.2
+        // keeps the switch, so the draft is still unsaved and the re-read must
+        // not overwrite it.
+        vi.spyOn(toasts, 'error').mockImplementation(() => 0);
         await bindingsState.save();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(bindingsState.view?.archive_label).toBe('Home');
+        expect(bindingsState.drafts[rowKey('qrz', 2)].enabled).toBe(true);
+        bindingsState.reset();
         await vi.waitFor(() => expect(bindingsState.view?.archive_label).toBe('Home (fresh)'));
     });
 

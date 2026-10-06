@@ -13,10 +13,12 @@
       - a destination the daemon says cannot be turned on here refuses the
         switch (turning off always works);
       - a row turned on without a required per-logbook field is refused BEFORE
-        the wire: the field is marked, that row's switch goes back to what the
-        daemon holds, sibling rows keep their drafts;
-      - a daemon refusal restores every switch (nothing was saved) and keeps
-        typed values, so the switch never claims more than the daemon saved;
+        the wire: the field is marked;
+      - a refused save — this one or the daemon's — keeps every drafted switch,
+        typed value and removal mark, still unsaved; the card's pill reads the
+        daemon's rows, so it never claims more than was saved (C.2 ruling
+        2026-09-26, a departure from ADR 0082 part 9's restore: restoring made
+        the operator re-find the switch after typing the key);
       - a timed-out save is re-read and reported outcome-unknown (ADR 0078),
         never "saved";
       - a stored field can be removed only from a row that ends off.
@@ -407,19 +409,6 @@ class BindingsState {
         return `Save failed: ${parts.join('; ')}.`;
     }
 
-    /** Every switch back to what the daemon holds; typed values stay. A row
-     *  restored to ON loses its removal marks, which need a row that ends off. */
-    #restoreSwitches(): void {
-        for (const dest of this.view?.destinations ?? []) {
-            for (const row of dest.logbooks) {
-                const d = this.drafts[rowKey(dest.type, row.logbook_id)];
-                if (!d) continue;
-                d.enabled = row.enabled;
-                d.cleared = keptRemovals(row, d.cleared);
-            }
-        }
-    }
-
     async save(): Promise<void> {
         await this.#save();
         this.#settle();
@@ -429,11 +418,6 @@ class BindingsState {
         if (this.saving || !this.loaded || !this.dirty || !this.view) return;
         const missing = this.validate();
         if (Object.keys(missing).length > 0) {
-            for (const k of Object.keys(missing)) {
-                const found = this.#row(k);
-                const d = this.drafts[k];
-                if (found && d) d.enabled = found.row.enabled;
-            }
             this.missing = missing;
             // An outcome is a toast, as on every Settings tab (ruling 2026-09-26).
             toasts.error(this.#missingMessage(missing));
@@ -459,7 +443,6 @@ class BindingsState {
                 return;
             }
             toasts.error(`Save failed: ${res.message}`);
-            this.#restoreSwitches();
         } finally {
             this.saving = false;
         }
@@ -523,8 +506,9 @@ class BindingsState {
     }
 
     /** Pay an owed re-read once nothing is unsaved and nothing is on the wire.
-     *  Called wherever edits can come to nothing: every edit, a save's end
-     *  (refused ones restore switches), a discard, and a load's end. */
+     *  Called wherever edits can come to nothing: every edit, a save's end,
+     *  a discard, and a load's end. A refused save keeps its draft, so the
+     *  re-read waits for a save or a discard. */
     #settle(): void {
         if (this.#reloadRequested <= this.#reloadCovered) return;
         if (!this.loaded || this.dirty || this.saving || this.loading) return;

@@ -109,10 +109,40 @@ describe('StoredSecretField', () => {
         expect(text.className).toMatch(/peer-focus:block/);
     });
 
-    it('S7: a marked field says why, on the input', () => {
-        setup({ invalid: true, invalidNote: 'Required to turn this on.' });
-        expect(screen.getByLabelText('API key').getAttribute('aria-invalid')).toBe('true');
-        expect(screen.getByText('Required to turn this on.')).toBeInTheDocument();
+    it('S7: a marked field says why as its own red placeholder, not a line under it', () => {
+        setup({
+            invalid: true,
+            invalidNote: 'Required to turn this on.',
+            emptyPlaceholder: 'M0ABC — the logbook’s callsign unless you type another',
+        });
+        const input = screen.getByLabelText('API key');
+        expect(input.getAttribute('aria-invalid')).toBe('true');
+        expect(input.getAttribute('placeholder')).toBe('Required to turn this on.');
+        expect(input.classList.contains('placeholder:text-invalid')).toBe(true);
+        expect(screen.queryByText('Required to turn this on.')).toBeNull();
+    });
+
+    it('S7b: a text field marks its placeholder the same way', () => {
+        setup({
+            kind: 'text',
+            invalid: true,
+            invalidNote: 'Required to turn this on.',
+            emptyPlaceholder: 'M0ABC',
+        });
+        const input = screen.getByLabelText('API key');
+        expect(input.getAttribute('placeholder')).toBe('Required to turn this on.');
+        expect(input.classList.contains('placeholder:text-invalid')).toBe(true);
+    });
+
+    it('S7c: an unmarked field keeps its ordinary placeholder in the ordinary colour', () => {
+        setup({
+            kind: 'text',
+            invalidNote: 'Required to turn this on.',
+            emptyPlaceholder: 'M0ABC',
+        });
+        const input = screen.getByLabelText('API key');
+        expect(input.getAttribute('placeholder')).toBe('M0ABC');
+        expect(input.classList.contains('placeholder:text-invalid')).toBe(false);
     });
 
     it('S8: a marked stored field opens its input so the mark is visible', () => {
