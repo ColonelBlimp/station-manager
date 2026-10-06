@@ -1345,6 +1345,96 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      Proofs: strip happens only after the seed marker commits; a failed strip is retried;
      duplicate-type file refused before any write; the non-collapsible downgrade refuses without
      rewriting.
+     **5C review package (2026-10-06; rulings given the same day; no code yet).**
+     *Already in the tree, so not 5C work:* one entry per type is enforced by `validateForwarders`
+     (`internal/config/config.go:1895`, ADR 0082 part 3) at load and on the PUT candidate; the
+     queue-name collapse for a downgrade is migration 0015's down (`legacy_name` first, then the
+     default logbook's binding, then the first name), which supersedes the plan's inferred rule
+     above (ADR 0082 dated update 2026-09-25). The seed marker and `legacy_name` exist (0014, 0015,
+     `SeedLogbookDestinationsWithContext`). Nothing strips config.json yet; config is still v5.
+     *Operator-observable outcomes:*
+     1. After the first start on this build with Home's bindings seeded, `config.json` is v6 and
+        its forwarder entries hold only station-account fields (type, label, station-scoped
+        credentials, `action_filter`, endpoints, cadence, retry, `allow_insecure_http`); no
+        `name`, `enabled`, QRZ/QRZCQ/ClubLog keys or SM Cloud `logbook`. Uploads, queue names and
+        Forwarding look exactly as before. Nearest confusable: a stripped file whose bindings were
+        never seeded (keys lost) — the strip runs only after Home's marker has committed.
+     2. With another archive active at upgrade, the file is v6 but keeps the deprecated keys until
+        Home is next active; nothing forwards from them (bindings rule), and the strip then runs.
+     3. A failed strip write is logged and retried at the next start; the daemon still starts.
+     4. Settings → Forwarding's Station accounts and `GET /v1/config` show one account per type
+        with station fields only, whether or not the file has been stripped yet.
+     5. Saving a station account (say a new SM Cloud token) is refused, naming the binding, when
+        any enabled binding in the active archive could not be built with it; nothing is written.
+     6. Evidence sync and `smd restore` keep working after the strip: they find SM Cloud by its
+        complete station account, not by an `enabled` flag.
+     7. Rollback: with the daemon stopped, `smd config-downgrade --to 5` rebuilds the v5 entries
+        from Home's bindings plus the station accounts and writes them, or refuses by destination
+        and logbook name — writing nothing — when a destination's Home bindings cannot become one
+        v5 entry without changing an enabled state or a credential. Then `smd db-downgrade` takes
+        the log schema below 14 (it opens `datastore.path`, not the catalogue's active archive —
+        to verify in the drill that this is the Home file the config downgrade reads). Both old and new binaries boot the results (drilled on copies).
+     *Code changes (inventory):* `migrations.go` v5→v6 stamp step (keys stay known); the
+     data-aware 6→5 path in `cmd/smd/config_downgrade.go` (opens Home through `db-downgrade`'s
+     container wiring; a pure document down is impossible); the strip after the seed in
+     `startQso` (file-first, `config.WriteDocument`), gated on Home's committed marker;
+     `types.ForwarderConfig` keeps `Name`/`Enabled` for v5 input and the down path only;
+     `validateForwarders` stops requiring `name`; `applyDefaults`' seeded accounts carry no
+     `name`/`enabled`; `ForwarderInfo` narrows (type, label, station `credentials_set`,
+     `action_filter`) and the PUT merges by type, extending `forwarder_field_binding_owned` to
+     `name`; `ForwarderStartupFinding` on the PUT becomes a probe of the active archive's enabled
+     bindings with the candidate accounts (`forwarding.BindingConfig` + `Build`, as
+     `archive.buildCandidate`); `EvidenceSyncCredentials` (`validate.go:452`) by a complete
+     account; `smd restore`'s default cloud logbook; `smd config-check`'s "enabled forwarder"
+     count; the SPA's `api/forwarders.ts` and `config/forwarding.svelte.ts` (no name, no enabled;
+     keyed by type) and the dead `fetchForwarders` in `api/config-blocks.ts`. Docs: `config.md`
+     §3.3, §7, §11, §13; `api-endpoints.md` (`ForwarderInfo`); `install.md` §7 — its rollback
+     recipe today runs `db-downgrade` FIRST, the reverse of the ruled order.
+     *Rulings (operator, 2026-10-06):*
+     (R1) A station-account PUT carrying `name` or `enabled` is refused 400
+     `forwarder_field_binding_owned` on the key's PRESENCE — an empty `name` and `enabled: false`
+     included — naming the field and saying the tab needs reloading; the refusal does not reload it.
+     (R2) `smd restore` defaults to Home's default-logbook SM Cloud binding. `--forwarder` selects a
+     named SM Cloud binding in Home, a disabled one included (restoring needs no upload consent).
+     `--cloud-logbook` stays an explicit override that works even when Home's database is
+     unavailable. When the default binding cannot be resolved, restore requires that override
+     rather than guessing. A binding whose `logbook` field is empty keeps the existing cloud-name
+     default.
+     (R3) A once-only, owner-only (`0600`) recovery copy, `config.v5.json`. It must be an actual v5
+     document: startup persists the migrated config BEFORE seeding (`persistResolvedConfig`,
+     `cmd/smd/main.go:250`), so a copy taken at strip time would already be v6 — the copy is taken
+     from the v5 bytes before that persistence. It is never overwritten, and its historical
+     credentials are never substituted automatically for current bindings. A failed copy defers
+     the strip; startup continues and a later start retries. It is historical recovery material,
+     not a guaranteed lossless rollback after later edits. Open detail for the build, to confirm
+     when presenting: a retry after a failed first copy finds the file already persisted as v6
+     but still unstripped; since v5→v6 is a stamp only, that document re-stamped as version 5 is
+     the v5 shape — or the strip waits for an operator action. The copy also takes the same ClubLog
+     `api` scrub `persistResolvedConfig` applies, so it carries no secret the live file has shed.
+     (R4) Confirmed: evidence sync requires a complete SM Cloud station account; `evidence.sync`
+     stays the consent switch. Binding enablement and the active archive never decide that consent.
+     *Acceptance cases added before implementation (operator, 2026-10-06):*
+     8. A station-account save while Home's seed is deferred (another archive active) preserves
+        the hidden legacy fields the seed still needs (`name`, `enabled`, logbook-scoped keys):
+        the narrowed PUT must not drop what the narrowed GET does not show.
+     9. The downgrade treats an UNBOUND live logbook as off. Comparing only existing binding rows
+        could permit a collapse that turns forwarding on for that logbook in v5, where one entry
+        serves every logbook.
+     *Drill (pending):* config-first downgrade order; the Home file confirmed by its archive
+     identity, not assumed from `datastore.path`; the old and new binaries each boot their OWN
+     copy, so the new binary's upward migrations cannot touch the old binary's proof.
+     *Status:* implementation, tests and drill results pending.
+     *Commit split (accepted):* (a) passing characterization tests first, pinning today's v5
+     behaviour the change must keep (load of the station's shaped config; GET/PUT station fields; evidence sync and
+     restore lookup); (b) the slice in one releasable commit with its docs references; (c) the
+     dossier and ADR 0082 dated note. RED-first proofs: strip only after the marker commits; a
+     failed strip retried; strip not run with another archive active; the narrowed GET before
+     and after the strip; a PUT with `name`/`enabled`/logbook keys refused and nothing written; an
+     account save refused when an enabled binding cannot build; downgrade recombines a seeded
+     two-logbook Home or refuses without writing; evidence sync and restore after the strip;
+     `applyDefaults` seeds no name/enabled. Cloud tests against `sm-pg` (credential readers).
+     Rollback drill on copies before commit (b): config 6→5 then log 15→13; the tagged alpha.3
+     and the new binary each boot.
    - **5D — the bindings API.** `GET`/`PUT /v1/qso-archives/{uuid}/bindings`, 409 unless `{uuid}`
      is the active archive; GET = per destination the station account's presence, the aggregate
      state (`on`/`off`/`mixed`) and per live logbook the binding (enabled, `credentials_set`,
