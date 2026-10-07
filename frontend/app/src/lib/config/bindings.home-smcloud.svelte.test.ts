@@ -16,6 +16,9 @@ import { _resetForTests as resetToasts } from '../ui/toasts.svelte';
       F3  an existing enabled row may be turned off and back on in the draft
           (it is not a new enable until a disable is saved).
       F4  the rendered row says why, with its switch disabled.
+      F5  refreshing eligibility after a station-account save brings the row
+          refusals too (codex P2 on 4daf2a2e): while the account was
+          incomplete the daemon named only the destination's reason.
 */
 
 const REASON =
@@ -82,14 +85,17 @@ function json(body: unknown): Response {
     });
 }
 
+let served: unknown = VIEW;
+
 beforeEach(() => {
+    served = VIEW;
     vi.stubGlobal(
         'fetch',
         vi.fn((url: string) => {
             if (url === '/v1/version')
                 return Promise.resolve(json({ instance: 'i', archive: { id: 'A1' } }));
             if (url === '/v1/forwarder-types') return Promise.resolve(json(TYPES));
-            if (url === '/v1/qso-archives/A1/bindings') return Promise.resolve(json(VIEW));
+            if (url === '/v1/qso-archives/A1/bindings') return Promise.resolve(json(served));
             return Promise.resolve(new Response('{}', { status: 404 }));
         })
     );
@@ -129,6 +135,33 @@ describe('bindingsState — Home SM Cloud, default logbook only (5F.0)', () => {
         bindingsState.setRow('smcloud', 2, true);
         expect(bindingsState.drafts[rowKey('smcloud', 2)].enabled).toBe(true);
         expect(bindingsState.dirty).toBe(false);
+    });
+
+    it('F5: an eligibility refresh brings the row refusals as well as the account', async () => {
+        const incomplete = 'its station account is incomplete: a required station field is not set';
+        const [dest] = VIEW.destinations;
+        served = {
+            ...VIEW,
+            destinations: [
+                {
+                    ...dest,
+                    account: { configured: false },
+                    reason: incomplete,
+                    new_logbook_reason: incomplete,
+                    logbooks: dest.logbooks.map((r) => ({ ...r, reason: '' })),
+                },
+            ],
+        };
+        await bindingsState.load();
+        served = VIEW; // the account was completed and saved
+        expect(await bindingsState.refreshEligibility()).toBe(true);
+        const after = bindingsState.view!.destinations[0];
+        expect(after.reason).toBe('');
+        expect(after.new_logbook_reason).toBe(REASON);
+        expect(after.logbooks[2].reason).toBe(REASON);
+        bindingsState.setAll('smcloud', true);
+        expect(bindingsState.drafts[rowKey('smcloud', 1)].enabled).toBe(true);
+        expect(bindingsState.drafts[rowKey('smcloud', 3)].enabled).toBe(false);
     });
 
     it('F4: the refused row says why, with its switch disabled', async () => {

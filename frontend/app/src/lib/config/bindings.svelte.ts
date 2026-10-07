@@ -393,7 +393,22 @@ class BindingsState {
             ...current,
             destinations: current.destinations.map((dest) => {
                 const next = fresh.get(dest.type);
-                return next ? { ...dest, account: next.account, reason: next.reason } : dest;
+                if (!next) return dest;
+                // The row refusals too (5F.0): while the destination itself was
+                // refused the daemon named no row's, so completing the account
+                // can surface them (codex P2 on 4daf2a2e). Only eligibility is
+                // taken; the rows' state and the drafts stay as they are.
+                const rowReason = new Map(next.logbooks.map((r) => [r.logbook_id, r.reason]));
+                return {
+                    ...dest,
+                    account: next.account,
+                    reason: next.reason,
+                    new_logbook_reason: next.new_logbook_reason,
+                    logbooks: dest.logbooks.map((r) => ({
+                        ...r,
+                        reason: rowReason.get(r.logbook_id) ?? r.reason,
+                    })),
+                };
             }),
         };
         return true;
