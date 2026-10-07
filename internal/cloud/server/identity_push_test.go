@@ -393,3 +393,38 @@ func doNoFatalMethod(method, url string, body []byte, out any) int {
 	_ = json.NewDecoder(resp.Body).Decode(out)
 	return resp.StatusCode
 }
+
+// IP11 (codex P1 on 4bf46bc4): a logbook created by UUID inside the ADOPTED
+// legacy archive has no legacy name, so the name-only wire cannot ask for it.
+// The old listing, per-id reads and export leave it out — and keep serving the
+// named logbooks rather than failing for the whole tenant.
+func TestIdentityPush_IP11_AUUIDOnlyLogbookInTheAdoptedArchiveStaysOffTheOldWire(t *testing.T) {
+	ts, _, _, db := newTestServer(t, quietLog)
+	pushMain(t, ts)
+	adopt(t, ts.URL, adoptBody("main", homeUUID, defaultLBUID))
+	const fresh = "0197f9a0-0000-7000-8000-00000000010e"
+	if status, out := pushIdentity(t, ts, homeUUID, otherLBUID, identityPut{LogbookLabel: "Contest",
+		Qsos: oneQso(t, fresh, "DL9UW", 1, pushAt)}); status != http.StatusOK {
+		t.Fatalf("push a new logbook into the adopted home: %d %v", status, out)
+	}
+	newLB, _ := readLogbook(t, db, otherLBUID)
+
+	var books struct {
+		Logbooks []store.LogbookInfo `json:"logbooks"`
+	}
+	resp := do(t, http.MethodGet, ts.URL+"/v1/logbooks", testToken, nil, &books)
+	if resp.StatusCode != http.StatusOK || len(books.Logbooks) != 1 || books.Logbooks[0].Name != "main" {
+		t.Fatalf("old listing (status %d) = %+v; want only main", resp.StatusCode, books.Logbooks)
+	}
+	if r := do(t, http.MethodGet, ts.URL+"/v1/logbooks/"+itoa(newLB.id)+"/manifest", testToken, nil, nil); r.StatusCode != http.StatusNotFound {
+		t.Fatalf("old manifest of the uuid-only logbook = %d; want 404", r.StatusCode)
+	}
+	var export struct {
+		Logbooks []store.LogbookInfo `json:"logbooks"`
+		Qsos     []ExportQso         `json:"qsos"`
+	}
+	resp = do(t, http.MethodGet, ts.URL+"/v1/export", testToken, nil, &export)
+	if resp.StatusCode != http.StatusOK || len(export.Logbooks) != 1 || len(export.Qsos) != 1 || export.Qsos[0].UUID == fresh {
+		t.Fatalf("old export (status %d) = %d logbooks, %+v; want main and its one QSO", resp.StatusCode, len(export.Logbooks), export.Qsos)
+	}
+}

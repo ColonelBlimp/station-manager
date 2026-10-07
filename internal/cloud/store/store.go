@@ -463,8 +463,11 @@ type querier interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
-// Logbooks lists the logbooks of a tenant's LEGACY archive, ordered by id
-// (creation order) — the name-only wire's view (W-0021 5F.1).
+// Logbooks lists the logbooks of a tenant's LEGACY archive that have a legacy
+// name, ordered by id (creation order) — the name-only wire's view (W-0021
+// 5F.1). A logbook created by UUID inside the adopted legacy archive has no
+// name an old client could ask for, so it is not part of that view (codex P1
+// on 4bf46bc4: scanning its NULL name failed the whole listing).
 func (s *Store) Logbooks(ctx context.Context, tenantID int64) ([]LogbookInfo, error) {
 	return queryLogbooks(ctx, "store.Logbooks", s.db, tenantID)
 }
@@ -473,7 +476,7 @@ func queryLogbooks(ctx context.Context, op errors.Op, q querier, tenantID int64)
 	const query = `
 SELECT l.id, l.tenant_id, l.legacy_name
 FROM logbooks l JOIN archives a ON a.id = l.archive_id AND a.legacy
-WHERE l.tenant_id = $1 ORDER BY l.id`
+WHERE l.tenant_id = $1 AND l.legacy_name IS NOT NULL ORDER BY l.id`
 	rows, err := q.QueryContext(ctx, query, tenantID)
 	if err != nil {
 		return nil, errors.New(op).WithErr(err).WithMsgf("tenant %d", tenantID)
@@ -503,7 +506,7 @@ func (s *Store) Logbook(ctx context.Context, id int64) (LogbookInfo, error) {
 	const q = `
 SELECT l.id, l.tenant_id, l.legacy_name
 FROM logbooks l JOIN archives a ON a.id = l.archive_id AND a.legacy
-WHERE l.id = $1`
+WHERE l.id = $1 AND l.legacy_name IS NOT NULL`
 	var l LogbookInfo
 	err := s.db.QueryRowContext(ctx, q, id).Scan(&l.ID, &l.TenantID, &l.Name)
 	if stderr.Is(err, sql.ErrNoRows) {
@@ -578,7 +581,7 @@ func streamExport(ctx context.Context, op errors.Op, q querier, tenantID int64,
 	const query = `
 SELECT q.uuid, q.tenant_id, q.logbook_id, q.modified_at, q.revision, q.deleted_at, q.payload
 FROM qsos q
-JOIN logbooks l ON l.id = q.logbook_id
+JOIN logbooks l ON l.id = q.logbook_id AND l.legacy_name IS NOT NULL
 JOIN archives a ON a.id = l.archive_id AND a.legacy
 WHERE q.tenant_id = $1 ORDER BY q.logbook_id, q.uuid`
 	rows, err := q.QueryContext(ctx, query, tenantID)
