@@ -91,8 +91,8 @@ func TestArchives_A1_UpgradePlacesEveryLogbookInItsTenantsLegacyArchive(t *testi
 	if err := Migrate(db); err != nil {
 		t.Fatalf("Migrate over version-6 data: %v", err)
 	}
-	if v := scalar[int](t, db, `SELECT version FROM schema_migrations`); v != 7 {
-		t.Fatalf("schema version = %d; want 7", v)
+	if v := scalar[int](t, db, `SELECT version FROM schema_migrations`); v != 8 {
+		t.Fatalf("schema version = %d; want 8 (the latest)", v)
 	}
 	if n := scalar[int](t, db, `SELECT count(*) FROM tenants t
 		WHERE (SELECT count(*) FROM archives a WHERE a.tenant_id = t.id AND a.legacy AND a.archive_uuid IS NULL) = 1`); n != 2 {
@@ -160,6 +160,7 @@ func TestArchives_A3_DownIsLosslessUnadoptedAndRefusesOtherwise(t *testing.T) {
 		if err := Migrate(db); err != nil {
 			t.Fatal(err)
 		}
+		execSQLFile(t, db, "migrations/0008_logbook_callsign.down.sql") // the latest steps down first
 		execSQLFile(t, db, "migrations/0007_archives.down.sql")
 		if n := scalar[int](t, db, `SELECT count(*) FROM pg_class WHERE relname = 'archives'`); n != 0 {
 			t.Fatal("archives table still present after the down step")
@@ -186,6 +187,7 @@ func TestArchives_A3_DownIsLosslessUnadoptedAndRefusesOtherwise(t *testing.T) {
 			if err := Migrate(db); err != nil {
 				t.Fatal(err)
 			}
+			execSQLFile(t, db, "migrations/0008_logbook_callsign.down.sql") // no callsign recorded: allowed
 			if _, err := db.Exec(c.adopt); err != nil {
 				t.Fatal(err)
 			}

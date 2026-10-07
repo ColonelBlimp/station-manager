@@ -519,6 +519,15 @@ the hourly reconcile self-heals anything a flaky link drops.
   Postgres: the data survived and a 0001–0006 build then boots ("no change").
   Once an archive or logbook identity exists (adoption arrives with 5F.2),
   the down step refuses and changes nothing; restore the dump instead.
+- **Schema 8, the logbook callsign (W-0021 5F.2).** Migration 0008 adds an
+  empty `logbooks.callsign`; adoption and identity pushes fill it. Its down
+  step runs only while every callsign is empty, and otherwise refuses
+  without changing anything. To roll a schema-8 box back to 6 while nothing
+  is adopted, copy both down files, then step down in one transaction:
+  `sudo -u postgres psql smcloud -1 -v ON_ERROR_STOP=1 -f 0008_logbook_callsign.down.sql -f 0007_archives.down.sql -c "UPDATE schema_migrations SET version = 6"`.
+  This was drilled 2026-10-07 on the dev Postgres: the data survived at
+  version 6. Use `version = 7` with the 0008 file alone to step back one
+  version only.
 - **Restore drill** (worth one rehearsal — see `smd restore` in
   sm-cloud-p1.md S5): on the shack machine with the daemon stopped,
   `smd restore -dry-run` fetches the export and reports counts without

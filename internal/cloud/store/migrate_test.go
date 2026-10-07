@@ -82,7 +82,7 @@ FROM tenants t JOIN logbooks l ON l.tenant_id = t.id`
 	if err := db.QueryRow(`SELECT version FROM schema_migrations`).Scan(&version); err != nil {
 		t.Fatalf("read schema version: %v", err)
 	}
-	if qsos != 1 || version != 7 {
-		t.Errorf("after upgrade: qsos = %d (want 1), schema version = %d (want 7)", qsos, version)
+	if qsos != 1 || version != 8 {
+		t.Errorf("after upgrade: qsos = %d (want 1), schema version = %d (want 8)", qsos, version)
 	}
 }
