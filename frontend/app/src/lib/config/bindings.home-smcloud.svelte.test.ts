@@ -22,6 +22,8 @@ import { _resetForTests as resetToasts } from '../ui/toasts.svelte';
       F6  an eligibility read that started before a binding save cannot undo
           that save's row refusal when its answer arrives late (codex P2 on
           956a01db).
+      F7  discarding edits restores the cached view; it is not a newer view,
+          so an eligibility read in flight still applies (codex P2 on 205f57ec).
 */
 
 const REASON =
@@ -233,6 +235,33 @@ describe('bindingsState — Home SM Cloud, default logbook only (5F.0)', () => {
         held!(json(VIEW));
         await late;
         expect(bindingsState.view!.destinations[0].logbooks[1].reason).toBe(REASON);
+    });
+
+    it('F7: discarding edits does not cancel an eligibility read in flight', async () => {
+        const incomplete = 'its station account is incomplete: a required station field is not set';
+        const [dest] = VIEW.destinations;
+        served = {
+            ...VIEW,
+            destinations: [
+                {
+                    ...dest,
+                    account: { configured: false },
+                    reason: incomplete,
+                    new_logbook_reason: incomplete,
+                    logbooks: dest.logbooks.map((r) => ({ ...r, reason: '' })),
+                },
+            ],
+        };
+        await bindingsState.load();
+        bindingsState.setField('smcloud', 1, 'logbook', 'shack');
+        expect(bindingsState.dirty).toBe(true);
+        holdNextGet = true;
+        const pending = bindingsState.refreshEligibility(); // the account was completed and saved
+        bindingsState.reset();
+        held!(json(VIEW));
+        expect(await pending).toBe(true);
+        expect(bindingsState.view!.destinations[0].reason).toBe('');
+        expect(bindingsState.view!.destinations[0].logbooks[2].reason).toBe(REASON);
     });
 
     it('F4: the refused row says why, with its switch disabled', async () => {

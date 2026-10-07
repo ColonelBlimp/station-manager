@@ -336,7 +336,6 @@ class BindingsState {
     }
 
     #apply(v: ArchiveBindings): void {
-        this.#supersedeEligibilityReads();
         const drafts: Record<string, RowDraft> = {};
         for (const d of v.destinations) {
             for (const r of d.logbooks) drafts[rowKey(d.type, r.logbook_id)] = draftFrom(r);
@@ -346,10 +345,12 @@ class BindingsState {
         this.missing = {};
     }
 
-    /** A full view from the daemon (a load, a save's answer, a timed-out
-     *  save's re-read) is newer than any eligibility read still on the wire:
-     *  that read's row refusals predate it and must not patch it (codex P2 on
-     *  956a01db — a late read undid a saved disable's refusal). */
+    /** A full view FETCHED from the daemon (a load, a save's answer, a
+     *  timed-out save's re-read) is newer than any eligibility read still on
+     *  the wire: that read's row refusals predate it and must not patch it
+     *  (codex P2 on 956a01db — a late read undid a saved disable's refusal).
+     *  Not called from #apply: reset() re-applies the CACHED view, which is
+     *  not newer (codex P2 on 205f57ec). */
     #supersedeEligibilityReads(): void {
         this.#eligibilityRefreshGeneration++;
     }
@@ -460,6 +461,7 @@ class BindingsState {
             const covers = this.#reloadRequested;
             const res = await saveArchiveBindings(this.archiveId, this.buildRequest());
             if (res.kind === 'ok') {
+                this.#supersedeEligibilityReads();
                 this.#apply(res.bindings);
                 this.#covered(covers); // the PUT answers with the view as of its send
                 toasts.info(
