@@ -19,6 +19,9 @@ import { _resetForTests as resetToasts } from '../ui/toasts.svelte';
       F5  refreshing eligibility after a station-account save brings the row
           refusals too (codex P2 on 4daf2a2e): while the account was
           incomplete the daemon named only the destination's reason.
+      F6  an eligibility read that started before a binding save cannot undo
+          that save's row refusal when its answer arrives late (codex P2 on
+          956a01db).
 */
 
 const REASON =
@@ -86,16 +89,33 @@ function json(body: unknown): Response {
 }
 
 let served: unknown = VIEW;
+let held: ((r: Response) => void) | null = null;
+let holdNextGet = false;
+let putReply: unknown = VIEW;
 
 beforeEach(() => {
     served = VIEW;
+    held = null;
+    holdNextGet = false;
+    putReply = VIEW;
     vi.stubGlobal(
         'fetch',
-        vi.fn((url: string) => {
+        vi.fn((url: string, init?: RequestInit) => {
             if (url === '/v1/version')
                 return Promise.resolve(json({ instance: 'i', archive: { id: 'A1' } }));
             if (url === '/v1/forwarder-types') return Promise.resolve(json(TYPES));
-            if (url === '/v1/qso-archives/A1/bindings') return Promise.resolve(json(served));
+            if (url === '/v1/qso-archives/A1/bindings') {
+                if (init?.method === 'PUT') {
+                    return putReply === 'timeout'
+                        ? Promise.reject(Object.assign(new Error('t'), { name: 'TimeoutError' }))
+                        : Promise.resolve(json(putReply));
+                }
+                if (holdNextGet) {
+                    holdNextGet = false;
+                    return new Promise<Response>((resolve) => (held = resolve));
+                }
+                return Promise.resolve(json(served));
+            }
             return Promise.resolve(new Response('{}', { status: 404 }));
         })
     );
@@ -162,6 +182,57 @@ describe('bindingsState — Home SM Cloud, default logbook only (5F.0)', () => {
         bindingsState.setAll('smcloud', true);
         expect(bindingsState.drafts[rowKey('smcloud', 1)].enabled).toBe(true);
         expect(bindingsState.drafts[rowKey('smcloud', 3)].enabled).toBe(false);
+    });
+
+    it('F6: a late eligibility answer cannot undo a newer save’s row refusal', async () => {
+        await bindingsState.load();
+        holdNextGet = true;
+        const late = bindingsState.refreshEligibility(); // reads Portable enabled, no reason
+        bindingsState.setRow('smcloud', 2, false);
+        const [dest] = VIEW.destinations;
+        putReply = {
+            ...VIEW,
+            destinations: [
+                {
+                    ...dest,
+                    logbooks: dest.logbooks.map((r) =>
+                        r.logbook_id === 2 ? { ...r, enabled: false, reason: REASON } : r
+                    ),
+                },
+            ],
+        };
+        await bindingsState.save();
+        expect(bindingsState.view!.destinations[0].logbooks[1].reason).toBe(REASON);
+        held!(json(VIEW)); // the read from before the save
+        await late;
+        expect(bindingsState.view!.destinations[0].logbooks[1].reason).toBe(REASON);
+        bindingsState.setRow('smcloud', 2, true);
+        expect(bindingsState.drafts[rowKey('smcloud', 2)].enabled).toBe(false);
+    });
+
+    it('F6b: the same holds when the save timed out and was re-read', async () => {
+        await bindingsState.load();
+        holdNextGet = true;
+        const late = bindingsState.refreshEligibility();
+        bindingsState.setRow('smcloud', 2, false);
+        const [dest] = VIEW.destinations;
+        served = {
+            ...VIEW,
+            destinations: [
+                {
+                    ...dest,
+                    logbooks: dest.logbooks.map((r) =>
+                        r.logbook_id === 2 ? { ...r, enabled: false, reason: REASON } : r
+                    ),
+                },
+            ],
+        };
+        putReply = 'timeout';
+        await bindingsState.save();
+        expect(bindingsState.view!.destinations[0].logbooks[1].reason).toBe(REASON);
+        held!(json(VIEW));
+        await late;
+        expect(bindingsState.view!.destinations[0].logbooks[1].reason).toBe(REASON);
     });
 
     it('F4: the refused row says why, with its switch disabled', async () => {

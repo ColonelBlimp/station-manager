@@ -336,6 +336,7 @@ class BindingsState {
     }
 
     #apply(v: ArchiveBindings): void {
+        this.#supersedeEligibilityReads();
         const drafts: Record<string, RowDraft> = {};
         for (const d of v.destinations) {
             for (const r of d.logbooks) drafts[rowKey(d.type, r.logbook_id)] = draftFrom(r);
@@ -343,6 +344,14 @@ class BindingsState {
         this.view = v;
         this.drafts = drafts;
         this.missing = {};
+    }
+
+    /** A full view from the daemon (a load, a save's answer, a timed-out
+     *  save's re-read) is newer than any eligibility read still on the wire:
+     *  that read's row refusals predate it and must not patch it (codex P2 on
+     *  956a01db — a late read undid a saved disable's refusal). */
+    #supersedeEligibilityReads(): void {
+        this.#eligibilityRefreshGeneration++;
     }
 
     /** Re-read only the live queue counts. A queue request can finish after a
@@ -374,9 +383,10 @@ class BindingsState {
         return true;
     }
 
-    /** Re-read only station-account eligibility after config.json changes.
-     *  Binding rows, their drafts, queue counts and restart state belong to a
-     *  different save boundary and remain untouched. */
+    /** Re-read only eligibility after config.json changes: each destination's
+     *  account and reasons, and each row's refusal (5F.0). The rows' state,
+     *  their drafts, queue counts and restart state belong to a different save
+     *  boundary and remain untouched; a newer full view supersedes this read. */
     async refreshEligibility(): Promise<boolean> {
         if (this.archiveId === '' || !this.view) return false;
         const generation = ++this.#eligibilityRefreshGeneration;
@@ -492,6 +502,7 @@ class BindingsState {
                 };
             }
         }
+        this.#supersedeEligibilityReads();
         this.view = out.bindings;
         this.drafts = drafts;
         this.#covered(covers);
