@@ -26,6 +26,9 @@ import { _resetForTests as resetToasts } from '../ui/toasts.svelte';
           so an eligibility read in flight still applies (codex P2 on 205f57ec).
       F8  an eligibility read SENT before a load's own read cannot patch the
           loaded view when it answers late (codex P2 on 264335f7).
+      F9  a full view answering after a NEWER eligibility answer keeps that
+          eligibility, and the older eligibility read stays superseded (codex
+          P2 on f9440ade).
 */
 
 const REASON =
@@ -93,16 +96,16 @@ function json(body: unknown): Response {
 }
 
 let served: unknown = VIEW;
-let held: ((r: Response) => void) | null = null;
-let holdNextGet = false;
+let held: ((r: Response) => void)[] = [];
+let holdGets = 0;
 let putReply: unknown = VIEW;
 let identityHeld: ((r: Response) => void) | null = null;
 let holdIdentity = false;
 
 beforeEach(() => {
     served = VIEW;
-    held = null;
-    holdNextGet = false;
+    held = [];
+    holdGets = 0;
     putReply = VIEW;
     identityHeld = null;
     holdIdentity = false;
@@ -123,9 +126,9 @@ beforeEach(() => {
                         ? Promise.reject(Object.assign(new Error('t'), { name: 'TimeoutError' }))
                         : Promise.resolve(json(putReply));
                 }
-                if (holdNextGet) {
-                    holdNextGet = false;
-                    return new Promise<Response>((resolve) => (held = resolve));
+                if (holdGets > 0) {
+                    holdGets--;
+                    return new Promise<Response>((resolve) => held.push(resolve));
                 }
                 return Promise.resolve(json(served));
             }
@@ -199,7 +202,7 @@ describe('bindingsState — Home SM Cloud, default logbook only (5F.0)', () => {
 
     it('F6: a late eligibility answer cannot undo a newer save’s row refusal', async () => {
         await bindingsState.load();
-        holdNextGet = true;
+        holdGets = 1;
         const late = bindingsState.refreshEligibility(); // reads Portable enabled, no reason
         bindingsState.setRow('smcloud', 2, false);
         const [dest] = VIEW.destinations;
@@ -216,7 +219,7 @@ describe('bindingsState — Home SM Cloud, default logbook only (5F.0)', () => {
         };
         await bindingsState.save();
         expect(bindingsState.view!.destinations[0].logbooks[1].reason).toBe(REASON);
-        held!(json(VIEW)); // the read from before the save
+        held[0](json(VIEW)); // the read from before the save
         await late;
         expect(bindingsState.view!.destinations[0].logbooks[1].reason).toBe(REASON);
         bindingsState.setRow('smcloud', 2, true);
@@ -225,7 +228,7 @@ describe('bindingsState — Home SM Cloud, default logbook only (5F.0)', () => {
 
     it('F6b: the same holds when the save timed out and was re-read', async () => {
         await bindingsState.load();
-        holdNextGet = true;
+        holdGets = 1;
         const late = bindingsState.refreshEligibility();
         bindingsState.setRow('smcloud', 2, false);
         const [dest] = VIEW.destinations;
@@ -243,7 +246,7 @@ describe('bindingsState — Home SM Cloud, default logbook only (5F.0)', () => {
         putReply = 'timeout';
         await bindingsState.save();
         expect(bindingsState.view!.destinations[0].logbooks[1].reason).toBe(REASON);
-        held!(json(VIEW));
+        held[0](json(VIEW));
         await late;
         expect(bindingsState.view!.destinations[0].logbooks[1].reason).toBe(REASON);
     });
@@ -266,10 +269,10 @@ describe('bindingsState — Home SM Cloud, default logbook only (5F.0)', () => {
         await bindingsState.load();
         bindingsState.setField('smcloud', 1, 'logbook', 'shack');
         expect(bindingsState.dirty).toBe(true);
-        holdNextGet = true;
+        holdGets = 1;
         const pending = bindingsState.refreshEligibility(); // the account was completed and saved
         bindingsState.reset();
-        held!(json(VIEW));
+        held[0](json(VIEW));
         expect(await pending).toBe(true);
         expect(bindingsState.view!.destinations[0].reason).toBe('');
         expect(bindingsState.view!.destinations[0].logbooks[2].reason).toBe(REASON);
@@ -279,7 +282,7 @@ describe('bindingsState — Home SM Cloud, default logbook only (5F.0)', () => {
         await bindingsState.load(); // Portable enabled, no refusal
         holdIdentity = true;
         const loading = bindingsState.load(); // waits for the daemon's identity
-        holdNextGet = true;
+        holdGets = 1;
         const early = bindingsState.refreshEligibility(); // sent now: the older state
         const [dest] = VIEW.destinations;
         served = {
@@ -296,9 +299,33 @@ describe('bindingsState — Home SM Cloud, default logbook only (5F.0)', () => {
         identityHeld!(json({ instance: 'i', archive: { id: 'A1' } }));
         await loading;
         expect(bindingsState.view!.destinations[0].logbooks[1].reason).toBe(REASON);
-        held!(json(VIEW));
+        held[0](json(VIEW));
         await early;
         expect(bindingsState.view!.destinations[0].logbooks[1].reason).toBe(REASON);
+    });
+
+    it('F9: a late full view keeps newer eligibility; the older read stays superseded', async () => {
+        await bindingsState.load();
+        const incomplete = 'its station account is incomplete: a required station field is not set';
+        const [dest] = VIEW.destinations;
+        const withEligibility = (reason: string, newLogbook: string) => ({
+            ...VIEW,
+            destinations: [{ ...dest, reason, new_logbook_reason: newLogbook }],
+        });
+        holdGets = 3;
+        const reload = bindingsState.load(); // its GET is sent first
+        await vi.waitFor(() => expect(held.length).toBe(1));
+        const a = bindingsState.refreshEligibility(); // sent second: older
+        const b = bindingsState.refreshEligibility(); // sent third: newest
+        held[2](json(withEligibility('', 'B: newest')));
+        expect(await b).toBe(true);
+        held[0](json(withEligibility('', 'reload: older than B')));
+        await reload;
+        expect(bindingsState.view!.destinations[0].new_logbook_reason).toBe('B: newest');
+        held[1](json(withEligibility(incomplete, incomplete)));
+        expect(await a).toBe(true);
+        expect(bindingsState.view!.destinations[0].reason).toBe('');
+        expect(bindingsState.view!.destinations[0].new_logbook_reason).toBe('B: newest');
     });
 
     it('F4: the refused row says why, with its switch disabled', async () => {

@@ -85,6 +85,33 @@ export function destinationLabel(dest: DestinationBinding): string {
     return dest.account.label || dest.display_name;
 }
 
+/** `target` with the eligibility of `source` laid over it: each destination's
+ *  account, reason and new_logbook_reason, and each row's refusal (5F.0).
+ *  The rows' state stays `target`'s — eligibility is a separate boundary.
+ *  While a destination itself was refused the daemon named no row's reason,
+ *  so completing its account can surface them (codex P2 on 4daf2a2e). */
+function withEligibility(target: ArchiveBindings, source: ArchiveBindings): ArchiveBindings {
+    const fresh = new Map(source.destinations.map((d) => [d.type, d]));
+    return {
+        ...target,
+        destinations: target.destinations.map((dest) => {
+            const next = fresh.get(dest.type);
+            if (!next) return dest;
+            const rowReason = new Map(next.logbooks.map((r) => [r.logbook_id, r.reason]));
+            return {
+                ...dest,
+                account: next.account,
+                reason: next.reason,
+                new_logbook_reason: next.new_logbook_reason,
+                logbooks: dest.logbooks.map((r) => ({
+                    ...r,
+                    reason: rowReason.get(r.logbook_id) ?? r.reason,
+                })),
+            };
+        }),
+    };
+}
+
 class BindingsState {
     loading = $state(false);
     loaded = $state(false);
@@ -335,8 +362,7 @@ class BindingsState {
             }
             this.archiveId = identity.archiveId;
             this.types = types.kind === 'ok' ? types.types : [];
-            this.#apply(view.bindings);
-            this.#eligibilitySeq = seq;
+            this.#apply(this.#takeFull(view.bindings, seq));
             this.#covered(covers);
             this.loaded = true;
         } finally {
@@ -345,6 +371,18 @@ class BindingsState {
         // A re-read requested while this one was on the wire: its rows may
         // predate that change.
         this.#settle();
+    }
+
+    /** A full view fetched by the read numbered `seq`. If an eligibility read
+     *  sent later has already answered, its eligibility is newer than this
+     *  view's and is kept on top; the boundary never moves backwards (codex P2
+     *  on f9440ade). */
+    #takeFull(v: ArchiveBindings, seq: number): ArchiveBindings {
+        if (seq >= this.#eligibilitySeq) {
+            this.#eligibilitySeq = seq;
+            return v;
+        }
+        return this.view ? withEligibility(v, this.view) : v;
     }
 
     #apply(v: ArchiveBindings): void {
@@ -403,29 +441,7 @@ class BindingsState {
         const current = this.view;
         if (!current) return false;
         this.#eligibilitySeq = seq;
-        const fresh = new Map(out.bindings.destinations.map((d) => [d.type, d]));
-        this.view = {
-            ...current,
-            destinations: current.destinations.map((dest) => {
-                const next = fresh.get(dest.type);
-                if (!next) return dest;
-                // The row refusals too (5F.0): while the destination itself was
-                // refused the daemon named no row's, so completing the account
-                // can surface them (codex P2 on 4daf2a2e). Only eligibility is
-                // taken; the rows' state and the drafts stay as they are.
-                const rowReason = new Map(next.logbooks.map((r) => [r.logbook_id, r.reason]));
-                return {
-                    ...dest,
-                    account: next.account,
-                    reason: next.reason,
-                    new_logbook_reason: next.new_logbook_reason,
-                    logbooks: dest.logbooks.map((r) => ({
-                        ...r,
-                        reason: rowReason.get(r.logbook_id) ?? r.reason,
-                    })),
-                };
-            }),
-        };
+        this.view = withEligibility(current, out.bindings);
         return true;
     }
 
@@ -466,8 +482,7 @@ class BindingsState {
             const seq = ++this.#sendSeq;
             const res = await saveArchiveBindings(this.archiveId, this.buildRequest());
             if (res.kind === 'ok') {
-                this.#apply(res.bindings);
-                this.#eligibilitySeq = seq;
+                this.#apply(this.#takeFull(res.bindings, seq));
                 this.#covered(covers); // the PUT answers with the view as of its send
                 toasts.info(
                     res.bindings.restart_required
@@ -510,8 +525,7 @@ class BindingsState {
                 };
             }
         }
-        this.view = out.bindings;
-        this.#eligibilitySeq = seq;
+        this.view = this.#takeFull(out.bindings, seq);
         this.drafts = drafts;
         this.#covered(covers);
         toasts.warn(
