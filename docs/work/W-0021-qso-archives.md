@@ -1780,6 +1780,73 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      check, in order: Home adopts on start; counts are unchanged and nothing is duplicated; then,
      only with the operator's say, a dummy QSO on Drill. That QSO uploads to the operator's real SM
      Cloud tenant.
+     **5F.0 built (2026-10-07, `4daf2a2e`; review fixes `956a01db`, `205f57ec`, `264335f7`, `f9440ade`, `f1499c7e`, `d8edef3b`).** In Home, a NEW SM Cloud enable is refused with
+     `binding_not_enableable` unless it is on the default logbook (config's projection of the
+     archive's own, the logbook the boot-time reconciler serves). An already-enabled binding is
+     kept: re-submitting it, or editing its fields while it stays on, is not a new enable. Turning
+     it back on after a saved disable is a new enable. Nothing at start changed: existing bindings
+     route and keep their queues. This prevents NEW merges; it does not repair an existing one.
+     Wire: `reason` per row (only on a row that is not enabled) and `new_logbook_reason` per
+     destination on `GET /v1/qso-archives/{uuid}/bindings`. SPA: a refused row's switch is disabled
+     with "Can't be turned on for this logbook: …". The every-logbook switch turns on only the rows
+     that may be turned on. The logbook form's "Upload to SM Cloud" is offered only when
+     `new_logbook_reason` is empty, and a create carrying the tick while it is refused is refused
+     whole before the wire (no logbook, no binding). A daemon refusal arriving AFTER a create, for
+     another cause, keeps the existing ruled behaviour: the logbook stays and the toast says SM Cloud
+     was not turned on. Docs: `api-endpoints.md` (bindings GET/PUT), manual `forwarding.md` and
+     `qso-archives.md`.
+     Tests, RED first:
+     - `internal/archive/bindings_smcloud_home_test.go` H1–H5: H2 (absent row beside a valid default
+       enable writes nothing; stored disabled row), H4 (disable allowed, re-enable refused) and H5
+       (row reason, `new_logbook_reason`, other destinations unaffected) were RED. H1 (default
+       enable) and H3 (unchanged submission, its own field edited, the default enabled beside it,
+       another destination edited; name and queue unchanged) passed before: they are guards against
+       over-refusing.
+     - `cmd/smd` `TestLifecycle_ExistingNonDefaultHomeSmcloudBindingSurvivesARestart`, a guard:
+       the route is built and both queued rows are kept.
+     - SPA `bindings.home-smcloud.svelte.test.ts` F1, F2 and F4 were RED; F3 (an existing enabled
+       row toggled in the draft) was a guard. `logbooks.svelte.test.ts` adds two RED cases: not
+       offered, and the add refused whole.
+     Existing fixtures updated: the 5D gate test's config now names its default logbook; two SPA
+     fixtures carry the new fields.
+     Reversion proofs, each restored and verified byte-identical:
+     - P1, the PUT ignores the row rule: H2 fails.
+     - P2, a stored-enabled row not kept: H3 fails ("must stay editable").
+     - P3, the view's row reason dropped: H5 fails.
+     - P4, `new_logbook_reason` dropped: H5 fails.
+     - P5, start drops non-default SM Cloud bindings: the restart guard fails (routes = []).
+     - P6, `setRow` ignores the row reason: F1 fails.
+     - P7, `setAll` ignores it: F2 fails.
+     - P8, the row switch is not disabled: F4 fails.
+     - P9, the add is not refused before the wire: the refusal assertion fails.
+     - P10, the offer ignores `new_logbook_reason`: the not-offered case fails.
+     Gates: gofmt (whole tree), vet, `go test ./...`, maintainability (0 regressions), frontend
+     lint, format, svelte-check, vitest (150 files, 2,094 tests) — all exit 0. `task ci:local` passed
+     on `4daf2a2e`. Subsequent review fixes through `d8edef3b` passed the frontend checks and
+     maintainability checks; the full release gate has not been rerun on that revision.
+     **Codex on 5F.0: five P2 rounds, all in the SPA's eligibility refresh, all fixed.** Codex was
+     clean on `d8edef3b`.
+     1. `4daf2a2e`: a refresh after a station-account save copied only destination fields, losing
+        the new row refusals. The refresh now takes the row reasons and `new_logbook_reason`
+        (`956a01db`; test F5).
+     2. `956a01db`: a late eligibility answer undid a saved disable's refusal (`205f57ec`; F6, and
+        F6b for a timed-out save).
+     3. `205f57ec`: discarding edits re-applied the cached view and cancelled a read in flight
+        (`264335f7`; F7).
+     4. `264335f7`: a read sent while a load waited for the daemon's identity could patch the
+        loaded view. The generation counter became ordering by SEND: each read carrying
+        eligibility (a load's GET, a save's PUT, a timed-out save's re-read, an eligibility GET)
+        is numbered as it is sent. A failed read counts as superseded only by a later eligibility
+        read or load, never by a save that may be refused (`f9440ade`; F8, B16b).
+     5. `f9440ade`: a late full view moved the boundary backwards. The boundary is now monotonic,
+        and newer eligibility is kept on top of a late full view (`f1499c7e`; F9). The overlay
+        source is the complete newest answer, not the cached view, so a row only the late view
+        brings still gets its refusal (`d8edef3b`; F10).
+     Each fix was RED first, with reversion proofs restored and verified: Q1, Q2, Q1b, Q3,
+     R1–R11, R1b–R3b. Frontend gates and maintainability exit 0 on each commit (vitest 150 files,
+     2,102 tests at `d8edef3b`). The lesson is the clustered-fix one again: a field read from a
+     partial refresh needs every view-installing path and every ordering of their answers
+     enumerated BEFORE the first fix.
    - **Station drills after deploy** (operator-run, recorded here): Home unchanged after the
      upgrade (same `forwarded_to`, worker names and queue counts as before; bindings listed under
      Home with the legacy names); the Drill archive shows every destination off, no banner, and a
