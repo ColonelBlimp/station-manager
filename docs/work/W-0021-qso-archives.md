@@ -2023,6 +2023,65 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      - **Migration 0008:** the up step; the down step succeeds with empty callsigns and refuses,
        changing nothing, with a populated one.
      - **The version flag:** absent before its commit, present after.
+     **5F.2 built (2026-10-07), server only.** Commits: `840a4cb5` (schema 8), `0bb0754c` + `ba315225`
+     (adoption), `4bf46bc4` + `045fd4c2` (identity push), `1604b2c6` (scoped reads), `2e16f02b` (the
+     flag, last). Codex was clean on every final commit. No daemon change: the client is 5F.3.
+     - **Schema 8 (S4):** `logbooks.callsign` (at most 32 characters, `''`). The down step refuses
+       while any callsign is recorded.
+       Tests: CS1–CS3. Proofs: H1 (the guard removed), H2 (no length check).
+       The runbook's combined 8→6 rollback
+       (`psql -1 -f 0008…down.sql -f 0007…down.sql -c "UPDATE schema_migrations SET version = 6"`)
+       was drilled on `sm-pg` with a throwaway test, since removed. psql printed `DO`, `ALTER TABLE`,
+       `DO`, ten `ALTER TABLE`, `DROP TABLE`, `UPDATE 1`, and afterwards the database held version
+       6, main and portable, and 3 QSOs.
+     - **Adoption, `POST /v1/archives/adopt` (Q4, S2, S5, S6):** one transaction; the legacy archive
+       row is locked first. Display values apply only where the call establishes a mapping, and a
+       replay is a no-op, metadata included.
+       Refusals: `legacy_archive_adopted_elsewhere`, `archive_uuid_in_use` (also when a concurrent
+       first push wins, through the unique constraint) and `logbook_mapping_conflict`.
+       Tests: AD1–AD10. Proofs J2–J9 each fail at their assertion.
+       J1 (no `FOR UPDATE`) is NOT separately provable with AD9's barrier: the waiting adoption
+       already blocks in `ensureLegacyArchive`'s insert-if-absent on the same row and then reads the
+       committed stamp. The lock closes the window where the read would precede another adoption's
+       update. Recorded honestly, not claimed.
+     - **Codex P2 on `0bb0754c`, fixed in `ba315225`:** UUIDv7 validation accepts uppercase while
+       Postgres prints lowercase, so an identical uppercase replay was refused. The handler now
+       normalizes identity UUIDs (`store.CanonicalUUID`) before the store compares them and before
+       the response echoes them. Test AD10; proof J9. A second copy in the store was removed,
+       because the two masked each other's proof.
+     - **Identity push, `PUT /v1/archives/{a}/logbooks/{l}/qsos` (S1, S3, S5, S6):** archive creation
+       (managed, or the adopted legacy one), logbook creation, display values and the batch all
+       commit in ONE transaction.
+       Refusals: `logbook_in_other_archive`, plus `archive_conflict` against the REQUESTED archive at
+       every revision. Within-archive relocation is kept.
+       The QSO-row validation and the batch-error mapping are shared with the name wire
+       (`validateUploads`, `writeUpsertError`).
+       Tests IP1–IP11. They include IP9 (adoption against a first push, both directions) and IP10
+       (rival claims of one logbook UUID), with `pg_stat_activity` lock-wait barriers.
+       Proofs M1–M6: the containers committed apart; the other-archive logbook accepted; empty
+       display values overwriting; inserts without `DO NOTHING` (500 instead of the waiting side's
+       outcome); the QSO guard ignoring the requested archive.
+     - **Codex P1 on `4bf46bc4`, fixed in `045fd4c2`:** a logbook created by UUID inside the ADOPTED
+       legacy archive has a NULL legacy name, and the legacy listing and export failed with HTTP 500
+       for the whole tenant. The name-only view is now the legacy archive's NAMED logbooks (listing,
+       per-id check, export rows). Test IP11; proofs N1–N3.
+     - **Scoped reads (operator correction: both UUIDs):** reconcile `{archive_uuid, logbook_uuid,
+       count, hash}`, manifest `{archive_uuid, logbook_uuid, entries}`, and the export `{archive,
+       logbook, qsos}` from one snapshot. All are 404 outside the tenant's archive. The export gate,
+       deadline and streaming writer, and the manifest read and summary, were factored out and are
+       shared with the name-only routes; the existing export tests guarded the refactor.
+       Tests IR1–IR4. IR4 is AC 6 on the server: two archives with equal labels and logbook names
+       never see each other's rows in push, manifest, reconcile or export.
+       Proofs: R1 (the lookup ignores the archive), R2 (it ignores the tenant), R3 (the export
+       streams the whole tenant).
+     - **The flag:** `identity_protocol: 1` on `GET /v1/version`, last. Test plus proof V1. The
+       Postgres-gated `TestAuth_Required` now decodes the version body as `map[string]any`.
+     Validation, before each code commit: gofmt (whole tree), vet, `go test ./...`, the cloud suites
+     with `-race` against `sm-pg`, maintainability (0 regressions) and `task ci:local` — all exit
+     0. `sm-pg` is stopped.
+     Not covered by 5F.2: whole-archive export and provisioning (Q7, later), and every client
+     change (5F.3–5F.5). The "old wire after adoption" proof is IP2 (the old manifest of the adopted
+     main shows both wires' QSOs) together with AD1.
    - **Station drills after deploy** (operator-run, recorded here): Home unchanged after the
      upgrade (same `forwarded_to`, worker names and queue counts as before; bindings listed under
      Home with the legacy names); the Drill archive shows every destination off, no banner, and a
