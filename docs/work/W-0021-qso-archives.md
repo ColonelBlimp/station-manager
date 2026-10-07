@@ -2082,6 +2082,119 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      Not covered by 5F.2: whole-archive export and provisioning (Q7, later), and every client
      change (5F.3–5F.5). The "old wire after adoption" proof is IP2 (the old manifest of the adopted
      main shows both wires' QSOs) together with AD1.
+     **5F.2 deployed (2026-10-07, operator).** smcloud was upgraded to schema 8 from the pushed tree
+     (`efae7b06`), following the runbook: a `pg_dump` first, before and after counts, the RPM upgrade
+     and a restart. The operator reports that it booted and migrated to version 8, that every
+     logbook is still legacy, unadopted, without a callsign and with the same counts, and that
+     `GET /v1/version` reports `identity_protocol: 1`. The rollback was not needed. The deploy went
+     out while CI run 37617321454 on `efae7b06` was still running; the local gates, `task ci:local`
+     and the cloud suites against `sm-pg` included, had passed on those commits, and the CI run
+     then passed too. Keep the
+     pre-schema-7 and pre-schema-8 dumps until adoption is deployed and checked.
+     **5F.3 design (2026-10-07; rulings given the same day; no code yet).** The client, Home only: the
+     version check, Home's adoption, the ambiguity rule, and Home's default SM Cloud binding moved to
+     the identity paths. The multiple-binding gate stays as it is (5F.0 in Home, the managed-archive
+     refusal); it lifts in 5F.4 with per-binding reconcilers. Choices weighed here are recorded in
+     [ADR 0090](../decisions/0090-home-adopts-sm-cloud-identity-in-the-background-on-evidence.md).
+     *What the tree constrains* (survey of `efae7b06`):
+     - Forwarders are built synchronously from the binding rows at start (`spawnForwarderWorkers`,
+       `main.go:649`). A binding's wire is therefore fixed for the run.
+     - 404 is terminal today (`classifyHTTPStatus`, `smcloud.go:417`).
+     - `OutcomeUnreachable` (`forwarding.go:38`) means that NO response came back.
+     - `remote_adopted_at` exists but nothing writes or reads it.
+     - The reconciler resolves the cloud logbook by name through `GET /v1/logbooks`. That still lists
+       the adopted named legacy logbook, so the legacy reconciler keeps working, unchanged in 5F.3.
+     - The binding seed gave every Home logbook's SM Cloud binding the same `logbook` value;
+       normalization is `TrimSpace`, blank meaning `"main"`.
+     *Flow:*
+     1. When Home is the ACTIVE archive and its default logbook has an ENABLED SM Cloud binding with a
+        complete station account, a lifecycle-tracked background task (the reconciler's
+        `safego.GoTracked` pattern, drained at shutdown) makes an adoption attempt. A disabled
+        default binding is never adopted automatically, though disabled bindings still count for
+        ambiguity.
+     2. The attempt:
+        - `GET /v1/version`;
+        - the ambiguity rule (T3);
+        - `POST /v1/archives/adopt` with `legacy_name` (the normalized cloud name), Home's
+          `archive_uuid`, the catalogue label, and the default logbook's `logbook_uuid`,
+          `logbook_name` and `callsign`;
+        - then `remote_adopted_at` is recorded on THAT binding.
+     3. A binding with `remote_adopted_at` is built at the NEXT start as an identity forwarder. It
+        PUTs to `/v1/archives/{Home}/logbooks/{logbook}/qsos` with the labels, never the `logbook`
+        name and never the name-only path.
+     *Rulings (operator, 2026-10-07):*
+     - (T1) **Background adoption, switch at the next start.** "Adopted, awaiting restart" is an
+       explicit transition state: until the restart, the running worker keeps the legacy wire and the
+       legacy reconciler keeps running. The task is tracked through the existing lifecycle. The
+       durable adoption marker is part of the restart fingerprint, so the "restart required" banner
+       appears.
+     - (T2) **10 s per HTTP request; hourly retries for the WHOLE attempt.** A temporary failure in
+       the check, the manifest read or the adoption call schedules the next hourly try. A valid
+       response without `identity_protocol` waits until the next start.
+       Authentication failures (401), malformed responses and adoption conflicts (409) each get their
+       own diagnostic. They are not retried as if they were outages; each waits for a restart or an
+       operator fix.
+     - (T3) **The manifest check IN ADDITION to the binding rule.** Q3's rule stays: every Home SM
+       Cloud binding counts, disabled ones included, grouped by normalized name. Adoption needs ALL
+       of these:
+       - (a) the default binding is the only binding in its name group;
+       - (b) no other binding in Home has queued uploads under that name;
+       - (c) every QSO UUID the cloud holds under that name, tombstones included, is a local QSO of
+         Home's default logbook, soft-deleted rows included.
+       Cloud-only UUIDs block adoption conservatively, but they do not prove that another logbook
+       owns them. A failed or incomplete read is no evidence of safety: the attempt retries.
+       The manifest is a SNAPSHOT. It cannot see an upload still queued elsewhere or one written after
+       it was read. (a) and (b) cover the local writers, and the server's single-writer rule (ADR
+       0052) covers the rest. ADR 0090 states the limits.
+     - (T4) **Status on Home's SM Cloud card, complete.** The states:
+       - checking;
+       - adopted, applies after a restart;
+       - adopted;
+       - not yet: the server does not support archive identity;
+       - not yet: the server could not be reached (retrying);
+       - not adopted: the token was refused;
+       - not adopted: the server's answer could not be read;
+       - not adopted: the adoption conflicts (`legacy_archive_adopted_elsewhere`,
+         `archive_uuid_in_use`, `logbook_mapping_conflict`);
+       - "Not adopted: the legacy cloud logbook cannot be matched safely to Home's default logbook;
+         manual recovery is required.";
+       - not adopted: the local record could not be saved (retrying).
+       "Adopted" follows ONLY a confirmed remote success AND the durable local record. Each
+       transition is logged once.
+     - (T5) **Identity-path 404: pending indefinitely, honestly classified.** The row stays pending
+       beyond the normal attempt limit, with capped backoff and no name fallback. A 404 proves the
+       server answered, so it is NOT `OutcomeUnreachable` (`forwarding.go:38`, which means no
+       response). It gets its own diagnostic: the identity endpoint is unavailable. The name-only
+       path's 404 is unchanged.
+     - (T6) **The adoption key is hidden and locked.** The Cloud logbook name field is not shown on
+       an adopted row, and the bindings API refuses changing (or clearing) it once adopted. "Never
+       sent" begins when the identity worker starts (T1).
+     - (T7) **Neutral refusal text.** The managed-archive refusal becomes "SM Cloud can currently be
+       enabled only in Home." The gate stays, and the server-state distinctions are deferred to 5F.4.
+     *Proofs to plan (RED first):*
+     - no attempt off Home, or for a missing or DISABLED default binding;
+     - each T4 state, including unsupported versus unreachable, 401, a malformed answer, and each
+       409 code;
+     - the adoption body and `remote_adopted_at`; an adopted binding is not re-adopted at the next
+       start;
+     - an ambiguous name: (a) a second binding sharing the name, a disabled one included; (b)
+       ANOTHER same-name binding with PENDING uploads while the cloud manifest still looks safe; (c)
+       a cloud UUID outside the default logbook, and a cloud-only UUID. Each refuses and stamps
+       nothing.
+     - **Sequences:**
+       - a binding or account change, or a shutdown, during an attempt: a stale completion never
+         stamps the wrong binding;
+       - the remote adoption commits but its response is lost, OR the local marker fails to save:
+         the retry confirms the same mapping idempotently and then stamps;
+       - more than five consecutive identity-path 404s leave the upload pending, then it succeeds
+         once the endpoint answers;
+       - between adoption and the restart, the legacy worker and the reconciler stay correct.
+     - the restart banner after adoption;
+     - the next start builds the identity forwarder, and it never sends the name;
+     - the API refuses changing the adoption key; the SPA status line and the hidden field;
+     - the neutral T7 text;
+     - end to end against `sm-pg`: adopt, restart, push by UUID, and the old reconciler is still in
+       sync.
    - **Station drills after deploy** (operator-run, recorded here): Home unchanged after the
      upgrade (same `forwarded_to`, worker names and queue counts as before; bindings listed under
      Home with the legacy names); the Drill archive shows every destination off, no banner, and a
