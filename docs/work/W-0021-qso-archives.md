@@ -1937,6 +1937,92 @@ the compatibility promise that a daemon at any slice boundary starts the existin
        gofmt (whole tree), vet, `go test ./...`, the cloud suites with `-race` against `sm-pg`,
        maintainability (0 regressions) and `task ci:local`.
      - `70cb1f9f` holds a test that was in those runs unchanged.
+     **5F.1 deployed (2026-10-07, operator).** smcloud was upgraded to schema 7 from the pushed tree
+     (CI green on `aba1289e`, run 37600837941), following `smcloud-deploy.md`: a `pg_dump` first,
+     before and after counts, the RPM upgrade and a restart. The operator reports that it booted and
+     migrated, and the after query showed every logbook in its tenant's unadopted legacy archive
+     with the same names and QSO counts. The counts were not pasted here. The rollback was not
+     needed. Keep the pre-schema-7 dump until 5F.2's adoption is deployed and checked: once anything
+     is adopted, the down step refuses and the dump is the only way back to version 6.
+     **5F.2 design (2026-10-07; rulings given the same day; no code yet).** The server identity wire
+     per ADR 0088. Choices weighed here are recorded in
+     [ADR 0089](../decisions/0089-sm-cloud-identity-wire-creates-on-first-push-strictly.md).
+     Already ruled, so not reopened:
+     - the scoped paths that an old server 404s;
+     - `identity_protocol: 1` on `GET /v1/version`;
+     - transactional, idempotent `POST /v1/archives/adopt` with 409 `legacy_archive_adopted_elsewhere`
+       and refusal of conflicting logbook mappings;
+     - the scoped export;
+     - the name-only routes stay legacy-only (5F.1).
+     *Routes:*
+     - `POST /v1/archives/adopt` with body `{legacy_name, archive_uuid, archive_label, logbook_uuid,
+       logbook_name, callsign}`.
+     - `PUT /v1/archives/{archive_uuid}/logbooks/{logbook_uuid}/qsos` with body `{archive_label,
+       logbook_label, callsign, qsos: [...]}`. The `qsos` rows are as today, with the same validation
+       and the same 1,000-row cap.
+     - `GET /v1/archives/{a}/logbooks/{l}/reconcile`, answering `{archive_uuid, logbook_uuid, count,
+       hash}`.
+     - `GET /v1/archives/{a}/logbooks/{l}/manifest`, answering `{archive_uuid, logbook_uuid,
+       entries}`. Corrected by the operator: the scoped responses carry the UUIDs, not only today's
+       numeric logbook identity.
+     - `GET /v1/archives/{a}/logbooks/{l}/export`, answering `{archive: {uuid, label}, logbook:
+       {uuid, label, callsign}, qsos: [...]}` from one snapshot.
+     - Every scoped read is 404 unless the archive is the tenant's and the logbook is in it.
+     *Commit order:* the version flag lands LAST. A server deployed between 5F.2 commits never
+     claims support it does not fully have.
+     *Rulings (operator, 2026-10-07):*
+     - (S1) **Create on the first identity push.** An unknown archive UUID becomes a managed archive,
+       and an unknown logbook UUID a logbook in it. Archive creation, logbook creation, metadata
+       updates and the whole QSO batch commit in ONE transaction; a rejected batch leaves none of
+       them behind. Adoption is never inferred from a matching label.
+     - (S2) **409 `archive_uuid_in_use`.** An existing non-legacy archive cannot absorb the legacy
+       archive. Concurrent adoption and first-push attempts must end consistently, without partial
+       changes.
+     - (S3) **Refuse.** A logbook UUID belonging to another archive is refused with 409
+       `logbook_in_other_archive`. A QSO stored in another archive is refused with 409
+       `archive_conflict` at every revision, comparing against the REQUESTED target archive.
+       Within-archive QSO relocation is kept. Deliberate cross-archive movement stays outside 5F.2.
+     - (S4) **Migration 0008 adds `logbooks.callsign` now** (at most 32 characters, default `''`). Its
+       down step is allowed only while every callsign is empty; otherwise it refuses before changing
+       anything. 0007's guard does not protect an 8→7 downgrade from losing callsigns.
+     - (S5) **Display values.** A successful identity push and the FIRST adoption apply non-empty
+       `archive_label`, `logbook_label` / `logbook_name` and `callsign`; empty values keep the stored
+       ones. A REPEATED adoption with the same identity mapping is a no-op, metadata included, so an
+       adoption retry cannot undo a later label change. The legacy name stays immutable. Push
+       metadata follows SERVER COMMIT ORDER: with no metadata revision, a delayed request can
+       overwrite a later local edit's label. This is accepted and documented, not guaranteed against.
+     - (S6) **Strict envelopes on the new bodies.** Unknown keys, duplicate keys and trailing JSON are
+       refused with 400 `invalid_body`. The QSO payload contract (the rows inside `qsos`) and the
+       name-only decoder keep today's behaviour.
+     *Proofs to plan (RED first, against `sm-pg`):*
+     - **Adoption:**
+       - stamps once; a repeat is a no-op, metadata included;
+       - a different archive UUID is refused;
+       - a conflicting logbook UUID or legacy name is refused;
+       - an unseen legacy name creates the logbook;
+       - S2 refuses;
+       - the whole call is atomic;
+       - an adoption REPLAYED after a later label update leaves the label alone.
+     - **Identity push:**
+       - it creates the managed archive and the logbook;
+       - it reaches an adopted legacy logbook by UUID;
+       - S3 refuses, at every revision, against the requested archive;
+       - within-archive relocation is kept;
+       - labels follow S5;
+       - a MIXED batch refused rolls back the metadata and the newly created archive and logbook.
+     - **Concurrency:** adoption racing a first push for the same archive UUID; two conflicting
+       claims of one UUID (archive or logbook) racing. Each ends in one consistent winner and a
+       refusal with no partial change. Proven with lock-wait barriers, not sleeps.
+     - **Strict envelopes:** unknown, duplicate and trailing content each give 400 `invalid_body`;
+       the QSO rows are validated as today.
+     - **Scoped reads:** 404 across archives and across tenants; reconcile and manifest carry both
+       UUIDs.
+     - **AC 6, server side:** two archives with equal labels and equal logbook names never see each
+       other's rows in push, manifest, reconcile or export.
+     - **The old wire after adoption:** still served from the legacy archive by name.
+     - **Migration 0008:** the up step; the down step succeeds with empty callsigns and refuses,
+       changing nothing, with a populated one.
+     - **The version flag:** absent before its commit, present after.
    - **Station drills after deploy** (operator-run, recorded here): Home unchanged after the
      upgrade (same `forwarded_to`, worker names and queue counts as before; bindings listed under
      Home with the legacy names); the Drill archive shows every destination off, no banner, and a

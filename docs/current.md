@@ -3,8 +3,8 @@
 Updated: 2026-10-07
 
 - **Goal:** W-0021: QSO archives — finish the foundations: C.2, then 5C (config v6), then 5F (SM Cloud identity). [`backlog`](backlog.md) owns priority.
-- **State:** 5C deployed and stripped on Home (`52077508`…`2e4e49eb`); C.2 accepted on screen 2026-10-06. 5F.0 deployed (`d8edef3b`); 5F.1 server schema 7 built (`70cb1f9f`, `a6affeed`, `cc98c5c8`), codex-clean, smcloud not deployed.
-- **Next:** deploy smcloud with schema 7 (`pg_dump` first; `smcloud-deploy.md`), then 5F.2 (server identity wire). **alpha.3 FROZEN** at `333427ea`; FT8-10 BLOCKED.
+- **State:** 5C deployed and stripped on Home (`52077508`…`2e4e49eb`); C.2 accepted on screen 2026-10-06. 5F.0 deployed (`d8edef3b`); 5F.1 (schema 7) deployed on smcloud 2026-10-07; keep the pre-schema-7 dump until adoption is checked.
+- **Next:** 5F.2 (server identity wire, ADR 0088): rulings on its open points, then build. **alpha.3 FROZEN** at `333427ea`; FT8-10 BLOCKED.
 - **Decisions not to revisit:** W-0004 palettes DECLINED. PT-6 `fsOps` package-private. FT8 timing stays +0.500/+0.660. `txConfirmTimeout` DEFERRED. ClubLog is not a station account; its callsign default stays persisted at save.
 - **Do not:** re-open a closed dossier (W-0001/W-0003/W-0004/W-0005/W-0019); initiate RF/hardware without per-occasion agreement; amend or push without operator direction.
 - **Relevant files:** [`W-0021`](work/W-0021-qso-archives.md), [`inbox`](dogfood-inbox.md).
