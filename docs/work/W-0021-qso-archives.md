@@ -1620,6 +1620,166 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      Needs the Postgres dev DB (`SMCLOUD_TEST_ALLOW_DEFAULT=1`, `sm-pg`). Proof of AC 6: two
      archives with the same label and logbook name, each bound, reconcile and restore without the
      other's rows; the legacy archive adopts its existing rows without a duplicate.
+     **5F review package (2026-10-07; rulings given the same day; no code yet).** Protocol
+     alternatives weighed in [ADR 0088](../decisions/0088-sm-cloud-identity-protocol-on-scoped-paths.md).
+     *Survey of the tree at `d183e8e8` (read-only):* nothing of the identity exists on the SM Cloud
+     side. The cloud keys a logbook by `UNIQUE (tenant_id, name)` (`internal/cloud/store/migrations/0001_init.up.sql:20-27`)
+     and a QSO by `(tenant_id, uuid)` (0004). It has no `archives` table and no `logbooks.uuid`.
+     `PUT /v1/qsos` carries only the logbook NAME (`server.go:371-374`), and the server creates the
+     logbook on first push (`EnsureLogbook`, `:445`). Its streaming decoder silently SKIPS any key
+     other than `logbook` and `qsos` (`server.go:206-230`), and `GET /v1/export` reads no query
+     parameter (`:555`). `GET /v1/version` returns only `{"version"}` (`:351`). Reconcile and
+     manifest address the cloud's numeric id; the client resolves the name to an id through
+     `GET /v1/logbooks`, taking the first match by name (`reconcile.go:435-451`). Restore does the
+     same over the whole-tenant export (`cmd/smd/restore.go:90-104`).
+     The client never probes the server's version, and it treats every 4xx except 408 and 429
+     (401 re-armed) as terminal, a 404 included (`smcloud.go:386`). The cloud-name normalization is
+     `TrimSpace`, then blank = `"main"`; the comparison is exact and case-sensitive (`smcloud.go:169-172`).
+     `remote_adopted_at` exists (0014/0015) but nothing writes it. One reconciler runs, for the
+     default logbook only (`lifecycle_adapters.go:877-907`). `POST /v1/smcloud/reconcile` answers
+     its single summary; no SPA code calls it, and `docs/smcloud-deploy.md` documents it with `curl`.
+     The 5D gate (`internal/archive/bindings.go:331-343`, reason `binding_not_enableable`) refuses SM
+     Cloud on any archive that is not legacy-owned. Inside Home it allows EVERY logbook, not only
+     the default binding. The seed copies the one `logbook` name to every live Home logbook
+     (`cmd/smd/archive_bindings.go:27-62`). The logbook form's "with SM Cloud" sends no name, so it
+     means `"main"`. **Two Home logbooks can therefore already push into one cloud logbook today.**
+     That was v5's normal shape too: one entry served every logbook. The cloud upsert MOVES a QSO's
+     logbook on a newer revision, and refuses a tie at a different logbook with 409 (`store.go:222-253`).
+     Evidence sync is tenant-scoped (no logbook or archive field), which matches ADR 0071; 5F leaves it alone.
+     Found in passing: `testguard.go:23` and its returned skip message both say `task test` and
+     `task db:pg:up` set `SMCLOUD_TEST_ALLOW_DEFAULT`. They do not (`Taskfile.yml:236-249`); only CI
+     does. That gets its own separate correction.
+     *Operator-observable outcomes:*
+     1. Upgrading the daemon while the SM Cloud server is still old changes nothing. Home's SM
+        Cloud uploads, reconcile and restore behave exactly as today. On any other archive, the
+        switch stays off, and the reason distinguishes "the SM Cloud server does not report archive
+        identity support" from "the SM Cloud server could not be reached at start". Neither stops a
+        QSO being logged. Nearest confusable: an identity upload that an OLD server accepts by
+        ignoring new fields and filing under the name. That would be a silent merge; ADR 0088's
+        scoped paths make it impossible.
+     2. Upgrading the server moves no data. Every existing cloud logbook sits in the tenant's legacy
+        archive with the same rows and counts. An old client's push, listing, reconcile and restore
+        all still work, and keep working when a managed archive holds a logbook with the same
+        display name.
+     3. The first daemon start against an identity-ready server adopts Home's cloud logbook once.
+        This happens only when the mapping is unambiguous (Q3). It stamps the cloud logbook with
+        Home's archive UUID and the logbook's UUID, and records `remote_adopted_at`. From then on
+        Home uploads to the identity paths. A repeat (or a retry) is a no-op, and no second, empty
+        cloud logbook appears. Nearest confusable: adoption by a different archive (a second station
+        on the same tenant), or a conflicting logbook UUID mapping. Both are refused by name, never
+        merged. A copied, unchanged Home file carries the same UUIDs, so its adoption looks like a
+        retry. That is ADR 0071's copy semantics (a backup of the same archive), and 5F does not
+        claim to detect it.
+     4. When Home's legacy mapping is ambiguous (Q3), adoption does not run. Home keeps the old wire
+        and the default-logbook reconciler. Settings → Forwarding says why
+        (`legacy_logbook_ambiguous`) and that the fix is manual. Nothing is stamped.
+     5. An identity binding never falls back to the name. Against an old or unreachable server its
+        rows stay queued and retry; they are never stranded and never filed by name.
+     6. One reconciler runs per enabled SM Cloud binding. `POST /v1/smcloud/reconcile` runs them all
+        and answers one result per binding (Q6). Only then can SM Cloud be turned on for a second
+        logbook or a managed archive such as Drill. Its QSOs reach a cloud logbook keyed by the
+        logbook's UUID, under that archive's UUID.
+     7. `smd restore` restores one cloud logbook by UUID into `--archive` through a scoped export,
+        and never receives another archive's rows. The legacy name is a separate, explicit option.
+     8. AC 6: two archives with the same label and the same logbook name are each bound. They
+        reconcile and restore without the other's rows, and the legacy archive adopts its existing
+        rows without a duplicate.
+     *Sub-slices* (each its own RED-first commit series; every boundary releasable; the server
+     commits are deployed before any client commit relies on them):
+     5F.0 (ruled Q0, a separate commit, before 5F proper): new SM Cloud enables in Home are refused
+     for every binding except the one on Home's default logbook. This covers both the bindings PUT
+     and the logbook form's "with SM Cloud". Existing enabled bindings and their queues are KEPT for
+     compatibility. This prevents NEW merges; it does not repair a merge that already exists.
+     5F.1 server schema: Postgres 0007 `archives` (`tenant_id`, nullable `archive_uuid` unique per
+     tenant, `label`, `legacy` flag; one legacy row per tenant), `logbooks.archive_id` (backfilled
+     to the legacy row), nullable `logbooks.uuid` unique per tenant, and name uniqueness narrowed to
+     `(archive_id, name)`. The name-only routes (push, listing, reconcile, manifest, export) resolve
+     and list ONLY the legacy archive's logbooks. The legacy name is its own column, independent of
+     the mutable display label. Down step included. No wire change for old clients.
+     5F.2 server identity wire (ADR 0088): the scoped upload, manifest, reconcile and export paths;
+     `POST /v1/archives/adopt`; and `identity_protocol: 1` on `GET /v1/version`.
+     5F.3 client, Home only: the version check at start (unreachable and unsupported reported
+     separately), Home's adoption, the ambiguity rule, Home's default binding moved to the identity
+     paths, and 404 on an identity path classified as retryable. The multiple-binding gate stays as
+     it is (5F.0's Home-default-only rule, and the refusal on managed archives).
+     5F.4 reconcilers and the gate lift, delivered together: one reconciler per enabled SM Cloud
+     binding (lifecycle per ADR 0070), the aggregate endpoint, and only then the gate moved from
+     "Home default only" to "identity-ready and unambiguous". ADR 0071 makes per-logbook reconcile a
+     prerequisite (`0071-first-class-qso-archives.md:288`). `api-endpoints.md` and
+     `smcloud-deploy.md` change in the same commit.
+     5F.5 restore by UUID into `--archive` via the scoped export.
+     *Characterization first (tests only, passing today):*
+     - the name-only wire: create on first push, and the same name reaching the same logbook;
+     - today's silent skip of unknown push keys and of export query parameters (the hazard behind
+       ADR 0088);
+     - 404 classified as terminal;
+     - the single reconcile summary's shape;
+     - restore selecting by name from the whole-tenant export;
+     - the Home-only gate (already `TestBindings_SmcloudOnlyOnTheAdoptedArchiveUntil5F`).
+     *Rulings (operator, 2026-10-07):*
+     (Q0) Yes, as 5F.0 above.
+     (Q1) `"identity_protocol": 1` on `GET /v1/version` (unauthenticated, absent on an old server),
+     checked at daemon start with a bounded timeout. An unreachable server is distinguished from one
+     lacking support, and neither blocks local logging. A server upgrade takes effect at the next
+     daemon start.
+     (Q2) New scoped paths (ADR 0088), with no name fallback for identity bindings. The promised
+     queue retention is implemented explicitly: today a 404 is terminal (`smcloud.go:386`); on an
+     identity path it becomes retryable, and the row stays queued. The check gates only enabling and
+     adoption.
+     (Q3) Ambiguity, revised. The rule counts enabled AND disabled Home SM Cloud bindings and groups
+     them by the forwarder's actual normalization (`TrimSpace`, blank = `"main"`, exact match). It
+     examines EVERY name group being adopted, not only the default's. A logbook is not excluded
+     because its live count is zero: deletion leaves tombstones and history
+     (`internal/qsoservice/delete.go:16`). A logbook may be excluded only on evidence that it never
+     contributed to that cloud name; otherwise the group stays ambiguous and needs manual recovery.
+     (Q4) `POST /v1/archives/adopt`, transactional and idempotent, with `legacy_name`,
+     `archive_uuid`, `archive_label`, `logbook_uuid`, `logbook_name` and `callsign`. It refuses with
+     409 `legacy_archive_adopted_elsewhere` when the legacy archive is already stamped with a
+     different archive UUID, and with 409 when a logbook UUID or a legacy name is already mapped
+     differently. It makes NO claim to detect an unchanged copied Home file: identical UUIDs are
+     indistinguishable from a retry (ADR 0071, `0071-first-class-qso-archives.md:110`). A legacy
+     name the cloud has never seen still succeeds, creating the logbook under the adopted archive.
+     (Q5) After the transition the SM Cloud `logbook` field is only the adoption key. It is not sent
+     and not shown for identity bindings. The server keeps legacy name resolution independent of the
+     mutable display labels while compatibility clients are supported.
+     (Q6) `{"results": [{forwarder_name, logbook_uuid, summary | error}]}`. Each error is sanitized
+     and names the binding and the fault, never a credential. 503 `smcloud_unavailable` when no
+     reconciler runs. `api-endpoints.md` and the `smcloud-deploy.md` `curl` examples change together.
+     (Q7) Restore by one logbook UUID. Whole-archive provisioning (a new managed file carrying the
+     cloud archive's UUID) is a later slice after 5F. The legacy name is an explicit option, never a
+     fallback after a failed UUID lookup.
+     (Q8) Revised. An old export handler ignores query parameters, so the guarantee that a restore
+     never downloads another archive's rows needs the scoped export path an old server rejects
+     (ADR 0088), not a query filter on `GET /v1/export`. The whole-tenant export stays for
+     compatibility.
+     Sequencing (operator, mandatory): the multiple-binding gate stays until per-binding
+     reconciliation is ready; it lifts in 5F.4 together with the reconcilers. Server-first
+     deployment stands.
+     *Proofs to plan (RED first, each with a reversion proof, all against `sm-pg`):*
+     - **Identity wire against an old server:** the server rejects the identity path, and the row stays
+       queued and retries, never filed by name.
+     - **Old client after 5F.1:** push, listing, reconcile, manifest and restore by name all reach the
+       legacy archive, including when a managed archive holds a logbook with the same display name.
+     - **Adoption:**
+       - it is idempotent;
+       - it refuses a different archive UUID;
+       - it refuses a conflicting logbook UUID;
+       - it creates no duplicate.
+     - **Ambiguity:**
+       - every name group is checked;
+       - a disabled binding counts;
+       - a zero-count logbook with tombstones or history counts;
+       - an ambiguous Home stamps nothing and keeps the old wire.
+     - **The gate:** it holds through 5F.3; the 5F.0 refusal covers both entry points and keeps the
+       existing bindings.
+     - **Reconcilers:** one per enabled binding, none for a disabled one; the aggregate carries no
+       credential.
+     - **AC 6:** two managed archives with equal labels and logbook names never see each other's rows
+       in push, manifest, reconcile, export or restore.
+     *Station drill (operator-run, per occasion):* deploy the server first, then the daemon. Then
+     check, in order: Home adopts on start; counts are unchanged and nothing is duplicated; then,
+     only with the operator's say, a dummy QSO on Drill. That QSO uploads to the operator's real SM
+     Cloud tenant.
    - **Station drills after deploy** (operator-run, recorded here): Home unchanged after the
      upgrade (same `forwarded_to`, worker names and queue counts as before; bindings listed under
      Home with the legacy names); the Drill archive shows every destination off, no banner, and a
