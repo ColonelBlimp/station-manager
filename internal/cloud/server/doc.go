@@ -16,7 +16,12 @@
 //	GET  /v1/health                   liveness + DB ping (unauthenticated)
 //	GET  /v1/version                  build version (unauthenticated)
 //
-// These are the NAME-ONLY routes. Since schema 7 (W-0021 5F.1) they resolve,
+// The identity wire (W-0021 5F.2; ADR 0088, ADR 0089), strict envelopes:
+//
+//	POST /v1/archives/adopt           stamp the legacy archive and one legacy logbook
+//	                                  with the client's UUIDs; idempotent, one transaction
+//
+// The others are the NAME-ONLY routes. Since schema 7 (W-0021 5F.1) they resolve,
 // list and dump only the tenant's legacy archive: an old client never reaches
 // a logbook of another archive, even one with the same display name.
 //

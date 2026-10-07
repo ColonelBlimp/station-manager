@@ -95,6 +95,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/logbooks/{id}/reconcile", s.auth(s.handleReconcile))
 	mux.HandleFunc("GET /v1/logbooks/{id}/manifest", s.auth(s.handleManifest))
 	mux.HandleFunc("GET /v1/export", s.auth(s.handleExport))
+	mux.HandleFunc("POST /v1/archives/adopt", s.auth(s.handleAdopt))
 	// Middleware, inside-out: gzip compresses negotiated responses (the
 	// manifest and export payloads are the bandwidth-heavy ones — see
 	// gzip.go); the concurrency limiter sits OUTERMOST so a rejected request
