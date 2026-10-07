@@ -29,6 +29,9 @@ import { _resetForTests as resetToasts } from '../ui/toasts.svelte';
       F9  a full view answering after a NEWER eligibility answer keeps that
           eligibility, and the older eligibility read stays superseded (codex
           P2 on f9440ade).
+      F10 that newer eligibility includes rows the cached view did not show yet
+          (a logbook the reload brings): the overlay comes from the complete
+          newest answer, not from the cached view (codex P2 on f1499c7e).
 */
 
 const REASON =
@@ -326,6 +329,52 @@ describe('bindingsState — Home SM Cloud, default logbook only (5F.0)', () => {
         expect(await a).toBe(true);
         expect(bindingsState.view!.destinations[0].reason).toBe('');
         expect(bindingsState.view!.destinations[0].new_logbook_reason).toBe('B: newest');
+    });
+
+    it('F10: newer eligibility reaches a row only the late reload brings', async () => {
+        const incomplete = 'its station account is incomplete: a required station field is not set';
+        const [dest] = VIEW.destinations;
+        const twoRows = dest.logbooks.slice(0, 2);
+        const contest = dest.logbooks[2]; // the new logbook, refused in Home
+        served = {
+            ...VIEW,
+            destinations: [
+                {
+                    ...dest,
+                    account: { configured: false },
+                    reason: incomplete,
+                    new_logbook_reason: incomplete,
+                    logbooks: twoRows.map((r) => ({ ...r, reason: '' })),
+                },
+            ],
+        };
+        await bindingsState.load(); // cached: no Contest row
+        holdGets = 2;
+        const reload = bindingsState.load(); // read while the account was incomplete
+        await vi.waitFor(() => expect(held.length).toBe(1));
+        const eligibility = bindingsState.refreshEligibility(); // after the account save
+        held[1](json(VIEW)); // complete account; Contest refused
+        expect(await eligibility).toBe(true);
+        held[0](
+            json({
+                ...VIEW,
+                destinations: [
+                    {
+                        ...dest,
+                        account: { configured: false },
+                        reason: incomplete,
+                        new_logbook_reason: incomplete,
+                        logbooks: [...twoRows, contest].map((r) => ({ ...r, reason: '' })),
+                    },
+                ],
+            })
+        );
+        await reload;
+        const d = bindingsState.view!.destinations[0];
+        expect(d.reason).toBe('');
+        expect(d.logbooks.find((r) => r.logbook_id === 3)?.reason).toBe(REASON);
+        bindingsState.setRow('smcloud', 3, true);
+        expect(bindingsState.drafts[rowKey('smcloud', 3)].enabled).toBe(false);
     });
 
     it('F4: the refused row says why, with its switch disabled', async () => {

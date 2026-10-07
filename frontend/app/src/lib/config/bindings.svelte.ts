@@ -132,6 +132,10 @@ class BindingsState {
     // changes neither.
     #sendSeq = 0;
     #eligibilitySeq = 0;
+    // That read's complete answer: the overlay source when an older full view
+    // lands later. Not the cached view, which can lack rows the answer carried
+    // (codex P2 on f1499c7e).
+    #eligibilitySource: ArchiveBindings | null = null;
     // The last eligibility GET or load sent: a failed eligibility read with a
     // later one of those on the wire is superseded, not reported. A save is not
     // counted — a refused save refreshes nothing.
@@ -380,9 +384,10 @@ class BindingsState {
     #takeFull(v: ArchiveBindings, seq: number): ArchiveBindings {
         if (seq >= this.#eligibilitySeq) {
             this.#eligibilitySeq = seq;
+            this.#eligibilitySource = v;
             return v;
         }
-        return this.view ? withEligibility(v, this.view) : v;
+        return this.#eligibilitySource ? withEligibility(v, this.#eligibilitySource) : v;
     }
 
     #apply(v: ArchiveBindings): void {
@@ -441,6 +446,7 @@ class BindingsState {
         const current = this.view;
         if (!current) return false;
         this.#eligibilitySeq = seq;
+        this.#eligibilitySource = out.bindings;
         this.view = withEligibility(current, out.bindings);
         return true;
     }
