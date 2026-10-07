@@ -24,6 +24,8 @@ import { _resetForTests as resetToasts } from '../ui/toasts.svelte';
           956a01db).
       F7  discarding edits restores the cached view; it is not a newer view,
           so an eligibility read in flight still applies (codex P2 on 205f57ec).
+      F8  an eligibility read SENT before a load's own read cannot patch the
+          loaded view when it answers late (codex P2 on 264335f7).
 */
 
 const REASON =
@@ -94,17 +96,26 @@ let served: unknown = VIEW;
 let held: ((r: Response) => void) | null = null;
 let holdNextGet = false;
 let putReply: unknown = VIEW;
+let identityHeld: ((r: Response) => void) | null = null;
+let holdIdentity = false;
 
 beforeEach(() => {
     served = VIEW;
     held = null;
     holdNextGet = false;
     putReply = VIEW;
+    identityHeld = null;
+    holdIdentity = false;
     vi.stubGlobal(
         'fetch',
         vi.fn((url: string, init?: RequestInit) => {
-            if (url === '/v1/version')
+            if (url === '/v1/version') {
+                if (holdIdentity) {
+                    holdIdentity = false;
+                    return new Promise<Response>((resolve) => (identityHeld = resolve));
+                }
                 return Promise.resolve(json({ instance: 'i', archive: { id: 'A1' } }));
+            }
             if (url === '/v1/forwarder-types') return Promise.resolve(json(TYPES));
             if (url === '/v1/qso-archives/A1/bindings') {
                 if (init?.method === 'PUT') {
@@ -262,6 +273,32 @@ describe('bindingsState — Home SM Cloud, default logbook only (5F.0)', () => {
         expect(await pending).toBe(true);
         expect(bindingsState.view!.destinations[0].reason).toBe('');
         expect(bindingsState.view!.destinations[0].logbooks[2].reason).toBe(REASON);
+    });
+
+    it('F8: a read sent before a load’s own read cannot patch the loaded view', async () => {
+        await bindingsState.load(); // Portable enabled, no refusal
+        holdIdentity = true;
+        const loading = bindingsState.load(); // waits for the daemon's identity
+        holdNextGet = true;
+        const early = bindingsState.refreshEligibility(); // sent now: the older state
+        const [dest] = VIEW.destinations;
+        served = {
+            ...VIEW,
+            destinations: [
+                {
+                    ...dest,
+                    logbooks: dest.logbooks.map((r) =>
+                        r.logbook_id === 2 ? { ...r, enabled: false, reason: REASON } : r
+                    ),
+                },
+            ],
+        };
+        identityHeld!(json({ instance: 'i', archive: { id: 'A1' } }));
+        await loading;
+        expect(bindingsState.view!.destinations[0].logbooks[1].reason).toBe(REASON);
+        held!(json(VIEW));
+        await early;
+        expect(bindingsState.view!.destinations[0].logbooks[1].reason).toBe(REASON);
     });
 
     it('F4: the refused row says why, with its switch disabled', async () => {

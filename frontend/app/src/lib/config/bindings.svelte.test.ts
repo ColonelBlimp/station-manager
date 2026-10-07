@@ -611,6 +611,33 @@ describe('bindingsState', () => {
         expect(await older).toBe(true);
     });
 
+    it('B16b: an older read failing while a newer one is on the wire is superseded; a refused save is not', async () => {
+        await bindingsState.load();
+        const replies: ((response: Response) => void)[] = [];
+        getAnswer = () =>
+            new Promise<Response>((resolve) => {
+                replies.push(resolve);
+            });
+        const older = bindingsState.refreshEligibility();
+        const newer = bindingsState.refreshEligibility();
+        replies[0](json({ message: 'older read failed' }, 500));
+        expect(await older).toBe(true);
+        replies[1](json(view()));
+        expect(await newer).toBe(true);
+
+        // A save sent after the read refreshes nothing when refused: the
+        // read's failure is still reported.
+        const alone = bindingsState.refreshEligibility();
+        vi.spyOn(toasts, 'error').mockImplementation(() => 0);
+        putAnswer = () =>
+            Promise.resolve(json({ code: 'binding_not_enableable', message: 'refused' }, 400));
+        bindingsState.setRow('qrz', 2, true);
+        bindingsState.setField('qrz', 2, 'api_key', 'K');
+        await bindingsState.save();
+        replies[2](json({ message: 'read failed' }, 500));
+        expect(await alone).toBe(false);
+    });
+
     // Review 412cca37 P2: a logbook change on Settings → Logbooks asks for the
     // rows again. With unsaved Forwarding edits the re-read would overwrite them,
     // so it is OWED — paid when those edits are discarded (reset() alone restores

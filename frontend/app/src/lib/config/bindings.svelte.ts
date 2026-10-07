@@ -96,7 +96,19 @@ class BindingsState {
     drafts = $state<Record<string, RowDraft>>({});
     /** Required fields a refused save marked, per row key. */
     missing = $state<Record<string, string[]>>({});
-    #eligibilityRefreshGeneration = 0;
+    // Eligibility ordering by SEND order (codex P2s on 956a01db, 205f57ec,
+    // 264335f7). Every read that carries eligibility — a load's GET, a save's
+    // PUT, a timed-out save's re-read, an eligibility GET — takes a number as
+    // it is sent; #eligibilitySeq is the number of the read whose answer the
+    // view's eligibility now comes from. An eligibility answer applies only if
+    // it was sent after that read. reset() re-applies the cached view and
+    // changes neither.
+    #sendSeq = 0;
+    #eligibilitySeq = 0;
+    // The last eligibility GET or load sent: a failed eligibility read with a
+    // later one of those on the wire is superseded, not reported. A save is not
+    // counted — a refused save refreshes nothing.
+    #lastRefreshSent = 0;
     // Re-reads the logbooks asked for (review 412cca37 P2). A fresh view — a
     // load, a save's response, a timeout's re-read — covers only the requests
     // made before it was read; the rest stay owed and are paid by #settle()
@@ -300,9 +312,6 @@ class BindingsState {
 
     async load(): Promise<void> {
         if (this.loading) return;
-        // A full reload supersedes any narrower eligibility read already in
-        // flight; that older snapshot must not patch the newly loaded view.
-        this.#eligibilityRefreshGeneration++;
         const covers = this.#reloadRequested;
         this.loading = true;
         // Invalidate first: a pending reload's list is not known-current.
@@ -314,6 +323,8 @@ class BindingsState {
                 this.error = 'Station Manager did not say which archive it is serving.';
                 return;
             }
+            const seq = ++this.#sendSeq;
+            this.#lastRefreshSent = seq;
             const [types, view] = await Promise.all([
                 fetchForwarderTypes(),
                 fetchArchiveBindings(identity.archiveId),
@@ -325,6 +336,7 @@ class BindingsState {
             this.archiveId = identity.archiveId;
             this.types = types.kind === 'ok' ? types.types : [];
             this.#apply(view.bindings);
+            this.#eligibilitySeq = seq;
             this.#covered(covers);
             this.loaded = true;
         } finally {
@@ -343,16 +355,6 @@ class BindingsState {
         this.view = v;
         this.drafts = drafts;
         this.missing = {};
-    }
-
-    /** A full view FETCHED from the daemon (a load, a save's answer, a
-     *  timed-out save's re-read) is newer than any eligibility read still on
-     *  the wire: that read's row refusals predate it and must not patch it
-     *  (codex P2 on 956a01db — a late read undid a saved disable's refusal).
-     *  Not called from #apply: reset() re-applies the CACHED view, which is
-     *  not newer (codex P2 on 205f57ec). */
-    #supersedeEligibilityReads(): void {
-        this.#eligibilityRefreshGeneration++;
     }
 
     /** Re-read only the live queue counts. A queue request can finish after a
@@ -390,15 +392,17 @@ class BindingsState {
      *  boundary and remain untouched; a newer full view supersedes this read. */
     async refreshEligibility(): Promise<boolean> {
         if (this.archiveId === '' || !this.view) return false;
-        const generation = ++this.#eligibilityRefreshGeneration;
+        const seq = ++this.#sendSeq;
+        this.#lastRefreshSent = seq;
         const out = await fetchArchiveBindings(this.archiveId);
-        // A later account save (or a full load) owns a newer read. Treat this
-        // response as superseded: it neither applies stale data nor reports a
-        // stale failure after the newer read has already settled the view.
-        if (generation !== this.#eligibilityRefreshGeneration) return true;
-        if (out.kind !== 'ok') return false;
+        // A read sent later has settled (or will settle) the view: this answer
+        // is superseded — it neither applies older eligibility nor reports a
+        // stale failure.
+        if (seq < this.#eligibilitySeq) return true;
+        if (out.kind !== 'ok') return seq < this.#lastRefreshSent;
         const current = this.view;
         if (!current) return false;
+        this.#eligibilitySeq = seq;
         const fresh = new Map(out.bindings.destinations.map((d) => [d.type, d]));
         this.view = {
             ...current,
@@ -459,10 +463,11 @@ class BindingsState {
         this.saving = true;
         try {
             const covers = this.#reloadRequested;
+            const seq = ++this.#sendSeq;
             const res = await saveArchiveBindings(this.archiveId, this.buildRequest());
             if (res.kind === 'ok') {
-                this.#supersedeEligibilityReads();
                 this.#apply(res.bindings);
+                this.#eligibilitySeq = seq;
                 this.#covered(covers); // the PUT answers with the view as of its send
                 toasts.info(
                     res.bindings.restart_required
@@ -485,6 +490,7 @@ class BindingsState {
      *  show the daemon's switches, keep what the operator typed. */
     async #reconcileAfterTimeout(): Promise<void> {
         const covers = this.#reloadRequested;
+        const seq = ++this.#sendSeq;
         const out = await fetchArchiveBindings(this.archiveId);
         if (out.kind !== 'ok') {
             toasts.warn(
@@ -504,8 +510,8 @@ class BindingsState {
                 };
             }
         }
-        this.#supersedeEligibilityReads();
         this.view = out.bindings;
+        this.#eligibilitySeq = seq;
         this.drafts = drafts;
         this.#covered(covers);
         toasts.warn(
