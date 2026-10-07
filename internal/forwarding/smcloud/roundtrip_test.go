@@ -55,7 +55,8 @@ func TestSubmit_AgainstRealCloudServer(t *testing.T) {
 		_ = conn.Close()
 	})
 	// Clean schema via the runtime applier.
-	if _, err := db.Exec(`DROP TABLE IF EXISTS qsos; DROP TABLE IF EXISTS logbooks;
+	if _, err := db.Exec(`DROP TABLE IF EXISTS evidence_tombstones; DROP TABLE IF EXISTS evidence_records;
+DROP TABLE IF EXISTS qsos; DROP TABLE IF EXISTS logbooks; DROP TABLE IF EXISTS archives;
 DROP TABLE IF EXISTS tenants; DROP TABLE IF EXISTS schema_migrations`); err != nil {
 		t.Fatalf("drop: %v", err)
 	}
@@ -63,7 +64,8 @@ DROP TABLE IF EXISTS tenants; DROP TABLE IF EXISTS schema_migrations`); err != n
 		t.Fatalf("migrate: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = db.Exec(`DROP TABLE IF EXISTS qsos; DROP TABLE IF EXISTS logbooks;
+		_, _ = db.Exec(`DROP TABLE IF EXISTS evidence_tombstones; DROP TABLE IF EXISTS evidence_records;
+DROP TABLE IF EXISTS qsos; DROP TABLE IF EXISTS logbooks; DROP TABLE IF EXISTS archives;
 DROP TABLE IF EXISTS tenants; DROP TABLE IF EXISTS schema_migrations`)
 		_ = db.Close()
 	})

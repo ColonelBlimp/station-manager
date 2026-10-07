@@ -503,6 +503,22 @@ the hourly reconcile self-heals anything a flaky link drops.
   env file is `noreplace`, so the edited token/DSN survives). Rebuilding the
   same dirty commit keeps the same NVR — install that with
   `sudo rpm -Uvh --replacepkgs`. Schema migrations apply automatically at boot.
+- **Schema 7, the archive boundary (W-0021 5F.1).** The first boot of a
+  build with migration 0007 places every existing logbook in the tenant's
+  **legacy archive**. No rows move and the counts stay the same. Daemons
+  using the name-only wire keep working: their pushes, logbook list,
+  reconcile, manifest and export reach that legacy archive only.
+  Take the `pg_dump` above first. An older smcloud **refuses to boot** on
+  schema 7 (`migrate: no migration found for version 7`, measured
+  2026-10-07), so rolling back the binary needs the schema rolled back too.
+  While nothing is adopted, roll back with smcloud stopped. First copy
+  `internal/cloud/store/migrations/0007_archives.down.sql` from the repo to the
+  box. Then run, as one transaction:
+  `sudo -u postgres psql smcloud -1 -v ON_ERROR_STOP=1 -f 0007_archives.down.sql -c "UPDATE schema_migrations SET version = 6"`.
+  Finally install the older RPM. This was drilled 2026-10-07 on the dev
+  Postgres: the data survived and a 0001–0006 build then boots ("no change").
+  Once an archive or logbook identity exists (adoption arrives with 5F.2),
+  the down step refuses and changes nothing; restore the dump instead.
 - **Restore drill** (worth one rehearsal — see `smd restore` in
   sm-cloud-p1.md S5): on the shack machine with the daemon stopped,
   `smd restore -dry-run` fetches the export and reports counts without

@@ -129,6 +129,25 @@ RETURNING id`
 	if err := s.db.QueryRowContext(ctx, q, callsign, name).Scan(&id); err != nil {
 		return 0, errors.New(op).WithErr(err).WithMsgf("callsign %q", callsign)
 	}
+	if _, err := s.ensureLegacyArchive(ctx, id); err != nil {
+		return 0, errors.New(op).WithErr(err).WithMsgf("callsign %q", callsign)
+	}
+	return id, nil
+}
+
+// ensureLegacyArchive returns the id of the tenant's ONE legacy archive,
+// creating it on first use (W-0021 5F.1). Every tenant has one: migration 0007
+// made it for the tenants of its day, and EnsureTenant makes it for later ones.
+// It holds the logbooks the name-only wire reaches.
+func (s *Store) ensureLegacyArchive(ctx context.Context, tenantID int64) (int64, error) {
+	const q = `
+INSERT INTO archives (tenant_id, legacy) VALUES ($1, true)
+ON CONFLICT (tenant_id) WHERE legacy DO UPDATE SET legacy = true
+RETURNING id`
+	var id int64
+	if err := s.db.QueryRowContext(ctx, q, tenantID).Scan(&id); err != nil {
+		return 0, fmt.Errorf("legacy archive of tenant %d: %w", tenantID, err)
+	}
 	return id, nil
 }
 
@@ -156,16 +175,22 @@ func (s *Store) tenantCaseVariants(ctx context.Context, callsign string) ([]tena
 	return out, rows.Err()
 }
 
-// EnsureLogbook returns the id of the (tenant, name) logbook, creating it on first
-// use. Idempotent (unique per tenant).
+// EnsureLogbook returns the id of the logbook the name-only wire calls name,
+// creating it on first use. Names resolve inside the tenant's LEGACY archive
+// only (W-0021 5F.1): another archive's logbook of the same display name is
+// never reached. Idempotent (a legacy name is unique within its archive).
 func (s *Store) EnsureLogbook(ctx context.Context, tenantID int64, name string) (int64, error) {
 	const op errors.Op = "store.EnsureLogbook"
+	archiveID, err := s.ensureLegacyArchive(ctx, tenantID)
+	if err != nil {
+		return 0, errors.New(op).WithErr(err).WithMsgf("tenant %d name %q", tenantID, name)
+	}
 	const q = `
-INSERT INTO logbooks (tenant_id, name) VALUES ($1, $2)
-ON CONFLICT (tenant_id, name) DO UPDATE SET name = EXCLUDED.name
+INSERT INTO logbooks (tenant_id, archive_id, legacy_name, label) VALUES ($1, $2, $3, $3)
+ON CONFLICT (archive_id, legacy_name) DO UPDATE SET legacy_name = EXCLUDED.legacy_name
 RETURNING id`
 	var id int64
-	if err := s.db.QueryRowContext(ctx, q, tenantID, name).Scan(&id); err != nil {
+	if err := s.db.QueryRowContext(ctx, q, tenantID, archiveID, name).Scan(&id); err != nil {
 		return 0, errors.New(op).WithErr(err).WithMsgf("tenant %d name %q", tenantID, name)
 	}
 	return id, nil
@@ -332,8 +357,9 @@ FROM qsos WHERE logbook_id = $1 ORDER BY uuid`
 	return out, nil
 }
 
-// LogbookInfo is a logbook's identity row — what the HTTP layer lists and
-// checks ownership against (TenantID never goes on the wire).
+// LogbookInfo is a legacy-archive logbook as the name-only wire knows it —
+// what the HTTP layer lists and checks ownership against (TenantID never goes
+// on the wire). Name is the logbook's legacy name.
 type LogbookInfo struct {
 	ID       int64  `json:"id"`
 	TenantID int64  `json:"-"`
@@ -346,13 +372,17 @@ type querier interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
-// Logbooks lists a tenant's logbooks, ordered by id (creation order).
+// Logbooks lists the logbooks of a tenant's LEGACY archive, ordered by id
+// (creation order) — the name-only wire's view (W-0021 5F.1).
 func (s *Store) Logbooks(ctx context.Context, tenantID int64) ([]LogbookInfo, error) {
 	return queryLogbooks(ctx, "store.Logbooks", s.db, tenantID)
 }
 
 func queryLogbooks(ctx context.Context, op errors.Op, q querier, tenantID int64) ([]LogbookInfo, error) {
-	const query = `SELECT id, tenant_id, name FROM logbooks WHERE tenant_id = $1 ORDER BY id`
+	const query = `
+SELECT l.id, l.tenant_id, l.legacy_name
+FROM logbooks l JOIN archives a ON a.id = l.archive_id AND a.legacy
+WHERE l.tenant_id = $1 ORDER BY l.id`
 	rows, err := q.QueryContext(ctx, query, tenantID)
 	if err != nil {
 		return nil, errors.New(op).WithErr(err).WithMsgf("tenant %d", tenantID)
@@ -373,12 +403,16 @@ func queryLogbooks(ctx context.Context, op errors.Op, q querier, tenantID int64)
 	return out, nil
 }
 
-// Logbook returns one logbook's identity row — the ownership check the HTTP
-// layer runs before serving a per-logbook read. Returns ErrNotFound
-// (errors.Is-matchable) when the id doesn't exist.
+// Logbook returns one LEGACY-archive logbook's row — the ownership check the
+// name-only wire's per-logbook reads run first. Returns ErrNotFound
+// (errors.Is-matchable) when the id doesn't exist or belongs to another
+// archive (W-0021 5F.1).
 func (s *Store) Logbook(ctx context.Context, id int64) (LogbookInfo, error) {
 	const op errors.Op = "store.Logbook"
-	const q = `SELECT id, tenant_id, name FROM logbooks WHERE id = $1`
+	const q = `
+SELECT l.id, l.tenant_id, l.legacy_name
+FROM logbooks l JOIN archives a ON a.id = l.archive_id AND a.legacy
+WHERE l.id = $1`
 	var l LogbookInfo
 	err := s.db.QueryRowContext(ctx, q, id).Scan(&l.ID, &l.TenantID, &l.Name)
 	if stderr.Is(err, sql.ErrNoRows) {
@@ -390,13 +424,15 @@ func (s *Store) Logbook(ctx context.Context, id int64) (LogbookInfo, error) {
 	return l, nil
 }
 
-// Export returns EVERY record a tenant owns, tombstones included (restore needs
-// the deleted markers), ordered by (logbook_id, uuid) for a stable dump.
+// Export returns every record of a tenant's LEGACY archive, tombstones included
+// (restore needs the deleted markers), ordered by (logbook_id, uuid) for a
+// stable dump — the name-only wire's export (W-0021 5F.1).
 func (s *Store) Export(ctx context.Context, tenantID int64) ([]Record, error) {
 	return queryExport(ctx, "store.Export", s.db, tenantID)
 }
 
-// ExportSnapshot streams a tenant's logbooks AND every record it owns from
+// ExportSnapshot streams a tenant's LEGACY-archive logbooks AND their records
+// (W-0021 5F.1: the name-only wire never sees another archive) from
 // ONE repeatable-read, read-only transaction — the consistent dump behind
 // GET /v1/export (the full-fidelity restore source). Two separate autocommit
 // reads can interleave with a concurrent push: a new logbook and its first
@@ -443,14 +479,17 @@ func queryExport(ctx context.Context, op errors.Op, q querier, tenantID int64) (
 	return out, nil
 }
 
-// streamExport row-streams a tenant's full record set (tombstones included)
-// to onRecord in (logbook_id, uuid) order. Callback errors abort the scan and
-// return unwrapped (see ExportSnapshot).
+// streamExport row-streams the record set of a tenant's legacy archive
+// (tombstones included) to onRecord in (logbook_id, uuid) order. Callback
+// errors abort the scan and return unwrapped (see ExportSnapshot).
 func streamExport(ctx context.Context, op errors.Op, q querier, tenantID int64,
 	onRecord func(Record) error) error {
 	const query = `
-SELECT uuid, tenant_id, logbook_id, modified_at, revision, deleted_at, payload
-FROM qsos WHERE tenant_id = $1 ORDER BY logbook_id, uuid`
+SELECT q.uuid, q.tenant_id, q.logbook_id, q.modified_at, q.revision, q.deleted_at, q.payload
+FROM qsos q
+JOIN logbooks l ON l.id = q.logbook_id
+JOIN archives a ON a.id = l.archive_id AND a.legacy
+WHERE q.tenant_id = $1 ORDER BY q.logbook_id, q.uuid`
 	rows, err := q.QueryContext(ctx, query, tenantID)
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsgf("tenant %d", tenantID)

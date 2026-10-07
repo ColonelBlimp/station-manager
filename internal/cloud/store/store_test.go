@@ -48,22 +48,28 @@ func testStore(t *testing.T) *Store {
 	// order. 0001's down drops the QSO tables, taking later migrations'
 	// constraints with them — but evidence_records (0005) references
 	// tenants, so its own down must run FIRST or 0001's tenant drop fails.
-	execSQLFile(t, db, "migrations/0006_retention.down.sql")
-	execSQLFile(t, db, "migrations/0005_evidence.down.sql")
-	execSQLFile(t, db, "migrations/0001_init.down.sql")
-	execSQLFile(t, db, "migrations/0001_init.up.sql")
-	execSQLFile(t, db, "migrations/0002_qsos_logbook_tenant_fk.up.sql")
-	execSQLFile(t, db, "migrations/0003_qsos_revision.up.sql")
-	execSQLFile(t, db, "migrations/0004_qsos_tenant_scoped_uuid.up.sql")
-	execSQLFile(t, db, "migrations/0005_evidence.up.sql")
-	execSQLFile(t, db, "migrations/0006_retention.up.sql")
+	dropAll(t, db)
+	if err := Migrate(db); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
 	t.Cleanup(func() {
-		execSQLFile(t, db, "migrations/0006_retention.down.sql")
-		execSQLFile(t, db, "migrations/0005_evidence.down.sql")
-		execSQLFile(t, db, "migrations/0001_init.down.sql")
+		dropAll(t, db)
 		_ = db.Close()
 	})
 	return New(db)
+}
+
+// dropAll removes every smcloud table, dependents first (evidence and
+// archives reference tenants), and the migration tracking table — a clean
+// slate whatever version or rows a previous run left behind.
+func dropAll(t *testing.T, db *sql.DB) {
+	t.Helper()
+	const q = `DROP TABLE IF EXISTS evidence_tombstones; DROP TABLE IF EXISTS evidence_records;
+DROP TABLE IF EXISTS qsos; DROP TABLE IF EXISTS logbooks; DROP TABLE IF EXISTS archives;
+DROP TABLE IF EXISTS tenants; DROP TABLE IF EXISTS schema_migrations`
+	if _, err := db.Exec(q); err != nil {
+		t.Fatalf("drop the smcloud schema: %v", err)
+	}
 }
 
 // Package review (2026-08-10): the destructive integration tests require a

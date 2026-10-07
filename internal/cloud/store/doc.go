@@ -4,7 +4,10 @@
 //
 // # Data model
 //
-// Three tables — tenants, logbooks, qsos. A QSO is stored whole as JSONB (the
+// Four tables — tenants, archives, logbooks, qsos. An archive is a station's
+// QSO archive (identified by its UUID; schema 7, W-0021 5F.1); every tenant has
+// one LEGACY archive holding the logbooks the name-only wire reaches, by
+// legacy_name. A QSO is stored whole as JSONB (the
 // full types.Qso), with its identity + reconcile fields lifted into columns:
 //
 //   - uuid        the QSO's own UUID — with tenant_id the upsert key (uniqueness

@@ -40,6 +40,14 @@ const (
 // HTTP test server plus the primary tenant's id. Skips without a reachable Postgres.
 func testServerLogged(t *testing.T, log *slog.Logger) (*httptest.Server, *store.Store, int64) {
 	t.Helper()
+	ts, st, tenant, _ := newTestServer(t, log)
+	return ts, st, tenant
+}
+
+// newTestServer is testServerLogged plus the database handle, for a test that
+// must plant rows no wire can write yet.
+func newTestServer(t *testing.T, log *slog.Logger) (*httptest.Server, *store.Store, int64, *sql.DB) {
+	t.Helper()
 	dsn, skip := store.ResolveTestDSN()
 	if skip != "" {
 		t.Skip(skip)
@@ -58,12 +66,7 @@ func testServerLogged(t *testing.T, log *slog.Logger) (*httptest.Server, *store.
 	// Clean slate via the migration files (drop then the runtime applier —
 	// which this also exercises). evidence_records (0005) references
 	// tenants, so its down runs before 0001's tenant drop.
-	execSQLFile(t, db, "../store/migrations/0006_retention.down.sql")
-	execSQLFile(t, db, "../store/migrations/0005_evidence.down.sql")
-	execSQLFile(t, db, "../store/migrations/0001_init.down.sql")
-	if _, err := db.Exec(`DROP TABLE IF EXISTS schema_migrations`); err != nil {
-		t.Fatalf("drop schema_migrations: %v", err)
-	}
+	dropAll(t, db)
 	if err := store.Migrate(db); err != nil {
 		t.Fatalf("store.Migrate: %v", err)
 	}
@@ -83,13 +86,10 @@ func testServerLogged(t *testing.T, log *slog.Logger) (*httptest.Server, *store.
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() {
 		ts.Close()
-		execSQLFile(t, db, "../store/migrations/0006_retention.down.sql")
-		execSQLFile(t, db, "../store/migrations/0005_evidence.down.sql")
-		execSQLFile(t, db, "../store/migrations/0001_init.down.sql")
-		_, _ = db.Exec(`DROP TABLE IF EXISTS schema_migrations`)
+		dropAll(t, db)
 		_ = db.Close()
 	})
-	return ts, st, tenant
+	return ts, st, tenant, db
 }
 
 // testServer is the common case: the logged variant with a quiet stderr logger, for
@@ -126,6 +126,18 @@ func lockTestDatabase(t *testing.T, db *sql.DB) {
 			`SELECT pg_advisory_unlock($1)`, smcloudTestLockID)
 		_ = conn.Close()
 	})
+}
+
+// dropAll removes every smcloud table, dependents first (evidence and
+// archives reference tenants), and the migration tracking table.
+func dropAll(t *testing.T, db *sql.DB) {
+	t.Helper()
+	const q = `DROP TABLE IF EXISTS evidence_tombstones; DROP TABLE IF EXISTS evidence_records;
+DROP TABLE IF EXISTS qsos; DROP TABLE IF EXISTS logbooks; DROP TABLE IF EXISTS archives;
+DROP TABLE IF EXISTS tenants; DROP TABLE IF EXISTS schema_migrations`
+	if _, err := db.Exec(q); err != nil {
+		t.Fatalf("drop the smcloud schema: %v", err)
+	}
 }
 
 func execSQLFile(t *testing.T, db *sql.DB, path string) {

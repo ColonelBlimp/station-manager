@@ -9,12 +9,16 @@
 //	PUT  /v1/evidence                 §5 evidence-sync batch: per-row outcomes (evidencewire);
 //	                                  retention-slice supersession = tombstone-then-delete, and
 //	                                  tombstones gate every kind's upsert (re-offer → tombstoned)
-//	GET  /v1/logbooks                 the tenant's logbooks (id + name)
+//	GET  /v1/logbooks                 the tenant's legacy-archive logbooks (id + name)
 //	GET  /v1/logbooks/{id}/reconcile  {count, hash} over the live rows (reconcile.Summary)
 //	GET  /v1/logbooks/{id}/manifest   the (uuid, modified_at, deleted) diff list
-//	GET  /v1/export                   full-fidelity dump of everything the tenant owns
+//	GET  /v1/export                   full-fidelity dump of the tenant's legacy archive
 //	GET  /v1/health                   liveness + DB ping (unauthenticated)
 //	GET  /v1/version                  build version (unauthenticated)
+//
+// These are the NAME-ONLY routes. Since schema 7 (W-0021 5F.1) they resolve,
+// list and dump only the tenant's legacy archive: an old client never reaches
+// a logbook of another archive, even one with the same display name.
 //
 // # Wire contract
 //
