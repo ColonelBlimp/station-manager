@@ -318,7 +318,8 @@
                                         class="cursor-pointer"
                                         checked={d.enabled}
                                         disabled={bindingsState.saving ||
-                                            (dest.reason !== '' && !d.enabled)}
+                                            ((dest.reason !== '' || row.reason !== '') &&
+                                                !d.enabled)}
                                         aria-label={`${label} for ${row.logbook_name}`}
                                         onchange={(e) =>
                                             bindingsState.setRow(
@@ -339,6 +340,11 @@
                                         ></span
                                     >
                                 </label>
+                                {#if row.reason !== '' && !d.enabled}
+                                    <p class="mt-1 text-sm text-muted" data-testid="row-reason">
+                                        Can't be turned on for this logbook: {row.reason}.
+                                    </p>
+                                {/if}
 
                                 {#if fields.length > 0}
                                     <div class="mt-3 space-y-3">

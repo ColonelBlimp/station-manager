@@ -67,6 +67,7 @@ const row = (id: number, name: string, over: Record<string, unknown> = {}) => ({
     forwarder_name: '',
     credentials_set: [],
     queue: { waiting: 0, failed: 0, in_flight: 0 },
+    reason: '',
     ...over,
 });
 

@@ -135,7 +135,12 @@ change upstream.
 SM Cloud's **Service URL** and **Bearer token** are a station account: set
 them once under **Station accounts**. Each logbook may name its **Cloud
 logbook**; leave it empty for `main`. For now SM Cloud can be turned on only
-in the Home archive, and its card says so in any other.
+in the Home archive, and its card says so in any other. Within Home it can be
+newly turned on only for the Default logbook: every Home logbook would upload
+into the same cloud logbook, mixing their QSOs. Another logbook's row says so
+and its switch stays off. A logbook that already uploads to SM Cloud keeps
+doing so. If you turn it off and save, it cannot be turned back on until SM
+Cloud learns to keep logbooks apart.
 
 ### How to tell a QSO was uploaded
 

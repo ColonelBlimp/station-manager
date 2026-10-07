@@ -52,6 +52,28 @@ type BindingsDB interface {
 // archive only.
 const smcloudIdentityReason = "SM Cloud can be bound only on the adopted Home archive until the identity-aware server lands; this archive's QSOs stay local until then"
 
+// smcloudHomeDefaultOnlyReason is W-0021 5F.0: every Home SM Cloud binding
+// pushes to one cloud logbook name, so until per-binding identity and
+// reconciliation land (5F.4) a NEW enable is allowed only on Home's default
+// logbook. An already-enabled binding is kept, not repaired.
+const smcloudHomeDefaultOnlyReason = "SM Cloud can be turned on in Home only for the default logbook until per-logbook SM Cloud identity lands; another logbook would upload into the same cloud logbook"
+
+// newEnableRefusal names why a binding that is not enabled now cannot be
+// turned on although its destination can (5F.0). storedEnabled keeps an
+// existing enabled binding: re-submitting it is not a new enable, and turning
+// it back on after a saved disable is. The default logbook is config's
+// projection of the archive's own, the one the boot-time reconciler serves.
+func newEnableRefusal(typ string, entry *types.QsoArchiveConfig, logbookID, defaultID int64, storedEnabled bool) string {
+	if typ != "smcloud" || storedEnabled || !adoptedArchive(entry) || logbookID == defaultID {
+		return ""
+	}
+	return smcloudHomeDefaultOnlyReason
+}
+
+func adoptedArchive(entry *types.QsoArchiveConfig) bool {
+	return entry == nil || entry.Ownership == types.QsoArchiveOwnershipLegacy
+}
+
 // BindingsView builds GET /v1/qso-archives/{uuid}/bindings for the ACTIVE
 // archive (entry nil = the not-yet-catalogued adopted file). atStart is the
 // running daemon's fingerprint of the bindings it started with.
@@ -84,6 +106,10 @@ func BindingsView(ctx context.Context, db BindingsDB, cfg config.Config, entry *
 		if reason := enableRefusal(td.Type, dv.Account, hasEntry, entry); reason != "" {
 			dv.Reason = reason
 		}
+		dv.NewLogbookReason = dv.Reason
+		if dv.NewLogbookReason == "" {
+			dv.NewLogbookReason = newEnableRefusal(td.Type, entry, 0, cfg.DefaultLogbookID, false)
+		}
 		enabled, total := 0, 0
 		for _, lb := range logbooks {
 			row := types.LogbookBindingView{LogbookID: lb.ID, LogbookUUID: lb.UUID, LogbookName: lb.Name, LogbookCallsign: lb.Callsign}
@@ -95,6 +121,9 @@ func BindingsView(ctx context.Context, db BindingsDB, cfg config.Config, entry *
 				if b.Enabled {
 					enabled++
 				}
+			}
+			if dv.Reason == "" {
+				row.Reason = newEnableRefusal(td.Type, entry, lb.ID, cfg.DefaultLogbookID, row.Enabled)
 			}
 			total++
 			dv.Logbooks = append(dv.Logbooks, row)
@@ -176,7 +205,11 @@ func applyBindings(ctx context.Context, log *logging.Service, db BindingsDB, cfg
 				return types.ArchiveBindingsView{}, &RequestError{Code: "logbook_not_found", Message: fmt.Sprintf("logbook %d does not exist in this archive", e.LogbookID)}
 			}
 			if e.Enabled {
-				if reason := enableRefusal(d.Type, account, hasEntry, entry); reason != "" {
+				reason := enableRefusal(d.Type, account, hasEntry, entry)
+				if reason == "" {
+					reason = newEnableRefusal(d.Type, entry, lb.ID, cfg.DefaultLogbookID, existing[key].Enabled)
+				}
+				if reason != "" {
 					return types.ArchiveBindingsView{}, &RequestError{Code: "binding_not_enableable", Message: fmt.Sprintf("%s for logbook %q: %s", td.DisplayName, lb.Name, reason)}
 				}
 			}
@@ -335,8 +368,7 @@ func enableRefusal(typ string, account types.StationAccountView, hasEntry bool, 
 	if !account.Configured {
 		return "its station account is incomplete: a required station field is not set"
 	}
-	adopted := entry == nil || entry.Ownership == types.QsoArchiveOwnershipLegacy
-	if typ == "smcloud" && !adopted {
+	if typ == "smcloud" && !adoptedArchive(entry) {
 		return smcloudIdentityReason
 	}
 	return ""

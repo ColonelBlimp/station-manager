@@ -302,7 +302,8 @@ func TestBindings_SmcloudOnlyOnTheAdoptedArchiveUntil5F(t *testing.T) {
 	db := bindingsDB(t)
 	a, _ := twoLogbooks(t, db)
 	ctx := context.Background()
-	cfg := config.Config{Forwarders: []types.ForwarderConfig{{Name: "smcloud", Type: "smcloud", Enabled: true, Credentials: json.RawMessage(`{"url":"https://c","token":"t"}`)}}}
+	// The enabled logbook is Home's default: 5F.0 allows a new Home enable there only.
+	cfg := config.Config{DefaultLogbookID: a, Forwarders: []types.ForwarderConfig{{Name: "smcloud", Type: "smcloud", Enabled: true, Credentials: json.RawMessage(`{"url":"https://c","token":"t"}`)}}}
 	managed := &types.QsoArchiveConfig{ID: "m", Label: "Contest", Ownership: types.QsoArchiveOwnershipManaged}
 	v, _ := BindingsView(ctx, db, cfg, managed, nil)
 	if d := destView(t, v, "smcloud"); !strings.Contains(d.Reason, "adopted") {

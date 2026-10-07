@@ -457,3 +457,60 @@ func TestLifecycle_DisabledMalformedSeedIsKeptAndCannotBeEnabledAsIs(t *testing.
 		t.Fatalf("after the valid enable = %+v", rows)
 	}
 }
+
+// W-0021 5F.0: the default-logbook-only rule refuses NEW SM Cloud enables in
+// Home; it never touches one already enabled. A start with an enabled SM Cloud
+// binding on a NON-default Home logbook still routes it and keeps its queued
+// rows (a guard: startup was not changed, and must not be).
+func TestLifecycle_ExistingNonDefaultHomeSmcloudBindingSurvivesARestart(t *testing.T) {
+	var logDB string
+	d, orch := newOrchestratedDaemon(t, func(c *config.Config) {
+		logDB = c.Datastore.Path
+		c.SetupComplete = true
+		c.DefaultLogbookID = 1
+		c.LoggingStation.StationCallsign = "7Q5MLV"
+		c.Forwarders = []types.ForwarderConfig{{Type: smcloud.Type,
+			Credentials: json.RawMessage(`{"url":"http://127.0.0.1:9","token":"t"}`), TickIntervalSec: 1, BatchSize: 1}}
+	})
+	const name = "smcloud.second"
+	seedFailedUploads(t, logDB, name) // logbook 1 and two failed rows under the binding's name
+	raw, err := sql.Open("sqlite", "file:"+logDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`INSERT INTO archive_metadata (singleton, archive_uuid, default_logbook_id, destination_bindings_seeded_at) VALUES (1, '01920000-0000-7000-8000-000000000001', 1, datetime('now'))`,
+		`INSERT INTO logbook (id, callsign, name, uuid) VALUES (2, 'G4ABC', 'Second', '01920000-0000-7000-8000-0000000000b2')`,
+		`INSERT INTO logbook_destination (logbook_id, destination, forwarder_name, enabled, credentials) VALUES (2, 'smcloud', '` + name + `', 1, '{"logbook":"main"}')`,
+	} {
+		if _, err := raw.Exec(q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	_ = raw.Close()
+
+	if err := orch.Start(d.workerCtx); err != nil {
+		t.Fatalf("orchestrated start failed: %v", err)
+	}
+	routes := d.qso.DestinationRoutes()
+	if len(routes) != 1 || routes[0].LogbookID != 2 || routes[0].Config.Name != name || !routes[0].Config.Enabled {
+		t.Fatalf("routes = %+v; want the existing enabled %s on logbook 2", routes, name)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	kept := 0
+	for _, id := range []int64{1, 2} {
+		rows, err := d.db.FetchUploadsByQsoIDWithContext(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range rows {
+			if r.ForwarderName == name {
+				kept++
+			}
+		}
+	}
+	if kept != 2 {
+		t.Fatalf("%s rows after start = %d; want both kept", name, kept)
+	}
+}

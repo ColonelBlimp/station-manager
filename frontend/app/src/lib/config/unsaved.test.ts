@@ -263,6 +263,7 @@ function dirtyBinding(): void {
                 account: { configured: true, label: '', fields_set: [], build_key: '' },
                 state: 'off',
                 reason: '',
+                new_logbook_reason: '',
                 logbooks: [
                     {
                         logbook_id: 1,
@@ -274,6 +275,7 @@ function dirtyBinding(): void {
                         forwarder_name: 'qrz',
                         credentials_set: ['api_key'],
                         queue: { waiting: 0, failed: 0, in_flight: 0 },
+                        reason: '',
                     },
                 ],
             },

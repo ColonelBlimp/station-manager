@@ -27,8 +27,12 @@ type DestinationBindingView struct {
 	// Reason, when set, is why the switch cannot be turned on here (no station
 	// account; SM Cloud outside the adopted archive until the identity-aware
 	// server lands) — with where it is fixed.
-	Reason   string               `json:"reason,omitempty"`
-	Logbooks []LogbookBindingView `json:"logbooks"`
+	Reason string `json:"reason,omitempty"`
+	// NewLogbookReason, when set, is why a logbook created now could not have
+	// this destination turned on (SM Cloud in Home: the default logbook only
+	// until per-binding identity lands, W-0021 5F.0).
+	NewLogbookReason string               `json:"new_logbook_reason,omitempty"`
+	Logbooks         []LogbookBindingView `json:"logbooks"`
 }
 
 // StationAccountView is the presence of a station account, never its values.
@@ -59,6 +63,9 @@ type LogbookBindingView struct {
 	// CredentialsSet lists the logbook-scoped keys that hold a value.
 	CredentialsSet []string          `json:"credentials_set,omitempty"`
 	Queue          BindingQueueCount `json:"queue"`
+	// Reason, when set, is why THIS row cannot be turned on although its
+	// destination can (W-0021 5F.0); never set on a row that is enabled.
+	Reason string `json:"reason,omitempty"`
 }
 
 // BindingQueueCount mirrors the queue readout for one binding name.

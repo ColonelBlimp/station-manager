@@ -39,6 +39,10 @@ export interface LogbookBinding {
     /** Logbook-scoped keys that hold a value — never the values. */
     credentials_set: string[];
     queue: BindingQueue;
+    /** Why THIS row cannot be turned on although its destination can (SM Cloud
+     *  in Home: the default logbook only, W-0021 5F.0); '' when it can. Never
+     *  set on an enabled row. */
+    reason: string;
 }
 
 export interface StationAccount {
@@ -57,6 +61,9 @@ export interface DestinationBinding {
     state: BindingState;
     /** Why this destination cannot be turned on here; '' when it can. */
     reason: string;
+    /** Why a logbook created now could not have this destination turned on;
+     *  '' when it could. */
+    new_logbook_reason: string;
     logbooks: LogbookBinding[];
 }
 
@@ -103,6 +110,7 @@ function toRow(v: unknown): LogbookBinding | null {
         forwarder_name: str(v.forwarder_name),
         credentials_set: strs(v.credentials_set),
         queue: { waiting: num(q.waiting), failed: num(q.failed), in_flight: num(q.in_flight) },
+        reason: str(v.reason),
     };
 }
 
@@ -122,6 +130,7 @@ function toDestination(v: unknown): DestinationBinding | null {
         },
         state,
         reason: str(v.reason),
+        new_logbook_reason: str(v.new_logbook_reason),
         logbooks: Array.isArray(v.logbooks)
             ? v.logbooks.map(toRow).filter((r): r is LogbookBinding => r !== null)
             : [],

@@ -48,13 +48,14 @@ import { toastsState, _resetForTests as resetToasts } from '../ui/toasts.svelte'
 
 const ARCHIVE = '01a0e79a-7b32-7cf5-a72c-57cf437a362d';
 
-function smcloud(reason = '') {
+function smcloud(reason = '', newLogbookReason = '') {
     return {
         type: 'smcloud',
         display_name: 'SM Cloud',
         account: { configured: reason === '', label: '', fields_set: [], build_key: '' },
         state: 'off',
         reason,
+        new_logbook_reason: newLogbookReason || reason,
         logbooks: [],
     };
 }
@@ -129,6 +130,12 @@ describe('logbooksState.load', () => {
         expect(logbooksState.smcloudAvailable).toBe(false);
 
         daemonHas({ destinations: [] });
+        await logbooksState.load();
+        expect(logbooksState.smcloudAvailable).toBe(false);
+    });
+
+    it('5F.0: SM Cloud is not offered when a NEW logbook could not have it turned on', async () => {
+        daemonHas({ destinations: [smcloud('', 'only for the default logbook')] });
         await logbooksState.load();
         expect(logbooksState.smcloudAvailable).toBe(false);
     });
@@ -209,6 +216,22 @@ describe('logbooksState.create', () => {
             destinations: [{ type: 'smcloud', logbooks: [{ logbook_id: 3, enabled: true }] }],
         });
         expect(toast('info', /SM Cloud uploads start after a restart/)).toBe(true);
+    });
+
+    it('5F.0: an add with SM Cloud that a new logbook cannot have is refused whole — no logbook, no binding', async () => {
+        daemonHas({ destinations: [smcloud('', 'only for the default logbook')] });
+        await logbooksState.load();
+        expect(
+            await logbooksState.create({ name: 'Contest', callsign: '7Q5MLV', smcloud: true })
+        ).toBe(false);
+        expect(createLogbook).not.toHaveBeenCalled();
+        expect(saveArchiveBindings).not.toHaveBeenCalled();
+        expect(
+            toast(
+                'error',
+                /SM Cloud can’t be turned on for a new logbook: only for the default logbook/
+            )
+        ).toBe(true);
     });
 
     it('if SM Cloud cannot be turned on, the logbook stays and the message says so', async () => {

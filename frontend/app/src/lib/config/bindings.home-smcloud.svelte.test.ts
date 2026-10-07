@@ -1,0 +1,150 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { render, screen, within } from '@testing-library/svelte';
+import DestinationsSection from './DestinationsSection.svelte';
+import { bindingsState, rowKey, _resetBindingsForTests } from './bindings.svelte';
+import { _resetForTests as resetToasts } from '../ui/toasts.svelte';
+
+/*
+    W-0021 5F.0 (ruled 2026-10-07): in Home, a NEW SM Cloud enable is allowed
+    only on the default logbook until per-binding identity lands. The daemon
+    names the refusal per row (`reason` on a row that is not enabled) while the
+    destination itself stays enable-able; an existing enabled row carries no
+    reason and stays editable.
+
+      F1  a refused row's switch cannot be turned on; the default row's can.
+      F2  the every-logbook switch turns on only the rows that may be turned on.
+      F3  an existing enabled row may be turned off and back on in the draft
+          (it is not a new enable until a disable is saved).
+      F4  the rendered row says why, with its switch disabled.
+*/
+
+const REASON =
+    'SM Cloud can be turned on in Home only for the default logbook until per-logbook SM Cloud identity lands; another logbook would upload into the same cloud logbook';
+
+const TYPES = {
+    types: [
+        {
+            type: 'smcloud',
+            display_name: 'SM Cloud backup',
+            supported_actions: ['insert'],
+            credential_fields: [
+                { key: 'url', label: 'Service URL', kind: 'text', scope: 'station' },
+                {
+                    key: 'logbook',
+                    label: 'Cloud logbook name',
+                    kind: 'text',
+                    clearable: true,
+                    scope: 'logbook',
+                },
+            ],
+        },
+    ],
+};
+
+const row = (id: number, name: string, over: Record<string, unknown> = {}) => ({
+    logbook_id: id,
+    logbook_uuid: `u${id}`,
+    logbook_name: name,
+    logbook_callsign: 'M0ABC',
+    bound: false,
+    enabled: false,
+    forwarder_name: '',
+    credentials_set: [],
+    queue: { waiting: 0, failed: 0, in_flight: 0 },
+    ...over,
+});
+
+const VIEW = {
+    archive_id: 'A1',
+    archive_label: 'Home',
+    restart_required: false,
+    destinations: [
+        {
+            type: 'smcloud',
+            display_name: 'SM Cloud backup',
+            account: { configured: true },
+            state: 'mixed',
+            reason: '',
+            new_logbook_reason: REASON,
+            logbooks: [
+                row(1, 'Default'),
+                row(2, 'Portable', { bound: true, enabled: true, forwarder_name: 'smcloud.u2' }),
+                row(3, 'Contest', { reason: REASON }),
+            ],
+        },
+    ],
+};
+
+function json(body: unknown): Response {
+    return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+    });
+}
+
+beforeEach(() => {
+    vi.stubGlobal(
+        'fetch',
+        vi.fn((url: string) => {
+            if (url === '/v1/version')
+                return Promise.resolve(json({ instance: 'i', archive: { id: 'A1' } }));
+            if (url === '/v1/forwarder-types') return Promise.resolve(json(TYPES));
+            if (url === '/v1/qso-archives/A1/bindings') return Promise.resolve(json(VIEW));
+            return Promise.resolve(new Response('{}', { status: 404 }));
+        })
+    );
+});
+
+afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    _resetBindingsForTests();
+    resetToasts();
+});
+
+describe('bindingsState — Home SM Cloud, default logbook only (5F.0)', () => {
+    it('F1: a refused row cannot be turned on; the default row can', async () => {
+        await bindingsState.load();
+        expect(bindingsState.view!.destinations[0].logbooks[2].reason).toBe(REASON);
+        expect(bindingsState.view!.destinations[0].new_logbook_reason).toBe(REASON);
+        bindingsState.setRow('smcloud', 3, true);
+        expect(bindingsState.drafts[rowKey('smcloud', 3)].enabled).toBe(false);
+        bindingsState.setRow('smcloud', 1, true);
+        expect(bindingsState.drafts[rowKey('smcloud', 1)].enabled).toBe(true);
+    });
+
+    it('F2: the every-logbook switch turns on only the rows that may be turned on', async () => {
+        await bindingsState.load();
+        bindingsState.setAll('smcloud', true);
+        expect(bindingsState.drafts[rowKey('smcloud', 1)].enabled).toBe(true);
+        expect(bindingsState.drafts[rowKey('smcloud', 2)].enabled).toBe(true);
+        expect(bindingsState.drafts[rowKey('smcloud', 3)].enabled).toBe(false);
+        expect(bindingsState.draftState(bindingsState.view!.destinations[0])).toBe('mixed');
+    });
+
+    it('F3: an existing enabled row may be turned off and back on before a save', async () => {
+        await bindingsState.load();
+        bindingsState.setRow('smcloud', 2, false);
+        expect(bindingsState.drafts[rowKey('smcloud', 2)].enabled).toBe(false);
+        bindingsState.setRow('smcloud', 2, true);
+        expect(bindingsState.drafts[rowKey('smcloud', 2)].enabled).toBe(true);
+        expect(bindingsState.dirty).toBe(false);
+    });
+
+    it('F4: the refused row says why, with its switch disabled', async () => {
+        render(DestinationsSection);
+        await screen.findByText('SM Cloud backup');
+        const box = (name: string) =>
+            screen.getByRole<HTMLInputElement>('checkbox', { name: `SM Cloud backup for ${name}` });
+        expect(box('Contest').disabled).toBe(true);
+        expect(box('Default').disabled).toBe(false);
+        expect(box('Portable').disabled).toBe(false);
+        const rows = screen.getAllByTestId('binding-row');
+        const contest = rows.find((r) => r.textContent?.includes('Contest'))!;
+        expect(within(contest).getByTestId('row-reason').textContent).toContain(
+            'only for the default logbook'
+        );
+        const portable = rows.find((r) => r.textContent?.includes('Portable'))!;
+        expect(within(portable).queryByTestId('row-reason')).toBeNull();
+    });
+});

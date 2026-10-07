@@ -41,8 +41,10 @@ class LogbooksState {
     defaultId = $state(0);
     stationCallsign = $state('');
     archiveLabel = $state('');
-    /** SM Cloud can be turned on for a logbook of this archive. */
+    /** SM Cloud can be turned on for a logbook created now in this archive. */
     smcloudAvailable = $state(false);
+    /** Why it cannot ('' when it can, or when the bindings are unread). */
+    smcloudRefusal = $state('');
     loaded = $state(false);
     loading = $state(false);
     error = $state('');
@@ -107,6 +109,7 @@ class LogbooksState {
 
     async #readBindings(generation: number): Promise<void> {
         this.smcloudAvailable = false;
+        this.smcloudRefusal = '';
         this.archiveLabel =
             archivesState.list.find((a) => a.id === this.#archiveId)?.label ?? this.archiveLabel;
         if (this.#archiveId === '') return;
@@ -114,7 +117,10 @@ class LogbooksState {
         if (generation !== this.#generation || out.kind !== 'ok') return;
         if (out.bindings.archive_label !== '') this.archiveLabel = out.bindings.archive_label;
         const sm = out.bindings.destinations.find((d) => d.type === 'smcloud');
-        this.smcloudAvailable = sm !== undefined && sm.reason === '';
+        // A new logbook is never the default one, so it takes the daemon's
+        // new-logbook answer, not the destination's (W-0021 5F.0).
+        this.smcloudRefusal = sm?.new_logbook_reason || sm?.reason || '';
+        this.smcloudAvailable = sm !== undefined && this.smcloudRefusal === '';
     }
 
     /** Unsaved drafts: a typed name, a callsign other than the prefill, a ticked
@@ -190,6 +196,13 @@ class LogbooksState {
     /** Create a logbook; true when it exists (the caller clears its form). */
     async create(input: { name: string; callsign: string; smcloud: boolean }): Promise<boolean> {
         if (!this.#mayWrite()) return false;
+        // Refused whole, before the wire: creating the logbook and then failing
+        // to bind it would leave a logbook the operator did not ask for alone.
+        if (input.smcloud && !this.smcloudAvailable) {
+            const why = this.smcloudRefusal || 'this archive cannot turn it on';
+            toasts.error(`SM Cloud can’t be turned on for a new logbook: ${why}.`);
+            return false;
+        }
         this.busy = true;
         try {
             const out = await createLogbook({ name: input.name, callsign: input.callsign });
@@ -299,6 +312,7 @@ export function _resetLogbooksForTests(): void {
     logbooksState.stationCallsign = '';
     logbooksState.archiveLabel = '';
     logbooksState.smcloudAvailable = false;
+    logbooksState.smcloudRefusal = '';
     logbooksState.loaded = false;
     logbooksState.loading = false;
     logbooksState.error = '';

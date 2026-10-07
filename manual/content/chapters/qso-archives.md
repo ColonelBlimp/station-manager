@@ -51,9 +51,10 @@ that archive first.
   QSOs by import or restore (see [Importing](#importing)). A logbook whose
   callsign differs from your station callsign cannot receive live contacts
   yet.
-- **Upload to SM Cloud** appears, unticked, only when this archive can upload
-  to SM Cloud. Ticked, the new logbook's SM Cloud uploads start after a
-  restart. Other services are set up per logbook on the **Forwarding** tab.
+- **Upload to SM Cloud** appears, unticked, only when a new logbook in this
+  archive can upload to SM Cloud. For now it never can: in Home only the
+  Default logbook may be newly turned on (see Forwarding). Ticked, the new
+  logbook's SM Cloud uploads start after a restart. Other services are set up per logbook on the **Forwarding** tab.
 - **Rename** changes the name; a logbook's callsign cannot be changed.
 - **Delete** works only on an empty logbook that is not the Default; the
   button's tooltip says why when it is unavailable.

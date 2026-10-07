@@ -11,7 +11,9 @@
     Rules, each with a test (bindings.svelte.test.ts):
       - only changed rows and non-blank typed values ride a save;
       - a destination the daemon says cannot be turned on here refuses the
-        switch (turning off always works);
+        switch (turning off always works); so does a row the daemon names a
+        reason for (SM Cloud in Home off the default logbook, W-0021 5F.0) —
+        the every-logbook switch then turns on only the rows that may be;
       - a row turned on without a required per-logbook field is refused BEFORE
         the wire: the field is marked;
       - a refused save — this one or the daemon's — keeps every drafted switch,
@@ -170,7 +172,10 @@ class BindingsState {
         if (this.saving) return;
         const dest = this.#dest(type);
         if (!dest || (on && dest.reason !== '')) return;
-        for (const r of dest.logbooks) this.#setDraft(dest, r.logbook_id, on);
+        for (const r of dest.logbooks) {
+            if (on && r.reason !== '') continue;
+            this.#setDraft(dest, r.logbook_id, on);
+        }
     }
 
     setRow(type: string, logbookId: number, on: boolean): void {
@@ -182,6 +187,7 @@ class BindingsState {
         if (this.saving) return;
         const dest = this.#dest(type);
         if (!dest || (on && dest.reason !== '')) return;
+        if (on && dest.logbooks.find((r) => r.logbook_id === logbookId)?.reason) return;
         this.#setDraft(dest, logbookId, on);
     }
 
