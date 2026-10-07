@@ -14,7 +14,7 @@
 //	GET  /v1/logbooks/{id}/manifest   the (uuid, modified_at, deleted) diff list
 //	GET  /v1/export                   full-fidelity dump of the tenant's legacy archive
 //	GET  /v1/health                   liveness + DB ping (unauthenticated)
-//	GET  /v1/version                  build version (unauthenticated)
+//	GET  /v1/version                  build version and identity_protocol (unauthenticated)
 //
 // The identity wire (W-0021 5F.2; ADR 0088, ADR 0089), strict envelopes:
 //

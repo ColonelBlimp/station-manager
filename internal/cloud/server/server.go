@@ -353,8 +353,13 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "db": "ok"})
 }
 
+// identityProtocol is the identity wire's version this server implements
+// (W-0021 5F.2, ruling Q1, ADR 0088): the scoped archive/logbook routes and
+// adoption. A client checks it at start; an old server omits it.
+const identityProtocol = 1
+
 func (s *Server) handleVersion(w http.ResponseWriter, _ *http.Request) {
-	s.writeJSON(w, http.StatusOK, map[string]string{"version": s.version})
+	s.writeJSON(w, http.StatusOK, map[string]any{"version": s.version, "identity_protocol": identityProtocol})
 }
 
 // QsoUpload is one QSO on the PUT /v1/qsos wire: canonical types.Qso JSON as

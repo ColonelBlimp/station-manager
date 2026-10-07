@@ -528,6 +528,9 @@ the hourly reconcile self-heals anything a flaky link drops.
   This was drilled 2026-10-07 on the dev Postgres: the data survived at
   version 6. Use `version = 7` with the 0008 file alone to step back one
   version only.
+  A build with the 5F.2 identity wire reports `"identity_protocol": 1` on
+  `GET /v1/version`; an older build omits it, and daemons treat that as "not
+  identity-ready".
 - **Restore drill** (worth one rehearsal — see `smd restore` in
   sm-cloud-p1.md S5): on the shack machine with the daemon stopped,
   `smd restore -dry-run` fetches the export and reports counts without

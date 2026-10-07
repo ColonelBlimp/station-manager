@@ -283,7 +283,7 @@ func TestAuth_Required(t *testing.T) {
 	if resp := do(t, http.MethodGet, ts.URL+"/v1/health", "", nil, nil); resp.StatusCode != http.StatusOK {
 		t.Errorf("health status = %d, want 200", resp.StatusCode)
 	}
-	var v map[string]string
+	var v map[string]any // identity_protocol is a number (W-0021 5F.2)
 	if resp := do(t, http.MethodGet, ts.URL+"/v1/version", "", nil, &v); resp.StatusCode != http.StatusOK || v["version"] != testVersion {
 		t.Errorf("version = %d %v", resp.StatusCode, v)
 	}
