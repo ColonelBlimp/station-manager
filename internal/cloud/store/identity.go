@@ -164,3 +164,99 @@ func uniqueViolation(err error, constraint string) bool {
 	var pqErr *pq.Error
 	return stderr.As(err, &pqErr) && pqErr.Code == "23505" && pqErr.Constraint == constraint
 }
+
+// IdentityTarget is where an identity push writes: the archive and logbook by
+// their UUIDs (CanonicalUUID form), with the display values the push carries.
+type IdentityTarget struct {
+	ArchiveUUID  string
+	ArchiveLabel string
+	LogbookUUID  string
+	LogbookLabel string
+	Callsign     string
+}
+
+// UpsertIdentity is the identity wire's write (W-0021 5F.2, ADR 0089 S1, S3,
+// S5). In ONE transaction it resolves the archive by UUID — creating a managed
+// archive on first use, or reaching the adopted legacy archive — and the
+// logbook by UUID within it, applies the non-empty display values, and upserts
+// recs into that logbook. A refusal leaves none of it behind:
+//   - logbook_in_other_archive — the logbook UUID belongs to another archive;
+//   - ArchiveConflictError — a QSO is stored in another archive than the
+//     requested one (the upsert's own guard, at every revision);
+//   - VersionConflictError — as on the name wire.
+//
+// Races with an adoption or another first push of the same UUID are settled by
+// the unique constraints: an insert-if-absent waits on the other transaction
+// and then reads what it committed.
+func (s *Store) UpsertIdentity(ctx context.Context, tenantID int64, target IdentityTarget, recs []Record) (applied int, err error) {
+	const op errors.Op = "store.UpsertIdentity"
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, errors.New(op).WithErr(err).WithMsg("begin")
+	}
+	defer txutil.Rollback(tx, &err)
+	archiveID, err := ensureIdentityArchive(ctx, tx, tenantID, target)
+	if err != nil {
+		return 0, wrapIdentity(op, err)
+	}
+	logbookID, err := ensureIdentityLogbook(ctx, tx, tenantID, archiveID, target)
+	if err != nil {
+		return 0, wrapIdentity(op, err)
+	}
+	for i := range recs {
+		recs[i].LogbookID = logbookID
+	}
+	if applied, err = upsertTx(ctx, op, tx, recs); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, errors.New(op).WithErr(err).WithMsg("commit")
+	}
+	return applied, nil
+}
+
+func ensureIdentityArchive(ctx context.Context, tx *sql.Tx, tenantID int64, t IdentityTarget) (int64, error) {
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO archives (tenant_id, archive_uuid, label) VALUES ($1, $2, $3)
+ON CONFLICT (tenant_id, archive_uuid) DO NOTHING`, tenantID, t.ArchiveUUID, t.ArchiveLabel); err != nil {
+		return 0, err
+	}
+	var id int64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT id FROM archives WHERE tenant_id = $1 AND archive_uuid = $2`, tenantID, t.ArchiveUUID).Scan(&id); err != nil {
+		return 0, err
+	}
+	// Only a change takes the row lock, so pushes that repeat the label do not
+	// queue behind each other.
+	if _, err := tx.ExecContext(ctx, `
+UPDATE archives SET label = $2 WHERE id = $1 AND $2 <> '' AND label IS DISTINCT FROM $2`, id, t.ArchiveLabel); err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+func ensureIdentityLogbook(ctx context.Context, tx *sql.Tx, tenantID, archiveID int64, t IdentityTarget) (int64, error) {
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO logbooks (tenant_id, archive_id, uuid, label, callsign) VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (tenant_id, uuid) DO NOTHING`, tenantID, archiveID, t.LogbookUUID, t.LogbookLabel, t.Callsign); err != nil {
+		return 0, err
+	}
+	var id, inArchive int64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT id, archive_id FROM logbooks WHERE tenant_id = $1 AND uuid = $2`, tenantID, t.LogbookUUID).Scan(&id, &inArchive); err != nil {
+		return 0, err
+	}
+	if inArchive != archiveID {
+		return 0, identityConflict("logbook_in_other_archive",
+			"logbook %s belongs to another archive than %s", t.LogbookUUID, t.ArchiveUUID)
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE logbooks SET
+    label    = CASE WHEN $2 <> '' THEN $2 ELSE label END,
+    callsign = CASE WHEN $3 <> '' THEN $3 ELSE callsign END
+WHERE id = $1 AND (($2 <> '' AND label IS DISTINCT FROM $2) OR ($3 <> '' AND callsign IS DISTINCT FROM $3))`,
+		id, t.LogbookLabel, t.Callsign); err != nil {
+		return 0, err
+	}
+	return id, nil
+}

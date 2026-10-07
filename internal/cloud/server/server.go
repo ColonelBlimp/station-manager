@@ -96,6 +96,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/logbooks/{id}/manifest", s.auth(s.handleManifest))
 	mux.HandleFunc("GET /v1/export", s.auth(s.handleExport))
 	mux.HandleFunc("POST /v1/archives/adopt", s.auth(s.handleAdopt))
+	mux.HandleFunc("PUT /v1/archives/{archive_uuid}/logbooks/{logbook_uuid}/qsos", s.auth(s.handleIdentityPut))
 	// Middleware, inside-out: gzip compresses negotiated responses (the
 	// manifest and export payloads are the bandwidth-heavy ones — see
 	// gzip.go); the concurrency limiter sits OUTERMOST so a rejected request
@@ -399,15 +400,68 @@ func (s *Server) handlePutQsos(w http.ResponseWriter, r *http.Request) {
 	// the same transaction as the QSOs, so no rejected request provisions
 	// anything.
 	tenant := tenantID(r)
-	recs := make([]store.Record, 0, len(req.Qsos))
-	for i, u := range req.Qsos {
+	recs, ok := s.validateUploads(w, tenant, req.Qsos)
+	if !ok {
+		return
+	}
+
+	logbookID, applied, err := s.store.UpsertLegacy(r.Context(), tenant, req.Logbook, recs)
+	if err != nil {
+		s.writeUpsertError(w, r, req.Logbook, err)
+		return
+	}
+	s.log.Info("qsos upserted", "tenant_id", tenant, "logbook_id", logbookID,
+		"received", len(recs), "applied", applied)
+	s.writeJSON(w, http.StatusOK, PutQsosResponse{Received: len(recs), Applied: applied})
+}
+
+// writeUpsertError maps a refused or failed batch write to its response. Every
+// refusal rolled the whole batch back — its containers included — so nothing
+// changed. target names the logbook written (a name or a UUID) for the log.
+func (s *Server) writeUpsertError(w http.ResponseWriter, r *http.Request, target string, err error) {
+	// A QSO stored in another archive than the one written: neither wire moves
+	// a QSO between archives (W-0021 5F.1/5F.2, ADR 0089 S3).
+	var ace *store.ArchiveConflictError
+	if stderr.As(err, &ace) {
+		s.log.Warn("qso upsert archive conflict", "logbook", target, "uuid", ace.UUID, "tenant_id", tenantID(r), "request_id", requestID(r))
+		s.writeError(w, http.StatusConflict, "archive_conflict",
+			"uuid "+ace.UUID+" is stored in another archive than the one written")
+		return
+	}
+	// An equal-version divergence is a client/protocol conflict, not a server
+	// fault. Surface it as a bounded 409 naming the UUID (client-generated,
+	// non-secret) so the forwarder does NOT record it as a successful backup
+	// (PT-1).
+	var vce *store.VersionConflictError
+	if stderr.As(err, &vce) {
+		s.log.Warn("qso upsert version conflict", "logbook", target, "uuid", vce.UUID, "tenant_id", tenantID(r), "request_id", requestID(r))
+		s.writeError(w, http.StatusConflict, "version_conflict", "equal-version divergent state for uuid "+vce.UUID)
+		return
+	}
+	var ice *store.IdentityConflictError
+	if stderr.As(err, &ice) {
+		s.log.Warn("qso upsert identity conflict", "code", ice.Code, "logbook", target, "tenant_id", tenantID(r), "request_id", requestID(r))
+		s.writeError(w, http.StatusConflict, ice.Code, ice.Message)
+		return
+	}
+	s.log.Error("upsert failed", "logbook", target, "tenant_id", tenantID(r), "request_id", requestID(r), "err", err)
+	s.writeError(w, http.StatusInternalServerError, "internal_error", "store write failed")
+}
+
+// validateUploads checks every row of a batch — the QSO payload shape, a raw
+// UUIDv7, modified_at, revision — and builds the store records, writing the
+// 400 and returning false on the first bad row. Shared by the name-only and
+// identity wires, so both accept exactly the same rows.
+func (s *Server) validateUploads(w http.ResponseWriter, tenant int64, ups []QsoUpload) ([]store.Record, bool) {
+	recs := make([]store.Record, 0, len(ups))
+	for i, u := range ups {
 		// Unmarshal ONLY to validate shape + extract the UUID; the stored
 		// payload stays the caller's bytes verbatim (full-fidelity restore).
 		var q types.Qso
 		if err := json.Unmarshal(u.Qso, &q); err != nil {
 			s.writeError(w, http.StatusBadRequest, "invalid_field_value",
 				"qsos["+strconv.Itoa(i)+"].qso is not a QSO: "+err.Error())
-			return
+			return nil, false
 		}
 		// UUIDv7 exactly, not just any UUID: Postgres's uuid column would
 		// accept every RFC 4122 version, but restore (qsoservice.Restore)
@@ -422,17 +476,17 @@ func (s *Server) handlePutQsos(w http.ResponseWriter, r *http.Request) {
 		if !utils.IsValidUUIDv7(uuid) {
 			s.writeError(w, http.StatusBadRequest, "invalid_field_value",
 				"qsos["+strconv.Itoa(i)+"].qso.uuid must be a UUIDv7")
-			return
+			return nil, false
 		}
 		if u.ModifiedAt.IsZero() {
 			s.writeError(w, http.StatusBadRequest, "invalid_field_value",
 				"qsos["+strconv.Itoa(i)+"].modified_at is required")
-			return
+			return nil, false
 		}
 		if u.Revision < 0 {
 			s.writeError(w, http.StatusBadRequest, "invalid_field_value",
 				"qsos["+strconv.Itoa(i)+"].revision must be >= 0")
-			return
+			return nil, false
 		}
 		recs = append(recs, store.Record{
 			UUID:       uuid,
@@ -443,36 +497,7 @@ func (s *Server) handlePutQsos(w http.ResponseWriter, r *http.Request) {
 			Payload:    u.Qso,
 		})
 	}
-
-	logbookID, applied, err := s.store.UpsertLegacy(r.Context(), tenant, req.Logbook, recs)
-	if err != nil {
-		// A QSO stored in another archive: the name-only wire writes only the
-		// legacy archive and never moves another archive's record (W-0021 5F.1).
-		// The batch, its logbook creation included, was rolled back.
-		var ace *store.ArchiveConflictError
-		if stderr.As(err, &ace) {
-			s.log.Warn("qso upsert archive conflict", "logbook", req.Logbook, "uuid", ace.UUID, "tenant_id", tenantID(r), "request_id", requestID(r))
-			s.writeError(w, http.StatusConflict, "archive_conflict",
-				"uuid "+ace.UUID+" is stored in another archive; this wire writes only the legacy archive")
-			return
-		}
-		// An equal-version divergence is a client/protocol conflict, not a server
-		// fault: the whole batch was rolled back and nothing changed. Surface it as
-		// a bounded 409 naming the UUID (client-generated, non-secret) so the
-		// forwarder does NOT record it as a successful backup (PT-1).
-		var vce *store.VersionConflictError
-		if stderr.As(err, &vce) {
-			s.log.Warn("qso upsert version conflict", "logbook", req.Logbook, "uuid", vce.UUID, "tenant_id", tenantID(r), "request_id", requestID(r))
-			s.writeError(w, http.StatusConflict, "version_conflict", "equal-version divergent state for uuid "+vce.UUID)
-			return
-		}
-		s.log.Error("upsert failed", "logbook", req.Logbook, "count", len(recs), "tenant_id", tenantID(r), "request_id", requestID(r), "err", err)
-		s.writeError(w, http.StatusInternalServerError, "internal_error", "store write failed")
-		return
-	}
-	s.log.Info("qsos upserted", "tenant_id", tenant, "logbook_id", logbookID,
-		"received", len(recs), "applied", applied)
-	s.writeJSON(w, http.StatusOK, PutQsosResponse{Received: len(recs), Applied: applied})
+	return recs, true
 }
 
 func (s *Server) handleLogbooks(w http.ResponseWriter, r *http.Request) {

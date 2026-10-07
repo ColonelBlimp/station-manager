@@ -20,6 +20,10 @@
 //
 //	POST /v1/archives/adopt           stamp the legacy archive and one legacy logbook
 //	                                  with the client's UUIDs; idempotent, one transaction
+//	PUT  /v1/archives/{a}/logbooks/{l}/qsos
+//	                                  batch upsert into the logbook {l} of archive {a},
+//	                                  both created on first use, all in one transaction;
+//	                                  never moves a logbook or a QSO between archives
 //
 // The others are the NAME-ONLY routes. Since schema 7 (W-0021 5F.1) they resolve,
 // list and dump only the tenant's legacy archive: an old client never reaches

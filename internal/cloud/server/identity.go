@@ -18,6 +18,10 @@ import (
 // strictFields maps each allowed envelope key to the decoder of its value.
 type strictFields map[string]func(dec *json.Decoder) error
 
+// errResponded is a field decoder's report that it already wrote the error
+// response (the qsos streamer writes its own 400/413).
+var errResponded = stderr.New("response already written")
+
 // decodeStrict reads one JSON object whose keys are exactly among fields, each
 // at most once, and nothing after it. It writes the 400/413 and returns false
 // on any violation.
@@ -41,6 +45,9 @@ func (s *Server) decodeStrict(w http.ResponseWriter, r *http.Request, fields str
 		}
 		seen[key] = true
 		if err := decode(dec); err != nil {
+			if stderr.Is(err, errResponded) {
+				return false
+			}
 			return s.rejectBody(w, err)
 		}
 	}
@@ -139,4 +146,62 @@ func (s *Server) identityError(w http.ResponseWriter, r *http.Request, what stri
 	}
 	s.log.Error("identity "+what+" failed", "tenant_id", tenantID(r), "request_id", requestID(r), "err", err)
 	s.writeError(w, http.StatusInternalServerError, "internal_error", "store write failed")
+}
+
+// IdentityPutRequest is PUT /v1/archives/{archive_uuid}/logbooks/{logbook_uuid}/qsos.
+type IdentityPutRequest struct {
+	ArchiveLabel string      `json:"archive_label"`
+	LogbookLabel string      `json:"logbook_label"`
+	Callsign     string      `json:"callsign"`
+	Qsos         []QsoUpload `json:"qsos"`
+}
+
+// handleIdentityPut writes a batch to the logbook named by UUID inside the
+// archive named by UUID, creating either on first use (ADR 0089 S1), in one
+// transaction with the batch.
+func (s *Server) handleIdentityPut(w http.ResponseWriter, r *http.Request) {
+	archiveUUID, logbookUUID := r.PathValue("archive_uuid"), r.PathValue("logbook_uuid")
+	if !utils.IsValidUUIDv7(archiveUUID) || !utils.IsValidUUIDv7(logbookUUID) {
+		s.writeError(w, http.StatusBadRequest, "invalid_field_value", "the archive and logbook in the path must be UUIDv7s")
+		return
+	}
+	var req IdentityPutRequest
+	if !s.decodeStrict(w, r, strictFields{
+		"archive_label": stringField(&req.ArchiveLabel),
+		"logbook_label": stringField(&req.LogbookLabel),
+		"callsign":      stringField(&req.Callsign),
+		"qsos": func(dec *json.Decoder) error {
+			if !s.streamQsos(w, dec, &req.Qsos) {
+				return errResponded
+			}
+			return nil
+		},
+	}) {
+		return
+	}
+	if msg := displayValuesInvalid(req.ArchiveLabel, req.LogbookLabel, req.Callsign); msg != "" {
+		s.writeError(w, http.StatusBadRequest, "invalid_field_value", msg)
+		return
+	}
+	if len(req.Qsos) == 0 {
+		s.writeError(w, http.StatusBadRequest, "invalid_field_value", "qsos must be a non-empty array")
+		return
+	}
+	tenant := tenantID(r)
+	recs, ok := s.validateUploads(w, tenant, req.Qsos)
+	if !ok {
+		return
+	}
+	target := store.IdentityTarget{
+		ArchiveUUID: store.CanonicalUUID(archiveUUID), ArchiveLabel: req.ArchiveLabel,
+		LogbookUUID: store.CanonicalUUID(logbookUUID), LogbookLabel: req.LogbookLabel, Callsign: req.Callsign,
+	}
+	applied, err := s.store.UpsertIdentity(r.Context(), tenant, target, recs)
+	if err != nil {
+		s.writeUpsertError(w, r, target.LogbookUUID, err)
+		return
+	}
+	s.log.Info("qsos upserted", "tenant_id", tenant, "archive_uuid", target.ArchiveUUID,
+		"logbook_uuid", target.LogbookUUID, "received", len(recs), "applied", applied)
+	s.writeJSON(w, http.StatusOK, PutQsosResponse{Received: len(recs), Applied: applied})
 }
