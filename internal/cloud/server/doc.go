@@ -24,6 +24,10 @@
 //	                                  batch upsert into the logbook {l} of archive {a},
 //	                                  both created on first use, all in one transaction;
 //	                                  never moves a logbook or a QSO between archives
+//	GET  /v1/archives/{a}/logbooks/{l}/reconcile  {archive_uuid, logbook_uuid, count, hash}
+//	GET  /v1/archives/{a}/logbooks/{l}/manifest   {archive_uuid, logbook_uuid, entries}
+//	GET  /v1/archives/{a}/logbooks/{l}/export     that logbook's identity and every record,
+//	                                              from one snapshot; 404 outside its archive
 //
 // The others are the NAME-ONLY routes. Since schema 7 (W-0021 5F.1) they resolve,
 // list and dump only the tenant's legacy archive: an old client never reaches

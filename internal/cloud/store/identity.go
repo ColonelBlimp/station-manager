@@ -260,3 +260,86 @@ WHERE id = $1 AND (($2 <> '' AND label IS DISTINCT FROM $2) OR ($3 <> '' AND cal
 	}
 	return id, nil
 }
+
+// IdentityLogbookInfo is a logbook reached by UUID with its archive's identity
+// and the display values the scoped reads report.
+type IdentityLogbookInfo struct {
+	ID           int64
+	ArchiveUUID  string
+	ArchiveLabel string
+	LogbookUUID  string
+	LogbookLabel string
+	Callsign     string
+}
+
+const identityLogbookQ = `
+SELECT l.id, a.archive_uuid::text, a.label, l.uuid::text, l.label, l.callsign
+FROM logbooks l JOIN archives a ON a.id = l.archive_id
+WHERE a.tenant_id = $1 AND a.archive_uuid = $2 AND l.uuid = $3`
+
+// IdentityLogbook returns the logbook logbookUUID of the tenant's archive
+// archiveUUID (both CanonicalUUID form), or ErrNotFound — also when the
+// logbook belongs to another archive or tenant.
+func (s *Store) IdentityLogbook(ctx context.Context, tenantID int64, archiveUUID, logbookUUID string) (IdentityLogbookInfo, error) {
+	const op errors.Op = "store.IdentityLogbook"
+	return queryIdentityLogbook(ctx, op, s.db, tenantID, archiveUUID, logbookUUID)
+}
+
+func queryIdentityLogbook(ctx context.Context, op errors.Op, q execQuerier, tenantID int64, archiveUUID, logbookUUID string) (IdentityLogbookInfo, error) {
+	var l IdentityLogbookInfo
+	err := q.QueryRowContext(ctx, identityLogbookQ, tenantID, archiveUUID, logbookUUID).
+		Scan(&l.ID, &l.ArchiveUUID, &l.ArchiveLabel, &l.LogbookUUID, &l.LogbookLabel, &l.Callsign)
+	if stderr.Is(err, sql.ErrNoRows) {
+		return l, errors.New(op).WithErr(ErrNotFound).WithMsgf("archive %s logbook %s", archiveUUID, logbookUUID)
+	}
+	if err != nil {
+		return l, errors.New(op).WithErr(err).WithMsgf("archive %s logbook %s", archiveUUID, logbookUUID)
+	}
+	return l, nil
+}
+
+// IdentityExportSnapshot streams one logbook reached by UUID — its identity
+// first (onHead, exactly once), then every record, tombstones included, in
+// uuid order — from ONE repeatable-read, read-only transaction, as
+// ExportSnapshot does for the legacy archive. ErrNotFound before onHead when
+// the logbook is not in that archive. Callback errors return unwrapped.
+func (s *Store) IdentityExportSnapshot(ctx context.Context, tenantID int64, archiveUUID, logbookUUID string,
+	onHead func(IdentityLogbookInfo) error, onRecord func(Record) error) (err error) {
+	const op errors.Op = "store.IdentityExportSnapshot"
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		return errors.New(op).WithErr(err).WithMsg("begin")
+	}
+	defer txutil.Rollback(tx, &err)
+	head, err := queryIdentityLogbook(ctx, op, tx, tenantID, archiveUUID, logbookUUID)
+	if err != nil {
+		return err
+	}
+	if err := onHead(head); err != nil {
+		return err
+	}
+	rows, err := tx.QueryContext(ctx, `
+SELECT uuid, tenant_id, logbook_id, modified_at, revision, deleted_at, payload
+FROM qsos WHERE tenant_id = $1 AND logbook_id = $2 ORDER BY uuid`, tenantID, head.ID)
+	if err != nil {
+		return errors.New(op).WithErr(err).WithMsgf("logbook %s", logbookUUID)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var (
+			r       Record
+			payload []byte
+		)
+		if err := rows.Scan(&r.UUID, &r.TenantID, &r.LogbookID, &r.ModifiedAt, &r.Revision, &r.DeletedAt, &payload); err != nil {
+			return errors.New(op).WithErr(err).WithMsg("scan")
+		}
+		r.Payload = payload
+		if err := onRecord(r); err != nil {
+			return err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("rows")
+	}
+	return nil
+}

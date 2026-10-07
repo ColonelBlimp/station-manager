@@ -97,6 +97,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/export", s.auth(s.handleExport))
 	mux.HandleFunc("POST /v1/archives/adopt", s.auth(s.handleAdopt))
 	mux.HandleFunc("PUT /v1/archives/{archive_uuid}/logbooks/{logbook_uuid}/qsos", s.auth(s.handleIdentityPut))
+	mux.HandleFunc("GET /v1/archives/{archive_uuid}/logbooks/{logbook_uuid}/reconcile", s.auth(s.handleScopedReconcile))
+	mux.HandleFunc("GET /v1/archives/{archive_uuid}/logbooks/{logbook_uuid}/manifest", s.auth(s.handleScopedManifest))
+	mux.HandleFunc("GET /v1/archives/{archive_uuid}/logbooks/{logbook_uuid}/export", s.auth(s.handleScopedExport))
 	// Middleware, inside-out: gzip compresses negotiated responses (the
 	// manifest and export payloads are the bandwidth-heavy ones — see
 	// gzip.go); the concurrency limiter sits OUTERMOST so a rejected request
@@ -526,21 +529,40 @@ func (s *Server) handleReconcile(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	manifest, err := s.store.Manifest(r.Context(), lb.ID)
-	if err != nil {
-		s.log.Error("manifest read failed", "logbook_id", lb.ID, "tenant_id", tenantID(r), "request_id", requestID(r), "err", err)
-		s.writeError(w, http.StatusInternalServerError, "internal_error", "manifest read failed")
+	manifest, ok := s.readManifest(w, r, lb.ID)
+	if !ok {
 		return
 	}
+	count, hash := summarize(manifest)
+	s.writeJSON(w, http.StatusOK, ReconcileResponse{LogbookID: lb.ID, Count: count, Hash: hash})
+}
+
+// readManifest reads a logbook's manifest (never nil), writing the 500 itself
+// on failure. Shared by both wires.
+func (s *Server) readManifest(w http.ResponseWriter, r *http.Request, logbookID int64) ([]store.ManifestEntry, bool) {
+	manifest, err := s.store.Manifest(r.Context(), logbookID)
+	if err != nil {
+		s.log.Error("manifest read failed", "logbook_id", logbookID, "tenant_id", tenantID(r), "request_id", requestID(r), "err", err)
+		s.writeError(w, http.StatusInternalServerError, "internal_error", "manifest read failed")
+		return nil, false
+	}
+	if manifest == nil {
+		manifest = []store.ManifestEntry{}
+	}
+	return manifest, true
+}
+
+// summarize is the reconcile summary over a manifest's LIVE rows: tombstones
+// reconcile via the manifest, not the summary.
+func summarize(manifest []store.ManifestEntry) (int, string) {
 	entries := make([]reconcile.Entry, 0, len(manifest))
 	for _, m := range manifest {
 		if m.Deleted {
-			continue // tombstones reconcile via the manifest, not the summary
+			continue
 		}
 		entries = append(entries, reconcile.Entry{UUID: m.UUID, ModifiedAt: m.ModifiedAt, Revision: m.Revision})
 	}
-	count, hash := reconcile.Summary(entries)
-	s.writeJSON(w, http.StatusOK, ReconcileResponse{LogbookID: lb.ID, Count: count, Hash: hash})
+	return reconcile.Summary(entries)
 }
 
 func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
@@ -548,14 +570,9 @@ func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	manifest, err := s.store.Manifest(r.Context(), lb.ID)
-	if err != nil {
-		s.log.Error("manifest read failed", "logbook_id", lb.ID, "tenant_id", tenantID(r), "request_id", requestID(r), "err", err)
-		s.writeError(w, http.StatusInternalServerError, "internal_error", "manifest read failed")
+	manifest, ok := s.readManifest(w, r, lb.ID)
+	if !ok {
 		return
-	}
-	if manifest == nil {
-		manifest = []store.ManifestEntry{}
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"logbook_id": lb.ID, "entries": manifest})
 }
@@ -580,23 +597,11 @@ type ExportQso struct {
 const exportWriteDeadline = 15 * time.Minute
 
 func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
-	// Export concurrency gate — try-acquire, never queue (see
-	// maxConcurrentExports): a gated export must fail fast, not hold a request
-	// slot waiting for a 15-minute stream to finish.
-	select {
-	case s.exportSlots <- struct{}{}:
-		defer func() { <-s.exportSlots }()
-	default:
-		w.Header().Set("Retry-After", exportRetryAfterSeconds)
-		s.writeError(w, http.StatusServiceUnavailable, "overloaded",
-			"too many concurrent exports; retry shortly")
+	release, ok := s.acquireExport(w, r)
+	if !ok {
 		return
 	}
-	if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(exportWriteDeadline)); err != nil {
-		// Fail open: an unsupported ResponseWriter keeps the server-wide
-		// deadline, which is only a problem on a link slow enough to notice.
-		s.log.Warn("export: extend write deadline failed", "tenant_id", tenantID(r), "request_id", requestID(r), "err", err)
-	}
+	defer release()
 	tenant := tenantID(r)
 	// One snapshot for both reads — a logbook + its first QSOs committing
 	// between separate queries would dump QSOs whose logbook_id is missing
@@ -612,8 +617,7 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	// heap it replaces. The export gate above keeps concurrent exports
 	// BELOW the pool size (the 16-slot request semaphore alone would let 5
 	// slow exports drain the whole pool — review 2026-07-20 #1).
-	count := 0
-	started := false
+	out := &exportStream{w: w}
 	err := s.store.ExportSnapshot(r.Context(), tenant,
 		func(books []store.LogbookInfo) error {
 			if books == nil {
@@ -623,20 +627,10 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				return err
 			}
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			started = true
-			if _, err := w.Write([]byte(`{"logbooks":`)); err != nil {
-				return err
-			}
-			if _, err := w.Write(head); err != nil {
-				return err
-			}
-			_, err = w.Write([]byte(`,"qsos":[`))
-			return err
+			return out.begin(append(append([]byte(`{"logbooks":`), head...), `,"qsos":[`...))
 		},
 		func(rec store.Record) error {
-			row, err := json.Marshal(ExportQso{
+			return out.row(ExportQso{
 				UUID:       rec.UUID,
 				LogbookID:  rec.LogbookID,
 				ModifiedAt: rec.ModifiedAt,
@@ -644,36 +638,6 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 				DeletedAt:  rec.DeletedAt,
 				Qso:        rec.Payload,
 			})
-			if err != nil {
-				return err
-			}
-			if count > 0 {
-				if _, err := w.Write([]byte{','}); err != nil {
-					return err
-				}
-			}
-			count++
-			_, err = w.Write(row)
-			return err
 		})
-	if err != nil {
-		if !started {
-			// Nothing written yet — a normal error response still works.
-			s.log.Error("export: snapshot read failed", "tenant_id", tenant, "request_id", requestID(r), "err", err)
-			s.writeError(w, http.StatusInternalServerError, "internal_error", "export failed")
-			return
-		}
-		// Mid-stream failure: the 200 is already on the wire, so the only
-		// honest signal is a truncated body — the missing "]}" terminator
-		// makes it invalid JSON, which the restore client rejects as corrupt
-		// rather than silently restoring a partial dump.
-		s.log.Error("export: aborted mid-stream", "tenant_id", tenant, "request_id", requestID(r), "written", count, "err", err)
-		return
-	}
-	// Trailing newline matches the pre-streaming json.Encoder framing.
-	if _, err := w.Write([]byte("]}\n")); err != nil {
-		s.log.Error("export: aborted mid-stream", "tenant_id", tenant, "request_id", requestID(r), "written", count, "err", err)
-		return
-	}
-	s.log.Info("export served", "tenant_id", tenant, "qsos", count)
+	s.finishExport(w, r, out, err)
 }

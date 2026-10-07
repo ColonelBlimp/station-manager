@@ -5,6 +5,7 @@ import (
 	stderr "errors"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/cloud/store"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
@@ -204,4 +205,128 @@ func (s *Server) handleIdentityPut(w http.ResponseWriter, r *http.Request) {
 	s.log.Info("qsos upserted", "tenant_id", tenant, "archive_uuid", target.ArchiveUUID,
 		"logbook_uuid", target.LogbookUUID, "received", len(recs), "applied", applied)
 	s.writeJSON(w, http.StatusOK, PutQsosResponse{Received: len(recs), Applied: applied})
+}
+
+// scopedLogbook resolves {archive_uuid}/{logbook_uuid} to a logbook of the
+// authenticated tenant's archive. Any failure — a malformed UUID, an unknown
+// one, a logbook of another archive or tenant — is a 404 (existence is not
+// leaked); the response is already written when ok is false.
+func (s *Server) scopedLogbook(w http.ResponseWriter, r *http.Request) (store.IdentityLogbookInfo, bool) {
+	archiveUUID, logbookUUID := r.PathValue("archive_uuid"), r.PathValue("logbook_uuid")
+	if !utils.IsValidUUIDv7(archiveUUID) || !utils.IsValidUUIDv7(logbookUUID) {
+		s.writeError(w, http.StatusNotFound, "not_found", "no such logbook")
+		return store.IdentityLogbookInfo{}, false
+	}
+	lb, err := s.store.IdentityLogbook(r.Context(), tenantID(r), store.CanonicalUUID(archiveUUID), store.CanonicalUUID(logbookUUID))
+	if stderr.Is(err, store.ErrNotFound) {
+		s.writeError(w, http.StatusNotFound, "not_found", "no such logbook")
+		return store.IdentityLogbookInfo{}, false
+	}
+	if err != nil {
+		s.log.Error("logbook lookup failed", "tenant_id", tenantID(r), "request_id", requestID(r), "err", err)
+		s.writeError(w, http.StatusInternalServerError, "internal_error", "logbook lookup failed")
+		return store.IdentityLogbookInfo{}, false
+	}
+	return lb, true
+}
+
+// ScopedReconcileResponse is the identity wire's drift summary: the logbook by
+// both UUIDs (operator correction 2026-10-07), its live-row count and hash.
+type ScopedReconcileResponse struct {
+	ArchiveUUID string `json:"archive_uuid"`
+	LogbookUUID string `json:"logbook_uuid"`
+	Count       int    `json:"count"`
+	Hash        string `json:"hash"`
+}
+
+// ScopedManifestResponse is the identity wire's manifest, by both UUIDs.
+type ScopedManifestResponse struct {
+	ArchiveUUID string                `json:"archive_uuid"`
+	LogbookUUID string                `json:"logbook_uuid"`
+	Entries     []store.ManifestEntry `json:"entries"`
+}
+
+func (s *Server) handleScopedReconcile(w http.ResponseWriter, r *http.Request) {
+	lb, ok := s.scopedLogbook(w, r)
+	if !ok {
+		return
+	}
+	manifest, ok := s.readManifest(w, r, lb.ID)
+	if !ok {
+		return
+	}
+	count, hash := summarize(manifest)
+	s.writeJSON(w, http.StatusOK, ScopedReconcileResponse{ArchiveUUID: lb.ArchiveUUID, LogbookUUID: lb.LogbookUUID, Count: count, Hash: hash})
+}
+
+func (s *Server) handleScopedManifest(w http.ResponseWriter, r *http.Request) {
+	lb, ok := s.scopedLogbook(w, r)
+	if !ok {
+		return
+	}
+	manifest, ok := s.readManifest(w, r, lb.ID)
+	if !ok {
+		return
+	}
+	s.writeJSON(w, http.StatusOK, ScopedManifestResponse{ArchiveUUID: lb.ArchiveUUID, LogbookUUID: lb.LogbookUUID, Entries: manifest})
+}
+
+// ScopedExportQso is one row of the scoped export: the verbatim stored payload
+// and the storage facts restore needs. No numeric logbook id — the head names
+// the logbook by UUID.
+type ScopedExportQso struct {
+	UUID       string          `json:"uuid"`
+	ModifiedAt time.Time       `json:"modified_at"`
+	Revision   int64           `json:"revision,omitempty"`
+	DeletedAt  *time.Time      `json:"deleted_at,omitempty"`
+	Qso        json.RawMessage `json:"qso"`
+}
+
+type scopedExportHead struct {
+	Archive struct {
+		UUID  string `json:"uuid"`
+		Label string `json:"label"`
+	} `json:"archive"`
+	Logbook struct {
+		UUID     string `json:"uuid"`
+		Label    string `json:"label"`
+		Callsign string `json:"callsign"`
+	} `json:"logbook"`
+}
+
+// handleScopedExport streams one logbook, by UUID, from one snapshot: its
+// identity and display values, then every record, tombstones included (ADR
+// 0088: an old server 404s this path rather than over-delivering).
+func (s *Server) handleScopedExport(w http.ResponseWriter, r *http.Request) {
+	archiveUUID, logbookUUID := r.PathValue("archive_uuid"), r.PathValue("logbook_uuid")
+	if !utils.IsValidUUIDv7(archiveUUID) || !utils.IsValidUUIDv7(logbookUUID) {
+		s.writeError(w, http.StatusNotFound, "not_found", "no such logbook")
+		return
+	}
+	release, ok := s.acquireExport(w, r)
+	if !ok {
+		return
+	}
+	defer release()
+	out := &exportStream{w: w}
+	err := s.store.IdentityExportSnapshot(r.Context(), tenantID(r),
+		store.CanonicalUUID(archiveUUID), store.CanonicalUUID(logbookUUID),
+		func(lb store.IdentityLogbookInfo) error {
+			var h scopedExportHead
+			h.Archive.UUID, h.Archive.Label = lb.ArchiveUUID, lb.ArchiveLabel
+			h.Logbook.UUID, h.Logbook.Label, h.Logbook.Callsign = lb.LogbookUUID, lb.LogbookLabel, lb.Callsign
+			head, err := json.Marshal(h)
+			if err != nil {
+				return err
+			}
+			// Reopen the head object to append the qsos array.
+			return out.begin(append(head[:len(head)-1], `,"qsos":[`...))
+		},
+		func(rec store.Record) error {
+			return out.row(ScopedExportQso{
+				UUID: rec.UUID, ModifiedAt: rec.ModifiedAt, Revision: rec.Revision,
+				DeletedAt: rec.DeletedAt, Qso: rec.Payload,
+			})
+		})
+	s.finishExport(w, r, out, err)
 }
