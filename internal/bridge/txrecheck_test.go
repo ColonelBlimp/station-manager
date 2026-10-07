@@ -51,6 +51,18 @@ func newAlarmProbeService(t *testing.T, attempts int) (*Service, *fakeSerial) {
 	s.mu.Unlock()
 
 	t.Cleanup(func() {
+		// Close the gate first, as Stop() does: a confirm timer firing during
+		// teardown would otherwise reach startAlarmProbes with stopped still
+		// false and call wg.Add concurrently with the Wait below — the
+		// WaitGroup misuse -race caught in CI (run 37638319949). Under s.mu,
+		// stopped=true makes that callback a no-op, and the timer is stopped.
+		s.mu.Lock()
+		s.stopped = true
+		if s.txConfirmTimer != nil {
+			s.txConfirmTimer.Stop()
+			s.txConfirmTimer = nil
+		}
+		s.mu.Unlock()
 		cancel()
 		s.wg.Wait() // the probe + re-unkey goroutines are registered on it
 		txAlarmProbeDelay, txAlarmProbeInterval, txAlarmProbeAttempts = delay, interval, maxAttempts
