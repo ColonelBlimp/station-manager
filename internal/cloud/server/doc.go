@@ -39,8 +39,11 @@
 // PUT bodies must be a SINGLE JSON document (trailing content is a 400), and
 // every uploaded UUID must be a valid UUIDv7 — the store's uuid column would
 // take any RFC 4122 value, but restore (qsoservice.Restore) admits only v7,
-// and an accepted backup must be restorable. Validation runs before the
-// EnsureLogbook side effect, so a rejected batch provisions nothing.
+// and an accepted backup must be restorable. Validation runs first, and the
+// logbook is provisioned in the same transaction as the QSOs, so a rejected
+// or refused batch provisions nothing. A batch carrying a UUID stored in
+// another archive is refused whole with 409 archive_conflict: the name-only
+// wire never overwrites (or moves) another archive's QSO.
 // /v1/export reads logbooks + records from ONE repeatable-read snapshot
 // (store.ExportSnapshot), so a push landing mid-export can't produce QSOs
 // whose logbook is missing from the same dump.

@@ -394,8 +394,9 @@ func (s *Server) handlePutQsos(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate the whole batch BEFORE the EnsureLogbook side effect, so a
-	// rejected request provisions nothing.
+	// Validate the whole batch first; the write below provisions the logbook in
+	// the same transaction as the QSOs, so no rejected request provisions
+	// anything.
 	tenant := tenantID(r)
 	recs := make([]store.Record, 0, len(req.Qsos))
 	for i, u := range req.Qsos {
@@ -442,29 +443,29 @@ func (s *Server) handlePutQsos(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	logbookID, err := s.store.EnsureLogbook(r.Context(), tenant, req.Logbook)
+	logbookID, applied, err := s.store.UpsertLegacy(r.Context(), tenant, req.Logbook, recs)
 	if err != nil {
-		s.log.Error("ensure logbook failed", "logbook", req.Logbook, "tenant_id", tenantID(r), "request_id", requestID(r), "err", err)
-		s.writeError(w, http.StatusInternalServerError, "internal_error", "logbook provisioning failed")
-		return
-	}
-	for i := range recs {
-		recs[i].LogbookID = logbookID
-	}
-
-	applied, err := s.store.Upsert(r.Context(), recs)
-	if err != nil {
+		// A QSO stored in another archive: the name-only wire writes only the
+		// legacy archive and never moves another archive's record (W-0021 5F.1).
+		// The batch, its logbook creation included, was rolled back.
+		var ace *store.ArchiveConflictError
+		if stderr.As(err, &ace) {
+			s.log.Warn("qso upsert archive conflict", "logbook", req.Logbook, "uuid", ace.UUID, "tenant_id", tenantID(r), "request_id", requestID(r))
+			s.writeError(w, http.StatusConflict, "archive_conflict",
+				"uuid "+ace.UUID+" is stored in another archive; this wire writes only the legacy archive")
+			return
+		}
 		// An equal-version divergence is a client/protocol conflict, not a server
 		// fault: the whole batch was rolled back and nothing changed. Surface it as
 		// a bounded 409 naming the UUID (client-generated, non-secret) so the
 		// forwarder does NOT record it as a successful backup (PT-1).
 		var vce *store.VersionConflictError
 		if stderr.As(err, &vce) {
-			s.log.Warn("qso upsert version conflict", "logbook_id", logbookID, "uuid", vce.UUID, "tenant_id", tenantID(r), "request_id", requestID(r))
+			s.log.Warn("qso upsert version conflict", "logbook", req.Logbook, "uuid", vce.UUID, "tenant_id", tenantID(r), "request_id", requestID(r))
 			s.writeError(w, http.StatusConflict, "version_conflict", "equal-version divergent state for uuid "+vce.UUID)
 			return
 		}
-		s.log.Error("upsert failed", "logbook_id", logbookID, "count", len(recs), "tenant_id", tenantID(r), "request_id", requestID(r), "err", err)
+		s.log.Error("upsert failed", "logbook", req.Logbook, "count", len(recs), "tenant_id", tenantID(r), "request_id", requestID(r), "err", err)
 		s.writeError(w, http.StatusInternalServerError, "internal_error", "store write failed")
 		return
 	}

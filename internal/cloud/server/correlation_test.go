@@ -65,7 +65,9 @@ func TestManifest_LogbookLookupFailure_LogsCorrelation(t *testing.T) {
 	assertCorrelated(t, &buf, "logbook lookup failed", 1)
 }
 
-func TestPutQsos_EnsureLogbookFailure_LogsCorrelation(t *testing.T) {
+// The logbook is provisioned in the same transaction as the QSOs (W-0021
+// 5F.1), so a store failure on a push is one "upsert failed" line.
+func TestPutQsos_StoreFailure_LogsCorrelation(t *testing.T) {
 	var buf bytes.Buffer
 	ts := deadDBServer(t, &buf)
 
@@ -81,5 +83,5 @@ func TestPutQsos_EnsureLogbookFailure_LogsCorrelation(t *testing.T) {
 	if resp.StatusCode != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500 (store connection error)", resp.StatusCode)
 	}
-	assertCorrelated(t, &buf, "ensure logbook failed", 1)
+	assertCorrelated(t, &buf, "upsert failed", 1)
 }

@@ -39,6 +39,21 @@ func (e *VersionConflictError) Error() string {
 		e.UUID)
 }
 
+// ArchiveConflictError is returned by Upsert when a record's UUID is already
+// stored in ANOTHER archive than the logbook it is written to (W-0021 5F.1,
+// codex P1 on a6affeed). The name-only wire writes only the legacy archive; a
+// write there must never overwrite — and so move — another archive's QSO, at
+// any revision. A deliberate move between archives belongs to an
+// identity-aware operation. The whole batch is rolled back and the stored row
+// is left untouched.
+type ArchiveConflictError struct {
+	UUID string
+}
+
+func (e *ArchiveConflictError) Error() string {
+	return fmt.Sprintf("smcloud: uuid %s is stored in another archive", e.UUID)
+}
+
 // canonicalPrecision is the timestamp resolution the reconcile protocol pins
 // modified_at / deleted_at to. Postgres TIMESTAMPTZ stores microseconds while Go
 // time.Time (and the local SQLite side) carry nanoseconds; reconcile diffs a
@@ -140,15 +155,49 @@ RETURNING id`
 // made it for the tenants of its day, and EnsureTenant makes it for later ones.
 // It holds the logbooks the name-only wire reaches.
 func (s *Store) ensureLegacyArchive(ctx context.Context, tenantID int64) (int64, error) {
-	const q = `
+	return ensureLegacyArchive(ctx, s.db, tenantID)
+}
+
+// execQuerier is the write surface shared by *sql.DB and *sql.Tx.
+type execQuerier interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// ensureLegacyArchive inserts-if-absent, then reads: DO NOTHING takes no lock on
+// an existing row, so concurrent pushes of one tenant do not queue behind each
+// other's transactions, and the read (a fresh statement) sees a row a
+// concurrent first insert committed.
+func ensureLegacyArchive(ctx context.Context, q execQuerier, tenantID int64) (int64, error) {
+	if _, err := q.ExecContext(ctx, `
 INSERT INTO archives (tenant_id, legacy) VALUES ($1, true)
-ON CONFLICT (tenant_id) WHERE legacy DO UPDATE SET legacy = true
-RETURNING id`
+ON CONFLICT (tenant_id) WHERE legacy DO NOTHING`, tenantID); err != nil {
+		return 0, fmt.Errorf("legacy archive of tenant %d: %w", tenantID, err)
+	}
 	var id int64
-	if err := s.db.QueryRowContext(ctx, q, tenantID).Scan(&id); err != nil {
+	if err := q.QueryRowContext(ctx,
+		`SELECT id FROM archives WHERE tenant_id = $1 AND legacy`, tenantID).Scan(&id); err != nil {
 		return 0, fmt.Errorf("legacy archive of tenant %d: %w", tenantID, err)
 	}
 	return id, nil
+}
+
+// ensureLegacyLogbook is ensureLegacyArchive's twin for the legacy logbook
+// called name.
+func ensureLegacyLogbook(ctx context.Context, q execQuerier, tenantID int64, name string) (int64, error) {
+	archiveID, err := ensureLegacyArchive(ctx, q, tenantID)
+	if err != nil {
+		return 0, err
+	}
+	if _, err := q.ExecContext(ctx, `
+INSERT INTO logbooks (tenant_id, archive_id, legacy_name, label) VALUES ($1, $2, $3, $3)
+ON CONFLICT (archive_id, legacy_name) DO NOTHING`, tenantID, archiveID, name); err != nil {
+		return 0, err
+	}
+	var id int64
+	err = q.QueryRowContext(ctx,
+		`SELECT id FROM logbooks WHERE archive_id = $1 AND legacy_name = $2`, archiveID, name).Scan(&id)
+	return id, err
 }
 
 // tenantVariant is one row matching a callsign case-insensitively.
@@ -181,16 +230,8 @@ func (s *Store) tenantCaseVariants(ctx context.Context, callsign string) ([]tena
 // never reached. Idempotent (a legacy name is unique within its archive).
 func (s *Store) EnsureLogbook(ctx context.Context, tenantID int64, name string) (int64, error) {
 	const op errors.Op = "store.EnsureLogbook"
-	archiveID, err := s.ensureLegacyArchive(ctx, tenantID)
+	id, err := ensureLegacyLogbook(ctx, s.db, tenantID, name)
 	if err != nil {
-		return 0, errors.New(op).WithErr(err).WithMsgf("tenant %d name %q", tenantID, name)
-	}
-	const q = `
-INSERT INTO logbooks (tenant_id, archive_id, legacy_name, label) VALUES ($1, $2, $3, $3)
-ON CONFLICT (archive_id, legacy_name) DO UPDATE SET legacy_name = EXCLUDED.legacy_name
-RETURNING id`
-	var id int64
-	if err := s.db.QueryRowContext(ctx, q, tenantID, archiveID, name).Scan(&id); err != nil {
 		return 0, errors.New(op).WithErr(err).WithMsgf("tenant %d name %q", tenantID, name)
 	}
 	return id, nil
@@ -228,6 +269,12 @@ RETURNING id`
 //
 // modified_at / deleted_at are truncated to canonicalPrecision so the stored
 // value matches what the reconcile hash expects (see canonicalPrecision).
+//
+// Archive boundary (W-0021 5F.1, codex P1 on a6affeed): a record whose UUID is
+// already stored in ANOTHER archive than its target logbook's is refused with
+// ArchiveConflictError at every revision — the guard sits in the ON CONFLICT
+// WHERE and in the check of the row that clause locked, so a concurrent insert
+// into another archive is seen, never raced past.
 func (s *Store) Upsert(ctx context.Context, recs []Record) (applied int, err error) {
 	const op errors.Op = "store.Upsert"
 	if len(recs) == 0 {
@@ -238,7 +285,45 @@ func (s *Store) Upsert(ctx context.Context, recs []Record) (applied int, err err
 		return 0, errors.New(op).WithErr(err).WithMsg("begin")
 	}
 	defer txutil.Rollback(tx, &err)
+	applied, err = upsertTx(ctx, op, tx, recs)
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, errors.New(op).WithErr(err).WithMsg("commit")
+	}
+	return applied, nil
+}
 
+// UpsertLegacy is the name-only wire's write: it ensures the legacy logbook
+// called name and upserts recs into it in ONE transaction, so a refused batch
+// (a version or archive conflict) writes nothing — not even the logbook it
+// would have created. Returns the logbook's id.
+func (s *Store) UpsertLegacy(ctx context.Context, tenantID int64, name string, recs []Record) (logbookID int64, applied int, err error) {
+	const op errors.Op = "store.UpsertLegacy"
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, 0, errors.New(op).WithErr(err).WithMsg("begin")
+	}
+	defer txutil.Rollback(tx, &err)
+	logbookID, err = ensureLegacyLogbook(ctx, tx, tenantID, name)
+	if err != nil {
+		return 0, 0, errors.New(op).WithErr(err).WithMsgf("tenant %d name %q", tenantID, name)
+	}
+	for i := range recs {
+		recs[i].LogbookID = logbookID
+	}
+	applied, err = upsertTx(ctx, op, tx, recs)
+	if err != nil {
+		return 0, 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, 0, errors.New(op).WithErr(err).WithMsg("commit")
+	}
+	return logbookID, applied, nil
+}
+
+func upsertTx(ctx context.Context, op errors.Op, tx *sql.Tx, recs []Record) (applied int, err error) {
 	// The upsert applies a STRICTLY newer record: a higher revision, or the same
 	// revision with a strictly later modified_at (a legitimate later legacy write
 	// at revision 0 — ADR 0050). An exact (revision, modified_at) tie no longer
@@ -253,8 +338,10 @@ ON CONFLICT (tenant_id, uuid) DO UPDATE SET
     revision    = EXCLUDED.revision,
     deleted_at  = EXCLUDED.deleted_at,
     payload     = EXCLUDED.payload
-WHERE EXCLUDED.revision > qsos.revision
-   OR (EXCLUDED.revision = qsos.revision AND EXCLUDED.modified_at > qsos.modified_at)`
+WHERE (EXCLUDED.revision > qsos.revision
+       OR (EXCLUDED.revision = qsos.revision AND EXCLUDED.modified_at > qsos.modified_at))
+  AND (SELECT archive_id FROM logbooks WHERE id = qsos.logbook_id)
+    = (SELECT archive_id FROM logbooks WHERE id = EXCLUDED.logbook_id)`
 	upsertStmt, err := tx.PrepareContext(ctx, upsertQ)
 	if err != nil {
 		return 0, errors.New(op).WithErr(err).WithMsg("prepare upsert")
@@ -262,14 +349,18 @@ WHERE EXCLUDED.revision > qsos.revision
 	defer func() { _ = upsertStmt.Close() }()
 
 	// tieConflictQ inspects the stored row — locked for this transaction by the
-	// ON CONFLICT attempt above — when the upsert applied nothing. It reports TRUE
+	// ON CONFLICT attempt above — when the upsert applied nothing. Its first
+	// column is TRUE when that row lives in another archive than the target
+	// logbook (an archive conflict, whatever the revision). Its second is TRUE
 	// only for an exact (revision, modified_at) TIE whose authoritative state
 	// differs: payload (compared as JSONB, so input key order and whitespace do
 	// not matter), tombstone (deleted_at, NULL-aware), or backup logbook. A stale
 	// older row, or a tie whose state matches, reports FALSE — an idempotent no-op.
 	// Parameters mirror the upsert's, so one argument list drives both.
 	const tieConflictQ = `
-SELECT revision = $5 AND modified_at = $4
+SELECT (SELECT archive_id FROM logbooks WHERE id = qsos.logbook_id)
+         <> (SELECT archive_id FROM logbooks WHERE id = $3),
+       revision = $5 AND modified_at = $4
    AND NOT (
        payload = $7::jsonb
        AND deleted_at IS NOT DISTINCT FROM $6
@@ -314,17 +405,17 @@ FROM qsos WHERE tenant_id = $2 AND uuid = $1`
 		// A tie whose stored state DIVERGES is a conflict — roll the whole batch
 		// back (the deferred Rollback) with the offending UUID named, so no
 		// batch-mate is committed and the stored row is left untouched (PT-1).
-		var conflict bool
-		if err := tieStmt.QueryRowContext(ctx, args...).Scan(&conflict); err != nil {
+		var crossArchive, conflict bool
+		if err := tieStmt.QueryRowContext(ctx, args...).Scan(&crossArchive, &conflict); err != nil {
 			return 0, errors.New(op).WithErr(err).WithMsgf("uuid %s: tie check", r.UUID)
+		}
+		if crossArchive {
+			return 0, errors.New(op).WithErr(&ArchiveConflictError{UUID: r.UUID})
 		}
 		if conflict {
 			return 0, errors.New(op).WithErr(&VersionConflictError{UUID: r.UUID})
 		}
 		// A matching tie or a stale older row is an idempotent no-op: not applied.
-	}
-	if err := tx.Commit(); err != nil {
-		return 0, errors.New(op).WithErr(err).WithMsg("commit")
 	}
 	return applied, nil
 }
