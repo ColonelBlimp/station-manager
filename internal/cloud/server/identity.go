@@ -93,6 +93,7 @@ func (s *Server) handleAdopt(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "invalid_field_value", msg)
 		return
 	}
+	req.ArchiveUUID, req.LogbookUUID = store.CanonicalUUID(req.ArchiveUUID), store.CanonicalUUID(req.LogbookUUID)
 	changed, err := s.store.Adopt(r.Context(), tenantID(r), store.AdoptRequest(req))
 	if err != nil {
 		s.identityError(w, r, "adopt", err)

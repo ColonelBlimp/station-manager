@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	stderr "errors"
 	"fmt"
+	"strings"
 
 	"github.com/ColonelBlimp/station-manager/internal/database/txutil"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
@@ -49,6 +50,9 @@ type AdoptRequest struct {
 //     never absorbs the legacy archive;
 //   - logbook_mapping_conflict — the legacy logbook carries another UUID, or
 //     the UUID is already another logbook's.
+//
+// UUIDs must arrive in CanonicalUUID form (the HTTP layer normalizes them):
+// they are compared as text with what Postgres prints.
 //
 // The legacy archive row is locked first, so a second adoption waits and then
 // sees the first one's stamp; a concurrent first push claiming the same UUID
@@ -147,6 +151,13 @@ WHERE id = $1`, id, req.LogbookUUID, req.LogbookName, req.Callsign)
 	}
 	return true, nil
 }
+
+// CanonicalUUID is a UUID's one textual form, lowercase hex — what Postgres
+// prints for uuid::text. A client may send uppercase (UUIDv7 validation accepts
+// it); the HTTP layer normalizes every identity UUID to this form before the
+// store compares it or the response echoes it, so an identical retry is the
+// same UUID (codex P2 on 0bb0754c).
+func CanonicalUUID(u string) string { return strings.ToLower(u) }
 
 // uniqueViolation reports a Postgres unique violation on the named constraint.
 func uniqueViolation(err error, constraint string) bool {

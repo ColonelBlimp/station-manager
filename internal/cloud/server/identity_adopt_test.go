@@ -288,3 +288,29 @@ func waitForLockWait(t *testing.T, db *sql.DB) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// AD10 (codex P2 on 0bb0754c): an accepted UUID in uppercase hex is the same
+// UUID — an identical replay is still a no-op, and the stored form is
+// canonical lowercase.
+func TestAdopt_AD10_UppercaseUUIDsReplayIdempotently(t *testing.T) {
+	ts, _, _, db := newTestServer(t, quietLog)
+	pushMain(t, ts)
+	body := adoptBody("main", strings.ToUpper(homeUUID), strings.ToUpper(defaultLBUID))
+	if status, out := adopt(t, ts.URL, body); status != http.StatusOK || out["changed"] != true {
+		t.Fatalf("first uppercase adoption: %d %v", status, out)
+	}
+	status, out := adopt(t, ts.URL, body)
+	if status != http.StatusOK || out["changed"] != false {
+		t.Fatalf("identical uppercase replay: %d %v; want 200, changed false", status, out)
+	}
+	mixed := adoptBody("main", homeUUID, strings.ToUpper(defaultLBUID))
+	if status, out := adopt(t, ts.URL, mixed); status != http.StatusOK || out["changed"] != false {
+		t.Fatalf("mixed-case replay: %d %v; want 200, changed false", status, out)
+	}
+	if out["archive_uuid"] != homeUUID {
+		t.Fatalf("response archive_uuid = %v; want the canonical %s", out["archive_uuid"], homeUUID)
+	}
+	if got := readLegacy(t, db, "main"); got.archiveUUID.String != homeUUID || got.logbookUUID.String != defaultLBUID {
+		t.Fatalf("stored = %+v; want canonical lowercase", got)
+	}
+}
