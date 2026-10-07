@@ -1847,6 +1847,96 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      2,102 tests at `d8edef3b`). The lesson is the clustered-fix one again: a field read from a
      partial refresh needs every view-installing path and every ordering of their answers
      enumerated BEFORE the first fix.
+     **5F.1 built (2026-10-07; server schema, no wire change): characterization `70cb1f9f`, slice
+     `a6affeed`, archive-conflict fix `cc98c5c8`; codex clean on `70cb1f9f` and `cc98c5c8`.** Postgres 0007: the `archives` table
+     with one `legacy` archive per tenant, unadopted (`archive_uuid` NULL), and `archive_uuid` unique
+     per tenant (required unless legacy). `logbooks.name` is renamed `legacy_name`, now nullable,
+     with a separate display `label` backfilled from it. `logbooks.archive_id` ties each logbook to
+     its tenant's archive (composite FK). `logbooks.uuid` is nullable and unique per tenant. The
+     legacy name is unique per ARCHIVE, no longer per tenant. Every existing logbook lands in the
+     legacy archive; nothing moves.
+     The down step is lossless while nothing is adopted, and refuses (changing nothing) once an
+     archive or logbook identity exists.
+     Store: `EnsureTenant` ensures the legacy archive (race-safe on the partial unique index). The
+     name-only reads are scoped to the legacy archive: `EnsureLogbook`, `Logbooks`, `Logbook` (the
+     per-id ownership check) and the export snapshot. A managed archive's logbook is therefore never
+     resolved, listed, reconciled, manifested or exported for an old client: 404 on its id, absent
+     from the listing and export. A push by name creates a legacy logbook beside it.
+     Docs: `smcloud-deploy.md` (the schema-7 upgrade note and the rollback recipe); package docs
+     for `store` and `server`.
+     *Measured (throwaway tests, since removed; recorded here because they no longer exist):*
+     - A golang-migrate instance holding only 0001–0006, run against a schema-7 database, returns
+       `no migration found for version 7: read down for version 7 migrations: file does not
+       exist`. `cmd/smcloud` treats a `store.Migrate` error as fatal (`main.go:440`), so an older
+       smcloud refuses to boot on schema 7.
+     - The rollback drill, on the dev Postgres (`sm-pg`): version-6 data (two tenants; logbooks
+       main and portable; 3 QSOs) was migrated to 7, then
+       `podman exec -i sm-pg psql -U smcloud smcloud -1 -v ON_ERROR_STOP=1 -f - -c "UPDATE
+       schema_migrations SET version = 6"` ran with 0007's down file on stdin. psql printed
+       `DO`, nine `ALTER TABLE`, `DROP TABLE`, `UPDATE 1`. Afterwards the version was 6, the names
+       read main and portable, and there were 3 QSOs. The 0001–0006 migrator's `Up` then returned
+       `no change`. The runbook gives the same command for a production box.
+     Tests:
+     - `server/legacy_wire_characterization_test.go` C1–C3, passing before the change: create by
+       name, same name same logbook, the listing and per-id reads, export mapping.
+     - `store/archives_migration_test.go` A1–A3: upgrade over version-6 data with two tenants, one
+       with no logbooks; a new tenant's legacy archive; down lossless and refused for both identity
+       kinds.
+     - `server/legacy_archive_test.go` L1–L4: a managed archive planted FIRST, with a logbook whose
+       display label is "main" and a QSO, so its id sorts first.
+     - `migrate_test` now ends at version 7 from a version-1 database with data.
+     All were RED before the migration. Every harness now drops `archives`: a shared `dropAll`
+     replaced the down-file clean slate, which cannot drop `tenants` once `archives` references it.
+     Reversion proofs, restored and verified:
+     - K1, the listing not scoped: L2 fails with HTTP 500 (the unscoped read cannot scan the
+       managed logbook's NULL legacy name).
+     - K2, the per-id read not scoped: L3 fails with HTTP 500, not 404.
+     K1 and K2 surface as compatibility regressions (an old client's listing or per-id read
+     erroring), not as an observed data leak. The proofs did not show another archive's data
+     reaching the client; they show the unscoped read failing.
+     - K3, the export not scoped: L4 fails (the managed QSO exported).
+     - K4, a new tenant gets no legacy archive: A2 fails.
+     - K5, the backfill creates no legacy archive: A1 fails (the migration cannot set `archive_id`).
+     - K6, the label not backfilled: A1 fails.
+     - K7, the down refusal removed: A3 fails for both cases.
+     - K8, the down step not restoring per-tenant name uniqueness: A3 fails.
+     **Superseded ruling.** The operator first directed (2026-10-07) that the move-on-newer-revision
+     rule stay unchanged and be recorded. Under it, an old client pushing a newer revision of a QSO
+     stored in a managed archive would overwrite it and move it into the legacy logbook.
+     Codex P1 on `a6affeed` showed this defeats the boundary that the slice enforces for reads.
+     The operator accepted the finding the same day ("documenting the relocation behavior does not
+     satisfy the legacy archive boundary"): a deliberate move between archives (ADR 0071) belongs to
+     an identity-aware operation, never to the name-only wire.
+     **Fix `cc98c5c8`:**
+     - A name-only write to a QSO stored in another archive is refused with 409 `archive_conflict`,
+       naming the UUID, at newer, equal and older revisions.
+     - The guard sits in the upsert's own `ON CONFLICT ... WHERE` (the stored row's archive equals
+       the target logbook's) and in the check of the row that clause locked. An archive conflict is
+       reported before the version-tie check.
+     - The legacy logbook (and archive) is provisioned in the SAME transaction as the QSOs
+       (`store.UpsertLegacy`; ensure-by-`DO NOTHING`-then-read, so no row lock couples concurrent
+       pushes). A refused batch therefore writes nothing, its logbook included; that resolves the
+       earlier gap where `EnsureLogbook` ran before the upsert transaction.
+     - Within the legacy archive a newer revision still moves a QSO between logbooks.
+     Tests in `server/archive_conflict_test.go`:
+     - X1, RED: newer, equal and older revisions each refused; payload, revision and placement
+       untouched.
+     - X2, RED: a mixed batch to a NEW name, with the valid QSO written first, stores neither and
+       creates no logbook.
+     - X3, a guard: the within-legacy move is unchanged.
+     - X4, RED: a managed insert held uncommitted while the push waits on it, with a
+       `pg_stat_activity` lock-wait barrier, is still refused once committed.
+     The correlation test for a dead-database push now expects the single "upsert failed" line.
+     Proofs, restored and verified:
+     - G1, no archive clause in the conflict update: X1 (newer) and X4 fail.
+     - G2, the post-check ignores the archive: X1 fails.
+     - G3, the logbook created outside the transaction: X2 fails ("created its logbook").
+     - G4, a refused batch committed: X2 fails (the valid QSO stored).
+     Validation scope:
+     - Before `a6affeed`, and again before `cc98c5c8`, all exited 0 on the committed contents:
+       gofmt (whole tree), vet, `go test ./...`, the cloud suites with `-race` against `sm-pg`,
+       maintainability (0 regressions) and `task ci:local`.
+     - `70cb1f9f` holds a test that was in those runs unchanged.
    - **Station drills after deploy** (operator-run, recorded here): Home unchanged after the
      upgrade (same `forwarded_to`, worker names and queue counts as before; bindings listed under
      Home with the legacy names); the Drill archive shows every destination off, no banner, and a
