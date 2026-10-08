@@ -101,6 +101,33 @@ create a managed archive under B and bypass adopting B's legacy data.
 - **Tests (4b):** an account replacement, a token rotation, an offline `config.json` edit, and an
   account save racing with confirmation.
 
+Adjustments ruled on the 4b design (2026-10-08):
+- **Encoding.** The key is the token. The message is the prefix `sm-adoption-account/v1`, then the
+  archive UUID (lower case) and the URL (trimmed, trailing `/` removed), each length-prefixed.
+  The fingerprint is stored as hex in `logbook_destination.remote_adopted_account` (migration
+  0017).
+- **The confirmation is durable too.** It authorizes a permanent wire transition, so it commits
+  like the reservation: a pinned connection at `synchronous=FULL`, read back inside the
+  transaction.
+- **Downgrade.** A downgrade below 17 is refused while any binding holds a confirmation, disabled
+  bindings and deleted logbooks included. A schema-16 build would upload by name without the
+  account-confirmation hold, and a later upgrade cannot undo those uploads.
+- **Lock order.** `bindingsMu`, then the config read lock. The callback uses only the config it is
+  given, stays read-only, and makes no nested config call and no network request. The pinned
+  archive, default, binding, name and account are rechecked before the reservation and before the
+  confirmation.
+- **The account race has two orderings.** If the save wins, the old completion is discarded. If
+  the confirmation wins, the save waits, the confirmation commits for the old account, and the new
+  account then leaves that fingerprint unmatched.
+- **Status belongs to its subject.** A moved default or a changed account never inherits an earlier
+  attempt's status. A remote success followed by a failed local write says so and retries; a lost
+  response is an uncertain outcome, never "not adopted". An adoption whose fingerprint does not
+  match says "Adoption needs confirmation for the current station account."
+- **Retrying after a refusal.** After 401, a malformed answer or a 409, the hourly check retries
+  only once a relevant saved input changes (the account fingerprint, or the binding, the default,
+  the name or the eligibility). The check keeps running after a success and while nothing is
+  eligible.
+
 Options weighed:
 - **Server tenant identity.** A tenant UUID served on an authenticated endpoint would be exact and
   survive token rotation. Not chosen: it needs a server change and a redeploy of the 5F.2 server.
@@ -142,13 +169,13 @@ unresolved, and the name-only wire keeps working while the retry waits.
 - **A permanent local fact.** A reserved name stays reserved in that archive even if adoption never
   succeeds. Freeing it is manual recovery.
 - **A one-way migration once used.** A downgrade below 16 is refused while a reservation or an
-  adoption exists.
+  adoption exists, and below 17 while a confirmation exists.
 - **A new refusal on saves.** `binding_name_reserved` (409) joins `binding_field_locked`. The SPA
   shows the API's message.
 - **Two statuses for "not confirmed".** "Not adopted" means no request could have succeeded.
   "Adoption confirmation blocked" means one may have.
-- **Lock ordering.** The marker write coordinates with the config mutex. Commit 4b fixes the order
-  and tests it.
+- **Lock ordering.** The marker write coordinates with the config mutex: `bindingsMu` first, then
+  the config read lock. A config save waits for that local write.
 
 ## Triggers to revisit
 

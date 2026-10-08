@@ -2491,6 +2491,179 @@ the compatibility promise that a daemon at any slice boundary starts the existin
        proposal.
      - **4b tests:** an account replacement, a token rotation, an offline `config.json` edit, and
        an account save racing with confirmation.
+     *Commit 4b design (proposed 2026-10-08, awaiting rulings Q1–Q4; no code yet).* What the tree
+     gives: no client for `/v1/version` or `/v1/archives/adopt` exists yet; the reconciler's `get`
+     reads `/v1/logbooks` and the manifest by id. The running workers use the account as it was at
+     start (`BindingConfig` merges the account's station keys with the binding's `logbook`), while
+     a config save changes `config.json` under `config.Service.mu`. `ApplyBindings` reads
+     `cfg.Snapshot()` while holding `bindingsMu`, so the only deadlock-free order is `bindingsMu`
+     first, then the config lock.
+     - **The account fingerprint.** `smcloud.AccountFingerprint(archiveUUID, url, token)`:
+       HMAC-SHA256 keyed by the token over `"sm-adoption-account/v1"`, then the archive UUID
+       (lower case) and the URL, each length-prefixed. The URL is normalized as the client sends
+       to it (TrimSpace, trailing `/` removed), so a trailing slash is no change, and any other
+       edit needs a fresh, idempotent confirmation. Migration 0017 adds
+       `logbook_destination.remote_adopted_account TEXT` (hex). A downgrade to 16 needs no new
+       refusal: 16's build never selects the identity wire, and a later upgrade reads the missing
+       fingerprint as unconfirmed.
+     - **Recording a confirmation.** `Manager.RecordAdoption(read, account, fingerprint)` takes
+       `bindingsMu`, then a config read lock (a new `config.Service.WithSnapshot(fn)` that runs fn
+       under `RLock` with the config it read, so no save lands in between). Under both, it checks
+       that the saved account still is the one the attempt used, then writes `remote_adopted_at`
+       and the fingerprint in ONE conditional `UPDATE` (same binding, credentials, enabled; and
+       not yet adopted, OR adopted under another fingerprint). An account changed since the
+       attempt began discards the completion and writes nothing; the reservation stays. A config
+       save waits for this local write only.
+     - **Confirmation means a matching fingerprint.** "Adopted" (status) and, in commit 5, the
+       identity wire require `remote_adopted_at` AND the fingerprint of the CURRENT saved account.
+       Adopted under another account (replacement, token rotation, offline edit): the attempt runs
+       again (version, manifest, judgement, adopt) under the current account. `stillAsRead` and the
+       reservation's `UPDATE` accept such a binding (its reservation is kept, by COALESCE). Commit
+       5 builds a binding adopted under another account as a held worker: its uploads stay queued
+       until confirmation, with no name-only fallback (ADR 0088). Until commit 5 such a binding
+       keeps the legacy wire, as every binding does. The restart fingerprint includes the account
+       fingerprint, so a re-confirmation raises `restart_required`.
+     - **The marker write stays at `synchronous=NORMAL`.** A marker lost to a power cut is a
+       confirmation the next attempt repeats; the server answers 200 unchanged. Only the
+       reservation guards against a competing name, and it is FULL.
+     - **The adopter** (`smcloud.Adopter`, started by `cmd/smd` when Home is the active archive,
+       tracked with `safego.GoTracked` and drained at shutdown):
+       1. Each attempt re-reads the saved state: Home's default binding (enabled, SM Cloud, live),
+          the account (complete), the archive UUID and labels. No eligible binding means no attempt
+          and no status. Adopted with a matching fingerprint: status "adopted" (or "adopted,
+          applies after a restart" until the next start), and the loop ends.
+       2. It pins the binding, the account and the archive UUID, then `GET /v1/version` (10 s).
+          No `identity_protocol`: "not yet: the server does not support archive identity", and the
+          adopter waits for the next start (T2).
+       3. Reads the cloud manifest under the name (`/v1/logbooks`, then the manifest; 10 s each),
+          outside every lock. A name not yet in the cloud is an empty manifest.
+       4. `ReserveAdoption`, with `LocalAdoptionEvidence` and `JudgeAdoption` as the judge.
+          Unsafe: "not adopted: … manual recovery is required", or with a reservation already held
+          "adoption confirmation blocked" (R2). Changed: the attempt is abandoned and the next one
+          re-reads.
+       5. `POST /v1/archives/adopt` (10 s) with `legacy_name`, the archive UUID and label, and the
+          default logbook's UUID, name and callsign.
+       6. On 200, `RecordAdoption`. A failed write: "not adopted: the local record could not be
+          saved (retrying)".
+       Retries: no response, a timeout or a 5xx anywhere retries the whole attempt hourly. 401, a
+       malformed answer and each 409 code are terminal for the account and binding that drew them:
+       the hourly check retries only once the saved account or the binding differs from the
+       attempt's (the operator's fix), and otherwise waits for a restart. Each status transition is
+       logged once.
+     - **Status on the wire.** The adopter keeps the T4 status in memory. The bindings view carries
+       it on Home's default SM Cloud row as `adoption: {state, message}` (states as T4, plus
+       "adoption confirmation blocked" and Q2's). The SPA shows the message under the row.
+     - **Sequences to prove (RED first):** a lost response, then the retry confirms and stamps; a
+       failed marker write, then the retry stamps; a restart with a reservation and no marker; a
+       binding renamed or disabled, the default moved, or a shutdown during an attempt; an account
+       replacement, a token rotation, an offline `config.json` edit, and an account save racing
+       with the confirmation (a barrier inside the write proves the save waits and the completion
+       is discarded); each T4 state; no attempt off Home or for a disabled default.
+     *Questions for the operator:*
+     - (Q1) Split 4b in three: 4b1 the fingerprint, migration 0017 and the coordinated
+       confirmation (local, with the four account tests); 4b2 the client, the adopter, its status
+       on the API and the start wiring, with the remote sequences; 4b3 the SPA status line.
+       Proposed: yes.
+     - (Q2) Status text for a binding adopted under another account while its confirmation is
+       pending. Proposed: "Adopted under a different station account; confirming under this one."
+       Its uploads are held from commit 5 on, so the text should say so then.
+     - (Q3) Does a save during the run start an attempt at once (an account fixed after a 401, a
+       default binding enabled), or does it wait for the hourly check? Proposed: the hourly check;
+       the restart banner already tells the operator when a save applies.
+     - (Q4) After a terminal outcome (401, malformed, 409), may the hourly check retry on its own
+       once the account or binding differs, as above, or only after a restart? Proposed: once they
+       differ.
+     *Rulings on the 4b design (operator, 2026-10-08), recorded in ADR 0091.* They replace the
+     proposals above where they differ.
+     - (Q1) Split approved: 4b1 the fingerprint, migration 0017 and the coordinated confirmation,
+       with the four account tests; 4b2 the client, the adopter, its status and the start wiring,
+       with the remote recovery sequences; 4b3 the SPA status line.
+     - (Q2) The text is "Adoption needs confirmation for the current station account." A rotated
+       token need not mean a different tenant. "Confirming" appears only while an attempt runs.
+       Commit 5 adds the upload state: waiting for confirmation, then restart required to resume.
+     - (Q3) No attempt on save; the hourly check picks it up. The polling loop stays alive after a
+       success and while no binding is eligible, so it notices a later account change or a newly
+       enabled binding. A fake clock proves both sequences.
+     - (Q4) After 401, a malformed answer or a 409, the check retries only once a RELEVANT saved
+       input changes: the account fingerprint, or the target binding, the default, the name or the
+       eligibility. Unrelated config edits and the adopter's own reservation timestamps do not
+       rearm it. Unchanged inputs stay suppressed until a restart.
+     - **Downgrade (replaces the exemption above).** A downgrade below 17 is refused while any
+       binding holds a confirmation, disabled bindings and deleted logbooks included, by the same
+       preflight as 16. A schema-16 binary would upload by name without the account-confirmation
+       hold, and a later upgrade cannot undo those uploads.
+     - **FULL for the confirmation too (replaces the NORMAL bullet above).** The marker authorizes
+       a permanent wire transition; its loss is harmless only if no identity worker has relied on
+       it. It commits like the reservation: a pinned connection at `synchronous=FULL`, read back
+       inside the transaction, restored afterwards.
+     - **Lock order approved** (`bindingsMu`, then the config read lock). The callback uses only the
+       config it is given, stays read-only, and makes no nested `Snapshot`/`Update` call and no
+       network request. The pinned archive, default, binding, name and account are rechecked before
+       the reservation as well as before the confirmation.
+     - **The account race is two orderings (replaces the single sequence above).** The save wins:
+       the old completion is discarded. The confirmation wins: the save waits, the confirmation
+       commits for A, and the change to B then leaves that fingerprint unmatched.
+     - **Status belongs to its subject.** A moved default or a changed account never inherits the
+       previous attempt's status. A 200 followed by a failed marker write says "Cloud adoption
+       succeeded; local confirmation could not be saved. Retrying." A lost response says the
+       outcome is uncertain, never "not adopted".
+     The fingerprint encoding is approved. 4b1 may start failing tests.
+     **5F.3 commit 4b1, the confirmation's account (committed `7fc69365`, 2026-10-08; the
+     operator's review found no actionable issues).** Migration 0017 adds `logbook_destination.remote_adopted_account`.
+     - **The fingerprint.** `smcloud.AccountFingerprint(archiveID, station)` implements the
+       approved encoding and is registered beside `CloudName`
+       (`forwarding.RegisterAccountFingerprint`). It refuses an account without a URL or a token,
+       or no archive, with an error that names no value. The token is the key exactly as `New`
+       sends it (untrimmed). `types.LogbookDestination.RemoteAdoptedAccount` is `json:"-"`.
+     - **The pin.** `archive.AdoptionPin{ArchiveID, Binding, Account}`. `ReserveAdoption` and
+       `RecordAdoption` both take `bindingsMu`, then `config.Service.WithSnapshot` (the read lock,
+       with the config it read), and recheck the active archive, the default logbook and
+       `CurrentAccount` before any read or write. A moved pin is `changed` for the reservation (the
+       judge does not run) and a discarded completion (false, nil) for the confirmation.
+     - **The confirmation.** One durable `UPDATE` (the reservation's FULL path, now shared as
+       `durableUpdate`) writes `remote_adopted_at` and the account, only on a reserved, enabled,
+       live binding with the credentials read that is not already confirmed under this account.
+       A binding adopted under another account, or none, is re-confirmed with a fresh time; the
+       reservation accepts it too (its time kept). `AdoptionConfirmed(b, account)` is the test
+       that 4b2's status and commit 5's wire use. The account joins the restart fingerprint; an
+       account save alone does not raise `restart_required`.
+     - **Downgrade.** Below 17 is refused while any binding holds `remote_adopted_at`, disabled
+       bindings and deleted logbooks included, before any down step.
+     RED first, against stubs and with migration 0017 in place (so the 0017 up and plain-down
+     test was not separately RED): the confirmation recorded nothing, re-confirmation and the
+     reservation's re-confirmation were refused, the FULL seam saw no call, the downgrade to 16
+     was accepted, the fingerprint was empty and unregistered, a save completed inside
+     `WithSnapshot`, and every CF test failed on its assertion. Some cases passed against the
+     stubs only because they wrote nothing; reversions cover them.
+     Reversion proofs (unique anchor, non-empty compiling replacement, verified restore), each
+     failing its intended assertion:
+     - Record: no reservation required; never re-confirms; rewrites the same account; drops the
+       account; keeps the old time; no empty-account guard.
+     - Reserve: refuses every adopted binding; accepts one confirmed under this account.
+     - FULL path: no restore; no readback guard; never FULL.
+     - Downgrade: no guard; misses a confirmation without an account; skips disabled bindings
+       or deleted logbooks.
+     - The list and claims scans drop the account.
+     - The fingerprint: URL not normalized; archive case kept; no length prefixes; keyed by the
+       archive UUID; a missing token, URL or archive accepted; the token trimmed; not
+       registered.
+     - The registry: a duplicate, a type without an adoption key, a nil function.
+     - `WithSnapshot`: outside the lock; the error dropped.
+     - The Manager: archive, default or account not rechecked; the checks and write outside the
+       config lock (CF6); an adopted binding never re-reserved; `AdoptionConfirmed` ignoring the
+       account or accepting an empty one; the account outside the restart fingerprint; a moved
+       pin reported as an error; the wrong account recorded; no `stillAsRead`; no `bindingsMu`
+       (AK5 and RS5).
+     The nil-function proof first passed: the test registered it under an unregistered type, so
+     it panicked for another reason. That test, and the same one for `RegisterAdoptionName`
+     (4a), now use a type valid in every other respect.
+     AK5 changed: a reserved name is locked (RS3), so a rename can no longer race the
+     confirmation. AK5 now holds a PUT that DISABLES the reserved binding and proves the
+     confirmation from the enabled read records nothing. AK3 and AK4 reserve before recording.
+     Gates: gofmt (whole tree), `go vet ./...`, `go test ./...`, the cloud set with archive,
+     sqlite and config under `-race` against `sm-pg` (stopped afterwards), maintainability (0
+     regressions), and `task ci:local` all passed. `install.md` (the refusal below 17) and
+     `api-endpoints.md` (`restart_required`) change with the code.
    - **Station drills after deploy** (operator-run, recorded here): Home unchanged after the
      upgrade (same `forwarded_to`, worker names and queue counts as before; bindings listed under
      Home with the legacy names); the Drill archive shows every destination off, no banner, and a
