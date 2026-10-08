@@ -33,6 +33,7 @@ var (
 	noBulkBackfillTypes = map[string]struct{}{}
 	buildKeys           = map[string]func() bool{}
 	adoptionNames       = map[string]AdoptionName{}
+	accountFingerprints = map[string]AccountFingerprint{}
 )
 
 // WorkerDefaults carries a forwarder type's preferred queue-drain cadence.
@@ -695,5 +696,41 @@ func AdoptionNameFor(typeName string) (AdoptionName, bool) {
 	registryMu.Lock()
 	defer registryMu.Unlock()
 	fn, ok := adoptionNames[typeName]
+	return fn, ok
+}
+
+// AccountFingerprint derives the fingerprint of the station account an
+// adoption is confirmed under (ADR 0091) from the archive's UUID and the
+// account's station-scoped credentials, or reports that the account is
+// incomplete. The result is a verifier derived from the account's secret: it
+// is stored, compared, and never served.
+type AccountFingerprint func(archiveID string, station json.RawMessage) (string, error)
+
+// RegisterAccountFingerprint records typeName's account fingerprint (ADR
+// 0091): an adoption's confirmation is stored with it and counts only while the
+// saved station account still produces it. From the forwarder package's
+// init(), after RegisterForwarderType. Panics on a nil function, a duplicate,
+// or a type whose descriptor declares no adoption key — all binary bugs.
+func RegisterAccountFingerprint(typeName string, fn AccountFingerprint) {
+	if fn == nil {
+		panic("forwarding.RegisterAccountFingerprint: nil function for " + typeName)
+	}
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	d, ok := descriptors[typeName]
+	if !ok || !slices.ContainsFunc(d.CredentialFields, func(f CredentialField) bool { return f.AdoptionKey }) {
+		panic("forwarding.RegisterAccountFingerprint: " + typeName + " declares no adoption key")
+	}
+	if _, dup := accountFingerprints[typeName]; dup {
+		panic("forwarding.RegisterAccountFingerprint: already registered: " + typeName)
+	}
+	accountFingerprints[typeName] = fn
+}
+
+// AccountFingerprintFor returns typeName's registered fingerprint, or false.
+func AccountFingerprintFor(typeName string) (AccountFingerprint, bool) {
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	fn, ok := accountFingerprints[typeName]
 	return fn, ok
 }

@@ -73,7 +73,7 @@ func TestReservation_RS1_ReserveAdoptionPinsJudgesThenReserves(t *testing.T) {
 		m := homeManager(t, db, a)
 		m.SetActiveBindings(db, nil)
 		j := &countingJudge{}
-		out, reason, err := m.ReserveAdoption(ctx, read, j.judge)
+		out, reason, err := m.ReserveAdoption(ctx, homePin(t, read), j.judge)
 		if err != nil || out != ReserveReserved || reason != "" || j.calls != 1 {
 			t.Fatalf("ReserveAdoption = %q, %q, %v (judge calls %d); want reserved after one judgement", out, reason, err, j.calls)
 		}
@@ -88,7 +88,7 @@ func TestReservation_RS1_ReserveAdoptionPinsJudgesThenReserves(t *testing.T) {
 		m.SetActiveBindings(db, nil)
 		execArchive(t, db, `UPDATE logbook_destination SET adoption_reserved_at = '2026-01-02 03:04:05' WHERE logbook_id = ?`, a)
 		read, _ = smcloudRow(t, db, a)
-		if out, _, err := m.ReserveAdoption(ctx, read, safeJudge); err != nil || out != ReserveReserved {
+		if out, _, err := m.ReserveAdoption(ctx, homePin(t, read), safeJudge); err != nil || out != ReserveReserved {
 			t.Fatalf("ReserveAdoption again = %q, %v; want reserved", out, err)
 		}
 		r, _ := smcloudRow(t, db, a)
@@ -101,7 +101,7 @@ func TestReservation_RS1_ReserveAdoptionPinsJudgesThenReserves(t *testing.T) {
 		m := homeManager(t, db, a)
 		m.SetActiveBindings(db, nil)
 		j := &countingJudge{reason: "binding x shares the cloud name"}
-		out, reason, err := m.ReserveAdoption(ctx, read, j.judge)
+		out, reason, err := m.ReserveAdoption(ctx, homePin(t, read), j.judge)
 		if err != nil || out != ReserveUnsafe || reason != j.reason {
 			t.Fatalf("ReserveAdoption = %q, %q, %v; want unsafe with the judge's reason", out, reason, err)
 		}
@@ -114,7 +114,7 @@ func TestReservation_RS1_ReserveAdoptionPinsJudgesThenReserves(t *testing.T) {
 		m := homeManager(t, db, a)
 		m.SetActiveBindings(db, nil)
 		j := &countingJudge{err: stderr.New("manifest unreadable")}
-		if out, _, err := m.ReserveAdoption(ctx, read, j.judge); err == nil || out == ReserveReserved {
+		if out, _, err := m.ReserveAdoption(ctx, homePin(t, read), j.judge); err == nil || out == ReserveReserved {
 			t.Fatalf("ReserveAdoption = %q, %v; want an error", out, err)
 		}
 		if r, _ := smcloudRow(t, db, a); r.AdoptionReservedAt != nil {
@@ -125,7 +125,7 @@ func TestReservation_RS1_ReserveAdoptionPinsJudgesThenReserves(t *testing.T) {
 		db, a, _, read := unadoptedHome(t)
 		m := homeManager(t, db, a)
 		m.SetActiveBindings(failingReserveDB{db}, nil)
-		if out, _, err := m.ReserveAdoption(ctx, read, safeJudge); err == nil || out == ReserveReserved {
+		if out, _, err := m.ReserveAdoption(ctx, homePin(t, read), safeJudge); err == nil || out == ReserveReserved {
 			t.Fatalf("ReserveAdoption = %q, %v; want an error", out, err)
 		}
 	})
@@ -140,8 +140,8 @@ func TestReservation_RS1_ReserveAdoptionPinsJudgesThenReserves(t *testing.T) {
 				t.Fatal(err)
 			}
 		},
-		"the binding is already adopted": func(t *testing.T, db *sqlite.Service, a int64, _ *types.LogbookDestination) {
-			stampAdopted(t, db, a)
+		"the binding is already confirmed under this account": func(t *testing.T, db *sqlite.Service, a int64, _ *types.LogbookDestination) {
+			stampConfirmed(t, db, a, accountOf(t, homeStation))
 		},
 		"the read names another logbook": func(t *testing.T, _ *sqlite.Service, _ int64, read *types.LogbookDestination) {
 			read.LogbookID++
@@ -156,7 +156,7 @@ func TestReservation_RS1_ReserveAdoptionPinsJudgesThenReserves(t *testing.T) {
 			m := homeManager(t, db, a)
 			m.SetActiveBindings(db, nil)
 			j := &countingJudge{}
-			out, _, err := m.ReserveAdoption(ctx, read, j.judge)
+			out, _, err := m.ReserveAdoption(ctx, homePin(t, read), j.judge)
 			if err != nil || out != ReserveChanged {
 				t.Fatalf("ReserveAdoption = %q, %v; want changed", out, err)
 			}
@@ -173,14 +173,14 @@ func TestReservation_RS1_ReserveAdoptionPinsJudgesThenReserves(t *testing.T) {
 		m := homeManager(t, db, a)
 		m.SetActiveBindings(db, nil)
 		qrz := types.LogbookDestination{LogbookID: a, Destination: "bindview-qrz", ForwarderName: "qrz", Enabled: true}
-		if out, _, err := m.ReserveAdoption(ctx, qrz, safeJudge); err == nil || out == ReserveReserved {
+		if out, _, err := m.ReserveAdoption(ctx, homePin(t, qrz), safeJudge); err == nil || out == ReserveReserved {
 			t.Fatalf("ReserveAdoption(qrz) = %q, %v; want an error", out, err)
 		}
 	})
 	t.Run("no active archive database", func(t *testing.T) {
 		_, _, _, read := unadoptedHome(t)
 		m, _, _ := testManager(t)
-		if out, _, err := m.ReserveAdoption(ctx, read, safeJudge); bindingCode(err) != "bindings_unavailable" || out == ReserveReserved {
+		if out, _, err := m.ReserveAdoption(ctx, homePin(t, read), safeJudge); bindingCode(err) != "bindings_unavailable" || out == ReserveReserved {
 			t.Fatalf("ReserveAdoption = %q, %v; want bindings_unavailable", out, err)
 		}
 	})
@@ -195,7 +195,7 @@ func TestReservation_RS2_AReservationIsNotAdoption(t *testing.T) {
 	}
 	m := homeManager(t, db, a)
 	m.SetActiveBindings(db, atStart)
-	if out, _, err := m.ReserveAdoption(ctx, read, safeJudge); err != nil || out != ReserveReserved {
+	if out, _, err := m.ReserveAdoption(ctx, homePin(t, read), safeJudge); err != nil || out != ReserveReserved {
 		t.Fatalf("ReserveAdoption = %q, %v", out, err)
 	}
 	r, _ := smcloudRow(t, db, a)
@@ -427,7 +427,7 @@ func TestReservation_RS5_TheJudgementAndTheReservationAreSerializedWithAPUT(t *t
 	}
 	done := make(chan res, 1)
 	go func() {
-		out, _, err := m.ReserveAdoption(ctx, read, judge)
+		out, _, err := m.ReserveAdoption(ctx, homePin(t, read), judge)
 		done <- res{out, err}
 	}()
 	select {
@@ -456,7 +456,7 @@ func TestReservation_RS5_TheJudgementAndTheReservationAreSerializedWithAPUT(t *t
 // failingReserveDB fails the reservation write.
 type failingReserveDB struct{ *sqlite.Service }
 
-func (failingReserveDB) ReserveLogbookDestinationAdoptionWithContext(context.Context, string, int64, json.RawMessage) (bool, error) {
+func (failingReserveDB) ReserveLogbookDestinationAdoptionWithContext(context.Context, string, int64, json.RawMessage, string) (bool, error) {
 	return false, stderr.New("disk full")
 }
 

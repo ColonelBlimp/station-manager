@@ -163,6 +163,14 @@ func TestAdoption_AK2_ThePUTRefusesChangingOrClearingTheAdoptionKey(t *testing.T
 // homeManager wires a Manager to db as Home, the active archive.
 func homeManager(t *testing.T, db BindingsDB, defaultID int64) *Manager {
 	t.Helper()
+	m, _ := homeManagerCfg(t, db, defaultID)
+	return m
+}
+
+// homeManagerCfg is homeManager with its config service, for a test that saves
+// the station account.
+func homeManagerCfg(t *testing.T, db BindingsDB, defaultID int64) (*Manager, *config.Service) {
+	t.Helper()
 	m, cfgSvc, _ := testManager(t)
 	if _, err := cfgSvc.Update(func(c *config.Config) error {
 		c.QsoArchives = []types.QsoArchiveConfig{{ID: homeID, Label: "Home", Ownership: types.QsoArchiveOwnershipLegacy, Path: "/x/home.db"}}
@@ -173,7 +181,7 @@ func homeManager(t *testing.T, db BindingsDB, defaultID int64) *Manager {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	return m
+	return m, cfgSvc
 }
 
 // unadoptedHome stores Home's default SM Cloud binding, enabled under "shack",
@@ -197,7 +205,8 @@ func TestAdoption_AK3_TheMarkerIsRecordedOnlyOnTheBindingTheAttemptRead(t *testi
 		db, a, _, read := unadoptedHome(t)
 		m := homeManager(t, db, a)
 		m.SetActiveBindings(db, nil)
-		recorded, err := m.RecordAdoption(ctx, read)
+		stampReserved(t, db, a)
+		recorded, err := m.RecordAdoption(ctx, homePin(t, read))
 		if err != nil || !recorded {
 			t.Fatalf("RecordAdoption = %v, %v; want recorded", recorded, err)
 		}
@@ -217,17 +226,18 @@ func TestAdoption_AK3_TheMarkerIsRecordedOnlyOnTheBindingTheAttemptRead(t *testi
 				t.Fatal(err)
 			}
 		},
-		"the binding is already adopted": func(t *testing.T, db *sqlite.Service, a int64) {
-			stampAdopted(t, db, a)
+		"the binding is already confirmed under this account": func(t *testing.T, db *sqlite.Service, a int64) {
+			stampConfirmed(t, db, a, accountOf(t, homeStation))
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			db, a, _, read := unadoptedHome(t)
 			change(t, db, a)
+			stampReserved(t, db, a)
 			before, _ := smcloudRow(t, db, a)
 			m := homeManager(t, db, a)
 			m.SetActiveBindings(db, nil)
-			recorded, err := m.RecordAdoption(ctx, read)
+			recorded, err := m.RecordAdoption(ctx, homePin(t, read))
 			if err != nil || recorded {
 				t.Fatalf("RecordAdoption = %v, %v; want not recorded, no error", recorded, err)
 			}
@@ -242,8 +252,9 @@ func TestAdoption_AK3_TheMarkerIsRecordedOnlyOnTheBindingTheAttemptRead(t *testi
 		db, a, _, read := unadoptedHome(t)
 		m := homeManager(t, db, a)
 		m.SetActiveBindings(db, nil)
+		stampReserved(t, db, a)
 		read.ForwarderName = "smcloud.gone"
-		if recorded, err := m.RecordAdoption(ctx, read); err != nil || recorded {
+		if recorded, err := m.RecordAdoption(ctx, homePin(t, read)); err != nil || recorded {
 			t.Fatalf("RecordAdoption = %v, %v; want not recorded, no error", recorded, err)
 		}
 		if r, _ := smcloudRow(t, db, a); r.RemoteAdoptedAt != nil {
@@ -255,14 +266,14 @@ func TestAdoption_AK3_TheMarkerIsRecordedOnlyOnTheBindingTheAttemptRead(t *testi
 		m := homeManager(t, db, a)
 		m.SetActiveBindings(db, nil)
 		qrz := types.LogbookDestination{LogbookID: a, Destination: "bindview-qrz", ForwarderName: "qrz", Enabled: true}
-		if recorded, err := m.RecordAdoption(ctx, qrz); err == nil || recorded {
+		if recorded, err := m.RecordAdoption(ctx, homePin(t, qrz)); err == nil || recorded {
 			t.Fatalf("RecordAdoption(qrz) = %v, %v; want an error", recorded, err)
 		}
 	})
 	t.Run("no active archive database", func(t *testing.T) {
 		_, a, _, read := unadoptedHome(t)
 		m, _, _ := testManager(t)
-		if recorded, err := m.RecordAdoption(ctx, read); bindingCode(err) != "bindings_unavailable" || recorded {
+		if recorded, err := m.RecordAdoption(ctx, homePin(t, read)); bindingCode(err) != "bindings_unavailable" || recorded {
 			t.Fatalf("RecordAdoption = %v, %v; want bindings_unavailable", recorded, err)
 		}
 		_ = a
@@ -272,6 +283,7 @@ func TestAdoption_AK3_TheMarkerIsRecordedOnlyOnTheBindingTheAttemptRead(t *testi
 func TestAdoption_AK4_TheMarkerJoinsTheRestartFingerprint(t *testing.T) {
 	ctx := context.Background()
 	db, a, _, read := unadoptedHome(t)
+	stampReserved(t, db, a)
 	atStart, err := db.ListLogbookDestinationsWithContext(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -282,7 +294,7 @@ func TestAdoption_AK4_TheMarkerJoinsTheRestartFingerprint(t *testing.T) {
 	if err != nil || v.RestartRequired {
 		t.Fatalf("before recording: restart_required=%v err=%v; want false", v.RestartRequired, err)
 	}
-	if recorded, err := m.RecordAdoption(ctx, read); err != nil || !recorded {
+	if recorded, err := m.RecordAdoption(ctx, homePin(t, read)); err != nil || !recorded {
 		t.Fatalf("RecordAdoption = %v, %v", recorded, err)
 	}
 	v, err = m.Bindings(ctx, homeID)
@@ -291,52 +303,60 @@ func TestAdoption_AK4_TheMarkerJoinsTheRestartFingerprint(t *testing.T) {
 	}
 }
 
-// AK5: a PUT renaming the binding is held at its write; the marker is then
-// recorded from the PRE-rename read. Unserialized, the stamp lands first (the
-// stored credentials still match) and the held rename then writes a new name
-// onto an adopted binding. Serialized, the stamp waits for the PUT, finds the
-// credentials changed and records nothing. The window only lets the bad
-// interleaving happen; the serialized path passes whatever it waits.
+// AK5: a PUT disabling the reserved binding is held at its write; the
+// confirmation is then recorded from the read made while it was enabled. (A
+// rename can no longer race it: the reservation locks the name, RS3.)
+// Unserialized, the stamp lands first (the stored row still matches) and the
+// held PUT then disables a binding that was just confirmed. Serialized, the
+// stamp waits for the PUT, finds the binding disabled and records nothing. The
+// window only lets the bad interleaving happen; the serialized path passes
+// whatever it waits.
 func TestAdoption_AK5_RecordingIsSerializedWithABindingsPUT(t *testing.T) {
 	ctx := context.Background()
-	db, a, _, read := unadoptedHome(t)
+	db, a, _, _ := unadoptedHome(t)
+	stampReserved(t, db, a)
+	read, _ := smcloudRow(t, db, a)
 	m := homeManager(t, db, a)
 	g := &gatedDB{Service: db, arrived: make(chan struct{}), release: make(chan struct{})}
 	m.SetActiveBindings(g, nil)
 	putErr := make(chan error, 1)
 	go func() {
 		_, err := m.ApplyBindings(ctx, homeID, types.ArchiveBindingsRequest{Destinations: []types.DestinationBindingEdit{{
-			Type: "smcloud", Logbooks: []types.LogbookBindingEdit{{LogbookID: a, Enabled: true, Credentials: map[string]string{"logbook": "elsewhere"}}}}}})
+			Type: "smcloud", Logbooks: []types.LogbookBindingEdit{{LogbookID: a, Enabled: false}}}}})
 		putErr <- err
 	}()
-	within(t, g.arrived, "the rename at its write")
+	within(t, g.arrived, "the disable at its write")
 	type res struct {
 		recorded bool
 		err      error
 	}
 	recDone := make(chan res, 1)
 	go func() {
-		recorded, err := m.RecordAdoption(ctx, read)
+		recorded, err := m.RecordAdoption(ctx, homePin(t, read))
 		recDone <- res{recorded, err}
 	}()
 	select {
-	case <-recDone:
-		// Finished while the rename was held: not serialized. Fall through;
+	case r := <-recDone:
+		// Finished while the PUT was held: not serialized. Fall through;
 		// the assertions below name the consequence.
-		recDone <- res{}
+		recDone <- r
 	case <-time.After(300 * time.Millisecond):
 	}
 	g.release <- struct{}{}
 	if err := <-putErr; err != nil {
-		t.Fatalf("rename PUT: %v", err)
+		t.Fatalf("disable PUT: %v", err)
 	}
+	var r res
 	select {
-	case <-recDone:
+	case r = <-recDone:
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for RecordAdoption")
 	}
-	r, _ := smcloudRow(t, db, a)
-	if r.RemoteAdoptedAt != nil && string(r.Credentials) != `{"logbook":"shack"}` {
-		t.Fatalf("an adopted binding carries a name it was not adopted under: %s", r.Credentials)
+	row, _ := smcloudRow(t, db, a)
+	if row.RemoteAdoptedAt != nil && !row.Enabled {
+		t.Fatal("a binding disabled by a save that began first carries a confirmation recorded from its enabled read")
+	}
+	if r.err != nil || r.recorded {
+		t.Fatalf("RecordAdoption = %v, %v; want nothing recorded once the save disabled the binding", r.recorded, r.err)
 	}
 }

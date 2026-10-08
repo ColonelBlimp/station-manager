@@ -2383,6 +2383,19 @@ func (s *Service) Snapshot() Config {
 	return s.Cfg
 }
 
+// WithSnapshot runs fn with the current config under the read lock, so no
+// Update can land while fn runs: a save started meanwhile waits for fn to
+// return (ADR 0091 — an adoption compares the saved station account and records
+// its confirmation inside one call). fn must treat the config as read-only
+// (it is the same shallow copy Snapshot returns), must not call back into this
+// Service (a nested read lock deadlocks behind a waiting writer), and must not
+// make network requests: every save waits on it.
+func (s *Service) WithSnapshot(fn func(cfg Config) error) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return fn(s.Cfg)
+}
+
 // Clone returns a fully independent deep copy of the config — no shared
 // slices, maps, or pointers with the receiver. Used for the candidate-editing
 // path (PUT /v1/config builds a candidate, Normalizes it in place, then

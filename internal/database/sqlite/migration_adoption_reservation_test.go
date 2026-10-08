@@ -25,8 +25,8 @@ func seedSmcloudBinding(t *testing.T, svc *Service) {
 
 func TestMigrate0016_AdoptionReservation_Up(t *testing.T) {
 	svc := testService(t)
-	if v := schemaVersion(t, svc); v != 16 {
-		t.Fatalf("schema version = %d, want 16", v)
+	if v := schemaVersion(t, svc); v < 16 {
+		t.Fatalf("schema version = %d, want at least 16", v)
 	}
 	seedSmcloudBinding(t, svc)
 	if n := countT(t, svc, `SELECT COUNT(*) FROM logbook_destination WHERE adoption_reserved_at IS NULL`); n != 1 {
@@ -63,8 +63,8 @@ func TestMigrate0016_Down_RefusesToEraseAReservationOrAnAdoption(t *testing.T) {
 				if _, err := svc.DowngradeLogSchemaTo(target); err == nil {
 					t.Fatalf("downgrade to %d succeeded; want it refused", target)
 				}
-				if v := schemaVersion(t, svc); v != 16 {
-					t.Fatalf("schema version = %d after a refused downgrade, want 16", v)
+				if v := schemaVersion(t, svc); v != 17 {
+					t.Fatalf("schema version = %d after a refused downgrade, want 17", v)
 				}
 				if n := countT(t, svc, `SELECT COUNT(*) FROM `+schemaMigrationsTable(MigrationSetLog)+` WHERE dirty = 1`); n != 0 {
 					t.Fatal("a refused downgrade left the schema dirty")
@@ -83,12 +83,12 @@ func TestReserveLogbookDestinationAdoption(t *testing.T) {
 	t.Run("reserves the binding read, once", func(t *testing.T) {
 		svc := testService(t)
 		seedSmcloudBinding(t, svc)
-		ok, err := svc.ReserveLogbookDestinationAdoptionWithContext(ctx, "cloud", 1, creds)
+		ok, err := svc.ReserveLogbookDestinationAdoptionWithContext(ctx, "cloud", 1, creds, accountA)
 		if err != nil || !ok || reserved(t, svc) != 1 {
 			t.Fatalf("reserve = %v, %v; reserved rows %d", ok, err, reserved(t, svc))
 		}
 		execT(t, svc, `UPDATE logbook_destination SET adoption_reserved_at = '2026-01-02 03:04:05'`)
-		if ok, err := svc.ReserveLogbookDestinationAdoptionWithContext(ctx, "cloud", 1, creds); err != nil || !ok {
+		if ok, err := svc.ReserveLogbookDestinationAdoptionWithContext(ctx, "cloud", 1, creds, accountA); err != nil || !ok {
 			t.Fatalf("reserve again = %v, %v; want true", ok, err)
 		}
 		if n := countT(t, svc, `SELECT COUNT(*) FROM logbook_destination WHERE adoption_reserved_at = '2026-01-02 03:04:05'`); n != 1 {
@@ -101,13 +101,13 @@ func TestReserveLogbookDestinationAdoption(t *testing.T) {
 		logbook int64
 		creds   json.RawMessage
 	}{
-		"other credentials":   {name: "cloud", logbook: 1, creds: json.RawMessage(`{"logbook":"portable"}`)},
-		"no credentials":      {name: "cloud", logbook: 1},
-		"another logbook":     {name: "cloud", logbook: 2, creds: creds},
-		"an unknown binding":  {name: "gone", logbook: 1, creds: creds},
-		"a disabled binding":  {change: `UPDATE logbook_destination SET enabled = 0`, name: "cloud", logbook: 1, creds: creds},
-		"an adopted binding":  {change: `UPDATE logbook_destination SET remote_adopted_at = datetime('now')`, name: "cloud", logbook: 1, creds: creds},
-		"a deleted logbook's": {change: `UPDATE logbook SET deleted_at = datetime('now') WHERE id = 1`, name: "cloud", logbook: 1, creds: creds},
+		"other credentials":            {name: "cloud", logbook: 1, creds: json.RawMessage(`{"logbook":"portable"}`)},
+		"no credentials":               {name: "cloud", logbook: 1},
+		"another logbook":              {name: "cloud", logbook: 2, creds: creds},
+		"an unknown binding":           {name: "gone", logbook: 1, creds: creds},
+		"a disabled binding":           {change: `UPDATE logbook_destination SET enabled = 0`, name: "cloud", logbook: 1, creds: creds},
+		"confirmed under this account": {change: `UPDATE logbook_destination SET remote_adopted_at = datetime('now'), remote_adopted_account = '` + accountA + `'`, name: "cloud", logbook: 1, creds: creds},
+		"a deleted logbook's":          {change: `UPDATE logbook SET deleted_at = datetime('now') WHERE id = 1`, name: "cloud", logbook: 1, creds: creds},
 	} {
 		t.Run("refused: "+name, func(t *testing.T) {
 			svc := testService(t)
@@ -115,7 +115,7 @@ func TestReserveLogbookDestinationAdoption(t *testing.T) {
 			if c.change != "" {
 				execT(t, svc, c.change)
 			}
-			ok, err := svc.ReserveLogbookDestinationAdoptionWithContext(ctx, c.name, c.logbook, c.creds)
+			ok, err := svc.ReserveLogbookDestinationAdoptionWithContext(ctx, c.name, c.logbook, c.creds, accountA)
 			if err != nil || ok || reserved(t, svc) != 0 {
 				t.Fatalf("reserve = %v, %v; reserved rows %d; want nothing reserved", ok, err, reserved(t, svc))
 			}
@@ -187,7 +187,7 @@ func TestReserveLogbookDestinationAdoption_CommitsAtSynchronousFull(t *testing.T
 		svc := testService(t)
 		seedSmcloudBinding(t, svc)
 		calls := observe(t, nil)
-		if ok, err := svc.ReserveLogbookDestinationAdoptionWithContext(ctx, "cloud", 1, creds); err != nil || !ok {
+		if ok, err := svc.ReserveLogbookDestinationAdoptionWithContext(ctx, "cloud", 1, creds, accountA); err != nil || !ok {
 			t.Fatalf("reserve = %v, %v", ok, err)
 		}
 		want := []call{{level: "FULL", reserved: 0, readback: 2}, {level: "NORMAL", reserved: 1, readback: 1}}
@@ -205,7 +205,7 @@ func TestReserveLogbookDestinationAdoption_CommitsAtSynchronousFull(t *testing.T
 			_, err := conn.ExecContext(ctx, "PRAGMA synchronous = "+level)
 			return err
 		})
-		ok, err := svc.ReserveLogbookDestinationAdoptionWithContext(ctx, "cloud", 1, creds)
+		ok, err := svc.ReserveLogbookDestinationAdoptionWithContext(ctx, "cloud", 1, creds, accountA)
 		if err == nil || ok {
 			t.Fatalf("reserve = %v, %v; want an error", ok, err)
 		}
@@ -220,7 +220,7 @@ func TestReserveLogbookDestinationAdoption_CommitsAtSynchronousFull(t *testing.T
 			_, err := conn.ExecContext(ctx, "PRAGMA synchronous = NORMAL") // claims success, leaves NORMAL
 			return err
 		})
-		ok, err := svc.ReserveLogbookDestinationAdoptionWithContext(ctx, "cloud", 1, creds)
+		ok, err := svc.ReserveLogbookDestinationAdoptionWithContext(ctx, "cloud", 1, creds, accountA)
 		if err == nil || ok {
 			t.Fatalf("reserve = %v, %v; want an error (the transaction would commit at NORMAL)", ok, err)
 		}

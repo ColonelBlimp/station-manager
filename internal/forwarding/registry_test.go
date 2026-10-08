@@ -604,10 +604,13 @@ func TestRegisterAdoptionName(t *testing.T) {
 	if _, ok := AdoptionNameFor("adoptname-none"); ok {
 		t.Fatal("AdoptionNameFor reported an unregistered type")
 	}
+	// A type valid in every other respect, so the nil function alone panics.
+	RegisterForwarderType("adoptname-nil", "X", []Action{action.Insert},
+		[]CredentialField{{Key: "name", Label: "N", Kind: "text", Scope: ScopeLogbook, AdoptionKey: true}})
 	RegisterForwarderType("adoptname-nokey", "X", []Action{action.Insert},
 		[]CredentialField{{Key: "name", Label: "N", Kind: "text", Scope: ScopeLogbook}})
 	for name, fn := range map[string]func(){
-		"a nil function": func() { RegisterAdoptionName("adoptname-ok2", nil) },
+		"a nil function": func() { RegisterAdoptionName("adoptname-nil", nil) },
 		"a duplicate": func() {
 			RegisterAdoptionName("adoptname-ok", func(json.RawMessage) (string, error) { return "", nil })
 		},
@@ -617,6 +620,43 @@ func TestRegisterAdoptionName(t *testing.T) {
 		"an unregistered type": func() {
 			RegisterAdoptionName("adoptname-unknown", func(json.RawMessage) (string, error) { return "", nil })
 		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("%s: expected panic", name)
+				}
+			}()
+			fn()
+		})
+	}
+}
+
+func TestRegisterAccountFingerprint(t *testing.T) {
+	RegisterForwarderType("acctfp-ok", "X", []Action{action.Insert},
+		[]CredentialField{{Key: "name", Label: "N", Kind: "text", Scope: ScopeLogbook, AdoptionKey: true}})
+	RegisterAccountFingerprint("acctfp-ok", func(archive string, raw json.RawMessage) (string, error) { return archive + ":" + string(raw), nil })
+	fn, ok := AccountFingerprintFor("acctfp-ok")
+	if !ok {
+		t.Fatal("AccountFingerprintFor: not registered")
+	}
+	if got, err := fn("a", json.RawMessage(`x`)); err != nil || got != "a:x" {
+		t.Fatalf("fn = %q, %v", got, err)
+	}
+	if _, ok := AccountFingerprintFor("acctfp-none"); ok {
+		t.Fatal("AccountFingerprintFor reported an unregistered type")
+	}
+	// A type valid in every other respect, so the nil function alone panics.
+	RegisterForwarderType("acctfp-nil", "X", []Action{action.Insert},
+		[]CredentialField{{Key: "name", Label: "N", Kind: "text", Scope: ScopeLogbook, AdoptionKey: true}})
+	RegisterForwarderType("acctfp-nokey", "X", []Action{action.Insert},
+		[]CredentialField{{Key: "name", Label: "N", Kind: "text", Scope: ScopeLogbook}})
+	noop := func(string, json.RawMessage) (string, error) { return "", nil }
+	for name, fn := range map[string]func(){
+		"a nil function":                 func() { RegisterAccountFingerprint("acctfp-nil", nil) },
+		"a duplicate":                    func() { RegisterAccountFingerprint("acctfp-ok", noop) },
+		"a type without an adoption key": func() { RegisterAccountFingerprint("acctfp-nokey", noop) },
+		"an unregistered type":           func() { RegisterAccountFingerprint("acctfp-unknown", noop) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			defer func() {

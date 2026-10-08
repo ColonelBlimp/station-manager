@@ -47,7 +47,7 @@ func (s *Service) ListLogbookDestinationsWithContext(ctx context.Context) ([]typ
 	defer cancel()
 	rows, err := h.QueryContext(ctx, `
 		SELECT d.id, d.logbook_id, d.destination, d.forwarder_name, d.enabled, d.credentials,
-		       d.remote_adopted_at, d.adoption_reserved_at, d.legacy_name, d.created_at, d.modified_at
+		       d.remote_adopted_at, d.adoption_reserved_at, d.remote_adopted_account, d.legacy_name, d.created_at, d.modified_at
 		FROM logbook_destination d
 		         JOIN logbook l ON l.id = d.logbook_id
 		WHERE l.deleted_at IS NULL
@@ -64,17 +64,18 @@ func (s *Service) ListLogbookDestinationsWithContext(ctx context.Context) ([]typ
 			creds    sql.NullString
 			adopted  sql.NullTime
 			reserved sql.NullTime
+			account  sql.NullString
 			legacy   sql.NullString
 			modified sql.NullTime
 		)
-		if err := rows.Scan(&d.ID, &d.LogbookID, &d.Destination, &d.ForwarderName, &enabled, &creds, &adopted, &reserved, &legacy, &d.CreatedAt, &modified); err != nil {
+		if err := rows.Scan(&d.ID, &d.LogbookID, &d.Destination, &d.ForwarderName, &enabled, &creds, &adopted, &reserved, &account, &legacy, &d.CreatedAt, &modified); err != nil {
 			return nil, errors.New(op).WithErr(err).WithMsg("scan logbook destination")
 		}
 		d.Enabled = enabled == 1
 		if creds.Valid && creds.String != "" {
 			d.Credentials = json.RawMessage(creds.String)
 		}
-		d.RemoteAdoptedAt, d.AdoptionReservedAt = timePtr(adopted), timePtr(reserved)
+		d.RemoteAdoptedAt, d.AdoptionReservedAt, d.RemoteAdoptedAccount = timePtr(adopted), timePtr(reserved), account.String
 		if legacy.Valid {
 			d.LegacyName = legacy.String
 		}
@@ -306,63 +307,70 @@ func (s *Service) UpsertLogbookDestinationsWithContext(ctx context.Context, rows
 	return nil
 }
 
-// RecordLogbookDestinationAdoptedWithContext sets remote_adopted_at on the
-// binding named forwarderName, but only while it is still the binding an
-// adoption attempt read: enabled, on a live logbook, not yet adopted, and with
-// exactly the stored credentials passed (nil = none), so a name changed or a
-// binding disabled since the read is never stamped (ADR 0090). It reports
-// whether the marker was written; false with a nil error means nothing matched.
-func (s *Service) RecordLogbookDestinationAdoptedWithContext(ctx context.Context, forwarderName string, credentials json.RawMessage) (bool, error) {
+// RecordLogbookDestinationAdoptedWithContext records an adoption's
+// confirmation on the binding an attempt reserved and read (ADR 0091):
+// remote_adopted_at and account, the fingerprint of the station account it was
+// confirmed under, in one write. It writes only while the binding is reserved,
+// enabled, on logbookID (a live logbook), holds exactly the credentials passed
+// (nil = none), and is not already confirmed under account; a binding
+// confirmed under another account, or under none, is re-confirmed. It reports
+// whether it wrote; false with a nil error means nothing matched. The write is
+// durable before it returns (durableUpdate): the confirmation moves the
+// binding onto the identity wire at the next start.
+func (s *Service) RecordLogbookDestinationAdoptedWithContext(ctx context.Context, forwarderName string, logbookID int64, credentials json.RawMessage, account string) (bool, error) {
 	const op errors.Op = "sqlite.Service.RecordLogbookDestinationAdoptedWithContext"
 	if err := checkService(op, s); err != nil {
 		return false, err
 	}
-	tx, cancel, err := s.BeginTxContext(ctx)
-	if err != nil {
-		return false, errors.New(op).WithErr(err)
+	if account == "" {
+		return false, errors.New(op).WithMsg("a confirmation needs the account it was made under")
 	}
-	defer cancel()
-	defer func() { _ = tx.Rollback() }()
-	var creds any
-	if len(credentials) > 0 {
-		creds = string(credentials)
-	}
-	r, err := tx.ExecContext(ctx, `
-		UPDATE logbook_destination SET remote_adopted_at = datetime('now')
-		WHERE forwarder_name = ? AND enabled = 1 AND remote_adopted_at IS NULL AND credentials IS ?
-		  AND logbook_id IN (SELECT id FROM logbook WHERE deleted_at IS NULL)`, forwarderName, creds)
-	if err != nil {
-		return false, errors.New(op).WithErr(err).WithMsg("record adoption")
-	}
-	n, err := r.RowsAffected()
-	if err != nil {
-		return false, errors.New(op).WithErr(err).WithMsg("record adoption")
-	}
-	if err := tx.Commit(); err != nil {
-		return false, errors.New(op).WithErr(err).WithMsg("commit adoption")
-	}
-	return n == 1, nil
+	return s.durableUpdate(ctx, op, "record adoption", `
+		UPDATE logbook_destination SET remote_adopted_at = datetime('now'), remote_adopted_account = ?
+		WHERE forwarder_name = ? AND logbook_id = ? AND enabled = 1 AND credentials IS ?
+		  AND adoption_reserved_at IS NOT NULL
+		  AND (remote_adopted_at IS NULL OR remote_adopted_account IS NOT ?)
+		  AND logbook_id IN (SELECT id FROM logbook WHERE deleted_at IS NULL)`,
+		account, forwarderName, logbookID, credentialsArg(credentials), account)
 }
 
 // ReserveLogbookDestinationAdoptionWithContext records adoption_reserved_at on
 // the binding an adoption attempt read (ADR 0091): the binding named
-// forwarderName on logbookID, enabled, on a live logbook, not yet adopted, and
-// with exactly the stored credentials passed (nil = none). A binding already
-// reserved keeps its first reservation and reports true. false with a nil error
-// means nothing matched.
-//
-// A true result is durable across a power loss before it is returned, because
-// the adoption request follows it. The pool runs WAL with synchronous=NORMAL,
-// under which a committed transaction may roll back after a power failure or
-// an OS crash (sqlite.org, PRAGMA synchronous). So the write runs on one pinned
-// connection set to FULL before its transaction begins, the setting is read
-// back inside the transaction, and the connection is set back to NORMAL after
-// the commit. Any failure before the commit reserves nothing.
-func (s *Service) ReserveLogbookDestinationAdoptionWithContext(ctx context.Context, forwarderName string, logbookID int64, credentials json.RawMessage) (bool, error) {
+// forwarderName on logbookID, enabled, on a live logbook, not already
+// confirmed under account (the attempt's station account), and with exactly
+// the stored credentials passed (nil = none). A binding already reserved keeps
+// its first reservation and reports true. false with a nil error means nothing
+// matched. A true result is durable before it is returned (durableUpdate),
+// because the adoption request follows it.
+func (s *Service) ReserveLogbookDestinationAdoptionWithContext(ctx context.Context, forwarderName string, logbookID int64, credentials json.RawMessage, account string) (bool, error) {
 	const op errors.Op = "sqlite.Service.ReserveLogbookDestinationAdoptionWithContext"
 	if err := checkService(op, s); err != nil {
 		return false, err
 	}
+	return s.durableUpdate(ctx, op, "reserve adoption", `
+		UPDATE logbook_destination SET adoption_reserved_at = COALESCE(adoption_reserved_at, datetime('now'))
+		WHERE forwarder_name = ? AND logbook_id = ? AND enabled = 1 AND credentials IS ?
+		  AND (remote_adopted_at IS NULL OR remote_adopted_account IS NOT ?)
+		  AND logbook_id IN (SELECT id FROM logbook WHERE deleted_at IS NULL)`,
+		forwarderName, logbookID, credentialsArg(credentials), account)
+}
+
+func credentialsArg(credentials json.RawMessage) any {
+	if len(credentials) == 0 {
+		return nil
+	}
+	return string(credentials)
+}
+
+// durableUpdate runs one UPDATE that must survive a power loss once it is
+// reported (ADR 0091: an adoption's reservation and its confirmation), and
+// reports whether it changed exactly one row. The pool runs WAL with
+// synchronous=NORMAL, under which a committed transaction may roll back after a
+// power failure or an OS crash (sqlite.org, PRAGMA synchronous). So the write
+// runs on one pinned connection set to FULL before its transaction begins, the
+// setting is read back inside the transaction, and the connection is set back
+// to NORMAL afterwards. Any failure before the commit writes nothing.
+func (s *Service) durableUpdate(ctx context.Context, op errors.Op, what, query string, args ...any) (bool, error) {
 	h, err := s.getOpenHandle(op)
 	if err != nil {
 		return false, err
@@ -390,25 +398,18 @@ func (s *Service) ReserveLogbookDestinationAdoptionWithContext(ctx context.Conte
 		return false, errors.New(op).WithErr(err).WithMsg("read synchronous")
 	}
 	if level != synchronousFull {
-		return false, errors.New(op).WithMsgf("the reservation's connection runs synchronous=%d, not FULL; nothing was reserved", level)
+		return false, errors.New(op).WithMsgf("the connection runs synchronous=%d, not FULL; nothing was written (%s)", level, what)
 	}
-	var creds any
-	if len(credentials) > 0 {
-		creds = string(credentials)
-	}
-	r, err := tx.ExecContext(ctx, `
-		UPDATE logbook_destination SET adoption_reserved_at = COALESCE(adoption_reserved_at, datetime('now'))
-		WHERE forwarder_name = ? AND logbook_id = ? AND enabled = 1 AND remote_adopted_at IS NULL AND credentials IS ?
-		  AND logbook_id IN (SELECT id FROM logbook WHERE deleted_at IS NULL)`, forwarderName, logbookID, creds)
+	r, err := tx.ExecContext(ctx, query, args...)
 	if err != nil {
-		return false, errors.New(op).WithErr(err).WithMsg("reserve adoption")
+		return false, errors.New(op).WithErr(err).WithMsg(what)
 	}
 	n, err := r.RowsAffected()
 	if err != nil {
-		return false, errors.New(op).WithErr(err).WithMsg("reserve adoption")
+		return false, errors.New(op).WithErr(err).WithMsg(what)
 	}
 	if err := tx.Commit(); err != nil {
-		return false, errors.New(op).WithErr(err).WithMsg("commit reservation")
+		return false, errors.New(op).WithErr(err).WithMsg("commit: " + what)
 	}
 	return n == 1, nil
 }
@@ -439,7 +440,7 @@ func (s *Service) ListAdoptionClaimsWithContext(ctx context.Context) ([]types.Lo
 	ctx, cancel := s.ensureCtxTimeout(ctx)
 	defer cancel()
 	rows, err := h.QueryContext(ctx, `
-		SELECT id, logbook_id, destination, forwarder_name, enabled, credentials, adoption_reserved_at, remote_adopted_at
+		SELECT id, logbook_id, destination, forwarder_name, enabled, credentials, adoption_reserved_at, remote_adopted_at, remote_adopted_account
 		FROM logbook_destination
 		WHERE adoption_reserved_at IS NOT NULL OR remote_adopted_at IS NOT NULL
 		ORDER BY id`)
@@ -454,15 +455,16 @@ func (s *Service) ListAdoptionClaimsWithContext(ctx context.Context) ([]types.Lo
 			enabled           int64
 			creds             sql.NullString
 			reserved, adopted sql.NullTime
+			account           sql.NullString
 		)
-		if err := rows.Scan(&d.ID, &d.LogbookID, &d.Destination, &d.ForwarderName, &enabled, &creds, &reserved, &adopted); err != nil {
+		if err := rows.Scan(&d.ID, &d.LogbookID, &d.Destination, &d.ForwarderName, &enabled, &creds, &reserved, &adopted, &account); err != nil {
 			return nil, errors.New(op).WithErr(err).WithMsg("scan adoption claim")
 		}
 		d.Enabled = enabled == 1
 		if creds.Valid && creds.String != "" {
 			d.Credentials = json.RawMessage(creds.String)
 		}
-		d.AdoptionReservedAt, d.RemoteAdoptedAt = timePtr(reserved), timePtr(adopted)
+		d.AdoptionReservedAt, d.RemoteAdoptedAt, d.RemoteAdoptedAccount = timePtr(reserved), timePtr(adopted), account.String
 		out = append(out, d)
 	}
 	if err := rows.Err(); err != nil {

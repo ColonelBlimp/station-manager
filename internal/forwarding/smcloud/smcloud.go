@@ -115,6 +115,8 @@ func init() {
 		})
 	// A bindings save compares cloud names as New uploads under them (ADR 0091).
 	forwarding.RegisterAdoptionName(Type, CloudName)
+	// A confirmation counts only for the account it was made under (ADR 0091).
+	forwarding.RegisterAccountFingerprint(Type, AccountFingerprint)
 }
 
 // credentials is the type-specific shape of ForwarderConfig.Credentials.

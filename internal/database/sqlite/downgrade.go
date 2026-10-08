@@ -67,8 +67,12 @@ func (s *Service) DowngradeLogSchemaTo(target uint) (from uint, err error) {
 	return current, nil
 }
 
-// adoptionReservationVersion is the schema that added adoption_reserved_at.
-const adoptionReservationVersion = 16
+// adoptionReservationVersion is the schema that added adoption_reserved_at;
+// adoptionAccountVersion the one that added remote_adopted_account.
+const (
+	adoptionReservationVersion = 16
+	adoptionAccountVersion     = 17
+)
 
 // refuseErasingAdoptionClaims refuses a downgrade below 16 while any binding
 // holds an adoption reservation or a recorded adoption (ADR 0091): 0016's down
@@ -76,18 +80,35 @@ const adoptionReservationVersion = 16
 // take a cloud name the server may already have adopted. The check runs here,
 // before any migration, because a down step that failed inside the migration
 // would leave the schema dirty. Manual recovery owns any release.
+//
+// Below 17 it also refuses while any binding holds a confirmation
+// (remote_adopted_at): a schema-16 build cannot tell which account confirmed
+// it, so it would upload by name without the hold a changed account needs, and
+// a later upgrade cannot undo those uploads. Disabled bindings and deleted
+// logbooks' count, as for 16.
 func (s *Service) refuseErasingAdoptionClaims(op errors.Op, current, target uint) error {
-	if current < adoptionReservationVersion || target >= adoptionReservationVersion {
-		return nil
+	if current >= adoptionAccountVersion && target < adoptionAccountVersion {
+		if err := s.refuseWhileAny(op, `remote_adopted_at IS NOT NULL`,
+			"hold an SM Cloud adoption confirmation; a downgrade below schema %d would drop the account it was confirmed under", adoptionAccountVersion); err != nil {
+			return err
+		}
 	}
+	if current >= adoptionReservationVersion && target < adoptionReservationVersion {
+		return s.refuseWhileAny(op, `adoption_reserved_at IS NOT NULL OR remote_adopted_at IS NOT NULL`,
+			"hold an SM Cloud adoption reservation or adoption; a downgrade below schema %d would erase that protection", adoptionReservationVersion)
+	}
+	return nil
+}
+
+// refuseWhileAny refuses when any binding matches where; msg takes the schema
+// version.
+func (s *Service) refuseWhileAny(op errors.Op, where, msg string, version int) error {
 	var n int
-	if err := s.handle.QueryRow(`SELECT COUNT(*) FROM logbook_destination
-		WHERE adoption_reserved_at IS NOT NULL OR remote_adopted_at IS NOT NULL`).Scan(&n); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("check adoption reservations")
+	if err := s.handle.QueryRow(`SELECT COUNT(*) FROM logbook_destination WHERE ` + where).Scan(&n); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("check adoption claims")
 	}
 	if n > 0 {
-		return errors.New(op).WithMsgf("%d binding(s) hold an SM Cloud adoption reservation or adoption; a downgrade below schema %d would erase that protection",
-			n, adoptionReservationVersion)
+		return errors.New(op).WithMsgf("%d binding(s) "+msg, n, version)
 	}
 	return nil
 }

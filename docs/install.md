@@ -446,7 +446,10 @@ prints the transition, and refuses a target at or above the current version
 any SM Cloud binding holds an adoption reservation or a recorded adoption
 (ADR 0091). That protects a cloud name the server may already have adopted;
 an older build would not enforce the protection, and releasing it is a
-manual recovery step. Each down step drops what its migration added, so
+manual recovery step. It refuses a target below 17 while any binding holds
+a confirmed adoption: schema 16 drops the record of which station account
+confirmed it, and a build at 16 would not hold uploads after the account
+changes. Each down step drops what its migration added, so
 run it only with the daemon stopped and a copy of the database in hand; QSO,
 upload-queue and history rows are kept by every down migration shipped so
 far. The reference and evidence databases are station-global and are never

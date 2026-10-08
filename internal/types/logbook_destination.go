@@ -34,6 +34,10 @@ type LogbookDestination struct {
 	// for an adoption request (ADR 0091): archive-local protection, never
 	// proof that a server accepted adoption. nil for every other destination.
 	AdoptionReservedAt *time.Time `json:"adoption_reserved_at,omitempty"`
+	// RemoteAdoptedAccount is the fingerprint of the station account the
+	// confirmation belongs to (ADR 0091): a verifier derived from the token,
+	// so it is never served. A confirmation counts only for that account.
+	RemoteAdoptedAccount string `json:"-"`
 	// LegacyName is the config.json forwarder name a seeded binding derives
 	// from — the one name an older, config-driven build drains — so a
 	// downgrade collapses to it rather than inferring it. Empty for a binding

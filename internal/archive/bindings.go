@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -26,10 +27,11 @@ const (
 )
 
 // BindingFingerprint is a binding's content as the running daemon saw it at
-// start: (name → enabled + credentials hash + adopted). GET compares the
-// table with it to report restart_required (ADR 0082 part 5); an adoption
-// recorded since the start switches the binding's wire at the next one (ADR
-// 0090, T1).
+// start: (name → enabled + credentials hash + adopted + the account it was
+// confirmed under). GET compares the table with it to report restart_required
+// (ADR 0082 part 5); an adoption recorded since the start, or re-confirmed
+// under another account, switches the binding's wire at the next one (ADR
+// 0090, T1; ADR 0091).
 type BindingFingerprint map[string]string
 
 // FingerprintBindings summarises a binding list for the restart comparison.
@@ -37,7 +39,7 @@ func FingerprintBindings(bindings []types.LogbookDestination) BindingFingerprint
 	fp := make(BindingFingerprint, len(bindings))
 	for _, b := range bindings {
 		sum := sha256.Sum256(b.Credentials)
-		fp[b.ForwarderName] = fmt.Sprintf("%v:%s:%v", b.Enabled, hex.EncodeToString(sum[:8]), b.RemoteAdoptedAt != nil)
+		fp[b.ForwarderName] = fmt.Sprintf("%v:%s:%v:%s", b.Enabled, hex.EncodeToString(sum[:8]), b.RemoteAdoptedAt != nil, b.RemoteAdoptedAccount)
 	}
 	return fp
 }
@@ -49,8 +51,8 @@ type BindingsDB interface {
 	FetchAllLogbooksWithContext(ctx context.Context) ([]types.Logbook, error)
 	ForwarderQueueCountsWithContext(ctx context.Context) (map[string]sqlite.ForwarderQueueCounts, error)
 	UpsertLogbookDestinationsWithContext(ctx context.Context, rows []sqlite.DestinationUpsert) error
-	RecordLogbookDestinationAdoptedWithContext(ctx context.Context, forwarderName string, credentials json.RawMessage) (bool, error)
-	ReserveLogbookDestinationAdoptionWithContext(ctx context.Context, forwarderName string, logbookID int64, credentials json.RawMessage) (bool, error)
+	RecordLogbookDestinationAdoptedWithContext(ctx context.Context, forwarderName string, logbookID int64, credentials json.RawMessage, account string) (bool, error)
+	ReserveLogbookDestinationAdoptionWithContext(ctx context.Context, forwarderName string, logbookID int64, credentials json.RawMessage, account string) (bool, error)
 	ListAdoptionClaimsWithContext(ctx context.Context) ([]types.LogbookDestination, error)
 }
 
@@ -546,26 +548,94 @@ func (m *Manager) ApplyBindings(ctx context.Context, id string, req types.Archiv
 	return applyBindings(ctx, m.logger, db, snap, entry, atStart, req)
 }
 
-// RecordAdoption records remote_adopted_at on the binding an adoption attempt
-// read (ADR 0090, T1): only while it is still enabled, unadopted and holds the
-// credentials the attempt read, so a changed name is never stamped. It runs
-// under bindingsMu, as a PUT does: a rename that read the row before the stamp
-// would otherwise write a new name onto an adopted binding. false with a nil
-// error means the binding changed since the read and nothing was written.
-func (m *Manager) RecordAdoption(ctx context.Context, read types.LogbookDestination) (bool, error) {
+// RecordAdoption records an adoption's confirmation on the binding the attempt
+// pinned (ADR 0090 T1, ADR 0091): remote_adopted_at with the fingerprint of the
+// station account it was made under, in one durable write. Under bindingsMu,
+// as a PUT, and then the config read lock, so neither a bindings save nor an
+// account save can land between the checks and the write: the pin must still
+// hold (same active archive, default logbook and account), and the binding
+// must still be reserved, enabled, hold the credentials read and not be
+// confirmed under this account already. false with a nil error means the pin
+// or the binding changed: the completion is discarded and the reservation
+// stays. A save started meanwhile waits for this local write.
+func (m *Manager) RecordAdoption(ctx context.Context, pin AdoptionPin) (bool, error) {
+	recorded := false
+	err := m.underPin(pin, func(db BindingsDB) error {
+		var err error
+		recorded, err = db.RecordLogbookDestinationAdoptedWithContext(ctx, pin.Binding.ForwarderName, pin.Binding.LogbookID, pin.Binding.Credentials, pin.Account)
+		return err
+	})
+	if errors.Is(err, errPinMoved) {
+		return false, nil
+	}
+	return recorded, err
+}
+
+// AdoptionPin is what an adoption attempt read and acts for (ADR 0091): the
+// active archive, its default logbook's binding as read, and the fingerprint
+// of the station account the attempt uses (CurrentAccount). Each local write
+// rechecks it.
+type AdoptionPin struct {
+	ArchiveID string
+	Binding   types.LogbookDestination
+	Account   string
+}
+
+// errPinMoved reports that the pinned archive, default or account no longer
+// holds.
+var errPinMoved = errors.New("the adoption's pinned archive, default logbook or account changed")
+
+// underPin runs write with the active database while holding bindingsMu and
+// then the config read lock — the only order that cannot deadlock, since a
+// bindings PUT reads the config while holding bindingsMu — once the pin still
+// holds against the saved config. write must not call the config service or
+// the network: every save waits on it.
+func (m *Manager) underPin(pin AdoptionPin, write func(db BindingsDB) error) error {
 	m.bindingsMu.Lock()
 	defer m.bindingsMu.Unlock()
 	m.mu.Lock()
 	db := m.activeDB
 	m.mu.Unlock()
 	if db == nil {
-		return false, &RequestError{Code: "bindings_unavailable", Message: "this daemon has no active archive database wired for bindings"}
+		return &RequestError{Code: "bindings_unavailable", Message: "this daemon has no active archive database wired for bindings"}
 	}
-	td, ok := forwarding.DescriptorFor(read.Destination)
+	td, ok := forwarding.DescriptorFor(pin.Binding.Destination)
 	if !ok || len(adoptionKeys(td)) == 0 {
-		return false, fmt.Errorf("destination %q has no remote adoption", read.Destination)
+		return fmt.Errorf("destination %q has no remote adoption", pin.Binding.Destination)
 	}
-	return db.RecordLogbookDestinationAdoptedWithContext(ctx, read.ForwarderName, read.Credentials)
+	return m.cfg.WithSnapshot(func(cfg config.Config) error {
+		if cfg.ActiveQsoArchiveID != pin.ArchiveID || cfg.DefaultLogbookID != pin.Binding.LogbookID {
+			return errPinMoved
+		}
+		if current, err := CurrentAccount(cfg, pin.Binding.Destination, pin.ArchiveID); err != nil || current != pin.Account {
+			return errPinMoved
+		}
+		return write(db)
+	})
+}
+
+// CurrentAccount is the fingerprint of the station account cfg holds for typ,
+// for the archive archiveID (ADR 0091). An adoption is confirmed for that
+// account only. An error means no fingerprint can be made: no account, an
+// incomplete one, or a type without one.
+func CurrentAccount(cfg config.Config, typ, archiveID string) (string, error) {
+	fingerprint, ok := forwarding.AccountFingerprintFor(typ)
+	if !ok {
+		return "", fmt.Errorf("destination %q has no account fingerprint", typ)
+	}
+	account, ok := accountsByType(cfg)[typ]
+	if !ok {
+		return "", fmt.Errorf("no %s station account", typ)
+	}
+	return fingerprint(archiveID, account.Credentials)
+}
+
+// AdoptionConfirmed reports whether b's adoption is confirmed for the station
+// account whose fingerprint is account (ADR 0091): recorded, and recorded under
+// that account. A binding adopted under another account, or under none, needs
+// a fresh confirmation.
+func AdoptionConfirmed(b types.LogbookDestination, account string) bool {
+	return b.RemoteAdoptedAt != nil && account != "" && b.RemoteAdoptedAccount == account
 }
 
 // adoptionKeys lists the type's logbook-scoped fields that an adoption fixes.
@@ -682,58 +752,56 @@ const (
 )
 
 // ReserveAdoption is the step between an adoption attempt's unlocked reads and
-// its request (ADR 0091). Under bindingsMu, as a PUT, it checks that the
-// binding is still the one the attempt read (same name, logbook, credentials;
-// enabled and unadopted), runs judge over the local evidence, and on a safe
-// verdict ("") reserves the binding's name. No save can come between the
-// judgement and the reservation. A reservation is committed before this
-// returns; any error means nothing may be sent. Reserving an already reserved
-// binding keeps its first reservation: a retry judges again (ruling R2).
-func (m *Manager) ReserveAdoption(ctx context.Context, read types.LogbookDestination, judge func(context.Context) (string, error)) (ReserveOutcome, string, error) {
-	m.bindingsMu.Lock()
-	defer m.bindingsMu.Unlock()
-	m.mu.Lock()
-	db := m.activeDB
-	m.mu.Unlock()
-	if db == nil {
-		return "", "", &RequestError{Code: "bindings_unavailable", Message: "this daemon has no active archive database wired for bindings"}
-	}
-	td, ok := forwarding.DescriptorFor(read.Destination)
-	if !ok || len(adoptionKeys(td)) == 0 {
-		return "", "", fmt.Errorf("destination %q has no remote adoption", read.Destination)
-	}
-	bindings, err := db.ListLogbookDestinationsWithContext(ctx)
-	if err != nil {
-		return "", "", err
-	}
-	if !stillAsRead(bindings, read) {
+// its request (ADR 0091). Under bindingsMu, as a PUT, and then the config read
+// lock, it checks that the pin still holds (same active archive, default
+// logbook and account) and that the binding is still the one the attempt read
+// (same name, logbook, credentials; enabled; not already confirmed under the
+// pinned account), runs judge over the local evidence, and on a safe verdict
+// ("") reserves the binding's name. No bindings or account save can come
+// between the checks, the judgement and the reservation, so judge must read
+// only the archive (no config call, no network). A reservation is committed
+// before this returns; any error means nothing may be sent. Reserving an
+// already reserved binding keeps its first reservation: a retry judges again
+// (ruling R2), and so does a re-confirmation under a new account.
+func (m *Manager) ReserveAdoption(ctx context.Context, pin AdoptionPin, judge func(context.Context) (string, error)) (ReserveOutcome, string, error) {
+	outcome, reason := ReserveChanged, ""
+	err := m.underPin(pin, func(db BindingsDB) error {
+		bindings, err := db.ListLogbookDestinationsWithContext(ctx)
+		if err != nil {
+			return err
+		}
+		if !stillAsRead(bindings, pin) {
+			return nil
+		}
+		if reason, err = judge(ctx); err != nil || reason != "" {
+			outcome = ReserveUnsafe
+			return err
+		}
+		reserved, err := db.ReserveLogbookDestinationAdoptionWithContext(ctx, pin.Binding.ForwarderName, pin.Binding.LogbookID, pin.Binding.Credentials, pin.Account)
+		if err != nil || !reserved {
+			return err
+		}
+		outcome = ReserveReserved
+		return nil
+	})
+	switch {
+	case errors.Is(err, errPinMoved):
 		return ReserveChanged, "", nil
-	}
-	reason, err := judge(ctx)
-	if err != nil {
+	case err != nil:
 		return "", "", err
 	}
-	if reason != "" {
-		return ReserveUnsafe, reason, nil
-	}
-	reserved, err := db.ReserveLogbookDestinationAdoptionWithContext(ctx, read.ForwarderName, read.LogbookID, read.Credentials)
-	if err != nil {
-		return "", "", err
-	}
-	if !reserved {
-		return ReserveChanged, "", nil
-	}
-	return ReserveReserved, "", nil
+	return outcome, reason, nil
 }
 
-// stillAsRead reports whether the binding read is unchanged in bindings and may
-// still be reserved: same logbook, destination and credentials, enabled and not
-// yet adopted.
-func stillAsRead(bindings []types.LogbookDestination, read types.LogbookDestination) bool {
+// stillAsRead reports whether the binding pinned is unchanged in bindings and
+// may still be reserved: same logbook, destination and credentials, enabled,
+// and not already confirmed under the pinned account.
+func stillAsRead(bindings []types.LogbookDestination, pin AdoptionPin) bool {
+	read := pin.Binding
 	for _, b := range bindings {
 		if b.ForwarderName == read.ForwarderName {
 			return b.LogbookID == read.LogbookID && b.Destination == read.Destination && b.Enabled &&
-				b.RemoteAdoptedAt == nil && bytes.Equal(b.Credentials, read.Credentials)
+				!AdoptionConfirmed(b, pin.Account) && bytes.Equal(b.Credentials, read.Credentials)
 		}
 	}
 	return false
