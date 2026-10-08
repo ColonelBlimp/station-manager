@@ -307,6 +307,11 @@
                     {#each dest.logbooks as row (row.logbook_id)}
                         {@const k = rowKey(dest.type, row.logbook_id)}
                         {@const d = bindingsState.drafts[k]}
+                        <!-- An adopted binding's adoption key is fixed (ADR 0090, T6):
+                             not offered, and the daemon refuses editing it. -->
+                        {@const rowFields = fields.filter(
+                            (f) => !row.locked_fields.includes(f.key)
+                        )}
                         {#if d}
                             <div
                                 class="rounded-md border border-line p-3"
@@ -346,9 +351,9 @@
                                     </p>
                                 {/if}
 
-                                {#if fields.length > 0}
+                                {#if rowFields.length > 0}
                                     <div class="mt-3 space-y-3">
-                                        {#each fields as field (field.key)}
+                                        {#each rowFields as field (field.key)}
                                             <!-- A stored value is a status line with Replace
                                                  and Remove (ruling 2026-09-26). Remove only on
                                                  a row that is off: the daemon refuses a removal

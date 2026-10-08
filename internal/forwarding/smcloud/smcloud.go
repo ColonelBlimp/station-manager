@@ -108,7 +108,9 @@ func init() {
 				Help: "The SMCLOUD_TOKEN the service was provisioned with."},
 			// Clearable: New defaults an empty logbook to DefaultLogbook, so a blank
 			// PUT is a genuine "reset to main" — unlike url/token, which New rejects.
-			{Key: "logbook", Label: "Cloud logbook name", Kind: "text", Clearable: true, Scope: forwarding.ScopeLogbook,
+			// AdoptionKey: the explicit adoption maps this name to the archive
+			// and logbook UUIDs, so it is fixed once adopted (ADR 0090, T6).
+			{Key: "logbook", Label: "Cloud logbook name", Kind: "text", Clearable: true, Scope: forwarding.ScopeLogbook, AdoptionKey: true,
 				Help: "Cloud-side logbook the QSOs land in (created on first push). Leave empty for \"main\"."},
 		})
 }

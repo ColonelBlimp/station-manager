@@ -66,6 +66,10 @@ type LogbookBindingView struct {
 	// Reason, when set, is why THIS row cannot be turned on although its
 	// destination can (W-0021 5F.0); never set on a row that is enabled.
 	Reason string `json:"reason,omitempty"`
+	// LockedFields lists the logbook-scoped keys fixed by the binding's remote
+	// adoption (SM Cloud's cloud logbook name, ADR 0090): not shown for
+	// editing, and refused by the PUT. Absent when nothing is locked.
+	LockedFields []string `json:"locked_fields,omitempty"`
 }
 
 // BindingQueueCount mirrors the queue readout for one binding name.

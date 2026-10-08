@@ -488,6 +488,12 @@ type CredentialField struct {
 	// Only DefaultsToLogbookCallsign exists; only on a logbook-scoped field
 	// that is not Clearable.
 	DefaultsTo string `json:"defaults_to,omitempty"`
+	// AdoptionKey marks the logbook-scoped field that names the remote logbook
+	// a binding's explicit adoption mapped (SM Cloud's cloud logbook name, ADR
+	// 0090). Once the binding records remote_adopted_at the field is fixed:
+	// the bindings view lists it in locked_fields and the PUT refuses typing or
+	// clearing it. Daemon-side policy only, so it is not on the wire.
+	AdoptionKey bool `json:"-"`
 }
 
 // DefaultsToLogbookCallsign: the binding's logbook callsign (ClubLog's
@@ -534,6 +540,9 @@ func RegisterForwarderType(typeName, displayName string, actions []Action, creds
 		}
 		if c.Scope != ScopeStation && c.Scope != ScopeLogbook {
 			panic("forwarding.RegisterForwarderType: bad credential scope " + strconv.Quote(c.Scope) + " for " + typeName + "." + c.Key)
+		}
+		if c.AdoptionKey && c.Scope != ScopeLogbook {
+			panic("forwarding.RegisterForwarderType: adoption key " + typeName + "." + c.Key + " must be logbook-scoped")
 		}
 		if c.DefaultsTo != "" && (c.DefaultsTo != DefaultsToLogbookCallsign || c.Scope != ScopeLogbook || c.Clearable) {
 			panic("forwarding.RegisterForwarderType: defaults_to " + strconv.Quote(c.DefaultsTo) +

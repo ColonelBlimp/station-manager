@@ -307,3 +307,41 @@ func (s *Service) UpsertLogbookDestinationsWithContext(ctx context.Context, rows
 	}
 	return nil
 }
+
+// RecordLogbookDestinationAdoptedWithContext sets remote_adopted_at on the
+// binding named forwarderName, but only while it is still the binding an
+// adoption attempt read: enabled, on a live logbook, not yet adopted, and with
+// exactly the stored credentials passed (nil = none), so a name changed or a
+// binding disabled since the read is never stamped (ADR 0090). It reports
+// whether the marker was written; false with a nil error means nothing matched.
+func (s *Service) RecordLogbookDestinationAdoptedWithContext(ctx context.Context, forwarderName string, credentials json.RawMessage) (bool, error) {
+	const op errors.Op = "sqlite.Service.RecordLogbookDestinationAdoptedWithContext"
+	if err := checkService(op, s); err != nil {
+		return false, err
+	}
+	tx, cancel, err := s.BeginTxContext(ctx)
+	if err != nil {
+		return false, errors.New(op).WithErr(err)
+	}
+	defer cancel()
+	defer func() { _ = tx.Rollback() }()
+	var creds any
+	if len(credentials) > 0 {
+		creds = string(credentials)
+	}
+	r, err := tx.ExecContext(ctx, `
+		UPDATE logbook_destination SET remote_adopted_at = datetime('now')
+		WHERE forwarder_name = ? AND enabled = 1 AND remote_adopted_at IS NULL AND credentials IS ?
+		  AND logbook_id IN (SELECT id FROM logbook WHERE deleted_at IS NULL)`, forwarderName, creds)
+	if err != nil {
+		return false, errors.New(op).WithErr(err).WithMsg("record adoption")
+	}
+	n, err := r.RowsAffected()
+	if err != nil {
+		return false, errors.New(op).WithErr(err).WithMsg("record adoption")
+	}
+	if err := tx.Commit(); err != nil {
+		return false, errors.New(op).WithErr(err).WithMsg("commit adoption")
+	}
+	return n == 1, nil
+}

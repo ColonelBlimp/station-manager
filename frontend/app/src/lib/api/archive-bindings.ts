@@ -43,6 +43,10 @@ export interface LogbookBinding {
      *  in Home: the default logbook only, W-0021 5F.0); '' when it can. Never
      *  set on an enabled row. */
     reason: string;
+    /** Logbook-scoped keys fixed by the binding's remote adoption (SM Cloud's
+     *  cloud logbook name, ADR 0090): not offered for editing; the daemon
+     *  refuses changing or removing them. */
+    locked_fields: string[];
 }
 
 export interface StationAccount {
@@ -111,6 +115,7 @@ function toRow(v: unknown): LogbookBinding | null {
         credentials_set: strs(v.credentials_set),
         queue: { waiting: num(q.waiting), failed: num(q.failed), in_flight: num(q.in_flight) },
         reason: str(v.reason),
+        locked_fields: strs(v.locked_fields),
     };
 }
 

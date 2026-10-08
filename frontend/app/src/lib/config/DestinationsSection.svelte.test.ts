@@ -560,6 +560,40 @@ describe('DestinationsSection', () => {
         expect(within(card('QRZ Logbook')).queryByTestId('build-key-absent')).toBeNull();
     });
 
+    it('D14: an adopted binding hides its locked cloud logbook name; an unadopted one shows it', async () => {
+        current = () =>
+            view({
+                destinations: [
+                    view().destinations[0],
+                    {
+                        ...view().destinations[1],
+                        account: { configured: true },
+                        state: 'mixed',
+                        reason: '',
+                        logbooks: [
+                            row(1, 'Main', {
+                                bound: true,
+                                enabled: true,
+                                forwarder_name: 'smcloud',
+                                credentials_set: ['logbook'],
+                                locked_fields: ['logbook'],
+                            }),
+                            row(2, 'Second', {
+                                bound: true,
+                                forwarder_name: 'smcloud.u2',
+                                credentials_set: ['logbook'],
+                            }),
+                        ],
+                    },
+                ],
+            });
+        await renderLoaded();
+        const rows = within(card('SM Cloud backup')).getAllByTestId('binding-row');
+        expect(within(rows[0]).queryByText('Cloud logbook name')).toBeNull();
+        expect(within(rows[0]).queryByRole('button', { name: /Cloud logbook name/ })).toBeNull();
+        expect(within(rows[1]).getByText('Cloud logbook name')).toBeTruthy();
+    });
+
     it('D9: a stored value can be removed only from a row that is off', async () => {
         await renderLoaded();
         const rows = within(card('QRZ Logbook')).getAllByTestId('binding-row');

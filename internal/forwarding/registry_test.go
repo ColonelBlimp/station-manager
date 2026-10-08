@@ -379,6 +379,10 @@ func TestRegisterForwarderType_Panics(t *testing.T) {
 			RegisterForwarderType("ftpanic-badscope", "X", []Action{action.Insert},
 				[]CredentialField{{Key: "k", Label: "K", Kind: "text", Scope: "archive"}})
 		}},
+		{"adoption key on a station-scoped field", func() {
+			RegisterForwarderType("ftpanic-adoptstation", "X", []Action{action.Insert},
+				[]CredentialField{{Key: "k", Label: "K", Kind: "text", Scope: ScopeStation, AdoptionKey: true}})
+		}},
 		{"empty type (delegated)", func() {
 			RegisterForwarderType("", "X", []Action{action.Insert}, nil)
 		}},

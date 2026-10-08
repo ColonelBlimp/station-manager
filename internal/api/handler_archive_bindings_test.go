@@ -56,6 +56,7 @@ func TestArchiveBindings_PortMappingAndPassthrough(t *testing.T) {
 		"binding_not_enableable": http.StatusBadRequest,
 		"logbook_not_found":      http.StatusNotFound,
 		"bindings_unavailable":   http.StatusServiceUnavailable,
+		"binding_field_locked":   http.StatusConflict,
 	} {
 		f.bindingsErr = &codedErr{code, "why"}
 		if w := bindingsReq(t, srv, http.MethodPut, "a", body); w.Code != want || decodeErrCode(t, w) != code {

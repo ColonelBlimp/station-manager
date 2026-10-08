@@ -72,6 +72,26 @@ function keptRemovals(row: LogbookBinding, cleared: string[]): string[] {
     return row.enabled ? [] : cleared.filter((k) => row.credentials_set.includes(k));
 }
 
+/** A draft kept across a timed-out save's re-read: the daemon's switch, the
+ *  typed values, and the removal marks that still apply. A field the re-read
+ *  shows locked (adopted meanwhile, ADR 0090) is no longer offered, so its
+ *  typed value or removal mark would be a hidden edit the daemon refuses on
+ *  every later save: it is dropped, and named in droppedKeys when the
+ *  operator had touched it. */
+function recoveredDraft(
+    row: LogbookBinding,
+    kept: RowDraft | undefined
+): { draft: RowDraft; droppedKeys: string[] } {
+    const credentials = { ...(kept?.credentials ?? {}) };
+    const marks = kept?.cleared ?? [];
+    const droppedKeys = row.locked_fields.filter(
+        (key) => (credentials[key] ?? '').trim() !== '' || marks.includes(key)
+    );
+    for (const key of row.locked_fields) delete credentials[key];
+    const cleared = keptRemovals(row, marks).filter((key) => !row.locked_fields.includes(key));
+    return { draft: { enabled: row.enabled, credentials, cleared }, droppedKeys };
+}
+
 function rowChanged(row: LogbookBinding, d: RowDraft | undefined): boolean {
     if (!d) return false;
     return (
@@ -521,21 +541,28 @@ class BindingsState {
         }
         const keep = this.drafts;
         const drafts: Record<string, RowDraft> = {};
+        const dropped: string[] = [];
         for (const d of out.bindings.destinations) {
             for (const r of d.logbooks) {
                 const k = rowKey(d.type, r.logbook_id);
-                drafts[k] = {
-                    enabled: r.enabled,
-                    credentials: { ...(keep[k]?.credentials ?? {}) },
-                    cleared: keptRemovals(r, keep[k]?.cleared ?? []),
-                };
+                const { draft, droppedKeys } = recoveredDraft(r, keep[k]);
+                drafts[k] = draft;
+                for (const key of droppedKeys) {
+                    const label =
+                        this.logbookFields(d.type).find((f) => f.key === key)?.label ?? key;
+                    dropped.push(`${label} for ${r.logbook_name}`);
+                }
             }
         }
         this.view = this.#takeFull(out.bindings, seq);
         this.drafts = drafts;
         this.#covered(covers);
+        const fixed =
+            dropped.length === 0
+                ? ''
+                : ` Not kept, because adoption has fixed it: ${dropped.join(', ')}.`;
         toasts.warn(
-            `${OUTCOME_UNKNOWN_LEAD} The switches now show what Station Manager holds; what you typed is kept — check it and save again if needed.`
+            `${OUTCOME_UNKNOWN_LEAD} The switches now show what Station Manager holds; what you typed is kept — check it and save again if needed.${fixed}`
         );
     }
 

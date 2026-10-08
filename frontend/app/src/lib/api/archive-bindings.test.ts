@@ -43,6 +43,7 @@ const VIEW = {
                     enabled: true,
                     forwarder_name: 'qrz',
                     credentials_set: ['api_key'],
+                    locked_fields: ['api_key', 7],
                     queue: { waiting: 1, failed: 2, in_flight: 0 },
                 },
                 { logbook_id: 2, logbook_name: 'Second', bound: false, enabled: false },
@@ -79,12 +80,15 @@ describe('fetchArchiveBindings', () => {
         expect(qrz.state).toBe('mixed');
         expect(qrz.logbooks).toHaveLength(2);
         expect(qrz.logbooks[0].queue).toEqual({ waiting: 1, failed: 2, in_flight: 0 });
+        // Adoption-locked keys (ADR 0090, T6): strings only; absent reads none.
+        expect(qrz.logbooks[0].locked_fields).toEqual(['api_key']);
         expect(qrz.logbooks[1]).toMatchObject({
             logbook_id: 2,
             bound: false,
             enabled: false,
             forwarder_name: '',
             credentials_set: [],
+            locked_fields: [],
             queue: { waiting: 0, failed: 0, in_flight: 0 },
         });
         expect(v.destinations[1].account.build_key).toBe('absent');

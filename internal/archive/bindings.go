@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -24,8 +25,10 @@ const (
 )
 
 // BindingFingerprint is a binding's content as the running daemon saw it at
-// start: (name → enabled + credentials hash). GET compares the table with it
-// to report restart_required (ADR 0082 part 5).
+// start: (name → enabled + credentials hash + adopted). GET compares the
+// table with it to report restart_required (ADR 0082 part 5); an adoption
+// recorded since the start switches the binding's wire at the next one (ADR
+// 0090, T1).
 type BindingFingerprint map[string]string
 
 // FingerprintBindings summarises a binding list for the restart comparison.
@@ -33,7 +36,7 @@ func FingerprintBindings(bindings []types.LogbookDestination) BindingFingerprint
 	fp := make(BindingFingerprint, len(bindings))
 	for _, b := range bindings {
 		sum := sha256.Sum256(b.Credentials)
-		fp[b.ForwarderName] = fmt.Sprintf("%v:%s", b.Enabled, hex.EncodeToString(sum[:8]))
+		fp[b.ForwarderName] = fmt.Sprintf("%v:%s:%v", b.Enabled, hex.EncodeToString(sum[:8]), b.RemoteAdoptedAt != nil)
 	}
 	return fp
 }
@@ -45,6 +48,7 @@ type BindingsDB interface {
 	FetchAllLogbooksWithContext(ctx context.Context) ([]types.Logbook, error)
 	ForwarderQueueCountsWithContext(ctx context.Context) (map[string]sqlite.ForwarderQueueCounts, error)
 	UpsertLogbookDestinationsWithContext(ctx context.Context, rows []sqlite.DestinationUpsert) error
+	RecordLogbookDestinationAdoptedWithContext(ctx context.Context, forwarderName string, credentials json.RawMessage) (bool, error)
 }
 
 // smcloudIdentityReason is the ADR 0082 part 7 remnant of the interim gate:
@@ -116,6 +120,9 @@ func BindingsView(ctx context.Context, db BindingsDB, cfg config.Config, entry *
 			if b, ok := byKey[fmt.Sprintf("%d/%s", lb.ID, td.Type)]; ok {
 				row.Bound, row.Enabled, row.ForwarderName = true, b.Enabled, b.ForwarderName
 				row.CredentialsSet = keysSet(b.Credentials)
+				if b.RemoteAdoptedAt != nil {
+					row.LockedFields = adoptionKeys(td)
+				}
 				c := counts[b.ForwarderName]
 				row.Queue = types.BindingQueueCount{Waiting: c.Waiting, Failed: c.Failed, InFlight: c.InFlight}
 				if b.Enabled {
@@ -213,6 +220,12 @@ func applyBindings(ctx context.Context, log *logging.Service, db BindingsDB, cfg
 					return types.ArchiveBindingsView{}, &RequestError{Code: "binding_not_enableable", Message: fmt.Sprintf("%s for logbook %q: %s", td.DisplayName, lb.Name, reason)}
 				}
 			}
+			if existing[key].RemoteAdoptedAt != nil {
+				if k := lockedKeyTouched(td, e); k != "" {
+					return types.ArchiveBindingsView{}, &RequestError{Code: "binding_field_locked", Message: fmt.Sprintf(
+						"%s for logbook %q: %q is fixed since this binding was adopted and cannot be changed or removed", td.DisplayName, lb.Name, k)}
+				}
+			}
 			merged, err := mergeBindingCredentials(td, existing[key].Credentials, e.Credentials, e.CredentialsClear, e.Enabled, lb.Callsign)
 			if err != nil {
 				return types.ArchiveBindingsView{}, &RequestError{Code: err.code, Message: fmt.Sprintf("%s for logbook %q: %s", td.DisplayName, lb.Name, err.msg)}
@@ -238,6 +251,23 @@ func applyBindings(ctx context.Context, log *logging.Service, db BindingsDB, cfg
 		return types.ArchiveBindingsView{}, err
 	}
 	return BindingsView(ctx, db, cfg, entry, atStart)
+}
+
+// lockedKeyTouched names the first adoption key the edit types a value into or
+// clears; "" when it touches none. A blank typed value keeps the stored one, so
+// it is not a change. Any other typed value is refused, even an equal one: the
+// SPA never sends the hidden field, and comparing would need the type's own
+// normalization.
+func lockedKeyTouched(td forwarding.TypeDescriptor, e types.LogbookBindingEdit) string {
+	for _, k := range adoptionKeys(td) {
+		if v, ok := e.Credentials[k]; ok && strings.TrimSpace(v) != "" {
+			return k
+		}
+		if slices.Contains(e.CredentialsClear, k) {
+			return k
+		}
+	}
+	return ""
 }
 
 // buildCandidate constructs one candidate binding the way the workers node
@@ -508,4 +538,37 @@ func (m *Manager) ApplyBindings(ctx context.Context, id string, req types.Archiv
 		return types.ArchiveBindingsView{}, err
 	}
 	return applyBindings(ctx, m.logger, db, snap, entry, atStart, req)
+}
+
+// RecordAdoption records remote_adopted_at on the binding an adoption attempt
+// read (ADR 0090, T1): only while it is still enabled, unadopted and holds the
+// credentials the attempt read, so a changed name is never stamped. It runs
+// under bindingsMu, as a PUT does: a rename that read the row before the stamp
+// would otherwise write a new name onto an adopted binding. false with a nil
+// error means the binding changed since the read and nothing was written.
+func (m *Manager) RecordAdoption(ctx context.Context, read types.LogbookDestination) (bool, error) {
+	m.bindingsMu.Lock()
+	defer m.bindingsMu.Unlock()
+	m.mu.Lock()
+	db := m.activeDB
+	m.mu.Unlock()
+	if db == nil {
+		return false, &RequestError{Code: "bindings_unavailable", Message: "this daemon has no active archive database wired for bindings"}
+	}
+	td, ok := forwarding.DescriptorFor(read.Destination)
+	if !ok || len(adoptionKeys(td)) == 0 {
+		return false, fmt.Errorf("destination %q has no remote adoption", read.Destination)
+	}
+	return db.RecordLogbookDestinationAdoptedWithContext(ctx, read.ForwarderName, read.Credentials)
+}
+
+// adoptionKeys lists the type's logbook-scoped fields that an adoption fixes.
+func adoptionKeys(td forwarding.TypeDescriptor) []string {
+	var keys []string
+	for _, f := range td.CredentialFields {
+		if f.AdoptionKey {
+			keys = append(keys, f.Key)
+		}
+	}
+	return keys
 }

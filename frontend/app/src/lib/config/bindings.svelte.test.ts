@@ -68,6 +68,7 @@ const row = (id: number, name: string, over: Record<string, unknown> = {}) => ({
     credentials_set: [],
     queue: { waiting: 0, failed: 0, in_flight: 0 },
     reason: '',
+    locked_fields: [],
     ...over,
 });
 
@@ -405,6 +406,78 @@ describe('bindingsState', () => {
         bindingsState.clear('qrz', 1, 'api_key');
         await bindingsState.save();
         expect(bindingsState.drafts[rowKey('qrz', 1)].cleared).toEqual(['api_key']);
+    });
+
+    it('B25: a field the recovery read shows newly locked loses its hidden draft; unrelated edits survive and the next save is accepted', async () => {
+        // SM Cloud usable, both rows bound with a stored cloud name: Main on,
+        // Second off (so its stored name can be marked for removal).
+        const cloud = (locked: string[]) => {
+            const base = view();
+            return {
+                ...base,
+                destinations: base.destinations.map((dest) =>
+                    dest.type !== 'smcloud'
+                        ? dest
+                        : {
+                              ...dest,
+                              account: { configured: true },
+                              state: 'mixed',
+                              reason: '',
+                              logbooks: [
+                                  row(1, 'Main', {
+                                      bound: true,
+                                      enabled: true,
+                                      forwarder_name: 'smcloud',
+                                      credentials_set: ['logbook'],
+                                      locked_fields: locked,
+                                  }),
+                                  row(2, 'Second', {
+                                      bound: true,
+                                      forwarder_name: 'smcloud.u2',
+                                      credentials_set: ['logbook'],
+                                      locked_fields: locked,
+                                  }),
+                              ],
+                          }
+                ),
+            };
+        };
+        getView = () => cloud([]);
+        await bindingsState.load();
+        const warn = vi.spyOn(toasts, 'warn').mockImplementation(() => 0);
+        bindingsState.setField('smcloud', 1, 'logbook', 'renamed');
+        bindingsState.clear('smcloud', 2, 'logbook');
+        bindingsState.setField('qrz', 2, 'api_key', 'K2');
+        expect(bindingsState.drafts[rowKey('smcloud', 2)].cleared).toEqual(['logbook']);
+
+        // The save times out; meanwhile both bindings were adopted.
+        putAnswer = () => Promise.reject(Object.assign(new Error('t'), { name: 'TimeoutError' }));
+        getView = () => cloud(['logbook']);
+        await bindingsState.save();
+        expect(bindingsState.drafts[rowKey('smcloud', 1)].credentials).toEqual({});
+        expect(bindingsState.drafts[rowKey('smcloud', 2)].cleared).toEqual([]);
+        expect(bindingsState.drafts[rowKey('qrz', 2)].credentials.api_key).toBe('K2');
+        expect(warn).toHaveBeenCalledWith(
+            expect.stringMatching(
+                /Not kept, because adoption has fixed it: Cloud logbook name for Main, Cloud logbook name for Second\./
+            )
+        );
+        expect(bindingsState.dirty).toBe(true);
+
+        // The next save sends the unrelated edit only, and the daemon accepts it.
+        putAnswer = () => Promise.resolve(json(cloud(['logbook'])));
+        const errors = vi.spyOn(toasts, 'error').mockImplementation(() => 0);
+        await bindingsState.save();
+        expect(errors).not.toHaveBeenCalled();
+        expect(puts().at(-1)!.body).toEqual({
+            destinations: [
+                {
+                    type: 'qrz',
+                    logbooks: [{ logbook_id: 2, enabled: false, credentials: { api_key: 'K2' } }],
+                },
+            ],
+        });
+        expect(bindingsState.dirty).toBe(false);
     });
 
     it('B12: a field that defaults to the logbook callsign is satisfied, and left for the daemon', async () => {

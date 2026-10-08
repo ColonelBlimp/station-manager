@@ -276,6 +276,7 @@ function dirtyBinding(): void {
                         credentials_set: ['api_key'],
                         queue: { waiting: 0, failed: 0, in_flight: 0 },
                         reason: '',
+                        locked_fields: [],
                     },
                 ],
             },
