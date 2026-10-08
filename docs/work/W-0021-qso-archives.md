@@ -2249,6 +2249,71 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      kept `{logbook: "renamed"}`; reversions keeping the typed value or the removal mark each fail
      B25. The strict API rule stays (operator, 2026-10-08): any non-blank value is refused,
      including the stored name.
+     **5F.3 commit 3, T3 evidence check (2026-10-08).** `smcloud.JudgeAdoption(evidence)` is a pure
+     judgement. `smcloud.LocalAdoptionEvidence` reads the local half from the open archive and
+     returns an error, never partial evidence, when a read fails. Commit 4's adopter adds the
+     cloud UUIDs and retries instead of judging when a read fails or is incomplete. The evidence:
+     - the saved bindings of Home's live logbooks, enabled and disabled;
+     - the RUNNING routes: the snapshot the daemon built its workers from at start
+       (`d.bindingsAtStart`);
+     - the upload queue by forwarder name;
+     - every UUID of the default logbook, soft-deleted included (`FetchQsoManifestWithContext`);
+     - every cloud UUID under the default binding's cloud name, tombstones included.
+     `smcloud.CloudName` normalizes a name exactly as `New` does (TrimSpace, blank or absent =
+     `main`, otherwise exact and case-sensitive); a test checks it against `New` itself. Every
+     other SM Cloud binding is judged twice, under its running name (as started) and its saved
+     name (as saved). It refuses, with a reason for the log:
+     - (a) another binding with the same name, disabled ones included; every binding examined;
+     - (b) such a binding with uploads queued (waiting, in flight, or failed, since Retry failed
+       returns them to pending), reported in preference to (a) as the more specific reason;
+     - another binding whose cloud name cannot be read (it may share the name);
+     - (c) any cloud UUID that is not a local QSO of the default logbook (UUIDs compared
+       case-insensitively), whether it belongs to another logbook or exists only in the cloud.
+     Queue rows of a forwarder in neither list are inert (no worker sends them now or after the
+     restart). No saved default SM Cloud binding, or an unreadable one, is an error.
+     *Operator review (2026-10-08), two P1s fixed before committing.* The first draft judged the
+     saved bindings of live logbooks only. (1) Saved names need not be running names: workers keep
+     the routing snapshot from start, and SM Cloud sends the name captured at construction, so a
+     binding renamed away from the default's name without a restart still uploads under it. (2) A
+     logbook deleted during the run keeps its worker, which still sends queued rows (including
+     tombstones of soft-deleted QSOs) after the manifest was read. Both differences are now
+     covered by judging the running routes beside the saved bindings, rather than by a
+     restart prerequisite. My earlier judgments were wrong on both counts: deleted logbooks
+     cannot be undeleted, but that does not stop their workers; and (b) does matter on its own
+     when the running and saved names differ. Judgment 1 (failed uploads count) stands.
+     RED first against stubs: every E-case failed on its assertion, `CloudName` returned "",
+     E7 judged the running routes safe, S1 and S2 failed at the stub gatherer. Sequences against
+     a real database: S1 starts both bindings on "shack", renames the other without a restart,
+     and is refused "(as started)", then judged safe on the post-restart snapshot; S2 starts the
+     other logbook's binding on "shack", deletes its last QSO with the tombstone queued, deletes
+     the logbook, and is refused for the queued upload "(as started)", then judged safe on the
+     post-restart snapshot. Reversion proofs (unique anchor, non-empty compiling replacement,
+     verified restore): not judging the running routes fails E7, S1 and S2 on the verdict; not
+     judging the saved bindings fails E2 and E7; the gatherer dropping the queue fails S2 on its
+     reason, and dropping the running routes fails S1 and S2; ignoring the same name fails E2;
+     skipping the queue fails E3 on the reason; not counting failed uploads fails E3/failed;
+     skipping the cloud comparison fails E4; a case-sensitive comparison fails E1; skipping
+     disabled bindings fails E2/disabled; ignoring an unreadable name fails E5; dropping
+     TrimSpace fails the `New` agreement test. Not separately provable: the missing-default error
+     (removing it panics on a nil binding rather than reaching an assertion). Gates: gofmt
+     (whole tree), `go vet ./...`, `go test ./...`, the cloud set against `sm-pg` with `-race`,
+     the maintainability check and `task ci:local` passed.
+     *Commit 4 ruling, name protection (operator, 2026-10-08).* T3 judges one moment; nothing
+     afterwards stopped another binding taking the adopted name, whose uploads by name the 5F.2
+     server still files into the adopted logbook. The protection ships in commit 4 with the
+     adopter, and checking `remote_adopted_at` alone is not enough. Acceptance criterion, held
+     continuously: once remote adoption may have occurred, no other binding can acquire that name
+     through a save. Commit 4 must ensure:
+     - the successful evidence check and the protection of the selected name cannot be separated
+       by a conflicting bindings save;
+     - the protection exists BEFORE the adoption request is sent, and survives a lost response, a
+       failed marker write, or a daemon restart while the remote outcome is unresolved (a durable
+       adoption intent or reservation is one way, kept distinct from confirmed adoption);
+     - a bindings save validates the WHOLE merged candidate with `CloudName`, disabled bindings
+       included, and clearing a name back to `main` included;
+     - disabling or deleting the adopted logbook does not release its protected name.
+     Sequence tests: a competing rename; remote success with a lost response; a local-marker
+     failure; restart recovery.
    - **Station drills after deploy** (operator-run, recorded here): Home unchanged after the
      upgrade (same `forwarded_to`, worker names and queue counts as before; bindings listed under
      Home with the legacy names); the Drill archive shows every destination off, no banner, and a
