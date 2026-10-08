@@ -2212,6 +2212,43 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      `SMCLOUD_TEST_DSN` pointing to a separate disposable Postgres 16 container, including the
      cloud server/store and SM Cloud integration tests in both race and full runs — all passed.
      No deployment; commits 2–5 follow review of this slice.
+     **5F.3 commit 2, T1 marker and T6 lock (2026-10-08).** `RemoteAdoptedAt` is now written and
+     read:
+     - **Recording.** `Manager.RecordAdoption(read)` stamps `remote_adopted_at` on the binding an
+       attempt read, only while it is still enabled, on a live logbook, unadopted, and holds exactly
+       the credentials read (`RecordLogbookDestinationAdoptedWithContext`, one conditional
+       `UPDATE`). A name changed, a binding disabled, or an adoption already recorded since the read
+       stamps nothing and reports false. It runs under `bindingsMu`, like a PUT, so a rename that
+       read the row before the stamp cannot land on the adopted binding. Commit 4's adopter calls it.
+     - **Restart.** The marker joins the binding fingerprint, so recording it raises
+       `restart_required` (T1's banner).
+     - **Lock.** A descriptor flag, `AdoptionKey` (SM Cloud's `logbook`, logbook-scoped only, not on
+       the wire), names the fixed field. The bindings view lists it in a row's `locked_fields` once
+       adopted; the SPA does not offer it; the PUT refuses typing a non-blank value (even the
+       stored one) or clearing it with 409 `binding_field_locked` and writes nothing. A blank typed
+       value keeps the stored one. An unadopted binding's name still changes.
+     RED first (with stubs, so each failed on its assertion): AK1 locked_fields empty; AK2 every
+     edit accepted; AK3 not recorded; AK4 not recorded; the decoder dropped `locked_fields`; D14
+     showed the field. AK3's refusals and AK5 passed against the stub that records nothing, so
+     they rest on reversions. Reversion proofs (unique anchor, non-empty replacement, verified
+     restore): fingerprint without the marker fails AK4; the stamp outside `bindingsMu` fails AK5
+     (the adopted binding carries "elsewhere"); no credentials guard, no enabled guard, or no
+     already-adopted guard each fail their AK3 case; the view without the lock fails AK1; the PUT
+     without the check fails AK2's typed cases, and without the clear check its clear case; the
+     SPA without the filter fails D14; the registry without its scope check fails its panic test;
+     the code unmapped serves 500 (`binding_field_locked` 409 assertion).
+     Gates: gofmt (whole tree), `go vet ./...`, `go test ./...`, the cloud set against `sm-pg`
+     with `-race`, the maintainability check, the four frontend gates and `task ci:local` passed.
+     *Operator review P2 (fixed before committing):* a timed-out save keeps the operator's drafts
+     across its re-read. If that read showed the cloud name newly locked (adopted meanwhile), the
+     field disappeared but its typed value or removal mark stayed in the draft, and every later
+     save was refused `binding_field_locked` until all edits were discarded. The re-read now drops
+     a locked field's typed value and removal mark, keeps every unrelated edit, and names what it
+     dropped in the outcome toast. B25 drives it: the timed-out save, the re-read showing
+     `locked_fields`, then the next PUT carrying only the unrelated edit, accepted. RED on the
+     kept `{logbook: "renamed"}`; reversions keeping the typed value or the removal mark each fail
+     B25. The strict API rule stays (operator, 2026-10-08): any non-blank value is refused,
+     including the stored name.
    - **Station drills after deploy** (operator-run, recorded here): Home unchanged after the
      upgrade (same `forwarded_to`, worker names and queue counts as before; bindings listed under
      Home with the legacy names); the Drill archive shows every destination off, no banner, and a
