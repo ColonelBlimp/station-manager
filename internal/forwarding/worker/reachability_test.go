@@ -17,7 +17,7 @@ package worker
 //
 // FIXTURE NOTE (why real claimed rows, not literals): the demotion is the difference between
 // Debug and Info, but logAttempt's FIRST case is disp==persist_failed → Error. A row literal
-// that is not in the DB fails markUnreachable's conditional write with "not found" → Error,
+// that is not in the DB fails markIndefiniteRetry's conditional write with "not found" → Error,
 // so a demotion assertion against it would pass without ever exercising the Debug branch —
 // the two paths would agree. The level-asserting test therefore seeds and CLAIMS a real row,
 // so the disposition is persisted/rearmed and the Debug demotion is what actually sets the
@@ -51,7 +51,7 @@ func newReachWorker(t *testing.T, h *testHarness) *Worker {
 }
 
 // seedClaimedRow seeds a QSO, enqueues a stub upload and claims it, returning the row in
-// its in_progress state — so markUnreachable/markSuccess resolve as a real persisted/rearmed
+// its in_progress state — so markIndefiniteRetry/markSuccess resolve as a real persisted/rearmed
 // disposition rather than the "not found" persist_failed a bare literal would produce.
 func seedClaimedRow(t *testing.T, h *testHarness) types.QsoUpload {
 	t.Helper()

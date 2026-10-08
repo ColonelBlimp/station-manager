@@ -2195,6 +2195,23 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      - the neutral T7 text;
      - end to end against `sm-pg`: adopt, restart, push by UUID, and the old reconciler is still in
        sync.
+     **5F.3 commit 1, T5 (2026-10-08).** Added `OutcomeEndpointUnavailable`: the worker keeps the
+     row pending beyond `MaxAttempts`, reuses capped exponential backoff, and logs the distinct
+     outcome at Info. A reply recovers reachability even while the upload waits. SM Cloud's
+     identity-mode 404 classifier runs before reading the body, so a truncated error response
+     cannot turn it into a bounded transient retry. The legacy 404 remains terminal. This slice
+     prepares the classifier; the identity constructor and startup switch remain in commit 5.
+     RED first: the worker failed the row on attempt 1; plain 404 returned terminal and truncated
+     404 returned transient. GREEN: seven replies preserve pending state, increment attempts,
+     grow and cap the persisted retry delay, remain unclaimable before due, report their own
+     diagnostic, and then permit success. HTTP tests assert one identity request per Submit with
+     no name fallback; a legacy 404 guard passes. Reversion proofs: old worker fails attempt 1;
+     bounded retry fails attempt 5; false outage fails recovery; old classifier fails both 404
+     cases; broadening the classifier fails the legacy guard. Every mutation and restoration
+     verified. Gates: focused worker and SM Cloud tests with `-race`; `task ci:local` with
+     `SMCLOUD_TEST_DSN` pointing to a separate disposable Postgres 16 container, including the
+     cloud server/store and SM Cloud integration tests in both race and full runs — all passed.
+     No deployment; commits 2–5 follow review of this slice.
    - **Station drills after deploy** (operator-run, recorded here): Home unchanged after the
      upgrade (same `forwarded_to`, worker names and queue counts as before; bindings listed under
      Home with the legacy names); the Drill archive shows every destination off, no banner, and a

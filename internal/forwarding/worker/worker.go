@@ -528,12 +528,16 @@ func (w *Worker) persistOutcome(
 
 	case forwarding.OutcomeUnreachable:
 		cause = nonNilErr(res.Err, "forwarder reported unreachable outcome without an error")
-		disp = w.markUnreachable(ctx, row, cause, attempt)
+		disp = w.markIndefiniteRetry(ctx, row, cause, attempt)
+
+	case forwarding.OutcomeEndpointUnavailable:
+		cause = nonNilErr(res.Err, "forwarder reported endpoint unavailable without an error")
+		disp = w.markIndefiniteRetry(ctx, row, cause, attempt)
 
 	default:
 		// Unknown outcome from the forwarder — treat as terminal so we
 		// don't spin on it. Forwarder authors should only return the
-		// three documented outcomes. Structured warn so a misbehaving
+		// documented outcomes. Structured warn so a misbehaving
 		// forwarder (typically a bug in a new plugin) surfaces in logs
 		// rather than just in last_error text.
 		ev := w.logger.WarnWith().
@@ -551,7 +555,7 @@ func (w *Worker) persistOutcome(
 	}
 
 	// Reachability transition (L11). An unreachable outcome marks the destination
-	// down (Warn on the edge only); any other outcome — success, terminal, transient —
+	// down (Warn on the edge only); any other outcome, including endpoint unavailable,
 	// proves the host was reached and marks it recovered (Info on the edge only). This
 	// carries all default-level outage signal; the per-attempt record below is demoted
 	// to Debug for the unreachable case so an indefinite outage does not flood the log.
@@ -735,16 +739,11 @@ func (w *Worker) markTransientFromForwarder(
 	return string(forwarding.OutcomeTransient), w.markTransientRetry(ctx, row, nextAt, errText(cause))
 }
 
-// markUnreachable records a connectivity failure: the upstream host could
-// not be reached at all (the forwarder returned OutcomeUnreachable). Unlike
-// a transient outcome it does NOT consume the retry budget and is NEVER
-// promoted to `failed` — the row goes back to `pending` and is retried
-// indefinitely, with backoff saturating at MaxBackoffSec, so a QSO logged
-// during an outage uploads whenever the link returns (ADR 0038). attempts
-// still increments (useful diagnostics, and it drives backoff toward the
-// cap) but never triggers give-up. `failed` stays reserved for host-up
-// rejections, which keeps it a clean "needs operator attention" signal.
-func (w *Worker) markUnreachable(
+// markIndefiniteRetry keeps an unreachable host (ADR 0038) or unavailable
+// endpoint (ADR 0090) pending without exhausting MaxAttempts. Attempts still
+// increments for diagnostics and capped backoff; the caller preserves the
+// distinct outcome and reachability signal.
+func (w *Worker) markIndefiniteRetry(
 	ctx context.Context, row types.QsoUpload, cause error, extra *attemptFields,
 ) disposition {
 	nextAttempts := row.Attempts + 1

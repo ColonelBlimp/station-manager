@@ -127,6 +127,8 @@ type Forwarder struct {
 	token   string
 	logbook string
 	client  *http.Client
+	// identity is fixed at construction; legacy workers retain their 404 policy.
+	identity bool
 }
 
 // New constructs an SM Cloud Forwarder. url + token are required; logbook
@@ -325,6 +327,15 @@ func (f *Forwarder) Submit(
 		}
 	}
 	defer func() { _ = resp.Body.Close() }()
+
+	// The status alone is sufficient evidence, even if the error body is
+	// truncated. Never turn this into a bounded retry or fall back by name.
+	if f.identity && resp.StatusCode == http.StatusNotFound {
+		return forwarding.Result{
+			Outcome: forwarding.OutcomeEndpointUnavailable,
+			Err:     errors.New(op).WithMsg("smcloud identity endpoint is unavailable (HTTP 404)"),
+		}
+	}
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {

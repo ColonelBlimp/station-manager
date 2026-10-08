@@ -45,8 +45,13 @@ const (
 	// whenever the link returns, an hour or ten days later. Return this
 	// only when the HTTP client yielded no response; the moment a response
 	// arrives (even an error status) the host is reachable — use
-	// OutcomeTransient or OutcomeTerminal instead.
+	// OutcomeEndpointUnavailable, OutcomeTransient or OutcomeTerminal instead.
 	OutcomeUnreachable Outcome = "unreachable"
+	// OutcomeEndpointUnavailable — the host answered, but the endpoint this
+	// upload requires is unavailable (SM Cloud identity-path 404, ADR 0090).
+	// The worker keeps the row pending indefinitely with capped backoff and its
+	// own diagnostic. This proves reachability and never exhausts MaxAttempts.
+	OutcomeEndpointUnavailable Outcome = "endpoint_unavailable"
 	// OutcomeTransient — the host responded but cannot accept right now:
 	// rate limits (429), request timeout (408), 5xx, or a mid-transfer
 	// transport glitch after headers arrived. Worker re-queues per the

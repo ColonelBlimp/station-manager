@@ -124,15 +124,22 @@ successful local transaction and returned UUID are.
 3. [`internal/forwarding/worker/worker.go`](../internal/forwarding/worker/worker.go) claims a bounded
    batch, reloads the QSO, and calls the concrete forwarder. Network, authentication, pacing, and
    response interpretation belong to that destination package.
-4. The worker persists success, retry, unreachable, or terminal failure. Where a destination stamps
-   an ADIF upload field, the upload success and QSO stamp commit together; row-mirror synchronization
-   is triggered only after that commit.
+4. The worker persists success, retry, unreachable, endpoint unavailable, or terminal failure.
+   Where a destination stamps an ADIF upload field, the upload success and QSO stamp commit
+   together; row-mirror synchronization is triggered only after that commit.
 5. Terminal transitions publish `forward.succeeded` or `forward.failed`. These events update clients,
    while the upload row remains the durable explanation of the outcome.
 
 Forwarding is asynchronous and opt-in. An unavailable upstream leaves local logging usable and the
 queue retryable; it does not roll back a committed QSO. The optional SM Cloud reconciler compares
 manifests to repair replica drift, but it does not sit on the local QSO commit path.
+
+An `endpoint_unavailable` result keeps the upload pending indefinitely with capped exponential
+backoff and its own attempt diagnostic ([ADR 0090](decisions/0090-home-adopts-sm-cloud-identity-in-the-background-on-evidence.md)).
+SM Cloud uses it for an identity-path 404, including an unreadable error body; the name-only path's
+404 remains terminal. Unlike `unreachable`, this result proves the server answered. It neither
+exhausts the retry budget nor falls back to uploading by name. Identity worker construction at
+startup remains pending in W-0021 5F.3.
 
 Nearest confusable outcome: “QSO stored” does not mean “uploaded,” and an accepted upstream request
 does not mean “complete” until the local outcome write succeeds.
