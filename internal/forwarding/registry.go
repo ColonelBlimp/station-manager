@@ -1,7 +1,9 @@
 package forwarding
 
 import (
+	"encoding/json"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"sync"
@@ -30,6 +32,7 @@ var (
 	rowMirrorTypes      = map[string]struct{}{}
 	noBulkBackfillTypes = map[string]struct{}{}
 	buildKeys           = map[string]func() bool{}
+	adoptionNames       = map[string]AdoptionName{}
 )
 
 // WorkerDefaults carries a forwarder type's preferred queue-drain cadence.
@@ -658,4 +661,39 @@ func ForwarderTypes() []TypeDescriptor {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Type < out[j].Type })
 	return out
+}
+
+// AdoptionName normalizes a binding's stored logbook-scoped credentials to the
+// remote name its adoption key selects, exactly as the type uploads under it,
+// or reports that the name cannot be read.
+type AdoptionName func(credentials json.RawMessage) (string, error)
+
+// RegisterAdoptionName records how typeName's adoption key normalizes (ADR
+// 0091): a bindings save compares every binding's name with the names that
+// reservations and adoptions protect, so it must compare them as the type
+// uploads them. From the forwarder package's init(), after
+// RegisterForwarderType. Panics on a nil function, a duplicate, or a type
+// whose descriptor declares no adoption key — all binary bugs.
+func RegisterAdoptionName(typeName string, fn AdoptionName) {
+	if fn == nil {
+		panic("forwarding.RegisterAdoptionName: nil function for " + typeName)
+	}
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	d, ok := descriptors[typeName]
+	if !ok || !slices.ContainsFunc(d.CredentialFields, func(f CredentialField) bool { return f.AdoptionKey }) {
+		panic("forwarding.RegisterAdoptionName: " + typeName + " declares no adoption key")
+	}
+	if _, dup := adoptionNames[typeName]; dup {
+		panic("forwarding.RegisterAdoptionName: already registered: " + typeName)
+	}
+	adoptionNames[typeName] = fn
+}
+
+// AdoptionNameFor returns typeName's registered normalization, or false.
+func AdoptionNameFor(typeName string) (AdoptionName, bool) {
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	fn, ok := adoptionNames[typeName]
+	return fn, ok
 }

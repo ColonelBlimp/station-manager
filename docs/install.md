@@ -442,7 +442,11 @@ historical: settings saved since then are not in it.
 `smd db-downgrade` migrates the QSO database's log schema DOWN to the named
 version on the config's own database (`--config <path>` for another file),
 prints the transition, and refuses a target at or above the current version
-— it never migrates up. Each down step drops what its migration added, so
+— it never migrates up. It also refuses a target below log schema 16 while
+any SM Cloud binding holds an adoption reservation or a recorded adoption
+(ADR 0091). That protects a cloud name the server may already have adopted;
+an older build would not enforce the protection, and releasing it is a
+manual recovery step. Each down step drops what its migration added, so
 run it only with the daemon stopped and a copy of the database in hand; QSO,
 upload-queue and history rows are kept by every down migration shipped so
 far. The reference and evidence databases are station-global and are never

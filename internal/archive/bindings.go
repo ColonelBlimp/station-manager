@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -49,6 +50,8 @@ type BindingsDB interface {
 	ForwarderQueueCountsWithContext(ctx context.Context) (map[string]sqlite.ForwarderQueueCounts, error)
 	UpsertLogbookDestinationsWithContext(ctx context.Context, rows []sqlite.DestinationUpsert) error
 	RecordLogbookDestinationAdoptedWithContext(ctx context.Context, forwarderName string, credentials json.RawMessage) (bool, error)
+	ReserveLogbookDestinationAdoptionWithContext(ctx context.Context, forwarderName string, logbookID int64, credentials json.RawMessage) (bool, error)
+	ListAdoptionClaimsWithContext(ctx context.Context) ([]types.LogbookDestination, error)
 }
 
 // smcloudIdentityReason is the ADR 0082 part 7 remnant of the interim gate:
@@ -120,7 +123,7 @@ func BindingsView(ctx context.Context, db BindingsDB, cfg config.Config, entry *
 			if b, ok := byKey[fmt.Sprintf("%d/%s", lb.ID, td.Type)]; ok {
 				row.Bound, row.Enabled, row.ForwarderName = true, b.Enabled, b.ForwarderName
 				row.CredentialsSet = keysSet(b.Credentials)
-				if b.RemoteAdoptedAt != nil {
+				if adoptionClaimed(b) {
 					row.LockedFields = adoptionKeys(td)
 				}
 				c := counts[b.ForwarderName]
@@ -220,10 +223,10 @@ func applyBindings(ctx context.Context, log *logging.Service, db BindingsDB, cfg
 					return types.ArchiveBindingsView{}, &RequestError{Code: "binding_not_enableable", Message: fmt.Sprintf("%s for logbook %q: %s", td.DisplayName, lb.Name, reason)}
 				}
 			}
-			if existing[key].RemoteAdoptedAt != nil {
+			if adoptionClaimed(existing[key]) {
 				if k := lockedKeyTouched(td, e); k != "" {
 					return types.ArchiveBindingsView{}, &RequestError{Code: "binding_field_locked", Message: fmt.Sprintf(
-						"%s for logbook %q: %q is fixed since this binding was adopted and cannot be changed or removed", td.DisplayName, lb.Name, k)}
+						"%s for logbook %q: %q is fixed since this binding was reserved for adoption and cannot be changed or removed", td.DisplayName, lb.Name, k)}
 				}
 			}
 			merged, err := mergeBindingCredentials(td, existing[key].Credentials, e.Credentials, e.CredentialsClear, e.Enabled, lb.Callsign)
@@ -246,6 +249,9 @@ func applyBindings(ctx context.Context, log *logging.Service, db BindingsDB, cfg
 			}
 			rows = append(rows, sqlite.DestinationUpsert{LogbookID: e.LogbookID, Destination: d.Type, ForwarderName: name, Enabled: e.Enabled, Credentials: merged})
 		}
+	}
+	if err := refuseProtectedNames(ctx, db, bindings, rows, lbByID); err != nil {
+		return types.ArchiveBindingsView{}, err
 	}
 	if err := db.UpsertLogbookDestinationsWithContext(ctx, rows); err != nil {
 		return types.ArchiveBindingsView{}, err
@@ -571,4 +577,164 @@ func adoptionKeys(td forwarding.TypeDescriptor) []string {
 		}
 	}
 	return keys
+}
+
+// adoptionClaimed reports a binding reserved for, or recorded with, an
+// adoption: from then on its adoption key is fixed (ADR 0090 T6, ADR 0091).
+func adoptionClaimed(b types.LogbookDestination) bool {
+	return b.AdoptionReservedAt != nil || b.RemoteAdoptedAt != nil
+}
+
+// refuseProtectedNames checks the WHOLE candidate a PUT would leave — the
+// stored bindings of live logbooks with the PUT's rows laid over them, enabled
+// or not — against every name an adoption reservation or a recorded adoption
+// protects (ADR 0091). Protected names come from every claimed binding,
+// disabled ones and deleted logbooks' included, so neither disabling nor
+// deleting releases one. Names compare as the type uploads under them (a
+// cleared name is the type's default). Only the claiming binding may hold its
+// name. A candidate whose stored name cannot be read is refused: it may share
+// one. The refusal names the logbook and the field, never the value.
+func refuseProtectedNames(ctx context.Context, db BindingsDB, stored []types.LogbookDestination, rows []sqlite.DestinationUpsert, lbByID map[int64]types.Logbook) error {
+	claims, err := db.ListAdoptionClaimsWithContext(ctx)
+	if err != nil || len(claims) == 0 {
+		return err
+	}
+	protected := map[string]map[string]string{} // type → name → claiming binding
+	for _, c := range claims {
+		normalize, ok := forwarding.AdoptionNameFor(c.Destination)
+		if !ok {
+			continue
+		}
+		name, err := normalize(c.Credentials)
+		if err != nil {
+			return fmt.Errorf("binding %s holds an adoption claim whose name cannot be read: %w", c.ForwarderName, err)
+		}
+		if protected[c.Destination] == nil {
+			protected[c.Destination] = map[string]string{}
+		}
+		protected[c.Destination][name] = c.ForwarderName
+	}
+	for _, c := range candidateBindings(stored, rows) {
+		names := protected[c.Destination]
+		if len(names) == 0 {
+			continue
+		}
+		td, _ := forwarding.DescriptorFor(c.Destination)
+		normalize, _ := forwarding.AdoptionNameFor(c.Destination)
+		name, err := normalize(c.Credentials)
+		if err != nil {
+			return &RequestError{Code: "binding_credentials_corrupt", Message: fmt.Sprintf(
+				"%s for logbook %q: the stored credentials cannot be read, so it may use a name an adoption reserved; fix the archive file before editing bindings", td.DisplayName, lbByID[c.LogbookID].Name)}
+		}
+		if owner, ok := names[name]; ok && owner != c.ForwarderName {
+			return &RequestError{Code: "binding_name_reserved", Message: fmt.Sprintf(
+				"%s for logbook %q: its %s is reserved by another logbook's adoption and cannot be used by a second binding; choose another",
+				td.DisplayName, lbByID[c.LogbookID].Name, adoptionKeyLabel(td))}
+		}
+	}
+	return nil
+}
+
+// candidateBindings is what the bindings would be after the write: each stored
+// binding with its PUT row's credentials, then the PUT's new bindings.
+func candidateBindings(stored []types.LogbookDestination, rows []sqlite.DestinationUpsert) []types.LogbookDestination {
+	edited := make(map[string]sqlite.DestinationUpsert, len(rows))
+	for _, r := range rows {
+		edited[r.ForwarderName] = r
+	}
+	out := make([]types.LogbookDestination, 0, len(stored)+len(rows))
+	for _, b := range stored {
+		if r, ok := edited[b.ForwarderName]; ok {
+			b.Credentials = r.Credentials
+			delete(edited, b.ForwarderName)
+		}
+		out = append(out, b)
+	}
+	for _, r := range rows {
+		if _, isNew := edited[r.ForwarderName]; isNew {
+			out = append(out, types.LogbookDestination{LogbookID: r.LogbookID, Destination: r.Destination, ForwarderName: r.ForwarderName, Credentials: r.Credentials})
+		}
+	}
+	return out
+}
+
+func adoptionKeyLabel(td forwarding.TypeDescriptor) string {
+	for _, f := range td.CredentialFields {
+		if f.AdoptionKey {
+			return f.Label
+		}
+	}
+	return "name"
+}
+
+// ReserveOutcome is what ReserveAdoption did.
+type ReserveOutcome string
+
+const (
+	// ReserveReserved: the binding's name is reserved, durably, and the
+	// adoption request may be sent.
+	ReserveReserved ReserveOutcome = "reserved"
+	// ReserveUnsafe: the judge refused; nothing was written.
+	ReserveUnsafe ReserveOutcome = "unsafe"
+	// ReserveChanged: the binding is no longer the one the attempt read; the
+	// judge did not run and nothing was written.
+	ReserveChanged ReserveOutcome = "changed"
+)
+
+// ReserveAdoption is the step between an adoption attempt's unlocked reads and
+// its request (ADR 0091). Under bindingsMu, as a PUT, it checks that the
+// binding is still the one the attempt read (same name, logbook, credentials;
+// enabled and unadopted), runs judge over the local evidence, and on a safe
+// verdict ("") reserves the binding's name. No save can come between the
+// judgement and the reservation. A reservation is committed before this
+// returns; any error means nothing may be sent. Reserving an already reserved
+// binding keeps its first reservation: a retry judges again (ruling R2).
+func (m *Manager) ReserveAdoption(ctx context.Context, read types.LogbookDestination, judge func(context.Context) (string, error)) (ReserveOutcome, string, error) {
+	m.bindingsMu.Lock()
+	defer m.bindingsMu.Unlock()
+	m.mu.Lock()
+	db := m.activeDB
+	m.mu.Unlock()
+	if db == nil {
+		return "", "", &RequestError{Code: "bindings_unavailable", Message: "this daemon has no active archive database wired for bindings"}
+	}
+	td, ok := forwarding.DescriptorFor(read.Destination)
+	if !ok || len(adoptionKeys(td)) == 0 {
+		return "", "", fmt.Errorf("destination %q has no remote adoption", read.Destination)
+	}
+	bindings, err := db.ListLogbookDestinationsWithContext(ctx)
+	if err != nil {
+		return "", "", err
+	}
+	if !stillAsRead(bindings, read) {
+		return ReserveChanged, "", nil
+	}
+	reason, err := judge(ctx)
+	if err != nil {
+		return "", "", err
+	}
+	if reason != "" {
+		return ReserveUnsafe, reason, nil
+	}
+	reserved, err := db.ReserveLogbookDestinationAdoptionWithContext(ctx, read.ForwarderName, read.LogbookID, read.Credentials)
+	if err != nil {
+		return "", "", err
+	}
+	if !reserved {
+		return ReserveChanged, "", nil
+	}
+	return ReserveReserved, "", nil
+}
+
+// stillAsRead reports whether the binding read is unchanged in bindings and may
+// still be reserved: same logbook, destination and credentials, enabled and not
+// yet adopted.
+func stillAsRead(bindings []types.LogbookDestination, read types.LogbookDestination) bool {
+	for _, b := range bindings {
+		if b.ForwarderName == read.ForwarderName {
+			return b.LogbookID == read.LogbookID && b.Destination == read.Destination && b.Enabled &&
+				b.RemoteAdoptedAt == nil && bytes.Equal(b.Credentials, read.Credentials)
+		}
+	}
+	return false
 }

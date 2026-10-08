@@ -78,13 +78,16 @@ func (s *Service) getDsn() (string, error) {
 		fmt.Sprintf("busy_timeout(%d)", busyTimeoutMS),
 		"journal_mode(WAL)",
 		"foreign_keys(on)",
-		// synchronous=NORMAL is safe under WAL (the WAL itself is
-		// sync'd on commit; the main DB only at checkpoint) and is
-		// the SQLite-recommended default for WAL mode. Trades a
-		// small risk of losing the LAST committed transaction on a
-		// power loss against a substantial throughput improvement —
-		// acceptable for a personal logging app where the operator
-		// can re-log a single QSO if power dies mid-commit.
+		// synchronous=NORMAL under WAL syncs the WAL only at a
+		// checkpoint, not at each commit, so the database stays
+		// consistent but a committed transaction may roll back after
+		// a power failure or an OS crash (sqlite.org, PRAGMA
+		// synchronous). It is SQLite's recommended setting for WAL,
+		// and the throughput gain is worth that window for ordinary
+		// writes in a personal logging app: the operator can re-log a
+		// QSO lost that way. A write whose loss is not recoverable
+		// that way commits on a connection set to FULL (the SM Cloud
+		// adoption reservation, ADR 0091).
 		"synchronous(normal)",
 	}
 

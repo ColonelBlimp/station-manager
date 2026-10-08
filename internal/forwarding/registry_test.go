@@ -2,6 +2,7 @@ package forwarding
 
 import (
 	"context"
+	"encoding/json"
 	stderr "errors"
 	"strings"
 	"testing"
@@ -584,5 +585,46 @@ func TestRegisterForwarderType_DefaultsTo(t *testing.T) {
 			}()
 			RegisterForwarderType("defaults-bad-"+strings.ReplaceAll(name, " ", "-"), "X", []Action{action.Insert}, []CredentialField{field})
 		}()
+	}
+}
+
+// ADR 0091: a type with an adoption key registers how its adopted name
+// normalizes, so a bindings save compares names as the type uploads them.
+func TestRegisterAdoptionName(t *testing.T) {
+	RegisterForwarderType("adoptname-ok", "X", []Action{action.Insert},
+		[]CredentialField{{Key: "name", Label: "N", Kind: "text", Scope: ScopeLogbook, AdoptionKey: true}})
+	RegisterAdoptionName("adoptname-ok", func(raw json.RawMessage) (string, error) { return "n:" + string(raw), nil })
+	fn, ok := AdoptionNameFor("adoptname-ok")
+	if !ok {
+		t.Fatal("AdoptionNameFor: not registered")
+	}
+	if got, err := fn(json.RawMessage(`x`)); err != nil || got != "n:x" {
+		t.Fatalf("fn = %q, %v", got, err)
+	}
+	if _, ok := AdoptionNameFor("adoptname-none"); ok {
+		t.Fatal("AdoptionNameFor reported an unregistered type")
+	}
+	RegisterForwarderType("adoptname-nokey", "X", []Action{action.Insert},
+		[]CredentialField{{Key: "name", Label: "N", Kind: "text", Scope: ScopeLogbook}})
+	for name, fn := range map[string]func(){
+		"a nil function": func() { RegisterAdoptionName("adoptname-ok2", nil) },
+		"a duplicate": func() {
+			RegisterAdoptionName("adoptname-ok", func(json.RawMessage) (string, error) { return "", nil })
+		},
+		"a type without an adoption key": func() {
+			RegisterAdoptionName("adoptname-nokey", func(json.RawMessage) (string, error) { return "", nil })
+		},
+		"an unregistered type": func() {
+			RegisterAdoptionName("adoptname-unknown", func(json.RawMessage) (string, error) { return "", nil })
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("%s: expected panic", name)
+				}
+			}()
+			fn()
+		})
 	}
 }

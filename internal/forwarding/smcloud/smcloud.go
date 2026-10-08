@@ -113,6 +113,8 @@ func init() {
 			{Key: "logbook", Label: "Cloud logbook name", Kind: "text", Clearable: true, Scope: forwarding.ScopeLogbook, AdoptionKey: true,
 				Help: "Cloud-side logbook the QSOs land in (created on first push). Leave empty for \"main\"."},
 		})
+	// A bindings save compares cloud names as New uploads under them (ADR 0091).
+	forwarding.RegisterAdoptionName(Type, CloudName)
 }
 
 // credentials is the type-specific shape of ForwarderConfig.Credentials.

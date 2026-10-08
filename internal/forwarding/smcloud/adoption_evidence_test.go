@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
+	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
@@ -210,6 +211,12 @@ func TestCloudName_MatchesTheForwardersNormalization(t *testing.T) {
 		got, err := CloudName(json.RawMessage(creds))
 		if err != nil || got != want {
 			t.Errorf("CloudName(%s) = %q, %v; want %q", creds, got, err, want)
+		}
+		// A bindings save compares protected names through the registry (ADR 0091).
+		if fn, ok := forwarding.AdoptionNameFor(Type); !ok {
+			t.Errorf("no adoption name registered for %s", Type)
+		} else if got, err := fn(json.RawMessage(creds)); err != nil || got != want {
+			t.Errorf("AdoptionNameFor(%s)(%s) = %q, %v; want %q", Type, creds, got, err, want)
 		}
 		// The forwarder itself must agree: it is what uploads under the name.
 		full := map[string]any{}

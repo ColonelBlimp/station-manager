@@ -58,8 +58,36 @@ func (s *Service) DowngradeLogSchemaTo(target uint) (from uint, err error) {
 	if target >= current {
 		return current, errors.New(op).WithMsgf("target version %d is not below the current version %d (down only)", target, current)
 	}
+	if err := s.refuseErasingAdoptionClaims(op, current, target); err != nil {
+		return current, err
+	}
 	if err := m.Migrate(target); err != nil {
 		return current, errors.New(op).WithErr(err).WithMsgf("migrate log schema %d → %d", current, target)
 	}
 	return current, nil
+}
+
+// adoptionReservationVersion is the schema that added adoption_reserved_at.
+const adoptionReservationVersion = 16
+
+// refuseErasingAdoptionClaims refuses a downgrade below 16 while any binding
+// holds an adoption reservation or a recorded adoption (ADR 0091): 0016's down
+// step drops the reservation, and an older build would then let another binding
+// take a cloud name the server may already have adopted. The check runs here,
+// before any migration, because a down step that failed inside the migration
+// would leave the schema dirty. Manual recovery owns any release.
+func (s *Service) refuseErasingAdoptionClaims(op errors.Op, current, target uint) error {
+	if current < adoptionReservationVersion || target >= adoptionReservationVersion {
+		return nil
+	}
+	var n int
+	if err := s.handle.QueryRow(`SELECT COUNT(*) FROM logbook_destination
+		WHERE adoption_reserved_at IS NOT NULL OR remote_adopted_at IS NOT NULL`).Scan(&n); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("check adoption reservations")
+	}
+	if n > 0 {
+		return errors.New(op).WithMsgf("%d binding(s) hold an SM Cloud adoption reservation or adoption; a downgrade below schema %d would erase that protection",
+			n, adoptionReservationVersion)
+	}
+	return nil
 }
