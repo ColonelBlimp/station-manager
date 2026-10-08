@@ -2314,6 +2314,183 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      - disabling or deleting the adopted logbook does not release its protected name.
      Sequence tests: a competing rename; remote success with a lost response; a local-marker
      failure; restart recovery.
+     *Commit 4 design (proposed 2026-10-08, awaiting rulings R1–R4; no code yet).* Facts that shape
+     it: binding rows are never hard-deleted (the PUT upserts; a logbook delete is a soft delete,
+     so the `ON DELETE CASCADE` never fires), but `ListLogbookDestinationsWithContext` hides
+     deleted logbooks' rows. The default logbook cannot be deleted, but the default can be moved
+     and the old one then deleted. The server's adopt is idempotent for the same mapping and
+     commits nothing on a 409; a mapping, once set, is never cleared.
+     - **The reservation.** A new column, `logbook_destination.adoption_reserved_at` (migration
+       0016, `ADD COLUMN`), distinct from `remote_adopted_at`. The protected name is the
+       `CloudName` of the row's credentials, which the T6 lock fixes from the reservation onward
+       (`locked_fields` lists the key once reserved OR adopted).
+     - **Protected names** are read from EVERY SM Cloud row that is reserved or adopted, deleted
+       logbooks included and enabled or not, so disabling or deleting never releases a name.
+     - **Save validation.** `applyBindings` checks the whole merged candidate: every other SM Cloud
+       binding (disabled included, unreadable refused, a cleared name read as `main`) must not
+       normalize to a protected name; 409 `binding_name_reserved`, nothing written. The
+       normalization reaches the generic layer as a descriptor hook beside `AdoptionKey`
+       (`smcloud.CloudName`).
+     - **One attempt** (`d.bindingsAtStart` supplies the running routes):
+       1. Gate: Home active; its default SM Cloud binding enabled, unadopted, with a complete
+          station account.
+       2. `GET /v1/version` (10 s). No `identity_protocol`: wait for the next start.
+       3. Read the cloud manifest under the name, OUTSIDE the lock (network).
+       4. Under `bindingsMu`: read the local evidence, judge it, and if safe write the reservation
+          (conditional on the same credentials, enabled, live, as `RecordAdoption`). The judgement
+          and the protection cannot be separated by a save.
+       5. `POST /v1/archives/adopt` (10 s).
+       6. On 200, `RecordAdoption` (already conditional) under `bindingsMu`, after checking the
+          station account is the one the attempt used.
+       Outcomes: unreachable, 5xx or a timeout retries the whole attempt hourly; a failed marker
+       write retries hourly (the retry's adopt returns 200, unchanged, and stamps); 401, an
+       unreadable answer, and each 409 code wait for a restart or an operator fix. A restart with
+       a reservation and no marker runs the same attempt.
+     - **Status (T4)** is held in memory by the adopter, served on the bindings view of Home's
+       default row, shown on the SM Cloud card; each transition logged once.
+     *Questions for the operator:*
+     - (R1) Is the reservation ever released automatically? Proposed: never. A 409 does prove our
+       mapping is not in effect (mappings are never cleared), so releasing on 409 would be sound,
+       but it adds a path for a rare case; "manual recovery" already applies there.
+     - (R2) With a reservation already held, does the retry re-judge the evidence before sending
+       again? Proposed: yes. If it now refuses, nothing is sent, the reservation stays, and the
+       status says unsafe; the name-only wire keeps working either way.
+     - (R3) A station account change between the request and the marker: proposed, the completion
+       is discarded and the next attempt runs under the new account (the reservation stays).
+     - (R4) Split commit 4 in two: 4a the reservation, the save validation and the lock extension
+       (local only, with the competing-rename sequence); 4b the adopter, its status, and the
+       lost-response, marker-failure and restart sequences. Proposed: yes.
+     *Rulings (operator, 2026-10-08), recorded with the alternatives in
+     [ADR 0091](../decisions/0091-sm-cloud-adoption-reserves-its-cloud-name-durably-before-sending.md):*
+     - (R1) Never released automatically, after a conflict, cancellation, failed write or uncertain
+       outcome; manual recovery owns any release. The down migration refuses to erase reservations.
+       The reservation is archive-local, survives account changes, and is not proof that any server
+       accepted adoption.
+     - (R2) Retries judge again. An unsafe retry sends nothing and keeps the reservation, and the
+       status says "adoption confirmation blocked", not "not adopted".
+     - (R3) A stale completion is discarded, but comparing the account and then calling
+       `RecordAdoption` is not enough: account saves take the config mutex
+       (`internal/config/config.go`, `Service.Update`), which `bindingsMu` does not exclude. The
+       comparison and the marker write coordinate with account saves. A changed account needs a fresh
+       version check, manifest and adoption; the reservation stays.
+     - (R4) Split: 4a is the durable protection and its enforcement; 4b is the remote side effects
+       and recovery.
+     Also required:
+     - The attempt pins its archive UUID, binding and logbook, normalized name and account; after
+       the unlocked manifest read, it checks they still match before judging and reserving. A moved
+       default never redirects an attempt or its status.
+     - A reservation is durable before sending; a failed or uncertain write sends nothing.
+       Reservations are enforced from the first save after start, disabled and deleted logbooks'
+       included. A reservation alone neither selects identity uploads nor claims "adopted, restart
+       required".
+     - Before 4b, settle which account a confirmation belongs to: `remote_adopted_at` alone cannot
+       tell account A from account B, and B must not inherit A's confirmation and create an identity
+       archive that bypasses adopting B's legacy data. ADR 0091 lists the options (OPEN).
+     4a may start failing tests.
+     **5F.3 commit 4a, the durable name reservation (committed 2026-10-08, `5b9ccb2e`; Codex
+     clean).** Migration 0016 adds `logbook_destination.adoption_reserved_at`.
+     - **Reserving.** `Manager.ReserveAdoption(read, judge)`, under `bindingsMu`, first pins the
+       binding the attempt read (same name, logbook, destination and credentials; enabled,
+       unadopted). A binding changed since the read is `changed`, and the judge does not run. It then
+       runs the judge (4b supplies the T3 judgement over the local evidence) and, on a safe verdict,
+       writes the reservation (`ReserveLogbookDestinationAdoptionWithContext`, one conditional,
+       committed `UPDATE` that keeps the first timestamp). An unsafe verdict, a judge error or a
+       failed write reserves nothing; an error means nothing may be sent.
+     - **Not adoption.** `remote_adopted_at` is untouched and the restart fingerprint ignores the
+       reservation, so no `restart_required` and no wire change.
+     - **The lock.** `locked_fields` and `binding_field_locked` now apply from the reservation.
+     - **Protection.** Every bindings PUT checks the whole candidate (stored live bindings with the
+       PUT's rows laid over them, enabled or not) against every name a reserved or adopted binding
+       protects. `ListAdoptionClaimsWithContext` reads those claims, disabled bindings and
+       deleted logbooks' included. Names are normalized by the type's registered
+       `forwarding.AdoptionName` (SM Cloud registers `CloudName`: spaces trimmed, blank or cleared
+       = `main`). Another binding on a protected name: 409 `binding_name_reserved`, naming the
+       logbook and field, never the value. Another binding whose stored name cannot be read:
+       `binding_credentials_corrupt`. A protected name that cannot be read: a server error. Nothing
+       is written on any refusal.
+     - **Downgrade.** `DowngradeLogSchemaTo` refuses any target below 16 while a reservation or
+       an adoption exists. It checks before any down step runs, because a refusal raised inside a
+       step leaves the schema dirty. The 0016 down step drops the column.
+     RED first against compiling stubs (with the column migrated, so every test reached its
+     assertion): RS1–RS5, the sqlite reserve and claims tests, the downgrade refusal, the
+     registry test, the SM Cloud registration and the API mapping each failed on their assertion.
+     The 0016 up and plain-down tests passed once the migration existed. They were not RED
+     separately; the rest of the suite, at head 16, depends on them.
+     Reversion proofs (unique anchor, non-empty compiling replacement, verified restore):
+     - **View and lock:** the view locking adopted bindings only fails RS3 on `locked_fields`;
+       the PUT locking adopted only fails RS3's typed cases.
+     - **The save check:** dropping it fails RS4's refusals. Claims of live logbooks only fail
+       RS4's deleted-logbook case and the claims test; claims of reservations only fail the
+       adoption-protected case. Raw names, without normalization, fail the padding and `main`
+       cases. Not checking new bindings fails the new-binding case. Not laying the PUT's rows
+       over the stored ones fails the rename cases. Not exempting the owner fails "other names
+       save".
+     - **Reserving:** no pin check fails RS1 (the judge ran on a changed binding); a pin
+       ignoring the logbook fails RS1 the same way; ignoring the verdict fails "unsafe"; a
+       swallowed write error fails "a failed write"; reserving outside `bindingsMu` fails RS5
+       (the reserved name given to a second binding); a fingerprint counting the reservation
+       fails RS2.
+     - **SQL:** overwriting the reservation time fails "reserve again". Dropping the enabled,
+       adopted, credentials, logbook or live-logbook guard each fails its sqlite case. A list
+       that drops the column fails RS1.
+     - **Downgrade:** without the check, every refusal case fails; counting reservations only
+       fails the adopted case; checking only the target 15 fails at 13.
+     - **Elsewhere:** the code unmapped serves 500; the registry accepting a type without an
+       adoption key fails its panic case; SM Cloud not registering fails `TestCloudName`.
+     The two unreadable-name cases were written after the code: their reversions (an unreadable
+     candidate passed, an unreadable claim skipped) each fail their case. Not separately provable:
+     a reserve write that matches nothing under the lock (`changed`), which is unreachable after the
+     pin check. Schema head assertions moved from 15 to 16 in the sqlite, API version and
+     `db-downgrade` tests.
+     Gates: gofmt (whole tree), `go vet ./...`, `go test ./...`, the cloud set, archive and
+     sqlite with `-race` against `sm-pg` (stopped afterwards), maintainability (0 regressions),
+     and `task ci:local` all passed. `api-endpoints.md` and `install.md` (the `db-downgrade`
+     refusal) change with the code.
+     *Operator review of 4a (2026-10-08): hold for one P1.* The reservation was committed through
+     the ordinary transaction path. The archive's connections run WAL with `synchronous=NORMAL`
+     (`internal/database/sqlite/internal.go`), under which SQLite allows a committed transaction
+     to disappear after a power failure or an OS crash. That permits this sequence: the
+     reservation returns success, the remote adoption succeeds, power fails, the reservation is
+     gone, and a competing rename is accepted after the restart. Fix: commit the reservation on a
+     pinned connection set to `synchronous=FULL` before its transaction begins, read the setting
+     back inside it, and let any failure prevent sending. Tests cover the connection setting and
+     the propagation of failures; a commit-and-reopen test cannot prove durability across a power
+     loss. Also correct the `internal.go` comment that claimed NORMAL syncs the WAL at every
+     commit. No other actionable 4a issue; the downgrade preflight and the commit split are sound.
+     *Fixed:* `ReserveLogbookDestinationAdoptionWithContext` pins one connection and sets it to
+     `synchronous=FULL` before beginning its transaction. It reads `PRAGMA synchronous` back inside
+     the transaction and refuses anything but FULL (2), and sets the connection back to NORMAL
+     after the commit. Any failure before the commit reserves nothing and returns an error, which
+     `ReserveAdoption` passes on, so nothing is sent. The `internal.go` comment now says what
+     NORMAL guarantees. RED first: an observing seam (`setSynchronous`) saw no FULL setting, and a
+     failed or ineffective FULL setting still reserved. GREEN: FULL is set with nothing yet reserved
+     on that connection, the readback is 2, then NORMAL after the commit with the reservation
+     visible; a failed FULL setting and a FULL setting that did not take each reserve nothing.
+     Reversions:
+     - No restore fails the call sequence.
+     - No readback guard fails "did not take".
+     - Never setting FULL is refused by the readback guard ("synchronous=1, not FULL").
+     Not cleanly provable: a transaction on the pool instead of the pinned connection deadlocks on
+     the test pool's single connection rather than failing an assertion. The readback runs inside
+     the transaction's own connection, so the guard refuses any connection that is not FULL.
+     Ignoring a failed FULL setting is masked by the same guard. Power-loss durability itself is
+     not testable here. Gates rerun and passed: gofmt, vet, `go test ./...`, sqlite and archive
+     with `-race`, the cloud set against `sm-pg` (stopped afterwards), maintainability (0
+     regressions), and `task ci:local`.
+     *Operator re-review (2026-10-08): P1 closed, no remaining actionable issue; committed as
+     `5b9ccb2e` (code, tests, `api-endpoints.md`, `install.md`).* Next: 4b.
+     *4b account ruling (operator, 2026-10-08), recorded in ADR 0091:*
+     - **The fingerprint:** a local fingerprint of the confirming account, HMAC-SHA256 keyed by the
+       token, over a versioned, unambiguous encoding of the archive UUID and the normalized URL.
+       The UUID is public, so it is not the key. The storage cost of a verifier derived from the
+       token is accepted.
+     - **Storage:** stored with the confirmation in one write, coordinated with account saves. A
+       missing or mismatched fingerprint needs a fresh confirmation.
+     - **No fallback:** an adopted binding whose account changes keeps uploads queued until it is
+       confirmed again, with no name-only fallback (ADR 0088). This corrects ADR 0091's earlier
+       proposal.
+     - **4b tests:** an account replacement, a token rotation, an offline `config.json` edit, and
+       an account save racing with confirmation.
    - **Station drills after deploy** (operator-run, recorded here): Home unchanged after the
      upgrade (same `forwarded_to`, worker names and queue counts as before; bindings listed under
      Home with the legacy names); the Drill archive shows every destination off, no banner, and a
