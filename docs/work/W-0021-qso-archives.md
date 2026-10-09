@@ -3244,6 +3244,11 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      Approved 2026-10-09; committed `38425535` (test fix) and `393faf51` (5b), not pushed. Codex
      reviews of both: no actionable findings; closed, files removed. 5F.3 is built; the
      deployment order stands (the fixed cloud server first), and the daemon hold remains.
+     **Cloud server deployed (2026-10-09, operator).** `GET /v1/version` on the smcloud host
+     answers `{"identity_protocol":1,"version":"2.0.0-alpha.3-220-g95d4e331"}`, a build that
+     contains `f4298a5e`; before it, `...-195-gefae7b06` (5F.2). No schema change (still 8).
+     Still to verify passively: the station's name-wire uploads keep succeeding. The daemon hold
+     remains until the operator lifts it.
    - **Station drills after deploy** (operator-run, recorded here): Home unchanged after the
      upgrade (same `forwarded_to`, worker names and queue counts as before; bindings listed under
      Home with the legacy names); the Drill archive shows every destination off, no banner, and a
