@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ColonelBlimp/station-manager/internal/cloud/store"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
@@ -125,11 +126,13 @@ func validateAdopt(req AdoptRequest) string {
 }
 
 // displayValuesInvalid checks the display values' lengths (empty keeps the stored value).
+// The labels count code points, as the client's limit and the columns' CHECKs
+// do; they are stored exactly as sent. The callsign keeps its byte limit.
 func displayValuesInvalid(archiveLabel, logbookLabel, callsign string) string {
 	switch {
-	case len(archiveLabel) > 64:
+	case utf8.RuneCountInString(archiveLabel) > 64:
 		return "archive_label must be at most 64 characters"
-	case len(logbookLabel) > 64:
+	case utf8.RuneCountInString(logbookLabel) > 64:
 		return "the logbook label must be at most 64 characters"
 	case len(callsign) > 32:
 		return "callsign must be at most 32 characters"

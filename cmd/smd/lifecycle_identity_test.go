@@ -404,11 +404,21 @@ func apiCall(t *testing.T, d *daemon, method, path string) (int, []byte) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A listener that fails to start reports why on errCh: name that failure
+	// instead of waiting out the deadline.
 	var resp *http.Response
-	waitUntil(t, "the API to answer", func() bool {
-		resp, err = client.Do(req)
-		return err == nil
-	})
+	deadline := time.Now().Add(15 * time.Second)
+	for resp, err = client.Do(req); err != nil; resp, err = client.Do(req) {
+		select {
+		case lerr := <-d.errCh:
+			t.Fatalf("the API listener on %s failed: %v", sock, lerr)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the API on %s did not answer: %v", sock, err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
 	return resp.StatusCode, body
