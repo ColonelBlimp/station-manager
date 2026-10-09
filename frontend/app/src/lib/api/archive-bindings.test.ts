@@ -95,6 +95,45 @@ describe('fetchArchiveBindings', () => {
         expect(qrz.account.build_key).toBe('');
     });
 
+    it('decodes an adoption status; anything it cannot read is none (W-0021 4b3)', async () => {
+        const rowWith = (id: number, adoption: unknown) => ({
+            logbook_id: id,
+            logbook_name: `L${id}`,
+            bound: true,
+            enabled: true,
+            adoption,
+        });
+        stub(200, {
+            ...VIEW,
+            destinations: [
+                {
+                    ...VIEW.destinations[0],
+                    logbooks: [
+                        rowWith(1, { state: 'checking', message: 'Checking.' }),
+                        { logbook_id: 2, logbook_name: 'absent' },
+                        rowWith(3, 'checking'),
+                        rowWith(4, { state: 7, message: 'm' }),
+                        rowWith(5, { state: 'unauthorized', message: '' }),
+                        rowWith(6, { state: '', message: 'no state' }),
+                        rowWith(7, null),
+                    ],
+                },
+            ],
+        });
+        const out = await fetchArchiveBindings('a1');
+        expect(out.kind).toBe('ok');
+        if (out.kind !== 'ok') return;
+        expect(out.bindings.destinations[0].logbooks.map((r) => r.adoption)).toEqual([
+            { state: 'checking', message: 'Checking.' },
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+        ]);
+    });
+
     it('an unknown aggregate state reads as off rather than claiming more', async () => {
         stub(200, { ...VIEW, destinations: [{ ...VIEW.destinations[0], state: 'bogus' }] });
         const out = await fetchArchiveBindings('a1');

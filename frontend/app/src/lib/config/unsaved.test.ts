@@ -277,6 +277,7 @@ function dirtyBinding(): void {
                         queue: { waiting: 0, failed: 0, in_flight: 0 },
                         reason: '',
                         locked_fields: [],
+                        adoption: null,
                     },
                 ],
             },

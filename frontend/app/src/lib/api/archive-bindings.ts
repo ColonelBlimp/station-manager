@@ -47,6 +47,16 @@ export interface LogbookBinding {
      *  cloud logbook name, ADR 0090): not offered for editing; the daemon
      *  refuses changing or removing them. */
     locked_fields: string[];
+    /** The SM Cloud adoption's status (ADR 0090 T4, W-0021 5F.3): only on
+     *  Home's default SM Cloud row, and only while it describes that binding,
+     *  its cloud name and the current station account; null otherwise. */
+    adoption: BindingAdoption | null;
+}
+
+/** One adoption status: a stable state and the sentence to show. */
+export interface BindingAdoption {
+    state: string;
+    message: string;
 }
 
 export interface StationAccount {
@@ -116,7 +126,17 @@ function toRow(v: unknown): LogbookBinding | null {
         queue: { waiting: num(q.waiting), failed: num(q.failed), in_flight: num(q.in_flight) },
         reason: str(v.reason),
         locked_fields: strs(v.locked_fields),
+        adoption: toAdoption(v.adoption),
     };
+}
+
+/** An adoption status needs a state and a sentence to show; anything less is
+ *  none, never a status the daemon did not give. */
+function toAdoption(v: unknown): BindingAdoption | null {
+    if (!isPlainObject(v)) return null;
+    const state = str(v.state);
+    const message = str(v.message);
+    return state !== '' && message !== '' ? { state, message } : null;
 }
 
 function toDestination(v: unknown): DestinationBinding | null {

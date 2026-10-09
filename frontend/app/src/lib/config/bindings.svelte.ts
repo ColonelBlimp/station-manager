@@ -49,6 +49,22 @@ export interface RowDraft {
     cleared: string[];
 }
 
+/** How often the adoption status is re-read while an attempt is shown in
+ *  progress (ruling B1, 2026-10-09). */
+export const ADOPTION_POLL_MS = 5000;
+
+/** The adoption states shown in the muted row text (ruling B2): the adopted
+ *  ones and an attempt in progress. Every other state uses the warning text. */
+const ADOPTION_MUTED = new Set(['adopted', 'adopted_restart_required', 'checking', 'confirming']);
+
+export function adoptionMuted(state: string): boolean {
+    return ADOPTION_MUTED.has(state);
+}
+
+function adoptionRunning(row: LogbookBinding): boolean {
+    return row.adoption?.state === 'checking' || row.adoption?.state === 'confirming';
+}
+
 export function rowKey(type: string, logbookId: number): string {
     return `${type}/${logbookId}`;
 }
@@ -132,6 +148,31 @@ function withEligibility(target: ArchiveBindings, source: ArchiveBindings): Arch
     };
 }
 
+/** `target` with each row's adoption status taken from `source`, the row
+ *  matched by logbook and binding name. A row `source` does not describe has
+ *  none. Nothing else of `source` is taken: the drafts' baseline, queue
+ *  counts and eligibility belong to other reads. */
+function withAdoption(target: ArchiveBindings, source: ArchiveBindings): ArchiveBindings {
+    const fresh = new Map(source.destinations.map((d) => [d.type, d]));
+    return {
+        ...target,
+        destinations: target.destinations.map((dest) => {
+            const rows = fresh.get(dest.type)?.logbooks ?? [];
+            return {
+                ...dest,
+                logbooks: dest.logbooks.map((row) => {
+                    const next = rows.find(
+                        (c) =>
+                            c.logbook_id === row.logbook_id &&
+                            c.forwarder_name === row.forwarder_name
+                    );
+                    return { ...row, adoption: next?.adoption ?? null };
+                }),
+            };
+        }),
+    };
+}
+
 class BindingsState {
     loading = $state(false);
     loaded = $state(false);
@@ -168,6 +209,20 @@ class BindingsState {
     #reloadCovered = 0;
 
     dirty = $derived(this.#anyChanged());
+
+    /** A row shows an adoption attempt in progress (checking or confirming). */
+    adoptionInProgress = $derived(
+        this.view?.destinations.some((d) => d.logbooks.some(adoptionRunning)) ?? false
+    );
+    // The adoption status re-read (ruling B1), ordered by SEND order like
+    // eligibility: #adoptionSeq is the read whose statuses the view shows, and
+    // #adoptionSource that read's answer, laid over an older full view that
+    // lands later. One re-read on the wire at a time; closing the tab moves
+    // #adoptionGen, so an answer still on the wire is ignored.
+    #adoptionSeq = 0;
+    #adoptionSource: ArchiveBindings | null = null;
+    #adoptionInFlight = false;
+    #adoptionGen = 0;
 
     #anyChanged(): boolean {
         const v = this.view;
@@ -386,7 +441,7 @@ class BindingsState {
             }
             this.archiveId = identity.archiveId;
             this.types = types.kind === 'ok' ? types.types : [];
-            this.#apply(this.#takeFull(view.bindings, seq));
+            this.#apply(this.#takeAdoption(this.#takeFull(view.bindings, seq), seq));
             this.#covered(covers);
             this.loaded = true;
         } finally {
@@ -449,9 +504,51 @@ class BindingsState {
         return true;
     }
 
-    /** Re-read only eligibility after config.json changes: each destination's
-     *  account and reasons, and each row's refusal (5F.0). The rows' state,
-     *  their drafts, queue counts and restart state belong to a different save
+    /** Re-read only the adoption statuses (ruling B1): the drafts, the rows'
+     *  state, queue counts and eligibility are untouched. False when nothing
+     *  was applied: another re-read is on the wire, the read failed (the
+     *  status shown stays; a failure never reads as done), or the answer came
+     *  after the tab closed, the archive changed or a newer full view. */
+    async refreshAdoption(): Promise<boolean> {
+        if (this.#adoptionInFlight || this.archiveId === '' || !this.view) return false;
+        const archiveId = this.archiveId;
+        const gen = this.#adoptionGen;
+        const seq = ++this.#sendSeq;
+        this.#adoptionInFlight = true;
+        try {
+            const out = await fetchArchiveBindings(archiveId);
+            if (gen !== this.#adoptionGen || archiveId !== this.archiveId) return false;
+            if (out.kind !== 'ok' || seq < this.#adoptionSeq || !this.view) return false;
+            this.#adoptionSeq = seq;
+            this.#adoptionSource = out.bindings;
+            this.view = withAdoption(this.view, out.bindings);
+            return true;
+        } finally {
+            if (gen === this.#adoptionGen) this.#adoptionInFlight = false;
+        }
+    }
+
+    /** The tab closed: an adoption re-read still on the wire is ignored. */
+    closeAdoption(): void {
+        this.#adoptionGen++;
+        this.#adoptionInFlight = false;
+    }
+
+    /** A full view read by `seq`: newer than the shown statuses, its own are
+     *  taken; older, the newer re-read's are laid over it. */
+    #takeAdoption(v: ArchiveBindings, seq: number): ArchiveBindings {
+        if (seq >= this.#adoptionSeq) {
+            this.#adoptionSeq = seq;
+            this.#adoptionSource = v;
+            return v;
+        }
+        return this.#adoptionSource ? withAdoption(v, this.#adoptionSource) : v;
+    }
+
+    /** Re-read eligibility after config.json changes: each destination's
+     *  account and reasons, and each row's refusal (5F.0), and with them the
+     *  adoption statuses, which depend on the account. The rows' state, their
+     *  drafts, queue counts and restart state belong to a different save
      *  boundary and remain untouched; a newer full view supersedes this read. */
     async refreshEligibility(): Promise<boolean> {
         if (this.archiveId === '' || !this.view) return false;
@@ -467,7 +564,17 @@ class BindingsState {
         if (!current) return false;
         this.#eligibilitySeq = seq;
         this.#eligibilitySource = out.bindings;
-        this.view = withEligibility(current, out.bindings);
+        // An account save changes which account an adoption is confirmed
+        // for, and an adopted status is not re-read on its own: the statuses
+        // ride this read too, under their own send order (operator review of
+        // 4b3). Drafts are untouched.
+        let next = withEligibility(current, out.bindings);
+        if (seq >= this.#adoptionSeq) {
+            this.#adoptionSeq = seq;
+            this.#adoptionSource = out.bindings;
+            next = withAdoption(next, out.bindings);
+        }
+        this.view = next;
         return true;
     }
 
@@ -508,7 +615,7 @@ class BindingsState {
             const seq = ++this.#sendSeq;
             const res = await saveArchiveBindings(this.archiveId, this.buildRequest());
             if (res.kind === 'ok') {
-                this.#apply(this.#takeFull(res.bindings, seq));
+                this.#apply(this.#takeAdoption(this.#takeFull(res.bindings, seq), seq));
                 this.#covered(covers); // the PUT answers with the view as of its send
                 toasts.info(
                     res.bindings.restart_required
@@ -554,7 +661,7 @@ class BindingsState {
                 }
             }
         }
-        this.view = this.#takeFull(out.bindings, seq);
+        this.view = this.#takeAdoption(this.#takeFull(out.bindings, seq), seq);
         this.drafts = drafts;
         this.#covered(covers);
         const fixed =

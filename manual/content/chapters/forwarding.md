@@ -142,6 +142,15 @@ and its switch stays off. A logbook that already uploads to SM Cloud keeps
 doing so. If you turn it off and save, it cannot be turned back on until SM
 Cloud learns to keep logbooks apart.
 
+In Home, Station Manager also works in the background, at start and then
+hourly, to link the Default logbook's cloud logbook to this archive, so the
+cloud can tell its QSOs apart from any other logbook's later. A line under the
+Default logbook's row shows the adoption status: for example *Adopted; applies
+after a restart.*, or why it has not happened yet. A line about a problem is
+shown in the warning colour. While a check is running the line updates by
+itself. Once the link has been reserved, the logbook's **Cloud logbook** name
+is fixed and no longer offered for editing.
+
 ### How to tell a QSO was uploaded
 
 After a successful QRZ.com or Club Log upload, Station Manager stamps the QSO

@@ -7,7 +7,13 @@
     // queue. The card's pill is what the daemon HOLDS; the switches are the
     // draft. Saved bindings apply when the daemon restarts.
     import { onMount } from 'svelte';
-    import { bindingsState, rowKey, destinationLabel } from './bindings.svelte';
+    import {
+        bindingsState,
+        rowKey,
+        destinationLabel,
+        adoptionMuted,
+        ADOPTION_POLL_MS,
+    } from './bindings.svelte';
     import { clearForwarderQueue, retryForwarderQueue } from '../api/forwarder-queues';
     import type { BindingState, DestinationBinding } from '../api/archive-bindings';
     import type { CredentialField } from '../api/forwarders';
@@ -50,6 +56,17 @@
 
     onMount(() => {
         void bindingsState.load();
+        // Closing the tab drops an adoption re-read still on the wire.
+        return () => bindingsState.closeAdoption();
+    });
+
+    // While a row shows an adoption attempt in progress, its status is re-read
+    // every 5 s, so "Checking…" never outlives the attempt (ruling B1). The
+    // interval ends when no row is in progress or the tab closes.
+    $effect(() => {
+        if (!bindingsState.adoptionInProgress) return;
+        const timer = setInterval(() => void bindingsState.refreshAdoption(), ADOPTION_POLL_MS);
+        return () => clearInterval(timer);
     });
 
     const PILL: Record<BindingState, { text: string; cls: string }> = {
@@ -348,6 +365,19 @@
                                 {#if row.reason !== '' && !d.enabled}
                                     <p class="mt-1 text-sm text-muted" data-testid="row-reason">
                                         Can't be turned on for this logbook: {row.reason}.
+                                    </p>
+                                {/if}
+                                <!-- The SM Cloud adoption's status, as the daemon words it
+                                     (ADR 0090 T4); the warning text for anything but adopted
+                                     or in progress (ruling B2), never an alert container. -->
+                                {#if row.adoption}
+                                    <p
+                                        class="mt-1 text-sm {adoptionMuted(row.adoption.state)
+                                            ? 'text-muted'
+                                            : 'text-warning'}"
+                                        data-testid="row-adoption"
+                                    >
+                                        {row.adoption.message}
                                     </p>
                                 {/if}
 
