@@ -42,6 +42,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/evidence"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding/smcloud"
+	"github.com/ColonelBlimp/station-manager/internal/forwarding/smcloud/adoption"
 	"github.com/ColonelBlimp/station-manager/internal/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/inhibit"
 	"github.com/ColonelBlimp/station-manager/internal/iocdi"
@@ -114,6 +115,7 @@ type daemon struct {
 	mailer     *email.Service
 	server     *api.Server
 	smcloudRec *smcloud.Reconciler
+	adopter    *adoption.Adopter
 	// routes is the start-time snapshot of the active archive's bindings
 	// resolved against their station accounts (ADR 0082): the QSO service's
 	// routing set and the workers node's worker set are this one slice.
@@ -133,6 +135,8 @@ type daemon struct {
 	// context. run()'s workerCancel still cascades to it.
 	forwarderCancel context.CancelFunc
 	workerWG        sync.WaitGroup
+	adoptionCancel  context.CancelFunc
+	adoptionWG      sync.WaitGroup
 	qsoLogWG        sync.WaitGroup
 
 	// HTTP serving + planned self-restart.
@@ -203,6 +207,8 @@ func (d *daemon) registerLifecycle(c *iocdi.Container) (*orchestrator.Orchestrat
 		{NodeID: nodePromote, Start: d.startArchivePromote},
 		{NodeID: nodeHTTP, Initialize: d.initHTTP, Start: d.startHTTP,
 			PrepareStop: d.httpStopAccepting, Stop: d.stopHTTP},
+		{NodeID: nodeAdoption, Start: d.startAdoption, PrepareStop: d.adoptionPrepareStop,
+			Stop: stopErr(d.stopAdoption), Rollback: rollbackVia(d.stopAdoption)},
 	}
 	for _, a := range adapters {
 		if err := o.Register(a); err != nil {
@@ -903,6 +909,45 @@ func (d *daemon) startReconciler(ctx context.Context) {
 			Msg("smcloud reconciler started")
 		return
 	}
+}
+
+// ---- SM Cloud adoption ----
+
+// startAdoption starts Home's SM Cloud adopter (ADR 0090, T1) when Home is
+// the active archive, and gives the bindings view its status. It runs on its
+// own child of ctx, so stopping it cancels the request in flight and waits for
+// it before the log database closes.
+func (d *daemon) startAdoption(ctx context.Context) error {
+	cfg := d.cfgSvc.Snapshot()
+	entry := cfg.QsoArchiveByID(cfg.ActiveQsoArchiveID)
+	if entry == nil || entry.Ownership != types.QsoArchiveOwnershipLegacy || d.archives == nil {
+		return nil
+	}
+	actx, cancel := context.WithCancel(ctx)
+	d.adoptionCancel = cancel
+	d.adopter = adoption.New(d.cfgSvc, d.archives, d.db, d.bindingsAtStart, d.logger)
+	d.archives.SetAdoptionStatus(d.adopter.Status)
+	onPanic := func(name string, pv any, stack []byte) {
+		d.logger.ErrorWith().Str("goroutine", name).Interface("panic", pv).
+			Bytes("stack", stack).Msg("smcloud adoption panic recovered")
+	}
+	adopter := d.adopter
+	safego.GoTracked(actx, nodeAdoption, onPanic, func() { adopter.Run(actx) }, true, &d.adoptionWG)
+	return nil
+}
+
+// adoptionPrepareStop cancels the adopter without waiting.
+func (d *daemon) adoptionPrepareStop() {
+	if d.adoptionCancel != nil {
+		d.adoptionCancel()
+	}
+}
+
+// stopAdoption cancels the adopter and waits for it.
+func (d *daemon) stopAdoption() error {
+	d.adoptionPrepareStop()
+	d.adoptionWG.Wait()
+	return nil
 }
 
 // ---- http server ----

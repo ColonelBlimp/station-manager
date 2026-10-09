@@ -70,6 +70,17 @@ type LogbookBindingView struct {
 	// adoption (SM Cloud's cloud logbook name, ADR 0090): not shown for
 	// editing, and refused by the PUT. Absent when nothing is locked.
 	LockedFields []string `json:"locked_fields,omitempty"`
+	// Adoption is the remote adoption's status (ADR 0090, T4), on Home's
+	// default SM Cloud row only, and only while it describes that row's
+	// current binding, name and station account.
+	Adoption *BindingAdoptionView `json:"adoption,omitempty"`
+}
+
+// BindingAdoptionView is one adoption status: a stable state and the sentence
+// the Forwarding tab shows.
+type BindingAdoptionView struct {
+	State   string `json:"state"`
+	Message string `json:"message"`
 }
 
 // BindingQueueCount mirrors the queue readout for one binding name.

@@ -68,6 +68,12 @@ type Manager struct {
 	// daemon wires it — the bindings routes then answer bindings_unavailable.
 	activeDB BindingsDB
 	atStart  BindingFingerprint
+	// startBindings is the same set by forwarder name: an adoption confirmed
+	// since the start applies at the next one (ADR 0090, T1).
+	startBindings map[string]types.LogbookDestination
+	// adoptionStatus is the adopter's status (SetAdoptionStatus); nil until
+	// wired, when only what the archive records is shown.
+	adoptionStatus func() AdoptionStatus
 
 	// activeSummary is the live summary of the ACTIVE archive (SetActiveSummary,
 	// ADR 0084); nil until wired, when the active archive lists from the sidecar

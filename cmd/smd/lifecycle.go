@@ -33,17 +33,18 @@ const (
 	nodeQso     = qsoservice.ServiceName       // "qsoservice"
 
 	// Non-bean fleet + promoted infra nodes.
-	nodeBridge     = "bridge"          // CAT/RF bridge — the RF-critical fence
-	nodeEnrichment = "enrichment"      // lookup.Orchestrator runtime (promoted: ft8 + http depend on it)
-	nodeMailer     = "mailer"          // email.Service (promoted: http depends on it)
-	nodeEvidence   = "evidence"        // FT8 evidence writer
-	nodePsk        = "psk"             // PSK Reporter uploader
-	nodeEvents     = "station-events"  // Station Events recorder (W-0020): alarm-family rows, non-blocking
-	nodeFt8        = "ft8"             // FT8 decode subsystem (sole producer for evidence/qso-log)
-	nodeWorkers    = "workers"         // forwarder workers + the smcloud reconciler that rides them
-	nodeQsoLog     = "qso-log"         // FT8 completed-QSO log goroutines (launched by ft8's decode loop)
-	nodeHTTP       = "http"            // the HTTP API server (the front door)
-	nodePromote    = "archive-promote" // ADR 0071: pending → active once the DB-dependent graph is up, BEFORE http serves
+	nodeBridge     = "bridge"           // CAT/RF bridge — the RF-critical fence
+	nodeEnrichment = "enrichment"       // lookup.Orchestrator runtime (promoted: ft8 + http depend on it)
+	nodeMailer     = "mailer"           // email.Service (promoted: http depends on it)
+	nodeEvidence   = "evidence"         // FT8 evidence writer
+	nodePsk        = "psk"              // PSK Reporter uploader
+	nodeEvents     = "station-events"   // Station Events recorder (W-0020): alarm-family rows, non-blocking
+	nodeFt8        = "ft8"              // FT8 decode subsystem (sole producer for evidence/qso-log)
+	nodeWorkers    = "workers"          // forwarder workers + the smcloud reconciler that rides them
+	nodeQsoLog     = "qso-log"          // FT8 completed-QSO log goroutines (launched by ft8's decode loop)
+	nodeHTTP       = "http"             // the HTTP API server (the front door)
+	nodePromote    = "archive-promote"  // ADR 0071: pending → active once the DB-dependent graph is up, BEFORE http serves
+	nodeAdoption   = "smcloud-adoption" // W-0021 5F.3: Home's SM Cloud adoption, in the background
 )
 
 // lifecycleNodes declares the daemon graph. Registration order is the deterministic shutdown
@@ -69,7 +70,9 @@ func lifecycleNodes() []iocdi.Node {
 		// process reclamation rather than closed under a live writer (safer than the old deferred close).
 		// It also drains after qso, whose archive summary worker recounts it (ADR 0084): a qso
 		// node that does not stop leaves the DB open rather than closed beneath the worker.
-		{Name: nodeLogDB, DrainAfter: []string{nodeHub, nodeEnrichment, nodeEvents, nodeQso}},
+		// The SM Cloud adopter reads and writes it too (its reservation and
+		// confirmation), so it drains first.
+		{Name: nodeLogDB, DrainAfter: []string{nodeHub, nodeEnrichment, nodeEvents, nodeQso, nodeAdoption}},
 		{Name: nodeRefDB, StartAfter: []string{nodeLogDB}, DrainAfter: []string{nodeHub, nodeEnrichment}},
 		// qso owns the active archive's summary worker (ADR 0084), notified by every QSO commit: it
 		// drains after the QSO writers — HTTP handlers and the FT8 completed-QSO logger — so their
@@ -110,6 +113,9 @@ func lifecycleNodes() []iocdi.Node {
 			nodeEnrichment, nodeMailer, nodeBridge, nodeFt8, nodeEvidence,
 			nodeQso, nodeLogDB, nodeHub, nodeLogging, nodePromote,
 		}},
+		// Home's SM Cloud adoption (W-0021 5F.3, ADR 0090): it drives the
+		// archive manager http builds, on the archive the promotion made active.
+		{Name: nodeAdoption, StartAfter: []string{nodeHTTP, nodePromote, nodeLogDB, nodeConfig, nodeLogging}},
 	}
 
 	// logging drains strictly after every other node (see the doc comment above).

@@ -493,6 +493,10 @@ func (m *Manager) SetActiveBindings(db BindingsDB, atStart []types.LogbookDestin
 	defer m.mu.Unlock()
 	m.activeDB = db
 	m.atStart = FingerprintBindings(atStart)
+	m.startBindings = make(map[string]types.LogbookDestination, len(atStart))
+	for _, b := range atStart {
+		m.startBindings[b.ForwarderName] = b
+	}
 }
 
 // activeEntryForBindings resolves id to the ACTIVE archive's catalogue entry:
@@ -524,7 +528,11 @@ func (m *Manager) Bindings(ctx context.Context, id string) (types.ArchiveBinding
 	if err != nil {
 		return types.ArchiveBindingsView{}, err
 	}
-	return BindingsView(ctx, db, snap, entry, atStart)
+	view, err := BindingsView(ctx, db, snap, entry, atStart)
+	if err != nil {
+		return types.ArchiveBindingsView{}, err
+	}
+	return view, m.annotateAdoption(ctx, db, snap, entry, &view)
 }
 
 // ApplyBindings serves PUT /v1/qso-archives/{uuid}/bindings through the port.
@@ -545,7 +553,11 @@ func (m *Manager) ApplyBindings(ctx context.Context, id string, req types.Archiv
 	if err != nil {
 		return types.ArchiveBindingsView{}, err
 	}
-	return applyBindings(ctx, m.logger, db, snap, entry, atStart, req)
+	view, err := applyBindings(ctx, m.logger, db, snap, entry, atStart, req)
+	if err != nil {
+		return types.ArchiveBindingsView{}, err
+	}
+	return view, m.annotateAdoption(ctx, db, snap, entry, &view)
 }
 
 // RecordAdoption records an adoption's confirmation on the binding the attempt
