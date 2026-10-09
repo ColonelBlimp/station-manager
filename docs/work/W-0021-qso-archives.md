@@ -2993,6 +2993,156 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      fixed cadence in the effect; a terminal state polled. Each fails its intended tests, and all
      25 SPA reversions pass their check against the fixed code. Not separately provable: "the
      fastest row wins", since only Home's default row ever carries a status.
+     *Commit 5 design (proposed 2026-10-09, awaiting rulings C1–C4; no code yet).* What the tree
+     gives: workers are built by `forwarding.Build(fc)` from the synthesized `ForwarderConfig`
+     alone (`spawnForwarderWorkers`, the single spawn site). Routes and workers come from one
+     start snapshot (`resolveDestinationRoutes`). `qsoservice.routesFor` enqueues for every
+     enabled route whether or not a worker runs. SM Cloud's `Forwarder` has the `identity` flag
+     (commit 1) but no identity constructor. The legacy reconciler stays by name in 5F.3 (design
+     of 2026-10-07).
+     - **Which wire, decided at start, per binding.** Confirmed under the account at start
+       (`AdoptionConfirmed(b, CurrentAccount(cfg))`): the identity worker. Adopted, but not
+       confirmed under that account: held. Otherwise: the legacy wire, as today. The default's
+       position does not matter: a binding stays adopted on its logbook if the default moves.
+     - **The identity forwarder.** `smcloud.NewIdentity(fc, IdentityTarget{ArchiveUUID,
+       ArchiveLabel, LogbookUUID, LogbookLabel, Callsign})` PUTs to
+       `/v1/archives/{archive}/logbooks/{logbook}/qsos` with `archive_label`, `logbook_label`,
+       `callsign` and `qsos` (the server's strict envelope), never `logbook` and never the
+       name-only path; `identity` is set, so a 404 keeps the row pending (T5). The labels are the
+       catalogue label, the logbook's name and callsign as read at start.
+     - **A held binding** (adopted under another account, ADR 0088: no name fallback) keeps its
+       route, so new QSOs still queue, but gets no worker and no reconciler. Its rows stay queued
+       until it is confirmed and the daemon restarts.
+     - **The reconciler** for an identity binding stays the by-name one; its heal traffic goes
+       through the binding's queue, so the identity worker sends it.
+     - **T7.** The managed-archive refusal reads "SM Cloud can currently be enabled only in Home"
+       (no final period: the SPA renders "Can't be turned on here: {reason}.").
+     - **Proofs (RED first).** Each wire chosen at start: identity, held, legacy (including
+       adopted under another account and confirmed under none). The identity body and path, with
+       no `logbook` and no name request. A held binding's QSOs stay queued with no worker and no
+       reconciler. A disabled adopted binding has no worker as before. T7's text. End to end
+       against `sm-pg`: adopt, restart, push by UUID, and the old reconciler still in sync.
+     *Questions for the operator:*
+     - (C1) How the identity target reaches the spawner. Proposed: cmd/smd builds the identity
+       forwarders itself and passes `spawnForwarderWorkers` a map from binding name to a prebuilt
+       forwarder, keeping one spawn site and one worker per name. The alternative is runtime
+       fields on `types.ForwarderConfig` read by `smcloud.New`, which widens the canonical config
+       type with non-config data.
+     - (C2) The upload state for a held binding (ruling Q2: "waiting for confirmation, then
+       restart required to resume"). Proposed: a second line on the row, apart from the adoption
+       status, as `uploads_held: {state, message}`. While unconfirmed: `waiting_for_confirmation`,
+       "Uploads are held until adoption is confirmed for the current station account." Once
+       confirmed during the run: `restart_required`, "Uploads resume after a restart." The view
+       knows a binding started held from the bindings at start and the account fingerprint taken
+       at start. 4b3's SPA shows it in the warning text.
+     - (C3) The reconciler: by name for an identity binding, none for a held binding. Proposed:
+       yes.
+     - (C4) One commit or two: 5a the identity forwarder, the wire selection and T7 (daemon and
+       API); 5b the held-upload line in the SPA. Proposed: two.
+     *Rulings C1–C4 (operator, 2026-10-09).*
+     - (C1) Prebuilt forwarders, built at the daemon's assembly boundary and passed to the existing
+       spawner; runtime identity stays out of `types.ForwarderConfig`. Selection and construction
+       use the same start snapshot. A failed identity construction never falls through to
+       `forwarding.Build` and a legacy worker.
+     - (C2) `uploads_held` with both messages, shown apart from the adoption status, in the
+       warning text. It describes an actual hold at start, not a mismatch with today's saved
+       account, and shows on every affected binding even if the default moves. An enabled
+       binding with an adoption marker but no fingerprint is held too. The status-only re-read
+       carries `uploads_held` without touching drafts. `waiting_for_confirmation` needs the 60 s
+       cadence on its own; `restart_required` needs no timer by itself. The account-save
+       re-read updates both fields under the existing ordering. Test: confirmation, then
+       `restart_required`, then a restart, then no hold.
+     - (C3) The by-name reconciler for this slice, with its existing default-logbook scope and no
+       new reconcilers. The legacy-name lookup still reaches the adopted legacy logbook
+       (`internal/cloud/store/store.go`, `queryLogbooks`), and repairs enter the binding's queue.
+       Prove that repairs leave through the identity worker, including after a display-label
+       change. A held binding gets neither periodic nor on-demand reconciliation.
+     - (C4) Two commits. 5a: `uploads_held` and its API documentation, the selection at start,
+       the identity forwarder and T7. 5b: the line, the re-read, their tests and the operator
+       documentation.
+     T7's wording is approved as proposed. Two boundaries need explicit tests: a reservation
+     alone keeps the legacy wire, and a held enabled binding survives the start's queue
+     housekeeping (not treated as disabled or unbound). Prove that queued uploads and newly
+     logged QSOs stay queued, then drain through the identity worker only after confirmation and
+     a restart.
+     **5F.3 commit 5a, the identity wire at start (built 2026-10-09; approved and committed as
+     `14e9b94a` with the review's fixes below; not pushed).**
+     - **The identity forwarder** (`smcloud.NewIdentity(fc, IdentityTarget)`): the account
+       validated as `New` validates it, both UUIDs lower-cased and required to be UUIDv7s, every
+       upload PUT to `/v1/archives/{archive}/logbooks/{logbook}/qsos` with exactly
+       `archive_label`, `logbook_label`, `callsign` and `qsos`, never the cloud logbook name;
+       `identity` set, so a 404 stays pending (T5).
+     - **Selection** (`cmd/smd/identity_wire.go`, `selectWires`), in `startQso` right after the
+       routing snapshot and from it: every enabled SM Cloud binding with `remote_adopted_at` is an
+       identity binding when confirmed for the account at start, fingerprinted against the
+       archive FILE's own UUID (`ArchiveIdentityWithContext`), so a Home being re-activated is
+       judged by its own identity before the promotion; otherwise held. A reservation alone
+       changes nothing. A failed construction returns an error that stops the start.
+     - **Workers**: `spawnForwarderWorkers` takes the selection; a held binding gets no worker (a
+       warning names it), an identity binding gets its prebuilt forwarder, and every other
+       binding is built by its type as before. The route stays, so new QSOs queue; the start's
+       housekeeping keeps an enabled held binding's rows.
+     - **Reconciler** (C3): unchanged by name for an identity binding; none for a held binding,
+       so the on-demand endpoint is not wired either.
+     - **View**: `Manager.SetHeldUploads` takes the selection's held names; the bindings view sets
+       `uploads_held` on each (default or not): `waiting_for_confirmation` until a confirmation
+       for the current account is recorded, then `restart_required`.
+     - **T7**: "SM Cloud can currently be enabled only in Home". `api-endpoints.md` documents
+       `uploads_held`, the identity wire and T7.
+     Tests, RED first: IF1–IF3 (envelope and path; the target checked; 404 pending), UH1, UH2,
+     UH4 (the view), T7's exact text (Go and the SPA's rendered sentence), SW1 (identity at
+     start, by UUID only, reconciler kept), SW3/SW4 (held for another account or none: no
+     upload, no worker, no reconciler, queued and newly logged QSOs kept pending, the view
+     waiting; confirmed during the run: restart required; restarted: both uploads drain by
+     identity only, nothing held), SW5 (a failed construction stops the start, no legacy
+     worker, nothing sent). Passing before the change, and covered by reversions: SW2 (a
+     reservation alone keeps the legacy wire), UH3 (only what started held), IF4 (against the
+     real server on `sm-pg`: uploads by UUID land in the adopted legacy logbook, which the by-name
+     reconciler finds in sync; after a logbook label change its repair enters the binding's
+     queue and the identity forwarder sends it, in sync again; the stub's legacy wire also lands
+     there, so IF1 is what tells the wires apart). Reversions, each failing its intended test,
+     all restored by hash: the account not checked; a reservation counted as adoption; a held
+     binding given a worker; the prebuilt forwarder ignored; a failed construction falling back;
+     a held binding reconciled; the hold not on the view; no identity flag; the legacy path
+     kept; the target not checked; the UUIDs not lowered; the held lines not set; never restart
+     required; every adopted binding shown held; the old refusal text. Not separately proved:
+     fingerprinting against the file's UUID rather than the active selector, which differs only
+     while a Home candidate awaits promotion (no activation test with an adopted binding).
+     **Operator review of 5a (2026-10-09): held, two P2s.**
+     - (P2-1) A held binding was advertised as having a running worker: `initHTTP` put every
+       enabled route into `SetRunningForwarders`, so a queue retry answered 200 and rearmed
+       failed uploads that no worker would send. Exclude held bindings from that set while
+       keeping their routes and queue visibility; test the refusal while held and a successful
+       retry after confirmation and a restart.
+     - (P2-2) `uploadsHeldOf` judged confirmation but not the saved enabled state: started held,
+       confirmed, then disabled and saved, the line still promised "Uploads resume after a
+       restart." although the start discards that disabled binding's queued uploads. The line
+       must reflect the saved disablement; test that sequence.
+     - The archive-file UUID choice is ruled correct (the start validates the file against the
+       effective selection before promotion). Add a regression test: Home's file open while
+       another archive remains the active selector; a real-database `selectWires` test with
+       deliberately different UUIDs suffices.
+     **The review's fixes (built 2026-10-09; approved 2026-10-09, in `14e9b94a`).**
+     - (P2-1) `initHTTP` leaves held names out of `SetRunningForwarders`; their routes and queue
+       names are unchanged, so new QSOs queue, the queue is listed and can be cleared, and a
+       retry answers 400 `forwarder_disabled`.
+     - (P2-2) `uploadsHeldOf` reads the saved enabled state first: a held binding saved
+       disabled reads `disabled`, "Uploads are held; this binding is off, so its queued uploads
+       are discarded at the next restart.", confirmed or not (the state name and the sentence
+       approved exactly as written). Enabled again, it reads as before.
+     - `api-endpoints.md`: the retry refusal for a held binding, and the `disabled` state.
+     Tests, RED first: SW6 (held: the retry refused and the failed upload left failed, the queue
+     listed; confirmed and restarted: the retry accepted, the upload drained by identity only),
+     SW7 (held, confirmed, disabled and saved: the discard line; restarted: the upload discarded,
+     nothing sent, nothing held), UH5 (disabled while waiting and while confirmed; re-enabled,
+     the waiting line again). Passing before the change, as the review expected: SW8 (Home's
+     file open with another archive as the selector, on the real database: a binding confirmed
+     for the file's UUID is an identity binding whose target is Home's UUID and label; one
+     fingerprinted for the selector is held). Reversions, each failing its intended assertion,
+     all restored by hash: a held binding advertised as running (SW6); the disablement ignored
+     (UH5, SW7); the account, the target UUID and the label each taken from the selector (SW8).
+     The test daemons' socket directory is made owner-only before a restart so SW6 reaches the
+     API over the socket, as the listener requires.
    - **Station drills after deploy** (operator-run, recorded here): Home unchanged after the
      upgrade (same `forwarded_to`, worker names and queue counts as before; bindings listed under
      Home with the legacy names); the Drill archive shows every destination off, no banner, and a
