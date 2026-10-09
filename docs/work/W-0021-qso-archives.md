@@ -2961,6 +2961,38 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      wording is acceptable.* Committed as `53a4c45e` (app code, tests, manual). Next: commit 5
      (the identity worker at start, T7). The daemon deployment hold stands until 5F.3 is
      complete and reviewed.
+     *Codex review of `53a4c45e` (P2) and ruling B3 (operator, 2026-10-09), a correction to B1,
+     not an implementation mistake.* The review found that polling only while checking or
+     confirming leaves a status the daemon retries on its own stale in an open tab. Its examples
+     are an uncertain outcome after a lost response, resolved by a later hourly retry, and
+     `needs_confirmation` after an account replacement, resolved without further action. The
+     adopter keeps an unresolved outcome through the attempt that resolves it, so B1 was too
+     narrow. Ruled cadences:
+     - 5 s: `checking`, `confirming`.
+     - 60 s: `unreachable`, `uncertain`, `record_failed`, `local_unreadable`,
+       `needs_confirmation`, `unsafe`, `blocked`. `uncertain` and `record_failed` are polled even
+       when their message names a terminal blocker: the state does not expose retry eligibility,
+       and no API extension is wanted for this.
+     - No timer: every other state, or no status.
+     The draft protection, the single request, the response ordering and the close and archive
+     guards stay. A failed re-read keeps the status and its cadence. Fake-clock tests prove both
+     reported sequences, the cadence changes, and the stop after confirmation. The review file
+     stays until the fix is reviewed; `53a4c45e` and `cc7f251e` stay unpushed meanwhile.
+     *Fixed (2026-10-09, committed `87804ec6`; the operator approved B3 and found no further
+     actionable issue; the review finding is closed and its file removed):* `adoptionPollMs` gives each row's cadence (5 s in
+     progress, `ADOPTION_RETRY_POLL_MS` 60 s for the seven retrying states, 0 otherwise) and the
+     fastest wins. The section's effect runs one interval at that cadence and replaces it when the
+     cadence changes. A failed re-read leaves the status, so the cadence and its interval stay.
+     `adoptionInProgress` is removed, and A1 is folded into A10. RED first: A10 (the cadence by
+     state), R7 (lost response: uncertain, re-read at 60 s, a retry confirms, then no more
+     re-reads), R8 (account replacement: `needs_confirmation`, likewise), R9 (checking at 5 s,
+     then unreachable at 60 s, then checking at 5 s again, then adopted and none), R10 (a failed
+     re-read keeps the status and the 60 s cadence). R11 (no timer for the five terminal states
+     or adopted) passed before the change, since nothing slower polled then. Reversions: retrying
+     states not polled; another retry cadence; `uncertain` or `needs_confirmation` left out; a
+     fixed cadence in the effect; a terminal state polled. Each fails its intended tests, and all
+     25 SPA reversions pass their check against the fixed code. Not separately provable: "the
+     fastest row wins", since only Home's default row ever carries a status.
    - **Station drills after deploy** (operator-run, recorded here): Home unchanged after the
      upgrade (same `forwarded_to`, worker names and queue counts as before; bindings listed under
      Home with the legacy names); the Drill archive shows every destination off, no banner, and a
