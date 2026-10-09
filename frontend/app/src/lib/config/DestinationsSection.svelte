@@ -55,9 +55,10 @@
     });
 
     // The adoption statuses are re-read every 5 s while an attempt is shown in
-    // progress, and every 60 s while the daemon retries on its own (rulings B1
-    // and B3), so no shown status outlives what resolves it. The interval
-    // follows the cadence and ends when nothing is pending or the tab closes.
+    // progress, and every 60 s while the daemon retries on its own or a held
+    // binding waits for a confirmation (rulings B1, B3 and C2), so no shown
+    // status outlives what resolves it. The interval follows the cadence and
+    // ends when nothing is pending or the tab closes.
     $effect(() => {
         const ms = bindingsState.adoptionPollMs;
         if (ms === 0) return;
@@ -376,6 +377,17 @@
                                         {row.adoption.message}
                                     </p>
                                 {/if}
+                                <!-- Why this binding's uploads are held, as the daemon words
+                                     it (ruling C2): on every held row, apart from the
+                                     adoption line, in the warning text. -->
+                                {#if row.uploads_held}
+                                    <p
+                                        class="mt-1 text-sm text-warning"
+                                        data-testid="row-uploads-held"
+                                    >
+                                        {row.uploads_held.message}
+                                    </p>
+                                {/if}
 
                                 {#if rowFields.length > 0}
                                     <div class="mt-3 space-y-3">
@@ -447,9 +459,14 @@
                                             flight
                                         </p>
                                         <div class="flex flex-wrap gap-2">
+                                            <!-- A held binding has no worker, whatever its line
+                                                 says (a confirmation alone starts none): Retry
+                                                 is off and the held line says why; Clear stays. -->
                                             <button
                                                 class="btn"
-                                                disabled={q.failed === 0 || retrying[name]}
+                                                disabled={q.failed === 0 ||
+                                                    retrying[name] ||
+                                                    row.uploads_held !== null}
                                                 aria-label={`Retry failed uploads for ${rowLabel}`}
                                                 onclick={() => onRetryFailed(name, rowLabel)}
                                             >

@@ -70,6 +70,7 @@ const row = (id: number, name: string, over: Record<string, unknown> = {}) => ({
     reason: '',
     locked_fields: [],
     adoption: null,
+    uploads_held: null,
     ...over,
 });
 

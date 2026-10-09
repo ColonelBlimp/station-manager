@@ -313,3 +313,114 @@ describe('bindingsState — the adoption status re-read (4b3, B1/B3)', () => {
         }
     });
 });
+
+/*
+    W-0021 5F.3 commit 5b, ruling C2 (2026-10-09): a binding the daemon started
+    held carries uploads_held, apart from its adoption status.
+
+      H1  the adoption re-read brings uploads_held too; the drafts stay.
+      H2  so does the re-read after a station-account save; an adoption re-read
+          sent before it cannot overwrite it when it answers late.
+      H3  nor can an account re-read sent before a newer adoption re-read.
+      H4  a newer full view wins over a late re-read.
+      H5  the cadence: 60 s while waiting for confirmation, on any row; none
+          for restart required or disabled by themselves; the fastest row or
+          field wins.
+*/
+
+const WAITING = {
+    state: 'waiting_for_confirmation',
+    message: 'Uploads are held until adoption is confirmed for the current station account.',
+};
+const RESTART = { state: 'restart_required', message: 'Uploads resume after a restart.' };
+const DISABLED = {
+    state: 'disabled',
+    message:
+        'Uploads are held; this binding is off, so its queued uploads are discarded at the next restart.',
+};
+
+/** view(adoption) with uploads_held on the default row, or on Portable (bound). */
+function heldView(adoption: unknown, held: unknown, onPortable = false) {
+    const v = onPortable
+        ? view(adoption, { bound: true, enabled: true, forwarder_name: 'smcloud.u2' })
+        : view(adoption);
+    (v.destinations[0].logbooks[onPortable ? 1 : 0] as Record<string, unknown>).uploads_held = held;
+    return v;
+}
+
+const heldOf = (i = 0) => bindingsState.view!.destinations[0].logbooks[i].uploads_held;
+
+describe('bindingsState — uploads_held (5b, C2)', () => {
+    it('H1: the adoption re-read brings it; the drafts stay', async () => {
+        served = heldView(NEEDS, WAITING);
+        await bindingsState.load();
+        bindingsState.setRow('smcloud', 2, true);
+        bindingsState.setField('smcloud', 2, 'logbook', 'portable');
+        const before = structuredClone($state.snapshot(bindingsState.drafts));
+        expect(heldOf()).toEqual(WAITING);
+
+        served = heldView(ADOPTED, RESTART);
+        expect(await bindingsState.refreshAdoption()).toBe(true);
+        expect(heldOf()).toEqual(RESTART);
+        expect(adoptionOf()).toEqual(ADOPTED);
+        expect($state.snapshot(bindingsState.drafts)).toEqual(before);
+        expect(bindingsState.dirty).toBe(true);
+    });
+
+    it('H2: the account re-read brings it; an older adoption re-read cannot overwrite it', async () => {
+        served = heldView(NEEDS, WAITING);
+        await bindingsState.load();
+        holdGets = 1;
+        const late = bindingsState.refreshAdoption();
+        served = heldView(ADOPTED, RESTART); // the account was saved back
+        expect(await bindingsState.refreshEligibility()).toBe(true);
+        expect(heldOf()).toEqual(RESTART);
+        held[0](json(heldView(NEEDS, WAITING)));
+        expect(await late).toBe(false);
+        expect(heldOf()).toEqual(RESTART);
+    });
+
+    it('H3: an account re-read sent before a newer adoption re-read cannot roll it back', async () => {
+        served = heldView(NEEDS, WAITING);
+        await bindingsState.load();
+        holdGets = 1;
+        const late = bindingsState.refreshEligibility();
+        served = heldView(ADOPTED, RESTART);
+        expect(await bindingsState.refreshAdoption()).toBe(true);
+        held[0](json(heldView(NEEDS, WAITING)));
+        await late;
+        expect(heldOf()).toEqual(RESTART);
+    });
+
+    it('H4: a newer full view wins over a late re-read', async () => {
+        served = heldView(NEEDS, WAITING);
+        await bindingsState.load();
+        holdGets = 1;
+        const late = bindingsState.refreshAdoption();
+        served = heldView(ADOPTED, RESTART);
+        await bindingsState.load();
+        held[0](json(heldView(NEEDS, WAITING)));
+        await late;
+        expect(heldOf()).toEqual(RESTART);
+    });
+
+    it('H5: the cadence', async () => {
+        const cases: [unknown, unknown, boolean, number][] = [
+            [null, WAITING, false, 60_000],
+            [{ state: 'adopted', message: 'Adopted.' }, WAITING, false, 60_000],
+            [null, WAITING, true, 60_000],
+            [ADOPTED, RESTART, false, 0],
+            [ADOPTED, DISABLED, false, 0],
+            [null, DISABLED, true, 0],
+            [CHECKING, WAITING, false, 5_000],
+            [NEEDS, RESTART, false, 60_000],
+        ];
+        for (const [adoption, held, onPortable, want] of cases) {
+            served = heldView(adoption, held, onPortable);
+            await bindingsState.load();
+            expect(bindingsState.adoptionPollMs, JSON.stringify([adoption, held, onPortable])).toBe(
+                want
+            );
+        }
+    });
+});

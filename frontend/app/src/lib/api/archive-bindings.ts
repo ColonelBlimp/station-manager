@@ -51,6 +51,10 @@ export interface LogbookBinding {
      *  Home's default SM Cloud row, and only while it describes that binding,
      *  its cloud name and the current station account; null otherwise. */
     adoption: BindingAdoption | null;
+    /** Why this binding's uploads are held, apart from the adoption status
+     *  (W-0021 5F.3 ruling C2): set on every binding the running daemon
+     *  started held; null otherwise. */
+    uploads_held: BindingAdoption | null;
 }
 
 /** One adoption status: a stable state and the sentence to show. */
@@ -127,11 +131,12 @@ function toRow(v: unknown): LogbookBinding | null {
         reason: str(v.reason),
         locked_fields: strs(v.locked_fields),
         adoption: toAdoption(v.adoption),
+        uploads_held: toAdoption(v.uploads_held),
     };
 }
 
-/** An adoption status needs a state and a sentence to show; anything less is
- *  none, never a status the daemon did not give. */
+/** An adoption status (or a held-uploads line) needs a state and a sentence to
+ *  show; anything less is none, never a status the daemon did not give. */
 function toAdoption(v: unknown): BindingAdoption | null {
     if (!isPlainObject(v)) return null;
     const state = str(v.state);

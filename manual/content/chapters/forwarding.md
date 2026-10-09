@@ -151,6 +151,19 @@ shown in the warning colour. While a check is running the line updates by
 itself. Once the link has been reserved, the logbook's **Cloud logbook** name
 is fixed and no longer offered for editing.
 
+Once the link is confirmed, the logbook uploads by the link from the next
+restart on. If Station Manager starts while a linked logbook's confirmation
+does not match the current station account, for example after you replaced the
+token, it holds that logbook's uploads rather than send them anywhere else. A
+warning line under the logbook's row says *Uploads are held until adoption is
+confirmed for the current station account.* QSOs you log still queue, and
+nothing is lost. While the line is shown, **Retry failed** is unavailable for
+that logbook; **Clear** still works. The line updates by itself once the link
+is confirmed and then reads *Uploads resume after a restart.*; after the
+restart the queued uploads are sent and the line is gone. If you turn the
+logbook off and save while its uploads are held, the line says its queued
+uploads are discarded at the next restart.
+
 ### How to tell a QSO was uploaded
 
 After a successful QRZ.com or Club Log upload, Station Manager stamps the QSO

@@ -179,6 +179,12 @@ async function shown(text: string): Promise<HTMLElement> {
     return el;
 }
 
+async function wantGets(ms: number, more: number): Promise<void> {
+    const before = gets;
+    await vi.advanceTimersByTimeAsync(ms);
+    expect(gets).toBe(before + more);
+}
+
 describe('DestinationsSection — the adoption status (4b3)', () => {
     it('R1: the message as served, muted while fine or in progress, warning otherwise', async () => {
         for (const [adoption, warning] of [
@@ -271,12 +277,6 @@ describe('DestinationsSection — the adoption status (4b3)', () => {
         expect(bindingsState.view!.destinations[0].logbooks[0].adoption).toEqual(CHECKING);
     });
 
-    async function wantGets(ms: number, more: number): Promise<void> {
-        const before = gets;
-        await vi.advanceTimersByTimeAsync(ms);
-        expect(gets).toBe(before + more);
-    }
-
     it('R7: a lost response, re-read at 60 s until a retry confirms it', async () => {
         served = view(UNCERTAIN);
         render(DestinationsSection);
@@ -342,6 +342,139 @@ describe('DestinationsSection — the adoption status (4b3)', () => {
             const { unmount } = render(DestinationsSection);
             await shown(`Status ${state}.`);
             await wantGets(180_000, 0);
+            unmount();
+            _resetBindingsForTests();
+        }
+    });
+});
+
+/*
+    W-0021 5F.3 commit 5b, ruling C2 (2026-10-09): a binding the daemon
+    started held shows the daemon's uploads_held line.
+
+      U1  the line as served, in the warning text, in a plain paragraph, on
+          every held row (the default or not), apart from the adoption line.
+      U2  the sequence: waiting for confirmation, re-read at 60 s; confirmed,
+          the line says a restart is required and the re-reads stop; after
+          the restart, no line.
+      U3  disabled while held: its line, and no re-reads by itself.
+      U4  a held row with no adoption status of its own is re-read at 60 s.
+      U5  a held row's Retry failed is disabled whatever the held line says
+          (a confirmation alone creates no worker), with failed uploads
+          present; Clear stays available; an unheld row's Retry is not.
+*/
+
+const WAITING = {
+    state: 'waiting_for_confirmation',
+    message: 'Uploads are held until adoption is confirmed for the current station account.',
+};
+const RESTART = { state: 'restart_required', message: 'Uploads resume after a restart.' };
+const DISABLED = {
+    state: 'disabled',
+    message:
+        'Uploads are held; this binding is off, so its queued uploads are discarded at the next restart.',
+};
+
+/** view(adoption) with uploads_held on the default row and, when given, on a
+ *  bound Portable row. */
+function heldView(adoption: unknown, held: unknown, portableHeld?: unknown) {
+    const v = view(adoption);
+    const rows = v.destinations[0].logbooks as Record<string, unknown>[];
+    rows[0].uploads_held = held;
+    if (portableHeld !== undefined) {
+        Object.assign(rows[1], {
+            bound: true,
+            enabled: true,
+            forwarder_name: 'smcloud.u2',
+            uploads_held: portableHeld,
+        });
+    }
+    return v;
+}
+
+async function heldShown(...texts: string[]): Promise<HTMLElement[]> {
+    await screen.findAllByText(texts[0]);
+    const els = screen.getAllByTestId('row-uploads-held');
+    expect(els.map((e) => e.textContent?.trim())).toEqual(texts);
+    return els;
+}
+
+describe('DestinationsSection — uploads_held (5b)', () => {
+    it('U1: the line as served, warning text, on every held row', async () => {
+        served = heldView(NEEDS, WAITING, WAITING);
+        render(DestinationsSection);
+        const els = await heldShown(WAITING.message, WAITING.message);
+        for (const el of els) {
+            expect(el.classList.contains('text-warning')).toBe(true);
+            expect(el.tagName).toBe('P');
+            expect(el.getAttribute('role')).toBeNull();
+        }
+        // The adoption line stays its own.
+        expect(screen.getByTestId('row-adoption').textContent?.trim()).toBe(NEEDS.message);
+    });
+
+    it('U2: waiting, confirmed, restarted', async () => {
+        served = heldView(NEEDS, WAITING);
+        const { unmount } = render(DestinationsSection);
+        await heldShown(WAITING.message);
+        await wantGets(59_999, 0);
+        served = heldView(ADOPTED, RESTART); // confirmed during the run
+        await wantGets(1, 1);
+        await heldShown(RESTART.message);
+        await shown(ADOPTED.message);
+        await wantGets(180_000, 0);
+
+        // The restart reloads the page.
+        unmount();
+        _resetBindingsForTests();
+        served = heldView(DONE, undefined);
+        render(DestinationsSection);
+        await shown(DONE.message);
+        expect(screen.queryByTestId('row-uploads-held')).toBeNull();
+        await wantGets(180_000, 0);
+    });
+
+    it('U3: disabled while held: its line, no re-reads', async () => {
+        served = heldView(ADOPTED, DISABLED);
+        render(DestinationsSection);
+        await heldShown(DISABLED.message);
+        await wantGets(180_000, 0);
+    });
+
+    it('U4: a held row without an adoption status is re-read at 60 s', async () => {
+        served = heldView(DONE, undefined, WAITING);
+        render(DestinationsSection);
+        await heldShown(WAITING.message);
+        await wantGets(59_999, 0);
+        served = heldView(DONE, undefined, RESTART);
+        await wantGets(1, 1);
+        await heldShown(RESTART.message);
+        await wantGets(180_000, 0);
+    });
+});
+
+describe('DestinationsSection — Retry while held (5b, operator review)', () => {
+    it('U5: a held row cannot retry; it can clear; an unheld row can retry', async () => {
+        for (const line of [WAITING, RESTART, DISABLED]) {
+            const v = heldView(NEEDS, line, null);
+            for (const row of v.destinations[0].logbooks as Record<string, unknown>[]) {
+                row.queue = { waiting: 1, failed: 2, in_flight: 0 };
+            }
+            served = v;
+            const { unmount } = render(DestinationsSection);
+            await heldShown(line.message);
+            const retry = (logbook: string) =>
+                screen.getByRole('button', {
+                    name: `Retry failed uploads for SM Cloud backup for ${logbook}`,
+                });
+            const clear = (logbook: string) =>
+                screen.getByRole('button', {
+                    name: `Clear the queue for SM Cloud backup for ${logbook}`,
+                });
+            expect(retry('Default'), line.state).toBeDisabled();
+            expect(clear('Default'), line.state).toBeEnabled();
+            expect(retry('Portable'), line.state).toBeEnabled();
+            expect(clear('Portable'), line.state).toBeEnabled();
             unmount();
             _resetBindingsForTests();
         }

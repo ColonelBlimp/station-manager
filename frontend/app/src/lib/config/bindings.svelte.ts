@@ -82,10 +82,13 @@ function adoptionRunning(row: LogbookBinding): boolean {
     return row.adoption?.state === 'checking' || row.adoption?.state === 'confirming';
 }
 
-/** A row's re-read cadence: 5 s in progress, 60 s retrying, 0 for none. */
+/** A row's re-read cadence: 5 s in progress, 60 s retrying or while its
+ *  uploads wait for a confirmation (ruling C2), 0 for none. A held line saying
+ *  a restart is required, or that the binding is off, needs no re-read. */
 function adoptionPollFor(row: LogbookBinding): number {
     if (adoptionRunning(row)) return ADOPTION_POLL_MS;
-    return row.adoption && ADOPTION_RETRYING.has(row.adoption.state) ? ADOPTION_RETRY_POLL_MS : 0;
+    if (row.adoption && ADOPTION_RETRYING.has(row.adoption.state)) return ADOPTION_RETRY_POLL_MS;
+    return row.uploads_held?.state === 'waiting_for_confirmation' ? ADOPTION_RETRY_POLL_MS : 0;
 }
 
 export function rowKey(type: string, logbookId: number): string {
@@ -171,10 +174,10 @@ function withEligibility(target: ArchiveBindings, source: ArchiveBindings): Arch
     };
 }
 
-/** `target` with each row's adoption status taken from `source`, the row
- *  matched by logbook and binding name. A row `source` does not describe has
- *  none. Nothing else of `source` is taken: the drafts' baseline, queue
- *  counts and eligibility belong to other reads. */
+/** `target` with each row's adoption status and held-uploads line taken from
+ *  `source`, the row matched by logbook and binding name. A row `source` does
+ *  not describe has neither. Nothing else of `source` is taken: the drafts'
+ *  baseline, queue counts and eligibility belong to other reads. */
 function withAdoption(target: ArchiveBindings, source: ArchiveBindings): ArchiveBindings {
     const fresh = new Map(source.destinations.map((d) => [d.type, d]));
     return {
@@ -189,7 +192,11 @@ function withAdoption(target: ArchiveBindings, source: ArchiveBindings): Archive
                             c.logbook_id === row.logbook_id &&
                             c.forwarder_name === row.forwarder_name
                     );
-                    return { ...row, adoption: next?.adoption ?? null };
+                    return {
+                        ...row,
+                        adoption: next?.adoption ?? null,
+                        uploads_held: next?.uploads_held ?? null,
+                    };
                 }),
             };
         }),

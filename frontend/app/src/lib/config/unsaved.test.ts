@@ -278,6 +278,7 @@ function dirtyBinding(): void {
                         reason: '',
                         locked_fields: [],
                         adoption: null,
+                        uploads_held: null,
                     },
                 ],
             },

@@ -134,6 +134,47 @@ describe('fetchArchiveBindings', () => {
         ]);
     });
 
+    it('decodes uploads_held beside the adoption; anything it cannot read is none (W-0021 5b)', async () => {
+        const rowWith = (id: number, held: unknown) => ({
+            logbook_id: id,
+            logbook_name: `L${id}`,
+            bound: true,
+            enabled: true,
+            adoption: { state: 'needs_confirmation', message: 'Needs.' },
+            uploads_held: held,
+        });
+        stub(200, {
+            ...VIEW,
+            destinations: [
+                {
+                    ...VIEW.destinations[0],
+                    logbooks: [
+                        rowWith(1, { state: 'waiting_for_confirmation', message: 'Held.' }),
+                        { logbook_id: 2, logbook_name: 'absent' },
+                        rowWith(3, 'restart_required'),
+                        rowWith(4, { state: 'disabled', message: '' }),
+                        rowWith(5, { state: '', message: 'no state' }),
+                        rowWith(6, null),
+                    ],
+                },
+            ],
+        });
+        const out = await fetchArchiveBindings('a1');
+        expect(out.kind).toBe('ok');
+        if (out.kind !== 'ok') return;
+        const rows = out.bindings.destinations[0].logbooks;
+        expect(rows.map((r) => r.uploads_held)).toEqual([
+            { state: 'waiting_for_confirmation', message: 'Held.' },
+            null,
+            null,
+            null,
+            null,
+            null,
+        ]);
+        // A separate field: the adoption is untouched by it.
+        expect(rows[0].adoption).toEqual({ state: 'needs_confirmation', message: 'Needs.' });
+    });
+
     it('an unknown aggregate state reads as off rather than claiming more', async () => {
         stub(200, { ...VIEW, destinations: [{ ...VIEW.destinations[0], state: 'bogus' }] });
         const out = await fetchArchiveBindings('a1');
