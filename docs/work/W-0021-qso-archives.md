@@ -3143,6 +3143,50 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      (UH5, SW7); the account, the target UUID and the label each taken from the selector (SW8).
      The test daemons' socket directory is made owner-only before a restart so SW6 reaches the
      API over the socket, as the listener requires.
+     **Codex review of `14e9b94a` (2026-10-09): one P2, verified, ruled (a), fixed in `f4298a5e`; closed.**
+     The identity wire sends the local logbook name as `logbook_label`. Locally a logbook name is
+     at most 64 characters (SQLite `length()`; the rename PATCH has no check of its own), but the
+     cloud handler's `displayValuesInvalid` counts BYTES (`len`), while the cloud's own column
+     CHECK (Postgres `length()`) counts characters. A logbook renamed to 33 `é` (66 bytes) after
+     adoption makes every upload a 400, failed terminally; the name wire never sent the label. The
+     adoption request carries the same value. Options weighed: (a) the cloud handler counts
+     characters, matching its column and the local limit (one change, needs an smcloud deploy
+     before the daemon's); (b) the forwarder trims the label to 64 bytes on a character boundary
+     (the cloud shows a shortened label); (c) a 64-byte limit on local names (could refuse
+     existing names). Recommended: (a). Codex also saw SW6 time out waiting for the socket API in
+     its sandbox, cause unverified; `apiCall` hides the listener's error.
+     **Ruling (2026-10-09): (a).** The cloud's display-label limits count Unicode code points
+     (`utf8.RuneCountInString`), for both the archive and the logbook label, in the shared
+     validator. Names are kept exactly: no truncation, no normalization, no tighter local limit.
+     Prove through the adoption and identity-upload endpoints: 33 `é` succeed and round-trip
+     unchanged; 64 multibyte characters succeed; 65 are refused with nothing written; the ASCII
+     boundaries still hold. Scoped to display labels: the legacy cloud name's and the
+     callsign's policy unchanged. **Deployment prerequisite: the corrected cloud server is
+     deployed and verified before the identity-enabled daemon**; this ruling does not authorize
+     a deployment. SW6: report the listener's actual failure, neither a longer timeout nor
+     treating the sandbox failure as harmless. Test first; the review file kept; the diff
+     presented before committing.
+     **The fix (built 2026-10-09; approved and committed as `f4298a5e`, not pushed).**
+     `displayValuesInvalid` (`internal/cloud/server/identity.go`), shared by the adoption and the
+     identity upload, counts the archive and logbook labels in code points; the callsign's and
+     the legacy name's byte limits are untouched. Tests (`identity_labels_test.go`, on `sm-pg`),
+     RED first: DL1/DL2 through both endpoints: 33 `é`, 64 `é`, 64 four-byte characters and 64
+     decomposed code points (`e` + U+0301) succeed and are stored byte-for-byte. Passing before
+     the change: DL3/DL4 (65 multibyte or ASCII characters, either label, refused 400
+     `invalid_field_value`; a push leaves no archive, logbook or QSO, an adoption leaves the
+     legacy rows as they were), 64 ASCII accepted, and DL5 (a 34-byte callsign and a 66-byte
+     legacy name still refused). Reversions, each failing its intended assertion, restored by
+     hash: either label counted in bytes (DL1); either limit one higher (DL3); the callsign or
+     the legacy name counted in code points (DL5). Not separately provable: "no normalization",
+     since there is no normalizing code to revert; DL2's decomposed case would catch one added.
+     SW6: `apiCall` reads the generation's `errCh` while it waits and fails with the listener's
+     own error; shown by leaving the socket directory 0755, which now fails in 0.3 s naming
+     "socket parent directory is accessible to group/other (mode 0755)" instead of timing out.
+     **Deployment order (prerequisite): deploy and verify this cloud server before any daemon
+     carrying the identity wire (`14e9b94a` onward).** Until then a logbook label over 64 bytes
+     but within 64 characters is refused by the deployed server, failing every identity upload
+     of that logbook and its adoption. Not authorized by this ruling.
+     Codex review of `f4298a5e`: no actionable findings; closed. Both review files removed.
    - **Station drills after deploy** (operator-run, recorded here): Home unchanged after the
      upgrade (same `forwarded_to`, worker names and queue counts as before; bindings listed under
      Home with the legacy names); the Drill archive shows every destination off, no banner, and a
