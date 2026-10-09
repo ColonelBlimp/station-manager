@@ -3254,6 +3254,15 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      `identity_protocol: 1`), green CI, and the change's scope (only the adoption and identity
      endpoints' label check, which no deployed client calls yet). The cloud-first prerequisite
      is met; the daemon hold remains until the operator lifts it.
+     **Daemon deployed (2026-10-09, operator, `task deploy:local:dev`).** `smd` runs
+     `2.0.0-alpha.3-222-g5e2bc1c7`. Migration 0017 (new to this station; the previous build
+     `aba1289e` predates it) applied: `/v1/version` reports schema 17, not dirty. The old daemon
+     stopped cleanly at 16:34:25 and the new one was listening at 16:34:32; no warning or error
+     since start. The test station has no SM Cloud station account, so the adopter, the hold and
+     the identity wire have nothing to act on (no SM Cloud log lines, as expected). No
+     `db.pre-0017` copy was seen in the working directory. Still to run: the station drills
+     listed below; to exercise adoption, the operator adds the SM Cloud account, enables it on
+     Default and restarts.
    - **Station drills after deploy** (operator-run, recorded here): Home unchanged after the
      upgrade (same `forwarded_to`, worker names and queue counts as before; bindings listed under
      Home with the legacy names); the Drill archive shows every destination off, no banner, and a
