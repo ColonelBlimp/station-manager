@@ -3247,8 +3247,13 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      **Cloud server deployed (2026-10-09, operator).** `GET /v1/version` on the smcloud host
      answers `{"identity_protocol":1,"version":"2.0.0-alpha.3-220-g95d4e331"}`, a build that
      contains `f4298a5e`; before it, `...-195-gefae7b06` (5F.2). No schema change (still 8).
-     Still to verify passively: the station's name-wire uploads keep succeeding. The daemon hold
-     remains until the operator lifts it.
+     **Verified (2026-10-09, operator's choice (a)): by version.** A test QSO (`01a12110…`) on
+     the station's test database was not queued anywhere (`forwarded_to: []`, no upload rows):
+     this station has no SM Cloud station account, so it has no name-wire client to exercise.
+     The server is accepted as verified by its version (`95d4e331`, containing `f4298a5e`;
+     `identity_protocol: 1`), green CI, and the change's scope (only the adoption and identity
+     endpoints' label check, which no deployed client calls yet). The cloud-first prerequisite
+     is met; the daemon hold remains until the operator lifts it.
    - **Station drills after deploy** (operator-run, recorded here): Home unchanged after the
      upgrade (same `forwarded_to`, worker names and queue counts as before; bindings listed under
      Home with the legacy names); the Drill archive shows every destination off, no banner, and a
