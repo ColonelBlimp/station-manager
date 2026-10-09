@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	stderr "errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -141,8 +142,8 @@ func uploadStatus(t *testing.T, d *daemon, uuid string) string {
 	return ""
 }
 
-// stampAdoption writes the binding's adoption columns between generations, as
-// the adopter would have, and makes the queued rows due.
+// stampAdoption writes the binding's adoption columns between generations
+// (after stopGen), as the adopter would have, and makes the queued rows due.
 func stampAdoption(t *testing.T, d *daemon, reserved bool, adopted bool, account string) {
 	t.Helper()
 	db, err := sql.Open("sqlite", "file:"+d.paths.QSO)
@@ -178,7 +179,37 @@ func startAccount(t *testing.T, d *daemon) string {
 
 func restartGen(t *testing.T, d *daemon, orch *orchestrator.Orchestrator) (*daemon, *orchestrator.Orchestrator) {
 	t.Helper()
-	orch.Shutdown(5*time.Second, nil)
+	stopGen(t, orch)
+	return startGen(t, d)
+}
+
+// stopGen ends a generation and requires every node to have drained: only
+// then are its workers and connections gone, so the raw writes between
+// generations, and the next generation, cannot race them. A failed, timed-out
+// or skipped node fails the test, named with its error.
+func stopGen(t *testing.T, orch *orchestrator.Orchestrator) {
+	t.Helper()
+	report := orch.Shutdown(5*time.Second, nil)
+	names := map[orchestrator.Result]string{orchestrator.Failed: "failed", orchestrator.TimedOut: "timed out", orchestrator.Skipped: "skipped"}
+	var bad []string
+	for _, o := range report.Outcomes {
+		if o.Result != orchestrator.Drained {
+			what, ok := names[o.Result]
+			if !ok {
+				what = fmt.Sprintf("result %d", o.Result)
+			}
+			bad = append(bad, fmt.Sprintf("%s %s (err %v, blocked by %v)", o.Node, what, o.Err, o.BlockedBy))
+		}
+	}
+	if len(bad) > 0 || report.FirstTimedOut != "" || len(report.Outcomes) == 0 {
+		t.Fatalf("the generation did not drain cleanly (first timed out %q, %d outcomes): %s",
+			report.FirstTimedOut, len(report.Outcomes), strings.Join(bad, "; "))
+	}
+}
+
+// startGen starts the next generation on d's config.
+func startGen(t *testing.T, d *daemon) (*daemon, *orchestrator.Orchestrator) {
+	t.Helper()
 	d2, orch2 := buildOrchestratedDaemon(t, d.cfgSvc, d.cfgSvc.Snapshot())
 	if err := orch2.Start(d2.workerCtx); err != nil {
 		t.Fatalf("restart: %v", err)
@@ -239,10 +270,11 @@ func TestIdentityWire_SW1_ConfirmedUploadsByUUID(t *testing.T) {
 	cloud := newIdentityCloud(t)
 	d, orch := homeWithCloud(t, cloud)
 	u1 := logQso(t, d, "DL9UW")
+	stopGen(t, orch)
 	stampAdoption(t, d, true, true, startAccount(t, d))
 	before := len(cloud.seen())
 	cloud.setStatus(0)
-	d2, _ := restartGen(t, d, orch)
+	d2, _ := startGen(t, d)
 
 	waitUntil(t, "the queued QSO to upload", func() bool { return uploadStatus(t, d2, u1) == "uploaded" })
 	want := identityPath(t, d2)
@@ -263,10 +295,11 @@ func TestIdentityWire_SW2_AReservationAloneKeepsTheLegacyWire(t *testing.T) {
 	cloud := newIdentityCloud(t)
 	d, orch := homeWithCloud(t, cloud)
 	u1 := logQso(t, d, "DL9UW")
+	stopGen(t, orch)
 	stampAdoption(t, d, true, false, "")
 	before := len(cloud.seen())
 	cloud.setStatus(0)
-	d2, _ := restartGen(t, d, orch)
+	d2, _ := startGen(t, d)
 	waitUntil(t, "the queued QSO to upload", func() bool { return uploadStatus(t, d2, u1) == "uploaded" })
 	for _, p := range cloud.seen()[before:] {
 		if p != "/v1/qsos" {
@@ -281,11 +314,12 @@ func TestIdentityWire_SW3_SW4_HeldThenConfirmedThenRestarted(t *testing.T) {
 			cloud := newIdentityCloud(t)
 			d, orch := homeWithCloud(t, cloud)
 			u1 := logQso(t, d, "DL9UW")
+			stopGen(t, orch)
 			stampAdoption(t, d, true, true, account)
 			cloud.setStatus(0)
 			workersBefore := smcloudWorkersStarted(t, d)
 			before := len(cloud.seen())
-			d2, orch2 := restartGen(t, d, orch)
+			d2, orch2 := startGen(t, d)
 
 			// SW3: held.
 			u2 := logQso(t, d2, "9A4ZM")
@@ -348,6 +382,7 @@ func TestIdentityWire_SW5_ConstructionFailureStopsTheStart(t *testing.T) {
 	cloud := newIdentityCloud(t)
 	d, orch := homeWithCloud(t, cloud)
 	logQso(t, d, "DL9UW")
+	stopGen(t, orch)
 	stampAdoption(t, d, true, true, startAccount(t, d))
 	cloud.setStatus(0)
 	restore := newIdentityForwarder
@@ -358,7 +393,6 @@ func TestIdentityWire_SW5_ConstructionFailureStopsTheStart(t *testing.T) {
 	workersBefore := smcloudWorkersStarted(t, d)
 	before := len(cloud.seen())
 
-	orch.Shutdown(5*time.Second, nil)
 	d2, orch2 := buildOrchestratedDaemon(t, d.cfgSvc, d.cfgSvc.Snapshot())
 	err := orch2.Start(d2.workerCtx)
 	if err == nil || !strings.Contains(err.Error(), "identity") {
@@ -453,6 +487,7 @@ func TestIdentityWire_SW6_NoRetryWhileHeld(t *testing.T) {
 	cloud := newIdentityCloud(t)
 	d, orch := homeWithCloud(t, cloud)
 	u1 := logQso(t, d, "DL9UW")
+	stopGen(t, orch)
 	stampAdoption(t, d, true, true, "another")
 	db, err := sql.Open("sqlite", "file:"+d.paths.QSO)
 	if err != nil {
@@ -465,7 +500,7 @@ func TestIdentityWire_SW6_NoRetryWhileHeld(t *testing.T) {
 	cloud.setStatus(0)
 	before := len(cloud.seen())
 	ownerOnlySocketDir(t, d)
-	d2, orch2 := restartGen(t, d, orch)
+	d2, orch2 := startGen(t, d)
 
 	code, body := apiCall(t, d2, http.MethodPost, "/v1/forwarder/smcloud/queue/retry")
 	if code != http.StatusBadRequest || !strings.Contains(string(body), "forwarder_disabled") {
@@ -498,10 +533,11 @@ func TestIdentityWire_SW7_DisabledWhileHeld(t *testing.T) {
 	cloud := newIdentityCloud(t)
 	d, orch := homeWithCloud(t, cloud)
 	u1 := logQso(t, d, "DL9UW")
+	stopGen(t, orch)
 	stampAdoption(t, d, true, true, "another")
 	cloud.setStatus(0)
 	before := len(cloud.seen())
-	d2, orch2 := restartGen(t, d, orch)
+	d2, orch2 := startGen(t, d)
 
 	setBinding(t, d2, `remote_adopted_account = ?`, startAccount(t, d2))
 	if h := heldLine(t, d2); h == nil || h.State != archive.UploadsHeldRestart {
