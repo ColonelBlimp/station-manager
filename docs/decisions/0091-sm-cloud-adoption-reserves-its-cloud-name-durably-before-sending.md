@@ -128,6 +128,33 @@ Adjustments ruled on the 4b design (2026-10-08):
   the name or the eligibility). The check keeps running after a success and while nothing is
   eligible.
 
+Adjustments ruled for the adopter (2026-10-09, 4b2):
+- **(A1) The first check runs at once** when the lifecycle dependencies are ready, then hourly.
+  Elapsed time does not guarantee a drained queue. Safety comes from the judgement and the
+  durable reservation, and the judgement already counts waiting, in-flight and failed uploads.
+- **(A2) An old server is rearmed like a refusal.** A version answer without `identity_protocol`
+  waits for a relevant input change, replacing ADR 0090 T2's restart-only rule. A server upgraded
+  at the same URL with unchanged inputs still needs a daemon restart.
+- **(A3) A status the protocol does not define is a refusal.** An unexpected 400, 403 or 404 is
+  terminal for unchanged inputs and says "Adoption could not be confirmed: the server returned
+  HTTP {status}." It is not reported as an unreadable answer. Transport failures and 5xx stay
+  retryable hourly.
+- **(A4) Texts and kept uncertainty.** No answer to the adoption request: "Adoption outcome
+  uncertain: no confirmation was received from the server. Retrying." The client cannot know that
+  a reply was lost. Judged unsafe while reserved: "Adoption confirmation blocked: the legacy cloud
+  logbook can no longer be matched safely to Home's default logbook; manual recovery is required."
+  Local evidence unreadable: "Not yet: the local archive could not be read (retrying)." While an
+  earlier outcome for the same subject is uncertain, a later "Not yet" keeps the uncertainty.
+- **(A5) A later refusal does not resolve an uncertain outcome.** A 401 proves only that the
+  latest request failed authentication. For the same subject the status keeps the uncertainty and
+  names the current blocker: "Adoption outcome remains uncertain. Confirmation is blocked: the
+  server rejected authentication (HTTP 401)." A cloud success whose local record failed is kept
+  the same way. Only evidence clears it: a recorded confirmation, or a 409 to the same adoption
+  request carrying one of the three adoption conflict codes, since the store never clears a
+  mapping and a replay of one in effect answers 200. Any other 409 resolves nothing. It stops
+  showing when its subject no longer matches. An unreadable answer to the adoption request is
+  uncertain too (the server may have committed), and is still suppressed as terminal.
+
 Options weighed:
 - **Server tenant identity.** A tenant UUID served on an authenticated endpoint would be exact and
   survive token rotation. Not chosen: it needs a server change and a redeploy of the 5F.2 server.

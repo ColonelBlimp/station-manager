@@ -2664,6 +2664,199 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      sqlite and config under `-race` against `sm-pg` (stopped afterwards), maintainability (0
      regressions), and `task ci:local` all passed. `install.md` (the refusal below 17) and
      `api-endpoints.md` (`restart_required`) change with the code.
+     *4b2 go-ahead and acceptance set (operator, 2026-10-09).* 4b2 starts; the scope matches the
+     rulings above. The test-first acceptance set states each of these explicitly:
+     - A lost response, a failed local confirmation and a restart with a reservation each recover
+       through a fresh judgement and an idempotent adoption.
+     - A moved default or a changed account cannot inherit an earlier attempt's status, a late
+       completion included.
+     - Terminal failures stay suppressed across unchanged hourly checks; each relevant input
+       change rearms them.
+     - Shutdown cancels in-flight HTTP work and drains the adopter before its dependencies close.
+     - No adoption request is sent off Home, for an ineligible binding, or after a failed
+       reservation.
+     The API reference update stays in 4b2, the SPA in 4b3, and identity-worker selection plus T7
+     in commit 5. The deployment hold stands until 5F.3 is built and reviewed.
+     *4b2 shape and open questions (proposed 2026-10-09, awaiting the operator; no code yet).*
+     - **Where it lives.** The archive tests import `smcloud`, so `smcloud` cannot import
+       `archive`. The HTTP client (`/v1/version`, `/v1/logbooks` and the manifest,
+       `/v1/archives/adopt`) goes in `smcloud`. The adopter goes in a new
+       `internal/forwarding/smcloud/adoption`, which uses both. `archive` owns the status type
+       and its subject; the bindings view shows a status only on the subject it belongs to.
+     - **Start and drain.** A new lifecycle node starts after `http` (the archive manager is
+       built there), runs only on Home, and drains before the log database closes.
+     - (A1) First attempt: after 2 minutes (as the reconciler), or at once? Proposed: 2 minutes.
+       *Ruled (operator, 2026-10-09): at once, when the lifecycle dependencies are ready, then
+       hourly.* Elapsed time guarantees no drained queue; safety comes from the judgement and the
+       durable reservation. A readiness condition the judgement needs must be explicit. None is
+       needed: the judgement counts waiting, in-flight and failed rows alike. The orphan sweep in
+       `startWorkers` (before this node starts) only moves `in_progress` rows back to pending,
+       which changes no count the judgement reads.
+     - (A2) A version answer without `identity_protocol`: suppressed like a terminal failure and
+       rearmed by a relevant change, or literal T2 (only a restart)? Proposed: like a terminal
+       failure.
+     - (A3) An HTTP status the protocol does not define (400, 403, 404): terminal as "the
+       server's answer could not be read", or retried hourly as unreachable? Proposed: terminal.
+     - (A4) Draft texts. Lost reply (timeout, no response or a 5xx on the adopt call): "Adoption
+       outcome uncertain: the server's reply was lost (retrying)." Re-judged unsafe while
+       reserved: "Adoption confirmation blocked: the legacy cloud logbook can no longer be matched
+       safely to Home's default logbook; manual recovery is required." Local evidence unreadable:
+       "Not yet: the local archive could not be read (retrying)."
+     - Noted: an unsafe verdict is not on Q4's terminal list, so it is judged again hourly. An
+       eligibility flip undone between two hourly checks cannot be observed.
+     *Rulings on A2–A4 (operator, 2026-10-09); to be recorded in ADR 0091:*
+     - (A2) Rearmed by a relevant input change, as proposed. This REPLACES T2's restart-only rule.
+       A server upgraded at the same URL with unchanged inputs still needs a daemon restart.
+     - (A3) An unexpected 400, 403 or 404 is terminal for unchanged inputs, but it is a refusal,
+       not an unreadable answer: "Adoption could not be confirmed: the server returned HTTP
+       {status}." Transport failures and 5xx stay retryable hourly.
+     - (A4) Lost reply: "Adoption outcome uncertain: no confirmation was received from the server.
+       Retrying." ("Reply was lost" asserts what the client cannot know.) Reserved and unsafe: the
+       proposed text. Evidence unreadable: the proposed text, retried hourly; while an earlier
+       adoption outcome for the same subject is still uncertain, the status keeps that
+       uncertainty instead of "Not yet". The same applies to an unreachable server: neither proves
+       anything about the earlier request. The uncertainty is held in memory, so a restart starts
+       again from "checking".
+     **5F.3 commit 4b2, the adopter (committed `45c8c126`, 2026-10-09, after the review rounds
+     below; the operator's follow-up review found no further actionable issue).**
+     - **The client** (`smcloud.AdoptionClient`, built through `New`'s account validation): GET
+       `/v1/version` (no token sent), `/v1/logbooks` then the named logbook's manifest
+       (tombstones included; a name the cloud lacks is none, with no manifest request), and POST
+       `/v1/archives/adopt` with the six fields, UUIDs in lower case. A 200 must echo the archive
+       and logbook sent. Every request is bounded at 10 s and never follows a redirect. Failures:
+       no answer, a timeout or a 5xx is `unreachable`; 401 `unauthorized`; a 200 that is not the
+       protocol's answer `unreadable`; 409 `conflict`, with the code only when it is one of the
+       three known; anything else `refused` with its status (A3; a 3xx is one). Error text names
+       the method, path and status, never the URL, the token or the body.
+     - **The adopter** (`internal/forwarding/smcloud/adoption`; `smcloud` cannot import `archive`,
+       whose tests import `smcloud`). `Run` checks at once, then hourly, and returns only on
+       cancellation. Each check reads Home (legacy ownership), the default logbook (live, with a
+       UUID), its enabled SM Cloud binding, and a complete account whose client builds; anything
+       missing clears the status and the suppression. A binding confirmed under the current
+       account needs nothing. Otherwise the attempt runs: version (below 1 is `unsupported`), the
+       cloud UUIDs, `ReserveAdoption` with the T3 judgement over `LocalAdoptionEvidence` (the
+       enabled bindings at start as the running routes), the request, then `RecordAdoption`.
+       A moved pin clears the status; an unsafe verdict is `unsafe`, or `blocked` when the binding
+       was already reserved; a failed reservation or evidence read is `local_unreadable`; no
+       answer to the request is `uncertain`; a failed record is `record_failed`; a discarded
+       completion clears the status. A cancelled attempt reports nothing.
+     - **Suppression (Q4, A2, A3).** `unauthorized`, `unreadable`, `refused`, `conflict` and
+       `unsupported` hold the subject (archive, binding, normalized name, account fingerprint).
+       A later check with the same subject sends nothing. A different subject, or a check that
+       finds nothing eligible, rearms it. Reservation timestamps and unrelated config are not in
+       the subject.
+     - **Status.** `archive.AdoptionStatus` carries its subject. The bindings view (GET and the
+       PUT's answer) sets `adoption: {state, message}` on Home's default SM Cloud row only:
+       `adopted` or `adopted_restart_required` from the archive itself (by the bindings at start),
+       otherwise, on an enabled binding, the adopter's status when its subject is the current
+       one, otherwise `needs_confirmation` for a binding adopted under another account.
+       `uncertain` and `record_failed` are kept through `checking`, `confirming`, `unreachable` and
+       `local_unreadable` of the same subject (A4); see A5 below for later refusals. Each
+       outcome is logged once per subject, with the judgement's reason for `unsafe` and
+       `blocked`; never the token or the account fingerprint.
+     - **Wiring.** Node `smcloud-adoption` starts after `http` (which builds the archive manager)
+       and `archive-promote`; the log database drains after it. It starts the adopter only on
+       Home, on its own child context: stop cancels the request in flight and waits.
+       `api-endpoints.md` documents `adoption`.
+     Tests, RED first against compiling stubs: AC1–AC6 (client), AS1–AS6 (view), AD1–AD9 (the
+     adopter: the attempt; no request off Home, without a catalogued archive, for a missing,
+     disabled or deleted default, an incomplete or missing account, or a confirmed binding; no
+     request after an unsafe verdict, a failed write, an unreadable archive or a moved pin; the
+     three recoveries through a fresh judgement and the same request; no inherited status, a late
+     completion included; suppression and each rearm; every text and the kept uncertainty; the
+     loop on a fake clock, alive after a success and while nothing is eligible, and shutdown
+     cancelling the request in flight; one log line per transition), AW1–AW3 (wiring). AD2,
+     AS4 and AS6's "none" cases passed against the stubs (they write and send nothing); their
+     reversions cover them. AC7 (the client against the real cloud server on `sm-pg`: the
+     protocol, the UUIDs with a tombstone, an adoption and its replay, a mapping conflict's
+     code, a refused token) was written after the code, as a wire pin.
+     Reversion proofs (unique anchor, non-empty compiling replacement, restore checked by hash),
+     each failing its intended assertion; 42 in all:
+     - Client: 5xx refused; 401 not distinguished; an unknown 409 code repeated; the echo
+       unchecked; redirects followed; no per-request bound; a manifest without entries accepted;
+       UUIDs not lowered; transport text kept (it carries the address); no account validation.
+     - View: the subject ignored; the start ignored (no "applies after a restart"); no
+       `needs_confirmation`; shown off Home, on a disabled binding, off the default; the name not
+       normalized; the PUT's view unannotated.
+     - Adopter: no suppression; suppression by binding only; eligibility not rearming; a lost
+       reply not uncertain; nothing sticky; adopting after an unsafe verdict or a failed
+       reservation; `blocked` not distinguished; the loop ending when idle; every repeat logged;
+       cloud UUIDs not judged; the conflict code dropped; never `confirming`; a confirmed binding
+       attempted; off Home attempted; a disabled default attempted; `unsupported` or `refused`
+       not suppressed.
+     - Wiring: the adopter on a context stop does not cancel; the log database not draining after
+       it; no start edge (reverse registration); the status not wired; started off Home; stop not
+       waiting; a wait before the first check (AW2, on the real hourly timer).
+     Not separately provable: AD8's first check runs with nothing eligible, so "at once" is proved
+     by AW2 instead.
+     *Operator response to 4b2 (2026-10-09): hold the commit for one policy correction; the diff is
+     not yet reviewed.* Accepted: a redirect as a refusal with its 3xx status, an unrecognised 409
+     code left out of the text, and both in-progress texts, shown only while an attempt runs.
+     **Correction (A5):** a later refusal does not resolve an earlier uncertain outcome. A 401 proves
+     only that the latest request failed authentication. For the same subject the status keeps the
+     uncertainty and names the current blocker, e.g. "Adoption outcome remains uncertain.
+     Confirmation is blocked: the server rejected authentication (HTTP 401)." The same holds for
+     every later refusal. The uncertainty clears only when evidence resolves the earlier outcome,
+     and stops showing when its subject no longer matches. Required: a sequence test of a lost
+     adoption response, then a 401, then suppression while inputs are unchanged.
+     *Applying A5:*
+     - What resolves it: a recorded confirmation (the binding confirmed under this account), and a
+       409 to the adoption request of the same subject with one of the three recognised codes
+       (narrowed by review finding 2 below). The 409 resolves it because the server's
+       mappings are never cleared and a replay of a mapping in effect answers 200
+       (`internal/cloud/store/identity.go`: `adoptArchive` and `adoptLogbook` answer a matching
+       stored UUID without error). The subject fixes the archive, the logbook and the legacy name.
+       A 409 to an earlier request in the chain is not possible, since only the adoption request
+       draws one.
+     - What does not: 401, an unreadable answer, a refusal, an old server, an unsafe judgement
+       (shown as blocked), a failed reservation, an unreachable server. A "Cloud adoption
+       succeeded; local confirmation could not be saved" outcome is kept the same way; only a
+       recorded confirmation resolves it.
+     - On the wire the state stays `uncertain` (or `record_failed`) while unresolved; the message
+       names the current blocker. Terminal suppression still applies to the blocker.
+     - Built (2026-10-09). The adopter holds the unresolved outcome with its subject, apart from
+       the status. A transient state shows it unchanged; any other outcome keeps its state and
+       says "<kept> Confirmation is blocked: <blocker>." A recorded confirmation clears it. So
+       does a 409 to the adoption request, for `uncertain` only. A later lost reply does not
+       replace a cloud success. An eligibility flip keeps it. A new subject never shows it.
+       RED first: AD10 (lost response → 401 → suppressed while unchanged → fixed and confirmed;
+       lost response → an unreadable answer, a refusal, an old server, an unsafe judgement; a 409
+       resolving it; an eligibility flip keeping it; a cloud success kept through a 409; a new
+       subject) and AD7's last step, now expecting the kept outcome. The 409 case passed before
+       the change (nothing was kept then); "a cloud success kept through a later lost reply" was
+       added after the code. Reversions of each fail their intended assertion: no blocker beside
+       the kept outcome; a 409 not resolving; a 409 resolving a cloud success; kept across
+       subjects; a lost reply replacing a cloud success. The earlier adopter proofs were rerun
+       against the new code (anchors updated where the code moved); all still fail as intended.
+       Not separately provable: a 409 to a request before the adoption request, which the server
+       never sends.
+     *Operator review of 4b2 (2026-10-09): hold; three P2 findings.*
+     1. An unreadable answer to the adoption request said "Not adopted". A server may commit the
+        adoption and then return malformed JSON or a wrong echo. After the POST, an unreadable
+        answer leaves the outcome uncertain, and it is still suppressed as terminal. Required:
+        a committed adoption, then a malformed 200, then a later refusal.
+     2. A 409 without a recognised code cleared the uncertainty. The store's evidence
+        (`adoptArchive`, `adoptLogbook`) covers only the three adoption conflicts. Only a
+        recognised code resolves it; any other 409 keeps it. The documentation is narrowed.
+     3. A local read failure rearmed terminal outcomes: `target` returned false for both a failed
+        read and a confirmed ineligibility, and either cleared the suppression. So a 401, a
+        transient read failure, then recovery sent again with unchanged inputs. A read failure
+        is now distinct and keeps the suppression and the status.
+     *Fixed.* (1) An unreadable answer after the POST marks the outcome uncertain (a cloud success
+     already held is kept) and is still terminal. (2) Only a 409 whose code the client recognised
+     resolves it. (3) `target` returns an error for a failed read; `check` then logs it and
+     leaves the suppression and the status as they were. RED first: AD11 (committed, then
+     malformed JSON or a wrong echo, then suppressed, then a 401 after a rearm, then a replay
+     that confirms; an unknown 409 keeping the uncertainty; a 401, a renamed table, then
+     recovery with no request). Reversions, each failing AD11 on its assertion: unreadable after
+     the POST not uncertain; not suppressed; any 409 resolving; a read failure rearming. The two
+     earlier 409 proofs were rerun on the moved anchor and still fail as intended.
+     *Operator follow-up review (2026-10-09): the three findings are resolved; hold lifted.* A
+     refusal of the adoption POST itself (401 or another 4xx) stays a plain refusal: the server
+     authenticates before it invokes the adoption (`internal/cloud/server/server.go`), and an
+     uncertain outcome already held is kept through it. No proxy-specific policy for this slice.
+     Committed as `45c8c126` (code, tests, `api-endpoints.md`). Next: 4b3 (the SPA status
+     line), then 5. The daemon deployment hold stands until 5F.3 is complete and reviewed.
    - **Station drills after deploy** (operator-run, recorded here): Home unchanged after the
      upgrade (same `forwarded_to`, worker names and queue counts as before; bindings listed under
      Home with the legacy names); the Drill archive shows every destination off, no banner, and a
