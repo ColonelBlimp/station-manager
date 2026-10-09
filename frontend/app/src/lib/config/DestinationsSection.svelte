@@ -7,13 +7,7 @@
     // queue. The card's pill is what the daemon HOLDS; the switches are the
     // draft. Saved bindings apply when the daemon restarts.
     import { onMount } from 'svelte';
-    import {
-        bindingsState,
-        rowKey,
-        destinationLabel,
-        adoptionMuted,
-        ADOPTION_POLL_MS,
-    } from './bindings.svelte';
+    import { bindingsState, rowKey, destinationLabel, adoptionMuted } from './bindings.svelte';
     import { clearForwarderQueue, retryForwarderQueue } from '../api/forwarder-queues';
     import type { BindingState, DestinationBinding } from '../api/archive-bindings';
     import type { CredentialField } from '../api/forwarders';
@@ -60,12 +54,14 @@
         return () => bindingsState.closeAdoption();
     });
 
-    // While a row shows an adoption attempt in progress, its status is re-read
-    // every 5 s, so "Checking…" never outlives the attempt (ruling B1). The
-    // interval ends when no row is in progress or the tab closes.
+    // The adoption statuses are re-read every 5 s while an attempt is shown in
+    // progress, and every 60 s while the daemon retries on its own (rulings B1
+    // and B3), so no shown status outlives what resolves it. The interval
+    // follows the cadence and ends when nothing is pending or the tab closes.
     $effect(() => {
-        if (!bindingsState.adoptionInProgress) return;
-        const timer = setInterval(() => void bindingsState.refreshAdoption(), ADOPTION_POLL_MS);
+        const ms = bindingsState.adoptionPollMs;
+        if (ms === 0) return;
+        const timer = setInterval(() => void bindingsState.refreshAdoption(), ms);
         return () => clearInterval(timer);
     });
 

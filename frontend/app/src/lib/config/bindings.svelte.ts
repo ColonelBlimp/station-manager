@@ -53,6 +53,23 @@ export interface RowDraft {
  *  progress (ruling B1, 2026-10-09). */
 export const ADOPTION_POLL_MS = 5000;
 
+/** How often it is re-read while a status the daemon retries on its own is
+ *  shown (ruling B3, 2026-10-09, correcting B1): an unresolved outcome can
+ *  stay shown through the attempt that resolves it. "uncertain" and
+ *  "record_failed" are polled even when their message names a terminal
+ *  blocker, since the state does not say whether a retry is due. */
+export const ADOPTION_RETRY_POLL_MS = 60_000;
+
+const ADOPTION_RETRYING = new Set([
+    'unreachable',
+    'uncertain',
+    'record_failed',
+    'local_unreadable',
+    'needs_confirmation',
+    'unsafe',
+    'blocked',
+]);
+
 /** The adoption states shown in the muted row text (ruling B2): the adopted
  *  ones and an attempt in progress. Every other state uses the warning text. */
 const ADOPTION_MUTED = new Set(['adopted', 'adopted_restart_required', 'checking', 'confirming']);
@@ -63,6 +80,12 @@ export function adoptionMuted(state: string): boolean {
 
 function adoptionRunning(row: LogbookBinding): boolean {
     return row.adoption?.state === 'checking' || row.adoption?.state === 'confirming';
+}
+
+/** A row's re-read cadence: 5 s in progress, 60 s retrying, 0 for none. */
+function adoptionPollFor(row: LogbookBinding): number {
+    if (adoptionRunning(row)) return ADOPTION_POLL_MS;
+    return row.adoption && ADOPTION_RETRYING.has(row.adoption.state) ? ADOPTION_RETRY_POLL_MS : 0;
 }
 
 export function rowKey(type: string, logbookId: number): string {
@@ -210,10 +233,10 @@ class BindingsState {
 
     dirty = $derived(this.#anyChanged());
 
-    /** A row shows an adoption attempt in progress (checking or confirming). */
-    adoptionInProgress = $derived(
-        this.view?.destinations.some((d) => d.logbooks.some(adoptionRunning)) ?? false
-    );
+    /** How often the adoption statuses are re-read; 0 for not at all. The
+     *  fastest row's cadence wins. */
+    adoptionPollMs = $derived(this.#adoptionPollMs());
+
     // The adoption status re-read (ruling B1), ordered by SEND order like
     // eligibility: #adoptionSeq is the read whose statuses the view shows, and
     // #adoptionSource that read's answer, laid over an older full view that
@@ -223,6 +246,17 @@ class BindingsState {
     #adoptionSource: ArchiveBindings | null = null;
     #adoptionInFlight = false;
     #adoptionGen = 0;
+
+    #adoptionPollMs(): number {
+        let fastest = 0;
+        for (const dest of this.view?.destinations ?? []) {
+            for (const row of dest.logbooks) {
+                const ms = adoptionPollFor(row);
+                if (ms > 0 && (fastest === 0 || ms < fastest)) fastest = ms;
+            }
+        }
+        return fastest;
+    }
 
     #anyChanged(): boolean {
         const v = this.view;

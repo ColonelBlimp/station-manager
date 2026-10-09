@@ -7,7 +7,7 @@ import { _resetForTests as resetToasts } from '../ui/toasts.svelte';
     adoption attempt in progress (checking or confirming), the adoption status
     is re-read every 5 s.
 
-      A1  in progress means checking or confirming, nothing else.
+      A1  (folded into A10, the cadence by state.)
       A2  the re-read lays only the adoption statuses over the view: the
           attempt finishes, its status updates, and the operator's unsaved
           switch and typed value stay exactly as they were.
@@ -24,6 +24,9 @@ import { _resetForTests as resetToasts } from '../ui/toasts.svelte';
           overwrite it when it answers late.
       A9  nor can an account re-read sent before an adoption re-read that
           has already answered.
+      A10 the re-read cadence by state (ruling B3): 5 s while an attempt is
+          in progress, 60 s while the daemon retries on its own, none
+          otherwise; the fastest row wins.
 */
 
 const TYPES = {
@@ -151,21 +154,7 @@ afterEach(() => {
 
 const adoptionOf = () => bindingsState.view!.destinations[0].logbooks[0].adoption;
 
-describe('bindingsState — the adoption status re-read (4b3, B1)', () => {
-    it('A1: in progress means checking or confirming only', async () => {
-        for (const [adoption, want] of [
-            [CHECKING, true],
-            [{ state: 'confirming', message: 'Confirming.' }, true],
-            [REFUSED, false],
-            [ADOPTED, false],
-            [null, false],
-        ] as const) {
-            served = view(adoption);
-            await bindingsState.load();
-            expect(bindingsState.adoptionInProgress).toBe(want);
-        }
-    });
-
+describe('bindingsState — the adoption status re-read (4b3, B1/B3)', () => {
     it('A2: the attempt finishes, its status updates, and the draft stays intact', async () => {
         await bindingsState.load();
         bindingsState.setRow('smcloud', 2, true);
@@ -184,7 +173,7 @@ describe('bindingsState — the adoption status re-read (4b3, B1)', () => {
         expect(await bindingsState.refreshAdoption()).toBe(true);
 
         expect(adoptionOf()).toEqual(ADOPTED);
-        expect(bindingsState.adoptionInProgress).toBe(false);
+        expect(bindingsState.adoptionPollMs).toBe(0);
         expect($state.snapshot(bindingsState.drafts)).toEqual(before);
         expect(bindingsState.drafts[rowKey('smcloud', 2)]).toMatchObject({
             enabled: true,
@@ -217,7 +206,7 @@ describe('bindingsState — the adoption status re-read (4b3, B1)', () => {
         failGets = true;
         expect(await bindingsState.refreshAdoption()).toBe(false);
         expect(adoptionOf()).toEqual(CHECKING);
-        expect(bindingsState.adoptionInProgress).toBe(true);
+        expect(bindingsState.adoptionPollMs).toBe(5_000);
     });
 
     it('A5: an answer after the tab closed, or after the archive changed, is ignored', async () => {
@@ -289,5 +278,38 @@ describe('bindingsState — the adoption status re-read (4b3, B1)', () => {
         held[0](json(view(CHECKING)));
         await late;
         expect(adoptionOf()).toEqual(ADOPTED);
+    });
+
+    it('A10: the cadence by state', async () => {
+        const slow = [
+            'unreachable',
+            'uncertain',
+            'record_failed',
+            'local_unreadable',
+            'needs_confirmation',
+            'unsafe',
+            'blocked',
+        ];
+        const none = [
+            'unauthorized',
+            'unreadable',
+            'refused',
+            'conflict',
+            'unsupported',
+            'adopted',
+            'adopted_restart_required',
+        ];
+        const cases: [unknown, number][] = [
+            [CHECKING, 5_000],
+            [{ state: 'confirming', message: 'm' }, 5_000],
+            ...slow.map((state): [unknown, number] => [{ state, message: 'm' }, 60_000]),
+            ...none.map((state): [unknown, number] => [{ state, message: 'm' }, 0]),
+            [null, 0],
+        ];
+        for (const [adoption, want] of cases) {
+            served = view(adoption);
+            await bindingsState.load();
+            expect(bindingsState.adoptionPollMs, JSON.stringify(adoption)).toBe(want);
+        }
     });
 });

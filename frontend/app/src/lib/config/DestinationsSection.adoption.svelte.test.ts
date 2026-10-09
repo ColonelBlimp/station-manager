@@ -18,6 +18,15 @@ import { _resetForTests as resetToasts } from '../ui/toasts.svelte';
       R4  closing the tab stops the re-reads.
       R5  no re-reads while nothing is in progress.
       R6  a re-read still on the wire when the tab closes is ignored.
+    Ruling B3 (a correction to B1, after the Codex review of 53a4c45e): a
+    status the daemon retries on its own is re-read every 60 s.
+      R7  a lost response: "uncertain" is re-read at 60 s until a later retry
+          confirms it; then the re-reads stop.
+      R8  an account replacement: "needs confirmation" likewise.
+      R9  the cadence follows the state: 5 s while checking, 60 s while
+          unreachable, none once adopted.
+      R10 a failed re-read keeps the status and its cadence.
+      R11 no timer for the terminal states or a final one.
 */
 
 const TYPES = {
@@ -51,6 +60,14 @@ const CONFIRMING = {
 const ADOPTED = { state: 'adopted_restart_required', message: 'Adopted; applies after a restart.' };
 const DONE = { state: 'adopted', message: 'Adopted.' };
 const REFUSED = { state: 'unauthorized', message: 'Not adopted: the token was refused.' };
+const NEEDS = {
+    state: 'needs_confirmation',
+    message: 'Adoption needs confirmation for the current station account.',
+};
+const UNREACHABLE = {
+    state: 'unreachable',
+    message: 'Not yet: the server could not be reached (retrying).',
+};
 const UNCERTAIN = {
     state: 'uncertain',
     message: 'Adoption outcome uncertain: no confirmation was received from the server. Retrying.',
@@ -110,12 +127,14 @@ function json(body: unknown): Response {
 let served: unknown;
 let gets = 0;
 let holdNext = false;
+let failNext = false;
 let held: ((r: Response) => void) | null = null;
 
 beforeEach(() => {
     served = view(CHECKING);
     gets = 0;
     holdNext = false;
+    failNext = false;
     held = null;
     // Only the interval is faked: testing-library's own waits use timeouts.
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
@@ -128,6 +147,10 @@ beforeEach(() => {
             if (url === '/v1/forwarder-types') return Promise.resolve(json(TYPES));
             if (url === '/v1/qso-archives/A1/bindings') {
                 gets++;
+                if (failNext) {
+                    failNext = false;
+                    return Promise.resolve(new Response('{}', { status: 500 }));
+                }
                 if (holdNext) {
                     holdNext = false;
                     return new Promise<Response>((resolve) => (held = resolve));
@@ -246,5 +269,81 @@ describe('DestinationsSection — the adoption status (4b3)', () => {
         // Let the answer and its handling run (setTimeout is real here).
         await new Promise((r) => setTimeout(r, 20));
         expect(bindingsState.view!.destinations[0].logbooks[0].adoption).toEqual(CHECKING);
+    });
+
+    async function wantGets(ms: number, more: number): Promise<void> {
+        const before = gets;
+        await vi.advanceTimersByTimeAsync(ms);
+        expect(gets).toBe(before + more);
+    }
+
+    it('R7: a lost response, re-read at 60 s until a retry confirms it', async () => {
+        served = view(UNCERTAIN);
+        render(DestinationsSection);
+        await shown(UNCERTAIN.message);
+        await wantGets(59_999, 0);
+        await wantGets(1, 1);
+        served = view(ADOPTED); // a later hourly retry confirmed it
+        await wantGets(60_000, 1);
+        await shown(ADOPTED.message);
+        await wantGets(180_000, 0);
+    });
+
+    it('R8: an account replacement, re-read at 60 s until confirmed', async () => {
+        served = view(NEEDS);
+        render(DestinationsSection);
+        await shown(NEEDS.message);
+        await wantGets(60_000, 1);
+        served = view(ADOPTED);
+        await wantGets(60_000, 1);
+        await shown(ADOPTED.message);
+        await wantGets(180_000, 0);
+    });
+
+    it('R9: the cadence follows the state', async () => {
+        render(DestinationsSection);
+        await shown(CHECKING.message);
+        served = view(UNREACHABLE);
+        await wantGets(5_000, 1);
+        await shown(UNREACHABLE.message);
+        await wantGets(55_000, 0);
+        await wantGets(5_000, 1);
+        served = view(CHECKING);
+        await wantGets(60_000, 1);
+        await shown(CHECKING.message);
+        await wantGets(5_000, 1);
+        served = view(DONE);
+        await wantGets(5_000, 1);
+        await shown(DONE.message);
+        await wantGets(180_000, 0);
+    });
+
+    it('R10: a failed re-read keeps the status and its cadence', async () => {
+        served = view(UNREACHABLE);
+        render(DestinationsSection);
+        await shown(UNREACHABLE.message);
+        failNext = true;
+        await wantGets(60_000, 1);
+        await shown(UNREACHABLE.message);
+        await wantGets(59_999, 0);
+        await wantGets(1, 1);
+    });
+
+    it('R11: no timer for the terminal states or a final one', async () => {
+        for (const state of [
+            'unauthorized',
+            'unreadable',
+            'refused',
+            'conflict',
+            'unsupported',
+            'adopted',
+        ]) {
+            served = view({ state, message: `Status ${state}.` });
+            const { unmount } = render(DestinationsSection);
+            await shown(`Status ${state}.`);
+            await wantGets(180_000, 0);
+            unmount();
+            _resetBindingsForTests();
+        }
     });
 });
