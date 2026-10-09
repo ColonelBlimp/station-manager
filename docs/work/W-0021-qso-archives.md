@@ -2857,6 +2857,110 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      uncertain outcome already held is kept through it. No proxy-specific policy for this slice.
      Committed as `45c8c126` (code, tests, `api-endpoints.md`). Next: 4b3 (the SPA status
      line), then 5. The daemon deployment hold stands until 5F.3 is complete and reviewed.
+     *CI red after the 4b2 push (run 37892971997, 2026-10-09):* AW3 asserted, in the same instant
+     stop returned, that the server had seen the request cancelled. The server notices a closed
+     request asynchronously, so a slow runner failed it; no product fault. Fixed in the test.
+     AW3 now proves the cancellation by stop returning within 2 s while the server holds the
+     request open (only cancelling it allows that, inside the 10 s bound), then awaits the
+     server's view. The new AW4 proves stop waits for the adopter: a config save holds the lock
+     the reservation reads, and stop may not return until it lets go. AW3's earlier reversion
+     ("stop does not wait") passed against the reworded AW3, so AW4 replaces it as that proof.
+     Both stressed (50 runs, and 20 under `-race` on one CPU).
+     *Operator review of the test fix (2026-10-09): hold.* AW3's fix is sound. AW4's 50 ms pause
+     does not prove the client consumed the answer: on a slow runner the cancellation can still
+     interrupt that read, so the adopter exits before the lock and AW4 fails on correct code.
+     Replace the pause with an observable barrier, or test `stopAdoption`'s wait with a
+     controlled goroutine tracked in its wait group. Register a cleanup that releases the
+     barrier even when an assertion fails. Keep the cancellation and missing-wait reversions.
+     *Fixed:* AW4 now tracks a goroutine the test controls in `adoptionWG`, under the
+     `adoptionCancel` it installs. That goroutine signals when stop's cancellation reaches it,
+     then holds until released. Stop must not have returned at that point; once released, it
+     returns. The cleanup releases the barrier on any failure. Correct code cannot fail it: a
+     200 ms bound applies only to detecting a stop that does not wait, which correct code can
+     never be. Reversions: stop not waiting (R33) and stop waiting without cancelling (R56) each
+     fail AW4; the adopter run on a context stop does not cancel (R29) fails AW3. Stressed: 20
+     runs under `-race`.
+     *4b3 design (proposed 2026-10-09; awaiting rulings B1–B2, no code yet).* The Forwarding tab
+     shows `adoption.message` under Home's default SM Cloud row, exactly as served (the decoder
+     drops an `adoption` that is not an object with a string state and a non-empty message, ADR
+     0077). The row's locked field stays hidden (T6). What the tree gives: the bindings view is
+     read once when the tab mounts (`DestinationsSection.svelte`), then after saves and on
+     `requestReload`, which never overwrites a draft. The adopter's first check runs at start.
+     - (B1) A tab opened during an attempt would keep "Checking…" or "Confirming…" after the
+       attempt ends, against the ruling that they show only during one. Proposed: while the
+       served state is `checking` or `confirming`, re-read the view every 5 s through the
+       existing reload path (a draft is never overwritten), stopping when the state changes or
+       the tab closes; no polling otherwise. Alternatives: never show the in-progress states in
+       the app; or show them stale until a reload.
+     - (B2) Tone. Proposed: the warning colour (`text-warning`) for every state except
+       `adopted`, `adopted_restart_required`, `checking` and `confirming`, which use the muted
+       row text.
+     *Ruling B1 (operator, 2026-10-09): re-read every 5 s while the shown state is `checking` or
+     `confirming`.* Acceptance conditions:
+     - The status refreshes even while an unsaved draft exists, without overwriting the draft's
+       fields.
+     - Only one refresh request is in flight at a time.
+     - Polling stops when the state changes or the tab closes. A late response after the tab
+       closed or the archive changed is ignored.
+     - A failed refresh never implies that the adoption completed.
+     - Proved explicitly: the attempt finishes, its status updates, and the operator's edits stay
+       intact.
+     *Ruling B2 (operator, 2026-10-09): the warning-colour proposal.* Muted: `adopted`,
+     `adopted_restart_required`, `checking`, `confirming`. Warning: every other adoption state.
+     Use the existing warning text style with no alert container; the message alone carries the
+     meaning, never the colour.
+     **5F.3 commit 4b3, the SPA status line (committed `53a4c45e`, 2026-10-09, after the review
+     below; the operator's follow-up review found no further actionable issue).**
+     - **Decoder** (`archive-bindings.ts`): `adoption` is read only as an object with a non-empty
+       string `state` and `message`; anything else is none.
+     - **Row** (`DestinationsSection.svelte`): the message, as served, under the row's switch, in
+       `text-muted` for `adopted`, `adopted_restart_required`, `checking` and `confirming` and in
+       `text-warning` otherwise. A plain paragraph, no role or alert container.
+     - **Re-read** (`bindings.svelte.ts`): `adoptionInProgress` holds while any row shows
+       `checking` or `confirming`. The section's effect then runs `refreshAdoption` every
+       `ADOPTION_POLL_MS` (5 s) and clears the interval when that ends or the tab closes.
+       `refreshAdoption` re-reads the view and lays over only each row's `adoption` (matched by
+       logbook and binding name); drafts, switches, queue counts and eligibility are untouched.
+       One read is on the wire at a time. A failed read changes nothing. Its answer is ignored
+       after `closeAdoption` (called on unmount), after the archive changes, or when a newer full
+       view (a load, a save, a timed-out save's re-read) has landed; an older full view landing
+       later keeps the newer statuses (send order, as eligibility).
+     - **Manual** (`forwarding.md`, SM Cloud backup): the status line, its colour, the self-update
+       while a check runs, and the fixed cloud logbook name.
+     Tests, RED first against stubs: the decoder; A1–A6 (state: in progress; the draft case,
+     where the attempt finishes, the status updates, and the unsaved switch and typed value stay
+     identical while the answer's other row changes are not taken; one in flight; a failed read;
+     closed tab and changed archive; a newer full view); R1–R5 (component: text and tone, the
+     5 s cadence and its stop, the draft case through the UI, unmount, nothing in progress).
+     A5 and A6 failed against the stubs on a missing request rather than an assertion; they reach
+     their assertions now. R6 (a read on the wire when the tab closes is ignored) was added after
+     the code. Reversions, each failing its intended test, all restored by hash: an empty message
+     accepted; any status counted as in progress; the re-read resetting the drafts; taking the
+     whole view; no in-flight guard; a failure clearing the status; no close guard; no archive
+     guard; no send ordering; a load not counted; the tone; no polling; the interval never
+     cleared; no close on unmount; another cadence; the state shown instead of the message.
+     *Operator review of 4b3 (2026-10-09): hold for one P2.* `refreshEligibility` (the re-read
+     after a station-account save) dropped the adoption statuses. After an account replacement
+     the row kept "Adopted" for the old account until a reload, since adopted states do not poll,
+     and an older adoption read could land after the account re-read and restore an obsolete
+     status. Required: the account re-read updates the statuses under the same send ordering,
+     drafts untouched. Prove that adopted, then an account change, reads `needs_confirmation`
+     with unsaved edits intact; and that an adoption read sent before the change cannot overwrite
+     the newer account re-read. The manual paragraph is accurate. Applied the suggested wording:
+     "shows the adoption status", without "in Station Manager's own words". The AW4 test fix was
+     approved and committed separately as `7bbd5cf5`, then pushed.
+     *Fixed:* `refreshEligibility` now lays the statuses over the view too, when its send number is
+     not older than the shown statuses', and moves that number; drafts are untouched. RED first:
+     A7 (adopted, then the account replaced: `needs_confirmation`, the unsaved switch and typed
+     value identical) and A8 (an adoption read sent before the account re-read, answering
+     after it, is ignored). A9 (an account re-read sent before an adoption read that has already
+     answered cannot roll it back) was added after the code. Reversions: the account re-read
+     dropping the statuses (A7, A8), not moving the send number (A8), not ordered (A9). All 19
+     SPA reversions were rerun against the fixed code and still fail as intended.
+     *Operator follow-up review (2026-10-09): the P2 is resolved; hold lifted. The revised manual
+     wording is acceptable.* Committed as `53a4c45e` (app code, tests, manual). Next: commit 5
+     (the identity worker at start, T7). The daemon deployment hold stands until 5F.3 is
+     complete and reviewed.
    - **Station drills after deploy** (operator-run, recorded here): Home unchanged after the
      upgrade (same `forwarded_to`, worker names and queue counts as before; bindings listed under
      Home with the legacy names); the Drill archive shows every destination off, no banner, and a
