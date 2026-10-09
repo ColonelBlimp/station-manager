@@ -3187,6 +3187,63 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      but within 64 characters is refused by the deployed server, failing every identity upload
      of that logbook and its adoption. Not authorized by this ruling.
      Codex review of `f4298a5e`: no actionable findings; closed. Both review files removed.
+     **5F.3 commit 5b, the held line in the app (built 2026-10-09; approved and committed as
+     `393faf51`, with Retry disabled while held; not pushed).**
+     - The decoder takes `uploads_held` as it takes `adoption` (a non-empty state and message, or
+       none). Every row that has it shows the daemon's sentence in a plain paragraph in the warning
+       text, below the adoption line and apart from it, on the default row or not.
+     - The adoption re-read and the re-read after a station-account save lay both fields over the
+       view under the same send order (`withAdoption`); drafts, queue counts and eligibility are
+       untouched, and a newer full view still wins.
+     - Cadence: a row waiting for confirmation is re-read every 60 s; restart required and
+       disabled need no timer by themselves; the fastest row or field wins.
+     - The manual's SM Cloud section describes the hold, its two follow-up lines and the
+       disabled case.
+     Tests, RED first: the decoder (with anything unreadable read as none); H1 (the adoption
+     re-read brings it, drafts intact), H2 (the account re-read brings it; an older adoption
+     re-read cannot overwrite it), H3 (an older account re-read cannot roll back a newer
+     adoption re-read), H4 (a newer full view wins), H5 (the cadence table); U1 (the line, warning
+     text, plain paragraph, on two rows, apart from the adoption line), U2 (waiting, re-read at
+     60 s, confirmed: restart required and the re-reads stop; restarted, as a page reload: no
+     line, no timer), U3 (disabled: its line, no timer), U4 (a held row with no adoption status
+     of its own re-read at 60 s until restart required, then stopped). Reversions, each failing
+     its intended tests, all restored by hash: not decoded; the re-reads drop it; waiting not
+     polled; every held line polled; waiting polled at 5 s; the line not shown; the muted tone;
+     the adoption re-read unordered; the account re-read unordered. U2 does not tell the held
+     cadence apart, because its adoption status polls at 60 s on its own; U4 does.
+     Raised with the operator: a held row's **Retry failed** stayed offered, and the daemon
+     refuses it with "forwarder has no running worker; restart the daemon with it enabled
+     before retrying", which a held binding's restart does not cure (ruled below).
+     **A 5a test flake, found by 5b's release gate (2026-10-09).** `task ci:local` failed once in
+     SW2: `database is locked (5) (SQLITE_BUSY)` at `stampAdoption`. That helper writes through
+     its own connection, and it ran while the first generation was still running, so it could
+     meet the running daemon's write lock. The same window let that generation's worker upload
+     on the name wire once the fake cloud began accepting. SW1–SW3 and SW5–SW7 now stop the
+     first generation (`stopGen`) before any raw write and start the next with `startGen`;
+     `restartGen` is the two together. Not reproduced on the committed test in 110 runs (50
+     sequential, 60 six-way concurrent under `-race`); the fix holds by construction, with no raw
+     write while a generation runs. The fixed tests passed three times under `-race`, all of
+     `cmd/smd` under `-race`, and `task ci:local`. Committed as `38425535`, apart from 5b.
+     **Operator review of 5b (2026-10-09).** Ruling: **Retry failed** is disabled whenever
+     `uploads_held` is present, `restart_required` and `disabled` included (a confirmation alone
+     creates no worker); the held line is the explanation; **Clear** stays available. Test with
+     failed uploads present, so the zero-count condition cannot mask a missing hold check.
+     Review issue on the test fix: `stopGen` ignored the shutdown report; a budget-expired
+     shutdown can return with workers alive, so it did not establish the isolation claimed.
+     Assert a clean drain before any direct database write or the next generation, reporting
+     any failed, timed-out or skipped node. The three-commit split stands; all unpushed.
+     Done: Retry failed is disabled on any row with `uploads_held`; Clear unchanged; the manual
+     says so. U5, RED first, with two failed uploads on both rows: for each held line the held
+     row's Retry is disabled and its Clear enabled, and the unheld row's Retry stays enabled.
+     Reversions: the hold check removed, and only "waiting" checked, each fail U5 (the 5b set
+     now 11 reversions, all failing as intended). `stopGen` now fails on any node that did not
+     drain (failed, timed out, skipped, or no outcomes at all), naming each with its error and
+     blockers; every identity test drains cleanly. Shown by a 1 ns budget: SW2 fails with
+     "the generation did not drain cleanly (first timed out "enrichment", 16 outcomes)", the
+     timed-out nodes listed; the file restored by hash.
+     Approved 2026-10-09; committed `38425535` (test fix) and `393faf51` (5b), not pushed. Codex
+     reviews of both: no actionable findings; closed, files removed. 5F.3 is built; the
+     deployment order stands (the fixed cloud server first), and the daemon hold remains.
    - **Station drills after deploy** (operator-run, recorded here): Home unchanged after the
      upgrade (same `forwarded_to`, worker names and queue counts as before; bindings listed under
      Home with the legacy names); the Drill archive shows every destination off, no banner, and a
