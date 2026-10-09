@@ -66,7 +66,7 @@ func spawnAndCapture(t *testing.T, fwds []types.ForwarderConfig) (error, *bytes.
 
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
-	err := spawnForwarderWorkers(ctx, &wg, fwds, db, qsoSvc, logger, hub)
+	err := spawnForwarderWorkers(ctx, &wg, fwds, wireSelection{}, db, qsoSvc, logger, hub)
 	cancel()
 
 	done := make(chan struct{})

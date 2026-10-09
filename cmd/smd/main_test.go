@@ -101,7 +101,7 @@ func spawnAndDrain(t *testing.T, fwds []types.ForwarderConfig) (spawnErr error, 
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 
-	spawnErr = spawnForwarderWorkers(ctx, &wg, fwds, db, qsoSvc, logger, hub)
+	spawnErr = spawnForwarderWorkers(ctx, &wg, fwds, wireSelection{}, db, qsoSvc, logger, hub)
 
 	cancel()
 

@@ -613,6 +613,7 @@ func spawnForwarderWorkers(
 	ctx context.Context,
 	wg *sync.WaitGroup,
 	fwds []types.ForwarderConfig,
+	wires wireSelection,
 	dbSvc *sqlite.Service,
 	qsoSvc *qsoservice.Service,
 	loggerSvc *logging.Service,
@@ -646,7 +647,22 @@ func spawnForwarderWorkers(
 			continue
 		}
 
-		fwd, err := forwarding.Build(fc)
+		// A held binding (adopted, not confirmed for this account) gets no
+		// worker: its uploads stay queued, with no name fallback (ADR 0088).
+		if _, held := wires.held[fc.Name]; held {
+			loggerSvc.WarnWith().Str("forwarder", fc.Name).
+				Msg("forwarder held: SM Cloud adoption needs confirmation for the current station account; uploads stay queued until it is confirmed and the daemon restarts")
+			continue
+		}
+
+		// An adopted binding's identity forwarder was built at assembly from
+		// the same start snapshot (ruling C1); every other binding is built by
+		// its type here.
+		fwd, prebuilt := wires.identity[fc.Name]
+		var err error
+		if !prebuilt {
+			fwd, err = forwarding.Build(fc)
+		}
 		if err != nil {
 			// Startup aborts on the return below, and the returned error reaches
 			// only stderr (main.go's run() wrapper) — so without this line a

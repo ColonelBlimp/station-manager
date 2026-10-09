@@ -35,7 +35,7 @@ type Server struct {
 	cfg        *config.Service
 	// startupForwarders is the set of forwarder names with a running worker:
 	// derived from cfg at construction as a default, replaced by the daemon
-	// with the active archive's enabled bindings (SetRunningForwarders).
+	// with the active archive's enabled, unheld bindings (SetRunningForwarders).
 	// It mirrors the enabled worker set built from cfg at daemon
 	// startup. PUT /v1/config updates cfg immediately; workers change on restart.
 	startupForwarders map[string]struct{}
@@ -725,8 +725,8 @@ func (s *Server) Shutdown(ctx context.Context) error {
 }
 
 // SetRunningForwarders replaces the running-worker set with the names of the
-// active archive's enabled bindings (ADR 0082): the workers node builds one
-// worker per enabled binding, so a queue retry is admitted only for one of
+// active archive's enabled bindings (ADR 0082), less any SM Cloud binding held
+// at start (ADR 0091): only those get a worker, so a retry is admitted only for one of
 // these names. Called by cmd/smd after the workers node has its snapshot.
 func (s *Server) SetRunningForwarders(names []string) {
 	set := make(map[string]struct{}, len(names))

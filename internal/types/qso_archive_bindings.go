@@ -74,6 +74,12 @@ type LogbookBindingView struct {
 	// default SM Cloud row only, and only while it describes that row's
 	// current binding, name and station account.
 	Adoption *BindingAdoptionView `json:"adoption,omitempty"`
+	// UploadsHeld is set when the running daemon started this binding held:
+	// adopted, but not confirmed for the station account it started with, so
+	// its uploads stay queued (ADR 0091, ruling C2). It reads "waiting for
+	// confirmation" until a confirmation for the current account is recorded,
+	// then "restart required".
+	UploadsHeld *BindingAdoptionView `json:"uploads_held,omitempty"`
 }
 
 // BindingAdoptionView is one adoption status: a stable state and the sentence

@@ -57,9 +57,9 @@ type BindingsDB interface {
 }
 
 // smcloudIdentityReason is the ADR 0082 part 7 remnant of the interim gate:
-// until the identity-aware server (5F), SM Cloud is bindable on the adopted
-// archive only.
-const smcloudIdentityReason = "SM Cloud can be bound only on the adopted Home archive until the identity-aware server lands; this archive's QSOs stay local until then"
+// SM Cloud is bindable on the adopted archive only, until per-archive identity
+// lifts it (5F.4). The text is neutral about why (ADR 0090, T7).
+const smcloudIdentityReason = "SM Cloud can currently be enabled only in Home"
 
 // smcloudHomeDefaultOnlyReason is W-0021 5F.0: every Home SM Cloud binding
 // pushes to one cloud logbook name, so until per-binding identity and

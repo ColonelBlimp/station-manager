@@ -135,6 +135,8 @@ type Forwarder struct {
 	client  *http.Client
 	// identity is fixed at construction; legacy workers retain their 404 policy.
 	identity bool
+	// target carries an identity forwarder's display values (NewIdentity).
+	target IdentityTarget
 }
 
 // New constructs an SM Cloud Forwarder. url + token are required; logbook
@@ -302,7 +304,12 @@ func (f *Forwarder) Submit(
 		}
 	}
 
-	body, err := json.Marshal(putRequest{Logbook: f.logbook, Qsos: []qsoUpload{up}})
+	var envelope any = putRequest{Logbook: f.logbook, Qsos: []qsoUpload{up}}
+	if f.identity {
+		envelope = identityPutRequest{ArchiveLabel: f.target.ArchiveLabel, LogbookLabel: f.target.LogbookLabel,
+			Callsign: f.target.Callsign, Qsos: []qsoUpload{up}}
+	}
+	body, err := json.Marshal(envelope)
 	if err != nil {
 		return forwarding.Result{
 			Outcome: forwarding.OutcomeTerminal,

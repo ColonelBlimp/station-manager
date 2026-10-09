@@ -306,8 +306,10 @@ func TestBindings_SmcloudOnlyOnTheAdoptedArchiveUntil5F(t *testing.T) {
 	cfg := config.Config{DefaultLogbookID: a, Forwarders: []types.ForwarderConfig{{Name: "smcloud", Type: "smcloud", Enabled: true, Credentials: json.RawMessage(`{"url":"https://c","token":"t"}`)}}}
 	managed := &types.QsoArchiveConfig{ID: "m", Label: "Contest", Ownership: types.QsoArchiveOwnershipManaged}
 	v, _ := BindingsView(ctx, db, cfg, managed, nil)
-	if d := destView(t, v, "smcloud"); !strings.Contains(d.Reason, "adopted") {
-		t.Fatalf("smcloud on a managed archive = %+v; want the identity reason", d)
+	// T7 (ADR 0090, W-0021 5F.3 commit 5a): the neutral text, with no final
+	// period (the SPA renders "Can't be turned on here: {reason}.").
+	if d := destView(t, v, "smcloud"); d.Reason != "SM Cloud can currently be enabled only in Home" {
+		t.Fatalf("smcloud on a managed archive = %q; want the neutral T7 text", d.Reason)
 	}
 	_, err := applyBindings(ctx, nil, db, cfg, managed, nil, types.ArchiveBindingsRequest{Destinations: []types.DestinationBindingEdit{{
 		Type: "smcloud", Logbooks: []types.LogbookBindingEdit{{LogbookID: a, Enabled: true}}}}})

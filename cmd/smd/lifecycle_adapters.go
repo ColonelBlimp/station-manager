@@ -116,6 +116,9 @@ type daemon struct {
 	server     *api.Server
 	smcloudRec *smcloud.Reconciler
 	adopter    *adoption.Adopter
+	// wires is each adopted SM Cloud binding's wire this generation, chosen in
+	// startQso from the routing snapshot (identity forwarders, held bindings).
+	wires wireSelection
 	// routes is the start-time snapshot of the active archive's bindings
 	// resolved against their station accounts (ADR 0082): the QSO service's
 	// routing set and the workers node's worker set are this one slice.
@@ -454,6 +457,11 @@ func (d *daemon) startQso(context.Context) error {
 	d.disabledNames = snap.disabledNames
 	d.bindingsAtStart = snap.bindings
 	d.qso.SetDestinationRoutes(snap.routes)
+	// Each adopted SM Cloud binding's wire, from this same snapshot (ADR 0090
+	// T1, ruling C1); a failed identity construction stops the start here.
+	if d.wires, err = selectWires(context.Background(), d.db, d.cfg, snap); err != nil {
+		return errors.New(op).WithErr(err)
+	}
 	// Leftovers of an interrupted archive creation are named at every start;
 	// they are never archives and the operator removes them (ADR 0071).
 	d.creatingArtefacts = archive.DiagnoseCreatingArtefacts(d.cfg, d.logger)
@@ -852,7 +860,7 @@ func (d *daemon) startWorkers(ctx context.Context) error {
 		}
 	}
 
-	if err := spawnForwarderWorkers(fctx, &d.workerWG, fwds, d.db, d.qso, d.logger, d.hub); err != nil {
+	if err := spawnForwarderWorkers(fctx, &d.workerWG, fwds, d.wires, d.db, d.qso, d.logger, d.hub); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("spawn forwarder workers")
 	}
 
@@ -888,6 +896,13 @@ func (d *daemon) startReconciler(ctx context.Context) {
 		fc := r.Config
 		if !fc.Enabled || fc.Type != smcloud.Type || r.LogbookID != d.cfg.DefaultLogbookID {
 			continue
+		}
+		// A held binding gets no reconciliation, periodic or on demand
+		// (ruling C3): its repairs could not leave anyway.
+		if _, held := d.wires.held[fc.Name]; held {
+			d.logger.InfoWith().Str("forwarder", fc.Name).
+				Msg("smcloud reconciler not started: the binding's uploads are held until adoption is confirmed")
+			return
 		}
 		if d.cfg.DefaultLogbookID < 1 {
 			d.logger.WarnWith().Str("forwarder", fc.Name).
@@ -955,9 +970,11 @@ func (d *daemon) stopAdoption() error {
 func (d *daemon) initHTTP() error {
 	d.server = api.New(d.cfg, buildinfo.Version, d.cfgSvc, d.qso, d.db, d.logger, d.hub, d.enrich, d.mailer, d.bridge, d.ft8)
 	d.server.SetEvidence(d.evidence)
+	// A held binding keeps its route and its queue, but has no worker, so a
+	// retry is refused for it like a disabled one's.
 	running := make([]string, 0, len(d.routes))
 	for _, r := range d.routes {
-		if r.Config.Enabled {
+		if _, held := d.wires.held[r.Config.Name]; r.Config.Enabled && !held {
 			running = append(running, r.Config.Name)
 		}
 	}
@@ -988,6 +1005,7 @@ func (d *daemon) initHTTP() error {
 	// The bindings port: the active archive's open database and the bindings
 	// this generation started with (restart_required is judged against them).
 	d.archives.SetActiveBindings(d.db, d.bindingsAtStart)
+	d.archives.SetHeldUploads(d.wires.heldNames())
 	d.server.SetArchiveManager(d.archives)
 	if d.activeSummary != nil {
 		d.archives.SetActiveSummary(d.activeSummary)

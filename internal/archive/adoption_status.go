@@ -56,6 +56,29 @@ func SubjectOf(cfg config.Config, b types.LogbookDestination) (AdoptionSubject, 
 	return AdoptionSubject{ArchiveID: cfg.ActiveQsoArchiveID, ForwarderName: b.ForwarderName, LogbookID: b.LogbookID, Name: name, Account: account}, nil
 }
 
+// The held-uploads states (ruling C2; disabled from the operator's review of
+// 5a: the start discards a disabled binding's queued uploads, ADR 0039).
+const (
+	UploadsHeldWaiting         = "waiting_for_confirmation"
+	UploadsHeldRestart         = "restart_required"
+	UploadsHeldDisabled        = "disabled"
+	uploadsHeldWaitingMessage  = "Uploads are held until adoption is confirmed for the current station account."
+	uploadsHeldRestartMessage  = "Uploads resume after a restart."
+	uploadsHeldDisabledMessage = "Uploads are held; this binding is off, so its queued uploads are discarded at the next restart."
+)
+
+// SetHeldUploads names the bindings this generation started held (cmd/smd,
+// from the same start snapshot that chose their wire).
+func (m *Manager) SetHeldUploads(names []string) {
+	held := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		held[n] = struct{}{}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.heldUploads = held
+}
+
 // SetAdoptionStatus wires the adopter's status (cmd/smd); nil until then.
 func (m *Manager) SetAdoptionStatus(status func() AdoptionStatus) {
 	m.mu.Lock()
@@ -63,7 +86,8 @@ func (m *Manager) SetAdoptionStatus(status func() AdoptionStatus) {
 	m.adoptionStatus = status
 }
 
-// annotateAdoption sets the adoption status on Home's default SM Cloud row
+// annotateAdoption sets each held binding's uploads_held line (ruling C2), and
+// the adoption status on Home's default SM Cloud row
 // (ADR 0090 T4, ADR 0091). A binding confirmed under the current account is
 // adopted, pending a restart while the running generation started without
 // that confirmation. Otherwise, on an enabled binding, the adopter's status is
@@ -74,13 +98,16 @@ func (m *Manager) annotateAdoption(ctx context.Context, db BindingsDB, cfg confi
 		return nil
 	}
 	m.mu.Lock()
-	status, atStart := m.adoptionStatus, m.startBindings
+	status, atStart, held := m.adoptionStatus, m.startBindings, m.heldUploads
 	m.mu.Unlock()
 	bindings, err := db.ListLogbookDestinationsWithContext(ctx)
 	if err != nil {
 		return err
 	}
 	for _, b := range bindings {
+		if _, ok := held[b.ForwarderName]; ok {
+			setRowUploadsHeld(view, b, uploadsHeldOf(cfg, b))
+		}
 		if b.LogbookID != cfg.DefaultLogbookID {
 			continue
 		}
@@ -113,6 +140,33 @@ func adoptionOf(b types.LogbookDestination, sub AdoptionSubject, status func() A
 		return &types.BindingAdoptionView{State: AdoptionStateNeedsConfirmation, Message: adoptionMessageNeedsConfirmation}
 	}
 	return nil
+}
+
+// uploadsHeldOf is a held binding's line: waiting until a confirmation for the
+// current account is recorded, then restart required; once disabled and
+// saved, its queued uploads are discarded at the next start instead.
+func uploadsHeldOf(cfg config.Config, b types.LogbookDestination) *types.BindingAdoptionView {
+	if !b.Enabled {
+		return &types.BindingAdoptionView{State: UploadsHeldDisabled, Message: uploadsHeldDisabledMessage}
+	}
+	account, err := CurrentAccount(cfg, b.Destination, cfg.ActiveQsoArchiveID)
+	if err == nil && AdoptionConfirmed(b, account) {
+		return &types.BindingAdoptionView{State: UploadsHeldRestart, Message: uploadsHeldRestartMessage}
+	}
+	return &types.BindingAdoptionView{State: UploadsHeldWaiting, Message: uploadsHeldWaitingMessage}
+}
+
+func setRowUploadsHeld(view *types.ArchiveBindingsView, b types.LogbookDestination, h *types.BindingAdoptionView) {
+	for i := range view.Destinations {
+		if view.Destinations[i].Type != b.Destination {
+			continue
+		}
+		for j := range view.Destinations[i].Logbooks {
+			if row := &view.Destinations[i].Logbooks[j]; row.ForwarderName == b.ForwarderName {
+				row.UploadsHeld = h
+			}
+		}
+	}
 }
 
 func setRowAdoption(view *types.ArchiveBindingsView, b types.LogbookDestination, a *types.BindingAdoptionView) {

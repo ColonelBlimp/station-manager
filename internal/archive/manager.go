@@ -74,6 +74,9 @@ type Manager struct {
 	// adoptionStatus is the adopter's status (SetAdoptionStatus); nil until
 	// wired, when only what the archive records is shown.
 	adoptionStatus func() AdoptionStatus
+	// heldUploads names the bindings this generation started held
+	// (SetHeldUploads, ruling C2).
+	heldUploads map[string]struct{}
 
 	// activeSummary is the live summary of the ACTIVE archive (SetActiveSummary,
 	// ADR 0084); nil until wired, when the active archive lists from the sidecar

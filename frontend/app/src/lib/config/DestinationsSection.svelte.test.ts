@@ -299,14 +299,16 @@ describe('DestinationsSection', () => {
                 ? {
                       ...d,
                       account: { configured: true },
-                      reason: "SM Cloud can be bound only on the adopted Home archive until the identity-aware server lands; this archive's QSOs stay local until then",
+                      reason: 'SM Cloud can currently be enabled only in Home',
                   }
                 : d
         );
         current = () => ({ ...base, destinations });
         await renderLoaded({ hasAccountCard: (t: string) => t === 'smcloud' });
         const note = within(card('SM Cloud backup')).getByTestId('destination-reason');
-        expect(flat(note)).toMatch(/only on the adopted Home archive/);
+        expect(flat(note).trim()).toBe(
+            "Can't be turned on here: SM Cloud can currently be enabled only in Home."
+        );
         expect(within(note).queryByRole('button', { name: /station account/ })).toBeNull();
     });
 
