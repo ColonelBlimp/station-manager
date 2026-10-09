@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -27,8 +28,8 @@ import (
           archive is promoted before http) and the log database drains after it.
      AW2  on Home it starts the adopter at once and wires its status into the
           bindings view; off Home it starts nothing.
-     AW3  shutdown cancels the request in flight and waits for the adopter
-          before the node reports drained.
+     AW3  shutdown cancels the request in flight.
+     AW4  stop waits for the adopter before the node reports drained.
 */
 
 func TestAdoptionNode_AW1_StartsAfterHTTPAndDrainsBeforeTheLogDB(t *testing.T) {
@@ -225,6 +226,10 @@ func TestAdoptionNode_AW3_ShutdownCancelsAndDrains(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("no request in flight")
 	}
+	// The server holds the request open and never answers: stop can return
+	// well inside the request's own 10 s bound only by cancelling it. The
+	// server notices the closed request asynchronously, so that is awaited
+	// separately (CI 37892971997 caught the earlier same-instant check).
 	d.adoptionPrepareStop()
 	stopped := make(chan error, 1)
 	go func() { stopped <- d.stopAdoption() }()
@@ -233,12 +238,55 @@ func TestAdoptionNode_AW3_ShutdownCancelsAndDrains(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("stop did not return")
+	case <-time.After(2 * time.Second):
+		t.Fatal("stop did not return: the request in flight was not cancelled")
 	}
 	select {
 	case <-cancelled:
-	default:
-		t.Fatal("stop returned before the request in flight was cancelled")
+	case <-time.After(5 * time.Second):
+		t.Fatal("the server never saw the request cancelled")
+	}
+}
+
+// AW4: stop waits for the adopter. A goroutine the test controls is tracked in
+// the adopter's wait group, under the cancel stop calls. It reports when the
+// cancellation reaches it and then holds until released: stop must not return
+// before that release, and returns after it.
+func TestAdoptionNode_AW4_StopWaitsForTheAdopter(t *testing.T) {
+	d := &daemon{}
+	ctx, cancel := context.WithCancel(context.Background())
+	d.adoptionCancel = cancel
+	cancelled, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	t.Cleanup(func() { once.Do(func() { close(release) }) })
+	d.adoptionWG.Add(1)
+	go func() {
+		defer d.adoptionWG.Done()
+		<-ctx.Done()
+		close(cancelled)
+		<-release
+	}()
+	stopped := make(chan error, 1)
+	go func() { stopped <- d.stopAdoption() }()
+	select {
+	case <-cancelled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("stop did not cancel the adopter")
+	}
+	// Correct code cannot return here at all, so this bound never fails it;
+	// it only gives a stop that skips the wait time to show itself.
+	select {
+	case <-stopped:
+		t.Fatal("stop returned while the adopter was still running")
+	case <-time.After(200 * time.Millisecond):
+	}
+	once.Do(func() { close(release) })
+	select {
+	case err := <-stopped:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("stop did not return once the adopter finished")
 	}
 }
