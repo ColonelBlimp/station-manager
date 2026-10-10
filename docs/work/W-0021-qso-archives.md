@@ -3306,6 +3306,246 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      dummy QSO stores with `forwarded_to: []`; enabling a destination on Drill needs the operator's
      say per occasion (a real key uploads a dummy QSO to a real logbook); the rollback drill on
      copies; the two-archive SM Cloud proof after 5F.
+   - **5F.4 design (2026-10-10; selected by the operator; awaiting rulings; no code yet).**
+     Per-binding SM Cloud reconcilers, the aggregate reconcile endpoint, and only then the gate
+     moved from "Home default only" to "identity-ready and unambiguous" (sequencing ruled
+     2026-10-07, mandatory). Bound by Q1–Q3, Q5 and Q6 above.
+     *What the tree constrains* (survey of `6708b260`):
+     - One reconciler, for the default logbook only (`startReconciler`,
+       `cmd/smd/lifecycle_adapters.go:891`), stored as `d.smcloudRec`; a held binding gets none
+       (C3).
+     - The reconciler resolves its cloud logbook BY NAME through `GET /v1/logbooks`, then the
+       name-scoped `/v1/logbooks/{id}/reconcile` and `/manifest` (`reconcile.go:435–474`). The
+       adopted Home default therefore still reconciles on the name wire; its in-sync runs on
+       2026-10-10 (8,129/8,129) went through the legacy archive's `main`, which the adoption
+       made the same cloud logbook. The scoped `GET …/reconcile` and `…/manifest` exist on the
+       server since 5F.2 (`internal/cloud/server/identity.go:252–303`) and answer 404 for an
+       unknown archive or logbook without revealing which.
+     - `selectWires` (`cmd/smd/identity_wire.go`) puts a binding on the identity wire only when
+       it is adopted (`remote_adopted_at`) and confirmed for the current account; every other
+       enabled SM Cloud binding uses the name wire. Nothing marks a binding that never had a
+       legacy name.
+     - The server creates the archive and the logbook on the first identity PUT (ADR 0089 S1),
+       so a binding with no legacy data needs no adoption call.
+     - The version check (`identity_protocol`) runs only inside Home's adopter.
+     - `POST /v1/smcloud/reconcile` has no SPA caller; its consumers are `api-endpoints.md` and
+       the `smcloud-deploy.md` `curl` examples.
+     - The two gates: `smcloudHomeDefaultOnlyReason` (5F.0, `internal/archive/bindings.go:68`)
+       and `smcloudIdentityReason` (managed archives, `bindings.go:62`, used at `:410`).
+     *Acceptance criteria (operator-observable):*
+     1. Every enabled, unheld SM Cloud binding of the active archive has its own reconciler,
+        hourly and on demand; a disabled or held binding has none. Nearest confusable outcome:
+        one reconciler that loops over the bindings, where one binding's failure stops the
+        others' passes.
+     2. An identity binding reconciles through the scoped paths only; it never resolves a
+        cloud logbook by name.
+     3. `POST /v1/smcloud/reconcile` returns `{"results": [{forwarder_name, logbook_uuid,
+        summary | error}]}` (Q6); each error is sanitized and names the binding and the fault,
+        never a credential; 503 `smcloud_unavailable` when no reconciler runs.
+     4. A Home logbook other than the default, and a logbook of a managed archive, can be turned
+        on for SM Cloud when the gate's conditions hold, and its QSOs land in their own cloud
+        logbook, never in another logbook's.
+     5. A binding that would merge with another logbook's cloud data stays refused, with the
+        reason on its row.
+     6. AC 6 of the dossier: two managed archives with equal labels and logbook names never see
+        each other's rows in push, manifest or reconcile (export and restore are 5F.5).
+     *Questions for the operator (proposals marked; nothing is built until ruled):*
+     - **(F1) The wire of a binding with no legacy name.** A new enable on a managed archive, or
+       on a Home logbook other than the default, has no cloud data under a name. Proposal: it is
+       *identity from birth*. It uploads by UUID from its first PUT, with no adoption call, and
+       its Cloud logbook name is neither shown nor sent (Q5). The alternative is to run every
+       new binding through `POST /v1/archives/adopt` with its cloud name as `legacy_name`: one
+       mechanism, but it would invent a legacy name the cloud never had.
+     - **(F2) Marking identity from birth.** `selectWires` cannot tell such a binding from a
+       pre-5F.0 legacy binding that stayed enabled. Proposal: migration 0018 adds a nullable
+       `identity_since` timestamp on the binding row, stamped in the same save that newly enables
+       it under 5F.4; it is never cleared. A binding with neither `identity_since` nor
+       `remote_adopted_at` keeps the name wire (the kept pre-5F.0 bindings). The alternative is
+       to derive the wire from the archive's kind and the logbook's role, which breaks for Home's
+       kept non-default bindings.
+     - **(F3) An account change on an identity-from-birth binding.** An adopted binding is held
+       when the station account no longer matches its confirmation (T1), because its legacy name
+       maps to one tenant. A binding born on identity has no such mapping: after a token change
+       its next PUT creates its archive and logbook in the new tenant, and the reconciler then
+       backfills its QSOs there. Proposal: not held; the manual says what a token change does.
+       The alternative is to record the account at `identity_since` and hold on a mismatch, as
+       adopted bindings are.
+     - **(F4) "Identity-ready" at enable time.** Q1 and Q2 say the version check gates enabling.
+       Proposal: the version check runs at every daemon start that has an SM Cloud station
+       account, whatever the active archive, and its last result is kept for the run. A new
+       identity-from-birth enable is refused while that result is "unsupported" (an old server).
+       While it is "unreachable" — the offline-first case — the enable is ALLOWED: the worker
+       starts, and the 404-is-retryable rule (Q2) keeps the rows queued until a supporting server
+       answers. Your decision: allow on unreachable (proposed) or refuse until a start has seen
+       the server.
+     - **(F5) "Unambiguous" for Home's other logbooks.** Q3 lets a logbook be excluded from a
+       name group only on evidence that it never contributed. Proposal: a NEW enable of a Home
+       logbook other than the default is refused if any of its QSOs ever has an SM Cloud upload
+       row (`qso_upload` with `forwarder_type` smcloud, any status, any name), because those QSOs
+       are in a legacy cloud logbook that is now some other binding's. The row says it needs
+       manual recovery. Kept pre-5F.0 bindings are untouched. Managed archives have no legacy
+       history and are never refused on this ground.
+     - **(F6) A held binding in the aggregate.** Proposal: it appears in `results` with an
+       error, "uploads are held until adoption is confirmed for the current station account",
+       rather than being left out; a disabled binding is left out.
+     - **(F7) The cloud logbook not yet created.** The name path treats a missing cloud logbook
+       as "not created yet" and enqueues the whole local logbook (`cloud_logbook_id: 0`).
+       Proposal: the scoped reconcile treats its 404 the same way; the cloud then fills from the
+       queue. With F4's rule an old server cannot be the cause of that 404 while enabling, but it
+       can after a server downgrade; those rows then stay queued and retry (Q2), never filed by
+       name.
+     - **(F8) The reconcile route.** Proposal: `POST /v1/smcloud/reconcile` keeps its path and
+       takes the Q6 body; no per-binding route. The old single-summary body goes, and
+       `api-endpoints.md` and `smcloud-deploy.md` change in the same commit (no SPA caller).
+     *Proposed commits (each RED first, with reversion proofs, gates as for 5F.3):*
+     1. The scoped reconciler: the identity paths for an identity binding, F7's 404 rule, tests
+        against `sm-pg` (AC 2, AC 6's reconcile half).
+     2. One reconciler per enabled, unheld binding under the workers node, and the aggregate
+        route with its docs (AC 1, AC 3, F6, F8).
+     3. Migration 0018 and `identity_since` (F2), and `selectWires` building the identity
+        forwarder for it (F1, F3).
+     4. The version check for every start with an account (F4) and the gate lifted to the F4/F5
+        rules, with the API reason texts, the SPA rows and the logbook form, and the manual (AC 4,
+        AC 5, AC 6's push half).
+     *Station drill afterwards (operator-run, per occasion):* Home's default reconciles on the
+     scoped paths; then, only with the operator's say, a second logbook (or the Drill archive)
+     turned on for SM Cloud uploads a dummy QSO into its own cloud logbook.
+     **5F.4 rulings (operator, 2026-10-10).** Commit 1 approved to start, tests first; the
+     four-commit order stands and the gate stays closed until commit 4. The morning correction
+     stands: the 2026-10-10 runs show agreement with the adopted cloud logbook, but prove neither
+     scoped reconciliation nor identity uploads. The permanent identity decision, the
+     account-change policy and the offline-enable trade-off are also recorded in
+     [ADR 0092](../decisions/0092-sm-cloud-bindings-born-on-identity-are-permanent.md).
+     - **(F1) Approved.** A binding established without legacy history uses UUIDs from its first
+       upload and needs no adoption. The legacy Cloud logbook name is hidden and omitted; the
+       ordinary display labels stay in the identity envelope. These bindings are excluded from
+       the legacy-name collision checks: an absent adoption key must not normalize to `main` and
+       collide with Home's reservation.
+     - **(F2) Approved with safeguards.** `identity_since` records a permanent wire decision,
+       written atomically with the qualifying enable. Not every off→on transition stamps it:
+       adopted or reserved bindings keep their adoption rules, and a legacy binding needs the
+       history check (F5) before conversion. Never cleared on disable, account change or restart.
+       It gets the same durable-write protection as the adoption confirmation. A downgrade below
+       schema 18 is refused while any stamp exists, disabled bindings and deleted logbooks
+       included. The marker is part of restart detection. A binding with neither marker keeps
+       its name behaviour.
+     - **(F3) Approved, for bindings born on identity only.** Token rotation within the same
+       tenant continues the same backup. Credentials for a different tenant make uploads and
+       reconciliation fill that tenant's UUID-scoped backup; the old backup remains. This
+       applies when the new account takes effect under the existing restart rules. Adopted
+       bindings keep their confirmation hold. The manual must say that the new tenant can
+       receive the whole local logbook, not only later QSOs.
+     - **(F4) Allow the enable when unreachable.** The bounded support check runs at every start
+       with an SM Cloud account, whatever the active archive. Explicitly unsupported refuses a
+       new identity enable; transport unavailability permits it, with support shown as
+       unverified, and uploads stay on the scoped paths with retry and no name fallback. The
+       result is tied to the server checked: a saved URL change does not inherit another
+       server's result. A pending check, a malformed response, or an authentication or
+       configuration error never silently becomes "offline". Existing validation and restart
+       semantics are kept; none of this blocks local logging.
+     - **(F5) Approved as a conservative first-transition gate, with corrected wording.** For a
+       previously legacy or unmarked non-default Home binding, any SM Cloud upload record,
+       whatever its status or worker name, prevents automatic conversion; deleted QSOs and
+       tombstones included. Bindings already established on identity are exempt: their own
+       upload history does not prevent re-enabling them. Kept enabled legacy bindings stay
+       untouched. Text: "Previous SM Cloud upload history exists; automatic conversion needs
+       manual recovery." (an upload record does not prove delivery or ownership by another
+       binding). Absence of records counts only where the retained history supports that
+       conclusion; unreadable or uncertain evidence never counts as clean history.
+     - **(F6) Approved; Q6's 503 rule kept explicitly.** Disabled bindings are omitted. Held
+       bindings appear with a sanitized error and get no reconciler. When at least one
+       reconciler runs: 200 with every enabled binding's result; one failure does not abort its
+       peers. When none runs: 503 `smcloud_unavailable`, with the held bindings' results beside
+       the normal error envelope. No enabled bindings: an empty results list. An enabled binding
+       whose reconciler cannot be built or resolved is reported, never silently dropped. The
+       running generation's snapshot is used throughout, and a slow binding cannot use up the
+       shared request deadline before the others get their attempt.
+     - **(F7) Approved, narrower.** A scoped-summary 404 starts the existing empty-cloud repair
+       calculation: the local live rows enqueue through that binding's queue, with the existing
+       batch limit and idempotency — eventual backfill, not an unlimited whole-logbook enqueue;
+       a tombstone missing from the cloud needs no upload. **Correction to the design text
+       above:** with F4's offline allowance an old server CAN cause this 404 at enable time; a
+       404 alone does not establish why the resource is unavailable. Never fall back to names;
+       any other failure never becomes an empty cloud result. The returned archive and logbook
+       UUIDs are validated on successful summary and manifest responses. Scoped responses carry
+       no numeric id, so `cloud_logbook_id` is omitted for identity summaries rather than
+       returned as a misleading zero.
+     - **(F8) Approved.** The path and the bodyless request stay; the response becomes Q6's
+       aggregate. Both `api-endpoints.md` and `smcloud-deploy.md` change in commit 2, including
+       mixed outcomes, the all-held 503 and the numeric-id semantics.
+     *Commit 1's decisive fixtures (ruled):* identical labels with different UUIDs; a populated
+     legacy-name decoy; the scoped summary and manifest requests; wrong returned UUIDs; a missing
+     scoped logbook; the legacy behaviour retained. Identity reconciliation makes zero name-path
+     requests and queues repairs only for its own binding.
+     **5F.4 commit 1 built (2026-10-10; not committed).** `smcloud.NewIdentityReconciler` (target
+     UUIDv7s checked and lower-cased; the account validated as `NewReconciler` does). An identity
+     reconciler reads only `GET /v1/archives/{a}/logbooks/{l}/reconcile` and `/manifest`. The
+     summary's 404 is the empty cloud: the existing diff, batch cap and idempotent enqueue run
+     through the binding's own queue, with an info line saying a 404 was the cause. Every other
+     failure is an error that enqueues nothing. A successful summary or manifest must name the
+     binding's archive and logbook UUIDs. `ReconcileSummary.CloudLogbookID` is now `*int64`
+     with `omitempty`: set on the name wire (0 included), absent on the identity wire. The name
+     reconciler is unchanged in behaviour (shared helpers factored: `getStatus`, `cloudSource`,
+     `manifestEntries`). Nothing in `cmd/smd` constructs the identity reconciler yet; commit 2
+     does.
+     Tests, RED first (`internal/forwarding/smcloud/reconcile_identity_test.go`):
+     - RI1, against `sm-pg` through a recording proxy: a populated legacy decoy `main` and
+       another archive with identical labels under different UUIDs. The 404 run enqueues A's two
+       live rows for A's binding only (the tombstone none; the decoy's and the other archive's
+       QSOs none) and asks exactly the scoped summary. Drained, A is in sync at 2 (not the decoy's
+       1). A new QSO asks the scoped summary and manifest, in that order, with `cloud_only` 0.
+     - RI2: ten failure cases (wrong archive or logbook UUID on the summary or the manifest,
+       UUIDs absent, 500, 401, a malformed summary, a manifest 404 or 500 after a summary). Each
+       is an error carrying its own text, enqueues nothing, and asks no name path.
+     - RI3: no `cloud_logbook_id` on an identity summary; `"cloud_logbook_id":0` kept on a name
+       summary. RI4: the name reconciler asks `/v1/logbooks`, then `/7/reconcile` and
+       `/7/manifest`, and reports id 7 (passed before the change: a characterization). RI5:
+       targets without valid UUIDv7s, and an account without a token, are refused.
+     - RED: against a stub that built today's name reconciler, RI1, RI2, RI3 and RI5 failed for
+       the intended reasons; RI4 passed.
+     - Fixture fixes: RI1's tombstone first carried a delete row from the ordinary delete path
+       (the logbook was bound before the delete), so it now binds after the delete and asserts
+       the tombstone starts with no row. Under reversion K2, RI2's summary-UUID cases first
+       passed for the wrong reason: without a manifest answer they still errored, and "logbook"
+       matched the request path in the error text. They now get a valid manifest and assert the
+       exact "names another …" text.
+     Reversions, each applied by a unique anchor with a non-empty replacement, then restored and
+     verified by hash; each fails its intended assertion:
+     - K1, the identity reconciler takes the name path: RI1, RI2 (all ten), RI3.
+     - K2, returned UUIDs not checked: RI2's five UUID cases.
+     - K3, the summary 404 is not the empty cloud: RI1, RI3.
+     - K4, every summary failure is the empty cloud: RI2's 500 and 401.
+     - K5, a manifest failure is an empty manifest: RI2's manifest 404 and 500.
+     - K6, an identity summary reports id 0: RI1, RI3.
+     - K7, the target not validated: RI5. Its first replacement failed to build (unused
+       import), so the test never reached its assertion; it was rerun with a compiling
+       replacement.
+     Not separately provable here: the batch cap (`truncateBatch`, shared with the name wire and
+     unit-tested there; reaching it needs 5,001 rows) and the tombstone rule (`diffManifests`,
+     shared; RI1's 0 deletes would hold before the change too). "Only its own binding" is
+     shown for one bound binding; several bindings arrive in commit 2.
+     Gates, all exit 0: gofmt (whole tree), `go vet ./...`, `go test ./...`, the cloud set with
+     `-race` against `sm-pg` (then stopped), maintainability (0 regressions), `task ci:local`
+     (`frontend/app/dist/index.html` restored).
+     Operator review (2026-10-10), one P2, fixed before the commit: a 200 answer naming the right
+     UUIDs but missing a field passed as valid. A summary without `count` or `hash` read as 0 or
+     "", which passed for a mismatch, and a manifest without `entries` read as empty, so the repair
+     queued local rows on a malformed answer. Now each omission is an error ("the cloud's
+     reconcile summary omits count" / "... omits hash", "the cloud's manifest omits entries"),
+     while `"entries": null`, which the current server can emit, stays a valid empty manifest.
+     - RI2 gained three cases (count, hash, entries omitted; thirteen in all) and now asserts no
+       upload row and no name path before it checks the error, so a reversion fails on the harm
+       itself. RED: the three new cases failed ("An error is expected but got nil").
+     - RI6 (new): a manifest with `"entries": null` repairs as an empty cloud, queuing the one
+       live row. It passed before the fix: a characterization guarding the null case.
+     - K8 (a missing `count` reads as 0), K9 (a missing `hash` reads as ""), K10 (missing
+       `entries` read as empty): each fails its RI2 case on "a failed run must not enqueue as if
+       the cloud were empty". K11 (`null` treated as omitted): RI6 fails. The first K8/K9
+       replacements only skipped the check and panicked on the nil pointer, and the first K10
+       replacement failed on a decode error, not the queue. None of the three reproduced the old
+       behaviour, so each was redone to read a missing field as its zero value.
+     - K1–K7 were run before RI2's assertions were reordered; the assertion set is unchanged.
+     - Gates rerun after the fix, all exit 0: as above, with RI1 passing against `sm-pg`.
 
    - **Archive contents (ADR 0084; ruled 2026-09-28).** Settings → Archives lists each
      archive's logbooks under its row, nested on the table's grid (name under Label,
