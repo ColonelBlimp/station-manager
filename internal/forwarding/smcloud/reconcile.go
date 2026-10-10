@@ -17,6 +17,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/qsoservice"
 	"github.com/ColonelBlimp/station-manager/internal/securehttp"
 	"github.com/ColonelBlimp/station-manager/internal/types"
+	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
 
 // Reconcile (ADR 0040 / sm-cloud-p1.md S4): detect + self-heal drift between
@@ -65,15 +66,15 @@ const (
 // the on-demand endpoint.
 type ReconcileSummary struct {
 	InSync          bool   `json:"in_sync"`
-	LocalCount      int    `json:"local_count"`      // live local rows
-	CloudCount      int    `json:"cloud_count"`      // live cloud rows
-	CloudLogbookID  int64  `json:"cloud_logbook_id"` // 0 = logbook not on the cloud yet
-	EnqueuedUpserts int    `json:"enqueued_upserts"` // local-newer / cloud-missing rows queued
-	EnqueuedDeletes int    `json:"enqueued_deletes"` // missed tombstones queued
-	CloudOnly       int    `json:"cloud_only"`       // cloud rows unknown locally (logged, untouched)
-	CloudNewer      int    `json:"cloud_newer"`      // cloud rows newer than local (warned, untouched)
-	Truncated       bool   `json:"truncated"`        // maxEnqueuePerRun hit; next run continues
-	Hash            string `json:"local_hash"`       // the local Summary hash (diagnostics)
+	LocalCount      int    `json:"local_count"`                // live local rows
+	CloudCount      int    `json:"cloud_count"`                // live cloud rows
+	CloudLogbookID  *int64 `json:"cloud_logbook_id,omitempty"` // name wire: 0 = not on the cloud yet; absent on the identity wire
+	EnqueuedUpserts int    `json:"enqueued_upserts"`           // local-newer / cloud-missing rows queued
+	EnqueuedDeletes int    `json:"enqueued_deletes"`           // missed tombstones queued
+	CloudOnly       int    `json:"cloud_only"`                 // cloud rows unknown locally (logged, untouched)
+	CloudNewer      int    `json:"cloud_newer"`                // cloud rows newer than local (warned, untouched)
+	Truncated       bool   `json:"truncated"`                  // maxEnqueuePerRun hit; next run continues
+	Hash            string `json:"local_hash"`                 // the local Summary hash (diagnostics)
 
 	// Discovered/Attempted back the run-complete log accounting (L12) and are NOT served on
 	// the wire (json:"-") — L12 is a logging change, so the endpoint's response shape is
@@ -88,13 +89,16 @@ type ReconcileSummary struct {
 // logbook (P1: the default logbook). Construct with NewReconciler; drive
 // with Run (periodic) and/or RunOnce (on demand).
 type Reconciler struct {
-	db            *sqlite.Service
-	qso           *qsoservice.Service
-	log           *logging.Service
-	client        *http.Client
-	baseURL       string
-	token         string
-	cloudLogbook  string // cloud-side logbook NAME (mirrors the forwarder's)
+	db           *sqlite.Service
+	qso          *qsoservice.Service
+	log          *logging.Service
+	client       *http.Client
+	baseURL      string
+	token        string
+	cloudLogbook string // cloud-side logbook NAME (mirrors the forwarder's)
+	// identity is set for an identity binding (W-0021 5F.4, ruling F7): the
+	// reconciler then reads only the scoped paths, never a name.
+	identity      *IdentityTarget
 	forwarderName string // queue destination for the heal traffic
 	localLogbook  int64
 	interval      time.Duration
@@ -136,6 +140,26 @@ func NewReconciler(fc types.ForwarderConfig, localLogbookID int64,
 		localLogbook:  localLogbookID,
 		interval:      defaultReconcileInterval,
 	}, nil
+}
+
+// NewIdentityReconciler builds the reconciler of an identity binding: the
+// account validated as NewReconciler validates it, and every cloud read on
+// /v1/archives/{archive}/logbooks/{logbook}/reconcile and /manifest, never by
+// name (ADR 0088). A target without a valid archive or logbook UUIDv7 is
+// refused; there is no fallback to the name.
+func NewIdentityReconciler(fc types.ForwarderConfig, localLogbookID int64, target IdentityTarget,
+	db *sqlite.Service, qso *qsoservice.Service, log *logging.Service) (*Reconciler, error) {
+	const op errors.Op = "smcloud.NewIdentityReconciler"
+	target.ArchiveUUID, target.LogbookUUID = strings.ToLower(target.ArchiveUUID), strings.ToLower(target.LogbookUUID)
+	if !utils.IsValidUUIDv7(target.ArchiveUUID) || !utils.IsValidUUIDv7(target.LogbookUUID) {
+		return nil, errors.New(op).WithMsg("the identity binding needs the archive's and the logbook's UUIDv7")
+	}
+	r, err := NewReconciler(fc, localLogbookID, db, qso, log)
+	if err != nil {
+		return nil, errors.New(op).WithErr(err)
+	}
+	r.identity = &target
+	return r, nil
 }
 
 // Run drives the periodic loop until ctx is cancelled: first run after
@@ -246,26 +270,21 @@ func (r *Reconciler) runOnce(ctx context.Context) (ReconcileSummary, error) {
 	localCount, localHash := reconcile.Summary(liveEntries)
 	sum := ReconcileSummary{LocalCount: localCount, Hash: localHash}
 
-	// Resolve the cloud logbook id by name. Absent = nothing pushed yet:
-	// everything local-live is divergence (the first backfill).
-	cloudID, err := r.cloudLogbookID(ctx)
+	// The cloud's summary. Absent = nothing pushed yet: everything local-live
+	// is divergence (the first backfill).
+	src, err := r.cloudSource(ctx, &sum)
 	if err != nil {
-		return ReconcileSummary{}, errors.New(op).WithErr(err).WithMsg("resolve cloud logbook")
+		return ReconcileSummary{}, errors.New(op).WithErr(err)
 	}
-	sum.CloudLogbookID = cloudID
 
 	cloud := map[string]cloudEntry{}
-	if cloudID > 0 {
-		cr, err := r.cloudReconcile(ctx, cloudID)
-		if err != nil {
-			return ReconcileSummary{}, errors.New(op).WithErr(err).WithMsg("cloud reconcile summary")
-		}
-		sum.CloudCount = cr.Count
-		if cr.Count == localCount && cr.Hash == localHash {
+	if src.found {
+		sum.CloudCount = src.count
+		if src.count == localCount && src.hash == localHash {
 			sum.InSync = true
 			return sum, nil
 		}
-		if cloud, err = r.cloudManifest(ctx, cloudID); err != nil {
+		if cloud, err = src.manifest(ctx); err != nil {
 			return ReconcileSummary{}, errors.New(op).WithErr(err).WithMsg("cloud manifest")
 		}
 	}
@@ -396,16 +415,23 @@ func diffManifests(local []types.QsoManifestEntry, cloud map[string]cloudEntry) 
 const maxManifestBytes = 64 << 20 // 64 MiB
 
 func (r *Reconciler) get(ctx context.Context, path string, out any) error {
+	_, err := r.getStatus(ctx, path, out)
+	return err
+}
+
+// getStatus is get with the answer's HTTP status (0 when no answer came
+// back), so a caller can tell a 404 from every other failure.
+func (r *Reconciler) getStatus(ctx context.Context, path string, out any) (int, error) {
 	const op errors.Op = "smcloud.Reconciler.get"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.baseURL+path, nil)
 	if err != nil {
-		return errors.New(op).WithErr(err).WithMsgf("build GET %s", path)
+		return 0, errors.New(op).WithErr(err).WithMsgf("build GET %s", path)
 	}
 	req.Header.Set("Authorization", "Bearer "+r.token)
 	req.Header.Set("User-Agent", UserAgent)
 	resp, err := securehttp.Do(r.client, req)
 	if err != nil {
-		return errors.New(op).WithErr(err).WithMsgf("GET %s", path)
+		return 0, errors.New(op).WithErr(err).WithMsgf("GET %s", path)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	// maxManifestBytes, NOT the 1 MiB submit-response cap: the reconcile GETs
@@ -418,16 +444,143 @@ func (r *Reconciler) get(ctx context.Context, path string, out any) error {
 	// beyond any single logbook — while still bounding a rogue response.
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxManifestBytes))
 	if err != nil {
-		return errors.New(op).WithErr(err).WithMsgf("read GET %s", path)
+		return resp.StatusCode, errors.New(op).WithErr(err).WithMsgf("read GET %s", path)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return errors.New(op).WithMsgf("GET %s: HTTP %d (body: %s)", path, resp.StatusCode,
+		return resp.StatusCode, errors.New(op).WithMsgf("GET %s: HTTP %d (body: %s)", path, resp.StatusCode,
 			bodySnippet(body, errorSnippetLen))
 	}
 	if err := json.Unmarshal(body, out); err != nil {
-		return errors.New(op).WithErr(err).WithMsgf("parse GET %s", path)
+		return resp.StatusCode, errors.New(op).WithErr(err).WithMsgf("parse GET %s", path)
+	}
+	return resp.StatusCode, nil
+}
+
+// cloudSide is one run's view of the cloud logbook: whether it exists, its
+// summary, and how to read its manifest.
+type cloudSide struct {
+	found    bool
+	count    int
+	hash     string
+	manifest func(context.Context) (map[string]cloudEntry, error)
+}
+
+// cloudSource reads the cloud's summary on the binding's wire. The name wire
+// resolves the logbook by name and reports its numeric id (0 = not created
+// yet). The identity wire reads the scoped summary: its 404 is the empty
+// cloud (F7), every other failure is an error, and a successful answer must
+// name the binding's own archive and logbook.
+func (r *Reconciler) cloudSource(ctx context.Context, sum *ReconcileSummary) (cloudSide, error) {
+	if r.identity == nil {
+		cloudID, err := r.cloudLogbookID(ctx)
+		if err != nil {
+			return cloudSide{}, errors.New("smcloud.Reconciler.cloudSource").WithErr(err).WithMsg("resolve cloud logbook")
+		}
+		sum.CloudLogbookID = &cloudID
+		if cloudID == 0 {
+			return cloudSide{}, nil
+		}
+		cr, err := r.cloudReconcile(ctx, cloudID)
+		if err != nil {
+			return cloudSide{}, errors.New("smcloud.Reconciler.cloudSource").WithErr(err).WithMsg("cloud reconcile summary")
+		}
+		return cloudSide{found: true, count: cr.Count, hash: cr.Hash,
+			manifest: func(ctx context.Context) (map[string]cloudEntry, error) { return r.cloudManifest(ctx, cloudID) }}, nil
+	}
+	return r.scopedSource(ctx)
+}
+
+func (r *Reconciler) scopedPath() string {
+	return "/v1/archives/" + r.identity.ArchiveUUID + "/logbooks/" + r.identity.LogbookUUID
+}
+
+// checkScope refuses an answer that names another archive or logbook than
+// the binding's own.
+func (r *Reconciler) checkScope(what, archiveUUID, logbookUUID string) error {
+	if !strings.EqualFold(strings.TrimSpace(archiveUUID), r.identity.ArchiveUUID) {
+		return errors.New("smcloud.Reconciler.checkScope").WithMsgf("the cloud's %s names another archive (%q)", what, archiveUUID)
+	}
+	if !strings.EqualFold(strings.TrimSpace(logbookUUID), r.identity.LogbookUUID) {
+		return errors.New("smcloud.Reconciler.checkScope").WithMsgf("the cloud's %s names another logbook (%q)", what, logbookUUID)
 	}
 	return nil
+}
+
+func (r *Reconciler) scopedSource(ctx context.Context) (cloudSide, error) {
+	const op errors.Op = "smcloud.Reconciler.scopedSource"
+	var out struct {
+		ArchiveUUID string  `json:"archive_uuid"`
+		LogbookUUID string  `json:"logbook_uuid"`
+		Count       *int    `json:"count"`
+		Hash        *string `json:"hash"`
+	}
+	status, err := r.getStatus(ctx, r.scopedPath()+"/reconcile", &out)
+	if status == http.StatusNotFound {
+		// Not on the cloud, by the server's answer. A 404 does not say why
+		// (not created yet, or a server without the scoped paths); either
+		// way the repair queues through this binding and never by name.
+		r.log.InfoWith().Str("forwarder", r.forwarderName).
+			Msg("smcloud reconcile: the binding's cloud logbook was not found (404); its live rows queue for upload")
+		return cloudSide{}, nil
+	}
+	if err != nil {
+		return cloudSide{}, errors.New(op).WithErr(err).WithMsg("cloud reconcile summary")
+	}
+	if err := r.checkScope("reconcile summary", out.ArchiveUUID, out.LogbookUUID); err != nil {
+		return cloudSide{}, errors.New(op).WithErr(err)
+	}
+	// A summary missing a field would read as 0 or "" and pass for a
+	// mismatch, and the repair would queue rows on a malformed answer.
+	if out.Count == nil {
+		return cloudSide{}, errors.New(op).WithMsg("the cloud's reconcile summary omits count")
+	}
+	if out.Hash == nil {
+		return cloudSide{}, errors.New(op).WithMsg("the cloud's reconcile summary omits hash")
+	}
+	return cloudSide{found: true, count: *out.Count, hash: *out.Hash, manifest: r.scopedManifest}, nil
+}
+
+func (r *Reconciler) scopedManifest(ctx context.Context) (map[string]cloudEntry, error) {
+	const op errors.Op = "smcloud.Reconciler.scopedManifest"
+	var out struct {
+		ArchiveUUID string          `json:"archive_uuid"`
+		LogbookUUID string          `json:"logbook_uuid"`
+		Entries     json.RawMessage `json:"entries"`
+	}
+	if err := r.get(ctx, r.scopedPath()+"/manifest", &out); err != nil {
+		return nil, err
+	}
+	if err := r.checkScope("manifest", out.ArchiveUUID, out.LogbookUUID); err != nil {
+		return nil, err
+	}
+	// "entries": null is the server's empty logbook; an absent field is a
+	// malformed answer, which must not read as an empty cloud.
+	if out.Entries == nil {
+		return nil, errors.New(op).WithMsg("the cloud's manifest omits entries")
+	}
+	var m manifestEntries
+	if err := json.Unmarshal(out.Entries, &m.Entries); err != nil {
+		return nil, errors.New(op).WithErr(err).WithMsg("parse the cloud's manifest entries")
+	}
+	return m.byUUID(), nil
+}
+
+// manifestEntries is a manifest body's entries, on either wire.
+type manifestEntries struct {
+	Entries []struct {
+		UUID       string    `json:"uuid"`
+		ModifiedAt time.Time `json:"modified_at"`
+		Revision   int64     `json:"revision"`
+		Deleted    bool      `json:"deleted"`
+	} `json:"entries"`
+}
+
+func (m manifestEntries) byUUID() map[string]cloudEntry {
+	out := make(map[string]cloudEntry, len(m.Entries))
+	for _, e := range m.Entries {
+		out[strings.ToLower(strings.TrimSpace(e.UUID))] = cloudEntry{modified: e.ModifiedAt, revision: e.Revision, deleted: e.Deleted}
+	}
+	return out
 }
 
 // cloudLogbookID resolves the configured cloud logbook name to its id;
@@ -463,20 +616,9 @@ func (r *Reconciler) cloudReconcile(ctx context.Context, logbookID int64) (struc
 }
 
 func (r *Reconciler) cloudManifest(ctx context.Context, logbookID int64) (map[string]cloudEntry, error) {
-	var out struct {
-		Entries []struct {
-			UUID       string    `json:"uuid"`
-			ModifiedAt time.Time `json:"modified_at"`
-			Revision   int64     `json:"revision"`
-			Deleted    bool      `json:"deleted"`
-		} `json:"entries"`
-	}
+	var out manifestEntries
 	if err := r.get(ctx, fmt.Sprintf("/v1/logbooks/%d/manifest", logbookID), &out); err != nil {
 		return nil, err
 	}
-	m := make(map[string]cloudEntry, len(out.Entries))
-	for _, e := range out.Entries {
-		m[strings.ToLower(strings.TrimSpace(e.UUID))] = cloudEntry{modified: e.ModifiedAt, revision: e.Revision, deleted: e.Deleted}
-	}
-	return m, nil
+	return out.byUUID(), nil
 }
