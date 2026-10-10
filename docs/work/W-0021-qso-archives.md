@@ -3263,6 +3263,43 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      `db.pre-0017` copy was seen in the working directory. Still to run: the station drills
      listed below; to exercise adoption, the operator adds the SM Cloud account, enables it on
      Default and restarts.
+     **Home restored and adopted (2026-10-10, operator; the agent read only).** Instead of adding
+     an account to the test install, the operator restored the real station's working directory
+     from the 2026-09-28 backup (`~/Documents/2026-09-28-Backup/station-manager`), with `smd`
+     stopped. The test install was moved aside intact to
+     `~/.local/share/station-manager.test-2026-10-10` (2 QSOs, schema 17, archive `01a0f275…`;
+     no upload rows, so nothing of it reached a real service). Checked before the copy: the
+     backup is archive `01a0c8cb-904f-7394-afca-ef922b41bbfb` (Home, the UUID recorded at the
+     2026-09-22 deploy), 8,129 QSOs, one logbook, schema 15 not dirty, bindings seeded
+     2026-09-26, every upload `uploaded` (clublog 2,356, qrz 2,671, smcloud 10,706; none
+     waiting or failed), `config.json` version 5 with ClubLog, QRZ and SM Cloud on (SM Cloud
+     url, token and logbook set), QRZCQ off, `evidence.sync` on. Checked after: `diff -r`
+     against the backup is clean, and modes, sizes and mtimes match; no nested copy.
+     **First start (07:25:15):** migrations 0016–0017 applied (schema 17, not dirty; the
+     migrator logs only "m.Up completed or no change"); `config v6: wrote the one-time v5
+     recovery copy` (`config.v5.json`, 0600, 7,771 bytes, the v5 file's size) and the strip:
+     `config.json` version 6, no entry keeps `name` or `enabled`, only SM Cloud keeps
+     credentials (`url`, `token`). Bindings: ClubLog and QRZ on, QRZCQ off, SM Cloud on for
+     Default, every queue 0/0/0; logbook 1 counts 8,129. Workers clublog, qrz and smcloud and the
+     smcloud reconciler started. Adoption `checking` (07:25:17.353) → `adopted` (07:25:17.527),
+     cloud name `main`; the row read *Adopted; applies after a restart.*, the Cloud logbook name
+     locked, `restart_required` true, no `uploads_held`. A reconcile at 07:27:17 (still the
+     name wire) was in sync, 8,129 local and 8,129 cloud.
+     **Second start (07:27:31, operator restart).** The previous generation drained cleanly
+     (refresher dropped 0; evidence pending 0). Schema 17, archive Home; the same workers
+     started; the SM Cloud row reads `adopted` / *Adopted.*, `uploads_held` absent,
+     `restart_required` false, every queue 0/0/0. The first reconcile of this generation
+     (07:29:32) was in sync, 8,129 and 8,129, nothing enqueued. No warning or error except the
+     known plain-HTTP notice (`allow_insecure_http`, from the backup's config) and the bridge's
+     rig-unreachable lines (rig off).
+     **Still open — direct proof of the identity wire.** The wire selection is not logged, and
+     it is not established here whether the reconciler compares through the identity endpoints,
+     so nothing above shows that uploads now take the identity path. The operator ruled
+     (2026-10-10) that the proof waits for the next on-air QSO: it must reach SM Cloud as
+     `uploaded` on this station, and the smcloud server's log must show its PUT to
+     `/v1/archives/01a0c8cb-904f-7394-afca-ef922b41bbfb/logbooks/{logbook}/qsos`, not the
+     name path. That QSO also goes to ClubLog and QRZ, which are on. When it lands, record it
+     here and close the 5F.3 station proof.
    - **Station drills after deploy** (operator-run, recorded here): Home unchanged after the
      upgrade (same `forwarded_to`, worker names and queue counts as before; bindings listed under
      Home with the legacy names); the Drill archive shows every destination off, no banner, and a
