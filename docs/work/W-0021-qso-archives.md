@@ -3546,6 +3546,150 @@ the compatibility promise that a daemon at any slice boundary starts the existin
        behaviour, so each was redone to read a missing field as its zero value.
      - K1–K7 were run before RI2's assertions were reordered; the assertion set is unchanged.
      - Gates rerun after the fix, all exit 0: as above, with RI1 passing against `sm-pg`.
+     Committed as `73a992b0` (code) and `cd632c3e` (docs). Clean-room review of `73a992b0`: no
+     actionable findings; closed.
+   - **5F.4 commit 2 plan (2026-10-10; operator asked for tests and plan before code; not
+     built).** Scope as directed: per-binding wire selection; held, disabled and unresolved
+     bindings; mixed results and the all-unavailable 503; slow-binding isolation; lifecycle
+     cancellation and draining; both F8 docs. The enable gate stays closed: tests create extra
+     bindings by SQL, as SW1–SW8 do.
+     *Shape.* `startReconciler` becomes one pass over the start snapshot's enabled SM Cloud
+     bindings, producing the generation's reconcile set, one entry per enabled binding in
+     listing order: `{forwarder_name, logbook_uuid}` plus either a running reconciler or a fixed
+     fault. Identity bindings (`d.wires.identity`) get `NewIdentityReconciler` with the SAME
+     `IdentityTarget` `selectWires` built their forwarder from (kept on `wireSelection`); others
+     get `NewReconciler`. Held: fault, no reconciler. Unresolved (a `BindingFault` on an
+     enabled binding, now kept on the snapshot): fault. Build failure: fault, cause logged. Each
+     running reconciler gets its own goroutine on the forwarder context and `workerWG`, as
+     today. The api package takes the set through a new seam (no forwarding import): a slice
+     of `{ForwarderName, LogbookUUID, Run func(ctx) (any, error) | Fault string}`. The handler
+     runs every `Run` concurrently, each under its own deadline, and builds `results` in set
+     order. Reconcile log lines gain the forwarder name (several reconcilers share the log).
+     *Behaviour change to note:* the adopted Home default moves from the name wire to the
+     scoped paths at the deploy (AC 2); SW1's "keeps the by-name reconciler" becomes "has an
+     identity reconciler".
+     *Questions (proposals; not built until ruled):*
+     - (G1) Per-binding deadline: run all bindings concurrently, each bounded by the existing
+       25 s, so the request stays under the server's write timeout with no new number.
+       Alternative: one after another with a per-binding share (needs a number from you).
+     - (G2) Wire error texts, fixed per class; the cause goes to the log with the binding's name:
+       held "uploads are held until adoption is confirmed for the current station account";
+       unresolved "the binding cannot be resolved against a station account"; build failure
+       "the reconciler could not be built; the daemon log has the cause"; deadline "timed out
+       after 25 s"; any other run failure "the reconcile pass failed; the daemon log has the
+       cause". No upstream text, URL or body crosses the wire.
+     - (G3) No enabled SM Cloud bindings: 503 `smcloud_unavailable` with `"results": []`
+       beside the envelope (Q6's "no reconciler runs" read literally), or 200 `{"results": []}`.
+       Proposal: 503 with the empty list; the F6 text allows either reading.
+     - (G4) Kept pre-5F.0 enabled name-wire bindings on other Home logbooks get their own name
+       reconciler (AC 1). Two such bindings sharing one cloud name would each count the other's
+       rows as `cloud_only` and never read in sync (noise; nothing is deleted). Proposal: accept
+       for now; 5F.4 commit 4's history gate keeps new ones from appearing.
+     *Tests (RED first; reversion per guarantee):*
+     - api, fake `Run`s: AR1 mixed (summary, run error, held, unresolved): 200, set order, each
+       entry exactly one of `summary`/`error`, a secret-bearing run error (token, URL with
+       userinfo, body) absent from the body. AR2 every entry a fault: 503 envelope plus results.
+       AR3 no entries: per G3. AR4 isolation: binding 1 blocks until binding 2 has run (a
+       sequential handler deadlocks into 1's timeout); then binding 1 never returns: binding 2's
+       summary is served and 1 reads "timed out". AR5 the request cancelled: every `Run` sees its
+       context cancelled and the handler returns.
+     - cmd/smd, orchestrated, fake cloud recording paths: DR1 one generation holding an
+       identity binding (confirmed), a name binding on a second logbook, a held binding, an
+       unresolved one and a disabled one; the aggregate lists the first four in order (held and
+       unresolved with their texts), omits the disabled one; the identity entry's requests are
+       only `/v1/archives/{a}/logbooks/{l}/…`, the name entry's only `/v1/logbooks…`; one
+       "reconciler started" line per running binding, none for held, unresolved or disabled.
+       DR2 one binding's cloud failing (500) leaves its peer's summary intact (200). DR3 the
+       set is the start snapshot: a binding enabled by SQL after start is absent until restart.
+       DR4 lifecycle: with two reconcilers whose periodic passes are blocked mid-GET (startup
+       delay shortened by an in-package seam), a generation stop cancels both and the workers
+       node drains (`workerWG` returns, no panic line); an on-demand aggregate in flight when the
+       stop begins finishes within its bound before the log database closes.
+     - smcloud: RR1 `Run` returns promptly when cancelled mid-GET (no test today).
+     - Updated, not new: SW1, the workers characterization and the forwarding-gate tests read
+       `d.smcloudRec`; they move to the set. `TestHandleSmcloudReconcile` moves to AR1–AR5.
+     *Docs (F8):* `api-endpoints.md` (gating, Q6 body, per-binding deadline, mixed outcomes, the
+     all-unavailable 503 with `results`, `cloud_logbook_id` only on name-wire summaries);
+     `smcloud-deploy.md` (both `curl` examples read `.results[]`; `in_sync` per binding).
+     **5F.4 commit 2 rulings (operator, 2026-10-10).** Structure approved; the gate stays closed;
+     both F8 docs in this commit.
+     - (G1) Concurrent, 25 s kept. Each binding gets its own cancellable context, bounded by the
+       request's context and ONE deadline fixed when the handler starts, so late scheduling
+       cannot extend the aggregate. A timeout cannot stop arbitrary Go code: every launched run
+       must finish before the handler returns (no abandoned database-using goroutine). AR4's
+       second case blocks until its context is cancelled, then returns; the barrier case stays.
+     - (G2) The fixed texts approved; the entry names the binding; no raw cause on the wire.
+       Request cancellation is distinct from the binding using up its 25 s: an early
+       cancellation never says "timed out after 25 s". Binding attribution on the failure and
+       partial-queue-mutation log lines as well as on success. A panic in a launched run is
+       recovered by the existing convention and becomes a fixed failure result; peers keep
+       theirs.
+     - (G3) 503 with `"results": []`: no runnable reconciler means `smcloud_unavailable` (Q6).
+       Every runnable reconciler failing is still 200 with per-binding errors: availability and
+       success are different outcomes.
+     - (G4) Approved, with the consequence stated fully: such reconcilers can also backfill
+       their own missing rows into the shared cloud logbook, acceptable for kept enabled
+       bindings; cloud-only rows stay untouched; local tombstones may repair their own matching
+       cloud rows. Never promise they cannot read in sync; that depends on contents. A
+       shared-name fixture proves each binding repairs only its own QSOs and leaves its peer's
+       cloud-only rows untouched.
+     - Matrix additions: build failure (fixed fault, healthy peer runs); all runs fail (200,
+       ordered errors); cancellation and draining assert the run callbacks EXITED, DR4 observes
+       completion before the log database closes, and an exhausted shutdown budget keeps the
+       existing dependency-skip behaviour; snapshot changes cover a saved disable and an
+       account change as well as a new enable; panic isolation. Held before unresolved where
+       both apply (as `selectWires`); the identity target is the one `selectWires` captured,
+       never re-derived from mutable configuration.
+     **5F.4 commit 2 built (2026-10-10; not committed).** `startReconciler` builds the
+     generation's reconcile set from the start snapshot: one entry per enabled SM Cloud binding,
+     in listing order. Held (judged first): the fixed held text. Unresolved (no route): its text.
+     Identity (`wireSelection.targets`, the target `selectWires` built the forwarder from):
+     `NewIdentityReconciler`. Otherwise `NewReconciler`. A build failure is the fixed build text,
+     cause logged. Each reconciler runs on the forwarder context and `workerWG`; its "reconciler
+     started" line names the binding and its wire. The api package takes the set as
+     `[]SmcloudReconcileEntry` (no forwarding import). The handler runs every runnable entry
+     concurrently, each on its own cancellable context under the request's and ONE deadline
+     fixed at the start, waits for every run to exit, and answers 200 `{"results": […]}`, or 503
+     `smcloud_unavailable` with `results` beside the envelope when nothing is runnable. Failed
+     runs read a fixed text: failed, "timed out after 25 s" only when the shared deadline
+     passed, cancelled when the request ended. A panicking run is recovered in its goroutine the
+     way `recoverPanic` recovers the request's (the frozen import set, ADR 0043, rules out
+     `internal/safego` in `internal/api`; the first draft used it and the boundary test caught
+     it). Every reconcile log line now names its binding.
+     - Tests: AR1–AR7 (api), DR1–DR4 (cmd/smd, orchestrated, fake cloud), RL1, RR1 and SN1
+       (smcloud; SN1 against `sm-pg`). SW1's assertion now requires an identity reconciler; the
+       workers characterization and forwarding-gate tests read the set.
+     - RED: AR1–AR7 against an inert 503 stub; DR1–DR4 against the single default-logbook
+       reconciler (one started, 503 through the stub, the name wire for the identity binding);
+       RL1's four lines without a `forwarder` field. RR1 and SN1 passed before the change: RR1
+       pins the existing cancellation, SN1 the unchanged reconciler's G4 consequence.
+     - Test fixes during the build, none in production code: AR4's deadline bound was measured
+       from before the handler started (now within 50 ms of the budget); DR1's expected paths
+       were unsorted; DR4 counted the first generation's loop; SN1 assumed an import queues an
+       upload (it does not; B's reconciler queues b3) and that cloud-only excludes tombstones (it
+       counts A's a3).
+     - Reversions, each by a unique anchor and a non-empty replacement, restored and hash-verified:
+       K12 sequential runs: AR4's barrier case times out, AR5 hangs. K13 a per-run deadline: AR4's
+       shared-deadline check (the two deadlines differ by about a microsecond, set at launch; a run
+       cannot be forced to start late). K14 not waiting: AR4 "returned before the blocked run
+       exited", AR5 "0 of 2 exited", and the results empty. K15 cancellation not distinguished:
+       AR5 reads failed. K16 the raw cause: AR1 shows the secrets, AR6 the cause. K17 a panic not
+       turned into the fixed failure: AR7. K18 503 dropped: AR2, AR3. K19 unresolved before held:
+       DR1/DR2 `smcloud-hu`. K20 the identity binding on the name wire: SW1, DR1's numeric id,
+       DR2. K21 disabled bindings kept: DR1's started lines, DR2's six entries. K22 a build
+       failure stopping the start: DR2. K24 untracked reconciler goroutines: DR4 "0 of 2 loops
+       exited". K26a–d each RL1 line without the binding. K27 the local manifest across logbooks:
+       SN1's cloud-only count.
+     - Not separately reverted: DR3 (the set has always been built once at start; no simple
+       reversion makes it read live state, so it guards against a future one), and DR4's
+       in-flight case (K14 removes the wait at the api level; at the daemon level the run
+       finishes quickly once released, so timing would not discriminate reliably).
+     - Gates, all exit 0: gofmt (whole tree), `go vet ./...`, `go test ./...`, `internal/api` with
+       `-race`, the cloud set with `-race` against `sm-pg` (then stopped), maintainability (0
+       regressions), `task ci:local` (`frontend/app/dist/index.html` restored).
+     - Docs (F8): `api-endpoints.md` (the set at start, fixed texts, concurrency and the shared
+       deadline, 200/503 and `results`, `cloud_logbook_id` only on name summaries) and
+       `smcloud-deploy.md` (both `curl` examples read `.results[]`; the 200/503 rule).
 
    - **Archive contents (ADR 0084; ruled 2026-09-28).** Settings → Archives lists each
      archive's logbooks under its row, nested on the table's grid (name under Label,
