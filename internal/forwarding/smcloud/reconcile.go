@@ -102,6 +102,7 @@ type Reconciler struct {
 	forwarderName string // queue destination for the heal traffic
 	localLogbook  int64
 	interval      time.Duration
+	startDelay    time.Duration // reconcileStartupDelay; shortened by tests
 
 	// runOnceOverride, when non-nil, replaces runOnce so a test can drive RunOnce's
 	// post-run logging — specifically the F8 partial-mutation branch (a run that
@@ -139,6 +140,7 @@ func NewReconciler(fc types.ForwarderConfig, localLogbookID int64,
 		forwarderName: fc.Name,
 		localLogbook:  localLogbookID,
 		interval:      defaultReconcileInterval,
+		startDelay:    reconcileStartupDelay,
 	}, nil
 }
 
@@ -167,7 +169,7 @@ func NewIdentityReconciler(fc types.ForwarderConfig, localLogbookID int64, targe
 // — reconcile is a safety net; the next tick tries again (a down cloud is
 // business as usual on a flaky link).
 func (r *Reconciler) Run(ctx context.Context) {
-	t := time.NewTimer(reconcileStartupDelay)
+	t := time.NewTimer(r.startDelay)
 	defer t.Stop()
 	for {
 		select {
@@ -176,7 +178,7 @@ func (r *Reconciler) Run(ctx context.Context) {
 		case <-t.C:
 		}
 		if _, err := r.RunOnce(ctx, TriggerPeriodic); err != nil {
-			r.log.WarnWith().Err(err).Msg("smcloud reconcile: run failed (next tick retries)")
+			r.log.WarnWith().Err(err).Str("forwarder", r.forwarderName).Msg("smcloud reconcile: run failed (next tick retries)")
 		}
 		t.Reset(r.interval)
 	}
@@ -192,6 +194,7 @@ func (r *Reconciler) logSummary(sum ReconcileSummary, trigger string) {
 	skipped := sum.Attempted - enqueued
 
 	ev := r.log.InfoWith().
+		Str("forwarder", r.forwarderName).
 		Str("trigger", trigger).
 		Bool("in_sync", sum.InSync).
 		Int("local", sum.LocalCount).
@@ -246,6 +249,7 @@ func (r *Reconciler) RunOnce(ctx context.Context, trigger string) (ReconcileSumm
 	// Record the mutation here, once, at whichever caller.
 	if sum.EnqueuedUpserts > 0 || sum.EnqueuedDeletes > 0 {
 		r.log.WarnWith().
+			Str("forwarder", r.forwarderName).
 			Str("trigger", trigger).
 			Int("upserts", sum.EnqueuedUpserts).
 			Int("deletes", sum.EnqueuedDeletes).
@@ -293,11 +297,11 @@ func (r *Reconciler) runOnce(ctx context.Context) (ReconcileSummary, error) {
 	sum.CloudOnly = cloudOnly
 	sum.CloudNewer = cloudNewer
 	if cloudOnly > 0 {
-		r.log.InfoWith().Int("count", cloudOnly).
+		r.log.InfoWith().Str("forwarder", r.forwarderName).Int("count", cloudOnly).
 			Msg("smcloud reconcile: cloud holds rows unknown locally (retentive superset — untouched; restore pulls them if wanted)")
 	}
 	if cloudNewer > 0 {
-		r.log.WarnWith().Int("count", cloudNewer).
+		r.log.WarnWith().Str("forwarder", r.forwarderName).Int("count", cloudNewer).
 			Msg("smcloud reconcile: cloud rows NEWER than local — unexpected in single-writer P1; left untouched")
 	}
 

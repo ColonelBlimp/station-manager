@@ -31,8 +31,8 @@ import (
    (ADR 0090 T1; ADR 0091; rulings C1–C3, 2026-10-09).
 
      SW1  a binding confirmed for the account it starts with uploads by UUID
-          (the identity path, never /v1/qsos), and keeps the by-name
-          reconciler.
+          (the identity path, never /v1/qsos), and its reconciler reads
+          only the scoped paths (5F.4 commit 2; it was by name until then).
      SW2  a reservation alone keeps the legacy wire.
      SW3  a binding adopted for another account, or for none, is held: no
           worker, no reconciler (periodic or on demand); the start's queue
@@ -283,8 +283,8 @@ func TestIdentityWire_SW1_ConfirmedUploadsByUUID(t *testing.T) {
 			t.Fatalf("an upload went to %s; want only %s", p, want)
 		}
 	}
-	if d2.smcloudRec == nil {
-		t.Fatal("the identity binding lost its by-name reconciler")
+	if w := runningReconcilers(d2)["smcloud"]; w != "identity" {
+		t.Fatalf("the identity binding's reconciler = %q; want identity (5F.4: scoped paths only)", w)
 	}
 	if h := heldLine(t, d2); h != nil {
 		t.Fatalf("uploads_held = %+v on an identity binding", *h)
@@ -335,7 +335,7 @@ func TestIdentityWire_SW3_SW4_HeldThenConfirmedThenRestarted(t *testing.T) {
 					t.Fatalf("upload of %s = %q; want kept pending", u, s)
 				}
 			}
-			if d2.smcloudRec != nil {
+			if len(runningReconcilers(d2)) != 0 {
 				t.Fatal("a held binding has a reconciler")
 			}
 			if h := heldLine(t, d2); h == nil || h.State != archive.UploadsHeldWaiting {

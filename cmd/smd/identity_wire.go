@@ -23,7 +23,10 @@ var newIdentityForwarder = smcloud.NewIdentity
 // the wire its type builds.
 type wireSelection struct {
 	identity map[string]forwarding.Forwarder
-	held     map[string]struct{}
+	// targets is the identity each identity forwarder was built for; its
+	// reconciler uses the same one, never re-derived from configuration.
+	targets map[string]smcloud.IdentityTarget
+	held    map[string]struct{}
 }
 
 func (w wireSelection) heldNames() []string {
@@ -44,7 +47,7 @@ func (w wireSelection) heldNames() []string {
 // error that stops the start: it never falls back to a legacy worker.
 func selectWires(ctx context.Context, db *sqlite.Service, cfg config.Config, snap destinationSnapshot) (wireSelection, error) {
 	const op errors.Op = "smd.selectWires"
-	sel := wireSelection{identity: map[string]forwarding.Forwarder{}, held: map[string]struct{}{}}
+	sel := wireSelection{identity: map[string]forwarding.Forwarder{}, targets: map[string]smcloud.IdentityTarget{}, held: map[string]struct{}{}}
 	var adopted []types.LogbookDestination
 	for _, b := range snap.bindings {
 		if b.Destination == smcloud.Type && b.Enabled && b.RemoteAdoptedAt != nil {
@@ -82,14 +85,16 @@ func selectWires(ctx context.Context, db *sqlite.Service, cfg config.Config, sna
 			continue
 		}
 		lb := byID[b.LogbookID]
-		f, err := newIdentityForwarder(route.Config, smcloud.IdentityTarget{
+		target := smcloud.IdentityTarget{
 			ArchiveUUID: identity.ArchiveUUID, ArchiveLabel: label,
 			LogbookUUID: lb.UUID, LogbookLabel: lb.Name, Callsign: lb.Callsign,
-		})
+		}
+		f, err := newIdentityForwarder(route.Config, target)
 		if err != nil {
 			return sel, errors.New(op).WithErr(err).WithMsgf("build the identity forwarder for %q; it is not started on the legacy wire", b.ForwarderName)
 		}
 		sel.identity[b.ForwarderName] = f
+		sel.targets[b.ForwarderName] = target
 	}
 	return sel, nil
 }

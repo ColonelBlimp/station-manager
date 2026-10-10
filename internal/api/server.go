@@ -82,10 +82,10 @@ type Server struct {
 	maxPageLimit             int
 	maxContactHistoryResults int
 	daemonVersion            string
-	// smcloudRec runs one SM Cloud reconcile pass (POST /v1/smcloud/reconcile).
-	// Injected by cmd/smd via SetSmcloudReconcile when an enabled smcloud
-	// forwarder exists; nil → the route answers 503.
-	smcloudRec SmcloudReconcileFunc
+	// smcloudRec is the generation's SM Cloud reconcile set, one entry per
+	// enabled binding (POST /v1/smcloud/reconcile). Injected by cmd/smd via
+	// SetSmcloudReconcile; with no runnable entry the route answers 503.
+	smcloudRec []SmcloudReconcileEntry
 	// restart triggers a graceful daemon restart (POST /v1/restart). Injected by
 	// cmd/smd via SetRestart; nil → the route answers 503.
 	restart RestartFunc

@@ -46,7 +46,7 @@ func TestLifecycle_ArchiveWithoutBindingsStartsNoForwardingAtAll(t *testing.T) {
 	if err := orch.Start(d.workerCtx); err != nil {
 		t.Fatalf("orchestrated start failed: %v", err)
 	}
-	if d.smcloudRec != nil {
+	if len(runningReconcilers(d)) != 0 {
 		t.Fatal("an SM Cloud reconciler was constructed in an archive with no bindings")
 	}
 	if started, _ := workerNamesStarted(t, filepath.Join(d.cfgSvc.WorkingDir(), "log", "smd.log")); len(started) != 0 {

@@ -143,7 +143,7 @@ func TestCharacterization_HomeStartsStationWorkerSet(t *testing.T) {
 	if want := []string{"qrzcq"}; strings.Join(skipped, ",") != strings.Join(want, ",") {
 		t.Fatalf("workers skipped = %v; want %v", skipped, want)
 	}
-	if d.smcloudRec == nil {
+	if runningReconcilers(d)["smcloud"] == "" {
 		t.Fatal("no SM Cloud reconciler for the enabled smcloud entry")
 	}
 

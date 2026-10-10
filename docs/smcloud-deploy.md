@@ -238,10 +238,12 @@ logbook automatically** — no manual export/import.
 ### 1.6 Verify (shack machine)
 
 ```bash
-curl -s -X POST http://127.0.0.1:8080/v1/smcloud/reconcile | jq
+curl -s -X POST http://127.0.0.1:8080/v1/smcloud/reconcile | jq '.results[]'
+# One entry per enabled SM Cloud binding: {"forwarder_name", "logbook_uuid",
+# "summary": {...}} or, for a binding that is held or failed, "error": "...".
 # First run: in_sync:false + enqueued_upserts:N (the backfill being queued).
-# When the worker has drained it, re-run and expect:
-#   {"in_sync": true, "local_count": N, "cloud_count": N, ...}
+# When the worker has drained it, re-run and expect, per binding:
+#   "summary": {"in_sync": true, "local_count": N, "cloud_count": N, ...}
 ```
 
 From here every logged/edited/deleted QSO pushes within one worker tick.
@@ -257,7 +259,8 @@ audit CLEAN at 5,590/5,590):*
   unreachable-retries-forever), then drain on reconnect.
 - Stop Postgres mid-push → transient classification, worker retries.
 - Restart smcloud during a large backfill → the idempotent UUID upsert
-  absorbs the replay; `POST /v1/smcloud/reconcile` converges to `in_sync`.
+  absorbs the replay; `POST /v1/smcloud/reconcile` converges to `in_sync` (in
+  each binding's `summary`).
 - Edit + delete QSOs with the LAN box powered off → power it on → the hourly
   reconcile (or an on-demand pass) self-heals the drift.
 - A restore drill against a scratch `SM_WORKING_DIR` (section 7).
@@ -417,12 +420,22 @@ pass backfills the entire logbook automatically** — no manual export/import.
 ## 6. Verify
 
 ```bash
-# Shack machine — run one reconcile pass now instead of waiting for the tick:
-curl -s -X POST http://127.0.0.1:8080/v1/smcloud/reconcile | jq
+# Shack machine — run one reconcile pass per binding now instead of waiting
+# for the tick:
+curl -s -X POST http://127.0.0.1:8080/v1/smcloud/reconcile | jq '.results[]'
 # First run: in_sync:false + enqueued_upserts:N (the backfill). The worker
-# drains N rows at its tick/batch pace; when done, re-run and expect:
-#   {"in_sync": true, "local_count": N, "cloud_count": N, ...}
+# drains N rows at its tick/batch pace; when done, re-run and expect, for
+# each binding:
+#   "summary": {"in_sync": true, "local_count": N, "cloud_count": N, ...}
 ```
+
+The answer is 200 whenever at least one reconciler runs, even if some
+bindings report an `error` (each a fixed text; the cause is in `smd.log`
+under the binding's name). It is 503 `smcloud_unavailable`, with the
+`results` beside the error, when none runs: no enabled binding, or every one
+held (adopted but not confirmed for the current account) or unresolved.
+`cloud_logbook_id` appears only on a name binding's summary (`0` = its cloud
+logbook doesn't exist yet); a binding on the identity wire has none.
 
 `in_sync: true` = every live QSO's (uuid, modified_at) hash-matches the cloud.
 From here every logged/edited/deleted QSO pushes within one worker tick, and

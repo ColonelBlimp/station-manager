@@ -110,11 +110,13 @@ type daemon struct {
 	evidenceReady bool // evidence.Initialize AND Start both succeeded (⇒ capture sink may be wired)
 
 	// Promoted infra, constructed once in-node.
-	enrich     *lookup.Orchestrator
-	refresher  *refresher.Service
-	mailer     *email.Service
-	server     *api.Server
-	smcloudRec *smcloud.Reconciler
+	enrich    *lookup.Orchestrator
+	refresher *refresher.Service
+	mailer    *email.Service
+	server    *api.Server
+	// smcloudSet is this generation's reconcile set: one entry per enabled
+	// SM Cloud binding of the start snapshot, in listing order.
+	smcloudSet []reconcileEntry
 	adopter    *adoption.Adopter
 	// wires is each adopted SM Cloud binding's wire this generation, chosen in
 	// startQso from the routing snapshot (identity forwarders, held bindings).
@@ -864,7 +866,9 @@ func (d *daemon) startWorkers(ctx context.Context) error {
 		return errors.New(op).WithErr(err).WithMsg("spawn forwarder workers")
 	}
 
-	d.startReconciler(fctx)
+	if err := d.startReconciler(fctx); err != nil {
+		return errors.New(op).WithErr(err)
+	}
 	return nil
 }
 
@@ -888,42 +892,88 @@ func (d *daemon) workerPrepareStop() {
 	}
 }
 
-func (d *daemon) startReconciler(ctx context.Context) {
-	// Until 5F the reconciler stays the boot-time default-logbook one, now keyed
-	// on the DEFAULT LOGBOOK's enabled SM Cloud binding (its synthesized config
-	// carries the station's URL and token and the binding's cloud logbook name).
+// Reconciler construction and its loop; test seams.
+var (
+	newNameReconciler     = smcloud.NewReconciler
+	newIdentityReconciler = smcloud.NewIdentityReconciler
+	runReconcileLoop      = (*smcloud.Reconciler).Run
+)
+
+// reconcileEntry is one enabled SM Cloud binding in the reconcile set: a
+// running reconciler, or the fixed text saying why it has none.
+type reconcileEntry struct {
+	name        string
+	logbookUUID string
+	rec         *smcloud.Reconciler
+	identity    bool
+	fault       string
+}
+
+// The fixed texts of a binding without a reconciler (ruling G2); the cause, if
+// any, goes to the log under the binding's name.
+const (
+	reconcileFaultHeld       = "uploads are held until adoption is confirmed for the current station account"
+	reconcileFaultUnresolved = "the binding cannot be resolved against a station account"
+	reconcileFaultBuild      = "the reconciler could not be built; the daemon log has the cause"
+)
+
+// startReconciler builds the generation's reconcile set from the start
+// snapshot (W-0021 5F.4, AC 1): every enabled SM Cloud binding gets an entry,
+// and every one that is neither held nor unresolved its own reconciler, on
+// the wire selectWires chose. Held is judged before unresolved, as there.
+func (d *daemon) startReconciler(ctx context.Context) error {
+	const op errors.Op = "smd.startReconciler"
+	routes := make(map[string]forwarding.BoundForwarder, len(d.routes))
 	for _, r := range d.routes {
-		fc := r.Config
-		if !fc.Enabled || fc.Type != smcloud.Type || r.LogbookID != d.cfg.DefaultLogbookID {
+		routes[r.Config.Name] = r
+	}
+	logbooks, err := d.db.FetchAllLogbooksWithContext(ctx)
+	if err != nil {
+		return errors.New(op).WithErr(err).WithMsg("list the logbooks")
+	}
+	uuidOf := make(map[int64]string, len(logbooks))
+	for _, lb := range logbooks {
+		uuidOf[lb.ID] = lb.UUID
+	}
+	reconcilePanic := func(name string, pv any, stack []byte) {
+		d.logger.ErrorWith().Str("goroutine", name).Interface("panic", pv).
+			Bytes("stack", stack).Msg("smcloud reconciler panic recovered")
+	}
+	for _, b := range d.bindingsAtStart {
+		if b.Destination != smcloud.Type || !b.Enabled {
 			continue
 		}
-		// A held binding gets no reconciliation, periodic or on demand
-		// (ruling C3): its repairs could not leave anyway.
-		if _, held := d.wires.held[fc.Name]; held {
-			d.logger.InfoWith().Str("forwarder", fc.Name).
+		e := reconcileEntry{name: b.ForwarderName, logbookUUID: uuidOf[b.LogbookID]}
+		route, routed := routes[b.ForwarderName]
+		target, identity := d.wires.targets[b.ForwarderName]
+		_, held := d.wires.held[b.ForwarderName]
+		switch {
+		case held:
+			// No reconciliation, periodic or on demand (ruling C3): its repairs
+			// could not leave anyway.
+			e.fault = reconcileFaultHeld
+			d.logger.InfoWith().Str("forwarder", e.name).
 				Msg("smcloud reconciler not started: the binding's uploads are held until adoption is confirmed")
-			return
+		case !routed:
+			e.fault = reconcileFaultUnresolved
+		case identity:
+			e.rec, err = newIdentityReconciler(route.Config, route.LogbookID, target, d.db, d.qso, d.logger)
+			e.identity = true
+		default:
+			e.rec, err = newNameReconciler(route.Config, route.LogbookID, d.db, d.qso, d.logger)
 		}
-		if d.cfg.DefaultLogbookID < 1 {
-			d.logger.WarnWith().Str("forwarder", fc.Name).
-				Msg("smcloud reconciler skipped: no default logbook yet (first-run setup pending)")
-			return
+		if err != nil {
+			d.logger.ErrorWith().Err(err).Str("forwarder", e.name).Msg("smcloud reconciler build failed")
+			e.rec, e.fault, err = nil, reconcileFaultBuild, nil
 		}
-		rec, rerr := smcloud.NewReconciler(fc, d.cfg.DefaultLogbookID, d.db, d.qso, d.logger)
-		if rerr != nil {
-			d.logger.ErrorWith().Err(rerr).Str("forwarder", fc.Name).Msg("smcloud reconciler build failed")
-			return
+		if rec := e.rec; rec != nil {
+			safego.GoTracked(ctx, e.name+"-reconcile", reconcilePanic, func() { runReconcileLoop(rec, ctx) }, true, &d.workerWG)
+			d.logger.InfoWith().Str("forwarder", e.name).Int64("logbook_id", route.LogbookID).Bool("identity", e.identity).
+				Msg("smcloud reconciler started")
 		}
-		d.smcloudRec = rec
-		reconcilePanic := func(name string, pv any, stack []byte) {
-			d.logger.ErrorWith().Str("goroutine", name).Interface("panic", pv).
-				Bytes("stack", stack).Msg("smcloud reconciler panic recovered")
-		}
-		safego.GoTracked(ctx, fc.Name+"-reconcile", reconcilePanic, func() { rec.Run(ctx) }, true, &d.workerWG)
-		d.logger.InfoWith().Str("forwarder", fc.Name).Int64("logbook_id", d.cfg.DefaultLogbookID).
-			Msg("smcloud reconciler started")
-		return
+		d.smcloudSet = append(d.smcloudSet, e)
 	}
+	return nil
 }
 
 // ---- SM Cloud adoption ----
@@ -980,11 +1030,15 @@ func (d *daemon) initHTTP() error {
 	}
 	d.server.SetRunningForwarders(running)
 	d.server.SetForwarderQueueNames(d.queueNames)
-	if d.smcloudRec != nil {
-		d.server.SetSmcloudReconcile(func(ctx context.Context) (any, error) {
-			return d.smcloudRec.RunOnce(ctx, smcloud.TriggerManual)
-		})
+	entries := make([]api.SmcloudReconcileEntry, 0, len(d.smcloudSet))
+	for _, e := range d.smcloudSet {
+		entry := api.SmcloudReconcileEntry{ForwarderName: e.name, LogbookUUID: e.logbookUUID, Fault: e.fault}
+		if rec := e.rec; rec != nil {
+			entry.Run = func(ctx context.Context) (any, error) { return rec.RunOnce(ctx, smcloud.TriggerManual) }
+		}
+		entries = append(entries, entry)
 	}
+	d.server.SetSmcloudReconcile(entries)
 	// The archive port (ADR 0071): provisioning and activation over the attended
 	// restart. The activation's restart request is the SAME trigger as
 	// POST /v1/restart, wired only under the respawn contract (SM_SELF_RESTART=1);
