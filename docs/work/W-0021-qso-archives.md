@@ -3690,6 +3690,144 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      - Docs (F8): `api-endpoints.md` (the set at start, fixed texts, concurrency and the shared
        deadline, 200/503 and `results`, `cloud_logbook_id` only on name summaries) and
        `smcloud-deploy.md` (both `curl` examples read `.results[]`; the 200/503 rule).
+     Operator review (2026-10-10): no blocking findings; the local `defer recover()` kept within the
+     frozen api boundary. One doc correction made before the commit: `api-endpoints.md` now says
+     only a summary 404 means an empty cloud; a manifest 404 is an error. Committed as `7c2dd05a`
+     (code with both canonical references) and `e146e397` (dossier). Clean-room review of
+     `7c2dd05a`: no actionable findings; its `cmd/smd` run failed only on its sandbox's `/tmp`
+     ownership (the Unix-socket ancestry policy), and that package passed locally with `-race`.
+     Closed.
+   - **5F.4 commit 3 plan (2026-10-10; operator asked for the plan and failing tests; not
+     built).** Migration 0018 and `identity_since` (F2), and the wire selection for bindings
+     born on identity (F1, F3). The enable gate stays closed: tests stamp by SQL or through the
+     store, never through the PUT.
+     *What the tree constrains:* `durableUpdate` (`logbook_destination.go`) pins one connection
+     at `synchronous=FULL` for a single UPDATE, the ADR 0091 protection. The PUT writes through
+     `UpsertLogbookDestinationsWithContext`, one ordinary transaction. `refuseErasingAdoptionClaims`
+     (`downgrade.go`) refuses below 16 and 17 before any migration runs. `FingerprintBindings`
+     drives `restart_required`. `refuseProtectedNames` normalizes every candidate's cloud name,
+     so a binding with no name reads as `main` and collides with Home's reservation (F1).
+     `selectWires` considers adopted bindings only; commit 2's reconcile set already follows
+     `wires.targets`. An older build cannot open a schema-18 file, so the downgrade refusal also
+     covers `config-downgrade`.
+     *Shape:*
+     - 0018 up: `ALTER TABLE logbook_destination ADD COLUMN identity_since DATETIME`; down drops it.
+       `types.LogbookDestination.IdentitySince *time.Time` (`identity_since`, omitempty), read by
+       the listing and the offline peek.
+     - Store: `DestinationUpsert.StampIdentity`. When any row stamps, the whole upsert runs as one
+       transaction on a pinned `synchronous=FULL` connection (`durableUpdate` generalized to a
+       transaction), setting `identity_since = COALESCE(identity_since, datetime('now'))` in the
+       same statement as the enable. No other write touches the column.
+     - Downgrade: below 18, refused while any binding holds `identity_since`, disabled bindings
+       and deleted logbooks included, checked before any migration.
+     - Restart detection: the fingerprint gains the stamp.
+     - F1: stamped bindings leave `refuseProtectedNames`' candidate set.
+     - `selectWires`: an enabled stamped binding with a route gets the identity forwarder (and,
+       through `targets`, the identity reconciler), never held for the account (F3); unresolved
+       stays unresolved; a failed construction stops the start, as SW5.
+     *Questions (proposals; not built until ruled):*
+     - (H1) Who stamps in commit 3: the store path only. `applyBindings` never sets
+       `StampIdentity` until commit 4 adds the qualifying rules (F2 transitions, F5 history,
+       F4 support) with the gate lift; until then nothing in production stamps.
+     - (H2) A binding holding both a stamp and an adoption or reservation (no build writes that):
+       held, with an error line naming it, never the name wire and never identity. Alternative:
+       refuse the start.
+     - (H3) Hiding the legacy Cloud logbook name in the view and the SPA (F1, Q5) moves to commit
+       4 with the rows and the form; commit 3 only stops the name from mattering to the wire and
+       to the collision check.
+     *Tests (RED first; reversion per guarantee):*
+     - sqlite: MI1 0018 up/down (column added NULL, other columns and rows kept, down drops it).
+       MI2 the listing and the peek read the stamp. MI3 a stamping upsert: the stamp and the
+       enable land in one transaction; a later failing row writes neither; an existing stamp keeps
+       its time; the write runs on a FULL connection (the `setSynchronous` seam, as the adoption
+       tests), and a failed FULL setting writes nothing. MI4 never cleared: disable, credential
+       edit, re-enable without the flag, and the seed leave it. MI5 downgrade below 18 refused
+       with a stamp on an enabled, a disabled, and a deleted logbook's binding; allowed without
+       one; the schema stays 18 and clean after a refusal; the 16/17 refusals unchanged.
+     - archive: AB1 a stamp written during the run sets `restart_required`. AB2 a stamped
+       binding without a cloud name beside Home's reserved `main` no longer blocks a PUT; the same
+       binding unstamped still does (control).
+     - cmd/smd: SI1 a stamped, enabled binding on a second Home logbook uploads only to
+       `/v1/archives/{a}/logbooks/{its uuid}/qsos`, and its reconciler is identity. SI2 an
+       account change between generations (another token; and an account never recorded) is not
+       held: the next uploads carry the new bearer on the same scoped path. SI3 disabled: no
+       worker, stamp kept across the restart; re-enabled by SQL: identity again. SI4 an unstamped,
+       unadopted binding keeps the name wire. SI5 contradictory markers: held (H2), nothing
+       uploaded. SI6 a stamped binding in a managed archive targets that archive's UUID. SI7 a
+       failed identity construction for a stamped binding stops the start.
+     **5F.4 commit 3 rulings (operator, 2026-10-10).** H1 and H3 approved; H2 approved with a
+     distinct hold reason; adoption-exclusion safeguards added before the failing tests.
+     - (H1) Database capability only; no production caller sets `StampIdentity` until commit 4's
+       eligibility checks and gate lift. The operation itself refuses to stamp a disabled or
+       non-SM-Cloud binding, or one already reserved or adopted, judged on the stored markers
+       inside the same transaction. An existing stamp is kept exactly; a later failure rolls back
+       the whole save. Durability as `durableUpdate`: pin the connection, set FULL before
+       beginning, verify inside the transaction, restore afterwards. MI3 adds cancellation and a
+       setter that reports success without establishing FULL.
+     - (H2) The conflicting binding is held; healthy bindings continue. Its queue is kept; no
+       worker, no reconciler, never names. A distinct fixed reason ("conflicting identity and
+       adoption markers; manual recovery required"); neither the bindings view nor the aggregate
+       may describe it as awaiting confirmation or suggest confirmation and a restart will repair
+       it. An existing reservation's name protection stays.
+     - (H3) Hiding the legacy field waits for commit 4; commit 3 must ensure the field cannot
+       influence a stamped binding's upload or reconcile target.
+     - Missing transition: a born-identity Home logbook can later become the default, and the
+       adopter selects any enabled default SM Cloud binding (`adoption/adopter.go:200`). The
+       adopter skips stamped bindings, after a default change too. Reservation and confirmation
+       writes cannot add adoption markers to a stamped binding, rechecked at the authoritative
+       write so a stale attempt cannot bypass it. Both orderings tested: reservation first, the
+       stamp refuses; stamp first, the reservation refuses.
+     - AB2 exempts clean born-identity candidates only; a mixed-marker row keeps its legacy
+       claim. Commit 4 must count a proposed stamp before the collision check runs.
+     - MI2/MI5: the offline read stays compatible with pre-18 files. "`config-downgrade` is
+       refused" and "an older daemon cannot open schema 18" are separate guarantees, never
+       described interchangeably.
+     **5F.4 commit 3 built (2026-10-10; not committed).** Migration 0018 (`identity_since`,
+     nullable; down drops it). `types.LogbookDestination.IdentitySince`, read by the listing
+     and the claims list. `DestinationUpsert.StampIdentity`: a save with any stamping row runs
+     through `durableTx` (`durableUpdate` generalized: pinned connection, FULL before begin,
+     read back inside, NORMAL after), and each stamping row's conditional UPDATE (enabled, SM
+     Cloud, no reservation, no adoption, `COALESCE` keeping an existing time) must match exactly
+     one row or the whole save fails. Reservation and confirmation writes add
+     `identity_since IS NULL`; `stillAsRead` refuses a stamped binding too. Downgrade below 18
+     refused while any stamp exists. The offline peek counts stamps (0 on a pre-18 file, by
+     column check) and `config-downgrade` refuses while any exists: its own guarantee, distinct
+     from the database refusal and from an older daemon being unable to open schema 18 (the
+     manual and `config.md` say so separately). Archive: `BornOnIdentity` (stamp, no claim) and
+     `IdentityConflict` (stamp and claim); the fingerprint includes the stamp; clean
+     born-identity candidates leave `refuseProtectedNames`; a conflict's hold is
+     `conflicting_markers` with its own message and no adoption line. Adopter: skips stamped
+     bindings. `selectWires`: conflict, then born (identity forwarder, no account check), then
+     adopted (as before); `wireSelection.conflicts`; the reconcile set's conflict fault. Docs in
+     this change: `api-endpoints.md` (restart detection, born-identity behaviour, the conflict
+     hold and fault), `install.md` and `config.md` (both refusals).
+     - Tests: MI1–MI6 (sqlite), AB1–AB3 (archive; AB2 with four cases), AD9 (adopter, three
+       orderings), SI1–SI7 (cmd/smd; SI1 and SI4 one fixture), CD1–CD2 (config-downgrade).
+       Schema-head pins moved 17 → 18 in eleven sqlite test files, `handler_version_test.go` and
+       `db_downgrade_test.go` (the downgrade-target test now refuses 18, 19, 99).
+     - RED: with only the stub fields, every new test failed on the missing column; with 0018
+       alone, each failed on its behaviour (listing, refusals, FULL, downgrade, reservation and
+       confirmation guards, restart, collision, hold reason, adopter requests, wire, config
+       refusal). MI3's kept-time case and MI4 passed then (nothing wrote the column); R5 and R7
+       prove them. A fixture error: `stampOf` read the column through the driver's time
+       conversion; it now normalizes with `strftime`.
+     - Reversions, each restored and hash-verified: R1 listing (MI2); R2 marker guard (MI3
+       reserved/adopted, MI6); R3 enabled (MI3 disabled); R4 SM Cloud (MI3 non-SM-Cloud); R5 no
+       COALESCE (MI3 kept time); R6 no durable path (MI3 FULL, all three); R7 a save clearing it
+       (MI3, MI4); R8 downgrade check (MI5); R9 reservation guard (MI6, AD9 stale ordering); R10
+       confirmation guard (MI6); R11 fingerprint (AB1); R12 no exemption (AB2 stamped); R13 any
+       stamp exempt (AB2 "not exempt" case: the first AB2 mixed case passed under R13 because it
+       only proved the mixed row's own claim, so a case where the mixed row collides with a later
+       claim was added); R14 conflict hold (AB3); R15 adoption line (AB3); R16 adopter skip (AD9
+       two cases); R17 born ignored (SI1, SI2, SI3, SI6); R18 born as adopted (SI1, SI2, SI3
+       held); R19 conflict not held (SI5); R20 config refusal (CD1, three cases); R21 peek column
+       check (CD2); R22 conflict fault text (SI5).
+     - Not proved here: SI6 uses Home's file (the target is the file's identity); a managed
+       archive's own file is AC 6's push half in commit 4. Commit 4 must count a proposed stamp
+       before the collision check (ruling); nothing proposes one yet.
+     - Gates, all exit 0: gofmt (whole tree), `go vet ./...`, `go test ./...`, the cloud set
+       with `-race` against `sm-pg` (sqlite added; then stopped), maintainability (0
+       regressions), `task ci:local` (`frontend/app/dist/index.html` restored).
 
    - **Archive contents (ADR 0084; ruled 2026-09-28).** Settings → Archives lists each
      archive's logbooks under its row, nested on the table's grid (name under Label,
