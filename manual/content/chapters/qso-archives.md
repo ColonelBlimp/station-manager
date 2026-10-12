@@ -52,9 +52,11 @@ that archive first.
   callsign differs from your station callsign cannot receive live contacts
   yet.
 - **Upload to SM Cloud** appears, unticked, only when a new logbook in this
-  archive can upload to SM Cloud. For now it never can: in Home only the
-  Default logbook may be newly turned on (see Forwarding). Ticked, the new
-  logbook's SM Cloud uploads start after a restart. Other services are set up per logbook on the **Forwarding** tab.
+  archive can upload to SM Cloud: the station has an SM Cloud account, and
+  the server's support for keeping logbooks apart has been checked (see
+  Forwarding). Ticked, the new logbook's SM Cloud uploads start after a
+  restart, under its own identity. Other services are set up per logbook on
+  the **Forwarding** tab.
 - **Rename** changes the name; a logbook's callsign cannot be changed.
 - **Delete** works only on an empty logbook that is not the Default; the
   button's tooltip says why when it is unavailable.
@@ -70,10 +72,10 @@ A new archive uploads nowhere: every destination starts off, SM Cloud
 included. Once it is active, turn on the ones it should use on **Settings →
 Forwarding** (see the Forwarding chapter).
 
-SM Cloud is the exception for now: it can be turned on only in **Home**, the
-original archive. In an archive you created, its QSOs stay local, and SM Cloud's
-destination card on **Settings → Forwarding** says so. A later release lifts
-this.
+SM Cloud can be turned on in an archive you created as in Home, once the
+server's support has been checked. Each logbook is backed up under its own
+identity, so two archives with the same label and logbook names never mix
+their QSOs. The first turn-on backs up the whole logbook (see Forwarding).
 
 ## Switching archives
 
@@ -129,6 +131,6 @@ accounts on **Settings → Forwarding**: SM Cloud's service and token.
 
 Where each archive uploads is its own. Each archive keeps its destinations,
 logbook by logbook, with each logbook's own account for each service; the
-Forwarding tab edits those of the active archive only. SM Cloud is the one
-exception for now: it can be turned on only in the Home archive, and its
-card says so in any other.
+Forwarding tab edits those of the active archive only. SM Cloud backs each
+logbook up under its own identity, so archives never share an SM Cloud backup,
+even when their labels and logbook names match (see Forwarding).

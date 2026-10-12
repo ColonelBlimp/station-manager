@@ -18,7 +18,11 @@ import {
 } from '../api/logbooks';
 import { fetchStationContext } from '../api/seams';
 import { fetchDaemonIdentity } from '../api/qso-archives';
-import { fetchArchiveBindings, saveArchiveBindings } from '../api/archive-bindings';
+import {
+    fetchArchiveBindings,
+    saveArchiveBindings,
+    type DestinationBinding,
+} from '../api/archive-bindings';
 import { OUTCOME_UNKNOWN_LEAD } from '../api/_helpers';
 import { archiveSwitchGate, archivesState } from './archives.svelte';
 import { bindingsState } from './bindings.svelte';
@@ -45,6 +49,9 @@ class LogbooksState {
     smcloudAvailable = $state(false);
     /** Why it cannot ('' when it can, or when the bindings are unread). */
     smcloudRefusal = $state('');
+    /** SM Cloud's server support is still being checked (W-0021 5F.4): the
+     *  answer is re-read (refreshSmcloud) until it settles. */
+    smcloudChecking = $state(false);
     loaded = $state(false);
     loading = $state(false);
     error = $state('');
@@ -67,6 +74,9 @@ class LogbooksState {
     // that answers last (a tab opening while a write's re-read runs) never
     // replaces a newer list.
     #generation = 0;
+    // One SM Cloud re-read on the wire at a time; a load (a new generation)
+    // supersedes its answer.
+    #smcloudInFlight = false;
 
     async load(): Promise<void> {
         const generation = ++this.#generation;
@@ -110,17 +120,50 @@ class LogbooksState {
     async #readBindings(generation: number): Promise<void> {
         this.smcloudAvailable = false;
         this.smcloudRefusal = '';
+        this.smcloudChecking = false;
         this.archiveLabel =
             archivesState.list.find((a) => a.id === this.#archiveId)?.label ?? this.archiveLabel;
         if (this.#archiveId === '') return;
         const out = await fetchArchiveBindings(this.#archiveId);
         if (generation !== this.#generation || out.kind !== 'ok') return;
         if (out.bindings.archive_label !== '') this.archiveLabel = out.bindings.archive_label;
-        const sm = out.bindings.destinations.find((d) => d.type === 'smcloud');
+        this.#takeSmcloud(out.bindings.destinations.find((d) => d.type === 'smcloud'));
+    }
+
+    #takeSmcloud(sm: DestinationBinding | undefined): void {
         // A new logbook is never the default one, so it takes the daemon's
         // new-logbook answer, not the destination's (W-0021 5F.0).
         this.smcloudRefusal = sm?.new_logbook_reason || sm?.reason || '';
         this.smcloudAvailable = sm !== undefined && this.smcloudRefusal === '';
+        this.smcloudChecking = sm?.support?.state === 'checking';
+    }
+
+    /** Re-read only SM Cloud's answer for a new logbook while its server
+     *  support is still being checked (W-0021 5F.4); the list and the drafts
+     *  are untouched. One on the wire at a time, never during a load; an
+     *  answer superseded by a later load is dropped. False when nothing was
+     *  applied. */
+    async refreshSmcloud(): Promise<boolean> {
+        // Not during a load: it shares the load's generation, so its late
+        // answer would overwrite the load's newer one (operator review).
+        if (this.loading || this.#smcloudInFlight || this.#archiveId === '') return false;
+        const archiveId = this.#archiveId;
+        const generation = this.#generation;
+        this.#smcloudInFlight = true;
+        try {
+            const out = await fetchArchiveBindings(archiveId);
+            if (
+                out.kind !== 'ok' ||
+                generation !== this.#generation ||
+                archiveId !== this.#archiveId
+            ) {
+                return false;
+            }
+            this.#takeSmcloud(out.bindings.destinations.find((d) => d.type === 'smcloud'));
+            return true;
+        } finally {
+            this.#smcloudInFlight = false;
+        }
     }
 
     /** Unsaved drafts: a typed name, a callsign other than the prefill, a ticked
@@ -313,6 +356,7 @@ export function _resetLogbooksForTests(): void {
     logbooksState.archiveLabel = '';
     logbooksState.smcloudAvailable = false;
     logbooksState.smcloudRefusal = '';
+    logbooksState.smcloudChecking = false;
     logbooksState.loaded = false;
     logbooksState.loading = false;
     logbooksState.error = '';

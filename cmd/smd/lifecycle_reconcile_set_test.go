@@ -76,6 +76,7 @@ type setCloud struct {
 
 func newSetCloud(t *testing.T) *setCloud {
 	t.Helper()
+	quietSupportCheck(t) // the aggregate's request list is these tests' evidence
 	c := &setCloud{status: map[string]int{}, blocked: map[string]chan struct{}{}, entered: make(chan string, 64)}
 	c.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)

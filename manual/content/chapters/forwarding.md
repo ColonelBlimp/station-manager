@@ -133,17 +133,46 @@ change upstream.
 ### SM Cloud backup
 
 SM Cloud's **Service URL** and **Bearer token** are a station account: set
-them once under **Station accounts**. Each logbook may name its **Cloud
-logbook**; leave it empty for `main`. For now SM Cloud can be turned on only
-in the Home archive, and its card says so in any other. Within Home it can be
-newly turned on only for the Default logbook: every Home logbook would upload
-into the same cloud logbook, mixing their QSOs. Another logbook's row says so
-and its switch stays off. A logbook that already uploads to SM Cloud keeps
-doing so. If you turn it off and save, it cannot be turned back on until SM
-Cloud learns to keep logbooks apart.
+them once under **Station accounts**. Home's Default logbook names its **Cloud
+logbook**; leave it empty for `main`. Every other logbook, in Home or in an
+archive you created, is backed up under its own identity, apart from every
+other logbook, and has no Cloud logbook name to set. That is permanent: a
+logbook backed up under its own identity keeps it, with no Cloud logbook name,
+even if it later becomes Home's Default. A Home logbook that already uploads to
+SM Cloud by a Cloud logbook name keeps doing so.
+
+The first time a logbook moves onto its own identity, two conditions apply.
+After that it can be turned off and on again freely, whatever it holds, like
+any other destination.
+
+- **The server must support it.** Each time Station Manager starts, it asks
+  the SM Cloud server whether it can keep logbooks apart. While the answer is
+  pending, if the server says no, or if the check fails, the logbook's row
+  says why and its switch stays off. While the check is still running, the
+  page updates by itself when it finishes. If the server could not be reached
+  at all, the logbook can still be turned on. The card then says support is
+  not verified, and its uploads wait and retry until a supporting server is
+  available. If you change the Service URL, restart before turning on another
+  logbook, so that the new server is checked.
+- **In Home, the logbook must never have held a QSO** (the Default excepted,
+  which keeps its Cloud logbook name). A logbook that holds QSOs, or ever did,
+  says so on its row: its QSOs may already be in the cloud under another
+  logbook's name, so moving it needs manual recovery. If you turn a logbook
+  that uploads by name off and save, restart before turning it on again. Until
+  then the running daemon still uploads it by name.
+
+**The first turn-on backs up the whole logbook.** Station Manager's hourly
+check finds every QSO the cloud is missing and queues it, in batches, so a
+logbook that already holds QSOs (in an archive you created) is uploaded in
+full without you doing anything. The same happens if you replace the token
+with one for a **different SM Cloud account**: that account then receives the
+whole logbook, not only the QSOs logged from then on, and the backup under the
+old account stays where it is. A new token for the same account simply
+continues the same backup. Neither takes effect until the next restart.
 
 In Home, Station Manager also works in the background, at start and then
-hourly, to link the Default logbook's cloud logbook to this archive, so the
+hourly, to link the Default logbook's cloud logbook to this archive (unless
+that logbook is already backed up under its own identity), so the
 cloud can tell its QSOs apart from any other logbook's later. A line under the
 Default logbook's row shows the adoption status: for example *Adopted; applies
 after a restart.*, or why it has not happened yet. A line about a problem is
@@ -186,7 +215,9 @@ themselves are untouched in your log — only the pending upload is cleared).
 This is deliberate — it's the clean way to keep a batch of QSOs (say, a
 contest) off a service. When you turn the destination back on, new QSOs
 queue again, but the ones logged while it was off do **not** get sent
-automatically. You send those yourself — see "Catching up" below.
+automatically. You send those yourself — see "Catching up" below. SM Cloud is
+the exception: its hourly check queues whatever the cloud is missing, so a
+logbook turned back on for SM Cloud catches up by itself.
 
 ### The queue: retrying and clearing
 
@@ -224,8 +255,10 @@ can send them yourself from the Logbook view:
 
 Uploading is safe to repeat: a contact already on the service is skipped
 rather than sent twice (the services de-duplicate anyway). Backfill always
-sends one service at a time, and only when you ask — Station Manager never
-bulk-uploads your history on its own.
+sends one service at a time, and only when you ask. Station Manager never
+bulk-uploads your history to QRZ.com, Club Log or QRZCQ on its own. SM Cloud,
+a backup of your own log, is the exception: its hourly check sends whatever
+the cloud is missing.
 
 ### Slow or unreliable internet
 

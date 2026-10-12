@@ -47,6 +47,10 @@ export interface LogbookBinding {
      *  cloud logbook name, ADR 0090): not offered for editing; the daemon
      *  refuses changing or removing them. */
     locked_fields: string[];
+    /** Logbook-scoped keys this binding does not use (SM Cloud's legacy cloud
+     *  logbook name on a binding born on identity, or one whose next enable can
+     *  only be; ADR 0092, W-0021 5F.4): never shown, never sent. */
+    hidden_fields: string[];
     /** The SM Cloud adoption's status (ADR 0090 T4, W-0021 5F.3): only on
      *  Home's default SM Cloud row, and only while it describes that binding,
      *  its cloud name and the current station account; null otherwise. */
@@ -82,7 +86,17 @@ export interface DestinationBinding {
     /** Why a logbook created now could not have this destination turned on;
      *  '' when it could. */
     new_logbook_reason: string;
+    /** The SM Cloud server's identity support as the daemon's start found it
+     *  (W-0021 5F.4); null for any other destination. */
+    support: BindingSupport | null;
     logbooks: LogbookBinding[];
+}
+
+/** A destination's server support: its state and, where the operator should
+ *  know it, the daemon's sentence. */
+export interface BindingSupport {
+    state: string;
+    message: string;
 }
 
 export interface ArchiveBindings {
@@ -130,6 +144,7 @@ function toRow(v: unknown): LogbookBinding | null {
         queue: { waiting: num(q.waiting), failed: num(q.failed), in_flight: num(q.in_flight) },
         reason: str(v.reason),
         locked_fields: strs(v.locked_fields),
+        hidden_fields: strs(v.hidden_fields),
         adoption: toAdoption(v.adoption),
         uploads_held: toAdoption(v.uploads_held),
     };
@@ -142,6 +157,14 @@ function toAdoption(v: unknown): BindingAdoption | null {
     const state = str(v.state);
     const message = str(v.message);
     return state !== '' && message !== '' ? { state, message } : null;
+}
+
+/** A support state needs a state; its sentence may be empty (only the
+ *  unverified state carries one). */
+function toSupport(v: unknown): BindingSupport | null {
+    if (!isPlainObject(v)) return null;
+    const state = str(v.state);
+    return state === '' ? null : { state, message: str(v.message) };
 }
 
 function toDestination(v: unknown): DestinationBinding | null {
@@ -161,6 +184,7 @@ function toDestination(v: unknown): DestinationBinding | null {
         state,
         reason: str(v.reason),
         new_logbook_reason: str(v.new_logbook_reason),
+        support: toSupport(v.support),
         logbooks: Array.isArray(v.logbooks)
             ? v.logbooks.map(toRow).filter((r): r is LogbookBinding => r !== null)
             : [],

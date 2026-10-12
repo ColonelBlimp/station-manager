@@ -320,6 +320,12 @@ catalogued archive, pass `--archive <uuid>`; the daemon must be stopped
 either way. The reference and evidence databases are station-global under
 `<data_dir>/db` and are never created beside the QSO file.
 
+`smd restore` reads a Cloud logbook by its name. In Home it refuses a target
+logbook backed up to SM Cloud under its own identity, whether that backup is
+on or off, before inserting anything: those QSOs would keep another cloud
+logbook's ids, and a later edit would move them between cloud logbooks. A
+restore that understands identities comes in a later release.
+
 You don't need to set `SM_WORKING_DIR` in your shell. When run from
 `/usr/bin/smd` (the installed location), the binary resolves its
 working directory via the same XDG fallback the daemon uses, so it

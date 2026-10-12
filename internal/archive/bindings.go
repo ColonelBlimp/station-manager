@@ -11,10 +11,12 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
+	"github.com/ColonelBlimp/station-manager/internal/forwarding/smcloud"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
@@ -55,29 +57,121 @@ type BindingsDB interface {
 	RecordLogbookDestinationAdoptedWithContext(ctx context.Context, forwarderName string, logbookID int64, credentials json.RawMessage, account string) (bool, error)
 	ReserveLogbookDestinationAdoptionWithContext(ctx context.Context, forwarderName string, logbookID int64, credentials json.RawMessage, account string) (bool, error)
 	ListAdoptionClaimsWithContext(ctx context.Context) ([]types.LogbookDestination, error)
+	LogbookSmcloudHistoryWithContext(ctx context.Context, logbookID int64) (sqlite.LogbookHistory, error)
 }
 
-// smcloudIdentityReason is the ADR 0082 part 7 remnant of the interim gate:
-// SM Cloud is bindable on the adopted archive only, until per-archive identity
-// lifts it (5F.4). The text is neutral about why (ADR 0090, T7).
-const smcloudIdentityReason = "SM Cloud can currently be enabled only in Home"
+// The SM Cloud enable gate's reasons (W-0021 5F.4, ADR 0092; rulings F5,
+// J1–J6, 2026-10-12). A row prefixes them "Can't be turned on for this
+// logbook:", so each starts lowercase unless it names SM Cloud.
+const (
+	reasonHistoryRecords = "previous SM Cloud upload history exists; automatic conversion needs manual recovery"
+	reasonHistoryQsos    = "this logbook already holds QSOs and the archive cannot show that none reached SM Cloud; automatic conversion needs manual recovery"
+	reasonRunning        = "this binding still uploads by its Cloud logbook name until the daemon restarts; restart, then turn it on"
+	reasonClaimed        = "this binding belongs to an SM Cloud adoption; make its logbook the default to use it"
+	reasonConflict       = "this binding carries conflicting identity and adoption markers; manual recovery is required"
+	// supportUnverifiedMessage is the SM Cloud card's line while the start
+	// could not reach the server (ruling J3).
+	supportUnverifiedMessage = "SM Cloud server support is not verified: the server could not be reached at startup. Uploads wait and retry until a supporting server is available."
+)
 
-// smcloudHomeDefaultOnlyReason is W-0021 5F.0: every Home SM Cloud binding
-// pushes to one cloud logbook name, so until per-binding identity and
-// reconciliation land (5F.4) a NEW enable is allowed only on Home's default
-// logbook. An already-enabled binding is kept, not repaired.
-const smcloudHomeDefaultOnlyReason = "SM Cloud can be turned on in Home only for the default logbook until per-logbook SM Cloud identity lands; another logbook would upload into the same cloud logbook"
+// supportReasons is why a new identity enable waits on the start's check;
+// the allowing states have none.
+var supportReasons = map[smcloud.SupportState]string{
+	smcloud.SupportChecking:    "SM Cloud server support is still being checked; try again shortly",
+	smcloud.SupportUnsupported: "the SM Cloud server does not support per-logbook backups; upgrade it",
+	smcloud.SupportError:       "SM Cloud server support could not be checked; the daemon log has the cause",
+	smcloud.SupportChanged:     "the SM Cloud server changed since the daemon started; restart to check it",
+}
 
-// newEnableRefusal names why a binding that is not enabled now cannot be
-// turned on although its destination can (5F.0). storedEnabled keeps an
-// existing enabled binding: re-submitting it is not a new enable, and turning
-// it back on after a saved disable is. The default logbook is config's
-// projection of the archive's own, the one the boot-time reconciler serves.
-func newEnableRefusal(typ string, entry *types.QsoArchiveConfig, logbookID, defaultID int64, storedEnabled bool) string {
-	if typ != "smcloud" || storedEnabled || !adoptedArchive(entry) || logbookID == defaultID {
-		return ""
+// gate is what the SM Cloud enable rules need from the running daemon: the
+// start's support check as the saved config sees it, and the bindings this
+// generation started with. The zero gate reads support as still checking and
+// knows no running generation.
+type gate struct {
+	support func(config.Config) smcloud.SupportState
+	start   map[string]types.LogbookDestination
+}
+
+func (g gate) supportState(cfg config.Config) smcloud.SupportState {
+	if g.support == nil {
+		return smcloud.SupportChecking
 	}
-	return smcloudHomeDefaultOnlyReason
+	return g.support(cfg)
+}
+
+// smcloudPlan is what turning one SM Cloud row on would mean.
+type smcloudPlan struct {
+	reason       string // why it cannot be turned on; "" when it can
+	stamp        bool   // the enable marks it born on identity (ADR 0092)
+	requireEmpty bool   // the stamp re-asserts an empty logbook (ruling J1)
+}
+
+// planSmcloud judges a new SM Cloud enable of logbookID (0: a logbook created
+// now, so empty and never the default), whose stored binding is b (nil when
+// none), in the rules' order (ruling J6): the claim and conflict rules, then
+// history, then the running generation, then the server's support. An already
+// enabled binding is not a transition and keeps every rule it has. The name
+// collision check comes after, over the whole candidate.
+func (g gate) planSmcloud(ctx context.Context, db BindingsDB, cfg config.Config, entry *types.QsoArchiveConfig, logbookID int64, b *types.LogbookDestination) (smcloudPlan, error) {
+	home := adoptedArchive(entry)
+	isDefault := logbookID != 0 && logbookID == cfg.DefaultLogbookID
+	switch {
+	case b != nil && IdentityConflict(*b):
+		return smcloudPlan{reason: reasonConflict}, nil
+	case b != nil && BornOnIdentity(*b):
+		return smcloudPlan{}, nil // its wire is decided: no history, running or support rule
+	case b != nil && adoptionClaimed(*b):
+		if home && isDefault || b.Enabled {
+			return smcloudPlan{}, nil
+		}
+		return smcloudPlan{reason: reasonClaimed}, nil
+	case home && isDefault, b != nil && b.Enabled:
+		return smcloudPlan{}, nil // the adoption path, or a kept legacy binding
+	}
+	plan := smcloudPlan{stamp: true}
+	if home {
+		plan.requireEmpty = true
+		if logbookID != 0 {
+			h, err := db.LogbookSmcloudHistoryWithContext(ctx, logbookID)
+			if err != nil {
+				return smcloudPlan{}, err
+			}
+			switch {
+			case h.SmcloudUploads > 0:
+				return smcloudPlan{reason: reasonHistoryRecords}, nil
+			case h.Qsos > 0:
+				return smcloudPlan{reason: reasonHistoryQsos}, nil
+			}
+		}
+		if b != nil {
+			if s, ok := g.start[b.ForwarderName]; ok && s.Enabled && s.IdentitySince == nil {
+				return smcloudPlan{reason: reasonRunning}, nil
+			}
+		}
+	}
+	if reason := supportReasons[g.supportState(cfg)]; reason != "" {
+		return smcloudPlan{reason: reason}, nil
+	}
+	return plan, nil
+}
+
+// smcloudHidden reports whether an SM Cloud row does not use its legacy Cloud
+// logbook name (ruling J5): a clean born-identity binding, or one whose next
+// enable can only be by identity. A claimed binding's name is locked instead,
+// never hidden; Home's unmarked default and a kept enabled legacy binding
+// still upload by it.
+func smcloudHidden(entry *types.QsoArchiveConfig, logbookID, defaultID int64, b *types.LogbookDestination) bool {
+	switch {
+	case b != nil && adoptionClaimed(*b):
+		return false
+	case b != nil && b.IdentitySince != nil:
+		return true
+	case adoptedArchive(entry) && logbookID == defaultID:
+		return false
+	case b != nil && b.Enabled:
+		return false
+	}
+	return true
 }
 
 func adoptedArchive(entry *types.QsoArchiveConfig) bool {
@@ -88,6 +182,10 @@ func adoptedArchive(entry *types.QsoArchiveConfig) bool {
 // archive (entry nil = the not-yet-catalogued adopted file). atStart is the
 // running daemon's fingerprint of the bindings it started with.
 func BindingsView(ctx context.Context, db BindingsDB, cfg config.Config, entry *types.QsoArchiveConfig, atStart BindingFingerprint) (types.ArchiveBindingsView, error) {
+	return gate{}.bindingsView(ctx, db, cfg, entry, atStart)
+}
+
+func (g gate) bindingsView(ctx context.Context, db BindingsDB, cfg config.Config, entry *types.QsoArchiveConfig, atStart BindingFingerprint) (types.ArchiveBindingsView, error) {
 	bindings, err := db.ListLogbookDestinationsWithContext(ctx)
 	if err != nil {
 		return types.ArchiveBindingsView{}, err
@@ -117,13 +215,27 @@ func BindingsView(ctx context.Context, db BindingsDB, cfg config.Config, entry *
 			dv.Reason = reason
 		}
 		dv.NewLogbookReason = dv.Reason
-		if dv.NewLogbookReason == "" {
-			dv.NewLogbookReason = newEnableRefusal(td.Type, entry, 0, cfg.DefaultLogbookID, false)
+		smc := td.Type == smcloud.Type
+		if smc && hasEntry {
+			state := g.supportState(cfg)
+			dv.Support = &types.DestinationSupportView{State: string(state)}
+			if state == smcloud.SupportUnverified {
+				dv.Support.Message = supportUnverifiedMessage
+			}
+		}
+		if smc && dv.NewLogbookReason == "" {
+			plan, err := g.planSmcloud(ctx, db, cfg, entry, 0, nil)
+			if err != nil {
+				return types.ArchiveBindingsView{}, err
+			}
+			dv.NewLogbookReason = plan.reason
 		}
 		enabled, total := 0, 0
 		for _, lb := range logbooks {
 			row := types.LogbookBindingView{LogbookID: lb.ID, LogbookUUID: lb.UUID, LogbookName: lb.Name, LogbookCallsign: lb.Callsign}
+			var stored *types.LogbookDestination
 			if b, ok := byKey[fmt.Sprintf("%d/%s", lb.ID, td.Type)]; ok {
+				stored = &b
 				row.Bound, row.Enabled, row.ForwarderName = true, b.Enabled, b.ForwarderName
 				row.CredentialsSet = keysSet(b.Credentials)
 				if adoptionClaimed(b) {
@@ -135,8 +247,15 @@ func BindingsView(ctx context.Context, db BindingsDB, cfg config.Config, entry *
 					enabled++
 				}
 			}
-			if dv.Reason == "" {
-				row.Reason = newEnableRefusal(td.Type, entry, lb.ID, cfg.DefaultLogbookID, row.Enabled)
+			if smc && smcloudHidden(entry, lb.ID, cfg.DefaultLogbookID, stored) {
+				row.HiddenFields = adoptionKeys(td)
+			}
+			if smc && dv.Reason == "" && !row.Enabled {
+				plan, err := g.planSmcloud(ctx, db, cfg, entry, lb.ID, stored)
+				if err != nil {
+					return types.ArchiveBindingsView{}, err
+				}
+				row.Reason = plan.reason
 			}
 			total++
 			dv.Logbooks = append(dv.Logbooks, row)
@@ -181,6 +300,10 @@ func anyBound(rows []types.LogbookBindingView) bool {
 // caller serializes the whole operation (Manager.ApplyBindings). log may be
 // nil; it receives a refused build's cause, which never reaches the wire.
 func applyBindings(ctx context.Context, log *logging.Service, db BindingsDB, cfg config.Config, entry *types.QsoArchiveConfig, atStart BindingFingerprint, req types.ArchiveBindingsRequest) (types.ArchiveBindingsView, error) {
+	return gate{}.applyBindings(ctx, log, db, cfg, entry, atStart, req)
+}
+
+func (g gate) applyBindings(ctx context.Context, log *logging.Service, db BindingsDB, cfg config.Config, entry *types.QsoArchiveConfig, atStart BindingFingerprint, req types.ArchiveBindingsRequest) (types.ArchiveBindingsView, error) {
 	bindings, err := db.ListLogbookDestinationsWithContext(ctx)
 	if err != nil {
 		return types.ArchiveBindingsView{}, err
@@ -217,20 +340,13 @@ func applyBindings(ctx context.Context, log *logging.Service, db BindingsDB, cfg
 			if !ok {
 				return types.ArchiveBindingsView{}, &RequestError{Code: "logbook_not_found", Message: fmt.Sprintf("logbook %d does not exist in this archive", e.LogbookID)}
 			}
-			if e.Enabled {
-				reason := enableRefusal(d.Type, account, hasEntry, entry)
-				if reason == "" {
-					reason = newEnableRefusal(d.Type, entry, lb.ID, cfg.DefaultLogbookID, existing[key].Enabled)
-				}
-				if reason != "" {
-					return types.ArchiveBindingsView{}, &RequestError{Code: "binding_not_enableable", Message: fmt.Sprintf("%s for logbook %q: %s", td.DisplayName, lb.Name, reason)}
-				}
+			var stored *types.LogbookDestination
+			if b, ok := existing[key]; ok {
+				stored = &b
 			}
-			if adoptionClaimed(existing[key]) {
-				if k := lockedKeyTouched(td, e); k != "" {
-					return types.ArchiveBindingsView{}, &RequestError{Code: "binding_field_locked", Message: fmt.Sprintf(
-						"%s for logbook %q: %q is fixed since this binding was reserved for adoption and cannot be changed or removed", td.DisplayName, lb.Name, k)}
-				}
+			plan, rerr := g.editRules(ctx, db, cfg, entry, td, account, hasEntry, lb, e, stored)
+			if rerr != nil {
+				return types.ArchiveBindingsView{}, rerr
 			}
 			merged, err := mergeBindingCredentials(td, existing[key].Credentials, e.Credentials, e.CredentialsClear, e.Enabled, lb.Callsign)
 			if err != nil {
@@ -250,7 +366,8 @@ func applyBindings(ctx context.Context, log *logging.Service, db BindingsDB, cfg
 					return types.ArchiveBindingsView{}, refusal
 				}
 			}
-			rows = append(rows, sqlite.DestinationUpsert{LogbookID: e.LogbookID, Destination: d.Type, ForwarderName: name, Enabled: e.Enabled, Credentials: merged})
+			rows = append(rows, sqlite.DestinationUpsert{LogbookID: e.LogbookID, Destination: d.Type, ForwarderName: name, Enabled: e.Enabled, Credentials: merged,
+				StampIdentity: plan.stamp, RequireEmptyLogbook: plan.requireEmpty})
 		}
 	}
 	if err := refuseProtectedNames(ctx, db, bindings, rows, lbByID); err != nil {
@@ -259,7 +376,43 @@ func applyBindings(ctx context.Context, log *logging.Service, db BindingsDB, cfg
 	if err := db.UpsertLogbookDestinationsWithContext(ctx, rows); err != nil {
 		return types.ArchiveBindingsView{}, err
 	}
-	return BindingsView(ctx, db, cfg, entry, atStart)
+	return g.bindingsView(ctx, db, cfg, entry, atStart)
+}
+
+// editRules applies the enable and field rules to one edit, in ruling J6's
+// order (account, then SM Cloud's claim, history, running-generation and
+// support rules), then the field rules: a hidden field (J5) and a locked one
+// (ADR 0090, T6). It returns the SM Cloud plan the edit's write carries; a
+// row ending disabled, or another destination, carries none.
+func (g gate) editRules(ctx context.Context, db BindingsDB, cfg config.Config, entry *types.QsoArchiveConfig, td forwarding.TypeDescriptor,
+	account types.StationAccountView, hasEntry bool, lb types.Logbook, e types.LogbookBindingEdit, stored *types.LogbookDestination) (smcloudPlan, error) {
+	var plan smcloudPlan
+	if e.Enabled {
+		reason := enableRefusal(td.Type, account, hasEntry, entry)
+		if reason == "" && td.Type == smcloud.Type {
+			var err error
+			if plan, err = g.planSmcloud(ctx, db, cfg, entry, lb.ID, stored); err != nil {
+				return smcloudPlan{}, err
+			}
+			reason = plan.reason
+		}
+		if reason != "" {
+			return smcloudPlan{}, &RequestError{Code: "binding_not_enableable", Message: fmt.Sprintf("%s for logbook %q: %s", td.DisplayName, lb.Name, reason)}
+		}
+	}
+	if td.Type == smcloud.Type && smcloudHidden(entry, lb.ID, cfg.DefaultLogbookID, stored) {
+		if k := lockedKeyTouched(td, e); k != "" {
+			return smcloudPlan{}, &RequestError{Code: "binding_field_unused", Message: fmt.Sprintf(
+				"%s for logbook %q: %q is not used by a binding that uploads by SM Cloud identity and cannot be set or removed", td.DisplayName, lb.Name, k)}
+		}
+	}
+	if stored != nil && adoptionClaimed(*stored) {
+		if k := lockedKeyTouched(td, e); k != "" {
+			return smcloudPlan{}, &RequestError{Code: "binding_field_locked", Message: fmt.Sprintf(
+				"%s for logbook %q: %q is fixed since this binding was reserved for adoption and cannot be changed or removed", td.DisplayName, lb.Name, k)}
+		}
+	}
+	return plan, nil
 }
 
 // lockedKeyTouched names the first adoption key the edit types a value into or
@@ -407,9 +560,6 @@ func enableRefusal(typ string, account types.StationAccountView, hasEntry bool, 
 	if !account.Configured {
 		return "its station account is incomplete: a required station field is not set"
 	}
-	if typ == "smcloud" && !adoptedArchive(entry) {
-		return smcloudIdentityReason
-	}
 	return ""
 }
 
@@ -487,6 +637,21 @@ func fingerprintEqual(a, b BindingFingerprint) bool {
 	return true
 }
 
+// SetSmcloudSupport wires the start's SM Cloud support check (cmd/smd): the
+// state a new identity enable is judged by, for the config saved now.
+func (m *Manager) SetSmcloudSupport(state func(config.Config) smcloud.SupportState) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.smcloudSupport = state
+}
+
+// gateNow is the gate as wired now, for one view or PUT.
+func (m *Manager) gateNow() gate {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return gate{support: m.smcloudSupport, start: m.startBindings}
+}
+
 // SetActiveBindings wires the active archive's database and the bindings the
 // running daemon started with (cmd/smd, at HTTP init).
 func (m *Manager) SetActiveBindings(db BindingsDB, atStart []types.LogbookDestination) {
@@ -529,7 +694,7 @@ func (m *Manager) Bindings(ctx context.Context, id string) (types.ArchiveBinding
 	if err != nil {
 		return types.ArchiveBindingsView{}, err
 	}
-	view, err := BindingsView(ctx, db, snap, entry, atStart)
+	view, err := m.gateNow().bindingsView(ctx, db, snap, entry, atStart)
 	if err != nil {
 		return types.ArchiveBindingsView{}, err
 	}
@@ -554,7 +719,7 @@ func (m *Manager) ApplyBindings(ctx context.Context, id string, req types.Archiv
 	if err != nil {
 		return types.ArchiveBindingsView{}, err
 	}
-	view, err := applyBindings(ctx, m.logger, db, snap, entry, atStart, req)
+	view, err := m.gateNow().applyBindings(ctx, m.logger, db, snap, entry, atStart, req)
 	if err != nil {
 		return types.ArchiveBindingsView{}, err
 	}
@@ -736,23 +901,33 @@ func refuseProtectedNames(ctx context.Context, db BindingsDB, stored []types.Log
 }
 
 // candidateBindings is what the bindings would be after the write: each stored
-// binding with its PUT row's credentials, then the PUT's new bindings.
+// binding with its PUT row's credentials, then the PUT's new bindings. A row
+// the save stamps counts as stamped (ruling J6) — only a qualifying proposed
+// stamp, since a claimed row is never planned one.
 func candidateBindings(stored []types.LogbookDestination, rows []sqlite.DestinationUpsert) []types.LogbookDestination {
 	edited := make(map[string]sqlite.DestinationUpsert, len(rows))
 	for _, r := range rows {
 		edited[r.ForwarderName] = r
 	}
 	out := make([]types.LogbookDestination, 0, len(stored)+len(rows))
+	stamped := time.Now()
 	for _, b := range stored {
 		if r, ok := edited[b.ForwarderName]; ok {
 			b.Credentials = r.Credentials
+			if r.StampIdentity && b.IdentitySince == nil {
+				b.IdentitySince = &stamped
+			}
 			delete(edited, b.ForwarderName)
 		}
 		out = append(out, b)
 	}
 	for _, r := range rows {
 		if _, isNew := edited[r.ForwarderName]; isNew {
-			out = append(out, types.LogbookDestination{LogbookID: r.LogbookID, Destination: r.Destination, ForwarderName: r.ForwarderName, Credentials: r.Credentials})
+			c := types.LogbookDestination{LogbookID: r.LogbookID, Destination: r.Destination, ForwarderName: r.ForwarderName, Credentials: r.Credentials}
+			if r.StampIdentity {
+				c.IdentitySince = &stamped
+			}
+			out = append(out, c)
 		}
 	}
 	return out

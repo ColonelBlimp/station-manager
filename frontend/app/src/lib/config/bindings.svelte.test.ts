@@ -69,6 +69,7 @@ const row = (id: number, name: string, over: Record<string, unknown> = {}) => ({
     queue: { waiting: 0, failed: 0, in_flight: 0 },
     reason: '',
     locked_fields: [],
+    hidden_fields: [],
     adoption: null,
     uploads_held: null,
     ...over,

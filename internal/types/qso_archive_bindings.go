@@ -31,8 +31,18 @@ type DestinationBindingView struct {
 	// NewLogbookReason, when set, is why a logbook created now could not have
 	// this destination turned on (SM Cloud in Home: the default logbook only
 	// until per-binding identity lands, W-0021 5F.0).
-	NewLogbookReason string               `json:"new_logbook_reason,omitempty"`
-	Logbooks         []LogbookBindingView `json:"logbooks"`
+	NewLogbookReason string `json:"new_logbook_reason,omitempty"`
+	// Support is the SM Cloud server's identity support as this start checked
+	// it (W-0021 5F.4, ADR 0092 decision 4); on the SM Cloud destination only.
+	Support  *DestinationSupportView `json:"support,omitempty"`
+	Logbooks []LogbookBindingView    `json:"logbooks"`
+}
+
+// DestinationSupportView is the server support a start found: its state and,
+// where the operator should know it, the daemon's wording.
+type DestinationSupportView struct {
+	State   string `json:"state"`
+	Message string `json:"message,omitempty"`
 }
 
 // StationAccountView is the presence of a station account, never its values.
@@ -70,6 +80,11 @@ type LogbookBindingView struct {
 	// adoption (SM Cloud's cloud logbook name, ADR 0090): not shown for
 	// editing, and refused by the PUT. Absent when nothing is locked.
 	LockedFields []string `json:"locked_fields,omitempty"`
+	// HiddenFields lists the logbook-scoped keys this binding does not use: the
+	// legacy Cloud logbook name of a binding born on SM Cloud identity, or of
+	// one whose next enable can only be (ADR 0092, ruling J5). Not shown, and
+	// refused by the PUT.
+	HiddenFields []string `json:"hidden_fields,omitempty"`
 	// Adoption is the remote adoption's status (ADR 0090, T4), on Home's
 	// default SM Cloud row only, and only while it describes that row's
 	// current binding, name and station account.

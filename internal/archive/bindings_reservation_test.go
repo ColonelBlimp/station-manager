@@ -236,12 +236,14 @@ func TestReservation_RS3_AReservedBindingsKeyIsLocked(t *testing.T) {
 }
 
 // protectedHome: Home's default binding "cloud" (logbook a) under "shack",
-// reserved; logbook b holds a disabled SM Cloud binding under "portable".
+// reserved; logbook b holds an enabled SM Cloud binding under "portable" — a
+// kept legacy binding, which still uploads by its name and so may be renamed
+// (W-0021 5F.4: any other unclaimed binding no longer uses a name, J5).
 func protectedHome(t *testing.T) (*sqlite.Service, int64, int64) {
 	t.Helper()
 	db, a, b, _ := unadoptedHome(t)
 	if err := db.UpsertLogbookDestinationsWithContext(context.Background(), []sqlite.DestinationUpsert{{
-		LogbookID: b, Destination: "smcloud", ForwarderName: "smcloud.second", Enabled: false, Credentials: json.RawMessage(`{"logbook":"portable"}`),
+		LogbookID: b, Destination: "smcloud", ForwarderName: "smcloud.second", Enabled: true, Credentials: json.RawMessage(`{"logbook":"portable"}`),
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -313,6 +315,9 @@ func TestReservation_RS4_NoOtherBindingMayTakeAProtectedName(t *testing.T) {
 			}
 		})
 	}
+	// W-0021 5F.4 (J5): a NEW SM Cloud binding off Home's default no longer
+	// carries a name at all, so it cannot take a protected one; the refusal is
+	// binding_field_unused, and the whole PUT still writes nothing.
 	t.Run("refused: a new binding under the name, and nothing else in the PUT is written", func(t *testing.T) {
 		db, a, b := protectedHome(t)
 		c, err := db.InsertLogbookWithContext(ctx, types.Logbook{Name: "Third", Callsign: "M0QQQ"})
@@ -322,8 +327,8 @@ func TestReservation_RS4_NoOtherBindingMayTakeAProtectedName(t *testing.T) {
 		_, err = putSmcloud(ctx, db, homeSmcloudCfg(a),
 			types.LogbookBindingEdit{LogbookID: b, Credentials: map[string]string{"logbook": "renamed"}},
 			types.LogbookBindingEdit{LogbookID: c, Credentials: map[string]string{"logbook": "shack"}})
-		if bindingCode(err) != "binding_name_reserved" {
-			t.Fatalf("PUT = %v; want binding_name_reserved", err)
+		if bindingCode(err) != "binding_field_unused" {
+			t.Fatalf("PUT = %v; want binding_field_unused", err)
 		}
 		if r, _ := smcloudRow(t, db, b); string(r.Credentials) != `{"logbook":"portable"}` {
 			t.Fatalf("the refused PUT wrote its other row: %s", r.Credentials)

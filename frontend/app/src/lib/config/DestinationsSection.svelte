@@ -66,6 +66,17 @@
         return () => clearInterval(timer);
     });
 
+    // While SM Cloud's server support is still being checked, the eligibility
+    // is re-read every 5 s (W-0021 5F.4), so a check that finishes after the
+    // tab opened enables its rows; the interval ends once it settles or the
+    // tab closes.
+    $effect(() => {
+        const ms = bindingsState.supportPollMs;
+        if (ms === 0) return;
+        const timer = setInterval(() => void bindingsState.refreshSupport(), ms);
+        return () => clearInterval(timer);
+    });
+
     const PILL: Record<BindingState, { text: string; cls: string }> = {
         on: {
             text: 'enabled',
@@ -294,6 +305,13 @@
                             >
                         </p>
                     {/if}
+                    <!-- The start could not reach the SM Cloud server (W-0021 5F.4,
+                         J3): informational, so the muted text, never an alert. -->
+                    {#if dest.support?.state === 'unverified' && dest.support.message}
+                        <p class="text-sm text-muted" data-testid="destination-support">
+                            {dest.support.message}
+                        </p>
+                    {/if}
                     {#if dest.account.build_key === 'absent'}
                         <p class="text-sm text-warning" data-testid="build-key-absent">
                             This build of Station Manager carries no {label} application key: its uploads
@@ -321,10 +339,13 @@
                     {#each dest.logbooks as row (row.logbook_id)}
                         {@const k = rowKey(dest.type, row.logbook_id)}
                         {@const d = bindingsState.drafts[k]}
-                        <!-- An adopted binding's adoption key is fixed (ADR 0090, T6):
-                             not offered, and the daemon refuses editing it. -->
+                        <!-- An adopted binding's adoption key is fixed (ADR 0090, T6),
+                             and a binding born on identity does not use it (ADR 0092,
+                             J5): neither is offered, and the daemon refuses both. -->
                         {@const rowFields = fields.filter(
-                            (f) => !row.locked_fields.includes(f.key)
+                            (f) =>
+                                !row.locked_fields.includes(f.key) &&
+                                !row.hidden_fields.includes(f.key)
                         )}
                         {#if d}
                             <div

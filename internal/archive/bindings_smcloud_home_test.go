@@ -9,6 +9,7 @@ import (
 
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
+	"github.com/ColonelBlimp/station-manager/internal/forwarding/smcloud"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
@@ -21,14 +22,24 @@ import (
    before 5F.0) is KEPT: it is not repaired, only no new one is made.
 
      H1  a new enable on the default logbook succeeds.
-     H2  a new enable on a non-default logbook is refused — absent row or stored
-         disabled row — and the whole PUT writes nothing.
+     H2  a new enable on a non-default logbook that the gate refuses — absent
+         row or stored disabled row — writes nothing, the whole PUT included.
      H3  an existing enabled non-default binding survives an unchanged
          submission and unrelated edits, its name and queue untouched.
-     H4  disabling it is allowed; turning it back on is a NEW enable, refused.
+     H4  disabling it is allowed; turning it back on is a NEW enable, judged
+         as one: its upload history refuses it.
      H5  the view names the refusal on each non-default row that is not enabled,
          and for a logbook created now (new_logbook_reason).
+
+   W-0021 5F.4 (ADR 0092, rulings J1–J6, 2026-10-12) replaced the "default
+   logbook only" rule: a non-default Home logbook may now be turned on by
+   identity when its history is empty and the server's support allows it.
+   H2, H4 and H5 keep their guarantees under the new reasons; the gate's own
+   matrix is bindings_gate_test.go. The package-level calls run the zero gate,
+   which reads support as still being checked.
 */
+
+const checkingReason = "SM Cloud server support is still being checked; try again shortly"
 
 func homeSmcloudCfg(defaultID int64) config.Config {
 	return config.Config{
@@ -115,8 +126,8 @@ func TestHomeSmcloud_H2_NewEnableOnANonDefaultLogbookIsRefusedAndWritesNothing(t
 		_, err := putSmcloud(ctx, db, homeSmcloudCfg(a),
 			types.LogbookBindingEdit{LogbookID: a, Enabled: true},
 			types.LogbookBindingEdit{LogbookID: b, Enabled: true})
-		if bindingCode(err) != "binding_not_enableable" || !strings.Contains(err.Error(), `"Second"`) {
-			t.Fatalf("non-default enable: %v; want binding_not_enableable naming the logbook", err)
+		if bindingCode(err) != "binding_not_enableable" || !strings.Contains(err.Error(), `"Second"`) || !strings.Contains(err.Error(), checkingReason) {
+			t.Fatalf("non-default enable: %v; want binding_not_enableable naming the logbook and the support check", err)
 		}
 		if _, ok := smcloudRow(t, db, a); ok {
 			t.Fatal("the default row was written though the PUT was refused")
@@ -134,8 +145,8 @@ func TestHomeSmcloud_H2_NewEnableOnANonDefaultLogbookIsRefusedAndWritesNothing(t
 			t.Fatal(err)
 		}
 		_, err := putSmcloud(ctx, db, homeSmcloudCfg(a), types.LogbookBindingEdit{LogbookID: b, Enabled: true})
-		if bindingCode(err) != "binding_not_enableable" {
-			t.Fatalf("enable of a stored disabled non-default row: %v; want binding_not_enableable", err)
+		if bindingCode(err) != "binding_not_enableable" || !strings.Contains(err.Error(), checkingReason) {
+			t.Fatalf("enable of a stored disabled non-default row: %v; want binding_not_enableable for the support check", err)
 		}
 		if r, _ := smcloudRow(t, db, b); r.Enabled {
 			t.Fatal("the stored disabled row was turned on")
@@ -209,8 +220,8 @@ func TestHomeSmcloud_H4_DisableAllowedThenReEnableIsANewEnable(t *testing.T) {
 		t.Fatalf("after disable = %+v; want %s off", r, name)
 	}
 	_, err := putSmcloud(ctx, db, cfg, types.LogbookBindingEdit{LogbookID: b, Enabled: true})
-	if bindingCode(err) != "binding_not_enableable" {
-		t.Fatalf("re-enable after a saved disable: %v; want binding_not_enableable", err)
+	if bindingCode(err) != "binding_not_enableable" || !strings.Contains(err.Error(), reasonHistoryRecords) {
+		t.Fatalf("re-enable after a saved disable: %v; want the upload-history refusal", err)
 	}
 	if r, _ := smcloudRow(t, db, b); r.Enabled {
 		t.Fatal("the re-enable was written")
@@ -234,8 +245,8 @@ func TestHomeSmcloud_H5_ViewNamesTheRefusalPerRowAndForANewLogbook(t *testing.T)
 	if d.Reason != "" {
 		t.Fatalf("destination reason = %q; want none (the default logbook can still be turned on)", d.Reason)
 	}
-	if !strings.Contains(d.NewLogbookReason, "default logbook") {
-		t.Fatalf("new_logbook_reason = %q; want the default-logbook-only reason", d.NewLogbookReason)
+	if d.NewLogbookReason != checkingReason {
+		t.Fatalf("new_logbook_reason = %q; want the support check's reason", d.NewLogbookReason)
 	}
 	for _, row := range d.Logbooks {
 		switch row.LogbookID {
@@ -244,9 +255,24 @@ func TestHomeSmcloud_H5_ViewNamesTheRefusalPerRowAndForANewLogbook(t *testing.T)
 				t.Fatalf("row %q reason = %q; want none", row.LogbookName, row.Reason)
 			}
 		case c:
-			if !strings.Contains(row.Reason, "default logbook") {
-				t.Fatalf("row %q reason = %q; want the default-logbook-only reason", row.LogbookName, row.Reason)
+			if row.Reason != checkingReason {
+				t.Fatalf("row %q reason = %q; want the support check's reason", row.LogbookName, row.Reason)
 			}
+		}
+	}
+	// Once the server supports identity, a new logbook and the empty one can.
+	supported := gate{support: func(config.Config) smcloud.SupportState { return smcloud.SupportSupported }}
+	v, err = supported.bindingsView(ctx, db, homeSmcloudCfg(a), homeArchive, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d = destView(t, v, "smcloud")
+	if d.NewLogbookReason != "" {
+		t.Fatalf("new_logbook_reason under a supporting server = %q; want none", d.NewLogbookReason)
+	}
+	for _, row := range d.Logbooks {
+		if row.LogbookID == c && row.Reason != "" {
+			t.Fatalf("the empty row's reason under a supporting server = %q; want none", row.Reason)
 		}
 	}
 	// Other destinations are unaffected.

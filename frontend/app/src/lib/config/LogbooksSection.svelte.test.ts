@@ -283,3 +283,75 @@ describe('LogbooksSection', () => {
         expect(screen.getByTestId('logbooks-gate')).toBeInTheDocument();
     });
 });
+
+/*
+    W-0021 5F.4 commit 4, operator review: while SM Cloud's server support is
+    still being checked, the visible tab re-reads it every 5 s until it
+    settles; a hidden tab, or a closed one, does not.
+
+      LS1 checking → supported: the SM Cloud option appears; the re-reads stop.
+      LS2 closing the tab stops the re-reads.
+      LS3 a hidden tab does not re-read.
+*/
+describe('LogbooksSection — SM Cloud support still being checked (5F.4 review)', () => {
+    const CHECKING = 'SM Cloud server support is still being checked; try again shortly';
+    function smcloudSupport(state: string, reason: string) {
+        daemonHas();
+        vi.mocked(fetchArchiveBindings).mockResolvedValue({
+            kind: 'ok',
+            bindings: {
+                archive_id: 'arch-a',
+                archive_label: 'Home',
+                restart_required: false,
+                destinations: [
+                    {
+                        type: 'smcloud',
+                        display_name: 'SM Cloud',
+                        account: { configured: true, label: '', fields_set: [], build_key: '' },
+                        state: 'off',
+                        reason: '',
+                        new_logbook_reason: reason,
+                        support: { state, message: '' },
+                        logbooks: [],
+                    },
+                ] as never,
+            },
+        });
+    }
+    const reads = () => vi.mocked(fetchArchiveBindings).mock.calls.length;
+
+    beforeEach(() => {
+        vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    });
+    afterEach(() => vi.useRealTimers());
+
+    it('LS1: checking → supported offers SM Cloud and stops', async () => {
+        smcloudSupport('checking', CHECKING);
+        await renderLoaded();
+        expect(screen.queryByText('Upload to SM Cloud')).toBeNull();
+        smcloudSupport('supported', '');
+        const before = reads();
+        await vi.advanceTimersByTimeAsync(5000);
+        expect(reads()).toBe(before + 1);
+        await vi.waitFor(() => expect(screen.getByText('Upload to SM Cloud')).toBeTruthy());
+        await vi.advanceTimersByTimeAsync(20000);
+        expect(reads()).toBe(before + 1);
+    });
+
+    it('LS2: closing the tab stops the re-reads', async () => {
+        smcloudSupport('checking', CHECKING);
+        const { unmount } = await renderLoaded();
+        unmount();
+        const before = reads();
+        await vi.advanceTimersByTimeAsync(20000);
+        expect(reads()).toBe(before);
+    });
+
+    it('LS3: a hidden tab does not re-read', async () => {
+        smcloudSupport('checking', CHECKING);
+        await renderLoaded({ visible: false });
+        const before = reads();
+        await vi.advanceTimersByTimeAsync(20000);
+        expect(reads()).toBe(before);
+    });
+});

@@ -185,8 +185,8 @@ func runRestore(args []string) error {
 	if logbookID, err = targetLogbook(logbookID, dbSvc, paths, cfg); err != nil {
 		return errors.New(op).WithErr(err)
 	}
-	if _, ferr := dbSvc.FetchLogbookByIDWithContext(context.Background(), logbookID); ferr != nil {
-		return errors.New(op).WithErr(ferr).WithMsgf("target logbook id=%d does not exist", logbookID)
+	if err := checkRestoreTarget(context.Background(), dbSvc, paths, logbookID); err != nil {
+		return errors.New(op).WithErr(err)
 	}
 
 	// ---- Restore loop: per-record best-effort, errors reported at the end.
@@ -317,4 +317,28 @@ func restoreBinding(cfg config.Config, forwarderName string) (types.LogbookDesti
 		}
 	}
 	return types.LogbookDestination{}, fmt.Errorf("the Home archive's default logbook has no SM Cloud destination binding%s", ask)
+}
+
+// checkRestoreTarget requires the target logbook to exist and refuses a
+// legacy restore into a Home logbook whose SM Cloud binding is born on
+// identity, enabled or not (W-0021 5F.4, ruling J1): the restored QSOs keep
+// the legacy cloud's UUIDs, and an edit would later move those cloud rows into
+// the identity logbook. Identity-aware restore is 5F.5.
+func checkRestoreTarget(ctx context.Context, db *sqlite.Service, paths archive.Paths, logbookID int64) error {
+	if _, err := db.FetchLogbookByIDWithContext(ctx, logbookID); err != nil {
+		return fmt.Errorf("target logbook id=%d does not exist: %w", logbookID, err)
+	}
+	if paths.Entry != nil && paths.Entry.Ownership != types.QsoArchiveOwnershipLegacy {
+		return nil
+	}
+	bindings, err := db.ListLogbookDestinationsWithContext(ctx)
+	if err != nil {
+		return fmt.Errorf("read the target archive's bindings: %w", err)
+	}
+	for _, b := range bindings {
+		if b.LogbookID == logbookID && b.Destination == smcloud.Type && b.IdentitySince != nil {
+			return fmt.Errorf("logbook id=%d is backed up to SM Cloud by identity; a legacy restore into it is refused until identity-aware restore", logbookID)
+		}
+	}
+	return nil
 }

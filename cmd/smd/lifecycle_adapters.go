@@ -118,6 +118,9 @@ type daemon struct {
 	// SM Cloud binding of the start snapshot, in listing order.
 	smcloudSet []reconcileEntry
 	adopter    *adoption.Adopter
+	// support is this start's SM Cloud server support check (W-0021 5F.4,
+	// ruling J3), run in the adoption node.
+	support supportCheck
 	// wires is each adopted SM Cloud binding's wire this generation, chosen in
 	// startQso from the routing snapshot (identity forwarders, held bindings).
 	wires wireSelection
@@ -985,18 +988,112 @@ func (d *daemon) startReconciler(ctx context.Context) error {
 
 // ---- SM Cloud adoption ----
 
-// startAdoption starts Home's SM Cloud adopter (ADR 0090, T1) when Home is
-// the active archive, and gives the bindings view its status. It runs on its
-// own child of ctx, so stopping it cancels the request in flight and waits for
-// it before the log database closes.
+// checkSmcloudSupport is the start's SM Cloud support check (ruling J3); a
+// seam for tests.
+var checkSmcloudSupport = smcloud.CheckSupport
+
+// supportCheck holds the result a start's check published (ruling J3). Until
+// then every new identity enable reads "checking"; a cancelled check (drain)
+// publishes nothing.
+type supportCheck struct {
+	mu   sync.Mutex
+	res  smcloud.SupportResult
+	done bool
+	// expected: the generation started with an SM Cloud account, so a check
+	// runs. Without one, an account saved later is never checked this run.
+	expected bool
+}
+
+func (c *supportCheck) expect(expected bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.expected = expected
+}
+
+func (c *supportCheck) publish(res smcloud.SupportResult) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.res, c.done = res, true
+}
+
+// published is the result the check published, if any.
+func (c *supportCheck) published() (smcloud.SupportResult, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.res, c.done
+}
+
+// stateFor is the support a new identity enable is judged by, for the config
+// saved now: the result while the saved account names the server checked.
+func (c *supportCheck) stateFor(cfg config.Config) smcloud.SupportState {
+	c.mu.Lock()
+	expected := c.expected
+	c.mu.Unlock()
+	if !expected {
+		return smcloud.SupportChanged
+	}
+	res, done := c.published()
+	if !done {
+		return smcloud.SupportChecking
+	}
+	account, ok := smcloudAccount(cfg)
+	if !ok {
+		return smcloud.SupportChanged
+	}
+	return res.For(account)
+}
+
+// smcloudAccount is the SM Cloud station account cfg holds.
+func smcloudAccount(cfg config.Config) (types.ForwarderConfig, bool) {
+	for _, fc := range cfg.Forwarders {
+		if fc.Type == smcloud.Type {
+			return fc, true
+		}
+	}
+	return types.ForwarderConfig{}, false
+}
+
+// startSupportCheck runs the start's SM Cloud support check in the background
+// on ctx, tracked by the adoption node's wait group (ruling J3): any active
+// archive, one check per start with an account, never in the start's path. A
+// check ended by the drain publishes nothing.
+func (d *daemon) startSupportCheck(ctx context.Context, cfg config.Config) {
+	account, ok := smcloudAccount(cfg)
+	if !ok {
+		return
+	}
+	onPanic := func(name string, pv any, stack []byte) {
+		d.logger.ErrorWith().Str("goroutine", name).Interface("panic", pv).
+			Bytes("stack", stack).Msg("smcloud support check panic recovered")
+	}
+	safego.GoTracked(ctx, nodeAdoption+"-support", onPanic, func() {
+		res, err := checkSmcloudSupport(ctx, account)
+		if ctx.Err() != nil {
+			return
+		}
+		d.support.publish(res)
+		ev := d.logger.InfoWith()
+		if err != nil {
+			ev = d.logger.WarnWith().Err(err)
+		}
+		ev.Str("state", string(res.State)).Msg("smcloud: server identity support checked")
+	}, true, &d.adoptionWG)
+}
+
+// startAdoption starts the start's SM Cloud support check, whatever the active
+// archive (W-0021 5F.4, ruling J3), and Home's SM Cloud adopter (ADR 0090, T1)
+// when Home is the active archive, giving the bindings view its status. Both
+// run on one child of ctx, so stopping the node cancels the requests in
+// flight and waits for them before the log database closes.
 func (d *daemon) startAdoption(ctx context.Context) error {
 	cfg := d.cfgSvc.Snapshot()
+	actx, cancel := context.WithCancel(ctx)
+	d.adoptionCancel = cancel
+	d.startSupportCheck(actx, d.cfg) // the generation's snapshot, as initHTTP expected
 	entry := cfg.QsoArchiveByID(cfg.ActiveQsoArchiveID)
 	if entry == nil || entry.Ownership != types.QsoArchiveOwnershipLegacy || d.archives == nil {
 		return nil
 	}
-	actx, cancel := context.WithCancel(ctx)
-	d.adoptionCancel = cancel
 	d.adopter = adoption.New(d.cfgSvc, d.archives, d.db, d.bindingsAtStart, d.logger)
 	d.archives.SetAdoptionStatus(d.adopter.Status)
 	onPanic := func(name string, pv any, stack []byte) {
@@ -1067,6 +1164,9 @@ func (d *daemon) initHTTP() error {
 	// this generation started with (restart_required is judged against them).
 	d.archives.SetActiveBindings(d.db, d.bindingsAtStart)
 	d.archives.SetHeldUploads(d.wires.heldNames())
+	_, hasAccount := smcloudAccount(d.cfg)
+	d.support.expect(hasAccount)
+	d.archives.SetSmcloudSupport(d.support.stateFor)
 	d.server.SetArchiveManager(d.archives)
 	if d.activeSummary != nil {
 		d.archives.SetActiveSummary(d.activeSummary)

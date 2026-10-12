@@ -8,6 +8,7 @@
     import ManualLink from './ManualLink.svelte';
     import { logbooksState, type LogbookRow } from './logbooks.svelte';
     import { archiveSwitchGate } from './archives.svelte';
+    import { SUPPORT_POLL_MS } from './bindings.svelte';
     import { isValidCallsign } from '../validators/callsign';
 
     // visible: Settings keeps every section mounted and hides the inactive ones;
@@ -19,6 +20,15 @@
     });
     $effect(() => {
         if (visible) untrack(() => void logbooksState.load());
+    });
+
+    // While SM Cloud's server support is still being checked, the visible tab
+    // re-reads its answer every 5 s (W-0021 5F.4) until it settles; a hidden
+    // tab reads it again when opened, and a closed one stops.
+    $effect(() => {
+        if (!visible || !logbooksState.smcloudChecking) return;
+        const timer = setInterval(() => void logbooksState.refreshSmcloud(), SUPPORT_POLL_MS);
+        return () => clearInterval(timer);
     });
 
     // Nothing writes while an archive switch is in flight or unresolved: the

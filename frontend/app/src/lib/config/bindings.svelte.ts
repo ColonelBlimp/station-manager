@@ -91,6 +91,10 @@ function adoptionPollFor(row: LogbookBinding): number {
     return row.uploads_held?.state === 'waiting_for_confirmation' ? ADOPTION_RETRY_POLL_MS : 0;
 }
 
+/** While a destination's server support is still being checked (W-0021 5F.4),
+ *  its eligibility is re-read at the in-progress cadence of ruling B1. */
+export const SUPPORT_POLL_MS = 5_000;
+
 export function rowKey(type: string, logbookId: number): string {
     return `${type}/${logbookId}`;
 }
@@ -131,13 +135,34 @@ function recoveredDraft(
     );
     for (const key of row.locked_fields) delete credentials[key];
     const cleared = keptRemovals(row, marks).filter((key) => !row.locked_fields.includes(key));
-    return { draft: { enabled: row.enabled, credentials, cleared }, droppedKeys };
+    return {
+        draft: withoutHidden(row, { enabled: row.enabled, credentials, cleared }),
+        droppedKeys,
+    };
+}
+
+/** `d` without any typed value or removal mark on a field the row hides
+ *  (W-0021 5F.4, ruling J5): the binding does not use it, the form no longer
+ *  shows it, and the daemon refuses it — so a stale one is dropped, never
+ *  sent. */
+function withoutHidden(row: LogbookBinding, d: RowDraft): RowDraft {
+    if (row.hidden_fields.length === 0) return d;
+    const credentials = { ...d.credentials };
+    for (const key of row.hidden_fields) delete credentials[key];
+    return {
+        ...d,
+        credentials,
+        cleared: d.cleared.filter((key) => !row.hidden_fields.includes(key)),
+    };
 }
 
 function rowChanged(row: LogbookBinding, d: RowDraft | undefined): boolean {
     if (!d) return false;
+    const shown = withoutHidden(row, d);
     return (
-        d.enabled !== row.enabled || Object.keys(typedValues(d)).length > 0 || d.cleared.length > 0
+        shown.enabled !== row.enabled ||
+        Object.keys(typedValues(shown)).length > 0 ||
+        shown.cleared.length > 0
     );
 }
 
@@ -148,7 +173,8 @@ export function destinationLabel(dest: DestinationBinding): string {
 }
 
 /** `target` with the eligibility of `source` laid over it: each destination's
- *  account, reason and new_logbook_reason, and each row's refusal (5F.0).
+ *  account, reason, new_logbook_reason and server support, and each row's
+ *  refusal (5F.0) and hidden fields (5F.4).
  *  The rows' state stays `target`'s — eligibility is a separate boundary.
  *  While a destination itself was refused the daemon named no row's reason,
  *  so completing its account can surface them (codex P2 on 4daf2a2e). */
@@ -159,15 +185,17 @@ function withEligibility(target: ArchiveBindings, source: ArchiveBindings): Arch
         destinations: target.destinations.map((dest) => {
             const next = fresh.get(dest.type);
             if (!next) return dest;
-            const rowReason = new Map(next.logbooks.map((r) => [r.logbook_id, r.reason]));
+            const rows = new Map(next.logbooks.map((r) => [r.logbook_id, r]));
             return {
                 ...dest,
                 account: next.account,
                 reason: next.reason,
                 new_logbook_reason: next.new_logbook_reason,
+                support: next.support,
                 logbooks: dest.logbooks.map((r) => ({
                     ...r,
-                    reason: rowReason.get(r.logbook_id) ?? r.reason,
+                    reason: rows.get(r.logbook_id)?.reason ?? r.reason,
+                    hidden_fields: rows.get(r.logbook_id)?.hidden_fields ?? r.hidden_fields,
                 })),
             };
         }),
@@ -243,6 +271,11 @@ class BindingsState {
     /** How often the adoption statuses are re-read; 0 for not at all. The
      *  fastest row's cadence wins. */
     adoptionPollMs = $derived(this.#adoptionPollMs());
+    /** SUPPORT_POLL_MS while any destination's support reads `checking`. */
+    supportPollMs = $derived(
+        this.view?.destinations.some((d) => d.support?.state === 'checking') ? SUPPORT_POLL_MS : 0
+    );
+    #supportInFlight = false;
 
     // The adoption status re-read (ruling B1), ordered by SEND order like
     // eligibility: #adoptionSeq is the read whose statuses the view shows, and
@@ -444,8 +477,9 @@ class BindingsState {
         for (const dest of this.view?.destinations ?? []) {
             const logbooks: LogbookBindingEdit[] = [];
             for (const row of dest.logbooks) {
-                const d = this.drafts[rowKey(dest.type, row.logbook_id)];
-                if (!d || !rowChanged(row, d)) continue;
+                const draft = this.drafts[rowKey(dest.type, row.logbook_id)];
+                if (!draft || !rowChanged(row, draft)) continue;
+                const d = withoutHidden(row, draft);
                 const edit: LogbookBindingEdit = { logbook_id: row.logbook_id, enabled: d.enabled };
                 const typed = typedValues(d);
                 if (Object.keys(typed).length > 0) edit.credentials = typed;
@@ -569,6 +603,20 @@ class BindingsState {
         }
     }
 
+    /** Re-read eligibility while server support is still being checked
+     *  (W-0021 5F.4): the eligibility read, with its drafts kept and its send
+     *  order, one on the wire at a time. False when another is in flight or
+     *  nothing was applied. */
+    async refreshSupport(): Promise<boolean> {
+        if (this.#supportInFlight) return false;
+        this.#supportInFlight = true;
+        try {
+            return await this.refreshEligibility();
+        } finally {
+            this.#supportInFlight = false;
+        }
+    }
+
     /** The tab closed: an adoption re-read still on the wire is ignored. */
     closeAdoption(): void {
         this.#adoptionGen++;
@@ -608,7 +656,8 @@ class BindingsState {
         // An account save changes which account an adoption is confirmed
         // for, and an adopted status is not re-read on its own: the statuses
         // ride this read too, under their own send order (operator review of
-        // 4b3). Drafts are untouched.
+        // 4b3). Drafts are untouched, except that an edit on a field the
+        // read now hides is dropped (5F.4, J5).
         let next = withEligibility(current, out.bindings);
         if (seq >= this.#adoptionSeq) {
             this.#adoptionSeq = seq;
@@ -616,7 +665,20 @@ class BindingsState {
             next = withAdoption(next, out.bindings);
         }
         this.view = next;
+        this.#dropHidden(next);
         return true;
+    }
+
+    /** Drops typed values and removal marks on the fields `view` hides: they
+     *  are stale, and the daemon refuses them (W-0021 5F.4, ruling J5). */
+    #dropHidden(view: ArchiveBindings): void {
+        for (const dest of view.destinations) {
+            for (const row of dest.logbooks) {
+                const k = rowKey(dest.type, row.logbook_id);
+                const d = this.drafts[k];
+                if (d && row.hidden_fields.length > 0) this.drafts[k] = withoutHidden(row, d);
+            }
+        }
     }
 
     #missingMessage(missing: Record<string, string[]>): string {

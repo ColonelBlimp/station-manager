@@ -13,7 +13,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
-	_ "github.com/ColonelBlimp/station-manager/internal/forwarding/smcloud" // registers the smcloud descriptor
+	"github.com/ColonelBlimp/station-manager/internal/forwarding/smcloud" // also registers the smcloud descriptor
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
@@ -298,24 +298,33 @@ func TestBindings_EnableRefusals(t *testing.T) {
 }
 
 // ADR 0082 part 7 remnant: SM Cloud binds on the adopted archive only until 5F.
-func TestBindings_SmcloudOnlyOnTheAdoptedArchiveUntil5F(t *testing.T) {
+// W-0021 5F.4 (ADR 0092) lifted the "only in Home" remnant (T7): SM Cloud on
+// a managed archive is no longer refused as a destination; a new enable there
+// waits only on the start's support check (AG1 has the full matrix).
+func TestBindings_SmcloudOnAManagedArchiveFollowsTheSupportCheck(t *testing.T) {
 	db := bindingsDB(t)
 	a, _ := twoLogbooks(t, db)
 	ctx := context.Background()
-	// The enabled logbook is Home's default: 5F.0 allows a new Home enable there only.
 	cfg := config.Config{DefaultLogbookID: a, Forwarders: []types.ForwarderConfig{{Name: "smcloud", Type: "smcloud", Enabled: true, Credentials: json.RawMessage(`{"url":"https://c","token":"t"}`)}}}
 	managed := &types.QsoArchiveConfig{ID: "m", Label: "Contest", Ownership: types.QsoArchiveOwnershipManaged}
 	v, _ := BindingsView(ctx, db, cfg, managed, nil)
-	// T7 (ADR 0090, W-0021 5F.3 commit 5a): the neutral text, with no final
-	// period (the SPA renders "Can't be turned on here: {reason}.").
-	if d := destView(t, v, "smcloud"); d.Reason != "SM Cloud can currently be enabled only in Home" {
-		t.Fatalf("smcloud on a managed archive = %q; want the neutral T7 text", d.Reason)
+	if d := destView(t, v, "smcloud"); d.Reason != "" {
+		t.Fatalf("smcloud on a managed archive = %q; want no destination refusal", d.Reason)
 	}
 	_, err := applyBindings(ctx, nil, db, cfg, managed, nil, types.ArchiveBindingsRequest{Destinations: []types.DestinationBindingEdit{{
 		Type: "smcloud", Logbooks: []types.LogbookBindingEdit{{LogbookID: a, Enabled: true}}}}})
-	if bindingCode(err) != "binding_not_enableable" {
-		t.Fatalf("smcloud enable on a managed archive: %v", err)
+	if bindingCode(err) != "binding_not_enableable" || !strings.Contains(err.Error(), "still being checked") {
+		t.Fatalf("smcloud enable before any support check: %v; want the checking refusal", err)
 	}
+	supported := gate{support: func(config.Config) smcloud.SupportState { return smcloud.SupportSupported }}
+	if _, err := supported.applyBindings(ctx, nil, db, cfg, managed, nil, types.ArchiveBindingsRequest{Destinations: []types.DestinationBindingEdit{{
+		Type: "smcloud", Logbooks: []types.LogbookBindingEdit{{LogbookID: a, Enabled: true}}}}}); err != nil {
+		t.Fatalf("smcloud enable on a managed archive under a supporting server: %v", err)
+	}
+	if r, _ := smcloudRow(t, db, a); !r.Enabled || r.IdentitySince == nil {
+		t.Fatalf("managed binding = %+v; want enabled and born on identity", r)
+	}
+	execArchive(t, db, `DELETE FROM logbook_destination`)
 	legacy := &types.QsoArchiveConfig{ID: "h", Label: "Home", Ownership: types.QsoArchiveOwnershipLegacy}
 	if _, err := applyBindings(ctx, nil, db, cfg, legacy, nil, types.ArchiveBindingsRequest{Destinations: []types.DestinationBindingEdit{{
 		Type: "smcloud", Logbooks: []types.LogbookBindingEdit{{LogbookID: a, Enabled: true}}}}}); err != nil {

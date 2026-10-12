@@ -92,6 +92,47 @@ retrying (Q2), so an unverified server costs a delay, not data.
 - If an unverified enable is found sitting behind an old server unnoticed, revisit decision 4 and
   how the row reports unverified support.
 
+## Refinement (2026-10-12): what "clean history" can prove
+
+The W-0021 5F.4 commit 4 survey found that a missing upload record cannot show that a logbook's
+QSOs never reached SM Cloud. Every start discards a disabled binding's undelivered records (pending,
+in-progress and failed), and those of any queued name no binding carries. The operator's queue clear
+discards pending and failed records. Each leaves only a log line, and an attempted record may have
+reached the server. `smd restore` puts QSOs from a legacy cloud logbook into any local logbook with
+no record at all. In a non-default Home logbook those UUIDs belong to another logbook of the same
+cloud archive: an identity push at a newer version moves the cloud row, and an exact tie is refused
+as a version conflict.
+
+The operator ruled (W-0021 dossier, rulings J1–J6) that decision 2 is tightened.
+
+- **Empty-only conversion.** A non-default Home binding converts only while its logbook holds no QSO
+  row, live or deleted. Any SM Cloud upload record refuses with decision 2's text; QSOs without one
+  refuse with a second text. Both are checked when the save is validated and again inside the
+  stamping transaction.
+- **Running generation.** Conversion is refused while the running generation still has the binding
+  enabled on the name wire, until a restart; history is then checked again.
+- **Restore.** A legacy `smd restore` into a stamped Home target is refused, enabled or disabled,
+  until identity-aware restore (5F.5).
+- **Managed archives.** They keep no history rule: slice 2B kept them from uploading until 5B, and
+  they have refused SM Cloud since. A legacy restore into one carries Home's UUIDs, which the server
+  refuses across archives: a visible failure, not a merge.
+
+Decision 4 is made precise. Only identified transport failures are `unverified`: DNS failure, a
+refused or reset connection, or a timeout before any status. Any HTTP status but 200 (a proxy's
+502, 503 or 504 included), a malformed answer, a redirect, a TLS verification failure, an unusable
+account or an unknown error is `error` and refuses. A drain cancellation publishes no result.
+
+Alternatives rejected:
+
+- **Records-only history.** Count upload records alone. This was the original wording; it would
+  count the discards and restores above as clean.
+- **Durable discard markers from now on.** Record each discard so that absence becomes evidence. It
+  cannot recover the discards already made, so existing logbooks would still be uncertain.
+- **Ask the cloud.** Look for the logbook's UUIDs in the legacy cloud logbooks. It needs the network
+  at save time, and an unreachable or partial answer would still be uncertain.
+- **Treat a 502, 503 or 504 as offline.** A proxy's answer is still an HTTP answer, and a stopped
+  backend is not the offline-first case decision 4 allows.
+
 ## References
 
 - `docs/work/W-0021-qso-archives.md`: "5F.4 design" and "5F.4 rulings" (F1–F8).

@@ -267,6 +267,48 @@ type DestinationUpsert struct {
 	// save (ADR 0092). No production caller sets it before W-0021 5F.4
 	// commit 4.
 	StampIdentity bool
+	// RequireEmptyLogbook re-asserts, inside the stamping transaction, that the
+	// logbook holds no QSO row, live or deleted (ruling J1): a QSO written
+	// since the save was validated fails the whole save.
+	RequireEmptyLogbook bool
+}
+
+// LogbookHistory is what a logbook's rows say about its SM Cloud past (W-0021
+// 5F.4, ruling J1): its SM Cloud upload records, whatever their status or
+// worker name, and its QSO rows, live or deleted.
+type LogbookHistory struct {
+	SmcloudUploads int
+	Qsos           int
+}
+
+// ErrLogbookNotEmpty refuses a stamp with RequireEmptyLogbook whose logbook
+// holds a QSO row inside the stamping transaction: one was written since the
+// save was validated (ruling J1).
+var ErrLogbookNotEmpty = stderr.New("the logbook holds QSOs, so its binding cannot be marked born on SM Cloud identity")
+
+// LogbookSmcloudHistoryWithContext reads logbookID's history for the identity
+// conversion gate: its QSO rows, live or deleted, and every SM Cloud upload
+// record on them, whatever its status, action or worker name.
+func (s *Service) LogbookSmcloudHistoryWithContext(ctx context.Context, logbookID int64) (LogbookHistory, error) {
+	const op errors.Op = "sqlite.Service.LogbookSmcloudHistoryWithContext"
+	if err := checkService(op, s); err != nil {
+		return LogbookHistory{}, err
+	}
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return LogbookHistory{}, err
+	}
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+	var out LogbookHistory
+	if err := h.QueryRowContext(ctx, `
+		SELECT (SELECT COUNT(*) FROM qso WHERE logbook_id = ?),
+		       (SELECT COUNT(*) FROM qso_upload u JOIN qso q ON q.id = u.qso_id
+		         WHERE q.logbook_id = ? AND u.forwarder_type = 'smcloud')`,
+		logbookID, logbookID).Scan(&out.Qsos, &out.SmcloudUploads); err != nil {
+		return LogbookHistory{}, errors.New(op).WithErr(err).WithMsgf("read the SM Cloud history of logbook %d", logbookID)
+	}
+	return out, nil
 }
 
 // UpsertLogbookDestinationsWithContext writes every row in ONE transaction:
@@ -331,6 +373,15 @@ func upsertDestinations(ctx context.Context, op errors.Op, tx *sql.Tx, rows []De
 		}
 		if !r.StampIdentity {
 			continue
+		}
+		if r.RequireEmptyLogbook {
+			var held bool
+			if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM qso WHERE logbook_id = ?)`, r.LogbookID).Scan(&held); err != nil {
+				return errors.New(op).WithErr(err).WithMsgf("recheck logbook %d before marking its binding", r.LogbookID)
+			}
+			if held {
+				return errors.New(op).WithErr(ErrLogbookNotEmpty).WithMsgf("logbook %d", r.LogbookID)
+			}
 		}
 		res, err := tx.ExecContext(ctx, `
 			UPDATE logbook_destination SET identity_since = COALESCE(identity_since, datetime('now'))

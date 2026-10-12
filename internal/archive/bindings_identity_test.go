@@ -78,7 +78,11 @@ func TestIdentityBindings_AB2_CleanBornIdentityLeavesTheNameCheck(t *testing.T) 
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, err = putSmcloud(ctx, db, homeSmcloudCfg(a), types.LogbookBindingEdit{LogbookID: c, Credentials: map[string]string{"logbook": "portable"}})
+		// A kept enabled legacy binding still uses its name (5F.4, J5), so it
+		// is the one that may try to take the mixed binding's.
+		execArchive(t, db, `INSERT INTO logbook_destination (logbook_id, destination, forwarder_name, enabled, credentials)
+			VALUES (?, 'smcloud', 'smcloud.third', 1, '{"logbook":"elsewhere"}')`, c)
+		_, err = putSmcloud(ctx, db, homeSmcloudCfg(a), types.LogbookBindingEdit{LogbookID: c, Enabled: true, Credentials: map[string]string{"logbook": "portable"}})
 		if bindingCode(err) != "binding_name_reserved" {
 			t.Fatalf("PUT = %v; want the mixed binding's name still protected", err)
 		}

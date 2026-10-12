@@ -80,6 +80,7 @@ const awHome = "019fd5c5-efcc-7193-be4f-1fee532ee3a1"
 // to SM Cloud and enabled, the station account pointing at cloud.
 func adoptionDaemon(t *testing.T, cloud string, home bool) *daemon {
 	t.Helper()
+	quietSupportCheck(t) // these fakes answer the adopter's requests only
 	ctx := context.Background()
 	tmp := t.TempDir()
 	cfg := config.DefaultConfig(filepath.Join(tmp, "data"))

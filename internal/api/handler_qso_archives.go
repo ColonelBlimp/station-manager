@@ -63,6 +63,7 @@ var archiveErrorStatus = map[string]int{
 	"binding_credentials_corrupt":     http.StatusConflict,
 	"binding_field_locked":            http.StatusConflict,
 	"binding_name_reserved":           http.StatusConflict,
+	"binding_field_unused":            http.StatusConflict,
 	"binding_unusable":                http.StatusBadRequest,
 }
 

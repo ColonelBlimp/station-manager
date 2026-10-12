@@ -11,6 +11,7 @@ import (
 
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
+	"github.com/ColonelBlimp/station-manager/internal/forwarding/smcloud"
 	"github.com/ColonelBlimp/station-manager/internal/fsperm"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -77,6 +78,9 @@ type Manager struct {
 	// heldUploads names the bindings this generation started held
 	// (SetHeldUploads, ruling C2).
 	heldUploads map[string]struct{}
+	// smcloudSupport is the start's SM Cloud support check as the saved config
+	// sees it (SetSmcloudSupport, ruling J3); nil until wired.
+	smcloudSupport func(config.Config) smcloud.SupportState
 
 	// activeSummary is the live summary of the ACTIVE archive (SetActiveSummary,
 	// ADR 0084); nil until wired, when the active archive lists from the sidecar

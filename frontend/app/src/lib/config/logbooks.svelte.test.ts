@@ -48,7 +48,7 @@ import { toastsState, _resetForTests as resetToasts } from '../ui/toasts.svelte'
 
 const ARCHIVE = '01a0e79a-7b32-7cf5-a72c-57cf437a362d';
 
-function smcloud(reason = '', newLogbookReason = '') {
+function smcloud(reason = '', newLogbookReason = '', support: unknown = null) {
     return {
         type: 'smcloud',
         display_name: 'SM Cloud',
@@ -56,7 +56,23 @@ function smcloud(reason = '', newLogbookReason = '') {
         state: 'off',
         reason,
         new_logbook_reason: newLogbookReason || reason,
+        support,
         logbooks: [],
+    };
+}
+
+const CHECKING = 'SM Cloud server support is still being checked; try again shortly';
+const smcloudChecking = () => smcloud('', CHECKING, { state: 'checking', message: '' });
+
+function bindingsAnswer(destinations: unknown[]) {
+    return {
+        kind: 'ok' as const,
+        bindings: {
+            archive_id: ARCHIVE,
+            archive_label: 'Home',
+            restart_required: false,
+            destinations: destinations as never,
+        },
     };
 }
 
@@ -138,6 +154,30 @@ describe('logbooksState.load', () => {
         daemonHas({ destinations: [smcloud('', 'only for the default logbook')] });
         await logbooksState.load();
         expect(logbooksState.smcloudAvailable).toBe(false);
+    });
+
+    it('5F.4 UI4: a new logbook follows the daemon’s answer, in a managed archive too', async () => {
+        daemonHas({ destinations: [smcloud()] });
+        vi.mocked(fetchArchiveBindings).mockResolvedValue({
+            kind: 'ok',
+            bindings: {
+                archive_id: ARCHIVE,
+                archive_label: 'Drill',
+                restart_required: false,
+                destinations: [smcloud()] as never,
+            },
+        });
+        await logbooksState.load();
+        expect(logbooksState.smcloudAvailable).toBe(true);
+        for (const why of [
+            'SM Cloud server support is still being checked; try again shortly',
+            'the SM Cloud server does not support per-logbook backups; upgrade it',
+        ]) {
+            daemonHas({ destinations: [smcloud('', why)] });
+            await logbooksState.load();
+            expect(logbooksState.smcloudAvailable).toBe(false);
+            expect(logbooksState.smcloudRefusal).toBe(why);
+        }
     });
 
     it('a failed logbook read is an error, not an empty list', async () => {
@@ -433,5 +473,102 @@ describe('a draft typed while a write is pending', () => {
         expect(logbooksState.renameId).toBe(2);
         expect(logbooksState.renameFrom).toBe('Field');
         expect(logbooksState.dirty).toBe(true); // "Portable" is now a change
+    });
+});
+
+/*
+    W-0021 5F.4 commit 4, operator review: a new logbook's SM Cloud answer
+    while the server's support is still being checked.
+
+      LB1 checking, then a re-read finds it supported: SM Cloud is offered, and
+          the add form's drafts stay.
+      LB2 checking, then error: the refusal names the error; no longer checking.
+      LB3 a re-read answering after a newer load cannot roll it back; only one
+          re-read is on the wire at a time.
+      LB4 a re-read cannot start while a load is in flight: otherwise it shares
+          the load's generation, and its late "checking" would overwrite the
+          load's newer answer (operator review).
+*/
+describe('logbooksState.refreshSmcloud (5F.4 review)', () => {
+    it('LB1: checking → supported offers SM Cloud and keeps the drafts', async () => {
+        daemonHas({ destinations: [smcloudChecking()] });
+        await logbooksState.load();
+        expect(logbooksState.smcloudChecking).toBe(true);
+        expect(logbooksState.smcloudAvailable).toBe(false);
+        expect(logbooksState.smcloudRefusal).toBe(CHECKING);
+        logbooksState.addName = 'Portable 2026';
+        vi.mocked(fetchArchiveBindings).mockResolvedValue(
+            bindingsAnswer([smcloud('', '', { state: 'supported', message: '' })])
+        );
+        expect(await logbooksState.refreshSmcloud()).toBe(true);
+        expect(logbooksState.smcloudChecking).toBe(false);
+        expect(logbooksState.smcloudAvailable).toBe(true);
+        expect(logbooksState.addName).toBe('Portable 2026');
+    });
+
+    it('LB2: checking → error names the error', async () => {
+        daemonHas({ destinations: [smcloudChecking()] });
+        await logbooksState.load();
+        const why = 'SM Cloud server support could not be checked; the daemon log has the cause';
+        vi.mocked(fetchArchiveBindings).mockResolvedValue(
+            bindingsAnswer([smcloud('', why, { state: 'error', message: '' })])
+        );
+        await logbooksState.refreshSmcloud();
+        expect(logbooksState.smcloudChecking).toBe(false);
+        expect(logbooksState.smcloudAvailable).toBe(false);
+        expect(logbooksState.smcloudRefusal).toBe(why);
+    });
+
+    it('LB3: a late re-read cannot roll back a newer load; one on the wire', async () => {
+        daemonHas({ destinations: [smcloudChecking()] });
+        await logbooksState.load();
+        let release: (v: unknown) => void = () => {};
+        vi.mocked(fetchArchiveBindings).mockReturnValueOnce(
+            new Promise((resolve) => (release = resolve)) as never
+        );
+        const late = logbooksState.refreshSmcloud();
+        expect(await logbooksState.refreshSmcloud()).toBe(false);
+        daemonHas({ destinations: [smcloud('', '', { state: 'supported', message: '' })] });
+        await logbooksState.load();
+        expect(logbooksState.smcloudAvailable).toBe(true);
+        release(bindingsAnswer([smcloudChecking()]));
+        expect(await late).toBe(false);
+        expect(logbooksState.smcloudAvailable).toBe(true);
+        expect(logbooksState.smcloudChecking).toBe(false);
+    });
+
+    it('LB4: a re-read cannot start during a load and overwrite its answer', async () => {
+        daemonHas({ destinations: [smcloudChecking()] });
+        await logbooksState.load();
+        expect(logbooksState.smcloudChecking).toBe(true);
+        let releaseList: (v: unknown) => void = () => {};
+        vi.mocked(fetchLogbooks).mockReturnValueOnce(
+            new Promise((resolve) => (releaseList = resolve)) as never
+        );
+        let releasePoll: (v: unknown) => void = () => {};
+        let phase: 'poll' | 'load' = 'poll';
+        vi.mocked(fetchArchiveBindings).mockImplementation(() =>
+            phase === 'poll'
+                ? (new Promise((resolve) => (releasePoll = resolve)) as never)
+                : Promise.resolve(
+                      bindingsAnswer([smcloud('', '', { state: 'supported', message: '' })])
+                  )
+        );
+        const loading = logbooksState.load();
+        const poll = logbooksState.refreshSmcloud();
+        phase = 'load';
+        releaseList({
+            kind: 'ok',
+            logbooks: [
+                { id: 1, name: 'Default', callsign: '7Q5MLV' },
+                { id: 2, name: 'Portable', callsign: '7Q5MLV/P' },
+            ],
+        });
+        await loading;
+        expect(logbooksState.smcloudAvailable).toBe(true);
+        releasePoll(bindingsAnswer([smcloudChecking()]));
+        await poll;
+        expect(logbooksState.smcloudAvailable).toBe(true);
+        expect(logbooksState.smcloudChecking).toBe(false);
     });
 });
