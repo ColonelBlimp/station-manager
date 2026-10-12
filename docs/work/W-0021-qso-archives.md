@@ -3828,6 +3828,425 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      - Gates, all exit 0: gofmt (whole tree), `go vet ./...`, `go test ./...`, the cloud set
        with `-race` against `sm-pg` (sqlite added; then stopped), maintainability (0
        regressions), `task ci:local` (`frontend/app/dist/index.html` restored).
+     - Committed 2026-10-12 as `7dc454f3` (code, migration, the three references) and
+       `4f5e6485` (this dossier). The clean-room review of `7dc454f3` found no actionable
+       findings; closed and the review file deleted. The commit 2 push's one CI failure was
+       `internal/bridge` `TestHTTPHandler_StreamsPipelineEvents`, `fake did not reach 3 writes within
+       3s (have 2)`: a suspected streaming flake, not diagnosed here. The text matches W-0017
+       sub-item A's recorded signature, and commit 2 touched nothing in the bridge. Its re-run
+       was cancelled by the push of commit 3 (CI cancels superseded runs); run 38231973771 at
+       `4f5e6485`, covering both commits, is green.
+
+   - **5F.4 commit 4 plan (2026-10-12; operator asked for the plan and failing tests before
+     code; awaiting rulings J1–J6).** The gate is lifted to the F4/F5 rules. The first save
+     that qualifies stamps `identity_since`. The bindings view reports eligibility, server
+     support and hidden fields. The SPA follows the view. The manual gains the backfill and
+     tenant warnings. AC 4, AC 5 and AC 6's push half.
+     *What the tree shows (survey of `4f5e6485`), which bears on F5:*
+     - (E1) Not every SM Cloud upload record survives. At every start, the workers node
+       discards the pending, in-progress and failed rows of each disabled binding, and of any
+       queued name that no binding carries (`cmd/smd/lifecycle_adapters.go:803–830`; in-progress
+       rows are first reset to pending). The operator's queue clear removes pending and failed
+       rows (`handler_forwarder_queue.go:98`). Each leaves only a log line. An attempted row may
+       have reached the server (an answer lost, a timeout after acceptance), so its absence
+       proves nothing. Only `uploaded` rows are never deleted: QSOs are soft-deleted only (no
+       hard delete; `qso_upload` cascades only on one), and a QSO never changes logbook
+       (`qsoservice/update.go:87`).
+     - (E2) `smd restore --archive … --logbook …` inserts QSOs from a legacy cloud logbook into
+       any local logbook with no upload rows and no provenance marker
+       (`cmd/smd/restore.go:30–48`, `qsoservice/restore.go`). The legacy export lists only the
+       tenant's legacy archive (`internal/cloud/store/store.go:528`). In a non-default Home
+       logbook, those QSOs carry UUIDs that the cloud holds in another logbook of the same
+       archive. An identity push aimed at the other logbook depends on the version
+       (`store.go:327–368`, corrected by the operator 2026-10-12). An older version is ignored.
+       An exact `(revision, modified_at)` tie raises `VersionConflictError`, because the stored
+       logbook differs. A newer version moves the row into the pushing logbook, within the same
+       archive. The newer case is the merge F5 guards against, and it leaves no local record.
+     - (E3) A managed archive cannot hold name-wire SM Cloud history. Slice 2B's interim gate
+       kept non-Home archives from enqueuing until 5B. A managed file is created empty and seeded
+       with no bindings (`archive/manager.go:376`). Since the bindings API (`c8ca2a7a`, 5D),
+       SM Cloud enables have been refused there. QSOs restored into one carry Home's UUIDs; the
+       server refuses them as `ArchiveConflictError` (cross-archive) rather than merging them:
+       a visible failure, not a merge.
+     - (E4) The support read is `AdoptionClient.IdentityProtocol` (`GET /v1/version`,
+       unauthenticated, 10 s `AdoptionRequestTimeout`). Its error classes merge transport
+       failure with a 5xx and a cut-off body as `unreachable` (`adoption_client.go:211–226`),
+       so F4 needs its own classification.
+     *Questions for the operator (proposals marked):*
+     - **(J1) What "clean history" can prove.** E1 and E2 show that a missing upload row cannot
+       prove that a logbook's QSOs never reached SM Cloud. Proposal: a non-default Home logbook
+       is converted automatically only when it holds no QSO rows at all, live or deleted
+       (tombstones included). Any SM Cloud upload record also refuses, with F5's text. QSOs
+       without a record refuse with a second text: "This logbook already holds QSOs and the
+       archive cannot show that none reached SM Cloud; automatic conversion needs manual
+       recovery." Both are checked at validation and again inside the stamping transaction. The
+       alternative is the records-only rule, which would count E1's and E2's gaps as clean.
+       Managed archives get no history gate (E3).
+     - **(J2) What counts as transport unavailability.** Proposal: only a request that got no
+       HTTP status: DNS failure, connection refused or reset, or a timeout before the headers.
+       Everything else refuses a new identity enable and is never shown as offline: any HTTP
+       status other than 200 (5xx included), a body cut off after the status, malformed JSON, a
+       redirect, a TLS certificate failure, or an account that cannot build a client. A 502,
+       503 or 504 from a proxy in front of a stopped server is the borderline case; your call.
+     - **(J3) Support states, where they show, and the bound.** One check per start with an SM
+       Cloud account, whatever the active archive, bounded by the existing 10 s
+       `AdoptionRequestTimeout`. The result is kept with the server URL it checked, normalized.
+       The states:
+       - `checking`: refuses, "SM Cloud server support is still being checked; try again
+         shortly".
+       - `supported`.
+       - `unverified`: allows; the card says "SM Cloud server support not verified: the server
+         could not be reached at startup. Uploads wait and retry until it answers."
+       - `unsupported`: refuses, "the SM Cloud server does not support per-logbook backups;
+         upgrade it".
+       - `error`: refuses, "SM Cloud server support could not be checked; the daemon log has
+         the cause".
+       - `changed`: the saved URL is not the one checked; refuses, "the SM Cloud server changed
+         since the daemon started; restart to check it".
+       A token-only change keeps the result: the check sends no token. Re-enabling a binding
+       that is already stamped is not a new identity enable and skips the support rule.
+     - **(J4) Claimed non-default bindings.** A reserved or adopted binding that is no longer on
+       the default logbook (the default moved) stays refused on re-enable and is never stamped.
+       Its reason is "this binding belongs to an SM Cloud adoption; make its logbook the default
+       to use it", replacing the 5F.0 text.
+     - **(J5) The legacy field.** A row that is stamped, or that a new enable would stamp,
+       lists `logbook` in a new `hidden_fields`. The SPA does not render the field or send it.
+       The API refuses a typed or cleared value there as `binding_field_unused`, and nothing is
+       written. A converted binding keeps its stored legacy value: never shown, never sent, and
+       outside the collision check. A kept enabled legacy binding and Home's default show the
+       field as now.
+     - **(J6) The check order.** For each enabled row: account and station refusals, then the
+       claim rule (J4), then history (J1), then support (J3), then the collision check with the
+       proposed stamps counted. A row refused for history reports the history text, never
+       `binding_name_reserved`.
+     *Behaviour (not changed):* Home's default keeps the adoption path, and the adopter keeps
+     its own version check. A kept enabled legacy binding re-saved enabled is not a transition:
+     no stamp, the name wire, no refusal. A saved disable followed by a re-enable of an unmarked
+     Home binding is a new transition, and J1 decides it; 5F.0 already refuses this. Local
+     logging never waits on the check.
+     *Failing tests (RED first; each names the rule it proves):*
+     - Support, F4 (`internal/forwarding/smcloud` against `httptest`, `internal/archive`,
+       `cmd/smd`):
+       - VS1: classification. Protocol 1 is `supported`; 0 or absent is `unsupported`. A
+         closed listener, an `.invalid` host and a handler held past the bound are `unverified`.
+         An untrusted TLS server is `error`, as are 500, 502, 503 (pending J2), 401, 404, a 3xx,
+         a body cut off after 200, a non-object body, malformed JSON, and an account refused
+         before any request.
+       - VS2: one check per start with an account, whether a managed archive or Home is
+         active, bounded. With no account there is no request and no state. Drain cancels a
+         check in flight, and nothing outlives the node.
+       - VS3: a saved URL change gives `changed` and refuses. A token-only change keeps the
+         result.
+       - VS4: `checking` refuses and never reads as `unverified`.
+       - AG1: the gate matrix in `internal/archive`. Each support state against a managed
+         logbook and an empty non-default Home logbook gives the expected allow or refusal, and
+         the card's support line. Under `unverified` the binding is stamped, and its uploads
+         use the scoped path with no name request (the commit 1/3 fixtures).
+       - AG2: a stamped binding re-enables under `unsupported` and `checking`, keeping its
+         stamp time.
+     - History, F5 (`internal/archive` over `internal/database/sqlite`):
+       - FH1: an empty non-default Home logbook, with no binding or a disabled unmarked one,
+         is enabled and stamped (read back); the view shows no reason.
+       - FH2: one SM Cloud upload row for a live QSO, at each status (pending, in progress,
+         uploaded, failed) and under each name kind (Home's legacy name, the logbook's own
+         binding name, an unbound name), refuses with F5's text, and nothing is written.
+       - FH3: a record on a soft-deleted QSO, and a tombstone's delete row, refuse the same way.
+       - FH4: no records but QSOs (live only; deleted only) refuse with J1's second text.
+       - FH5: a history read that fails refuses with an error and never stamps.
+       - FH6: records from another destination (QRZ) on an empty-of-SM-Cloud logbook. Under
+         J1 these refuse with the second text, since the logbook holds QSOs. This pins the
+         order, not a loophole.
+       - FH7: a QSO written between validation and the stamp makes the save fail whole, with
+         nothing written (a hook between the two).
+       - FH8: a kept enabled legacy binding re-saved enabled gets no stamp and stays on the
+         name wire (`selectWires`).
+       - FH9: a managed logbook holding imported QSOs is enabled and stamped (no history gate).
+       - FH10: Home's default is enabled with no stamp, through the adopter path, as before.
+       - FH11: a reserved, and an adopted, non-default binding refuses re-enable with J4's
+         text and is never stamped.
+     - Stamps before collisions:
+       - SC1: an empty non-default Home logbook whose stored legacy name equals the default's
+         reservation is enabled and stamped; the proposed stamp exempts it.
+       - SC2: the same row with history reports the history refusal, not
+         `binding_name_reserved` (J6).
+       - SC3: a mixed-marker row in the same save is still checked and refuses
+         `binding_name_reserved`; the stamping row is not stamped (whole save).
+       - SC4: a reserved or adopted row in a PUT never carries `StampIdentity`; the database
+         guard from commit 3 stays the second line.
+     - SPA (`frontend/app`, vitest):
+       - UI1: each refusal text (history, uncertain history, checking, unsupported, error,
+         changed, claimed) appears on its row, with the switch disabled while off.
+       - UI2: the SM Cloud card shows the unverified line only under `unverified`.
+       - UI3: `hidden_fields` drops the Cloud logbook name field from a stamped row and an
+         eligible row, and keeps it on a kept legacy row and on Home's default. The save
+         payload never carries `logbook` for those rows.
+       - UI4: the new-logbook form offers SM Cloud in a managed archive when
+         `new_logbook_reason` is empty, and shows the refusal under `checking` or
+         `unsupported`.
+       - AF1/AF2 (Go): `hidden_fields` per row kind; a typed or cleared legacy name on such a row
+         refuses `binding_field_unused`.
+     - Isolation, AC 6 push half (`cmd/smd` against `sm-pg`):
+       - EI1: two managed archives with equal labels, equal logbook names and the same callsign,
+         each activated in turn. In each, the binding is enabled and stamped, and a QSO is
+         logged and pushed. The cloud holds two archives and two logbooks. Each scoped manifest
+         lists only its own QSO, each reconcile is in sync, and there are no name-path requests.
+       - EI2: a QSO UUID of one archive, pushed for the other, refuses as an archive conflict
+         and lands in neither. This characterizes the server rule from 5F.1 on the daemon's
+         path.
+     *Docs in the commit:* `api-endpoints.md` (the support object, `hidden_fields`, the
+     refusal texts, `binding_field_unused`). The manual (`install.md`): a first enable backfills
+     the whole local logbook through the reconciler's capped batches; credentials for another
+     tenant fill that tenant's backup, again with the whole logbook; an unverified server keeps
+     rows queued; a non-default Home logbook that already holds QSOs needs manual recovery.
+     `smcloud-deploy.md` only if its verify step changes. No config change, so `config.md` is
+     untouched.
+     *Not proved by this commit:* the station drill (operator-run) and the identity wire's
+     direct proof (next on-air QSO). The manual recovery path stays undesigned (ADR 0092
+     trigger).
+     **5F.4 commit 4 rulings (operator, 2026-10-12).** Proceed to RED tests, amended as below.
+     - (J1) Empty-only conversion approved. Both refusal texts, the transactional recheck and the
+       managed-archive exemption stay. Two sequence guards are added before the gate lifts:
+       - *Running generation.* Conversion is refused while the running generation still has the
+         binding enabled on the name wire. Otherwise this happens: an empty legacy binding starts
+         enabled, a disable is saved, an enable is saved without a restart, the stamp succeeds,
+         and a new QSO still uploads by name, because routing and the workers keep their startup
+         snapshot (`cmd/smd/lifecycle_adapters.go:450`). A saved disable must take effect through
+         a restart before conversion, and history is then checked again.
+       - *Legacy restore.* `smd restore` checks only that the target logbook exists, then inserts
+         (`cmd/smd/restore.go:184`). An empty Home logbook could be stamped, receive restored
+         legacy UUIDs, and later move cloud rows through edits. For this commit a legacy restore
+         into a stamped Home target is refused, enabled or disabled, until identity-aware
+         restore in 5F.5.
+     - (J2) Strict classification approved; 502, 503 and 504 refuse. A proxy's HTTP response is
+       still a response. Having no status is necessary but not enough: only the identified
+       transport failures allow. TLS verification failures, malformed protocol responses,
+       configuration faults and unknown errors never become `unverified`. Drain cancellation
+       never publishes an allowing result. The adopter's own classifications stay unchanged.
+     - (J3) The existing 10 s bound and the proposed states are approved. The check runs
+       asynchronously under the existing lifecycle and never delays local logging. A token-only
+       change keeps the support result, but account validation still applies. Only clean
+       born-identity bindings bypass support on re-enable. The unverified text says uploads
+       retry until a supporting server is available, not "until it answers": an old server can
+       answer.
+     - (J4) Approved for clean reserved or adopted bindings. Bindings already enabled stay
+       unchanged. Mixed identity and adoption markers keep H2's manual-recovery diagnosis and
+       name protection; "make its logbook the default" is never offered as their repair.
+     - (J5) Approved, with marker precedence. A stamped binding stays hidden and omitted even
+       after its logbook becomes Home's default. "Home's default shows the field" applies only
+       where the adoption rules allow it; reserved or adopted fields stay locked. Hidden fields
+       are removed from stale drafts and removal lists before submission.
+     - (J6) Approved, with the running-generation guard. The order is account, then the claim
+       and conflict rules, then history, then the running-generation guard, then support, then
+       collision, counting only qualifying proposed stamps. Disabling a binding must stay
+       possible, and history refusals come before name-collision refusals.
+     - Added cases:
+       - FH12: a legacy binding enabled at start has a disable saved and is re-enabled before a
+         restart. The enable is refused without stamping; after the restart an empty binding
+         qualifies.
+       - FH13: a legacy restore into a stamped Home target refuses before inserting any QSO,
+         including when its binding is disabled.
+       - VS1/VS2 add 504, separate a timeout before the headers from a timeout reading the body,
+         and prove a drain cancellation cannot become `unverified`. DNS tests use no external
+         DNS.
+       - UI3/AF: a stamped binding that later becomes the default stays hidden, and stale typed
+         or cleared values cannot survive a refresh into the hidden state.
+       - EI2: the original stays unchanged in the source archive, and the refused write changes
+         nothing in the target (replacing "lands in neither").
+     - Docs scope corrected:
+       - The embedded manual's forwarding chapter (`manual/content/chapters/forwarding.md:137`)
+         and archive chapter (`manual/content/chapters/qso-archives.md:54`) change too, or their
+         old gates stay visible. The forwarding chapter's claims that re-enabling never catches
+         up and that backfill is only manual are qualified.
+       - ADR 0092 gains a dated refinement recording the tightened history rule and the
+         alternatives rejected.
+     - W-0017 sub-item A is selected as the separate change after commit 4 (`docs/backlog.md`).
+       A matching failure signature is not a proven root cause.
+     **5F.4 commit 4 RED (2026-10-12; tests and stubs only, no behaviour).** The stubs are
+     signatures that change nothing:
+     - `smcloud.CheckSupport`, `SupportServer` and `SupportResult.For`, with the
+       `SupportState` values.
+     - `sqlite.LogbookSmcloudHistoryWithContext` (returns zero), plus
+       `DestinationUpsert.RequireEmptyLogbook` (ignored).
+     - `archive.Manager.SetSmcloudSupport` (a no-op).
+     - `types` `DestinationBindingView.Support` and `LogbookBindingView.HiddenFields`.
+     - `cmd/smd` `checkSmcloudSupport` and `supportCheck.published`.
+     - SPA `hidden_fields` and `support`, never parsed.
+     With the new tests excluded, the existing suites pass with the stubs (Go packages,
+     `cmd/smd`, and 2,138 SPA tests).
+     - Failing on their intended assertions:
+       - `internal/forwarding/smcloud`: VS1, the 26 classification cases; VS1d; VS3's
+         changed cases.
+       - `internal/archive`: AG1 (12 cases), AG2, FH1–FH7, FH9, FH11 (disabled), FH12,
+         SC1–SC3, AF1, and AF2's hidden cases.
+       - `internal/database/sqlite`: HI1, and MI7's two non-empty cases.
+       - `cmd/smd`: VS2 (Home then managed, and drain), FH12, FH13 (stamped, enabled and
+         disabled), EI1/EI2.
+       - SPA: UI2 and UI3a–d.
+     - Fixture fixes before RED counted:
+       - FH5 and FH7 would have passed under the old gate, which refuses the PUT anyway. Each
+         gained a control (the same save succeeds without the fault) and an assertion that its
+         failure is the history read's error or the transaction's recheck, never a validation
+         refusal.
+       - EI1 first failed in setup (`Create` needs a request key); after the fix it reaches the
+         missing support check.
+     - The `cmd/smd` FH12 and EI1 tests fail first at the missing support result, ahead of
+       their decisive assertions. The archive-level FH12 reaches its own.
+     - Passing before the change, kept as characterizations: FH8, FH10, SC4, DIS, FH11's
+       already-enabled cases, AF2's legacy, default and mixed kinds, MI7's empty-logbook case,
+       VS3's kept cases, VS2's no-account case, FH13's control, UI1 (row reasons render
+       generically), and UI4 (the new-logbook form already follows `new_logbook_reason`).
+     **Fixture corrections (operator source review, 2026-10-12; texts approved as written).**
+     - The FH12 seam answers with the normalized URL of the account it was given; production
+       never treats an empty server as a wildcard (VS3 now asserts that case).
+     - EI2 asserts the cross-archive PUT drew 409 `archive_conflict`, with both manifests
+       unchanged; the recorder decompresses gzip answers.
+     - EI1 runs the on-demand reconcile in each archive and requires one in-sync identity
+       summary (1/1).
+     - VS1d's RED was recorded as an earlier failure ("the check never reached the server"),
+       like lifecycle FH12/EI1; it is proved by reversion below.
+     - The redirect cases send a real `Location` (301, 302, 307, 308) to a responding target,
+       which must receive no request.
+     - FH7 asserts `sqlite.ErrLogbookNotEmpty` and that the injected QSO exists, besides its
+       control and the whole-save rollback (MI7 asserts the sentinel too).
+     - UI3d gained the timed-out save with a stale removal mark: the re-read drops it, and the
+       next request omits it.
+     - W-0017's "Selected" line now agrees with its status.
+     **5F.4 commit 4 built (2026-10-12; not committed).**
+     - Support (`smcloud.CheckSupport`): `GET /v1/version` with no token, no redirect followed,
+       bounded at 10 s. Only a DNS failure, a refused or reset connection, or the deadline before
+       any status is `unverified`; everything else is `error`. A cancelled check returns the
+       cancellation, and `cmd/smd` publishes nothing for it. `SupportResult.For` compares the
+       normalized saved URL, and an empty or unreadable one is `changed`.
+     - `cmd/smd` runs the check in the adoption node on its context and wait group, for any
+       active archive with an account. Until it publishes, the gate reads `checking`. An account
+       saved after a start with none reads `changed`, never "still being checked" (a gap found
+       in self-review; VS2 gained the case).
+     - Restore: `checkRestoreTarget` refuses a stamped Home target before any insert.
+     - Archive (`gate`, `planSmcloud`, `smcloudHidden`, `editRules`): the J6 order, the support
+       line and `new_logbook_reason`, and `hidden_fields`. The stamp and the empty-logbook
+       recheck are planned per row. Proposed stamps count in `candidateBindings`. The
+       package-level `BindingsView`/`applyBindings` run the zero gate (support `checking`).
+     - sqlite: `LogbookSmcloudHistoryWithContext`; the in-transaction recheck returns
+       `ErrLogbookNotEmpty`.
+     - API: `binding_field_unused` maps to 409. It was unmapped, which would have answered 500:
+       found while writing the docs, RED then green in `handler_archive_bindings_test.go`.
+     - SPA: parses `hidden_fields` and `support`. `withoutHidden` keeps hidden keys out of
+       `rowChanged`, `buildRequest`, the timed-out re-read and the eligibility re-read
+       (`#dropHidden`). The form filters hidden fields, and the card shows the muted unverified
+       line.
+     - Maintainability first regressed (`runRestore` +1; the gate's `applyBindings` at 69 over
+       the 60 policy). It was refactored, not re-baselined: `editRules` and
+       `checkRestoreTarget`. Three reversions were re-run on the new shape.
+     - Old gate tests, rewritten or retired:
+       - `TestBindings_SmcloudOnlyOnTheAdoptedArchiveUntil5F` is replaced by
+         `…OnAManagedArchiveFollowsTheSupportCheck`. T7's destination refusal no longer exists;
+         the legacy-archive default enable is kept.
+       - H2 keeps "a refused PUT writes nothing", now refused by the support check. H4 keeps
+         "a saved disable then re-enable is a new enable", now refused by its history. H5
+         names the support reason and gained the supporting-server view. H1 and H3 are
+         unchanged (H3 guards unchanged legacy bindings).
+       - `protectedHome`'s second binding is now a kept enabled legacy one. Renames stay
+         possible there, so every RS4/RS5 collision guarantee keeps its meaning.
+       - "A new binding under the name" is now refused `binding_field_unused`, still writing
+         nothing.
+       - AB2's mixed case collides through a kept legacy binding.
+       - The adoption-node (AW) and reconcile-set (DR) fixtures answer the support check
+         without the network (`quietSupportCheck`). Their fakes and request lists are about the
+         adopter and the aggregate; the extra `/v1/version` made AW's fake close a channel
+         twice and DR1's GET list race.
+       - The SPA 5F.0 F-cases (stale responses, the newest read winning, drafts kept) pass
+         unchanged: they carry a reason string as data.
+     - Reversions, each restored and hash-verified, each failing its named assertion:
+       - S1–S8 (support): any no-status error unverified; a 5xx unverified; redirects
+         followed; a body timeout unverified; a cancelled check unverified; an empty server as
+         a wildcard; the result ignoring the server; a non-numeric protocol unsupported.
+       - Q1–Q4 (sqlite): history counting every destination, or live QSOs only; the recheck
+         seeing live QSOs only; no recheck.
+       - A1–A18 (archive): records not counted; QSOs-without-records clean; no running guard;
+         support ignored; only `supported` allowing; born bindings re-judged; mixed read as a
+         plain claim; claimed bindings off the default re-enabling; Home's default stamped;
+         managed archives history-gated; proposed stamps not counted; support before history;
+         a stamped default showing its field; kept legacy hiding it; no
+         `binding_field_unused`; no recheck asked; the support line on every state;
+         `new_logbook_reason` not computed. A9 fails FH10 at its first assertion (Home's
+         default refused for history instead of the adoption path), not at "never stamped".
+       - C1–C5 (`cmd/smd`): the check in Home only; a drained check publishing; an account
+         saved later reading `checking`; no restore guard; the guard for enabled bindings only.
+       - E1 (the server answering another code: EI2) and E2 (lifecycle FH12 without the
+         running guard).
+       - U1–U7 (SPA): hidden edits counted and sent; the eligibility re-read keeping them; the
+         timed-out re-read keeping them; the field rendered; the support line on every state;
+         `hidden_fields` not carried or not parsed.
+       - Harness slips re-run (not counted as proofs until re-run): S7 first failed to compile,
+         and A15 and U3 had stale anchors (indent, prettier).
+     - Gates, all exit 0:
+       - gofmt (whole tree), `go vet ./...`, `go test ./...`.
+       - The cloud set with `-race` against `sm-pg` (11 packages, sqlite and archive included;
+         re-run after the refactor; EI confirmed run; `sm-pg` stopped).
+       - The SPA: lint, format, svelte-check and 2,146 tests.
+       - Maintainability (0 regressions), `task ci:local` (`frontend/app/dist/index.html`
+         restored), and the context gate.
+     - Docs in this change:
+       - `api-endpoints.md`: the rules in order, `support`, `hidden_fields`, the stamp and
+         recheck, `binding_field_unused`.
+       - The manual: `forwarding.md` (SM Cloud rewritten: identity per logbook, the support
+         check, empty-only conversion, restart after a saved disable, the whole-logbook
+         backfill and the other-tenant warning). Its turn-off and backfill claims are
+         qualified for SM Cloud. `qso-archives.md`: the new-logbook tick and managed archives.
+       - `install.md`: the restore refusal. ADR 0092's dated refinement.
+     - Not proved here: the station drill (operator-run); the identity wire's direct proof (the
+       next on-air QSO). The manual recovery path stays undesigned (ADR 0092 trigger).
+     **Operator review of the build (2026-10-12): two P2s, fixed before commit.**
+     - Support could stay `checking` in an open page, because nothing re-read it.
+       - The Destinations card now re-reads eligibility every 5 s (`SUPPORT_POLL_MS`, the
+         in-progress cadence of ruling B1) while any destination's support reads `checking`.
+         `refreshSupport` is the eligibility read: drafts kept, send order kept, one on the wire.
+       - The new-logbook form re-reads SM Cloud's answer (`refreshSmcloud`) on the same cadence
+         while it reads `checking` and the tab is visible. A load supersedes it, one is on the
+         wire at a time, and drafts are untouched.
+       - Both stop once support settles, and on unmount.
+       - Tests:
+         - SP1–SP3: `checking` to supported, unverified and error (the switch enables, the line
+           appears, the error is named, the drafts stay, the re-reads stop).
+         - SP4: unmount. SP5: a late answer cannot roll back a newer view, and one read is on
+           the wire.
+         - LB1–LB3 (the form store), and LS1–LS3 (the form section: settle, unmount, hidden).
+       - RED: SP1–SP4, LB1–LB2 and LS1 failed on their assertions. SP5 and LB3 failed with a
+         missing method. LS2 and LS3 passed before (nothing polled); P8 and P7 prove them.
+       - Reversions P1–P8, each failing its assertion: no re-read; re-reads going on after
+         settling; several on the wire; the card's interval not cleared; a late form answer
+         applied; `checking` never read; a hidden tab polling; the form's interval not cleared.
+       - P5 first survived: the form's send-order counter was redundant, since a load moves the
+         generation and the in-flight guard stops overlap. The counter was removed and P5
+         re-aimed at the generation check, which it then proves.
+     - The manual still contradicted the rules.
+       - `qso-archives.md` lost its Home-only sentence: archives never share an SM Cloud
+         backup.
+       - `forwarding.md` scopes the server-support and empty-history conditions to a logbook's
+         first move onto its own identity; after that it turns off and on freely. A logbook
+         backed up under its own identity keeps it, with no Cloud logbook name, even as Home's
+         Default, and Home's adoption skips such a Default. The page now says the check result
+         arrives by itself.
+     - Commit split, as ruled:
+       - Code: the code, tests, `api-endpoints.md`, `install.md`, both manual chapters, and the
+         ADR 0092 refinement (it records what the code enforces).
+       - Docs: the W-0021 dossier, `backlog.md` and W-0017.
+     - Gates after the fixes, all exit 0: the SPA (lint, format, svelte-check, 2,157 tests),
+       `task ci:local` (dist restored), maintainability (0 regressions) and the context gate.
+       Go was unchanged by the fixes; its gates and the `-race` cloud set ran after the
+       refactor above.
+     **Operator review, second pass (2026-10-12): one P2 ordering gap, fixed.** A form re-read
+     started during a load shared the load's generation. Its late `checking` answer could
+     overwrite the load's newer one, hiding the SM Cloud option again. LB3 covered only a
+     re-read started before the load. `refreshSmcloud` now does nothing while a load is in
+     flight. LB4 (controlled responses: the re-read starts mid-load, the load answers supported,
+     then the re-read answers checking) was RED, then green. P9 (the guard removed) fails LB4,
+     and P5 re-run still fails LB3: the two orderings need both guards. Gates, all exit 0: the
+     SPA (2,158 tests), `git diff --check`, `task ci:local` (dist restored), maintainability.
+     Code review cleared by the operator. Committed 2026-10-12 as `8400f680` (code, tests,
+     `api-endpoints.md`, `install.md`, both manual chapters, ADR 0092's refinement), then this
+     dossier with the backlog and W-0017 corrections. Still outstanding as acceptance work: the
+     station drill and the identity wire's direct proof on the next on-air QSO.
 
    - **Archive contents (ADR 0084; ruled 2026-09-28).** Settings → Archives lists each
      archive's logbooks under its row, nested on the table's grid (name under Label,

@@ -1,7 +1,7 @@
 # W-0017 — De-flake CI-observed environment-sensitive tests
 
-**Status:** Deferred — adjacent-change work; also fix on next recurrence
-**Selected:** Not selected
+**Status:** Sub-item A selected 2026-10-12 (next after W-0021 5F.4 commit 4); sub-item B fixed in `e7237b3a` (busy handling on the raw test connections)
+**Selected:** Sub-item A, 2026-10-12 (operator), as the change after W-0021 5F.4 commit 4
 **Outcome:** Two tests that flake red only on a loaded/instrumented CI runner become deterministic,
 each proving its original guarantee without leaning on a wall-clock margin.
 
@@ -32,6 +32,12 @@ reruns were stopped after attempt 3: the gate will not go green by retrying, onl
 (INIT → post-INIT READ → bootstrap READ, the last firing only after `Subscribe`). On a loaded runner
 the bootstrap write misses the deadline (`fake did not reach 3 writes within 3s (have 2)`). Already
 widened once (run `31574196491`, 2026-08-12, 1s → 3s) and flaked again at 3s.
+
+**Recurrence (2026-10-12).** CI run `38048543752` (W-0021 5F.4 commit 2, which touched nothing in
+`internal/bridge`) failed in this test alone, with the same text: `fake did not reach 3 writes
+within 3s (have 2)`. That signature meets the recurrence trigger. The operator selected sub-item A
+as the separate change after W-0021 5F.4 commit 4 (ordering in `docs/backlog.md`). The matching
+signature is not a proven root cause; the fix must still establish the cause.
 
 **Acceptance:** replace the timeout-based write-count barrier with a deterministic signal that the
 bootstrap READ has been published to the subscriber (synchronize on `Subscribe` + bootstrap
