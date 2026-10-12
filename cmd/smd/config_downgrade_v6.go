@@ -35,6 +35,13 @@ func rebuildV5Forwarders(path string, data []byte) ([]byte, error) {
 		return nil, fmt.Errorf("%w — the v5 entries are rebuilt from Home's destination bindings, so Home's file must be readable "+
 			"(run this before smd db-downgrade)", err)
 	}
+	// A binding born on SM Cloud identity (ADR 0092) has no v5 shape: rebuilt as
+	// an entry it would upload by name. Refused here, by this command, whatever
+	// the database downgrade would later say.
+	if peek.IdentityStamped > 0 {
+		return nil, fmt.Errorf("the Home archive file holds %d binding(s) born on SM Cloud identity; config v5 has no such binding, "+
+			"and an entry rebuilt from one would upload it by name, so the config cannot go below v6", peek.IdentityStamped)
+	}
 	if !peek.Seeded {
 		if !stripped {
 			return data, nil

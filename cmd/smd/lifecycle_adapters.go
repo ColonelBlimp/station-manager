@@ -913,6 +913,7 @@ type reconcileEntry struct {
 // any, goes to the log under the binding's name.
 const (
 	reconcileFaultHeld       = "uploads are held until adoption is confirmed for the current station account"
+	reconcileFaultConflict   = "conflicting identity and adoption markers; manual recovery required"
 	reconcileFaultUnresolved = "the binding cannot be resolved against a station account"
 	reconcileFaultBuild      = "the reconciler could not be built; the daemon log has the cause"
 )
@@ -947,7 +948,13 @@ func (d *daemon) startReconciler(ctx context.Context) error {
 		route, routed := routes[b.ForwarderName]
 		target, identity := d.wires.targets[b.ForwarderName]
 		_, held := d.wires.held[b.ForwarderName]
+		_, conflict := d.wires.conflicts[b.ForwarderName]
 		switch {
+		case conflict:
+			// Neither a confirmation nor a restart repairs it (ruling H2).
+			e.fault = reconcileFaultConflict
+			d.logger.ErrorWith().Str("forwarder", e.name).
+				Msg("smcloud binding holds both the identity stamp and an adoption marker; its uploads are held until manual recovery")
 		case held:
 			// No reconciliation, periodic or on demand (ruling C3): its repairs
 			// could not leave anyway.

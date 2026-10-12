@@ -680,7 +680,11 @@ seed the file still holds them and is stamped. It refuses, naming the destinatio
 and logbooks and writing nothing, when Home's live logbooks disagree on the state (an unbound logbook
 counts as off) or the bindings hold different credentials, and — without changing
 consent or a binding — when the result would hold `evidence.sync` on with no
-enabled `smcloud` entry, which every older loader refuses. The name is the one
+enabled `smcloud` entry, which every older loader refuses. It also refuses, writing
+nothing, while Home's file holds any binding born on SM Cloud identity (ADR 0092),
+enabled or not and a deleted logbook's included: version 5 has no such binding, and
+an entry rebuilt from it would upload by name. That is this command's own refusal,
+not the database downgrade's (below). The name is the one
 migration 0015 down renames the queue rows to, read with its own query over every
 binding (a deleted logbook's included); an account with no binding at all becomes a
 disabled entry named after its type. Run it before `smd db-downgrade`, which

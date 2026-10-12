@@ -433,7 +433,9 @@ cannot become one version-5 entry per destination: one logbook on and another
 off (a logbook with no binding counts as off), or different credentials on
 different logbooks. It also refuses while evidence sync is on and the SM Cloud
 destination is off, because older builds require SM Cloud enabled for evidence
-sync; it never changes either for you. Make them agree in Settings → Forwarding
+sync; it never changes either for you. It also refuses while Home's file holds
+any binding born on SM Cloud identity (ADR 0092), enabled or not: version 5 has
+no such binding, and an entry rebuilt from one would upload by name. Make them agree in Settings → Forwarding
 (or turn evidence sync off), or restore
 `config.v5.json` — the copy of your version-5 `config.json` that the first
 version-6 start wrote beside it (owner-only, never overwritten). That copy is
@@ -449,7 +451,11 @@ an older build would not enforce the protection, and releasing it is a
 manual recovery step. It refuses a target below 17 while any binding holds
 a confirmed adoption: schema 16 drops the record of which station account
 confirmed it, and a build at 16 would not hold uploads after the account
-changes. Each down step drops what its migration added, so
+changes. It refuses a target below 18 while any binding is born on SM Cloud
+identity (ADR 0092), disabled bindings and deleted logbooks' included: a build
+at 17 would treat it as a legacy binding and upload it by name. (Separately, an
+older daemon cannot open a database at a schema it does not know, which is why
+the database is downgraded at all.) Each down step drops what its migration added, so
 run it only with the daemon stopped and a copy of the database in hand; QSO,
 upload-queue and history rows are kept by every down migration shipped so
 far. The reference and evidence databases are station-global and are never

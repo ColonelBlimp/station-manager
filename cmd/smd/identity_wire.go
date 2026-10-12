@@ -27,6 +27,10 @@ type wireSelection struct {
 	// reconciler uses the same one, never re-derived from configuration.
 	targets map[string]smcloud.IdentityTarget
 	held    map[string]struct{}
+	// conflicts are the held bindings holding both the identity stamp and an
+	// adoption marker (ruling H2): held for manual recovery, not for a
+	// confirmation.
+	conflicts map[string]struct{}
 }
 
 func (w wireSelection) heldNames() []string {
@@ -38,23 +42,36 @@ func (w wireSelection) heldNames() []string {
 	return names
 }
 
-// selectWires decides the wire of every enabled adopted SM Cloud binding from
-// the start snapshot the routes came from, for the archive file being opened.
-// Confirmed for the station account the daemon starts with: the identity
-// forwarder, built now. Adopted otherwise (another account, or none
-// recorded): held, so its uploads stay queued with no name fallback (ADR
-// 0088). A reservation alone changes nothing. A failed construction is an
-// error that stops the start: it never falls back to a legacy worker.
+// selectWires decides the wire of every enabled SM Cloud binding that is
+// adopted or born on identity, from the start snapshot the routes came from,
+// for the archive file being opened. Born on identity (ADR 0092): the identity
+// forwarder, whatever the station account (ruling F3). Adopted and confirmed
+// for the account the daemon starts with: the identity forwarder. Adopted
+// otherwise (another account, or none recorded): held, so its uploads stay
+// queued with no name fallback (ADR 0088). Both markers at once: held as a
+// conflict (ruling H2). A reservation alone changes nothing. A failed
+// construction is an error that stops the start: it never falls back to a
+// legacy worker.
 func selectWires(ctx context.Context, db *sqlite.Service, cfg config.Config, snap destinationSnapshot) (wireSelection, error) {
 	const op errors.Op = "smd.selectWires"
-	sel := wireSelection{identity: map[string]forwarding.Forwarder{}, targets: map[string]smcloud.IdentityTarget{}, held: map[string]struct{}{}}
-	var adopted []types.LogbookDestination
+	sel := wireSelection{identity: map[string]forwarding.Forwarder{}, targets: map[string]smcloud.IdentityTarget{},
+		held: map[string]struct{}{}, conflicts: map[string]struct{}{}}
+	var adopted, born []types.LogbookDestination
 	for _, b := range snap.bindings {
-		if b.Destination == smcloud.Type && b.Enabled && b.RemoteAdoptedAt != nil {
+		if b.Destination != smcloud.Type || !b.Enabled {
+			continue
+		}
+		switch {
+		case archive.IdentityConflict(b):
+			sel.held[b.ForwarderName] = struct{}{}
+			sel.conflicts[b.ForwarderName] = struct{}{}
+		case b.IdentitySince != nil:
+			born = append(born, b)
+		case b.RemoteAdoptedAt != nil:
 			adopted = append(adopted, b)
 		}
 	}
-	if len(adopted) == 0 {
+	if len(adopted) == 0 && len(born) == 0 {
 		return sel, nil
 	}
 	identity, err := db.ArchiveIdentityWithContext(ctx)
@@ -77,13 +94,7 @@ func selectWires(ctx context.Context, db *sqlite.Service, cfg config.Config, sna
 	if e := cfg.QsoArchiveByID(identity.ArchiveUUID); e != nil {
 		label = e.Label
 	}
-	account, accountErr := archive.CurrentAccount(cfg, smcloud.Type, identity.ArchiveUUID)
-	for _, b := range adopted {
-		route, routed := routes[b.ForwarderName]
-		if accountErr != nil || !archive.AdoptionConfirmed(b, account) || !routed {
-			sel.held[b.ForwarderName] = struct{}{}
-			continue
-		}
+	build := func(b types.LogbookDestination, route forwarding.BoundForwarder) error {
 		lb := byID[b.LogbookID]
 		target := smcloud.IdentityTarget{
 			ArchiveUUID: identity.ArchiveUUID, ArchiveLabel: label,
@@ -91,10 +102,31 @@ func selectWires(ctx context.Context, db *sqlite.Service, cfg config.Config, sna
 		}
 		f, err := newIdentityForwarder(route.Config, target)
 		if err != nil {
-			return sel, errors.New(op).WithErr(err).WithMsgf("build the identity forwarder for %q; it is not started on the legacy wire", b.ForwarderName)
+			return errors.New(op).WithErr(err).WithMsgf("build the identity forwarder for %q; it is not started on the legacy wire", b.ForwarderName)
 		}
 		sel.identity[b.ForwarderName] = f
 		sel.targets[b.ForwarderName] = target
+		return nil
+	}
+	// An unresolved born binding has no route, so no worker: it stays as any
+	// unresolved binding does.
+	for _, b := range born {
+		if route, routed := routes[b.ForwarderName]; routed {
+			if err := build(b, route); err != nil {
+				return sel, err
+			}
+		}
+	}
+	account, accountErr := archive.CurrentAccount(cfg, smcloud.Type, identity.ArchiveUUID)
+	for _, b := range adopted {
+		route, routed := routes[b.ForwarderName]
+		if accountErr != nil || !archive.AdoptionConfirmed(b, account) || !routed {
+			sel.held[b.ForwarderName] = struct{}{}
+			continue
+		}
+		if err := build(b, route); err != nil {
+			return sel, err
+		}
 	}
 	return sel, nil
 }

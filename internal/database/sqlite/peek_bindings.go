@@ -35,6 +35,10 @@ type PeekedBindings struct {
 	// SELECT over ALL bindings, a soft-deleted logbook's included, so a v5
 	// entry rebuilt under it drains exactly those rows (codex P1 on 52077508).
 	CollapseTargets map[string]string
+	// IdentityStamped counts every binding marked born on SM Cloud identity
+	// (ADR 0092), enabled or not and a deleted logbook's included; 0 on a file
+	// below log schema 18, which has no such column.
+	IdentityStamped int
 }
 
 // PeekDestinationBindings reads an archive file's identity, seed marker, live
@@ -89,7 +93,21 @@ func PeekDestinationBindings(path string) (PeekedBindings, error) {
 	if out.CollapseTargets, err = peekCollapseTargets(ctx, db); err != nil {
 		return PeekedBindings{}, errors.New(op).WithErr(err)
 	}
+	if out.IdentityStamped, err = peekIdentityStamped(ctx, db); err != nil {
+		return PeekedBindings{}, errors.New(op).WithErr(err)
+	}
 	return out, nil
+}
+
+// peekIdentityStamped counts the stamped bindings, all of them; a file below
+// schema 18 has no identity_since column and none.
+func peekIdentityStamped(ctx context.Context, db *sql.DB) (int, error) {
+	var n int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('logbook_destination') WHERE name = 'identity_since'`).Scan(&n); err != nil || n == 0 {
+		return 0, err
+	}
+	err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM logbook_destination WHERE identity_since IS NOT NULL`).Scan(&n)
+	return n, err
 }
 
 // peekCollapseTargets runs migration 0015 down's target SELECT read-only (keep

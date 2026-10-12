@@ -47,7 +47,7 @@ func (s *Service) ListLogbookDestinationsWithContext(ctx context.Context) ([]typ
 	defer cancel()
 	rows, err := h.QueryContext(ctx, `
 		SELECT d.id, d.logbook_id, d.destination, d.forwarder_name, d.enabled, d.credentials,
-		       d.remote_adopted_at, d.adoption_reserved_at, d.remote_adopted_account, d.legacy_name, d.created_at, d.modified_at
+		       d.remote_adopted_at, d.adoption_reserved_at, d.remote_adopted_account, d.identity_since, d.legacy_name, d.created_at, d.modified_at
 		FROM logbook_destination d
 		         JOIN logbook l ON l.id = d.logbook_id
 		WHERE l.deleted_at IS NULL
@@ -65,10 +65,11 @@ func (s *Service) ListLogbookDestinationsWithContext(ctx context.Context) ([]typ
 			adopted  sql.NullTime
 			reserved sql.NullTime
 			account  sql.NullString
+			identity sql.NullTime
 			legacy   sql.NullString
 			modified sql.NullTime
 		)
-		if err := rows.Scan(&d.ID, &d.LogbookID, &d.Destination, &d.ForwarderName, &enabled, &creds, &adopted, &reserved, &account, &legacy, &d.CreatedAt, &modified); err != nil {
+		if err := rows.Scan(&d.ID, &d.LogbookID, &d.Destination, &d.ForwarderName, &enabled, &creds, &adopted, &reserved, &account, &identity, &legacy, &d.CreatedAt, &modified); err != nil {
 			return nil, errors.New(op).WithErr(err).WithMsg("scan logbook destination")
 		}
 		d.Enabled = enabled == 1
@@ -76,6 +77,7 @@ func (s *Service) ListLogbookDestinationsWithContext(ctx context.Context) ([]typ
 			d.Credentials = json.RawMessage(creds.String)
 		}
 		d.RemoteAdoptedAt, d.AdoptionReservedAt, d.RemoteAdoptedAccount = timePtr(adopted), timePtr(reserved), account.String
+		d.IdentitySince = timePtr(identity)
 		if legacy.Valid {
 			d.LegacyName = legacy.String
 		}
@@ -261,12 +263,23 @@ type DestinationUpsert struct {
 	ForwarderName string
 	Enabled       bool
 	Credentials   json.RawMessage
+	// StampIdentity marks the binding born on SM Cloud identity in the same
+	// save (ADR 0092). No production caller sets it before W-0021 5F.4
+	// commit 4.
+	StampIdentity bool
 }
 
 // UpsertLogbookDestinationsWithContext writes every row in ONE transaction:
 // all or none (ADR 0082 part 9 — the PUT validates the complete candidate
 // first and commits atomically). forwarder_name is never changed on an
-// existing row.
+// existing row, and no row's identity_since is ever cleared.
+//
+// A row with StampIdentity also marks its binding born on SM Cloud identity
+// (ADR 0092) in the same transaction, judged on the stored row inside it: an
+// enabled SM Cloud binding with no adoption reservation or adoption. Any other
+// row refuses the whole save. An existing stamp keeps its time. A save that
+// stamps commits like an adoption's confirmation (durableTx): the stamp is a
+// permanent wire decision.
 func (s *Service) UpsertLogbookDestinationsWithContext(ctx context.Context, rows []DestinationUpsert) error {
 	const op errors.Op = "sqlite.Service.UpsertLogbookDestinationsWithContext"
 	if err := checkService(op, s); err != nil {
@@ -275,12 +288,28 @@ func (s *Service) UpsertLogbookDestinationsWithContext(ctx context.Context, rows
 	if len(rows) == 0 {
 		return nil
 	}
+	write := func(ctx context.Context, tx *sql.Tx) error { return upsertDestinations(ctx, op, tx, rows) }
+	for _, r := range rows {
+		if r.StampIdentity {
+			return s.durableTx(ctx, op, "write bindings", write)
+		}
+	}
 	tx, cancel, err := s.BeginTxContext(ctx)
 	if err != nil {
 		return errors.New(op).WithErr(err)
 	}
 	defer cancel()
 	defer func() { _ = tx.Rollback() }()
+	if err := write(ctx, tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("commit bindings")
+	}
+	return nil
+}
+
+func upsertDestinations(ctx context.Context, op errors.Op, tx *sql.Tx, rows []DestinationUpsert) error {
 	for _, r := range rows {
 		enabled := 0
 		if r.Enabled {
@@ -300,9 +329,21 @@ func (s *Service) UpsertLogbookDestinationsWithContext(ctx context.Context, rows
 			r.LogbookID, r.Destination, r.ForwarderName, enabled, creds); err != nil {
 			return errors.New(op).WithErr(err).WithMsgf("write %s binding for logbook %d", r.Destination, r.LogbookID)
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("commit bindings")
+		if !r.StampIdentity {
+			continue
+		}
+		res, err := tx.ExecContext(ctx, `
+			UPDATE logbook_destination SET identity_since = COALESCE(identity_since, datetime('now'))
+			WHERE logbook_id = ? AND destination = ? AND destination = 'smcloud' AND enabled = 1
+			  AND adoption_reserved_at IS NULL AND remote_adopted_at IS NULL`,
+			r.LogbookID, r.Destination)
+		if err != nil {
+			return errors.New(op).WithErr(err).WithMsgf("mark the %s binding for logbook %d born on identity", r.Destination, r.LogbookID)
+		}
+		if n, err := res.RowsAffected(); err != nil || n != 1 {
+			return errors.New(op).WithErr(err).WithMsgf("the %s binding for logbook %d cannot be marked born on SM Cloud identity: "+
+				"only an enabled SM Cloud binding with no adoption reservation or adoption can", r.Destination, r.LogbookID)
+		}
 	}
 	return nil
 }
@@ -328,7 +369,7 @@ func (s *Service) RecordLogbookDestinationAdoptedWithContext(ctx context.Context
 	return s.durableUpdate(ctx, op, "record adoption", `
 		UPDATE logbook_destination SET remote_adopted_at = datetime('now'), remote_adopted_account = ?
 		WHERE forwarder_name = ? AND logbook_id = ? AND enabled = 1 AND credentials IS ?
-		  AND adoption_reserved_at IS NOT NULL
+		  AND adoption_reserved_at IS NOT NULL AND identity_since IS NULL
 		  AND (remote_adopted_at IS NULL OR remote_adopted_account IS NOT ?)
 		  AND logbook_id IN (SELECT id FROM logbook WHERE deleted_at IS NULL)`,
 		account, forwarderName, logbookID, credentialsArg(credentials), account)
@@ -349,7 +390,7 @@ func (s *Service) ReserveLogbookDestinationAdoptionWithContext(ctx context.Conte
 	}
 	return s.durableUpdate(ctx, op, "reserve adoption", `
 		UPDATE logbook_destination SET adoption_reserved_at = COALESCE(adoption_reserved_at, datetime('now'))
-		WHERE forwarder_name = ? AND logbook_id = ? AND enabled = 1 AND credentials IS ?
+		WHERE forwarder_name = ? AND logbook_id = ? AND enabled = 1 AND credentials IS ? AND identity_since IS NULL
 		  AND (remote_adopted_at IS NULL OR remote_adopted_account IS NOT ?)
 		  AND logbook_id IN (SELECT id FROM logbook WHERE deleted_at IS NULL)`,
 		forwarderName, logbookID, credentialsArg(credentials), account)
@@ -362,56 +403,68 @@ func credentialsArg(credentials json.RawMessage) any {
 	return string(credentials)
 }
 
-// durableUpdate runs one UPDATE that must survive a power loss once it is
-// reported (ADR 0091: an adoption's reservation and its confirmation), and
-// reports whether it changed exactly one row. The pool runs WAL with
+// durableUpdate runs one UPDATE through durableTx and reports whether it
+// changed exactly one row.
+func (s *Service) durableUpdate(ctx context.Context, op errors.Op, what, query string, args ...any) (bool, error) {
+	var n int64
+	err := s.durableTx(ctx, op, what, func(ctx context.Context, tx *sql.Tx) error {
+		r, err := tx.ExecContext(ctx, query, args...)
+		if err != nil {
+			return errors.New(op).WithErr(err).WithMsg(what)
+		}
+		if n, err = r.RowsAffected(); err != nil {
+			return errors.New(op).WithErr(err).WithMsg(what)
+		}
+		return nil
+	})
+	return err == nil && n == 1, err
+}
+
+// durableTx runs one transaction that must survive a power loss once it is
+// reported (ADR 0091: an adoption's reservation and its confirmation; ADR
+// 0092: a binding's identity stamp). The pool runs WAL with
 // synchronous=NORMAL, under which a committed transaction may roll back after a
 // power failure or an OS crash (sqlite.org, PRAGMA synchronous). So the write
 // runs on one pinned connection set to FULL before its transaction begins, the
 // setting is read back inside the transaction, and the connection is set back
 // to NORMAL afterwards. Any failure before the commit writes nothing.
-func (s *Service) durableUpdate(ctx context.Context, op errors.Op, what, query string, args ...any) (bool, error) {
+func (s *Service) durableTx(ctx context.Context, op errors.Op, what string, write func(context.Context, *sql.Tx) error) error {
 	h, err := s.getOpenHandle(op)
 	if err != nil {
-		return false, err
+		return err
 	}
 	ctx, cancel := s.ensureCtxTimeout(ctx)
 	defer cancel()
 	conn, err := h.Conn(ctx)
 	if err != nil {
-		return false, errors.New(op).WithErr(err).WithMsg("pin a connection")
+		return errors.New(op).WithErr(err).WithMsg("pin a connection")
 	}
 	defer func() { _ = conn.Close() }()
 	if err := setSynchronous(ctx, conn, "FULL"); err != nil {
-		return false, errors.New(op).WithErr(err).WithMsg("set synchronous=FULL")
+		return errors.New(op).WithErr(err).WithMsg("set synchronous=FULL")
 	}
 	// Restored whatever happens, so the pooled connection goes back at the
 	// pool's setting. A failed restore leaves it at FULL, which is only slower.
 	defer func() { _ = setSynchronous(context.WithoutCancel(ctx), conn, "NORMAL") }()
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
-		return false, errors.New(op).WithErr(err).WithMsg("begin")
+		return errors.New(op).WithErr(err).WithMsg("begin")
 	}
 	defer func() { _ = tx.Rollback() }()
 	var level int
 	if err := tx.QueryRowContext(ctx, `PRAGMA synchronous`).Scan(&level); err != nil {
-		return false, errors.New(op).WithErr(err).WithMsg("read synchronous")
+		return errors.New(op).WithErr(err).WithMsg("read synchronous")
 	}
 	if level != synchronousFull {
-		return false, errors.New(op).WithMsgf("the connection runs synchronous=%d, not FULL; nothing was written (%s)", level, what)
+		return errors.New(op).WithMsgf("the connection runs synchronous=%d, not FULL; nothing was written (%s)", level, what)
 	}
-	r, err := tx.ExecContext(ctx, query, args...)
-	if err != nil {
-		return false, errors.New(op).WithErr(err).WithMsg(what)
-	}
-	n, err := r.RowsAffected()
-	if err != nil {
-		return false, errors.New(op).WithErr(err).WithMsg(what)
+	if err := write(ctx, tx); err != nil {
+		return err
 	}
 	if err := tx.Commit(); err != nil {
-		return false, errors.New(op).WithErr(err).WithMsg("commit: " + what)
+		return errors.New(op).WithErr(err).WithMsg("commit: " + what)
 	}
-	return n == 1, nil
+	return nil
 }
 
 // synchronousFull is PRAGMA synchronous's value for FULL.
@@ -440,7 +493,7 @@ func (s *Service) ListAdoptionClaimsWithContext(ctx context.Context) ([]types.Lo
 	ctx, cancel := s.ensureCtxTimeout(ctx)
 	defer cancel()
 	rows, err := h.QueryContext(ctx, `
-		SELECT id, logbook_id, destination, forwarder_name, enabled, credentials, adoption_reserved_at, remote_adopted_at, remote_adopted_account
+		SELECT id, logbook_id, destination, forwarder_name, enabled, credentials, adoption_reserved_at, remote_adopted_at, remote_adopted_account, identity_since
 		FROM logbook_destination
 		WHERE adoption_reserved_at IS NOT NULL OR remote_adopted_at IS NOT NULL
 		ORDER BY id`)
@@ -456,8 +509,9 @@ func (s *Service) ListAdoptionClaimsWithContext(ctx context.Context) ([]types.Lo
 			creds             sql.NullString
 			reserved, adopted sql.NullTime
 			account           sql.NullString
+			identity          sql.NullTime
 		)
-		if err := rows.Scan(&d.ID, &d.LogbookID, &d.Destination, &d.ForwarderName, &enabled, &creds, &reserved, &adopted, &account); err != nil {
+		if err := rows.Scan(&d.ID, &d.LogbookID, &d.Destination, &d.ForwarderName, &enabled, &creds, &reserved, &adopted, &account, &identity); err != nil {
 			return nil, errors.New(op).WithErr(err).WithMsg("scan adoption claim")
 		}
 		d.Enabled = enabled == 1
@@ -465,6 +519,7 @@ func (s *Service) ListAdoptionClaimsWithContext(ctx context.Context) ([]types.Lo
 			d.Credentials = json.RawMessage(creds.String)
 		}
 		d.AdoptionReservedAt, d.RemoteAdoptedAt, d.RemoteAdoptedAccount = timePtr(reserved), timePtr(adopted), account.String
+		d.IdentitySince = timePtr(identity)
 		out = append(out, d)
 	}
 	if err := rows.Err(); err != nil {

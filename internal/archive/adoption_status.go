@@ -62,9 +62,11 @@ const (
 	UploadsHeldWaiting         = "waiting_for_confirmation"
 	UploadsHeldRestart         = "restart_required"
 	UploadsHeldDisabled        = "disabled"
+	UploadsHeldConflict        = "conflicting_markers"
 	uploadsHeldWaitingMessage  = "Uploads are held until adoption is confirmed for the current station account."
 	uploadsHeldRestartMessage  = "Uploads resume after a restart."
 	uploadsHeldDisabledMessage = "Uploads are held; this binding is off, so its queued uploads are discarded at the next restart."
+	uploadsHeldConflictMessage = "Uploads are held: this binding carries conflicting identity and adoption markers; manual recovery is required."
 )
 
 // SetHeldUploads names the bindings this generation started held (cmd/smd,
@@ -124,6 +126,8 @@ func (m *Manager) annotateAdoption(ctx context.Context, db BindingsDB, cfg confi
 
 func adoptionOf(b types.LogbookDestination, sub AdoptionSubject, status func() AdoptionStatus, started types.LogbookDestination) *types.BindingAdoptionView {
 	switch {
+	case IdentityConflict(b):
+		return nil // its hold line says what is wrong; no adoption step repairs it
 	case AdoptionConfirmed(b, sub.Account) && AdoptionConfirmed(started, sub.Account):
 		return &types.BindingAdoptionView{State: AdoptionStateAdopted, Message: adoptionMessageAdopted}
 	case AdoptionConfirmed(b, sub.Account):
@@ -146,6 +150,10 @@ func adoptionOf(b types.LogbookDestination, sub AdoptionSubject, status func() A
 // current account is recorded, then restart required; once disabled and
 // saved, its queued uploads are discarded at the next start instead.
 func uploadsHeldOf(cfg config.Config, b types.LogbookDestination) *types.BindingAdoptionView {
+	// Neither a confirmation nor a restart repairs a conflict (ruling H2).
+	if IdentityConflict(b) {
+		return &types.BindingAdoptionView{State: UploadsHeldConflict, Message: uploadsHeldConflictMessage}
+	}
 	if !b.Enabled {
 		return &types.BindingAdoptionView{State: UploadsHeldDisabled, Message: uploadsHeldDisabledMessage}
 	}

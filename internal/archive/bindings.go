@@ -39,7 +39,8 @@ func FingerprintBindings(bindings []types.LogbookDestination) BindingFingerprint
 	fp := make(BindingFingerprint, len(bindings))
 	for _, b := range bindings {
 		sum := sha256.Sum256(b.Credentials)
-		fp[b.ForwarderName] = fmt.Sprintf("%v:%s:%v:%s", b.Enabled, hex.EncodeToString(sum[:8]), b.RemoteAdoptedAt != nil, b.RemoteAdoptedAccount)
+		fp[b.ForwarderName] = fmt.Sprintf("%v:%s:%v:%s:%v", b.Enabled, hex.EncodeToString(sum[:8]), b.RemoteAdoptedAt != nil, b.RemoteAdoptedAccount,
+			b.IdentitySince != nil)
 	}
 	return fp
 }
@@ -661,6 +662,20 @@ func adoptionKeys(td forwarding.TypeDescriptor) []string {
 	return keys
 }
 
+// BornOnIdentity reports a binding born on SM Cloud identity (ADR 0092) and
+// holding no adoption marker: it uploads by UUID, and its legacy cloud name
+// means nothing.
+func BornOnIdentity(b types.LogbookDestination) bool {
+	return b.IdentitySince != nil && !adoptionClaimed(b)
+}
+
+// IdentityConflict reports a binding holding both the identity stamp and an
+// adoption reservation or adoption, which no build writes: it is held, with
+// its own reason, until manual recovery (ruling H2).
+func IdentityConflict(b types.LogbookDestination) bool {
+	return b.IdentitySince != nil && adoptionClaimed(b)
+}
+
 // adoptionClaimed reports a binding reserved for, or recorded with, an
 // adoption: from then on its adoption key is fixed (ADR 0090 T6, ADR 0091).
 func adoptionClaimed(b types.LogbookDestination) bool {
@@ -698,7 +713,10 @@ func refuseProtectedNames(ctx context.Context, db BindingsDB, stored []types.Log
 	}
 	for _, c := range candidateBindings(stored, rows) {
 		names := protected[c.Destination]
-		if len(names) == 0 {
+		// A clean born-identity binding uploads by UUID; its absent name would
+		// read as "main" and collide for nothing (ruling F1). A binding with
+		// mixed markers is not clean, and keeps every legacy rule.
+		if len(names) == 0 || BornOnIdentity(c) {
 			continue
 		}
 		td, _ := forwarding.DescriptorFor(c.Destination)
@@ -812,7 +830,7 @@ func stillAsRead(bindings []types.LogbookDestination, pin AdoptionPin) bool {
 	read := pin.Binding
 	for _, b := range bindings {
 		if b.ForwarderName == read.ForwarderName {
-			return b.LogbookID == read.LogbookID && b.Destination == read.Destination && b.Enabled &&
+			return b.LogbookID == read.LogbookID && b.Destination == read.Destination && b.Enabled && b.IdentitySince == nil &&
 				!AdoptionConfirmed(b, pin.Account) && bytes.Equal(b.Credentials, read.Credentials)
 		}
 	}

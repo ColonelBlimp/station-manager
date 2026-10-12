@@ -259,3 +259,36 @@ func TestConfigDowngradeV6_D11_EvidenceSyncNeedsSmcloudOnInV5(t *testing.T) {
 		t.Fatalf("D12: smcloud = %v; want it enabled", e["smcloud"])
 	}
 }
+
+// W-0021 5F.4 commit 3 (ADR 0092; operator ruling 2026-10-10). CD1: while
+// Home's file holds a binding born on SM Cloud identity — enabled, disabled,
+// or a deleted logbook's — config-downgrade refuses, writing nothing: a v5
+// entry rebuilt from it would upload by name. This is its own guarantee, not
+// the database downgrade's refusal below schema 18 (an older daemon cannot
+// open a schema-18 file at all). CD2: a pre-18 Home file, with no
+// identity_since column, still rebuilds.
+func TestConfigDowngradeV6_CD1_RefusedWhileABindingIsBornOnIdentity(t *testing.T) {
+	for name, stmts := range map[string][]string{
+		"enabled":  {smcHomeOn, `UPDATE logbook_destination SET identity_since = datetime('now') WHERE destination = 'smcloud'`},
+		"disabled": {smcHome, `UPDATE logbook_destination SET identity_since = datetime('now') WHERE destination = 'smcloud'`},
+		"a deleted logbook's": {second, `INSERT INTO logbook_destination (logbook_id, destination, forwarder_name, enabled, identity_since)
+			VALUES (2, 'smcloud', 'smcloud.second', 1, datetime('now'))`, `UPDATE logbook SET deleted_at = datetime('now') WHERE id = 2`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := downgradeBed(t, nil, append([]string{seeded, qrzHome}, stmts...)...)
+			assertRefusedUnchanged(t, "CD1 "+name, path, downgradeTo5(t, path), "SM Cloud identity")
+		})
+	}
+}
+
+func TestConfigDowngradeV6_CD2_APre18HomeFileStillRebuilds(t *testing.T) {
+	path := downgradeBed(t, nil, seeded, qrzHome, smcHome, `ALTER TABLE logbook_destination DROP COLUMN identity_since`)
+	if err := downgradeTo5(t, path); err != nil {
+		t.Fatalf("CD2: %v", err)
+	}
+	if v, e := entriesOf(t, path); v != 5 || e["smcloud"]["name"] != "cloud-home" {
+		t.Fatalf("CD2: version %d, smcloud %v", v, e["smcloud"])
+	}
+}
+
+const smcHomeOn = `INSERT INTO logbook_destination (logbook_id, destination, forwarder_name, enabled, credentials, legacy_name) VALUES (1, 'smcloud', 'cloud-home', 1, '{"logbook":"d-book"}', 'cloud-home')`

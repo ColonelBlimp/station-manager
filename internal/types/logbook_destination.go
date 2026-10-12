@@ -38,6 +38,10 @@ type LogbookDestination struct {
 	// confirmation belongs to (ADR 0091): a verifier derived from the token,
 	// so it is never served. A confirmation counts only for that account.
 	RemoteAdoptedAccount string `json:"-"`
+	// IdentitySince marks a binding born on SM Cloud identity (ADR 0092): it
+	// uploads by UUID from its first upload and is never adopted. Written with
+	// the qualifying enable, never cleared. nil for every other binding.
+	IdentitySince *time.Time `json:"identity_since,omitempty"`
 	// LegacyName is the config.json forwarder name a seeded binding derives
 	// from — the one name an older, config-driven build drains — so a
 	// downgrade collapses to it rather than inferring it. Empty for a binding

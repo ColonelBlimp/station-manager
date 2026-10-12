@@ -198,7 +198,9 @@ func (a *Adopter) target(ctx context.Context) (target, bool, error) {
 		}
 	}
 	for _, b := range bindings {
-		if b.Destination == smcloud.Type && b.LogbookID == cfg.DefaultLogbookID && b.Enabled {
+		// A binding born on identity is never adopted (ADR 0092), even once its
+		// logbook becomes the default; the reservation write refuses it too.
+		if b.Destination == smcloud.Type && b.LogbookID == cfg.DefaultLogbookID && b.Enabled && b.IdentitySince == nil {
 			t.binding = b
 		}
 	}

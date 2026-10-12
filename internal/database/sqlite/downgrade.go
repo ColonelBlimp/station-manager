@@ -58,6 +58,9 @@ func (s *Service) DowngradeLogSchemaTo(target uint) (from uint, err error) {
 	if target >= current {
 		return current, errors.New(op).WithMsgf("target version %d is not below the current version %d (down only)", target, current)
 	}
+	if err := s.refuseErasingIdentityStamps(op, current, target); err != nil {
+		return current, err
+	}
 	if err := s.refuseErasingAdoptionClaims(op, current, target); err != nil {
 		return current, err
 	}
@@ -72,7 +75,20 @@ func (s *Service) DowngradeLogSchemaTo(target uint) (from uint, err error) {
 const (
 	adoptionReservationVersion = 16
 	adoptionAccountVersion     = 17
+	identitySinceVersion       = 18
 )
+
+// refuseErasingIdentityStamps refuses a downgrade below 18 while any binding
+// is marked born on SM Cloud identity (ADR 0092): a schema-17 build would
+// treat it as a legacy binding and upload it by name. Disabled bindings and
+// deleted logbooks' count: the stamp is never cleared, so neither releases it.
+func (s *Service) refuseErasingIdentityStamps(op errors.Op, current, target uint) error {
+	if current < identitySinceVersion || target >= identitySinceVersion {
+		return nil
+	}
+	return s.refuseWhileAny(op, `identity_since IS NOT NULL`,
+		"are born on SM Cloud identity; a downgrade below schema %d would leave them uploading by name", identitySinceVersion)
+}
 
 // refuseErasingAdoptionClaims refuses a downgrade below 16 while any binding
 // holds an adoption reservation or a recorded adoption (ADR 0091): 0016's down

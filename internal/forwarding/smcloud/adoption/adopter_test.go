@@ -204,6 +204,9 @@ type spyArchive struct {
 	judgements int
 	reserveErr error
 	recordErr  error // once
+	// duringJudge, when set, runs inside the reservation's judgement: a change
+	// that lands after the attempt read the binding and before its write.
+	duringJudge func()
 }
 
 func (s *spyArchive) ReserveAdoption(ctx context.Context, pin archive.AdoptionPin, judge func(context.Context) (string, error)) (archive.ReserveOutcome, string, error) {
@@ -216,7 +219,11 @@ func (s *spyArchive) ReserveAdoption(ctx context.Context, pin archive.AdoptionPi
 	return s.m.ReserveAdoption(ctx, pin, func(ctx context.Context) (string, error) {
 		s.mu.Lock()
 		s.judgements++
+		hook := s.duringJudge
 		s.mu.Unlock()
+		if hook != nil {
+			hook()
+		}
 		return judge(ctx)
 	})
 }
@@ -1269,5 +1276,53 @@ func TestAdopter_AD11_ReviewFindings(t *testing.T) {
 			t.Fatalf("requests after a read failure and recovery: %v; want none (inputs unchanged)", got[n:])
 		}
 		s.wantStatus("unauthorized", msgUnauth)
+	})
+}
+
+// ---- AD9 -------------------------------------------------------------------
+
+// AD9 (W-0021 5F.4 commit 3; ADR 0092; operator ruling 2026-10-10): a binding
+// born on identity is never adopted — not as Home's default, not after the
+// default moves onto it, and not by an attempt that read it before the stamp
+// landed (the reservation write refuses it).
+func TestAdopter_AD9_BornIdentityIsNeverAdopted(t *testing.T) {
+	const stamp = `UPDATE logbook_destination SET identity_since = datetime('now') WHERE logbook_id = ?`
+	t.Run("a stamped default binding", func(t *testing.T) {
+		s := newStation(t)
+		s.exec(stamp, s.main)
+		s.check()
+		if got := s.cloud.seen(); len(got) != 0 {
+			t.Fatalf("requests = %v; want none", got)
+		}
+		if b := s.binding(s.main); b.AdoptionReservedAt != nil || b.RemoteAdoptedAt != nil {
+			t.Fatalf("binding = %+v; want no adoption marker", b)
+		}
+		s.wantStatus("", "")
+	})
+	t.Run("the default moved onto a stamped binding", func(t *testing.T) {
+		s := newStation(t)
+		s.exec(`INSERT INTO logbook_destination (logbook_id, destination, forwarder_name, enabled, identity_since)
+			VALUES (?, 'smcloud', 'cloud2', 1, datetime('now'))`, s.second)
+		s.update(func(c *config.Config) { c.DefaultLogbookID = s.second })
+		s.check()
+		if got := s.cloud.seen(); len(got) != 0 {
+			t.Fatalf("requests = %v; want none", got)
+		}
+		if b := s.binding(s.second); b.AdoptionReservedAt != nil || b.RemoteAdoptedAt != nil {
+			t.Fatalf("binding = %+v; want no adoption marker", b)
+		}
+	})
+	t.Run("stamped after the attempt read it", func(t *testing.T) {
+		s := newStation(t)
+		s.arch.duringJudge = func() { s.exec(stamp, s.main) }
+		s.check()
+		for _, r := range s.cloud.seen() {
+			if strings.Contains(r, "adopt") {
+				t.Fatalf("an adoption request was sent for a binding stamped before the reservation: %v", s.cloud.seen())
+			}
+		}
+		if b := s.binding(s.main); b.AdoptionReservedAt != nil || b.RemoteAdoptedAt != nil {
+			t.Fatalf("binding = %+v; want the reservation refused at the write", b)
+		}
 	})
 }
