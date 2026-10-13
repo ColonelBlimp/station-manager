@@ -40,6 +40,11 @@ type fakeSerial struct {
 	// marked closed and its channel closed). Models a port that won't release —
 	// the cause of a busy reopen (B8). Nil (default) = clean close.
 	closeErr error
+	// afterWrite, when set, runs after a write is recorded, outside mu, with
+	// the number of writes recorded so far. A test holds the pipeline there to
+	// force the window between its startup writes and the publication of its
+	// client (W-0017 A). Nil (default) = no hold.
+	afterWrite func(n int)
 }
 
 func newFakeSerial() *fakeSerial {
@@ -89,13 +94,21 @@ func (f *fakeSerial) setWriteErr(err error) {
 }
 
 func (f *fakeSerial) WriteCommandBytes(ctx context.Context, cmd []byte) error {
+	n, hook, err := f.recordWrite(cmd)
+	if err == nil && hook != nil {
+		hook(n)
+	}
+	return err
+}
+
+func (f *fakeSerial) recordWrite(cmd []byte) (int, func(int), error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.closed {
-		return serial.ErrClosed
+		return 0, nil, serial.ErrClosed
 	}
 	if f.writeErr != nil {
-		return f.writeErr
+		return 0, nil, f.writeErr
 	}
 	f.writes = append(f.writes, append([]byte(nil), cmd...))
 	if f.onWrite != nil {
@@ -108,7 +121,7 @@ func (f *fakeSerial) WriteCommandBytes(ctx context.Context, cmd []byte) error {
 			}
 		}
 	}
-	return nil
+	return len(f.writes), f.afterWrite, nil
 }
 
 func (f *fakeSerial) ReadResponseBytes(ctx context.Context) ([]byte, error) {

@@ -747,22 +747,20 @@ func TestPipeline_TriggerBootstrap_WritesReadCommand(t *testing.T) {
 	// this gate, the test could fire TriggerBootstrap before
 	// runPipeline finishes its pair of writes, making the
 	// "TriggerBootstrap added a new write" assertion meaningless.
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if len(fake.recordedWrites()) >= 2 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	if len(fake.recordedWrites()) < 2 {
-		t.Fatalf("runPipeline did not write INIT + READ within 1s; got %d writes", len(fake.recordedWrites()))
+	//
+	// Two writes are not enough: the pipeline publishes its client after them,
+	// and TriggerBootstrap writes nothing until it has (W-0017 A). Wait for the
+	// publication itself.
+	waitForPipelineActive(t, s, 3*time.Second)
+	if n := len(fake.recordedWrites()); n != 2 {
+		t.Fatalf("writes at publication = %d; want INIT + the startup READ", n)
 	}
 
 	if err := s.TriggerBootstrap(context.Background()); err != nil {
 		t.Fatalf("TriggerBootstrap: %v", err)
 	}
 
-	deadline = time.Now().Add(time.Second)
+	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		if len(fake.recordedWrites()) >= 3 {
 			break

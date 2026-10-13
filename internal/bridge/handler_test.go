@@ -114,6 +114,12 @@ func TestHTTPHandler_StreamsPipelineEvents(t *testing.T) {
 	srv := httptest.NewServer(s.HTTPHandler(shutdownCh))
 	t.Cleanup(srv.Close)
 
+	// A LATE subscriber: connect only once the pipeline has published its
+	// client, the condition TriggerBootstrap reads. Before that, a subscriber's
+	// bootstrap writes nothing (W-0017 A; the early case is EB1), so a wait for
+	// a third write would never end.
+	waitForPipelineActive(t, s, 3*time.Second)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
@@ -123,36 +129,20 @@ func TestHTTPHandler_StreamsPipelineEvents(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	// Wait for the handler to subscribe + bootstrap before feeding.
-	// Do() returns as soon as response headers are flushed (which
-	// happens BEFORE Subscribe in the handler), so feedLine could
-	// otherwise race the registration and publish to zero
-	// subscribers.
-	//
-	// Write log shape post-2026-05-16 (supervisor work):
-	//   writes[0] = INIT          (runPipeline startup)
-	//   writes[1] = post-INIT READ (runPipeline — fresh snapshot every cycle)
-	//   writes[2] = bootstrap READ (TriggerBootstrap, fires AFTER Subscribe)
-	//
-	// Waiting for writes >= 3 proves both Subscribe + bootstrap have
-	// completed. Pre-2026-05-16 this was writes >= 2 because
-	// runPipeline only wrote INIT at startup; the post-INIT READ added
-	// in the supervisor work shifted the count, but this test was
-	// missed during that refactor (see TestHTTPHandler_ShutdownChClosesStream
-	// for the matched update).
-	// Use the shared write-count barrier with a CI-generous 3s timeout, not the old
-	// hand-rolled 1s deadline: a race-instrumented, heavily-loaded runner can take
-	// >1s to start the pipeline + subscribe + bootstrap, which flaked this test red
-	// (run 31574196491, 2026-08-12). 3s matches the suite's other cross-goroutine
-	// waits (waitForSubscribers 2s, per-client 3s).
+	// The bootstrap READ is written after the handler subscribes: INIT, the
+	// startup READ, then the bootstrap READ, with the rigdef's READ bytes.
+	scanner := bufio.NewScanner(resp.Body)
+	waitForSubscribers(t, s, 1, 2*time.Second)
 	waitForWriteCount(t, fake, 3, 3*time.Second)
+	if w := fake.recordedWrites(); string(w[0]) != "AI1;" || string(w[2]) != ft710Read {
+		t.Fatalf("writes = %q; want INIT first and the bootstrap READ third", w)
+	}
 
 	// FT-710 ID 0800 → "FT-710" via the rigdef value-mapping.
 	fake.feedLine([]byte("ID0800"))
 
 	// Read the SSE stream line-by-line until we see one full event
 	// frame (event: + data: + blank line). Bounded by ctx timeout.
-	scanner := bufio.NewScanner(resp.Body)
 	var sawEvent, sawData bool
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -186,6 +176,7 @@ func TestHTTPHandler_ShutdownChClosesStream(t *testing.T) {
 	s, fake, shutdownCh := newHandlerTestService(t)
 	srv := httptest.NewServer(s.HTTPHandler(shutdownCh))
 	t.Cleanup(srv.Close)
+	waitForPipelineActive(t, s, 3*time.Second) // a late subscriber (W-0017 A)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -196,30 +187,11 @@ func TestHTTPHandler_ShutdownChClosesStream(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	// Wait for the handler to subscribe + bootstrap before feeding —
-	// Do() returns as soon as headers flush, which precedes Subscribe
-	// in the handler. Without this gate, feedLine can race the
-	// subscription and publish to zero subscribers (then the scanner
-	// below hangs forever waiting for a rig-state that already came
-	// and went).
-	//
-	// Write log shape post-2026-05-16:
-	//   writes[0] = INIT          (runPipeline startup)
-	//   writes[1] = post-INIT READ (runPipeline — fresh snapshot every cycle)
-	//   writes[2] = bootstrap READ (TriggerBootstrap, fires AFTER Subscribe)
-	//
-	// Waiting for writes >= 3 proves both Subscribe + bootstrap have
-	// completed. (Pre-2026-05-16 this was writes >= 2 because
-	// runPipeline only wrote INIT at startup and the bootstrap READ
-	// was the second write; the post-INIT READ added in the
-	// supervisor work shifted the count.)
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if len(fake.recordedWrites()) >= 3 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	// Feed only once the handler has subscribed: a push published to zero
+	// subscribers is lost, and the scanner below would wait for it forever.
+	// Its bootstrap READ (the third write) shows it is past the bootstrap.
+	waitForSubscribers(t, s, 1, 2*time.Second)
+	waitForWriteCount(t, fake, 3, 3*time.Second)
 
 	// Drive at least one event through so we know the handler is in
 	// the select loop with an active subscription.
@@ -271,7 +243,10 @@ func TestHTTPHandler_BootstrapFiresOnSubscribe(t *testing.T) {
 	// only because both encode identically (review 2026-06-04 L2). Barrier
 	// on the hub subscriber count + a write that lands after subscription so
 	// the test proves the bootstrap actually fired on subscribe.
-	waitForWriteCount(t, fake, 2, time.Second) // INIT + post-INIT READ
+	// The pipeline must have PUBLISHED its client, not merely written INIT and
+	// the startup READ: it publishes after those writes, and a bootstrap before
+	// the publication writes nothing (W-0017 A).
+	waitForPipelineActive(t, s, 3*time.Second)
 	preCount := len(fake.recordedWrites())
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
