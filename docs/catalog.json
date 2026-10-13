@@ -347,15 +347,6 @@
       "summary": "W-0021 delivers ADR 0071's first-class QSO archives: stable archive and logbook identities with in-place adoption of the existing install, a managed archive catalogue and provisioner with last-known-good startup, create/list/activate over the attended restart, the shell archive selector, and SM Cloud keyed by archive/logbook UUIDs."
     },
     {
-      "id": "work.w-0022",
-      "path": "docs/work/W-0022-http-shutdown-double-close.md",
-      "class": "work-item",
-      "audiences": ["contributor", "agent"],
-      "topics": ["lifecycle", "shutdown", "http", "testing"],
-      "scopes": ["internal/api/server.go", "cmd/smd/lifecycle_adapters.go"],
-      "summary": "W-0022 makes the HTTP node's shutdown close its listener once and keep that close's result, so a benign repeated close no longer fails the drain in either untracking order, while genuine close errors and drain timeouts still fail it and skip its dependents."
-    },
-    {
       "id": "work.dogfood-inbox",
       "path": "docs/dogfood-inbox.md",
       "class": "work-item",

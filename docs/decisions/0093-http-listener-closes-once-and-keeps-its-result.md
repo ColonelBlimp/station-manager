@@ -67,5 +67,5 @@ bind and new requests are refused during teardown.
 
 ## References
 
-- `docs/work/W-0022-http-shutdown-double-close.md` (cause, reproducer, rulings, proofs)
+- `docs/archive/work/W-0022-http-shutdown-double-close.md` (cause, reproducer, rulings, proofs)
 - `internal/api/server.go` (`ListenAndServe`, `StopAccepting`, `Shutdown`, `closeOnceListener`)

@@ -1,6 +1,6 @@
 # W-0022 — HTTP shutdown closes the listener twice
 
-**Status:** Committed `c1b9fbbd` (option A, [ADR 0093](../decisions/0093-http-listener-closes-once-and-keeps-its-result.md)); closes once CI is green
+**Status:** Closed 2026-10-13: committed `c1b9fbbd` (option A, [ADR 0093](../../decisions/0093-http-listener-closes-once-and-keeps-its-result.md)), CI green (run 38383340052)
 **Selected:** 2026-10-13 (operator), as the shutdown-correctness item after W-0017 A
 **Outcome:** A benign repeated close of the HTTP listener no longer fails the daemon's `http`
 node, whichever order its listener is untracked in, so a clean shutdown drains the dependent nodes.
@@ -183,10 +183,13 @@ errors visible.
   SO tests under `-race`, but its sandbox could not run SO6, because the temporary directory's
   ownership fails the Unix socket ancestry policy. SO6 passed locally `-race -count=10`. Review
   closed and the file deleted.
+- Pushed by the operator. CI run 38383340052 (head `200f9aaf`) passed on its first attempt. The
+  clean-room review of `200f9aaf` (catalog entry checked) found no actionable findings; closed and
+  the file deleted. W-0022 is closed.
 
 ## References
 
-- [ADR 0093](../decisions/0093-http-listener-closes-once-and-keeps-its-result.md)
+- [ADR 0093](../../decisions/0093-http-listener-closes-once-and-keeps-its-result.md)
 - `internal/api/server.go` (`ListenAndServe`, `StopAccepting`, `Shutdown`, `closeOnceListener`)
 - `cmd/smd/lifecycle_adapters.go` (`httpStopAccepting`, `stopHTTP`)
 - net/http go1.26 `server.go`: `Serve` (close-once wrapper, listener tracking), `Shutdown`
