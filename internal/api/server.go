@@ -111,6 +111,16 @@ type Server struct {
 	// listenerMu guards listener: it's assigned in ListenAndServe (serve
 	// goroutine) and read by StopAccepting (shutdown goroutine).
 	listenerMu sync.Mutex
+	// boundListener is the close-once owner of the bound listener (W-0022): it
+	// closes it once and keeps that close's result, which Shutdown reports
+	// whichever caller closed first. Guarded by listenerMu.
+	boundListener *closeOnceListener
+	// innerListenerHook and listenerHook, when set, wrap the bound listener
+	// beneath and above its close-once owner. Nil in production; package tests
+	// use them to inject a close error and to drive the real ListenAndServe /
+	// StopAccepting / Shutdown sequence in a chosen order (W-0022).
+	innerListenerHook func(net.Listener) net.Listener
+	listenerHook      func(net.Listener) net.Listener
 	// draining is set by StopAccepting at the very start of shutdown. The
 	// rejectWhenDraining middleware turns it into a 503 for NEW requests: closing
 	// the listener frees the port but leaves existing keep-alive connections
@@ -572,7 +582,20 @@ func (s *Server) ListenAndServe(socketPath string) error {
 	if err != nil {
 		return err
 	}
+	// One close, whoever asks first: StopAccepting closes the listener directly,
+	// and Shutdown closes it again through http.Server's own wrapper while Serve
+	// still tracks it. A second real close fails ("use of closed network
+	// connection") and would fail the drain (W-0022).
+	if s.innerListenerHook != nil {
+		ln = s.innerListenerHook(ln)
+	}
+	owner := &closeOnceListener{Listener: ln}
+	ln = owner
+	if s.listenerHook != nil {
+		ln = s.listenerHook(ln)
+	}
 	s.listenerMu.Lock()
+	s.boundListener = owner
 	s.listener = ln
 	s.listenerMu.Unlock()
 
@@ -586,6 +609,38 @@ func (s *Server) ListenAndServe(socketPath string) error {
 	}
 
 	return nil
+}
+
+// closeOnceListener closes its listener on the first Close only and keeps
+// that close's result. A later Close returns nil — a repeated close is benign,
+// not a failure — and result reports the one real close to Shutdown (W-0022).
+type closeOnceListener struct {
+	net.Listener
+	once sync.Once
+	mu   sync.Mutex
+	err  error
+}
+
+func (l *closeOnceListener) Close() error {
+	first := false
+	l.once.Do(func() {
+		first = true
+		err := l.Listener.Close()
+		l.mu.Lock()
+		l.err = err
+		l.mu.Unlock()
+	})
+	if !first {
+		return nil
+	}
+	return l.result()
+}
+
+// result is the first close's error; nil before any close.
+func (l *closeOnceListener) result() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.err
 }
 
 // bindListener binds the network listener for s.protocol, hardening a Unix socket so
@@ -685,7 +740,7 @@ func (s *Server) StopAccepting() {
 	ln := s.listener
 	s.listenerMu.Unlock()
 	if ln != nil {
-		_ = ln.Close()
+		_ = ln.Close() // the close-once owner keeps the result for Shutdown
 	}
 }
 
@@ -711,7 +766,19 @@ func (s *Server) StopAccepting() {
 // cleanup's job in ListenAndServe.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.shutdownOnce.Do(func() { close(s.shutdownCh) })
+	// The drain's result and the listener's one close result are both reported,
+	// whichever caller closed first: after a drain timeout, net/http returns
+	// only the deadline, and once Serve has returned it no longer tracks the
+	// listener at all.
 	err := s.httpServer.Shutdown(ctx)
+	s.listenerMu.Lock()
+	owner := s.boundListener
+	s.listenerMu.Unlock()
+	if owner != nil {
+		if closeErr := owner.result(); closeErr != nil && !stderr.Is(err, closeErr) {
+			err = stderr.Join(err, closeErr)
+		}
+	}
 	// Completion is logged only on SUCCESS, and only once. A failed Shutdown
 	// (deadline exceeded with connections still open) has NOT completed the
 	// transition, so recording it would assert something untrue; leaving the
