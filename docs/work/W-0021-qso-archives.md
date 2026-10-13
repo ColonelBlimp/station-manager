@@ -4246,7 +4246,9 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      Code review cleared by the operator. Committed 2026-10-12 as `8400f680` (code, tests,
      `api-endpoints.md`, `install.md`, both manual chapters, ADR 0092's refinement), then this
      dossier with the backlog and W-0017 corrections. Still outstanding as acceptance work: the
-     station drill and the identity wire's direct proof on the next on-air QSO.
+     station drill and the identity wire's direct proof on the next on-air QSO. The dossier
+     commit is `ea7b189e`. The clean-room review of `8400f680` found no actionable findings;
+     closed and the review file deleted. CI run 38259610345 at `ea7b189e` is green.
 
    - **Archive contents (ADR 0084; ruled 2026-09-28).** Settings → Archives lists each
      archive's logbooks under its row, nested on the table's grid (name under Label,
