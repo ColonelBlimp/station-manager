@@ -1,6 +1,6 @@
 # W-0017 — De-flake CI-observed environment-sensitive tests
 
-**Status:** Sub-item A fixed in tests (`544fb62a`, 2026-10-13); sub-item B fixed in `e7237b3a` (busy handling on the raw test connections)
+**Status:** Sub-item A closed (`544fb62a`, CI green 2026-10-13); sub-item B fixed in `e7237b3a` (busy handling on the raw test connections)
 **Selected:** Sub-item A, 2026-10-12 (operator), as the change after W-0021 5F.4 commit 4
 **Outcome:** Two tests that flake red only on a loaded/instrumented CI runner become deterministic,
 each proving its original guarantee without leaning on a wall-clock margin.
@@ -123,7 +123,9 @@ the fake's own answer to the startup READ. Narrow these claims.
     package and `-count=20` for the handler and bootstrap tests pass, as does `git diff --check`.
 - Approved by the operator and committed 2026-10-13 as `544fb62a` (the four bridge test files;
   test-only). The clean-room review of `544fb62a` found no actionable findings; closed and the
-  review file deleted. Sub-item A is fixed in the tests; it closes once CI is green on this commit.
+  review file deleted. CI run 38356688161 at `3968d269` (which includes `544fb62a`): the bridge
+  package passed in attempt 1. The run's one failure was the unrelated `cmd/smd` shutdown
+  double-close (W-0022), and attempt 2 is green. Sub-item A is closed.
 
 ## Sub-item B — `internal/evidence` concurrent-SQLite lock
 
