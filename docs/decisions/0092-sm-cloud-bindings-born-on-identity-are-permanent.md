@@ -133,6 +133,18 @@ Alternatives rejected:
 - **Treat a 502, 503 or 504 as offline.** A proxy's answer is still an HTTP answer, and a stopped
   backend is not the offline-first case decision 4 allows.
 
+## Refinement (2026-10-13): the legacy-restore refusal in every archive
+
+W-0021 5F.5 (ruling K4) widens the 2026-10-12 restore rule. A legacy `smd restore`
+(`--cloud-logbook NAME`) into a logbook whose SM Cloud binding is stamped is refused in every
+archive, enabled or disabled, before the export is fetched. The refusal names the identity restore
+(no source flag) as the way to restore that logbook. Identity restores of a stamped target are
+allowed, and change no binding.
+
+Alternative rejected: keeping the Home-only scope. In a managed archive the legacy restore
+succeeds, and every later edit of a restored QSO then fails at upload with `archive_conflict`. The
+failure is visible, but deferred to a moment unrelated to its cause.
+
 ## References
 
 - `docs/work/W-0021-qso-archives.md`: "5F.4 design" and "5F.4 rulings" (F1–F8).

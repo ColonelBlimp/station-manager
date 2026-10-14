@@ -320,11 +320,34 @@ catalogued archive, pass `--archive <uuid>`; the daemon must be stopped
 either way. The reference and evidence databases are station-global under
 `<data_dir>/db` and are never created beside the QSO file.
 
-`smd restore` reads a Cloud logbook by its name. In Home it refuses a target
-logbook backed up to SM Cloud under its own identity, whether that backup is
-on or off, before inserting anything: those QSOs would keep another cloud
-logbook's ids, and a later edit would move them between cloud logbooks. A
-restore that understands identities comes in a later release.
+`smd restore` brings back the target logbook's own SM Cloud copy, found by
+the archive's id and the logbook's id: `--archive` picks the archive (default:
+the active one) and `--logbook` the logbook (default: that archive's own
+default logbook). It needs only the SM Cloud station account in `config.json`
+(url and token); the logbook needs no SM Cloud destination, and a restore
+never adds, turns on or changes one, or queues anything for upload. It first
+asks the server whether it supports archive identity, and stops, restoring
+nothing, if the server says it does not, cannot be reached, or answers with
+an error. It also stops if the server has no copy of that logbook. It never
+falls back to restoring by name.
+
+Nothing is written until the whole copy has arrived and names exactly the
+requested archive and logbook. `--dry-run`, and every refusal up to that point,
+leave the archive file as it was. Reading the stopped file may leave two SQLite
+companion files beside it: an empty `-wal` and a 32 KiB `-shm`. They are
+harmless, and SQLite removes them the next time it opens the file for writing
+and closes it. Once the copy is accepted, restore opens the archive for
+writing, which brings an older file up to date first; a refusal after that
+point (the target logbook changed while the copy was downloading) has
+restored nothing, but the file may already have been updated.
+
+To restore an older Cloud logbook that was backed up by name, pass
+`--cloud-logbook NAME`, where NAME is the Cloud logbook's name as the server
+lists it, not a destination's name. This is refused, in any archive, for a
+target logbook whose SM Cloud backup uses its identity, whether that backup is
+on or off: those QSOs would keep another cloud logbook's ids, and a later edit
+would move them between cloud logbooks. Restore such a logbook without
+`--cloud-logbook`. The old `--forwarder` option is retired and refused.
 
 You don't need to set `SM_WORKING_DIR` in your shell. When run from
 `/usr/bin/smd` (the installed location), the binary resolves its

@@ -124,6 +124,66 @@ Ambiguity is detected and reported for manual recovery instead (W-0021 5F, rulin
 - If ambiguous legacy mappings turn out to be common on real stations, revisit the
   membership-split alternative.
 
+## Refinement (2026-10-13): restore by identity (W-0021 5F.5)
+
+The operator ruled (W-0021 dossier, rulings K1–K6) how `smd restore` uses the scoped export.
+
+- **Source.** A restore reads only the target's own identity: the target archive's UUID (its
+  catalogue id, `--archive`, default the active archive) and the target logbook's UUID
+  (`--logbook`, default that archive's own default logbook). No flag names another source, and
+  nothing is provisioned.
+- **Default.** With no source flag, every archive restores by identity, Home included. The legacy
+  name is selected only by an explicit `--cloud-logbook NAME`, where NAME is the cloud logbook's
+  name. `--forwarder`, which read a name from a binding, is retired and refused before anything is
+  fetched.
+- **Preflight.** The existing bounded support check runs first, and only `supported` proceeds.
+  Unsupported, unreachable and other errors are refused in their own words. A later 404 is refused
+  naming both UUIDs and the legacy option, without claiming the server still supports identity: the
+  preflight records what the server reported, not that it stayed unchanged.
+- **Validation.** An export is used only when its head names exactly the requested archive and
+  logbook and the document is complete. Nothing is inserted otherwise. A valid empty export
+  succeeds.
+- **No consent needed, nothing changed.** A restore needs a valid station account and the target's
+  existing identities, not a binding. It never creates, enables or stamps a binding, and never
+  queues an upload.
+- **Read-only until the export is accepted.** Target resolution, the preflight and the fetch run
+  before the archive is opened for writing, so a dry-run, or a refusal before that open, migrates
+  nothing, creates no missing file and writes no archive summary. The re-check after the open
+  (the target changed during the fetch) refuses with nothing inserted, but follows the open's
+  migrations. The read-only target resolution reads logbook UUIDs whether or not the file has a
+  binding table, so an archive at log schema 12 or 13 resolves its target by identity without
+  being migrated. Archive-file identity verification is kept. A legacy dry-run whose target file
+  is missing reads nothing, since that file holds no binding to refuse on; a real restore still
+  refuses the missing file before fetching.
+- **What "untouched" permits (ruling A, 2026-10-14).** The read-only reads open the closed file
+  with SQLite's `mode=ro`. On a WAL-mode file that leaves an empty `-wal` and a 32 KiB `-shm`
+  beside it (measured), which the next read-write open removes; the database file is unchanged.
+  Only those are permitted: newly created, beside the archive file actually inspected, the `-wal`
+  zero bytes, each with that file's mode. Every pre-existing entry stays byte-for-byte unchanged,
+  existing sidecars included, and the database, summary and configuration stay under strict
+  comparison. A write held in a nonempty WAL is a change even though the main file is unchanged.
+
+Alternatives rejected:
+
+- **A source flag for another logbook of the same archive.** An identity push at a newer revision
+  moves a cloud row between logbooks of one archive, so restored UUIDs in another logbook would
+  later merge the two silently.
+- **A source flag for another archive (disaster recovery before provisioning).** The server
+  refuses one archive's UUIDs in another as `archive_conflict`, so the restore would succeed and
+  every later edit fail at upload. Restoring a lost archive file belongs to whole-archive
+  provisioning, a later slice.
+- **Keeping the name default in Home.** It makes the default depend on the archive's ownership,
+  and it is the name fallback this ADR rules out.
+- **Filtering the whole-tenant export by UUID.** It reads the same rows from a new server, but an
+  old server ignores the filter and delivers every archive's rows.
+- **Keeping `--forwarder` as a second legacy option.** An identity binding's `logbook` field is
+  only the adoption key, so the name it supplies says nothing about where the binding uploads.
+- **Opening the read-only reads with `immutable=1` to leave no sidecars.** No `-wal` at one instant
+  does not make the file immutable for the whole read. SQLite documents that `immutable=1` skips
+  locking and change detection, so a later change can produce incorrect results or corruption
+  errors (<https://www.sqlite.org/uri.html#uriimmutable>). That contract does not suit the shared
+  read helpers, which daemon start and archive activation also use.
+
 ## References
 
 - ADR 0071 — first-class QSO archives, §"SM Cloud impact".

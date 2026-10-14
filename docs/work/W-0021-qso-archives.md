@@ -4249,6 +4249,319 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      station drill and the identity wire's direct proof on the next on-air QSO. The dossier
      commit is `ea7b189e`. The clean-room review of `8400f680` found no actionable findings;
      closed and the review file deleted. CI run 38259610345 at `ea7b189e` is green.
+   - **5F.5 plan (2026-10-13; selected by the operator; awaiting rulings; no code yet).**
+     Restore by UUID into `--archive` through the scoped export (outcome 7; rulings Q7, Q8; ADR
+     0088). Whole-archive provisioning (a new managed file carrying the cloud archive's UUID)
+     stays a later slice after 5F (Q7).
+     *Survey (read-only, at `200f9aaf`):*
+     - The server half exists since 5F.2:
+       `GET /v1/archives/{archive_uuid}/logbooks/{logbook_uuid}/export`
+       (`internal/cloud/server/identity.go:300`). It streams a head naming the archive and
+       logbook by UUID with their labels and callsign, then every record with `uuid`,
+       `modified_at`, `revision`, `deleted_at` and the verbatim payload. It reads one snapshot
+       (`store.IdentityExportSnapshot`). An unknown or malformed UUID answers 404 `not_found`
+       (`export_stream.go:74`). An old server has no such route and also answers 404
+       `not_found` (`route_fallback.go`), so the status alone cannot tell them apart.
+     - The client has no scoped export. `smcloud.FetchExport` reads only the whole-tenant
+       `GET /v1/export` (`internal/forwarding/smcloud/export.go:49`).
+     - The cloud archive UUID is the local catalogue id. The cloud logbook UUID is the local
+       logbook's `uuid`. Adoption sends both (`adoption_client.go:159`), the identity push
+       uses both (`identity.go:48`), and EI1 reads each archive's manifest at
+       (catalogue id, logbook UUID) (`cmd/smd/lifecycle_identity_gate_test.go:603`).
+     - `smd restore` today (`cmd/smd/restore.go`):
+       - It fetches before it opens any archive, so `--cloud-logbook` works with Home's file
+         unavailable (S3).
+       - With no flags, the cloud logbook NAME comes from Home's default-logbook SM Cloud
+         binding, disabled included (R2, S1). `--forwarder` names another Home binding (S2).
+       - It selects that name's rows from the whole-tenant export.
+       - `checkRestoreTarget` (`restore.go:298`) refuses a legacy restore into a Home logbook
+         whose SM Cloud binding has `identity_since`, enabled or disabled (J1, FH13). Managed
+         archives are exempt: their bindings are born stamped, and the server refuses another
+         archive's UUIDs as `archive_conflict` (EI2). That is a visible failure, not a merge,
+         but it is a deferred one: the restore succeeds and each later edit fails at upload.
+     - Within one cloud archive, an identity push at a newer revision MOVES a row between
+       logbooks, and an exact tie is refused as a version conflict (ADR 0092 refinement). So
+       restoring one logbook's UUIDs into another logbook of the SAME archive is the silent
+       merge; across archives it is the deferred visible failure.
+     *Operator-observable outcomes:*
+     1. `smd restore` with no source flag restores the target logbook's own cloud logbook: the
+        target archive's UUID (`--archive`, default the active archive) and the target logbook's
+        UUID (`--logbook`, default the archive's default logbook). Only the scoped export of that
+        one logbook is requested. UUIDs, `modified_at`, `revision` and tombstones are kept,
+        existing rows are skipped, and nothing is queued, as today. Nearest confusable: a restore
+        that filters the whole-tenant export by UUID. It reads the same rows, but an old server
+        would deliver every archive's rows to the client (Q8).
+     2. Two archives with the same label, logbook name and callsign each restore only their own
+        rows. A Home (legacy) cloud logbook with that same name is never read by an identity
+        restore. Nearest confusable: a restore that resolves the logbook by name or label.
+     3. When the server does not report identity support, restore refuses before fetching and
+        says so. When the server supports identity but has no such logbook, restore refuses,
+        naming both UUIDs and the legacy option. In neither case does it fall back to the name
+        or write anything (Q7).
+     4. A response whose head names another archive or logbook than the one requested is
+        refused before anything is inserted.
+     5. The legacy name stays an explicit option, `--cloud-logbook NAME`, read from the
+        whole-tenant export as today (S3 unchanged: it opens no archive for the fetch).
+     6. A legacy restore into a logbook whose SM Cloud binding is stamped stays refused,
+        enabled or disabled, and the refusal now names the identity restore as the way to
+        restore it. The FH13 targets, which 5F.4 left with no restore at all, now restore by
+        identity.
+     *Questions for the operator (each with a recommendation):*
+     - **(K1) Which cloud logbook an identity restore may read.** Recommended: only the target
+       logbook's own UUIDs (archive and logbook), with no source flag. Reading another logbook
+       of the same archive into the target is the silent merge above. Reading another archive
+       is the deferred `archive_conflict`, and it is what whole-archive provisioning will do
+       properly. Alternatives: (b) a `--cloud-logbook-uuid` limited to the target archive,
+       refused when the target logbook has an SM Cloud binding; (c) a `--cloud-archive-uuid`
+       pair as well, for disaster recovery before provisioning exists. With (a), a lost
+       archive file cannot be restored by identity until provisioning; the legacy option
+       still serves Home's adopted logbook, whose rows the legacy name also reaches.
+     - **(K2) The default with no flags.** Recommended: identity restore of the target, in every
+       archive, Home included. For Home's adopted default logbook this reads the same rows S1
+       reads today, by UUID instead of name. Alternative: keep S1's name default in Home and
+       use identity only elsewhere. That makes the default depend on the archive's ownership,
+       and it is the "fallback by name" Q7 rules out.
+     - **(K3) `--forwarder`.** It only supplies a cloud logbook name from a Home binding, and an
+       identity binding's `logbook` field is now only the adoption key (Q5). Recommended:
+       retire it, refusing it by name with a pointer to `--cloud-logbook` (the explicit legacy
+       option). Alternative: keep it as a second legacy option, refused when the named binding
+       is stamped or adopted.
+     - **(K4) The legacy-restore refusal's scope.** Recommended: refuse a legacy restore into any
+       logbook whose SM Cloud binding is stamped, in every archive, not only Home. In a managed
+       archive the restore succeeds today and every later edit fails at upload with
+       `archive_conflict`. Alternative: keep J1's Home-only scope; a managed target then fails
+       later, visibly.
+     - **(K5) Support preflight.** Recommended: run the existing `smcloud.CheckSupport` (its
+       10 s bound) before the scoped fetch. It separates "the server does not report archive
+       identity support" from "unreachable" and from "no such cloud logbook". Without it, an
+       old server's 404 reads as a missing logbook.
+     - **(K6) Binding not required.** Recommended: an identity restore needs no SM Cloud binding
+       on the target; the UUIDs are the target's own, and restoring needs no upload consent
+       (R2's reasoning). Alternative: require a stamped or adopted binding.
+     *Failing tests (RED first; written as ruled; cmd/smd uses export and support seams
+     beside `fetchSMCloudExport`, except the EI tests, which use the real server on `sm-pg`):*
+     - `internal/forwarding/smcloud` (`httptest`):
+       - SX1: `FetchScopedExport` requests exactly
+         `/v1/archives/{a}/logbooks/{l}/export` with the bearer token, and decodes the head and
+         every row, tombstones and revisions included, gzip-negotiated responses too (the
+         server compresses negotiated responses, `server.go:117`).
+       - SX2: a 404 is a typed not-found error; any other non-200 is an error that carries the
+         status and never the token.
+       - SX3: a head naming another archive or logbook is refused.
+     - `cmd/smd` (offline, seams):
+       - RI1: no flags, Home active: the scoped export is requested at (Home's id, the default
+         logbook's UUID); the whole-tenant export is never requested; the rows are restored
+         with UUID, `modified_at`, `revision` and tombstone kept; a re-run skips them all.
+       - RI2: `--archive B --logbook N`: the request names B's id and N's UUID.
+       - RI3: a head naming another logbook: refused, no QSO inserted.
+       - RI4: support `unsupported`, and support unreachable: each refused with its own text;
+         no export requested; nothing inserted.
+       - RI5: supported, then 404: refused naming both UUIDs and `--cloud-logbook`; no request
+         to `/v1/export` follows (no fallback); nothing inserted.
+       - RI6: the FH13 targets (stamped, enabled and disabled) restore by identity (FH13's
+         refusal cases now pass through the new default).
+       - RI7: `--cloud-logbook` into a stamped target refused in Home and, under K4, in a managed
+         archive; its text names the identity restore; an unstamped target restores (control).
+       - RI8: `--forwarder` as K3 rules.
+       - RI9: `--dry-run` by identity counts the rows and writes nothing.
+       - The S1–S6 characterization is revised as ruled: S1 and S2 change under K2 and K3, and
+         S3–S6 are kept where their options survive.
+     - `cmd/smd` against the real server (`sm-pg`), extending EI1's fixture:
+       - EI3: two managed archives with equal labels, logbook names and callsigns each upload
+         one QSO, and Home's legacy wire uploads a third to a cloud logbook of the same name.
+         Each archive's local QSO row is then removed. `smd restore --archive A` restores
+         only A's QSO and `--archive B` only B's; each requests only its own scoped export.
+         `--cloud-logbook Drill` into an unstamped Home logbook restores only the legacy row.
+     *Reversions planned (each restored and hash-verified, each failing its named
+     assertion):* the whole-tenant export filtered by UUID (RI1); the default logbook's UUID
+     used instead of `--logbook`'s (RI2); no head check (RI3, SX3); no support preflight (RI4);
+     a 404 falling back to the name (RI5); the refusal kept Home-only (RI7, under K4); the
+     no-flag default left on the name (RI1, RI6); one archive's UUID used for both (EI3).
+     *Docs in the same change:* `install.md` (the restore section: identity default, the
+     legacy option, the refusals), `smcloud-deploy.md` (the restore drill's flags),
+     `architecture.md` if its import/restore row changes, and a dated refinement to ADR 0092
+     (the refusal's scope, under K4).
+     *Commits:* one code commit (client, `smd restore`, tests, the canonical docs), then this
+     dossier with the capsule. Gates as for 5F.4, the cloud set with `-race` against `sm-pg`
+     included.
+     *Kept open:* the 5F.4 station drill and the identity wire's direct proof (operator). The
+     pre-schema-7/8 smcloud dumps are kept until that proof.
+     **5F.5 rulings (operator, 2026-10-13).** K1–K6 approved, qualified:
+     - (K1) Restore only the existing target's archive and logbook UUIDs. No alternate-source
+       flags, no implicit provisioning.
+     - (K2) Identity is the default everywhere, Home included. Legacy selection requires an
+       explicit `--cloud-logbook NAME`.
+     - (K3) `--forwarder` is retired with an actionable refusal before fetching. The refusal
+       explains that NAME is the cloud logbook's name, not a binding's name.
+     - (K4) A legacy restore into a stamped target is refused in every archive, enabled or
+       disabled. Identity restores stay allowed.
+     - (K5) The existing bounded support check runs first. Only `supported` with no error
+       proceeds. Unsupported, unreachable and other errors stay distinct outcomes. Never fall
+       back. The preflight records what the server reported; it cannot prove the server stayed
+       unchanged before a later 404, so the 404 text must not claim support.
+     - (K6) No binding is required. A valid station account and the target's existing
+       identities suffice. Restore never creates, enables or stamps a binding, and never queues
+       an upload.
+     Test plan amendments, before the RED tests:
+     - Read-only target resolution. An identity dry-run and every preflight or export refusal
+       must not migrate a database, create a missing file or update an archive summary. The
+       shared open (`cmd/smd/archive_paths.go:39`) writes, so it cannot simply move before the
+       fetch. Archive-file identity verification is preserved.
+     - Complete export validation: a missing or wrong identity head, and a document truncated
+       after a valid row, insert nothing. A valid empty export succeeds.
+     - Selection boundaries: no flags with a managed archive active; an inactive archive's own
+       default; a target with no binding.
+     - Characterizations: S4 and S5 change too (an empty binding name no longer selects
+       `main`; an absent binding no longer requires the legacy override). S3's explicit legacy
+       dry-run is preserved.
+     - The restore decisions and their weighed alternatives go into an ADR refinement, beside
+       K4's update to ADR 0092.
+     **5F.5 RED (2026-10-13; tests and one stub, no restore behaviour).** Files:
+     `internal/forwarding/smcloud/scoped_export_test.go` (SX1–SX4),
+     `cmd/smd/restore_identity_test.go` (RI1–RI11, a scripted fake server),
+     `cmd/smd/restore_identity_e2e_test.go` (EI3, the real server on `sm-pg`), and the revised
+     S1–S6 in `restore_selection_characterization_test.go`. The stub,
+     `smcloud.FetchScopedExport`, is the naive fetch: FetchExport's shape on the scoped path,
+     with none of 5F.5's checks. The ADR refinements (0088 and 0092, dated 2026-10-13) are
+     drafted. Failures, each at its intended assertion:
+     - SX2: a 404 is not `ErrScopedLogbookNotFound`. SX3: all four wrong or missing heads are
+       accepted. SX4: a document with no `qsos` array is accepted.
+     - SX1, SX4's cut-off document and SX4's valid empty export pass against the naive stub.
+       They guard the transport and the decoder, and are not RED.
+     - RI1–RI3, RI7, RI4's empty export and EI3: the restore takes the name path. It fails with
+       "the Home archive's default logbook has no SM Cloud destination binding", or, with a
+       binding or in EI3, "cloud logbook "main" not found".
+     - RI4's four bad exports: no request was made (the name path refused first).
+     - RI5: each of the three refusals carries the name path's text, not its own.
+     - RI6: the refusal names neither UUID.
+     - RI8: the name path ("main" not found).
+     - RI9: in Home, the 5F.4 text, which does not name the identity restore; in a managed
+       archive, the legacy restore succeeds.
+     - RI10: `--forwarder` is read as a binding name.
+     - S1, S2 and S4: the name path succeeds. S5: the old "requires --cloud-logbook" refusal.
+       S6: the old "both name the cloud logbook" refusal.
+     - RI11 is a guard for its refusal (today's code already refuses before any request,
+       pointing to `--cloud-logbook`), but it fails the untouched-directory check. See below.
+     Found while writing them, a question for the operator: the existing read-only peeks
+     (`PeekArchiveIdentity` under `VerifyIdentity`, `PeekDestinationBindings` under
+     `ReadHomeBindings`) open with `mode=ro`. On a cleanly closed WAL-mode file, that open
+     leaves an empty `-wal` and a 32 KiB `-shm` beside it; the next read-write open removes
+     them. The QSO file's content is unchanged. Measured with a throwaway probe test (removed),
+     and seen in RI5 and RI11: `db/station-manager.db-shm` and `db/station-manager.db-wal`
+     appear. The untouched-directory check compares every file, so as written it treats these
+     sidecars as a change.
+
+     **Sidecar ruling (operator, 2026-10-14): A.** "Untouched" permits only newly created
+     sidecars beside the archive file actually inspected: a zero-byte `-wal` and its 32 KiB
+     `-shm`, each with that file's mode. Every pre-existing entry stays byte-for-byte unchanged,
+     existing sidecars included, and every mode is kept. The database, summary, configuration
+     and every other entry stay under strict comparison, with no blanket exclusion by suffix. The
+     nearest confusable outcome, a write held in a nonempty WAL with the main file unchanged,
+     must fail. B (`immutable=1`) is rejected: no WAL at one instant does not make the file
+     immutable for the read, and SQLite documents that `immutable=1` skips locking and change
+     detection (https://www.sqlite.org/uri.html#uriimmutable), unsuitable for helpers shared with
+     daemon start and activation. Two boundaries, made explicit: dry-run never opens the archive
+     for writing, and both flag and binding refusals come before the export is fetched. Record
+     the exception and the rejected alternative in the ADR 0088 refinement and qualify
+     "untouched" in the test comments. Proceed to the code commit and the docs commit for review.
+
+     **5F.5 build (2026-10-14; uncommitted).**
+     - `smcloud.FetchScopedExport`: a non-200 names its status only; 404 is
+       `ErrScopedLogbookNotFound`. Refused with no rows: a document that does not decode
+       completely, a head missing either UUID, a head naming another archive or logbook, and a
+       missing (or null) `qsos` array. An empty array is accepted.
+     - `sqlite.PeekDestinationBindings` now carries each binding's `identity_since` (read only
+       when the column exists, schema 18+). New direct test,
+       `TestPeekDestinationBindings_CarriesIdentitySince`. Deviation: written after the change;
+       its RED evidence is reversion R9.
+     - `runRestore`, reordered:
+       - `--forwarder` is refused first, before config is read.
+       - Then config and the station account are read, and `--archive` resolves the archive
+         from config alone.
+       - Then `restoreTarget` resolves the target from the closed file, read-only, with
+         `VerifyIdentity` and `PeekDestinationBindings`. The identity path needs an adopted
+         archive (RI11's refusal otherwise) and the logbook's UUID. The legacy path refuses a
+         stamped target in every archive, enabled or disabled (K4).
+       - Then the support preflight (identity only), then the fetch.
+       - Then the count; `--dry-run` returns here, never opening for writing.
+       - Only then `openArchiveDatabases`, followed by `checkRestoreTarget`, which re-reads
+         through the writing connection. It refuses an identity target whose logbook UUID
+         changed since the read-only resolution, and a legacy target stamped meanwhile.
+     - S3 kept: a legacy `--dry-run` whose target file is missing skips the peek (that file
+       holds no binding to refuse on). A real restore still refuses the missing file, through
+       `VerifyIdentity`, before fetching.
+     - `targetLogbook`'s config fallback was split out as `configDefaultLogbook`, shared with
+       `smd import` (behaviour unchanged). `restoreSource` and `restoreBinding` were removed.
+       `runRestore`'s complexity fell (cognitive 53 → 49, cyclomatic 40 → 38, MI 16 → 17), and
+       the maintainability baseline is ratcheted to match.
+     - Tests added during the build:
+       - `TestRestoreIdentity_TheUntouchedCheck` (ruling A's check itself): a read-only open's
+         sidecars beside the inspected file pass; the same beside a file not inspected fail; a
+         write held in a nonempty WAL fails with the main file unchanged.
+       - RI12: a target changed during the fetch (identity: the logbook UUID; legacy: the
+         binding stamped, enabled or disabled) is refused, with nothing inserted.
+     - The sidecar modes were measured with a throwaway probe test (removed): under umask 022,
+       a 0600 and a 0640 file each got a zero-byte `-wal` and a 32768-byte `-shm` of their own
+       mode.
+     - Reversion proofs. Each used a unique anchor and a non-empty replacement, was restored
+       from a copy and hash-verified, and failed at its intended assertion:
+       - R1: the head check off → SX3 another archive and another logbook; RI4 the same.
+       - R2: a missing `qsos` array read as empty → SX4 "no qsos array". The first attempt (the
+         case disabled) panicked on the nil pointer instead of reaching the assertion, so it
+         was redone.
+       - R3: 404 untyped → SX2; RI6 names neither UUID.
+       - R4: preflight always passes → RI5 "restore went ahead" (unsupported, other error) and
+         all three texts wrong.
+       - R5: a 404 falls back to the whole-tenant export → RI6 "restore went ahead after a 404".
+       - R7: K4 pre-check Home-only → RI9 managed enabled and disabled fetch `GET /v1/export`.
+       - R8: K4 pre-check enabled-only → RI9 Home and managed disabled fetch.
+       - R9: the peek drops `identity_since` → the peek test, and all four RI9 refusals fetch.
+       - R10: `--forwarder` not refused → RI10 "--forwarder accepted".
+       - R11: the identity default ignored → RI2 requests logbook 1's path; RI3 "has no
+         default logbook".
+       - R12: each post-open re-check off → RI12 identity and RI12 legacy respectively.
+       - R13: dry-run continues to the write → RI7 "changed the data directory".
+       - R14: no missing-file exception → S3 `archive_file_missing`.
+       - R15: the check accepts any `-wal` → TheUntouchedCheck "a write held in a nonempty WAL
+         passed as untouched".
+       - There is no R6: the numbering skipped it, so R1–R15 is fourteen reversions. The first
+         report to the operator said "R1–R15" as if fifteen; corrected at review.
+       Guards with no RED (disclosed): SX1, SX4's cut-off documents and empty export, and
+       RI11's refusal text (today's code refused too). Without the RI11 guard the identity path
+       dereferences a nil catalogue entry. The post-open K4 re-check for a disabled binding was
+       untested at first; covered at review (below).
+
+     **Operator review of the 5F.5 build (2026-10-14).** Commit 1 held for one P2; the
+     missing-file legacy dry-run exception agreed; the DR3 fix agreed, separate from 5F.5; the
+     four-commit split otherwise agreed.
+     - **P2: an identity restore rejected schema 12–13 archives.** `PeekDestinationBindings`
+       returned before reading logbooks when the binding table was absent (below schema 14), so
+       `restoreTarget` found no logbook and refused "target logbook … does not exist" before
+       fetching, although schemas 12 and 13 carry archive and logbook UUIDs. Fixed: the peek
+       reads the live logbooks before looking for the binding table, and reads them without a
+       UUID below schema 12 (no `uuid` column). Its other consumers are unaffected:
+       config-downgrade refuses a file below schema 14 before reading the logbooks.
+       - New `TestPeekDestinationBindings_ReadsLogbooksBelowTheBindingTable` (schemas 13, 12,
+         11; real down migrations) and RI13: an identity dry-run on a Home file migrated down to
+         13 and to 12 requests the scoped export for its default logbook's UUID, counts the row,
+         leaves the data directory untouched in ruling A's sense, and leaves the schema version
+         as it was. RED first: the peek test "peeked logbooks []" at all three schemas (after a
+         fixture slip, corrected: `testFileService` seeds no logbook, so the test now inserts
+         two); RI13 "target logbook id=1 does not exist in archive Home", the reported symptom.
+       - R16: the logbooks read after the binding-table return again → the peek test (all three
+         schemas) and RI13 (both) fail as above.
+       - R17: the `uuid` column assumed → the peek test at schema 11 fails "no such column:
+         uuid".
+     - **RI12 extended** to a binding stamped while disabled. It passed on its first run (the
+       post-open check never filtered on enabled); its evidence is R18: the post-open check
+       made enabled-only → RI12 "enabled=0" fails "restore = <nil>; want the newly stamped
+       target refused", and only that case.
+     - **`docs/install.md` corrected:** the `-shm` is 32 KiB, not empty; the unchanged-file
+       promise is limited to `--dry-run` and refusals before the write-open, since a refusal
+       after it can follow the open's migrations. The ADR 0088 refinement is qualified the same
+       way, and records the schema 12–13 resolution.
+     - Re-review (2026-10-14): clear, no remaining blockers; the four commits approved in the
+       proposed order (5F.5 code, 5F.5 docs, DR3 fix, W-0017 record).
 
    - **Archive contents (ADR 0084; ruled 2026-09-28).** Settings → Archives lists each
      archive's logbooks under its row, nested on the table's grid (name under Label,

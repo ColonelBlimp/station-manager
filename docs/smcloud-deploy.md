@@ -545,10 +545,15 @@ the hourly reconcile self-heals anything a flaky link drops.
   `GET /v1/version`; an older build omits it, and daemons treat that as "not
   identity-ready".
 - **Restore drill** (worth one rehearsal — see `smd restore` in
-  sm-cloud-p1.md S5): on the shack machine with the daemon stopped,
-  `smd restore -dry-run` fetches the export and reports counts without
-  writing; drop `-dry-run` to restore into the default logbook. Existing rows
-  skip, so it is safe to run against a live database too.
+  [install.md](install.md)): on the shack machine with the daemon stopped,
+  `smd restore --dry-run` checks the server's identity support, fetches the
+  default logbook's own export (`GET /v1/archives/{archive}/logbooks/{logbook}/export`)
+  and reports counts without writing; drop `--dry-run` to restore it. Add
+  `--archive <uuid>` and `--logbook <id>` for another target. A server without
+  `identity_protocol` is refused; `--cloud-logbook NAME` restores a legacy
+  by-name Cloud logbook through `GET /v1/export` instead, and is refused for a
+  logbook backed up by identity. Existing rows skip, so a re-run, or a run
+  against a populated archive, adds only what is missing.
 - **Token rotation:** new `openssl rand -base64 32` → `/etc/smcloud/smcloud.env`
   → `systemctl restart smcloud` → update the daemon's forwarder credential →
   restart `smd`.
