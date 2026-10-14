@@ -415,14 +415,22 @@ func TestReconcileSet_DR3_TheSetIsTheStartSnapshot(t *testing.T) {
 		t.Fatalf("aggregate = %d %s; want 200", code, body)
 	}
 	f.wantResults(t, results, drAllFive(`"in_sync":false`, `"cloud_logbook_id":0`))
-	_, auths := f.cloud.since(mark)
-	if len(auths) == 0 {
-		t.Fatal("no cloud request during the aggregate")
-	}
-	for _, a := range auths {
-		if a != "Bearer t" {
-			t.Fatalf("a request carried %q; want the start's token", a)
+	paths, auths := f.cloud.since(mark)
+	checked := 0
+	for i, a := range auths {
+		// The saved token changes the account fingerprint, so the adopter may
+		// re-check meanwhile; its GET /v1/version carries no token by design
+		// and is not the aggregate's (CI run 38416339715).
+		if paths[i] == "/v1/version" {
+			continue
 		}
+		checked++
+		if a != "Bearer t" {
+			t.Fatalf("GET %s carried %q; want the start's token", paths[i], a)
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no cloud request during the aggregate")
 	}
 }
 
