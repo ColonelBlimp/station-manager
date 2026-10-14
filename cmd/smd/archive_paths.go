@@ -165,6 +165,13 @@ func targetLogbook(requested int64, db *sqlite.Service, paths archive.Paths, cfg
 	case err != nil && !stderr.Is(err, errors.ErrNotFound):
 		return 0, err
 	}
+	return configDefaultLogbook(paths, cfg)
+}
+
+// configDefaultLogbook is targetLogbook's fallback when the archive's identity
+// names no default: config's projection, only for the active or a
+// not-yet-adopted archive.
+func configDefaultLogbook(paths archive.Paths, cfg config.Config) (int64, error) {
 	if paths.Entry == nil || paths.Entry.ID == cfg.ActiveQsoArchiveID {
 		if cfg.DefaultLogbookID > 0 {
 			return cfg.DefaultLogbookID, nil

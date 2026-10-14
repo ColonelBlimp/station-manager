@@ -71,6 +71,12 @@ func PeekDestinationBindings(path string) (PeekedBindings, error) {
 			return PeekedBindings{}, err
 		}
 	}
+	// The logbooks are read before the binding table is looked for: schemas 12
+	// and 13 carry logbook UUIDs, which an identity restore resolves by, and
+	// no binding table.
+	if out.Logbooks, err = peekLiveLogbooks(ctx, db); err != nil {
+		return PeekedBindings{}, errors.New(op).WithErr(err)
+	}
 	if out.HasBindingsTable, err = hasTable(db, "logbook_destination"); err != nil {
 		return PeekedBindings{}, errors.New(op).WithErr(err).WithMsg("inspect archive file")
 	}
@@ -83,9 +89,6 @@ func PeekDestinationBindings(path string) (PeekedBindings, error) {
 			return PeekedBindings{}, errors.New(op).WithErr(err).WithMsg("read the seed marker")
 		}
 		out.Seeded = at.Valid
-	}
-	if out.Logbooks, err = peekLiveLogbooks(ctx, db); err != nil {
-		return PeekedBindings{}, errors.New(op).WithErr(err)
 	}
 	if out.Bindings, err = peekBindings(ctx, db); err != nil {
 		return PeekedBindings{}, errors.New(op).WithErr(err)
@@ -151,8 +154,18 @@ func peekCollapseTargets(ctx context.Context, db *sql.DB) (map[string]string, er
 	return out, rows.Err()
 }
 
+// peekLiveLogbooks reads the live logbooks; below log schema 12 there is no
+// uuid column, and every logbook reads with none.
 func peekLiveLogbooks(ctx context.Context, db *sql.DB) ([]types.Logbook, error) {
-	rows, err := db.QueryContext(ctx, `SELECT id, COALESCE(uuid, ''), name, callsign FROM logbook WHERE deleted_at IS NULL ORDER BY id`)
+	uuid := "''"
+	var n int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('logbook') WHERE name = 'uuid'`).Scan(&n); err != nil {
+		return nil, err
+	}
+	if n == 1 {
+		uuid = "COALESCE(uuid, '')"
+	}
+	rows, err := db.QueryContext(ctx, `SELECT id, `+uuid+`, name, callsign FROM logbook WHERE deleted_at IS NULL ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -169,18 +182,25 @@ func peekLiveLogbooks(ctx context.Context, db *sql.DB) ([]types.Logbook, error) 
 }
 
 // peekBindings reads the live logbooks' bindings. legacy_name exists from log
-// schema 15; on a file at 14 it reads as empty.
+// schema 15 and identity_since from 18; below those they read as empty.
 func peekBindings(ctx context.Context, db *sql.DB) ([]types.LogbookDestination, error) {
-	legacy := "NULL"
-	var n int
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('logbook_destination') WHERE name = 'legacy_name'`).Scan(&n); err != nil {
+	column := func(name string) (string, error) {
+		var n int
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('logbook_destination') WHERE name = ?`, name).Scan(&n); err != nil || n == 0 {
+			return "NULL", err
+		}
+		return "d." + name, nil
+	}
+	legacy, err := column("legacy_name")
+	if err != nil {
 		return nil, err
 	}
-	if n == 1 {
-		legacy = "d.legacy_name"
+	identity, err := column("identity_since")
+	if err != nil {
+		return nil, err
 	}
 	rows, err := db.QueryContext(ctx, `
-		SELECT d.id, d.logbook_id, d.destination, d.forwarder_name, d.enabled, d.credentials, `+legacy+`
+		SELECT d.id, d.logbook_id, d.destination, d.forwarder_name, d.enabled, d.credentials, `+legacy+`, `+identity+`
 		FROM logbook_destination d
 		         JOIN logbook l ON l.id = d.logbook_id
 		WHERE l.deleted_at IS NULL
@@ -196,10 +216,12 @@ func peekBindings(ctx context.Context, db *sql.DB) ([]types.LogbookDestination, 
 			enabled int64
 			creds   sql.NullString
 			name    sql.NullString
+			since   sql.NullTime
 		)
-		if err := rows.Scan(&d.ID, &d.LogbookID, &d.Destination, &d.ForwarderName, &enabled, &creds, &name); err != nil {
+		if err := rows.Scan(&d.ID, &d.LogbookID, &d.Destination, &d.ForwarderName, &enabled, &creds, &name, &since); err != nil {
 			return nil, err
 		}
+		d.IdentitySince = timePtr(since)
 		d.Enabled = enabled == 1
 		if creds.Valid && creds.String != "" {
 			d.Credentials = json.RawMessage(creds.String)

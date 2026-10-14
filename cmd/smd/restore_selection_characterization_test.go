@@ -2,28 +2,32 @@ package main
 
 // How `smd restore` chooses its SM Cloud credentials and its cloud logbook.
 // Characterized under config v5 (W-0021 5C, commit a); the cases marked
-// CHANGED took their 5C form with config v6 (ruling R2, 2026-10-06). --dry-run
+// CHANGED took their 5C form with config v6 (ruling R2, 2026-10-06), and those
+// marked 5F.5 their identity form (rulings K2, K3, 2026-10-13). --dry-run
 // stops after the export is fetched and counted, so each case reads which
 // account the fetch was given and which cloud logbook was counted. The SM
-// Cloud station account always supplies url and token; the binding supplies
-// the cloud logbook name, and the fixture gives the binding a name the config
-// entry does not hold, so reading the wrong source fails visibly.
+// Cloud station account always supplies url and token; the binding once
+// supplied the cloud logbook name, and the fixture gives the binding a name the
+// config entry does not hold, so reading the wrong source fails visibly. The
+// fixture's Home is adopted (it carries its identity), and its account names a
+// closed loopback port, so a restore that takes the identity path stops at its
+// support preflight, unreachable, having fetched nothing.
 //
-//   S1  CHANGED  — with no flags, the cloud logbook comes from Home's
-//                  default-logbook SM Cloud binding (v5: the config entry's
-//                  `logbook`). A disabled binding serves: restoring needs no
-//                  upload consent.
-//   S2  CHANGED  — --forwarder names an SM Cloud BINDING in Home,
-//                  case-insensitively, a disabled one included (v5: the config
-//                  entry's name). A name no SM Cloud binding carries is refused
-//                  and nothing is fetched.
+//   S1  5F.5     — with no flags, no binding names the cloud logbook: restore
+//                  takes the identity path (v6: Home's default-logbook
+//                  binding's name; v5: the config entry's `logbook`).
+//   S2  5F.5     — --forwarder is retired, refused before anything is fetched
+//                  and pointing to --cloud-logbook (v6: it named a Home SM
+//                  Cloud binding).
 //   S3  KEPT     — --cloud-logbook overrides — and works with Home's database
 //                  unavailable, opening nothing.
-//   S4  KEPT     — a binding whose logbook is empty restores the cloud's "main".
-//   S5  NEW      — when the default binding cannot be resolved, restore
-//                  requires --cloud-logbook rather than guessing; nothing fetched.
-//   S6  NEW      — --forwarder and --cloud-logbook together are refused: both
-//                  name the cloud logbook.
+//   S4  5F.5     — a binding whose logbook is empty no longer selects the
+//                  cloud's "main": restore takes the identity path.
+//   S5  5F.5     — with no default binding, restore no longer requires
+//                  --cloud-logbook: it takes the identity path (v6: refused,
+//                  asking for --cloud-logbook).
+//   S6  5F.5     — --forwarder with --cloud-logbook is refused as --forwarder
+//                  is (v6: refused because both named the cloud logbook).
 
 import (
 	"context"
@@ -40,7 +44,7 @@ import (
 )
 
 const (
-	restoreCharURL   = "https://smc-restore-char.example.test"
+	restoreCharURL   = "http://127.0.0.1:9" // closed: the identity path stops at its preflight
 	restoreCharToken = "SMC-RESTORE-TOKEN-41"
 )
 
@@ -58,12 +62,19 @@ func restoreCharTestbed(t *testing.T, bindings ...string) (string, string, *type
 	var homePath string
 	tmp := setupImportTestbed(t, func(c *config.Config) {
 		homePath = c.Datastore.Path
+		c.QsoArchives = []types.QsoArchiveConfig{{ID: archA, Label: "Home", Ownership: types.QsoArchiveOwnershipLegacy, Path: homePath}}
+		c.ActiveQsoArchiveID = archA
 		c.Forwarders = []types.ForwarderConfig{
 			{Name: "qrz-char", Type: "qrz", Enabled: true,
 				Credentials: json.RawMessage(`{"api_key":"QRZ-RESTORE-KEY-43"}`)},
 			{Name: "cloud-char", Type: smcloud.Type, Enabled: false, Credentials: raw},
 		}
 	})
+	cfg, err := config.Load(filepath.Join(tmp, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	giveIdentity(t, cfg, homePath, archA)
 	if len(bindings) > 0 {
 		db, err := sql.Open("sqlite", "file:"+homePath)
 		if err != nil {
@@ -117,33 +128,33 @@ func assertRestoreSource(t *testing.T, label string, fc *types.ForwarderConfig) 
 	}
 }
 
+// wantIdentityPath: restore went to the identity path — stopped at its
+// unreachable support preflight — and never fetched the whole-tenant export.
+func wantIdentityPath(t *testing.T, label string, err error, fc *types.ForwarderConfig) {
+	t.Helper()
+	if err == nil || !strings.Contains(err.Error(), "could not be reached") {
+		t.Fatalf("%s: err = %v; want the identity path's unreachable preflight", label, err)
+	}
+	if fc.Type != "" {
+		t.Fatalf("%s: the whole-tenant export was fetched", label)
+	}
+}
+
 func TestCharacterize_RestoreSelection(t *testing.T) {
-	t.Run("S1 default: Home's default-logbook SM Cloud binding, disabled", func(t *testing.T) {
+	t.Run("S1 no flags: the identity path, not the binding's name", func(t *testing.T) {
 		cfgPath, _, got := restoreCharTestbed(t, bindDefault)
-		out, err := runRestoreDry(t, "--config", cfgPath)
-		if err != nil {
-			t.Fatalf("restore: %v", err)
-		}
-		assertRestoreSource(t, "S1", got)
-		if !strings.Contains(out, `2 record(s) in cloud logbook "binding-book"`) {
-			t.Fatalf("S1: output %q; want the binding's cloud logbook counted, not the config entry's", out)
+		_, err := runRestoreDry(t, "--config", cfgPath)
+		wantIdentityPath(t, "S1", err, got)
+		if strings.Contains(err.Error(), "binding-book") {
+			t.Fatalf("S1: %v; the binding's cloud logbook name was used", err)
 		}
 	})
 
-	t.Run("S2 --forwarder names a Home SM Cloud binding case-insensitively", func(t *testing.T) {
+	t.Run("S2 --forwarder is retired", func(t *testing.T) {
 		cfgPath, _, got := restoreCharTestbed(t, bindDefault, secondLogbk, bindSecondLb)
-		out, err := runRestoreDry(t, "--config", cfgPath, "--forwarder", "SMCLOUD.SECOND")
-		if err != nil {
-			t.Fatalf("restore: %v", err)
-		}
-		assertRestoreSource(t, "S2", got)
-		if !strings.Contains(out, `3 record(s) in cloud logbook "other-book"`) {
-			t.Fatalf("S2: output %q; want the named binding's cloud logbook counted", out)
-		}
-		*got = types.ForwarderConfig{}
-		_, err = runRestoreDry(t, "--config", cfgPath, "--forwarder", "qrz-char")
-		if err == nil || !strings.Contains(err.Error(), "qrz-char") {
-			t.Fatalf("S2: --forwarder naming no SM Cloud binding: err = %v; want refused by name", err)
+		_, err := runRestoreDry(t, "--config", cfgPath, "--forwarder", "SMCLOUD.SECOND")
+		if err == nil || !strings.Contains(err.Error(), "--cloud-logbook") {
+			t.Fatalf("S2: err = %v; want --forwarder refused, pointing to --cloud-logbook", err)
 		}
 		if got.Type != "" {
 			t.Fatalf("S2: a refused selection still fetched")
@@ -168,33 +179,23 @@ func TestCharacterize_RestoreSelection(t *testing.T) {
 		}
 	})
 
-	t.Run("S4 an empty binding logbook restores the cloud's main", func(t *testing.T) {
-		cfgPath, _, _ := restoreCharTestbed(t, bindEmpty)
-		out, err := runRestoreDry(t, "--config", cfgPath)
-		if err != nil {
-			t.Fatalf("restore: %v", err)
-		}
-		if !strings.Contains(out, `1 record(s) in cloud logbook "main"`) {
-			t.Fatalf("S4: output %q; want the cloud's main counted", out)
-		}
+	t.Run("S4 an empty binding logbook no longer selects main", func(t *testing.T) {
+		cfgPath, _, got := restoreCharTestbed(t, bindEmpty)
+		_, err := runRestoreDry(t, "--config", cfgPath)
+		wantIdentityPath(t, "S4", err, got)
 	})
 
-	t.Run("S5 no default binding: the override is required", func(t *testing.T) {
+	t.Run("S5 no default binding: the identity path, no override required", func(t *testing.T) {
 		cfgPath, _, got := restoreCharTestbed(t)
 		_, err := runRestoreDry(t, "--config", cfgPath)
-		if err == nil || !strings.Contains(err.Error(), "--cloud-logbook") {
-			t.Fatalf("S5: err = %v; want restore to require --cloud-logbook", err)
-		}
-		if got.Type != "" {
-			t.Fatal("S5: an unresolved default still fetched")
-		}
+		wantIdentityPath(t, "S5", err, got)
 	})
 
-	t.Run("S6 --forwarder with --cloud-logbook is refused", func(t *testing.T) {
+	t.Run("S6 --forwarder with --cloud-logbook is refused as --forwarder", func(t *testing.T) {
 		cfgPath, _, got := restoreCharTestbed(t, bindDefault)
 		_, err := runRestoreDry(t, "--config", cfgPath, "--forwarder", "cloud-char", "--cloud-logbook", "other-book")
-		if err == nil || !strings.Contains(err.Error(), "--forwarder") {
-			t.Fatalf("S6: err = %v; want the pair refused", err)
+		if err == nil || !strings.Contains(err.Error(), "--forwarder") || !strings.Contains(err.Error(), "retired") {
+			t.Fatalf("S6: err = %v; want --forwarder refused as retired", err)
 		}
 		if got.Type != "" {
 			t.Fatal("S6: a refused selection still fetched")

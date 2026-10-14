@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	stderr "errors"
 	"flag"
 	"fmt"
 	"os"
@@ -15,7 +16,6 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/events"
-	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding/smcloud"
 	"github.com/ColonelBlimp/station-manager/internal/iocdi"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
@@ -23,24 +23,35 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
-// fetchSMCloudExport is the restore command's network boundary. Kept as a seam
-// so command tests can exercise the real restore/database/close path offline.
-var fetchSMCloudExport = smcloud.FetchExport
+// The restore command's network boundaries: the whole-tenant export (the
+// legacy, by-name source) and one logbook's scoped export (by identity). Kept
+// as seams so command tests can exercise the real restore/database/close path
+// offline.
+var (
+	fetchSMCloudExport = smcloud.FetchExport
+	fetchScopedExport  = smcloud.FetchScopedExport
+)
 
 // runRestore is the entry point for `smd restore` — the SM Cloud restore
-// path (ADR 0040 S5): pull GET /v1/export from the operator's smcloud
-// service and insert every QSO of one cloud logbook into a LOCAL logbook
-// with UUID + additional_data + modified_at + tombstones preserved. NEVER an
-// ADIF re-import (which mints new UUIDs and flattens additional_data).
+// path (ADR 0040 S5): insert a cloud logbook's QSOs into a LOCAL logbook with
+// UUID + additional_data + modified_at + revision + tombstones preserved.
+// NEVER an ADIF re-import (which mints new UUIDs and flattens additional_data).
+//
+// By default the source is the target logbook's OWN cloud logbook, addressed
+// by the target archive's catalogue id and the logbook's UUID through the
+// scoped export (W-0021 5F.5, ADR 0088 refinement 2026-10-13, rulings K1–K6):
+// in every archive, Home included; no binding is needed, and none is created,
+// enabled or stamped. The server's identity support is checked first and
+// nothing falls back. --cloud-logbook NAME selects the legacy, by-name source
+// (the whole-tenant export) instead, refused for a target whose SM Cloud
+// binding is born on identity (ADR 0092 refinement). --forwarder is retired.
 //
 // Credentials come from the SM Cloud station account in config.json (url and
-// token). The cloud logbook comes from Home's default-logbook SM Cloud binding,
-// read from Home's closed file — enabled or not: restoring only reads the cloud
-// and needs no upload consent (config v6, W-0021 5C ruling R2). --forwarder
-// names another SM Cloud binding in Home; --cloud-logbook names the cloud
-// logbook outright and reads no archive file at all. When neither resolves,
-// restore asks for --cloud-logbook rather than guessing. The daemon must not
-// be running (sqlite single-writer), same as `smd import`.
+// token); restoring only reads the cloud and needs no upload consent. The
+// target is resolved, and every refusal made, from the closed file read-only;
+// the file is opened for writing only after the export was accepted, and
+// never on --dry-run. The daemon must not be running (sqlite single-writer),
+// same as `smd import`.
 //
 // Existing rows (by UUID, tombstones included) are SKIPPED — re-running is
 // idempotent and restore never overwrites; healing a diverged existing row
@@ -55,8 +66,8 @@ func runRestore(args []string) error {
 	var logbookID int64
 	var dryRun bool
 	fs.StringVar(&configPath, "config", "", "path to config.json (default: $SM_WORKING_DIR, else the XDG data dir, else the executable's directory)")
-	fs.StringVar(&forwarderName, "forwarder", "", "name of an SM Cloud destination binding in the Home archive whose cloud logbook to restore (default: the binding on Home's default logbook)")
-	fs.StringVar(&cloudLogbook, "cloud-logbook", "", "cloud-side logbook name to restore from, overriding any binding (reads no archive file)")
+	fs.StringVar(&forwarderName, "forwarder", "", "retired: name the legacy cloud logbook with --cloud-logbook NAME instead")
+	fs.StringVar(&cloudLogbook, "cloud-logbook", "", "restore a LEGACY cloud logbook by its cloud-side name, through the whole-tenant export (default: the target logbook's own cloud logbook, by identity)")
 	fs.Int64Var(&logbookID, "logbook", 0, "LOCAL target logbook id (default: the target archive's default logbook)")
 	archiveID := fs.String("archive", "", "catalogue id (uuid) of the archive to restore into (default: the active archive); run with the daemon stopped")
 	fs.BoolVar(&dryRun, "dry-run", false, "fetch the export and report what would be restored — no DB writes")
@@ -67,54 +78,53 @@ func runRestore(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if forwarderName != "" {
+		return errors.New(op).WithMsg("--forwarder is retired: a restore no longer reads a destination binding. " +
+			"With no flag, restore takes the target logbook's own cloud logbook by identity; to restore a legacy cloud " +
+			"logbook, pass --cloud-logbook NAME, where NAME is the cloud logbook's name (as the SM Cloud server lists it), not a binding's name")
+	}
 
-	// ---- Config, the SM Cloud station account and the cloud logbook.
+	// ---- Config, the SM Cloud station account and the target, read-only.
 	cfg, _, err := loadConfig(configPath)
 	if err != nil {
 		return err
 	}
 	cfgSvc := config.New(cfg)
-
-	fc, via, err := restoreSource(cfg, forwarderName, &cloudLogbook)
+	account, ok := smcloudAccount(cfg) // enabled or not: restoring only reads
+	if !ok {
+		return errors.New(op).WithMsg("no SM Cloud station account in config.json — add one (url + token) before restoring")
+	}
+	paths, err := resolveArchivePaths(cfg, *archiveID, os.Stdout)
+	if err != nil {
+		return errors.New(op).WithErr(err)
+	}
+	legacy := cloudLogbook != ""
+	target, err := restoreTarget(cfg, paths, logbookID, legacy, dryRun)
 	if err != nil {
 		return errors.New(op).WithErr(err)
 	}
 
-	// ---- Pull the export.
-	_, _ = fmt.Fprintf(os.Stderr, "fetching export via %s…\n", via)
-	export, err := fetchSMCloudExport(context.Background(), fc)
+	// ---- Pull and accept the export.
+	ctx := context.Background()
+	var records []smcloud.ScopedExportRecord
+	var source string
+	if legacy {
+		records, err = legacyRecords(ctx, account, cloudLogbook)
+		source = fmt.Sprintf("cloud logbook %q", cloudLogbook)
+	} else {
+		records, err = identityRecords(ctx, account, paths.Entry.ID, target.UUID)
+		source = fmt.Sprintf("cloud archive %s logbook %s", paths.Entry.ID, target.UUID)
+	}
 	if err != nil {
-		return errors.New(op).WithErr(err).WithMsg("fetch export")
+		return errors.New(op).WithErr(err)
 	}
-
-	var cloudLogbookID int64
-	for _, lb := range export.Logbooks {
-		if lb.Name == cloudLogbook {
-			cloudLogbookID = lb.ID
-			break
-		}
-	}
-	if cloudLogbookID == 0 {
-		names := make([]string, 0, len(export.Logbooks))
-		for _, lb := range export.Logbooks {
-			names = append(names, lb.Name)
-		}
-		return errors.New(op).WithMsgf("cloud logbook %q not found (cloud has: %s)",
-			cloudLogbook, strings.Join(names, ", "))
-	}
-	var records []smcloud.ExportRecord
 	tombstones := 0
-	for _, r := range export.Qsos {
-		if r.LogbookID != cloudLogbookID {
-			continue
-		}
+	for _, r := range records {
 		if r.DeletedAt != nil {
 			tombstones++
 		}
-		records = append(records, r)
 	}
-	_, _ = fmt.Fprintf(os.Stderr, "export: %d record(s) in cloud logbook %q (%d tombstone(s))\n",
-		len(records), cloudLogbook, tombstones)
+	_, _ = fmt.Fprintf(os.Stderr, "export: %d record(s) in %s (%d tombstone(s))\n", len(records), source, tombstones)
 
 	if dryRun {
 		_, _ = fmt.Fprintln(os.Stdout, "dry-run: no DB writes")
@@ -175,22 +185,18 @@ func runRestore(args []string) error {
 		return errors.New(op).WithErr(err).WithMsg("resolve qso service")
 	}
 
-	paths, closeDBs, err := openArchiveDatabases(cfg, cfgSvc, *archiveID, dbSvc, refDbSvc, loggerSvc, os.Stdout)
+	// ---- Open for writing: the export was accepted.
+	paths, closeDBs, err := openArchiveDatabases(cfg, cfgSvc, *archiveID, dbSvc, refDbSvc, loggerSvc, nil)
 	if err != nil {
 		return errors.New(op).WithErr(err)
 	}
 	defer closeArchiveDatabasesAndRecordSummary(cfg, paths, dbSvc, closeDBs, loggerSvc)
-
-	// ---- Resolve the LOCAL target logbook.
-	if logbookID, err = targetLogbook(logbookID, dbSvc, paths, cfg); err != nil {
-		return errors.New(op).WithErr(err)
-	}
-	if err := checkRestoreTarget(context.Background(), dbSvc, paths, logbookID); err != nil {
+	logbookID = target.ID
+	if err := checkRestoreTarget(ctx, dbSvc, paths, target, legacy); err != nil {
 		return errors.New(op).WithErr(err)
 	}
 
 	// ---- Restore loop: per-record best-effort, errors reported at the end.
-	ctx := context.Background()
 	start := time.Now()
 	var stored, skipped, failed int
 	var firstErrs []string
@@ -253,82 +259,153 @@ func runRestore(args []string) error {
 	return nil
 }
 
-// restoreSource resolves what a restore reads: the SM Cloud station account
-// (url, token) and, unless *cloudLogbook is already set, the cloud logbook
-// named by a Home binding (R2). It returns the account to fetch with and a
-// description of where the logbook came from.
-func restoreSource(cfg config.Config, forwarderName string, cloudLogbook *string) (types.ForwarderConfig, string, error) {
-	var account types.ForwarderConfig
-	found := false
-	for _, f := range cfg.Forwarders {
-		if f.Type == smcloud.Type {
-			account, found = f, true
-			break
+// restoreTarget resolves the LOCAL target logbook from the closed archive file,
+// read-only (ruling K1 and the read-only amendment): no migration, no file
+// created, no summary written. The identity path needs an adopted archive and
+// the logbook's UUID. The legacy path refuses a target whose SM Cloud binding is
+// born on identity, enabled or not, in every archive (ruling K4); a dry-run of it
+// against a missing file reads nothing (that file holds no binding), and a real
+// one is refused when the file is opened.
+func restoreTarget(cfg config.Config, paths archive.Paths, requested int64, legacy, dryRun bool) (types.Logbook, error) {
+	if !legacy && paths.Entry == nil {
+		return types.Logbook{}, fmt.Errorf("this install has no archive identity yet (the daemon adopts Home at its next start), so there is no " +
+			"cloud logbook to restore by identity; to restore a legacy cloud logbook, pass --cloud-logbook NAME")
+	}
+	if _, err := os.Stat(paths.QSO); legacy && dryRun && os.IsNotExist(err) {
+		id, err := legacyTargetID(requested, paths, cfg, sqlite.PeekedBindings{})
+		return types.Logbook{ID: id}, err
+	}
+	if err := verifyArchiveIdentity(paths); err != nil {
+		return types.Logbook{}, err
+	}
+	peek, err := sqlite.PeekDestinationBindings(paths.QSO)
+	if err != nil {
+		return types.Logbook{}, fmt.Errorf("read the target archive read-only: %w", err)
+	}
+	if legacy {
+		id, err := legacyTargetID(requested, paths, cfg, peek)
+		if err != nil {
+			return types.Logbook{}, err
 		}
-	}
-	if !found {
-		return types.ForwarderConfig{}, "", fmt.Errorf("no SM Cloud station account in config.json — add one (url + token) before restoring")
-	}
-	if *cloudLogbook != "" {
-		if forwarderName != "" {
-			return types.ForwarderConfig{}, "", fmt.Errorf("--forwarder and --cloud-logbook both name the cloud logbook; give one")
-		}
-		return account, "the SM Cloud station account", nil
-	}
-	binding, err := restoreBinding(cfg, forwarderName)
-	if err != nil {
-		return types.ForwarderConfig{}, "", err
-	}
-	fc, err := forwarding.BindingConfig(binding, account)
-	if err != nil {
-		return types.ForwarderConfig{}, "", err
-	}
-	if *cloudLogbook, err = smcloud.CloudLogbookName(fc); err != nil {
-		return types.ForwarderConfig{}, "", err
-	}
-	return account, fmt.Sprintf("the SM Cloud station account (binding %q)", binding.ForwarderName), nil
-}
-
-// restoreBinding finds the SM Cloud binding in Home that names the cloud
-// logbook: the one --forwarder names (case-insensitively), else the one on
-// Home's default logbook. Either may be disabled. Neither found asks for
-// --cloud-logbook.
-func restoreBinding(cfg config.Config, forwarderName string) (types.LogbookDestination, error) {
-	const ask = "; name the cloud logbook with --cloud-logbook"
-	peek, err := archive.ReadHomeBindings(cfg)
-	if err != nil {
-		return types.LogbookDestination{}, fmt.Errorf("%w%s", err, ask)
-	}
-	if forwarderName != "" {
 		for _, b := range peek.Bindings {
-			if b.Destination == smcloud.Type && strings.EqualFold(b.ForwarderName, forwarderName) {
-				return b, nil
+			if b.LogbookID == id && b.Destination == smcloud.Type && b.IdentitySince != nil {
+				return types.Logbook{}, stampedRefusal(id, paths)
 			}
 		}
-		return types.LogbookDestination{}, fmt.Errorf("no SM Cloud destination binding named %q in the Home archive%s", forwarderName, ask)
+		return types.Logbook{ID: id}, nil
 	}
-	defaultID := cfg.DefaultLogbookID
-	if peek.HasIdentity && peek.Identity.DefaultLogbookID > 0 {
-		defaultID = peek.Identity.DefaultLogbookID
-	}
-	for _, b := range peek.Bindings {
-		if b.Destination == smcloud.Type && b.LogbookID == defaultID {
-			return b, nil
+	id := requested
+	if id == 0 {
+		if id, err = legacyTargetID(0, paths, cfg, peek); err != nil {
+			return types.Logbook{}, err
 		}
 	}
-	return types.LogbookDestination{}, fmt.Errorf("the Home archive's default logbook has no SM Cloud destination binding%s", ask)
+	for _, lb := range peek.Logbooks {
+		if lb.ID == id {
+			if lb.UUID == "" {
+				return types.Logbook{}, fmt.Errorf("target logbook id=%d has no UUID yet; start the daemon once, then restore", id)
+			}
+			return lb, nil
+		}
+	}
+	return types.Logbook{}, fmt.Errorf("target logbook id=%d does not exist in archive %s (%s)", id, paths.Entry.Label, paths.Entry.ID)
 }
 
-// checkRestoreTarget requires the target logbook to exist and refuses a
-// legacy restore into a Home logbook whose SM Cloud binding is born on
-// identity, enabled or not (W-0021 5F.4, ruling J1): the restored QSOs keep
-// the legacy cloud's UUIDs, and an edit would later move those cloud rows into
-// the identity logbook. Identity-aware restore is 5F.5.
-func checkRestoreTarget(ctx context.Context, db *sqlite.Service, paths archive.Paths, logbookID int64) error {
-	if _, err := db.FetchLogbookByIDWithContext(ctx, logbookID); err != nil {
-		return fmt.Errorf("target logbook id=%d does not exist: %w", logbookID, err)
+// legacyTargetID is the --logbook value, else the archive's own default from
+// its identity row, else config's projection where that applies.
+func legacyTargetID(requested int64, paths archive.Paths, cfg config.Config, peek sqlite.PeekedBindings) (int64, error) {
+	switch {
+	case requested != 0:
+		return requested, nil
+	case peek.HasIdentity && peek.Identity.DefaultLogbookID > 0:
+		return peek.Identity.DefaultLogbookID, nil
 	}
-	if paths.Entry != nil && paths.Entry.Ownership != types.QsoArchiveOwnershipLegacy {
+	return configDefaultLogbook(paths, cfg)
+}
+
+func stampedRefusal(logbookID int64, paths archive.Paths) error {
+	where := "this archive"
+	if paths.Entry != nil {
+		where = fmt.Sprintf("archive %s (%s)", paths.Entry.Label, paths.Entry.ID)
+	}
+	return fmt.Errorf("logbook id=%d in %s is backed up to SM Cloud by identity, so a legacy restore by name into it is refused: "+
+		"its QSOs would keep the legacy cloud's UUIDs, and an edit would later move those cloud rows. "+
+		"Restore it by identity instead: run smd restore without --cloud-logbook", logbookID, where)
+}
+
+// identityRecords is the identity path's source (rulings K1, K5): the server
+// must answer the bounded support check as supported, with no error, before
+// the scoped export is requested; nothing falls back to the whole-tenant
+// export. The preflight cannot prove the server is unchanged by the time the
+// export is requested, so a 404 is reported as what it is and nothing more.
+func identityRecords(ctx context.Context, account types.ForwarderConfig, archiveUUID, logbookUUID string) ([]smcloud.ScopedExportRecord, error) {
+	const nothing = "; nothing was restored"
+	res, err := checkSmcloudSupport(ctx, account)
+	switch {
+	case err == nil && res.State == smcloud.SupportSupported:
+	case err == nil:
+		return nil, fmt.Errorf("the SM Cloud server does not report archive identity support, which a restore by identity needs%s. "+
+			"A legacy cloud logbook is restored by its name with --cloud-logbook NAME", nothing)
+	case res.State == smcloud.SupportUnverified:
+		return nil, fmt.Errorf("the SM Cloud server could not be reached to check its archive identity support (%v)%s", err, nothing)
+	default:
+		return nil, fmt.Errorf("the SM Cloud server's archive identity support could not be confirmed (%v)%s", err, nothing)
+	}
+	_, _ = fmt.Fprintf(os.Stderr, "fetching cloud archive %s logbook %s…\n", archiveUUID, logbookUUID)
+	export, err := fetchScopedExport(ctx, account, archiveUUID, logbookUUID)
+	switch {
+	case stderr.Is(err, smcloud.ErrScopedLogbookNotFound):
+		return nil, fmt.Errorf("the SM Cloud server has no logbook %s in archive %s (HTTP 404)%s. "+
+			"If this logbook's QSOs were only ever uploaded by name, restore them with --cloud-logbook NAME", logbookUUID, archiveUUID, nothing)
+	case err != nil:
+		return nil, fmt.Errorf("fetch the scoped export: %w", err)
+	}
+	return export.Qsos, nil
+}
+
+// legacyRecords is the --cloud-logbook source: the whole-tenant export,
+// filtered to the cloud logbook of that name.
+func legacyRecords(ctx context.Context, account types.ForwarderConfig, cloudLogbook string) ([]smcloud.ScopedExportRecord, error) {
+	_, _ = fmt.Fprintln(os.Stderr, "fetching export via the SM Cloud station account…")
+	export, err := fetchSMCloudExport(ctx, account)
+	if err != nil {
+		return nil, fmt.Errorf("fetch export: %w", err)
+	}
+	var cloudLogbookID int64
+	names := make([]string, 0, len(export.Logbooks))
+	for _, lb := range export.Logbooks {
+		names = append(names, lb.Name)
+		if lb.Name == cloudLogbook && cloudLogbookID == 0 {
+			cloudLogbookID = lb.ID
+		}
+	}
+	if cloudLogbookID == 0 {
+		return nil, fmt.Errorf("cloud logbook %q not found (cloud has: %s)", cloudLogbook, strings.Join(names, ", "))
+	}
+	var records []smcloud.ScopedExportRecord
+	for _, r := range export.Qsos {
+		if r.LogbookID == cloudLogbookID {
+			records = append(records, smcloud.ScopedExportRecord{UUID: r.UUID, ModifiedAt: r.ModifiedAt, Revision: r.Revision, DeletedAt: r.DeletedAt, Qso: r.Qso})
+		}
+	}
+	return records, nil
+}
+
+// checkRestoreTarget re-reads the target through the writing connection, as
+// the read-only resolution saw it: the logbook exists, an identity restore's
+// logbook still has the UUID its export was fetched for, and a legacy
+// restore's logbook has no SM Cloud binding born on identity (ruling K4; the
+// read-only check already refused one, so this holds only if the file changed
+// meanwhile).
+func checkRestoreTarget(ctx context.Context, db *sqlite.Service, paths archive.Paths, target types.Logbook, legacy bool) error {
+	lb, err := db.FetchLogbookByIDWithContext(ctx, target.ID)
+	if err != nil {
+		return fmt.Errorf("target logbook id=%d does not exist: %w", target.ID, err)
+	}
+	if !legacy {
+		if lb.UUID != target.UUID {
+			return fmt.Errorf("target logbook id=%d changed while the export was fetched (UUID %s, fetched for %s); nothing was restored", target.ID, lb.UUID, target.UUID)
+		}
 		return nil
 	}
 	bindings, err := db.ListLogbookDestinationsWithContext(ctx)
@@ -336,8 +413,8 @@ func checkRestoreTarget(ctx context.Context, db *sqlite.Service, paths archive.P
 		return fmt.Errorf("read the target archive's bindings: %w", err)
 	}
 	for _, b := range bindings {
-		if b.LogbookID == logbookID && b.Destination == smcloud.Type && b.IdentitySince != nil {
-			return fmt.Errorf("logbook id=%d is backed up to SM Cloud by identity; a legacy restore into it is refused until identity-aware restore", logbookID)
+		if b.LogbookID == target.ID && b.Destination == smcloud.Type && b.IdentitySince != nil {
+			return stampedRefusal(target.ID, paths)
 		}
 	}
 	return nil

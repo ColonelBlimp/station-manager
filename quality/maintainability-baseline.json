@@ -146,7 +146,7 @@
       "path": "cmd/smd/restore.go",
       "function": "runRestore",
       "direction": "maximum",
-      "value": 53
+      "value": 49
     },
     {
       "language": "go",
@@ -266,7 +266,7 @@
       "path": "cmd/smd/restore.go",
       "function": "runRestore",
       "direction": "maximum",
-      "value": 40
+      "value": 38
     },
     {
       "language": "go",
@@ -386,7 +386,7 @@
       "path": "cmd/smd/restore.go",
       "function": "runRestore",
       "direction": "minimum",
-      "value": 16
+      "value": 17
     },
     {
       "language": "go",
