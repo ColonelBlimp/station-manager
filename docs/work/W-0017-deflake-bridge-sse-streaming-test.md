@@ -142,6 +142,26 @@ simply increasing test timeouts. Preserve what the test proves about dial-contex
 separation, and keep the fix within the test/store setup without loosening production locking
 guarantees.
 
+## Sub-item C — `cmd/smd` DR3 sees the adopter's version probe (2026-10-14)
+
+**Observed:** CI run `38416339715` (docs-only commit `ec81682b`) failed
+`TestReconcileSet_DR3_TheSetIsTheStartSnapshot` with `a request carried ""; want the start's
+token`; it passed locally.
+
+**Cause (proven):** DR3 saves a new station token before the aggregate. The token keys the SM Cloud
+account fingerprint (`smcloud.AccountFingerprint`, HMAC on the token), so Home's default binding is
+no longer confirmed for the current account. If the adopter's first check (asynchronous at start)
+runs after the save, it re-attempts adoption and sends `GET /v1/version`, which carries no token by
+design (`adoption_client.go`). When that lands between the test's mark and its read, the assertion
+counts it as the aggregate's. The adopter is correct; the test's assertion was too broad.
+
+**Reproducer (temporary instrumentation, removed, hashes verified):** the adopter's `Run` waited for
+the saved `t2` token before its first check, and each reconciler GET slept 100 ms. Before the fix:
+3/3 failures with CI's exact text. After it: 3/3 passes under the same instrumentation.
+
+**Fix (test only):** DR3 skips `GET /v1/version` and requires every other request in the window to
+carry the start's token, and at least one such request. Production is unchanged. Not yet committed.
+
 ## References
 
 - `internal/bridge/handler_test.go` (barrier + its inline flake history at the wait site)
