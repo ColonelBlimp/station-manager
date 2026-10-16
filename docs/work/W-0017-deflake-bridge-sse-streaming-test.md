@@ -1,6 +1,6 @@
 # W-0017 — De-flake CI-observed environment-sensitive tests
 
-**Status:** Sub-item A closed (`544fb62a`, CI green 2026-10-13); sub-item B fixed in `e7237b3a` (busy handling on the raw test connections)
+**Status:** Sub-item A closed (`544fb62a`, CI green 2026-10-13); sub-item B fixed in `e7237b3a` (busy handling on the raw test connections); sub-item C closed (`20b879e3`, CI green 2026-10-14)
 **Selected:** Sub-item A, 2026-10-12 (operator), as the change after W-0021 5F.4 commit 4
 **Outcome:** Two tests that flake red only on a loaded/instrumented CI runner become deterministic,
 each proving its original guarantee without leaning on a wall-clock margin.
@@ -160,7 +160,9 @@ the saved `t2` token before its first check, and each reconciler GET slept 100 m
 3/3 failures with CI's exact text. After it: 3/3 passes under the same instrumentation.
 
 **Fix (test only):** DR3 skips `GET /v1/version` and requires every other request in the window to
-carry the start's token, and at least one such request. Production is unchanged. Not yet committed.
+carry the start's token, and at least one such request. Production is unchanged. Approved at
+operator review and committed 2026-10-14 as `20b879e3`. Its clean-room review found no
+actionable findings; closed and the review file deleted.
 
 ## References
 

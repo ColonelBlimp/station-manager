@@ -4562,6 +4562,8 @@ the compatibility promise that a daemon at any slice boundary starts the existin
        way, and records the schema 12–13 resolution.
      - Re-review (2026-10-14): clear, no remaining blockers; the four commits approved in the
        proposed order (5F.5 code, 5F.5 docs, DR3 fix, W-0017 record).
+     - Committed 2026-10-14 as `6aa99773` (code) and `d93accc9` (docs). The clean-room review
+       of `6aa99773` found no actionable findings; closed and the review file deleted.
 
    - **Archive contents (ADR 0084; ruled 2026-09-28).** Settings → Archives lists each
      archive's logbooks under its row, nested on the table's grid (name under Label,
