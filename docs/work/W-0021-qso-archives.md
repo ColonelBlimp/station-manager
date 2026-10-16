@@ -4565,6 +4565,331 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      - Committed 2026-10-14 as `6aa99773` (code) and `d93accc9` (docs). The clean-room review
        of `6aa99773` found no actionable findings; closed and the review file deleted.
 
+   - **Whole-archive provisioning (Q7) design (2026-10-16; selected by the operator for design
+     review; no code).** The operator's direction: define acceptance around creating a new managed
+     file carrying the cloud archive's UUID, kept apart from importing archive contents into an
+     existing file; bring the design and commit sequence before implementation. 5F stays open
+     against AC 6 until its evidence is established; Settings → Logbooks follows that checkpoint.
+     *Survey (read-only, at `44abbc8a`):*
+     - Creation is online only: `POST /v1/qso-archives` → `archive.Manager.Create`
+       (`internal/archive/manager.go:116-214`). It mints the archive UUID (`:152`), builds
+       `<managed dir>/<id>.db.creating` (log set only; logbook, identity row, empty binding
+       seed, integrity check, summaries), renames it into place (`:177`, no guard against an
+       existing final file) and appends the catalogue entry, file first. `PathFor` derives a
+       managed file's path from its id alone (`internal/archive/paths.go:69-74`).
+     - Logbook UUIDs are always minted: `InsertLogbookWithContext` overwrites the field,
+       "never accepted from the caller (ADR 0071)" (`internal/database/sqlite/api_context.go:1781`).
+       `WriteArchiveIdentityWithContext` does accept a chosen archive UUID and refuses to
+       relabel a file that has one.
+     - The catalogue refuses a duplicate id (`internal/config/validate.go:806`). A missing
+       file is `archive_file_missing` (`internal/archive/failure.go:87-107`): the daemon does
+       not start when it is the active archive's, a candidate falls back, and offline commands
+       and `smd restore` refuse.
+     - The server has no listing of a tenant's archives or of an archive's logbooks with UUIDs,
+       and no whole-archive export. Identity reads are per logbook (`server.go:98-101`).
+       `GET /v1/logbooks` lists the legacy archive's names only.
+     - Store behaviour for a file carrying an existing cloud archive's and logbooks' UUIDs
+       (inferred from `internal/cloud/store/identity.go:218-262` and `store.go:326-418`): the
+       archive and logbooks resolve to the existing rows, rows already there are no-ops or
+       older, and no `archive_conflict` arises. A file whose logbooks were given NEW UUIDs
+       would make new cloud logbooks on the first push, and a later revision would move each
+       row there (ADR 0092 `:101-105`).
+     - Offline commands have no daemon lock; they rely on "run with the daemon stopped".
+     *Acceptance (operator-observable):*
+     - (PA1) With the daemon stopped, provisioning archive U from the station account creates
+       one managed file at U's managed path. Its identity row carries U. It has one logbook per
+       cloud logbook of U, each with that logbook's UUID, label and callsign. Every cloud row
+       is in its logbook with UUID, revision, `modified_at`, tombstone and payload kept. The
+       catalogue gains one inactive managed entry for U, or keeps its existing entry unchanged.
+       Nothing else in the data directory changes: no other archive file, no binding, nothing
+       queued.
+     - (PA2) After U is activated and SM Cloud is enabled on its logbooks, reconcile reports
+       each logbook in sync, and the first pushes create no cloud archive, logbook or row.
+     - (PA3) Refused before anything is created: a file already at U's path, catalogued or not
+       (that is a copy of U, and `smd restore` fills an existing file); U unknown to the
+       server; the server lacking the capability, unreachable or erroring; an export that is
+       incomplete or names another archive; U being the tenant's legacy (Home) archive; a
+       cloud archive with no logbook; two cloud logbooks whose labels would collide locally.
+     - (PA4) A failure after the build starts leaves no selectable archive and no catalogue
+       change; a crash leaves only a diagnosed `.creating` file, as creation does today.
+     - (PA5) `--dry-run` fetches and validates, reports per-logbook counts, and creates
+       nothing.
+     - Nearest confusable outcomes:
+       - importing archive contents into an existing file: `smd restore` into a catalogued
+         file, or one archive's rows into another (the deferred `archive_conflict`).
+         Provisioning never writes into a file that exists.
+       - a provisioned file whose logbooks got fresh UUIDs. It looks right locally, but its
+         first push makes new cloud logbooks and moves rows between them.
+       - a Clone (a new archive UUID; ADR 0071 `:112-115`), and a copied file registered as a
+         second archive.
+     *Design (recommended; each choice is a question below):*
+     - Server first: `GET /v1/archives`, the tenant's identity archives with their logbooks
+       (UUID, label, callsign, row count), and `GET /v1/archives/{archive_uuid}/export`, the
+       whole archive in one repeatable-read snapshot (head: the archive and its logbooks; each
+       row names its logbook UUID). A new capability on `GET /v1/version` (`archive_export:
+       1`) tells the client the routes exist; an old server answers 404 and the preflight
+       refuses first.
+     - Offline subcommand `smd provision --archive U [--default-logbook LOGBOOK_UUID]
+       [--dry-run]`, daemon stopped, kept apart from `smd restore` (K1: no implicit
+       provisioning).
+     - `archive.Manager` gains a provision path sharing `Create`'s build. It takes the archive
+       UUID and the logbook identities from the validated export, writes the chosen logbook
+       UUIDs through a new narrow sqlite call used only on a file under construction, inserts
+       the rows (as `qsoservice.Restore` does), places the file only if nothing is there, and
+       adds the entry only if it is absent.
+     - ADR: a refinement of ADR 0071 (logbook UUIDs are accepted, from the cloud's archive, by
+       provisioning a new file only), with the weighed alternatives below.
+     *Alternatives weighed:*
+     - The listing plus one scoped export per logbook, with no whole-archive export. This
+       reuses 5F.5's client, but each logbook is its own snapshot. A row moved between
+       logbooks between two fetches lands twice (the second skipped as a duplicate, in the
+       wrong logbook) or not at all. Under the single-writer invariant (ADR 0052) that needs a
+       second writer, so it is unlikely but not impossible.
+     - Minting new logbook UUIDs and mapping old to new: the moved-rows outcome above.
+     - Provisioning online through `POST /v1/qso-archives`: the active archive's lost file
+       stops the daemon from starting, so an online path cannot serve that case. It could
+       follow later for an inactive archive.
+     - Reusing `smd restore --archive U` for a missing file: it makes restore's target
+       sometimes a new file, which K1 rules out.
+     *Questions for the operator (each with a recommendation):*
+     - (PQ1) Server shape. Recommended: the listing plus a whole-archive export in one
+       snapshot, behind a new capability. Alternative: the listing plus per-logbook scoped
+       exports (no new export route).
+     - (PQ2) Discovery. Recommended: `--archive U` is required, and `smd provision --list`
+       prints the listing (archive UUID, label, logbooks, counts, whether catalogued here).
+       Alternative: choose by label (labels are not unique).
+     - (PQ3) The catalogue entry. Recommended: an existing entry for U with its file missing
+       is kept unchanged (id, label, request key), so the file is re-created at its fixed
+       path; an absent entry is added as inactive, labelled from the cloud. Any activation
+       failure code recorded on the entry stays for activation to clear.
+     - (PQ4) The default logbook. The cloud does not record it. Recommended: required
+       `--default-logbook` when the archive has more than one logbook; the only one
+       otherwise.
+     - (PQ5) Home. Recommended: refuse the tenant's legacy archive in this slice. Home is
+       legacy-owned at a recorded path, with adoption state, the name wire and kept pre-5F.0
+       bindings, so recovering Home's file needs its own design. A legacy archive that was
+       never adopted has no UUID to provision by.
+     - (PQ6) Bindings. Recommended: none created; SM Cloud stays off until the operator
+       enables it per logbook, which stamps it born on identity (PA2). Alternative: provision
+       enabled, identity-stamped SM Cloud bindings, since the file came from that account.
+     - (PQ7) Collisions and gaps. Recommended: refuse naming both logbooks when two cloud
+       labels collide under local name uniqueness, and refuse a logbook with no callsign;
+       no renaming or defaults.
+     - (PQ8) Running daemon. Recommended: document "daemon stopped" as the other offline
+       commands do. Alternative: a lock, which no offline command has today.
+     *Proposed commit sequence (each RED first, with reversion proofs; cloud tests with
+     `-race` against `sm-pg`):*
+     1. Server: the listing, the whole-archive export and the capability, last in the
+        commit (old-server compatibility kept). Deploy server first.
+     2. Client: `smcloud.ListArchives` and `smcloud.FetchArchiveExport` with head validation
+        (another archive, a logbook named twice, a row naming a logbook outside the head, a
+        cut-off document).
+     3. Storage and manager: the narrow logbook-UUID write; `Manager.Provision` sharing
+        `Create`'s build, with no-replace placement and add-if-absent entry; PA3's local
+        refusals and PA4.
+     4. Command: `smd provision` (`--list`, `--dry-run`), the preflight and PA1–PA5 end to
+        end, with an e2e test against the real server: provision B after deleting its file,
+        activate, enable, reconcile in sync (PA2), with an equal-labelled second archive left
+        alone.
+     5. Docs: the ADR 0071 refinement, `install.md`, `smcloud-deploy.md` (the drill and the
+        server routes), the dossier and the capsule.
+     **Operator review of the Q7 design (2026-10-16): hold for three corrections; PQ1–PQ8
+     ruled.**
+     - (P1) PA1 and PA2 claimed more than the restore path gives. The SQLite adapter reconciles
+       coordinates on restore (`internal/database/sqlite/qso_coords_test.go:183`, Q7 there), so
+       a restored payload can differ from its cloud copy while revision and `modified_at` are
+       kept. Reconcile compares only UUID, `modified_at` and revision
+       (`internal/forwarding/smcloud/reconcile.go:268`), while an exact-version push compares
+       the payload as JSONB (`internal/cloud/store/store.go:351`). "In sync" can therefore
+       coexist with a later `version_conflict`. Resolve before choosing the writer.
+       Recommendation: refuse exports whose payloads cannot round-trip unchanged, naming the
+       rows. Keep the coordinate rule. Define equality on the cloud wire, with local numeric ids
+       and dedupe keys reconstructed. PA2 must require unchanged pushes that succeed with zero
+       applied writes, since "creates nothing" also describes a rejected push.
+     - (P1) PA4 needs separate publication outcomes for a new and an existing entry. Creation
+       already diagnoses both `.creating` files and complete uncatalogued `.db` files left
+       between placement and the catalogue write (`internal/archive/manager.go:436`); the
+       design's "only a `.creating` file" was wrong. A missing file restored for an existing
+       entry is usable the moment it is placed, possibly as the active archive
+       (`manager.go:177`). Before publication a failure cleans up this invocation's
+       artefacts; after it, the applied outcome is reported, durability uncertainty included.
+       A crash can leave an unfinished temporary file, a complete unregistered file, or a
+       complete registered archive. A retry never overwrites any of them, and a cleanup
+       failure is disclosed.
+     - (P2) PQ3's reuse is limited to managed entries. An external or legacy entry resolves
+       through its recorded path (`internal/archive/paths.go:69`), so keeping it while creating
+       `<U>.db` in the managed directory would leave the catalogue pointing at the missing
+       file. Refuse existing legacy and external entries in this slice; keep existing managed
+       entries and both selection fields.
+     - Rulings:
+       - PQ1 agreed: the listing plus one whole-archive snapshot behind a new capability. The
+         archive metadata, the logbook inventory, the counts and the rows are read in that
+         one snapshot. Reuse the existing export admission and cancellation handling.
+       - PQ2 agreed: `--archive UUID` required, `--list` provided. Labels are display values;
+         the export is authoritative even if the earlier listing differs.
+       - PQ3 agreed, managed only (above). An existing entry keeps its label, request key and
+         activation error. A new entry is inactive. Recovering an already-active archive needs
+         no separate activation.
+       - PQ4 agreed: a logbook UUID is required when there are several, validated as a member
+         of the export; the sole logbook otherwise.
+       - PQ5 agreed: refuse Home. The export carries an authoritative legacy marker, so the
+         refusal works with no local catalogue entry; a label such as "Home" cannot establish
+         it.
+       - PQ6 agreed: no bindings and no uploads. The empty binding-seed decision is recorded
+         inside the new file, as creation does, so startup cannot seed bindings later.
+       - PQ7 agreed, extended: refuse collisions, missing callsigns and any metadata that
+         violates a local constraint. Accepted values are kept, never silently renamed or
+         defaulted.
+       - PQ8 agreed for this slice: document exclusive offline use, including no concurrent
+         offline writer. Atomic no-replace placement regardless; an absence check followed by
+         an ordinary rename is not enough.
+     - Tests, tightened:
+       - Validate unique logbook and QSO UUIDs, row membership, required metadata, complete
+         arrays and document, and count agreement; include empty logbooks and tombstones.
+       - PA2's fixture makes real unchanged pushes through the real forwarder and server, then
+         compares cloud identities, membership, payloads and tombstones. The source account
+         and cloud data stay unchanged during the proof.
+       - Both an absent entry and an existing active entry whose file is missing. Failures
+         injected around placement and the catalogue write, cleanup failure included.
+       - Pre-existing temporary files and SQLite sidecars are refused and not deleted. A
+         destination that appears after the preflight is covered.
+       - `--list`, the refusals and `--dry-run` with no default configuration too: the
+         ordinary loader can seed one (`cmd/smd/main.go:939`). Create's summary-sidecar write
+         (`manager.go:202`) is accounted for under PA1's "nothing else changes".
+     - Sequence: server → client → storage and manager → command stands. The ADR refinement
+       goes before or with the implementation it governs; canonical server and CLI docs change
+       with their behaviour commits. Characterize `Create` before extracting shared
+       construction code.
+
+     **Q7 design, revised (2026-10-16; for review; no code).**
+     *Verified for the corrections:* the push projection drops `id`, `logbook_id`,
+     `dedupe_key`, `csid` and the nested `country_details.id` and `contact_history[].id`
+     (`internal/forwarding/smcloud/cloud_projection.go:32-48`). The worker reads a row with
+     `FetchQsoByIdWithContext`, or `FetchQsoByIDIncludingDeletedWithContext` for a delete
+     (`internal/forwarding/worker/worker.go:395`, `:440`). The PUT acknowledges `received` and
+     `applied` (`internal/cloud/server/identity.go:210`). `os.Link` failing with EEXIST is the
+     tree's existing no-replace placement (`internal/pskreporter/identity.go:91`,
+     `cmd/smd/config_v6_strip.go:263`).
+     *The round-trip rule (P1):* each row is inserted into the file under construction through
+     the restore adapter, coordinate rule unchanged. It is then read back through the worker's
+     read for its state and projected with `projectCloudQso`. The result must equal the
+     export's payload under JSONB equality: key order and whitespace ignored, numbers equal by
+     value, duplicate keys resolved as JSONB resolves them. The tombstone and the logbook must
+     match too. Any row that differs refuses the whole provisioning before placement, naming
+     each row's UUID and the differing top-level keys, never their values (diagnostics carry
+     operator data). Rows that differ include those whose coordinates the adapter corrects, and
+     payload keys this build does not model. This replaces "reconcile reports in sync" as the
+     content proof: reconcile still must agree, but it is not evidence of payload equality.
+     *Acceptance, revised:*
+     - (PA1) As before, plus: every provisioned row's projected payload equals its cloud
+       payload under the round-trip rule. The changes permitted in the data directory are the
+       new file, the catalogue entry when one was added (inactive), and U's record in the
+       archive-summary sidecar (best effort, as creation does). Nothing else changes: no other
+       archive file, no binding, no queued upload, no seeded config.
+     - (PA2) After activation (none needed when U was already active) and enabling SM Cloud on
+       each logbook, an unchanged push of every row through the real forwarder and server
+       succeeds with `applied` 0 on every acknowledgement. The cloud's archive, logbooks,
+       membership, payloads and tombstones are unchanged after it, compared before and after.
+       Reconcile agrees.
+     - (PA3) As before, plus refusals: an existing legacy or external entry for U; the export's
+       legacy marker set; duplicate logbook or QSO UUIDs; a row naming a logbook outside the
+       head; missing required metadata or a value violating a local constraint; a count
+       disagreeing with the rows; a document or array cut off; a default logbook UUID that is
+       not a member; a row that does not round-trip.
+     - (PA4) Publication outcomes:
+       - Before publication any failure removes this invocation's own artefacts (its
+         temporary file and sidecars) and reports the failure; a cleanup failure is reported
+         with the path left behind.
+       - New entry: publication is the catalogue write. The file is placed first with
+         `os.Link` (EEXIST refuses, the temporary file is removed); a catalogue failure after
+         placement removes the placed file, as creation does, and discloses a removal
+         failure.
+       - Existing managed entry: publication is the placement itself; the archive is usable
+         at once, and active if it was. After it nothing is undone: the outcome is reported,
+         with durability uncertain when the directory sync fails.
+       - Crash residue (an unfinished temporary file, a complete unregistered file, a
+         complete registered archive) is never overwritten. A retry refuses each, without
+         deleting it, naming the path.
+     - (PA5) `--dry-run` and `--list` create nothing, seed no config and open no archive.
+     *Design changes:* config is read with `config.Load` on the resolved path, never the seeding
+     loader. The temporary file is `<U>.db.creating`, created `O_EXCL`; an existing one, or
+     an existing `<U>.db`, `-wal` or `-shm` at U's path, is refused without being touched.
+     `Create` is characterized (its publication order, cleanup and artefacts) before the shared
+     build is extracted.
+     *Commit sequence, revised:*
+     1. ADR 0071 refinement (logbook UUIDs taken from the cloud archive, only when provisioning
+        a new file; the round-trip rule; the rejected alternatives), as its own docs commit
+        ahead of the code.
+     2. Server: listing, whole-archive export in one snapshot with the legacy marker and
+        counts, existing admission and cancellation reused, the capability last. Server docs
+        (`doc.go`, `smcloud-deploy.md`'s routes) in the same commit.
+     3. Client: `ListArchives`, `FetchArchiveExport` and their validation.
+     4. Characterization of `Create`, test-only.
+     5. Storage and manager: the narrow logbook-UUID write, the shared build, the round-trip
+        check, `Manager.Provision` with the PA4 outcomes.
+     6. Command: `smd provision`, the end-to-end proof against `sm-pg` (PA1–PA5), and
+        `install.md` in the same commit.
+     7. Dossier and capsule.
+     **Operator review of the revised design (2026-10-16).** The publication and managed-entry
+     corrections are accepted and the seven-commit sequence is sound. Two P2 contract gaps,
+     one wording change and two evidence requirements; to be carried into the ADR refinement.
+     No redesign.
+     - (P2) The round-trip check compares the complete upload record as it would be sent: QSO
+       UUID, revision and `modified_at` as well as payload, tombstone and logbook, with archive
+       and logbook membership and all version metadata. The worker's read truncates
+       `modified_at` to seconds (`internal/database/sqlite/adapters/model_to_type.go:95-103`)
+       while the cloud keeps microseconds (`internal/cloud/store/store.go:57`). A row exported
+       at `….123456Z` survives insertion but is read for forwarding at the whole second: the
+       payload matches, a push of it is older and acknowledged `applied` 0, and reconcile
+       disagrees. Add a sub-second timestamp refusal case; keep the adapter as it is.
+     - (P2) Preflight refusals and construction refusals are separate, and dry-run's promise is
+       bounded. Preflight refusals happen before the temporary database is created. Storage
+       and round-trip refusals happen during construction, before placement, with PA4's
+       cleanup. `--dry-run` validates the export and the preflight conditions, reports counts,
+       and says explicitly that database construction and round-trip compatibility were not
+       tested: zero writes, and no promise that a real provisioning succeeds.
+     - Wording: PA2 promises unchanged cloud identities, membership and QSO state, not unchanged
+       archive records. A kept local catalogue label can differ from the cloud's, and an
+       identity push rewrites the label (`internal/cloud/store/identity.go:229`) even with
+       `applied` 0. PQ3's preservation stands; that display-label behaviour is allowed.
+     - Evidence: the JSON comparator is checked against `sm-pg`'s JSONB equality, including
+       numeric equivalents, large integers, nested values, and missing versus null. Linking
+       followed by a failure to remove the temporary name, and a catalogue write that returns
+       `DurabilityUncertain`, are exercised and reported by their publication boundary, with
+       the published archive kept.
+     **ADR refinement reviewed (2026-10-16):** no remaining design findings; commit 1 (the ADR
+     0071 refinement with this record) ready as proposed. Commit 2's checkpoint, ruled: one
+     grouped test diff, the exact `sm-pg` commands and the failing assertions before any
+     production change, covering tenant isolation and equal labels; complete exports (empty
+     logbooks, tombstones, counts, the legacy marker); snapshot consistency under a
+     barrier-controlled move between logbooks; admission, interruption and the capability. The
+     initial 404 shows the route missing; a later reversion must show separately that the
+     snapshot fixture catches an inconsistent read.
+     **Commit 2 RED (2026-10-16; tests only, nothing in production changed).**
+     - `internal/cloud/server/archive_export_test.go`, AX1–AX7, against the HTTP surface:
+       - AX1 listing (identity archives only, equal labels apart, logbook counts, the legacy
+         marker, a not-adopted legacy logbook with no UUID, the other tenant's listing);
+       - AX2 complete export (an empty logbook, a tombstone, counts against rows, each row's
+         logbook UUID, microsecond `modified_at`, payloads, no equal-labelled rows, the
+         document's terminator);
+       - AX3 the legacy marker; AX4 404s against a positive control;
+       - AX5 503 `overloaded` at a saturated gate, without a database;
+       - AX6 interruption: an `ACCESS EXCLUSIVE` lock on `qsos` holds the export in the store,
+         seen in `pg_locks`; the client cancels; the waiting lock must vanish and the slot
+         free while the lock is still held;
+       - AX7 `archive_export: 1` on `GET /v1/version`.
+     - `internal/cloud/store/archive_export_test.go`, AS1: the head callback commits a move of
+       a row to the other logbook at a higher revision before returning; the rows must show it
+       where the head counted it, at its old revision, and a fresh export must show the move.
+     - `server_test.go`: `newTestServerFull` exposes the `*Server` (export slots) for AX6;
+       `newTestServer` wraps it.
+     - RED, all at their assertions: AX1–AX3 and AX5–AX6 on the missing route's 404, AX7 on the
+       missing capability. AX4 first passed vacuously (the missing route's 404 is also
+       `not_found`); a control now requires the tenant's own archive to export 200, and AX4
+       fails there. AS1 does not compile (`undefined: ArchiveHead`,
+       `ArchiveExportSnapshot`): its first assertion-level run needs the store API declared.
+       Existing server tests still pass.
+
    - **Archive contents (ADR 0084; ruled 2026-09-28).** Settings → Archives lists each
      archive's logbooks under its row, nested on the table's grid (name under Label,
      callsign under State, count under Size), muted and indented:

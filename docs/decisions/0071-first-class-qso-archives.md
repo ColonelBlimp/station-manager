@@ -477,6 +477,92 @@ not complete.
   single-writer invariant is broken and conflict semantics must be decided
   first.
 
+## Refinement (2026-10-16): whole-archive provisioning from SM Cloud (W-0021 Q7)
+
+The operator ruled (W-0021 dossier, the Q7 design and its two reviews, PQ1–PQ8) how a lost or
+absent managed archive is re-created from its SM Cloud copy. The design survey found no way to do
+it: the server has no listing of a tenant's archives and no whole-archive export, a managed file
+always mints its own archive UUID, and a logbook's UUID is "never accepted from the caller".
+
+- **What it is.** An offline command, `smd provision --archive U`, run with the daemon stopped,
+  creates a NEW managed file carrying cloud archive U's UUID, one logbook per cloud logbook with
+  that logbook's UUID, label and callsign, and every cloud row. It never writes into a file that
+  exists; filling an existing file is `smd restore`'s job (ADR 0088 refinement). It is not a Clone,
+  which mints a new archive UUID, and not the registration of a copied file.
+- **Where it reads.** One whole-archive export, read in one snapshot on the server (the archive's
+  metadata, its logbook inventory, the counts and the rows), behind a new capability on
+  `GET /v1/version`. A listing serves `--list` only; labels are display values, and the export is
+  authoritative even if the listing differed.
+- **Logbook UUIDs are accepted here, and only here.** The rule "minted here, never accepted from the
+  caller" stands for every other path. Provisioning writes the logbook UUIDs of the validated
+  export into the file it is building, through a call used on no other path. The identities already
+  exist in the cloud archive: a file given fresh ones would make new cloud logbooks on its first
+  push and move each row there at its next revision.
+- **Which entries.** An existing *managed* catalogue entry for U whose file is missing is kept as
+  it is: its label, request key, activation error and both selection fields. An active archive
+  recovered this way needs no separate activation. With no entry, an inactive managed entry is
+  added. An existing legacy or external entry for U is refused, because it resolves through its
+  recorded path, not the managed one. The tenant's legacy archive (Home) is refused by an
+  authoritative legacy marker in the export, never by its label; recovering Home needs its own
+  design.
+- **What must round-trip.** Each row is inserted through the restore adapter, the coordinate rule
+  unchanged, then read back the way the forwarding worker reads it and built into the upload record
+  it would send. That complete record must equal the cloud's: QSO UUID, revision, `modified_at`,
+  tombstone, archive and logbook membership, and the payload under PostgreSQL JSONB equality (key
+  order and whitespace ignored, numbers by value). A row that differs refuses the provisioning,
+  naming its UUID and the differing fields, never their values. This refuses, among others, rows
+  whose coordinates the adapter corrects, payload keys this build does not model, and a sub-second
+  `modified_at` the worker's read truncates to the second.
+- **Two phases of refusal.**
+  - Preflight refusals come before the temporary database exists: the capability, the account, a
+    file or residue already at U's path, the entry rules above, and the export's own validation
+    (unique logbook and QSO UUIDs, row membership, required metadata and local constraints, a
+    complete document, counts that agree, the default logbook a member).
+  - Construction refusals (storage and the round-trip) come before placement, and clean up.
+  - `--dry-run` runs the preflight only, reports counts, and says that construction and
+    round-trip compatibility were not tested. It writes nothing and promises no successful
+    provisioning.
+- **Publication.**
+  - Before publication a failure removes this invocation's own artefacts and says so; a cleanup
+    failure names the path left behind.
+  - For a new entry, publication is the catalogue write. The file is placed first with a link that
+    refuses an existing name. A catalogue failure after placement removes the placed file, as
+    creation does, and a removal failure is disclosed.
+  - For an existing managed entry, publication is the placement itself. From then on nothing is
+    undone; the outcome is reported, with durability uncertain where it is.
+  - Crash residue (an unfinished temporary file, a complete unregistered file, a complete
+    registered archive) is never overwritten or deleted by a retry, which refuses naming the path.
+- **Nothing else is set up.** No binding and no upload are created. The new file records the empty
+  binding-seed decision, as creation does, so startup cannot seed bindings into it. U's record in
+  the archive-summary sidecar is written as creation writes it. Config is read with the
+  non-seeding loader. Exclusive offline use is documented: no daemon and no other offline writer.
+- **What proves it.** After SM Cloud is enabled on the provisioned logbooks, an unchanged push of
+  every row through the real forwarder and server succeeds with `applied` 0 on every
+  acknowledgement. The cloud's identities, membership and QSO state are unchanged after it. Its
+  display labels may follow the local catalogue's, as every identity push does.
+
+Alternatives rejected:
+
+- **A listing plus one scoped export per logbook.** Each logbook is its own snapshot, so a row that
+  moved between logbooks between two fetches lands in the wrong logbook or not at all.
+- **Fresh logbook UUIDs mapped to the cloud's.** The moved-rows outcome above.
+- **Provisioning through the running daemon.** The active archive's missing file stops the daemon
+  from starting, so an online path cannot serve that case.
+- **`smd restore --archive U` for a missing file.** Restore's target would sometimes be a new file;
+  the 5F.5 rulings (K1) rule out implicit provisioning.
+- **Accepting a payload that does not round-trip, as `smd restore` does.** Restore accepts a
+  self-healing difference on an existing archive. A provisioned archive is presented as the cloud's
+  copy, and an exact-version push of a differing row is refused as a version conflict.
+- **Skipping the coordinate rule while provisioning.** It would bring a known-contradictory
+  position back into live data, which the rule exists to prevent.
+- **Comparing reconcile summaries instead of records.** Reconcile hashes UUID, `modified_at` and
+  revision, never content, so "in sync" can coexist with a later conflict.
+- **An absence check followed by an ordinary rename.** A file appearing in between is replaced.
+
+Consequences: an archive holding any row that does not round-trip cannot be provisioned in this
+slice, and the refusal names those rows. The server change deploys before the client, as for every
+identity route.
+
 ## References
 
 - ADR 0070 — declarative daemon lifecycle graph and per-generation supervisors.
