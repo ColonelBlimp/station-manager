@@ -4889,6 +4889,63 @@ the compatibility promise that a daemon at any slice boundary starts the existin
        fails there. AS1 does not compile (`undefined: ArchiveHead`,
        `ArchiveExportSnapshot`): its first assertion-level run needs the store API declared.
        Existing server tests still pass.
+     **Operator review of commit 2's RED (2026-10-16): three P2 test corrections, fixed.**
+     - AX2 accepted wrong contents: either timestamp on either row, counts checked only
+       against the returned head, duplicates collapsed by the index, and both rows moved into
+       the empty logbook with matching counts would pass. Now each UUID's exact record is
+       asserted (logbook, revision, `modified_at`, nullable `deleted_at`, payload), duplicates
+       are refused before indexing, and the head counts are asserted from the fixture. AX1 and
+       AS1 refuse duplicate archives, logbooks and rows too.
+     - AX3 passed with the portable row missing. It now requires exactly the legacy archive's
+       two rows: main's in `defaultLBUID` and `portable`'s with no logbook UUID.
+     - The payload comparison decoded through float64 and the fixture held only modelled
+       fields. The live row now carries an unknown nested field with `9007199254740993` and a
+       30-digit integer, and payloads are compared with PostgreSQL's JSONB equality. A control
+       in AX2 shows that oracle tells the payload from its float64-collapsed copy.
+     - RED again, all at their assertions: AX1 404 at `GET /v1/archives`; AX2 and AX3 404 at
+       the export (after AX2's control passed); AX4 at its control; AX5, AX6, AX7 as before.
+       AS1: compile failure first (`undefined: ArchiveHead`); then, with the store's types and
+       method declared and returning "not implemented"
+       (`internal/cloud/store/archive_export.go`, the first production edit, as agreed), it
+       fails at `archive_export_test.go:80`, "ArchiveExportSnapshot: … not implemented".
+       Its move assertions are not reached until the code exists; the inconsistent-snapshot
+       reversion remains the proof that they catch a wrong read.
+     **Commit 2 built (2026-10-17; uncommitted; approved to proceed 2026-10-16).**
+     - Store (`internal/cloud/store/archive_export.go`): `ArchiveExportSnapshot` runs in one
+       repeatable-read, read-only transaction. It reads the archive row first, so the snapshot
+       is fixed before the logbooks are read, then every logbook with its row and tombstone
+       counts (`LEFT JOIN`, so an empty logbook counts zero), then `onHead`, then the
+       archive's rows in UUID order. An archive the tenant lacks is `ErrNotFound`.
+       `IdentityArchives` lists the tenant's archives that have a UUID, with their logbooks,
+       from one snapshot.
+     - Server (`internal/cloud/server/archive_export.go`): `GET /v1/archives` and
+       `GET /v1/archives/{archive_uuid}/export`. The export goes through `acquireExport`, passes
+       the request's context to the store and ends through `finishExport`. A malformed UUID or
+       an unknown archive is 404 "no such archive" (`exportStream.notFound`). A row whose
+       logbook is not in the head truncates the document; the snapshot makes that unreachable.
+       `GET /v1/version` adds `archive_export: 1`. `doc.go` and `smcloud-deploy.md` list the
+       routes.
+     - Green with `-race` on `sm-pg`: AX1–AX7 and AS1, also at `-count=10`.
+     - Reversions, each restored and hash-verified, each failing at the assertion named:
+       - RA1: rows read on a separate connection → AS1's move assertion
+         (`archive_export_test.go:101`, the moved row seen in `…f02` at revision 2). The
+         reversion the operator required.
+       - RA2: read-committed isolation → AS1, the same assertion.
+       - RA3: no admission gate → AX5 (500 instead of 503) and AX6 (no slot taken).
+       - RA4: `context.Background()` to the store → AX6, "the store's query was not cancelled
+         within 5s". Its temporary `context` import was removed after the restore.
+       - RA5: an inner join (the empty logbook dropped) → AX1 and AX2.
+       - RA6: the export's archive not scoped to the tenant → AX4 (both cross-tenant cases 200).
+       - RA7: rows not limited to the archive → AX2, but at the completeness check: the
+         handler's own guard truncated the document. RA7b, with that guard also off, fails AX2's
+         exact row set (the other archives' rows listed).
+       - RA8: the legacy marker forced false → AX3.
+       - RA9: the capability absent → AX7.
+       - RA10: the listing not scoped to the tenant → AX1 (the other tenant's archive listed).
+       - AS1's count assertion is not reached by RA1 or RA2, which fail first at the move.
+     - Gates, all exit 0: gofmt (whole tree), `go vet ./...`, `go test ./...`, the cloud set
+       with `-race` on `sm-pg` (stopped after), maintainability (0 regressions), docs catalog,
+       the context check, `git diff --check`, `task ci:local` (dist restored).
 
    - **Archive contents (ADR 0084; ruled 2026-09-28).** Settings → Archives lists each
      archive's logbooks under its row, nested on the table's grid (name under Label,
