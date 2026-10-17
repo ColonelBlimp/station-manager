@@ -14,7 +14,7 @@
 //	GET  /v1/logbooks/{id}/manifest   the (uuid, modified_at, deleted) diff list
 //	GET  /v1/export                   full-fidelity dump of the tenant's legacy archive
 //	GET  /v1/health                   liveness + DB ping (unauthenticated)
-//	GET  /v1/version                  build version and identity_protocol (unauthenticated)
+//	GET  /v1/version                  build version, identity_protocol and archive_export (unauthenticated)
 //
 // The identity wire (W-0021 5F.2; ADR 0088, ADR 0089), strict envelopes:
 //
@@ -28,6 +28,16 @@
 //	GET  /v1/archives/{a}/logbooks/{l}/manifest   {archive_uuid, logbook_uuid, entries}
 //	GET  /v1/archives/{a}/logbooks/{l}/export     that logbook's identity and every record,
 //	                                              from one snapshot; 404 outside its archive
+//
+// The whole-archive reads (W-0021 Q7, ADR 0071 refinement), behind archive_export 1:
+//
+//	GET  /v1/archives                 the tenant's archives that have a UUID, each with its
+//	                                  legacy marker and logbooks (UUID or null, label,
+//	                                  callsign, row and tombstone counts)
+//	GET  /v1/archives/{a}/export      the whole archive from one snapshot: the archive, its
+//	                                  legacy marker and every logbook with its counts, then
+//	                                  every record naming its logbook; through the export
+//	                                  gate; 404 outside the tenant
 //
 // The others are the NAME-ONLY routes. Since schema 7 (W-0021 5F.1) they resolve,
 // list and dump only the tenant's legacy archive: an old client never reaches

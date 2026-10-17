@@ -100,6 +100,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/archives/{archive_uuid}/logbooks/{logbook_uuid}/reconcile", s.auth(s.handleScopedReconcile))
 	mux.HandleFunc("GET /v1/archives/{archive_uuid}/logbooks/{logbook_uuid}/manifest", s.auth(s.handleScopedManifest))
 	mux.HandleFunc("GET /v1/archives/{archive_uuid}/logbooks/{logbook_uuid}/export", s.auth(s.handleScopedExport))
+	mux.HandleFunc("GET /v1/archives", s.auth(s.handleArchives))
+	mux.HandleFunc("GET /v1/archives/{archive_uuid}/export", s.auth(s.handleArchiveExport))
 	// Middleware, inside-out: gzip compresses negotiated responses (the
 	// manifest and export payloads are the bandwidth-heavy ones — see
 	// gzip.go); the concurrency limiter sits OUTERMOST so a rejected request
@@ -358,8 +360,13 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 // adoption. A client checks it at start; an old server omits it.
 const identityProtocol = 1
 
+// archiveExport is the whole-archive listing and export's version (W-0021 Q7,
+// ADR 0071 refinement): a provisioning client checks it before asking, as an
+// old server answers those routes 404.
+const archiveExport = 1
+
 func (s *Server) handleVersion(w http.ResponseWriter, _ *http.Request) {
-	s.writeJSON(w, http.StatusOK, map[string]any{"version": s.version, "identity_protocol": identityProtocol})
+	s.writeJSON(w, http.StatusOK, map[string]any{"version": s.version, "identity_protocol": identityProtocol, "archive_export": archiveExport})
 }
 
 // QsoUpload is one QSO on the PUT /v1/qsos wire: canonical types.Qso JSON as

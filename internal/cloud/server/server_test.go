@@ -48,6 +48,14 @@ func testServerLogged(t *testing.T, log *slog.Logger) (*httptest.Server, *store.
 // must plant rows no wire can write yet.
 func newTestServer(t *testing.T, log *slog.Logger) (*httptest.Server, *store.Store, int64, *sql.DB) {
 	t.Helper()
+	ts, _, st, tenant, db := newTestServerFull(t, log)
+	return ts, st, tenant, db
+}
+
+// newTestServerFull is newTestServer plus the *Server, for a test that
+// observes the server's own state (its export slots).
+func newTestServerFull(t *testing.T, log *slog.Logger) (*httptest.Server, *Server, *store.Store, int64, *sql.DB) {
+	t.Helper()
 	dsn, skip := store.ResolveTestDSN()
 	if skip != "" {
 		t.Skip(skip)
@@ -89,7 +97,7 @@ func newTestServer(t *testing.T, log *slog.Logger) (*httptest.Server, *store.Sto
 		dropAll(t, db)
 		_ = db.Close()
 	})
-	return ts, st, tenant, db
+	return ts, srv, st, tenant, db
 }
 
 // testServer is the common case: the logged variant with a quiet stderr logger, for

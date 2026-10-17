@@ -37,6 +37,9 @@ type exportStream struct {
 	w       http.ResponseWriter
 	started bool
 	count   int
+	// notFound is the 404 message for an ErrNotFound before the head; empty
+	// means "no such logbook".
+	notFound string
 }
 
 func (e *exportStream) begin(head []byte) error {
@@ -72,7 +75,11 @@ func (s *Server) finishExport(w http.ResponseWriter, r *http.Request, out *expor
 	if err != nil {
 		if !out.started {
 			if stderr.Is(err, store.ErrNotFound) {
-				s.writeError(w, http.StatusNotFound, "not_found", "no such logbook")
+				msg := out.notFound
+				if msg == "" {
+					msg = "no such logbook"
+				}
+				s.writeError(w, http.StatusNotFound, "not_found", msg)
 				return
 			}
 			s.log.Error("export: snapshot read failed", "tenant_id", tenant, "request_id", requestID(r), "err", err)

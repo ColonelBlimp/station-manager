@@ -544,6 +544,14 @@ the hourly reconcile self-heals anything a flaky link drops.
   A build with the 5F.2 identity wire reports `"identity_protocol": 1` on
   `GET /v1/version`; an older build omits it, and daemons treat that as "not
   identity-ready".
+  A build with the whole-archive reads also reports `"archive_export": 1`:
+  `GET /v1/archives` lists the tenant's archives that have a UUID, with each
+  logbook's row and tombstone counts and the legacy marker, and
+  `GET /v1/archives/{archive}/export` returns one archive from a single
+  snapshot, through the same export gate as the other exports. They change
+  nothing on the server and need no schema change. They are the server half
+  of re-creating a lost managed archive (W-0021 Q7); the station command
+  follows in a later release. An older build answers them 404.
 - **Restore drill** (worth one rehearsal — see `smd restore` in
   [install.md](install.md)): on the shack machine with the daemon stopped,
   `smd restore --dry-run` checks the server's identity support, fetches the
