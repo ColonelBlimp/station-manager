@@ -4946,6 +4946,63 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      - Gates, all exit 0: gofmt (whole tree), `go vet ./...`, `go test ./...`, the cloud set
        with `-race` on `sm-pg` (stopped after), maintainability (0 regressions), docs catalog,
        the context check, `git diff --check`, `task ci:local` (dist restored).
+     Committed as `32b8792e` (code) and `b576edf6` (this record), 2026-10-17.
+
+     **Automatic review of `32b8792e`: one P2, accepted (2026-10-17).** In an adopted legacy
+     archive, adoption stamps only one logbook; every other legacy logbook keeps a null UUID.
+     With two or more, every row of either exported `"logbook_uuid": null` and the head carried
+     no key apart from it, so a complete, successful document lost membership. AX3's fixture had
+     one unadopted logbook and missed it. Options put to the operator: (1) carry the stored
+     `legacy_name` for a logbook without a UUID, in the head and on its rows; (2) a per-document
+     key on every logbook and row; (3) refuse a legacy archive's rows (head only, or 409).
+     **Ruled: option 1** ("my earlier review missed the multiple-unadopted-logbook case").
+     - Acceptance: every exported row resolves to exactly one head logbook, including when two
+       unadopted logbooks have equal display labels. Correct totals with ambiguous or swapped
+       membership must fail.
+     - Contract: UUID-bearing logbooks and rows keep their shape and omit the new fields. An
+       unadopted logbook carries `uuid: null` plus `legacy_name` in both the listing and the
+       export head; its rows carry `logbook_uuid: null` plus `logbook_legacy_name`. The name is
+       read in the existing snapshot and rows map through the head's numeric logbook ID. The
+       stored name is preserved exactly, absence distinct from an empty string.
+     - A head logbook with neither identifier fails before the head is written:
+       `legacy_name` is nullable (`0007_archives.up.sql:29`), so its uniqueness does not
+       establish the fallback's presence.
+     - Tests: AX3 with two populated unadopted logbooks, distinct legacy names and equal
+       labels, beside the adopted one, each row's exact membership including tombstones; AX1
+       and the indexing helper too (its `""` key conflated every null UUID). The RED must reach
+       the missing-identity assertion, not the helper's duplicate check; then a reversion.
+     - Record the choice and alternatives in ADR 0071 and the route documentation with the fix.
+       `archive_export: 1` stays, since neither commit has been deployed. Fixed before commit 3.
+     - **RED (2026-10-17).** `axTenant` keeps main adopted and adds three unadopted logbooks,
+       all labelled `Field`: `portable` (one row), `contest` (a live row and a tombstone), and
+       one whose stored name is `''` (one row). `axKey` resolves each head logbook and row to
+       one key: its UUID, with the fallback field required absent; or its legacy name, required
+       present. The `""` key is gone. A new test, AX8, strips `portable`'s name. On the old code,
+       AX1 failed at `archive_export_test.go:343` and AX3 at `:441`, both at the
+       missing-identity assertion ("neither a UUID nor a legacy_name"), not the duplicate check.
+       AX8 failed at `:586` (export 200, head written). AX2 and AX4–AX7 passed.
+     - **Built.** The store reads `l.legacy_name` in the same logbook query (`sql.NullString`,
+       nil only for NULL). `archiveLogbooksJSON` sets `legacy_name` only without a UUID and
+       errors on neither. The export maps rows through the head's wire entries keyed by store
+       ID. The listing returns 500 on the same error, which goes beyond the ruling: a listing
+       entry with neither identifier would break the same contract. Gates, all exit 0: gofmt
+       (whole tree), `go vet ./...`, `go test ./...`, the cloud set with `-race` on `sm-pg`,
+       the export tests at `-race -count=10`, maintainability (0 regressions), the context
+       check, the docs catalog, `git diff --check`, `task ci:local` (dist restored).
+     - **Reversions** (unique anchor, non-empty replacement, restore hash-verified):
+       - RV1, the head without `legacy_name` → AX1 `:343`, AX3 `:441` (missing identity).
+       - RV2, rows mapped to the reversed head order → AX2 `:429`, AX3 `:443` (membership).
+       - RV2b, `portable` and `contest` rows swapped, head totals intact → AX3 `:443` (the
+         tombstone `…307` in `portable`, wanted in `contest`).
+       - RV2c, every unadopted row under the first unadopted logbook → AX3 `:443`.
+       - RV3, rows without `logbook_legacy_name` → AX3 `:443` (row missing identity).
+       - RV4, no neither-identifier guard → AX8 `:586` (200).
+       - RV5, `COALESCE(legacy_name, '')` in the store (absence read as empty) → AX8 `:586`.
+       - RV6, `legacy_name` also beside a UUID → AX1 `:343`, AX3 `:441` ("carries legacy_name
+         \"main\" beside its UUID").
+     - Docs: ADR 0071's refinement gains the contract and the two rejected options plus labels
+       or counts; `internal/cloud/server/doc.go` and `docs/smcloud-deploy.md` document the
+       fields. Review file deleted after this record.
 
    - **Archive contents (ADR 0084; ruled 2026-09-28).** Settings → Archives lists each
      archive's logbooks under its row, nested on the table's grid (name under Label,

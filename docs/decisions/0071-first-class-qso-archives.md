@@ -493,6 +493,16 @@ always mints its own archive UUID, and a logbook's UUID is "never accepted from 
   metadata, its logbook inventory, the counts and the rows), behind a new capability on
   `GET /v1/version`. A listing serves `--list` only; labels are display values, and the export is
   authoritative even if the listing differed.
+- **How a row names its logbook (2026-10-17, after review of the server commit).** Every exported
+  row resolves to exactly one logbook of the head. A logbook with a UUID, and each of its rows, is
+  named by that UUID alone. Adoption stamps one legacy logbook, so an adopted legacy archive can
+  hold several with no UUID. Such a logbook carries `uuid: null` and its stored `legacy_name`, the
+  name the name-only wire resolves and unique within the archive, in the listing and in the export
+  head. Each of its rows carries `logbook_uuid: null` and `logbook_legacy_name`. The name is read
+  in the same snapshot and kept exactly as stored, an empty name distinct from none. The column is
+  nullable, so a logbook with neither identifier fails the listing, and fails the export before
+  its head is written. Provisioning still refuses a legacy archive. The export stays unambiguous
+  for every archive it serves.
 - **Logbook UUIDs are accepted here, and only here.** The rule "minted here, never accepted from the
   caller" stands for every other path. Provisioning writes the logbook UUIDs of the validated
   export into the file it is building, through a call used on no other path. The identities already
@@ -546,6 +556,14 @@ Alternatives rejected:
 - **A listing plus one scoped export per logbook.** Each logbook is its own snapshot, so a row that
   moved between logbooks between two fetches lands in the wrong logbook or not at all.
 - **Fresh logbook UUIDs mapped to the cloud's.** The moved-rows outcome above.
+- **A key for one export only, on every logbook and row.** It would work for every archive. It
+  would also change every row's shape and add an identifier with no meaning outside one document,
+  where the legacy name is already the identifier that the name-only routes use.
+- **Exporting a legacy archive's head without its rows (or a 409).** Provisioning refuses such an
+  archive anyway. But the export would then not be complete for every archive it serves, and that
+  ambiguity would wait for the first consumer that reads legacy rows.
+- **Labels or counts to tell legacy logbooks apart.** Labels are mutable and may be equal. Correct
+  totals can coexist with swapped membership.
 - **Provisioning through the running daemon.** The active archive's missing file stops the daemon
   from starting, so an online path cannot serve that case.
 - **`smd restore --archive U` for a missing file.** Restore's target would sometimes be a new file;
