@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -23,15 +24,19 @@ import (
 //	AX1 GET /v1/archives lists the tenant's identity archives, equal labels
 //	    apart, each with its logbooks (UUID, label, callsign, row and
 //	    tombstone counts), the legacy marker on the adopted legacy archive,
-//	    a not-adopted legacy logbook with no UUID, and nothing of another
-//	    tenant's.
+//	    the not-adopted legacy logbooks with no UUID, each by its stored
+//	    legacy name, and nothing of another tenant's.
 //	AX2 GET /v1/archives/{uuid}/export is the complete archive: the head
 //	    names the archive and every logbook, an empty one included, with
 //	    counts that agree with the rows; every row names its logbook's UUID
 //	    and keeps revision, microsecond modified_at, tombstone and payload;
 //	    no row of the equal-labelled archive.
-//	AX3 the adopted legacy archive's export carries legacy: true, its
-//	    not-adopted logbook with no UUID, and that logbook's rows with none.
+//	AX3 the adopted legacy archive's export carries legacy: true and every
+//	    row resolves to exactly one head logbook: the adopted one by UUID,
+//	    each not-adopted one (equal display labels, one stored name empty)
+//	    by uuid null plus its exact legacy_name, its rows, tombstones
+//	    included, by logbook_uuid null plus logbook_legacy_name. A UUID-
+//	    bearing logbook or row carries neither fallback field.
 //	AX4 404 for another tenant's archive, an unknown archive or a malformed
 //	    UUID, against the control that the tenant's own archive exports.
 //	AX5 the export is admitted through the export gate: 503 overloaded with
@@ -39,6 +44,8 @@ import (
 //	AX6 a client gone while the export waits in the store cancels the
 //	    store's query and frees its slot, without the wait ending.
 //	AX7 GET /v1/version advertises archive_export 1.
+//	AX8 a logbook with neither a UUID nor a legacy name fails the listing
+//	    and the export before the export's head is written.
 //
 // Snapshot consistency under a barrier-controlled move is AS1, in the store.
 
@@ -53,6 +60,9 @@ const (
 	axSame        = "0197f9a0-0000-7000-8000-000000000303"
 	axOther       = "0197f9a0-0000-7000-8000-000000000304"
 	axPortable    = "0197f9a0-0000-7000-8000-000000000305"
+	axFieldLive   = "0197f9a0-0000-7000-8000-000000000306"
+	axFieldGone   = "0197f9a0-0000-7000-8000-000000000307"
+	axBlank       = "0197f9a0-0000-7000-8000-000000000308"
 )
 
 // axPushAt carries microseconds: the export must not round them away.
@@ -60,10 +70,41 @@ var axPushAt = time.Date(2026, 7, 17, 6, 0, 0, 123456000, time.UTC)
 
 type axLogbook struct {
 	UUID       *string `json:"uuid"`
+	LegacyName *string `json:"legacy_name"`
 	Label      string  `json:"label"`
 	Callsign   string  `json:"callsign"`
 	Count      int     `json:"count"`
 	Tombstones int     `json:"tombstones"`
+	keys       map[string]json.RawMessage
+}
+
+// UnmarshalJSON also keeps the keys present, so an omitted field is told
+// from a null one.
+func (lb *axLogbook) UnmarshalJSON(b []byte) error {
+	type plain axLogbook
+	if err := json.Unmarshal(b, (*plain)(lb)); err != nil {
+		return err
+	}
+	return json.Unmarshal(b, &lb.keys)
+}
+
+type axRow struct {
+	UUID              string          `json:"uuid"`
+	LogbookUUID       *string         `json:"logbook_uuid"`
+	LogbookLegacyName *string         `json:"logbook_legacy_name"`
+	ModifiedAt        time.Time       `json:"modified_at"`
+	Revision          int64           `json:"revision"`
+	DeletedAt         *time.Time      `json:"deleted_at"`
+	Qso               json.RawMessage `json:"qso"`
+	keys              map[string]json.RawMessage
+}
+
+func (r *axRow) UnmarshalJSON(b []byte) error {
+	type plain axRow
+	if err := json.Unmarshal(b, (*plain)(r)); err != nil {
+		return err
+	}
+	return json.Unmarshal(b, &r.keys)
 }
 
 type axArchive struct {
@@ -84,14 +125,7 @@ type axExport struct {
 		Legacy bool   `json:"legacy"`
 	} `json:"archive"`
 	Logbooks []axLogbook `json:"logbooks"`
-	Qsos     []struct {
-		UUID        string          `json:"uuid"`
-		LogbookUUID *string         `json:"logbook_uuid"`
-		ModifiedAt  time.Time       `json:"modified_at"`
-		Revision    int64           `json:"revision"`
-		DeletedAt   *time.Time      `json:"deleted_at"`
-		Qso         json.RawMessage `json:"qso"`
-	} `json:"qsos"`
+	Qsos     []axRow     `json:"qsos"`
 }
 
 // mainUUID is pushMain's row, in the legacy main logbook.
@@ -153,8 +187,10 @@ func floatCollapsed(t *testing.T, raw json.RawMessage) json.RawMessage {
 
 // axTenant seeds the tenant: the managed "Contest" (contestLB with a live row
 // and a tombstone, emptyLB with none), an equal-labelled managed "Contest"
-// with one row, the adopted legacy archive (main adopted, portable not), and
-// another tenant's archive.
+// with one row, the adopted legacy archive, and another tenant's archive. The
+// legacy archive has main adopted and three logbooks not adopted, all
+// labelled "Field": portable (one row), contest (a live row and a tombstone)
+// and one whose stored legacy name is empty (one row).
 func axTenant(t *testing.T) (*httptest.Server, *sql.DB, axFixture) {
 	t.Helper()
 	ts, _, _, db := newTestServer(t, quietLog)
@@ -187,20 +223,58 @@ func axTenant(t *testing.T) (*httptest.Server, *sql.DB, axFixture) {
 	if status, out := adopt(t, ts.URL, adoptBody("main", homeUUID, defaultLBUID)); status != http.StatusOK {
 		t.Fatalf("adopt: %d %v", status, out)
 	}
-	p, _ := json.Marshal(fixtureQso(axPortable))
-	putQsos(t, ts, testToken, "portable", []QsoUpload{{ModifiedAt: axPushAt, Qso: p}})
+	legacy := func(name, uuid string, deletedAt *time.Time) {
+		t.Helper()
+		p, _ := json.Marshal(fixtureQso(uuid))
+		fx.payloads[uuid] = p
+		at := axPushAt
+		if deletedAt != nil {
+			putQsos(t, ts, testToken, name, []QsoUpload{{ModifiedAt: at, Qso: p}})
+			at = *deletedAt
+		}
+		putQsos(t, ts, testToken, name, []QsoUpload{{ModifiedAt: at, DeletedAt: deletedAt, Qso: p}})
+	}
+	legacy("portable", axPortable, nil)
+	legacy("contest", axFieldLive, nil)
+	legacy("contest", axFieldGone, &fx.deleted)
+	legacy("blank", axBlank, nil)
+	if _, err := db.Exec(`UPDATE logbooks SET label = 'Field', legacy_name = CASE legacy_name WHEN 'blank' THEN '' ELSE legacy_name END
+		WHERE legacy_name IN ('portable', 'contest', 'blank') AND uuid IS NULL`); err != nil {
+		t.Fatalf("label the not-adopted logbooks: %v", err)
+	}
 	return ts, db, fx
 }
 
-// axLogbooks indexes logbooks by UUID ("" for none), refusing a duplicate.
+// byUUID and byName are the keys a logbook resolves by: its UUID, or, with
+// none, its stored legacy name.
+func byUUID(uuid string) string { return "uuid " + uuid }
+func byName(name string) string { return "legacy_name " + strconv.Quote(name) }
+
+// axKey is the one logbook a head entry or a row names. With a UUID the
+// fallback field must be absent; without one the stored legacy name must be
+// present.
+func axKey(t *testing.T, where string, uuid, legacyName *string, fallback string, keys map[string]json.RawMessage) string {
+	t.Helper()
+	if uuid != nil {
+		if _, ok := keys[fallback]; ok {
+			t.Fatalf("%s: carries %s %s beside its UUID %s; want it omitted", where, fallback, keys[fallback], *uuid)
+		}
+		return byUUID(*uuid)
+	}
+	if legacyName == nil {
+		t.Fatalf("%s: neither a UUID nor a %s (keys %v): its logbook cannot be told from another without a UUID",
+			where, fallback, slices.Sorted(maps.Keys(keys)))
+	}
+	return byName(*legacyName)
+}
+
+// axLogbooks indexes logbooks by the one key each resolves by, refusing a
+// duplicate.
 func axLogbooks(t *testing.T, where string, lbs []axLogbook) map[string]axLogbook {
 	t.Helper()
 	out := map[string]axLogbook{}
 	for _, lb := range lbs {
-		key := ""
-		if lb.UUID != nil {
-			key = *lb.UUID
-		}
+		key := axKey(t, where+" logbook "+lb.Label, lb.UUID, lb.LegacyName, "legacy_name", lb.keys)
 		if _, dup := out[key]; dup {
 			t.Fatalf("%s: logbook %q listed twice: %+v", where, key, lbs)
 		}
@@ -209,12 +283,26 @@ func axLogbooks(t *testing.T, where string, lbs []axLogbook) map[string]axLogboo
 	return out
 }
 
-func wantLogbook(t *testing.T, where string, got map[string]axLogbook, uuid, label, callsign string, count, tombstones int) {
+func wantLogbook(t *testing.T, where string, got map[string]axLogbook, key, label, callsign string, count, tombstones int) {
 	t.Helper()
-	lb, ok := got[uuid]
+	lb, ok := got[key]
 	if !ok || lb.Label != label || lb.Callsign != callsign || lb.Count != count || lb.Tombstones != tombstones {
-		t.Fatalf("%s: logbook %q = %+v (present %v); want %s, %q, %d rows, %d tombstones", where, uuid, lb, ok, label, callsign, count, tombstones)
+		t.Fatalf("%s: logbook %s = %+v (present %v); want %s, %q, %d rows, %d tombstones", where, key, lb, ok, label, callsign, count, tombstones)
 	}
+}
+
+// wantHomeLogbooks is the adopted legacy archive's logbooks: main by UUID,
+// the three not adopted by their exact stored names under one label.
+func wantHomeLogbooks(t *testing.T, where string, lbs []axLogbook) {
+	t.Helper()
+	h := axLogbooks(t, where, lbs)
+	if len(h) != 4 {
+		t.Fatalf("%s: logbooks = %+v; want exactly main and the three not adopted", where, lbs)
+	}
+	wantLogbook(t, where, h, byUUID(defaultLBUID), "Default", "7Q5MLV", 1, 0)
+	wantLogbook(t, where, h, byName("portable"), "Field", "", 1, 0)
+	wantLogbook(t, where, h, byName("contest"), "Field", "", 2, 1)
+	wantLogbook(t, where, h, byName(""), "Field", "", 1, 0)
 }
 
 func TestArchiveExport_AX1_TheListing(t *testing.T) {
@@ -245,17 +333,14 @@ func TestArchiveExport_AX1_TheListing(t *testing.T) {
 		t.Fatalf("the adopted legacy archive = %+v; want Home, legacy true", home)
 	}
 	c := axLogbooks(t, "Contest", contest.Logbooks)
-	wantLogbook(t, "Contest", c, contestLB, "main", "7Q5MLV/P", 2, 1)
-	wantLogbook(t, "Contest", c, emptyLB, "empty", "7Q5MLV", 0, 0)
+	wantLogbook(t, "Contest", c, byUUID(contestLB), "main", "7Q5MLV/P", 2, 1)
+	wantLogbook(t, "Contest", c, byUUID(emptyLB), "empty", "7Q5MLV", 0, 0)
 	sm := axLogbooks(t, "equal-labelled", same.Logbooks)
-	wantLogbook(t, "equal-labelled", sm, sameLabelLB, "main", "7Q5MLV/P", 1, 0)
-	h := axLogbooks(t, "Home", home.Logbooks)
-	if len(c) != 2 || len(sm) != 1 || len(h) != 2 {
-		t.Fatalf("logbooks: Contest %d, equal-labelled %d, Home %d; want 2, 1 and 2", len(c), len(sm), len(h))
+	wantLogbook(t, "equal-labelled", sm, byUUID(sameLabelLB), "main", "7Q5MLV/P", 1, 0)
+	if len(c) != 2 || len(sm) != 1 {
+		t.Fatalf("logbooks: Contest %d, equal-labelled %d; want 2 and 1", len(c), len(sm))
 	}
-	if h[defaultLBUID].Count != 1 || h[""].Count != 1 {
-		t.Fatalf("Home's logbooks = %+v; want main by UUID and portable with none, one row each", home.Logbooks)
-	}
+	wantHomeLogbooks(t, "Home", home.Logbooks)
 
 	var other axListing
 	do(t, http.MethodGet, ts.URL+"/v1/archives", otherToken, nil, &other)
@@ -265,7 +350,7 @@ func TestArchiveExport_AX1_TheListing(t *testing.T) {
 }
 
 type axWant struct {
-	logbook    *string
+	logbook    string
 	revision   int64
 	modifiedAt time.Time
 	deletedAt  *time.Time
@@ -308,8 +393,8 @@ func wantRows(t *testing.T, db *sql.DB, e axExport, idx map[string]int, want map
 			t.Fatalf("row %s missing from the export", uuid)
 		}
 		q := e.Qsos[i]
-		if (q.LogbookUUID == nil) != (w.logbook == nil) || (q.LogbookUUID != nil && *q.LogbookUUID != *w.logbook) {
-			t.Fatalf("row %s logbook %v; want %v", uuid, ptrString(q.LogbookUUID), ptrString(w.logbook))
+		if got := axKey(t, "row "+uuid, q.LogbookUUID, q.LogbookLegacyName, "logbook_legacy_name", q.keys); got != w.logbook {
+			t.Fatalf("row %s is in logbook %s; want %s", uuid, got, w.logbook)
 		}
 		if q.Revision != w.revision || !q.ModifiedAt.Equal(w.modifiedAt) {
 			t.Fatalf("row %s revision %d modified_at %s; want %d at %s", uuid, q.Revision,
@@ -322,13 +407,6 @@ func wantRows(t *testing.T, db *sql.DB, e axExport, idx map[string]int, want map
 			t.Fatalf("row %s payload %s; want %s", uuid, q.Qso, w.payload)
 		}
 	}
-}
-
-func ptrString(p *string) string {
-	if p == nil {
-		return "<none>"
-	}
-	return *p
 }
 
 func TestArchiveExport_AX2_TheCompleteArchive(t *testing.T) {
@@ -345,31 +423,29 @@ func TestArchiveExport_AX2_TheCompleteArchive(t *testing.T) {
 	if len(lbs) != 2 {
 		t.Fatalf("head logbooks = %+v; want exactly main and the empty logbook", e.Logbooks)
 	}
-	wantLogbook(t, "head", lbs, contestLB, "main", "7Q5MLV/P", 2, 1)
-	wantLogbook(t, "head", lbs, emptyLB, "empty", "7Q5MLV", 0, 0)
-	main := contestLB
+	wantLogbook(t, "head", lbs, byUUID(contestLB), "main", "7Q5MLV/P", 2, 1)
+	wantLogbook(t, "head", lbs, byUUID(emptyLB), "empty", "7Q5MLV", 0, 0)
+	main := byUUID(contestLB)
 	wantRows(t, db, e, idx, map[string]axWant{
-		axLive: {&main, 1, axPushAt, nil, fx.payloads[axLive]},
-		axGone: {&main, 2, fx.deleted, &fx.deleted, fx.payloads[axGone]},
+		axLive: {main, 1, axPushAt, nil, fx.payloads[axLive]},
+		axGone: {main, 2, fx.deleted, &fx.deleted, fx.payloads[axGone]},
 	})
 }
 
 func TestArchiveExport_AX3_TheLegacyMarker(t *testing.T) {
-	ts, db, _ := axTenant(t)
+	ts, db, fx := axTenant(t)
 	e, idx := axGet(t, ts, homeUUID)
 	if !e.Archive.Legacy || e.Archive.UUID != homeUUID {
 		t.Fatalf("head archive = %+v; want the legacy marker set", e.Archive)
 	}
-	lbs := axLogbooks(t, "head", e.Logbooks)
-	if len(lbs) != 2 || lbs[defaultLBUID].Count != 1 || lbs[""].Count != 1 {
-		t.Fatalf("head logbooks = %+v; want main by UUID and the not-adopted logbook with none, one row each", e.Logbooks)
-	}
+	wantHomeLogbooks(t, "head", e.Logbooks)
 	mainPayload, _ := json.Marshal(fixtureQso(mainUUID))
-	portablePayload, _ := json.Marshal(fixtureQso(axPortable))
-	main := defaultLBUID
 	wantRows(t, db, e, idx, map[string]axWant{
-		mainUUID:   {&main, 0, pushAt, nil, mainPayload},
-		axPortable: {nil, 0, axPushAt, nil, portablePayload},
+		mainUUID:    {byUUID(defaultLBUID), 0, pushAt, nil, mainPayload},
+		axPortable:  {byName("portable"), 0, axPushAt, nil, fx.payloads[axPortable]},
+		axFieldLive: {byName("contest"), 0, axPushAt, nil, fx.payloads[axFieldLive]},
+		axFieldGone: {byName("contest"), 0, fx.deleted, &fx.deleted, fx.payloads[axFieldGone]},
+		axBlank:     {byName(""), 0, axPushAt, nil, fx.payloads[axBlank]},
 	})
 }
 
@@ -494,5 +570,24 @@ func TestArchiveExport_AX7_TheCapability(t *testing.T) {
 	}
 	if v["archive_export"] != float64(1) || v["identity_protocol"] != float64(1) {
 		t.Fatalf("GET /v1/version = %v; want archive_export 1 beside identity_protocol 1", v)
+	}
+}
+
+func TestArchiveExport_AX8_ALogbookWithNoIdentityFails(t *testing.T) {
+	ts, db, _ := axTenant(t)
+	// The control: the archive lists and exports while every logbook has one.
+	axGet(t, ts, homeUUID)
+	if _, err := db.Exec(`UPDATE logbooks SET legacy_name = NULL WHERE legacy_name = 'portable' AND uuid IS NULL`); err != nil {
+		t.Fatalf("strip portable's legacy name: %v", err)
+	}
+	resp := do(t, http.MethodGet, ts.URL+"/v1/archives/"+homeUUID+"/export", testToken, nil, nil)
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusInternalServerError || bytes.Contains(body, []byte(`"archive"`)) {
+		t.Fatalf("export with a logbook of no identity = %d %s; want 500 before the head is written", resp.StatusCode, body)
+	}
+	resp = do(t, http.MethodGet, ts.URL+"/v1/archives", testToken, nil, nil)
+	body, _ = io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusInternalServerError || bytes.Contains(body, []byte(`"archives"`)) {
+		t.Fatalf("listing with a logbook of no identity = %d %s; want 500", resp.StatusCode, body)
 	}
 }

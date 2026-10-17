@@ -32,11 +32,14 @@
 // The whole-archive reads (W-0021 Q7, ADR 0071 refinement), behind archive_export 1:
 //
 //	GET  /v1/archives                 the tenant's archives that have a UUID, each with its
-//	                                  legacy marker and logbooks (UUID or null, label,
-//	                                  callsign, row and tombstone counts)
+//	                                  legacy marker and logbooks (UUID, or null plus the
+//	                                  stored legacy_name; label, callsign, row and
+//	                                  tombstone counts)
 //	GET  /v1/archives/{a}/export      the whole archive from one snapshot: the archive, its
 //	                                  legacy marker and every logbook with its counts, then
-//	                                  every record naming its logbook; through the export
+//	                                  every record naming its logbook as the head does
+//	                                  (logbook_uuid, or null plus logbook_legacy_name);
+//	                                  a logbook with neither fails it; through the export
 //	                                  gate; 404 outside the tenant
 //
 // The others are the NAME-ONLY routes. Since schema 7 (W-0021 5F.1) they resolve,

@@ -21,10 +21,13 @@ type ArchiveHead struct {
 }
 
 // ArchiveLogbook is one logbook of ArchiveHead. UUID is nil only for a
-// legacy logbook that was never adopted. Count includes tombstones.
+// legacy logbook that was never adopted. LegacyName is the stored name the
+// name-only wire resolves, exactly as stored (nil when NULL). Count includes
+// tombstones.
 type ArchiveLogbook struct {
 	ID         int64
 	UUID       *string
+	LegacyName *string
 	Label      string
 	Callsign   string
 	Count      int
@@ -34,7 +37,7 @@ type ArchiveLogbook struct {
 // archiveLogbooksQ is every logbook of one archive with its counts, in id
 // order; an empty logbook counts zero.
 const archiveLogbooksQ = `
-SELECT l.id, l.uuid, l.label, l.callsign, count(q.uuid), count(q.deleted_at)
+SELECT l.id, l.uuid, l.legacy_name, l.label, l.callsign, count(q.uuid), count(q.deleted_at)
 FROM logbooks l
          LEFT JOIN qsos q ON q.tenant_id = l.tenant_id AND q.logbook_id = l.id
 WHERE l.tenant_id = $1 AND l.archive_id = $2
@@ -50,14 +53,17 @@ func queryArchiveLogbooks(ctx context.Context, op errors.Op, tx *sql.Tx, tenantI
 	out := []ArchiveLogbook{}
 	for rows.Next() {
 		var (
-			lb   ArchiveLogbook
-			uuid sql.NullString
+			lb         ArchiveLogbook
+			uuid, name sql.NullString
 		)
-		if err := rows.Scan(&lb.ID, &uuid, &lb.Label, &lb.Callsign, &lb.Count, &lb.Tombstones); err != nil {
+		if err := rows.Scan(&lb.ID, &uuid, &name, &lb.Label, &lb.Callsign, &lb.Count, &lb.Tombstones); err != nil {
 			return nil, errors.New(op).WithErr(err).WithMsg("scan logbook")
 		}
 		if uuid.Valid {
 			lb.UUID = &uuid.String
+		}
+		if name.Valid {
+			lb.LegacyName = &name.String
 		}
 		out = append(out, lb)
 	}

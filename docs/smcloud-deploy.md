@@ -548,7 +548,12 @@ the hourly reconcile self-heals anything a flaky link drops.
   `GET /v1/archives` lists the tenant's archives that have a UUID, with each
   logbook's row and tombstone counts and the legacy marker, and
   `GET /v1/archives/{archive}/export` returns one archive from a single
-  snapshot, through the same export gate as the other exports. They change
+  snapshot, through the same export gate as the other exports. A logbook
+  that has a UUID is named by it alone. A legacy logbook that was never
+  adopted has a null UUID and is named by its stored legacy name instead,
+  in the listing and the head (`legacy_name`) and on each of its rows
+  (`logbook_legacy_name`). A logbook with neither fails the request with a
+  500 and an error log. They change
   nothing on the server and need no schema change. They are the server half
   of re-creating a lost managed archive (W-0021 Q7); the station command
   follows in a later release. An older build answers them 404.

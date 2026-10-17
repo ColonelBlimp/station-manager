@@ -15,10 +15,13 @@ import (
 // are display values; the export is authoritative.
 
 // ArchiveLogbookJSON is one logbook of a listed or exported archive. UUID is
-// null only for a legacy logbook that was never adopted; Count includes
+// null only for a legacy logbook that was never adopted; such a logbook, and
+// only such a one, carries its stored LegacyName, unique within the archive,
+// so that two of them stay apart whatever their labels. Count includes
 // tombstones.
 type ArchiveLogbookJSON struct {
 	UUID       *string `json:"uuid"`
+	LegacyName *string `json:"legacy_name,omitempty"`
 	Label      string  `json:"label"`
 	Callsign   string  `json:"callsign"`
 	Count      int     `json:"count"`
@@ -39,15 +42,16 @@ type ArchivesResponse struct {
 }
 
 // ArchiveExportQso is one row of the whole-archive export: the scoped row
-// plus the UUID of the logbook it is in (null for a not-adopted legacy
-// logbook).
+// plus the logbook it is in, named as the head names it: by UUID, or, for a
+// not-adopted legacy logbook, by a null UUID and its legacy name.
 type ArchiveExportQso struct {
-	UUID        string          `json:"uuid"`
-	LogbookUUID *string         `json:"logbook_uuid"`
-	ModifiedAt  time.Time       `json:"modified_at"`
-	Revision    int64           `json:"revision,omitempty"`
-	DeletedAt   *time.Time      `json:"deleted_at,omitempty"`
-	Qso         json.RawMessage `json:"qso"`
+	UUID              string          `json:"uuid"`
+	LogbookUUID       *string         `json:"logbook_uuid"`
+	LogbookLegacyName *string         `json:"logbook_legacy_name,omitempty"`
+	ModifiedAt        time.Time       `json:"modified_at"`
+	Revision          int64           `json:"revision,omitempty"`
+	DeletedAt         *time.Time      `json:"deleted_at,omitempty"`
+	Qso               json.RawMessage `json:"qso"`
 }
 
 type archiveExportHead struct {
@@ -59,12 +63,22 @@ type archiveExportHead struct {
 	Logbooks []ArchiveLogbookJSON `json:"logbooks"`
 }
 
-func archiveLogbooksJSON(lbs []store.ArchiveLogbook) []ArchiveLogbookJSON {
+// archiveLogbooksJSON is the wire form of an archive's logbooks. A logbook
+// with neither a UUID nor a legacy name (the column is nullable) is an error:
+// its rows could not be told from another such logbook's.
+func archiveLogbooksJSON(lbs []store.ArchiveLogbook) ([]ArchiveLogbookJSON, error) {
 	out := make([]ArchiveLogbookJSON, 0, len(lbs))
 	for _, lb := range lbs {
-		out = append(out, ArchiveLogbookJSON{UUID: lb.UUID, Label: lb.Label, Callsign: lb.Callsign, Count: lb.Count, Tombstones: lb.Tombstones})
+		j := ArchiveLogbookJSON{UUID: lb.UUID, Label: lb.Label, Callsign: lb.Callsign, Count: lb.Count, Tombstones: lb.Tombstones}
+		if lb.UUID == nil {
+			if lb.LegacyName == nil {
+				return nil, fmt.Errorf("logbook %d has neither a uuid nor a legacy name", lb.ID)
+			}
+			j.LegacyName = lb.LegacyName
+		}
+		out = append(out, j)
 	}
-	return out
+	return out, nil
 }
 
 // handleArchives lists the tenant's archives that have a UUID, with their
@@ -78,7 +92,13 @@ func (s *Server) handleArchives(w http.ResponseWriter, r *http.Request) {
 	}
 	out := ArchivesResponse{Archives: make([]ArchiveJSON, 0, len(archives))}
 	for _, a := range archives {
-		out.Archives = append(out.Archives, ArchiveJSON{UUID: a.ArchiveUUID, Label: a.ArchiveLabel, Legacy: a.Legacy, Logbooks: archiveLogbooksJSON(a.Logbooks)})
+		lbs, err := archiveLogbooksJSON(a.Logbooks)
+		if err != nil {
+			s.log.Error("archives: list failed", "tenant_id", tenantID(r), "request_id", requestID(r), "archive_uuid", a.ArchiveUUID, "err", err)
+			s.writeError(w, http.StatusInternalServerError, "internal_error", "list failed")
+			return
+		}
+		out.Archives = append(out.Archives, ArchiveJSON{UUID: a.ArchiveUUID, Label: a.ArchiveLabel, Legacy: a.Legacy, Logbooks: lbs})
 	}
 	s.writeJSON(w, http.StatusOK, out)
 }
@@ -99,14 +119,19 @@ func (s *Server) handleArchiveExport(w http.ResponseWriter, r *http.Request) {
 	}
 	defer release()
 	out := &exportStream{w: w, notFound: "no such archive"}
-	logbookUUID := map[int64]*string{}
+	// Each row names its logbook exactly as the head does, through the
+	// logbook's store ID.
+	logbooks := map[int64]ArchiveLogbookJSON{}
 	err := s.store.ArchiveExportSnapshot(r.Context(), tenantID(r), store.CanonicalUUID(archiveUUID),
 		func(a store.ArchiveHead) error {
 			var h archiveExportHead
 			h.Archive.UUID, h.Archive.Label, h.Archive.Legacy = a.ArchiveUUID, a.ArchiveLabel, a.Legacy
-			h.Logbooks = archiveLogbooksJSON(a.Logbooks)
-			for _, lb := range a.Logbooks {
-				logbookUUID[lb.ID] = lb.UUID
+			var err error
+			if h.Logbooks, err = archiveLogbooksJSON(a.Logbooks); err != nil {
+				return err
+			}
+			for i, lb := range a.Logbooks {
+				logbooks[lb.ID] = h.Logbooks[i]
 			}
 			head, err := json.Marshal(h)
 			if err != nil {
@@ -116,14 +141,14 @@ func (s *Server) handleArchiveExport(w http.ResponseWriter, r *http.Request) {
 			return out.begin(append(head[:len(head)-1], `,"qsos":[`...))
 		},
 		func(rec store.Record) error {
-			lb, ok := logbookUUID[rec.LogbookID]
+			lb, ok := logbooks[rec.LogbookID]
 			if !ok {
 				// The snapshot makes this unreachable; an error truncates the
 				// document rather than export a row under no logbook.
 				return fmt.Errorf("row %s is in logbook %d, not in the head", rec.UUID, rec.LogbookID)
 			}
 			return out.row(ArchiveExportQso{
-				UUID: rec.UUID, LogbookUUID: lb, ModifiedAt: rec.ModifiedAt, Revision: rec.Revision,
+				UUID: rec.UUID, LogbookUUID: lb.UUID, LogbookLegacyName: lb.LegacyName, ModifiedAt: rec.ModifiedAt, Revision: rec.Revision,
 				DeletedAt: rec.DeletedAt, Qso: rec.Payload,
 			})
 		})
