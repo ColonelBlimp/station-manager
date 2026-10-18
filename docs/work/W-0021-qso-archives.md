@@ -5003,6 +5003,283 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      - Docs: ADR 0071's refinement gains the contract and the two rejected options plus labels
        or counts; `internal/cloud/server/doc.go` and `docs/smcloud-deploy.md` document the
        fields. Review file deleted after this record.
+     - Committed as `1127fdd8` (code) and `eb3b3e75` (records), 2026-10-17. The automatic
+       review of `1127fdd8`: no actionable findings; review file deleted.
+
+     **Commit 3 RED (2026-10-18; for review; not committed).** The operator asked for the
+     failing tests before code: capability gating with no fallback, identity and membership,
+     legacy identifiers, per-logbook counts, completeness, and transport, with payload,
+     revision, tombstone and sub-second timestamp preserved for commit 5.
+     - Tests: `internal/forwarding/smcloud/archive_export_test.go`, CA1–CA8, over a fake
+       server that records every request. API pinned: `ListArchives(ctx, account)
+       ([]CloudArchive, error)` and `FetchArchiveExport(ctx, account, U) (*ArchiveExport,
+       error)`; each returned row carries `Logbook`, its index into the head's `Logbooks`;
+       `ErrArchiveExportUnsupported` and `ErrArchiveNotFound`.
+     - Contract choices made in the tests, for the operator: `archive_export` >= 1 is
+       support, as `identity_protocol` is read; absent, 0 or negative is unsupported, and a
+       non-integer is malformed. The version is read without the token. No redirect is
+       followed, even on the same origin; `FetchScopedExport` follows same-origin ones. The
+       request path carries the lower-case UUID. Any defect refuses the whole listing; bad
+       archives are not dropped. Archive, logbook and QSO UUIDs must be UUIDv7: the server
+       refuses any other QSO UUID at ingest (`internal/cloud/server/server.go:491`). UUIDs
+       compare case-insensitively and legacy names exactly, as the unique constraint does. A
+       listing count must be non-negative, with tombstones no more than rows. Size limits
+       are not tested yet: the export would take `maxExportBytes` (256 MiB) and the listing
+       is open.
+     - Single-defect fixtures: every membership case uses the counts that a client putting
+       an unresolved row in the first logbook would find correct, so counting cannot stand
+       in for membership. Outside-head membership is also checked against counts that treat
+       the row as dropped.
+     - RED, stage 1: the missing symbols fail to compile
+       (`undefined: ListArchives`, `FetchArchiveExport`, `ErrArchiveExportUnsupported`,
+       `CloudArchiveLogbook`, `ArchiveExport`).
+     - RED, stage 2, against a declaration stub (`archive_client.go`; both calls return "not
+       implemented"): 49 fail at behavioural assertions and 25 pass. The passing 25 are
+       CA3's refusal subtests, which cannot fail against an always-refusing stub; CA3's two
+       controls fail. CA5–CA7 stop at their controls (`:553`, `:617`, `:655`). The redirect
+       and status cases fail at "want the archive route asked", so they are not vacuous.
+     - RED, stage 3, against a permissive scaffold kept in the scratchpad (never in the tree;
+       transport and decoding with no validation, unresolved rows to the first logbook):
+       every validation case in CA3 and CA5–CA7 fails at its refusal assertion (`:418`,
+       `:611`, `:640`/`:643`, `:667`), CA4's upper-case request fails at `:514`, and CA1,
+       CA2, CA4's other cases and CA8 pass. Truncation and trailing data are refused by
+       `json.Unmarshal` itself; the reversions after the build must show them failing.
+
+     **Operator review of commit 3's RED (2026-10-18).** The API and choices 1–7 are agreed;
+     `archive_export` is a cumulative capability level. The operator reproduced the stub RED:
+     41 failing subtests plus eight failing parents, and 25 passing subtests. Three P2s, all
+     to fix before implementation:
+     - `wantExportRows` checked the length and each row's membership, but not that every
+       expected UUID appears exactly once, so a repeated row in place of a missing tombstone
+       would pass.
+     - Fixtures that can fail for another reason:
+       - CA6's misplaced tombstone left the empty logbook with zero rows and one tombstone, so
+         the count bounds rejected it first. Both logbooks need rows, with correct row counts
+         and only the tombstone counts swapped.
+       - CA7's missing or null arrays kept populated rows or non-zero counts, so membership or
+         count checks could reject them without any array-presence check. Otherwise-empty
+         fixtures are needed.
+       - CA6's missing count fields need zero-valued fixtures, so an absent field defaulted to
+         zero cannot pass unnoticed.
+     - Unadopted legacy logbooks start with `callsign: ""`
+       (`internal/cloud/store/migrations/0008_logbook_callsign.up.sql:5`). Both calls must keep
+       that value; provisioning's local constraints belong to its later preflight.
+     Further pins asked for:
+     - CA1: a successful `archive_export: 2`; the exact request order; malformed and non-200
+       answers are not `ErrArchiveExportUnsupported`.
+     - Valid UUIDv4 refusals for archive, logbook and QSO identities.
+     - Negative tombstone counts.
+     - A legacy name equal to another logbook's UUID text resolves separately: the two are
+       distinct namespaces.
+     - Redirect refusal at `/v1/version` too.
+     Ruling on size limits (choice 8): the listing reuses `maxResponseBytes` (1 MiB) and the
+     export `maxExportBytes` (256 MiB). Tests cover acceptance at exactly the limit and refusal
+     above it, including a valid JSON prefix followed by bytes beyond the limit:
+     `LimitReader(N)` alone must not turn the limit into an apparently successful EOF.
+     Truncation refused by the parser is valid evidence already. Do not add redundant
+     validation only to make a reversion hook; test an incorrect document-consumption path
+     instead.
+
+     **Commit 3 RED, revised (2026-10-18; for review; not committed).**
+     - `wantExportRows` records each UUID seen: a repeat fails "returned twice", a gap fails
+       "missing".
+     - CA6 gets its own three-row fixture: LB1 has a live row and a tombstone, LB2 a live row.
+       The mutations are rows counted under the wrong logbook (1/1 and 2/0) and only the
+       tombstone moved (2/0 and 1/1), plus too few, too many, and a negative tombstone count.
+       Every count stays within its bounds except the case named for it. An empty logbook
+       whose true counts are zero is checked with `count` missing, `count` null, `tombstones`
+       missing, and a count of one row.
+     - CA7 adds otherwise-empty documents with `logbooks` or `qsos` missing or null; a
+       one-empty-logbook document is the extra control.
+     - Every unadopted legacy logbook now carries `callsign: ""` (`caLegacyLB`), and the
+       listing and export want it kept.
+     - CA1 reads levels 1 and 2 with exactly `GET /v1/version` then the one archive route,
+       and the version without the token. Each refusal asserts whether it is
+       `ErrArchiveExportUnsupported`: only absent, 0 or negative is. A version redirect to
+       another origin (which fails the test if contacted) or on the same origin is refused
+       with only the one request.
+     - UUIDv4 refusals: the archive (listing and export, requested by its own UUID), the
+       logbook (listing and export) and the QSO.
+     - Negative tombstone counts in the listing and the export.
+     - A legacy name spelled like another logbook's UUID, in the listing and the export, both
+       returned and each row resolved to its own logbook.
+     - CA9 covers the size limits. Values are pinned: `maxResponseBytes` 1 MiB, and
+       `archiveExportLimit` 256 MiB (= `maxExportBytes`). The listing runs at its real limit;
+       the export at a lowered one through `archiveExportLimit`, a package variable as
+       `supportTimeout` is, to avoid buffering 256 MiB per case. Each has an exact-limit
+       acceptance, one byte over, and a valid document padded to the limit followed by
+       `garbage`.
+     - RED, stub (always refuses): 50 subtests fail and 32 pass; all 9 parents fail. The
+       passing 32 are pure refusals: CA3's 28 refusal cases and CA9's 4 over-limit cases. Every
+       control and acceptance case fails.
+     - RED, permissive scaffold (scratchpad only; no validation, unresolved rows to the first
+       logbook, a bare `io.LimitReader(N)` read): 78 subtests fail and 58 pass. Failing:
+       every validation case in CA3 (`:490`), CA5 (`:715`, `:718`), CA6 (`:748`, `:760`,
+       `:763`) and CA7 (`:790`); CA4's lower-case request (`:596`); and all four over-limit
+       cases (`:949`, `:954`), the bare `LimitReader` reading the limit as an apparently
+       successful EOF. Passing: CA1 and CA8 (the scaffold has the transport rules), the
+       acceptance cases, and the parser-owned truncation and trailing-data cases.
+
+     **Operator review of the revised RED (2026-10-18).** The three P2s are closed and the pins
+     are in place. The operator reproduced the stub run: 50 failing subtests, 32 passing, nine
+     failing parents. `archiveExportLimit` stays a package variable: the production value is
+     pinned, restored by `t.Cleanup`, and the tests run sequentially. One P2 remains in CA9.
+     The reduced export bodies are under 2 KiB and written without a flush, so Go supplies
+     `Content-Length` itself (`net/http/server.go:1327`). An implementation that checks only
+     that header and then reads through a bare `LimitReader(N)` would pass, yet accept an
+     oversized response that declares no length. Fix: stream the CA9 responses with no
+     `Content-Length`, flushing the headers before the body, and keep the exact-limit and
+     over-limit assertions. The header-only guard with a bare `LimitReader` must then fail the
+     over-limit cases. The 256 MiB bodies do not return. With that RED shown, proceed to
+     implementation; no further design changes. Bring the implementation and reversion
+     evidence.
+
+     **Commit 3 built (2026-10-18; not committed).**
+     - **CA9 streamed RED.**
+       - Before the change, a scratchpad scaffold that refuses only a declared
+         `Content-Length` above the limit, then reads a bare `LimitReader(N)`, passed both
+         export over-limit cases. The listing's two already failed: its 1 MiB body streams.
+       - Now CA9 serves every body through `caStreamed` (headers flushed first), and
+         `caStreamedServer` checks that the fixture declares no length.
+       - Under that scaffold, all four over-limit cases fail (`:981`, `:986`). The stub fails
+         only the two exact-limit acceptances.
+     - **Implementation:** `internal/forwarding/smcloud/archive_client.go`.
+       - `wireField[T]` tells an absent member from a null one from a value.
+       - `checkLevel` reads `/v1/version` without the token, under `supportTimeout`, and
+         requires `archive_export` to be an integer of at least 1.
+       - `read` sends one GET with no redirect followed. Errors name the path and status
+         only. It reads `limit+1` bytes and refuses anything over `limit`, whatever length is
+         declared.
+       - Documents are decoded with `json.Unmarshal`; the parser refuses truncation and
+         trailing data.
+       - Validation: `validListing`, `validArchive`, `validLogbooks` (exactly one identifier;
+         label, callsign and counts present; 0 <= tombstones <= count), `validExport` and
+         `validRow`. Rows resolve by UUID in any case, or by the exact legacy name in a
+         separate map. Every logbook's row and tombstone counts are compared with its rows.
+       - The requested UUID must be UUIDv7 and is sent lower case. Errors name logbooks by
+         position, never by legacy name, and never quote a payload.
+     - **Test changes during the build.**
+       - The mid-body cancellation was racy: its cancel could land before the response
+         arrived, so C37 passed. It is now split in two:
+         - "cancelled before the answer", for both calls: the handler signals on entry.
+         - "the export cancelled mid-body": the handler writes 32 MiB, more than loopback
+           socket buffers hold, before signalling, so the cancel lands in the body read.
+         The listing's 1 MiB limit is too small for that; it shares `read`.
+       - CA8 is split into Status, Redirects, Cancellation and NotFound (gocognit 69 > 60).
+         No assertion changed.
+     - **Result:** 12 test functions, 137 subtests, green, including `-race -count=10`.
+     - **Reversions** (unique anchors, non-empty replacements, restores hash-checked;
+       `archive_client.go` sha256 `d882fe00…`). Each failed at its intended assertion:
+       - Capability and transport:
+         - C1 level threshold lowered → CA1 zero.
+         - C2 absent level accepted → CA1 absent.
+         - C3 token sent on `/v1/version` → CA1 levels 1 and 2 (`:311`).
+         - C4 same-origin redirects followed → CA1 and CA8 same-origin.
+         - C5 bare `LimitReader(N)` → the four CA9 over-limit cases.
+         - C36 404 untyped → CA8 NotFound.
+         - C37a cancellation cause dropped before the answer → CA8 before-answer.
+         - C37 cause dropped in the body read → CA8 mid-body.
+         - C38 path not lower-cased → CA4 upper-case.
+         - C39 response body quoted in status errors → 12 CA8 status cases.
+       - Document consumption: C6 and C7, a `json.Decoder` that reads only the first value
+         → CA7 trailing data and second document, and CA3 trailing data.
+       - Head and identity:
+         - C8 head archive not compared → CA5 another archive.
+         - C9 legacy marker presence; C10 archive label presence.
+         - C11 logbook, C19 QSO and C20 archive duplicates compared case-sensitively.
+         - C12 duplicate legacy names; C13 a logbook with both identifiers.
+         - C14 a null legacy name read as empty.
+         - C15 logbook, C16 QSO and C17 head-archive UUIDs not checked as UUIDv7.
+       - Membership:
+         - C21b unresolved rows placed in the first logbook → five CA5 membership cases.
+         - C22 a row with both identifiers; C23 a row's null name read as empty.
+         - C24 legacy names entered in the UUID map → CA4 namespace case.
+       - Counts and presence:
+         - C25 tombstones not compared → CA6 tombstone cases.
+         - C26 rows not compared → CA6 row cases.
+         - C27 count presence, including the zero-valued empty logbook.
+         - C28 count bounds.
+         - C29 label and callsign presence.
+         - C30 empty callsign refused → CA2, CA4 and CA1 controls on the legacy archive.
+         - C31–C33 array presence, including the otherwise-empty documents.
+         - C34 `modified_at` and C35 `qso` presence.
+       - Preservation:
+         - C41 payload decoded and re-encoded → CA4's byte-for-byte check.
+         - C42 `modified_at` truncated to the second → CA4.
+         - C43 revision dropped → CA4.
+     - **Not failed alone, with the reason:**
+       - C18 (requested archive not checked as UUIDv7): the head's own UUIDv7 check still
+         refuses that archive. With C17 as well (C17+18), CA3 and CA5's UUIDv4 archive fail.
+       - C21 (`if false`) did not compile: `ok` was left unused. C21b is the same mutation
+         in compiling form.
+       - C40 (token in the request-build error) is unreachable: `NewRequest` cannot fail on
+         a base URL `New` validated plus a constant path and a validated UUID.
+     - **Gates**, all exit 0:
+       - gofmt (whole tree); `go vet ./...`; `go test ./...`.
+       - The cloud set with `-race` on `sm-pg` (stopped after).
+       - Maintainability: 0 regressions after the CA8 split. The first run had 1, CA8 at
+         gocognit 69.
+       - The context check; the docs catalog; `git diff --check`.
+       - `task ci:local`, dist restored. The first run failed on the same gocognit finding.
+
+     **Operator review of the build (2026-10-18): hold the commits for two P2s.** Earlier
+     findings, CA9 included, are resolved. The operator ran the focused suite with `-race`:
+     12 test functions and 137 subtests passed.
+     - **`wireField` keeps a stale null.** `UnmarshalJSON` never clears `Null` when a value
+       follows. A logbook with `"uuid": null`, then another `"uuid"` with a valid UUID, plus
+       `"legacy_name": "portable"`, is accepted as legacy: the UUID is stored, but the null
+       branch wins. Row membership has the same flaw. Fix: refuse a repeated typed wire
+       member before updating its state. Add refusal cases for head and row identifiers with
+       counts that otherwise agree. Keep the raw QSO payload opaque.
+     - **The cancellation proof still relies on socket buffering.** CA8 observes a server
+       write completing, not the client entering its body read, so the 32 MiB assumption ties
+       the guarantee to the environment. Fix: signal from the client-side response body's
+       `Read` and cancel through that barrier, exercising the shared reader directly if
+       needed. Keep the separate before-answer cases, and repeat C37 against the
+       deterministic fixture.
+     The two-commit split (code and tests, then docs) stands after these corrections. The
+     docs commit carries the agreed `docs/current.md` "Next" correction.
+
+     **Both corrections built (2026-10-18; not committed).**
+     - **Repeated members.**
+       - The tests come first:
+         - a head logbook's `uuid` repeated, null then a UUID and a UUID then null, beside
+           `legacy_name` `portable`;
+         - a row's `logbook_uuid` repeated both ways, beside `logbook_legacy_name`;
+         - a repeated legacy marker and a repeated `qso` member;
+         - the listing's repeated logbook `uuid`.
+         Counts agree whichever occurrence wins. A CA4 acceptance case pins the payload as
+         opaque: a key repeated inside the QSO comes back verbatim.
+       - RED: all seven refusal cases failed at their assertions (`:498`, `:748`). The only
+         compile failure was the new `archiveTransport` seam, which was declared first.
+       - Fix: `wireField.UnmarshalJSON` returns `errRepeatedMember` when the member is already
+         set, before changing any state. The payload stays a `json.RawMessage` value.
+     - **Deterministic cancellation.**
+       - `archiveTransport` is a package variable like `supportDialContext`; nil is
+         `http.DefaultTransport`.
+       - `caBodyBarrier` wraps the real transport. The first `Read` of an archive route's
+         response body closes `reading`, and the test cancels only after that.
+       - "Cancelled in the body read" replaces the 32 MiB case, for both calls. The server
+         sends a partial document and holds the connection. The before-answer cases stay.
+     - **Reversions** (all 48 re-run on the final files; `archive_client.go` sha256
+       `b0e53f1c…`, restores hash-checked):
+       - C44, a repeat accepted with the stale null kept → all seven repeat cases.
+       - C45, a repeat accepted with the last occurrence winning (`Null` cleared) → four of
+         them (both identifiers UUID-then-null, the legacy marker, `qso`). Last-wins is not
+         a fix.
+       - C37, the cause dropped in the body read → "cancelled in the body read" for both
+         calls; repeated 20 times under `-race`, 40 of 40 failed.
+       - C37a → both before-answer cases.
+       - The others fail as recorded above. C18 alone, C21's non-compiling form and the
+         unreachable C40 are unchanged.
+     - Result: 12 test functions, 146 subtests, green. The barrier test passed 50 times under
+       `-race`.
+     - Gates, all exit 0: gofmt (whole tree); `go vet ./...`; `go test ./...`; the cloud set
+       with `-race` on `sm-pg` (stopped after); `-race -count=10`; maintainability
+       (0 regressions); the context check (capsule 1,497/2,048 bytes); the docs catalog;
+       `git diff --check`; `task ci:local` (dist restored).
+     - `docs/current.md`: "Next" now reads that the server and client reads are built, and
+       names the next steps (characterize `Create`, storage and manager, `smd provision`).
 
    - **Archive contents (ADR 0084; ruled 2026-09-28).** Settings → Archives lists each
      archive's logbooks under its row, nested on the table's grid (name under Label,
