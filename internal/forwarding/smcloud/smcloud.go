@@ -213,27 +213,12 @@ func (f *Forwarder) Type() string { return Type }
 // write would bump modified_at and poison reconcile (see the package doc).
 func (f *Forwarder) AdifPrefix() string { return "" }
 
-// qsoUpload / putRequest mirror the smcloud service's PUT /v1/qsos wire
-// (internal/cloud/server QsoUpload / PutQsosRequest). Declared locally rather
-// than imported: the cloud packages must stay daemon-free, and a production
-// import THIS direction would blur the boundary the other way — the shared
-// contract is types.Qso itself; this envelope is four fields whose round-trip
-// the integration test pins against the real server.
-type qsoUpload struct {
-	ModifiedAt time.Time `json:"modified_at"`
-	// Revision is the row's monotonic edit counter (ADR 0050) — the primary
-	// ordering the cloud's upsert guard applies. Envelope-only, like
-	// modified_at (types.Qso tags it json:"-", so it never rides the payload).
-	Revision  int64      `json:"revision,omitempty"`
-	DeletedAt *time.Time `json:"deleted_at,omitempty"`
-	// Qso is the projected QSO body (projectCloudQso) — the canonical types.Qso JSON with
-	// the daemon-local identifiers stripped (AW-1), never the raw struct.
-	Qso json.RawMessage `json:"qso"`
-}
-
+// putRequest is the smcloud service's PUT /v1/qsos body (internal/cloud/server
+// PutQsosRequest), declared locally for the same boundary reason as
+// UploadRecord.
 type putRequest struct {
-	Logbook string      `json:"logbook"`
-	Qsos    []qsoUpload `json:"qsos"`
+	Logbook string         `json:"logbook"`
+	Qsos    []UploadRecord `json:"qsos"`
 }
 
 type putResponse struct {
@@ -260,54 +245,17 @@ func (f *Forwarder) Submit(
 	if err := ctx.Err(); err != nil {
 		return forwarding.Result{Outcome: forwarding.OutcomeTransient, Err: err}
 	}
-	if qso.UUID == "" {
-		return forwarding.Result{
-			Outcome: forwarding.OutcomeTerminal,
-			Err:     errors.New(op).WithMsg("qso has no UUID"),
-		}
-	}
-	// modified_at is the reconcile drift signal — silently substituting
-	// now() here would make the cloud copy never hash-match the local row.
-	// A zero value means the fetch path didn't overlay the column: a bug,
-	// surfaced loudly as terminal rather than papered over.
-	if qso.ModifiedAt.IsZero() {
-		return forwarding.Result{
-			Outcome: forwarding.OutcomeTerminal,
-			Err:     errors.New(op).WithMsgf("qso %s has no modified_at (fetch overlay missing)", qso.UUID),
-		}
-	}
-
-	projected, err := projectCloudQso(qso)
+	// UploadFor refuses a QSO with no UUID or no modified_at, an unknown action
+	// and a projection failure: each is a bug no retry fixes.
+	up, err := UploadFor(qso, act)
 	if err != nil {
-		return forwarding.Result{
-			Outcome: forwarding.OutcomeTerminal,
-			Err:     errors.New(op).WithErr(err).WithMsg("project qso for cloud payload"),
-		}
-	}
-	up := qsoUpload{ModifiedAt: qso.ModifiedAt, Revision: qso.Revision, Qso: projected}
-	switch act {
-	case action.Insert, action.Update:
-		// plain upsert
-	case action.Delete:
-		// Tombstone: deleted_at set. The soft-deleted row carries its
-		// deleted_at column; fall back to modified_at (the delete bumped it)
-		// if a path ever yields a tombstone-less delete action.
-		d := qso.DeletedAt
-		if d.IsZero() {
-			d = qso.ModifiedAt
-		}
-		up.DeletedAt = &d
-	default:
-		return forwarding.Result{
-			Outcome: forwarding.OutcomeTerminal,
-			Err:     errors.New(op).WithMsgf("unknown action %q", act),
-		}
+		return forwarding.Result{Outcome: forwarding.OutcomeTerminal, Err: errors.New(op).WithErr(err)}
 	}
 
-	var envelope any = putRequest{Logbook: f.logbook, Qsos: []qsoUpload{up}}
+	var envelope any = putRequest{Logbook: f.logbook, Qsos: []UploadRecord{up}}
 	if f.identity {
 		envelope = identityPutRequest{ArchiveLabel: f.target.ArchiveLabel, LogbookLabel: f.target.LogbookLabel,
-			Callsign: f.target.Callsign, Qsos: []qsoUpload{up}}
+			Callsign: f.target.Callsign, Qsos: []UploadRecord{up}}
 	}
 	body, err := json.Marshal(envelope)
 	if err != nil {

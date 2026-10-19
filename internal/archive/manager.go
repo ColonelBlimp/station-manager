@@ -81,6 +81,9 @@ type Manager struct {
 	// smcloudSupport is the start's SM Cloud support check as the saved config
 	// sees it (SetSmcloudSupport, ruling J3); nil until wired.
 	smcloudSupport func(config.Config) smcloud.SupportState
+	// restorer writes a provisioned row (SetRowRestorer, W-0021 Q7); nil until
+	// wired, when Provision refuses.
+	restorer RowRestorer
 
 	// activeSummary is the live summary of the ACTIVE archive (SetActiveSummary,
 	// ADR 0084); nil until wired, when the active archive lists from the sidecar
@@ -167,7 +170,11 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (CreateResult, 
 		return CreateResult{}, err
 	}
 
-	logbooks, err := m.build(ctx, snap, tmp, id, req)
+	logbooks, err := m.build(ctx, snap, tmp, id, buildSpec{
+		logbooks: func(ctx context.Context, svc *sqlite.Service) (int64, error) {
+			return svc.InsertLogbookWithContext(ctx, types.Logbook{Name: req.LogbookName, Callsign: req.LogbookCallsign})
+		},
+	})
 	if err != nil {
 		return CreateResult{}, m.withCleanup(err, tmp)
 	}
@@ -344,11 +351,22 @@ func ensureContainedManagedDir(workDir, dir string) error {
 	return nil
 }
 
-// build migrates the .creating file with the LOG set only, seeds the initial
-// logbook and the identity, checks integrity, and closes to a single file.
-// It returns the new archive's logbook summaries, read before the close, for the
-// summaries sidecar (ADR 0084).
-func (m *Manager) build(ctx context.Context, snap config.Config, tmp, id string, req CreateRequest) ([]LogbookSummary, error) {
+// buildSpec is what a build puts in the file beyond what every archive gets.
+type buildSpec struct {
+	// logbooks inserts the file's logbooks and returns the default's id. It
+	// runs before the identity is written.
+	logbooks func(ctx context.Context, svc *sqlite.Service) (int64, error)
+	// rows, when set, fills and verifies the file after its identity and the
+	// empty binding seed are written, before the integrity check.
+	rows func(ctx context.Context, svc *sqlite.Service) error
+}
+
+// build migrates the .creating file with the LOG set only, seeds the
+// logbooks and the identity, records the empty binding seed, fills the rows
+// (provisioning), checks integrity, and closes to a single file. It returns
+// the archive's logbook summaries, read before the close, for the summaries
+// sidecar (ADR 0084).
+func (m *Manager) build(ctx context.Context, snap config.Config, tmp, id string, spec buildSpec) ([]LogbookSummary, error) {
 	c := snap
 	c.Datastore.Path = tmp
 	c.Datastore.Options = nil
@@ -369,7 +387,7 @@ func (m *Manager) build(ctx context.Context, snap config.Config, tmp, id string,
 	if err := svc.Migrate(); err != nil {
 		return nil, fmt.Errorf("provision: migrate: %w", err)
 	}
-	lbID, err := svc.InsertLogbookWithContext(ctx, types.Logbook{Name: req.LogbookName, Callsign: req.LogbookCallsign})
+	lbID, err := spec.logbooks(ctx, svc)
 	if err != nil {
 		return nil, fmt.Errorf("provision: seed logbook: %w", err)
 	}
@@ -380,6 +398,11 @@ func (m *Manager) build(ctx context.Context, snap config.Config, tmp, id string,
 	// seed decision is recorded here so no later start seeds it from config.
 	if _, err := svc.SeedLogbookDestinationsWithContext(ctx, nil); err != nil {
 		return nil, fmt.Errorf("provision: record the empty binding seed: %w", err)
+	}
+	if spec.rows != nil {
+		if err := spec.rows(ctx, svc); err != nil {
+			return nil, fmt.Errorf("provision: %w", err)
+		}
 	}
 	if err := svc.CheckIntegrityWithContext(ctx); err != nil {
 		return nil, fmt.Errorf("provision: %w", err)
@@ -400,15 +423,22 @@ func (m *Manager) build(ctx context.Context, snap config.Config, tmp, id string,
 	return logbooks, nil
 }
 
-// withCleanup removes a failed creation's file (and sidecars) and folds a
-// removal failure into the returned error — a file that cannot be removed is
-// logged and named, never silently left, and DiagnoseCreatingArtefacts reports
-// it at the next start as an unlisted archive file.
-func (m *Manager) withCleanup(cause error, path string) error {
-	if err := m.removeWithSidecars(path); err != nil {
-		return fmt.Errorf("%w; and the file could not be removed (%v) — it is unlisted and will be reported at the next start", cause, err)
+// withCleanup removes a failed creation's files (each with its sidecars) and
+// folds a removal failure into the returned error, after the cause: a file
+// that cannot be removed is logged and named, never silently left, and
+// DiagnoseCreatingArtefacts reports it at the next start as an unlisted
+// archive file. Every path is attempted whatever the others do.
+func (m *Manager) withCleanup(cause error, paths ...string) error {
+	var failed []string
+	for _, p := range paths {
+		for _, err := range m.removeWithSidecars(p) {
+			failed = append(failed, err.Error())
+		}
 	}
-	return cause
+	if len(failed) == 0 {
+		return cause
+	}
+	return fmt.Errorf("%w; and the file could not be removed (%s) — it is unlisted and will be reported at the next start", cause, strings.Join(failed, "; "))
 }
 
 // canonical resolves symlinks for a path comparison; an unresolvable path
@@ -420,35 +450,31 @@ func canonical(p string) string {
 	return p
 }
 
-func (m *Manager) removeWithSidecars(path string) error {
-	var first error
+// removeWithSidecars removes path, its -wal and its -shm, attempting each
+// whatever the others do, and returns every removal that failed (each names
+// its file).
+func (m *Manager) removeWithSidecars(path string) []error {
+	var failed []error
 	for _, p := range []string{path, path + "-wal", path + "-shm"} {
-		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+		if err := removeFile(p); err != nil && !os.IsNotExist(err) {
 			m.logger.ErrorWith().Err(err).Str("path", p).Msg("archive: could not remove a failed creation's file")
-			if first == nil {
-				first = err
-			}
+			failed = append(failed, err)
 		}
 	}
-	return first
+	return failed
 }
 
 // DiagnoseCreatingArtefacts lists what an interrupted or failed creation left
 // in the managed directory: `.creating` files, and `.db` files the catalogue
 // does not list (a crash between placing the file and the catalogue write, or
-// a cleanup that could not remove it). They are never archives — the catalogue
+// a cleanup that could not remove it), each with any -wal or -shm sidecar
+// left beside it. A catalogued archive's own sidecars are its live journal and
+// never reported. They are never archives — the catalogue
 // never learned of them — so they are reported for the operator to remove,
 // not deleted: a file that was mid-build may still be the operator's clue to
 // what happened. Runs at daemon start.
 func DiagnoseCreatingArtefacts(cfg config.Config, logger *logging.Service) []string {
 	dir := ManagedDir(cfg)
-	var found []string
-	creating, _ := filepath.Glob(filepath.Join(dir, "*"+creatingSuffix))
-	for _, p := range creating {
-		logger.WarnWith().Str("path", p).
-			Msg("archive: a .creating file was left by an interrupted archive creation; it is not an archive and can be removed")
-		found = append(found, p)
-	}
 	// EVERY catalogued file is excluded, whatever its ownership (review
 	// 8c8af208): a legacy or external entry may point into the managed directory,
 	// and calling the operator's live archive "removable" would be the worst
@@ -457,14 +483,41 @@ func DiagnoseCreatingArtefacts(cfg config.Config, logger *logging.Service) []str
 	for _, e := range cfg.QsoArchives {
 		listed[canonical(PathFor(cfg, e))] = struct{}{}
 	}
-	dbs, _ := filepath.Glob(filepath.Join(dir, "*.db"))
-	for _, p := range dbs {
+	// catalogued: the file itself is a catalogued archive (whatever its name),
+	// or it is a sidecar whose base file is one.
+	catalogued := func(p string) bool {
 		if _, ok := listed[canonical(p)]; ok {
-			continue
+			return true
 		}
-		logger.WarnWith().Str("path", p).
-			Msg("archive: an archive file in the managed directory is not in the catalogue (a failed creation left it); it is not served and can be removed")
-		found = append(found, p)
+		for _, side := range []string{"-wal", "-shm"} {
+			if base, ok := strings.CutSuffix(p, side); ok {
+				if _, ok := listed[canonical(base)]; ok {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	var found []string
+	for _, group := range []struct {
+		patterns []string
+		msg      string
+	}{
+		{[]string{"*" + creatingSuffix, "*" + creatingSuffix + "-wal", "*" + creatingSuffix + "-shm"},
+			"archive: a .creating file was left by an interrupted archive creation; it is not an archive and can be removed"},
+		{[]string{"*.db", "*.db-wal", "*.db-shm"},
+			"archive: an archive file in the managed directory is not in the catalogue (a failed creation left it); it is not served and can be removed"},
+	} {
+		for _, pattern := range group.patterns {
+			matches, _ := filepath.Glob(filepath.Join(dir, pattern))
+			for _, p := range matches {
+				if catalogued(p) {
+					continue
+				}
+				logger.WarnWith().Str("path", p).Msg(group.msg)
+				found = append(found, p)
+			}
+		}
 	}
 	return found
 }

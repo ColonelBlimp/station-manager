@@ -23,10 +23,10 @@ type IdentityTarget struct {
 // (internal/cloud/server IdentityPutRequest): the display values and the
 // QSOs, never the cloud logbook name.
 type identityPutRequest struct {
-	ArchiveLabel string      `json:"archive_label"`
-	LogbookLabel string      `json:"logbook_label"`
-	Callsign     string      `json:"callsign"`
-	Qsos         []qsoUpload `json:"qsos"`
+	ArchiveLabel string         `json:"archive_label"`
+	LogbookLabel string         `json:"logbook_label"`
+	Callsign     string         `json:"callsign"`
+	Qsos         []UploadRecord `json:"qsos"`
 }
 
 // NewIdentity constructs the identity forwarder of an adopted binding: the
