@@ -2,9 +2,11 @@ package qsoservice
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
 	"github.com/stretchr/testify/require"
@@ -152,4 +154,51 @@ func TestRestore_QueuesNoUploads(t *testing.T) {
 	rows, err := s.DB.FetchUploadsByQsoIDWithContext(ctx, got.ID)
 	require.NoError(t, err)
 	require.Empty(t, rows, "restore must not enqueue uploads")
+}
+
+// RestoreInto is Restore against a database the caller owns (W-0021 Q7: the
+// archive manager's file under construction), from a service wired as usual.
+// The existence probe, the insert and the idempotence all use that database;
+// the service's own is never read or written.
+func TestRestoreInto_UsesTheGivenDatabaseOnly(t *testing.T) {
+	s := newTestService(t)
+	ownLB := seedLogbook(t, s, "Main", "7Q5MLV")
+	// A file, not ":memory:": the driver shares one cache between in-memory
+	// databases, which would make the two indistinguishable.
+	target := &sqlite.Service{ConfigService: s.Config, LoggerService: s.Logger}
+	require.NoError(t, target.Initialize())
+	target.DatabaseConfig = &types.DatastoreConfig{Driver: "sqlite", Path: filepath.Join(t.TempDir(), "target.db"),
+		MaxOpenConns: 1, MaxIdleConns: 1, ContextTimeout: 10, TransactionContextTimeout: 10}
+	require.NoError(t, target.Open())
+	t.Cleanup(func() { _ = target.Close() })
+	require.NoError(t, target.Migrate())
+	targetLB, err := target.InsertLogbook(types.Logbook{Name: "Field Day", Callsign: "7Q5MLV"})
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	uuid := utils.NewUUIDv7()
+	q := restorableQso(uuid, time.Date(2026, 6, 1, 14, 30, 0, 0, time.UTC))
+	// The row already exists in the service's own database: a probe of that
+	// database would wrongly report it present.
+	status, err := s.Restore(ctx, ownLB, q)
+	require.NoError(t, err)
+	require.Equal(t, RestoreStored, status)
+	before, err := s.DB.FetchQsoByUUIDWithContext(ctx, uuid)
+	require.NoError(t, err)
+
+	status, err = s.RestoreInto(ctx, target, targetLB, q)
+	require.NoError(t, err)
+	require.Equal(t, RestoreStored, status, "the probe reads the given database")
+	got, err := target.FetchQsoByUUIDWithContext(ctx, uuid)
+	require.NoError(t, err, "the row is in the given database")
+	require.Equal(t, targetLB, got.LogbookID)
+	require.Equal(t, int64(7), got.Revision)
+
+	status, err = s.RestoreInto(ctx, target, targetLB, q)
+	require.NoError(t, err)
+	require.Equal(t, RestoreSkippedExisting, status, "idempotent against the given database")
+
+	after, err := s.DB.FetchQsoByUUIDWithContext(ctx, uuid)
+	require.NoError(t, err)
+	require.Equal(t, before, after, "the service's own database is untouched")
 }

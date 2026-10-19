@@ -443,13 +443,13 @@ func TestRestore_ClassifyInsertErr(t *testing.T) {
 	_, collisionErr := s.DB.InsertRestoredQsoWithContext(ctx, q)
 	require.Error(t, collisionErr, "fixture: the loser's insert must actually collide")
 
-	st, err := s.classifyRestoreInsertErr(ctx, uuid, lbID, collisionErr)
+	st, err := s.classifyRestoreInsertErr(ctx, s.DB, uuid, lbID, collisionErr)
 	require.NoError(t, err, "RS2: the loser's outcome is the documented idempotent skip, "+
 		"not a raw constraint error")
 	require.Equal(t, RestoreSkippedExisting, st)
 
 	// Any other fault passes through unchanged, attributed to the insert.
-	_, err = s.classifyRestoreInsertErr(ctx, utils.NewUUIDv7(), lbID, fmt.Errorf("disk I/O error"))
+	_, err = s.classifyRestoreInsertErr(ctx, s.DB, utils.NewUUIDv7(), lbID, fmt.Errorf("disk I/O error"))
 	require.Error(t, err)
 	require.ErrorContains(t, err, "insert restored qso")
 }

@@ -38,6 +38,13 @@ const (
 // guarantees both); logbookID is the LOCAL target logbook — cloud logbook ids
 // mean nothing here.
 func (s *Service) Restore(ctx context.Context, logbookID int64, qso types.Qso) (RestoreStatus, error) {
+	return s.RestoreInto(ctx, s.DB, logbookID, qso)
+}
+
+// RestoreInto is Restore against db, a database the caller owns and opened:
+// the archive manager's file under construction (W-0021 Q7). The probe, the
+// insert and the idempotence all use db; the service's own is not touched.
+func (s *Service) RestoreInto(ctx context.Context, db *sqlite.Service, logbookID int64, qso types.Qso) (RestoreStatus, error) {
 	const op errors.Op = "qsoservice.Restore"
 
 	// Canonicalise BEFORE validating and keep the trimmed form: cloud backups
@@ -62,7 +69,7 @@ func (s *Service) Restore(ctx context.Context, logbookID int64, qso types.Qso) (
 	// #5, the 2026-07-21 #6 shape): falling through would attempt the insert
 	// on an unproven premise and attribute whatever happens next to the wrong
 	// operation, so anything but a clean not-found propagates.
-	if _, err := s.DB.FetchQsoByUUIDIncludingDeletedWithContext(ctx, qso.UUID); err == nil {
+	if _, err := db.FetchQsoByUUIDIncludingDeletedWithContext(ctx, qso.UUID); err == nil {
 		s.logRestore(qso.UUID, logbookID, RestoreSkippedExisting)
 		return RestoreSkippedExisting, nil
 	} else if !stderr.Is(err, errors.ErrNotFound) {
@@ -90,8 +97,8 @@ func (s *Service) Restore(ctx context.Context, logbookID int64, qso types.Qso) (
 			strconv.FormatInt(freqKHz, 10), qso.QsoDate, utils.TimeToHHMM(qso.TimeOn))
 	}
 
-	if _, err := s.DB.InsertRestoredQsoWithContext(ctx, qso); err != nil {
-		return s.classifyRestoreInsertErr(ctx, qso.UUID, logbookID, err)
+	if _, err := db.InsertRestoredQsoWithContext(ctx, qso); err != nil {
+		return s.classifyRestoreInsertErr(ctx, db, qso.UUID, logbookID, err)
 	}
 	s.logRestore(qso.UUID, logbookID, RestoreStored)
 	return RestoreStored, nil
@@ -105,10 +112,10 @@ func (s *Service) Restore(ctx context.Context, logbookID int64, qso types.Qso) (
 // probe would have reported a moment later. Everything else — including a
 // dedupe-key collision with a row of DIFFERENT identity, where the refetch
 // misses — propagates, attributed to the insert.
-func (s *Service) classifyRestoreInsertErr(ctx context.Context, uuid string, logbookID int64, insertErr error) (RestoreStatus, error) {
+func (s *Service) classifyRestoreInsertErr(ctx context.Context, db *sqlite.Service, uuid string, logbookID int64, insertErr error) (RestoreStatus, error) {
 	const op errors.Op = "qsoservice.Restore"
 	if sqlite.IsUniqueConstraintError(insertErr) {
-		if _, ferr := s.DB.FetchQsoByUUIDIncludingDeletedWithContext(ctx, uuid); ferr == nil {
+		if _, ferr := db.FetchQsoByUUIDIncludingDeletedWithContext(ctx, uuid); ferr == nil {
 			s.logRestore(uuid, logbookID, RestoreSkippedExisting)
 			return RestoreSkippedExisting, nil
 		}

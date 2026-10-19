@@ -95,52 +95,14 @@ func main() {
 		}
 	}()
 
-	// Subcommand dispatch. Currently only one — `smd import <file.adi>` —
-	// but inserted here as a switch so future subcommands (export,
-	// migrate, etc.) drop in without restructuring. Argv shape:
-	//   smd                              → daemon (run())
-	//   smd --config <path>              → daemon with flag (run())
-	//   smd import [flags] <file.adi>    → one-shot import (runImport())
-	//   smd restore [flags]              → SM Cloud restore (runRestore())
-	//   smd config-check [--config p]    → read-only preflight: unknown keys, Load, forwarder construction (runConfigCheck())
-	//   smd db-downgrade --to N --yes    → migrate the log schema DOWN for a rollback to an older build (runDBDowngrade())
-	//   smd config-downgrade --to N --yes → rewrite config.json to an older schema for the same rollback (runConfigDowngrade())
-	if len(os.Args) > 1 {
-		switch os.Args[1] {
-		case "import":
-			if err := runImport(os.Args[2:]); err != nil {
-				_, _ = fmt.Fprintf(os.Stderr, "smd: %v\n", err)
-				os.Exit(ExitError)
-			}
-			return
-		case "restore":
-			if err := runRestore(os.Args[2:]); err != nil {
-				_, _ = fmt.Fprintf(os.Stderr, "smd: %v\n", err)
-				os.Exit(ExitError)
-			}
-			return
-		case "config-check":
-			if err := runConfigCheck(os.Args[2:]); err != nil {
-				_, _ = fmt.Fprintf(os.Stderr, "smd: %v\n", err)
-				os.Exit(ExitError)
-			}
-			return
-		case "db-downgrade":
-			if err := runDBDowngrade(os.Args[2:]); err != nil {
-				_, _ = fmt.Fprintf(os.Stderr, "smd: %v\n", err)
-				os.Exit(ExitError)
-			}
-			return
-		case "config-downgrade":
-			if err := runConfigDowngrade(os.Args[2:]); err != nil {
-				_, _ = fmt.Fprintf(os.Stderr, "smd: %v\n", err)
-				os.Exit(ExitError)
-			}
-			return
+	if code, handled := dispatchSubcommand(os.Args); handled {
+		if code != 0 {
+			os.Exit(code)
 		}
+		return
 	}
 
-	if err := run(); err != nil {
+	if err := runDaemon(); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "smd: %v\n", err)
 		os.Exit(ExitError)
 	}
@@ -150,6 +112,47 @@ func main() {
 		os.Exit(ExitRestart)
 	}
 }
+
+// subcommands are smd's one-shot commands; any other argv runs the daemon:
+//
+//	smd                               → daemon (run())
+//	smd --config <path>               → daemon with flag (run())
+//	smd import [flags] <file.adi>     → one-shot import (runImport())
+//	smd restore [flags]               → SM Cloud restore (runRestore())
+//	smd provision [flags]             → a cloud archive as a new managed archive (runProvision())
+//	smd config-check [--config p]     → read-only preflight: unknown keys, Load, forwarder construction (runConfigCheck())
+//	smd db-downgrade --to N --yes     → migrate the log schema DOWN for a rollback to an older build (runDBDowngrade())
+//	smd config-downgrade --to N --yes → rewrite config.json to an older schema for the same rollback (runConfigDowngrade())
+var subcommands = map[string]func([]string) error{
+	"import":           runImport,
+	"restore":          runRestore,
+	"provision":        runProvision,
+	"config-check":     runConfigCheck,
+	"db-downgrade":     runDBDowngrade,
+	"config-downgrade": runConfigDowngrade,
+}
+
+// dispatchSubcommand runs argv's subcommand, if it names one, and returns its
+// exit code: an error is printed as "smd: <error>" and exits ExitError.
+// handled is false when argv is the daemon's.
+func dispatchSubcommand(argv []string) (exit int, handled bool) {
+	if len(argv) < 2 {
+		return 0, false
+	}
+	cmd, ok := subcommands[argv[1]]
+	if !ok {
+		return 0, false
+	}
+	if err := cmd(argv[2:]); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "smd: %v\n", err)
+		return ExitError, true
+	}
+	return 0, true
+}
+
+// runDaemon is the daemon main falls through to when no subcommand matches;
+// a seam so an entry-point test can run main without starting a daemon.
+var runDaemon = run
 
 // run wires the daemon's lifecycle into a single function with
 // defer-based cleanup. Any failure returns an error; deferred closers

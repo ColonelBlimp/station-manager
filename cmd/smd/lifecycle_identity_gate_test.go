@@ -360,6 +360,7 @@ func qsoRowsIn(t *testing.T, path string) int {
 // request's method and path. It skips without the database.
 type realCloud struct {
 	srv     *httptest.Server
+	db      *sql.DB // the store's database, for tests that read or seed it directly
 	mu      sync.Mutex
 	reqs    []string
 	answers []cloudAnswer
@@ -431,7 +432,7 @@ DROP TABLE IF EXISTS tenants; DROP TABLE IF EXISTS schema_migrations`
 	}
 	quiet := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	h := server.New(st, db, quiet, map[string]int64{"tok-e2e": tenant}, "test", 0).Handler()
-	c := &realCloud{}
+	c := &realCloud{db: db}
 	c.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c.mu.Lock()
 		c.reqs = append(c.reqs, r.Method+" "+r.URL.Path)

@@ -349,6 +349,68 @@ on or off: those QSOs would keep another cloud logbook's ids, and a later edit
 would move them between cloud logbooks. Restore such a logbook without
 `--cloud-logbook`. The old `--forwarder` option is retired and refused.
 
+### Provisioning a cloud archive on this station
+
+`smd provision` re-creates an SM Cloud archive as a new archive on this
+station. The archive and each logbook keep their ids, and every QSO keeps its
+id, revision, modification time and deletion. Run it with the daemon stopped
+(`smctl stop`) and no other `smd` command running. Nothing prevents two
+writers, so this is the operator's responsibility.
+
+    smd provision --list
+    smd provision --archive <uuid> --default-logbook <uuid> --dry-run
+    smd provision --archive <uuid> --default-logbook <uuid>
+
+The command needs the SM Cloud station account in `config.json` (url and
+token), and a server that supports whole-archive export. Use `--config PATH`
+to name `config.json` elsewhere. A missing `config.json` is an error, never
+created. Exactly one of `--list` and `--archive` is required. `--list` accepts only
+`--config`, and both ids must be UUIDv7s.
+
+- `--list` shows the station account's cloud archives with their logbooks and
+  counts, and whether this station's catalogue already holds each archive.
+- `--dry-run` fetches the archive and reports where it would go and the
+  catalogue outcome. It writes nothing, and it opens neither an archive nor
+  the log. Building the file and checking the rows are not part of a dry run,
+  so a later real run can still refuse.
+- `--default-logbook` names the logbook that becomes the archive's default. It
+  is required when the archive has more than one logbook.
+
+The station account's legacy archive (Home) cannot be provisioned. A
+provisioning is refused, and nothing is published, in any of these cases:
+
+- the default logbook is not one of the archive's logbooks;
+- a label or callsign breaks a local rule;
+- this station already catalogues the archive as anything but a managed
+  archive;
+- an archive file, or a `.creating` file left by an interrupted attempt,
+  already exists at the destination. The refusal names the file. Provisioning
+  never overwrites or removes it: inspect it and remove it yourself.
+
+Every row is written through the same restore path `smd restore` uses, then
+read back as the upload worker would read it. The record that read builds
+must equal the cloud's. A row that would not push back unchanged refuses the
+whole provisioning, naming the row and its fields, never their values.
+
+A new archive is added to the catalogue inactive. When the catalogue already
+holds the archive as a managed archive whose file is missing, that entry is
+kept as it is, including whether it is active. The file is created in
+`<data_dir>/db/qso-archives/`. No SM Cloud destination is created and nothing
+is queued for upload. Activate the archive from Settings → Archives, then turn
+on its logbooks' SM Cloud backup under Settings → Forwarding, where each
+logbook's uploads are set.
+
+The command prints the archive, its logbooks and the catalogue outcome, and
+exits 0. Some caveats can follow a published archive:
+
+- the directory sync could not be confirmed, so durability is uncertain;
+- a temporary name could not be removed. The next start reports it.
+
+The command prints these as warnings, and the archive is still in place. A
+refusal or failure exits 1. A real run logs its outcome as `config.json`'s
+`logging` section directs: to the log file when `file_logging` is on, to the
+console when `console_logging` is on. With both off, it logs to the file.
+
 You don't need to set `SM_WORKING_DIR` in your shell. When run from
 `/usr/bin/smd` (the installed location), the binary resolves its
 working directory via the same XDG fallback the daemon uses, so it
