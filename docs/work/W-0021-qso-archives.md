@@ -6116,6 +6116,18 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      the remaining documentation step (commit 7). 5F's four operator acceptance items stay
      open.
 
+     **Codex review of `c1f63852` (triaged 2026-10-19): one P2, confirmed and
+     fixed.** `provision_cmd_test.go` calls `watchOpens`, which only the
+     `//go:build linux` file defines, so the package's tests stopped compiling on other
+     platforms. Reproduced: `GOOS=freebsd go vet ./cmd/smd/` failed with `undefined:
+     watchOpens`. Darwin and Windows already fail earlier for unrelated reasons (the serial
+     enumerator without cgo; `fsperm`'s `syscall.Stat_t`). The fix adds
+     `provision_open_other_test.go` (`//go:build !linux`), whose `watchOpens` skips the
+     test: an observer that cannot look must not pass. Afterwards `GOOS=freebsd` and
+     `GOOS=openbsd` vet exit 0, the Linux provision tests run with no skips, and gofmt and
+     maintainability exit 0. The operator approved the fallback and it was committed alone
+     as `92967cb8`; Codex found nothing to act on in it.
+
 
    - **Archive contents (ADR 0084; ruled 2026-09-28).** Settings → Archives lists each
      archive's logbooks under its row, nested on the table's grid (name under Label,
