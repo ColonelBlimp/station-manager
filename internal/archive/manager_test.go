@@ -3,9 +3,12 @@ package archive
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	stderr "errors"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -23,6 +26,28 @@ import (
 // inactive. A failure before the catalogue write leaves the active archive
 // untouched and no selectable half-built archive; the same request key returns
 // the same archive; `.creating` leftovers are diagnosed, never listed.
+//
+// W-0021 Q7 commit 4 characterizes Create before provisioning shares its
+// construction (operator direction 2026-10-19), against today's code:
+//
+//	publication   the file is placed and the directory chain synced while the
+//	              archive is in neither catalogue (memory, disk) nor List, with
+//	              no summary; a failed catalogue write leaves no summary, so the
+//	              summary follows publication.
+//	failures      construction, each directory sync, and the catalogue write
+//	              each leave no file, sidecar or summary, the catalogue unchanged
+//	              on disk and in memory, and the selection unchanged.
+//	cleanup       a removal that fails keeps the original cause, names the file
+//	              left behind (unlisted, not activatable, diagnosed at start),
+//	              and still attempts every sidecar.
+//	artefacts     identities, default logbook, log-only schema, modes, empty
+//	              bindings with the seed decision, and a summary matching the
+//	              file; no .creating, -wal or -shm before the file is reopened.
+//	after it      a summary failure and DurabilityUncertain each keep the
+//	              archive and return success, the latter logged as a caveat.
+//
+// config.fsOps stays private: the catalogue failure and DurabilityUncertain are
+// driven through the config directory's permissions instead.
 
 func testManager(t *testing.T) (*Manager, *config.Service, *strings.Builder) {
 	t.Helper()
@@ -105,6 +130,14 @@ func TestCreate_ProvisionsAManagedArchiveInactive(t *testing.T) {
 			t.Fatalf("%s left behind", filepath.Base(side))
 		}
 	}
+	// Before any reopen the managed directory holds exactly the final database:
+	// no construction sidecar (<id>.db.creating-wal, -shm) either.
+	wantOnlyFile(t, filepath.Dir(res.Path), res.Path)
+	// The identity reads from the placed file without opening it read-write, as
+	// a durable retry reads it.
+	if peeked, found, err := sqlite.PeekArchiveIdentity(res.Path); err != nil || !found || peeked.ArchiveUUID != res.Entry.ID {
+		t.Fatalf("peeked identity = %+v found %v (%v); want archive %s", peeked, found, err, res.Entry.ID)
+	}
 	// The file carries the catalogue's id, the initial logbook and its default —
 	// and the LOG schema only: no reference tables, no reference migration tracking.
 	db := openManaged(t, snap, res.Path)
@@ -141,6 +174,16 @@ func TestCreate_ProvisionsAManagedArchiveInactive(t *testing.T) {
 	disk, err := config.Load(cfgSvc.Path)
 	if err != nil || disk.QsoArchiveByID(res.Entry.ID) == nil {
 		t.Fatalf("entry not on disk: %v", err)
+	}
+	// The summary describes this file: its one logbook as the file holds it, the
+	// default, no QSOs, signed against the placed file.
+	sums, miss := ReadSummaries(SummariesPath(snap))
+	sum, ok := sums[res.Entry.ID]
+	if miss != "" || !ok || len(sum.Logbooks) != 1 {
+		t.Fatalf("summary = %+v (present %v, miss %q); want one logbook", sum, ok, miss)
+	}
+	if lb := sum.Logbooks[0]; lb.UUID != lbs[0].UUID || lb.Name != lbs[0].Name || lb.Callsign != lbs[0].Callsign || lb.QsoCount != 0 || !lb.Default {
+		t.Fatalf("summary logbook = %+v; want the file's %+v, default, 0 QSOs", lb, lbs[0])
 	}
 	if !strings.Contains(buf.String(), res.Entry.ID) {
 		t.Fatal("creation not logged with the archive id")
@@ -209,24 +252,304 @@ func TestCreate_Validation(t *testing.T) {
 
 // Step 5 failing (the catalogue cannot be persisted) leaves no file in place and
 // no entry — the active archive is untouched and nothing half-built is selectable.
+// No summary is recorded either: the summary follows publication.
 func TestCreate_CataloguePersistFailureLeavesNothingBehind(t *testing.T) {
 	m, cfgSvc, _ := testManager(t)
+	seedHome(t, cfgSvc)
+	before := catalogueNow(t, cfgSvc)
 	dir := filepath.Dir(cfgSvc.Path)
 	if err := os.Chmod(dir, 0o500); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
 	_, err := m.Create(context.Background(), CreateRequest{RequestKey: "req-4", Label: "L", LogbookName: "L", LogbookCallsign: "G4ABC"})
-	if err == nil {
-		t.Fatal("create succeeded although the catalogue could not be written")
+	if err == nil || !strings.Contains(err.Error(), "record the archive in the catalogue") {
+		t.Fatalf("create = %v; want the catalogue write's failure", err)
 	}
 	_ = os.Chmod(dir, 0o700)
-	entries, _ := os.ReadDir(ManagedDir(cfgSvc.Snapshot()))
-	if len(entries) != 0 {
-		t.Fatalf("managed dir holds %d file(s) after a failed create: %v", len(entries), entries)
+	wantNothingLeft(t, m, cfgSvc, before)
+}
+
+// wantOnlyFile requires dir to hold exactly the file at path.
+func wantOnlyFile(t *testing.T, dir, path string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read %s: %v", dir, err)
 	}
-	if n := len(cfgSvc.Snapshot().QsoArchives); n != 0 {
-		t.Fatalf("catalogue has %d entries after a failed create", n)
+	if len(entries) != 1 || filepath.Join(dir, entries[0].Name()) != path {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Fatalf("%s holds %v; want only %s", dir, names, filepath.Base(path))
+	}
+}
+
+// logRecord is the one JSON log record whose message is msg.
+func logRecord(t *testing.T, log, msg string) map[string]any {
+	t.Helper()
+	var found map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(log), "\n") {
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("log line is not JSON: %q", line)
+		}
+		if rec["message"] != msg {
+			continue
+		}
+		if found != nil {
+			t.Fatalf("two records say %q", msg)
+		}
+		found = rec
+	}
+	if found == nil {
+		t.Fatalf("no record says %q in %s", msg, log)
+	}
+	return found
+}
+
+// seedHome makes a legacy Home archive active, so an unchanged selection is a
+// real one.
+func seedHome(t *testing.T, cfgSvc *config.Service) {
+	t.Helper()
+	data := cfgSvc.Snapshot().DataDir
+	if err := os.MkdirAll(data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Join(data, "home.db")
+	if err := os.WriteFile(home, []byte("live"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cfgSvc.Update(func(c *config.Config) error {
+		c.QsoArchives = append(c.QsoArchives, types.QsoArchiveConfig{ID: idA, Label: "Home", Ownership: types.QsoArchiveOwnershipLegacy, Path: home})
+		c.ActiveQsoArchiveID = idA
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// catalogueState is the catalogue and the selection, in memory and on disk.
+type catalogueState struct {
+	memory, disk            []types.QsoArchiveConfig
+	active, pending         string
+	diskActive, diskPending string
+}
+
+func catalogueNow(t *testing.T, cfgSvc *config.Service) catalogueState {
+	t.Helper()
+	snap := cfgSvc.Snapshot()
+	disk, err := config.Load(cfgSvc.Path)
+	if err != nil {
+		t.Fatalf("read the catalogue on disk: %v", err)
+	}
+	return catalogueState{
+		memory: snap.QsoArchives, disk: disk.QsoArchives,
+		active: snap.ActiveQsoArchiveID, pending: snap.PendingQsoArchiveID,
+		diskActive: disk.ActiveQsoArchiveID, diskPending: disk.PendingQsoArchiveID,
+	}
+}
+
+func (c catalogueState) equal(o catalogueState) bool {
+	return slices.Equal(c.memory, o.memory) && slices.Equal(c.disk, o.disk) &&
+		c.active == o.active && c.pending == o.pending && c.diskActive == o.diskActive && c.diskPending == o.diskPending
+}
+
+// wantNothingLeft: a failed creation left no file, sidecar or summary, and the
+// catalogue and selection, in memory and on disk, are as they were.
+func wantNothingLeft(t *testing.T, m *Manager, cfgSvc *config.Service, before catalogueState) {
+	t.Helper()
+	if entries, _ := os.ReadDir(ManagedDir(cfgSvc.Snapshot())); len(entries) != 0 {
+		t.Fatalf("the managed directory holds %v after a failed create; want nothing", entries)
+	}
+	if after := catalogueNow(t, cfgSvc); !after.equal(before) {
+		t.Fatalf("catalogue after a failed create = %+v; want unchanged %+v", after, before)
+	}
+	if sums, _ := ReadSummaries(SummariesPath(cfgSvc.Snapshot())); len(sums) != 0 {
+		t.Fatalf("summaries after a failed create = %v; want none", sums)
+	}
+	if listed := m.List(); len(listed) != len(before.memory) {
+		t.Fatalf("List after a failed create = %+v; want only the catalogue as it was", listed)
+	}
+}
+
+// Construction failing (here the logbook seed, under a cancelled context)
+// removes the .creating file and its sidecars before anything is placed.
+func TestCreate_ConstructionFailureLeavesNothingBehind(t *testing.T) {
+	m, cfgSvc, _ := testManager(t)
+	seedHome(t, cfgSvc)
+	before := catalogueNow(t, cfgSvc)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := m.Create(ctx, CreateRequest{RequestKey: "req-c", Label: "L", LogbookName: "L", LogbookCallsign: "G4ABC"})
+	if err == nil || !strings.Contains(err.Error(), "provision: seed logbook") {
+		t.Fatalf("create = %v; want the construction failure", err)
+	}
+	wantNothingLeft(t, m, cfgSvc, before)
+}
+
+// A directory sync failing anywhere in the chain removes the placed file before
+// the catalogue is written.
+func TestCreate_DirectorySyncFailureLeavesNothingBehind(t *testing.T) {
+	for _, failAt := range []int{1, 2, 3} {
+		t.Run("sync "+strconv.Itoa(failAt)+" of 3", func(t *testing.T) {
+			m, cfgSvc, _ := testManager(t)
+			seedHome(t, cfgSvc)
+			before := catalogueNow(t, cfgSvc)
+			orig := syncDir
+			t.Cleanup(func() { syncDir = orig })
+			calls := 0
+			syncDir = func(p string) error {
+				if calls++; calls == failAt {
+					return stderr.New("sync boom")
+				}
+				return orig(p)
+			}
+			_, err := m.Create(context.Background(), CreateRequest{RequestKey: "req-s", Label: "L", LogbookName: "L", LogbookCallsign: "G4ABC"})
+			if err == nil || !strings.Contains(err.Error(), "sync boom") || strings.Contains(err.Error(), "could not be removed") {
+				t.Fatalf("create = %v; want the sync failure, the file removed", err)
+			}
+			wantNothingLeft(t, m, cfgSvc, before)
+		})
+	}
+}
+
+// A cleanup that cannot remove the file keeps the failure's own cause, names
+// the file left behind, and leaves it unlisted: it cannot be activated, and the
+// next start diagnoses it.
+func TestCreate_CleanupFailureKeepsTheCauseAndNamesTheLeftover(t *testing.T) {
+	lock := func(t *testing.T, dir string) {
+		t.Helper()
+		if err := os.Chmod(dir, 0o500); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range []struct {
+		name, cause string
+		arrange     func(t *testing.T, cfgSvc *config.Service)
+	}{
+		{"construction", "provision", func(t *testing.T, cfgSvc *config.Service) {
+			orig := closeFile
+			t.Cleanup(func() { closeFile = orig })
+			closeFile = func(f *os.File) error {
+				lock(t, ManagedDir(cfgSvc.Snapshot())) // the build cannot write beside the file
+				return orig(f)
+			}
+		}},
+		{"directory sync", "sync boom", func(t *testing.T, cfgSvc *config.Service) {
+			orig := syncDir
+			t.Cleanup(func() { syncDir = orig })
+			syncDir = func(string) error {
+				lock(t, ManagedDir(cfgSvc.Snapshot()))
+				return stderr.New("sync boom")
+			}
+		}},
+		{"catalogue write", "record the archive in the catalogue", func(t *testing.T, cfgSvc *config.Service) {
+			lock(t, filepath.Dir(cfgSvc.Path))
+			orig := syncDir
+			t.Cleanup(func() { syncDir = orig })
+			syncDir = func(p string) error {
+				if p == cfgSvc.Snapshot().DataDir { // the last sync, just before the catalogue
+					lock(t, ManagedDir(cfgSvc.Snapshot()))
+				}
+				return orig(p)
+			}
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			m, cfgSvc, buf := testManager(t)
+			seedHome(t, cfgSvc)
+			before := catalogueNow(t, cfgSvc)
+			dir := ManagedDir(cfgSvc.Snapshot())
+			t.Cleanup(func() { _ = os.Chmod(dir, 0o700); _ = os.Chmod(filepath.Dir(cfgSvc.Path), 0o700) })
+			c.arrange(t, cfgSvc)
+			_, err := m.Create(context.Background(), CreateRequest{RequestKey: "req-x", Label: "L", LogbookName: "L", LogbookCallsign: "G4ABC"})
+			_ = os.Chmod(dir, 0o700)
+			_ = os.Chmod(filepath.Dir(cfgSvc.Path), 0o700)
+			if err == nil {
+				t.Fatal("create succeeded")
+			}
+			msg := err.Error()
+			i := strings.Index(msg, "; and the file could not be removed")
+			if i < 0 || !strings.Contains(msg[:i], c.cause) {
+				t.Fatalf("create = %q; want the cause %q first, then the removal failure", msg, c.cause)
+			}
+			left, _ := os.ReadDir(dir)
+			if len(left) != 1 {
+				t.Fatalf("the managed directory holds %v; want the one file the cleanup could not remove", left)
+			}
+			leftover := filepath.Join(dir, left[0].Name())
+			if !strings.Contains(msg[i:], leftover) || !strings.Contains(buf.String(), leftover) {
+				t.Fatalf("the leftover %s is not named in the error %q or the log", leftover, msg)
+			}
+			if after := catalogueNow(t, cfgSvc); !after.equal(before) {
+				t.Fatalf("catalogue = %+v; want unchanged %+v", after, before)
+			}
+			id := strings.TrimSuffix(strings.TrimSuffix(left[0].Name(), creatingSuffix), ".db")
+			var re *RequestError
+			if _, err := m.Activate(context.Background(), id); !stderr.As(err, &re) || re.Code != "archive_not_found" {
+				t.Fatalf("activating the leftover = %v; want archive_not_found", err)
+			}
+			if found := DiagnoseCreatingArtefacts(cfgSvc.Snapshot(), m.logger); len(found) != 1 || found[0] != leftover {
+				t.Fatalf("diagnosed = %v; want the leftover %s", found, leftover)
+			}
+		})
+	}
+}
+
+// Cleanup attempts every sidecar even when the file itself cannot be removed
+// (here a non-empty directory at its path).
+func TestWithCleanup_AttemptsEverySidecar(t *testing.T) {
+	m, _, buf := testManager(t)
+	path := filepath.Join(t.TempDir(), "x.db")
+	if err := os.MkdirAll(filepath.Join(path, "keep"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, side := range []string{path + "-wal", path + "-shm"} {
+		if err := os.WriteFile(side, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cause := stderr.New("boom")
+	err := m.withCleanup(cause, path)
+	if !stderr.Is(err, cause) || !strings.Contains(err.Error(), path) {
+		t.Fatalf("withCleanup = %v; want the cause, naming %s", err, path)
+	}
+	for _, side := range []string{path + "-wal", path + "-shm"} {
+		if _, err := os.Stat(side); !os.IsNotExist(err) {
+			t.Fatalf("%s survived (%v); want every sidecar attempted and removed", filepath.Base(side), err)
+		}
+	}
+	if !strings.Contains(buf.String(), path) {
+		t.Fatal("the unremovable file was not logged")
+	}
+}
+
+// An uncertain catalogue write (the rename landed, the directory sync failed)
+// is a success: the archive is kept, in memory and on disk, and the caveat is
+// logged. The config directory without read permission fails only that sync.
+func TestCreate_DurabilityUncertainKeepsTheArchive(t *testing.T) {
+	m, cfgSvc, buf := testManager(t)
+	dir := filepath.Dir(cfgSvc.Path)
+	if err := os.Chmod(dir, 0o300); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	res, err := m.Create(context.Background(), CreateRequest{RequestKey: "req-u", Label: "L", LogbookName: "L", LogbookCallsign: "G4ABC"})
+	_ = os.Chmod(dir, 0o700)
+	if err != nil {
+		t.Fatalf("create = %v; want success with the caveat", err)
+	}
+	if !strings.Contains(buf.String(), `"durability_uncertain":true`) {
+		t.Fatalf("the uncertain durability was not logged: %s", buf.String())
+	}
+	if _, err := os.Stat(res.Path); err != nil {
+		t.Fatalf("archive file: %v", err)
+	}
+	after := catalogueNow(t, cfgSvc)
+	if !slices.Contains(after.memory, res.Entry) || !slices.Contains(after.disk, res.Entry) {
+		t.Fatalf("catalogue = %+v; want the entry in memory and on disk", after)
 	}
 }
 
@@ -433,13 +756,41 @@ func TestCreate_SyncsTheDirectoryBeforeTheCatalogueAndChecksTheFileOnRetry(t *te
 	m, cfgSvc, _ := testManager(t)
 	orig := syncDir
 	t.Cleanup(func() { syncDir = orig })
-	var syncedWhileUnlisted []string
+	var syncedWhileUnlisted, syncedAfter []string
+	var placedFiles []string
 	syncDir = func(p string) error {
 		if err := orig(p); err != nil {
 			return err
 		}
-		if len(cfgSvc.Snapshot().QsoArchives) == 0 { // not yet in the catalogue
-			syncedWhileUnlisted = append(syncedWhileUnlisted, p)
+		snap := cfgSvc.Snapshot()
+		if len(snap.QsoArchives) != 0 {
+			// After publication the only sync is the summary's own: the archive is
+			// already in the catalogue on disk when it is recorded.
+			if disk, err := config.Load(cfgSvc.Path); err != nil || len(disk.QsoArchives) != 1 {
+				t.Errorf("at sync %s after publication: the catalogue on disk = %v (%v); want the entry", p, disk.QsoArchives, err)
+			}
+			syncedAfter = append(syncedAfter, p)
+			return nil
+		}
+		syncedWhileUnlisted = append(syncedWhileUnlisted, p)
+		// At every sync before publication the file is already placed, and the
+		// archive is in neither catalogue, nor listed, nor summarised: a placed
+		// file alone is not an archive.
+		dir := ManagedDir(snap)
+		entries, err := os.ReadDir(dir)
+		if err != nil || len(entries) != 1 || !strings.HasSuffix(entries[0].Name(), ".db") {
+			t.Errorf("at sync %s: the managed directory holds %v (%v); want only the placed file", p, entries, err)
+			return nil
+		}
+		placedFiles = append(placedFiles, filepath.Join(dir, entries[0].Name()))
+		if disk, err := config.Load(cfgSvc.Path); err != nil || len(disk.QsoArchives) != 0 {
+			t.Errorf("at sync %s: the catalogue on disk = %v (%v); want it not yet written", p, disk.QsoArchives, err)
+		}
+		if listed := m.List(); len(listed) != 0 {
+			t.Errorf("at sync %s: List = %+v; want nothing listed", p, listed)
+		}
+		if sums, _ := ReadSummaries(SummariesPath(snap)); len(sums) != 0 {
+			t.Errorf("at sync %s: summaries %v; want none yet", p, sums)
 		}
 		return nil
 	}
@@ -452,6 +803,14 @@ func TestCreate_SyncsTheDirectoryBeforeTheCatalogueAndChecksTheFileOnRetry(t *te
 	// data_dir's entry for db/ is only durable once data_dir itself is synced.
 	dir := ManagedDir(cfgSvc.Snapshot())
 	want := []string{dir, filepath.Dir(dir), cfgSvc.Snapshot().DataDir}
+	for _, f := range placedFiles {
+		if f != res.Path {
+			t.Fatalf("placed file at a sync = %s; want %s", f, res.Path)
+		}
+	}
+	if sidecarDir := filepath.Dir(SummariesPath(cfgSvc.Snapshot())); len(syncedAfter) != 1 || syncedAfter[0] != sidecarDir {
+		t.Fatalf("syncs after publication = %v; want only the summary's, %s", syncedAfter, sidecarDir)
+	}
 	if len(syncedWhileUnlisted) != len(want) {
 		t.Fatalf("directories synced before the catalogue write = %v; want %v", syncedWhileUnlisted, want)
 	}
@@ -602,10 +961,14 @@ func TestCreate_ASidecarFailureDoesNotFailTheCreation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create failed on a sidecar fault: %v", err)
 	}
-	if !strings.Contains(buf.String(), "archive summary") {
-		t.Fatalf("the sidecar fault was not logged: %s", buf.String())
+	if rec := logRecord(t, buf.String(), "archive: could not record the new archive summary"); rec["level"] != "warn" || rec["archive_id"] != res.Entry.ID {
+		t.Fatalf("the sidecar fault's record = %v; want level warn and archive_id %s on it", rec, res.Entry.ID)
 	}
 	if _, err := os.Stat(res.Path); err != nil {
 		t.Fatalf("archive file: %v", err)
+	}
+	after := catalogueNow(t, cfgSvc)
+	if !slices.Contains(after.memory, res.Entry) || !slices.Contains(after.disk, res.Entry) {
+		t.Fatalf("catalogue = %+v; want the entry kept in memory and on disk", after)
 	}
 }
