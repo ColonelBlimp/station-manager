@@ -5280,6 +5280,128 @@ the compatibility promise that a daemon at any slice boundary starts the existin
        `git diff --check`; `task ci:local` (dist restored).
      - `docs/current.md`: "Next" now reads that the server and client reads are built, and
        names the next steps (characterize `Create`, storage and manager, `smd provision`).
+     - Committed 2026-10-18 as `c3d29f83` (code and tests) and `881db7b2` (this record and the
+       capsule). The automatic review of `c3d29f83` had no actionable findings; its review
+       file is deleted. Next: commit 4, characterize `Create`.
+
+     **Commit 4 direction (operator, 2026-10-19).** Test-only characterization of `Create`,
+     extending `internal/archive/manager_test.go` where useful; the diff comes for review
+     before commit 5. The distinctions to make explicit:
+     - **Publication:** the completed file is placed and the directory sync chain finishes
+       before the catalogue is published; the summary follows publication. A placed file
+       alone is not a selectable archive.
+     - **Failure cleanup:** cover construction, directory-sync and catalogue-write failures.
+       Assert the files left, the catalogue on disk and in memory, and an unchanged
+       selection. A cleanup failure keeps the original cause, discloses the leftover path,
+       and still attempts the other sidecars.
+     - **Successful artefacts:** read back the archive and logbook identities, the default
+       logbook, the log-only schema, permissions, empty bindings with the seed decision
+       recorded, and a matching summary. Check that no temporary, WAL or SHM file remains
+       before the database is reopened.
+     - **After publication:** a summary failure stays non-fatal. `DurabilityUncertain` also
+       keeps the archive and returns success, with the caveat logged.
+     - Keep `config.fsOps` private. Name any injection limit in the review rather than
+       widening production code in this commit.
+     The tests should pass against today's code; a characterization needs no artificial
+     failing baseline. Bring the grouped diff, a behaviour-to-test mapping and focused
+     results.
+
+     **Commit 4 built (2026-10-19; test-only; not committed).** All in
+     `internal/archive/manager_test.go`; no production change.
+     - **Publication.** `TestCreate_SyncsTheDirectoryBeforeTheCatalogue…` is extended.
+       - At each of the three chain syncs: the one placed `.db` exists and no `.creating`
+         does; the catalogue on disk is still empty; `List` is empty; no summary exists.
+       - After publication the only sync is the summary's own (`summaries.go:149`, the
+         sidecar's directory), with the entry already in the catalogue on disk. This is
+         direct evidence that the summary follows publication.
+       - The catalogue-failure test adds that no summary is recorded.
+     - **Failures.**
+       - The new helpers `seedHome` (an active legacy Home, so the selection check is
+         real), `catalogueNow` and `wantNothingLeft` cover: no file, sidecar or summary; the
+         catalogue and selection unchanged in memory and on disk; `List` unchanged.
+       - Construction: a cancelled context fails the logbook seed
+         (`TestCreate_ConstructionFailureLeavesNothingBehind`).
+       - Directory sync: each of syncs 1–3 fails in turn
+         (`TestCreate_DirectorySyncFailureLeavesNothingBehind`).
+       - Catalogue write: the existing test is extended.
+     - **Cleanup failure.** `TestCreate_CleanupFailureKeepsTheCauseAndNamesTheLeftover`
+       covers construction, directory sync and the catalogue write.
+       - The managed directory is locked to 0500 from the `closeFile` and `syncDir` seams.
+       - The cause comes first, then the removal failure. The leftover path is named in the
+         error and the log. The catalogue is unchanged.
+       - Activating the leftover's ID answers `archive_not_found`.
+         `DiagnoseCreatingArtefacts` reports it.
+       - `TestWithCleanup_AttemptsEverySidecar`: a non-empty directory at the path cannot be
+         removed, yet `-wal` and `-shm` are still removed, and the cause is kept.
+     - **Artefacts.** `TestCreate_ProvisionsAManagedArchiveInactive` is extended.
+       - `PeekArchiveIdentity` reads the identity from the placed file before any reopen;
+         the no-`.creating`/`-wal`/`-shm` check already ran before the reopen.
+       - The summary matches the file's logbook: UUID, name, callsign, 0 QSOs and default.
+     - **After publication.**
+       - The summary-failure test adds that the entry is kept in memory and on disk, and
+         that the warning names the archive.
+       - `TestCreate_DurabilityUncertainKeepsTheArchive`: the config directory at 0300 lets
+         the rename succeed and fails only the directory fsync's open. Create succeeds, logs
+         `"durability_uncertain":true`, and keeps the entry in memory and on disk.
+     - **Injection limit.** `config.fsOps` stays private. The catalogue failure and
+       `DurabilityUncertain` are driven through directory permissions instead, so these
+       tests assume a non-root user, like the existing chmod tests.
+     - **Mutation evidence** (not required for a characterization; restores hash-checked,
+       `manager.go` sha256 `da34a506…`). Each failed at its intended assertion:
+       - M1 summary recorded before the catalogue write.
+       - M2 a directory sync failure ignored.
+       - M3 a catalogue failure leaving the placed file.
+       - M4 a construction failure leaving the `.creating` file.
+       - M5 cleanup stopping at the first failure → `TestWithCleanup_AttemptsEverySidecar`.
+       - M6 a cleanup failure replacing the cause.
+       - M7 a summary failure made fatal.
+       - M8 the uncertain durability not logged.
+       - M9b the file placed only after the catalogue write → the publication test at
+         `:740` and the failure tests.
+       - M10 the empty binding seed not recorded.
+       - A first M9 (a double catalogue write) failed only through config's duplicate
+         request-key validation and was replaced by M9b.
+     - **Results.** The archive package is green; `TestCreate|TestWithCleanup` passes at
+       `-race -count=10`.
+     - **Gates**, all exit 0: gofmt (whole tree); `go vet ./...`; `go test ./...`; the cloud
+       set with `-race` on `sm-pg` (stopped after); maintainability (0 regressions); the
+       context check; the docs catalog; `git diff --check`; `task ci:local` (dist restored).
+
+     **Operator review of commit 4 (2026-10-19): two gaps to close before committing.** The
+     rest matches the agreed scope, and the permission-based `DurabilityUncertain` fixture
+     works without exposing `config.fsOps`. The operator verified `go test ./internal/archive
+     ./internal/config`, the `-race` run of `TestCreate|TestWithCleanup`, and
+     `git diff --check`.
+     - (P2) Temporary sidecars escape the success assertion. It checks the final path's
+       `-wal`/`-shm` and `.creating`, but construction uses `<id>.db.creating-wal` and
+       `<id>.db.creating-shm`, which neither that test nor the publication test's globs would
+       see. Before any reopen, assert the managed directory holds exactly the final database,
+       checking the directory-read error.
+     - (P3) The warning's archive ID is not checked. The test searches the whole log for the
+       warning text and the UUID separately, and the later success message carries the UUID,
+       so a warning without `archive_id` would still pass. Assert the message, level and
+       archive ID on the same log record.
+     **Both gaps closed (2026-10-19; not committed).**
+     - `wantOnlyFile` reads the managed directory (failing on a read error) and requires
+       exactly the final database before any reopen. The publication hook now reads the
+       directory too, and requires exactly one `.db` entry at each chain sync.
+     - `logRecord` parses the JSON log and returns the single record with the warning's
+       message. The test requires `level` `warn` and `archive_id` on that record.
+     - Mutations, each restored with its hash checked (`manager.go` `da34a506…`):
+       - M11 writes `<id>.db.creating-wal` after placement → the success test
+         (`wantOnlyFile`), the publication hook (`:782`), and the failure tests'
+         empty-directory checks.
+       - M12 drops `archive_id` from the warning, and M13 logs it at info. Each fails the
+         summary-failure test (`:965`).
+     - Gates, all exit 0: gofmt (whole tree); `go vet ./...`; `go test ./...`;
+       `TestCreate|TestWithCleanup` at `-race -count=10`; the cloud set with `-race` on
+       `sm-pg`; maintainability (0 regressions); the docs catalog; `git diff --check`;
+       `task ci:local` (dist restored).
+     **Review of the fixes (operator, 2026-10-19): clean, no remaining findings.** Both
+     gaps are closed. The operator reran the three affected tests with `-race` and
+     `git diff --check`; production code is unchanged. Committed as `60aa5644`
+     (test-only), this record separately. 5F stays open pending its acceptance evidence.
+     Next: commit 5, storage and manager.
 
    - **Archive contents (ADR 0084; ruled 2026-09-28).** Settings → Archives lists each
      archive's logbooks under its row, nested on the table's grid (name under Label,
