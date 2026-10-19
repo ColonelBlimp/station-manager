@@ -5402,6 +5402,430 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      `git diff --check`; production code is unchanged. Committed as `60aa5644`
      (test-only), this record separately. 5F stays open pending its acceptance evidence.
      Next: commit 5, storage and manager.
+     The record is `5e4ccccb`. The automatic review of `60aa5644` had no actionable
+     findings; its review file is deleted.
+
+     **Commit 5 direction (operator, 2026-10-19).** The JSON comparator stays in commit 5: it
+     is part of the round-trip check. Tests first, brought for review before production
+     changes.
+     - **Comparator.**
+       - The same production comparator is run against `SELECT $1::jsonb = $2::jsonb` on
+         `sm-pg`. PostgreSQL access stays in tests; the oracle needs only a query, with no
+         schema teardown.
+       - Cases: numeric equivalents (1, 1.0, 1e0); distinct integers beyond float64
+         precision; large decimals; nested objects; array order and repetition; missing
+         versus null; type differences; escaped strings; duplicate object keys. PostgreSQL's
+         numeric handling and its last-key-wins rule matter.
+       - The ordinary comparator tests run without PostgreSQL. Evidence is needed that the
+         oracle test actually ran against `sm-pg`.
+       - Malformed input is handled explicitly: a parse failure never becomes equality.
+     - **Boundaries to make visible at the test checkpoint.**
+       - Preflight refuses before the temporary file is created, not merely leaving nothing
+         behind afterwards.
+       - The round trip uses the actual forwarding projection and reads, for live rows and
+         for tombstones. Refusal diagnostics name UUIDs and fields, and never leak values
+         into errors or logs.
+       - Publication tests cover:
+         - a destination appearing after preflight;
+         - a successful link followed by a failed removal of the temporary name;
+         - a directory-sync failure;
+         - a catalogue `DurabilityUncertain`.
+         Each outcome is tied to its publication boundary.
+       - An existing managed entry's fields and the selections survive unchanged. Commit 4's
+         characterization tests stay unchanged.
+     - **To bring:** the grouped diff, the proposed API signatures, a behaviour-to-test
+       mapping, and the exact test commands.
+
+     **Commit 5 RED (2026-10-19; for review; not committed).**
+     - **Design facts found while writing the tests.**
+       - `archive` cannot use `qsoservice` in production without widening the package
+         graph. The restore adapter is injected (`SetRowRestorer`), as `validCallsign` is,
+         and the tests wire the real `qsoservice.Restore`, which needs only a database and a
+         logger.
+       - The forwarder's projection is unexported. `smcloud.UploadFor` will be the one
+         builder `Submit` uses.
+       - The fixtures' cloud payloads are captured from a real `Submit` PUT body, so they
+         are what the cloud stores, independent of the new API.
+       - `closeFile` runs only after the `O_EXCL` temporary file exists. A call count of zero
+         therefore proves preflight never created it.
+     - **Proposed API** (stubs in the tree; production code waits for this review):
+       - `archive`:
+         - `type RowRestorer func(ctx, *sqlite.Service, logbookID int64, types.Qso) error`
+           and `(*Manager).SetRowRestorer`.
+         - `ProvisionRequest{Export *smcloud.ArchiveExport; DefaultLogbook string}`.
+         - `(*Manager).PreflightProvision(req) (ProvisionPlan, error)`, the dry run.
+         - `(*Manager).Provision(ctx, req) (ProvisionResult, error)`.
+         - `ProvisionPlan{ArchiveUUID, Path, Entry *QsoArchiveConfig, Logbooks
+           []PlannedLogbook}`.
+         - `ProvisionResult{Plan, Entry, Added, DurabilityUncertain, LeftoverTemp}`.
+         - `*ProvisionRefusal{Code, Path, Message}`.
+         - `*RoundTripError{Rows []RoundTripMismatch{UUID, Fields}}`.
+         - `jsonbEqual(a, b []byte) (bool, error)`.
+         - The seam `removeTempName`.
+       - `sqlite`: `(*Service).InsertProvisionedLogbookWithContext(ctx, types.Logbook)`.
+       - `smcloud`: `UploadRecord` (the PUT element) and `UploadFor(types.Qso,
+         forwarding.Action) (UploadRecord, error)`.
+       - The refusal codes are proposals: `no_export`, `legacy_archive`, `no_logbooks`,
+         `default_logbook_required`, `default_logbook_not_member`,
+         `logbook_label_collision`, `invalid_logbook_label`, `invalid_logbook_callsign`,
+         `logbook_without_uuid`, `invalid_archive_label`, `entry_not_managed`,
+         `archive_file_exists`, `temp_file_exists`, `restorer_unavailable`,
+         `destination_appeared`.
+     - **Tests:**
+       - `jsonb_equal_test.go`: JB1 the table, run both ways round; JB2 malformed input,
+         with a control; JB3 the table and the malformed inputs against `sm-pg`.
+         - Before any code existed, all 41 entries were checked directly on `sm-pg`. The
+           comparator now follows PostgreSQL: `\u0000` is malformed, the last duplicate key
+           wins, and numbers compare by value.
+       - `provisioned_logbook_test.go`: PL1–PL5. PL2 has a control, and PL5 characterizes
+         the existing minting.
+       - `upload_record_test.go`: UR1, `UploadFor` against `Submit`'s captured body for an
+         insert, an update, a tombstone and a tombstone without `deleted_at`; UR2 with a
+         control.
+       - `provision_test.go`, PV1–PV11, as its header lists. Commit 4's `manager_test.go` is
+         unchanged.
+     - **RED.**
+       - Stage 1: the missing symbols fail to compile.
+       - Stage 2, against the stubs: 72 subtests and 20 parents fail at their assertions.
+         One passes: PL5, which characterizes existing minting.
+       - JB3 reached PostgreSQL ("PostgreSQL says true").
+       - Refusal-only cases fail at the refusal type or code. Each check's strength will be
+         shown by reversions after the build.
+
+     **Operator review of commit 5's RED (2026-10-19): hold the implementation for five test
+     corrections.** The API direction is sound. Accepted: the injected `RowRestorer`, the
+     shared `UploadFor` builder, and the result shape. `UploadRecord` replaces the existing
+     internal envelope shape. The refusal codes are accepted, plus `invalid_export` for
+     structural export defects, with safe field and UUID context. `restorer_unavailable` stays
+     specific to real provisioning. The operator reproduced the non-PostgreSQL RED (72
+     subtests and 19 parents failing against the stubs). Commit 4's tests are unchanged.
+     - (P2) The comparator table has an impossible positive case: valid `"say \"hi\""`
+       against an invalid literal. The Unicode and surrogate-pair cases compare identical
+       literal characters, with no escapes. Correct them and rerun the whole table directly
+       against PostgreSQL. The file has 43 cases, so the recorded 41-case evidence must be
+       updated. (Cause, found on review: the tool that wrote the file decoded the `\u`
+       escapes inside the Go raw strings.)
+     - (P2) The dry-run refusal contract is untested: every refusal runs through `Provision`,
+       and `PreflightProvision` only sees a valid request. Run the applicable refusals through
+       both. Cover structural defects in the publicly constructible `ArchiveExport`: invalid
+       or duplicate UUIDs, invalid membership indices, missing required metadata and
+       inconsistent counts. Check the exact reported path for residue refusals.
+     - (P2) The full-record round-trip guard is not proved. Only payload and `modified_at`
+       differences are exercised, so a guard ignoring revision, the tombstone timestamp and
+       membership would pass. Add controlled readback mismatches for the other envelope and
+       identity fields, and several mismatching rows to prove complete reporting. The success
+       helper must assert the exact `deleted_at`, not only that it is set.
+     - (P2) A rollback whose cleanup fails is missing. PV8 fails the temporary unlink once and
+       lets the cleanup succeed. Add persistent cleanup failures that keep the original cause
+       and name and log the actual leftovers. On the published branch, verify that a failed
+       temporary unlink still reaches the durability barrier, or reports uncertainty if the
+       barrier fails.
+     - (P2) The success assertions are weaker than PA1 and PQ3. Assert zero uploads, a
+       complete matching summary, and another archive's summary preserved. Seed a non-empty
+       pending selection, so clearing it fails the test.
+
+     **Commit 5 RED, corrected (2026-10-19; for review; not committed).**
+     - **Comparator.** The three fixtures are rewritten with exact backslash escapes, each now
+       pairing an escape with its literal character. A temporary test, since deleted, read the
+       Go table directly (no regex) and checked every entry on `sm-pg`: "PostgreSQL 16.14
+       (Debian 16.14-1.pgdg13+1): 36 equality cases and 7 malformed inputs, 43 entries
+       checked", all agreeing. This replaces the earlier 41-entry record, which came from a
+       checker that parsed the file with a regex.
+     - **PV1** runs every refusal through both `Provision` and `PreflightProvision`.
+       - Residue refusals must report the exact path, and name it.
+       - 13 structural cases are refused as `invalid_export`: an invalid archive UUID; a
+         UUIDv4 logbook; a duplicate logbook UUID; an invalid, a UUIDv4 and a duplicate QSO
+         UUID; membership indices past the end and negative; no `modified_at`; no payload; a
+         payload that is not an object; a payload naming another QSO; a row count and a
+         tombstone count that disagree. Each requires its UUID, row or field context in the
+         message.
+       - No refusal may carry a value.
+       - Without a restorer the dry run succeeds, and only `Provision` refuses with
+         `restorer_unavailable`.
+     - **PV5** adds controlled readback mismatches through a `tamper` hook in the injected
+       restorer:
+       - `modified_at` a whole second off; the revision;
+       - a tombstone's `deleted_at` moved; a tombstone restored live; a live row restored as
+         a tombstone;
+       - membership (restored into the next logbook); identity (restored under another
+         UUID);
+       - two rows at once, both reported in export order.
+       The success helper now asserts the exact `deleted_at`.
+     - **PV8 and PV12.**
+       - The removal seam is widened from `removeTempName` to `removeFile`. It is used for
+         every removal provisioning makes, so a removal can fail persistently.
+       - PV8, on the published branch: after a failed temporary unlink, the barrier chain is
+         still synced in order, and a failing barrier reports durability uncertain.
+       - PV12 covers a rollback that cannot clean up, after a construction refusal, a failed
+         unlink, a directory sync and the catalogue write. In each, the cause comes first and
+         each leftover is named in the error and the log. The leftovers are unlisted,
+         `Activate` answers `archive_not_found`, and the startup diagnosis reports them.
+     - **PV3 and PV4.**
+       - The fixture seeds a pending selection (another managed entry) and Home's summary.
+       - Each success asserts no queued upload (`qso_upload` is empty), and U's summary
+         exactly: live rows counted, the default marked, signed against the file.
+       - Home's summary must be kept, which `wantNothingOfOurs` also checks on every refusal.
+     - **RED against the stubs:** 134 subtests and 21 parents fail at their assertions. Only
+       PL5 passes, as a characterization. JB3 reached PostgreSQL ("PostgreSQL says true").
+       Commit 4's `manager_test.go` is unchanged.
+
+     **Operator review (2026-10-19): one P2 left in PV8.** The wider `removeFile` seam is
+     approved; it stays package-private with `os.Remove` as its default. The operator
+     reproduced the RED without PostgreSQL: 134 subtests and 20 parents failing, JB3 skipped.
+     - The published branches no longer check that the final archive survives: the durable
+       branch checks only the temporary name, and the uncertain branch only the result. A
+       removal of the final file after the failed unlink would pass both.
+     - `pvSyncsAfter` records every sync from the start of `Provision`, so it does not show
+       that the barrier follows the failed unlink.
+     - Fix: in both published branches, the final and temporary names exist, are the same
+       file, and carry U's identity; the catalogue and selections are unchanged. A shared
+       event trace links the removal and sync hooks: the file is placed at the unlink
+       attempt, and the barrier comes after it.
+     **Fixed (2026-10-19; not committed).** PV8's published branches are one test run twice:
+     with the barrier syncing, and with it failing.
+     - `pvTraceUnlinkAndSyncs` fails every removal of U's temporary name and records one
+       trace. At each attempt it records "unlink failed, archive placed" only when U's final
+       name is already the same file as the temporary one, or "unlink before placement"
+       otherwise. Every directory sync is recorded too.
+     - The test requires the "placed" event, no "before placement" event, and the barrier
+       right after the unlink: the whole chain in order, or its first sync when the barrier
+       fails.
+     - `wantPlacedAs` requires both names to stand as one file (`os.SameFile`) carrying U's
+       identity.
+     - The catalogue and selections must be unchanged, and the leftover name logged.
+     - RED without PostgreSQL: 134 subtests and 20 parents fail; JB3 skips; PL5 passes.
+       Commit 4's tests are unchanged.
+     **Test checkpoint approved (operator, 2026-10-19): proceed with the implementation.** PV8
+     closes the gap. The package-private `removeFile` seam is approved, defaulting to
+     `os.Remove`. The operator reproduced the focused PV8 RED (all three branches failing
+     against the stubs), `git diff --check`, and commit 4's tests unchanged. Commit 4's
+     characterization tests stay unchanged through the extraction. Bring the implementation
+     with GREEN gates, the full PostgreSQL comparator check and targeted reversion proofs
+     before committing.
+
+     **Commit 5 built (2026-10-19; for review; not committed).**
+     - **`smcloud`:**
+       - `UploadRecord` replaces the internal `qsoUpload` envelope, in the forwarder's PUT
+         and in the identity PUT.
+       - `UploadFor(q, act)` holds Submit's checks (no UUID, no `modified_at`, an unknown
+         action, a projection failure) and the tombstone fallback. `Submit` is built on it,
+         and its error texts are kept.
+     - **`sqlite`:** `InsertProvisionedLogbookWithContext`.
+       - It refuses a UUID that is not a v7, and refuses once the file holds its archive
+         identity.
+       - It checks the name first, so a duplicate name is `ErrDuplicateName` and any other
+         uniqueness failure is the UUID's.
+     - **`archive`, the shared build:**
+       - `build` takes a `buildSpec`: `logbooks` runs before the identity and returns the
+         default's id; `rows`, when set, runs after the empty binding seed.
+       - `Create` passes its one-logbook seed and keeps its error texts. Commit 4's tests
+         pass unchanged.
+       - `withCleanup` takes several paths, attempts each, and puts the cause first.
+         `removeWithSidecars` goes through `removeFile`.
+     - **`archive`, provisioning:**
+       - `preflight` checks, in order:
+         - the export: nil, then the legacy marker;
+         - its structure (`invalid_export` or `logbook_without_uuid`);
+         - no logbooks, then the default;
+         - per logbook: label, label collision, callsign;
+         - the catalogue entry (not managed is refused; a managed one is kept), or a new
+           entry's label;
+         - residue at `<U>.db`, `-wal`, `-shm`, `.creating`, `.creating-wal` and
+           `.creating-shm`, refused with that exact path.
+       - `Provision`:
+         - checks for a restorer, then runs the preflight, then creates the managed
+           directory and the `O_EXCL` temporary file;
+         - builds: the cloud's logbook UUIDs, the identity, the seed, the rows through the
+           restorer, then the round trip;
+         - sets mode 0600 and places with `os.Link`; `EEXIST` is `destination_appeared`;
+         - publishes a new entry by: unlink the temporary name, sync the chain, write the
+           catalogue. Each failure removes this invocation's files;
+         - for an existing entry, after the link: unlink the temporary name (a failure
+           becomes `LeftoverTemp` and a warning), then sync the chain (a failure makes
+           `DurabilityUncertain`);
+         - then records the summary (best effort) and logs the outcome.
+       - The round trip:
+         - reads each row by UUID (missing gives `uuid`), then as the worker does
+           (`FetchQsoByIdWithContext` for a live row, `FetchQsoByIDIncludingDeletedWithContext`
+           for a tombstone);
+         - builds `smcloud.UploadFor`;
+         - compares uuid, logbook, revision, `modified_at`, `deleted_at` and each top-level
+           payload key under `jsonbEqual`, reporting every mismatching row in export order.
+       - A restore failure is named by row: "a local uniqueness constraint" or a generic
+         refusal. The adapter's detail stays in the error chain, out of the text.
+     - **`jsonbEqual`:**
+       - It parses with `UseNumber`; a later duplicate key replaces an earlier one.
+       - It refuses invalid UTF-8, `\u0000`, unpaired surrogates, trailing data, and numbers
+         beyond `numeric` (131072 digits before the point, 16383 after). The arbitrary
+         exponent bound was replaced by those limits after probing `sm-pg`: `1e131071` and
+         `1e-16383` are accepted, `1e131072` and `1e-16384` overflow.
+       - Numbers compare as `big.Rat`.
+     - **Tests changed after the checkpoint, disclosed:**
+       - JB gained the boundary, surrogate, UTF-8 and nested-overflow fixtures (51 entries).
+         The surrogate check and the bound were otherwise untested.
+       - UR1 now also pins the record by value. Once `Submit` is built on `UploadFor`, the
+         equality check alone compares the function with itself, and the U1 reversion
+         first passed.
+     - **Results:**
+       - The focused tests are green: 141 subtests, then more after the fixtures. JB3:
+         "jsonbEqual agreed with PostgreSQL 16.14 (Debian 16.14-1.pgdg13+1) on 51 cases".
+       - The new tests and `TestCreate` pass at `-race -count=10`.
+     - **Reversions:** 36, each restored and hash-checked. Every one fails.
+       - Comparator: J1 numbers as float64 (5); J2 `\u0000` accepted (2); J3 surrogates (3);
+         J4 trailing data (2); J5 numeric range (4); J6 invalid UTF-8 (2); J7 arrays as
+         sets (2).
+       - Preflight:
+         - P1 residue unchecked (12; refused later under another code);
+         - P2 the legacy marker (2);
+         - P3 the dry run accepting `invalid_export` (14, every `PreflightProvision`
+           structural case);
+         - P4 counts (2);
+         - P5 membership indices (the case panics: the check is what prevents an
+           out-of-range index);
+         - P6 label collision (2);
+         - P23 a residue refusal without its path (12);
+         - P24 a file created before the preflight (47).
+       - Round trip: P7 revision (3); P8 `deleted_at` (3); P9 membership (2); P10
+         `modified_at` (2); P11 payload (3); P12 first mismatch only (1); P13 a missing row
+         (1); P14 comparing the cloud's record with itself (11).
+       - Publication:
+         - P15 rename instead of link (11);
+         - P16 an existing entry undone (4);
+         - P17 the barrier skipped after a failed unlink (2);
+         - P18 the barrier moved before the unlink (2);
+         - P19 the catalogue written before the barrier (4);
+         - P20 the summary before publication (2);
+         - P21 the dry run requiring a restorer (1);
+         - P22 an existing entry rewritten (1).
+       - Cleanup: M1 only the first path (2); M2 the cause dropped (10, Create's tests
+         included).
+       - `sqlite`: S1 the identity guard (1); S2 the UUID minted (2).
+       - `smcloud`: U1 the tombstone fallback (1).
+       - The first runs of J1, P3, P18 and S1 were faulty mutations (an unused import, a
+         mutation also hitting `Provision`, a barrier added rather than moved, a
+         half-removed guard) and were corrected. U1 exposed the UR1 gap above.
+     - **Gates**, all exit 0: gofmt (whole tree); `go vet ./...`; `go test ./...`; the cloud
+       set with `-race` on `sm-pg` (stopped after); maintainability (0 regressions); the
+       context check; the docs catalog; `git diff --check`; `task ci:local` (dist restored).
+
+     **Operator review of the build (2026-10-19): hold commit 5 for four P2 fixes.** The
+     operator verified the three packages, the focused race tests, the 51-case PostgreSQL
+     comparison and `git diff --check`; commit 4's tests are unchanged.
+     - **Restore errors leak values through structured logging.** `restoreError` exposes the
+       adapter's error through `Unwrap`. A malformed frequency stayed out of `Error()` but
+       appeared in `error_chain` and `error_history` after `logger.ErrorWith().Err(err)`.
+       Keep the returned chain safe, and exercise the real logger in the regression test.
+     - **The numeric guard misses fractional mantissas and arithmetic overflow.**
+       `0.1e131073` is accepted, because its integer part is zero, and compares equal to
+       itself; PostgreSQL refuses it. `1e9223372036854775807` returns false with no error.
+       Account for fractional digits shifted before the point, with overflow-safe
+       arithmetic.
+     - **Duplicate keys can hide an invalid number.** Collapsing them before the number check
+       makes `{"a":1e131072,"a":1}` equal to `{"a":1}`, while PostgreSQL refuses the first.
+       Validate every numeric token before overwritten values are discarded.
+     - **Rollback reporting omits surviving sidecars.** `removeWithSidecars` returns only the
+       first failure per path. With the managed directory at 0500 during a construction
+       refusal, `.creating`, `.creating-wal` and `.creating-shm` all stayed, but only
+       `.creating` appeared in the error and the startup diagnosis. Aggregate every failed
+       removal, and cover sidecar leftovers in the diagnosis and the tests.
+     The two-commit split stands once these are resolved.
+     **All four fixed (2026-10-19; not committed).**
+     - **RED first.**
+       - JB has 12 new fixtures, each checked by JB3 on `sm-pg`:
+         - accepted: `0.1e131072` (equal to `1e131071`); a zero with any exponent;
+           `"1."` plus 16383 zeros;
+         - refused: `0.1e131073`; `123.45e131070`; `"1."` plus 16384 zeros; `0e-20000`;
+           `1e±9223372036854775807/8` and beyond int64; an invalid number overwritten by a
+           duplicate key, at the top level and nested.
+       - PV12 adds a construction refusal with the managed directory locked from the first
+         restore. `.creating`, `-shm` and `-wal` all stay, and each must be named in the
+         error and the log and be diagnosed.
+       - PV13: a row whose frequency the restore adapter rejects with the value in its
+         message. The value must appear in no error of the chain, nor in the log after
+         `logger.ErrorWith().Err(err)`.
+       - PV14: the diagnosis reports the unlisted `.db-wal`/`-shm` and the unfinished
+         `.creating-wal`/`-shm`, and never the catalogued archive's own sidecars.
+       - RED: five comparator cases accepted (JB2 and JB3), PV12 missing `-shm`, PV13 the
+         value in the chain, PV14 nothing diagnosed.
+     - **Fixes.**
+       - `restoreError` keeps no cause: it holds the row and whether the refusal was a
+         uniqueness constraint.
+       - `numericHolds` reads the mantissa as one run of digits, moves the point by the
+         exponent, and counts significant integer digits (none for zero) and fractional
+         digits (trailing zeros included). The exponent is parsed as int64 and refused
+         beyond ±2^30 before any arithmetic.
+       - `checkJSONBNumbers` reads every token before decoding, so overwritten values are
+         checked.
+       - `removeWithSidecars` returns every failed removal, and `withCleanup` reports them
+         all.
+       - `DiagnoseCreatingArtefacts` also globs `*.creating-wal`/`-shm` and
+         `*.db-wal`/`-shm`, skipping a sidecar whose base file is catalogued.
+     - **Results.** JB3: "jsonbEqual agreed with PostgreSQL 16.14 (Debian 16.14-1.pgdg13+1)
+       on 63 cases". Commit 4's `manager_test.go` is unchanged and passes.
+     - **Reversions**, all failing, restores hash-checked:
+       - F1 `Unwrap` restored → PV13.
+       - F2 leading zeros not shifted → `0.1e131073` cases and JB3.
+       - F3 no exponent bound → the int64 extremes and JB3.
+       - F4 numbers checked after the collapse → both duplicate-key cases and JB3.
+       - F5 only the first removal reported → PV12 and commit 4's
+         `TestWithCleanup_AttemptsEverySidecar`.
+       - F6 unfinished sidecars not diagnosed → PV12 and PV14.
+       - F7 unlisted sidecars not diagnosed → PV14.
+       - F8 a catalogued archive's own WAL diagnosed → PV14.
+       - The earlier 36, re-run on the fixed code, all still fail. J5 and M1 were
+         re-anchored to the changed code (J5: 13 failing; M1: 2).
+     - **Gates**, all exit 0: gofmt (whole tree); `go vet ./...`; `go test ./...`; the cloud
+       set with `-race` on `sm-pg` (stopped after); focused `-race -count=5`; maintainability
+       (0 regressions); the context check; the docs catalog; `git diff --check`;
+       `task ci:local` (dist restored).
+     **Operator review (2026-10-19): hold the commits for two P2s.** The redaction, the
+     duplicate-key validation and the complete cleanup-error reporting are correct. The
+     operator verified the three packages, the focused race tests, the 63-case PostgreSQL
+     comparison and `git diff --check`; commit 4's tests are unchanged.
+     - **The wider diagnosis can call a catalogued archive removable.** It strips `-wal`/`-shm`
+       before checking the catalogue, so a valid external entry pointing at `external.db-wal`
+       is reported as unlisted and removable. Fix: check the candidate's own canonical path
+       first, then its base when it is a sidecar. Protect both scan groups, and extend PV14.
+     - **The exponent cutoff is off by one.** `0e1073741824` is accepted and compares equal
+       to `0`; PostgreSQL 16.14 refuses it. PostgreSQL accepts `0e1073741823`. Add that
+       positive control and the refused boundary, and align the cutoff.
+     **Both fixed (2026-10-19; not committed).**
+     - **The probe on `sm-pg`:** `0e1073741823`, `0.0e1073741823` and `0e+1073741823` equal
+       `0`; `0e1073741824` overflows; `0e-1073741823` and `0e-1073741824` overflow (scale).
+     - **RED:**
+       - JB adds `0e1073741823` equal to `0` and `0e1073741824` malformed. The latter was
+         accepted by JB2 and JB3.
+       - PV14 adds two catalogued external archives in the managed directory whose own
+         paths are `<id>.db-wal` and `<id>.db.creating-shm`. Both were diagnosed as
+         removable.
+     - **Fixes:**
+       - `maxShift` is `1<<30 - 1`, PostgreSQL's largest parsed exponent, and bounds the
+         exponent before any arithmetic.
+       - `DiagnoseCreatingArtefacts` runs both scan groups through one `catalogued` check:
+         the candidate's own canonical path first, then, for a `-wal`/`-shm` name, its
+         base's.
+     - **Results.** JB3: "jsonbEqual agreed with PostgreSQL 16.14 (Debian 16.14-1.pgdg13+1)
+       on 65 cases". The archive package is green; commit 4's tests are unchanged.
+     - **Reversions**, all failing, restores hash-checked:
+       - G1 the cutoff one past PostgreSQL's → the `0e1073741824` case and JB3.
+       - G2 the cutoff one short → the `0e1073741823` control and JB3.
+       - G3 the candidate's own path unchecked → PV14 and two of commit 4's diagnosis
+         tests.
+       - G4 the sidecar's base unchecked → PV14.
+       - G5 the `.creating` group unprotected → PV14.
+       - Every earlier mutation re-run on the final code also fails: the 36 (J5 and M1
+         re-anchored), and F1–F8 (F6 and F7 re-anchored to the new pattern lists). 49 in
+         all.
+     - **Gates**, all exit 0: gofmt (whole tree); `go vet ./...`; `go test ./...`; the cloud
+       set with `-race` on `sm-pg` (stopped after); focused `-race -count=5`; maintainability
+       (0 regressions); the context check; the docs catalog; `git diff --check`;
+       `task ci:local` (dist restored). Commit 4's `manager_test.go` is unchanged.
+     **Approved (operator, 2026-10-19): no remaining actionable findings in commit 5.** The
+     operator verified the three packages, the focused race tests, all 65 comparator cases
+     against PostgreSQL 16.14, `git diff --check`, and commit 4's tests unchanged. Committed
+     as `9d899f54` (code and tests), this record separately. The 5F acceptance items stay
+     open. Next: commit 6, `smd provision`, with the end-to-end proof on `sm-pg` and
+     `install.md`.
 
    - **Archive contents (ADR 0084; ruled 2026-09-28).** Settings → Archives lists each
      archive's logbooks under its row, nested on the table's grid (name under Label,
