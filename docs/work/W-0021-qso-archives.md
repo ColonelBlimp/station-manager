@@ -5826,6 +5826,296 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      as `9d899f54` (code and tests), this record separately. The 5F acceptance items stay
      open. Next: commit 6, `smd provision`, with the end-to-end proof on `sm-pg` and
      `install.md`.
+     The record is `f3287721`. The automatic review of `9d899f54` had no actionable
+     findings; its review file is deleted.
+
+     **Commit 6 direction (operator, 2026-10-19).** Write the tests and bring them for review
+     before production code; the scope and remaining sequence are approved. Make explicit:
+     - **The command contract:** dispatch, flag validation, output and exit outcomes,
+       including the proposed rules for conflicting flags.
+     - **PA5:** explicit and default config paths, a missing config included. `--list` and
+       `--dry-run` change nothing on disk, including directories logger initialization might
+       create, and open no archive. The dry run states that construction and round-trip
+       compatibility were not tested.
+     - **PA1:** the command, for a new entry and for an existing active entry whose file is
+       missing. Both selections, existing entry fields, other archives and summaries are
+       preserved; no bindings and no uploads are created.
+     - **PA2:** several logbooks, live rows, tombstones, an empty logbook and an
+       equal-labelled second archive. Every restored row is pushed through the real identity
+       forwarder and server; every acknowledgement is `applied` 0; the cloud's state is the
+       same before and after; reconcile agrees. Display-label changes stay allowed.
+     - **PA3/PA4:** the command reports refusals, leftovers and durability uncertainty
+       correctly, success with caveats after publication included. No value reaches stdout,
+       stderr or a structured error log.
+     Exclusive offline use stays the documented prerequisite; no locking design in this
+     slice. `install.md` goes with the command's implementation commit. Bring the grouped
+     test diff, the exact commands and informative RED assertions. The four operator
+     acceptance items stay separate.
+
+     **Commit 6 RED (2026-10-19; for review; not committed).**
+     - **Findings that shape the command:**
+       - `loadConfig` seeds a default `config.json` when the file is missing, and its
+         default path goes through `utils.WorkingDir()`, which creates the directory.
+         Provisioning reads with `config.Load` on `--config` or on
+         `utils.ResolveWorkingDir()` + `config.json`; a missing file is an error.
+       - `logging.Service.Initialize` always creates the log directory, so `--list` and
+         `--dry-run` use no file logger. A real run logs to `smd.log`.
+       - No test runs the binary. `main`'s subcommand switch moves into
+         `dispatchSubcommand(argv) (exit int, handled bool)`, which the tests call.
+     - **Proposed contract:**
+       - `smd provision --archive UUID [--default-logbook UUID] [--dry-run] [--config PATH]`
+         and `smd provision --list [--config PATH]`.
+       - Exactly one of `--list` and `--archive`. `--list` takes no flag but `--config`;
+         `--dry-run` and `--default-logbook` need `--archive`. Both UUID flags must be
+         UUIDv7s. No positional argument.
+       - An error prints `smd: …` on stderr and exits `ExitError` (1). Success, caveats
+         included, exits 0 and reports on stdout.
+       - The output lines are pinned by the tests (`archive … here: not catalogued`,
+         `  logbook …  2 QSOs (1 tombstone)`, the dry run's closing statement, `provisioned
+         archive … at …: N QSOs in M logbooks`, `catalogue: …`, and `warning:` lines for
+         durability and a leftover temporary name).
+       - `reportProvision(w, res, qsos, logbooks, active)` formats the outcome.
+     - **Tests** (`cmd/smd/provision_cmd_test.go` offline; `provision_e2e_test.go` on
+       `sm-pg`):
+       - PR1, dispatch and flags (11 refusals, no request, no change; success exits 0).
+       - PR2, PA5:
+         - `--list` and `--dry-run`, each with an explicit and with the default config
+           path;
+         - Home's file at mode 000 (so no archive can be opened), file logging on, the
+           whole tree byte for byte, the exact requests, the plan lines and the dry run's
+           statement.
+       - PR3, a missing config, explicit or default, naming its path and creating nothing.
+       - PR4, refusals: the legacy archive through `--dry-run` and a real run; a round-trip
+         refusal; a restore refusal. No value in stdout, stderr or the log files;
+         `config.json` unchanged; the managed directory empty.
+       - PR5, a new entry reported, and the same with the catalogue write's durability
+         uncertain (config directory 0300): exit 0 with the warning.
+       - PR6, the report states an existing entry kept and active, durability uncertain,
+         and a leftover temporary name.
+       - PE1/PE2:
+         - the cloud is seeded through the real identity forwarder: U (Contest with a
+           live row and a tombstone, Portable, an empty logbook added in the store) and an
+           equal-labelled V;
+         - the station holds Home (legacy, with a summary) and W (managed, pending, with
+           its file);
+         - run for a new entry and for an existing active entry with its file missing;
+         - PA1 checks: the catalogue, both selections, W's and Home's files, Home's
+           summary, the file's identity, logbooks and default, no bindings, no uploads,
+           only U's rows;
+         - PA2 checks: every row read as the worker reads it and pushed through
+           `smcloud.NewIdentity`, each acknowledgement `received 1, applied 0`; the
+           cloud's archives, logbooks, membership and rows unchanged, labels left out;
+           `NewIdentityReconciler.RunOnce` in sync for each logbook with nothing to heal.
+       - `realCloud` gains its `db` handle, for seeding and comparing.
+     - **RED.**
+       - The missing symbols first failed to compile; declaration stubs were then added.
+       - Against them, 26 subtests and 7 parents fail at their assertions. The e2e seeds
+         the real cloud successfully and fails at the command's exit.
+
+     **Operator review of commit 6's RED (2026-10-19): contract approved, five test gaps.**
+     The CLI contract is approved, including exit 0 with warnings after publication.
+     `config.Load` with `utils.ResolveWorkingDir` fits it. PR6 with archive PV8 suffices for
+     the leftover warning; the removal seam stays private. The operator reproduced the RED
+     (26 subtests and seven parents failing; both real-cloud fixtures seeded).
+     - (P2) **`main` is not proven to reach provisioning.** `prRun` calls
+       `dispatchSubcommand` directly, so everything could pass with `main` unchanged. Add a
+       safe, isolated entry-point test, and before extracting the switch, characterize its
+       existing routes and the daemon fallthrough.
+     - (P2) **"Opens no archive" is not observable.** An attempted open whose error is
+       ignored would pass. Add observable evidence of an open, with a control proving the
+       observation works. Extend PR3 to `--dry-run` and real provisioning: a missing config
+       creates nothing.
+     - (P2) **PA1 does not bound side effects.** Compare the whole filesystem footprint and
+       the config, allowing only the archive, catalogue, summary and ordinary log changes.
+       Take the comparison before `openArchiveFile`, which initializes logging and opens
+       SQLite.
+     - (P2) **PE2 bypasses activation and binding enablement.** Activate the entry, enable
+       SM Cloud through the normal binding path for every logbook, and push through
+       routing derived from those bindings. Keep the acknowledgement, cloud-state and
+       reconcile assertions.
+     - (P2) **Command-level failures miss distinct boundaries.** Add representative account
+       and capability failures, an incomplete export, local residue with its exact path,
+       and a fatal catalogue write. Assert exit 1, useful diagnostics, preserved state and
+       no value leakage, without duplicating the lower suites wholesale.
+
+     **Commit 6 RED, revised (2026-10-19; for review).**
+     - **The entry point.** One production seam, added for the characterization:
+       `var runDaemon = run` in `main.go`, and `main` calls `runDaemon()`.
+       `provision_entry_test.go` re-runs the test binary as `smd ARGS…`: a helper sets
+       `os.Args`, swaps the daemon for a marker, and calls the real `main()`.
+       - EP1 characterizes today's `main` and passes now: import, restore, config-check,
+         db-downgrade and config-downgrade each reach their own flag set (an unknown flag
+         exits 1 with `smd: flag provided…` and that subcommand's usage); no arguments, or
+         the daemon's `--config`, fall through to the daemon.
+       - EP2: `smd provision` must exit 1 with the provisioning error. RED: it falls
+         through to the daemon (the marker).
+     - **Opening an archive is observable.** `provision_open_linux_test.go` puts an inotify
+       `IN_OPEN` watch (stdlib `syscall`, no new dependency) on the data directory, `db/`
+       and the managed directory. The bed gains W, a managed archive with its file.
+       - PR2 requires no open during `--list` and `--dry-run`. Home's file is no longer
+         made unreadable.
+       - A control test opens Home's and W's files and requires the watch to see both. It
+         passes.
+     - **PR3** runs for `--list`, `--dry-run` and a real provisioning, each with an explicit
+       and a default config path.
+     - **PR7**, the failure boundaries at the command: no station account; a server without
+       `archive_export` (only `/v1/version` asked); a 401 whose body carries the token; an
+       incomplete export; `.creating` residue named exactly; a fatal catalogue write
+       (config directory 0500). Each must exit 1, name its boundary, print and log no value
+       and no token, and leave the whole tree byte for byte (only the log directory
+       exempt).
+     - **PE1/PE2 rebuilt on an orchestrated daemon.**
+       - Home is adopted at the first start, and W is created by the daemon and set pending;
+         for the existing case, U's entry is added as active.
+       - PE1 compares the whole working directory before and after the command, before
+         anything opens the file. Only U's file may appear; `config.json` may change only by
+         U's entry (byte for byte for an existing one); the summary sidecar only by U's
+         record; the log directory freely.
+       - PE2:
+         - U is activated by a restart onto it, SM Cloud is enabled on every logbook through
+           `ApplyBindings`, and a restart gives each binding its worker;
+         - the bindings must be enabled and born on identity;
+         - the live rows are sent by `POST /v1/forwarder/{name}/uploads` with `force`. The
+           tombstone goes by `qsoservice.EnqueueDeleteUploads` on the binding's route,
+           because the manual upload skips tombstones and this is the reconciler's repair
+           path;
+         - each upload must reach `uploaded`, every acknowledgement must be applied 0 (3
+           rows), nothing may take the name wire, and the cloud state must be unchanged;
+         - the daemon's `/v1/smcloud/reconcile` must find all three bindings in sync with
+           nothing to heal.
+     - **RED** (stubs as before; EP1 and the watch control pass by design): 36 subtests and
+       9 parents fail at their assertions. The e2e builds the daemon world and fails at the
+       command's exit.
+
+     **Revised RED review (operator, 2026-10-19).** The `runDaemon = run` seam and the revised
+     test design are approved; no further design checkpoint before implementation. The
+     revised PA1 footprint and the PA2 binding/worker route close the earlier gaps, and the
+     routed delete enqueue for the tombstone is appropriate. The operator reproduced the RED
+     (36 subtests, nine parents; EP1 and the watch control pass; both e2e fixtures reach the
+     stub). Three test corrections first:
+     1. P2: PR7 restored the config directory to 0700 before comparing against the snapshot
+        taken at 0500, so a correct implementation would fail. The registered cleanup alone
+        restores it, after the comparison.
+     2. PR7 requires the residue's complete path, and the log exemption is the exact
+        directory-or-descendant check `prFootprint` uses (a sibling sharing the prefix no
+        longer passes).
+     3. The open observer fails on a read error: `EAGAIN` ends the drain, any other error
+        fails the test, and only then is the length checked.
+     Then the implementation and `install.md`; bring the completed diff, GREEN and the
+     reversions before committing.
+
+     **Commit 6 build (2026-10-19; for review; not committed).**
+     - **The three corrections** are made as directed.
+     - **Two further test changes, disclosed:**
+       - PR4 still asserted an empty managed directory, which became wrong when the revision
+         added W's file to the bed. PR4 now compares the whole tree, with only the log
+         directory exempt, through the helper PR7 uses (`prWithoutLogs`).
+       - The maintainability gate measured the e2e test at cognitive complexity 190. The
+         body is split into phase helpers (station, footprint, file, activate and bind,
+         push back, unchanged). The assertions and their order are unchanged, except that
+         the no-value check on the command's output now runs right after the exit check.
+     - **Code:**
+       - `cmd/smd/provision.go`, `runProvision`:
+         - the flag rules as approved;
+         - `config.Load` on `--config` or `utils.ResolveWorkingDir()` + `config.json`;
+         - the station account (enabled or not);
+         - a signal-cancelled context;
+         - `--list` through `smcloud.ListArchives`;
+         - `--dry-run` through `PreflightProvision`, with an uninitialized (no-op) logger;
+         - a real run initializing the file logger, then `Provision`, using
+           `qsoservice.Restore` on the file under construction as the row restorer. A row
+           that already exists is an error.
+       - Reports: the listing with each archive's catalogue state; the plan; the outcome
+         with each caveat as a warning.
+       - Failures are logged by archive id; the error carries no values.
+       - `main.go`: the switch becomes `dispatchSubcommand` over a `subcommands` map, with
+         `provision` added.
+     - **Docs:**
+       - `install.md` gains "Provisioning a cloud archive on this station".
+       - `config.md`'s `qso_archives` row now covers `smd provision`'s placement and entry
+         rules.
+     - **GREEN:**
+       - `TestProvisionCommand*` and `TestEntryPoint*` pass, as does `TestProvisionE2E` on
+         `sm-pg` (both cases).
+       - Focused `-race -count=5` passes.
+     - **Gates (all exit 0):**
+       - gofmt (whole tree, 0 files), `go vet ./...`, `go test ./...`;
+       - the cloud set with `-race` on `sm-pg` (stopped after);
+       - maintainability (0 regressions);
+       - the context check, the docs catalog and `git diff --check`;
+       - `task ci:local` (dist restored).
+     - **Reversions** (unique anchor, non-empty replacement, restore hash-verified):
+       - R1: `provision` left out of the map. EP2 sees the daemon marker.
+       - R2: `restore` left out. EP1 fails, so the extraction is covered.
+       - R3: `--list` starts the file logger. PR2 sees `data/log` appear.
+       - R4: the dry run opens the active archive. PR2's watch sees `home.db` opened.
+       - R5: `loadConfig` instead of `config.Load`. PR3 fails, but at its "names the path"
+         assertion, because the seeded default config has no account.
+       - R5b: `utils.WorkingDir()` for the default path. PR3 fails at "created; a missing
+         config creates nothing".
+       - R6: `--list` accepts `--archive`. PR1 fails.
+       - R7: the leftover warning is dropped. PR6 fails.
+       - R8: the durability warning is dropped. PR5 fails.
+       - R9: the failure log carries the account. PR7 sees the token leak, through the log.
+       - R10: the restorer zeroes the revision. The e2e test fails at the command's exit
+         (the round-trip refusal).
+       - R11: a published caveat exits 1. PR5 wants 0.
+       - R12: the dry-run caveat sentence is dropped. PR2 fails.
+       - R13: a success writes a stray file. PE1's footprint sees it.
+       - T1: the early 0700 restore put back. PR7 fails on the `etc` mode, so the
+         correction was needed.
+       - T2: a sibling `data/logx` written on failure. PR7 sees it appear.
+
+     **Build review (operator, 2026-10-19).** The PR4 correction and the phase-helper
+     extraction are sound, and the commit split stands. The operator's own checks passed: the
+     focused tests, both real-cloud cases with `-race`, `git diff --check`, and Ctrl-C during
+     the export (exit 1, cancellation reported, no filesystem change). Two corrections
+     before committing:
+     - **P2: the real run's services bypassed the dependency wiring.** The logger was built
+       directly, and a QSO service was built per row with Config and Hub unset, skipping its
+       initialization checks. AGENTS.md requires iocdi. **Fixed:**
+       - `provisionServices` wires config, the hub, logging, both sqlite beans and the QSO
+         service through the container, as `smd import` and `smd restore` do. It runs only
+         on a real run, so PA5 holds. The sqlite beans are initialized and never opened.
+       - Rows go in through a new `qsoservice.RestoreInto(ctx, db, …)`, which is `Restore`
+         against a database the caller owns. `Restore` is now `RestoreInto(s.DB)`. The
+         manager keeps its ownership of the temporary database.
+       - TDD:
+         - `TestRestoreInto_UsesTheGivenDatabaseOnly`: the row already exists in the
+           service's own database. `RestoreInto` must store it in the given one, be
+           idempotent there, and leave its own database unchanged.
+         - RED, against a stub that ignored `db`: "the probe reads the given database".
+         - The fixture's target is a file: the driver opens `:memory:` with a shared
+           cache, so two in-memory databases are one.
+       - Reversions:
+         - Q1: the probe reads `s.DB`. Fails at the probe assertion.
+         - Q2: the insert goes to `s.DB`. Fails one line earlier: the insert collides
+           with the existing row.
+         - Q3: the command calls `Restore` on the container service's unopened
+           database. PR5 sees the restore refusal.
+         - Q4: `--list` builds the container. PR2 sees `data/log` appear.
+       - No test tells a hand-wired service from a container-wired one. The fix is
+         structural, and Q3 shows that rows reach only the manager's file.
+     - **P3: `install.md`.**
+       - `--list` accepts `--config`.
+       - The log line now describes configured logging: file, console, or the file when
+         both are off. The operator verified that a console-only configuration provisions
+         without creating a log file.
+     - **Gates again, all exit 0:**
+       - gofmt (0 files), `go vet ./...`, `go test ./...`;
+       - the cloud set with `-race` on `sm-pg`, which was stopped afterwards;
+       - focused `-race -count=5`, the e2e test included;
+       - maintainability (0 regressions);
+       - `task ci:local` (dist restored).
+
+     **Fix review (operator, 2026-10-19): approved for commit, no further findings.** The
+     container wiring and `RestoreInto`'s ownership are correct. The operator verified the
+     focused command, entry-point and restore tests and both real-cloud cases with `-race`,
+     and `git diff --check`; commit 4's tests are unchanged. Committed in the approved split:
+     code, tests, `install.md` and `config.md` together, then this dossier. The capsule is
+     the remaining documentation step (commit 7). 5F's four operator acceptance items stay
+     open.
+
 
    - **Archive contents (ADR 0084; ruled 2026-09-28).** Settings → Archives lists each
      archive's logbooks under its row, nested on the table's grid (name under Label,
