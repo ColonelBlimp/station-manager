@@ -6128,6 +6128,92 @@ the compatibility promise that a daemon at any slice boundary starts the existin
      maintainability exit 0. The operator approved the fallback and it was committed alone
      as `92967cb8`; Codex found nothing to act on in it.
 
+     **CI red on `684fc6b4` (run 39271834503, diagnosed 2026-10-20).** The runs for
+     `3a1c80bd` and `92967cb8` were cancelled by the later pushes, so `684fc6b4`'s was the
+     first full run of commit 6. The Releasability gate failed
+     `TestProvisionE2E_PE1_PE2_ProvisionThenPushBackUnchanged`, both subtests, at
+     `provision_e2e_test.go:481` (the manual upload in `pushBack`): `dial unix …/smd.sock:
+     connect: no such file or directory`. It failed in CI's second Go step, which runs
+     with Postgres and without `-race`.
+     - **Cause: a test race, not a product defect.** `startHTTP`
+       (`lifecycle_adapters.go:1181`) binds the socket in a goroutine, so `orch.Start`
+       returns before the socket necessarily exists. The shared `apiCall` already allows
+       for this: it retries until the listener answers, and fails at once on the
+       listener's own error from `errCh`. The new `prAPI` copied `apiCall`'s dial but not
+       its wait, and `pushBack` posts to d3 right after starting it. On the CI runner the
+       post arrived before the bind.
+     - **Why the local gates missed it:** the cloud set ran only with `-race`, and the
+       plain `go test ./...` ran with `sm-pg` stopped, so the e2e test skipped. Locally
+       it also passes without `-race`, alone and with the whole package, because the work
+       between the start and the post covers the bind.
+     - **Reproduced:** a temporary 300 ms delay before the bind in `startHTTP` (anchor
+       unique, restore hash-verified) fails both subtests at line 481 with the CI error
+       text. Under the same delay, `TestReconcileSet_DR1_PerBindingWire`, which uses
+       `apiCall`, passes.
+     - **Ruled by the operator 2026-10-20: the test-only fix, consolidated on `apiCall`.**
+       - From now on the cloud set runs both with and without `-race` (CI already defines
+         both modes, `.github/workflows/ci.yml:242`), against the disposable Postgres, with
+         `-count=1`, confirming the provisioning subtests ran rather than skipped.
+       - `apiCall` retries only positively identified dial failures, before any
+         connection exists. The listener-error check and the bounded readiness wait stay.
+         After a connection, a transport error fails without replaying the request; an
+         HTTP error response reaches the caller's assertions as before.
+       - The optional body is built fresh on every attempt. `prAPI`'s request timeout is
+         kept, since the retry deadline does not bound a connected request, and
+         `io.ReadAll`'s error is checked.
+       - Focused proofs for the widened helper: the server receives a complete POST and
+         drops the response, and the helper fails after exactly one received request; a
+         listener startup error still fails promptly.
+       - Then the helper's callers and both cloud modes run again, with the delay removed
+         and its restoration verified.
+     - **Built (2026-10-20, test-only), committed as `a37a50c0` after the operator's
+       review.** The operator reran AC1–AC5 with `-race -count=1` and found no blocking
+       issues; the explicit 30 s timeout needs no slow test. Codex found nothing to act on in
+       `a37a50c0`.
+       - `apiCall` takes a `testing.TB` and wraps the new `apiCallBody`, which carries the
+         optional body. `prAPI` is gone; the push-back uses `apiCallBody`.
+       - `apiCallBody` builds a fresh request on each attempt, keeps the 30 s client
+         timeout, and retries only while `notListening` holds: a `dial` `*net.OpError`
+         with `ENOENT` or `ECONNREFUSED`. Any other transport error fails at once, saying
+         the request was not retried. A response body that cannot be read in full fails.
+         The `errCh` check and the 15 s readiness deadline are unchanged.
+       - Proofs in `cmd/smd/apicall_test.go` use a raw unix server and a `testing.TB`
+         that records the failure:
+         - AC1: a socket that binds 300 ms late is waited for, and one request arrives.
+         - AC2: a complete POST, bodyless and with a body, whose response is dropped
+           fails at once after exactly one received request.
+         - AC3: a truncated body fails after one request.
+         - AC4: a listener startup error fails within 2 s, naming the listener's error.
+         - AC5: a 500 reaches the caller with its body.
+       - RED against the refactored but unchanged loop:
+         - AC2 bodyless: 299 requests received.
+         - AC2 with a body: failed only at the 15 s deadline.
+         - AC3: the truncated body was accepted.
+
+         AC1, AC4 and AC5 passed already and characterize kept behaviour.
+       - AC2's first form, a POST with a body only, passed against the old loop: the
+         consumed body could not be resent, so the call just waited out the deadline. The
+         bodyless case and the promptness bound were added so the proof discriminates.
+       - Reversions, each a unique anchor with a non-empty replacement and a
+         hash-verified restore:
+         - V1: retry every error. AC2 fails: 298 and 299 requests.
+         - V2: drop the `errCh` check. AC4 fails at 15 s with "did not answer".
+         - V3: ignore the read error. AC3 fails.
+         - V4: retry nothing. AC1 fails on the late socket.
+         - With the 300 ms bind delay in `startHTTP`, the e2e test passes; adding V4
+           fails both subtests at the push-back POST (line 455). A first V4 run skipped
+           because the harness dropped `SMCLOUD_TEST_ALLOW_DEFAULT`; it was rerun with
+           the variable exported.
+       - The 30 s client timeout has no proof; one would take 30 s to run.
+       - Gates, all exit 0, with the delay removed (adapters unchanged):
+         - the cloud set with `-race` and without it, `-count=1`, on `sm-pg` (stopped
+           afterwards). In both, the provisioning subtests, AC1–AC5, `RestoreInto` and
+           every caller of `apiCall` passed. The only skip was `TestEntryHelper`, a
+           subprocess-only helper.
+         - gofmt (whole tree), `go vet ./...`, `go test ./...`;
+         - maintainability (no baseline regressions);
+         - `task ci:local` (dist restored).
+
 
    - **Archive contents (ADR 0084; ruled 2026-09-28).** Settings → Archives lists each
      archive's logbooks under its row, nested on the table's grid (name under Label,
