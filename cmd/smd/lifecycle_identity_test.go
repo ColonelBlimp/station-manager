@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -426,23 +427,47 @@ func TestIdentityWire_SW5_ConstructionFailureStopsTheStart(t *testing.T) {
 
 // apiCall sends one request to the generation's API over its unix socket
 // (started after ownerOnlySocketDir).
-func apiCall(t *testing.T, d *daemon, method, path string) (int, []byte) {
+func apiCall(t testing.TB, d *daemon, method, path string) (int, []byte) {
+	t.Helper()
+	return apiCallBody(t, d, method, path, "")
+}
+
+// apiCallBody is apiCall with a JSON request body. It waits up to 15s for a
+// listener that is still binding, retrying only a dial that never connected;
+// once a request may have reached the daemon, a transport error fails rather
+// than sending it twice. Each attempt is a fresh request, bounded by the
+// client timeout.
+func apiCallBody(t testing.TB, d *daemon, method, path, body string) (int, []byte) {
 	t.Helper()
 	sock := d.cfgSvc.Snapshot().SocketPath
-	client := &http.Client{Transport: &http.Transport{
+	client := &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, "unix", sock)
 		},
 	}}
-	req, err := http.NewRequest(method, "http://smd"+path, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// A listener that fails to start reports why on errCh: name that failure
-	// instead of waiting out the deadline.
-	var resp *http.Response
 	deadline := time.Now().Add(15 * time.Second)
-	for resp, err = client.Do(req); err != nil; resp, err = client.Do(req) {
+	for {
+		req, err := http.NewRequest(method, "http://smd"+path, strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		resp, err := client.Do(req)
+		if err == nil {
+			defer func() { _ = resp.Body.Close() }()
+			out, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatalf("%s %s on %s: reading the response: %v", method, path, sock, err)
+			}
+			return resp.StatusCode, out
+		}
+		if !notListening(err) {
+			t.Fatalf("%s %s on %s: %v (not retried: the daemon may have received it)", method, path, sock, err)
+		}
+		// A listener that fails to start reports why on errCh: name that
+		// failure instead of waiting out the deadline.
 		select {
 		case lerr := <-d.errCh:
 			t.Fatalf("the API listener on %s failed: %v", sock, lerr)
@@ -453,9 +478,15 @@ func apiCall(t *testing.T, d *daemon, method, path string) (int, []byte) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	defer func() { _ = resp.Body.Close() }()
-	body, _ := io.ReadAll(resp.Body)
-	return resp.StatusCode, body
+}
+
+// notListening reports a dial that found no listener on the socket, either
+// not yet created or not yet accepting: no connection was made, so nothing
+// was sent.
+func notListening(err error) bool {
+	var op *net.OpError
+	return stderr.As(err, &op) && op.Op == "dial" &&
+		(stderr.Is(err, syscall.ENOENT) || stderr.Is(err, syscall.ECONNREFUSED))
 }
 
 // ownerOnlySocketDir makes the socket's directory owner-only, as the listener

@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,7 +11,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/archive"
 	"github.com/ColonelBlimp/station-manager/internal/config"
@@ -120,29 +117,6 @@ func prCloudState(t *testing.T, cloud *realCloud) []string {
 		_ = rows.Close()
 	}
 	return out
-}
-
-// prAPI sends one request with a JSON body to the generation's API.
-func prAPI(t *testing.T, d *daemon, method, path, body string) (int, []byte) {
-	t.Helper()
-	sock := d.cfgSvc.Snapshot().SocketPath
-	client := &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, "unix", sock)
-		},
-	}}
-	req, err := http.NewRequest(method, "http://smd"+path, strings.NewReader(body))
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatalf("%s %s: %v", method, path, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	b, _ := io.ReadAll(resp.Body)
-	return resp.StatusCode, b
 }
 
 // prUploadStatus is a QSO's upload status on one forwarder, tombstones too.
@@ -399,7 +373,7 @@ func (e *prE2E) pushBack(t *testing.T, d3 *daemon, lbs []types.Logbook, nameOf m
 		}
 		if len(live) > 0 {
 			body, _ := json.Marshal(map[string]any{"uuids": live, "force": true})
-			if code, out := prAPI(t, d3, http.MethodPost, "/v1/forwarder/"+nameOf[lb.ID]+"/uploads", string(body)); code != http.StatusOK {
+			if code, out := apiCallBody(t, d3, http.MethodPost, "/v1/forwarder/"+nameOf[lb.ID]+"/uploads", string(body)); code != http.StatusOK {
 				t.Fatalf("manual upload to %s: %d %s", nameOf[lb.ID], code, out)
 			}
 		}
