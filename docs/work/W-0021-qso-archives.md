@@ -6390,6 +6390,178 @@ the compatibility promise that a daemon at any slice boundary starts the existin
        - ClubLog and QRZ on, QRZCQ off, SM Cloud on and `adopted`, `restart_required`
          false;
        - no new warnings beyond the known ones.
+     - **Checklist C, the scratch rehearsal: prepared and reviewed 2026-10-21; execution
+       pending the smcloud-host journal prerequisite below.** The rehearsal commands have
+       not run. Cloud contact during the preparation incident remains unverified.
+       - *Acceptance (operator):*
+         - The UUIDs in the cloud but not in the copy are exactly ZS4JAN's. Record the
+           export's counts and tombstones.
+         - First restore: 1 stored, 8,129 skipped, 0 failed. Every column of the
+           original 8,129 rows is unchanged, `additional_data` included. The restored row's
+           cloud identity, revision and contents are verified.
+         - Repeat restore: 0 stored, 8,130 skipped, 0 failed, with no row changed and no new
+           upload work.
+         - Drill provisioning is a separate scratch case. It keeps Drill's copied inactive
+           catalogue entry, but its database and sidecars are left out of that case's scratch
+           directory. Provisioning refuses an existing file; it can recreate a missing
+           managed file while keeping the entry (preflight,
+           `internal/archive/provision.go:135`). Verify:
+           - the cloud UUIDs and payloads are preserved;
+           - there are no bindings and no queued uploads;
+           - Home is unchanged.
+       - *Binary:* `/usr/bin/smd`, SHA-256 `0c1dd857cd9c4b3eb8be8ab9ad68bb5d99a84e362a733e983972766c7ad98ce1`.
+         `rpm -V station-manager` is clean, and the preserved RPM (`2d3a0ec9…`) records the
+         same digest for `/usr/bin/smd`. `git diff 6217da21 HEAD` outside `docs/` is empty, so
+         the helpers below compile against the binary's own code.
+       - *Fixture:* `~/sm-c-scratch` (0700). The 09:04Z backup's SHA-256 matched, and it was
+         extracted to `pristine/`. Two copies were made from it, `restore/` and
+         `provision/`.
+         - In each copy's `config.json`, `data_dir`, `datastore.path` and Home's legacy
+           path were rewritten into that copy. Every resolved filesystem write target for
+           the rehearsal commands lies inside its copy, as checked below.
+         - From `provision/`, Drill's `db/qso-archives/01a15d43-….db` was removed. It had no
+           `-wal`, `-shm` or `.creating` sidecars. Its catalogue entry stays.
+         - The copies hold the live credentials, so the directory must be removed after the
+           record is taken.
+       - *Resolved-path inventory* (`build/private/c-paths`, git-ignored). It loads the
+         config with `config.Load` and resolves through `archive.Resolve`, `GlobalDir`,
+         `ManagedDir` and `SummariesPath`. Each path's deepest existing ancestor has its
+         symlinks resolved before the containment check. Per case, all 22 paths are inside:
+         - the config file, the working directory and `log/smd.log`;
+         - `datastore.path`, the global database directory, the managed directory and
+           `qso-archive-summaries.json`;
+         - for Home and Drill: the file with its `-wal` and `-shm`, Drill's three
+           `.creating` names, `reference.db`, `evidence.db` and the archive-scoped
+           `db/backups/<id>`.
+
+         Control: the same check on the live `config.json` reports 22 outside.
+       - *Baselines taken* (`~/sm-c-scratch/evidence`, by `build/private/c-rows.py`, read-only
+         and immutable):
+         - every row and every column of every table, for both copies' Home and the
+           backup's Drill;
+         - per-file SHA-256 manifests of both cases.
+
+         The fixture's Home has 8,129 QSOs, ZS4JAN absent, maximum id 8,129, and four bindings
+         with none stamped.
+
+         Self-tests:
+         - an appended space in one row's `additional_data` was reported by column name,
+           together with the trigger's `revision` and `modified_at`;
+         - a deleted `qso_upload` row was reported;
+         - an identical copy reported no change.
+       - *Restore verification* (`build/private/c-cloud verify`). It reads the restored row
+         from a private copy the way the worker reads it, builds `smcloud.UploadFor`, and
+         compares uuid, revision, `modified_at`, `deleted_at` and every payload key against
+         the export, with jsonb number equality. It prints field names only.
+         - Its `export` mode is one read-only GET of the scoped export, with the token used
+           in-process only.
+       - *Run sheet.* Go-ahead given by the operator 2026-10-21 for the agent to run it, with the
+         live daemon stopped and no further approval round unless a check fails. Corrections
+         the operator required before running are applied below: the whole working directory
+         is compared; every comparison is a manual checkpoint; and the exception for ZS4JAN is
+         scoped. Shared variables: `S=~/sm-c-scratch`,
+         `R=$S/restore/station-manager`, `P=$S/provision/station-manager`,
+         `E=$S/evidence`, `H=01a0c8cb-904f-7394-afca-ef922b41bbfb`,
+         `HL=01a0c8cb-904f-713c-af34-5f887f153a22`,
+         `D=01a15d43-6f90-7c26-82aa-828dda4bdebb`,
+         `DL=01a15d43-6fb8-7388-a75c-5494afe346d1`, `Z=01a15dc4-b0ea-78be-96cd-b3a96a136e2b`,
+         `C=build/private` (from the repository).
+         0. Prerequisite: the smcloud journal for 11:18:33–35Z, allowing for request
+            completion, is read and any QSO or evidence writes are recorded (incident below).
+            Host access is unavailable in this session. Someone with access must run
+            `sudo journalctl -u smcloud --since "2026-10-21 11:18:30 UTC" --until
+            "2026-10-21 11:20:00 UTC" -o short-iso-precise --no-pager` on the smcloud host
+            and supply the output. The local query on `dev-pc` returned `-- No entries --`;
+            that is not evidence about the remote service. Keep this step pending until
+            the server-side evidence is recorded; the existing go-ahead then stands.
+            Then `smctl stop`. Once `systemctl --user is-active smd` reads `inactive`, write a
+            manifest of names and SHA-256s for **every file in the live working directory**
+            (`find … -type f`, sorted), logs, archive summaries and sidecars included, to
+            `$E/live-before.sha256`. Stopping the daemon makes "live unchanged" a byte
+            comparison, and lets live Home's ZS4JAN row be read as immutable.
+         1. `go run ./$C/c-cloud export $R/config.json $H $HL $E/home-export.json`, then
+            `python3 -I $C/c-rows.py uuids $E/home-export.json $E/restore-home-before.json`.
+            - Expect 8,130 records and 0 tombstones.
+            - Cloud minus copy is `[Z]`, and copy minus cloud is none.
+            - Otherwise, stop.
+         2. `SM_WORKING_DIR=$R smd restore --config $R/config.json --archive $H --dry-run`.
+            - The `archive:` line must read `Home ($H, legacy) — $R/db/station-manager.db`.
+            - Expect 8,130 records and 0 tombstones.
+         3. The same command without `--dry-run`. Expect stored 1, skipped 8,129, failed 0,
+            exit 0. Then:
+            - `c-rows.py snap $R/db/station-manager.db $E/restore-after1.json`;
+            - `c-rows.py diff $E/restore-home-before.json $E/restore-after1.json`.
+              - Expected: `qso` 8,129 → 8,130, with the one added row's uuid `Z` and 0 rows
+                changed.
+              - `sqlite_sequence` may move for `qso`.
+              - Any `sqlite_stat*` change is reported as statistics.
+              - Every other table is unchanged, `qso_upload` and `logbook_destination`
+                included.
+            - `go run ./$C/c-cloud verify $R/db/station-manager.db $E/home-export.json $Z`:
+              matches.
+            - `c-rows.py row ~/.local/share/station-manager/db/station-manager.db
+              $R/db/station-manager.db $Z`: the restored row against its live origin. A
+              difference here is not by itself a failure. The cloud projection removes local
+              identifiers (`id`, `logbook_id`, `dedupe_key`, `csid`, and nested
+              `country_details.id` and `contact_history[].id`;
+              `internal/forwarding/smcloud/cloud_projection.go:32`), so `additional_data`
+              may legitimately differ. Each differing column is explained in the record.
+              Equality is required only with the projected payload and its metadata, by
+              `c-cloud verify`. This exception covers only the newly restored ZS4JAN. The
+              original 8,129 rows must be exactly unchanged.
+         4. Rerun step 3's command. Expect stored 0, skipped 8,130, failed 0. Then
+            `snap … $E/restore-after2.json` and `diff after1 after2`: every table unchanged.
+         5. Provisioning, case P:
+            - `SM_WORKING_DIR=$P smd provision --config $P/config.json --list`. Expect
+              Drill's line `catalogued as managed "Drill"` with logbook `DL` and 1 QSO.
+            - `… --archive $D --dry-run`. Expect `would be provisioned at
+              $P/db/qso-archives/$D.db` and `catalogue: the existing entry "Drill" kept,
+              inactive`.
+            - The real run, which takes the same flags without `--dry-run`. Expect 1 QSO in
+              1 logbook, exit 0, and `config.json`'s hash unchanged.
+         6. Checks on P:
+            - `c-cloud export $P/config.json $D $DL $E/drill-export.json`;
+            - `c-cloud verify $P/db/qso-archives/$D.db $E/drill-export.json
+              01a15d4e-ae3c-74b1-aecc-b8d960292a7b`;
+            - snap the provisioned file. Expect `logbook_destination` and `qso_upload` with
+              0 rows, and the archive and logbook UUIDs `D` and `DL`. Diff it against
+              `$E/drill-backup.json` for the record.
+            - Snap P's Home and diff it against `$E/provision-home-before.json`: unchanged.
+            - The same `--dry-run` again must refuse `archive_file_exists` (exit 1).
+         7. Before restarting, write the same whole-directory manifest to
+            `$E/live-after.sha256` and `diff` it against the first. Names and hashes must be
+            identical. Then `smctl start`, and confirm Home at `/v1/version`, queues 0/0/0 and
+            8,130.
+         8. Record the results here. The removal of `~/sm-c-scratch` (credentials, operator
+            data) is the operator's decision.
+
+         - Every comparison is a manual checkpoint. `c-rows.py` prints differences and exits
+           0 whatever it finds, so its exit code proves nothing about equality. Each output is
+           read and ruled on before the next step.
+         - Stop on any unexpected count, a changed existing row, an `archive:` line or plan
+           path outside the copy, or any write to a live file.
+         - Recovery: the copies are disposable, and the live station is untouched, apart
+           from the stop and start.
+       - **Incident during preparation (2026-10-21 11:18:33Z, the agent's error).** Looking for
+         the version, the agent ran `smd version`. That is not a subcommand, so it fell through
+         to a full daemon start on the live configuration.
+         - For about 1.6 s it opened the live Home and reference databases, with no-op
+           migrations, and started evidence capture, PSK Reporter, the forwarder workers and
+           the reconciler.
+         - Its serial open of the rig's port was refused with EBUSY, since the live daemon
+           holds it. No CAT command was sent. *Inference, not measured:* an EBUSY reopen
+           does not change the modem lines.
+         - It exited when the bind on `127.0.0.1:8080` failed.
+         - The live daemon was unaffected: the same instance `dmafs7nidrvb`, Home, schema 18.
+         - Live Home still holds 8,130 QSOs, and no row carries an 11:18Z timestamp.
+         - About 35 lines were appended to the live `smd.log`.
+         - *Not yet checked:* whether the support check or the reconciler sent a request to
+           smcloud in that window. Before C runs, the journal for 11:18:33–35Z, allowing for
+           request completion, is read and any QSO or evidence write recorded. An empty
+           journal cannot prove there was no contact: smcloud logs `/v1/version` requests
+           at Debug (`internal/cloud/server/access.go:133`; operator review).
+         - Version identity now comes only from `rpm` and the SHA-256, or from
+           `GET /v1/version`.
 
    - **5F operator acceptance checklists (drafted 2026-10-21 at the operator's direction,
      corrected after Codex's review the same day; nothing had been run when drafted).**
@@ -6627,10 +6799,45 @@ the compatibility promise that a daemon at any slice boundary starts the existin
          replay.
      - *On the station:* Home adopted with no duplicates (8,129/8,129 in sync). The
        identity path still awaits A and B.
-     - *Operator decision, not recorded:* whether AC 6 also needs a station run with two
-       equal-labelled archives on the real tenant (the record's "two-archive SM Cloud proof
-       after 5F"), and if so with which archives. Otherwise the tests above plus A, B and C
-       stand as its evidence.
+     - *Ruled by the operator 2026-10-21:* no station run with two equal-labelled archives.
+       AC 6's evidence is the equal-name integration proofs above, plus A and B (both passed)
+       and a successful C. Triage of the Forwarding-page note and the closure draft may
+       proceed now; closure waits for C's results.
+     - **Closure draft (2026-10-21, agent). PENDING: it closes only once C's rehearsal results
+       are recorded and pass.** The two clauses of AC 6, and their evidence:
+       1. *Equal labels and names get distinct identities and stay apart in reconcile and
+          restore.*
+          - Tests:
+            - `TestIdentityReads_IR4_TwoArchivesWithEqualNamesStayApart` (server);
+            - `TestGateLifecycle_EI1_EI2_EqualNamedArchivesStayApart` (daemon pushes and
+              reconciles);
+            - `TestRestoreIdentity_EI3_EqualNamedArchivesRestoreApart`;
+            - `TestProvisionE2E_PE1_PE2_ProvisionThenPushBackUnchanged`.
+
+            All are green in CI run 39578396557 on `09799666`. The cloud set also ran with and
+            without `-race` on `sm-pg`, its subtests confirmed run (2026-10-20).
+          - Station:
+            - A, part 1: Home reconciles only on its own archive and logbook path.
+            - A, part 2: Drill's dummy QSO was uploaded by identity into Drill's own cloud
+              logbook alone, and Home was unchanged.
+            - B: a real QSO, ZS4JAN, was uploaded by identity into Home's logbook, with no
+              name-path PUT.
+          - *Pending, C:* a scratch restore by identity recovers exactly the one missing row
+            and leaves the 8,129 unchanged. Drill is provisioned from its own cloud archive
+            with UUIDs and payloads preserved and Home unchanged.
+       2. *A legacy archive adopts its existing cloud rows without duplicate backup state.*
+          - Tests: `TestAdopt_AD1`…`AD10`, with AD2 the idempotent replay.
+          - Station:
+            - Home adopted on 2026-10-10 and reconciled in sync at 8,129/8,129.
+            - It reconciled by identity in A (8,129/8,129).
+            - After B, the periodic reconcile at 11:18:07Z read in sync at 8,130/8,130, with
+              nothing enqueued (live `smd.log`).
+       - *Scope ruled out:* no station run with two equal-labelled archives (operator,
+         2026-10-21).
+       - *On closing:*
+         - mark 5F's acceptance done here;
+         - update the capsule and backlog;
+         - cut the replacement candidate under the alpha.3 record's Option 1 ruling.
      - *Beyond 5F:* Settings → Logbooks is the next data-model step after this checkpoint.
        Among the P2 workstreams, W-0010 ranks next after W-0021.
 

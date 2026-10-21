@@ -281,11 +281,29 @@ Command-line checkpoints run by the coder; the operator rules every result. Time
    `alpha.2.124` the row describes). On-air observations on the dev build go to the dogfood inbox as usual;
    they are standing evidence for the surfaces, not candidate rows.
 
-## Compatibility and recovery plan — DRAFT 2026-10-21, awaiting the operator's rulings
+## Compatibility and recovery plan — drafted 2026-10-21; Option 1 ruled the same day
 
 The September installation sequence above (a downgrade from a same-source dev build) no longer
 fits the station. This section sets out the options; nothing in it has been run, and it
 authorises no installation.
+
+**Ruled by the operator 2026-10-21: Option 1.**
+- *Cut point:* after checklist C passes and AC 6's closure evidence is recorded (W-0021), and
+  before Settings → Logbooks or any unrelated implementation.
+- *alpha.3:* its tag is preserved and it is recorded as superseded, never accepted. The B1-01
+  waiver is carried until the replacement passes its retirement cases.
+- *Lanes:* an isolated RPM guest for the clean lane, and the same artifact for the daily
+  driver's upgrade.
+- *Scope:*
+  - Gate A;
+  - B1;
+  - CC-5 and the waiver's retirement;
+  - an updated B2 inventory that explicitly exercises archives, bindings, restore and
+    provisioning.
+
+  The hardware and RF cases keep their separate authorisation boundary.
+- *Recovery:* refresh the recovery backup before the live upgrade. The 09:04Z backup is kept as
+  checklist C's fixture.
 
 **Why the September sequence is blocked.**
 - `333427ea` supports `config.json` version 3 and log schema 9. Home now holds config version 6
