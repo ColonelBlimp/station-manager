@@ -314,6 +314,30 @@ authorises no installation.
   listed cleanly with `tar -tzf`. SHA-256
   `2c21b99daca1a1b8a651fbbc47b19894639e80dea16e523d95eebcbbe7bf9770`. The daemon was restarted
   afterwards.
+  **Snapshot verified 2026-10-21 (agent, read-only; `smd` not started):**
+  - The SHA-256 matched before extraction. The archive was unpacked into a private 0700 scratch
+    directory.
+  - `PRAGMA integrity_check` returned `ok` on Home, Drill, `reference.db` and `evidence.db`, each
+    opened read-only and immutable.
+  - Home (`db/station-manager.db`): archive UUID `01a0c8cb-904f-7394-afca-ef922b41bbfb`; logbook 1
+    "Default", `01a0c8cb-904f-713c-af34-5f887f153a22`; 8,129 QSOs; no binding stamped; schema
+    18, not dirty.
+  - Drill (`db/qso-archives/01a15d43-6f90-7c26-82aa-828dda4bdebb.db`): archive UUID
+    `01a15d43-6f90-7c26-82aa-828dda4bdebb`; logbook 1 "Drill",
+    `01a15d43-6fb8-7388-a75c-5494afe346d1`; 1 QSO; its SM Cloud binding stamped; schema 18, not
+    dirty.
+  - `config.json` is version 6, with Home active, and catalogues Home (legacy) and Drill (managed).
+  - Both match the backup-time baseline: Home 8,129 and Drill 1. ZS4JAN, logged at 09:22 UTC, is
+    absent, as expected.
+  - The scratch extraction was then removed.
+
+  This verifies the snapshot, not a cloud restore. Because it lacks ZS4JAN, it can serve as the
+  fixture for checklist C's scratch restore: a separately prepared copy, with its paths rewritten,
+  should recover exactly that one QSO and leave the 8,129 existing rows unchanged. For that run (operator
+  review, 2026-10-21):
+  - before the restore, confirm ZS4JAN is still the only UUID in the cloud logbook missing from
+    the copy;
+  - compare the existing rows' contents before and after, not just their counts.
 
 **Option 1: supersede alpha.3 with a new candidate cut from current `main`.** Recommended.
 - *Candidate-compatible data:* the live station as it stands (config 6, schema 18, Home adopted).
