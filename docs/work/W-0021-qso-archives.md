@@ -6213,6 +6213,251 @@ the compatibility promise that a daemon at any slice boundary starts the existin
          - gofmt (whole tree), `go vet ./...`, `go test ./...`;
          - maintainability (no baseline regressions);
          - `task ci:local` (dist restored).
+     - **CI green, 2026-10-21:** run 39374098343 on `bb796a11` passed, covering `a37a50c0`.
+       The capsule and backlog record it (`3c3e0575`).
+
+   - **5F operator acceptance checklists (drafted 2026-10-21 at the operator's direction,
+     corrected after Codex's review the same day; nothing here has been run).**
+     Codex's review held the commit for four corrections, each confirmed in the code and applied
+     below:
+     - P1: a copied configuration does not isolate a restore, because `--config` does not
+       move the stored paths (`internal/archive/paths.go`). C now requires rewriting the
+       copy's paths and checking every write target.
+     - P1: D's installation sequence is stale. `333427ea` supports config v3 and log schema
+       9, and Home is at v6 and 17, with downgrade below 17 refused once adopted. D's
+       installation is now blocked pending a compatible-data and recovery plan, and the
+       September sequence is kept as history. The same reasoning blocks the alpha.2 RPM
+       as D's rollback.
+     - P2: a bare `smd restore` targets the active archive, which may be Drill after A. C
+       now names the archive and the configuration, checks the printed target, and makes
+       "Home unchanged" conditional on a scratch restore.
+     - P2: `selectWires` also selects bindings born on identity, without adoption. B now
+       says so and names Home's binding as the adopted case.
+
+     Codex confirmed A's expectation, scoped reconcile requests in the server access
+     log, against current code. Provisioning is implemented and CI-green; 5F's acceptance
+     is still open. Each checklist below separates the proof already in hand from what only
+     the operator can establish on the station. None of them authorises RF, a keyed test or a
+     rig command: an on-air QSO happens only on the operator's own initiative. Where the
+     record says nothing, the checklist says "not recorded" and leaves the choice to the
+     operator.
+
+     **Shared prerequisites.**
+     - A full station backup taken with the daemon stopped (`smctl stop`) or with SQLite's
+       online backup, never a live `cp`: `config.json`, `db/station-manager.db`, every
+       `db/qso-archives/<id>.db`, `db/reference.db` and `db/evidence.db` (install.md, backup
+       section). Keep it outside the repository and note its SHA-256, as A3-01 asks.
+     - For any smcloud schema step, a `pg_dump` first (smcloud-deploy.md). The pre-schema-7
+       and pre-schema-8 smcloud dumps stay until checklist B's proof is recorded.
+     - A recovery route in hand: the backup above; for a package step, the general rollback
+       in install.md (`smd config-downgrade`, then `smd db-downgrade`, then the older RPM).
+       `db-downgrade` refuses below schema 18 once any binding is born on identity, so after
+       5F.4 the backup is the way back, not the down step.
+
+     **A. The 5F.4 station drill** (go-ahead on the day).
+     - *Already proven, by tests:* one reconciler per enabled SM Cloud binding, the aggregate
+       `POST /v1/smcloud/reconcile`, and the identity gate (5F.4 ACs 1–6 above, CI-green at
+       `73a992b0`…`ea7b189e`). *On the station:* Home adopted on 2026-10-10 and reconciled in
+       sync at 8,129/8,129, but through the legacy name wire. Those runs prove neither scoped
+       reconciliation nor identity uploads.
+     - *Prerequisites:* the operator's go-ahead that day; the backup; the deployed build
+       containing 5F.4 (the server first, then the daemon).
+     - *Steps:*
+       1. Record Home's state before: `forwarded_to`, worker names and queue counts.
+       2. Start the daemon and call `POST /v1/smcloud/reconcile`.
+       3. Only with the operator's say on the day: turn SM Cloud on for a second logbook
+          or for the Drill archive, and store one dummy QSO there.
+     - *Expected:*
+       - Step 2: one result per enabled binding, Home's default `in_sync` with nothing
+         to heal.
+       - The smcloud log shows Home's reconcile reading
+         `/v1/archives/01a0c8cb-904f-7394-afca-ef922b41bbfb/logbooks/{logbook}/…`, not
+         `GET /v1/qsos` or another name path.
+       - Step 3: the dummy QSO reaches `uploaded` and lands only in its own cloud
+         logbook.
+       - Home's counts are unchanged.
+     - *Evidence:*
+       - the reconcile response;
+       - the smcloud access-log lines (`journalctl -u smcloud`, or the Caddy access
+         log filtered on `.request.uri`, joined by `X-Request-Id`);
+       - Home's counts before and after;
+       - the dummy QSO's UUID and upload status.
+     - *Stop and recover:*
+       - Stop if:
+         - the reconcile returns an error or 503 `smcloud_unavailable`;
+         - a name-path request appears for an identity binding;
+         - Home's counts change;
+         - anything lands in a logbook other than the dummy's.
+       - Then stop the daemon and keep the logs. Restore from the backup only if
+         station data changed.
+       - The dummy QSO stays in Drill, as recorded. A drill-specific rollback is not
+         recorded.
+
+     **B. The identity wire's proof on the next real QSO.**
+     - *Already proven, by tests:* the identity forwarder pushes by UUID, and an adopted
+       Home is reached by UUID (`TestIdentityPush_IP2_AnAdoptedHomeIsReachedByUUID`).
+       `selectWires` puts an enabled binding on that wire when it is born on identity,
+       whatever the account, or adopted and confirmed for the account the daemon starts
+       with. Home's binding is the adopted case. *Not yet shown on the
+       station:* the wire selection is not logged, so nothing yet shows that live uploads
+       take the identity path.
+     - *Prerequisites:*
+       - the operator's own next on-air QSO, logged in Home, at the operator's initiative;
+       - access to the smcloud server's log for that time;
+       - the pre-schema-7/8 dumps still kept.
+     - *Steps:*
+       1. Note the QSO's UUID once it is logged.
+       2. Wait for its SM Cloud upload.
+       3. Find that QSO's PUT in the smcloud log.
+     - *Expected* (operator ruling 2026-10-10):
+       - On the station, the QSO is `uploaded` to SM Cloud.
+       - The server's log shows its `PUT /v1/archives/01a0c8cb-904f-7394-afca-ef922b41bbfb/logbooks/{logbook}/qsos`.
+       - It is not `PUT /v1/qsos`.
+       - ClubLog and QRZ, which are on, also receive it.
+     - *Evidence:*
+       - the QSO UUID;
+       - its upload rows for SM Cloud, ClubLog and QRZ;
+       - the server's log line with its `X-Request-Id`.
+
+       Record it here, which closes the 5F.3 station proof.
+     - *Stop and recover:*
+       - If the PUT went to `/v1/qsos`, the proof fails and the wire selection needs
+         diagnosis before 5F can close. Keep the dumps.
+       - If the upload fails or is held, keep the queue state and the logs; nothing is
+         retried by hand without a ruling.
+     - *After the proof:* the pre-schema-7/8 dumps may be discarded, at the operator's
+       decision. Their location is not recorded.
+
+     **C. The restore rehearsal.**
+     - *Already proven, by tests:*
+       - restore by archive and logbook UUID (5F.5, `6aa99773`) with its preflight and
+         refusals;
+       - equal-labelled archives restoring apart
+         (`TestRestoreIdentity_EI3_EqualNamedArchivesRestoreApart`);
+       - provisioning beside an equal-labelled archive, with the rows pushed back
+         unchanged (`TestProvisionE2E_PE1_PE2_ProvisionThenPushBackUnchanged`).
+
+       *Not yet done on the station:* any rehearsal of 5F.5. No station result is recorded.
+     - *Prerequisites:*
+       - the daemon stopped (`smctl stop`), with no other `smd` command running;
+       - the backup;
+       - SM Cloud's url and token in `config.json`.
+     - *Operator decisions before running:*
+       1. **Which archive, and where the write lands.** `smd restore` targets the active
+          archive unless `--archive` names one, and after A the active archive may be
+          Drill. Always pass `--archive <uuid>` and `--config <path>` explicitly.
+          - A dry run writes nothing. A real restore into live Home may add the rows
+            Home is missing.
+          - A scratch restore is isolated only when the copy is rewritten. `--config`
+            selects the configuration file; it does not move the paths stored in it.
+            Home's catalogue entry is an absolute path, and `data_dir` and
+            `datastore.path` can still point at the live station (`archive.PathFor` and
+            `Resolve`, `internal/archive/paths.go`). In the copied `config.json`,
+            rewrite `data_dir`, `datastore.path` and every legacy or external
+            catalogue path into the scratch directory. Then, before any real run,
+            check that every resolved write target is inside it, starting with the
+            archive line `smd restore` prints before it fetches.
+
+          Which target to use is the operator's decision; it is not recorded.
+       2. **Whether to provision as well.** `smd provision` is a separate, explicit
+          choice, never implied by restore. Home cannot be provisioned.
+          - `smd provision --list` shows the account's archives.
+          - `--dry-run` reports the plan and writes nothing.
+          - A real run adds a new, inactive managed archive, with no binding.
+
+          Whether the rehearsal includes it, and with which cloud archive, is the
+          operator's decision.
+     - *Steps:*
+       1. `smd restore --config <chosen config> --archive <chosen uuid> --dry-run`. It
+          checks identity support, fetches the chosen archive's default logbook export
+          and reports its counts. Before going on, check the printed archive line: the
+          intended label, UUID and file path.
+       2. If chosen, the same command without `--dry-run`, after checking the printed
+          target again.
+       3. If chosen, `smd provision --list`, then `--dry-run`, then the real run.
+     - *Expected:*
+       - The dry run's counts match the cloud logbook.
+       - The real restore reports stored and skipped totals, and a re-run stores
+         nothing.
+       - A provisioned archive appears inactive in Settings → Archives, with the
+         cloud's logbook UUIDs.
+       - Home is unchanged when the restore ran against a scratch copy. A real restore
+         into live Home may add missing rows, and the before and after counts show
+         exactly which.
+     - *Evidence:*
+       - the command outputs and exit codes;
+       - counts before and after;
+       - Settings → Archives after any provisioning.
+     - *Stop and recover:*
+       - Any refusal exits 1. A dry run or an early refusal leaves the file unchanged,
+         apart from a harmless empty `-wal` and `-shm`.
+       - A refusal after the write-open may have migrated the file: restore it from
+         the backup if unwanted.
+       - A failed provisioning publishes nothing.
+
+     **D. alpha.3 acceptance.**
+     - *Record:* `docs/reports/dogfood-acceptance-v2.0.0-alpha.3.md`.
+       - Candidate `333427ea`, tag `v2.0.0-alpha.3`, local and not pushed. The tag does
+         not mean acceptance passed.
+       - RPM SHA-256 `23335ff6…`.
+       - "Ready to deploy" and "Dogfood accepted" are both pending.
+     - *Already done:* A1-01 has evidence and awaits the operator's ruling.
+     - *Outstanding, all the operator's:*
+       - A3-01 backup location and SHA-256;
+       - A3-02 restore check;
+       - A3-04 rollback artifact;
+       - the remaining Gate A rows;
+       - Gate B1, B1-01 to B1-06, with Appendices 1–2's `config-check` and `jq` steps.
+
+       B2 and B3 (hardware and RF) are not executed for this candidate.
+     - *Installation: BLOCKED pending a compatible-data and recovery plan (the operator's),
+       which must identify the matching package and data for each step.*
+       - The frozen `333427ea` supports config v3 and log schema 9.
+       - Home is already at config v6 and log schema 17. Its adoption confirmation alone
+         stops `db-downgrade` below 17, before any schema-18 identity stamp
+         (`refuseErasingAdoptionClaims`, `internal/database/sqlite/downgrade.go`).
+       - A backup taken today holds those newer schemas too. This backup remains usable for
+         recovery with its matching current build; it cannot be opened by alpha.3 or the
+         preserved alpha.2 build.
+       - *Historical, not to be run as is:* the record's September sequence assumed a
+         same-source dev build: `sudo rpm -Uvh --oldpackage
+         build/private/station-manager-2.0.0~alpha.3-1.x86_64.rpm`, then `smd
+         config-check`, `systemctl --user daemon-reload` and
+         `systemctl --user restart smd`, with B1-01 ruled with that deviation noted. The
+         record's recovery policy then was a stopped-daemon copy of the whole working
+         directory.
+     - *The waiver:* acceptance retires the alpha.2 B1-01 waiver (Finding #6, the qrzcq
+       `action_filter`; the P1 item in the backlog), through A1-05 and B1-01.
+       FT8-10 keeps its BLOCKED disposition from alpha.2. Its link to alpha.3
+       acceptance is not recorded.
+     - *Stop and recover:*
+       - Only the operator marks a row WAIVED.
+       - RF-safety, data-loss, unrecoverable-upgrade and unusable-install failures
+         cannot be waived (`docs/dogfood-acceptance.md`).
+       - The final decision is accept, hold or roll back. The record names the preserved
+         alpha.2 RPM plus the working-directory copy as the rollback. That is blocked for
+         the same reason as the installation: the alpha.2 build predates today's config
+         and schema, so the recovery plan above has to cover rollback too.
+
+     **AC 6 (ADR 0071), and what closes 5F.** "Two archives with the same label and same
+     logical-logbook name produce distinct SMC archive/logbook identities and can each
+     reconcile/restore without rows from the other. A legacy archive adopts its existing
+     cloud rows without duplicate backup state."
+     - *Already proven, by tests:*
+       - isolation on the server: `TestIdentityReads_IR4_TwoArchivesWithEqualNamesStayApart`;
+       - isolation for the daemon's pushes and reconciles: `TestGateLifecycle_EI1_EI2_EqualNamedArchivesStayApart`;
+       - restore: EI3;
+       - provisioning: PE1 and PE2;
+       - adoption without a duplicate: `TestAdopt_AD1`…`AD10`, with AD2 the idempotent
+         replay.
+     - *On the station:* Home adopted with no duplicates (8,129/8,129 in sync). The
+       identity path still awaits A and B.
+     - *Operator decision, not recorded:* whether AC 6 also needs a station run with two
+       equal-labelled archives on the real tenant (the record's "two-archive SM Cloud proof
+       after 5F"), and if so with which archives. Otherwise the tests above plus A, B and C
+       stand as its evidence.
+     - *Beyond 5F:* Settings → Logbooks is the next data-model step after this checkpoint.
+       Among the P2 workstreams, W-0010 ranks next after W-0021.
 
 
    - **Archive contents (ADR 0084; ruled 2026-09-28).** Settings → Archives lists each
