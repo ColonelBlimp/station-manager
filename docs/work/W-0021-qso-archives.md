@@ -6215,9 +6215,71 @@ the compatibility promise that a daemon at any slice boundary starts the existin
          - `task ci:local` (dist restored).
      - **CI green, 2026-10-21:** run 39374098343 on `bb796a11` passed, covering `a37a50c0`.
        The capsule and backlog record it (`3c3e0575`).
+     - **Cloud server deployed (2026-10-21, operator; the agent checked from the LAN).**
+       `GET /v1/version` on the smcloud host's port 8091 answers
+       `{"archive_export":1,"identity_protocol":1,"version":"2.0.0-alpha.3-262-g6217da21"}`.
+       That build contains `32b8792e` and `1127fdd8`; the one before it was
+       `…-220-g95d4e331`. `GET /v1/health` answers `{"db":"ok","status":"ok"}`. No schema
+       change: it stays at 8, and the pre-schema-7/8 dumps are kept.
+     - **Daemon deployed (2026-10-21 08:37, operator, `task deploy:local:dev`; the agent read
+       only).**
+       - `/v1/version` reports `2.0.0-alpha.3-262-g6217da21-dirty`, schema 18 not dirty,
+         archive Home (`01a0c8cb…`, legacy). The previous build was `5e2bc1c7` at schema 17.
+         The only uncommitted change at build time was this dossier's Markdown, which
+         accounts for `-dirty`.
+       - The log from 08:37:16:
+         - migrations ran and the schema verified;
+         - the clublog, qrz and smcloud workers started;
+         - `smcloud reconciler started` for logbook 1 with `identity: true`;
+         - `smcloud: server identity support checked`, state `supported`;
+         - the HTTP server is listening.
+       - The only warnings are the known ones: the rig is off (unreachable), the plain-HTTP
+         notice (`allow_insecure_http`) and the RTS/DTR notice.
+       - Every forwarder queue reads 0 waiting, 0 failed, 0 in flight.
+       - No reconcile has run under this build yet. The agent ran none: the first
+         identity reconcile is drill A's step 2.
+       - The 06:47 start under the old build logged `no route to host` for 192.168.1.200;
+         its 07:49 reconcile was in sync at 8,129/8,129.
+       - No Home binding is stamped born on identity. A read-only query of Home's
+         `logbook_destination` shows `identity_since` empty on all four, with smcloud
+         enabled and adopted, so Home's file can still go down to 17. The refusal is per
+         archive file: stamping Drill's binding in drill A's step 3 keeps Drill's file at
+         schema 18 or above, and puts no such restriction on Home.
+     - **Drill A, run by the operator (2026-10-21).** Before: `GET /v1/forwarder-queues`
+       reads 0 waiting, 0 failed, 0 clearable and 0 in flight for clublog, qrz, smcloud and
+       qrzcq. Home's bindings:
+       - `restart_required` false.
+       - Logbook 1, "Default", 7Q5MLV, UUID `01a0c8cb-904f-713c-af34-5f887f153a22`.
+       - ClubLog and QRZ on, with the build key present.
+       - QRZCQ off.
+       - SM Cloud on: support `supported`, `logbook` locked, adoption `adopted`.
+       - Every queue 0/0/0.
+
+       The response lists credential key names only. Window start: 08:50:30 CAT (06:50:30
+       UTC).
+
+       Step 2: `POST /v1/smcloud/reconcile` returned exactly one result:
+       - forwarder `smcloud`, logbook `01a0c8cb-904f-713c-af34-5f887f153a22`;
+       - `in_sync` true, 8,129 local and 8,129 cloud;
+       - 0 upserts or deletes enqueued, 0 cloud-only, 0 cloud-newer, not truncated;
+       - `local_hash` `fbb606da…4c4e1b`.
+
+       It matches the expectation.
+
+       **Part 1 PASS: Home reconciles on the identity paths.** On the smcloud host, the
+       journal from 06:50:30 UTC holds exactly two `http request` lines, both
+       `GET /v1/archives/01a0c8cb-904f-7394-afca-ef922b41bbfb/logbooks/01a0c8cb-904f-713c-af34-5f887f153a22/reconcile`,
+       and no name-path request (`/v1/qsos`, `/v1/logbooks`).
+
+       The daemon's log accounts for both: a `periodic` run at 08:50:56 and the operator's
+       `manual` run at 08:51:06 (`POST /v1/smcloud/reconcile`, request id
+       `45b23f2d…`). Both were in sync at 8,129/8,129 with nothing enqueued.
+
+       Part 1 does not prove identity uploads: there was nothing to upload. Part 2 (a
+       dummy QSO on Drill) and checklist B (a real QSO on Home) remain.
 
    - **5F operator acceptance checklists (drafted 2026-10-21 at the operator's direction,
-     corrected after Codex's review the same day; nothing here has been run).**
+     corrected after Codex's review the same day; nothing had been run when drafted).**
      Codex's review held the commit for four corrections, each confirmed in the code and applied
      below:
      - P1: a copied configuration does not isolate a restore, because `--config` does not
