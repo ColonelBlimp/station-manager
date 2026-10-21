@@ -6349,6 +6349,26 @@ the compatibility promise that a daemon at any slice boundary starts the existin
 
        **Drill A (the 5F.4 station drill) PASS, 2026-10-21.** Checklist B (a real QSO on
        Home) and the pre-schema-7/8 dumps remain open.
+     - **Checklist B, the identity wire's proof on a real QSO: PASS (2026-10-21; the operator
+       ran the FT8 session, the agent read only).** This closes the 5F.3 station proof ruled
+       on 2026-10-10.
+       - The QSO: ZS4JAN, a completed FT8 exchange (`QSO complete (73 sent)`), `time_on`
+         09:20:33 UTC, stored 09:22:13 UTC in Home's Default. UUID
+         `01a15dc4-b0ea-78be-96cd-b3a96a136e2b`. `forwarded_to` names clublog, qrz and
+         smcloud. Home now holds 8,130 QSOs.
+       - Its upload rows, read read-only, are all `uploaded` on the first attempt:
+         - smcloud insert at 09:22:23 UTC, and smcloud update at 09:23:13 UTC;
+         - clublog insert at 09:23:04 UTC;
+         - qrz insert at 09:23:05 UTC.
+       - The smcloud journal from 09:22:00 UTC: two `PUT
+         /v1/archives/01a0c8cb-904f-7394-afca-ef922b41bbfb/logbooks/01a0c8cb-904f-713c-af34-5f887f153a22/qsos`,
+         the insert and the update, and no `PUT /v1/qsos`. Eight `PUT /v1/evidence` are the
+         FT8 evidence sync (`evidence.sync` on), not QSO uploads.
+       - Under the 5F.1/5F.2 retention rule, the pre-schema-7/8 smcloud dumps may now be
+         discarded, at the operator's decision. Their location is not recorded.
+       - Home's baseline is now 8,130 QSOs. The preserved 09:04 UTC backup predates this
+         contact, so refresh the data backup before any operation that relies on it for
+         rollback.
      - **Checklist C, the restore dry run (2026-10-21, operator; the agent read only).**
        With the daemon stopped (`smctl stop`), the operator ran `smd restore --config
        ~/.local/share/station-manager/config.json --archive
