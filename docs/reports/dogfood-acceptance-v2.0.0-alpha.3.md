@@ -302,10 +302,18 @@ authorises no installation.
 **Today's recovery pair.** Every option needs it, so preserve it first:
 - **Package:** the installed `station-manager-2.0.0~alpha.3.262.g6217da21.dirty-1`. Its file,
   `build/private/station-manager-dev.x86_64.rpm` (9,625,638 bytes, 2026-10-21 08:37), is
-  overwritten by the next `task deploy:local:dev`. Copy it to a versioned name and record its
-  SHA-256.
+  overwritten by the next `task deploy:local:dev`. **Preserved 2026-10-21 (operator):** `rpm -qp`
+  on the file and `rpm -q` on the installed package both read
+  `station-manager-2.0.0~alpha.3.262.g6217da21.dirty-1.x86_64`. It was copied (mode 0600, git-ignored)
+  to `build/private/station-manager-2.0.0~alpha.3.262.g6217da21.dirty-1.x86_64.rpm`, 9,625,638 bytes,
+  SHA-256 `2d3a0ec9bd1e35095d7e728eeeb1a1a6bfb514a015714a30f6284e19be180bdb`.
 - **Data:** a stopped-daemon copy of the working directory, taken under that build, with its
-  SHA-256. Since 2026-10-21 it includes the managed Drill archive.
+  SHA-256. Since 2026-10-21 it includes the managed Drill archive. **Taken 2026-10-21 09:04Z (operator):** with the daemon
+  stopped, `~/.local/share/station-manager` was archived to
+  `~/sm-backup/station-manager-20261021T0904Z-g6217da21.tar.gz` (mode 0600, 33,754,941 bytes),
+  listed cleanly with `tar -tzf`. SHA-256
+  `2c21b99daca1a1b8a651fbbc47b19894639e80dea16e523d95eebcbbe7bf9770`. The daemon was restarted
+  afterwards.
 
 **Option 1: supersede alpha.3 with a new candidate cut from current `main`.** Recommended.
 - *Candidate-compatible data:* the live station as it stands (config 6, schema 18, Home adopted).
