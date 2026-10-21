@@ -6278,6 +6278,78 @@ the compatibility promise that a daemon at any slice boundary starts the existin
        Part 1 does not prove identity uploads: there was nothing to upload. Part 2 (a
        dummy QSO on Drill) and checklist B (a real QSO on Home) remain.
 
+       **Part 2: go-ahead given by the operator 2026-10-21 ("Let's get on with part 2").**
+       The catalogue holds only Home. The Drill archive existed on the test install that
+       was moved aside on 2026-10-10, so Part 2 begins by creating a new archive. The
+       operator's actions:
+       1. Settings → Archives → New archive.
+       2. Activate it (the attended restart).
+       3. On Settings → Forwarding, turn SM Cloud alone on for its logbook, then restart.
+       4. Store one dummy QSO.
+
+       Turning SM Cloud on stamps the new archive's binding born on identity. Home is not
+       touched.
+
+       Step 1 done at 09:01:03 CAT. Drill was created:
+       - archive `01a15d43-6f90-7c26-82aa-828dda4bdebb`, managed, inactive, 151,552 bytes;
+       - logbook "Drill", callsign M0CMC, UUID `01a15d43-6fb8-7388-a75c-5494afe346d1`,
+         0 QSOs, the default.
+
+       Home is unchanged: active, 8,129 QSOs.
+
+       Step 2 done: Drill activated.
+       - `/v1/version` reports archive Drill (`01a15d43…`, managed), schema 18 not dirty,
+         new instance.
+       - Drill's bindings: ClubLog, QRZ, QRZCQ and SM Cloud are all off and unbound.
+         SM Cloud's support is `supported`, and its `logbook` field is hidden, as for a
+         binding that could only be enabled by identity.
+       - `restart_required` false.
+       - `GET /v1/forwarder-queues` lists no forwarders: no worker runs on Drill.
+
+       Step 3 done. The operator saved SM Cloud on for Drill's logbook (`PUT …/bindings`
+       200, 09:10:37 CAT) and restarted (09:11:40). On the new instance:
+       - Drill's binding `smcloud.01a15d43-6fb8-7388-a75c-5494afe346d1` is enabled, and
+         ClubLog, QRZ and QRZCQ stay off.
+       - Drill's file stamps `identity_since` `2026-10-21 07:10:37` UTC, with no adoption
+         and no reservation.
+       - Home still has no stamped binding.
+       - The log shows only that forwarder's worker starting, plus `smcloud reconciler
+         started` with `identity: true`, and support `supported`.
+       - Its queue reads 0/0/0.
+
+       The Settings → Forwarding page confused the operator: the expanded "SM Cloud
+       service and token" account section was taken for the destination row. This is
+       logged in the dogfood inbox.
+
+       Step 4: the operator logged a dummy QSO, `DR1LL`, at 07:13 UTC: UUID
+       `01a15d4e-ae3c-74b1-aecc-b8d960292a7b`, 20 m FT8, entered manually, with no rig
+       activity. `forwarded_to` names only Drill's SM Cloud forwarder. That worker's first
+       attempt succeeded (`outcome` `success`, `disposition` `persisted`).
+
+       **Part 2 PASS: an identity upload into the new archive's own cloud logbook.** The
+       smcloud journal from 07:13:00 UTC holds exactly two requests, and no `PUT /v1/qsos`:
+       - `PUT /v1/archives/01a15d43-6f90-7c26-82aa-828dda4bdebb/logbooks/01a15d43-6fb8-7388-a75c-5494afe346d1/qsos`;
+       - `GET …/reconcile` on the same archive and logbook.
+
+       The operator had taken no smcloud dump before today's server deploy. That deploy
+       changed no schema, so the runbook did not require one. A dump was taken on the
+       smcloud host after Part 2 and checked with `gzip -t`.
+
+       Step 5: Home was activated again (instance `dmac0uvgm2nj`, schema 18 not dirty). It
+       matches the baseline:
+       - every queue 0/0/0;
+       - Default with 8,129 QSOs;
+       - the bindings unchanged: ClubLog and QRZ on, QRZCQ off, SM Cloud on and
+         `adopted`, `restart_required` false;
+       - no Home binding stamped;
+       - the clublog, qrz and smcloud workers started, and the reconciler with
+         `identity: true`.
+
+       Drill is inactive, holding its one dummy QSO.
+
+       **Drill A (the 5F.4 station drill) PASS, 2026-10-21.** Checklist B (a real QSO on
+       Home) and the pre-schema-7/8 dumps remain open.
+
    - **5F operator acceptance checklists (drafted 2026-10-21 at the operator's direction,
      corrected after Codex's review the same day; nothing had been run when drafted).**
      Codex's review held the commit for four corrections, each confirmed in the code and applied
