@@ -6349,6 +6349,27 @@ the compatibility promise that a daemon at any slice boundary starts the existin
 
        **Drill A (the 5F.4 station drill) PASS, 2026-10-21.** Checklist B (a real QSO on
        Home) and the pre-schema-7/8 dumps remain open.
+     - **Checklist C, the restore dry run (2026-10-21, operator; the agent read only).**
+       With the daemon stopped (`smctl stop`), the operator ran `smd restore --config
+       ~/.local/share/station-manager/config.json --archive
+       01a0c8cb-904f-7394-afca-ef922b41bbfb --dry-run`.
+       - The resolved target: `archive: Home (01a0c8cb-904f-7394-afca-ef922b41bbfb,
+         legacy) — /home/mveary/.local/share/station-manager/db/station-manager.db`.
+       - It fetched cloud archive `01a0c8cb…` logbook `01a0c8cb-904f-713c-af34-5f887f153a22`:
+         8,129 records, 0 tombstones.
+       - It printed `dry-run: no DB writes` and exited 0.
+       - A read-only count of Home's file afterwards: 8,129 QSO rows, no binding stamped.
+
+       This is export and preflight evidence only. It does not prove a restore's writes.
+       A real restore and provisioning still need the operator's target decisions.
+
+       After `smctl start` (instance `dmacsem2dfge`, schema 18 not dirty), Home matches the
+       baseline:
+       - queues 0/0/0;
+       - Default with 8,129 QSOs;
+       - ClubLog and QRZ on, QRZCQ off, SM Cloud on and `adopted`, `restart_required`
+         false;
+       - no new warnings beyond the known ones.
 
    - **5F operator acceptance checklists (drafted 2026-10-21 at the operator's direction,
      corrected after Codex's review the same day; nothing had been run when drafted).**

@@ -281,6 +281,109 @@ Command-line checkpoints run by the coder; the operator rules every result. Time
    `alpha.2.124` the row describes). On-air observations on the dev build go to the dogfood inbox as usual;
    they are standing evidence for the surfaces, not candidate rows.
 
+## Compatibility and recovery plan — DRAFT 2026-10-21, awaiting the operator's rulings
+
+The September installation sequence above (a downgrade from a same-source dev build) no longer
+fits the station. This section sets out the options; nothing in it has been run, and it
+authorises no installation.
+
+**Why the September sequence is blocked.**
+- `333427ea` supports `config.json` version 3 and log schema 9. Home now holds config version 6
+  and log schema 18.
+- `smd config-downgrade` has down steps 6 → 5 → 4 → 3 (`internal/config/migrations.go`), and the
+  log migrations 0010–0018 all have down files.
+- `smd db-downgrade` refuses below 17 while a binding holds an SM Cloud adoption confirmation, and
+  below 16 while it holds a reservation or adoption (`refuseErasingAdoptionClaims`,
+  `internal/database/sqlite/downgrade.go`). Home's SM Cloud binding is adopted (W-0021, 2026-10-10).
+  Clearing that is manual recovery, and an older build would then upload Home by name.
+- A backup taken today holds the same schemas. It is recoverable only with its matching current
+  build.
+
+**Today's recovery pair.** Every option needs it, so preserve it first:
+- **Package:** the installed `station-manager-2.0.0~alpha.3.262.g6217da21.dirty-1`. Its file,
+  `build/private/station-manager-dev.x86_64.rpm` (9,625,638 bytes, 2026-10-21 08:37), is
+  overwritten by the next `task deploy:local:dev`. Copy it to a versioned name and record its
+  SHA-256.
+- **Data:** a stopped-daemon copy of the working directory, taken under that build, with its
+  SHA-256. Since 2026-10-21 it includes the managed Drill archive.
+
+**Option 1: supersede alpha.3 with a new candidate cut from current `main`.** Recommended.
+- *Candidate-compatible data:* the live station as it stands (config 6, schema 18, Home adopted).
+  The clean lane needs no data. A2-08's upgrade rehearsal starts from the frozen alpha.2 RPM
+  (`7b2fa20a…`) on a fresh directory and runs config 3 → 6 and schema 8 → 18.
+- *Recovery:* the pair above, from before B1. If the candidate is cut from a later commit, its
+  data stays readable by the preserved build only while no new migration lands.
+- *Gates it can prove:*
+  - all of Gate A on the identified artifact;
+  - B1 as a real dev-build → candidate upgrade on the daily driver;
+  - the same artifact on both lanes, as the acceptance boundary requires;
+  - retirement of the B1-01 waiver: CC-5 is in `main`, so A1-05 and B1-01 rerun on the new
+    artifact.
+- *Operator decisions:*
+  - the cut point: now, or once 5F (AC 6) closes;
+  - alpha.3's disposition: superseded, never accepted, with the waiver's retirement moved to the
+    new candidate;
+  - the new candidate's scope: the delta since alpha.3 adds the archive programme's surfaces
+    (archives, bindings, restore, provisioning), so the B2 inventory either grows or the scope is
+    reduced again by ruling;
+  - the clean lane.
+
+**Option 2: accept alpha.3 on a stand-in station, never on the daily driver.**
+- *Candidate-compatible data:*
+  - A fresh alpha.3 setup on the clean lane.
+  - A stand-in upgrade from a **verified alpha.2 baseline**. The named archive
+    `~/sm-backup/station-manager-pre-alpha2-20260905T1114Z.tar.gz` is alpha.1-era: config
+    version 2, schema 7. It is not an alpha.2 starting state. Either bring it up under the
+    frozen alpha.2 RPM (`7b2fa20a…`) first and verify config 3 and schema 8 before upgrading, or
+    describe the run as alpha.1 → alpha.3 and claim only that.
+- *Isolation:* a scratch directory is not enough on its own. Alpha.3 keeps the configured
+  `data_dir` and `datastore.path`, so extracting a backup elsewhere does not move them. Either:
+  - rewrite every stored path in the stand-in's `config.json` into the scratch directory, verify
+    each resolved path before the first start, and select that service and configuration
+    explicitly (a unit drop-in setting `SM_WORKING_DIR`, or `--config`); or
+  - use an isolated guest with no access to the live station's files. This is the simpler
+    guarantee.
+- *Integrations:* stripping credentials alone can stop alpha.3 from starting, because its
+  startup preflight refuses an enabled forwarder with missing credentials. Instead, either
+  disable every integration in the stand-in's configuration, or point it at isolated test
+  endpoints with a valid test configuration.
+  - Disabling them means the run proves retention of the configuration but not uploads.
+  - Test endpoints prove the upload path only against those endpoints, not real services.
+
+  Record whichever is chosen beside the B1 rows.
+- *Recovery:*
+  - the stand-in has its own archive and the frozen alpha.2 RPM;
+  - the live station has the pair above. On a shared host, installing the alpha.3 RPM replaces
+    `/usr/bin/smd`, so the live daemon stays stopped throughout and is reinstalled from the
+    preserved package afterwards. In a guest, the live station is untouched.
+- *Gates it can prove:*
+  - A1 and A2 on the clean lane;
+  - B1's mechanics on the stand-in, limited by the integration choice above and by the
+    baseline actually verified.
+
+  It cannot meet "the same artifact on the daily driver", so the acceptance boundary needs a
+  recorded scope ruling.
+- *Operator decisions:*
+  - whether a stand-in may replace the daily driver;
+  - a guest or verified path rewriting;
+  - disabled integrations or test endpoints;
+  - the alpha.2 baseline, or an alpha.1 → alpha.3 claim;
+  - the live station's downtime, on a shared host;
+  - whether this retires the B1-01 waiver.
+
+**Option 3: close alpha.3 without acceptance.**
+- *Candidate-compatible data, recovery and gates:* none. No gate is proven.
+- *Effect:* alpha.3 is recorded as withdrawn, and the B1-01 waiver stays open until a later
+  candidate's acceptance retires it.
+- *Operator decisions:* the disposition, and how long the waiver may stand.
+
+**Rejected: downgrading the daily driver to alpha.3.** It needs Home's adoption cleared by manual
+recovery, which the downgrade guards exist to prevent. That is a data-integrity and wrong-wire
+risk, of the kind the gate does not allow to be waived.
+
+FT8-10 keeps its alpha.2 BLOCKED disposition under every option. Its link to this candidate is not
+recorded.
+
 ## Findings
 
 Record surprises in [`dogfood-inbox.md`](../dogfood-inbox.md) as they happen; triage each here as
