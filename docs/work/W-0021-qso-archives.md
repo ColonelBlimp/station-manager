@@ -6390,9 +6390,12 @@ the compatibility promise that a daemon at any slice boundary starts the existin
        - ClubLog and QRZ on, QRZCQ off, SM Cloud on and `adopted`, `restart_required`
          false;
        - no new warnings beyond the known ones.
-     - **Checklist C, the scratch rehearsal: prepared and reviewed 2026-10-21; execution
-       pending the smcloud-host journal prerequisite below.** The rehearsal commands have
-       not run. Cloud contact during the preparation incident remains unverified.
+     - **Checklist C, the scratch rehearsal: PASS (ruled by the operator 2026-10-21).** Run
+       2026-10-21, 12:31–12:39Z, by the agent. Every acceptance check passed. One deviation,
+       the agent's error, was found and recovered at step 7, and is recorded with the
+       manifest-equality evidence. The operator independently checked the saved snapshots
+       and the matching before and after live manifests. The results are under *Results*,
+       after the run sheet.
        - *Acceptance (operator):*
          - The UUIDs in the cloud but not in the copy are exactly ZS4JAN's. Record the
            export's counts and tombstones.
@@ -6474,6 +6477,10 @@ the compatibility promise that a daemon at any slice boundary starts the existin
             and supply the output. The local query on `dev-pc` returned `-- No entries --`;
             that is not evidence about the remote service. Keep this step pending until
             the server-side evidence is recorded; the existing go-ahead then stands.
+            *Recorded 2026-10-21:* the operator ran the command on the smcloud host and it
+            returned `-- No entries --`: no writes observed in that window. It does not prove
+            that no request reached the server; a `/v1/version` request is logged only at
+            Debug (see the incident below).
             Then `smctl stop`. Once `systemctl --user is-active smd` reads `inactive`, write a
             manifest of names and SHA-256s for **every file in the live working directory**
             (`find … -type f`, sorted), logs, archive summaries and sidecars included, to
@@ -6542,6 +6549,98 @@ the compatibility promise that a daemon at any slice boundary starts the existin
            path outside the copy, or any write to a live file.
          - Recovery: the copies are disposable, and the live station is untouched, apart
            from the stop and start.
+       - *Results (2026-10-21, run by the agent; evidence in `~/sm-c-scratch/evidence`).*
+         Pre-checks before the stop:
+         - `/usr/bin/smd` SHA-256 `0c1dd857…` and `rpm -V` clean.
+         - No code outside `docs/` differs from `6217da21`.
+         - `c-paths` reports 0 paths outside for both copies.
+         - Both copies match their `*-files-before.sha256` manifests (70 and 69 files).
+
+         The steps:
+         0. The journal is recorded above. `smctl stop` gave `inactive`, and
+            `live-before.sha256` lists 70 files.
+         1. 8,130 records and 0 tombstones. Cloud minus copy is exactly `[Z]`; copy minus
+            cloud is none.
+         2. The `archive:` line names `$R/db/station-manager.db`. 8,130 records, 0
+            tombstones, no writes.
+         3. Stored 1, skipped 8,129, failed 0, exit 0 (343 ms). The diff from the baseline:
+            - `qso` 8,129 → 8,130, the one added row being `Z`, with 0 existing rows changed;
+            - `sqlite_sequence` changed only in `qso`'s row, 8,129 → 8,130;
+            - every other table unchanged, `qso_upload` (15,733) and `logbook_destination`
+              included, so no upload work was queued;
+            - `sqlite_stat*` unchanged.
+
+            `c-cloud verify` matches: local id 8130, revision 2, `modified_at`
+            09:23:05Z, 49 payload keys. Against its live origin, the restored ZS4JAN row
+            differs in three columns, each explained:
+            - `created_at`: the restore time (12:34:27Z) against 09:22:13Z. Restore keeps
+              the UUID, `modified_at`, revision and tombstone (ADR 0040 S5,
+              `internal/database/sqlite/manifest.go:82-125`), not the creation time.
+            - `modified_at`: the same instant in two text forms, `2026-10-21 09:23:05` from the
+              live update trigger and `2026-10-21 09:23:05+00:00` from the restore writer.
+              *Ruled not a release blocker (operator, 2026-10-21).* The manifest reader
+              parses timestamps (`internal/database/sqlite/manifest.go:43`), and
+              reconciliation compares instants (`internal/forwarding/smcloud/reconcile.go:354`).
+              The update trigger does compare text, but the current update paths either
+              supply a fresh timestamp or leave it unchanged for the trigger to stamp. Both
+              forms behaved correctly in the operator's isolated probe, and the focused
+              revision, timestamp and reconciliation tests passed.
+            - `additional_data`: the only difference is `csid` (4697), which is absent, as
+              the cloud projection removes it (`cloud_projection.go:32`).
+         4. Stored 0, skipped 8,130, failed 0. Every data table is unchanged from after1.
+            Only the planner statistics moved (`sqlite_stat1` in 10 rows, `sqlite_stat4` in
+            about 160). *Inference:* SQLite's close-time optimize ran after the extra row.
+         5. `--list` shows Drill as `catalogued as managed "Drill"`, `DL`, 1 QSO. The dry run
+            gives the expected path and `the existing entry "Drill" kept, inactive`. The real
+            run gives 1 QSO in 1 logbook, exit 0, and `config.json`'s SHA-256 is unchanged
+            (`a2ffa131…`).
+         6. The Drill export has 1 record and 0 tombstones, and `c-cloud verify` matches for
+            `01a15d4e-…`: revision 0, `modified_at` 07:13:19Z, 20 payload keys. In the
+            provisioned file:
+            - `logbook_destination` and `qso_upload` hold 0 rows, and `operator_event` 0;
+            - the archive UUID `D`, the logbook UUID `DL`, the name, the callsign `M0CMC`
+              and the QSO UUID are kept.
+
+            Against the backup's Drill, for the record:
+            - `created_at` on archive_metadata, logbook and qso, and
+              `destination_bindings_seeded_at`, carry the provisioning time;
+            - the QSO's `modified_at` is now the cloud's 07:13:19Z where the backup had NULL,
+              the row never having been updated;
+            - the backup's binding, upload row and operator event are absent.
+
+            P's Home is unchanged in every table. The repeat dry run refuses with
+            `archive_file_exists`, exit 1.
+         7. **Deviation (the agent's error):** `live-after.sha256` showed two added files,
+            `db/station-manager.db-wal` (0 bytes) and `db/station-manager.db-shm` (32 KiB),
+            both created at 12:34:53Z. `station-manager.db` was byte-identical.
+            - The cause: an ad hoc Python query, outside the run sheet, explaining the step-3
+              differences. It opened the live database `mode=ro` without `immutable=1`, and a
+              WAL-mode reader creates the sidecars. `c-rows.py` opens with `immutable=1` and
+              did not cause this.
+            - The operator ruled to remove them. Auto mode refused the agent's `rm` and `mv`,
+              so the operator moved both, with the daemon confirmed stopped, to
+              `$E/stray-live-sidecars/`.
+            - `live-after2.sha256` is then identical to `live-before.sha256`: 70 names, same
+              hashes.
+
+            `smctl start`. `/v1/version` reads Home (`01a0c8cb-…`, legacy), schema 18,
+            instance `dmaitqsvx02m`. All four queues read 0/0/0/0 in flight, and logbook 1
+            counts 8,130. Start-up warnings:
+            - the known ones: RTS/DTR at open, and smcloud over plain http;
+            - `bridge: rig went quiet` and `rig unreachable`. The same warnings logged at
+              11:05, 11:42 and 12:16 local that day, before the rehearsal, establish a
+              pre-existing symptom. They do not prove the cause of this occurrence. It was
+              not investigated, and no rig command was sent.
+         8. This record. *Operator ruling:* the changed `created_at` and the planner statistics
+            are acceptable under this restore contract. `~/sm-c-scratch` is removed after this
+            record is committed, and the moved sidecars need no further retention. The original
+            09:04Z backup and the recovery RPM are kept.
+
+         Lesson: during a "live unchanged" window, any read of a live database, ad hoc
+         diagnostics included, must not create files. Open it with `immutable=1` only when it
+         is a verified, unchanging file with the daemon stopped. `immutable=1` disables
+         locking and change detection, so it is unsafe on a database in use
+         (https://www.sqlite.org/uri.html).
        - **Incident during preparation (2026-10-21 11:18:33Z, the agent's error).** Looking for
          the version, the agent ran `smd version`. That is not a subcommand, so it fell through
          to a full daemon start on the live configuration.
@@ -6803,8 +6902,9 @@ the compatibility promise that a daemon at any slice boundary starts the existin
        AC 6's evidence is the equal-name integration proofs above, plus A and B (both passed)
        and a successful C. Triage of the Forwarding-page note and the closure draft may
        proceed now; closure waits for C's results.
-     - **Closure draft (2026-10-21, agent). PENDING: it closes only once C's rehearsal results
-       are recorded and pass.** The two clauses of AC 6, and their evidence:
+     - **AC 6 CLOSED 2026-10-21 (operator), on the agreed tests plus A, B and C; 5F's
+       acceptance is done.** The replacement candidate proceeds to its release gates under
+       the alpha.3 record's Option 1 ruling. The two clauses of AC 6, and their evidence:
        1. *Equal labels and names get distinct identities and stay apart in reconcile and
           restore.*
           - Tests:
@@ -6822,9 +6922,9 @@ the compatibility promise that a daemon at any slice boundary starts the existin
               logbook alone, and Home was unchanged.
             - B: a real QSO, ZS4JAN, was uploaded by identity into Home's logbook, with no
               name-path PUT.
-          - *Pending, C:* a scratch restore by identity recovers exactly the one missing row
-            and leaves the 8,129 unchanged. Drill is provisioned from its own cloud archive
-            with UUIDs and payloads preserved and Home unchanged.
+          - C (PASS): a scratch restore by identity recovered exactly the one missing row and
+            left the 8,129 unchanged, and a repeat changed nothing. Drill was provisioned from
+            its own cloud archive with UUIDs and payloads preserved, and Home unchanged.
        2. *A legacy archive adopts its existing cloud rows without duplicate backup state.*
           - Tests: `TestAdopt_AD1`…`AD10`, with AD2 the idempotent replay.
           - Station:
@@ -6834,10 +6934,9 @@ the compatibility promise that a daemon at any slice boundary starts the existin
               nothing enqueued (live `smd.log`).
        - *Scope ruled out:* no station run with two equal-labelled archives (operator,
          2026-10-21).
-       - *On closing:*
-         - mark 5F's acceptance done here;
-         - update the capsule and backlog;
-         - cut the replacement candidate under the alpha.3 record's Option 1 ruling.
+       - *On closing (done 2026-10-21):* 5F's acceptance is marked done here, and the capsule
+         and backlog are updated. The replacement candidate's cut follows under the alpha.3
+         record's Option 1 ruling.
      - *Beyond 5F:* Settings → Logbooks is the next data-model step after this checkpoint.
        Among the P2 workstreams, W-0010 ranks next after W-0021.
 

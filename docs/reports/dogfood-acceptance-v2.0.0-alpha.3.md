@@ -289,7 +289,9 @@ authorises no installation.
 
 **Ruled by the operator 2026-10-21: Option 1.**
 - *Cut point:* after checklist C passes and AC 6's closure evidence is recorded (W-0021), and
-  before Settings → Logbooks or any unrelated implementation.
+  before Settings → Logbooks or any unrelated implementation. **Reached 2026-10-21:** C
+  passed and AC 6 closed (W-0021); the operator released the replacement candidate to its
+  release gates.
 - *alpha.3:* its tag is preserved and it is recorded as superseded, never accepted. The B1-01
   waiver is carried until the replacement passes its retirement cases.
 - *Lanes:* an isolated RPM guest for the clean lane, and the same artifact for the daily
