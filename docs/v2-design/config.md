@@ -66,7 +66,7 @@ configuration.
 
 | JSON key | Go shape | Ownership and purpose |
 |---|---|---|
-| `version` | `int` | Schema version; currently `5`. |
+| `version` | `int` | Schema version; currently `6`. |
 | `data_dir` | `string` | Root for database, logs, caches, and other daemon state. |
 | `useragent` | `string` | Shared outbound HTTP User-Agent; first-run startup supplies `station-manager/<build-version>` when absent. |
 | `socket_path` | `string` | TCP address or Unix-socket path selected by `server.protocol`. |
