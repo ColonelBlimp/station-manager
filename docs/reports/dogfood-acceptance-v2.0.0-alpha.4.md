@@ -47,7 +47,8 @@ build of `6217da21` deployed 2026-10-21. By RPM ordering this is an **upgrade**:
 `rpm.labelCompare(2.0.0~alpha.4-1, 2.0.0~alpha.3.262.g6217da21.dirty-1)` = 1 (checked 2026-10-21).
 The station's data is config version 6 and log schema 18, the same as the candidate's head, so B1
 expects no migration to apply.
-Clean-install environment: pending — an isolated RPM guest (Appendix 3)
+Clean-install environment: the isolated RPM guest `sm-alpha4-clean` on `qemu:///session` (Appendix 3,
+approved with amendments 2026-10-22)
 Upgrade environment: the daily-driver dogfood station (this host)
 Browser(s) and viewport(s): Firefox; the A4 parameters to be confirmed at A4-01
 Planned test date: 2026-10-21 onward
@@ -76,7 +77,9 @@ Dogfood accepted: pending
 Operator/date:
 Residual waivers: the alpha.2 B1-01 waiver (Finding #6), carried from alpha.3, is retired by A1-05
 plus B1-01 below
-Follow-up destinations: pending
+Follow-up destinations: Findings #1–#5 below; W-0021 (archive startup and the B2 Session check),
+W-0018 (install-guide correction), W-0009 (existing packaging residual), and
+`docs/v2-design/config.md` §13.4 (wording). Priority remains in `docs/backlog.md`.
 
 ## Release delta — `v2.0.0-alpha.3` → `v2.0.0-alpha.4` (270 commits, 161 outside Markdown)
 
@@ -240,15 +243,34 @@ for this candidate: an unknown first argument starts the daemon (dogfood inbox, 
 
 ## Gate A — ready to deploy
 
+**Case review, 2026-10-22 (Codex, requested by the operator):** A1-02 and A2-01…A2-08 pass
+their stated outcomes on the recorded operator execution and supporting daemon evidence. These
+are case-level review rulings, not the operator’s Gate A or Gate B sign-off; neither gate is
+complete and no waiver is entered.
+
+**Profile deviation:** Appendix 3 item 6 was not followed. Both lanes used the normal Firefox
+profile; the execution record reports that `127.0.0.1:18080` was unused before A2-02, then the
+same tab/origin was reused for A2-08. Separate fresh-profile isolation is **not proved**. This
+does not negate the reported first-run actions, the matching version readings, or the independent
+install/uninstall and migration evidence. No blanket rerun is required for those assertions.
+A2-08 proves retention of the three daemon QSOs; it does not prove a fresh Session panel or
+archive-switch behavior. Finding #5’s archive concern needs a distinct B2 case before acceptance.
+
 | ID | Required | Environment and starting state | Operator action | Expected visible result | Nearest confusable failure | Evidence | Extra approval | Result |
 |---|---|---|---|---|---|---|---|---|
 | `A1-01` | yes | **record** — clean scratch worktree at tag `v2.0.0-alpha.4` (`3f7425ed`) | Build once with `SM_FFT=pocketfft scripts/dev-rpm.sh` after `task ci:local`; restore the committed `frontend/app/dist/index.html` first if the CI mirror rewrote it (alpha.3 Finding #1); record filename, SHA-256 and RPM version; keep the versioned copy | One artifact; RPM version `2.0.0~alpha.4-1`; `ci:local` exit 0; SHA recorded in the header | A `-dirty` or `alpha.4-N-g…` version; a second build overwriting the copy | Execution log #1–#3: `ci:local` exit 0. The CI mirror rewrote the tracked `dist/index.html` again (alpha.3 Finding #1); the committed file was restored before the build, `git status --porcelain` empty, `git describe` `v2.0.0-alpha.4`. One build: `2.0.0-alpha.4`, RPM `station-manager 2.0.0~alpha.4-1 x86_64`, 9,625,351 B, SHA-256 `cebcd305…c5532b`, copied to the versioned path (0600) with the SHA re-verified | none | **PASS** — operator, 2026-10-22: independently verified the tag's commit, the RPM's permissions, size, SHA-256, package version, private-build marker and packaged `smd` hash; CI results accepted from the execution record. Finding #1 stays open and does not block this artifact (the committed file was restored before the build, and the build regenerates the SPA after the version is fixed) |
-| `A1-02` | yes | **clean** — the A2-01 install, candidate installed and started | Verify the RPM SHA before installing; read `GET /v1/version`, the sidebar badge, the startup log line and `rpm -q` | All four read `2.0.0-alpha.4`; schema `{18, dirty:false}` after the first start | A badge from a cached tab; a dev-build version string | pending | none | pending |
+| `A1-02` | yes | **clean** — the A2-01 install, candidate installed and started | Verify the RPM SHA before installing; read `GET /v1/version`, the sidebar badge, the startup log line and `rpm -q` | All four read `2.0.0-alpha.4`; schema `{18, dirty:false}` after the first start | A badge from a cached tab; a dev-build version string | Execution log #5: RPM SHA verified before install; `rpm -q` `station-manager-2.0.0~alpha.4-1.x86_64`; `GET /v1/version` `2.0.0-alpha.4`, `env: release`, schema `{18, dirty:false}`; the startup line `smd starting` carries `"version":"2.0.0-alpha.4"`. Sidebar badge read `2.0.0-alpha.4` by the operator (execution log #6): all four agree | none | **PASS** — Codex review, 2026-10-22: All four version readings agree and schema 18 is clean; the profile deviation does not contradict this identity check. |
 | `A1-03` | yes | **record** — delta drafted above | Review the release delta against the candidate, completing the configuration and API items | Delta accepted or corrected here | Silent scope creep in the delta | Configuration, API and install items completed by the agent from the code and canonical references at both tags (route and JSON-key lists compared); one reference defect found (`config.md` line 69 said version 5, corrected on `main`, no rebuild). Operator review 2026-10-22: pending, with corrections — three fields wrongly labelled new, the archive-switch journey, the switch and reconcile failure semantics, the journeys beyond component names, the manual inventory, and the route count (54 → 61); all applied | none | **PASS** — operator, 2026-10-22: the revised delta resolves the review findings, including the B2 archive-switch wording; the reference fix is limited to 5 → 6 and needs no candidate rebuild |
 | `A1-04` | yes | **host-scratch** — 0700 scratch with a copy of the live `config.json`; the candidate `smd` extracted from the RPM (alpha.3 record, Appendix 1); live service untouched | `smd config-check --config` on the untouched copy (control), then on a top-level and a nested unknown-key mutation | Control exits 0; each mutation exits non-zero naming only the key path; nothing started, bound or written | Control non-zero: the candidate would refuse to start on the station. Fix and re-run; no waiver possible | Execution log #4: control exit 0 ("loads and validates as startup would; 0 enabled forwarder(s) construct", as v6 keeps uploads in each archive's bindings); top-level mutation exit 1 naming only `typo_key_a1_04`; nested exit 1 naming only `bridge.typo_nested_a1_04`, "(values omitted)"; no unexpected matches among the checked string values (six characters or more); nothing written; live config, service and file names unchanged | none | **PASS** — operator, 2026-10-22: the valid control succeeds and both independent mutations fail with the intended key-path diagnostics; the hashes, empty working directory and unchanged live service support isolation. Boundaries: zero enabled legacy forwarders validates neither archive bindings nor upstream connectivity (later cases cover them); the disclosure scan excluded shorter strings and non-string values |
 | `A1-05` | yes | **host-scratch** — as the alpha.3 record's Appendix 2, with this artifact's `smd` | The CC-5 reconcile on the alpha.1-era file, then the permutation control | Copy exits 0; the permutation exits non-zero naming `qrzcq` and the unsupported action | Both exit 0; the copy refused for `allow_insecure_http` | Execution log #4: fixture (config version 2, qrzcq `["insert","update","delete"]`, scratch-only `allow_insecure_http`) exit 0, "3 enabled forwarder(s) construct"; permutation `["update","insert","delete"]` exit 1: `forwarder "qrzcq": type "qrzcq" does not support action "update" (supports [insert])`; nothing written; live untouched | none | **PASS** — operator, 2026-10-22: the reconstructed legacy fixture succeeds while the permutation reaches validation and fails for the intended unsupported action, distinguishing the repair from indiscriminate acceptance. The alpha.2 B1-01 waiver still awaits B1-01 |
-| `A2-01`…`A2-07` | yes | **clean** — the isolated RPM guest (Appendix 3), no Station Manager data | As the alpha.3 record's A2-01…A2-07 (install, first-run, callsign, setup, persistence, guide and manual, uninstall), with this artifact | As there | As there | pending | none | pending |
-| `A2-08` | yes | **clean** — a second fresh working directory in the guest: the frozen alpha.2 RPM (SHA `7b2fa20a…c24856`) installed and set up, a few test QSOs, daemon running | Upgrade per `install.md` §7 to the candidate | `config-check` exit 0; config 3 → 6 and schema 8 → 18 applied once at the first start; setup bypassed; QSOs, logbook and config retained | Migrations re-run on every start; a refusal at the restart the preflight did not name | pending | none | pending |
+| `A2-01` | yes | **clean** — the guest `sm-alpha4-clean`, user `smtest` (Appendix 3) | Install per `install.md`; enable/start the user service; note the lingering step | Service active; health and version answer; logs readable; browser reaches `/` | Loopback-only bind with a differing guide URL; lingering omitted so the service dies at logout | Execution log #5: `dnf install` exit 0 (SHA verified in the guest); `daemon-reload` and `enable --now` exit 0; service `active (running)`; `/v1/healthz` `{database ok, logging ok, status ok}`; `/v1/version` `2.0.0-alpha.4`; listener `127.0.0.1:8080` only, as the guide says; `smd.log` readable (26 info lines, one warn: Finding #1). Lingering: the guide's `loginctl enable-linger "$USER"` was refused ("Access denied") because the Cloud image has no polkit; enabled with `sudo` instead (lane deviation, not a product defect). Browser reaching `/`: HTTP 200 through the tunnel, then the operator executed setup in execution log #6 | none | **PASS** — Codex review, 2026-10-22: Install, service, health, logs and browser access are demonstrated. The sudo lingering adjustment is recorded; execution log #7 also shows startup before login. Findings #1 and #2 remain follow-ups. |
+| `A2-02` | yes | **clean** — first browser open after A2-01 | Open the app | Only the first-run welcome surface; tab titled "Welcome"; no operate/logbook chrome | Operate chrome visible before setup | Operator executed (execution log #6) | none | **PASS** — Codex review, 2026-10-22: Accept the operator-reported first-run welcome/title/chrome check; the first lane used the previously unused origin, not the promised fresh profile. |
+| `A2-03` | yes | **clean** — first-run callsign form | Enter invalid, empty, lowercase/whitespace-normalised, then valid callsign | Each state understandable; the normalised form shown | A silent accept of the invalid form | Operator executed (execution log #6) | none | **PASS** — Codex review, 2026-10-22: Accept the operator-reported invalid, empty, normalised and valid callsign sequence; no contrary outcome is recorded. |
+| `A2-04` | yes | **clean** — valid callsign submitted | Complete setup | Default logbook created; both **Open Settings** and **Start logging** offered | Only one journey offered | Operator executed (execution log #6) | none | **PASS** — Codex review, 2026-10-22: Accept the operator-reported setup and both offered journeys; the persisted default logbook corroborates creation. |
+| `A2-05` | yes | **clean** — setup complete | Reload the browser; restart the daemon; reopen | Setup stays complete; the bare `/` lands on Phone/CW (first use, no Dashboard) | Welcome surface returns; a Dashboard placeholder | Operator executed (execution log #6), across two agent restarts of the guest daemon (PIDs 1564 → 1984 → 2072, each `smctl restart` exit 0, `NRestarts=0`); `setup_complete` true and `default_logbook_id` 1 persisted | none | **PASS** — Codex review, 2026-10-22: The reported reload/reopen journey and two daemon restarts preserve setup completion; no Welcome or placeholder regression is reported. |
+| `A2-06` | yes | **clean** — setup complete, guide and manual only | Find Settings, the embedded Manual (opens in a new tab) and its Station Events chapter, and log a first QSO using only the guide and manual | All reachable without repository knowledge; Station Events in the sidebar between Logbook and Settings, empty state correct | A step needing repository-only knowledge (record it) | Operator executed (execution log #7); the first test QSO stored: logbook `Default` count 0 → 1, one QSO on 20m SSB under the logbook's callsign; no new warning or error | none | **PASS** — Codex review, 2026-10-22: Accept the reported Settings, Manual and Station Events journey, completed by the first stored test QSO in execution log #7. |
+| `A2-07` | yes | **clean** — installed, test QSOs in the logbook | Uninstall per the guide | Package removed; operator data deliberately retained as documented | Data directory deleted by the package | Execution log #7: §10 followed. `systemctl --user disable --now smd` exit 0 (enable symlink removed); `sudo dnf remove` exit 0; `daemon-reload` exit 0; the unit, both binaries and the package gone, nothing on 8080. Data retained: `config.json`, `db/` (the QSO database `integrity_check` ok, 1 QSO) and `log/`. `loginctl disable-linger "$USER"` refused as in A2-01 (no polkit), done with `sudo`. An empty, unowned `/usr/share/doc/station-manager/manual/` is left behind | none | **PASS** — Codex review, 2026-10-22: The package, binaries and unit are removed and data retained. Finding #3 is the existing empty-directory packaging residual, not a retention failure. |
+| `A2-08` | yes | **clean** — a second fresh working directory in the guest: the frozen alpha.2 RPM (SHA `7b2fa20a…c24856`) installed and set up, a few test QSOs, daemon running | Upgrade per `install.md` §7 to the candidate | `config-check` exit 0; config 3 → 6 and schema 8 → 18 applied once at the first start; setup bypassed; QSOs, logbook and config retained | Migrations re-run on every start; a refusal at the restart the preflight did not name | Execution log #8: before, alpha.2 schema 8, config 3, setup complete, logbook `Default` with 3 QSOs. `dnf install` upgraded in place while alpha.2 kept serving (same PID); `smd config-check` exit 0, "no unrecognised keys; loads and validates", config byte-identical; `daemon-reload` and `restart` exit 0. After: `2.0.0-alpha.4`, schema `{18, dirty:false}`, config 6, archive Home (legacy) adopted, bindings seeded once, `config.v5.json` written (0600, version 5), setup still complete, the same 3 QSO UUIDs. A second restart re-ran nothing: `config.json` unchanged, no adoption, seed or strip line. No warning or error. The log names neither transition (Finding #4). In the browser (operator, normal Firefox profile, same tab/origin reused and reloaded after the upgrade): no Welcome page, lands on Phone/CW, badge `2.0.0-alpha.4`, Logbook shows the 3 QSOs; the Phone/CW Session panel shows 4 QSOs (Finding #5) | none | **PASS** — Codex review, 2026-10-22: The preflight, one-time migrations, retained setup/logbook and unchanged three QSO UUIDs pass. Finding #4 is diagnostic wording; Finding #5 is confirmed browser-session carry-over. Fresh-profile isolation and archive switching are not claimed. |
 | `A3-01` | yes | **live** — daemon stopped | Refresh the recovery backup of the complete working directory outside the repository | Backup exists and is listable; SHA-256 recorded | Backup copied into the repository tree | pending | none | pending |
 | `A3-02` | yes | **host-scratch** — the A3-01 archive | Restore a copy into scratch; open read-only (`immutable=1`, a verified unchanging copy); remove it | Integrity `ok`; counts equal A3-03 | Restore needs the live directory | pending | none | pending |
 | `A3-03` | yes | **live** — pre-upgrade | Record durable-record counts: QSOs per logbook per archive, upload-queue rows by status, `operator_event` rows per category, bindings per archive | Numbers recorded here without contents | Counting after the upgrade began | pending | none | pending |
@@ -283,41 +305,83 @@ The alpha.3 scope ruling's B2 stands. Option 1 adds explicit cases for:
 - **Provisioning:** `smd provision` list, dry run, real run and the refusal of an existing file, on a
   scratch copy.
 
-## Appendix 3 — clean-lane guest plan (DRAFT for the operator's review; nothing created)
+## Findings
 
-Purpose: an RPM environment with no Station Manager data and no route to the live station's
-files, for A2-01…A2-08. The host is Fedora 44 with `virt-install`, `qemu-img`, `xorrisofs` and
-libvirt (one existing VM, `win10`, on `qemu:///system`; checked 2026-10-21). Nothing below has been
-run.
+Numbered for this record; alpha.3's Finding #1 (the CI mirror rewriting `dist/index.html`) is cited by
+its record. The triage below is Codex review requested by the operator, 2026-10-22; release
+acceptance and any waiver remain the operator’s. No implementation is authorised by this triage.
 
-1. **Connection: `qemu:///session`** (the operator's user, no root, separate from the system VMs).
-   Directory `~/sm-guest` (0700) holds everything; nothing under the working directory or the
-   repository.
-2. **Image:** Fedora Cloud Base 44 qcow2 from `download.fedoraproject.org`, verified against the
-   release's signed `CHECKSUM` file with Fedora's published GPG key before use. A qcow2 overlay on
-   it is the guest disk, so a reset is deleting the overlay. *Unverified:* the exact file name for
-   44, which is read from the release directory when this step runs.
-3. **First boot by cloud-init:** a seed ISO built with `xorrisofs` (`cidata` label) holding
-   `user-data` and `meta-data`. One user, `smtest`, with an SSH key generated for this guest only
-   (in `~/sm-guest`, never reused), no password login, and lingering enabled at the A2-01 step the
-   guide describes rather than by cloud-init, so the guide's instruction is exercised.
-4. **Network:** user-mode networking (`passt` under the session connection), so the guest reaches
-   the Fedora mirrors for package dependencies and nothing on the LAN is addressed by name.
-   Port forwards on host loopback only: `127.0.0.1:2222` → guest 22 and `127.0.0.1:18080` → guest
-   8080, for SSH and the browser. *Unverified:* that this libvirt build supports `passt`
-   port forwards in a session; if not, the fallback is QEMU user-mode `hostfwd`, recorded here.
-5. **Isolation:** no shared folders, no host devices (no serial, no audio passthrough), no
-   credentials and no copy of any operator data. The only files copied in are the candidate RPM
-   and, for A2-08, the frozen alpha.2 RPM, each by `scp` and SHA-verified inside the guest.
+| # | Case | Observation (sanitized) | Triage | Destination |
+|---|---|---|---|---|
+| 1 | A2-01 | On a fresh install's first start, before setup, `smd.log` carries a `warn`: "startup: could not record the default logbook in the archive" (`default_logbook_id` 1, "no archive identity row, or logbook 1 does not exist"). Config's default logbook id is 1 before setup creates logbook 1. `SetArchiveDefaultLogbookWithContext` reports the missing row as a plain error, so the caller's `ErrNotFound` filter (`cmd/smd/archive_adopt.go:107`) never matches and the warning is logged. Inference, unverified: every start before setup logs it. A warning on a correct fresh install | **Defect, low severity:** a misleading warning on an otherwise usable first install. Does not invalidate A2-01; recurrence before setup remains untested. | [W-0021](../work/W-0021-qso-archives.md), startup adoption; correct the expected pre-setup case while retaining diagnostics for real failures. Priority remains in the backlog. |
+| 2 | A2-01 | `install.md` §2 says the package installs three files and that "the post-install scriptlet prints the next steps". The candidate installs six paths (the two binaries, the unit, `PRIVATE-BUILD-DO-NOT-DISTRIBUTE` and the manual's `index.html` and `.gitkeep` under `/usr/share/doc/station-manager/`) and carries no scriptlets (`rpm -q --scripts` empty, as the alpha.2 record found), so nothing is printed | **Documentation correction:** the no-scriptlet behavior is deliberate (`nfpm.yaml`); the install guide’s payload and next-steps claims are stale. Does not invalidate the completed install. | [W-0018](../work/W-0018-bring-the-embedded-manual-to-release-readiness.md), `docs/install.md` §2; describe the manual and the private-build marker accurately. No candidate rebuild for a repository-guide-only correction. |
+| 3 | A2-07 | `dnf remove station-manager` leaves `/usr/share/doc/station-manager/manual/` behind, empty and owned by no package (`rpm -qf`: not owned): the package ships files under it but does not own the directories | **Duplicate:** alpha.2 Finding #17, a low-severity packaging residual. Files and operator data behaved as expected; A2-07 passes. | [W-0009](../work/W-0009-maintainability-audit-residuals.md), existing Packaging residual, with the next packaging change; no new work item. |
+| 4 | A2-08 | The upgrade start logs neither transition as numbers. The config rewrite is `config saved` with `{"field":"schema_version","from":"","to":""}` (empty from and to), and the log migration says only `m.Up completed or no change`. Config 3 → 6 and schema 8 → 18 were shown by the file's `version` and by `GET /v1/version` before and after, not by the log. `config.md` §13.4 says the persistence reason names the version | **Working as designed; documentation wording correction.** ADR 0075 requires a `schema_version` reason naming no value; `cmd/smd/main.go:547-552` implements it and `config_migration_startup_test.go:100-140` explicitly requires empty `From`/`To`. The SQL completion message also matches `internal/database/sqlite/migrations.go:124-134`. Neither message proves the numeric transitions; the retained before/after evidence does. No migration defect. | `docs/v2-design/config.md` §13.4: clarify that the record names the schema-version field/reason, not numeric versions. Numeric transition logging would be a separately selected observability change, not a repair required by A2-08. |
+| 5 | A2-08 | After the upgrade and a reload, the Phone/CW Session panel shows 4 QSOs while the Logbook and the daemon hold 3 (three UUIDs, unchanged across the upgrade). Investigated (operator request): the daemon received exactly three `POST /v1/qso` in this lane (201 each, 12:46Z, alpha.2). The panel counts `session.qsos`, which lives in the tab's `sessionStorage` (`sm.session.qsos`, `frontend/app/src/lib/operate/session.svelte.ts`): it survives every reload, and no production code clears it (only a test seam does), so it is keyed by browser tab and origin, not by daemon, archive or logbook. Both throwaway profiles are still empty (0 files), so both lanes ran in the operator's normal Firefox profile on the same origin, `127.0.0.1:18080`. The fourth row is A2-06's QSO from the `smtest` lane (`7Q7EB`, 12:43:01Z): the operator confirmed the panel lists `7Q7EB` twice (2026-10-22). Product consequence, an inference from the code and not exercised: an archive switch reloads the page, so the Session panel would keep showing the previous archive's QSOs after it (no design in ADR 0071 or 0087 covers this) | **Confirmed test-isolation deviation; no daemon migration/data-integrity defect.** The fourth row is the first lane’s QSO retained by the existing per-tab Session behavior. The archive-switch consequence remains an unexercised code-based concern, not a confirmed runtime failure or a closed non-issue. | B2 / [W-0021](../work/W-0021-qso-archives.md): explicitly exercise Session rows/count and edit/export across an archive switch, with same-archive reload as the control. W-0012’s existing “New session” idea is separate and does not resolve archive correctness. |
+
+## Appendix 3 — clean-lane guest plan (approved with amendments, 2026-10-22)
+
+Purpose: an RPM environment with no Station Manager data, for A1-02 and A2-01…A2-08. The host is
+Fedora 44 with libvirt 12.0.0, `passt` `0^20261002.gcba3570`, `qemu-kvm` 10.2.2, `virt-install`
+5.1.0 and `xorriso` 1.5.8; the session connection had no domains and `~/sm-guest` did not exist
+(checked 2026-10-22).
+
+**Operator ruling, 2026-10-22:** the Fedora 44 Cloud x86_64 image download and this approach are
+approved, with three amendments incorporated below: browser access through an SSH tunnel (item 4),
+the isolation boundary stated as it actually is (item 5), and explicit lane transitions with
+guest-specific disposal (items 6 and 7).
+
+1. **Connection and ownership: `qemu:///session`** (the operator's user, no root, separate from
+   the system VMs). Domain name **`sm-alpha4-clean`**. Everything the guest owns is under
+   `~/sm-guest` (0700), and nothing else:
+   - `~/sm-guest/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2` — the verified base image, read-only;
+   - `~/sm-guest/sm-alpha4-clean.qcow2` — the overlay that is the guest disk;
+   - `~/sm-guest/seed.iso` — the cloud-init seed;
+   - `~/sm-guest/id_ed25519` and `.pub` — the guest-only SSH key;
+   - `~/sm-guest/fedora.gpg`, the `CHECKSUM` file, its verified copy `CHECKSUM.verified`, and the
+     cloud-init sources `user-data` and `meta-data`;
+   - `~/sm-guest/known_hosts` — the guest's SSH host key, kept out of `~/.ssh`;
+   - `~/sm-guest/ff-smtest` and `~/sm-guest/ff-smtest2` — the two throwaway Firefox profiles.
+   Nothing goes under the working directory or the repository.
+2. **Image:** `Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2`, verified per Fedora's published
+   procedure (https://fedoraproject.org/cloud/download/): the `Fedora-Cloud-44-1.7-x86_64-CHECKSUM`
+   file verified with `gpgv --keyring ./fedora.gpg` against Fedora's key file, then
+   `sha256sum -c --ignore-missing`. A failed verification stops here.
+3. **First boot by cloud-init:** a `cidata` seed ISO holding `user-data` and `meta-data`. One user,
+   `smtest`, with the guest-only key, no password login, and lingering left for A2-01 to enable as
+   the guide says.
+4. **Network and browser access (amendment 1):** user-mode networking via `passt`, with exactly one
+   port forward: host `127.0.0.1:2222` → guest SSH (22). The daemon keeps its default configuration,
+   which listens on guest loopback `127.0.0.1:8080` (`internal/config/config.go`, the default
+   `socket_path`); a VM port forward targets the guest's network interface and would not reach it.
+   The browser goes through an SSH local forward instead,
+   `ssh -p 2222 -L 127.0.0.1:18080:127.0.0.1:8080 smtest@127.0.0.1`, which connects to the
+   destination from inside the guest (ssh(1) `-L`, https://man.openbsd.org/ssh#L). The browser opens
+   `http://127.0.0.1:18080/`.
+5. **Isolation boundary (amendment 2):** user-mode networking gives the guest outbound connectivity
+   — the Fedora mirrors for package dependencies, and also the LAN; it does **not** restrict LAN
+   access (libvirt, "Userspace connection using passt",
+   https://libvirt.org/formatdomain.html#userspace-connection-using-passt). The boundary is instead:
+   - no shared folders or files and no host devices (no serial, no audio passthrough);
+   - no station credentials and no copy of any operator data — the only files copied in are the
+     candidate RPM and, for A2-08, the frozen alpha.2 RPM, each by `scp` and SHA-verified inside the
+     guest;
+   - no requests to live station services: setup enters only a test callsign, and no forwarder,
+     lookup credential, SM Cloud account, rig or SMTP is configured in the guest.
    The candidate carries the ClubLog key, so the guest is private and disposed of after Gate A.
-6. **A2-08 sequencing:** the two RPMs cannot be installed together. A2-08 runs after A2-07's
-   uninstall, as a second user `smtest2` with a fresh working directory: install the alpha.2 RPM,
-   set up, log a few test QSOs, then upgrade per `install.md` §7.
-7. **Disposal:** after Gate A, `virsh --connect qemu:///session undefine --remove-all-storage` and
-   removal of `~/sm-guest`, the SSH key included. The operator decides the timing.
-
-Operator decisions before anything is created: approve this plan or name another lane, and approve
-the image download.
+6. **Lane transitions (amendment 3):**
+   - each lane uses a **fresh, throwaway Firefox profile** (`firefox -no-remote -profile <new empty
+     dir>`), one for the `smtest` lane (A1-02, A2-01…A2-07) and another for the `smtest2` lane
+     (A2-08), so no cached chunk, storage or cookie crosses lanes;
+   - A2-08 starts only after A2-07 has **stopped and disabled** `smtest`'s `smd` user service and
+     uninstalled the package, so nothing else holds guest `127.0.0.1:8080`. Then a second user
+     `smtest2` with a fresh working directory installs the alpha.2 RPM, sets up, logs a few test
+     QSOs, and upgrades per `install.md` §7;
+   - each lane's SSH tunnel is closed before the next opens.
+7. **Disposal (guest-specific):** after Gate A, at the operator's timing,
+   `virsh --connect qemu:///session undefine sm-alpha4-clean --remove-all-storage` (which removes
+   only the storage that domain references: the overlay and the seed), then removal of the files
+   listed in item 1 and the directory itself, the SSH key and both browser profiles included.
 
 ## Execution log
 
@@ -379,3 +443,103 @@ Command-line checkpoints run by the agent; the operator rules every result. Time
      `$HOME` is btrfs, a copy-on-write filesystem, and `shred` "assumes the file system and hardware
      overwrite data in place" (shred(1)), so the overwrite is not assured there. Files deleted; secure
      erasure unverified.
+5. **2026-10-22 09:45–09:55Z — guest preparation, A1-02 and A2-01 (clean), by the agent.**
+   - *Image.* `~/sm-guest` created 0700. `Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2`,
+     `Fedora-Cloud-44-1.7-x86_64-CHECKSUM` and `fedora.gpg` downloaded from Fedora.
+     `gpgv --keyring ./fedora.gpg`: "Good signature from Fedora (44)", key
+     `36F612DCF27F7D1A48A835E4DBFCF71C6D9F90A6`; `sha256sum -c --ignore-missing`: OK. Image SHA-256
+     `28680fe5b371a5a82ebf43a31926e086a168e59949d03969c5093e7071f90b7f`, made read-only.
+   - *Guest.* A 20 GiB qcow2 overlay on the image; a guest-only ed25519 key; a `cidata` seed (user
+     `smtest`, key login only, passwordless `sudo` for the install steps). `virt-install` on
+     `qemu:///session`: domain `sm-alpha4-clean`, 2 vCPU, 2 GiB, the overlay and the seed, one `passt`
+     interface whose only port forward is `127.0.0.1:2222` → 22, no graphics, no sound, no shared
+     folders, no host devices (domain XML reviewed before creation). First boot: cloud-init `done`,
+     Fedora Linux 44 (Cloud Edition), kernel 6.19.10; no `station-manager` package, no 9p or virtiofs
+     mounts, `Linger=no`, nothing listening on 8080.
+   - *A2-01, install (§2).* The candidate RPM copied by `scp` to `~/rpms` (0600); SHA-256 inside the
+     guest `cebcd305…c5532b`, matching. `sudo dnf install -y <rpm>`: exit 0, "skipped OpenPGP checks"
+     (expected, per §2). Installed paths: `/usr/bin/smctl`, `/usr/bin/smd`,
+     `/usr/lib/systemd/user/smd.service`, `/usr/share/doc/station-manager/PRIVATE-BUILD-DO-NOT-DISTRIBUTE`,
+     `/usr/share/doc/station-manager/manual/index.html` and `.gitkeep`. No scriptlet output (Finding #2).
+   - *A2-01, enable and start (§3).* `systemctl --user daemon-reload` exit 0; `enable --now smd`
+     exit 0; `systemctl --user status smd` `active (running)`; `smctl status` "SM is running." The
+     guide's `loginctl enable-linger "$USER"` exited 1, "Could not enable linger: Access denied":
+     the Cloud image ships no `polkit` (`rpm -q polkit`: not installed), whereas the shipped polkit
+     policy allows self-linger (`allow_any`/`allow_inactive`/`allow_active` all `yes`). Lingering was
+     enabled with `sudo loginctl enable-linger smtest` (`Linger=yes`); a lane deviation, not a product
+     defect.
+   - *A2-01, health, version and logs.* `GET /v1/healthz` `{"database":"ok","logging":"ok","status":"ok"}`;
+     `GET /v1/version` `daemon 2.0.0-alpha.4`, `env release`, `schema {18, dirty:false}`, archive
+     `Home` (legacy), adopted at the first start; listener `127.0.0.1:8080` only; `GET /` 200. The
+     working directory `~/.local/share/station-manager` holds `config.json` (0600, "first run: wrote
+     default config to disk"), `db/` (0700: `station-manager.db`, `reference.db`) and `log/smd.log`
+     (0600): 27 lines when counted, all carrying `"version":"2.0.0-alpha.4"`, 26 `info` and one `warn`
+     (Finding #1). The `logging configured` line carries its `level` key twice (seen, not triaged).
+   - *A1-02.* `rpm -q`: `station-manager-2.0.0~alpha.4-1.x86_64`; the version endpoint and the startup
+     line `smd starting` agree. The sidebar badge awaits the browser.
+   - *Browser access.* SSH local forward `127.0.0.1:18080` → guest `127.0.0.1:8080` (Appendix 3,
+     item 4) opened by the agent; through it `GET /v1/version` and `GET /` (200, `text/html`)
+     answer. The host listens on `127.0.0.1:2222` and `127.0.0.1:18080` only. No browser has
+     opened the app yet; A2-02 onward is the operator's, in the fresh profile `~/sm-guest/ff-smtest`.
+6. **2026-10-22 — A2-02…A2-05 and the A1-02 badge (clean), by the operator, with daemon restarts by
+   the agent.** The operator ran A2-02, A2-03 and A2-04 through the tunnel and reported them
+   done. The profile was initially recorded as `~/sm-guest/ff-smtest`; investigation in log #8
+   established that the normal Firefox profile was used. The agent then restarted the guest daemon
+   (`smctl restart`, "SM Restarted.", exit 0; PID 1564 → 1984, `NRestarts=0`; a new `instance` on
+   `/v1/version`, still `2.0.0-alpha.4`, schema `{18, dirty:false}`, archive Home); `config.json`
+   then read `setup_complete: true`, `default_logbook_id: 1`. Finding #1's warning did not recur after
+   setup. A power cut at the operator's end interrupted the session; this host and the guest stayed
+   up (host boot 06:59 local; guest, tunnel and the live daemon, PID 4606, unchanged). The operator
+   completed A2-05 and the agent restarted the daemon again (PID 1984 → 2072, as before; no new warning
+   or error). The operator read the sidebar badge as `2.0.0-alpha.4`.
+   A2-06 was reported done before its first QSO was logged: the guest then held one archive (Home,
+   active) and one logbook (`Default`), with 0 QSOs (`GET /v1/logbook/1/count`) and no store line in
+   `smd.log`. The operator will log it once power is restored; A2-07 waits for it.
+7. **2026-10-22 12:42–12:50Z — A2-06 and A2-07 (clean).** The host had rebooted after the shutdown;
+   the guest was shut down cleanly before it. The agent started the guest: it booted at 12:42:20Z and
+   `smd` was active at 12:42:27Z, before any login, as lingering promises; `/v1/version` unchanged
+   (new instance), no new warning. The tunnel was reopened. The operator logged the first test QSO
+   (A2-06): count 0 → 1, 20m SSB, under the logbook's callsign; no forwarder queues
+   (`{"forwarders":[]}`).
+   A2-07, by the agent, per `install.md` §10: `systemctl --user disable --now smd` (exit 0, enable
+   symlink removed), `sudo dnf remove -y station-manager` (exit 0), `systemctl --user daemon-reload`
+   (exit 0); `rpm -q`: not installed; `/usr/bin/smd`, `/usr/bin/smctl` and the unit absent;
+   `systemctl --user status smd`: unit not found; nothing listening on 8080. `loginctl
+   disable-linger "$USER"` exited 1, "Access denied" (no polkit, as in A2-01); done with
+   `sudo loginctl disable-linger smtest` (`Linger=no`). Data retained in
+   `~/.local/share/station-manager`: `config.json` (byte-identical before and after), `db/` and
+   `log/`. The stop itself checkpointed the WAL and wrote the archive summary (the log ends
+   `smd stopped` at 12:43:40Z), so those files changed at the stop, not at the removal. The stopped
+   QSO database read through `immutable=1`: `integrity_check` ok, 1 QSO. Left behind: an empty
+   `/usr/share/doc/station-manager/manual/`, owned by no package (Finding #3).
+8. **2026-10-22 12:44–12:50Z — A2-08 (clean), the `smtest2` lane.** The `smtest` tunnel was closed
+   first (A2-07 had stopped, disabled and removed that lane's service). The agent created `smtest2`
+   (fresh home, the guest-only key, passwordless `sudo` for the package steps), copied both RPMs in
+   and verified them (`7b2fa20a…c24856`, `cebcd305…c5532b`), installed the frozen alpha.2 RPM,
+   enabled lingering with `sudo`, and ran `enable --now`: `2.0.0-alpha.2`, schema 8, `config.json`
+   version 3, setup not complete. The `smtest2` tunnel opened on the same host port; the operator
+   completed setup and logged three test QSOs in the normal Firefox profile, reusing the
+   first lane’s tab/origin (initially recorded as `~/sm-guest/ff-smtest2`; corrected below).
+   - *Before:* logbook `Default` with 3 QSOs; `config.json` version 3, setup complete, SHA-256
+     `66c23055…f6b73`; PID 1707; no warning or error in `smd.log`.
+   - *`install.md` §7:* `sudo dnf install` of the candidate: "Upgrading", exit 0; `rpm -q`
+     `station-manager-2.0.0~alpha.4-1.x86_64`; the old daemon still serving (PID 1707,
+     `2.0.0-alpha.2`). `smd config-check`: exit 0, "no unrecognised keys; the file loads and validates
+     as startup would; 0 enabled forwarder(s) construct …"; `config.json` unchanged (same SHA).
+     `systemctl --user daemon-reload` exit 0; `systemctl --user restart smd` exit 0.
+   - *After:* PID 1930, `NRestarts=0`; `2.0.0-alpha.4`, schema `{18, dirty:false}`, archive Home
+     (legacy); `config.json` version 6, setup complete, default logbook 1, the catalogue holding Home;
+     `config.v5.json` written beside it (0600, version 5); the same three QSO UUIDs, count 3. The
+     start logged, once each: `config saved` (`schema_version`), the archive catalogue written
+     (adopted in place), the destination bindings decided once, the v5 recovery copy written, and
+     `config.json` stripped to station accounts. No warning or error.
+   - *Idempotence:* a second `smctl restart` (PID 1995) left `config.json` byte-identical and logged
+     no adoption, seed, copy or strip line; count still 3.
+   - Neither transition is logged as numbers (Finding #4).
+   - *Browser (operator):* after reloading the reused normal-profile tab, no Welcome page, Phone/CW, badge
+     `2.0.0-alpha.4`, Logbook 3 QSOs. The Phone/CW Session panel shows 4 QSOs (Finding #5; inbox
+     note of 2026-10-22).
+   - *Lane deviation:* the throwaway profiles `~/sm-guest/ff-smtest` and `ff-smtest2` were never
+     opened (both empty); A1-02's badge and A2-02…A2-08's browser steps ran in the operator's
+     normal Firefox profile, on an origin (`127.0.0.1:18080`) it had not used before A2-02.
+     Appendix 3 item 6 (a fresh profile per lane) was therefore not met for either lane.
