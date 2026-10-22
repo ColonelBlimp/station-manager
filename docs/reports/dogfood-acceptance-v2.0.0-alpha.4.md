@@ -96,24 +96,114 @@ Drafted by the agent from `git diff v2.0.0-alpha.3 3f7425ed`; reviewed and corre
 
 ### Configuration changes
 
-To be enumerated at A1-03 against `docs/v2-design/config.md` (v4–v6: the archive catalogue,
-binding-owned forwarder fields under ADR 0082, the station-account split).
+Checked at A1-03 against `docs/v2-design/config.md` and the code at both tags (the JSON keys of
+`internal/config` and `internal/types` compared; none removed).
+
+- **New file keys (v4, v5), server-managed:** `active_qso_archive_id`, `pending_qso_archive_id` and the
+  `qso_archives` catalogue (`id`, `label`, `ownership`, `path` for legacy and external entries,
+  `last_activation_error`, and `request_key` from v5). `PUT /v1/config` carries none of them; adoption
+  at start and the archive manager write them.
+- **Forwarders become station accounts (v6, ADR 0082):** at most one entry per `type`. `name`,
+  `enabled` and logbook-scoped credential keys stay known but deprecated until Home's binding seed
+  commits; startup then strips them, first writing `config.v5.json` once (0600, never overwritten).
+  Whether a logbook uploads, and its per-logbook credentials, move to the archive's bindings.
+- **`datastore.path`** selects the QSO file only until adoption; afterwards the active catalogue
+  entry does.
+- **Evidence sync** depends on a complete SM Cloud station account (`url` and `token`), no longer on
+  an enabled `smcloud` forwarder.
+- **`default_rig_id: 0`** means no default rig and is valid with rigs configured; load no longer
+  stamps rig 1 (`4ffc727a`). With no default rig, `bridge.enabled` is refused.
+- **Down steps:** `4 → 3`, `5 → 4` and `6 → 5` through `smd config-downgrade`; `6 → 5` rebuilds
+  entries from Home's bindings and refuses where they cannot become one v5 entry per destination.
+- **Not a change:** the unknown-key refusal (ADR 0074) was already in alpha.3's code
+  (`PreflightUnknownKeys`); only the reference's wording was corrected.
+- **Reference defect found:** the §3 table in `docs/v2-design/config.md` (line 69) read "Schema
+  version; currently `5`"; the code (`currentConfigVersion = 6`) and §13.1 say 6. Corrected on
+  `main` by a separate docs-only change (operator ruling, 2026-10-22); the candidate's behaviour is
+  unaffected and needs no rebuild.
 
 ### Changed API surface (the embedded SPA is the only client)
 
-New endpoints: `POST /v1/forwarder/{name}/queue/retry`; `GET /v1/logbook/{id}/destinations`;
-`GET` and `POST /v1/qso-archives`; `POST /v1/qso-archives/{uuid}/activate`; `GET` and
-`PUT /v1/qso-archives/{uuid}/bindings`. Changed semantics on existing endpoints are enumerated at
-A1-03 from `docs/v2-design/api-endpoints.md`.
+Checked at A1-03: the registered routes at both tags were compared (54 → 61 explicit `/v1`
+method/path registrations; none removed), and each changed item below was confirmed new in the code
+since alpha.3 (corrected at the operator's review, 2026-10-22).
+
+New endpoints (the seven added routes): `POST /v1/forwarder/{name}/queue/retry`;
+`GET /v1/logbook/{id}/destinations`; `GET` and `POST /v1/qso-archives`;
+`POST /v1/qso-archives/{uuid}/activate`; `GET` and `PUT /v1/qso-archives/{uuid}/bindings`.
+
+Changed semantics on existing endpoints:
+
+- **Forwarder names are binding names** of the active archive (the seeded legacy names on Home,
+  `<type>.<logbook uuid>` on another logbook): `POST /v1/forwarder/{name}/uploads` (new bucket
+  `skipped_other_logbook`; `forwarder_unavailable` now means no enabled binding),
+  `POST /v1/forwarder/{name}/queue/clear` (404 when not a binding), and the `missing_from` filter of
+  `GET /v1/logbook/{id}/qso` and `/count`.
+- **`GET /v1/forwarder-queues`:** one entry per binding; adds `waiting` and `failed` beside
+  `clearable` and `in_flight`.
+- **`POST /v1/smcloud/reconcile`:** one pass per enabled SM Cloud binding, concurrently under one
+  25 s deadline; the response becomes `{"results": [...]}` per binding (a breaking shape change; the
+  embedded SPA is the only client). **200 whenever at least one reconciler runs, whatever its
+  outcome:** a binding's failure, timeout or held/unresolved state is an `error` entry inside the
+  200. **503 `smcloud_unavailable` only when no reconciler is runnable** (no enabled SM Cloud binding,
+  or every one held, unresolved or unbuildable), with the entries beside the error envelope.
+  Acceptance assertions must read the per-binding entries, not the status alone.
+- **Archive-switch refusals on existing paths:** once an activation is accepted, `POST /v1/rig/tune`
+  and the FT8 admissions (`POST /v1/ft8/claim`, `/tx/arm`, `/tx/send`, and session starts) answer
+  **409 `archive_switch_pending`** until the daemon restarts; the stop paths are never refused.
+- **`GET` / `PUT /v1/config`:** `forwarders` are station accounts (`{type, label?, action_filter?,
+  credentials_set?}`, no `name` or `enabled`); a PUT carrying `name`, `enabled` or a logbook-scoped
+  key is refused 400 `forwarder_field_binding_owned`; `forwarder_unusable` now judges enabled
+  bindings; new read-only `ft8_running` (`bridge_enabled` and `ft8_enabled` were already in
+  alpha.3); `default_rig_id: 0` clears the default, refused while the bridge is enabled; new 500
+  `bindings_read_failed`.
+- **`POST /v1/qso`:** an `expect_*` query key is refused 409 `reload_required` (ADR 0087), and the
+  query is parsed strictly.
+- **`GET /v1/qso/{uuid}/uploads`:** each item carries `failure_class` (`"auth"` or `""`, migration
+  0011).
+- **`GET /v1/logbook`:** each logbook carries its `uuid` (migration 0012).
+- **`GET /v1/station-events`:** new `archive.activated` and `archive.activation_failed` kinds.
+- **`GET /v1/forwarder-types`:** credential fields gain `scope` (`station` or `logbook`) and
+  `defaults_to` (`clearable` was already in alpha.3). **`GET /v1/lookup-types`:** entries gain `summary`.
+- **`GET /v1/version`:** adds `archive` (`{id, label, ownership}`, never the path).
 
 ### Changed user journeys
 
-- Settings: Archives, Logbooks and per-logbook Destinations sections; the station accounts split from
-  bindings on Forwarding; stored-secret fields; help tips and manual links.
-- The shell's archive switch, over the attended restart (`ArchiveSwitchGate`).
-- FT8: the off-state notice (`FtOffNotice`).
-- SM Cloud by archive and logbook identity: adoption of Home, `uploads_held`, identity uploads and
-  reconciles.
+Corrected at the operator's review (2026-10-22); each item checked against the SPA at the tag.
+
+- **Settings:** Archives, Logbooks and per-logbook Destinations sections; the station accounts split
+  from bindings on Forwarding; stored-secret fields; help tips and manual links.
+- **Archive switching, only from Settings → Archives** (ADR 0087). The header shows the active
+  archive above the logbook, display only, and "(switching to …)" while a candidate is pending
+  (`Header.svelte`). Activating asks for confirmation (`activateConfirmText`, `archives.svelte.ts`):
+  - it names the target, and warns that the restart takes about 5 s, that every open window reloads,
+    and that unlogged work in **any other window** (a Phone/CW QSO, an unfinished FT8/FT4 exchange,
+    unsaved Settings edits) is lost; logged QSOs are never affected; TX must be idle and FT8 disarmed;
+  - when this window holds an unlogged Phone/CW entry, it names it and says OK discards it and
+    Cancel keeps it; an entry whose Log outcome is unknown is named as possibly already logged, with
+    a pointer to check the old archive's Logbook;
+  - a Log in flight refuses the switch ("A QSO is being logged on Phone / CW — wait for it to
+    finish, then switch"), checked before and again after the prompt.
+  After an accepted request the tab waits for a **different** daemon instance and reloads; every
+  other open tab reloads when its reconnect finds another archive served. When the new instance
+  cannot be proven (no baseline, or the wait expires), the app is gated (`ArchiveSwitchGate`): an
+  overlay blocks logging and transmitting until reload, keeping the TX and tune stops reachable.
+- **Upload failures:** Settings → Forwarding shows waiting, failed and in-flight counts per
+  destination and per logbook; **Retry failed (N)** re-arms that binding's failed rows (any failure
+  class) and reports how many were re-queued; rows the destination rejected for authentication
+  (`failure_class: auth`) are re-armed automatically when the worker starts, once per daemon
+  restart.
+- **FT8/FT4 availability follows the running daemon** (`ft8_running`, not the saved switch): with
+  FT8 not served, the FT8/FT4 mode links are hidden and every way into an FT mode (bookmark, stored
+  last mode, Back/Forward, a click) lands on Phone/CW with the off-state notice (`FtOffNotice`)
+  linking to the setting; the fallback does not re-tune the rig. A saved change applies after the
+  restart.
+- **Rigs:** "+ Add rig" opens a model picker and then an **unsaved draft** that Cancel discards;
+  adding never selects the default; **Set as default** is the explicit act and needs a restart.
+  Delete is an immediate, confirmed write; the default rig deletes only with CAT off (button
+  disabled, "Turn off the rig connection (CAT) first"), which leaves no default rig.
+- **SM Cloud by archive and logbook identity:** adoption of Home, `uploads_held`, identity uploads
+  and reconciles.
 
 ### Packaged commands
 
@@ -123,8 +213,30 @@ for this candidate: an unknown first argument starts the daemon (dogfood inbox, 
 
 ### New manual or setup instructions
 
-`docs/install.md` changed, including "Provisioning a cloud archive on this station" and "Rolling back
-to an older build". To be reviewed at A1-03.
+**Manual** (`manual/content/chapters/`, 8 files, +470/−159):
+
+- **New chapter `qso-archives.md`:** where archives are, logbooks, creating an archive, switching
+  archives, what stays shared.
+- **`forwarding.md`** (largely rewritten): where forwarding is set up, station accounts, turning a
+  destination on, SM Cloud backup, the queue (retrying and clearing), advanced upload pacing.
+- **`cat.md`:** new "Adding your rig and choosing the default".
+- **`ft8.md`:** new "Settings for FT8 and FT4" (PSK Reporter, decode log).
+- **`enrichment.md`:** a section per lookup source, filling gaps from other sources, and how long
+  looked-up details are kept.
+- **`what-is-sm.md`:** new "More than one window".
+- **`importing.md`, `station-events.md`:** small wording changes.
+
+**Install guide** — `docs/install.md` (+186/−8):
+
+- **Imports and restores:** `smctl import --forward` names bindings; `smd import` and `smd restore`
+  resolve the active archive unless `--archive` names another; restore goes by archive and logbook
+  identity, with `--cloud-logbook` for an old name-based backup, and `--forwarder` is retired.
+- **New sections:** "Provisioning a cloud archive on this station" (`smd provision`) and "Rolling
+  back to an older build" (`config-downgrade` first, then `db-downgrade`, with their refusals).
+- **Upgrade and backup:** `config-check` does not open bindings; a full backup is `config.json`
+  plus every archive and the station-global databases, taken stopped or with SQLite's online backup.
+  A file-only key the old daemon does not know is now added only with the old daemon stopped, as it
+  refuses unknown keys.
 
 ## Gate A — ready to deploy
 
@@ -132,7 +244,7 @@ to an older build". To be reviewed at A1-03.
 |---|---|---|---|---|---|---|---|---|
 | `A1-01` | yes | **record** — clean scratch worktree at tag `v2.0.0-alpha.4` (`3f7425ed`) | Build once with `SM_FFT=pocketfft scripts/dev-rpm.sh` after `task ci:local`; restore the committed `frontend/app/dist/index.html` first if the CI mirror rewrote it (alpha.3 Finding #1); record filename, SHA-256 and RPM version; keep the versioned copy | One artifact; RPM version `2.0.0~alpha.4-1`; `ci:local` exit 0; SHA recorded in the header | A `-dirty` or `alpha.4-N-g…` version; a second build overwriting the copy | Execution log #1–#3: `ci:local` exit 0. The CI mirror rewrote the tracked `dist/index.html` again (alpha.3 Finding #1); the committed file was restored before the build, `git status --porcelain` empty, `git describe` `v2.0.0-alpha.4`. One build: `2.0.0-alpha.4`, RPM `station-manager 2.0.0~alpha.4-1 x86_64`, 9,625,351 B, SHA-256 `cebcd305…c5532b`, copied to the versioned path (0600) with the SHA re-verified | none | **PASS** — operator, 2026-10-22: independently verified the tag's commit, the RPM's permissions, size, SHA-256, package version, private-build marker and packaged `smd` hash; CI results accepted from the execution record. Finding #1 stays open and does not block this artifact (the committed file was restored before the build, and the build regenerates the SPA after the version is fixed) |
 | `A1-02` | yes | **clean** — the A2-01 install, candidate installed and started | Verify the RPM SHA before installing; read `GET /v1/version`, the sidebar badge, the startup log line and `rpm -q` | All four read `2.0.0-alpha.4`; schema `{18, dirty:false}` after the first start | A badge from a cached tab; a dev-build version string | pending | none | pending |
-| `A1-03` | yes | **record** — delta drafted above | Review the release delta against the candidate, completing the configuration and API items | Delta accepted or corrected here | Silent scope creep in the delta | pending | none | pending |
+| `A1-03` | yes | **record** — delta drafted above | Review the release delta against the candidate, completing the configuration and API items | Delta accepted or corrected here | Silent scope creep in the delta | Configuration, API and install items completed by the agent from the code and canonical references at both tags (route and JSON-key lists compared); one reference defect found (`config.md` line 69 said version 5, corrected on `main`, no rebuild). Operator review 2026-10-22: pending, with corrections — three fields wrongly labelled new, the archive-switch journey, the switch and reconcile failure semantics, the journeys beyond component names, the manual inventory, and the route count (54 → 61); all applied | none | **PASS** — operator, 2026-10-22: the revised delta resolves the review findings, including the B2 archive-switch wording; the reference fix is limited to 5 → 6 and needs no candidate rebuild |
 | `A1-04` | yes | **host-scratch** — 0700 scratch with a copy of the live `config.json`; the candidate `smd` extracted from the RPM (alpha.3 record, Appendix 1); live service untouched | `smd config-check --config` on the untouched copy (control), then on a top-level and a nested unknown-key mutation | Control exits 0; each mutation exits non-zero naming only the key path; nothing started, bound or written | Control non-zero: the candidate would refuse to start on the station. Fix and re-run; no waiver possible | Execution log #4: control exit 0 ("loads and validates as startup would; 0 enabled forwarder(s) construct", as v6 keeps uploads in each archive's bindings); top-level mutation exit 1 naming only `typo_key_a1_04`; nested exit 1 naming only `bridge.typo_nested_a1_04`, "(values omitted)"; no unexpected matches among the checked string values (six characters or more); nothing written; live config, service and file names unchanged | none | **PASS** — operator, 2026-10-22: the valid control succeeds and both independent mutations fail with the intended key-path diagnostics; the hashes, empty working directory and unchanged live service support isolation. Boundaries: zero enabled legacy forwarders validates neither archive bindings nor upstream connectivity (later cases cover them); the disclosure scan excluded shorter strings and non-string values |
 | `A1-05` | yes | **host-scratch** — as the alpha.3 record's Appendix 2, with this artifact's `smd` | The CC-5 reconcile on the alpha.1-era file, then the permutation control | Copy exits 0; the permutation exits non-zero naming `qrzcq` and the unsupported action | Both exit 0; the copy refused for `allow_insecure_http` | Execution log #4: fixture (config version 2, qrzcq `["insert","update","delete"]`, scratch-only `allow_insecure_http`) exit 0, "3 enabled forwarder(s) construct"; permutation `["update","insert","delete"]` exit 1: `forwarder "qrzcq": type "qrzcq" does not support action "update" (supports [insert])`; nothing written; live untouched | none | **PASS** — operator, 2026-10-22: the reconstructed legacy fixture succeeds while the permutation reaches validation and fails for the intended unsupported action, distinguishing the repair from indiscriminate acceptance. The alpha.2 B1-01 waiver still awaits B1-01 |
 | `A2-01`…`A2-07` | yes | **clean** — the isolated RPM guest (Appendix 3), no Station Manager data | As the alpha.3 record's A2-01…A2-07 (install, first-run, callsign, setup, persistence, guide and manual, uninstall), with this artifact | As there | As there | pending | none | pending |
@@ -160,8 +272,10 @@ to an older build". To be reviewed at A1-03.
 ### B2 — additions for the archive programme (to be expanded into cases before A4-01)
 
 The alpha.3 scope ruling's B2 stands. Option 1 adds explicit cases for:
-- **Archives:** list, create, activate over the attended restart, the shell switch, last-known-good
-  start, and Home's legacy entry.
+- **Archives:** list, create, activate from Settings → Archives over the attended restart (the
+  confirmation's discard and cancel, the other-window warning, the refusal while a Log is in flight,
+  the reload of every tab, and the unresolved-switch gate), the header's archive display,
+  last-known-good start, and Home's legacy entry.
 - **Bindings:** per-logbook destinations, station accounts, `restart_required`, `uploads_held`,
   adoption status, and the Forwarding-page wording (dogfood inbox, 2026-10-21).
 - **Restore:** `smd restore` by archive and logbook UUID, dry run and real, on a scratch copy
