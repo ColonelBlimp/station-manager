@@ -33,9 +33,15 @@ identifies the candidate and does not mean acceptance passed). CI green on `3f74
 39612261239, confirmed 2026-10-22).
 Version/build shown by daemon: `2.0.0-alpha.4` expected on `GET /v1/version`, the sidebar build
 badge, the startup log line and ADIF `PROGRAMVERSION`.
-RPM filename: `build/private/station-manager-2.0.0~alpha.4-1.x86_64.rpm` (mode 0600) — pending
-RPM SHA-256: pending
-RPM-reported version: `station-manager 2.0.0~alpha.4-1 x86_64` expected
+RPM filename: `build/private/station-manager-2.0.0~alpha.4-1.x86_64.rpm` (mode 0600), the single copy
+of the artifact `scripts/dev-rpm.sh` built in a clean scratch worktree at the tag, since removed. It is a
+private keyed build (PocketFFT/CGO; ships `/usr/share/doc/station-manager/PRIVATE-BUILD-DO-NOT-DISTRIBUTE`)
+and is **not distributable**. Verify the SHA before every install.
+RPM SHA-256: `cebcd305e99db31671ca0dbdeace70f84064e38a150f744f497aec9059c5532b` (9,625,351 bytes, built
+2026-10-22 05:26Z); `/usr/bin/smd` inside it SHA-256
+`08aebee97d2556c2385bf4105f3e5b5339d2011f0a00ce208236941bf0c6426b`
+RPM-reported version: `station-manager 2.0.0~alpha.4-1 x86_64` (read with `rpm -qp`); daemon build line
+`version: 2.0.0-alpha.4, FFT: PocketFFT (CGO, dynamically linked)`
 Previous installed version: `station-manager-2.0.0~alpha.3.262.g6217da21.dirty-1.x86_64`, the dev
 build of `6217da21` deployed 2026-10-21. By RPM ordering this is an **upgrade**:
 `rpm.labelCompare(2.0.0~alpha.4-1, 2.0.0~alpha.3.262.g6217da21.dirty-1)` = 1 (checked 2026-10-21).
@@ -46,7 +52,13 @@ Upgrade environment: the daily-driver dogfood station (this host)
 Browser(s) and viewport(s): Firefox; the A4 parameters to be confirmed at A4-01
 Planned test date: 2026-10-21 onward
 Operator: 7Q5MLV
-Automated gate evidence: pending (A1-01)
+Automated gate evidence: `task ci:local` passed at `3f7425ed` on 2026-10-22 (05:19–05:26Z) in the clean
+scratch worktree: SPA lint, prettier, svelte-check, vitest 2158/2158 (153 files), Vite build; manual
+build; Go gofmt, vet, golangci-lint, maintainability observatory 0 regressions (33,719 measurements);
+race and full Go test runs, none from the test cache; static, all-`cmd/` and PocketFFT builds; PocketFFT
+FT8 decode test; ClubLog build-key boundary (ST-7) OK; documentation catalog and agent-context budgets;
+"All CI gates passed locally." The smcloud store's Postgres tests skip locally (`ci:local` starts no
+Postgres); CI run 39612261239 ran them on the same commit, green.
 Backup location (do not record secrets): pending (A3-01, a refresh of the 09:04Z backup)
 Restore check: pending (A3-02)
 Recovery policy: a stopped-daemon copy of the complete working directory is the primary recovery
@@ -118,11 +130,11 @@ to an older build". To be reviewed at A1-03.
 
 | ID | Required | Environment and starting state | Operator action | Expected visible result | Nearest confusable failure | Evidence | Extra approval | Result |
 |---|---|---|---|---|---|---|---|---|
-| `A1-01` | yes | **record** — clean scratch worktree at tag `v2.0.0-alpha.4` (`3f7425ed`) | Build once with `SM_FFT=pocketfft scripts/dev-rpm.sh` after `task ci:local`; restore the committed `frontend/app/dist/index.html` first if the CI mirror rewrote it (alpha.3 Finding #1); record filename, SHA-256 and RPM version; keep the versioned copy | One artifact; RPM version `2.0.0~alpha.4-1`; `ci:local` exit 0; SHA recorded in the header | A `-dirty` or `alpha.4-N-g…` version; a second build overwriting the copy | pending | none | pending |
+| `A1-01` | yes | **record** — clean scratch worktree at tag `v2.0.0-alpha.4` (`3f7425ed`) | Build once with `SM_FFT=pocketfft scripts/dev-rpm.sh` after `task ci:local`; restore the committed `frontend/app/dist/index.html` first if the CI mirror rewrote it (alpha.3 Finding #1); record filename, SHA-256 and RPM version; keep the versioned copy | One artifact; RPM version `2.0.0~alpha.4-1`; `ci:local` exit 0; SHA recorded in the header | A `-dirty` or `alpha.4-N-g…` version; a second build overwriting the copy | Execution log #1–#3: `ci:local` exit 0. The CI mirror rewrote the tracked `dist/index.html` again (alpha.3 Finding #1); the committed file was restored before the build, `git status --porcelain` empty, `git describe` `v2.0.0-alpha.4`. One build: `2.0.0-alpha.4`, RPM `station-manager 2.0.0~alpha.4-1 x86_64`, 9,625,351 B, SHA-256 `cebcd305…c5532b`, copied to the versioned path (0600) with the SHA re-verified | none | **PASS** — operator, 2026-10-22: independently verified the tag's commit, the RPM's permissions, size, SHA-256, package version, private-build marker and packaged `smd` hash; CI results accepted from the execution record. Finding #1 stays open and does not block this artifact (the committed file was restored before the build, and the build regenerates the SPA after the version is fixed) |
 | `A1-02` | yes | **clean** — the A2-01 install, candidate installed and started | Verify the RPM SHA before installing; read `GET /v1/version`, the sidebar badge, the startup log line and `rpm -q` | All four read `2.0.0-alpha.4`; schema `{18, dirty:false}` after the first start | A badge from a cached tab; a dev-build version string | pending | none | pending |
 | `A1-03` | yes | **record** — delta drafted above | Review the release delta against the candidate, completing the configuration and API items | Delta accepted or corrected here | Silent scope creep in the delta | pending | none | pending |
-| `A1-04` | yes | **host-scratch** — 0700 scratch with a copy of the live `config.json`; the candidate `smd` extracted from the RPM (alpha.3 record, Appendix 1); live service untouched | `smd config-check --config` on the untouched copy (control), then on a top-level and a nested unknown-key mutation | Control exits 0; each mutation exits non-zero naming only the key path; nothing started, bound or written | Control non-zero: the candidate would refuse to start on the station. Fix and re-run; no waiver possible | pending | none | pending |
-| `A1-05` | yes | **host-scratch** — as the alpha.3 record's Appendix 2, with this artifact's `smd` | The CC-5 reconcile on the alpha.1-era file, then the permutation control | Copy exits 0; the permutation exits non-zero naming `qrzcq` and the unsupported action | Both exit 0; the copy refused for `allow_insecure_http` | pending | none | pending |
+| `A1-04` | yes | **host-scratch** — 0700 scratch with a copy of the live `config.json`; the candidate `smd` extracted from the RPM (alpha.3 record, Appendix 1); live service untouched | `smd config-check --config` on the untouched copy (control), then on a top-level and a nested unknown-key mutation | Control exits 0; each mutation exits non-zero naming only the key path; nothing started, bound or written | Control non-zero: the candidate would refuse to start on the station. Fix and re-run; no waiver possible | Execution log #4: control exit 0 ("loads and validates as startup would; 0 enabled forwarder(s) construct", as v6 keeps uploads in each archive's bindings); top-level mutation exit 1 naming only `typo_key_a1_04`; nested exit 1 naming only `bridge.typo_nested_a1_04`, "(values omitted)"; no unexpected matches among the checked string values (six characters or more); nothing written; live config, service and file names unchanged | none | **PASS** — operator, 2026-10-22: the valid control succeeds and both independent mutations fail with the intended key-path diagnostics; the hashes, empty working directory and unchanged live service support isolation. Boundaries: zero enabled legacy forwarders validates neither archive bindings nor upstream connectivity (later cases cover them); the disclosure scan excluded shorter strings and non-string values |
+| `A1-05` | yes | **host-scratch** — as the alpha.3 record's Appendix 2, with this artifact's `smd` | The CC-5 reconcile on the alpha.1-era file, then the permutation control | Copy exits 0; the permutation exits non-zero naming `qrzcq` and the unsupported action | Both exit 0; the copy refused for `allow_insecure_http` | Execution log #4: fixture (config version 2, qrzcq `["insert","update","delete"]`, scratch-only `allow_insecure_http`) exit 0, "3 enabled forwarder(s) construct"; permutation `["update","insert","delete"]` exit 1: `forwarder "qrzcq": type "qrzcq" does not support action "update" (supports [insert])`; nothing written; live untouched | none | **PASS** — operator, 2026-10-22: the reconstructed legacy fixture succeeds while the permutation reaches validation and fails for the intended unsupported action, distinguishing the repair from indiscriminate acceptance. The alpha.2 B1-01 waiver still awaits B1-01 |
 | `A2-01`…`A2-07` | yes | **clean** — the isolated RPM guest (Appendix 3), no Station Manager data | As the alpha.3 record's A2-01…A2-07 (install, first-run, callsign, setup, persistence, guide and manual, uninstall), with this artifact | As there | As there | pending | none | pending |
 | `A2-08` | yes | **clean** — a second fresh working directory in the guest: the frozen alpha.2 RPM (SHA `7b2fa20a…c24856`) installed and set up, a few test QSOs, daemon running | Upgrade per `install.md` §7 to the candidate | `config-check` exit 0; config 3 → 6 and schema 8 → 18 applied once at the first start; setup bypassed; QSOs, logbook and config retained | Migrations re-run on every start; a refusal at the restart the preflight did not name | pending | none | pending |
 | `A3-01` | yes | **live** — daemon stopped | Refresh the recovery backup of the complete working directory outside the repository | Backup exists and is listable; SHA-256 recorded | Backup copied into the repository tree | pending | none | pending |
@@ -196,3 +208,60 @@ the image download.
 ## Execution log
 
 Command-line checkpoints run by the agent; the operator rules every result. Times UTC.
+
+1. **2026-10-22 — freeze.** CI green on `3f7425ed` (run 39612261239). Annotated tag `v2.0.0-alpha.4`
+   created locally at `3f7425ed`, not pushed. A scratch worktree (agent scratchpad) checked out at the
+   tag: `git status --porcelain` empty, `git describe` `v2.0.0-alpha.4`, `scripts/version.sh` →
+   `2.0.0-alpha.4` / RPM `2.0.0~alpha.4`. `.env` copied in (0600, Git-ignored) for the private build key.
+2. **05:19Z–05:26Z — `task ci:local` in the worktree.** Exit 0; details in the header. No Go result came
+   from the test cache (131 `ok` lines, none `(cached)`).
+3. **05:26Z — the candidate build.** As at alpha.3, the CI mirror's SPA build had left the tracked
+   `frontend/app/dist/index.html` modified (Finding #1 of the alpha.3 record, still open). `git show
+   HEAD:frontend/app/dist/index.html` restored it; `git status --porcelain` empty; `git describe`
+   `v2.0.0-alpha.4`. `SM_FFT=pocketfft scripts/dev-rpm.sh` exit 0, once: daemon `version: 2.0.0-alpha.4,
+   FFT: PocketFFT (CGO, dynamically linked)`, RPM `2.0.0~alpha.4-1`, 9,625,351 bytes, SHA-256
+   `cebcd305e99db31671ca0dbdeace70f84064e38a150f744f497aec9059c5532b`. Copied to
+   `build/private/station-manager-2.0.0~alpha.4-1.x86_64.rpm` (0600; the destination did not exist
+   before), SHA re-verified after the copy. The extracted `smd` carries the version string
+   `2.0.0-alpha.4` and no other release version. The build again rewrote `dist/index.html` afterwards,
+   as expected; the version had been fixed before it. The worktree, with its `.env` copy, was then
+   removed (`git worktree remove --force`, pruned).
+4. **2026-10-22 05:30Z — A1-04 and A1-05 (host-scratch), by the agent.** Scratch `~/sm-a1-scratch`
+   (0700, absent before). The RPM's SHA-256 was verified, `./usr/bin/smd` extracted with `rpm2cpio`, and
+   its SHA-256 matched the header's (`08aebee9…6426b`). Every run was
+   `SM_WORKING_DIR=$S/wd smd config-check --config <copy>`, with `$S/wd` an empty 0700 directory.
+   - *A1-04.* The live `config.json` copied 0600 (`cmp` identical); the mutations added the top-level
+     `typo_key_a1_04` and the nested `bridge.typo_nested_a1_04`, each on its own copy.
+     - Control: exit 0. `config-check: config.live.json — no unrecognised keys; the file loads and
+       validates as startup would; 0 enabled forwarder(s) construct (legacy entries; destination
+       bindings live in each archive and are checked at startup). Not checked: databases, listeners
+       and other runtime dependencies.` The 0 is expected at config v6, where an entry is enabled only
+       while it holds its deprecated v5 fields (`cmd/smd/config_check.go`).
+     - Top-level: exit 1. `config.top.json has 1 unrecognised configuration key(s) — startup would
+       refuse (values omitted): typo_key_a1_04`.
+     - Nested: exit 1, the same wording, naming only `bridge.typo_nested_a1_04`.
+   - *A1-05.* Appendix 2 of the alpha.3 record. The alpha.1-era file from
+     `station-manager-pre-alpha2-20260905T1114Z.tar.gz` reads version 2, qrzcq `enabled: false`,
+     `action_filter: null`. Fixture a keeps version 2 and sets qrzcq's filter to
+     `["insert","update","delete"]` and smcloud's `allow_insecure_http` to true. Fixture b is a with the
+     filter `["update","insert","delete"]`.
+     - Fixture a: exit 0, "the file loads and validates as startup would; 3 enabled forwarder(s)
+       construct".
+     - Fixture b: exit 1. `startup would refuse: invalid config (invalid_forwarder): forwarder
+       "qrzcq": type "qrzcq" does not support action "update" (supports [insert])`.
+   - *Disclosure check.* Every string value of six characters or more in each input was searched for in
+     its output; matches were listed by key path only. A1-04's control matched
+     `qso_archives.0.ownership` (the word in the fixed text "legacy entries"), and A1-05's permutation
+     matched only `action_filter` entries (the action names the refusal names by design). No unexpected
+     matches among the checked string values. Strings shorter than six characters and non-string
+     values were outside the scan.
+   - *Nothing written.* A SHA-256 manifest of the scratch directory was identical before and after each
+     of the five runs, and `$S/wd` stayed empty.
+   - *Live untouched* (before / after the whole step, identical):
+     - live `config.json` SHA-256 `899c9978…7d2c08`, mtime 2026-10-22 07:00:55.597 +0200;
+     - `smd` `ActiveState=active`, `MainPID=4606`, `NRestarts=0`;
+     - the working directory's sorted file-name list hashed `7956b952…` (76 names).
+   - *Clean-up.* The six config copies were removed with `shred -u`, and the scratch directory deleted.
+     `$HOME` is btrfs, a copy-on-write filesystem, and `shred` "assumes the file system and hardware
+     overwrite data in place" (shred(1)), so the overwrite is not assured there. Files deleted; secure
+     erasure unverified.
