@@ -1,4 +1,5 @@
 import '@testing-library/jest-dom/vitest';
+import { setBoundArchive } from '../lib/api/archive-guard';
 
 // jsdom has no Web Animations API; Svelte 5 transitions (transition:fade)
 // call element.animate. Minimal stub with the members Svelte touches —
@@ -30,3 +31,8 @@ if (typeof window !== 'undefined' && !window.matchMedia) {
         dispatchEvent: () => false,
     });
 }
+
+// Every running tab proves its archive at boot (bootArchiveScoped) before it can
+// act, so tests start from a proven binding. archive-guard.test.ts drives the
+// unbound and re-checking states explicitly.
+setBoundArchive('01a16a00-0000-7000-8000-000000000001');

@@ -18,6 +18,7 @@ import {
     fetchQsoArchives,
 } from '../api/qso-archives';
 import { fetchDaemonInstance, waitForDaemonBack } from '../api/restart';
+import { boundArchive, guardedFetch } from '../api/archive-guard';
 import {
     activateArchive,
     activeArchive,
@@ -957,5 +958,73 @@ describe('the New archive draft', () => {
             logbookCallsign: '',
             requestKey: '',
         });
+    });
+});
+
+// The client half of the archive request guard (ADR 0094 update): guarded requests
+// name the archive the boot bracket PROVED — and only that one.
+describe('the archive request guard follows the proven binding', () => {
+    it('an agreeing boot bracket binds the guard to that archive', async () => {
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i1', archiveId: 'a' });
+        await bootArchiveScoped(() => Promise.resolve());
+        expect(boundArchive()).toBe('a');
+    });
+
+    it('a boot that straddles a switch binds nothing', async () => {
+        vi.mocked(fetchDaemonIdentity)
+            .mockResolvedValueOnce({ instance: 'i1', archiveId: 'a' })
+            .mockResolvedValueOnce({ instance: 'i2', archiveId: 'b' });
+        await bootArchiveScoped(() => Promise.resolve());
+        expect(boundArchive()).toBeNull();
+    });
+
+    it('an unreadable boot identity binds nothing', async () => {
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue(null);
+        vi.mocked(waitForDaemonBack).mockResolvedValue(false);
+        await bootArchiveScoped(() => Promise.resolve());
+        expect(boundArchive()).toBeNull();
+    });
+
+    it('holds guarded requests while a reconnect check is pending or a switch is unresolved', async () => {
+        _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
+        const fetchSpy = vi.fn(() => Promise.resolve(new Response('{}', { status: 200 })));
+        vi.stubGlobal('fetch', fetchSpy);
+        try {
+            archivesState.verifying = true;
+            await guardedFetch('/v1/qso/x');
+            archivesState.verifying = false;
+            archivesState.switchUnresolved = true;
+            await guardedFetch('/v1/qso/x');
+            expect(fetchSpy).not.toHaveBeenCalled();
+            archivesState.switchUnresolved = false;
+            await guardedFetch('/v1/qso/x');
+            expect(fetchSpy).toHaveBeenCalledTimes(1);
+        } finally {
+            vi.unstubAllGlobals();
+        }
+    });
+
+    it("the daemon's archive_mismatch verifies the archive and reloads onto the new one", async () => {
+        _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() =>
+                Promise.resolve(
+                    new Response(JSON.stringify({ code: 'archive_mismatch', message: 'm' }), {
+                        status: 409,
+                    })
+                )
+            )
+        );
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i2', archiveId: 'b' });
+        try {
+            await guardedFetch('/v1/qso/x', { method: 'PATCH' });
+            for (let i = 0; i < 10; i++) await Promise.resolve();
+            await new Promise((r) => setTimeout(r, 0));
+            expect(fetchDaemonIdentity).toHaveBeenCalled();
+            expect(reloads).toBe(1);
+        } finally {
+            vi.unstubAllGlobals();
+        }
     });
 });

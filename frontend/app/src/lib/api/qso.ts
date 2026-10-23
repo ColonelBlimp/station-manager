@@ -29,7 +29,8 @@
                        DNS, CORS preflight failure). Draft preserved.
 */
 
-import { isPlainObject, readJsonBody, safeFetch, WRITE_TIMEOUT_MS } from './_helpers';
+import { isPlainObject, readJsonBody, WRITE_TIMEOUT_MS } from './_helpers';
+import { guardedFetch } from './archive-guard';
 
 export type SubmitOutcome =
     | { kind: 'stored'; uuid: string }
@@ -67,7 +68,7 @@ export async function submitQso(
 ): Promise<SubmitOutcome> {
     const params = new URLSearchParams({ logbook: String(logbookID) });
     if (options.force) params.set('force', '1');
-    const fetched = await safeFetch(
+    const fetched = await guardedFetch(
         `/v1/qso?${params.toString()}`,
         {
             method: 'POST',

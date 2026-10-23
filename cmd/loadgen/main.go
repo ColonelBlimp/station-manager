@@ -27,6 +27,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -114,7 +115,7 @@ type result struct {
 // doRequest runs a single HTTP call and emits a result. Centralising
 // the do-and-time pattern means each per-iteration step in mixed mode
 // stays a one-liner and the keepalive-conn drain is consistent.
-func doRequest(ctx context.Context, c *http.Client, method, url, ct, body, endpoint string, results chan<- result) {
+func doRequest(ctx context.Context, c *http.Client, method, url, ct, body, archiveID, endpoint string, results chan<- result) {
 	var reader *bytes.Buffer
 	if body != "" {
 		reader = bytes.NewBufferString(body)
@@ -128,6 +129,9 @@ func doRequest(ctx context.Context, c *http.Client, method, url, ct, body, endpo
 	if ct != "" {
 		req.Header.Set("Content-Type", ct)
 	}
+	if archiveID != "" {
+		req.Header.Set("X-SM-Archive-Id", archiveID)
+	}
 
 	start := time.Now()
 	resp, err := c.Do(req)
@@ -140,6 +144,60 @@ func doRequest(ctx context.Context, c *http.Client, method, url, ct, body, endpo
 	_, _ = io.Copy(io.Discard, resp.Body)
 	_ = resp.Body.Close()
 	results <- result{endpoint: endpoint, status: resp.StatusCode, latency: elapsed}
+}
+
+// servedArchive reads the archive the target daemon serves, once, so every submit
+// can name it in X-SM-Archive-Id: the daemon refuses a QSO write that does not
+// prove which archive it is meant for.
+func servedArchive(ctx context.Context, c *http.Client, target string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target+"/v1/version", nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := c.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var v struct {
+		Archive *struct {
+			ID string `json:"id"`
+		} `json:"archive"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
+		return "", err
+	}
+	if v.Archive == nil || v.Archive.ID == "" {
+		return "", fmt.Errorf("/v1/version names no archive")
+	}
+	return v.Archive.ID, nil
+}
+
+// newHTTPClient sizes the connection pool for the worker count.
+func newHTTPClient(concurrency, timeoutSec int) *http.Client {
+	return &http.Client{
+		Timeout: time.Duration(timeoutSec) * time.Second,
+		// MaxIdleConnsPerHost matters for sustained throughput against
+		// a single target — the default of 2 forces TCP reconnects on
+		// the third concurrent request.
+		Transport: &http.Transport{
+			MaxIdleConns:        concurrency * 2,
+			MaxIdleConnsPerHost: concurrency * 2,
+			MaxConnsPerHost:     concurrency * 2,
+			IdleConnTimeout:     30 * time.Second,
+		},
+	}
+}
+
+// mustServedArchive is servedArchive or exit: without the archive no submit can
+// be sent.
+func mustServedArchive(ctx context.Context, c *http.Client, target string) string {
+	id, err := servedArchive(ctx, c, target)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cannot read the target's served archive: %v\n", err)
+		os.Exit(1)
+	}
+	return id
 }
 
 func main() {
@@ -183,20 +241,10 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	httpClient := &http.Client{
-		Timeout: time.Duration(*timeoutSec) * time.Second,
-		// MaxIdleConnsPerHost matters for sustained throughput against
-		// a single target — the default of 2 forces TCP reconnects on
-		// the third concurrent request.
-		Transport: &http.Transport{
-			MaxIdleConns:        *concurrency * 2,
-			MaxIdleConnsPerHost: *concurrency * 2,
-			MaxConnsPerHost:     *concurrency * 2,
-			IdleConnTimeout:     30 * time.Second,
-		},
-	}
+	httpClient := newHTTPClient(*concurrency, *timeoutSec)
 
 	submitURL := fmt.Sprintf("%s/v1/qso?logbook=%d", *target, *logbookID)
+	archiveID := mustServedArchive(ctx, httpClient, *target)
 
 	// Channel sizing: in mixed mode each iteration emits 3 results,
 	// so the buffer is sized 3× to absorb the extra fan-out without
@@ -250,12 +298,12 @@ func main() {
 					// SPA's actual behaviour, which is also sequential.
 					enrichURL := fmt.Sprintf("%s/v1/enrich/callsign?call=%s", *target, call)
 					historyURL := fmt.Sprintf("%s/v1/contact-history?call=%s", *target, call)
-					doRequest(ctx, httpClient, http.MethodGet, enrichURL, "", "", "enrich", results)
-					doRequest(ctx, httpClient, http.MethodGet, historyURL, "", "", "history", results)
+					doRequest(ctx, httpClient, http.MethodGet, enrichURL, "", "", "", "enrich", results)
+					doRequest(ctx, httpClient, http.MethodGet, historyURL, "", "", "", "history", results)
 				}
 
 				body := adifBody(call, *stationCallsign, qsoDate, timeOn)
-				doRequest(ctx, httpClient, http.MethodPost, submitURL, "application/x-adif", body, "submit", results)
+				doRequest(ctx, httpClient, http.MethodPost, submitURL, "application/x-adif", body, archiveID, "submit", results)
 			}
 		}()
 	}

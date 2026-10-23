@@ -16,6 +16,7 @@
 */
 
 import { isPlainObject, readJsonBody, safeFetch } from './_helpers';
+import { guardedFetch } from './archive-guard';
 
 export type Ft8TxOutcome =
     | { kind: 'ok' }
@@ -37,7 +38,9 @@ interface DaemonError {
 
 /** Arm (true) or disarm (false) the FT8 transmit path. */
 export async function armFt8Tx(armed: boolean, signal?: AbortSignal): Promise<Ft8TxOutcome> {
-    const fetched = await safeFetch('/v1/ft8/tx/arm', {
+    // Arming admits transmission, so it names the proven archive; disarming never
+    // waits on one (a stale tab must always be able to stop).
+    const fetched = await (armed ? guardedFetch : safeFetch)('/v1/ft8/tx/arm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ armed }),

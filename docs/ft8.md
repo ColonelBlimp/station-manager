@@ -951,6 +951,22 @@ subscriber would duplicate a session-list row):
   `country` is the enriched country the sink resolved before submit (so the Session-tab
   Country column matches Phone/CW).
 
+### Archive guard on the control routes (ADR 0094 update, 2026-10-23)
+
+A tab that still believes it serves one QSO archive must not start transmission, or bind an
+exchange that will be logged, against a daemon that has since switched to another. So the
+FT8 routes that **admit or initiate transmission, or annotate the exchange that will be
+logged**, carry `X-SM-Archive-Id` and are refused **409 `archive_mismatch`** (or 400 for a
+missing or malformed header) before any side effect: `tx/arm` with `armed: true`, `tx/send`,
+`qso/start`, `qso/work`, `qso/path`, `qso/next`, `qso/skip` with `armed: false`, `cq/start`,
+`cq/pick`, `cq/bag` and `cq/resume`. **Stop and reduce controls are exempt** so a stale tab can
+always stop: `tx/arm` with `armed: false`, `qso/abandon`, `autowork/stop`, `cq/unbag`,
+`qso/skip` with `armed: true`, and `claim`. Exempt means "not archive-checked", not "always
+succeeds": their own rung, run and profile refusals are unchanged. The check lives in
+`internal/api` (`archive_guard.go`); `internal/ft8` is not involved. The full contract,
+including the QSO and Session routes, is under "Archive request guard" in
+[api-endpoints.md](v2-design/api-endpoints.md).
+
 ### Message formats — what a rung may contain, and the CQ token
 
 Every rung the sequencer transmits is a **standard message** (protocol type 1, or type 2 for a

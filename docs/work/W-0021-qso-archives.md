@@ -8372,6 +8372,241 @@ cross-archive query.
     of the 2026-09-26 design exchange on the Forwarding tab ("the Forwarding tab frames the wrong
     thing"), which still needs its own ADR.
 
+
+### alpha.4 hold: fix design for Findings #5 and #6 (revision 3, ACCEPTED for RED 2026-10-23)
+
+Disposition: [alpha.4 record](../reports/dogfood-acceptance-v2.0.0-alpha.4.md), "B2-09–11 review
+and release disposition". Contracts: [ADR 0094](../decisions/0094-retain-session-lists-per-archive-within-each-tab.md)
+(Session isolation, with its 2026-10-23 update) and
+[ADR 0095](../decisions/0095-session-exports-report-exactly-what-they-delivered.md) (export and
+email completeness). Revision 1 had R1–R5 ruled (Codex, at the operator's request) and three P1
+corrections returned: provenance across reconnects, the email count, and UUID-less rows.
+Revision 2's review accepted the stream-identity approach and returned amendments. Its open
+question was ruled: guard `POST /v1/qso` and FT8 TX admission in this fix, because a response's
+`archive_id` proves provenance only after the action has happened, and ADR 0087 retains the
+prevention requirement. Revision 3 adds that request guard as one contract (with the edit
+exemption removed), duplicate-selection accounting, the exact email partition, the stream-identity
+test pins, and the legacy-notice limitation. Scope is a narrow archive-boundary correction: no
+draft recovery and no new lifecycle mechanism. **Accepted for the RED phase (Codex, at the
+operator's request, 2026-10-23)** with these amendments, folded in below: DELETE is in scope; plain
+`GET` without the header is allowed but a supplied header is enforced and every SPA edit read sends
+it; the duplicate wording; guard placement in `internal/api`; rebind only on 409
+`archive_mismatch`; existing FT8 checks preserved; email success requires a non-empty `sent`. This
+acceptance is not replacement-candidate acceptance or deployment approval.
+
+**Settled rulings.** R1: deliver a partial export or email with an explicit warning; all-missing
+stays `no_qsos`, with no file and no email. R2: discard legacy unscoped Session lists with a
+one-time notice that Session history was reset and logged QSOs are intact; ownership is never
+taken from the active archive. R3: an in-memory buffer under the provenance rules below, with no
+unscoped persistent pending bucket; unbound rows lost on reload are an acknowledged
+panel-history limitation. R4: FT8 engagement state is per archive too, survives same-archive
+reloads, and is reset with the R2 legacy discard. R5: omitted rows stay listed, every later export
+repeats the warning, and no export or email silently changes the Session list.
+
+**Source map (at `9c62707d`).** `session.svelte.ts` hydrates one unscoped `sm.session.qsos` at
+module init, before `bootArchiveScoped` proves the served archive. The consumers are the panel
+(`SessionPanel.svelte`), the rail badge (`UtilRail.svelte`), edit (`sessionEdit.svelte.ts`),
+export and email (`ExportDialog.svelte`), and FT8's `workedEvidence` (`Ft8BandActivity.svelte`).
+Rows enter from the Phone/CW submit response and the FT8 stream's `ft8-logged` (`main.ts`).
+Engagement (`sm.ft8.engaged`) is written from the FT8 stream's QSO-status frames
+(`ft8.svelte.ts` `onQso`). It feeds `workedEvidence`, which sets `allow_duplicate` (the daemon
+then files with a random dedupe key, `ft8.svelte.ts`), so a stale engagement can let a real
+duplicate past the daemon's dedupe. The FT8 and rig streams reconnect independently of the
+always-on log stream, whose `onReconnect` starts `verifyArchiveGeneration` asynchronously
+(`main.ts`). Until that check runs or finishes, FT8 frames from a daemon now serving another
+archive would be written under the old key: this is the P1 gap in revision 1.
+
+#### Provenance: every Session or engagement write carries its own archive
+
+1. **Stream identity frame.** The daemon writes `event: identity`, `data: {"archive_id": "<uuid>"}`
+   as the first frame of every FT8 stream connection, right after `: connected` and before any
+   hub event. A connection cannot outlive its process, so every later frame on that connection
+   belongs to that archive. The archive ID is injected into the FT8 service at the `cmd/smd`
+   boundary; `internal/ft8` does not import config or archive code. The frame is written after
+   `: connected` and **before** the loop drains the hub's one-slot replay
+   (`internal/ft8/handler.go`), so a cached replayed frame never precedes it.
+2. **Submit response.** `POST /v1/qso` adds `"archive_id"` to its 201/200 body (the process that
+   stored the row is the one answering).
+3. **SPA rule.** The SPA tracks a per-connection identity. It resets to null on **every**
+   (re)open, so a new connection never inherits the previous one's archive, and stays null until
+   that connection's identity frame arrives. A missing or malformed identity frame (absent, not
+   JSON, or `archive_id` not a UUID) leaves it null. A logged or engagement frame on a connection without an identity is dropped and
+   logged as a protocol fault, never applied. Every candidate write is a tagged record
+   `(archive_id, payload)`. It is applied to the store only when the tab's **bound archive** has
+   been proven and equals the tag.
+4. **Binding** is set only by the boot bracket (`bootArchiveScoped`, both identity reads agree).
+   It is never changed in place: another archive always means a reload, as ADR 0071 and 0087
+   already require.
+5. **Before binding,** tagged records wait in an in-memory buffer. When binding is proven, records
+   whose tag equals the bound archive are merged; every other record is discarded. A buffered
+   record is released only by a proof of its own archive. A later identity read cannot adopt an
+   earlier buffer, because the comparison is per record. If the bracket fails or straddles a
+   restart, the page reloads and the buffer is lost (R3).
+6. **After binding,** a tagged record for another archive is not applied. It starts
+   `verifyArchiveGeneration` at once instead of waiting for the log stream's reconnect, and that
+   leads to the existing reload. So an FT8 reconnect that beats the always-on stream cannot write
+   under the old key.
+7. **Merge by UUID.** A released or live row whose UUID is already in the bound list is not
+   added again: hydration may already hold it, and `ft8-logged` can repeat. A UUID-less row is
+   appended (it cannot be matched). Engagement entries are a set keyed `call|band` per archive,
+   so they are idempotent.
+
+#### Session isolation (Finding #5): behaviour
+
+1. Storage is `sm.session.qsos.<archiveUUID>` and `sm.ft8.engaged.<archiveUUID>`. Until binding,
+   the store shows an empty, unbound list.
+2. Panel, badge, edit, export, email selection, `workedEvidence` and the `allow_duplicate`
+   decision read only the bound archive's list and engagement set.
+3. An archive with no rows in this tab shows an empty list, even with durable contacts.
+4. Same-archive reloads or restarts preserve both stores; returning to an archive restores them;
+   other archives' keys are left untouched.
+5. **While binding is unproven** (before the bracket, while `archivesState.verifying`, or while
+   `switchUnresolved`), Session edit, export and email, Phone/CW submit and the guarded FT8
+   actions are disabled with the reason "Waiting until this tab has confirmed its archive." When
+   binding is proven, every such request carries the archive guard below.
+6. **Legacy reset (R2, R4).** At first boot of the new build, an unscoped `sm.session.qsos` or
+   `sm.ft8.engaged` is removed **after** binding is proven (so a failed boot keeps it for the
+   reload), and a single info toast reads: "Session history was reset by this update. Your logged
+   QSOs are intact in the Logbook." The notice shows once **only if the remove succeeds**. A
+   remove that fails (storage unavailable) leaves the legacy key, so the next boot discards again
+   and the notice repeats. This is an accepted limitation, not a once-only guarantee.
+7. Nearest confusable outcomes: a list chosen before identity is proven; a frame from a new
+   archive filed under the old key; keying by label or instance; a reset that also loses the
+   returning archive's list.
+
+#### Archive request guard (ADR 0087 prevention; Findings #5 and #6)
+
+1. **Header.** A protected request carries `X-SM-Archive-Id: <bound archive UUID>`. The daemon
+   compares it with the archive **this process serves**: fixed at startup for that daemon
+   generation, never the config's pending selector. The check runs **before any side effect**:
+   no QSO or upload-queue write, email send or stamp, export backup, or TX admission.
+2. **Outcomes.** Missing header: 400 `missing_required_field`. Not a UUID: 400
+   `invalid_field_value`. Another archive: 409 `archive_mismatch`. The 409 body names neither
+   archive's label (diagnostics stay minimal).
+3. **Client.** **Only** a 409 `archive_mismatch` rebinds: the SPA starts
+   `verifyArchiveGeneration` and reloads per the existing path. Existing outcomes keep their
+   behaviour: `edit_conflict`, `duplicate_key`, and every FT8 refusal (rung, profile, admission).
+   A `PATCH` that timed out stays **outcome unknown**, even if a later reconciliation `GET`
+   gets `archive_mismatch`: that `GET` cannot prove the write was refused. It **never retries automatically** against the replacement archive. The action's message
+   says it was not performed: for example "Not logged — the daemon now serves another archive.
+   This page will reload." A lost draft is ADR 0087's stated loss; no draft recovery is added.
+   With no proven binding the client sends nothing (item 5 above).
+4. **Protected operations.** These are classified by behaviour, not by blanket middleware:
+   - **QSO writes and Session reads-for-edit:** `POST /v1/qso` (submit);
+     `GET /v1/qso/{uuid}` and `PATCH /v1/qso/{uuid}` from Session edit and the Logbook editor
+     (both use `qso-patch.ts`); `DELETE /v1/qso/{uuid}`. There is **no UUID exemption**:
+     `smd import` preserves supplied UUIDs (`qsoservice.SubmitImport`) into the archive named by
+     `--archive` (`cmd/smd/import.go`), so two archives can hold the same UUID. `GET` without the
+     header stays allowed for plain readers; with the header it is enforced. The SPA always sends
+     it.
+   - **Session:** `POST /v1/session/export` and `POST /v1/session/email`.
+   - **FT8 actions that admit or initiate transmission, or bind an exchange:**
+     - `tx/arm` with `armed: true`, and `tx/send`;
+     - `qso/start`, `qso/work`, `cq/start`, `cq/pick`, `cq/bag` and `cq/resume`;
+     - `qso/next` (works another answerer or resumes CQ);
+     - `qso/skip` with `armed: false` (re-permits a repeat transmission);
+     - `qso/path` (annotates the exchange that will be logged).
+   - **Never guarded** (exempt from the archive check, so stop and reduce controls stay available
+     under any header state; their existing state checks and refusals still apply):
+     - `tx/arm` with `armed: false`, and `qso/abandon`;
+     - `autowork/stop`, `cq/unbag`, and `qso/skip` with `armed: true`;
+     - `claim` (profile selection, no TX or archive effect), and `GET /v1/ft8/events` (it carries
+       the identity frame instead).
+5. **Placement.** The header parser and check live in `internal/api`, where the protected FT8
+   HTTP handlers already are. `internal/ft8` receives only the served archive ID, for its stream
+   identity frame; it gets no request-check helper.
+6. **Other callers updated in the same change:** `cmd/loadgen` reads `GET /v1/version` once and
+   sends the header; e2e and Go test helpers; `api-endpoints.md` (each protected route and the
+   new codes); `docs/ft8.md` (the identity frame in "SSE wire" and the guarded/unguarded FT8
+   classification).
+
+#### Export and email completeness (Finding #6): behaviour
+
+1. **Selection snapshot.** At the click, the action snapshots its selected rows: all rows for a
+   download, and for email the "only unsent" subset or all rows. Later Session changes during the
+   request do not alter its accounting or marking.
+2. **Denominator.** *Submitted* is the number of distinct UUIDs among the snapshot rows; *no-ID* is
+   the number of snapshot rows without a UUID; the denominator is submitted + no-ID. Rows that
+   repeat a UUID already in the selection are collapsed before sending and **disclosed as
+   collapsed duplicates**, never as missing QSOs and never as delivered: "Duplicate selections
+   were counted once." (A duplicated UUID may itself be omitted.) (The merge-by-UUID rule should keep new duplicates from forming; this covers stored
+   lists.) An entirely UUID-less selection sends nothing and says why: "None of these QSOs can be
+   exported: they have no QSO ID."
+3. **Export response.** A 200 adds `X-SM-Requested-Count`, `X-SM-Exported-Count` and
+   `X-SM-Omitted-Count`, where requested is the daemon's deduplicated count. The body stays ADIF.
+   All-missing stays 400 `no_qsos` (no file, and no backup is written).
+4. **Email response.** A 200 adds `sent: []string` (UUIDs composed into the attachment that left)
+   and `omitted: []string` (UUIDs that could not be found). `emailed` keeps its meaning: rows
+   durably stamped, a subset of `sent`, and the only source for `markSessionEmailed`.
+5. **Validation.** For export, the SPA accepts counts only if all three headers are present,
+   each is a non-negative integer, exported + omitted = requested = *submitted*, and exported ≥ 1.
+   For email it requires an exact partition of the submitted UUID set: each list (`sent`,
+   `omitted`, `emailed`) holds unique UUIDs; `sent` is **non-empty** (all-missing is `no_qsos`);
+   `sent` ∪ `omitted` = submitted; `sent` ∩ `omitted` = ∅; and `emailed` ⊆ `sent`. Length arithmetic alone is not enough (`sent=[A,A]`,
+   `omitted=[B]` against a request for A, B and C has the right length but loses C). Validation
+   runs **before** `markSessionEmailed`; an invalid response marks nothing.
+   Absent, malformed or inconsistent metadata never yields a success claim. An export then
+   still downloads, with the warning "The file was saved, but the daemon did not confirm how many
+   QSOs it holds — check it before relying on it." An email is reported as sent with an
+   unconfirmed count, and no rows are marked.
+6. **Messages.** A complete result is an info toast: "Exported 4 QSOs to ADIF" or "Sent 4 QSOs to
+   …". Anything less is a warning that states every part:
+   - "Exported 3 of 5 selected QSOs. 1 could not be found in this archive. 1 has no QSO ID."
+   - For email, "Sent 3 of 4 …; 1 could not be found in this archive."
+   - Where `emailed` < `sent`: "…, but only 2 were recorded as emailed; the rest may be offered
+     again." With `emailed` empty: "…, but none were recorded as emailed."
+
+   "Could not be found in this archive" is the wording throughout: a missing row does not prove
+   deliberate deletion.
+7. **Unchanged:** the ambiguous-send handling. Every email transport failure is treated as
+   ambiguous, and a fired timeout gets the "outcome unknown" lead. An export timeout warns
+   "outcome unknown". The notification rules stay as they are.
+8. Nearest confusable outcome: a corrected toast over a file that is still silently short, or a
+   daemon count that ignores rows the SPA never sent.
+
+#### Tests (RED first, each with an informative assertion and a reversion proof)
+
+- **Stream identity (vitest + Go):** the identity resets on every reconnect; the identity frame
+  precedes the hub's cached replay; a missing or malformed identity frame never inherits the
+  previous connection's archive (frames on that connection are dropped).
+- **Provenance (vitest):** an FT8 reconnect delivering `ft8-logged` and engagement frames for
+  another archive before the log stream reconnects: nothing written under the bound key, and
+  verification started. A frame before the identity frame is dropped. Boot buffer with
+  matching, mismatched and unreadable identities (released, discarded, discarded on reload). A
+  buffered UUID already present in the hydrated list is merged without duplication.
+- **Isolation (vitest):** two archives in one tab; restore on return; same-archive reload; empty
+  new archive; legacy reset with its toast once when the remove succeeds and repeated when it
+  fails; actions disabled while unproven; a 409 `archive_mismatch` leads to verify with no
+  automatic retry.
+- **Request guard (Go, decisive fixtures):** a second archive with the **same logbook ID and
+  station callsign** and, for edit and delete, the **same QSO UUID with distinguishable
+  contents**. An absent UUID would hide the defect. Each stale request (a header naming the other
+  archive) gets 409 and leaves no trace:
+  - submit: no QSO row and no upload-queue row;
+  - `GET`, `PATCH` and `DELETE`: no read of, change to or deletion of the other archive's row;
+  - export: no file and no backup in `exports/sent-adif/`;
+  - email: no send and no stamp;
+  - each guarded FT8 route: no admission, arm or queued transmission.
+
+  Missing and malformed headers get 400. Each never-guarded FT8 control, in a state where it is
+  valid, behaves identically with an absent, malformed or mismatched header. Its existing
+  rung/profile refusals are unchanged.
+- **Engagement (vitest, behavioural):** an engagement recorded under Home does not set
+  `allow_duplicate` for the same call and band under Contest. One recorded under Contest does,
+  and survives a same-archive reload.
+- **Export and email (vitest):** complete; partial; all missing; UUID-less rows; an all-UUID-less
+  selection; duplicate UUIDs disclosed as collapsed (two rows, one UUID: one record, no shortfall
+  unexplained); email partition violations (a repeated UUID, missing coverage, overlap, `emailed`
+  outside `sent`) rejected before marking; the selection changing while the request is in
+  flight; absent, malformed and inconsistent metadata. For email: partial `sent`, and a successful send followed
+  by partial stamping or a complete stamp failure (`emailed` shorter than `sent`, or empty).
+- **Daemon (Go):** export and email handlers for complete, partial, all-missing and duplicate
+  selections, with their counts and lists; `archive_mismatch`; the FT8 stream's identity frame
+  written first on every connection; `archive_id` on the submit response.
+- **Then:** a new frozen candidate, the automated gates, affected Gate A prerequisites, and
+  B2-09–11 on that artifact before A3. Update `api-endpoints.md` and `docs/ft8.md` in the same
+  change as each route or stream change.
+
 ## Review findings on the plan (2026-09-22)
 
 Four findings from the operator's review, each fixed in the slice plan above rather than deferred:

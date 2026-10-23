@@ -7,6 +7,35 @@ date: 2026-10-22
 
 # 0094 — Retain Session lists per archive within each tab
 
+> **Update 2026-10-23:** B2-10 and B2-11 confirmed the failure against alpha.4, which is held.
+> These implementation rulings were settled (Codex, at the operator's request). The design is in
+> [W-0021](../work/W-0021-qso-archives.md), "alpha.4 hold: fix design".
+>
+> - **Legacy lists:** discard an unscoped list once the archive is proven, with a one-time notice
+>   that Session history was reset and logged QSOs are intact. Rejected: claiming the rows for
+>   the active archive (a guess), keeping only rows that resolve there (a boot-time lookup path
+>   for a one-off upgrade), and a hidden unassigned bucket.
+> - **Provenance:** every Session or engagement write carries the archive of the daemon that
+>   produced it (an identity frame first on each FT8 stream connection; `archive_id` on the
+>   submit response). It applies only when that equals the tab's proven binding. Rejected:
+>   trusting the order of streams, or adopting a buffer on any later identity read, because an
+>   FT8 reconnect can beat the stream that verifies the archive.
+> - **Before binding:** an in-memory buffer whose records are released only by a proof of their
+>   own archive. Rejected: an unscoped persistent pending bucket. Rows lost on a failed boot are
+>   an accepted panel-history limitation; the QSOs remain durable.
+> - **FT8 engagement state** is scoped per archive like the list, because it sets
+>   `allow_duplicate`. Rejected: per tab.
+> - **While binding is unproven,** Session edit, export and email, submit and FT8 transmit
+>   admission are disabled.
+> - **Request guard** (ruled in review of revision 2): once the archive is proven, those requests,
+>   and the Logbook editor's `GET`/`PATCH`/`DELETE` of a QSO, carry `X-SM-Archive-Id`. The daemon
+>   checks it against the archive it actually serves, before any side effect, and answers
+>   409 `archive_mismatch`. The client then verifies and reloads, with no automatic retry.
+>   Provenance on a response cannot stop an action reaching the wrong archive, and ADR 0087
+>   retains that prevention requirement. Rejected: exempting UUID-addressed edits, because
+>   `smd import` preserves UUIDs, so two archives can hold the same one. Stop, disarm and abandon
+>   controls are never guarded.
+
 ## Context
 
 The alpha.4 acceptance review confirmed that a reused browser tab retained a test QSO from a

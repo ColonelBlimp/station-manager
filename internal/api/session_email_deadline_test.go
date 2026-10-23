@@ -56,6 +56,7 @@ func TestSessionEmail_SuccessOutlivesWriteTimeout(t *testing.T) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Origin", ts.URL)
+	withServedArchive(req)
 
 	resp, err := ts.Client().Do(req)
 	if err != nil {

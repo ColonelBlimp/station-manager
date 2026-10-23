@@ -243,7 +243,20 @@ func testServerWithLogger(
 	// session-email handler probes Enabled() (which a nil mailer
 	// reports as false) and returns 503 mailer_disabled, mirroring
 	// an operator who hasn't configured SMTP.
-	return New(cfg, "test", cfgSvc, qsoSvc, dbSvc, logSvc, hub, nil, nil, nil, ft8Svc)
+	srv := New(cfg, "test", cfgSvc, qsoSvc, dbSvc, logSvc, hub, nil, nil, nil, ft8Svc)
+	srv.SetServedArchive(testServedArchive)
+	return srv
+}
+
+// testServedArchive is the archive every test server serves; a request that
+// passes the archive guard (archive_guard.go) names it in X-SM-Archive-Id.
+const testServedArchive = "01a16a00-0000-7000-8000-000000000001"
+
+// withServedArchive marks a request as coming from a tab bound to the test
+// server's archive.
+func withServedArchive(req *http.Request) *http.Request {
+	req.Header.Set(archiveIDHeader, testServedArchive)
+	return req
 }
 
 // createTestLogbook creates a logbook via the handler and returns its ID.

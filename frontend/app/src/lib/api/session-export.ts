@@ -5,7 +5,8 @@
 // attachment. Same send-UUIDs-not-a-blob contract as session-email; the SPA
 // never composes ADIF itself.
 
-import { safeFetch, readJsonBody, isPlainObject, WRITE_TIMEOUT_MS } from './_helpers';
+import { readJsonBody, isPlainObject, WRITE_TIMEOUT_MS } from './_helpers';
+import { guardedFetch } from './archive-guard';
 
 export type SessionExportOutcome =
     | { kind: 'ok'; filename: string; body: string }
@@ -35,7 +36,7 @@ export async function exportSessionAdif(
     uuids: string[],
     signal?: AbortSignal
 ): Promise<SessionExportOutcome> {
-    const fetched = await safeFetch(
+    const fetched = await guardedFetch(
         '/v1/session/export',
         {
             method: 'POST',

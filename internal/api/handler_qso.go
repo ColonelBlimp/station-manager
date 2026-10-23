@@ -280,5 +280,10 @@ func (s *Server) handleSubmitQso(w http.ResponseWriter, r *http.Request) {
 	if result.Status == "duplicate" {
 		status = http.StatusOK
 	}
-	s.writeJSON(w, status, result)
+	// archive_id names the archive that answered — the provenance a tab files
+	// its Session row under (ADR 0094 update).
+	s.writeJSON(w, status, struct {
+		qsoservice.SubmitResult
+		ArchiveID string `json:"archive_id"`
+	}{result, s.servedArchiveID})
 }

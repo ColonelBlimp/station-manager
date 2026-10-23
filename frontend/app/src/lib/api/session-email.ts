@@ -38,7 +38,8 @@
                              unreachable).
 */
 
-import { EMAIL_TIMEOUT_MS, isPlainObject, readJsonBody, safeFetch } from './_helpers';
+import { EMAIL_TIMEOUT_MS, isPlainObject, readJsonBody } from './_helpers';
+import { guardedFetch } from './archive-guard';
 
 export interface SessionEmailRequest {
     to: string;
@@ -76,7 +77,7 @@ export async function sendSessionEmail(
     req: SessionEmailRequest,
     signal?: AbortSignal
 ): Promise<SessionEmailOutcome> {
-    const fetched = await safeFetch(
+    const fetched = await guardedFetch(
         '/v1/session/email',
         {
             method: 'POST',

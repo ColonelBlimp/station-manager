@@ -16,6 +16,11 @@ import {
     type QsoArchive,
 } from '../api/qso-archives';
 import { fetchDaemonInstance, waitForDaemonBack } from '../api/restart';
+import {
+    setArchiveBindingGate,
+    setArchiveMismatchSink,
+    setBoundArchive,
+} from '../api/archive-guard';
 import { OUTCOME_UNKNOWN_LEAD } from '../api/_helpers';
 import { toasts } from '../ui/toasts.svelte';
 import { draft, draftInProgress, logOutcomeUnknown, submitState } from '../operate/qso.svelte';
@@ -434,6 +439,8 @@ export async function bootArchiveScoped<T>(reads: () => Promise<T>): Promise<T> 
     if (before !== null && after !== null) {
         if (before.instance === after.instance && before.archiveId === after.archiveId) {
             bootIdentity = after;
+            // The guarded requests may now name it (archive-guard.ts).
+            setBoundArchive(after.archiveId);
         } else {
             bootIdentity = null;
             toasts.info('The daemon changed while the page was loading. Reloading…');
@@ -539,12 +546,22 @@ export async function verifyAfterRigReconnect(): Promise<void> {
     }
 }
 
+// The client half of the archive request guard: hold guarded requests while the
+// binding is unproven, and treat the daemon's archive_mismatch as a reconnect
+// that found another archive — verify, then reload through the boot path.
+setArchiveBindingGate(() => archivesState.verifying || archivesState.switchUnresolved);
+setArchiveMismatchSink(() => {
+    void verifyArchiveGeneration();
+});
+
 /** Test seams. */
 export function _setBootIdentityForTests(id: DaemonIdentity | null): void {
     bootIdentity = id;
+    setBoundArchive(id?.archiveId ?? null);
 }
 export function _resetArchivesForTests(): void {
     bootIdentity = null;
+    setBoundArchive(null);
     pendingChecks = 0;
     archivesState.list = [];
     archivesState.loaded = false;

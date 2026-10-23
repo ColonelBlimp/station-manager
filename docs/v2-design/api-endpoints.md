@@ -70,6 +70,25 @@ SPA HTML. A headless (non-TCP or `ServeSPA` off) daemon registers no SPA routes,
 or root mount at all, so those paths `404` there too. (SM Cloud's API returns the same
 `not_found` / `method_not_allowed` envelope for unmatched routes.)
 
+**Archive request guard (ADR 0094 update, 2026-10-23).** A request that acts on the QSO
+archive or admits transmission names the archive the client has proven it is bound to, in
+`X-SM-Archive-Id: <archive uuid>`. The daemon compares it with the archive this process has
+**open** (the file's own identity, read at startup — never the catalogue's pending selector)
+**before any side effect**: no QSO or upload-queue write, email send or stamp, export backup,
+or TX admission. Missing header → **400 `missing_required_field`**; not exactly one UUIDv7 →
+**400 `invalid_field_value`**; another archive → **409 `archive_mismatch`** (nothing was
+done; the client re-verifies and reloads, and never retries against the replacement). UUIDs
+do not make a QSO route safe on their own: `smd import` preserves supplied UUIDs, so two
+archives can hold the same one. Guarded (`internal/api/archive_guard.go`):
+`POST /v1/qso`; `PATCH` and `DELETE /v1/qso/{uuid}`; `GET /v1/qso/{uuid}` **only when the
+header is supplied** (plain readers may omit it; the SPA always sends it);
+`POST /v1/session/email` and `/export`; FT8 `tx/arm` with `armed: true`, `tx/send`,
+`qso/start`, `qso/work`, `qso/path`, `qso/next`, `qso/skip` with `armed: false`, `cq/start`,
+`cq/pick`, `cq/bag`, `cq/resume`. **Never guarded**, so a stale tab can always stop: `tx/arm`
+with `armed: false`, `qso/abandon`, `autowork/stop`, `cq/unbag`, `qso/skip` with
+`armed: true`, and `claim` (their own state checks still apply). The guard runs outside the
+submit rate limiter, so a refused submit spends no token.
+
 ---
 
 ## QSO
@@ -83,29 +102,29 @@ items return a QSO through a boundary projection of `types.Qso`: the canonical *
 
 ### `POST /v1/qso`
 - **Purpose:** Submit exactly one QSO as ADIF — the primary logging write path (consolidated app, `curl`, import tooling). Bulk import is a separate tool (`cmd/importer`), not this endpoint.
-- **Gating:** Always-on; additionally wrapped in `limitSubmitRate`.
+- **Gating:** Always-on; **archive-guarded** (required header, see Conventions), then wrapped in `limitSubmitRate`.
 - **Request:** Content-Type `application/x-adif` / `text/plain` / empty (other → 415 `unsupported_media_type`). Body = a single-record ADIF doc. Query: `logbook` (int, **required**, ≥1; must exist), `force` (bool, optional — bypass dedupe). Any `expect_`-prefixed key — what a page loaded before ADR 0087 sent to log a recovered QSO — is refused **409 `reload_required`**, storing nothing; the page must reload. The query is parsed strictly: a malformed one is 400 `invalid_query_param`, never a partial read. **`STATION_CALLSIGN` is derived from the logbook** (ADR 0055): the daemon stamps the QSO with the logbook's own callsign, so a record's own `STATION_CALLSIGN` is ignored on a live submit and need not be present (an **import** keeps the record's value for historical fidelity).
-- **Response:** **201** on store / **200** on duplicate. Body `{"status": "stored"|"duplicate", "uuid": string, "id": int64}` (`id` is **DEPRECATED**, removed in `v2.0.0-alpha.3`; use `uuid`).
-- **Errors:** 400 `invalid_adif`, `too_many_records`, `missing_required_field`, `invalid_field_value`, `missing_required_param`, `invalid_id`, `invalid_query_param`, `invalid_time_range`; 404 `logbook_not_found`; 409 `reload_required` (any `expect_*` key; nothing written); 429 `rate_limited`; 503 `server_busy`; 500 `submit_failed`/`db_error`.
+- **Response:** **201** on store / **200** on duplicate. Body `{"status": "stored"|"duplicate", "uuid": string, "id": int64, "archive_id": string}` (`id` is **DEPRECATED**, removed in `v2.0.0-alpha.3`; use `uuid`). `archive_id` names the archive that answered — the provenance a client files its Session row under.
+- **Errors:** 409 `archive_mismatch` / 400 `missing_required_field` / 400 `invalid_field_value` from the archive guard; 400 `invalid_adif`, `too_many_records`, `missing_required_field`, `invalid_field_value`, `missing_required_param`, `invalid_id`, `invalid_query_param`, `invalid_time_range`; 404 `logbook_not_found`; 409 `reload_required` (any `expect_*` key; nothing written); 429 `rate_limited`; 503 `server_busy`; 500 `submit_failed`/`db_error`.
 - **Notes:** A `MODE` that names an ADIF submode (`USB`; `FT4`, `FST4`, `FST4W`, `JS8`, `Q65`, which the embedded catalogue listed as modes until 2026-09-11) is stored as its parent/submode pair (`SSB`/`USB`, `MFSK`/`FT4`); a `SUBMODE` contradicting such a `MODE` is `invalid_field_value`. `PATCH` applies the same canonicalisation to the merged record, so a contact stored under the old form is healed by its next edit. Dedupe — the single submit and the bulk import alike — also matches a record whose pair is `MFSK` with one of those submodes against the key its bare `MODE` hashed to, so a re-import of a contact stored before 2026-09-11 is a duplicate, not a copy. One-fails-all-fail atomic write (QSO row + upload-queue rows in one tx). Idempotent dedupe — a known duplicate returns 200 with the existing UUID/ID. **Dedupe is minute-precision** (`CALL|BAND|MODE|FREQ|QSO_DATE|TIME_ON`, TIME_ON truncated to HHMM), so two contacts in the same minute collide — even though times are **stored and exported at full `HH:MM:SS`** where supplied (ADIF `HHMMSS` preserved since migration 0003; seconds matter to QSL managers matching on exact timestamp). A **midnight-crossing** QSO (`TIME_ON` > `TIME_OFF`) must carry `QSO_DATE_OFF` on the **following day** or it's rejected `invalid_time_range`; SM's own clients (consolidated app + FT8 daemon) **always populate `QSO_DATE_OFF`** — the date at `TIME_OFF`, equal to `QSO_DATE` for a same-day contact.
 
 ### `GET /v1/qso/{uuid}`
 - **Purpose:** Fetch one QSO by canonical UUIDv7 (SPA edit/detail).
-- **Gating:** Always-on.
+- **Gating:** Always-on; **archive-guarded only when `X-SM-Archive-Id` is supplied** (then 400/409 as in Conventions).
 - **Request:** Path `{uuid}` (UUIDv7).
 - **Response:** **200**, body = the public QSO projection (see the QSO-section note). Excludes soft-deleted rows.
 - **Errors:** 400 `invalid_uuid`; 404 `not_found`; 500 `db_error`.
 
 ### `PATCH /v1/qso/{uuid}`
 - **Purpose:** Update fields of an existing QSO (SPA edit flow).
-- **Gating:** Always-on.
+- **Gating:** Always-on; **archive-guarded** (required header).
 - **Request:** Path `{uuid}`. JSON body overlaid on the existing QSO; immutable fields (ids, upload statuses) are stash-restored. A body with **no effective change** — empty, `{}`, unknown-only, immutable-only, or values that normalize back to the stored ones — is a **true no-op**: it returns the existing row unchanged, with no revision/modified bump, audit row, forwarder re-arm, or `qso.updated` event (AW-3, decided at the service boundary on an editable-field projection).
 - **Response:** **200**, body = the public QSO projection of the updated row.
 - **Errors:** 400 `invalid_uuid`/`invalid_json`/`missing_required_field`/`invalid_field_value`/`invalid_time_range`; 409 `duplicate_key` (dedupe collision) / `edit_conflict` (the QSO changed since this request fetched it — revision CAS; re-fetch and re-apply); 404 `not_found`; 500 `update_failed`/`db_error`.
 
 ### `DELETE /v1/qso/{uuid}`
 - **Purpose:** Soft-delete a QSO and enqueue a delete-forward.
-- **Gating:** Always-on.
+- **Gating:** Always-on; **archive-guarded** (required header).
 - **Request:** Path `{uuid}`.
 - **Response:** **204**.
 - **Errors:** 400 `invalid_uuid`; 404 `not_found` (missing or already soft-deleted); **409 `delete_conflict`** (the QSO changed since this request fetched it — revision CAS, parallel to `edit_conflict`; re-fetch and retry); 500 `db_error`.
@@ -251,7 +270,7 @@ The station-global archive catalogue (`config.md` §3): the archive the daemon s
 
 ### `POST /v1/session/email`
 - **Purpose:** Email a session's QSOs as an ADIF attachment via the daemon's SMTP (SessionPanel "send").
-- **Gating:** Always-on route; refuses if the mailer is disabled.
+- **Gating:** Always-on route; **archive-guarded** (required header, checked before the mailer); refuses if the mailer is disabled.
 - **Request:** Body `{"to" (req, exactly one RFC 5322 mailbox — `net/mail.ParseAddress`; comma-lists and CR/LF rejected, display-name normalized to the bare address), "subject"?, "uuids": []string (req, non-empty), "filename"?}` (subject/filename defaulted from UTC time).
 - **Response:** **200** `{"status": "sent", "emailed": []string, "date": "YYYYMMDD"}`. `emailed` lists only the UUIDs whose durable forwarded-by-email flag was actually written (and `date` is empty when none were) — it certifies the DURABLE outcome, not merely that the mail was sent.
 - **Errors:** 503 `mailer_disabled`; 400 `invalid_json`/`missing_required_field`/`invalid_field_value`/`no_qsos`; 500 `fetch_failed`/`adif_compose_failed`; 502 `smtp_failure`.
@@ -259,7 +278,7 @@ The station-global archive catalogue (`config.md` §3): the archive the daemon s
 
 ### `POST /v1/session/export`
 - **Purpose:** Download a session's QSOs as an ADIF file (Export dialog "Download ADIF"). Same rebuild-from-DB path as `email` minus the SMTP send — so the download carries the fully enriched stored record, not the SPA's pre-submit subset.
-- **Gating:** Always-on route (no mailer gating).
+- **Gating:** Always-on route (no mailer gating); **archive-guarded** (required header).
 - **Request:** Body `{"uuids": []string (req, non-empty), "filename"?}` (filename defaulted `session-YYYYMMDD-HHMMSS.adi`; an operator-supplied name is a bare attachment name — traversal rejected).
 - **Response:** **200** `application/x-adif` with `Content-Disposition: attachment; filename="…"`; body is the composed ADIF document.
 - **Errors:** 400 `invalid_json`/`missing_required_field`/`invalid_field_value`/`no_qsos`; 500 `fetch_failed`/`adif_compose_failed`.
@@ -450,7 +469,7 @@ The station-global archive catalogue (`config.md` §3): the archive the daemon s
 
 ### `POST /v1/ft8/tx/arm`
 - **Purpose:** Arm/disarm the FT8 transmit path — explicit operator gate before any FT8 RF (ADR 0030 e1).
-- **Gating:** **Only when FT8 is enabled.**
+- **Gating:** **Only when FT8 is enabled.** **Archive-guarded when `armed: true`** (arming admits TX); disarm never is.
 - **Request:** Body `{"armed": bool}` — `armed` is **required**: a missing boolean is a 400, never a silent disarm; unknown or duplicate keys are rejected (AW-2). Idempotent.
 - **Response:** **202 Accepted** (state confirmed via `ft8-tx` SSE).
 - **Errors:** 400 `invalid_json`/`missing_required_field`/`ft8_tx_bad_message`; 503 `ft8_tx_unavailable`/`rig_not_ready`/`rig_dial_unknown`; 409 `ft8_tx_not_armed`/`ft8_tx_in_flight`; 500 `ft8_tx_failed`.
@@ -458,14 +477,14 @@ The station-global archive catalogue (`config.md` §3): the archive the daemon s
 
 ### `POST /v1/ft8/tx/send`
 - **Purpose:** Queue one standard FT8 message for the next UTC slot at a chosen audio offset (ADR 0030 e1).
-- **Gating:** **Only when FT8 is enabled.** Requires TX armed.
+- **Gating:** **Only when FT8 is enabled.** Requires TX armed. **Archive-guarded.**
 - **Request:** Body `{"message": string, "offset_hz": float64}`.
 - **Response:** **202 Accepted** (completion/failure via `ft8-tx` SSE).
 - **Errors:** 400 `invalid_json`/`ft8_tx_bad_message`/`ft8_no_offset`/`ft8_bad_offset`; 503 `ft8_tx_unavailable`/`rig_not_ready`/`rig_dial_unknown`; 409 `ft8_tx_not_armed`/`ft8_tx_in_flight`; 500 `ft8_tx_failed`. (`offset_hz` is daemon-validated against the usable passband — review 2026-06-19 M1.)
 
 ### `POST /v1/ft8/qso/start`
 - **Purpose:** Begin a manual answer-a-CQ exchange the daemon auto-advances CQ→73 (ADR 0031 e3).
-- **Gating:** **Only when FT8 is enabled.** Requires TX armed.
+- **Gating:** **Only when FT8 is enabled.** Requires TX armed. **Archive-guarded.**
 - **Request:** Body `{"their_call" (req), "their_grid"?, "slot_utc"?, "offset_hz"?, "operating_freq_mhz"?, "mode"?, "their_snr"?, "answer_mode"?}`. Our own callsign/grid are resolved server-side from station config. `mode:"fd"` answers a `CQ FD` with the operator's ARRL Field Day exchange (class/section from `ft8.field_day` config; `ft8_field_day_unset` 400 if unset) — see ft8.md "ARRL Field Day operating". `mode:"type4"` answers a NONSTANDARD/compound-call CQ (`CQ PJ4/NA2AA`, `CQ K1ABC/D`) with the reduced type-4 ladder (bare-calls→RR73→73, no grid/report on the wire — ADR 0048); needs no config identity (our own call is standard). "" / "standard" is the normal grid/report answer. `their_snr` (our SNR of the clicked CQ) is logged as RST_SENT for `mode:"fd"` and `mode:"type4"` (neither exchanges a report; ignored for a standard answer, whose report comes from the exchange). `answer_mode` (ADR 0066/0067 — the SESSION's Answer mode, the ONE run input: an auto mode arms a hands-off run alongside this contact, `operator_pick` leaves a listing run that transmits at nobody until a pop/bag; absent/empty → the config default, junk → `invalid_field_value` 400). A fresh start replaces any previous run. Standard exchange mode only — `mode:"fd"`/`"type4"` never arm a run. (The ADR 0065 per-click `auto_work` intent field retired with ADR 0067; it is the one legacy key still accepted — an old client that sends it is tolerated, while any OTHER unknown field is now rejected with 400 `invalid_json` (AW-2).)
 - **Response:** **202 Accepted** (progress via `ft8-qso` SSE).
 - **Errors:** 400 `invalid_json`/`invalid_field_value`/`no_station_callsign`/`ft8_no_offset`/`ft8_bad_offset`/`ft8_no_frequency`; 409 `ft8_tx_not_armed`/`ft8_qso_in_progress`; 503 `db_unavailable`. **503 `db_unavailable`** when the logbook datastore cannot be read: the station identity is unresolvable, so no sequencer session starts and no PTT is keyed; the existing TX-arm state is unchanged (this route requires TX already armed, and the refusal does not disarm it). Distinct from 400 `no_station_callsign`, which means the callsign is genuinely unconfigured — the two demand opposite actions and were collapsed into the 400 until 2026-08-01 (audit finding A7).
@@ -473,7 +492,7 @@ The station-global archive catalogue (`config.md` §3): the archive the daemon s
 
 ### `POST /v1/ft8/qso/work`
 - **Purpose:** Begin working a station that is calling US, picked from the pile-up (ADR 0033 "work a caller"). Caller-style exchange (we report first → RR73 → log), then **idle** (does not loop to CQ). For tail-enders / answerers that call us when we're not in a Call-CQ session.
-- **Gating:** **Only when FT8 is enabled.** Requires TX armed + no session in flight.
+- **Gating:** **Only when FT8 is enabled.** Requires TX armed + no session in flight. **Archive-guarded.**
 - **Request:** Body `{"their_call" (req), "their_grid"?, "their_snr"?, "slot_utc"?, "offset_hz"?, "operating_freq_mhz"?, "mode"?, "their_class"?, "their_section"?, "answer_mode"?}`. `their_snr` is the SPA's SNR of the picked decode — the report we send (RST_SENT). Our own callsign/grid resolved server-side. `mode:"fd"` works a caller who called us with an ARRL Field Day exchange — the SPA parsed `their_class`/`their_section` from `<ourCall> <theirCall> <class> <section>`, and our class/section come from `ft8.field_day` config (`ft8_field_day_unset` 400 if unset). `mode:"type4"` works a NONSTANDARD/compound caller with the reduced type-4 ladder (single RR73 rung, no report — ADR 0048); needs no config identity. "" / "standard" is the normal grid/report work. Both bodies also accept `allow_duplicate` (bool, optional, default false) — the operator's EXPLICIT "work this station again" intent. QSO storage deduplicates on call+band+mode+freq+date+HH**MM**, so a deliberate second contact with the same station inside one minute would otherwise hash to the first's key and be silently discarded: the operator transmits a full exchange and no row appears (reachable on the short ladders — work-a-caller and the single-rung type-4 work path). The flag is pinned to the session AT ARM TIME (like the logbook, ADR 0055), stamped onto the completed QSO, and passed to `qsoservice.Submit` as `force`. The SPA sets it only from an operator action on a station it already shows as worked this session; `/v1/ft8/cq/start` does NOT take it (a Call-CQ run works whoever answers, so there is no per-station intent to express). Both bodies also accept `answer_mode` (ADR 0066/0067 — the SESSION's Answer mode, the ONE run input, same semantics as on `qso/start`: an auto mode arms a hands-off run, `operator_pick` leaves a listing run, absent/empty → the config default, junk → `invalid_field_value` 400; the retired ADR 0065 `auto_work` intent field is the one legacy key still accepted if an old client sends it, while any OTHER unknown field is now rejected with 400 `invalid_json` — AW-2). Standard exchange mode only — FD/type-4 never arm a run.
 - **Response:** **202 Accepted** (progress via `ft8-qso` SSE).
 - **Errors:** 400 `invalid_json`/`invalid_field_value`/`no_station_callsign`/`ft8_no_offset`/`ft8_bad_offset`/`ft8_no_frequency`/`ft8_tx_bad_message`; 409 `ft8_tx_not_armed`/`ft8_qso_in_progress`; 503 `rig_not_ready`/`rig_dial_unknown`/`db_unavailable`. **503 `db_unavailable`** when the logbook datastore cannot be read: the station identity is unresolvable, so no sequencer session starts and no PTT is keyed; the existing TX-arm state is unchanged (this route requires TX already armed, and the refusal does not disarm it). Distinct from 400 `no_station_callsign`, which means the callsign is genuinely unconfigured — the two demand opposite actions and were collapsed into the 400 until 2026-08-01 (audit finding A7).
@@ -481,7 +500,7 @@ The station-global archive catalogue (`config.md` §3): the archive the daemon s
 
 ### `POST /v1/ft8/cq/start`
 - **Purpose:** Begin a sequenced Call-CQ session that works answerers (ADR 0033). Answerer-selection mode = the SESSION's `answer_mode` on this request (ADR 0066; absent → the `ft8.tx.caller_answer_mode` default, `operator_pick` since 2026-08-08): `auto_first`; `auto_strongest`; `operator_pick` per ADR 0065 — answerers are LISTED on the `ft8-qso` frames (`answerers`) instead of auto-committed, the CQ keeps calling until the operator pops one via `POST /v1/ft8/cq/pick`, and the run works that station then resumes CQ.
-- **Gating:** **Only when FT8 is enabled.** Requires TX armed.
+- **Gating:** **Only when FT8 is enabled.** Requires TX armed. **Archive-guarded.**
 - **Request:** Body `{"offset_hz": float64, "operating_freq_mhz": float64, "tx_parity"?: "even"|"odd", "answer_mode"?: "auto_first"|"auto_strongest"|"operator_pick", "cq_modifier"?: string}`. Callsign/grid resolved server-side. `cq_modifier` (W-0011, 2026-09-12) is the optional CQ token that rides between CQ and our call — `"AF"` → `CQ AF 7Q5MLV KH78` — one to four letters or exactly three digits, the shapes the protocol packs into the first 28-bit field; trimmed and upper-cased; anything else → `invalid_field_value` 400 naming the field, before the arm check. The sequencer re-validates the composed CQ through the encoder round trip it already runs, so a token that passes the wire rule but fails to pack still ends as `ft8_tx_bad_message` 400 with no session started. Operating state per Call-CQ session, like `tx_parity`; the app keeps it behind a per-session enable. `tx_parity` is the operator's chosen CQ slot parity (WSJT-X "Tx even/1st" — `even` = :00/:30, `odd` = :15/:45); **omitted/empty/any-other value = call CQ on the next slot regardless of parity** (the default, fastest first CQ). `answer_mode` is the SESSION's answerer-selection mode (ADR 0066, the TX control bar's Answer selector) — omitted/empty = the config default; junk → `invalid_field_value` 400. Both are operating state, sent per session — not persisted daemon settings. Caller-side only (answering a CQ forces the opposite parity).
 - **Response:** **202 Accepted** (progress via `ft8-qso` SSE).
 - **Errors:** 400 `invalid_json`/`no_station_callsign`/`ft8_no_offset`/`ft8_bad_offset`/`ft8_no_frequency`/`invalid_field_value`; 409 `ft8_tx_not_armed`/`ft8_qso_in_progress`; 503 `db_unavailable`. (`ft8_caller_mode_unsupported` 501 retired 2026-08-07 — operator_pick is implemented, ADR 0065.) **503 `db_unavailable`** when the logbook datastore cannot be read: the station identity is unresolvable, so no sequencer session starts and no PTT is keyed; the existing TX-arm state is unchanged (this route requires TX already armed, and the refusal does not disarm it). Distinct from 400 `no_station_callsign`, which means the callsign is genuinely unconfigured — the two demand opposite actions and were collapsed into the 400 until 2026-08-01 (audit finding A7).
@@ -489,52 +508,52 @@ The station-global archive catalogue (`config.md` §3): the archive the daemon s
 
 ### `POST /v1/ft8/cq/pick`
 - **Purpose:** Commit a listed answerer into an **operator_pick** Call-CQ run (ADR 0065 decision 3): the run's next slot evaluation transmits our report to that station instead of the CQ; on RR73 the QSO logs and the run resumes CQ. The candidate list the client picks from rides the `ft8-qso` frames (`answerers`, call+SNR; grid/offset/dial stay daemon-side). Sequencing rules: `internal/ft8/operatorpick_test.go`.
-- **Gating:** **Only when FT8 is enabled.**
+- **Gating:** **Only when FT8 is enabled.** **Archive-guarded.**
 - **Request:** Body `{"call": string}` (required).
 - **Response:** **202 Accepted** — the commit is confirmed by push (the `ft8-qso` frame the pop publishes: the contact on the reporting rung, the popped call gone from `answerers`).
 - **Errors:** 400 `invalid_json`/`invalid_field_value` (missing call); **409 `ft8_no_cq_pick_run`** (idle, or the live run is an auto mode — a pop against auto is client drift, EXCEPT a pick naming the `held` station, which is "Answer anyway" in any run shape); **404 `ft8_answerer_not_listed`** (never heard, or unheard past the 3-min staleness bound — the station left; wait for a fresh answer); **409 `ft8_cq_contact_in_flight`** (finish the contact or press Next first — a pop never silently ends one). The three are deliberately distinct: the operator's next action differs.
 ### `POST /v1/ft8/cq/bag`
 
-- **Purpose:** Bag a LISTED pick-run caller into the queue (ADR 0067 slice B) — the operator's explicit "work this one too". Bagged stations are auto-worked by the drain in bag order (each was individually chosen, so the drain keeps every transmission operator-selected); stale entries (unheard past the 3-min bound) are expired at drain, never transmitted at.
+- **Purpose:** Bag a LISTED pick-run caller into the queue (ADR 0067 slice B) — the operator's explicit "work this one too". Bagged stations are auto-worked by the drain in bag order (each was individually chosen, so the drain keeps every transmission operator-selected); stale entries (unheard past the 3-min bound) are expired at drain, never transmitted at. **Archive-guarded.**
 - **Request:** Body `{"call": string}`.
 - **Response:** **202**; the moved station rides the next `ft8-qso` frame (`queue` vs `answerers`). Refusals mirror cq/pick: 409 `ft8_no_cq_pick_run` / 404 `ft8_answerer_not_listed`.
 
 ### `POST /v1/ft8/cq/unbag`
 
-- **Purpose:** Return a bagged station to the listed set (its heard-time intact — normal expiry governs it there).
+- **Purpose:** Return a bagged station to the listed set (its heard-time intact — normal expiry governs it there). **Never archive-guarded.**
 - **Request:** Body `{"call": string}`.
 - **Response:** **202**. Refusals as bag.
 
 ### `POST /v1/ft8/cq/resume`
 
-- **Purpose:** Continue a paused pick-queue drain (the run surface's Stop pauses — queue kept — per ADR 0067; this is the drawer's Resume).
+- **Purpose:** Continue a paused pick-queue drain (the run surface's Stop pauses — queue kept — per ADR 0067; this is the drawer's Resume). **Archive-guarded.**
 - **Request:** empty body.
 - **Response:** **202**. 409 `ft8_no_cq_pick_run` when no pick context exists.
 
 
 ### `POST /v1/ft8/qso/path`
 - **Purpose:** Record the operator's antenna-path choice for the active FT8 exchange (the short/long radio in the FT8 enrichment panel). **Logging-only** — it annotates the logged QSO (ADIF `ANT_PATH`, plus the matching great-circle `ANT_AZ` + `DISTANCE`) and never touches the on-air signal. FT8 QSOs are built daemon-side, so unlike Phone/CW (where the SPA stamps it at submit) the choice is sent here.
-- **Gating:** **Only when FT8 is enabled.**
+- **Gating:** **Only when FT8 is enabled.** **Archive-guarded** (it annotates the exchange that will be logged).
 - **Request:** Body `{"path": "S"|"short"|"L"|"long"}` (case-insensitive). Lenient — anything other than long is treated as short.
 - **Response:** **202 Accepted.**
 - **Notes:** Settable any time during a contact; read once when the exchange completes. Resets to short at the start of each exchange, so a prior contact's "long" never carries over. `ANT_AZ`/`DISTANCE` are only stamped when both grids resolve; `ANT_PATH` is stamped regardless.
 
 ### `POST /v1/ft8/qso/abandon`
-- **Purpose:** Drop any active sequenced session (answer-a-CQ or Call-CQ). **Only when FT8 is enabled.** No body. **202 Accepted**, idempotent (no-op while idle). No error codes.
+- **Purpose:** Drop any active sequenced session (answer-a-CQ or Call-CQ). **Only when FT8 is enabled.** No body. **202 Accepted**, idempotent (no-op while idle). No error codes. **Never archive-guarded** (a stale tab can always stop).
 
 ### `POST /v1/ft8/autowork/stop`
-- **Purpose:** Disarm an armed auto-work run **without ending any active contact** (ADR 0065 — the Auto-work pill's click action). Abandon stops run AND contact; this stops only the run. **Only when FT8 is enabled.** No body. **202 Accepted**, idempotent (stopping a stopped run publishes nothing). No error codes.
+- **Purpose:** Disarm an armed auto-work run **without ending any active contact** (ADR 0065 — the Auto-work pill's click action). Abandon stops run AND contact; this stops only the run. **Only when FT8 is enabled.** No body. **202 Accepted**, idempotent (stopping a stopped run publishes nothing). No error codes. **Never archive-guarded.**
 - **Notes:** The cleared state rides the `ft8-qso` SSE: with a contact active it is the live session frame with `auto_work_armed:false`; idle-and-armed it is a terminal-shaped frame (`active:false`, no `end_reason` — an operator action on the RUN, not a session end).
 
 ### `POST /v1/ft8/qso/next`
-- **Purpose:** Short-circuit the repeat cap on a **stuck Call-CQ contact**: park this answerer at the next slot evaluation, then work another live answerer from that slot or resume calling CQ. The run **continues** — ending it is Abandon's job. **Only when FT8 is enabled.**
+- **Purpose:** Short-circuit the repeat cap on a **stuck Call-CQ contact**: park this answerer at the next slot evaluation, then work another live answerer from that slot or resume calling CQ. The run **continues** — ending it is Abandon's job. **Only when FT8 is enabled.** **Archive-guarded.**
 - **Request:** No body.
 - **Response:** **202 Accepted**. The pending state rides the `ft8-qso` SSE as `next_armed` (confirm-by-push); it clears when the park happens or the contact advances.
 - **Errors:** (while an `ft8-qso` frame carries `held`, Next declines that station for the run and returns 202 in any run shape.) **409 `ft8_no_answerer`** when no answerer is being worked — idle, a Call-CQ run that is merely calling, or an answer/work session (whose Next is `qso/skip`). A third distinct refusal alongside `ft8_no_active_qso` and `ft8_rung_not_skippable`.
 - **Notes:** Deliberately **not** the skip route. Skip fires on a **silent** cycle; this exists for a station that keeps transmitting the same rung and never advances, so a skip-shaped trigger would never fire — the trigger is "did not advance", not "did not transmit". It is the repeat cap fired early, through the same `parkAnswererLocked` off-ramp, so the parked station gets the cap's **per-round** exclusion (cleared when the rescan is empty or a contact completes) — not a session-long lockout. Fires on **both** capped rungs; on the closing RR73 the contact is dropped **without logging** (Group B — the partner never got the roger). The transmission already on the air finishes: the park is deferred to the next slot evaluation, since a replacement can only be picked from a slot's decodes.
 
 ### `POST /v1/ft8/qso/skip`
-- **Purpose:** Arm/disarm **skip-if-silent** on the active sequenced session (the operator's deferred Next, daemon-side): armed, a silent cycle on an already-transmitted rung ends the session **instead of keying the repeat** — no RF at a station the operator has decided to drop. **Only when FT8 is enabled.**
+- **Purpose:** Arm/disarm **skip-if-silent** on the active sequenced session (the operator's deferred Next, daemon-side): armed, a silent cycle on an already-transmitted rung ends the session **instead of keying the repeat** — no RF at a station the operator has decided to drop. **Only when FT8 is enabled.** **Archive-guarded when `armed: false`** (re-permits a repeat transmission); arming skip never is.
 - **Request:** Body `{"armed": bool}` — `armed` is **required**: a missing boolean is a 400, never a silent disarm; unknown or duplicate keys are rejected (AW-2).
 - **Response:** **202 Accepted**. The armed state rides the `ft8-qso` SSE as `skip_armed` (confirm-by-push); the skip firing publishes the idle status.
 - **Errors:** 400 `missing_required_field`/`invalid_json`; **409 `ft8_no_active_qso`** when nothing is running; **409 `ft8_rung_not_skippable`** when a session IS running but sits on a rung with no skip path — a terminal RR73/73, or a Call-CQ run (whose Next is `POST /v1/ft8/qso/next`, below). Skippability is a property of the RUNG, not the session mode. Disarm is always accepted (idempotent, including when idle).

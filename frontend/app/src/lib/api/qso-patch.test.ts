@@ -151,3 +151,24 @@ describe('patchQso — commit-then-timeout reconciliation (F-04a)', () => {
         expect(getSpy).not.toHaveBeenCalled();
     });
 });
+
+// Archive request guard (ADR 0094 update): a re-read refused with archive_mismatch
+// proves nothing about the timed-out PATCH — the PATCH may have reached the old
+// daemon and committed before it went away. Outcome unknown, never "refused".
+describe('patchQso — a timed-out PATCH whose re-read meets another archive', () => {
+    it('stays outcome-unknown', async () => {
+        mockByMethod({
+            PATCH: timeoutError,
+            GET: () =>
+                Promise.resolve(
+                    jsonRes(409, { code: 'archive_mismatch', message: 'nothing was done' })
+                ),
+        });
+        const out = await patchQso(UUID, { comment: 'x' });
+        expect(out.kind).toBe('error');
+        if (out.kind !== 'error') return;
+        expect(out.timedOut).toBe(true);
+        expect(out.message).toContain('the outcome is unknown');
+        expect(out.message).not.toContain('nothing was done');
+    });
+});

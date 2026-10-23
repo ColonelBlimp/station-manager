@@ -25,7 +25,7 @@ func ft8TxTestServer(t *testing.T) *Server {
 
 func postFt8Tx(t *testing.T, srv *Server, path, body string, h http.HandlerFunc) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	req := withServedArchive(httptest.NewRequest(http.MethodPost, path, strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	h(w, req)

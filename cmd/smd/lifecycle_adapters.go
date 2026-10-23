@@ -1122,8 +1122,18 @@ func (d *daemon) stopAdoption() error {
 // ---- http server ----
 
 func (d *daemon) initHTTP() error {
+	const op errors.Op = "smd.initHTTP"
 	d.server = api.New(d.cfg, buildinfo.Version, d.cfgSvc, d.qso, d.db, d.logger, d.hub, d.enrich, d.mailer, d.bridge, d.ft8)
 	d.server.SetEvidence(d.evidence)
+	// The archive guard compares requests with the archive this generation has
+	// OPEN — the file's own identity, adopted before this node — never the
+	// catalogue's selectors. Unreadable here means the file cannot be proven,
+	// so the generation fails rather than serve unguarded.
+	identity, err := d.db.ArchiveIdentityWithContext(context.Background())
+	if err != nil {
+		return errors.New(op).WithErr(err).WithMsg("read the served archive's identity")
+	}
+	d.server.SetServedArchive(identity.ArchiveUUID)
 	// A held binding keeps its route and its queue, but has no worker, so a
 	// retry is refused for it like a disabled one's.
 	running := make([]string, 0, len(d.routes))

@@ -11,13 +11,8 @@
     the {code, message} envelope; the message is operator-facing enough to show.
 */
 
-import {
-    DEFAULT_TIMEOUT_MS,
-    isPlainObject,
-    readJsonBody,
-    safeFetch,
-    WRITE_TIMEOUT_MS,
-} from './_helpers';
+import { DEFAULT_TIMEOUT_MS, isPlainObject, readJsonBody, WRITE_TIMEOUT_MS } from './_helpers';
+import { guardedFetch } from './archive-guard';
 import type { LogbookQso } from './logbooks';
 
 // F-03c (ADR 0077): a single-record GET/PATCH response must be a plain object (an array is NOT —
@@ -98,7 +93,9 @@ export type PatchOutcome =
  *  that only carry a trimmed row (the Operate session list) can hydrate the
  *  edit modal without paging the logbook. */
 export async function fetchQso(uuid: string): Promise<PatchOutcome> {
-    const fetched = await safeFetch(`/v1/qso/${uuid}`, {}, { timeoutMs: DEFAULT_TIMEOUT_MS });
+    // An edit read names the proven archive too: `smd import` preserves UUIDs, so
+    // another archive can hold a QSO with this UUID and different contents.
+    const fetched = await guardedFetch(`/v1/qso/${uuid}`, {}, { timeoutMs: DEFAULT_TIMEOUT_MS });
     if (!fetched.ok) {
         return {
             kind: 'error',
@@ -121,7 +118,7 @@ export async function fetchQso(uuid: string): Promise<PatchOutcome> {
 /** Apply an edit to one QSO. `uuid` is the QSO's canonical id (carried on every
  *  row). Returns the updated row on success, or a daemon-supplied message. */
 export async function patchQso(uuid: string, patch: QsoPatch): Promise<PatchOutcome> {
-    const fetched = await safeFetch(
+    const fetched = await guardedFetch(
         `/v1/qso/${uuid}`,
         {
             method: 'PATCH',

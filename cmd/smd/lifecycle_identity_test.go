@@ -439,6 +439,12 @@ func apiCall(t testing.TB, d *daemon, method, path string) (int, []byte) {
 // client timeout.
 func apiCallBody(t testing.TB, d *daemon, method, path, body string) (int, []byte) {
 	t.Helper()
+	return apiCallHeaders(t, d, method, path, body, nil)
+}
+
+// apiCallHeaders is apiCallBody with extra request headers.
+func apiCallHeaders(t testing.TB, d *daemon, method, path, body string, headers map[string]string) (int, []byte) {
+	t.Helper()
 	sock := d.cfgSvc.Snapshot().SocketPath
 	client := &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -453,6 +459,9 @@ func apiCallBody(t testing.TB, d *daemon, method, path, body string) (int, []byt
 		}
 		if body != "" {
 			req.Header.Set("Content-Type", "application/json")
+		}
+		for k, v := range headers {
+			req.Header.Set(k, v)
 		}
 		resp, err := client.Do(req)
 		if err == nil {

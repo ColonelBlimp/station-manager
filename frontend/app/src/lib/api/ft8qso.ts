@@ -28,6 +28,7 @@
 */
 
 import { isPlainObject, readJsonBody, safeFetch } from './_helpers';
+import { guardedFetch } from './archive-guard';
 
 export type Ft8QsoOutcome =
     | { kind: 'ok' }
@@ -42,12 +43,16 @@ interface DaemonError {
     op?: string;
 }
 
+// `guarded` routes admit or initiate transmission (or annotate the exchange that
+// will be logged), so they name the proven archive and are held back without one.
+// Stop and reduce controls pass false: a stale tab must always be able to stop.
 async function postFt8Qso(
     path: string,
     body: unknown,
+    guarded: boolean,
     signal?: AbortSignal
 ): Promise<Ft8QsoOutcome> {
-    const fetched = await safeFetch(path, {
+    const fetched = await (guarded ? guardedFetch : safeFetch)(path, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -104,6 +109,7 @@ export function startFt8Qso(
             // run follows this start and how it selects.
             ...(answerMode ? { answer_mode: answerMode } : {}),
         },
+        true,
         signal
     );
 }
@@ -139,6 +145,7 @@ export function startFt8WorkCaller(
             ...(allowDuplicate ? { allow_duplicate: true } : {}),
             ...(answerMode ? { answer_mode: answerMode } : {}),
         },
+        true,
         signal
     );
 }
@@ -168,35 +175,36 @@ export function startFt8Cq(
             ...(answerMode ? { answer_mode: answerMode } : {}),
             ...(cqModifier ? { cq_modifier: cqModifier } : {}),
         },
+        true,
         signal
     );
 }
 
 /** Abandon any active sequenced session — answer-a-CQ, work-a-caller, or Call-CQ. */
 export function abandonFt8Qso(signal?: AbortSignal): Promise<Ft8QsoOutcome> {
-    return postFt8Qso('/v1/ft8/qso/abandon', {}, signal);
+    return postFt8Qso('/v1/ft8/qso/abandon', {}, false, signal);
 }
 
 /** Bag a listed pick-run caller into the queue (ADR 0067). */
 export function bagFt8Answerer(call: string, signal?: AbortSignal): Promise<Ft8QsoOutcome> {
-    return postFt8Qso('/v1/ft8/cq/bag', { call }, signal);
+    return postFt8Qso('/v1/ft8/cq/bag', { call }, true, signal);
 }
 
 /** Return a bagged station to the listed set (ADR 0067). */
 export function unbagFt8Answerer(call: string, signal?: AbortSignal): Promise<Ft8QsoOutcome> {
-    return postFt8Qso('/v1/ft8/cq/unbag', { call }, signal);
+    return postFt8Qso('/v1/ft8/cq/unbag', { call }, false, signal);
 }
 
 /** Continue a paused pick-queue drain (ADR 0067 — the drawer's Resume). */
 export function resumeFt8Drain(signal?: AbortSignal): Promise<Ft8QsoOutcome> {
-    return postFt8Qso('/v1/ft8/cq/resume', {}, signal);
+    return postFt8Qso('/v1/ft8/cq/resume', {}, true, signal);
 }
 
 /** Stop the auto-work run WITHOUT ending any active contact (ADR 0065) — the
  *  Auto-work pill's click action. Idempotent daemon-side; the cleared state rides
  *  the ft8-qso SSE. */
 export function stopFt8AutoWork(signal?: AbortSignal): Promise<Ft8QsoOutcome> {
-    return postFt8Qso('/v1/ft8/autowork/stop', {}, signal);
+    return postFt8Qso('/v1/ft8/autowork/stop', {}, false, signal);
 }
 
 /** Commit a listed answerer into an operator_pick Call-CQ run (ADR 0065): the run's
@@ -205,7 +213,7 @@ export function stopFt8AutoWork(signal?: AbortSignal): Promise<Ft8QsoOutcome> {
  *  (the frame the pop publishes). Distinct refusals: 409 no pick run / 404 not
  *  listed (the station left) / 409 contact in flight (finish or Next first). */
 export function pickFt8CqAnswerer(call: string, signal?: AbortSignal): Promise<Ft8QsoOutcome> {
-    return postFt8Qso('/v1/ft8/cq/pick', { call }, signal);
+    return postFt8Qso('/v1/ft8/cq/pick', { call }, true, signal);
 }
 
 /** Short-circuit the repeat cap on a stuck Call-CQ contact: park this answerer at
@@ -214,7 +222,7 @@ export function pickFt8CqAnswerer(call: string, signal?: AbortSignal): Promise<F
  *  skip fires on a SILENT cycle, this one on a station that keeps transmitting the
  *  same rung and never advances. Pending state rides ft8-qso as next_armed. */
 export function nextFt8Answerer(signal?: AbortSignal): Promise<Ft8QsoOutcome> {
-    return postFt8Qso('/v1/ft8/qso/next', {}, signal);
+    return postFt8Qso('/v1/ft8/qso/next', {}, true, signal);
 }
 
 /** Arm/disarm skip-if-silent on the active session (the deferred Next,
@@ -222,5 +230,6 @@ export function nextFt8Answerer(signal?: AbortSignal): Promise<Ft8QsoOutcome> {
  *  repeat — no RF at a station the operator decided to drop. The armed state
  *  comes back via the ft8-qso SSE (skip_armed). */
 export function skipFt8Qso(armed: boolean, signal?: AbortSignal): Promise<Ft8QsoOutcome> {
-    return postFt8Qso('/v1/ft8/qso/skip', { armed }, signal);
+    // Skip-on only withholds RF; skip-off re-permits a repeat transmission.
+    return postFt8Qso('/v1/ft8/qso/skip', { armed }, !armed, signal);
 }

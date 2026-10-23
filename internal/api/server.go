@@ -33,6 +33,10 @@ type Server struct {
 	httpServer *http.Server
 	listener   net.Listener
 	cfg        *config.Service
+	// servedArchiveID is the archive this daemon generation has open, read
+	// from the file's identity at startup (SetServedArchive). Requests that
+	// would act on an archive are checked against it (archive_guard.go).
+	servedArchiveID string
 	// startupForwarders is the set of forwarder names with a running worker:
 	// derived from cfg at construction as a default, replaced by the daemon
 	// with the active archive's enabled, unheld bindings (SetRunningForwarders).
@@ -275,10 +279,12 @@ func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *l
 
 	// QSO — POST /v1/qso carries the hottest per-endpoint cap (token
 	// bucket). See docs/v2-design/api.md §6 for the threat model.
-	apiMux.Handle("POST /v1/qso", s.limitSubmitRate(http.HandlerFunc(s.handleSubmitQso)))
-	apiMux.HandleFunc("GET /v1/qso/{uuid}", s.handleGetQso)
-	apiMux.HandleFunc("PATCH /v1/qso/{uuid}", s.handleUpdateQso)
-	apiMux.HandleFunc("DELETE /v1/qso/{uuid}", s.handleDeleteQso)
+	// The archive guard (archive_guard.go) wraps every route that acts on the
+	// archive; it runs outermost so a refused request spends no rate token.
+	apiMux.Handle("POST /v1/qso", s.requireArchive(s.limitSubmitRate(http.HandlerFunc(s.handleSubmitQso))))
+	apiMux.Handle("GET /v1/qso/{uuid}", s.archiveIfSupplied(http.HandlerFunc(s.handleGetQso)))
+	apiMux.Handle("PATCH /v1/qso/{uuid}", s.requireArchive(http.HandlerFunc(s.handleUpdateQso)))
+	apiMux.Handle("DELETE /v1/qso/{uuid}", s.requireArchive(http.HandlerFunc(s.handleDeleteQso)))
 	apiMux.HandleFunc("GET /v1/qso/{uuid}/uploads", s.handleListQsoUploads)
 
 	// Manual upload backfill (ADR 0039) — the logbook SPA queues selected
@@ -330,8 +336,8 @@ func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *l
 	// Session ADIF email — SessionPanel "send" button. Daemon owns
 	// SMTP creds; SPA owns the session list. Body shape and contract
 	// in handler_session_email.go.
-	apiMux.HandleFunc("POST /v1/session/email", s.handleSessionEmail)
-	apiMux.HandleFunc("POST /v1/session/export", s.handleSessionExport)
+	apiMux.Handle("POST /v1/session/email", s.requireArchive(http.HandlerFunc(s.handleSessionEmail)))
+	apiMux.Handle("POST /v1/session/export", s.requireArchive(http.HandlerFunc(s.handleSessionExport)))
 
 	// Durable operator events (W-0001 / ADR 0076; W-0020). The browser records
 	// an allowlisted, typed failure event that must survive toast expiry (the
@@ -428,30 +434,33 @@ func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *l
 		// anything live. Same enablement gate.
 		apiMux.HandleFunc("POST /v1/ft8/claim", s.handleFt8Claim)
 		apiMux.HandleFunc("POST /v1/ft8/tx/arm", s.handleFt8TxArm)
-		apiMux.HandleFunc("POST /v1/ft8/tx/send", s.handleFt8TxSend)
+		apiMux.Handle("POST /v1/ft8/tx/send", s.requireArchive(http.HandlerFunc(s.handleFt8TxSend)))
 		// Manual sequencer (ADR 0031 step e3) — start/abandon an answer-a-CQ
 		// exchange the daemon then auto-advances. Same enablement gate.
-		apiMux.HandleFunc("POST /v1/ft8/qso/start", s.handleFt8QsoStart)
+		apiMux.Handle("POST /v1/ft8/qso/start", s.requireArchive(http.HandlerFunc(s.handleFt8QsoStart)))
 		// Work a station calling US, picked from the pile-up (ADR 0033 "work a
 		// caller") — a caller-style exchange against the chosen station; idle on
 		// completion. Abandon uses the shared qso/abandon route.
-		apiMux.HandleFunc("POST /v1/ft8/qso/work", s.handleFt8QsoWork)
-		apiMux.HandleFunc("POST /v1/ft8/qso/path", s.handleFt8QsoPath)
+		apiMux.Handle("POST /v1/ft8/qso/work", s.requireArchive(http.HandlerFunc(s.handleFt8QsoWork)))
+		apiMux.Handle("POST /v1/ft8/qso/path", s.requireArchive(http.HandlerFunc(s.handleFt8QsoPath)))
 		apiMux.HandleFunc("POST /v1/ft8/qso/abandon", s.handleFt8QsoAbandon)
+		// Stop and reduce controls (disarm, abandon, autowork/stop, unbag, skip-on)
+		// and claim are exempt from the archive guard, so a stale tab can always
+		// stop; tx/arm and qso/skip guard only their TX-permitting value in-handler.
 		// Stop the auto-work run only (ADR 0065) — abandon stops run AND contact.
 		apiMux.HandleFunc("POST /v1/ft8/autowork/stop", s.handleFt8AutoWorkStop)
 		apiMux.HandleFunc("POST /v1/ft8/qso/skip", s.handleFt8QsoSkip)
-		apiMux.HandleFunc("POST /v1/ft8/qso/next", s.handleFt8QsoNext)
+		apiMux.Handle("POST /v1/ft8/qso/next", s.requireArchive(http.HandlerFunc(s.handleFt8QsoNext)))
 		// Caller-side sequencer (ADR 0033) — start a Call-CQ session that works the
 		// stations that answer (auto_first / operator_pick per ft8.tx.caller_answer_mode);
 		// abandon uses the shared qso/abandon route. Same enablement gate.
-		apiMux.HandleFunc("POST /v1/ft8/cq/start", s.handleFt8CqStart)
+		apiMux.Handle("POST /v1/ft8/cq/start", s.requireArchive(http.HandlerFunc(s.handleFt8CqStart)))
 		// Commit a listed operator_pick answerer into the run (ADR 0065) — the
 		// candidate list rides the ft8-qso SSE (answerers).
-		apiMux.HandleFunc("POST /v1/ft8/cq/pick", s.handleFt8CqPick)
-		apiMux.HandleFunc("POST /v1/ft8/cq/bag", s.handleFt8CqBag)
+		apiMux.Handle("POST /v1/ft8/cq/pick", s.requireArchive(http.HandlerFunc(s.handleFt8CqPick)))
+		apiMux.Handle("POST /v1/ft8/cq/bag", s.requireArchive(http.HandlerFunc(s.handleFt8CqBag)))
 		apiMux.HandleFunc("POST /v1/ft8/cq/unbag", s.handleFt8CqUnbag)
-		apiMux.HandleFunc("POST /v1/ft8/cq/resume", s.handleFt8CqResume)
+		apiMux.Handle("POST /v1/ft8/cq/resume", s.requireArchive(http.HandlerFunc(s.handleFt8CqResume)))
 	}
 
 	// pprof — opt-in via cfg.Server.EnableProfiling. Off by default
