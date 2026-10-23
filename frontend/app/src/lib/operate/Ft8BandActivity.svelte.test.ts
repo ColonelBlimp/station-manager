@@ -4,6 +4,7 @@
 // ft8.svelte.test.ts).
 
 import { describe, it, expect, beforeEach } from 'vitest';
+import { TEST_ARCHIVE } from '../../test/archive';
 import { render, screen, fireEvent } from '@testing-library/svelte';
 import { flushSync } from 'svelte';
 import Ft8BandActivity from './Ft8BandActivity.svelte';
@@ -691,13 +692,16 @@ describe('Ft8BandActivity deliberate-repeat intent', () => {
         // The sequencer engaged W1ABC, then went idle — no ft8-logged yet, so
         // session.qsos is still empty.
         // 14.074 MHz = 20 m, the band the click below happens on.
-        ft8Link.onQso({
-            active: true,
-            role: 'answerer',
-            their_call: 'W1ABC',
-            dial_freq_mhz: 14.074,
-        });
-        ft8Link.onQso({ active: false });
+        ft8Link.onQso(
+            {
+                active: true,
+                role: 'answerer',
+                their_call: 'W1ABC',
+                dial_freq_mhz: 14.074,
+            },
+            TEST_ARCHIVE
+        );
+        ft8Link.onQso({ active: false }, TEST_ARCHIVE);
         expect(session.qsos).toHaveLength(0);
 
         render(Ft8BandActivity);
@@ -720,13 +724,16 @@ describe('Ft8BandActivity deliberate-repeat intent', () => {
         const got: Ft8AnswerArgs[] = [];
         armReady({ answerCq: (a) => (got.push(a), okResult()) });
 
-        ft8Link.onQso({
-            active: true,
-            role: 'answerer',
-            their_call: 'W1ABC',
-            dial_freq_mhz: 14.074, // 20 m
-        });
-        ft8Link.onQso({ active: false });
+        ft8Link.onQso(
+            {
+                active: true,
+                role: 'answerer',
+                their_call: 'W1ABC',
+                dial_freq_mhz: 14.074, // 20 m
+            },
+            TEST_ARCHIVE
+        );
+        ft8Link.onQso({ active: false }, TEST_ARCHIVE);
 
         rig.band = '40m'; // band change — this is a NEW contact, not a repeat
         rig.freq = '7.074.000';
@@ -746,13 +753,16 @@ describe('Ft8BandActivity deliberate-repeat intent', () => {
     it('survives a reload: engagement is restored from session storage', async () => {
         setFt8OperatorCall('7Q5MLV');
         rig.band = '20m';
-        ft8Link.onQso({
-            active: true,
-            role: 'answerer',
-            their_call: 'W1ABC',
-            dial_freq_mhz: 14.074, // 20 m
-        });
-        ft8Link.onQso({ active: false });
+        ft8Link.onQso(
+            {
+                active: true,
+                role: 'answerer',
+                their_call: 'W1ABC',
+                dial_freq_mhz: 14.074, // 20 m
+            },
+            TEST_ARCHIVE
+        );
+        ft8Link.onQso({ active: false }, TEST_ARCHIVE);
 
         // Simulate a page reload: module state is rebuilt from storage, session.qsos
         // is empty (the daemon never got to log it).
@@ -783,21 +793,27 @@ describe('Ft8BandActivity deliberate-repeat intent', () => {
         armReady({ answerCq: (a) => (got.push(a), okResult()) });
 
         // Contact pinned to 20 m; the rig is dragged to 40 m while it runs.
-        ft8Link.onQso({
-            active: true,
-            role: 'answerer',
-            their_call: 'W1ABC',
-            dial_freq_mhz: 14.074,
-        });
+        ft8Link.onQso(
+            {
+                active: true,
+                role: 'answerer',
+                their_call: 'W1ABC',
+                dial_freq_mhz: 14.074,
+            },
+            TEST_ARCHIVE
+        );
         rig.band = '40m';
         rig.freq = '7.074.000';
-        ft8Link.onQso({
-            active: true,
-            role: 'answerer',
-            their_call: 'W1ABC',
-            dial_freq_mhz: 14.074,
-        });
-        ft8Link.onQso({ active: false });
+        ft8Link.onQso(
+            {
+                active: true,
+                role: 'answerer',
+                their_call: 'W1ABC',
+                dial_freq_mhz: 14.074,
+            },
+            TEST_ARCHIVE
+        );
+        ft8Link.onQso({ active: false }, TEST_ARCHIVE);
 
         // On 40 m this station has NOT been worked — the mid-contact rig state must
         // not have leaked an engagement onto this band.
@@ -1109,8 +1125,11 @@ describe('Ft8BandActivity worked-vs-engaged toast wording', () => {
     function engage(call: string): void {
         // Sequencer engaged the call on 20 m (dial 14.074), then went idle —
         // nothing logged, session.qsos stays empty.
-        ft8Link.onQso({ active: true, role: 'answerer', their_call: call, dial_freq_mhz: 14.074 });
-        ft8Link.onQso({ active: false });
+        ft8Link.onQso(
+            { active: true, role: 'answerer', their_call: call, dial_freq_mhz: 14.074 },
+            TEST_ARCHIVE
+        );
+        ft8Link.onQso({ active: false }, TEST_ARCHIVE);
     }
 
     function logQso(call: string): void {

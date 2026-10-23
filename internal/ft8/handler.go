@@ -153,6 +153,15 @@ func (s *Service) HTTPHandler(shutdownCh <-chan struct{}) http.Handler {
 		}
 		flusher.Flush()
 
+		// The identity frame: the archive this process has open, written on
+		// every connection before the hub's replay, so each later frame on the
+		// connection — a replayed ft8-qso included — is attributable to it.
+		armWrite()
+		if err := s.writeEvent(w, hubEvent{name: EventIdentity, payload: streamIdentity{ArchiveID: s.servedArchiveID()}}); err != nil {
+			return
+		}
+		flusher.Flush()
+
 		keepalive := time.NewTicker(sseKeepAliveInterval)
 		defer keepalive.Stop()
 

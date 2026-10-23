@@ -59,6 +59,10 @@ type captureSource interface {
 // once and snapshotted at construction — operator restart picks up edits,
 // matching internal/bridge.
 type Service struct {
+	// servedArchive is the archive this daemon generation has open (string;
+	// SetServedArchive), named in every stream's identity frame.
+	servedArchive atomic.Value
+
 	cfg    types.Ft8Config
 	occCfg types.Ft8OccupancyConfig // resolved occupancy/offset-ranking tuning
 	log    logging.Logger

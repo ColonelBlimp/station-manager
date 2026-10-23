@@ -1134,6 +1134,9 @@ func (d *daemon) initHTTP() error {
 		return errors.New(op).WithErr(err).WithMsg("read the served archive's identity")
 	}
 	d.server.SetServedArchive(identity.ArchiveUUID)
+	// The FT8 stream names the same archive in its identity frame, so the SPA
+	// can attribute logged rows and engagement to it.
+	d.ft8.SetServedArchive(identity.ArchiveUUID)
 	// A held binding keeps its route and its queue, but has no worker, so a
 	// retry is refused for it like a disabled one's.
 	running := make([]string, 0, len(d.routes))

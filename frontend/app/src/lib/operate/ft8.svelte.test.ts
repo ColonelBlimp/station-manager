@@ -3,6 +3,7 @@
 // cap, slot heartbeat, tx/qso mirrors, and the view-scoped lifecycle.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { TEST_ARCHIVE } from '../../test/archive';
 import {
     ft8State,
     ft8Link,
@@ -155,7 +156,10 @@ describe('occupancy + status mirrors', () => {
         expect(ft8State.tx.armed).toBe(true);
         expect(ft8State.tx.offsetHz).toBe(1500);
 
-        ft8Link.onQso({ active: true, role: 'answerer', their_call: 'PJ4/NA2AA', max_repeats: 6 });
+        ft8Link.onQso(
+            { active: true, role: 'answerer', their_call: 'PJ4/NA2AA', max_repeats: 6 },
+            TEST_ARCHIVE
+        );
         expect(ft8State.qso.theirCall).toBe('PJ4/NA2AA');
         expect(ft8State.qso.maxRepeats).toBe(6);
     });
@@ -163,19 +167,22 @@ describe('occupancy + status mirrors', () => {
     // ADR 0065 operator_pick: the candidate list the pile-up drawer renders comes
     // from these two frame fields — daemon rules in internal/ft8/operatorpick_test.go.
     it('onQso maps answer_mode + the operator_pick answerer list', () => {
-        ft8Link.onQso({
-            active: true,
-            role: 'caller',
-            state: 'calling-cq',
-            answer_mode: 'operator_pick',
-            answerers: [{ call: 'DL9UW', snr: -8 }],
-        });
+        ft8Link.onQso(
+            {
+                active: true,
+                role: 'caller',
+                state: 'calling-cq',
+                answer_mode: 'operator_pick',
+                answerers: [{ call: 'DL9UW', snr: -8 }],
+            },
+            TEST_ARCHIVE
+        );
         expect(ft8State.qso.answerMode).toBe('operator_pick');
         expect(ft8State.qso.answerers).toEqual([{ call: 'DL9UW', snr: -8 }]);
 
         // Absent on the wire (idle frames, auto-mode runs) → empty, never stale:
         // a terminal frame must clear the drawer with the run (daemon rule 10).
-        ft8Link.onQso({ active: false });
+        ft8Link.onQso({ active: false }, TEST_ARCHIVE);
         expect(ft8State.qso.answerMode).toBe('');
         expect(ft8State.qso.answerers).toEqual([]);
     });
@@ -183,7 +190,7 @@ describe('occupancy + status mirrors', () => {
     it('onLogged routes to the injected sink', () => {
         const seen: string[] = [];
         setFt8LoggedSink((p) => seen.push(p.uuid ?? ''));
-        ft8Link.onLogged({ uuid: 'u-1', callsign: 'PJ4/NA2AA' });
+        ft8Link.onLogged({ uuid: 'u-1', callsign: 'PJ4/NA2AA' }, TEST_ARCHIVE);
         expect(seen).toEqual(['u-1']);
     });
 });
@@ -224,12 +231,15 @@ describe('parity-aware occupancy', () => {
         ft8State.setOccupancyParity('even'); // manual pick would be even…
 
         // …but their CQ is on even → we TX on odd → show odd, toggle locked.
-        ft8Link.onQso({
-            active: true,
-            role: 'answerer',
-            their_call: 'W1ABC',
-            their_period: 'even',
-        });
+        ft8Link.onQso(
+            {
+                active: true,
+                role: 'answerer',
+                their_call: 'W1ABC',
+                their_period: 'even',
+            },
+            TEST_ARCHIVE
+        );
         expect(ft8State.occupancyParityLocked).toBe(true);
         expect(ft8State.shownParity).toBe('odd');
         expect(ft8State.suggested).toEqual([2000]); // odd snapshot, not the manual even
@@ -604,12 +614,15 @@ describe('session-ended notice (dogfood 2026-07-27, on air)', () => {
     // indistinguishable from a hang. The first on-air read of a WORKING dial guard
     // was "moving the dial does not stop TX"; it took a log dive to see that it had.
     function activeSession() {
-        ft8Link.onQso({
-            active: true,
-            role: 'caller',
-            their_call: 'K1ABC',
-            their_period: 'even',
-        });
+        ft8Link.onQso(
+            {
+                active: true,
+                role: 'caller',
+                their_call: 'K1ABC',
+                their_period: 'even',
+            },
+            TEST_ARCHIVE
+        );
     }
 
     it('announces the reason and who we were working when a session is cut short', () => {
@@ -619,7 +632,7 @@ describe('session-ended notice (dogfood 2026-07-27, on air)', () => {
         activeSession();
         // The terminal frame carries no callsign — the station has to come from the
         // state being replaced, which is why the notice fires before the overwrite.
-        ft8Link.onQso({ active: false, end_reason: 'dial_moved' });
+        ft8Link.onQso({ active: false, end_reason: 'dial_moved' }, TEST_ARCHIVE);
 
         expect(seen).toEqual([{ reason: 'dial_moved', call: 'K1ABC' }]);
         expect(ft8State.qso.active).toBe(false);
@@ -630,7 +643,7 @@ describe('session-ended notice (dogfood 2026-07-27, on air)', () => {
         setFt8SessionEndedSink((reason) => seen.push(reason));
 
         activeSession();
-        ft8Link.onQso({ active: false }); // no reason: the operator caused this
+        ft8Link.onQso({ active: false }, TEST_ARCHIVE); // no reason: the operator caused this
 
         expect(seen).toEqual([]);
     });
@@ -639,7 +652,7 @@ describe('session-ended notice (dogfood 2026-07-27, on air)', () => {
         const seen: string[] = [];
         setFt8SessionEndedSink((reason) => seen.push(reason));
 
-        ft8Link.onQso({ active: false, end_reason: 'dial_unknown' });
+        ft8Link.onQso({ active: false, end_reason: 'dial_unknown' }, TEST_ARCHIVE);
 
         expect(seen).toEqual([]);
     });
@@ -1151,19 +1164,22 @@ describe('a claim that could not reach the daemon is retried on the recovery sig
 // names a station the run is holding instead of answering; absent = no hold.
 describe('ft8-qso held (same-band/profile repeat hold)', () => {
     it('maps held onto the store and clears it when the frame drops it', () => {
-        ft8Link.onQso({
-            active: false,
-            auto_work_armed: true,
-            held: {
-                call: 'ZS6BOS',
-                grid: 'KG33',
-                snr: -6,
-                band: '20m',
-                mode: 'MFSK',
-                submode: 'FT4',
-                reason: 'worked_before',
+        ft8Link.onQso(
+            {
+                active: false,
+                auto_work_armed: true,
+                held: {
+                    call: 'ZS6BOS',
+                    grid: 'KG33',
+                    snr: -6,
+                    band: '20m',
+                    mode: 'MFSK',
+                    submode: 'FT4',
+                    reason: 'worked_before',
+                },
             },
-        });
+            TEST_ARCHIVE
+        );
         expect(ft8State.qso.held).toEqual({
             call: 'ZS6BOS',
             grid: 'KG33',
@@ -1174,7 +1190,7 @@ describe('ft8-qso held (same-band/profile repeat hold)', () => {
             reason: 'worked_before',
         });
 
-        ft8Link.onQso({ active: false, auto_work_armed: true });
+        ft8Link.onQso({ active: false, auto_work_armed: true }, TEST_ARCHIVE);
         expect(ft8State.qso.held).toBeNull();
     });
 });

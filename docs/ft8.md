@@ -923,7 +923,18 @@ disk logs one warning and leaves the subsystem decoding normally without a log.
 
 ### SSE wire — `GET /v1/ft8/events`
 
-Five event types over one stream. The first four are **replay-cached** (a tab
+Every connection opens with `: connected` and then an **`identity`** frame,
+`{"archive_id": "<uuid>"}`: the QSO archive the daemon serving this connection has open
+(ADR 0094 update, 2026-10-23; injected by `cmd/smd` as `SetServedArchive`, `identity.go`).
+It is written on every connection **before** the hub's replay, and a connection cannot
+outlive its process, so every later frame on it belongs to that archive. The SPA
+(`ft8-sse.ts`) labels each `ft8-qso` and `ft8-logged` frame with that connection's archive
+when it hands the frame to its consumer. The label resets to null on every (re)open; a
+missing or malformed identity (empty or not a UUIDv7, sent as `""` by a daemon that never
+recorded its archive) leaves it null. This is transport labelling only: filing Session
+rows and engagement by archive is the consumers' job (W-0021 fix design, slice 4).
+
+After it, five event types. The first four are **replay-cached** (a tab
 connecting mid-session gets the current state immediately); `ft8-logged` is a
 one-shot notification and deliberately **not** cached (replaying it to a late
 subscriber would duplicate a session-list row):

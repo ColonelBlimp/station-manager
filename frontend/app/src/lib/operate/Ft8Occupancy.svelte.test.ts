@@ -5,6 +5,7 @@
 // grading/mapping maths is covered in ft8Spectrum.test.ts.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { TEST_ARCHIVE } from '../../test/archive';
 import { render, screen, fireEvent } from '@testing-library/svelte';
 import { flushSync } from 'svelte';
 import Ft8Occupancy from './Ft8Occupancy.svelte';
@@ -48,12 +49,15 @@ describe('Ft8Occupancy picker', () => {
 
     it('during a QSO the toggle is replaced by a locked TX-parity cue', () => {
         ft8Link.onOccupancy(occupancy()); // even
-        ft8Link.onQso({
-            active: true,
-            role: 'answerer',
-            their_call: 'W1ABC',
-            their_period: 'even',
-        });
+        ft8Link.onQso(
+            {
+                active: true,
+                role: 'answerer',
+                their_call: 'W1ABC',
+                their_period: 'even',
+            },
+            TEST_ARCHIVE
+        );
         flushSync();
         render(Ft8Occupancy);
 
@@ -100,7 +104,10 @@ describe('Ft8Occupancy empty states', () => {
     // run that parity NEVER fills. "Waiting for slot…" implied it was imminent, and
     // the operator waited indefinitely for a reading that could not arrive.
     it('names the TX-parity blind spot instead of implying data is coming', () => {
-        ft8Link.onQso({ active: true, role: 'caller', their_call: 'W1ABC', their_period: 'odd' });
+        ft8Link.onQso(
+            { active: true, role: 'caller', their_call: 'W1ABC', their_period: 'odd' },
+            TEST_ARCHIVE
+        );
         flushSync();
         render(Ft8Occupancy);
 
@@ -278,7 +285,10 @@ describe('Ft8Occupancy reading age', () => {
     it("keeps the transmit parity's last reading on show during a run, labelled with its age", () => {
         ft8Link.onOccupancy(occupancy()); // even, 12:00:00
         heartbeat('2026-07-10T12:00:30Z', 'even'); // our keyed slot: no reading, clock ticks
-        ft8Link.onQso({ active: true, role: 'caller', their_call: 'W1ABC', their_period: 'odd' });
+        ft8Link.onQso(
+            { active: true, role: 'caller', their_call: 'W1ABC', their_period: 'odd' },
+            TEST_ARCHIVE
+        );
         flushSync();
         render(Ft8Occupancy);
 

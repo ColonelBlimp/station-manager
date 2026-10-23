@@ -87,15 +87,19 @@ describe('openFt8Events', () => {
         expect(h.onQso).toHaveBeenCalledOnce();
 
         src.emit('ft8-logged', '{"uuid":"u-1","callsign":"PJ4/NA2AA"}');
-        expect(h.onLogged).toHaveBeenCalledWith({ uuid: 'u-1', callsign: 'PJ4/NA2AA' });
+        // No identity frame on this connection: untagged (null).
+        expect(h.onLogged).toHaveBeenCalledWith({ uuid: 'u-1', callsign: 'PJ4/NA2AA' }, null);
         // An FT4 exchange is filed as its ADIF pair; the frame carries both halves.
         src.emit('ft8-logged', '{"uuid":"u-2","callsign":"K1ABC","mode":"MFSK","submode":"FT4"}');
-        expect(h.onLogged).toHaveBeenCalledWith({
-            uuid: 'u-2',
-            callsign: 'K1ABC',
-            mode: 'MFSK',
-            submode: 'FT4',
-        });
+        expect(h.onLogged).toHaveBeenCalledWith(
+            {
+                uuid: 'u-2',
+                callsign: 'K1ABC',
+                mode: 'MFSK',
+                submode: 'FT4',
+            },
+            null
+        );
 
         src.emit('error');
         expect(h.onError).toHaveBeenCalledOnce();
@@ -273,10 +277,13 @@ describe('openFt8Events — wrong-shape frames are dropped (F-03)', () => {
     it('accepts a valid ft8-logged', () => {
         expect(
             emit('ft8-logged', '{"uuid":"u-1","callsign":"K1ABC"}').onLogged
-        ).toHaveBeenCalledWith({
-            uuid: 'u-1',
-            callsign: 'K1ABC',
-        });
+        ).toHaveBeenCalledWith(
+            {
+                uuid: 'u-1',
+                callsign: 'K1ABC',
+            },
+            null
+        );
     });
 
     it('warns once per (event, reason) per subscription', () => {
@@ -287,5 +294,86 @@ describe('openFt8Events — wrong-shape frames are dropped (F-03)', () => {
         src.emit('ft8-tx', '{"transmitting":"x"}');
         src.emit('ft8-tx', '{"transmitting":1}');
         expect(warn).toHaveBeenCalledTimes(1);
+    });
+});
+
+// Stream identity (ADR 0094 update; W-0021 "alpha.4 hold: fix design", revision 3).
+// The daemon's first frame on every connection names the archive it has open; the
+// ft8-qso and ft8-logged frames on that connection are handed over labelled with it.
+// The label resets on EVERY (re)open, so a new connection never inherits an earlier
+// one's archive; a frame with no valid identity on its connection carries null.
+describe('openFt8Events — per-connection archive identity', () => {
+    const A = '01a163a7-0f04-7f69-85e9-255664b58d11';
+    const B = '01a1640f-815a-75e4-bae2-b9ef8d86f8c3';
+    const QSO = '{"active":true,"role":"answerer","their_call":"K1ABC"}';
+    const LOGGED = '{"uuid":"u-1","callsign":"K1ABC"}';
+    const identity = (id: string): string => JSON.stringify({ archive_id: id });
+
+    function open(): { h: Ft8EventHandlers; src: FakeEventSource } {
+        const h = makeHandlers();
+        openFt8Events(h);
+        return { h, src: FakeEventSource.instances[0] };
+    }
+    const lastArchive = (fn: unknown): unknown => {
+        const calls = (fn as ReturnType<typeof vi.fn>).mock.calls;
+        return calls[calls.length - 1][1];
+    };
+
+    it('tags the frames that follow the identity frame (a replayed ft8-qso included)', () => {
+        const { h, src } = open();
+        src.emit('open');
+        src.emit('identity', identity(A));
+        src.emit('ft8-qso', QSO);
+        src.emit('ft8-logged', LOGGED);
+        expect(lastArchive(h.onQso)).toBe(A);
+        expect(lastArchive(h.onLogged)).toBe(A);
+    });
+
+    it('frames before any identity frame are untagged', () => {
+        const { h, src } = open();
+        src.emit('open');
+        src.emit('ft8-logged', LOGGED);
+        expect(lastArchive(h.onLogged)).toBeNull();
+    });
+
+    it('resets on every reconnect: the new connection is untagged until its own identity', () => {
+        const { h, src } = open();
+        src.emit('open');
+        src.emit('identity', identity(A));
+        src.emit('error'); // the drop
+        src.emit('open'); // the browser's reconnect: a new connection
+        src.emit('ft8-qso', QSO);
+        expect(lastArchive(h.onQso)).toBeNull();
+        src.emit('identity', identity(B));
+        src.emit('ft8-logged', LOGGED);
+        expect(lastArchive(h.onLogged)).toBe(B);
+    });
+
+    it('a malformed identity after a valid one on the same connection clears the tag (fail closed)', () => {
+        const { h, src } = open();
+        src.emit('open');
+        src.emit('identity', identity(A));
+        src.emit('identity', '{"archive_id":"Home"}');
+        src.emit('ft8-logged', LOGGED);
+        expect(lastArchive(h.onLogged)).toBeNull();
+    });
+
+    it.each([
+        ['not JSON', '{'],
+        ['no archive_id', '{}'],
+        ['a non-string archive_id', '{"archive_id":7}'],
+        ['an empty archive_id (daemon never recorded one)', '{"archive_id":""}'],
+        ['not a UUID', '{"archive_id":"Home"}'],
+    ])('a malformed identity (%s) never inherits the previous connection', (_n, data) => {
+        const { h, src } = open();
+        src.emit('open');
+        src.emit('identity', identity(A));
+        src.emit('error');
+        src.emit('open');
+        src.emit('identity', data);
+        src.emit('ft8-logged', LOGGED);
+        src.emit('ft8-qso', QSO);
+        expect(lastArchive(h.onLogged)).toBeNull();
+        expect(lastArchive(h.onQso)).toBeNull();
     });
 });

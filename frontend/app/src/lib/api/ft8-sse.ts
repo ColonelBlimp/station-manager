@@ -196,8 +196,11 @@ export interface Ft8EventHandlers {
     onOccupancy: (p: OccupancyPayload) => void;
     onDecode: (p: DecodeReport) => void;
     onTx: (p: TxPayload) => void;
-    onQso: (p: QsoPayload) => void;
-    onLogged: (p: LoggedPayload) => void;
+    /** `archiveId` is the archive the frame's connection named in its identity
+     *  frame — null when that connection has named none (yet, or validly): an
+     *  untagged frame must not be filed under any archive (ADR 0094 update). */
+    onQso: (p: QsoPayload, archiveId: string | null) => void;
+    onLogged: (p: LoggedPayload, archiveId: string | null) => void;
     onAudioLevel: (p: AudioLevelPayload) => void;
 }
 
@@ -339,6 +342,18 @@ function isLogged(v: unknown): v is LoggedPayload {
 const isAudioLevel = (v: unknown): v is AudioLevelPayload =>
     isPlainObject(v) && typeof v.peak_dbfs === 'number' && typeof v.rms_dbfs === 'number';
 
+// The identity frame's archive: a canonical UUIDv7, or nothing at all.
+const ARCHIVE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+function identityArchive(data: string): string | null {
+    try {
+        const v: unknown = JSON.parse(data);
+        if (!isPlainObject(v) || typeof v.archive_id !== 'string') return null;
+        return ARCHIVE_UUID.test(v.archive_id) ? v.archive_id : null;
+    } catch {
+        return null;
+    }
+}
+
 const SSE_URL = '/v1/ft8/events';
 // EventSource.CLOSED, spelled out: the constant lives on the constructor and a
 // stubbed EventSource need not carry it (same as sse-reviving.ts).
@@ -359,10 +374,22 @@ export function openFt8Events(handlers: Ft8EventHandlers, mode?: string): () => 
     // claim, never the explanation (an EventSource sees only an error here).
     const url = mode ? `${SSE_URL}?mode=${encodeURIComponent(mode)}` : SSE_URL;
     return openReviving(url, (src) => {
-        src.addEventListener('open', () => handlers.onOpen());
+        // The archive THIS connection named (identity frame, ft8/identity.go).
+        // Cleared on every open — the browser's own reconnects included: a new
+        // connection, possibly to a daemon serving another archive, must name its
+        // own. (No frame arrives between a drop and the next open.)
+        let archiveId: string | null = null;
+        src.addEventListener('open', () => {
+            archiveId = null;
+            handlers.onOpen();
+        });
         // CLOSED at the error means the browser will not retry (ADR 0080: the
         // daemon answered the subscription with a refusal); CONNECTING means it will.
         src.addEventListener('error', () => handlers.onError(src.readyState === CLOSED));
+        src.addEventListener('identity', (ev: MessageEvent<string>) => {
+            archiveId = identityArchive(ev.data);
+            if (archiveId === null) warn('identity', 'no valid archive_id; frames stay untagged');
+        });
 
         src.addEventListener('ft8-occupancy', (ev: MessageEvent<string>) => {
             const p = decodeFrame(ev.data, 'ft8-occupancy', isOccupancy, warn);
@@ -378,11 +405,11 @@ export function openFt8Events(handlers: Ft8EventHandlers, mode?: string): () => 
         });
         src.addEventListener('ft8-qso', (ev: MessageEvent<string>) => {
             const p = decodeFrame(ev.data, 'ft8-qso', isQso, warn);
-            if (p !== null) handlers.onQso(p);
+            if (p !== null) handlers.onQso(p, archiveId);
         });
         src.addEventListener('ft8-logged', (ev: MessageEvent<string>) => {
             const p = decodeFrame(ev.data, 'ft8-logged', isLogged, warn);
-            if (p !== null) handlers.onLogged(p);
+            if (p !== null) handlers.onLogged(p, archiveId);
         });
         src.addEventListener('ft8-audio-level', (ev: MessageEvent<string>) => {
             const p = decodeFrame(ev.data, 'ft8-audio-level', isAudioLevel, warn);

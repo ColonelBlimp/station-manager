@@ -17,6 +17,7 @@
 // no longer reads the wire field (kept inert for old clients).
 
 import { it, expect, beforeEach } from 'vitest';
+import { TEST_ARCHIVE } from '../../test/archive';
 import { render, screen } from '@testing-library/svelte';
 import Ft8Operate from './Ft8Operate.svelte';
 import {
@@ -64,10 +65,10 @@ beforeEach(() => {
 // U1 — the flag arrives from the daemon and reaches the state. Without this the
 // component rules below could pass on a state nothing ever populates.
 it('carries auto_work_armed from the ft8-qso frame into state', () => {
-    ft8Link.onQso({ active: false, auto_work_armed: true });
+    ft8Link.onQso({ active: false, auto_work_armed: true }, TEST_ARCHIVE);
     expect(ft8State.qso.autoWorkArmed).toBe(true);
 
-    ft8Link.onQso({ active: false, auto_work_armed: false });
+    ft8Link.onQso({ active: false, auto_work_armed: false }, TEST_ARCHIVE);
     expect(ft8State.qso.autoWorkArmed).toBe(false);
 });
 
@@ -77,7 +78,7 @@ it('carries auto_work_armed from the ft8-qso frame into state', () => {
 // while there is a run to stop.
 it('offers Stop run when idle with a live run', () => {
     ft8State.answerMode = 'auto_first';
-    ft8Link.onQso({ active: false, auto_work_armed: true });
+    ft8Link.onQso({ active: false, auto_work_armed: true }, TEST_ARCHIVE);
     render(Ft8Operate);
     expect(screen.getByText('No active contact')).toBeTruthy();
     expect(document.querySelector('[data-run-stop]')).not.toBeNull();
@@ -85,7 +86,7 @@ it('offers Stop run when idle with a live run', () => {
 
 it('offers no Stop when idle with no run', () => {
     ft8State.answerMode = 'auto_first';
-    ft8Link.onQso({ active: false, auto_work_armed: false });
+    ft8Link.onQso({ active: false, auto_work_armed: false }, TEST_ARCHIVE);
     render(Ft8Operate);
     expect(screen.getByText('No active contact')).toBeTruthy();
     expect(document.querySelector('[data-run-stop]')).toBeNull();
@@ -96,7 +97,7 @@ it('offers no Stop when idle with no run', () => {
 // ended, which is the confusion this exists to remove.
 it('keeps Stop run offered while the run is working a contact', () => {
     ft8State.answerMode = 'auto_first';
-    ft8Link.onQso({ active: true, their_call: 'DL9UW', auto_work_armed: true });
+    ft8Link.onQso({ active: true, their_call: 'DL9UW', auto_work_armed: true }, TEST_ARCHIVE);
     render(Ft8Operate);
     expect(document.querySelector('[data-run-stop]')).not.toBeNull();
 });
@@ -111,7 +112,7 @@ it('keeps Stop run offered while the run is working a contact', () => {
 // act; this is advertising one that can act and withholding it.
 it('enables Abandon when idle with an armed run', () => {
     armReadyForAbandon();
-    ft8Link.onQso({ active: false, auto_work_armed: true });
+    ft8Link.onQso({ active: false, auto_work_armed: true }, TEST_ARCHIVE);
     render(Ft8Operate);
 
     // The rendered ATTRIBUTE, not the DOM property: getByRole is typed HTMLElement,
@@ -123,7 +124,7 @@ it('enables Abandon when idle with an armed run', () => {
 // enabling it always.
 it('leaves Abandon disabled when idle with no run', () => {
     armReadyForAbandon();
-    ft8Link.onQso({ active: false, auto_work_armed: false });
+    ft8Link.onQso({ active: false, auto_work_armed: false }, TEST_ARCHIVE);
     render(Ft8Operate);
 
     expect(screen.getByRole('button', { name: 'Abandon' }).hasAttribute('disabled')).toBe(true);
@@ -241,7 +242,7 @@ it('setFt8SessionDefaults seeds the selector; junk is ignored', () => {
 // locked while a run is active (the parity precedent — changes apply to the
 // NEXT run).
 it('the Answer mode selector renders, and locks while a run is active', () => {
-    ft8Link.onQso({ active: true, their_call: 'DL9UW' });
+    ft8Link.onQso({ active: true, their_call: 'DL9UW' }, TEST_ARCHIVE);
     render(Ft8Operate);
     const sel: HTMLSelectElement = screen.getByTestId('answer-mode');
     expect(sel.disabled).toBe(true);
@@ -253,7 +254,7 @@ it('the Answer mode selector renders, and locks while a run is active', () => {
 // the UI claim "Operator pick" while the run keeps auto-working with the old mode.
 // Changing the mode legitimately means stopping the run first (Stop run).
 it('the Answer mode selector stays locked while an auto-work run is armed', () => {
-    ft8Link.onQso({ active: false, auto_work_armed: true });
+    ft8Link.onQso({ active: false, auto_work_armed: true }, TEST_ARCHIVE);
     render(Ft8Operate);
     const sel: HTMLSelectElement = screen.getByTestId('answer-mode');
     expect(sel.disabled).toBe(true);

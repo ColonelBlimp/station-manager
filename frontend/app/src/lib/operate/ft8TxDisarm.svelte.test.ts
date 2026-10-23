@@ -13,6 +13,7 @@
 // exactly ONE notice, not two).
 
 import { describe, it, expect, beforeEach } from 'vitest';
+import { TEST_ARCHIVE } from '../../test/archive';
 import {
     ft8State,
     ft8Link,
@@ -67,8 +68,8 @@ describe('TX disarm cause visibility', () => {
         // The daemon's teardown order: terminal ft8-qso first (published under
         // the sequencer gate, inside the disarm), then the ft8-tx frame.
         ft8Link.onTx({ armed: true });
-        ft8Link.onQso({ active: true, role: 'caller', their_call: 'K1ABC' });
-        ft8Link.onQso({ active: false, end_reason: 'dial_moved' });
+        ft8Link.onQso({ active: true, role: 'caller', their_call: 'K1ABC' }, TEST_ARCHIVE);
+        ft8Link.onQso({ active: false, end_reason: 'dial_moved' }, TEST_ARCHIVE);
         ft8Link.onTx({ armed: false, disarm_cause: 'dial_moved' });
 
         expect(ends).toEqual(['dial_moved']);
@@ -104,11 +105,11 @@ describe('TX disarm cause visibility', () => {
         setFt8SessionEndedSink((reason) => ends.push(reason));
 
         ft8Link.onTx({ armed: true });
-        ft8Link.onQso({ active: true, role: 'caller', their_call: 'K1ABC' });
+        ft8Link.onQso({ active: true, role: 'caller', their_call: 'K1ABC' }, TEST_ARCHIVE);
         // Reconnect replay: cached ft8-tx first, cached terminal ft8-qso second.
         ft8Link.onTx({ armed: false, disarm_cause: 'dial_moved' });
         expect(disarms).toEqual([]);
-        ft8Link.onQso({ active: false, end_reason: 'dial_moved' });
+        ft8Link.onQso({ active: false, end_reason: 'dial_moved' }, TEST_ARCHIVE);
 
         expect(ends).toEqual(['dial_moved']);
         expect(disarms).toEqual([]);
@@ -125,11 +126,11 @@ describe('TX disarm cause visibility', () => {
         setFt8SessionEndedSink((reason) => ends.push(reason));
 
         ft8Link.onTx({ armed: true });
-        ft8Link.onQso({ active: true, role: 'caller', their_call: 'K1ABC' });
+        ft8Link.onQso({ active: true, role: 'caller', their_call: 'K1ABC' }, TEST_ARCHIVE);
         // Replay after an outage in which the operator abandoned (no end_reason
         // on the cached terminal frame) and a dial nudge then disarmed TX.
         ft8Link.onTx({ armed: false, disarm_cause: 'dial_moved' });
-        ft8Link.onQso({ active: false });
+        ft8Link.onQso({ active: false }, TEST_ARCHIVE);
 
         expect(ends).toEqual([]);
         // The safety stop must not go unannounced.
@@ -138,7 +139,7 @@ describe('TX disarm cause visibility', () => {
         // And the hold is gone once used: a fresh arm + reasonless frame later
         // must not resurrect it.
         ft8Link.onTx({ armed: true });
-        ft8Link.onQso({ active: false });
+        ft8Link.onQso({ active: false }, TEST_ARCHIVE);
         expect(disarms).toEqual(['dial_moved']);
     });
 
@@ -156,11 +157,11 @@ describe('TX disarm cause visibility', () => {
         setFt8SessionEndedSink((reason) => ends.push(reason));
 
         ft8Link.onTx({ armed: true });
-        ft8Link.onQso({ active: true, role: 'caller', their_call: 'K1ABC' });
+        ft8Link.onQso({ active: true, role: 'caller', their_call: 'K1ABC' }, TEST_ARCHIVE);
         // Replay: the LATEST tx frame is a cat-lost disarm from after a re-arm;
         // the cached terminal frame is the earlier dial-moved session end.
         ft8Link.onTx({ armed: false, disarm_cause: 'cat_lost' });
-        ft8Link.onQso({ active: false, end_reason: 'dial_moved' });
+        ft8Link.onQso({ active: false, end_reason: 'dial_moved' }, TEST_ARCHIVE);
 
         expect(ends).toEqual(['dial_moved']);
         expect(disarms).toEqual(['cat_lost']);

@@ -97,7 +97,7 @@ func TestHTTPHandler_StreamsOccupancy(t *testing.T) {
 		switch {
 		case strings.HasPrefix(line, "event: "+EventOccupancy):
 			sawEvent = true
-		case strings.HasPrefix(line, "data: "):
+		case sawEvent && strings.HasPrefix(line, "data: "): // the frame's own data, not the identity frame's
 			sawData = true
 			payload := strings.TrimPrefix(line, "data: ")
 			if !strings.Contains(payload, `"signal_width_hz":50`) {
@@ -147,7 +147,7 @@ func TestHTTPHandler_StreamsDecode(t *testing.T) {
 		switch {
 		case strings.HasPrefix(line, "event: "+EventDecode):
 			sawEvent = true
-		case strings.HasPrefix(line, "data: "):
+		case sawEvent && strings.HasPrefix(line, "data: "): // the frame's own data, not the identity frame's
 			sawData = true
 			if !strings.Contains(line, `"CQ DX S56GD JN65"`) || !strings.Contains(line, `"freq_hz":1500`) {
 				t.Errorf("decode payload missing expected fields: %q", line)

@@ -16,6 +16,7 @@
 // through Ft8Operate); Stop-vs-Abandon separation is there too (U6).
 
 import { describe, it, expect, beforeEach } from 'vitest';
+import { TEST_ARCHIVE } from '../../test/archive';
 import { render, screen, fireEvent } from '@testing-library/svelte';
 import { flushSync } from 'svelte';
 import RunSurface from './RunSurface.svelte';
@@ -70,48 +71,60 @@ describe('RunSurface state line — pick mode (the session default)', () => {
     });
 
     it('a live pick context with nobody calling says so', () => {
-        ft8Link.onQso({ active: false, answer_mode: 'operator_pick', auto_work_armed: true });
+        ft8Link.onQso(
+            { active: false, answer_mode: 'operator_pick', auto_work_armed: true },
+            TEST_ARCHIVE
+        );
         render(RunSurface);
         expect(stateLine()).toBe('Listing callers — nobody calling yet');
     });
 
     it('callers listed → count + where to act', () => {
-        ft8Link.onQso({
-            active: false,
-            answer_mode: 'operator_pick',
-            auto_work_armed: true,
-            answerers: [
-                { call: 'DL9UW', snr: -8 },
-                { call: 'K1ABC', snr: -12 },
-            ],
-        });
+        ft8Link.onQso(
+            {
+                active: false,
+                answer_mode: 'operator_pick',
+                auto_work_armed: true,
+                answerers: [
+                    { call: 'DL9UW', snr: -8 },
+                    { call: 'K1ABC', snr: -12 },
+                ],
+            },
+            TEST_ARCHIVE
+        );
         render(RunSurface);
         expect(stateLine()).toBe('2 calling you — open the drawer to work or bag');
     });
 
     it('a bagged queue outranks the caller count — the drain is the story now', () => {
-        ft8Link.onQso({
-            active: false,
-            answer_mode: 'operator_pick',
-            auto_work_armed: true,
-            answerers: [{ call: 'DL9UW', snr: -8 }],
-            queue: [
-                { call: '9A4ZM', snr: -3 },
-                { call: 'PA3KUS', snr: -15 },
-            ],
-        });
+        ft8Link.onQso(
+            {
+                active: false,
+                answer_mode: 'operator_pick',
+                auto_work_armed: true,
+                answerers: [{ call: 'DL9UW', snr: -8 }],
+                queue: [
+                    { call: '9A4ZM', snr: -3 },
+                    { call: 'PA3KUS', snr: -15 },
+                ],
+            },
+            TEST_ARCHIVE
+        );
         render(RunSurface);
         expect(stateLine()).toBe('Working your queue — 2 bagged left');
     });
 
     it('paused outranks everything — the ratified pause line', () => {
-        ft8Link.onQso({
-            active: false,
-            answer_mode: 'operator_pick',
-            auto_work_armed: true,
-            queue: [{ call: '9A4ZM', snr: -3 }],
-            drain_paused: true,
-        });
+        ft8Link.onQso(
+            {
+                active: false,
+                answer_mode: 'operator_pick',
+                auto_work_armed: true,
+                queue: [{ call: '9A4ZM', snr: -3 }],
+                drain_paused: true,
+            },
+            TEST_ARCHIVE
+        );
         render(RunSurface);
         expect(stateLine()).toBe('Drain paused — 1 bagged waiting');
     });
@@ -140,7 +153,7 @@ describe('RunSurface state line — auto modes', () => {
 
     it('armed and idle: run live, waiting — and the dot is back beside the text', () => {
         ft8State.answerMode = 'auto_first';
-        ft8Link.onQso({ active: false, auto_work_armed: true });
+        ft8Link.onQso({ active: false, auto_work_armed: true }, TEST_ARCHIVE);
         render(RunSurface);
         expect(stateLine()).toBe('Run live — waiting for callers (first come)');
         expect(runDot()).not.toBeNull();
@@ -148,7 +161,7 @@ describe('RunSurface state line — auto modes', () => {
 
     it('armed and working: run live, naming the station', () => {
         ft8State.answerMode = 'auto_first';
-        ft8Link.onQso({ active: true, their_call: 'DL9UW', auto_work_armed: true });
+        ft8Link.onQso({ active: true, their_call: 'DL9UW', auto_work_armed: true }, TEST_ARCHIVE);
         render(RunSurface);
         expect(stateLine()).toBe('Run live — working DL9UW (first come)');
     });
@@ -156,7 +169,10 @@ describe('RunSurface state line — auto modes', () => {
 
 describe('RunSurface state line click', () => {
     it('opens the pile-up drawer when a pick context is live', async () => {
-        ft8Link.onQso({ active: false, answer_mode: 'operator_pick', auto_work_armed: true });
+        ft8Link.onQso(
+            { active: false, answer_mode: 'operator_pick', auto_work_armed: true },
+            TEST_ARCHIVE
+        );
         render(RunSurface);
         await fireEvent.click(document.querySelector('[data-run-state]')!);
         expect(operate.pileup).toBe(true);
@@ -164,7 +180,7 @@ describe('RunSurface state line click', () => {
 
     it('does nothing outside a pick context — there is no list to open', async () => {
         ft8State.answerMode = 'auto_first';
-        ft8Link.onQso({ active: false, auto_work_armed: true });
+        ft8Link.onQso({ active: false, auto_work_armed: true }, TEST_ARCHIVE);
         render(RunSurface);
         await fireEvent.click(document.querySelector('[data-run-state]')!);
         expect(operate.pileup).toBe(false);
@@ -176,7 +192,7 @@ describe('RunSurface Stop / Resume', () => {
         let stops = 0;
         installActions({ stopAutoWork: () => (stops++, ok()) });
         ft8State.answerMode = 'auto_first';
-        ft8Link.onQso({ active: false, auto_work_armed: true });
+        ft8Link.onQso({ active: false, auto_work_armed: true }, TEST_ARCHIVE);
         render(RunSurface);
 
         await fireEvent.click(screen.getByRole('button', { name: 'Stop run' }));
@@ -192,13 +208,16 @@ describe('RunSurface Stop / Resume', () => {
     it('a paused pick drain swaps Stop for Resume, which posts the resume verb', async () => {
         let resumes = 0;
         installActions({ resumeDrain: () => (resumes++, ok()) });
-        ft8Link.onQso({
-            active: false,
-            answer_mode: 'operator_pick',
-            auto_work_armed: true,
-            queue: [{ call: '9A4ZM', snr: -3 }],
-            drain_paused: true,
-        });
+        ft8Link.onQso(
+            {
+                active: false,
+                answer_mode: 'operator_pick',
+                auto_work_armed: true,
+                queue: [{ call: '9A4ZM', snr: -3 }],
+                drain_paused: true,
+            },
+            TEST_ARCHIVE
+        );
         render(RunSurface);
 
         expect(document.querySelector('[data-run-stop]')).toBeNull();
@@ -211,7 +230,7 @@ describe('RunSurface Stop / Resume', () => {
             stopAutoWork: () => Promise.resolve({ ok: false, message: 'no auto-work run to stop' }),
         });
         ft8State.answerMode = 'auto_first';
-        ft8Link.onQso({ active: false, auto_work_armed: true });
+        ft8Link.onQso({ active: false, auto_work_armed: true }, TEST_ARCHIVE);
         render(RunSurface);
 
         await fireEvent.click(screen.getByRole('button', { name: 'Stop run' }));

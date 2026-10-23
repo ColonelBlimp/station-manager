@@ -15,7 +15,8 @@ import (
 // hub's one-slot replay is handed to the subscription, so a decode published
 // before the connect must still arrive — as the first FRAME, after the comment.
 // The motivating observation is in the acceptance record (entry 29, 2026-09-07);
-// this test claims only the ordering.
+// this test claims only the ordering. The identity frame (identity.go) sits
+// between the comment and the replay; handler_identity_test.go pins it.
 func TestHTTPHandler_FirstBodyBytesAreConnectedCommentThenReplay(t *testing.T) {
 	s, shutdownCh := newHandlerTestService(t)
 	s.hub.publish(hubEvent{name: EventDecode, payload: map[string]any{"replayed": true}})
@@ -35,7 +36,7 @@ func TestHTTPHandler_FirstBodyBytesAreConnectedCommentThenReplay(t *testing.T) {
 	go func() {
 		br := bufio.NewReader(resp.Body)
 		var out []string
-		for len(out) < 3 {
+		for len(out) < 6 {
 			l, err := br.ReadString('\n')
 			if err != nil {
 				out = append(out, "<read error: "+err.Error()+">")
@@ -47,11 +48,11 @@ func TestHTTPHandler_FirstBodyBytesAreConnectedCommentThenReplay(t *testing.T) {
 	}()
 	select {
 	case got := <-lines:
-		if len(got) < 3 || got[0] != ": connected" || got[1] != "" {
-			t.Fatalf("first body lines = %q, want \": connected\", blank, then the replayed frame", got)
+		if len(got) < 6 || got[0] != ": connected" || got[1] != "" || got[2] != "event: "+EventIdentity {
+			t.Fatalf("first body lines = %q, want \": connected\", blank, then the identity frame", got)
 		}
-		if !strings.HasPrefix(got[2], "event: "+EventDecode) {
-			t.Fatalf("third line = %q, want the replayed %s frame to follow the comment", got[2], EventDecode)
+		if !strings.HasPrefix(got[5], "event: "+EventDecode) {
+			t.Fatalf("sixth line = %q, want the replayed %s frame to follow the identity frame", got[5], EventDecode)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("no body bytes within 2s of opening the stream")
