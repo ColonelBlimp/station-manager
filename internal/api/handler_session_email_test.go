@@ -649,6 +649,13 @@ func TestSessionEmail_StampsOnlyComposedRevision(t *testing.T) {
 		t.Errorf("attachment leaked the post-compose edit to A into the sent ADIF")
 	}
 
+	// sent lists what the attachment carried — all three, in request order — even
+	// though only C could be durably stamped (ADR 0095: sent and emailed differ, and
+	// a client must not read a short emailed list as a short send).
+	if strings.Join(resp.Sent, ",") != strings.Join([]string{uuidA, uuidB, uuidC}, ",") || len(resp.Omitted) != 0 {
+		t.Errorf("sent = %v, omitted = %v; want all three sent, none omitted", resp.Sent, resp.Omitted)
+	}
+
 	// emailed must list ONLY the unchanged batch-mate C: A was edited (a different
 	// revision is now current) and B was deleted — neither was durably stamped as sent.
 	if len(resp.Emailed) != 1 || resp.Emailed[0] != uuidC {

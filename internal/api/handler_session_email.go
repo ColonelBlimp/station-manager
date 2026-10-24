@@ -51,10 +51,17 @@ type SessionEmailRequest struct {
 // stamp. On a stamp-write failure (after a successful send) emailed is
 // empty — the mail still went out, and the SPA shows those rows
 // unsent so a re-send or a Logbook-SPA fix can reconcile them.
+//
+// sent lists the UUIDs composed into the attachment that left, in request
+// order; omitted the distinct requested UUIDs not found in this archive.
+// emailed is the durably stamped subset of sent, so it is never a count of
+// what was sent (ADR 0095).
 type SessionEmailResponse struct {
 	Status  string   `json:"status"`
 	Emailed []string `json:"emailed"`
 	Date    string   `json:"date"`
+	Sent    []string `json:"sent"`
+	Omitted []string `json:"omitted"`
 }
 
 // handleSessionEmail packages the SPA-supplied ADIF as an email
@@ -155,7 +162,7 @@ func (s *Server) handleSessionEmail(w http.ResponseWriter, r *http.Request) {
 	// proceeds with the rows that remain. Order follows the request so
 	// the QSL manager sees the operator's submit order. Shared with the
 	// export handler via fetchSessionQsos.
-	qsos, ferr := s.fetchSessionQsos(r.Context(), reqUUIDs, "session email")
+	qsos, omitted, ferr := s.fetchSessionQsos(r.Context(), reqUUIDs, "session email")
 	if ferr != nil {
 		s.writeError(w, http.StatusInternalServerError, "fetch_failed",
 			"failed to load session QSOs", op)
@@ -246,10 +253,16 @@ func (s *Server) handleSessionEmail(w http.ResponseWriter, r *http.Request) {
 	// marked (PT-3) — see stampSessionEmailed.
 	emailed, stampDate := s.stampSessionEmailed(r.Context(), qsos)
 
+	sent := make([]string, len(qsos))
+	for i, q := range qsos {
+		sent[i] = q.UUID
+	}
 	s.writeJSON(w, http.StatusOK, SessionEmailResponse{
 		Status:  "sent",
 		Emailed: emailed,
 		Date:    stampDate,
+		Sent:    sent,
+		Omitted: omitted,
 	})
 }
 
@@ -273,7 +286,7 @@ func (s *Server) stampSessionEmailed(ctx context.Context, qsos types.QsoSlice) (
 	if err != nil {
 		s.logger.ErrorWith().Err(err).Int("qso_count", len(targets)).
 			Msg("session email sent but stamping forwarded-by-email flag failed")
-		return nil, ""
+		return []string{}, "" // an empty array, never null: the response contract (ADR 0095)
 	}
 
 	// emailed lists ONLY the rows durably stamped at the sent revision, in request

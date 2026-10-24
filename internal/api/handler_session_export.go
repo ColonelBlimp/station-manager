@@ -5,6 +5,7 @@ import (
 	stderrs "errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,10 +36,11 @@ type SessionExportRequest struct {
 	Filename string   `json:"filename,omitempty"`
 }
 
-// fetchSessionQsos loads QSOs by UUID in request order, skipping any that no
-// longer resolve (soft-deleted since the SPA snapshotted the session) with a
-// warning. A real fetch failure returns an error for the caller to map to a
-// 500. Shared by the email and export session handlers so both rebuild from
+// fetchSessionQsos loads QSOs by UUID in request order. A UUID that does not
+// resolve in this archive is returned in omitted (and logged) rather than
+// silently dropped: callers report it, so a short result never reads as a
+// complete one (ADR 0095). A real fetch failure returns an error for the caller
+// to map to a 500. Shared by the email and export session handlers so both rebuild from
 // the same battle-tested path. `what` labels the log lines for the caller.
 //
 // One indexed point-lookup per UUID is deliberate: callers cap the list at
@@ -49,23 +51,25 @@ type SessionExportRequest struct {
 // perf concern at the capped size).
 func (s *Server) fetchSessionQsos(
 	ctx context.Context, uuids []string, what string,
-) (types.QsoSlice, error) {
-	qsos := make(types.QsoSlice, 0, len(uuids))
+) (qsos types.QsoSlice, omitted []string, err error) {
+	qsos = make(types.QsoSlice, 0, len(uuids))
+	omitted = make([]string, 0)
 	for _, uuid := range uuids {
-		q, err := s.db.FetchQsoByUUIDWithContext(ctx, uuid)
-		if err != nil {
-			if stderrs.Is(err, errors.ErrNotFound) {
+		q, ferr := s.db.FetchQsoByUUIDWithContext(ctx, uuid)
+		if ferr != nil {
+			if stderrs.Is(ferr, errors.ErrNotFound) {
 				s.logger.WarnWith().Str("uuid", uuid).
-					Msg(what + ": QSO not found, skipping")
+					Msg(what + ": QSO not found in this archive; reported as omitted")
+				omitted = append(omitted, uuid)
 				continue
 			}
-			s.logger.ErrorWith().Err(err).Str("uuid", uuid).
+			s.logger.ErrorWith().Err(ferr).Str("uuid", uuid).
 				Msg(what + ": failed to fetch QSO")
-			return nil, err
+			return nil, nil, ferr
 		}
 		qsos = append(qsos, q)
 	}
-	return qsos, nil
+	return qsos, omitted, nil
 }
 
 // handleSessionExport rebuilds the session's ADIF from the live DB rows and
@@ -100,7 +104,7 @@ func (s *Server) handleSessionExport(w http.ResponseWriter, r *http.Request) {
 	// Dedupe (first-occurrence order) so a repeated UUID isn't emitted twice.
 	reqUUIDs := dedupeStrings(req.UUIDs)
 
-	qsos, ferr := s.fetchSessionQsos(r.Context(), reqUUIDs, "session export")
+	qsos, omitted, ferr := s.fetchSessionQsos(r.Context(), reqUUIDs, "session export")
 	if ferr != nil {
 		s.writeError(w, http.StatusInternalServerError, "fetch_failed",
 			"failed to load session QSOs", op)
@@ -140,6 +144,11 @@ func (s *Server) handleSessionExport(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/x-adif")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", req.Filename))
+	// What the file holds, against what was asked (distinct UUIDs): the client
+	// builds its message from these, never from its own row count (ADR 0095).
+	w.Header().Set("X-SM-Requested-Count", strconv.Itoa(len(reqUUIDs)))
+	w.Header().Set("X-SM-Exported-Count", strconv.Itoa(len(qsos)))
+	w.Header().Set("X-SM-Omitted-Count", strconv.Itoa(len(omitted)))
 	w.WriteHeader(http.StatusOK)
 	if _, werr := w.Write([]byte(adifBody)); werr != nil {
 		// Response already committed; nothing to do but log.
