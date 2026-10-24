@@ -116,6 +116,100 @@ definition against alpha.5.
 | `A3-01` … `A3-05` | pending, unchanged definitions | Never executed at alpha.4 | pending | pending |
 | `A4-01` | **revised** — ratify the B2 changes below | The B2-10 and B2-11 expected results change with the fix; four cases are added (B2-17 … B2-20). The A4 parameters carry forward | Revised inventory with two amendments (B2-18's verifiable legacy fixture; B2-19 and B2-20 as automated-evidence rows for FT8 and email) and the guest sequence in Scope | **PASS** — Codex inventory review requested by the operator, 2026-10-24. This ratifies the case definitions and the guest sequence, not their results or either release gate |
 
+### A3 outage plan — revision 3, for operator review (2026-10-24)
+
+Revision 3 reinstates the clean-shutdown and sidecar check that revision 2 dropped (operator: `inactive`
+and `MainPID=0` do not establish that committed changes were checkpointed out of a WAL — [SQLite, How
+WAL Works](https://www.sqlite.org/wal.html#how_wal_works); demonstrated by the operator on disposable
+databases: with committed rows left in a copied WAL, `immutable=1` reported integrity ok and 1 row
+where ordinary read-only access reported 2) and makes the extraction check cover the complete path set.
+Revision 2 applied the operator's four corrections to the first draft: a content baseline taken after
+shutdown, A3-03's API readings scoped honestly with the stopped backup as the authority, differences
+between checkpoints explained rather than forbidden, and a defined failure exit. **Agreed for this
+occasion (operator, 2026-10-24):** station-account SM Cloud support, listing and export reads for
+B2-15/16, with local writes confined to the verified scratch copies. Rollback RPM independently
+verified by the operator: version `2.0.0~alpha.3.262.g6217da21.dirty-1`, SHA-256 `2d3a0ec9…e180bdb`.
+**Not yet approved:** the stop and the live upgrade; the window awaits the operator's available UTC
+interval and station-needed-by deadline.
+
+No RF, rig command or FT8 activity is part of the plan; the station is idle throughout. No live
+database file is opened directly; every file-level check runs on scratch copies. Every artifact that
+may hold credentials (backup archive, scratch copies, the records' directory) is created with
+restrictive permissions from the outset (`umask 077`; directories 0700, files 0600), outside the
+repository, under the home directory.
+
+**Before the stop (daemon running, station idle) — observations, not the authority:**
+
+1. **A3-04.** The preserved dev RPM verified (SHA-256 `2d3a0ec9…e180bdb`, `rpm -qp` version as above).
+   Rollback recorded in the header: `systemctl --user stop smd`; `sudo rpm -Uvh --oldpackage <dev rpm>`;
+   `systemctl --user daemon-reload`; `systemctl --user start smd`; then `GET /v1/version` (the dev
+   build's version and Home) and `GET /v1/healthz` ok. No data downgrade: alpha.5 adds no migration.
+2. **A3-05.** The operator records the window, the station-needed-by deadline, and recovery time
+   reserved beyond the 20–30-minute stop.
+3. **API observations, labelled with their scope:** `GET /v1/qso-archives` (QSOs per logbook per
+   archive, from the catalogue summaries); `GET /v1/forwarder-queues` (the **active archive's** binding
+   backlog counts — not every upload-row status); `GET /v1/station-events?limit=1000` (the retained
+   ring; no pagination); `GET /v1/qso-archives/{Home}/bindings` (Drill, inactive, answers 409 and is
+   not read here). Forwarders may change queues while the station is idle, so these are reference
+   points only.
+
+**The stop (agreed outage):**
+
+4. `systemctl --user stop smd`; record the time; confirm `inactive` (`MainPID=0`) and a **clean
+   shutdown** — the journal shows the daemon's own orderly exit (no kill, no failure result). Then
+   check **every database file** in the working directory for `-wal`, `-shm` and `-journal` sidecars:
+   - the active databases (`station-manager.db`, `reference.db`, `evidence.db`) and Drill's
+     `qso-archives/01a15d43-….db` must have **none** after a clean shutdown;
+   - **known pre-existing pair**, recorded 2026-10-24 12:10Z with the daemon running:
+     `db/reference-premigrate-20260723-024757.db-wal` (0 bytes, SHA-256 `e3b0c442…7852b855`) and `-shm`
+     (32,768 bytes, SHA-256 `fd4c9fda…549389eb`), both last modified 2026-07-28 — a migration-era
+     leftover the daemon does not open. It passes only if both are byte-identical to that reading; it is
+     preserved untouched, and that database is never opened;
+   - any other sidecar, or any change to the known pair, **stops the plan before any `immutable=1`
+     read**: the sidecars are preserved exactly as found (never deleted or checkpointed to satisfy the
+     check), the daemon stays stopped, and the operator reviews.
+   The dated copies `db/20260722/` and `db/20260723/` are inventoried and hashed but never opened.
+5. **Preservation baseline (after shutdown).** Under `umask 077`, record every file's relative path and
+   SHA-256 in the stopped working directory to `~/sm-a3/baseline.sha256` (a 0700 directory outside the
+   live directory). This, not any earlier reading, is the snapshot to preserve.
+6. **A3-01.** `tar -czf ~/sm-backup/station-manager-<UTC>-g6217da21-pre-alpha5.tar.gz` of the complete
+   working directory (0600 from creation, outside the repository); its SHA-256 and `tar -tzf` count
+   recorded; the 2026-10-21 backup kept.
+7. **A3-02 and A3-03 (authoritative).** In `~/sm-a3/scratch` (0700, absent before): verify the archive's
+   SHA, extract, and verify the extraction against the step 5 baseline as **complete sets**: the
+   relative-path set must be identical (a missing or extra file fails) and every file's SHA-256 must
+   match. Then, on
+   those verified copies opened read-only with `immutable=1`: `PRAGMA integrity_check` = `ok` for each
+   database it opens (Home's `station-manager.db`, Drill's file, `reference.db`, `evidence.db`; not the
+   premigrate file or the dated copies); and the authoritative inventory and counts — QSOs per logbook per archive (Home and Drill
+   files), `qso_upload` rows by forwarder and status, `operator_event` rows per category, bindings per
+   archive (Home and Drill) — recorded without contents. Differences from step 3's observations are
+   explained (uploads processed, events added, catalogue-summary lag), not required to be zero.
+8. **B2-15a…c and B2-16a…c** in `~/sm-a3/c` by checklist C's fixture method with alpha.5's `smd`
+   (A1-04's extraction): separate `restore/` and `provision/` copies made from the verified extraction,
+   paths rewritten into each copy, and the resolved-path inventory (`build/private/c-paths`) showing
+   every write target inside the copy (live control: all outside). SM Cloud reads as agreed above.
+   Expected results as the alpha.4 definitions; their counts are compared with step 7's.
+9. **Preservation check, before any restart:** re-hash the live working directory and compare with the
+   step 5 baseline as complete sets (paths and hashes) — identical expected. Then clean up: credential-bearing copies `shred -u` (btrfs
+   caveat as A1-04), `~/sm-a3/scratch` and `~/sm-a3/c` removed; the baseline and count records kept.
+10. **Restart the old daemon:** `systemctl --user start smd`; `GET /v1/version` (dev build, Home, new
+    `instance`), `GET /v1/healthz` ok; the step 3 readings repeated and any difference from step 7
+    explained (the restart may move queue state).
+
+**Failure exit.** Any failed integrity, isolation (a write target outside a copy), restore or
+provisioning check **holds B1**. If step 9 shows the live directory identical to the baseline, restart
+the old daemon (step 10) and stop for review. If it does not, **do not restart**: preserve the live
+directory, the baseline, the backup and the scratch evidence as they are, and stop for the operator's
+review.
+
+**Then B1, separately, on the operator's go:** B1-05 (a fresh copy of the live `config.json` through
+alpha.5's `config-check`), B1-01 (install.md §7 while the old daemon runs), B1-02…B1-04 and B1-06, then
+B2-12 and B2-14a (read-only). B1-04's comparison is against step 7's authoritative counts, with
+differences explained.
+
+**Estimate:** steps 4–10 about 20–30 minutes, most of it B2-15/16; recovery time is reserved beyond that.
+
 ## Gate B — deploy and accept
 
 B1 rows (`B1-01` … `B1-06`): pending, the alpha.4 definitions run on this artifact (none was
@@ -164,6 +258,9 @@ apart from API-only evidence.
 | `B2-10` | 11:18–11:21Z, the same `ff-b2s5` tab. The operator activated Contest (instance `dmd0yw7xj76o`) and logged one distinguishable QSO, 7Q4A `01a16da3-ee8c-730f-ad54-1c88b1d89782` 11:20:15Z (`B2 Log` 0 → 1; Home `Default` still 5). **Visible** (screenshot `Screenshot_20261024_132042.png`): header `Archive Contest`, `Logbook B2 Log (1)`; **Session (1)** listing only 7Q4A; rail badge 1; no Home row (7Q5B, 7Q6C) listed, so none is offered for edit. Export: file `session-20261024-112054.adi` (617 B, SHA-256 `8a06dcc5…270939`) holds exactly **1 record**, 7Q4A 20261024 112015 M0CMC, `PROGRAMVERSION` `2.0.0-alpha.5`; the notice (screenshot `Screenshot_20261024_132138.png`) an info toast **"Exported 1 QSO to ADIF"**, matching the file. At alpha.4 this panel showed four rows and the toast "Exported 4 QSOs" over a one-record file | **PASS** — operator, 2026-10-24: archive isolation and file/notice counts |
 | `B2-11` | 11:21–11:24Z, the same `ff-b2s5` tab. The operator activated Home (instance `dmd12jdpvv29`). **Visible** (screenshot `Screenshot_20261024_132227.png`): header `Archive Home`, `Logbook Default (5)`; **Session (2)** — 7Q5B 11:14:16 and 7Q6C 11:14:07 (Country `Unknown` on the edited row, Finding #7) — and 7Q4A absent; rail badge 2. First export: info toast **"Exported 2 QSOs to ADIF"** (screenshot `Screenshot_20261024_132246.png`); file `session-20261024-112242.adi` (944 B, SHA-256 `e01bc18f…6ac3152`) holds exactly 7Q5B and 7Q6C (`B2-09 edit`), no Contest row. That export preceded the edit step, so the operator then edited 7Q5B's comment to `B2-11 edit`, saved and reloaded: `GET /v1/qso/01a16d9e-5bb3-…` returns `B2-11 edit` (7Q6C still `B2-09 edit`); a second export, `session-20261024-112345.adi` (967 B, SHA-256 `bc59c8cb…e717be5b`), holds exactly 7Q5B (`B2-11 edit`) and 7Q6C (`B2-09 edit`). Durable counts: Home `Default` 5, Contest `B2 Log` 1 (untouched). At alpha.4 this panel showed four rows instead of three | **PASS** — operator, 2026-10-24: Home's rows restored, edits saved to Home, file/notice counts; the second export completes the post-edit check |
 | `B2-17` | 11:25–, continuing the same `ff-b2s5` tab (B2-09…B2-11 sequence). The operator logged VK6YY `01a16da8-f247-7b93-ac41-9af25f9dbd82` 11:25:48Z: **Session (3)** — VK6YY, 7Q5B, 7Q6C — rail badge 3, header `Default (6)` (screenshot `Screenshot_20261024_132941.png`); durable Home 6. **Fixture preparation (agent, 11:33:49Z, amended method):** Home active (instance `dmd12jdpvv29`); guarded `GET /v1/qso/01a16da8-…` 200 (VK6YY 20261024 112548, logbook 1); `DELETE` with `X-SM-Archive-Id` `01a16d52-1c87-7dfd-b5ec-7caba7193539` → **204**; guarded `GET` → **404** `not_found`; durable Home **5**. **Export 1** (no reload; Session still 3): warning **"Exported 2 of 3 selected QSOs. 1 could not be found in this archive."** (screenshot `Screenshot_20261024_133510.png`); file `session-20261024-113508.adi` (967 B, SHA-256 `2ada5a5a…aa6cbc24`) holds exactly 7Q5B (`B2-11 edit`) and 7Q6C (`B2-09 edit`); VK6YY still listed, Session (3) (screenshot `Screenshot_20261024_133546.png`). **Export 2** (no reload): the same warning (operator); file `session-20261024-113921.adi` (967 B, SHA-256 `aaa3b84b…f356ea76db`) holds the same two records. **After a reload:** VK6YY still listed, Session (3). Side observation: until that reload the header read `Logbook Default (6)` while the durable count was 5 — the delete was made through the API with no SPA action, and the reload showed `Default (5)`. This matches the deferred event-driven count updates in [ADR 0079](../decisions/0079-shell-events-stream-reconnect-refresh.md) ("QSO-event-driven live updates … Deferred, not rejected") and does not invalidate B2-17 (operator, 2026-10-24) | **PASS** — operator, 2026-10-24: both exports contain exactly the two surviving rows, repeat the correct warning, and VK6YY stays listed, also after a reload |
+| `B2-13a` | 11:43–11:45Z, the same `ff-b2s5` tab, Home active (instance `dmd12jdpvv29`). **Starting state verified (API/config):** `config.json` forwarder accounts only `clublog`, `qrz`, `qrzcq` (the packaged defaults) — no SM Cloud account; Home's `GET /v1/qso-archives/{id}/bindings` lists ClubLog, QRZ Logbook and QRZCQ (each `off`, account configured, `Default` bound, not enabled) — no `smcloud` destination or binding. **Visible** (screenshot `Screenshot_20261024_134445.png`): Settings → Forwarding "Where each logbook in archive Home uploads" shows ClubLog, QRZ Logbook and QRZCQ, each `DISABLED`; **no SM Cloud card** and no unactionable "no station account" row | **PASS** — operator, 2026-10-24 |
+| `B2-13b` | **Automated evidence**, tied to alpha.5. Present at `v2.0.0-alpha.5`: `internal/archive/bindings_test.go` `TestBindings_EnableRefusals` and `TestBindings_AccountReportsBuildKeyAndReasonNamesTheGap`; the SPA's `frontend/app/src/lib/config/bindings.svelte.test.ts`. No `t.Skip` in the Go file; no `.skip`/`.only`/`.todo` in the TS file. A1-01's `task ci:local` at `v2.0.0-alpha.5` (`0da2cd6a`) passed (exit 0: vitest 2329/2329 in 156 files, every Go package run fresh) and CI run 40077880913 passed on the same commit. Not a manual pass | **PASS** — operator, 2026-10-24 — **automated evidence** (18 cited files and 30 named citations checked at the tag; no skip/focus markers) |
+| `B2-14b` | **Automated evidence**, tied to alpha.5. Present at `v2.0.0-alpha.5`: `internal/api/handler_forwarder_queue_test.go` `TestRetryForwarderQueue_HappyPath`, `_Validation`, `_UsesStartupWorkerSet`, `_PreservesExactName`; `cmd/smd/lifecycle_rearm_auth_test.go` `TestLifecycle_StartRearmsAuthFailedRowsForEnabledForwarder` (the separate start-time re-arm); `frontend/app/src/lib/api/forwarder-queues.test.ts`; `frontend/app/src/lib/config/DestinationsSection.adoption.svelte.test.ts` "U5: a held row cannot retry …" (line 457). No skips in the cited files. A1-01's `task ci:local` at `v2.0.0-alpha.5` (`0da2cd6a`) passed (exit 0: vitest 2329/2329 in 156 files, every Go package run fresh) and CI run 40077880913 passed on the same commit. The manual retry and the start-time re-arm are distinct tests | **PASS** — operator, 2026-10-24 — **automated evidence** (18 cited files and 30 named citations checked at the tag; no skip/focus markers) |
 
 ### B2 cases revised or added for alpha.5 (ratified at A4-01, 2026-10-24)
 
@@ -173,8 +270,8 @@ apart from API-only evidence.
 | `B2-11` | yes | **clean-guest** — B2-10; switch back to Home in the same tab | Read the panel; edit a Home row (save and reload), and export | Home's two rows are back and the other archive's row is absent; the edit saves to Home (`GET /v1/qso/{uuid}`); the file holds Home's two records and the notice reads "Exported 2 QSOs to ADIF" | Home's list lost on return; the other archive's row listed; an edit written to the wrong archive | pending | none | **PASS** — see B2 execution, `B2-11` (operator, 2026-10-24) |
 | `B2-17` | yes | **clean-guest** — Home active, three Session rows; one of them deleted from Home. **Amended at A4-01 (operator, 2026-10-24):** the SPA offers no QSO delete (Finding #3), so the agent prepares the fixture through the documented `DELETE /v1/qso/{uuid}` with Home's `X-SM-Archive-Id` (guarded `GET` 200 before, `204`, guarded `GET` 404 after, durable count and Session checked); the exports and their criteria are unchanged | Export from the Session dialog and open the file; export again | Both exports: the file holds the two remaining records and the notice is a warning, "Exported 2 of 3 selected QSOs. 1 could not be found in this archive."; the deleted row stays listed | "Exported 3 QSOs"; the row silently dropped from the list; a missing row described as deleted | pending | none | **PASS** — see B2 execution, `B2-17` (operator, 2026-10-24) |
 | `B2-18` | yes | **clean-guest, legacy lane** — kept separate from the fresh-install lane (A2-01 … A2-07). **Fixture, prepared while alpha.4 is still installed in the guest:** an alpha.4 working directory whose archive holds Phone / CW QSOs logged from one tab; that tab stays open at `http://127.0.0.1:18080` (same origin, through the tunnel) and is never closed, so its `sessionStorage` survives. Session `sessionStorage` lasts only as long as the tab: a closed tab, a closed browser or a power cut loses it (alpha.4 record, B2-09 attempt 1). **Verify before the first alpha.5 load,** read-only in that tab's DevTools console: `sessionStorage.getItem('sm.session.qsos')` is non-null and lists the logged UUIDs, and no `sm.session.qsos.<uuid>` key exists; `GET /v1/qso/{uuid}` returns each of them. Then upgrade that lane's package in place to the alpha.5 RPM (its data kept) and restart its daemon, without touching the tab. If the fixture cannot be prepared or is lost before the load, recreate it from the held alpha.4 RPM (`cebcd305…`); otherwise record the case **blocked** | Reload that tab once; read the notices, the Session panel and the Logbook; reload again; read `sessionStorage` again | One notice after the first reload: "Session history was reset by this update. Your logged QSOs are intact in the Logbook."; the Session panel is empty; the Logbook holds every fixture QSO; no notice after the second reload; `sm.session.qsos` is gone and `sm.session.qsos.<uuid>` holds an empty list or is absent | The old list adopted into the archive's Session list; the notice on every load; QSOs missing from the Logbook; a fixture that was never verified counted as a pass | Execution log #5. 2026-10-24, guest clock stepped first; `smtest2` lane (alpha.4, Home, `Default` 8); new empty profile `ff-b2l` (0700), one tab at `127.0.0.1:18080`. Two Phone / CW QSOs logged: 7Q7EB `01a16d3b-1bc9-7e7d-b0a4-6ece15286ec7` 09:25:35Z and 7Q7CT `01a16d3b-378f-7186-bb88-8b4c66ad4524` 09:25:57Z; `Default` 10. **Fixture verified before the alpha.5 load:** the DevTools Storage inspector (Firefox's console blocks pasted code) showed `sm.session.qsos` holding both rows and, besides it, only `sm.session.startedAt`, no scoped key; `GET /v1/qso/{uuid}` 200 for both. Package upgraded in place to alpha.5 (09:29:28Z, `/usr/bin/smd` `b91bc34b…`), `smtest2`'s daemon restarted (instance `dmcyo9gpkfen`, Home); the tab stayed open and did not reload by itself. **First reload (F5, operator):** the reset notice shown once; Session panel empty. **Second reload:** no notice. Storage afterwards: only `sm.session.startedAt` (the unscoped key gone; no scoped key written, which the row allows). Home still `Default` 10 with both UUIDs (`GET /v1/qso/{uuid}` 200, 09:31Z, read through the daemon rather than the Logbook view) | none | **PASS** — operator, 2026-10-24: fixture verified before alpha.5 loaded, the notice once, the legacy list gone, both durable QSOs retained. Deviations accepted: the Storage inspector reads the required state; QSO retention is **API evidence**, not a visual Logbook check; manual F5 is the prescribed action |
-| `B2-19` | yes | **record** — automated evidence from A1-01's `ci:local` at the alpha.5 tag | Cite the archive-boundary and engagement tests (list below) and confirm each is present at the tag and passing in that run | Every cited test present and passing | Read as a browser or on-air pass: the FT8 repeat decision runs in TX preflight and row shading reflects separate enrichment evidence, so neither is observable on this guest | pending | none | pending — **automated evidence** |
-| `B2-20` | yes | **record** — automated evidence from A1-01's `ci:local` at the alpha.5 tag | Cite the export and email accounting tests (list below), including partition rejection and stamp failure, and confirm each is present at the tag and passing in that run | Every cited test present and passing | Read as a manual email pass; the guest has no SMTP account | pending | none | pending — **automated evidence** |
+| `B2-19` | yes | **record** — automated evidence from A1-01's `ci:local` at the alpha.5 tag | Cite the archive-boundary and engagement tests (list below) and confirm each is present at the tag and passing in that run | Every cited test present and passing | Read as a browser or on-air pass: the FT8 repeat decision runs in TX preflight and row shading reflects separate enrichment evidence, so neither is observable on this guest | **Automated evidence**, verified 2026-10-24: every test named in the B2-19 citations below is present at `v2.0.0-alpha.5` (each name found once; `archive_guard_test.go` and `archive-guard.test.ts` present), with no `t.Skip` in the cited Go files and no `.skip`/`.only`/`.todo` in the cited TS suites; A1-01's `task ci:local` at `v2.0.0-alpha.5` (`0da2cd6a`) passed (exit 0: vitest 2329/2329 in 156 files, every Go package run fresh) and CI run 40077880913 passed on the same commit | none | **PASS** — operator, 2026-10-24 — **automated evidence** (18 cited files and 30 named citations checked at the tag; no skip/focus markers) |
+| `B2-20` | yes | **record** — automated evidence from A1-01's `ci:local` at the alpha.5 tag | Cite the export and email accounting tests (list below), including partition rejection and stamp failure, and confirm each is present at the tag and passing in that run | Every cited test present and passing | Read as a manual email pass; the guest has no SMTP account | **Automated evidence**, verified 2026-10-24: every test named in the B2-20 citations below is present at `v2.0.0-alpha.5`, including each partition violation "rejected before anything is marked", partial stamping and the stamp-failure cases, with no skips in the cited files; A1-01's `task ci:local` at `v2.0.0-alpha.5` (`0da2cd6a`) passed (exit 0: vitest 2329/2329 in 156 files, every Go package run fresh) and CI run 40077880913 passed on the same commit | none | **PASS** — operator, 2026-10-24 — **automated evidence** (18 cited files and 30 named citations checked at the tag; no skip/focus markers) |
 
 **B2-19 citations** (archive boundary and FT8 engagement):
 
