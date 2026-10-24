@@ -21,6 +21,11 @@ import {
     setArchiveMismatchSink,
     setBoundArchive,
 } from '../api/archive-guard';
+import {
+    bindArchiveStores,
+    setSessionActionGate,
+    setStoresMismatchSink,
+} from '../operate/archiveStores.svelte';
 import { OUTCOME_UNKNOWN_LEAD } from '../api/_helpers';
 import { toasts } from '../ui/toasts.svelte';
 import { draft, draftInProgress, logOutcomeUnknown, submitState } from '../operate/qso.svelte';
@@ -439,8 +444,10 @@ export async function bootArchiveScoped<T>(reads: () => Promise<T>): Promise<T> 
     if (before !== null && after !== null) {
         if (before.instance === after.instance && before.archiveId === after.archiveId) {
             bootIdentity = after;
-            // The guarded requests may now name it (archive-guard.ts).
+            // The guarded requests may now name it (archive-guard.ts), and the
+            // per-archive browser stores select it (archiveStores.svelte.ts).
             setBoundArchive(after.archiveId);
+            bindArchiveStores(after.archiveId);
         } else {
             bootIdentity = null;
             toasts.info('The daemon changed while the page was loading. Reloading…');
@@ -553,6 +560,17 @@ setArchiveBindingGate(() => archivesState.verifying || archivesState.switchUnres
 setArchiveMismatchSink(() => {
     void verifyArchiveGeneration();
 });
+// A Session or engagement write that names another archive is the same signal,
+// raised before any request: verify at once instead of waiting for the always-on
+// stream's reconnect, so the reload follows promptly.
+setStoresMismatchSink(() => {
+    void verifyArchiveGeneration();
+});
+setSessionActionGate(() =>
+    archivesState.verifying || archivesState.switchUnresolved
+        ? 'Waiting until this tab has confirmed its archive.'
+        : null
+);
 
 /** Test seams. */
 export function _setBootIdentityForTests(id: DaemonIdentity | null): void {

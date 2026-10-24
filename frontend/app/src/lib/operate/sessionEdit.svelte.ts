@@ -13,6 +13,7 @@
 import { fetchQso, patchQso, type QsoPatch } from '../api/qso-patch';
 import type { LogbookQso } from '../api/logbooks';
 import { updateSessionQso, type SessionQso, sessionModeLiteral } from './session.svelte';
+import { sessionActionBlock } from './archiveStores.svelte';
 
 /** ADIF HHMM[SS] → the session list's HH:MM[:SS] display shape. */
 function displayTime(t: string | undefined, fallback: string): string {
@@ -44,6 +45,12 @@ class SessionEditState {
 
     async open(sq: SessionQso): Promise<void> {
         if (this.opening || this.saving || sq.uuid === undefined || sq.uuid === '') return;
+        // An unproven archive sends nothing: the row may be another archive's.
+        const blocked = sessionActionBlock();
+        if (blocked !== null) {
+            this.openError = blocked;
+            return;
+        }
         this.opening = true;
         this.openError = null;
         const out = await fetchQso(sq.uuid);
@@ -67,6 +74,11 @@ class SessionEditState {
 
     async save(patch: QsoPatch): Promise<void> {
         if (this.saving) return; // Ctrl+Enter repeat while a PATCH is in flight
+        const blocked = sessionActionBlock();
+        if (blocked !== null) {
+            this.error = blocked; // the modal and its edit stay open for when it clears
+            return;
+        }
         const uuid = this.row?.uuid;
         if (uuid === undefined || uuid === '') {
             this.error = 'This QSO has no id and cannot be edited.';

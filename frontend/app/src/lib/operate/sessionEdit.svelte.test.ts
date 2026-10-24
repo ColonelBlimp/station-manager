@@ -2,7 +2,7 @@
 // PATCH + session-row write-back on save. The api layer is mocked — the
 // controller's job is state choreography, not HTTP.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const fetchQso = vi.fn();
 const patchQso = vi.fn();
@@ -12,6 +12,7 @@ vi.mock('../api/qso-patch', () => ({
 }));
 
 import { sessionEdit } from './sessionEdit.svelte';
+import { setSessionActionGate } from './archiveStores.svelte';
 import { session, addSessionQso, _resetSessionForTests, type SessionQso } from './session.svelte';
 
 const sq = (over: Partial<SessionQso> = {}): Omit<SessionQso, 'id'> => ({
@@ -155,5 +156,33 @@ describe('sessionEdit.save', () => {
         release({ kind: 'ok', qso: { id: 9, uuid: 'u-1', call: 'G4ABC', name: 'Fred' } });
         await first;
         expect(patchQso).toHaveBeenCalledTimes(1);
+    });
+});
+
+// While the tab's archive is unproven (before binding, while a check is pending,
+// or a switch is unresolved) Session edit sends nothing (ADR 0094 update): the row
+// may belong to an archive the daemon no longer serves.
+describe('sessionEdit while the archive is unproven', () => {
+    const WAIT = 'Waiting until this tab has confirmed its archive.';
+    afterEach(() => setSessionActionGate(() => null));
+
+    it('open is refused with the reason and fetches nothing', async () => {
+        addSessionQso(sq());
+        setSessionActionGate(() => WAIT);
+        await sessionEdit.open(session.qsos[0]);
+        expect(fetchQso).not.toHaveBeenCalled();
+        expect(sessionEdit.row).toBeNull();
+        expect(sessionEdit.openError).toBe(WAIT);
+    });
+
+    it('save is refused with the reason and sends no PATCH', async () => {
+        addSessionQso(sq());
+        fetchQso.mockResolvedValue({ kind: 'ok', qso: { id: 9, uuid: 'u-1', call: 'G4ABC' } });
+        await sessionEdit.open(session.qsos[0]);
+        setSessionActionGate(() => WAIT); // a reconnect check began with the modal open
+        await sessionEdit.save({ comment: 'x' });
+        expect(patchQso).not.toHaveBeenCalled();
+        expect(sessionEdit.error).toBe(WAIT);
+        expect(sessionEdit.row).not.toBeNull(); // the edit is kept for when it clears
     });
 });

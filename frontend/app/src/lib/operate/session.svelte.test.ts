@@ -12,6 +12,10 @@ import {
     _resetSessionForTests,
     type SessionQso,
 } from './session.svelte';
+import { TEST_ARCHIVE } from '../../test/archive';
+
+// The list is kept per archive (ADR 0094): the test setup binds TEST_ARCHIVE.
+const LIST_KEY = `sm.session.qsos.${TEST_ARCHIVE}`;
 
 beforeEach(() => {
     _resetSessionForTests();
@@ -42,7 +46,7 @@ describe('session log', () => {
 
     it('persists to sessionStorage so a reload keeps the session', () => {
         addSessionQso(qso({ callsign: 'G3XYZ' }));
-        const raw = sessionStorage.getItem('sm.session.qsos');
+        const raw = sessionStorage.getItem(LIST_KEY);
         expect(raw).not.toBeNull();
         const stored = JSON.parse(raw!) as { qsos: SessionQso[] };
         expect(stored.qsos[0].callsign).toBe('G3XYZ');
@@ -52,7 +56,7 @@ describe('session log', () => {
         addSessionQso(qso());
         _resetSessionForTests();
         expect(session.qsos).toHaveLength(0);
-        expect(sessionStorage.getItem('sm.session.qsos')).toBeNull();
+        expect(sessionStorage.getItem(LIST_KEY)).toBeNull();
     });
 });
 
@@ -67,7 +71,7 @@ describe('markSessionEmailed', () => {
         expect(byCall('A')?.emailed).toBe(true);
         expect(byCall('B')?.emailed).toBeUndefined();
         // Persisted, so a reload keeps the "already emailed" delta.
-        const stored = JSON.parse(sessionStorage.getItem('sm.session.qsos')!) as {
+        const stored = JSON.parse(sessionStorage.getItem(LIST_KEY)!) as {
             qsos: SessionQso[];
         };
         expect(stored.qsos.find((q) => q.uuid === 'u1')?.emailed).toBe(true);

@@ -20,6 +20,14 @@ import {
 import { fetchDaemonInstance, waitForDaemonBack } from '../api/restart';
 import { boundArchive, guardedFetch } from '../api/archive-guard';
 import {
+    bindArchiveStores,
+    sessionActionBlock,
+    storesArchive,
+    _reloadArchiveStoresForTests,
+} from '../operate/archiveStores.svelte';
+import { fileSessionQso, session } from '../operate/session.svelte';
+import { TEST_ARCHIVE } from '../../test/archive';
+import {
     activateArchive,
     activeArchive,
     archiveEntryLock,
@@ -1026,5 +1034,89 @@ describe('the archive request guard follows the proven binding', () => {
         } finally {
             vi.unstubAllGlobals();
         }
+    });
+});
+
+// Slice 4 (ADR 0094 update): the boot bracket's proof binds the per-archive
+// Session and engagement stores, and only it; the archive layer's pending checks
+// hold Session actions, and a store write naming another archive verifies at once.
+describe('the per-archive stores follow the proven binding', () => {
+    const A = '01a163a7-0f04-7f69-85e9-255664b58d11';
+    const B = '01a1640f-815a-75e4-bae2-b9ef8d86f8c3';
+    const legacy = (): string | null => sessionStorage.getItem('sm.session.qsos');
+
+    beforeEach(() => {
+        sessionStorage.clear();
+        _reloadArchiveStoresForTests();
+        sessionStorage.setItem(
+            `sm.session.qsos.${A}`,
+            JSON.stringify({ qsos: [{ id: 1, uuid: 'h-1', callsign: 'ZS4JAN' }] })
+        );
+        sessionStorage.setItem('sm.session.qsos', JSON.stringify({ qsos: [] }));
+    });
+    afterEach(() => {
+        sessionStorage.clear();
+        _reloadArchiveStoresForTests();
+        bindArchiveStores(TEST_ARCHIVE);
+    });
+
+    it('an agreeing boot binds the stores: the archive list loads, the legacy key goes', async () => {
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i1', archiveId: A });
+        await bootArchiveScoped(() => Promise.resolve());
+        expect(storesArchive()).toBe(A);
+        expect(session.qsos.map((q) => q.callsign)).toEqual(['ZS4JAN']);
+        expect(legacy()).toBeNull();
+    });
+
+    it('a boot that straddles a switch binds nothing and keeps the legacy key', async () => {
+        vi.mocked(fetchDaemonIdentity)
+            .mockResolvedValueOnce({ instance: 'i1', archiveId: A })
+            .mockResolvedValueOnce({ instance: 'i2', archiveId: B });
+        await bootArchiveScoped(() => Promise.resolve());
+        expect(storesArchive()).toBeNull();
+        expect(session.qsos).toEqual([]);
+        expect(legacy()).not.toBeNull();
+    });
+
+    it('an unreadable boot identity binds nothing and keeps the legacy key', async () => {
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue(null);
+        vi.mocked(waitForDaemonBack).mockResolvedValue(false);
+        await bootArchiveScoped(() => Promise.resolve());
+        expect(storesArchive()).toBeNull();
+        expect(legacy()).not.toBeNull();
+    });
+
+    it('holds Session actions while a check is pending or a switch is unresolved', async () => {
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i1', archiveId: A });
+        await bootArchiveScoped(() => Promise.resolve());
+        expect(sessionActionBlock()).toBeNull();
+        archivesState.verifying = true;
+        expect(sessionActionBlock()).toMatch(/confirmed its archive/);
+        archivesState.verifying = false;
+        archivesState.switchUnresolved = true;
+        expect(sessionActionBlock()).toMatch(/confirmed its archive/);
+    });
+
+    it('a store write naming another archive starts verification at once, which reloads', async () => {
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i1', archiveId: A });
+        await bootArchiveScoped(() => Promise.resolve());
+        vi.mocked(fetchDaemonIdentity).mockClear();
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i2', archiveId: B });
+        fileSessionQso(B, {
+            uuid: 'c-1',
+            callsign: 'VK0YY',
+            timeOn: '',
+            band: '',
+            mode: '',
+            rstSent: '',
+            rstRcvd: '',
+            name: '',
+            country: '',
+            comment: '',
+        });
+        expect(fetchDaemonIdentity).toHaveBeenCalled(); // synchronously started
+        for (let i = 0; i < 10; i++) await Promise.resolve();
+        expect(reloads).toBe(1);
+        expect(session.qsos.map((q) => q.callsign)).toEqual(['ZS4JAN']);
     });
 });

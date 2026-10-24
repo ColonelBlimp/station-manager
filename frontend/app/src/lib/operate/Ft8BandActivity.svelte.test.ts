@@ -5,6 +5,13 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { TEST_ARCHIVE } from '../../test/archive';
+import {
+    bindArchiveStores,
+    setStoresMismatchSink,
+    _reloadArchiveStoresForTests,
+} from './archiveStores.svelte';
+
+const OTHER_ARCHIVE = '01a1640f-815a-75e4-bae2-b9ef8d86f8c3';
 import { render, screen, fireEvent } from '@testing-library/svelte';
 import { flushSync } from 'svelte';
 import Ft8BandActivity from './Ft8BandActivity.svelte';
@@ -712,6 +719,65 @@ describe('Ft8BandActivity deliberate-repeat intent', () => {
 
         expect(got).toHaveLength(1);
         expect(got[0].allowDuplicate).toBe(true);
+    });
+
+    // Engagement is kept per archive (ADR 0094 update), and it decides
+    // allow_duplicate — which becomes Submit's `force`, a RANDOM dedupe key. So an
+    // engagement from another archive's daemon (an FT8 reconnect that beat this
+    // tab's verification) must not mark a first contact here as a repeat, and an
+    // archive's own engagement must come back when the tab returns to it.
+    it('an engagement from another archive does not flag a repeat here', async () => {
+        setStoresMismatchSink(() => {});
+        setFt8OperatorCall('7Q5MLV');
+        const got: Ft8AnswerArgs[] = [];
+        armReady({ answerCq: (a) => (got.push(a), okResult()) });
+
+        ft8Link.onQso(
+            { active: true, role: 'answerer', their_call: 'W1ABC', dial_freq_mhz: 14.074 },
+            OTHER_ARCHIVE
+        );
+        ft8Link.onQso({ active: false }, OTHER_ARCHIVE);
+
+        render(Ft8BandActivity);
+        ft8Link.onDecode(decode('t1', [{ text: 'CQ W1ABC FN42', freq_hz: 1200, snr: -12 }]));
+        flushSync();
+        await fireEvent.click(screen.getByText('CQ W1ABC FN42'));
+        await flush();
+        expect(got).toHaveLength(1);
+        expect(got[0].allowDuplicate).toBe(false);
+    });
+
+    it('Home → Contest → Home: an engagement flags a repeat only in its own archive', async () => {
+        setFt8OperatorCall('7Q5MLV');
+        const got: Ft8AnswerArgs[] = [];
+        armReady({ answerCq: (a) => (got.push(a), okResult()) });
+        ft8Link.onQso(
+            { active: true, role: 'answerer', their_call: 'W1ABC', dial_freq_mhz: 14.074 },
+            TEST_ARCHIVE
+        );
+        ft8Link.onQso({ active: false }, TEST_ARCHIVE);
+
+        const clickCq = async (slot: string): Promise<boolean | undefined> => {
+            const r = render(Ft8BandActivity);
+            ft8Link.onDecode(decode(slot, [{ text: 'CQ W1ABC FN42', freq_hz: 1200, snr: -12 }]));
+            flushSync();
+            // Decodes accumulate across renders: click the newest slot's row.
+            await fireEvent.click(screen.getAllByText('CQ W1ABC FN42').at(-1)!);
+            await flush();
+            r.unmount();
+            return got[got.length - 1]?.allowDuplicate;
+        };
+        try {
+            _reloadArchiveStoresForTests();
+            bindArchiveStores(OTHER_ARCHIVE); // the tab switched to Contest
+            expect(await clickCq('t1')).toBe(false);
+            _reloadArchiveStoresForTests();
+            bindArchiveStores(TEST_ARCHIVE); // and back to Home
+            expect(await clickCq('t2')).toBe(true);
+        } finally {
+            _reloadArchiveStoresForTests();
+            bindArchiveStores(TEST_ARCHIVE);
+        }
     });
 
     // Both consumers define a same-session duplicate as CALL + BAND. Keying the

@@ -6,6 +6,13 @@
 // (or any F5) reloads the page, and without this the whole session's contacts would
 // vanish from the review/export panel. sessionStorage (not localStorage) matches
 // the "this sitting" semantics: a reload keeps it, closing the tab ends it.
+//
+// One list per QSO archive within the tab (ADR 0094), keyed by the archive's UUID
+// and selected by the archive the page PROVED (archiveStores.svelte.ts): nothing is
+// hydrated before that proof, and every row arrives through fileSessionQso with the
+// archive of the daemon that produced it.
+
+import { fileUnderArchive, registerArchiveStore } from './archiveStores.svelte';
 
 export interface SessionQso {
     id: number;
@@ -27,14 +34,14 @@ export interface SessionQso {
     emailed?: boolean;
 }
 
-const STORE_KEY = 'sm.session.qsos';
+const KEY_PREFIX = 'sm.session.qsos.';
 
-// Hydrate from sessionStorage at boot; fail-soft to an empty session on any
-// problem (private mode, malformed value). nextId continues past the stored max so
+// Hydrate one archive's list; fail-soft to an empty session on any problem
+// (private mode, malformed value). nextId continues past the stored max so
 // keyed-each ids stay unique after a reload.
-function hydrate(): { qsos: SessionQso[]; nextId: number } {
+function hydrate(archiveId: string): { qsos: SessionQso[]; nextId: number } {
     try {
-        const raw = sessionStorage.getItem(STORE_KEY);
+        const raw = sessionStorage.getItem(KEY_PREFIX + archiveId);
         if (raw) {
             const parsed: unknown = JSON.parse(raw);
             if (
@@ -53,15 +60,30 @@ function hydrate(): { qsos: SessionQso[]; nextId: number } {
     return { qsos: [], nextId: 1 };
 }
 
-const booted = hydrate();
+export const session: { qsos: SessionQso[] } = $state({ qsos: [] });
 
-export const session: { qsos: SessionQso[] } = $state({ qsos: booted.qsos });
+let nextId = 1;
+/** The archive this page's list belongs to; null until the proof binds it. */
+let listArchive: string | null = null;
 
-let nextId = booted.nextId;
+registerArchiveStore({
+    load(archiveId) {
+        const h = hydrate(archiveId);
+        listArchive = archiveId;
+        session.qsos = h.qsos;
+        nextId = h.nextId;
+    },
+    clear() {
+        listArchive = null;
+        session.qsos = [];
+        nextId = 1;
+    },
+});
 
 function persist(): void {
+    if (listArchive === null) return;
     try {
-        sessionStorage.setItem(STORE_KEY, JSON.stringify({ qsos: session.qsos }));
+        sessionStorage.setItem(KEY_PREFIX + listArchive, JSON.stringify({ qsos: session.qsos }));
     } catch {
         // storage unavailable — the session stays in-memory only, which is fine
     }
@@ -75,9 +97,21 @@ export function sessionModeLiteral(mode?: string, submode?: string): string {
     return submode !== undefined && submode !== '' ? submode : (mode ?? '');
 }
 
+/** Add a row to the bound list. A row whose UUID the list already holds is not
+ *  added again (a hydrated row, or a repeated ft8-logged). Callers with a source
+ *  archive go through fileSessionQso. */
 export function addSessionQso(q: Omit<SessionQso, 'id'>): void {
+    if (q.uuid !== undefined && q.uuid !== '' && session.qsos.some((s) => s.uuid === q.uuid)) {
+        return;
+    }
     session.qsos.unshift({ ...q, id: nextId++ });
     persist();
+}
+
+/** File a row produced by the daemon serving `archiveId` (the submit response's
+ *  archive_id, or the FT8 connection's label) — applied only under that archive. */
+export function fileSessionQso(archiveId: string | null, q: Omit<SessionQso, 'id'>): void {
+    fileUnderArchive(archiveId, 'session row', () => addSessionQso(q));
 }
 
 /** Overlay edited fields onto a session row (the in-place edit's write-back —
@@ -111,8 +145,9 @@ export function markSessionEmailed(uuids: string[]): void {
 export function _resetSessionForTests(): void {
     session.qsos.length = 0;
     nextId = 1;
+    if (listArchive === null) return;
     try {
-        sessionStorage.removeItem(STORE_KEY);
+        sessionStorage.removeItem(KEY_PREFIX + listArchive);
     } catch {
         /* ignore */
     }

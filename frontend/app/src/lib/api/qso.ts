@@ -33,7 +33,9 @@ import { isPlainObject, readJsonBody, WRITE_TIMEOUT_MS } from './_helpers';
 import { guardedFetch } from './archive-guard';
 
 export type SubmitOutcome =
-    | { kind: 'stored'; uuid: string }
+    /** archiveId: the archive whose daemon stored it (the response's archive_id),
+     *  null when absent or malformed — the Session row's provenance (ADR 0094). */
+    | { kind: 'stored'; uuid: string; archiveId: string | null }
     | { kind: 'duplicate'; uuid: string }
     | { kind: 'validation'; code: string; message: string }
     | { kind: 'server'; code: string; message: string }
@@ -59,6 +61,12 @@ export interface SubmitOptions {
      */
     force?: boolean;
     signal?: AbortSignal;
+}
+
+/** The archive whose daemon answered (the response's archive_id); null when
+ *  absent or not a non-empty string, so the row files under no archive. */
+function answeringArchive(body: Record<string, unknown>): string | null {
+    return typeof body.archive_id === 'string' && body.archive_id !== '' ? body.archive_id : null;
 }
 
 export async function submitQso(
@@ -121,7 +129,7 @@ export async function submitQso(
         }
         return status === 'duplicate'
             ? { kind: 'duplicate', uuid: body.uuid }
-            : { kind: 'stored', uuid: body.uuid };
+            : { kind: 'stored', uuid: body.uuid, archiveId: answeringArchive(body) };
     }
 
     const err = isPlainObject(body) ? (body as unknown as DaemonError) : null;

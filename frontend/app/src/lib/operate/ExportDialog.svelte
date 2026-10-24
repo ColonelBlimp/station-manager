@@ -11,6 +11,7 @@
     import { fade } from 'svelte/transition';
     import { operate, closeExport } from './state.svelte';
     import { session, markSessionEmailed } from './session.svelte';
+    import { sessionActionBlock } from './archiveStores.svelte';
     import { mailer } from './mailer.svelte';
     import { sendSessionEmail } from '../api/session-email';
     import { exportSessionAdif, downloadTextFile } from '../api/session-export';
@@ -32,6 +33,9 @@
 
     let sending = $state(false);
     let downloading = $state(false);
+    // Held while the tab's archive is unproven (ADR 0094 update): the list may name
+    // rows of an archive the daemon no longer serves. Null = free.
+    const blocked = $derived(sessionActionBlock());
 
     const count = $derived(session.qsos.length);
     // The whole session — feeds the ADIF archive download (re-downloading a file
@@ -63,14 +67,15 @@
             sendUuids.length > 0 &&
             recipient.trim() !== '' &&
             recipient.includes('@') &&
-            !sending
+            !sending &&
+            blocked === null
     );
 
     // The daemon rebuilds the ADIF from the DB (enriched record + a backup in
     // exports/sent-adif/) and returns it as an attachment — the SPA never
     // composes ADIF itself. Fail-soft: an error toasts, the dialog stays open.
     async function downloadAdif(): Promise<void> {
-        if (uuids.length === 0 || downloading) return;
+        if (uuids.length === 0 || downloading || blocked !== null) return;
         downloading = true;
         try {
             const outcome = await exportSessionAdif(uuids);
@@ -200,6 +205,9 @@
                 <p class="mt-1 text-sm text-muted">
                     {count} QSO{count === 1 ? '' : 's'} logged this session.
                 </p>
+                {#if blocked !== null}
+                    <p class="mt-2 text-sm text-warning" role="status">{blocked}</p>
+                {/if}
 
                 <!-- Download ADIF (offline, no daemon) -->
                 <div class="mt-4 border-t border-line pt-4">
@@ -208,7 +216,7 @@
                         <p class="text-xs text-muted">Save this session as an ADIF file.</p>
                         <button
                             class="btn shrink-0"
-                            disabled={count === 0 || downloading}
+                            disabled={count === 0 || downloading || blocked !== null}
                             onclick={downloadAdif}
                         >
                             {downloading ? 'Exporting…' : 'ADIF'}

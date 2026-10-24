@@ -3,7 +3,8 @@ import App from './App.svelte';
 import { enrich, prefs, setEnricher, setMyGrid } from './lib/operate/enrich.svelte';
 import { setHistory } from './lib/operate/worked.svelte';
 import { setEntryGate, setSubmit, setSubmitGate } from './lib/operate/qso.svelte';
-import { addSessionQso, session, sessionModeLiteral } from './lib/operate/session.svelte';
+import { fileSessionQso } from './lib/operate/session.svelte';
+import { fileFt8Logged } from './lib/operate/ft8Logged';
 import { setMailer } from './lib/operate/mailer.svelte';
 import {
     rig,
@@ -52,7 +53,7 @@ import {
 } from './lib/config/archives.svelte';
 import { setFt8AudioWindow } from './lib/operate/audioLevel.svelte';
 import { setTxDriveConfig, onRigMeters } from './lib/operate/txDrive.svelte';
-import { setFt8Enricher, setFt8Dupe, ft8EnrichState } from './lib/operate/ft8Enrich.svelte';
+import { setFt8Enricher, setFt8Dupe } from './lib/operate/ft8Enrich.svelte';
 import { fetchContestDupe } from './lib/api/contest-dupe';
 import { armFt8Tx } from './lib/api/ft8tx';
 import {
@@ -219,35 +220,11 @@ setFt8TxDisarmedSink((cause) => {
     toasts.warn(`FT8 TX disarmed — ${why}.`);
 });
 
-// Completed-FT8-QSO sink (ft8-logged SSE): a finished exchange is logged daemon-side
-// (no form to submit), so route it into the shared session log — FT8 rows sit
-// alongside Phone/CW ones — grey the station out in Band Activity so it can't be
-// re-worked, and toast (the only "it's logged" signal for FT8). The event is
-// one-shot (not replay-cached); the uuid guard still defends against a stray
-// double-delivery duplicating a session row.
-setFt8LoggedSink((p) => {
-    const uuid = p.uuid ?? '';
-    if (uuid !== '' && session.qsos.some((q) => q.uuid === uuid)) return;
-    const call = p.callsign ?? '';
-    const band = p.band ?? '';
-    addSessionQso({
-        uuid: uuid || undefined,
-        callsign: call,
-        timeOn: p.time_on ?? '',
-        band,
-        // The row shows the ADIF submode when the pair has one (an FT4 exchange is
-        // filed as MFSK/FT4 and reads "FT4"), the mode otherwise — sessionModeLiteral,
-        // the same rule the edit path applies when it writes the merged row back.
-        mode: sessionModeLiteral(p.mode ?? 'FT8', p.submode),
-        rstSent: p.rst_sent ?? '',
-        rstRcvd: p.rst_rcvd ?? '',
-        name: p.name ?? '',
-        country: p.country ?? '',
-        comment: '',
-    });
-    // Mark it worked under the profile it was filed on (MFSK/FT4 is FT4's bucket).
-    if (call !== '') ft8EnrichState.markWorked(call, band, p.submode === 'FT4' ? 'FT4' : 'FT8');
-    toasts.info(call !== '' ? `QSO logged — ${call}${band ? ` (${band})` : ''}` : 'QSO logged');
+// Completed-FT8-QSO sink (ft8-logged SSE): filed by fileFt8Logged under the
+// archive the frame's connection named (row, worked mark, toast); the header count
+// is this shell's.
+setFt8LoggedSink((p, archiveId) => {
+    fileFt8Logged(p, archiveId);
     refreshLogbookCount(); // header "(n)" ticks up on each logged FT8 QSO
 });
 
@@ -585,7 +562,8 @@ setSubmit(async (q, opts) => {
 
     const out = await submitQso(adif, ctx.logbookId, { force: opts?.force });
     if (out.kind === 'stored') {
-        addSessionQso({
+        // Filed under the archive whose daemon stored it (ADR 0094 update).
+        fileSessionQso(out.archiveId, {
             uuid: out.uuid,
             callsign: call,
             timeOn: q.timeOn,

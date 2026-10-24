@@ -6,6 +6,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/svelte';
 import { flushSync } from 'svelte';
 import ExportDialog from './ExportDialog.svelte';
+import { setSessionActionGate } from './archiveStores.svelte';
 import { operate, closeExport } from './state.svelte';
 import { addSessionQso, session, _resetSessionForTests } from './session.svelte';
 import { setMailer } from './mailer.svelte';
@@ -60,6 +61,23 @@ describe('ExportDialog', () => {
         render(ExportDialog);
         expect(screen.getByText(/1 QSO logged/)).toBeInTheDocument();
         expect(screen.getByText('Export session')).toBeInTheDocument();
+    });
+
+    // While the tab's archive is unproven, download and send are held, and the
+    // dialog says why (ADR 0094 update) — the list may name another archive's rows.
+    it('holds download and send while the archive is unproven, saying why', () => {
+        addQso({ callsign: 'W1ABC', uuid: 'u-1' });
+        setMailer(true, 'qsl@example.com');
+        setSessionActionGate(() => 'Waiting until this tab has confirmed its archive.');
+        try {
+            operate.exportOpen = true;
+            render(ExportDialog);
+            expect(screen.getByRole('button', { name: 'ADIF' })).toBeDisabled();
+            expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+            expect(screen.getByText(/confirmed its archive/)).toBeInTheDocument();
+        } finally {
+            setSessionActionGate(() => null);
+        }
     });
 
     it('shows the empty count for an empty session', () => {

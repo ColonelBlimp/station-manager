@@ -26,7 +26,11 @@ describe('submitQso response decoding (F-03)', () => {
     it('201 stored → kind stored (no HTTP-mismatch warning)', async () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         mockFetch(201, { status: 'stored', uuid: UUID, id: 7 });
-        expect(await submitQso('<eor>', 1)).toEqual({ kind: 'stored', uuid: UUID });
+        expect(await submitQso('<eor>', 1)).toEqual({
+            kind: 'stored',
+            uuid: UUID,
+            archiveId: null,
+        });
         expect(warn).not.toHaveBeenCalled();
     });
 
@@ -63,7 +67,11 @@ describe('submitQso response decoding (F-03)', () => {
     it('classifies by body.status even when the HTTP code mismatches (200 + stored), and warns', async () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         mockFetch(200, { status: 'stored', uuid: UUID });
-        expect(await submitQso('<eor>', 1)).toEqual({ kind: 'stored', uuid: UUID });
+        expect(await submitQso('<eor>', 1)).toEqual({
+            kind: 'stored',
+            uuid: UUID,
+            archiveId: null,
+        });
         expect(warn).toHaveBeenCalledOnce();
         expect(String(warn.mock.calls[0][0])).toContain('HTTP 200');
     });
@@ -88,5 +96,25 @@ describe('submitQso response decoding (F-03)', () => {
         const out = await submitQso('<eor>', 1);
         expect(out.kind).toBe('server');
         expect((out as { code?: string }).code).toBe('db_error');
+    });
+});
+
+// Provenance (ADR 0094 update): a stored QSO names the archive that answered, so the
+// Session row is filed under it; an absent or non-string archive_id is null —
+// the row then files under no archive rather than the page's.
+describe('submitQso archive provenance', () => {
+    it('carries the archive_id the daemon answered with', async () => {
+        mockFetch(201, { status: 'stored', uuid: UUID, archive_id: 'arch-1' });
+        expect(await submitQso('<eor>', 1)).toEqual({
+            kind: 'stored',
+            uuid: UUID,
+            archiveId: 'arch-1',
+        });
+    });
+
+    it.each([[undefined], [7], ['']])('an archive_id of %j is null', async (archive_id) => {
+        mockFetch(201, { status: 'stored', uuid: UUID, archive_id });
+        const out = await submitQso('<eor>', 1);
+        expect(out.kind === 'stored' ? out.archiveId : 'not stored').toBeNull();
     });
 });

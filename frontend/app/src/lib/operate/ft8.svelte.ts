@@ -32,6 +32,7 @@ import {
 } from '../utils/storage';
 import { frequencyToBand } from '../utils/frequency';
 import { rig } from './rig.svelte';
+import { fileUnderArchive, registerArchiveStore } from './archiveStores.svelte';
 
 export type { Ft8SlotRef, Ft8Band } from '../api/ft8-sse';
 
@@ -595,9 +596,9 @@ export function ft8MyGrid(): string {
 /** Sink for a completed FT8 QSO (ft8-logged) — main.ts routes it to the shared
  *  session log + enrich cache + toast. Null until wired; the event is one-shot
  *  (not replayed), so a dropped early event just isn't shown. */
-let loggedSink: ((p: LoggedPayload) => void) | null = null;
+let loggedSink: ((p: LoggedPayload, archiveId: string | null) => void) | null = null;
 
-export function setFt8LoggedSink(fn: (p: LoggedPayload) => void): void {
+export function setFt8LoggedSink(fn: (p: LoggedPayload, archiveId: string | null) => void): void {
     loggedSink = fn;
 }
 
@@ -672,7 +673,12 @@ export const FT8_ARM_UNKNOWN_DISABLE_MSG =
 // exactly. Without it, a reload inside the async-logging window drops the engagement
 // before `session.qsos` has learned it, which is precisely the data-loss case this
 // set exists to prevent (codex a5667b00 P1).
-const engagedStoreKey = 'sm.ft8.engaged';
+// One set per QSO archive within the tab, like the Session list (ADR 0094 update):
+// it decides allow_duplicate, so an engagement in one archive must never bypass
+// duplicate protection in another. Selected by the proven archive and written only
+// for frames labelled with it (archiveStores.svelte.ts).
+const ENGAGED_PREFIX = 'sm.ft8.engaged.';
+let engagedArchive: string | null = null;
 
 // eslint-disable-next-line svelte/prefer-svelte-reactivity
 const engagedThisSession = new Set<string>();
@@ -685,8 +691,8 @@ function engagedKey(call: string, band: string): string {
     return `${call.trim().toUpperCase()}|${band.trim().toUpperCase()}`;
 }
 
-function loadEngaged(): string[] {
-    const raw = sessionGet(engagedStoreKey);
+function loadEngaged(archiveId: string): string[] {
+    const raw = sessionGet(ENGAGED_PREFIX + archiveId);
     if (raw === null) return [];
     try {
         const v: unknown = JSON.parse(raw);
@@ -697,7 +703,8 @@ function loadEngaged(): string[] {
 }
 
 function saveEngaged(): void {
-    sessionSet(engagedStoreKey, JSON.stringify([...engagedThisSession]));
+    if (engagedArchive === null) return;
+    sessionSet(ENGAGED_PREFIX + engagedArchive, JSON.stringify([...engagedThisSession]));
 }
 
 /** True when this session has already engaged `call` — used to decide whether an
@@ -707,22 +714,32 @@ export function ft8EngagedThisSession(call: string, band: string): boolean {
     return engagedThisSession.has(engagedKey(call, band));
 }
 
-/** Restore the engaged set from session storage. Called at MODULE INIT (below) and
- *  by tests to model a page reload — deliberately the same function, so the boot
- *  path is the one the tests actually exercise. The reset seam further down models
- *  a fresh TAB by clearing storage as well. */
+/** Restore the engaged set for the bound archive from session storage. The store
+ *  hook below calls it when the page proves its archive; tests call it to model a
+ *  page reload on the same archive — deliberately the same function, so the boot
+ *  path is the one the tests exercise. The reset seam further down models a fresh
+ *  TAB by clearing storage as well. */
 export function reloadFt8EngagedFromStorage(): void {
     engagedThisSession.clear();
-    for (const k of loadEngaged()) engagedThisSession.add(k);
+    if (engagedArchive === null) return;
+    for (const k of loadEngaged(engagedArchive)) engagedThisSession.add(k);
 }
 
-// A reload rebuilds this module; the engaged set comes back with it.
-reloadFt8EngagedFromStorage();
+registerArchiveStore({
+    load(archiveId) {
+        engagedArchive = archiveId;
+        reloadFt8EngagedFromStorage();
+    },
+    clear() {
+        engagedArchive = null;
+        engagedThisSession.clear();
+    },
+});
 
 /** Test seam: forget the engaged-call set (a fresh tab starts empty). */
 export function resetFt8EngagedThisSession(): void {
     engagedThisSession.clear();
-    sessionRemove(engagedStoreKey);
+    if (engagedArchive !== null) sessionRemove(ENGAGED_PREFIX + engagedArchive);
 }
 
 export interface Ft8AnswerArgs {
@@ -1234,7 +1251,7 @@ export const ft8Link: Ft8EventHandlers = {
     // BASELINE DEBT 2026-07-31 (complexity 32) — dispatch over the FT8 QSO status
     // payload; one arm per session state the daemon can publish.
     // eslint-disable-next-line complexity
-    onQso(p: QsoPayload): void {
+    onQso(p: QsoPayload, archiveId: string | null): void {
         // Remember every station the sequencer has actually engaged this session.
         // `session.qsos` cannot answer "did we just work them?" in time: the daemon
         // publishes the terminal idle BEFORE its enrich+submit goroutine runs, so
@@ -1253,9 +1270,13 @@ export const ft8Link: Ft8EventHandlers = {
         if (engaged !== '' && mhz > 0) {
             const band = frequencyToBand(Math.round(mhz * 1_000_000));
             if (band !== '') {
-                const before = engagedThisSession.size;
-                engagedThisSession.add(engagedKey(engaged, band));
-                if (engagedThisSession.size !== before) saveEngaged();
+                // Filed under the archive this frame's connection named — never
+                // under the page's archive by default (ADR 0094 update).
+                fileUnderArchive(archiveId, 'ft8 engagement', () => {
+                    const before = engagedThisSession.size;
+                    engagedThisSession.add(engagedKey(engaged, band));
+                    if (engagedThisSession.size !== before) saveEngaged();
+                });
             }
         }
         // A session ending with a reason is announced BEFORE the state is replaced:
@@ -1319,8 +1340,8 @@ export const ft8Link: Ft8EventHandlers = {
         };
     },
 
-    onLogged(p: LoggedPayload): void {
-        if (loggedSink) loggedSink(p);
+    onLogged(p: LoggedPayload, archiveId: string | null): void {
+        if (loggedSink) loggedSink(p, archiveId);
     },
 
     // RX level meter (audioLevel.svelte) — a pure hand-off: classification,
