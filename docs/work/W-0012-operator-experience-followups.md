@@ -273,6 +273,12 @@ stated before a build):
   there).
 - **Settings tab widths (inbox 2026-10-05):** standardise the content width across the Settings
   tabs; many differ today.
+- **Logbook column headings overlap (alpha.5 Finding #2, 2026-10-24):** the last two headings render
+  overlapped, "EMAIL" over "COMMENT" (alpha.5 acceptance record, B2-08 screenshot). Cause and wider
+  impact not investigated.
+- **No individual-QSO delete in the SPA (alpha.5 Finding #3, 2026-10-24):** the daemon supports
+  `DELETE /v1/qso/{uuid}` (soft delete, audited, archive-guarded) but the SPA offers no delete action
+  for a QSO; no recorded decision excludes it. A product gap for separate prioritisation.
 - **Country for an unenriched QSO (inbox 2026-09-30):** there is no place to enter the remote
   station's country when the QSO is not enriched over the internet.
 - **Re-enrich with no source enabled (inbox 2026-10-04):** on the Edit QSO card, "Re-enrich" is
