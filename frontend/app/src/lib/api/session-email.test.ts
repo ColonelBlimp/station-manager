@@ -61,3 +61,45 @@ describe('sendSessionEmail — F-04b timed-out ambiguity', () => {
         expect(spy).toHaveBeenCalledWith(EMAIL_TIMEOUT_MS);
     });
 });
+
+// Slice 5 (W-0021 revision 3): the dialog validates the partition itself; this
+// layer only refuses to invent lists. Each of sent, omitted and emailed must be
+// an array of strings, or `lists` is null. `emailed` keeps its lenient meaning
+// for the Logbook's caller.
+describe('sendSessionEmail — sent/omitted/emailed lists', () => {
+    const reply = (body: unknown) =>
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() =>
+                Promise.resolve(
+                    new Response(JSON.stringify(body), {
+                        status: 200,
+                        headers: { 'Content-Type': 'application/json' },
+                    })
+                )
+            )
+        );
+
+    it('returns the three lists as sent', async () => {
+        reply({ status: 'sent', sent: ['a', 'a'], omitted: ['b'], emailed: ['a'], date: '' });
+        const out = await sendSessionEmail(REQ);
+        expect(out.kind === 'sent' && out.lists).toEqual({
+            sent: ['a', 'a'],
+            omitted: ['b'],
+            emailed: ['a'],
+        });
+    });
+
+    it.each([
+        ['no sent', { omitted: [], emailed: ['a'] }],
+        ['no omitted', { sent: ['a'], emailed: ['a'] }],
+        ['null emailed', { sent: ['a'], omitted: [], emailed: null }],
+        ['a non-string entry', { sent: ['a', 7], omitted: [], emailed: ['a'] }],
+        ['a string, not a list', { sent: 'a', omitted: [], emailed: ['a'] }],
+    ])('%s gives no lists', async (_name, body) => {
+        reply({ status: 'sent', date: '', ...body });
+        const out = await sendSessionEmail(REQ);
+        expect(out.kind).toBe('sent');
+        expect(out.kind === 'sent' && out.lists).toBeNull();
+    });
+});

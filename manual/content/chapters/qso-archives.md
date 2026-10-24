@@ -109,6 +109,14 @@ edit, export and email wait until it has. The first time a tab loads after
 the update that introduced this, its old Session list is cleared and a notice
 says so; your logged QSOs are intact in the Logbook.
 
+An export or email from the Session list reports what the daemon confirmed
+for the rows selected when you clicked. If anything is short, the notice
+names every part, for example "Exported 3 of 5 selected QSOs. 1 could not be
+found in this archive. 1 has no QSO ID." Rows that could not be found stay
+in the list, and the next export says so again. If the daemon's answer does
+not account for every row, the file is still saved but you are asked to check
+it, and an email marks nothing as emailed.
+
 Once the daemon is back and the page has reloaded, the list and the header
 show which archive is active. If Station Manager cannot tell whether the
 daemon has restarted, the page is covered by an **Archive binding

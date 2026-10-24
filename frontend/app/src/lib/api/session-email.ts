@@ -5,7 +5,8 @@
     as `lib/api/qso.ts` and `lib/api/config.ts` for consistency.
 
     Wire contract (handler_session_email.go):
-      - 200 OK   → { status: "sent", emailed: string[], date: string }
+      - 200 OK   → { status: "sent", sent: string[], omitted: string[],
+                     emailed: string[], date: string }
       - 400      → { code: "missing_required_field" | "invalid_field_value" |
                      "invalid_json" | "no_qsos", message, op? }
       - 503      → { code: "mailer_disabled", message, op? }
@@ -19,6 +20,10 @@
     marks those session rows sent. A stamp-write failure on the daemon
     (after the mail left) comes back as `emailed: []` — the rows stay
     visually unsent so a re-send or the Logbook SPA can reconcile.
+    `sent` and `omitted` (slice 5) partition the request: what the attachment
+    held and what could not be found in this archive. They come back as
+    `lists`, untouched, or null when any of the three is not a list of strings;
+    the Session dialog validates the partition before marking anything.
 
     `kind` collapses to:
       - 'sent'             — message accepted by the SMTP server.
@@ -40,6 +45,7 @@
 
 import { EMAIL_TIMEOUT_MS, isPlainObject, readJsonBody } from './_helpers';
 import { guardedFetch } from './archive-guard';
+import type { EmailLists } from '../operate/sessionAccounting';
 
 export interface SessionEmailRequest {
     to: string;
@@ -52,7 +58,7 @@ export interface SessionEmailRequest {
 }
 
 export type SessionEmailOutcome =
-    | { kind: 'sent'; emailed: string[]; date: string }
+    | { kind: 'sent'; emailed: string[]; date: string; lists: EmailLists | null }
     | { kind: 'mailer_disabled'; message: string }
     | { kind: 'invalid'; code: string; message: string }
     | { kind: 'smtp_failure'; message: string }
@@ -71,6 +77,32 @@ interface DaemonError {
     code: string;
     message: string;
     op?: string;
+}
+
+function stringList(v: unknown): string[] | null {
+    return Array.isArray(v) && v.every((u): u is string => typeof u === 'string') ? v : null;
+}
+
+// The 200 body: the durable-stamp report plus the slice 5 partition lists. A
+// daemon that sent the mail but couldn't stamp returns emailed:[]; a body that
+// fails to parse (unexpected shape) degrades to "sent, nothing marked" rather
+// than throwing — the mail went out either way.
+function sentOutcome(body: unknown): SessionEmailOutcome {
+    const ok = isPlainObject(body)
+        ? (body as { sent?: unknown; omitted?: unknown; emailed?: unknown; date?: unknown })
+        : null;
+    const emailed = Array.isArray(ok?.emailed)
+        ? ok.emailed.filter((u): u is string => typeof u === 'string')
+        : [];
+    const date = typeof ok?.date === 'string' ? ok.date : '';
+    const sent = stringList(ok?.sent);
+    const omitted = stringList(ok?.omitted);
+    const exact = stringList(ok?.emailed);
+    const lists =
+        sent !== null && omitted !== null && exact !== null
+            ? { sent, omitted, emailed: exact }
+            : null;
+    return { kind: 'sent', emailed, date, lists };
 }
 
 export async function sendSessionEmail(
@@ -97,19 +129,7 @@ export async function sendSessionEmail(
     }
     const response = fetched.response;
 
-    if (response.ok) {
-        // Parse the durable-stamp report. A daemon that sent the mail
-        // but couldn't stamp returns emailed:[]; a body that fails to
-        // parse (unexpected shape) degrades to "sent, nothing marked"
-        // rather than throwing — the mail went out either way.
-        const body = await readJsonBody(response);
-        const ok = isPlainObject(body) ? (body as { emailed?: unknown; date?: unknown }) : null;
-        const emailed = Array.isArray(ok?.emailed)
-            ? ok.emailed.filter((u): u is string => typeof u === 'string')
-            : [];
-        const date = typeof ok?.date === 'string' ? ok.date : '';
-        return { kind: 'sent', emailed, date };
-    }
+    if (response.ok) return sentOutcome(await readJsonBody(response));
 
     // Body may not parse if the daemon emits an unexpected payload.
     // Treat an unparseable body as a synthesised error envelope — the

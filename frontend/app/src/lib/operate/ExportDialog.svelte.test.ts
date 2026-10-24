@@ -11,6 +11,7 @@ import { operate, closeExport } from './state.svelte';
 import { addSessionQso, session, _resetSessionForTests } from './session.svelte';
 import { setMailer } from './mailer.svelte';
 import { toasts } from '../ui/toasts.svelte';
+import * as sessionExport from '../api/session-export';
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
@@ -31,6 +32,58 @@ function addQso(over: Partial<Parameters<typeof addSessionQso>[0]>): void {
         comment: '',
         ...over,
     });
+}
+
+// A daemon email reply that sent and stamped every requested UUID.
+const sentReply = (uuids: string[]) => ({
+    status: 'sent',
+    sent: uuids,
+    omitted: [],
+    emailed: uuids,
+    date: '',
+});
+
+const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), {
+        status,
+        headers: { 'Content-Type': 'application/json' },
+    });
+
+const adif = (requested: number, exported: number, omitted: number) =>
+    new Response('<EOH>', {
+        status: 200,
+        headers: {
+            'X-SM-Requested-Count': String(requested),
+            'X-SM-Exported-Count': String(exported),
+            'X-SM-Omitted-Count': String(omitted),
+        },
+    });
+
+// A fetch stub that records each request body and answers from `reply`, which
+// may hold the response back until the test releases it.
+function stubDaemon(reply: (uuids: string[]) => Response | Promise<Response>): {
+    bodies: string[][];
+} {
+    const bodies: string[][] = [];
+    vi.stubGlobal(
+        'fetch',
+        vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+            if (urlOf(input) === '/v1/notifications') {
+                return Promise.resolve(new Response(null, { status: 204 }));
+            }
+            const uuids = (JSON.parse(init?.body as string) as { uuids: string[] }).uuids;
+            bodies.push(uuids);
+            return Promise.resolve(reply(uuids));
+        })
+    );
+    return { bodies };
+}
+
+async function click(name: RegExp): Promise<void> {
+    await fireEvent.click(screen.getByRole('button', { name }));
+    await flush();
+    await flush();
+    flushSync();
 }
 
 beforeEach(() => {
@@ -102,7 +155,7 @@ describe('ExportDialog', () => {
             vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
                 sentUuids = (JSON.parse(init?.body as string) as { uuids: string[] }).uuids;
                 return Promise.resolve(
-                    new Response(JSON.stringify({ status: 'sent', emailed: sentUuids, date: '' }), {
+                    new Response(JSON.stringify(sentReply(sentUuids)), {
                         status: 200,
                         headers: { 'Content-Type': 'application/json' },
                     })
@@ -139,7 +192,7 @@ describe('ExportDialog', () => {
             vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
                 sentUuids = (JSON.parse(init?.body as string) as { uuids: string[] }).uuids;
                 return Promise.resolve(
-                    new Response(JSON.stringify({ status: 'sent', emailed: sentUuids, date: '' }), {
+                    new Response(JSON.stringify(sentReply(sentUuids)), {
                         status: 200,
                         headers: { 'Content-Type': 'application/json' },
                     })
@@ -370,5 +423,187 @@ describe('ExportDialog', () => {
 
         // The record POST rejected, but the operator's toast still fired.
         expect(errSpy).toHaveBeenCalledTimes(1);
+    });
+
+    // Slice 5 (W-0021 revision 3; Finding #6): the toast reports what the daemon
+    // confirmed for the selection that was sent — B2-10 showed "Exported 4 QSOs"
+    // over a one-record file.
+    describe('export and email accounting', () => {
+        let saved: string[];
+        beforeEach(() => {
+            saved = [];
+            vi.spyOn(sessionExport, 'downloadTextFile').mockImplementation((name) => {
+                saved.push(name);
+            });
+        });
+
+        it('a short export names every part and still saves the file', async () => {
+            for (const u of ['a', 'b', 'c', 'd']) addQso({ uuid: u });
+            addQso({ callsign: 'NOID' });
+            const d = stubDaemon(() => adif(4, 3, 1));
+            const warn = vi.spyOn(toasts, 'warn');
+            const info = vi.spyOn(toasts, 'info');
+            operate.exportOpen = true;
+            render(ExportDialog);
+            await click(/ADIF/);
+            expect(d.bodies.map((b) => [...b].sort())).toEqual([['a', 'b', 'c', 'd']]);
+            expect(saved).toHaveLength(1);
+            expect(warn).toHaveBeenCalledWith(
+                'Exported 3 of 5 selected QSOs. 1 could not be found in this archive. 1 has no QSO ID.'
+            );
+            expect(info).not.toHaveBeenCalled();
+        });
+
+        it('collapses duplicate selections before sending and says so', async () => {
+            addQso({ callsign: 'A', uuid: 'a' });
+            session.qsos.push({ ...session.qsos[0] }); // a stored list from before merge-by-UUID
+            const d = stubDaemon(() => adif(1, 1, 0));
+            const info = vi.spyOn(toasts, 'info');
+            operate.exportOpen = true;
+            render(ExportDialog);
+            await click(/ADIF/);
+            expect(d.bodies).toEqual([['a']]);
+            expect(info).toHaveBeenCalledWith(
+                'Exported 1 QSO to ADIF. Duplicate selections were counted once.'
+            );
+        });
+
+        it('a selection with no QSO IDs sends nothing and says why', async () => {
+            addQso({ callsign: 'A' });
+            const d = stubDaemon(() => adif(0, 0, 0));
+            const warn = vi.spyOn(toasts, 'warn');
+            operate.exportOpen = true;
+            render(ExportDialog);
+            await click(/ADIF/);
+            expect(d.bodies).toEqual([]);
+            expect(warn).toHaveBeenCalledWith(
+                'None of these QSOs can be exported: they have no QSO ID.'
+            );
+        });
+
+        it('unconfirmed counts save the file under a warning, never a success', async () => {
+            addQso({ uuid: 'a' });
+            stubDaemon(() => new Response('<EOH>', { status: 200 }));
+            const warn = vi.spyOn(toasts, 'warn');
+            const info = vi.spyOn(toasts, 'info');
+            operate.exportOpen = true;
+            render(ExportDialog);
+            await click(/ADIF/);
+            expect(saved).toHaveLength(1);
+            expect(warn).toHaveBeenCalledWith(
+                'The file was saved, but the daemon did not confirm how many QSOs it holds — check it before relying on it.'
+            );
+            expect(info).not.toHaveBeenCalled();
+        });
+
+        it('a row logged while the export is in flight does not change its count', async () => {
+            addQso({ uuid: 'a' });
+            addQso({ uuid: 'b' });
+            let release: (r: Response) => void = () => {};
+            stubDaemon(() => new Promise<Response>((r) => (release = r)));
+            const info = vi.spyOn(toasts, 'info');
+            operate.exportOpen = true;
+            render(ExportDialog);
+            await click(/ADIF/);
+            addQso({ uuid: 'c' });
+            release(adif(2, 2, 0));
+            await flush();
+            await flush();
+            expect(info).toHaveBeenCalledWith('Exported 2 QSOs to ADIF');
+        });
+
+        it('an email partition violation marks nothing', async () => {
+            setMailer(true, 'qsl@example.com');
+            for (const u of ['a', 'b', 'c']) addQso({ uuid: u });
+            // Right length, wrong set: c is lost behind a repeated a.
+            stubDaemon(() =>
+                json({ status: 'sent', sent: ['a', 'a'], omitted: ['b'], emailed: ['a'], date: '' })
+            );
+            const warn = vi.spyOn(toasts, 'warn');
+            operate.exportOpen = true;
+            render(ExportDialog);
+            await click(/Send/);
+            expect(session.qsos.filter((q) => q.emailed)).toEqual([]);
+            expect(warn).toHaveBeenCalledWith(
+                'Email sent to qsl@example.com, but the daemon did not confirm which QSOs it contained. No Session rows were marked as emailed.'
+            );
+        });
+
+        it('a partial send with partial stamping marks only the stamped rows', async () => {
+            setMailer(true, 'qsl@example.com');
+            for (const u of ['a', 'b', 'c', 'd']) addQso({ uuid: u });
+            stubDaemon(() =>
+                json({
+                    status: 'sent',
+                    sent: ['a', 'b', 'c'],
+                    omitted: ['d'],
+                    emailed: ['a', 'b'],
+                    date: '',
+                })
+            );
+            const warn = vi.spyOn(toasts, 'warn');
+            operate.exportOpen = true;
+            render(ExportDialog);
+            await click(/Send/);
+            expect(
+                session.qsos
+                    .filter((q) => q.emailed)
+                    .map((q) => q.uuid)
+                    .sort()
+            ).toEqual(['a', 'b']);
+            expect(warn).toHaveBeenCalledWith(
+                'Sent 3 of 4 QSOs to qsl@example.com; 1 could not be found in this archive, but only 2 were recorded as emailed; the rest may be offered again.'
+            );
+        });
+
+        it('a send is accounted against its selection and recipient at the click', async () => {
+            setMailer(true, 'qsl@example.com');
+            addQso({ uuid: 'a' });
+            addQso({ uuid: 'b' });
+            let release: (r: Response) => void = () => {};
+            const d = stubDaemon(() => new Promise<Response>((r) => (release = r)));
+            const info = vi.spyOn(toasts, 'info');
+            operate.exportOpen = true;
+            render(ExportDialog);
+            await click(/Send/);
+            addQso({ uuid: 'c' });
+            await fireEvent.input(screen.getByLabelText('Recipient'), {
+                target: { value: 'other@example.com' },
+            });
+            release(json(sentReply(['a', 'b'])));
+            await flush();
+            await flush();
+            expect(d.bodies.map((b) => [...b].sort())).toEqual([['a', 'b']]);
+            expect(info).toHaveBeenCalledWith('Sent 2 QSOs to qsl@example.com');
+            expect(session.qsos.find((q) => q.uuid === 'c')?.emailed).toBeFalsy();
+        });
+
+        // The label counts what the send is accounted against: distinct UUIDs
+        // plus rows with no QSO ID — [A, A, no-ID] is 2, not 3.
+        it('Send N shows the denominator, not the raw row count', () => {
+            setMailer(true, 'qsl@example.com');
+            addQso({ callsign: 'DONE', uuid: 'e', emailed: true });
+            addQso({ callsign: 'NOID' });
+            addQso({ callsign: 'A', uuid: 'a' });
+            session.qsos.push({ ...session.qsos[0] }); // a stored list from before merge-by-UUID
+            operate.exportOpen = true;
+            render(ExportDialog);
+            flushSync();
+            expect(screen.getByRole('button', { name: 'Send 2' })).toBeInTheDocument();
+        });
+
+        it('a send selection with no QSO IDs sends nothing and says why', async () => {
+            setMailer(true, 'qsl@example.com');
+            addQso({ callsign: 'A' });
+            const d = stubDaemon(() => json(sentReply([])));
+            const warn = vi.spyOn(toasts, 'warn');
+            operate.exportOpen = true;
+            render(ExportDialog);
+            await click(/Send/);
+            expect(d.bodies).toEqual([]);
+            expect(warn).toHaveBeenCalledWith(
+                'None of these QSOs can be sent: they have no QSO ID.'
+            );
+        });
     });
 });

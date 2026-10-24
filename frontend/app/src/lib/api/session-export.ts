@@ -7,9 +7,13 @@
 
 import { readJsonBody, isPlainObject, WRITE_TIMEOUT_MS } from './_helpers';
 import { guardedFetch } from './archive-guard';
+import type { ExportCounts } from '../operate/sessionAccounting';
 
 export type SessionExportOutcome =
-    | { kind: 'ok'; filename: string; body: string }
+    // counts: the daemon's X-SM-*-Count headers (slice 5), or null when any is
+    // absent or not a non-negative integer. The caller checks them against what
+    // it sent; null never becomes a success claim.
+    | { kind: 'ok'; filename: string; body: string; counts: ExportCounts | null }
     | { kind: 'no_qsos'; message: string }
     | { kind: 'invalid'; code: string; message: string }
     | { kind: 'server'; code: string; message: string }
@@ -23,6 +27,19 @@ export type SessionExportOutcome =
 interface DaemonError {
     code: string;
     message: string;
+}
+
+function countHeader(h: Headers, name: string): number | null {
+    const v = h.get(name);
+    return v !== null && /^\d+$/.test(v) ? Number(v) : null;
+}
+
+function countsFrom(h: Headers): ExportCounts | null {
+    const requested = countHeader(h, 'X-SM-Requested-Count');
+    const exported = countHeader(h, 'X-SM-Exported-Count');
+    const omitted = countHeader(h, 'X-SM-Omitted-Count');
+    if (requested === null || exported === null || omitted === null) return null;
+    return { requested, exported, omitted };
 }
 
 // Pull the daemon's suggested name out of Content-Disposition; fall back to a
@@ -62,6 +79,7 @@ export async function exportSessionAdif(
             kind: 'ok',
             filename: filenameFrom(response.headers.get('Content-Disposition')),
             body,
+            counts: countsFrom(response.headers),
         };
     }
 

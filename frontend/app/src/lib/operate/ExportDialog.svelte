@@ -18,6 +18,7 @@
     import { recordExportFailed } from '../api/notifications';
     import { OUTCOME_UNKNOWN_LEAD } from '../api/_helpers';
     import { toasts } from '../ui/toasts.svelte';
+    import { emailReport, exportReport, snapshotSelection, type Report } from './sessionAccounting';
 
     let recipient = $state('');
     let recipientSeeded = false;
@@ -37,20 +38,15 @@
     // rows of an archive the daemon no longer serves. Null = free.
     const blocked = $derived(sessionActionBlock());
 
+    // The download is always the whole session (re-downloading a file is
+    // harmless). Each action snapshots its rows at the click and is accounted
+    // against that snapshot alone (sessionAccounting.ts, W-0021 slice 5).
     const count = $derived(session.qsos.length);
-    // The whole session — feeds the ADIF archive download (re-downloading a file
-    // is harmless, so the download is always the full session).
-    const uuids = $derived(session.qsos.map((q) => q.uuid).filter((u): u is string => !!u));
     // Email is different: a duplicate in a real inbox is NOT harmless, so a resend
     // defaults to only the not-yet-emailed delta. onlyUnsent is meaningful once
     // something has been emailed this session.
     const emailedCount = $derived(session.qsos.filter((q) => q.emailed).length);
-    const unsentUuids = $derived(
-        session.qsos
-            .filter((q) => !q.emailed)
-            .map((q) => q.uuid)
-            .filter((u): u is string => !!u)
-    );
+    const unsentRows = $derived(session.qsos.filter((q) => !q.emailed));
     let onlyUnsent = $state(true);
     // Reset the resend-all override every time the dialog OPENS. The component
     // stays mounted (Operate.svelte renders it unconditionally; only the inner
@@ -61,10 +57,13 @@
     $effect(() => {
         if (operate.exportOpen) onlyUnsent = true;
     });
-    const sendUuids = $derived(onlyUnsent ? unsentUuids : uuids);
+    const sendRows = $derived(onlyUnsent ? unsentRows : session.qsos);
+    // What the send is accounted against (distinct UUIDs + rows without one), so
+    // the label matches the denominator of its report.
+    const sendSel = $derived(snapshotSelection(sendRows));
     const canSend = $derived(
         mailer.enabled &&
-            sendUuids.length > 0 &&
+            sendRows.length > 0 &&
             recipient.trim() !== '' &&
             recipient.includes('@') &&
             !sending &&
@@ -74,14 +73,24 @@
     // The daemon rebuilds the ADIF from the DB (enriched record + a backup in
     // exports/sent-adif/) and returns it as an attachment — the SPA never
     // composes ADIF itself. Fail-soft: an error toasts, the dialog stays open.
+    function show(r: Report): void {
+        if (r.level === 'info') toasts.info(r.text);
+        else toasts.warn(r.text);
+    }
+
     async function downloadAdif(): Promise<void> {
-        if (uuids.length === 0 || downloading || blocked !== null) return;
+        if (count === 0 || downloading || blocked !== null) return;
+        const sel = snapshotSelection(session.qsos);
+        if (sel.uuids.length === 0) {
+            toasts.warn('None of these QSOs can be exported: they have no QSO ID.');
+            return;
+        }
         downloading = true;
         try {
-            const outcome = await exportSessionAdif(uuids);
+            const outcome = await exportSessionAdif(sel.uuids);
             if (outcome.kind === 'ok') {
                 downloadTextFile(outcome.filename, outcome.body);
-                toasts.info(`Exported ${count} QSO${count === 1 ? '' : 's'} to ADIF`);
+                show(exportReport(sel, outcome.counts));
                 closeExport();
             } else if (outcome.kind === 'network' && outcome.timedOut === true) {
                 // A timed-out export is AMBIGUOUS about its server-side backup —
@@ -97,7 +106,7 @@
                 // throws, so a post failure cannot suppress the toast above. The
                 // count is the UUIDs actually submitted for export. A cancel
                 // ('aborted') is excluded — it is not a failure.
-                void recordExportFailed(uuids.length, outcome.kind);
+                void recordExportFailed(sel.uuids.length, outcome.kind);
             }
         } finally {
             downloading = false;
@@ -106,19 +115,28 @@
 
     async function send(): Promise<void> {
         if (!canSend) return;
+        const sel = snapshotSelection(sendRows);
+        const to = recipient.trim();
+        if (sel.uuids.length === 0) {
+            toasts.warn('None of these QSOs can be sent: they have no QSO ID.');
+            return;
+        }
         sending = true;
         const pending = toasts.info('Sending email…', 0);
         try {
-            const outcome = await sendSessionEmail({ to: recipient.trim(), uuids: sendUuids });
+            const outcome = await sendSessionEmail({ to, uuids: sel.uuids });
             toasts.dismiss(pending);
             switch (outcome.kind) {
-                case 'sent':
-                    // Flag the sent rows so a resend this session defaults to the
-                    // remaining not-yet-emailed delta.
-                    markSessionEmailed(outcome.emailed);
-                    toasts.info(`Sent ${outcome.emailed.length} QSOs to ${recipient.trim()}`);
+                case 'sent': {
+                    // Flag only the rows the daemon durably stamped, and only once
+                    // its lists account exactly for what was sent, so a resend
+                    // defaults to the remaining not-yet-emailed delta.
+                    const report = emailReport(sel, to, outcome.lists);
+                    markSessionEmailed(report.mark);
+                    show(report);
                     closeExport();
                     break;
+                }
                 case 'mailer_disabled':
                     toasts.error('Email not configured (SMTP block missing)');
                     break;
@@ -245,7 +263,7 @@
                             <button
                                 class="btn btn-primary shrink-0"
                                 disabled={!canSend}
-                                title={emailedCount > 0 && onlyUnsent && unsentUuids.length === 0
+                                title={emailedCount > 0 && onlyUnsent && unsentRows.length === 0
                                     ? 'Everything this session is already emailed — uncheck to resend all'
                                     : undefined}
                                 onclick={send}
@@ -253,7 +271,7 @@
                                 {sending
                                     ? 'Sending…'
                                     : emailedCount > 0
-                                      ? `Send ${sendUuids.length}`
+                                      ? `Send ${sendSel.uuids.length + sendSel.noId}`
                                       : 'Send'}
                             </button>
                         </div>
