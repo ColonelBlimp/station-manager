@@ -27,6 +27,9 @@ internal candidate.
 - Finding #13 — CAT chapter: simplify the heading "Important: keep data-mode PTT off the control lines" to
   "Important" and let the body carry the instruction.
 - Finding #15 — add update and uninstall guidance to the embedded manual.
+- alpha.5 Finding #1 (A2-06, 2026-10-24) — the First Run chapter is still a placeholder ("*Draft outline —
+  content to be written.*"), so nothing in the manual says where Settings is or how the main screen is laid
+  out; write the chapter's main-screen tour, Settings included.
 - Standing pass — each dogfood session amends the chapters for the surfaces it touched; chapters touched so
   far: first-run, CAT, importing, logging. Chapters not yet walked: forwarding, FT8, my-station,
   session-log, troubleshooting, tuning, the appendices.
