@@ -130,7 +130,8 @@ occasion (operator, 2026-10-24):** station-account SM Cloud support, listing and
 B2-15/16, with local writes confined to the verified scratch copies. Rollback RPM independently
 verified by the operator: version `2.0.0~alpha.3.262.g6217da21.dirty-1`, SHA-256 `2d3a0ec9…e180bdb`.
 **Not yet approved:** the stop and the live upgrade; the window awaits the operator's available UTC
-interval and station-needed-by deadline.
+interval. **Station-needed-by (operator, 2026-10-26):** the station can be offline for up to a week if
+needed, so recovery time is not the constraint; the recovery reserve is that week.
 
 No RF, rig command or FT8 activity is part of the plan; the station is idle throughout. No live
 database file is opened directly; every file-level check runs on scratch copies. Every artifact that
