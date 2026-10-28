@@ -389,14 +389,16 @@ A1 satisfies the constraint only through the operator's memory.
 
 The operator types every number sent; the software never proposes one. It records what was typed,
 warns at save when the number is already bound in the occurrence, and reports gaps and duplicates at
-export. The software never reuses anything because it never offers anything, so the constraint holds
-by construction — but the burden of tracking the sequence (across interruptions, restarts and two
-windows) rests entirely on the operator, and two windows can still type the same number. It is the
+export. Because it never proposes a number, the software cannot *automatically* reuse one — but the
+operator can still enter a previously transmitted number, so the constraint is not guaranteed: the
+software can only warn when the typed number is already bound. The burden of tracking the sequence
+(across interruptions, restarts and two windows) rests entirely on the operator, and two windows can
+still type the same number. It is the
 natural fallback when no reservation is available (below).
 
 ### Option B — daemon-reserved serials per occurrence, with an allocation ledger (leading option)
 
-The archive holds, per occurrence (M1), a monotonic counter and a durable **allocation ledger**
+The archive holds, per occurrence (M1), a durable **allocation ledger**
 separate from saved QSOs. Each entry records the serial, an allocation id, its state, the holder (the
 form instance that took it), timestamps, and — once bound — the QSO's UUID. The ledger keeps the full
 history of every number; no entry is ever deleted.
@@ -409,14 +411,14 @@ history of every number; no entry is ever deleted.
   one transaction, or none of them does.
 - held → **retired** — the operator releases the number as *possibly sent*. Never offered again.
 - held → **returned** — the operator releases the number as *not sent*. This **revokes the allocation
-  id**: the old holder can no longer save against it. The number may be offered again, but only under
-  a **new allocation id**.
+  id**: the old holder can no longer save against it. The number may be offered again — only under a
+  **new allocation id**, and only if no other entry protects it (the protected-number rule below).
 - **externally bound** — a number that entered the occurrence without a reservation (a correction, a
   reassignment, an operator-entered number while reservations were unavailable). Recorded before any
-  further allocation, so the counter never offers it (see below).
+  further allocation, so it is never offered (see the offer rule below).
 
-The counter never goes backwards; numbers are offered from above the counter or from **returned**
-entries, never from any other state.
+Numbers are offered only by the offer rule in the transition table below: from the **returned**
+pool, or a number with no ledger entry at all.
 
 | Case | What happens |
 |---|---|
@@ -425,10 +427,10 @@ entries, never from any other state.
 | Failed save, retried | See *Save, release and retries* below: a retry consumes no new number. |
 | Restart | The ledger is durable in the archive file; holds survive a daemon restart. A form whose draft is restored reattaches to its allocation id. A form that never returns leaves its number **held**, listed for the operator to release as sent or not sent. |
 | Two tabs | Each form holds its own number; the daemon never offers a held number. Tab 2 sees the next free number with a note such as "045 is held by another window (since 12:03)". Serial order and time order can interleave; the Cabrillo export orders by serial, as the sponsor asks. |
-| Correction of a saved serial | An explicit, recorded edit (the number actually sent differs). The original binding stays in the history as *corrected*; the new number is **accounted for in the ledger before commit** — externally bound, the counter advanced past it if it lies above — so it can never be offered afterwards. A collision with a held or bound number is recorded as a duplicate and reported. |
+| Correction of a saved serial | An explicit, recorded edit (the number actually sent differs). The original binding stays in the history as *corrected*; the new number is **accounted for in the ledger before commit** — externally bound, so protected — and the offer rule never offers it afterwards. A collision with a held or bound number is recorded as a duplicate and reported. |
 | Deletion | The QSO is soft-deleted; its number stays bound to the deleted QSO and is never reused; the export reports the gap. |
 | Membership removed | The QSO keeps its `STX`; the number stays bound in the history (*membership removed*) and is never reused. |
-| Membership reassigned to another occurrence | The source ledger keeps the history (*moved out*); the QSO's number is **accounted for in the target ledger before the reassignment commits** (externally bound, counter advanced past it), so the target can never allocate it; any collision is reported. Nothing is renumbered. |
+| Membership reassigned to another occurrence | The source ledger keeps the history (*moved out*); the QSO's number is **accounted for in the target ledger before the reassignment commits** (externally bound, so protected in the target), so the target can never allocate it; any collision is reported. Nothing is renumbered. |
 
 ### Save, release and retries
 
@@ -444,9 +446,66 @@ entries, never from any other state.
   - A retry with the same request id and the same content returns the recorded result — for example
     a save whose response was lost returns the stored QSO and consumes no new number.
   - The same request id with **different content is rejected**.
-  - No record means the attempt rolled back; the retry executes it afresh.
+  - No record means no committed effect — **within the proposed atomicity and retention contract**
+    (the record commits in the same transaction as the effect and is kept for the occurrence's life).
+    It does not prove that the original request has finished: it may still be running.
+  - **Required outcome for concurrent attempts with the same request id:** at most one committed
+    effect, whatever happens — lock contention, a cancelled request, a client that gives up after
+    exhausting its retries. Every such outcome leaves the operation **safely retryable with the same
+    request id**: the retry either returns the one recorded result or executes the operation once.
+    (A candidate mechanism: the request record is the transaction's first write under a unique key.
+    The mechanism is for design; the outcome is the requirement.)
+  - **A retry returns the recorded result and the current state separately.** For example, a retried
+    reserve returns the allocation it recorded *and* that allocation's present state; if it has since
+    been revoked, the form must not treat it as usable.
 - **Lost response to a release:** the retry returns the recorded outcome, so the form learns whether
   its number was returned or retired.
+
+### Transition table (proposed, for review)
+
+**Protected-number rule (takes precedence over the returned pool).** A number is **protected** in an
+occurrence if any entry in its history — under any allocation — is **held**, **bound**, **externally
+bound**, **retired**, **corrected**, **moved out** or **membership removed**. A protected number is
+never offered, whether or not it also has a **returned** entry.
+
+**Offer rule.** A number is *offerable* only if it is **not protected** and either has **no ledger
+entry at all** (never issued) or its only history is **returned** entries. Reserve takes the lowest
+such returned number first, otherwise the lowest never-issued number above the highest ever issued.
+Advancing a counter alone protects neither a number already **held** by another form nor one with a
+**returned** entry; checking the whole history protects both.
+
+**Serialisation.** All ledger writes for one occurrence run in one write transaction at a time (the
+archive file's single writer). Every operation's first write is its request record under a unique
+request id, as described above. Every operation names its occurrence explicitly (M1, intent rule)
+and is refused if the occurrence does not belong to the request's archive and logbook.
+
+| Operation | Preconditions | Atomic effects (one transaction) | Retry (same request id) | Conflicting operations |
+|---|---|---|---|---|
+| **Reserve** | Occurrence exists and belongs to the request's archive and logbook; contest mode on the form. | Choose a number by the offer rule; create a **held** entry with a **new allocation id** and the holder, which protects the number (including one that came from a returned entry); record the request. | Same content: returns the recorded allocation and, separately, its current state — a since-revoked allocation is reported as revoked and must not be used. Different content: rejected. | Two reserves serialise and receive different numbers. A reserve never selects a protected number. |
+| **Save** | The allocation is **held** and not revoked, and the request comes from its holder; the QSO is valid. | Insert the QSO with `STX` = the held number; write the membership association (M5); move the entry **held → bound** with the QSO UUID; record the request. | Same content: returns the stored QSO; no second QSO, no new number. Different content: rejected. | A save that finds the allocation not held is refused, commits nothing, and **says which case applies**: **already saved** — the allocation is bound to a QSO (for example by an earlier save under another request id); the refusal names that QSO and the form shows it rather than inviting a second contact; or **revoked before save** — the allocation was returned or retired and no QSO is bound to it; only then, once it is established that this contact has not already been persisted, is **reconcile** offered. Racing **return** or **retire**: whichever commits first wins. A save rejected for validation commits nothing and leaves the hold intact. |
+| **Return** ("not sent") | The allocation is **held**. | **held → returned**; revoke the allocation id; record the request. The number becomes offerable again **only if the protected-number rule allows it** — any other held, bound, externally bound, retired or other protected entry for the same number (for example a reconcile that bound another contact to it) keeps it protected. | Recorded outcome and the allocation's current state returned (the form learns it was returned). | Save or retire committed first → return refused, nothing changes. After return, the number can be re-offered only under a new allocation id. |
+| **Retire** ("possibly sent") | The allocation is **held**. | **held → retired**; the number is never offerable again; record the request. | Recorded outcome returned. | Save or return committed first → retire refused, nothing changes. |
+| **Reconcile** (a losing save; an unreserved number; a late save against a revoked allocation) | Explicit operator action naming the occurrence and the number *X* actually transmitted; the QSO is valid. | Insert the QSO with `STX` = *X* and its membership; add an **externally bound** entry for *X* (with the reason), which protects *X* even if it has returned entries; if *X* is **held** by another form or already **bound**, record a **duplicate anomaly** (both contacts may genuinely have sent *X*) without touching the other entry; record the request. | Same content: returns the stored QSO. Different content: rejected. | A reserve that committed first and holds *X*: the reconcile still commits and records the duplicate; the other hold stays valid. A reserve after the reconcile never offers *X* (protected). |
+| **Correct** (the number actually sent differs) | Explicit operator action naming the QSO, the new number *Y* and the state it was decided against: the **expected QSO revision**, the **expected occurrence membership** and the **expected allocation identity** (the entry binding *W*). | Mark *W*'s entry **corrected** (history kept; *W* stays protected); account *Y* exactly as reconcile accounts *X* (externally bound, so protected; duplicate anomaly if held or bound elsewhere); set the QSO's `STX` = *Y*; record the request. | Same content: recorded result and current state. Different content: rejected. | Any mismatch with the expected revision, membership or allocation — a concurrent correction, edit, reassignment or removal committed first — refuses the correction as **stale, for the operator's review**; serialising writes alone does not preserve intent. A reserve holding *Y* first → the correction commits with a duplicate anomaly. |
+| **Reassign** (to another occurrence *P*) | Explicit operator action naming the QSO, the target *P* (same logbook) and the **expected QSO revision**, **expected membership** (occurrence *O*) and **expected allocation identity** (the entry binding *X* in *O*). | Move the membership *O → P*; mark *O*'s entry **moved out** (history kept; *X* stays protected in *O*); account *X* in *P* as reconcile does (externally bound, so protected in *P*; duplicate anomaly if held or bound in *P*); record the request. | Same content: recorded result and current state. Different content: rejected. | Any mismatch with the expected revision, membership or allocation refuses the reassignment as **stale, for review**. A reserve in *P* holding *X* first → the reassignment commits with a duplicate anomaly in *P*. |
+
+**Removing membership** without a target (D3) has the same preconditions — the expected QSO revision,
+membership and allocation identity, refused as stale on any mismatch — and the same first two effects:
+the association is removed and the entry is marked **membership removed**, so the number stays
+protected.
+
+**A reconciled number in the two cases the offer rule exists for:**
+
+- **Held by another tab.** Both contacts may have sent the number. The reconcile commits, the
+  duplicate is recorded, and neither contact or hold is invalidated: the other tab may still save, and
+  that second binding is a second recorded duplicate. The operator sees both in export validation.
+- **In the returned pool.** The operator once said "not sent", but a contact did carry it. The
+  reconcile's externally bound entry protects it in the same transaction, so it is never offered
+  again, whatever its returned entries say. If it had already been re-offered and is now **held**
+  under a new allocation id, the first case applies.
+- **Returned after a reconcile.** Tab A holds 045; a reconcile binds another contact to 045; then A
+  answers "not sent". The return revokes A's allocation, but 045 stays protected by the reconcile's
+  entry and is never offered again.
 
 ### Daemon unavailable before a reservation
 
@@ -455,7 +514,7 @@ one (from memory, a paper sheet, or A2 style), and the contact must not be lost:
 availability never becomes a new barrier to preserving a contact**. The form accepts an
 operator-entered serial for that contact, marked *unreserved*. When the contact is saved, the number
 goes through the same accounting as a correction: externally bound in the ledger before commit, so
-the counter never offers it, and any collision reported as a duplicate. (Saving itself still needs the
+the offer rule never offers it, and any collision reported as a duplicate. (Saving itself still needs the
 daemon, as for every QSO today; reservation adds no further condition.)
 
 ### What the operator sees
