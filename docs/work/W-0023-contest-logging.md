@@ -344,6 +344,8 @@ is ruled in *Serial allocation*.
    attention, never exported as a member.
 7. The **sponsor's duplicate policy** (question 1): how detected duplicates are represented in the
    file once the organiser answers.
+8. A member flagged with **exchange uncertainty** (opened by the T3 ruling: both *H* and *Y* were
+   sent and it is unclear which the contact carries): how it is exported.
 
 ## Serial allocation — option B ruled 2026-10-28 (operator)
 
@@ -359,6 +361,8 @@ authorised:**
 - **Atomic save, membership and binding; retry-safe operations; stale-write checks** — as in the
   transition table.
 - **Preservation of the serial actually transmitted** through explicit reconciliation.
+- **Typed serials (T3, ruled 2026-10-28):** an explicit override with the held number resolved in the
+  same save — see *Typed serials during normal operation*.
 
 The candidate mechanisms named below (such as the request record's placement) remain provisional
 design, not rulings. Options A1 and A2 stay recorded as the alternatives weighed; the contest ADR
@@ -429,7 +433,7 @@ history of every number; no entry is ever deleted.
   **new allocation id**, and only if no other current hold and no permanent protection exists (the
   protected-number rule below).
 - **externally bound** — a number that entered the occurrence without a reservation (a correction, a
-  reassignment, an operator-entered number while reservations were unavailable). Recorded before any
+  reassignment, an override (T3), an operator-entered number while reservations were unavailable). Recorded before any
   further allocation, so it is never offered (see the offer rule below).
 
 Numbers are offered only by the offer rule in the transition table below: from the **returned**
@@ -504,7 +508,7 @@ and is refused if the occurrence does not belong to the request's archive and lo
 | Operation | Preconditions | Atomic effects (one transaction) | Retry (same request id) | Conflicting operations |
 |---|---|---|---|---|
 | **Reserve** | Occurrence exists and belongs to the request's archive and logbook; contest mode on the form. | Choose a number by the offer rule; create a **held** entry with a **new allocation id** and the holder, which protects the number (including one that came from a returned entry); record the request. | Same content: returns the recorded allocation and, separately, its current state — a since-revoked allocation is reported as revoked and must not be used. Different content: rejected. | Two reserves serialise and receive different numbers. A reserve never selects a protected number. |
-| **Save** | The allocation is **held** and not revoked, and the request comes from its holder; the QSO is valid. | Insert the QSO with `STX` = the held number; write the membership association (M5); move the entry **held → bound** with the QSO UUID; record the request. | Same content: returns the stored QSO; no second QSO, no new number. Different content: rejected. | A save that finds the allocation not held is refused, commits nothing, and **says which case applies**: **already saved** — the allocation is bound to a QSO (for example by an earlier save under another request id); the refusal names that QSO and the form shows it rather than inviting a second contact; or **revoked before save** — the allocation was returned or retired and no QSO is bound to it; only then, once it is established that this contact has not already been persisted, is **reconcile** offered. Racing **return** or **retire**: whichever commits first wins. A save rejected for validation commits nothing and leaves the hold intact. |
+| **Save** | The allocation is **held** and not revoked, and the request comes from its holder; the QSO is valid. | Insert the QSO with `STX` = the held number; write the membership association (M5); move the entry **held → bound** with the QSO UUID; record the request. | Same content: returns the stored QSO; no second QSO, no new number. Different content: rejected. | A save that finds the allocation not held is refused, commits nothing, and **says which case applies**: **already saved** — the allocation is bound to a QSO, or carries an override's **completion link** (for example an earlier save or override under another request id); the refusal names that QSO and the form shows it rather than inviting a second contact; or **revoked before save** — the allocation was returned or retired, no QSO is bound to it and it has no completion link; only then, once it is established that this contact has not already been persisted, is **reconcile** offered. Racing **return** or **retire**: whichever commits first wins. A save rejected for validation commits nothing and leaves the hold intact. |
 | **Return** ("not sent") | The allocation is **held**. | **held → returned**; revoke the allocation id; record the request. Revoking the hold removes this allocation's current-hold protection; the number becomes offerable again **only if no other current hold and no permanent protection exists** — for example a reconcile that bound another contact to it keeps it permanently protected. | Recorded outcome and the allocation's current state returned (the form learns it was returned). | Save or retire committed first → return refused, nothing changes. After return, the number can be re-offered only under a new allocation id. |
 | **Retire** ("possibly sent") | The allocation is **held**. | **held → retired**; the number is never offerable again; record the request. | Recorded outcome returned. | Save or return committed first → retire refused, nothing changes. |
 | **Reconcile** (a losing save; an unreserved number; a late save against a revoked allocation) | Explicit operator action naming the occurrence and the number *X* actually transmitted; the QSO is valid. | Insert the QSO with `STX` = *X* and its membership; add an **externally bound** entry for *X* (with the reason), which protects *X* even if it has returned entries; if *X* is **held** by another form or already **bound**, record a **duplicate anomaly** (both contacts may genuinely have sent *X*) without touching the other entry; record the request. | Same content: returns the stored QSO. Different content: rejected. | A reserve that committed first and holds *X*: the reconcile still commits and records the duplicate; the other hold stays valid. A reserve after the reconcile never offers *X* (protected). |
@@ -548,11 +552,60 @@ daemon, as for every QSO today; reservation adds no further condition.)
 - Held numbers, gaps, duplicates, corrections and unreserved numbers appear in the occurrence's status
   and in export validation as reports, not as errors that stop logging.
 
+### Typed serials during normal operation — T3 ruled 2026-10-28 (operator)
+
+The case: a number *H* is held and displayed, and the operator sent (or will log) a different number
+*Y* — a misread or misspoken number, a number from a paper sheet after an interruption, or a number
+sent again when the other station asked for a repeat. **Ruled (design approval only, no
+implementation authorised): T3, an explicit override, with *H* resolved as part of the successful
+save.**
+
+- The form shows *H* read-only by default. An explicit **"I sent a different number"** action opens a
+  field for *Y*, which the operator confirms.
+- The override completes only with an answer for *H*: **not sent**, **possibly sent**, or **both
+  sent**. **No answer means no completed override:** the draft is kept and *H* stays held. There is
+  no default answer; in particular "not sent" is never assumed.
+- Cancelling the override, or a save refused for validation, changes nothing: *H* stays held, the
+  draft is kept, no QSO is written.
+- **Y equals H:** the ordinary save — *H* is bound; it is neither returned nor retired.
+- **Both sent:** *H* is retired and the fact that *H* was also transmitted for this contact is
+  preserved alongside *Y*. If it is unclear which serial the contact should carry, that **exchange
+  uncertainty is flagged** on the contact rather than one serial being silently selected. Export
+  handling of a flagged uncertainty is open (export-validation decision 8).
+- **A repeated exchange is not automatically another QSO.** When the other station asks for a repeat
+  within the same contact, it is the same contact: one QSO, and if a different number went out on the
+  repeat, that is the *both sent* case. A genuinely separate contact (a later re-work, a new
+  exchange) takes its own reservation and its own QSO, and duplicate detection informs as for any
+  other contact. The override is never the route to a second QSO.
+
+**Override operation** (added to the transition table; all effects in one transaction):
+
+| Operation | Preconditions | Atomic effects (one transaction) | Retry (same request id) | Conflicting operations |
+|---|---|---|---|---|
+| **Override** ("I sent a different number") | Explicit operator action naming the occurrence, the **expected allocation identity** of *H* (held by this form, not revoked), the confirmed *Y* ≠ *H*, and the answer for *H* (not sent / possibly sent / both sent); the QSO is valid. *Y* = *H* is not an override: the request is the ordinary **save**. | Validate that *H*'s allocation is still held by this form; insert the QSO with `STX` = *Y* and its membership (M5); account *Y* exactly as reconcile accounts *X* — **externally bound** (reason: override), so protected even if it has returned entries, with a **duplicate anomaly** if *Y* is held by another form or already bound, without touching the other entry; resolve *H* under the existing protection rules — *not sent*: **held → returned**, allocation revoked, offerable again only with no current hold and no permanent protection; *possibly sent*: **held → retired**; *both sent*: **held → retired**, recorded as also transmitted for this QSO, and the exchange-uncertainty flag set when the operator says the carried serial is unclear; whatever the answer, link *H*'s allocation to this QSO as the override that **completed** it (the completion link) — *H*'s returned or retired state alone cannot distinguish a completed override from a release, and the link is not protection (a *not sent* *H* stays offerable under the protected-number rule); record the request. | Same content: returns the stored QSO, the recorded resolution of *H* and, separately, the current state; no second QSO, no new number. Different content: rejected. | **Save or override of *H* committed first** (for example a double submit under another request id): the binding or completion link identifies that QSO; refused as **already saved**, naming it; the form shows it, and a differing number is then a **correct** of that QSO, not a second contact. **Return or retire of *H* committed first** (from another window or the held-numbers list), with no binding or completion link: override refused, nothing committed; once it is established that this contact has not already been saved, the form offers **reconcile for *Y* carrying the operator's statement about *H*** (below). ***H* revoked and re-offered** to another form under a new allocation id: the stale allocation identity refuses the override; the other hold is untouched. **Another form holds *Y*** (reserved first): the override commits with a duplicate anomaly; that hold stays valid. **A reserve after the override** never offers *Y* (externally bound) and offers *H* only if it was returned and is unprotected. |
+
+**Reconcile carrying a statement about *H*.** When *H* was resolved elsewhere before the override
+committed, the operator's answer for *H* is not discarded. The reconcile of *Y* records it in the
+same transaction: *not sent* adds nothing for *H*; *possibly sent* or *both sent* records *H* as
+transmitted for this contact, linked to the QSO, which **permanently protects** *H* — even when *H*
+was returned and has since been reissued. A form now holding *H* under a new allocation id keeps a
+valid hold; a **duplicate anomaly** is recorded, as for any reconcile of a held number. The
+exchange-uncertainty flag carries over unchanged. (The entry recording *H* as transmitted is a
+candidate representation; that it is permanent protection is the requirement.)
+
+**Alternatives weighed (for the contest ADR):**
+
+- **T1 — no typing:** *H* read-only; a different number only through correct, reconcile or the
+  unreserved path. Simplest, but a contact that carried *Y* is first saved with a wrong `STX` and then
+  corrected — two steps and a transient wrong record.
+- **T2 — free typing:** the operator overwrites *H* before saving. *Y* still needs accounting, and *H*
+  — displayed, so possibly transmitted — is left held with no answer, or tempts an automatic return,
+  which the reuse rule forbids.
+
 ### Still to decide
 
-- Whether the operator may type an arbitrary serial inside option B outside the unavailable case,
-  recorded as a correction.
 - Duplicate-serial handling at export (export-validation decision 2).
+- Export handling of a flagged exchange uncertainty (export-validation decision 8).
 
 ## Proposed acceptance criteria (first slice; proposal, not ruled)
 
