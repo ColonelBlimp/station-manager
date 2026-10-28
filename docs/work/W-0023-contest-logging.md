@@ -123,11 +123,7 @@ Product decisions (the operator's):
 8. **Received RS:** logged as heard, or defaulted (the rule makes RS optional).
 9. **Segment checks:** warn when the rig frequency is outside a published segment? The page gives
    segments for 80 m and 20 m only.
-10. **Contest membership scope:** which archive and logbook a declared contest applies to; which modes
-    (Phone / CW only for an SSB or CW contest, or FT8/FT4 when a digital contest is the reference);
-    whether membership is decided by the QSO's own timestamp or by the time it is submitted (a QSO
-    entered late, or imported); how the window boundaries are treated (inclusive or exclusive start and
-    end); and what happens to a non-contest QSO logged inside the window — a policy not yet decided.
+10. **Contest membership scope:** ruled 2026-10-28 — see *Contest membership* below.
 11. **Duplicate key and local retention:** the sponsor's duplicate key (question 1); every logged
     contact is preserved locally whatever the key, and any exclusion from an export needs an explicit
     rule.
@@ -276,14 +272,86 @@ requirements; the sponsor's need for them is unconfirmed.
    test facility.)
 7. (For scoring, later) Which entities count as "Europe" for the points table?
 
+## Contest membership — ruled 2026-10-28 (operator)
+
+Membership is designed before serial allocation because the serial sequence needs a defined owner
+and scope. The proposals M1–M5 and decisions D1–D4 below were ruled by the operator on 2026-10-28
+with corrections, recorded here. The weighed alternatives go into the contest ADR before
+implementation. Serial allocation remains question 6; no implementation is authorised.
+
+**Facts it rests on (tree at `81c670f8`):** a QSO's time is its own ADIF `QSO_DATE` + `TIME_ON`,
+stamped by the Phone / CW form's clock when the contact starts and editable before submit ("only
+blank fields get 'now'", `frontend/app/src/lib/operate/qso.svelte.ts`). QSOs are created by `POST
+/v1/qso` (the form, `curl`, import tooling), the FT8 logging path and `smd import`
+(`qsoservice.SubmitImport` / `SubmitImportBatch`), and edited by `PATCH /v1/qso/{uuid}`. Logbooks
+live inside an archive (W-0021); ADR 0056 places per-logbook and relational data in the database
+rather than `config.json` — it supports this placement but does not prescribe a contest schema.
+
+- **M1 — ownership (approved, with a correction).** A declared contest *occurrence* (one edition:
+  the 2026 SSB event, say) is a record in the archive file, owned by one logbook. It carries a
+  **stable identity of its own, distinct from ADIF `CONTEST_ID` and from the sponsor's Cabrillo
+  name**: annual editions can share those strings but never share membership or a serial sequence.
+  One serial sequence per occurrence. *Alternative weighed:* station-global in `config.json` —
+  contrary to ADR 0056's placement rule, and it would follow the operator into an archive it does not
+  belong to.
+- **M2 — eligibility by the QSO's own time (approved).** A QSO is *eligible* when its
+  `QSO_DATE`/`TIME_ON` falls inside the window, whenever it was submitted. **Eligibility and
+  membership are separate:** membership is explicit (M5), and a member can become ineligible after an
+  edit (D2). *Alternative weighed:* submission time — a late-entered or corrected QSO would land on
+  the wrong side of the boundary.
+- **M3 — window `[start, end)` (recommended product boundary).** 12:00:00 on the Saturday is inside;
+  12:00:00 on the Sunday is outside; an `HHMM` time of `1200` on the end date is outside (ADR 0041
+  allows `HHMM` or `HHMMSS`). This is the **proposed product boundary, not a confirmed reading of
+  the sponsor's "1200z on Saturday to 1200z on Sunday"**.
+- **M4 — mode is part of eligibility (approved).** A UK/EI SSB occurrence takes **SSB and its
+  applicable submodes** (`USB`, `LSB`); CW, FT8/FT4 and other modes inside the window are not
+  eligible.
+- **M5 — explicit membership, persisted as an association (approved, with a correction).**
+  Membership is an **association between the QSO and the declared occurrence, written atomically
+  with the QSO**; `CONTEST_ID` alone is insufficient. Nothing becomes a member by a query over the
+  window. An **imported `CONTEST_ID` stays intact on the QSO without creating an association**; a QSO
+  from another logbook, or from before the declaration, stays a non-member unless explicitly added
+  (D3). *Alternative weighed:* derived membership (every QSO in the logbook, mode and window) — it
+  sweeps in non-contest contacts and cannot carry a sent serial that was never recorded.
+
+| Decision | Ruling (operator, 2026-10-28) |
+|---|---|
+| D1 — a non-contest QSO inside the window | An **explicit, visible contest mode** on the form, **selecting the declared occurrence**. Ordinary logging remains ordinary. |
+| D2 — editing a member's time or mode out of eligibility | **Allow the correction; retain membership and serial.** Show the inconsistency immediately and report it in export validation. Never silently omit the QSO or remove membership. |
+| D3 — membership changes after the fact | **Allowed, explicit and recorded.** The QSO and its transmitted serial are preserved. A serial gap is diagnostic, not automatically an invalid log; duplicate-serial handling remains unresolved. |
+| D4 — overlapping declarations | **Refused within one logbook** for the first slice. Adjacent half-open windows do not overlap. Other logbooks remain independent. |
+
+**Concurrency and intent:** every request that logs into a contest **explicitly identifies the
+intended occurrence**. The daemon validates that the occurrence belongs to the request's archive and
+logbook and writes the membership atomically with the QSO; it **never infers intent from whichever
+contest is currently active**. So two tabs agree on membership because each states its occurrence,
+not because the daemon guesses. How serials are allocated across tabs, restarts and unsaved contacts
+stays question 6.
+
+### Export-validation decisions still open
+
+1. A member that has become **ineligible** (D2): exported with a reported inconsistency, or the export
+   refused until the operator resolves it? (Never silently omitted.)
+2. **Duplicate serials** (from D3 or from allocation): refuse, report, or allow with a report — open,
+   together with question 6.
+3. **Serial gaps:** reported as diagnostics (D3); whether any gap pattern blocks export.
+4. A member **missing its received serial or district**: refuse naming the QSOs (acceptance criterion
+   5) or export with `0` / `--` where the sponsor allows it (rule 6 logs a missing received serial as
+   zero).
+5. An **unknown district code** (the proposed report-not-refuse policy): does it block export?
+6. A QSO carrying an **imported `CONTEST_ID` with no association** (M5): listed for the operator's
+   attention, never exported as a member.
+7. The **sponsor's duplicate policy** (question 1): how detected duplicates are represented in the
+   file once the organiser answers.
+
 ## Proposed acceptance criteria (first slice; proposal, not ruled)
 
 Scoring is **out of the first slice** until questions 1–4 are settled.
 
 1. **Declared contest:** the operator declares a contest with an id, a start and end (UTC), a mode and
-   the sent exchange (here: RS and serial; `--` for the district as a DX entrant). Which QSOs are
-   members — archive and logbook, applicable mode, QSO timestamp or submission time, and the window
-   boundaries — follows question 10; members carry `CONTEST_ID`.
+   the sent exchange (here: RS and serial; `--` for the district as a DX entrant), as an occurrence
+   with its own identity owned by one logbook (M1). Membership is an explicit association written
+   with the QSO in contest mode (M5, D1); eligibility follows the QSO's own time and mode (M2–M4).
 2. **Explicit sent serial:** every contest QSO stores the serial actually sent, in ADIF `STX`, written
    at logging time; it is never derived later from a count of rows. How the next serial is allocated,
    and what happens to a serial sent for a QSO that is never saved, is unresolved (question 6).
@@ -308,8 +376,10 @@ Scoring is **out of the first slice** until questions 1–4 are settled.
 Nearest confusable outcomes: a serial reconstructed from a row count after a deletion; a pre-contest
 QSO greyed as a contest duplicate; a duplicate refused at entry; a Cabrillo file in time order instead
 of serial order; a header the robot rejects; an acknowledgement taken as acceptance although it
-reports problems; a non-contest QSO stamped because it fell inside the window (its policy is
-undecided, question 10).
+reports problems; a non-contest QSO made a member because it fell inside the window (D1: membership
+needs the explicit contest mode); a member silently dropped from the export after an edit (D2); two
+annual editions sharing a serial sequence because they share a `CONTEST_ID` (M1); a QSO filed under
+whichever contest the daemon thinks is active rather than the occurrence the request named.
 
 ## Interim: operating the 2026 SSB event on alpha.5 (not authorised)
 
