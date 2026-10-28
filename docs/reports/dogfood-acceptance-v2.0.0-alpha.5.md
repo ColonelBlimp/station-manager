@@ -535,3 +535,11 @@ Command-line checkpoints run by the agent; the operator rules every result. Time
     install needed the operator's `sudo`; the agent then ran `smd config-check`, `daemon-reload` and
     `restart`, read the API and logs, and ran the B1-06 restart. Details in the B1 table; the stale-tab
     behaviour is Finding #4.
+12. **2026-10-28 — guest disposal (alpha.4 record, Appendix 3, item 7), by the agent, after the final
+    acceptance ruling.** `sm-alpha4-clean` shut down cleanly, then `virsh --connect qemu:///session
+    undefine sm-alpha4-clean --remove-all-storage` (exit 0; volumes `sm-alpha4-clean.qcow2` and
+    `seed.iso` removed — the guest copies of the private keyed RPMs went with the disk); `~/sm-guest`
+    removed (the Fedora base image and checksum files, the guest-only SSH key, the ten throwaway Firefox
+    profiles). No guest port listening afterwards. Retained outside it: `~/sm-backup` (the A3-01 and
+    2026-10-21 backups), `~/sm-a3` (baseline, manifests, counts, observations), every RPM in
+    `build/private`, and the screenshots and export files cited in this record.
