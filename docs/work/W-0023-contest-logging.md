@@ -112,7 +112,7 @@ before they become fixtures):
 
 Product decisions (the operator's):
 
-6. **Serial allocation (mechanism unresolved):** a serial is sent over the air before the QSO is
+6. **Serial allocation (mechanism unresolved; proposal below, *Serial allocation*):** a serial is sent over the air before the QSO is
    saved, so the record of what was transmitted cannot be reconstructed from saved QSOs. Cases to
    decide: a serial sent for a contact that was interrupted or never saved; a failed or interrupted
    save; a corrected or deleted QSO; a daemon or browser restart mid-contest; two tabs logging the same
@@ -343,6 +343,136 @@ stays question 6.
    attention, never exported as a member.
 7. The **sponsor's duplicate policy** (question 1): how detected duplicates are represented in the
    file once the organiser answers.
+
+## Serial allocation — design proposal (2026-10-28; proposed, not ruled)
+
+Answers question 6 as a proposal, revised after the operator's review the same day. The operator
+supports durable reservations (option B) as the leading option; **the reuse policy and the complete
+transition rules remain unapproved**. No implementation is authorised.
+
+### Three distinct events
+
+1. **Offered** — the form displays a number for the next contact.
+2. **Transmitted** — the operator sends it over the air. On SSB and CW only the operator knows this.
+3. **Saved** — the QSO is written with that number in `STX` and its membership (M5).
+
+Saving cannot establish whether a number was transmitted, and not saving cannot establish that it
+was not. The conservative rule needs no transmission proxy: **a number is possibly transmitted from
+the moment it is displayed**, because the operator can read it out before any other signal changes.
+
+### Proposed constraint (for the operator's ruling)
+
+**Never automatically reuse a number that may have been transmitted.** The number actually
+transmitted is preserved on the QSO even when that creates a gap or a duplicate; the anomaly is
+reported (export validation), never repaired by renumbering history. A number returns to the pool
+only through the operator's explicit statement that it was not sent.
+
+### Option A1 — automatic `highest + 1`, recorded on each QSO
+
+The form proposes `next = highest stored STX in the occurrence + 1`, editable; the saved QSO stores
+what was sent. No allocation state exists outside saved QSOs.
+
+| Case | What happens |
+|---|---|
+| Cancelled before transmission | The form is cleared; the same number is proposed next — but it was displayed, so under the rule above it may have been sent. Reuse depends on the operator. |
+| Interrupted after transmission (never saved) | Nothing records the number; the next proposal is the same number, **reused automatically**. Breaks the constraint. |
+| Failed save, retried | The form still holds the number; the retry resends it. Correct if the save is idempotent. |
+| Restart (daemon or browser) | Recomputed from saved QSOs; a transmitted-but-unsaved number is forgotten and **reused**. Breaks the constraint. |
+| Two tabs | Both compute the same `highest + 1` and **display the same number**. Detected only as a duplicate after saving. Breaks the constraint. |
+| Correction of a saved serial | The operator edits `STX`; any gap or duplicate is reported. |
+| Deletion | Unless soft-deleted QSOs count, a deleted QSO's highest number is **reused**. |
+| Membership removed or reassigned | If the QSO held the highest number, that number is **reused** next. |
+
+A1 satisfies the constraint only through the operator's memory.
+
+### Option A2 — explicit operator-entered serials, no automatic proposal
+
+The operator types every number sent; the software never proposes one. It records what was typed,
+warns at save when the number is already bound in the occurrence, and reports gaps and duplicates at
+export. The software never reuses anything because it never offers anything, so the constraint holds
+by construction — but the burden of tracking the sequence (across interruptions, restarts and two
+windows) rests entirely on the operator, and two windows can still type the same number. It is the
+natural fallback when no reservation is available (below).
+
+### Option B — daemon-reserved serials per occurrence, with an allocation ledger (leading option)
+
+The archive holds, per occurrence (M1), a monotonic counter and a durable **allocation ledger**
+separate from saved QSOs. Each entry records the serial, an allocation id, its state, the holder (the
+form instance that took it), timestamps, and — once bound — the QSO's UUID. The ledger keeps the full
+history of every number; no entry is ever deleted.
+
+**States and transitions** (each transition is one transaction; at most one can leave **held**):
+
+- **held** — displayed to one form. Leaves only by save or release. **No timeout and no automatic
+  retirement** in the first slice (operator recommendation): an unanswered hold stays held.
+- held → **bound** — the save. QSO creation, the membership association (M5) and the binding commit in
+  one transaction, or none of them does.
+- held → **retired** — the operator releases the number as *possibly sent*. Never offered again.
+- held → **returned** — the operator releases the number as *not sent*. This **revokes the allocation
+  id**: the old holder can no longer save against it. The number may be offered again, but only under
+  a **new allocation id**.
+- **externally bound** — a number that entered the occurrence without a reservation (a correction, a
+  reassignment, an operator-entered number while reservations were unavailable). Recorded before any
+  further allocation, so the counter never offers it (see below).
+
+The counter never goes backwards; numbers are offered from above the counter or from **returned**
+entries, never from any other state.
+
+| Case | What happens |
+|---|---|
+| Cancelled before transmission | The number was displayed, so it stays **held** until the operator releases it: "not sent" → returned (old allocation revoked); "possibly sent" → retired (a gap, reported). |
+| Interrupted after transmission | The form keeps holding the number until the contact is saved or released. Never reused automatically. |
+| Failed save, retried | See *Save, release and retries* below: a retry consumes no new number. |
+| Restart | The ledger is durable in the archive file; holds survive a daemon restart. A form whose draft is restored reattaches to its allocation id. A form that never returns leaves its number **held**, listed for the operator to release as sent or not sent. |
+| Two tabs | Each form holds its own number; the daemon never offers a held number. Tab 2 sees the next free number with a note such as "045 is held by another window (since 12:03)". Serial order and time order can interleave; the Cabrillo export orders by serial, as the sponsor asks. |
+| Correction of a saved serial | An explicit, recorded edit (the number actually sent differs). The original binding stays in the history as *corrected*; the new number is **accounted for in the ledger before commit** — externally bound, the counter advanced past it if it lies above — so it can never be offered afterwards. A collision with a held or bound number is recorded as a duplicate and reported. |
+| Deletion | The QSO is soft-deleted; its number stays bound to the deleted QSO and is never reused; the export reports the gap. |
+| Membership removed | The QSO keeps its `STX`; the number stays bound in the history (*membership removed*) and is never reused. |
+| Membership reassigned to another occurrence | The source ledger keeps the history (*moved out*); the QSO's number is **accounted for in the target ledger before the reassignment commits** (externally bound, counter advanced past it), so the target can never allocate it; any collision is reported. Nothing is renumbered. |
+
+### Save, release and retries
+
+- **Save and release are mutually exclusive.** Whichever commits first decides the entry; the other
+  receives a definite refusal ("allocation no longer held") and changes nothing.
+- **A save that loses** — to a "not sent" release, or after the number was revoked and re-offered —
+  never loses the contact. The refusal leads to an **explicit reconciliation path**: the operator
+  saves the QSO with the number actually transmitted, recorded as externally bound and flagged
+  (a duplicate if the number has since been bound elsewhere). What was transmitted is preserved.
+- **Identities.** The *allocation id* identifies one number held for one contact; the *request id*
+  identifies one operation (reserve, save, release). The daemon records each committed operation's
+  request id, a digest of its content and its result **in the same transaction as its effect**.
+  - A retry with the same request id and the same content returns the recorded result — for example
+    a save whose response was lost returns the stored QSO and consumes no new number.
+  - The same request id with **different content is rejected**.
+  - No record means the attempt rolled back; the retry executes it afresh.
+- **Lost response to a release:** the retry returns the recorded outcome, so the form learns whether
+  its number was returned or retired.
+
+### Daemon unavailable before a reservation
+
+If the form cannot reach the daemon, it cannot be given a number. The operator may still transmit
+one (from memory, a paper sheet, or A2 style), and the contact must not be lost: **allocation
+availability never becomes a new barrier to preserving a contact**. The form accepts an
+operator-entered serial for that contact, marked *unreserved*. When the contact is saved, the number
+goes through the same accounting as a correction: externally bound in the ledger before commit, so
+the counter never offers it, and any collision reported as a duplicate. (Saving itself still needs the
+daemon, as for every QSO today; reservation adds no further condition.)
+
+### What the operator sees
+
+- In contest mode the form shows the number it holds ("Serial 045, held"), not a computed guess.
+- A number another window holds is shown, not silently skipped ("045 held by another window").
+- Clearing a contact asks whether the number was sent; an unanswered hold stays held and stays
+  visible.
+- Held numbers, gaps, duplicates, corrections and unreserved numbers appear in the occurrence's status
+  and in export validation as reports, not as errors that stop logging.
+
+### Still to decide
+
+- The reuse policy and the complete transition rules (above) — proposed, not approved.
+- Whether the operator may type an arbitrary serial inside option B outside the unavailable case,
+  recorded as a correction.
+- Duplicate-serial handling at export (export-validation decision 2).
 
 ## Proposed acceptance criteria (first slice; proposal, not ruled)
 
