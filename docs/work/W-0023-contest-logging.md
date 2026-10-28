@@ -112,7 +112,7 @@ before they become fixtures):
 
 Product decisions (the operator's):
 
-6. **Serial allocation (mechanism unresolved; proposal below, *Serial allocation*):** a serial is sent over the air before the QSO is
+6. **Serial allocation (ruled 2026-10-28; see *Serial allocation* below):** a serial is sent over the air before the QSO is
    saved, so the record of what was transmitted cannot be reconstructed from saved QSOs. Cases to
    decide: a serial sent for a contact that was interrupted or never saved; a failed or interrupted
    save; a corrected or deleted QSO; a daemon or browser restart mid-contest; two tabs logging the same
@@ -277,7 +277,8 @@ requirements; the sponsor's need for them is unconfirmed.
 Membership is designed before serial allocation because the serial sequence needs a defined owner
 and scope. The proposals M1–M5 and decisions D1–D4 below were ruled by the operator on 2026-10-28
 with corrections, recorded here. The weighed alternatives go into the contest ADR before
-implementation. Serial allocation remains question 6; no implementation is authorised.
+implementation. Serial allocation was ruled separately (see *Serial allocation*); no implementation
+is authorised.
 
 **Facts it rests on (tree at `81c670f8`):** a QSO's time is its own ADIF `QSO_DATE` + `TIME_ON`,
 stamped by the Phone / CW form's clock when the contact starts and editable before submit ("only
@@ -326,7 +327,7 @@ intended occurrence**. The daemon validates that the occurrence belongs to the r
 logbook and writes the membership atomically with the QSO; it **never infers intent from whichever
 contest is currently active**. So two tabs agree on membership because each states its occurrence,
 not because the daemon guesses. How serials are allocated across tabs, restarts and unsaved contacts
-stays question 6.
+is ruled in *Serial allocation*.
 
 ### Export-validation decisions still open
 
@@ -344,11 +345,24 @@ stays question 6.
 7. The **sponsor's duplicate policy** (question 1): how detected duplicates are represented in the
    file once the organiser answers.
 
-## Serial allocation — design proposal (2026-10-28; proposed, not ruled)
+## Serial allocation — option B ruled 2026-10-28 (operator)
 
-Answers question 6 as a proposal, revised after the operator's review the same day. The operator
-supports durable reservations (option B) as the leading option; **the reuse policy and the complete
-transition rules remain unapproved**. No implementation is authorised.
+Answers question 6. Drafted as a proposal and revised through several operator reviews the same day.
+**Ruled 2026-10-28 (operator), as design rulings — design approval only, no implementation
+authorised:**
+
+- **Option B:** durable reservations per contest occurrence, protected from the moment a number is
+  displayed.
+- **No timeout and no automatic retirement** of a hold.
+- **The reuse policy:** a number is reused only after an explicit "not sent", only when it has no
+  current hold and no permanent protection, and only under a new allocation identity.
+- **Atomic save, membership and binding; retry-safe operations; stale-write checks** — as in the
+  transition table.
+- **Preservation of the serial actually transmitted** through explicit reconciliation.
+
+The candidate mechanisms named below (such as the request record's placement) remain provisional
+design, not rulings. Options A1 and A2 stay recorded as the alternatives weighed; the contest ADR
+captures the accepted design and the alternatives before implementation.
 
 ### Three distinct events
 
@@ -360,7 +374,7 @@ Saving cannot establish whether a number was transmitted, and not saving cannot 
 was not. The conservative rule needs no transmission proxy: **a number is possibly transmitted from
 the moment it is displayed**, because the operator can read it out before any other signal changes.
 
-### Proposed constraint (for the operator's ruling)
+### The reuse constraint (ruled 2026-10-28)
 
 **Never automatically reuse a number that may have been transmitted.** The number actually
 transmitted is preserved on the QSO even when that creates a gap or a duplicate; the anomaly is
@@ -482,8 +496,9 @@ Advancing a counter alone protects neither a number already held by another form
 returned entry; checking current holds and the permanent history protects both.
 
 **Serialisation.** All ledger writes for one occurrence run in one write transaction at a time (the
-archive file's single writer). Every operation's first write is its request record under a unique
-request id, as described above. Every operation names its occurrence explicitly (M1, intent rule)
+archive file's single writer). Each operation is recorded under its request id with the outcome
+required above (at most one committed effect, safely retryable); writing that request record first
+under a unique key is a **provisional candidate mechanism**, as in *Save, release and retries*. Every operation names its occurrence explicitly (M1, intent rule)
 and is refused if the occurrence does not belong to the request's archive and logbook.
 
 | Operation | Preconditions | Atomic effects (one transaction) | Retry (same request id) | Conflicting operations |
@@ -535,7 +550,6 @@ daemon, as for every QSO today; reservation adds no further condition.)
 
 ### Still to decide
 
-- The reuse policy and the complete transition rules (above) — proposed, not approved.
 - Whether the operator may type an arbitrary serial inside option B outside the unavailable case,
   recorded as a correction.
 - Duplicate-serial handling at export (export-validation decision 2).
@@ -549,8 +563,9 @@ Scoring is **out of the first slice** until questions 1–4 are settled.
    with its own identity owned by one logbook (M1). Membership is an explicit association written
    with the QSO in contest mode (M5, D1); eligibility follows the QSO's own time and mode (M2–M4).
 2. **Explicit sent serial:** every contest QSO stores the serial actually sent, in ADIF `STX`, written
-   at logging time; it is never derived later from a count of rows. How the next serial is allocated,
-   and what happens to a serial sent for a QSO that is never saved, is unresolved (question 6).
+   at logging time; it is never derived later from a count of rows. Allocation, holds and the
+   reconciliation of a serial sent for a QSO that is never saved follow *Serial allocation* (option B,
+   ruled 2026-10-28).
 3. **Received exchange stored:** the received serial in `SRX` (0 when none was sent, per the rules) and
    the received district (or `--`) in a stored field (ADIF `SRX_STRING` is the candidate), both
    visible in the Session panel and the Logbook.
