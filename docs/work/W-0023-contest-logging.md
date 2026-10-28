@@ -99,7 +99,7 @@ Sponsor rules (to settle from the organisers, the translated PDFs or an establis
 before they become fixtures):
 
 1. The **duplicate policy**: once per band? Are duplicates to be logged (and the robot zero-scores
-   them) or omitted? The page states no rule.
+   them) or omitted? **Unanswered by every sponsor document read** — organiser question 3 below.
 2. The **Cabrillo header**: version, the `CONTEST:` value, required `CATEGORY-*` and other header
    fields, given that categories are chosen at upload; and whether power must be stated in the file,
    given rule 5's High Power default.
@@ -107,7 +107,8 @@ before they become fixtures):
    answered: they do, rule 7.2.)
 4. The district codes with no DXCC suffix (the London codes `EC`, `EL`, `NL`, `NW`, `SE`, `SW`, `WC`,
    `WL`) and the dual-entity codes (`CH`, `HR`, `LD`, `SY`, `TD`).
-5. The ADIF `CONTEST_ID` value for this contest, if the enumeration has one.
+5. The ADIF `CONTEST_ID` value for this contest. **Answered:** ADIF 3.1.6 has no enumeration value;
+   a sponsor-defined string is permitted (findings, question 3).
 
 Product decisions (the operator's):
 
@@ -130,6 +131,150 @@ Product decisions (the operator's):
 11. **Duplicate key and local retention:** the sponsor's duplicate key (question 1); every logged
     contact is preserved locally whatever the key, and any exclusion from an export needs an explicit
     rule.
+
+## Sponsor questions 1–5: findings (2026-10-28)
+
+Sources were read in the order the operator asked: sponsor documentation first, then established
+logger modules and registries as corroboration. Fetched through web agents on 2026-10-28; the
+sponsor PDFs were downloaded and their text extracted locally. Sponsor documents, newest first:
+
+- **S1** — English rules, "Version 19 - 2nd May 2026" (<https://www.ukeicc.com/dx-contest-rules.php>),
+  the current rules.
+- **S2** — the upload robot, `hfenter.pl` V12.77, read only, nothing submitted:
+  <https://logs.ukeicc.com/cgi-bin/hfenter.pl?Contest=DX%20SSB%20Contest> (S2a) and
+  <https://logs.ukeicc.com/cgi-bin/hfenter.pl?Contest=DX%20CW%20Contest> (S2b). A category form
+  (section DX / UK and EI / checklog; operator; assisted; power; time; overlay; rookie) with no
+  instructions about the file. Its linked rules pop-ups
+  (<https://logs.ukeicc.com/cgi-bin/hfcontest_rules.pl?contest=ukeidxssb&year=2026> and the
+  `ukeidxcw` equivalent) returned empty bodies.
+- **S3** — the translated PDFs linked from S1, each "Version 13 – 4 Jan 2023", older than S1:
+  French, <https://www.ukeicc.com/DXcontestRules/rulesfrench.pdf> (S3-fr); German,
+  <https://www.ukeicc.com/DXcontestRules/rulesgerman.pdf> (S3-de); Polish,
+  <https://www.ukeicc.com/DXcontestRules/rulespolish.pdf> (S3-pl).
+- **S4** — sponsor-hosted HTML translations, "Version 6.3 January 2020": German,
+  <https://www.qsl.net/gm3woj/rulesgerman.htm> (S4-de); Polish,
+  <https://www.qsl.net/gm3woj/rulespolish.htm> (S4-pl).
+
+Corroboration:
+
+- **C1** — contestcalendar.com, revised February 2026: the CW contest
+  <https://contestcalendar.com/contestdetails.php?ref=597> (C1a) and the Cabrillo-names registry
+  <https://www.contestcalendar.com/cabnames.php> (C1b; contests 596 SSB and 597 CW).
+- **C2** — N1MM Logger+ documentation, undated: contests list
+  <https://n1mmwp.hamdocs.com/manual-supported/contests-list/> (C2a) and HF contest setup
+  <https://n1mmwp.hamdocs.com/manual-supported/contests-setup/setup-hf-contests/> (C2b).
+- **C3** — WWROF Cabrillo v3: header <https://wwrof.org/cabrillo/cabrillo-v3-header/> (updated
+  5 June 2025; C3a) and QSO data <https://wwrof.org/cabrillo/cabrillo-qso-data/> (15 March 2021;
+  C3b).
+- **C4** — ADIF 3.1.6 (2025-09-15), <https://adif.org/316/ADIF_316.htm>.
+- **C5** — Writelog guide, January 2016, <https://www.qsl.net/gm3woj/writelog1.htm>.
+
+### 1. Cabrillo version, `CONTEST:`, headers and power — partly answered, one conflict
+
+- **Version:** no sponsor document names a Cabrillo version. C3a makes `START-OF-LOG: 3.0` and
+  `END-OF-LOG:` the only **unconditionally** required tags of the generic specification; it also
+  requires `CATEGORY-TRANSMITTER` for multi-operator entries (irrelevant to this single-op slice).
+  `CONTEST:` is a common tag whose value "Contest sponsors may define".
+- **`CONTEST:` value — conflict, unresolved.** S1 (current) states none. The sponsor's translations
+  state `CONTEST: UKEIDXCW or UKEIDXSSB` (S3-fr; S4-de and S4-pl; S3-de and S3-pl state no header lines). C1b's registry
+  lists **`UKEI-DX`** for both the CW and SSB contests (registry intro: names taken "from the contest
+  sponsor's web site or an e-mail exchange with the contest manager", source for this entry not
+  given), with alias `UKEIDX-CW` on the CW page (C1a). C2a and C2b use log types `UKEIDXCW` / `UKEIDXSSB` but does
+  not say what it writes to `CONTEST:`.
+- **Category headers:** the sponsor's translations list `CATEGORY-OPERATOR` (SINGLE-OP / MULTI-OP),
+  `CATEGORY-POWER` (HIGH / LOW / QRP), `CATEGORY-ASSISTED` (ASSISTED / UNASSISTED — the translations'
+  wording; **conflicts with C3a**, whose value is `NON-ASSISTED` per the operator's reading of the
+  WWROF header page; neither spelling is verified against the robot), `CATEGORY-TIME`
+  (24-HOURS / 12-HOURS) and `CATEGORY-OVERLAY` (SINGLE-ELEMENT ANTENNA). S1 rule 8.2 says categories
+  and overlays "are created automatically when you upload your logfile and select the categories on
+  the log submission robot", and S2 is that selection form.
+- **Power (finding):** S1 rule 5 — "Any station not indicating their transmitter power on their
+  submitted Cabrillo logfile will be classified as High Power" (the same in S3-fr, S3-de, S3-pl, S4-de and S4-pl). The rule
+  establishes the consequence of omitting power; it does not itself specify the header line. Which
+  source prevails when the file and the robot selection disagree is unresolved.
+  *Proposed product policy (not a sponsor finding):* always write `CATEGORY-POWER`, so a low-power
+  or QRP entry is never reclassified by omission.
+- **QSO lines:** S1 rule 8.3's samples, including a DX entrant's: `QSO: 7165 PH 2014-07-26 1343 DL1AA
+  59 003 -- EI7CC 599 136 DU` — frequency in kHz (to 1 kHz for awards), mode, `yyyy-mm-dd`, `hhmm`,
+  sent call, RS(T), serial, district or `--`, then the received call, RS(T), serial, district or
+  `--`; QSOs in order of serial sent. Samples pad serials to three digits; width beyond 999 is not
+  stated. S1's samples all use `PH`; S3-fr, S3-de, S3-pl, S4-de and S4-pl use `CW` for CW contacts. C3b defines the mode codes
+  (`CW`, `PH`, …).
+
+### 2. Duplicates — unanswered by the sponsor
+
+No duplicate rule appears in S1, S3-fr, S3-de, S3-pl, S4-de or S4-pl, and S2a/S2b say nothing. C1a, C1b, C2a and C2b are silent; only the
+multiplier rule says "worked on each band" (S1 7.2). The sponsor's duplicate key and whether
+duplicates stay in the submitted log are **unresolved** and go to the organiser (below). Locally
+every contact is kept regardless (question 11).
+
+### 3. ADIF contest ID — answered: no enumeration value
+
+C4 has no UK/EI entry (the nearest are `UK-DX-RTTY` and `UK-DX-BPSK63`, different contests).
+`CONTEST_ID` is a String with "use enumeration values for interoperability", so a sponsor-defined
+string is permitted. Proposal: store the sponsor's `CONTEST:` value once question 1 settles it. C4
+also defines `STX`/`SRX` (integer serials ≥ 0) and `STX_STRING`/`SRX_STRING` ("contest QSO
+transmitted/received information", in Cabrillo format where no dedicated field exists).
+
+### 4. District codes — partly answered
+
+- S1 lists 155 codes; the London codes (`EC`, `EL`, `NL`, `NW`, `SE`, `SW`, `WC`, `WL`) carry no
+  DXCC suffix in S1, S3-fr, S3-de, S3-pl, S4-de and S4-pl alike.
+- **Conflict on dual-entity codes:** S1 (2026) gives `CH`, `HR`, `LD`, `SY` as "G / GW" and `TD` as
+  "G / GM", and its notes tell UK entrants to "pick one District Code and use the same code in all
+  UK/EI DX Contests". S3-fr, S3-de, S3-pl (2023) and S4-de, S4-pl (2020) give `CH`, `HR`, `SY` as G, `LD` as GW and `TD` as
+  G/GM. S1, the newest, prevails.
+- For a DX entrant the code is received exchange only, and the code-to-entity mapping matters only
+  to scoring (deferred). *Proposed product policy (not a sponsor finding):* store the two letters as
+  received and check them against S1's list, reporting an unknown code without refusing the QSO.
+
+### 5. "Europe" — deferred with scoring
+
+Not defined in any sponsor document read. Deferred until scoring is designed.
+
+### Other conflicts found (recorded, not product questions)
+
+- **Not-in-log penalty:** S1 9.1 and S3-fr — "no additional penalty"; S3-de, S4-de and S4-pl — a
+  further penalty (S3-pl's wording was not located in its extracted text). S1, current, prevails.
+- **Multi-op:** S1 has one multi-op category (24 h, high power, assisted); S4-de and S4-pl limit a
+  single-transmitter multi-op to UK/EI. S1 prevails; irrelevant to a single-op DX entry.
+- **Deadline:** C5 (2016) says two hours; S1 says 24 hours.
+
+### Provisional export contract (pending the organiser's answers)
+
+```
+START-OF-LOG: 3.0
+CONTEST: <UKEIDXSSB | UKEIDXCW per the sponsor's translations; UKEI-DX per C1b — unresolved>
+CALLSIGN: 7Q5MLV
+CATEGORY-OPERATOR: SINGLE-OP
+CATEGORY-ASSISTED: <ASSISTED | NON-ASSISTED per C3a; UNASSISTED per the translations — unresolved>
+CATEGORY-POWER: <HIGH | LOW | QRP>   (always written: proposed policy, see 1)
+CATEGORY-TIME: <24-HOURS | 12-HOURS>
+QSO: <kHz> PH <yyyy-mm-dd> <hhmm> 7Q5MLV <rs> <nnn> -- <call> <rs> <nnn> <district | -->
+END-OF-LOG:
+```
+
+The `CALLSIGN:` tag and any `CREATED-BY:`/`OPERATORS:` lines are C3a common tags, not sponsor
+requirements; the sponsor's need for them is unconfirmed.
+
+### Draft questions for the organiser (prepared, not sent)
+
+1. Which `CONTEST:` value does the robot expect for the SSB and CW contests — `UKEIDXSSB` /
+   `UKEIDXCW` (the translated rules) or `UKEI-DX` (contestcalendar.com)? Which Cabrillo version?
+2. Does the robot read the `CATEGORY-*` lines, or only the categories selected on upload? If they
+   differ, which prevails? Given rule 5, should `CATEGORY-POWER` always be in the file? For
+   `CATEGORY-ASSISTED`, does the robot expect `NON-ASSISTED` (the Cabrillo v3 value) or `UNASSISTED`
+   (the translated rules)?
+3. Duplicates: is a station counted once per band? Should duplicate contacts be left in the submitted
+   log (and zero-scored by the robot) or removed?
+4. Serial numbers in `QSO:` lines: is a fixed width expected (three digits in the samples), and how
+   should serials above 999 be written?
+5. Which DXCC entity do the London district codes belong to, and is the 2026 list's G / GW and G / GM
+   treatment of CH, HR, LD, SY and TD authoritative over the 2023 translations?
+6. Is there a way to validate a log before the contest — a test upload or a checker — without it
+   counting as an entry? (The robot offers a "checklog" section, which is an entry category, not a
+   test facility.)
+7. (For scoring, later) Which entities count as "Europe" for the points table?
 
 ## Proposed acceptance criteria (first slice; proposal, not ruled)
 
