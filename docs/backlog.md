@@ -68,7 +68,9 @@ Open one workstream per active focus.
   after alpha.3 acceptance and W-0010 outcome 9 — (3) the **ADR 0071 archive programme** — SELECTED
   2026-09-21 as W-0021 above; (4) **Settings → Logbooks** on the active-archive model (W-0014 exchange 2026-09-19; ADR 0056
   bindings in the archive-aware shape gate different-call logbooks); (5) **contesting** — contest
-  mode (W-0011 ruling), scoring, export and different-call operation, its own ADR.
+  mode (W-0011 ruling), scoring, export and different-call operation, its own ADR. **Design opened
+  2026-10-28 as [W-0023](work/W-0023-contest-logging.md) — design only, no implementation authorised**;
+  the reference case is the UK/EI DX Contest.
 - **W-0014 · PARKED — [Deferred product workstreams](work/W-0014-deferred-product-workstreams.md).** Discovery inventory only; each member needs go-ahead and its own design/dossier before implementation.
 - **FT8 Field Day UI:** blocked until the relevant contest; not a 7Q8AC ship concern.
 - **Daemon-initiated FT8 sequencing:** out of scope. Sessions remain operator-initiated; an open event subscription is the presence signal, not proof that a person remains at the desk.

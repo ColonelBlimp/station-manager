@@ -347,6 +347,15 @@
       "summary": "W-0021 delivers ADR 0071's first-class QSO archives: stable archive and logbook identities with in-place adoption of the existing install, a managed archive catalogue and provisioner with last-known-good startup, create/list/activate over the attended restart, the shell archive selector, and SM Cloud keyed by archive/logbook UUIDs."
     },
     {
+      "id": "work.w-0023",
+      "path": "docs/work/W-0023-contest-logging.md",
+      "class": "work-item",
+      "audiences": ["operator", "contributor", "agent"],
+      "topics": ["contesting", "logging", "export", "cabrillo"],
+      "scopes": ["internal/types/qso_details.go", "frontend/app/src/lib/operate/**"],
+      "summary": "W-0023 is the design-only contest logging dossier: the UK/EI DX Contest as the reference case, its rules with sources, unresolved sponsor and product questions, and proposed first-slice acceptance criteria (declared contest, explicit sent serial, received exchange, in-contest duplicate detection kept apart from the sponsor's policy, Cabrillo export; scoring deferred)."
+    },
+    {
       "id": "work.dogfood-inbox",
       "path": "docs/dogfood-inbox.md",
       "class": "work-item",
