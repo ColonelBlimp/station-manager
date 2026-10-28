@@ -599,8 +599,10 @@ same transaction, keeping the operator's distinction:
   **permanently protects** *H*.
 
 Either protection holds even when *H* was returned and has since been reissued. A form now holding
-*H* under a new allocation id keeps a valid hold, and the overlap is recorded as a **duplicate
-anomaly** — a confirmed one for *both sent*, a possible one for *possibly sent*. The
+*H* under a new allocation id keeps a valid hold, and the overlap is recorded as a **possible serial
+collision**. Transmission certainty is recorded **per contact**: *both sent* confirms that *H* was
+transmitted for this contact, but another form merely holding *H* does not prove a second
+transmission. The collision remains possible until both contacts establish that they carried *H*. The
 exchange-uncertainty flag carries over unchanged. (The entries recording *H* are a candidate
 representation; the distinction between uncertainty and confirmed transmission, and the permanent
 protection, are the requirement.)
