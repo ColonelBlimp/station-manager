@@ -412,7 +412,8 @@ history of every number; no entry is ever deleted.
 - held → **retired** — the operator releases the number as *possibly sent*. Never offered again.
 - held → **returned** — the operator releases the number as *not sent*. This **revokes the allocation
   id**: the old holder can no longer save against it. The number may be offered again — only under a
-  **new allocation id**, and only if no other entry protects it (the protected-number rule below).
+  **new allocation id**, and only if no other current hold and no permanent protection exists (the
+  protected-number rule below).
 - **externally bound** — a number that entered the occurrence without a reservation (a correction, a
   reassignment, an operator-entered number while reservations were unavailable). Recorded before any
   further allocation, so it is never offered (see the offer rule below).
@@ -463,16 +464,22 @@ pool, or a number with no ledger entry at all.
 
 ### Transition table (proposed, for review)
 
-**Protected-number rule (takes precedence over the returned pool).** A number is **protected** in an
-occurrence if any entry in its history — under any allocation — is **held**, **bound**, **externally
-bound**, **retired**, **corrected**, **moved out** or **membership removed**. A protected number is
-never offered, whether or not it also has a **returned** entry.
+**Protected-number rule (takes precedence over the returned pool).** Two kinds of protection:
 
-**Offer rule.** A number is *offerable* only if it is **not protected** and either has **no ledger
-entry at all** (never issued) or its only history is **returned** entries. Reserve takes the lowest
+- **Current hold** — an entry that is **held** and not revoked protects the number while it stays
+  valid. The explicit "not sent" (return) revokes that hold, and with it this protection.
+- **Permanent protection** — any entry in the number's history, under any allocation, that is
+  **bound**, **externally bound**, **retired**, **corrected**, **moved out** or **membership
+  removed**. It survives a return.
+
+A number is **protected** while it has a current hold or any permanent protection, and a protected
+number is never offered.
+
+**Offer rule.** A number is *offerable* only if it has **no ledger entry at all** (never issued), or
+it is **returned** and has **no current hold and no permanent protection**. Reserve takes the lowest
 such returned number first, otherwise the lowest never-issued number above the highest ever issued.
-Advancing a counter alone protects neither a number already **held** by another form nor one with a
-**returned** entry; checking the whole history protects both.
+Advancing a counter alone protects neither a number already held by another form nor one with a
+returned entry; checking current holds and the permanent history protects both.
 
 **Serialisation.** All ledger writes for one occurrence run in one write transaction at a time (the
 archive file's single writer). Every operation's first write is its request record under a unique
@@ -483,7 +490,7 @@ and is refused if the occurrence does not belong to the request's archive and lo
 |---|---|---|---|---|
 | **Reserve** | Occurrence exists and belongs to the request's archive and logbook; contest mode on the form. | Choose a number by the offer rule; create a **held** entry with a **new allocation id** and the holder, which protects the number (including one that came from a returned entry); record the request. | Same content: returns the recorded allocation and, separately, its current state — a since-revoked allocation is reported as revoked and must not be used. Different content: rejected. | Two reserves serialise and receive different numbers. A reserve never selects a protected number. |
 | **Save** | The allocation is **held** and not revoked, and the request comes from its holder; the QSO is valid. | Insert the QSO with `STX` = the held number; write the membership association (M5); move the entry **held → bound** with the QSO UUID; record the request. | Same content: returns the stored QSO; no second QSO, no new number. Different content: rejected. | A save that finds the allocation not held is refused, commits nothing, and **says which case applies**: **already saved** — the allocation is bound to a QSO (for example by an earlier save under another request id); the refusal names that QSO and the form shows it rather than inviting a second contact; or **revoked before save** — the allocation was returned or retired and no QSO is bound to it; only then, once it is established that this contact has not already been persisted, is **reconcile** offered. Racing **return** or **retire**: whichever commits first wins. A save rejected for validation commits nothing and leaves the hold intact. |
-| **Return** ("not sent") | The allocation is **held**. | **held → returned**; revoke the allocation id; record the request. The number becomes offerable again **only if the protected-number rule allows it** — any other held, bound, externally bound, retired or other protected entry for the same number (for example a reconcile that bound another contact to it) keeps it protected. | Recorded outcome and the allocation's current state returned (the form learns it was returned). | Save or retire committed first → return refused, nothing changes. After return, the number can be re-offered only under a new allocation id. |
+| **Return** ("not sent") | The allocation is **held**. | **held → returned**; revoke the allocation id; record the request. Revoking the hold removes this allocation's current-hold protection; the number becomes offerable again **only if no other current hold and no permanent protection exists** — for example a reconcile that bound another contact to it keeps it permanently protected. | Recorded outcome and the allocation's current state returned (the form learns it was returned). | Save or retire committed first → return refused, nothing changes. After return, the number can be re-offered only under a new allocation id. |
 | **Retire** ("possibly sent") | The allocation is **held**. | **held → retired**; the number is never offerable again; record the request. | Recorded outcome returned. | Save or return committed first → retire refused, nothing changes. |
 | **Reconcile** (a losing save; an unreserved number; a late save against a revoked allocation) | Explicit operator action naming the occurrence and the number *X* actually transmitted; the QSO is valid. | Insert the QSO with `STX` = *X* and its membership; add an **externally bound** entry for *X* (with the reason), which protects *X* even if it has returned entries; if *X* is **held** by another form or already **bound**, record a **duplicate anomaly** (both contacts may genuinely have sent *X*) without touching the other entry; record the request. | Same content: returns the stored QSO. Different content: rejected. | A reserve that committed first and holds *X*: the reconcile still commits and records the duplicate; the other hold stays valid. A reserve after the reconcile never offers *X* (protected). |
 | **Correct** (the number actually sent differs) | Explicit operator action naming the QSO, the new number *Y* and the state it was decided against: the **expected QSO revision**, the **expected occurrence membership** and the **expected allocation identity** (the entry binding *W*). | Mark *W*'s entry **corrected** (history kept; *W* stays protected); account *Y* exactly as reconcile accounts *X* (externally bound, so protected; duplicate anomaly if held or bound elsewhere); set the QSO's `STX` = *Y*; record the request. | Same content: recorded result and current state. Different content: rejected. | Any mismatch with the expected revision, membership or allocation — a concurrent correction, edit, reassignment or removal committed first — refuses the correction as **stale, for the operator's review**; serialising writes alone does not preserve intent. A reserve holding *Y* first → the correction commits with a duplicate anomaly. |
