@@ -590,12 +590,20 @@ save.**
 
 **Reconcile carrying a statement about *H*.** When *H* was resolved elsewhere before the override
 committed, the operator's answer for *H* is not discarded. The reconcile of *Y* records it in the
-same transaction: *not sent* adds nothing for *H*; *possibly sent* or *both sent* records *H* as
-transmitted for this contact, linked to the QSO, which **permanently protects** *H* — even when *H*
-was returned and has since been reissued. A form now holding *H* under a new allocation id keeps a
-valid hold; a **duplicate anomaly** is recorded, as for any reconcile of a held number. The
-exchange-uncertainty flag carries over unchanged. (The entry recording *H* as transmitted is a
-candidate representation; that it is permanent protection is the requirement.)
+same transaction, keeping the operator's distinction:
+
+- *not sent* adds nothing for *H*;
+- *possibly sent* records **uncertainty** — *H* possibly transmitted for this contact, linked to the
+  QSO — and **permanently protects** *H*;
+- *both sent* records **confirmed transmission** of *H* for this contact, linked to the QSO, and
+  **permanently protects** *H*.
+
+Either protection holds even when *H* was returned and has since been reissued. A form now holding
+*H* under a new allocation id keeps a valid hold, and the overlap is recorded as a **duplicate
+anomaly** — a confirmed one for *both sent*, a possible one for *possibly sent*. The
+exchange-uncertainty flag carries over unchanged. (The entries recording *H* are a candidate
+representation; the distinction between uncertainty and confirmed transmission, and the permanent
+protection, are the requirement.)
 
 **Alternatives weighed (for the contest ADR):**
 
