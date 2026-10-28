@@ -1,6 +1,7 @@
 # W-0023 — Contest logging
 
 **Status:** Design only — no implementation authorised (operator, 2026-10-28)
+**Decision record:** [ADR 0096](../decisions/0096-contest-occurrences-reserved-serials-and-submission-export.md) (accepted design and alternatives; unresolved items excluded)
 **Selected:** 2026-10-28 for design (operator: "Open W-0023 as a design-only dossier")
 **Outcome:** The operator can log a contest in Station Manager — a declared contest with its exchange,
 an explicitly recorded sent serial, in-contest duplicate detection, and a sponsor-ready Cabrillo log —
@@ -17,7 +18,7 @@ export and different-call operation, designed on the archive and logbook identit
 and in its own ADR. On 2026-10-28 the operator asked to start the design against a real contest, the
 UK/EI DX Contest, and logged "cabrillo format session and logbook export" to the inbox the same day.
 This dossier holds the design: the reference contest's rules, what already exists, the open
-questions, and the proposed acceptance criteria. An ADR follows when the design settles.
+questions, and the proposed acceptance criteria. The accepted design and its alternatives are recorded in [ADR 0096](../decisions/0096-contest-occurrences-reserved-serials-and-submission-export.md).
 
 ## Prior rulings and records this design builds on
 
@@ -276,7 +277,7 @@ requirements; the sponsor's need for them is unconfirmed.
 
 Membership is designed before serial allocation because the serial sequence needs a defined owner
 and scope. The proposals M1–M5 and decisions D1–D4 below were ruled by the operator on 2026-10-28
-with corrections, recorded here. The weighed alternatives go into the contest ADR before
+with corrections, recorded here. The weighed alternatives go into the contest ADR ([ADR 0096](../decisions/0096-contest-occurrences-reserved-serials-and-submission-export.md)) before
 implementation. Serial allocation was ruled separately (see *Serial allocation*); no implementation
 is authorised.
 
@@ -370,7 +371,7 @@ authorised:**
 
 The candidate mechanisms named below (such as the request record's placement) remain provisional
 design, not rulings. Options A1 and A2 stay recorded as the alternatives weighed; the contest ADR
-captures the accepted design and the alternatives before implementation.
+([ADR 0096](../decisions/0096-contest-occurrences-reserved-serials-and-submission-export.md)) captures the accepted design and the alternatives before implementation.
 
 ### Three distinct events
 
@@ -607,7 +608,7 @@ exchange-uncertainty flag carries over unchanged. (The entries recording *H* are
 representation; the distinction between uncertainty and confirmed transmission, and the permanent
 protection, are the requirement.)
 
-**Alternatives weighed (for the contest ADR):**
+**Alternatives weighed (recorded in [ADR 0096](../decisions/0096-contest-occurrences-reserved-serials-and-submission-export.md)):**
 
 - **T1 — no typing:** *H* read-only; a different number only through correct, reconcile or the
   unreserved path. Simplest, but a contact that carried *Y* is first saved with a wrong `STX` and then
