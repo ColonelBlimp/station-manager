@@ -120,10 +120,19 @@ Product decisions (the operator's):
    contest concurrently. Gaps are visible to the sponsor's checker; reuse risks two QSOs claiming one
    transmitted number.
 7. **Where the exchange is entered:** dedicated fields on the Phone / CW form (received serial,
-   received district) versus a free exchange field parsed per contest.
-8. **Received RS:** logged as heard, or defaulted (the rule makes RS optional).
+   received district) versus a free exchange field parsed per contest. **Operator answer
+   (2026-10-28), a suggestion, not a mandate:** where a contest has dedicated exchange fields, a
+   **separate contest panel replaces the standard Phone / CW panel** while contest mode is on.
+   Still to design: the panel's fields for the reference contest, and how it relates to D1's
+   explicit, visible contest mode.
+8. **Received RS:** logged as heard, or defaulted (the rule makes RS optional). **Ruled 2026-10-28
+   (operator):** a **default is supplied at entry**; if the operator amends it, the value **as
+   heard** is logged. The default value itself is not yet set (a proposal would be the mode's
+   customary report, such as `59` on SSB).
 9. **Segment checks:** warn when the rig frequency is outside a published segment? The page gives
-   segments for 80 m and 20 m only.
+   segments for 80 m and 20 m only. **Ruled 2026-10-28 (operator): yes.** Still to design: the
+   behaviour on bands with no published segment, and whether the warning ever affects logging
+   (proposal: it informs and never refuses, as for duplicates).
 10. **Contest membership scope:** ruled 2026-10-28 — see *Contest membership* below.
 11. **Duplicate key and local retention:** the sponsor's duplicate key (question 1); every logged
     contact is preserved locally whatever the key, and any exclusion from an export needs an explicit
@@ -272,6 +281,20 @@ requirements; the sponsor's need for them is unconfirmed.
    counting as an entry? (The robot offers a "checklog" section, which is an entry category, not a
    test facility.)
 7. (For scoring, later) Which entities count as "Europe" for the points table?
+
+Added 2026-10-28 for the export rulings and the window boundary (still not sent):
+
+8. **Window:** is a QSO timed `1200` on the Sunday inside the contest, and is Saturday `1200` inside?
+   Does the checker judge by the QSO's start time? (M3's `[start, end)` is a proposed product
+   boundary.)
+9. **Missing received exchange:** for a received serial not copied, should the field be `0` or `000`
+   (rule 6 says zero)? For a UK/EI station whose district was not copied, what goes in the field —
+   `--`, or must the contact be omitted? (Export ruling 4b.)
+10. **Unknown district:** should a received two-letter code that is not on the list be submitted as
+    received? (Export ruling 5.)
+11. **Serial gaps and duplicates:** if a number is sent but the contact is not completed, should the
+    next contact skip it (a gap) or reuse it? If two contacts carry the same sent serial, should both
+    be submitted as sent? (Export rulings 2 and 3.)
 
 ## Contest membership — ruled 2026-10-28 (operator)
 
