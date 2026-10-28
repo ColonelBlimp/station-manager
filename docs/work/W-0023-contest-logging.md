@@ -329,23 +329,27 @@ contest is currently active**. So two tabs agree on membership because each stat
 not because the daemon guesses. How serials are allocated across tabs, restarts and unsaved contacts
 is ruled in *Serial allocation*.
 
-### Export-validation decisions still open
+### Export-validation rulings (2026-10-28, operator)
 
-1. A member that has become **ineligible** (D2): exported with a reported inconsistency, or the export
-   refused until the operator resolves it? (Never silently omitted.)
-2. **Duplicate serials** (from D3 or from allocation): refuse, report, or allow with a report — open,
-   together with question 6.
-3. **Serial gaps:** reported as diagnostics (D3); whether any gap pattern blocks export.
-4. A member **missing its received serial or district**: refuse naming the QSOs (acceptance criterion
-   5) or export with `0` / `--` where the sponsor allows it (rule 6 logs a missing received serial as
-   zero).
-5. An **unknown district code** (the proposed report-not-refuse policy): does it block export?
-6. A QSO carrying an **imported `CONTEST_ID` with no association** (M5): listed for the operator's
-   attention, never exported as a member.
-7. The **sponsor's duplicate policy** (question 1): how detected duplicates are represented in the
-   file once the organiser answers.
-8. A member flagged with **exchange uncertainty** (opened by the T3 ruling: both *H* and *Y* were
-   sent and it is unclear which the contact carries): how it is exported.
+Design rulings only; no implementation authorised. They govern the **submission export** — the file
+offered as ready for the sponsor. **None of them ever refuses saving a contact**; logging is never
+blocked by an export rule. The sponsor questions that remain open (*Unresolved questions* 1–4, 11, and
+the organiser questions) are separate and unchanged by these rulings.
+
+| # | Case | Ruling |
+|---|---|---|
+| 1 | A member that has become **ineligible** (D2) | The submission export is **blocked**, naming each inconsistency. A member is never silently omitted. |
+| 2 | **Duplicate sent serials** (from D3 or from allocation) | The actual duplicate sent serials are **preserved** and **every affected contact is reported**. Whether the sponsor accepts a duplicate serial is unverified. |
+| 3 | **Serial gaps** | **Diagnostic only**; no gap pattern blocks the export. Serials are **never renumbered**. |
+| 4a | A member **missing its received serial** | An explicit operator record of **"no serial received"** may export as `0` (rule 6: a missing received serial is logged as zero). An absent value with no such record is not exported as `0`. |
+| 4b | A member **missing a required received district** | **Unresolved.** Rule 6 does not establish `--` for a missing UK/EI district; the samples establish `--` only for DX stations. Until resolved, the submission export is **blocked** for such a member. |
+| 5 | An **unknown district code** | For a **syntactically representable** code: the unknown two-letter code is **preserved** and exported with a **warning**. **Invalid field syntax** is reported; it is never silently altered and never allowed to corrupt the Cabrillo file. |
+| 6 | An **imported `CONTEST_ID` with no association** (M5) | Relevant unassociated imports are **reported separately**; they are never exported as occurrence members. |
+| 7 | The **sponsor's duplicate policy** in the file (question 1) | **Unresolved.** All contacts are preserved locally. An **all-contact diagnostic export** is acceptable, but it is not called sponsor-ready, and **no provisional duplicate key is invented**. |
+| 8 | A member flagged with **exchange uncertainty** (T3: both *H* and *Y* sent, carried serial unclear) | The submission export is **blocked** until the carried serial is **explicitly resolved**. Both transmitted numbers and the resolution history are preserved. |
+
+Source for 4: [UK/EI DX Contest rules](https://www.ukeicc.com/dx-contest-rules.php) (S1), rule 6 and
+the sample logs.
 
 ## Serial allocation — option B ruled 2026-10-28 (operator)
 
@@ -571,7 +575,7 @@ save.**
 - **Both sent:** *H* is retired and the fact that *H* was also transmitted for this contact is
   preserved alongside *Y*. If it is unclear which serial the contact should carry, that **exchange
   uncertainty is flagged** on the contact rather than one serial being silently selected. Export
-  handling of a flagged uncertainty is open (export-validation decision 8).
+  handling of a flagged uncertainty is ruled in *Export-validation rulings* (8).
 - **A repeated exchange is not automatically another QSO.** When the other station asks for a repeat
   within the same contact, it is the same contact: one QSO, and if a different number went out on the
   repeat, that is the *both sent* case. A genuinely separate contact (a later re-work, a new
@@ -604,8 +608,8 @@ candidate representation; that it is permanent protection is the requirement.)
 
 ### Still to decide
 
-- Duplicate-serial handling at export (export-validation decision 2).
-- Export handling of a flagged exchange uncertainty (export-validation decision 8).
+- Nothing in allocation; duplicate serials (2) and exchange uncertainty (8) at export are ruled in
+  *Export-validation rulings*.
 
 ## Proposed acceptance criteria (first slice; proposal, not ruled)
 
@@ -620,7 +624,7 @@ Scoring is **out of the first slice** until questions 1–4 are settled.
    reconciliation of a serial sent for a QSO that is never saved follow *Serial allocation* (option B,
    ruled 2026-10-28).
 3. **Received exchange stored:** the received serial in `SRX` (0 when none was sent, per the rules) and
-   the received district (or `--`) in a stored field (ADIF `SRX_STRING` is the candidate), both
+   the received district (`--` for a DX station, per the samples) in a stored field (ADIF `SRX_STRING` is the candidate), both
    visible in the Session panel and the Logbook.
 4. **Duplicate detection, kept apart from the sponsor's policy:** inside a declared window the form and
    Band Activity show "already worked in this contest" by the sponsor-defined duplicate key, pending
@@ -629,8 +633,10 @@ Scoring is **out of the first slice** until questions 1–4 are settled.
    sponsor's policy, applied at export only under an explicit rule (question 11).
 5. **Cabrillo export:** the declared contest's QSOs export to a Cabrillo file in serial order, with
    frequency in kHz, the mode code (`PH` for SSB) and the sent and received exchanges in the sponsor's
-   order, plus the header fields the sponsor requires (question 2). The export refuses, naming the QSOs,
-   when a contest QSO lacks a stored sent serial or received serial; it never invents one.
+   order, plus the header fields the sponsor requires (question 2). The submission export follows
+   *Export-validation rulings*: it is blocked, naming the QSOs, when a member lacks a stored sent
+   serial, a received serial without an explicit "no serial received" record, or a required received
+   district (4b), and it never invents a value. Export rules never refuse saving a contact.
 6. **Proof against the reference contest:** fixtures built from the UK/EI rules (exchange, serial
    continuity across bands, district codes, `--` for DX, the sample `QSO:` lines) produce a file that
    passes validation: an acknowledgement reporting no problems requiring correction (rule 8.4), not
