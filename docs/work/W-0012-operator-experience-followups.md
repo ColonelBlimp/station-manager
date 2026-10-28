@@ -279,6 +279,10 @@ stated before a build):
 - **No individual-QSO delete in the SPA (alpha.5 Finding #3, 2026-10-24):** the daemon supports
   `DELETE /v1/qso/{uuid}` (soft delete, audited, archive-guarded) but the SPA offers no delete action
   for a QSO; no recorded decision excludes it. A product gap for separate prioritisation.
+- **Stale tab after an upgrade (alpha.5 Finding #4, 2026-10-28):** an open tab that reconnects after
+  the daemon restarts keeps running the previous build's code while its badge already shows the new
+  daemon version; its first lazily loaded page then fails (Settings blank: the old chunk name is
+  answered with the SPA's HTML fallback, 200 `text/html`, not a 404). A reload fixes it.
 - **Country for an unenriched QSO (inbox 2026-09-30):** there is no place to enter the remote
   station's country when the QSO is not enriched over the internet.
 - **Re-enrich with no source enabled (inbox 2026-10-04):** on the Edit QSO card, "Re-enrich" is
