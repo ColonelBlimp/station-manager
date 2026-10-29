@@ -282,7 +282,11 @@ END-OF-LOG:
 The `CALLSIGN:` tag and any `CREATED-BY:`/`OPERATORS:` lines are C3a common tags, not sponsor
 requirements; the sponsor's need for them is unconfirmed.
 
-### Draft questions for the organiser (prepared, not sent)
+### Questions for the organiser (sent; awaiting a reply)
+
+**Sent by the operator** (reported 2026-10-29) as the drafted email built from the questions below;
+**awaiting the organiser's reply.** Answers are recorded here as they arrive. Until then, the
+sponsor-dependent items in ADR 0096 *Unresolved* stay open.
 
 1. Which `CONTEST:` value does the robot expect for the SSB and CW contests — `UKEIDXSSB` /
    `UKEIDXCW` (the translated rules) or `UKEI-DX` (contestcalendar.com)? Which Cabrillo version?
@@ -301,7 +305,7 @@ requirements; the sponsor's need for them is unconfirmed.
    test facility.)
 7. (For scoring, later) Which entities count as "Europe" for the points table?
 
-Added 2026-10-28 for the export rulings and the window boundary (still not sent):
+Added 2026-10-28 for the export rulings and the window boundary (included in the email):
 
 8. **Window:** is a QSO timed `1200` on the Sunday inside the contest, and is Saturday `1200` inside?
    Does the checker judge by the QSO's start time? (M3's `[start, end)` is a proposed product
