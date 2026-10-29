@@ -125,6 +125,25 @@ Product decisions (the operator's):
    **separate contest panel replaces the standard Phone / CW panel** while contest mode is on.
    Still to design: the panel's fields for the reference contest, and how it relates to D1's
    explicit, visible contest mode.
+   **Operator statement (2026-10-29):** "With contest logging, we don't need to do enrichment. The
+   name field is superflous." So the contest panel carries **no Name field**. How far "no
+   enrichment" reached was open; the storage decision below settles it. Enrichment has two layers
+   (`internal/lookup/orchestrator.go`): station lookup (QRZ and the others in the chain: name, QTH,
+   grid) and country data (hamnut: DXCC, CQ/ITU zone, continent). The reference contest's scoring
+   needs continent and DXCC entity (points and multipliers, *Reference contest* above), though
+   scoring is outside the first slice. Also open at that point, and since settled by the storage
+   decision below: whether contest QSOs skip lookup entirely, or are only not shown or awaited in
+   the panel.
+   Enrichment never blocks logging either way.
+   **Operator statement (2026-10-29), following:** "The contact details are also unnecessary -
+   basically, we can be minimalistic about the UI." The contest panel is **minimal**: no Name field
+   and no contacted-station details. It shows only what the exchange, the serial, duplicate and
+   segment warnings, and contest mode need. These statements settle the panel's display.
+   **Operator decision (2026-10-29), on storage:** "Actually, keeping the enrichment might be a good
+   idea (removing it bad) since one might want (probably will) the qso to be integrated into the
+   main logbook and online services' logbooks..." Contest QSOs are **enriched as any other QSO**:
+   the station lookup and the country data both run and are stored. Only the panel leaves them out.
+   This supersedes the first statement's "we don't need to do enrichment" for storage.
 8. **Received RS:** logged as heard, or defaulted (the rule makes RS optional). **Ruled 2026-10-28
    (operator):** a **default is supplied at entry**; if the operator amends it, the value **as
    heard** is logged. The default value itself is not yet set (a proposal would be the mode's
