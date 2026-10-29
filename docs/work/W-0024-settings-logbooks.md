@@ -1,7 +1,8 @@
 # W-0024 — Settings → Logbooks, slice 2
 
-**Status:** Selected for design — criteria proposed and reviewed 2026-10-29; an ADR (restart
-application and the transition contract) is required before coding; **no implementation authorised**
+**Status:** Selected for design — criteria proposed and reviewed 2026-10-29; the restart application
+and transition contract are decided in [ADR 0097](../decisions/0097-change-the-default-logbook-at-an-attended-restart.md)
+(Accepted 2026-10-29); **no implementation authorised**
 **Selected:** 2026-10-29 (operator: "Let's do 3 first as it is prereq for the contesting work")
 **Outcome:** The operator can choose which logbook in the active archive receives live contacts, and
 can describe each logbook, without any open tab silently logging into the previous one.
@@ -51,10 +52,13 @@ needs the further step listed under *Out of scope*.
 - **Who reads it.** `DELETE /v1/logbook/{id}` refuses the configured default
   (`internal/api/handler_logbook.go:179`). A normal completed FT8 exchange is logged to the logbook
   ID **pinned** on it; config's current default is only the fallback when none is pinned
-  (`cmd/smd/lifecycle_adapters.go:732-736`; also `internal/api/handler_ft8_qso.go:47`). So FT8 does
-  not re-read the default for each contact, but a run started from a stale tab carries that tab's
-  logbook. Phone / CW submits name a logbook explicitly (`POST /v1/qso?logbook=`,
-  `docs/v2-design/api-endpoints.md:109`), and the SPA takes that id from the station context.
+  (`cmd/smd/lifecycle_adapters.go:732-736`). The pin is the **daemon's** current default at session
+  start, through `currentStationIdentity` (`internal/api/handler_ft8_qso.go:45`), not the tab's
+  logbook. So FT8 does not re-read the default for each contact, and a run started from a stale tab
+  uses the new default while that tab still displays — and its Phone / CW submits go to — the old
+  one. (Corrected 2026-10-29; this line first said such a run carries the tab's logbook.) Phone / CW
+  submits name a logbook explicitly (`POST /v1/qso?logbook=`, `docs/v2-design/api-endpoints.md:109`),
+  and the SPA takes that id from the station context.
 - **Config publication is immediate.** An ordinary config update publishes the new snapshot in
   memory as soon as it is written (`internal/config/config.go:2463` onward). Writing the new default
   to config and calling it "restart-required" would therefore expose it to the running process
@@ -99,7 +103,9 @@ active archive whose callsign matches the current default's.
 | L5 | **Accepted:** descriptions for inactive archives deferred. |
 
 **Before coding:** an ADR records the restart-versus-live decision and the transition contract
-below. Implementation remains unapproved.
+below — recorded as [ADR 0097](../decisions/0097-change-the-default-logbook-at-an-attended-restart.md)
+(Accepted 2026-10-29), which also chooses the SM Cloud recovery path. Implementation remains
+unapproved.
 
 ## Transition contract (to define in the ADR)
 
@@ -176,7 +182,10 @@ redirected by this gap; their recovery is what can be stranded.
 8. **Busy, competing and unknown outcomes:** Set as default is refused while archive activation's
    busy conditions hold (an archive switch, an active FT8 run, armed TX, tune) and while another
    default change or activation is in progress; the daemon serialises them. A timed-out request is an
-   unknown outcome and the state is re-read, never reported as a failure or a success.
+   unknown outcome and the state is re-read, never reported as a failure or a success. Cancel,
+   Confirm and Retry cleanup name the request they act on. A delayed one is refused once that
+   request is resolved, and never touches a later request (ADR 0097, *Acceptance cases for
+   removal*).
 
 **Nearest confusable outcomes:** an open Operate tab still logging to the previous logbook; FT8
 contacts going to one logbook and Phone / CW to another; the running process adopting the new default
