@@ -1,6 +1,6 @@
 # W-0024 — Settings → Logbooks, slice 2
 
-**Status:** In implementation — slices 1–3b committed 2026-10-29 (see *Implementation progress*);
+**Status:** In implementation — slices 1–4 committed 2026-10-29 (see *Implementation progress*);
 the restart application and transition contract are decided in
 [ADR 0097](../decisions/0097-change-the-default-logbook-at-an-attended-restart.md) (Accepted
 2026-10-29). **Set as default is not released:** its daemon routes stay unregistered until slices 4
@@ -205,6 +205,7 @@ Each slice was test-first: failing tests reviewed before implementation, then re
 | 2 | `9eebb500` | SM Cloud prerequisite (ADR 0097 §5): adoption follows its marker, not the default; a claimed Home binding re-enables off the default; per-binding adopter state. |
 | 3a | `76295c98` | A default change applied at start (ADR 0097 §1): the config record and its tombstones, confirmation only by a durable write holding them, the durable archive-pointer write, the read-back matrix; activation and deletion refuse while a change is unresolved. |
 | 3b | `027d5845` | The request path (ADR 0097 §2–§3): FT8, rig and live-entry seals; the shared single flight with activation and deletion; withdrawal on a failed restart; Cancel / Confirm / Retry cleanup by request id; the status read. Its routes are **gated** (`api.DefaultChangeRoutesReleased` is false). |
+| 4 | `457c9ba2` | The stale-tab default guard (ADR 0097 §4): live requests name the default of the tab's established station context (`X-SM-Default-Logbook`), checked after the archive guard and before any side effect, outside the submit rate limiter. FT8 admission is refused on another default before the service is asked; `POST /v1/qso` naming the asserted logbook is live (refused unless effective, never retargeted, sealed while a change drains), any other logbook deliberate. `/v1/version` reports the served default; the app reloads on another default at boot and on every reconnect; first-run setup establishes it without a reload. `loadgen` reads it at startup. Routes still **gated**. |
 
 **CI budget (2026-10-29):** the race step's 10-minute per-package timeout failed CI on 3a and 3b
 (`cmd/smd`, `internal/archive`, an uncached `internal/database/sqlite`; no assertion failed).
@@ -215,8 +216,8 @@ the 20-minute budget); the next were `adoption` 119 s, `qsoservice` 109 s and `f
 108 s. The race step took 9 min 56 s and the whole job 18 min 15 s (budget 45). The follow-up
 removes `-count=1`, so caching resumes.
 
-**Next:** slice 4, the stale-tab guard (ADR 0097 §4); then slice 5, the confirmation (ADR 0097
-§4a). The routes are released only after both.
+**Next:** slice 5, the confirmation (ADR 0097 §4a, ADR 0087's policy for unlogged work). The
+routes stay gated until its confirmation flow is complete and reviewed.
 
 ## Out of scope
 

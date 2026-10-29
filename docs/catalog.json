@@ -362,7 +362,7 @@
       "audiences": ["operator", "contributor", "agent"],
       "topics": ["logbooks", "settings", "archives"],
       "scopes": ["frontend/app/src/lib/config/**", "internal/api/handler_logbook.go"],
-      "summary": "W-0024 is Settings → Logbooks slice 2: choosing which logbook in the active archive receives live contacts (Set as default) and logbook descriptions, without any open tab silently logging into the previous logbook; ADR 0097 accepted; slices 1–3b implemented, Set as default's routes gated until the stale-tab guard (slice 4) and the confirmation (slice 5)."
+      "summary": "W-0024 is Settings → Logbooks slice 2: choosing which logbook in the active archive receives live contacts (Set as default) and logbook descriptions, without any open tab silently logging into the previous logbook; ADR 0097 accepted; slices 1–4 implemented (the stale-tab guard included), Set as default's routes gated until the confirmation (slice 5) is complete and reviewed."
     },
     {
       "id": "work.dogfood-inbox",
