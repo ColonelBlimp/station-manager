@@ -16,7 +16,7 @@
 */
 
 import { isPlainObject, readJsonBody, safeFetch } from './_helpers';
-import { guardedFetch } from './archive-guard';
+import { boundDefault, liveFetch } from './archive-guard';
 
 export type Ft8TxOutcome =
     | { kind: 'ok' }
@@ -38,14 +38,18 @@ interface DaemonError {
 
 /** Arm (true) or disarm (false) the FT8 transmit path. */
 export async function armFt8Tx(armed: boolean, signal?: AbortSignal): Promise<Ft8TxOutcome> {
-    // Arming admits transmission, so it names the proven archive; disarming never
-    // waits on one (a stale tab must always be able to stop).
-    const fetched = await (armed ? guardedFetch : safeFetch)('/v1/ft8/tx/arm', {
+    // Arming admits transmission, so it names the proven archive and the bound
+    // default; disarming never waits on either (a stale tab must always be able
+    // to stop).
+    const init: RequestInit = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ armed }),
         signal,
-    });
+    };
+    const fetched = armed
+        ? await liveFetch('/v1/ft8/tx/arm', init, boundDefault())
+        : await safeFetch('/v1/ft8/tx/arm', init);
     if (!fetched.ok) {
         // Carry the fired-timeout marker outward so the seam can reconcile it.
         return fetched.kind === 'network'

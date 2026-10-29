@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { submitQso } from './qso';
 
+const LIVE_LOGBOOK = { id: 1, uuid: '01a187bc-0173-7649-8ff3-71db8170c309' };
+
 afterEach(() => vi.restoreAllMocks());
 
 function mockFetch(status: number, body: unknown): void {
@@ -26,7 +28,7 @@ describe('submitQso response decoding (F-03)', () => {
     it('201 stored → kind stored (no HTTP-mismatch warning)', async () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         mockFetch(201, { status: 'stored', uuid: UUID, id: 7 });
-        expect(await submitQso('<eor>', 1)).toEqual({
+        expect(await submitQso('<eor>', LIVE_LOGBOOK)).toEqual({
             kind: 'stored',
             uuid: UUID,
             archiveId: null,
@@ -37,27 +39,27 @@ describe('submitQso response decoding (F-03)', () => {
     it('200 duplicate → kind duplicate (no HTTP-mismatch warning)', async () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         mockFetch(200, { status: 'duplicate', uuid: UUID, id: 7 });
-        expect(await submitQso('<eor>', 1)).toEqual({ kind: 'duplicate', uuid: UUID });
+        expect(await submitQso('<eor>', LIVE_LOGBOOK)).toEqual({ kind: 'duplicate', uuid: UUID });
         expect(warn).not.toHaveBeenCalled();
     });
 
     it('an unknown 2xx status is malformed_response, not stored (preserves the draft)', async () => {
         mockFetch(200, { status: 'unexpected', uuid: UUID });
-        const out = await submitQso('<eor>', 1);
+        const out = await submitQso('<eor>', LIVE_LOGBOOK);
         expect(out.kind).toBe('server');
         expect((out as { code?: string }).code).toBe('malformed_response');
     });
 
     it('a 2xx with no status field is malformed_response', async () => {
         mockFetch(200, { uuid: UUID });
-        const out = await submitQso('<eor>', 1);
+        const out = await submitQso('<eor>', LIVE_LOGBOOK);
         expect(out.kind).toBe('server');
         expect((out as { code?: string }).code).toBe('malformed_response');
     });
 
     it('a successful body without a uuid is malformed_response', async () => {
         mockFetch(201, { status: 'stored', uuid: '' });
-        const out = await submitQso('<eor>', 1);
+        const out = await submitQso('<eor>', LIVE_LOGBOOK);
         expect(out.kind).toBe('server');
         expect((out as { code?: string }).code).toBe('malformed_response');
     });
@@ -67,7 +69,7 @@ describe('submitQso response decoding (F-03)', () => {
     it('classifies by body.status even when the HTTP code mismatches (200 + stored), and warns', async () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         mockFetch(200, { status: 'stored', uuid: UUID });
-        expect(await submitQso('<eor>', 1)).toEqual({
+        expect(await submitQso('<eor>', LIVE_LOGBOOK)).toEqual({
             kind: 'stored',
             uuid: UUID,
             archiveId: null,
@@ -79,21 +81,21 @@ describe('submitQso response decoding (F-03)', () => {
     it('classifies by body.status even when the HTTP code mismatches (201 + duplicate), and warns', async () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         mockFetch(201, { status: 'duplicate', uuid: UUID });
-        expect(await submitQso('<eor>', 1)).toEqual({ kind: 'duplicate', uuid: UUID });
+        expect(await submitQso('<eor>', LIVE_LOGBOOK)).toEqual({ kind: 'duplicate', uuid: UUID });
         expect(warn).toHaveBeenCalledOnce();
         expect(String(warn.mock.calls[0][0])).toContain('HTTP 201');
     });
 
     it('4xx → validation with the daemon code', async () => {
         mockFetch(400, { code: 'invalid_adif', message: 'bad' });
-        const out = await submitQso('<eor>', 1);
+        const out = await submitQso('<eor>', LIVE_LOGBOOK);
         expect(out.kind).toBe('validation');
         expect((out as { code?: string }).code).toBe('invalid_adif');
     });
 
     it('5xx → server with the daemon code', async () => {
         mockFetch(500, { code: 'db_error', message: 'boom' });
-        const out = await submitQso('<eor>', 1);
+        const out = await submitQso('<eor>', LIVE_LOGBOOK);
         expect(out.kind).toBe('server');
         expect((out as { code?: string }).code).toBe('db_error');
     });
@@ -105,7 +107,7 @@ describe('submitQso response decoding (F-03)', () => {
 describe('submitQso archive provenance', () => {
     it('carries the archive_id the daemon answered with', async () => {
         mockFetch(201, { status: 'stored', uuid: UUID, archive_id: 'arch-1' });
-        expect(await submitQso('<eor>', 1)).toEqual({
+        expect(await submitQso('<eor>', LIVE_LOGBOOK)).toEqual({
             kind: 'stored',
             uuid: UUID,
             archiveId: 'arch-1',
@@ -114,7 +116,7 @@ describe('submitQso archive provenance', () => {
 
     it.each([[undefined], [7], ['']])('an archive_id of %j is null', async (archive_id) => {
         mockFetch(201, { status: 'stored', uuid: UUID, archive_id });
-        const out = await submitQso('<eor>', 1);
+        const out = await submitQso('<eor>', LIVE_LOGBOOK);
         expect(out.kind === 'stored' ? out.archiveId : 'not stored').toBeNull();
     });
 });

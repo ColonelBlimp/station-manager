@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom/vitest';
-import { setBoundArchive } from '../lib/api/archive-guard';
-import { TEST_ARCHIVE } from './archive';
+import { setBoundArchive, setBoundDefault } from '../lib/api/archive-guard';
+import { TEST_ARCHIVE, TEST_DEFAULT_LOGBOOK } from './archive';
 import { bindArchiveStores } from '../lib/operate/archiveStores.svelte';
 
 // jsdom has no Web Animations API; Svelte 5 transitions (transition:fade)
@@ -40,3 +40,6 @@ if (typeof window !== 'undefined' && !window.matchMedia) {
 // stores are bound the same way (archiveStores.svelte.test.ts drives the rest).
 setBoundArchive(TEST_ARCHIVE);
 bindArchiveStores(TEST_ARCHIVE);
+// …and its station context established a default logbook, which live requests
+// assert (default-guard.test.ts drives the unbound state).
+setBoundDefault(TEST_DEFAULT_LOGBOOK);

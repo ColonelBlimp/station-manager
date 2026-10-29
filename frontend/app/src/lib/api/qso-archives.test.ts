@@ -222,11 +222,50 @@ describe('fetchDaemonIdentity', () => {
             instance: 'i1',
             archive: { id: 'a', label: 'Home', ownership: 'legacy' },
         });
-        expect(await fetchDaemonIdentity()).toEqual({ instance: 'i1', archiveId: 'a' });
+        expect(await fetchDaemonIdentity()).toEqual({
+            instance: 'i1',
+            archiveId: 'a',
+            defaultLogbookUuid: '',
+        });
     });
-    it('a daemon without an adopted archive reports an empty archive id', async () => {
+    it('reads the effective default logbook beside the archive (W-0024 slice 4)', async () => {
+        mockJSON(200, {
+            daemon: 'dev',
+            instance: 'i1',
+            archive: {
+                id: 'a',
+                label: 'Home',
+                ownership: 'legacy',
+                default_logbook_uuid: '01a187bc-0173-7649-8ff3-71db8170c309',
+            },
+        });
+        expect(await fetchDaemonIdentity()).toEqual({
+            instance: 'i1',
+            archiveId: 'a',
+            defaultLogbookUuid: '01a187bc-0173-7649-8ff3-71db8170c309',
+        });
+    });
+    it('a daemon without an adopted archive reports an empty archive id and no default', async () => {
         mockJSON(200, { daemon: 'dev', instance: 'i1' });
-        expect(await fetchDaemonIdentity()).toEqual({ instance: 'i1', archiveId: '' });
+        expect(await fetchDaemonIdentity()).toEqual({
+            instance: 'i1',
+            archiveId: '',
+            defaultLogbookUuid: '',
+        });
+    });
+    // An archive without default_logbook_uuid is a legacy or unconfigured daemon:
+    // '' (covered above). A field that is present but malformed proves nothing,
+    // so the identity is unreadable — the tab gates rather than guessing.
+    it.each([
+        ['not a string', 7],
+        ['not a UUID', 'home'],
+    ])('a default_logbook_uuid that is %s makes the identity unreadable', async (_name, v) => {
+        mockJSON(200, {
+            daemon: 'dev',
+            instance: 'i1',
+            archive: { id: 'a', label: 'Home', ownership: 'legacy', default_logbook_uuid: v },
+        });
+        expect(await fetchDaemonIdentity()).toBeNull();
     });
     it('is null when unreachable or malformed', async () => {
         vi.stubGlobal(

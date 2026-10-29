@@ -259,6 +259,44 @@ func withServedArchive(req *http.Request) *http.Request {
 	return req
 }
 
+// withLiveContext marks a request as coming from a tab with an established
+// station context on the test server: its archive and its default logbook
+// (ADR 0097 §4). A configured daemon has a default, so one is created at the
+// default id when the server has none yet.
+func withLiveContext(t *testing.T, srv *Server, req *http.Request) *http.Request {
+	t.Helper()
+	req.Header.Set(defaultLogbookHeader, ensureDefaultLogbook(t, srv))
+	return withServedArchive(req)
+}
+
+// ensureDefaultLogbook returns the effective default's UUID, creating the
+// logbook at the configured default id (with the configured callsign, so the
+// station identity FT8 resolves is unchanged) when there is none.
+func ensureDefaultLogbook(t *testing.T, srv *Server) string {
+	t.Helper()
+	ctx := context.Background()
+	id, uuid, err := srv.effectiveDefault(ctx)
+	if err != nil {
+		t.Fatalf("effective default: %v", err)
+	}
+	if uuid != "" {
+		return uuid
+	}
+	call := srv.cfg.Snapshot().LoggingStation.StationCallsign
+	if call == "" {
+		call = "G0TST"
+	}
+	got, err := srv.db.InsertLogbookWithContext(ctx, types.Logbook{Name: "Default", Callsign: call})
+	if err != nil || got != id {
+		t.Fatalf("seed the default logbook: id %d, want %d (err=%v)", got, id, err)
+	}
+	_, uuid, err = srv.effectiveDefault(ctx)
+	if err != nil || uuid == "" {
+		t.Fatalf("effective default after seeding: %q (err=%v)", uuid, err)
+	}
+	return uuid
+}
+
 // createTestLogbook creates a logbook via the handler and returns its ID.
 func createTestLogbook(t *testing.T, srv *Server, name, callsign string) int64 {
 	t.Helper()

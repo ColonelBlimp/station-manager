@@ -44,6 +44,9 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 		ID        string `json:"id"`
 		Label     string `json:"label"`
 		Ownership string `json:"ownership"`
+		// DefaultLogbookUUID is the default this generation serves (ADR 0097
+		// §4): a reconnecting tab compares it with the default it asserts.
+		DefaultLogbookUUID string `json:"default_logbook_uuid,omitempty"`
 	}
 	type versionResponse struct {
 		Daemon   string       `json:"daemon"`
@@ -63,6 +66,11 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 	if snap := s.cfg.Snapshot(); snap.ActiveQsoArchiveID != "" {
 		if a := snap.QsoArchiveByID(snap.ActiveQsoArchiveID); a != nil {
 			resp.Archive = &archiveInfo{ID: a.ID, Label: a.Label, Ownership: string(a.Ownership)}
+			if _, def, err := s.effectiveDefault(r.Context()); err == nil {
+				resp.Archive.DefaultLogbookUUID = def
+			} else {
+				s.logger.WarnWith().Err(err).Msg("failed to read the effective default logbook")
+			}
 		}
 	}
 

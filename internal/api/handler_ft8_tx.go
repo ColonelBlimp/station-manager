@@ -38,8 +38,9 @@ func (s *Server) handleFt8TxArm(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "missing_required_field", "armed is required", op)
 		return
 	}
-	// Arming admits transmission, so it is archive-guarded; disarming never is.
-	if *req.Armed && !s.checkArchive(w, r, op, true) {
+	// Arming admits transmission, so it is archive- and default-guarded;
+	// disarming never is.
+	if *req.Armed && (!s.checkArchive(w, r, op, true) || !s.checkDefault(w, r, op)) {
 		return
 	}
 	if err := s.ft8.ArmTx(*req.Armed); err != nil {

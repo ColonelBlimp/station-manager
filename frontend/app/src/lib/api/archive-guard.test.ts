@@ -25,6 +25,8 @@ import {
     unbagFt8Answerer,
 } from './ft8qso';
 
+const LIVE_LOGBOOK = { id: 1, uuid: '01a187bc-0173-7649-8ff3-71db8170c309' };
+
 // The client half of the archive request guard (ADR 0094 update; W-0021
 // "alpha.4 hold: fix design", revision 3). A request that acts on the archive or
 // admits transmission names the tab's proven archive; with no proven binding it
@@ -58,7 +60,7 @@ function stubFetch(status = 202, body: unknown = {}): void {
 }
 
 const guarded: [string, () => Promise<unknown>][] = [
-    ['submit', () => submitQso('<CALL:5>VK0YY<EOR>', 1)],
+    ['submit', () => submitQso('<CALL:5>VK0YY<EOR>', LIVE_LOGBOOK)],
     ['qso read for edit', () => fetchQso(QSO)],
     ['qso edit', () => patchQso(QSO, { comment: 'x' })],
     ['session export', () => exportSessionAdif([QSO])],

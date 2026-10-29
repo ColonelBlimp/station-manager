@@ -93,6 +93,7 @@ import {
     type StationContext,
 } from './lib/api/seams';
 import { submitQso } from './lib/api/qso';
+import { setBoundDefault } from './lib/api/archive-guard';
 import { formatAdifRecord } from './lib/utils/adif';
 import { resolveModeAndSubmode } from './lib/utils/mode';
 import { isValidMaidenhead } from './lib/validators/maidenhead';
@@ -244,6 +245,7 @@ const ctx: StationContext = {
     stationCallsign: '',
     operator: '',
     logbookId: 0,
+    logbookUuid: '',
     catEnabled: false,
     ft8Running: false,
     modeMappings: {},
@@ -311,6 +313,10 @@ function applyStationIdentity(operator: string, grid: string, stationCallsign: s
 
 function applyStationContext(c: StationContext): void {
     Object.assign(ctx, c);
+    // The established context owns the default (ADR 0097 §4): FT8 asserts it,
+    // and the submit pair is read from ctx alongside it. Set here and only
+    // here — first-run setup establishes it, a reconnect never refreshes it.
+    setBoundDefault(c.logbookUuid || null);
     // FT8/FT4 not served ⇒ no FT links and no FT view; set before the shell first
     // renders (setup.status leaves 'loading' after this). An unreached config says nothing.
     if (c.configOk) setFtEnabled(c.ft8Running);
@@ -451,14 +457,20 @@ setEntryGate(archiveEntryLock);
 // so the archive this tab records is provably the one these stores were built
 // against; every reconnect of the always-on stream compares against it and
 // reloads (or gates) when the daemon serves another archive.
-void bootArchiveScoped(async () => {
-    const [c] = await Promise.all([fetchStationContext(), loadArchives()]);
-    applyStationContext(c);
-    // First-run gate: only a REACHED config saying setup_complete=false shows
-    // setup — a daemon outage falls through to the fail-soft shell instead of
-    // greeting a configured operator with the welcome card.
-    setup.status = c.configOk && !c.setupComplete ? 'needed' : 'complete';
-});
+void bootArchiveScoped(
+    async () => {
+        const [c] = await Promise.all([fetchStationContext(), loadArchives()]);
+        applyStationContext(c);
+        // First-run gate: only a REACHED config saying setup_complete=false shows
+        // setup — a daemon outage falls through to the fail-soft shell instead of
+        // greeting a configured operator with the welcome card.
+        setup.status = c.configOk && !c.setupComplete ? 'needed' : 'complete';
+        return c;
+    },
+    // The context's default must be the one the daemon names; an unreached
+    // config holds no opinion.
+    (c) => (c.configOk ? c.logbookUuid : null)
+);
 
 // First-run save (injected per ADR 0045 — the setup module never imports
 // lib/api): PUT the callsign, then re-fetch + re-wire the station context so
@@ -560,7 +572,11 @@ setSubmit(async (q, opts) => {
         myGridSquare: ctx.myGrid || undefined,
     });
 
-    const out = await submitQso(adif, ctx.logbookId, { force: opts?.force });
+    const out = await submitQso(
+        adif,
+        { id: ctx.logbookId, uuid: ctx.logbookUuid },
+        { force: opts?.force }
+    );
     if (out.kind === 'stored') {
         // Filed under the archive whose daemon stored it (ADR 0094 update).
         fileSessionQso(out.archiveId, {

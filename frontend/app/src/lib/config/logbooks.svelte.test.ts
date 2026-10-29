@@ -105,7 +105,11 @@ function daemonHas(opts: {
         stationCallsign: '7Q5MLV',
         logbookId: 1,
     } as never);
-    vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i', archiveId: ARCHIVE });
+    vi.mocked(fetchDaemonIdentity).mockResolvedValue({
+        instance: 'i',
+        archiveId: ARCHIVE,
+        defaultLogbookUuid: '01a187bc-0173-7649-8ff3-71db8170c309',
+    });
     vi.mocked(fetchArchiveBindings).mockResolvedValue({
         kind: 'ok',
         bindings: {

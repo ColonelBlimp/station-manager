@@ -16,7 +16,7 @@
 
 import { enrichCallsign } from './enrichment';
 import { fetchContactHistory, type ContactHistory } from './contact-history';
-import { isPlainObject, readJsonBody, safeFetch } from './_helpers';
+import { isPlainObject, isUuidV7, readJsonBody, safeFetch } from './_helpers';
 
 /** Number-typed field with an older-daemon fallback. */
 function numOr(v: unknown, fallback: number): number {
@@ -135,6 +135,10 @@ export interface StationContext {
     stationCallsign: string;
     operator: string;
     logbookId: number;
+    /** The default logbook's UUID, read with its id (W-0024 slice 4): the pair
+     *  a live submit names and asserts. '' when absent or malformed — no usable
+     *  pair, so no live submit is sent. */
+    logbookUuid: string;
     catEnabled: boolean;
     /** Whether THIS daemon serves FT8/FT4 (`ft8_running`: it registered the FT8
      *  routes at startup). Not the saved switch `ft8_enabled`, which changes on
@@ -220,6 +224,11 @@ export interface StationContext {
     restoreRigOnModeSwitch: boolean;
 }
 
+// A logbook UUID as the daemon mints it, or '' — never a guessed identity.
+function uuidOrEmpty(v: unknown): string {
+    return isUuidV7(v) ? v : '';
+}
+
 export async function fetchStationContext(): Promise<StationContext> {
     const none: StationContext = {
         configOk: false,
@@ -228,6 +237,7 @@ export async function fetchStationContext(): Promise<StationContext> {
         stationCallsign: '',
         operator: '',
         logbookId: 0,
+        logbookUuid: '',
         catEnabled: false,
         ft8Running: false,
         modeMappings: {},
@@ -276,6 +286,7 @@ export async function fetchStationContext(): Promise<StationContext> {
         stationCallsign: str(ls.station_callsign),
         operator: str(ls.operator),
         logbookId: typeof lb.id === 'number' ? lb.id : 0,
+        logbookUuid: uuidOrEmpty(lb.uuid),
         catEnabled: br.enabled === true,
         ft8Running: body.ft8_running === true,
         modeMappings: toModeMappings(br.mode_mappings),

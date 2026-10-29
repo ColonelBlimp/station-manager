@@ -17,9 +17,11 @@ import {
 } from '../api/qso-archives';
 import { fetchDaemonInstance, waitForDaemonBack } from '../api/restart';
 import {
+    boundDefault,
     setArchiveBindingGate,
     setArchiveMismatchSink,
     setBoundArchive,
+    setDefaultMismatchSink,
 } from '../api/archive-guard';
 import {
     bindArchiveStores,
@@ -429,7 +431,10 @@ function endCheck(): void {
  * is fail-closed, not a deferred check) and a watch reloads the page as soon
  * as a daemon answers again, so a plain outage at boot heals itself.
  */
-export async function bootArchiveScoped<T>(reads: () => Promise<T>): Promise<T> {
+export async function bootArchiveScoped<T>(
+    reads: () => Promise<T>,
+    contextDefault?: (result: T) => string | null
+): Promise<T> {
     beginCheck(); // the shell may open inside `reads`; nothing is admitted until the bracket decides
     let before: DaemonIdentity | null;
     let result: T;
@@ -442,7 +447,17 @@ export async function bootArchiveScoped<T>(reads: () => Promise<T>): Promise<T> 
         endCheck();
     }
     if (before !== null && after !== null) {
-        if (before.instance === after.instance && before.archiveId === after.archiveId) {
+        // The station context read inside the bracket must name the default the
+        // daemon names (ADR 0097 §4): one established context, or none.
+        // null: the reads hold no opinion (an unreached config).
+        const mine = contextDefault?.(result) ?? null;
+        const contextAgrees = mine === null || mine === after.defaultLogbookUuid;
+        if (
+            before.instance === after.instance &&
+            before.archiveId === after.archiveId &&
+            before.defaultLogbookUuid === after.defaultLogbookUuid &&
+            contextAgrees
+        ) {
             bootIdentity = after;
             // The guarded requests may now name it (archive-guard.ts), and the
             // per-archive browser stores select it (archiveStores.svelte.ts).
@@ -522,6 +537,22 @@ export async function verifyArchiveGeneration(): Promise<void> {
         requestReload('The daemon now serves another archive; this page must reload to rebind.');
         return;
     }
+    reloadOnAnotherDefault(now);
+}
+
+/**
+ * The daemon's effective default against this tab's: the established station
+ * context's default (bound by main.ts), or before any context the boot
+ * identity's. Another one — none included — reloads; the assertion is never
+ * refreshed in place (ADR 0097 §4).
+ */
+function reloadOnAnotherDefault(now: DaemonIdentity): void {
+    const mine = boundDefault() ?? bootIdentity?.defaultLogbookUuid ?? '';
+    if (now.defaultLogbookUuid === mine) return;
+    toasts.info('The daemon now serves another default logbook. Reloading…');
+    requestReload(
+        'The daemon now serves another default logbook; this page must reload to rebind.'
+    );
 }
 
 /** The rig stream reopened (after its last failed retry). The daemon's served
@@ -551,6 +582,7 @@ export async function verifyAfterRigReconnect(): Promise<void> {
         requestReload('The daemon now serves another archive; this page must reload to rebind.');
         return;
     }
+    reloadOnAnotherDefault(now);
 }
 
 // The client half of the archive request guard: hold guarded requests while the
@@ -559,6 +591,15 @@ export async function verifyAfterRigReconnect(): Promise<void> {
 setArchiveBindingGate(() => archivesState.verifying || archivesState.switchUnresolved);
 setArchiveMismatchSink(() => {
     void verifyArchiveGeneration();
+});
+// The daemon refused a live request for naming another default: this tab's
+// context is stale. Reload at once (there is nothing to verify first).
+setDefaultMismatchSink(() => {
+    if (archivesState.switchUnresolved) return;
+    toasts.info('The daemon now serves another default logbook. Reloading…');
+    requestReload(
+        'The daemon now serves another default logbook; this page must reload to rebind.'
+    );
 });
 // A Session or engagement write that names another archive is the same signal,
 // raised before any request: verify at once instead of waiting for the always-on

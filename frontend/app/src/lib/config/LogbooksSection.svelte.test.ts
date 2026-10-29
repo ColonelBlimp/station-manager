@@ -64,7 +64,11 @@ function daemonHas(smcloudReason: string | null = '', counts: Record<number, num
         stationCallsign: '7Q5MLV',
         logbookId: 1,
     } as never);
-    vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i', archiveId: 'arch-a' });
+    vi.mocked(fetchDaemonIdentity).mockResolvedValue({
+        instance: 'i',
+        archiveId: 'arch-a',
+        defaultLogbookUuid: '01a187bc-0173-7649-8ff3-71db8170c309',
+    });
     vi.mocked(fetchArchiveBindings).mockResolvedValue({
         kind: 'ok',
         bindings: {

@@ -212,6 +212,14 @@ export async function readJsonBody(response: Response): Promise<unknown> {
  * in this codebase is `{...}`, never `[...]`. If a future endpoint
  * returns a bare array at the top level, give it its own guard.
  */
+/** A UUIDv7 as the daemon mints archive and logbook identities. */
+export function isUuidV7(v: unknown): v is string {
+    return (
+        typeof v === 'string' &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v)
+    );
+}
+
 export function isPlainObject(value: unknown): value is Record<string, unknown> {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
 }

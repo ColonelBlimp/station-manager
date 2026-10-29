@@ -260,11 +260,18 @@ func (s *Server) handleSubmitQso(w http.ResponseWriter, r *http.Request) {
 	// is left alone so imported QSOs keep their own QSL data.
 	rec.ApplyQslDefaults(s.cfg.Snapshot().Qsl)
 
-	// A live submission — to the effective default — is admitted through the
-	// live-entry gate a default change seals (ADR 0097 §2 step 4); one naming
-	// another logbook is a deliberate operation and is never refused there.
+	// A live submission — naming the default the tab asserts, which
+	// requireLiveSubmit proved effective — is admitted through the live-entry
+	// gate a default change seals (ADR 0097 §2 step 4); one naming another
+	// logbook is a deliberate operation and is never refused there.
 	if s.liveEntry != nil {
-		done, ok := s.liveEntry.Admit(logbookID == s.cfg.Snapshot().DefaultLogbookID)
+		live, classified := submitClassifiedLive(r)
+		if !classified {
+			s.writeServerError(w, op, errors.New(op).WithMsg("submit served without the default guard"),
+				"submit_failed", "QSO submit failed")
+			return
+		}
+		done, ok := s.liveEntry.Admit(live)
 		if !ok {
 			s.writeError(w, http.StatusConflict, "default_change_pending",
 				"the default logbook is changing and the daemon is restarting; nothing was logged — log it again once the page reloads", op)

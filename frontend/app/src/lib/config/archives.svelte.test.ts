@@ -18,7 +18,9 @@ import {
     fetchQsoArchives,
 } from '../api/qso-archives';
 import { fetchDaemonInstance, waitForDaemonBack } from '../api/restart';
-import { boundArchive, guardedFetch } from '../api/archive-guard';
+import { boundArchive, guardedFetch, setBoundDefault } from '../api/archive-guard';
+import { submitQso } from '../api/qso';
+import { startFt8Cq } from '../api/ft8qso';
 import {
     bindArchiveStores,
     sessionActionBlock,
@@ -49,6 +51,7 @@ import {
     _setReloadForTests,
 } from './archives.svelte';
 import { toastsState, _resetForTests as resetToasts } from '../ui/toasts.svelte';
+import type { DaemonIdentity } from '../api/qso-archives';
 import { draft, clearDraft, submitState } from '../operate/qso.svelte';
 import { installBrowserStorageSpies } from '../utils/browserStorageSpies.fixture';
 
@@ -59,6 +62,11 @@ import { installBrowserStorageSpies } from '../utils/browserStorageSpies.fixture
     restart is awaited by the new-instance signal; an ambiguous timeout is never
     "failed".
 */
+
+// Each archive's default logbook, as a configured daemon reports it beside the
+// archive (W-0024 slice 4). '' is reserved for unconfigured or legacy daemons.
+const HOME_DEFAULT = '01a187bc-0173-7649-8ff3-71db8170c309';
+const CONTEST_DEFAULT = '01a187bc-0300-7000-8000-000000000003';
 
 const HOME = {
     id: 'a',
@@ -89,6 +97,9 @@ const hasToast = (level: string, re: RegExp): boolean =>
     toastsState.items.some((t) => t.level === level && re.test(t.message));
 
 beforeEach(() => {
+    // These store tests load no station context: the boot identity is the
+    // default baseline unless a test binds one (the slice-4 block below).
+    setBoundDefault(null);
     vi.mocked(fetchQsoArchives).mockReset();
     vi.mocked(createQsoArchive).mockReset();
     vi.mocked(activateQsoArchive).mockReset();
@@ -585,15 +596,27 @@ describe('automatic rebind reloads', () => {
         // The boot bracket straddling a change.
         _resetArchivesForTests();
         vi.mocked(fetchDaemonIdentity)
-            .mockResolvedValueOnce({ instance: 'i1', archiveId: 'a' })
-            .mockResolvedValueOnce({ instance: 'i2', archiveId: 'b' });
+            .mockResolvedValueOnce({
+                instance: 'i1',
+                archiveId: 'a',
+                defaultLogbookUuid: HOME_DEFAULT,
+            })
+            .mockResolvedValueOnce({
+                instance: 'i2',
+                archiveId: 'b',
+                defaultLogbookUuid: CONTEST_DEFAULT,
+            });
         await bootArchiveScoped(() => Promise.resolve(0));
         expect(reloads).toBe(3);
         expect(draft.callsign).toBe('ZS6BOS'); // never saved, only lost to the real reload
     });
 
     it('V10 a rig reconnect with an unreadable identity is retried, then gates', async () => {
-        _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
+        _setBootIdentityForTests({
+            instance: 'i1',
+            archiveId: 'a',
+            defaultLogbookUuid: HOME_DEFAULT,
+        });
         vi.mocked(fetchDaemonIdentity).mockResolvedValue(null);
         await verifyAfterRigReconnect();
         expect(fetchDaemonIdentity).toHaveBeenCalledTimes(3);
@@ -603,17 +626,33 @@ describe('automatic rebind reloads', () => {
     });
 
     it('V10 a rig reconnect to another archive reloads', async () => {
-        _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
+        _setBootIdentityForTests({
+            instance: 'i1',
+            archiveId: 'a',
+            defaultLogbookUuid: HOME_DEFAULT,
+        });
         draft.callsign = 'ZS6BOS';
-        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i2', archiveId: 'b' });
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({
+            instance: 'i2',
+            archiveId: 'b',
+            defaultLogbookUuid: CONTEST_DEFAULT,
+        });
         await verifyAfterRigReconnect();
         expect(reloads).toBe(1);
         expect(archivesState.switchUnresolved).toBe(true);
     });
 
     it('V10 a rig reconnect to the same archive changes nothing, a restart included', async () => {
-        _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
-        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i2', archiveId: 'a' });
+        _setBootIdentityForTests({
+            instance: 'i1',
+            archiveId: 'a',
+            defaultLogbookUuid: HOME_DEFAULT,
+        });
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({
+            instance: 'i2',
+            archiveId: 'a',
+            defaultLogbookUuid: HOME_DEFAULT,
+        });
         await verifyAfterRigReconnect();
         expect(archivesState.switchUnresolved).toBe(false);
         expect(reloads).toBe(0);
@@ -629,23 +668,43 @@ describe('automatic rebind reloads', () => {
 
 describe('verifyArchiveGeneration — every tab rebinds on reconnect', () => {
     it('the same archive after a reconnect changes nothing', async () => {
-        _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
-        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i2', archiveId: 'a' });
+        _setBootIdentityForTests({
+            instance: 'i1',
+            archiveId: 'a',
+            defaultLogbookUuid: HOME_DEFAULT,
+        });
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({
+            instance: 'i2',
+            archiveId: 'a',
+            defaultLogbookUuid: HOME_DEFAULT,
+        });
         await verifyArchiveGeneration();
         expect(reloads).toBe(0);
         expect(archivesState.switchUnresolved).toBe(false);
     });
 
     it('another archive served after a reconnect reloads this tab', async () => {
-        _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
-        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i2', archiveId: 'b' });
+        _setBootIdentityForTests({
+            instance: 'i1',
+            archiveId: 'a',
+            defaultLogbookUuid: HOME_DEFAULT,
+        });
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({
+            instance: 'i2',
+            archiveId: 'b',
+            defaultLogbookUuid: CONTEST_DEFAULT,
+        });
         await verifyArchiveGeneration();
         expect(reloads).toBe(1);
         expect(hasToast('info', /serves another archive/)).toBe(true);
     });
 
     it('an unreadable identity after retries gates the tab (fail closed)', async () => {
-        _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
+        _setBootIdentityForTests({
+            instance: 'i1',
+            archiveId: 'a',
+            defaultLogbookUuid: HOME_DEFAULT,
+        });
         vi.mocked(fetchDaemonIdentity).mockResolvedValue(null);
         await verifyArchiveGeneration();
         expect(fetchDaemonIdentity).toHaveBeenCalledTimes(3);
@@ -656,10 +715,16 @@ describe('verifyArchiveGeneration — every tab rebinds on reconnect', () => {
     });
 
     it('a transient read failure is retried before gating', async () => {
-        _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
-        vi.mocked(fetchDaemonIdentity)
-            .mockResolvedValueOnce(null)
-            .mockResolvedValueOnce({ instance: 'i2', archiveId: 'a' });
+        _setBootIdentityForTests({
+            instance: 'i1',
+            archiveId: 'a',
+            defaultLogbookUuid: HOME_DEFAULT,
+        });
+        vi.mocked(fetchDaemonIdentity).mockResolvedValueOnce(null).mockResolvedValueOnce({
+            instance: 'i2',
+            archiveId: 'a',
+            defaultLogbookUuid: HOME_DEFAULT,
+        });
         await verifyArchiveGeneration();
         expect(archivesState.switchUnresolved).toBe(false);
         expect(reloads).toBe(0);
@@ -669,7 +734,11 @@ describe('verifyArchiveGeneration — every tab rebinds on reconnect', () => {
         vi.mocked(fetchDaemonIdentity).mockResolvedValue(null);
         vi.mocked(waitForDaemonBack).mockResolvedValue(false);
         await bootArchiveScoped(() => Promise.resolve());
-        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i2', archiveId: 'b' });
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({
+            instance: 'i2',
+            archiveId: 'b',
+            defaultLogbookUuid: CONTEST_DEFAULT,
+        });
         await verifyArchiveGeneration();
         expect(archivesState.switchUnresolved).toBe(true);
     });
@@ -677,21 +746,37 @@ describe('verifyArchiveGeneration — every tab rebinds on reconnect', () => {
 
 describe('bootArchiveScoped — the identity is bracketed around the archive-scoped reads', () => {
     it('two agreeing reads record the identity the stores were built against', async () => {
-        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i1', archiveId: 'a' });
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({
+            instance: 'i1',
+            archiveId: 'a',
+            defaultLogbookUuid: HOME_DEFAULT,
+        });
         const reads = vi.fn(() => Promise.resolve('ctx'));
         expect(await bootArchiveScoped(reads)).toBe('ctx');
         expect(reads).toHaveBeenCalledTimes(1);
         expect(fetchDaemonIdentity).toHaveBeenCalledTimes(2);
         // Recorded: a later reconnect on the same archive changes nothing.
-        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i9', archiveId: 'a' });
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({
+            instance: 'i9',
+            archiveId: 'a',
+            defaultLogbookUuid: HOME_DEFAULT,
+        });
         await verifyArchiveGeneration();
         expect(reloads).toBe(0);
     });
 
     it('a boot that straddles a switch (identity differs across the reads) reloads at once', async () => {
         vi.mocked(fetchDaemonIdentity)
-            .mockResolvedValueOnce({ instance: 'i1', archiveId: 'a' })
-            .mockResolvedValueOnce({ instance: 'i2', archiveId: 'b' });
+            .mockResolvedValueOnce({
+                instance: 'i1',
+                archiveId: 'a',
+                defaultLogbookUuid: HOME_DEFAULT,
+            })
+            .mockResolvedValueOnce({
+                instance: 'i2',
+                archiveId: 'b',
+                defaultLogbookUuid: CONTEST_DEFAULT,
+            });
         await bootArchiveScoped(() => Promise.resolve());
         expect(reloads).toBe(1);
         expect(hasToast('info', /changed while the page was loading/)).toBe(true);
@@ -699,15 +784,27 @@ describe('bootArchiveScoped — the identity is bracketed around the archive-sco
 
     it('a plain restart during the boot (instance differs, same archive) also reloads: nothing is proven', async () => {
         vi.mocked(fetchDaemonIdentity)
-            .mockResolvedValueOnce({ instance: 'i1', archiveId: 'a' })
-            .mockResolvedValueOnce({ instance: 'i2', archiveId: 'a' });
+            .mockResolvedValueOnce({
+                instance: 'i1',
+                archiveId: 'a',
+                defaultLogbookUuid: HOME_DEFAULT,
+            })
+            .mockResolvedValueOnce({
+                instance: 'i2',
+                archiveId: 'a',
+                defaultLogbookUuid: HOME_DEFAULT,
+            });
         await bootArchiveScoped(() => Promise.resolve());
         expect(reloads).toBe(1);
     });
 
     it('an unreadable identity on either side LATCHES the gate at once (no reconnect needed), then reloads when a daemon answers', async () => {
         vi.mocked(fetchDaemonIdentity)
-            .mockResolvedValueOnce({ instance: 'i1', archiveId: 'a' })
+            .mockResolvedValueOnce({
+                instance: 'i1',
+                archiveId: 'a',
+                defaultLogbookUuid: HOME_DEFAULT,
+            })
             .mockResolvedValue(null); // the trailing read fails, retries included
         vi.mocked(waitForDaemonBack).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
         await bootArchiveScoped(() => Promise.resolve());
@@ -733,22 +830,30 @@ describe('bootArchiveScoped — the identity is bracketed around the archive-sco
 
 describe('the gate while a verification is pending, and latching before a reload', () => {
     it('operations are refused while the reconnect identity check is in flight', async () => {
-        _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
-        let release: (v: { instance: string; archiveId: string }) => void = () => {};
+        _setBootIdentityForTests({
+            instance: 'i1',
+            archiveId: 'a',
+            defaultLogbookUuid: HOME_DEFAULT,
+        });
+        let release: (v: DaemonIdentity) => void = () => {};
         vi.mocked(fetchDaemonIdentity).mockReturnValue(new Promise((r) => (release = r)));
         const pending = verifyArchiveGeneration();
         await Promise.resolve();
         expect(archivesState.verifying).toBe(true);
         expect(archiveSwitchGate()).toMatch(/confirming which archive/);
-        release({ instance: 'i1', archiveId: 'a' });
+        release({ instance: 'i1', archiveId: 'a', defaultLogbookUuid: HOME_DEFAULT });
         await pending;
         expect(archivesState.verifying).toBe(false);
         expect(archiveSwitchGate()).toBeNull();
     });
 
     it('an older check settling cannot reopen admission while a newer one is still pending', async () => {
-        _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
-        const releases: ((v: { instance: string; archiveId: string }) => void)[] = [];
+        _setBootIdentityForTests({
+            instance: 'i1',
+            archiveId: 'a',
+            defaultLogbookUuid: HOME_DEFAULT,
+        });
+        const releases: ((v: DaemonIdentity) => void)[] = [];
         vi.mocked(fetchDaemonIdentity).mockImplementation(
             () => new Promise((r) => releases.push(r))
         );
@@ -756,16 +861,20 @@ describe('the gate while a verification is pending, and latching before a reload
         const second = verifyArchiveGeneration();
         await Promise.resolve();
         expect(releases).toHaveLength(2);
-        releases[0]({ instance: 'i1', archiveId: 'a' }); // the older check: same archive
+        releases[0]({ instance: 'i1', archiveId: 'a', defaultLogbookUuid: HOME_DEFAULT }); // the older check: same archive
         await first;
         expect(archiveSwitchGate()).not.toBeNull(); // the newer check is still reading
-        releases[1]({ instance: 'i2', archiveId: 'b' }); // the newer check: the replacement daemon
+        releases[1]({ instance: 'i2', archiveId: 'b', defaultLogbookUuid: CONTEST_DEFAULT }); // the newer check: the replacement daemon
         await second;
         expect(reloads).toBe(1);
     });
 
     it('operations are refused for the whole boot bracket, including while the shell opens inside it', async () => {
-        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i1', archiveId: 'a' });
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({
+            instance: 'i1',
+            archiveId: 'a',
+            defaultLogbookUuid: HOME_DEFAULT,
+        });
         let gateInsideReads: string | null = 'unset';
         await bootArchiveScoped(() => {
             gateInsideReads = archiveSwitchGate();
@@ -795,8 +904,16 @@ describe('the gate while a verification is pending, and latching before a reload
     });
 
     it('a changed archive on reconnect latches before its reload too', async () => {
-        _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
-        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i2', archiveId: 'b' });
+        _setBootIdentityForTests({
+            instance: 'i1',
+            archiveId: 'a',
+            defaultLogbookUuid: HOME_DEFAULT,
+        });
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({
+            instance: 'i2',
+            archiveId: 'b',
+            defaultLogbookUuid: CONTEST_DEFAULT,
+        });
         let latchedAtReload = false;
         _setReloadForTests(() => {
             latchedAtReload = archivesState.switchUnresolved;
@@ -973,15 +1090,27 @@ describe('the New archive draft', () => {
 // name the archive the boot bracket PROVED — and only that one.
 describe('the archive request guard follows the proven binding', () => {
     it('an agreeing boot bracket binds the guard to that archive', async () => {
-        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i1', archiveId: 'a' });
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({
+            instance: 'i1',
+            archiveId: 'a',
+            defaultLogbookUuid: HOME_DEFAULT,
+        });
         await bootArchiveScoped(() => Promise.resolve());
         expect(boundArchive()).toBe('a');
     });
 
     it('a boot that straddles a switch binds nothing', async () => {
         vi.mocked(fetchDaemonIdentity)
-            .mockResolvedValueOnce({ instance: 'i1', archiveId: 'a' })
-            .mockResolvedValueOnce({ instance: 'i2', archiveId: 'b' });
+            .mockResolvedValueOnce({
+                instance: 'i1',
+                archiveId: 'a',
+                defaultLogbookUuid: HOME_DEFAULT,
+            })
+            .mockResolvedValueOnce({
+                instance: 'i2',
+                archiveId: 'b',
+                defaultLogbookUuid: CONTEST_DEFAULT,
+            });
         await bootArchiveScoped(() => Promise.resolve());
         expect(boundArchive()).toBeNull();
     });
@@ -994,7 +1123,11 @@ describe('the archive request guard follows the proven binding', () => {
     });
 
     it('holds guarded requests while a reconnect check is pending or a switch is unresolved', async () => {
-        _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
+        _setBootIdentityForTests({
+            instance: 'i1',
+            archiveId: 'a',
+            defaultLogbookUuid: HOME_DEFAULT,
+        });
         const fetchSpy = vi.fn(() => Promise.resolve(new Response('{}', { status: 200 })));
         vi.stubGlobal('fetch', fetchSpy);
         try {
@@ -1013,7 +1146,11 @@ describe('the archive request guard follows the proven binding', () => {
     });
 
     it("the daemon's archive_mismatch verifies the archive and reloads onto the new one", async () => {
-        _setBootIdentityForTests({ instance: 'i1', archiveId: 'a' });
+        _setBootIdentityForTests({
+            instance: 'i1',
+            archiveId: 'a',
+            defaultLogbookUuid: HOME_DEFAULT,
+        });
         vi.stubGlobal(
             'fetch',
             vi.fn(() =>
@@ -1024,7 +1161,11 @@ describe('the archive request guard follows the proven binding', () => {
                 )
             )
         );
-        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i2', archiveId: 'b' });
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({
+            instance: 'i2',
+            archiveId: 'b',
+            defaultLogbookUuid: CONTEST_DEFAULT,
+        });
         try {
             await guardedFetch('/v1/qso/x', { method: 'PATCH' });
             for (let i = 0; i < 10; i++) await Promise.resolve();
@@ -1061,7 +1202,11 @@ describe('the per-archive stores follow the proven binding', () => {
     });
 
     it('an agreeing boot binds the stores: the archive list loads, the legacy key goes', async () => {
-        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i1', archiveId: A });
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({
+            instance: 'i1',
+            archiveId: A,
+            defaultLogbookUuid: HOME_DEFAULT,
+        });
         await bootArchiveScoped(() => Promise.resolve());
         expect(storesArchive()).toBe(A);
         expect(session.qsos.map((q) => q.callsign)).toEqual(['ZS4JAN']);
@@ -1070,8 +1215,16 @@ describe('the per-archive stores follow the proven binding', () => {
 
     it('a boot that straddles a switch binds nothing and keeps the legacy key', async () => {
         vi.mocked(fetchDaemonIdentity)
-            .mockResolvedValueOnce({ instance: 'i1', archiveId: A })
-            .mockResolvedValueOnce({ instance: 'i2', archiveId: B });
+            .mockResolvedValueOnce({
+                instance: 'i1',
+                archiveId: A,
+                defaultLogbookUuid: HOME_DEFAULT,
+            })
+            .mockResolvedValueOnce({
+                instance: 'i2',
+                archiveId: B,
+                defaultLogbookUuid: CONTEST_DEFAULT,
+            });
         await bootArchiveScoped(() => Promise.resolve());
         expect(storesArchive()).toBeNull();
         expect(session.qsos).toEqual([]);
@@ -1087,7 +1240,11 @@ describe('the per-archive stores follow the proven binding', () => {
     });
 
     it('holds Session actions while a check is pending or a switch is unresolved', async () => {
-        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i1', archiveId: A });
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({
+            instance: 'i1',
+            archiveId: A,
+            defaultLogbookUuid: HOME_DEFAULT,
+        });
         await bootArchiveScoped(() => Promise.resolve());
         expect(sessionActionBlock()).toBeNull();
         archivesState.verifying = true;
@@ -1098,10 +1255,18 @@ describe('the per-archive stores follow the proven binding', () => {
     });
 
     it('a store write naming another archive starts verification at once, which reloads', async () => {
-        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i1', archiveId: A });
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({
+            instance: 'i1',
+            archiveId: A,
+            defaultLogbookUuid: HOME_DEFAULT,
+        });
         await bootArchiveScoped(() => Promise.resolve());
         vi.mocked(fetchDaemonIdentity).mockClear();
-        vi.mocked(fetchDaemonIdentity).mockResolvedValue({ instance: 'i2', archiveId: B });
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({
+            instance: 'i2',
+            archiveId: B,
+            defaultLogbookUuid: CONTEST_DEFAULT,
+        });
         fileSessionQso(B, {
             uuid: 'c-1',
             callsign: 'VK0YY',
@@ -1118,5 +1283,178 @@ describe('the per-archive stores follow the proven binding', () => {
         for (let i = 0; i < 10; i++) await Promise.resolve();
         expect(reloads).toBe(1);
         expect(session.qsos.map((q) => q.callsign)).toEqual(['ZS4JAN']);
+    });
+});
+
+/*
+    W-0024 slice 4 (ADR 0097 §4): the default logbook is part of what a tab
+    proves. The tab's default is its station context's (bound for FT8 by the
+    context, alongside the submit pair); a reconnect compares the daemon's
+    effective default with it, as it compares the archive. Another default
+    reloads the tab; an unreadable or malformed one gates it; while any check
+    is pending live requests are held; the daemon's default_logbook_mismatch
+    reloads at once.
+*/
+describe('the default logbook in the proven identity', () => {
+    const B = '01a187bc-0200-7000-8000-000000000002';
+    const LIVE = { id: 1, uuid: HOME_DEFAULT };
+
+    function stubLiveFetch(status = 201, body: unknown = { status: 'stored', uuid: 'u1' }) {
+        const sent: { url: string; defaultLogbook: string | null }[] = [];
+        vi.stubGlobal(
+            'fetch',
+            vi.fn((input: string, init?: RequestInit) => {
+                sent.push({
+                    url: input,
+                    defaultLogbook: new Headers(init?.headers).get('X-SM-Default-Logbook'),
+                });
+                return Promise.resolve(
+                    new Response(JSON.stringify(body), {
+                        status,
+                        headers: { 'Content-Type': 'application/json' },
+                    })
+                );
+            })
+        );
+        return sent;
+    }
+
+    // A configured tab: booted on Home, its station context's default bound.
+    async function bootConfigured(): Promise<void> {
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({
+            instance: 'i1',
+            archiveId: 'a',
+            defaultLogbookUuid: HOME_DEFAULT,
+        });
+        await bootArchiveScoped(() => Promise.resolve());
+        setBoundDefault(HOME_DEFAULT);
+    }
+
+    afterEach(() => {
+        setBoundDefault(null);
+        vi.unstubAllGlobals();
+    });
+
+    it('a reconnect that finds another default on the same archive reloads', async () => {
+        await bootConfigured();
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({
+            instance: 'i2',
+            archiveId: 'a',
+            defaultLogbookUuid: B,
+        });
+        await verifyArchiveGeneration();
+        expect(reloads).toBe(1);
+        expect(hasToast('info', /default logbook/)).toBe(true);
+    });
+
+    it('a rig reconnect that finds another default reloads', async () => {
+        await bootConfigured();
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({
+            instance: 'i2',
+            archiveId: 'a',
+            defaultLogbookUuid: B,
+        });
+        await verifyAfterRigReconnect();
+        expect(reloads).toBe(1);
+    });
+
+    it('a restart with the same archive and default changes nothing', async () => {
+        await bootConfigured();
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({
+            instance: 'i2',
+            archiveId: 'a',
+            defaultLogbookUuid: HOME_DEFAULT,
+        });
+        await verifyArchiveGeneration();
+        await verifyAfterRigReconnect();
+        expect(reloads).toBe(0);
+        expect(archivesState.switchUnresolved).toBe(false);
+    });
+
+    it('a reconnect that finds the default gone (none named) reloads, never adopts', async () => {
+        await bootConfigured();
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({
+            instance: 'i2',
+            archiveId: 'a',
+            defaultLogbookUuid: '',
+        });
+        await verifyArchiveGeneration();
+        expect(reloads).toBe(1);
+    });
+
+    it('first run: the context established by setup is what a reconnect compares', async () => {
+        // Booted unconfigured: no default named, none bound.
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({
+            instance: 'i1',
+            archiveId: 'a',
+            defaultLogbookUuid: '',
+        });
+        await bootArchiveScoped(() => Promise.resolve());
+        // Setup seeds the default; the re-fetched context binds it (no reload).
+        setBoundDefault(HOME_DEFAULT);
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue({
+            instance: 'i1',
+            archiveId: 'a',
+            defaultLogbookUuid: HOME_DEFAULT,
+        });
+        await verifyArchiveGeneration();
+        expect(reloads).toBe(0);
+        expect(archivesState.switchUnresolved).toBe(false);
+    });
+
+    it('a boot whose two reads disagree on the default reloads', async () => {
+        vi.mocked(fetchDaemonIdentity)
+            .mockResolvedValueOnce({
+                instance: 'i1',
+                archiveId: 'a',
+                defaultLogbookUuid: HOME_DEFAULT,
+            })
+            .mockResolvedValueOnce({ instance: 'i1', archiveId: 'a', defaultLogbookUuid: B });
+        await bootArchiveScoped(() => Promise.resolve());
+        expect(reloads).toBe(1);
+    });
+
+    it('a failed reconnect check gates live requests: nothing is sent', async () => {
+        await bootConfigured();
+        vi.mocked(fetchDaemonIdentity).mockResolvedValue(null);
+        await verifyArchiveGeneration();
+        expect(archivesState.switchUnresolved).toBe(true);
+        const sent = stubLiveFetch();
+        await submitQso('<CALL:5>VK0YY<EOR>', LIVE);
+        await startFt8Cq(1500, 14.074);
+        expect(sent).toHaveLength(0);
+    });
+
+    it('overlapping checks: live requests are held until the last settles, which finds B and reloads', async () => {
+        await bootConfigured();
+        const releases: ((v: DaemonIdentity) => void)[] = [];
+        vi.mocked(fetchDaemonIdentity).mockImplementation(
+            () => new Promise((r) => releases.push(r))
+        );
+        const first = verifyArchiveGeneration();
+        const second = verifyArchiveGeneration();
+        await Promise.resolve();
+        releases[0]({ instance: 'i1', archiveId: 'a', defaultLogbookUuid: HOME_DEFAULT });
+        await first;
+        const sent = stubLiveFetch();
+        await submitQso('<CALL:5>VK0YY<EOR>', LIVE);
+        await startFt8Cq(1500, 14.074);
+        expect(sent).toHaveLength(0); // the newer check is still reading
+        releases[1]({ instance: 'i2', archiveId: 'a', defaultLogbookUuid: B });
+        await second;
+        expect(reloads).toBe(1);
+    });
+
+    it('a daemon default_logbook_mismatch reloads the tab once and is not retried', async () => {
+        await bootConfigured();
+        const sent = stubLiveFetch(409, {
+            code: 'default_logbook_mismatch',
+            message: 'nothing was logged',
+        });
+        await submitQso('<CALL:5>VK0YY<EOR>', LIVE);
+        for (let i = 0; i < 10; i++) await Promise.resolve();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(sent).toHaveLength(1);
+        expect(reloads).toBe(1);
     });
 });

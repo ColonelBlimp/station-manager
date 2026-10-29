@@ -115,7 +115,7 @@ type result struct {
 // doRequest runs a single HTTP call and emits a result. Centralising
 // the do-and-time pattern means each per-iteration step in mixed mode
 // stays a one-liner and the keepalive-conn drain is consistent.
-func doRequest(ctx context.Context, c *http.Client, method, url, ct, body, archiveID, endpoint string, results chan<- result) {
+func doRequest(ctx context.Context, c *http.Client, method, url, ct, body string, id targetIdentity, endpoint string, results chan<- result) {
 	var reader *bytes.Buffer
 	if body != "" {
 		reader = bytes.NewBufferString(body)
@@ -129,8 +129,11 @@ func doRequest(ctx context.Context, c *http.Client, method, url, ct, body, archi
 	if ct != "" {
 		req.Header.Set("Content-Type", ct)
 	}
-	if archiveID != "" {
-		req.Header.Set("X-SM-Archive-Id", archiveID)
+	if id.ArchiveID != "" {
+		req.Header.Set("X-SM-Archive-Id", id.ArchiveID)
+	}
+	if id.DefaultLogbook != "" {
+		req.Header.Set("X-SM-Default-Logbook", id.DefaultLogbook)
 	}
 
 	start := time.Now()
@@ -144,33 +147,6 @@ func doRequest(ctx context.Context, c *http.Client, method, url, ct, body, archi
 	_, _ = io.Copy(io.Discard, resp.Body)
 	_ = resp.Body.Close()
 	results <- result{endpoint: endpoint, status: resp.StatusCode, latency: elapsed}
-}
-
-// servedArchive reads the archive the target daemon serves, once, so every submit
-// can name it in X-SM-Archive-Id: the daemon refuses a QSO write that does not
-// prove which archive it is meant for.
-func servedArchive(ctx context.Context, c *http.Client, target string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target+"/v1/version", nil)
-	if err != nil {
-		return "", err
-	}
-	resp, err := c.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	var v struct {
-		Archive *struct {
-			ID string `json:"id"`
-		} `json:"archive"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
-		return "", err
-	}
-	if v.Archive == nil || v.Archive.ID == "" {
-		return "", fmt.Errorf("/v1/version names no archive")
-	}
-	return v.Archive.ID, nil
 }
 
 // newHTTPClient sizes the connection pool for the worker count.
@@ -189,10 +165,47 @@ func newHTTPClient(concurrency, timeoutSec int) *http.Client {
 	}
 }
 
-// mustServedArchive is servedArchive or exit: without the archive no submit can
-// be sent.
-func mustServedArchive(ctx context.Context, c *http.Client, target string) string {
-	id, err := servedArchive(ctx, c, target)
+// targetIdentity is what every submit proves about the target: the archive it
+// serves (X-SM-Archive-Id) and the default logbook it serves
+// (X-SM-Default-Logbook). The daemon refuses a QSO write without both.
+type targetIdentity struct {
+	ArchiveID      string
+	DefaultLogbook string
+}
+
+// servedIdentity reads the target's identity once, from /v1/version. Submits to
+// the -logbook default are then live; to any other logbook, deliberate.
+func servedIdentity(ctx context.Context, c *http.Client, target string) (targetIdentity, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target+"/v1/version", nil)
+	if err != nil {
+		return targetIdentity{}, err
+	}
+	resp, err := c.Do(req)
+	if err != nil {
+		return targetIdentity{}, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var v struct {
+		Archive *struct {
+			ID                 string `json:"id"`
+			DefaultLogbookUUID string `json:"default_logbook_uuid"`
+		} `json:"archive"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
+		return targetIdentity{}, err
+	}
+	if v.Archive == nil || v.Archive.ID == "" {
+		return targetIdentity{}, fmt.Errorf("/v1/version names no archive")
+	}
+	if v.Archive.DefaultLogbookUUID == "" {
+		return targetIdentity{}, fmt.Errorf("/v1/version names no default logbook (an older daemon, or none configured)")
+	}
+	return targetIdentity{ArchiveID: v.Archive.ID, DefaultLogbook: v.Archive.DefaultLogbookUUID}, nil
+}
+
+// mustServedIdentity is servedIdentity or exit: without it no submit can be sent.
+func mustServedIdentity(ctx context.Context, c *http.Client, target string) targetIdentity {
+	id, err := servedIdentity(ctx, c, target)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cannot read the target's served archive: %v\n", err)
 		os.Exit(1)
@@ -244,7 +257,7 @@ func main() {
 	httpClient := newHTTPClient(*concurrency, *timeoutSec)
 
 	submitURL := fmt.Sprintf("%s/v1/qso?logbook=%d", *target, *logbookID)
-	archiveID := mustServedArchive(ctx, httpClient, *target)
+	identity := mustServedIdentity(ctx, httpClient, *target)
 
 	// Channel sizing: in mixed mode each iteration emits 3 results,
 	// so the buffer is sized 3× to absorb the extra fan-out without
@@ -298,12 +311,12 @@ func main() {
 					// SPA's actual behaviour, which is also sequential.
 					enrichURL := fmt.Sprintf("%s/v1/enrich/callsign?call=%s", *target, call)
 					historyURL := fmt.Sprintf("%s/v1/contact-history?call=%s", *target, call)
-					doRequest(ctx, httpClient, http.MethodGet, enrichURL, "", "", "", "enrich", results)
-					doRequest(ctx, httpClient, http.MethodGet, historyURL, "", "", "", "history", results)
+					doRequest(ctx, httpClient, http.MethodGet, enrichURL, "", "", targetIdentity{}, "enrich", results)
+					doRequest(ctx, httpClient, http.MethodGet, historyURL, "", "", targetIdentity{}, "history", results)
 				}
 
 				body := adifBody(call, *stationCallsign, qsoDate, timeOn)
-				doRequest(ctx, httpClient, http.MethodPost, submitURL, "application/x-adif", body, archiveID, "submit", results)
+				doRequest(ctx, httpClient, http.MethodPost, submitURL, "application/x-adif", body, identity, "submit", results)
 			}
 		}()
 	}

@@ -95,6 +95,10 @@ func serveGuarded(srv *Server, method, path, contentType, body string, h guardHe
 	if h.set {
 		req.Header.Set(archiveIDHeader, h.value)
 	}
+	// The tab's default is the served one: these tests isolate the archive guard.
+	if _, def, err := srv.effectiveDefault(context.Background()); err == nil && def != "" {
+		req.Header.Set(defaultLogbookHeader, def)
+	}
 	w := httptest.NewRecorder()
 	srv.httpServer.Handler.ServeHTTP(w, req)
 	return w

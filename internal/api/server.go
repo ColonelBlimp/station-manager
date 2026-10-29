@@ -285,7 +285,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *l
 	// bucket). See docs/v2-design/api.md §6 for the threat model.
 	// The archive guard (archive_guard.go) wraps every route that acts on the
 	// archive; it runs outermost so a refused request spends no rate token.
-	apiMux.Handle("POST /v1/qso", s.requireArchive(s.limitSubmitRate(http.HandlerFunc(s.handleSubmitQso))))
+	apiMux.Handle("POST /v1/qso", s.requireArchive(s.requireLiveSubmit(s.limitSubmitRate(http.HandlerFunc(s.handleSubmitQso)))))
 	apiMux.Handle("GET /v1/qso/{uuid}", s.archiveIfSupplied(http.HandlerFunc(s.handleGetQso)))
 	apiMux.Handle("PATCH /v1/qso/{uuid}", s.requireArchive(http.HandlerFunc(s.handleUpdateQso)))
 	apiMux.Handle("DELETE /v1/qso/{uuid}", s.requireArchive(http.HandlerFunc(s.handleDeleteQso)))
@@ -439,14 +439,14 @@ func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *l
 		// anything live. Same enablement gate.
 		apiMux.HandleFunc("POST /v1/ft8/claim", s.handleFt8Claim)
 		apiMux.HandleFunc("POST /v1/ft8/tx/arm", s.handleFt8TxArm)
-		apiMux.Handle("POST /v1/ft8/tx/send", s.requireArchive(http.HandlerFunc(s.handleFt8TxSend)))
+		apiMux.Handle("POST /v1/ft8/tx/send", s.requireArchive(s.requireDefault(http.HandlerFunc(s.handleFt8TxSend))))
 		// Manual sequencer (ADR 0031 step e3) — start/abandon an answer-a-CQ
 		// exchange the daemon then auto-advances. Same enablement gate.
-		apiMux.Handle("POST /v1/ft8/qso/start", s.requireArchive(http.HandlerFunc(s.handleFt8QsoStart)))
+		apiMux.Handle("POST /v1/ft8/qso/start", s.requireArchive(s.requireDefault(http.HandlerFunc(s.handleFt8QsoStart))))
 		// Work a station calling US, picked from the pile-up (ADR 0033 "work a
 		// caller") — a caller-style exchange against the chosen station; idle on
 		// completion. Abandon uses the shared qso/abandon route.
-		apiMux.Handle("POST /v1/ft8/qso/work", s.requireArchive(http.HandlerFunc(s.handleFt8QsoWork)))
+		apiMux.Handle("POST /v1/ft8/qso/work", s.requireArchive(s.requireDefault(http.HandlerFunc(s.handleFt8QsoWork))))
 		apiMux.Handle("POST /v1/ft8/qso/path", s.requireArchive(http.HandlerFunc(s.handleFt8QsoPath)))
 		apiMux.HandleFunc("POST /v1/ft8/qso/abandon", s.handleFt8QsoAbandon)
 		// Stop and reduce controls (disarm, abandon, autowork/stop, unbag, skip-on)
@@ -455,17 +455,17 @@ func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *l
 		// Stop the auto-work run only (ADR 0065) — abandon stops run AND contact.
 		apiMux.HandleFunc("POST /v1/ft8/autowork/stop", s.handleFt8AutoWorkStop)
 		apiMux.HandleFunc("POST /v1/ft8/qso/skip", s.handleFt8QsoSkip)
-		apiMux.Handle("POST /v1/ft8/qso/next", s.requireArchive(http.HandlerFunc(s.handleFt8QsoNext)))
+		apiMux.Handle("POST /v1/ft8/qso/next", s.requireArchive(s.requireDefault(http.HandlerFunc(s.handleFt8QsoNext))))
 		// Caller-side sequencer (ADR 0033) — start a Call-CQ session that works the
 		// stations that answer (auto_first / operator_pick per ft8.tx.caller_answer_mode);
 		// abandon uses the shared qso/abandon route. Same enablement gate.
-		apiMux.Handle("POST /v1/ft8/cq/start", s.requireArchive(http.HandlerFunc(s.handleFt8CqStart)))
+		apiMux.Handle("POST /v1/ft8/cq/start", s.requireArchive(s.requireDefault(http.HandlerFunc(s.handleFt8CqStart))))
 		// Commit a listed operator_pick answerer into the run (ADR 0065) — the
 		// candidate list rides the ft8-qso SSE (answerers).
-		apiMux.Handle("POST /v1/ft8/cq/pick", s.requireArchive(http.HandlerFunc(s.handleFt8CqPick)))
-		apiMux.Handle("POST /v1/ft8/cq/bag", s.requireArchive(http.HandlerFunc(s.handleFt8CqBag)))
+		apiMux.Handle("POST /v1/ft8/cq/pick", s.requireArchive(s.requireDefault(http.HandlerFunc(s.handleFt8CqPick))))
+		apiMux.Handle("POST /v1/ft8/cq/bag", s.requireArchive(s.requireDefault(http.HandlerFunc(s.handleFt8CqBag))))
 		apiMux.HandleFunc("POST /v1/ft8/cq/unbag", s.handleFt8CqUnbag)
-		apiMux.Handle("POST /v1/ft8/cq/resume", s.requireArchive(http.HandlerFunc(s.handleFt8CqResume)))
+		apiMux.Handle("POST /v1/ft8/cq/resume", s.requireArchive(s.requireDefault(http.HandlerFunc(s.handleFt8CqResume))))
 	}
 
 	// pprof — opt-in via cfg.Server.EnableProfiling. Off by default

@@ -583,9 +583,9 @@ func (s *Server) handleFt8QsoSkip(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "missing_required_field", "armed is required", op)
 		return
 	}
-	// Disarming skip re-permits a repeat transmission, so it is archive-guarded;
-	// arming skip only withholds RF and never is.
-	if !*req.Armed && !s.checkArchive(w, r, op, true) {
+	// Disarming skip re-permits a repeat transmission, so it is archive- and
+	// default-guarded; arming skip only withholds RF and never is.
+	if !*req.Armed && (!s.checkArchive(w, r, op, true) || !s.checkDefault(w, r, op)) {
 		return
 	}
 	if err := s.ft8.SetQsoSkip(*req.Armed); err != nil {

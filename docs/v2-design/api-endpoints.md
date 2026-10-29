@@ -92,6 +92,31 @@ with `armed: false`, `qso/abandon`, `autowork/stop`, `cq/unbag`, `qso/skip` with
 `armed: true`, and `claim` (their own state checks still apply). The guard runs outside the
 submit rate limiter, so a refused submit spends no token.
 
+**Default logbook guard (ADR 0097 §4, W-0024 slice 4).** A **live** request also names the
+logbook the client treats as the default, in `X-SM-Default-Logbook: <logbook uuid>`, taken from
+its established station context (the one that names `?logbook=`). The daemon checks it,
+after the archive guard and **before any side effect** (and outside the submit rate limiter),
+against the default this process serves (`internal/api/default_guard.go`). Missing header →
+**400 `missing_required_field`** (this also stops a page from an older build); not exactly one
+UUIDv7 → **400 `invalid_field_value`**; a datastore failure reading the default → **503
+`db_unavailable`**, never a mismatch.
+- **FT8** — `tx/arm` with `armed: true`, `tx/send`, `qso/start`, `qso/work`, `cq/start`,
+  `cq/pick`, `cq/bag`, `cq/resume`, `qso/next`, `qso/skip` with `armed: false`: any other
+  default, or none served, → **409 `default_logbook_mismatch`** (FT8 logs to the daemon's
+  default, so the contact would go somewhere the page does not show). The FT8 service is not
+  asked.
+- **`POST /v1/qso`** — naming the logbook the header names is a **live** submission: refused
+  with **409 `default_logbook_mismatch`** unless that is the default served (never
+  retargeted), and with `default_change_pending` while live entry is sealed. Naming any other
+  logbook is a **deliberate** operation on it — logged there whatever the header says, and
+  never refused by the seal.
+
+Not default-guarded: `qso/path` (archive guard only), the stop and reduce controls and `claim`
+above, and requests addressed to a QSO or a session (edit, delete, export, email). Set as
+default carries its assertion in its body (`believed_default_uuid`). A reconnecting client
+compares `GET /v1/version`'s `archive.default_logbook_uuid` with its own and reloads when
+they differ.
+
 ---
 
 ## QSO
@@ -108,7 +133,7 @@ items return a QSO through a boundary projection of `types.Qso`: the canonical *
 - **Gating:** Always-on; **archive-guarded** (required header, see Conventions), then wrapped in `limitSubmitRate`.
 - **Request:** Content-Type `application/x-adif` / `text/plain` / empty (other → 415 `unsupported_media_type`). Body = a single-record ADIF doc. Query: `logbook` (int, **required**, ≥1; must exist), `force` (bool, optional — bypass dedupe). Any `expect_`-prefixed key — what a page loaded before ADR 0087 sent to log a recovered QSO — is refused **409 `reload_required`**, storing nothing; the page must reload. The query is parsed strictly: a malformed one is 400 `invalid_query_param`, never a partial read. **`STATION_CALLSIGN` is derived from the logbook** (ADR 0055): the daemon stamps the QSO with the logbook's own callsign, so a record's own `STATION_CALLSIGN` is ignored on a live submit and need not be present (an **import** keeps the record's value for historical fidelity).
 - **Response:** **201** on store / **200** on duplicate. Body `{"status": "stored"|"duplicate", "uuid": string, "id": int64, "archive_id": string}` (`id` is **DEPRECATED**, removed in `v2.0.0-alpha.3`; use `uuid`). `archive_id` names the archive that answered — the provenance a client files its Session row under.
-- **Errors:** 409 `archive_mismatch` / 400 `missing_required_field` / 400 `invalid_field_value` from the archive guard; 400 `invalid_adif`, `too_many_records`, `missing_required_field`, `invalid_field_value`, `missing_required_param`, `invalid_id`, `invalid_query_param`, `invalid_time_range`; 404 `logbook_not_found`; 409 `reload_required` (any `expect_*` key; nothing written); 409 `default_change_pending` (a **live** submit — one whose `logbook` is the effective default — while a change of the default has closed live entry, ADR 0097; nothing written; a submit naming another logbook is a deliberate operation and is not refused); 429 `rate_limited`; 503 `server_busy`; 500 `submit_failed`/`db_error`.
+- **Errors:** 409 `archive_mismatch` / 400 `missing_required_field` / 400 `invalid_field_value` from the archive guard; 400 `invalid_adif`, `too_many_records`, `missing_required_field`, `invalid_field_value`, `missing_required_param`, `invalid_id`, `invalid_query_param`, `invalid_time_range`; 404 `logbook_not_found`; 409 `reload_required` (any `expect_*` key; nothing written); 409 `default_logbook_mismatch` / 400 `missing_required_field` / 400 `invalid_field_value` / 503 `db_unavailable` from the default guard (Conventions); 409 `default_change_pending` (a **live** submit — one whose `logbook` is the logbook its `X-SM-Default-Logbook` names — while a change of the default has closed live entry, ADR 0097; nothing written; a submit naming another logbook is a deliberate operation and is not refused); 429 `rate_limited`; 503 `server_busy`; 500 `submit_failed`/`db_error`.
 - **Notes:** A `MODE` that names an ADIF submode (`USB`; `FT4`, `FST4`, `FST4W`, `JS8`, `Q65`, which the embedded catalogue listed as modes until 2026-09-11) is stored as its parent/submode pair (`SSB`/`USB`, `MFSK`/`FT4`); a `SUBMODE` contradicting such a `MODE` is `invalid_field_value`. `PATCH` applies the same canonicalisation to the merged record, so a contact stored under the old form is healed by its next edit. Dedupe — the single submit and the bulk import alike — also matches a record whose pair is `MFSK` with one of those submodes against the key its bare `MODE` hashed to, so a re-import of a contact stored before 2026-09-11 is a duplicate, not a copy. One-fails-all-fail atomic write (QSO row + upload-queue rows in one tx). Idempotent dedupe — a known duplicate returns 200 with the existing UUID/ID. **Dedupe is minute-precision** (`CALL|BAND|MODE|FREQ|QSO_DATE|TIME_ON`, TIME_ON truncated to HHMM), so two contacts in the same minute collide — even though times are **stored and exported at full `HH:MM:SS`** where supplied (ADIF `HHMMSS` preserved since migration 0003; seconds matter to QSL managers matching on exact timestamp). A **midnight-crossing** QSO (`TIME_ON` > `TIME_OFF`) must carry `QSO_DATE_OFF` on the **following day** or it's rejected `invalid_time_range`; SM's own clients (consolidated app + FT8 daemon) **always populate `QSO_DATE_OFF`** — the date at `TIME_OFF`, equal to `QSO_DATE` for a same-day contact.
 
 ### `GET /v1/qso/{uuid}`
@@ -403,7 +428,7 @@ The station-global archive catalogue (`config.md` §3): the archive the daemon s
 - **Purpose:** Liveness/readiness (DB reachability). **Always-on.** **200** `{"status": "ok"}`; **503** `db_unavailable` if the DB ping fails.
 
 ### `GET /v1/version`
-- **Purpose:** Daemon build / Go runtime / build environment / DB schema version / active archive. **Always-on.** **200** `{"daemon": string, "go": string, "env": "dev"|"release", "schema": {"version": uint64, "dirty": bool}?, "archive": {"id": uuid, "label": string, "ownership": "managed"|"legacy"|"external"}?}` (always 200; `schema` omitted + warn-logged if the schema query fails; `archive` is the catalogue entry the daemon serves (ADR 0071) — identity, label and ownership only, never the file path — and is omitted before adoption). `env` is `dev` for any source build (incl. `task run:smd`) and `release` only for a packaged binary (the RPM build stamps `-X …/internal/buildinfo.Env=release`); the app flags a `dev` daemon with a Sidebar DEV pill and a `DEV · ` tab-title prefix so it's distinguishable from the deployed one on the same `:8080`. Only the exact literal `dev` marks DEV — a missing or unexpected `env` is treated as `release`, so a release daemon is never falsely labelled. The Sidebar footer shows the running `daemon` build itself (not a source constant); an unreachable/malformed response reads "Version unavailable" and drops the marker.
+- **Purpose:** Daemon build / Go runtime / build environment / DB schema version / active archive. **Always-on.** **200** `{"daemon": string, "go": string, "env": "dev"|"release", "schema": {"version": uint64, "dirty": bool}?, "archive": {"id": uuid, "label": string, "ownership": "managed"|"legacy"|"external", "default_logbook_uuid": uuid?}?}` (always 200; `schema` omitted + warn-logged if the schema query fails; `archive` is the catalogue entry the daemon serves (ADR 0071) — identity, label and ownership only, never the file path — and is omitted before adoption). `default_logbook_uuid` is the default this process serves (ADR 0097 §4: not a pending change's target until the restart that applies it, and the applied one even if `config.json` could not be rewritten); omitted when no logbook is the default, and warn-logged and omitted if it cannot be read. `env` is `dev` for any source build (incl. `task run:smd`) and `release` only for a packaged binary (the RPM build stamps `-X …/internal/buildinfo.Env=release`); the app flags a `dev` daemon with a Sidebar DEV pill and a `DEV · ` tab-title prefix so it's distinguishable from the deployed one on the same `:8080`. Only the exact literal `dev` marks DEV — a missing or unexpected `env` is treated as `release`, so a release daemon is never falsely labelled. The Sidebar footer shows the running `daemon` build itself (not a source constant); an unreachable/malformed response reads "Version unavailable" and drops the marker.
 
 ### `POST /v1/restart`
 - **Purpose:** ATTENDED, operator-triggered graceful daemon restart — applies the "Requires a restart" config-apply changes (active rig, connection, mode mappings, serial overrides) without an on-box `systemctl`. The daemon runs its normal graceful shutdown (releasing the tune/FT8 carrier — TX-safe), then exits `ExitRestart` (3); systemd (`smd.service` `Restart=on-failure` + `RestartForceExitStatus=3`) respawns it ~`RestartSec` (5s) later and SSE clients auto-reconnect.

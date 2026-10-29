@@ -316,6 +316,30 @@ describe('fetchStationContext bridge block (stubbed fetch)', () => {
         expect(ctx.rigName).toBe('FTdx10');
     });
 
+    // W-0024 slice 4: the default's UUID is read WITH its id — the pair a live
+    // submit names and asserts. A missing or malformed UUID leaves no usable
+    // pair ('' — the submit is then not sent), never a guessed one.
+    it('reads the default logbook’s uuid with its id', async () => {
+        mockConfig({
+            logging_station: { station_callsign: '7Q5MLV' },
+            default_logbook: { id: 3, uuid: '01a187bc-0173-7649-8ff3-71db8170c309', name: 'Home' },
+        });
+        const ctx = await fetchStationContext();
+        expect([ctx.logbookId, ctx.logbookUuid]).toEqual([
+            3,
+            '01a187bc-0173-7649-8ff3-71db8170c309',
+        ]);
+    });
+
+    it.each([
+        ['absent (pre-setup stub)', { id: 1 }],
+        ['not a string', { id: 1, uuid: 7 }],
+        ['not a UUID', { id: 1, uuid: 'home' }],
+    ])('a default logbook uuid that is %s is empty', async (_name, lb) => {
+        mockConfig({ logging_station: { station_callsign: '7Q5MLV' }, default_logbook: lb });
+        expect((await fetchStationContext()).logbookUuid).toBe('');
+    });
+
     it('defaults logbook/rig names to empty when the blocks are absent', async () => {
         mockConfig({ logging_station: { station_callsign: '7Q5MLV' } });
         const ctx = await fetchStationContext();

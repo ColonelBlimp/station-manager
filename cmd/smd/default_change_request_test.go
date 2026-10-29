@@ -55,11 +55,13 @@ func withRestartPort(t *testing.T) {
 
 const submitADIF = `<CALL:5>DL9UW<BAND:3>20m<MODE:3>SSB<FREQ:6>14.210<QSO_DATE:8>20261029<TIME_ON:4>%s<TIME_OFF:4>%s<RST_SENT:2>59<RST_RCVD:2>59<STATION_CALLSIGN:6>7Q5MLV<EOR>`
 
+// submit is a Phone / CW submit from a tab that booted believing A is the
+// default (ADR 0097 §4): naming A is live, naming another logbook deliberate.
 func (f *changeFixture) submit(t *testing.T, d *daemon, logbook int64, timeOn string) (int, []byte) {
 	t.Helper()
 	body := strings.ReplaceAll(submitADIF, "%s", timeOn)
 	return apiCallHeaders(t, d, http.MethodPost, "/v1/qso?logbook="+itoa(logbook), body,
-		map[string]string{"Content-Type": "application/x-adif", "X-SM-Archive-Id": f.archive})
+		map[string]string{"Content-Type": "application/x-adif", "X-SM-Archive-Id": f.archive, "X-SM-Default-Logbook": f.uuid[f.a]})
 }
 
 func (f *changeFixture) ask(t *testing.T, d *daemon, target int64) (int, []byte) {

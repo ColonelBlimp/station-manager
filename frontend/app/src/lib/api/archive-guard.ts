@@ -18,6 +18,8 @@ export const ARCHIVE_HEADER = 'X-SM-Archive-Id';
 let bound: string | null = null;
 let unproven: () => boolean = () => false;
 let onMismatch: () => void = () => {};
+let boundDefaultUuid: string | null = null;
+let onDefaultMismatch: () => void = () => {};
 
 /** The archive the boot bracket proved; null (or '') = nothing proven. */
 export function setBoundArchive(id: string | null): void {
@@ -57,15 +59,12 @@ function unprovenRefusal(): FetchOutcome {
 async function noteMismatch(response: Response): Promise<void> {
     try {
         const body: unknown = await response.json();
-        if (
-            body !== null &&
-            typeof body === 'object' &&
-            (body as { code?: unknown }).code === 'archive_mismatch'
-        ) {
-            onMismatch();
-        }
+        const code =
+            body !== null && typeof body === 'object' ? (body as { code?: unknown }).code : null;
+        if (code === 'archive_mismatch') onMismatch();
+        else if (code === 'default_logbook_mismatch') onDefaultMismatch();
     } catch {
-        // Not a JSON envelope: not the guard's refusal.
+        // Not a JSON envelope: not a guard's refusal.
     }
 }
 
@@ -87,4 +86,57 @@ export async function guardedFetch(
         void noteMismatch(out.response.clone());
     }
     return out;
+}
+
+// ---- Default guard (W-0024 slice 4, ADR 0097 §4) ----------------------------
+// A live request — the Phone / CW submit and every FT8 request that admits a
+// new session or transmission — also names the default logbook this tab's
+// established station context holds, so a daemon now serving another default
+// refuses it (409 default_logbook_mismatch) before any side effect. The submit
+// carries its own pair (lib/api/qso.ts); FT8, which names no logbook, asserts
+// the bound default, set from that same context.
+
+export const DEFAULT_HEADER = 'X-SM-Default-Logbook';
+
+/** The default logbook UUID of the established station context; null = none. */
+export function setBoundDefault(uuid: string | null): void {
+    boundDefaultUuid = uuid !== null && uuid !== '' ? uuid : null;
+}
+
+/** The default live FT8 requests assert now; null when the context has none. */
+export function boundDefault(): string | null {
+    return boundDefaultUuid;
+}
+
+/** Called once per daemon default_logbook_mismatch: the tab reloads. */
+export function setDefaultMismatchSink(sink: () => void): void {
+    onDefaultMismatch = sink;
+}
+
+const NO_DEFAULT_MESSAGE =
+    'This page has no confirmed default logbook, so nothing was sent. Reload the page.';
+
+/**
+ * guardedFetch for a live request: also names `defaultUuid`, the default the
+ * tab asserts, or sends nothing when there is none. A 409
+ * default_logbook_mismatch reloads the tab; the request is never retried.
+ */
+export async function liveFetch(
+    input: string,
+    init: RequestInit,
+    defaultUuid: string | null,
+    opts?: { timeoutMs?: number }
+): Promise<FetchOutcome> {
+    if (defaultUuid === null || defaultUuid === '') {
+        return {
+            ok: true,
+            response: new Response(
+                JSON.stringify({ code: 'default_unproven', message: NO_DEFAULT_MESSAGE }),
+                { status: 409, headers: { 'Content-Type': 'application/json' } }
+            ),
+        };
+    }
+    const headers = new Headers(init.headers);
+    headers.set(DEFAULT_HEADER, defaultUuid);
+    return guardedFetch(input, { ...init, headers }, opts);
 }

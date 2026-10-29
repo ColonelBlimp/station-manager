@@ -28,7 +28,7 @@
 */
 
 import { isPlainObject, readJsonBody, safeFetch } from './_helpers';
-import { guardedFetch } from './archive-guard';
+import { boundDefault, liveFetch } from './archive-guard';
 
 export type Ft8QsoOutcome =
     | { kind: 'ok' }
@@ -43,21 +43,25 @@ interface DaemonError {
     op?: string;
 }
 
-// `guarded` routes admit or initiate transmission (or annotate the exchange that
-// will be logged), so they name the proven archive and are held back without one.
-// Stop and reduce controls pass false: a stale tab must always be able to stop.
+// `guarded` routes admit or initiate transmission, so they name the proven
+// archive and the bound default logbook (ADR 0097 §4) and are held back without
+// either. Stop and reduce controls pass false: a stale tab must always be able
+// to stop.
 async function postFt8Qso(
     path: string,
     body: unknown,
     guarded: boolean,
     signal?: AbortSignal
 ): Promise<Ft8QsoOutcome> {
-    const fetched = await (guarded ? guardedFetch : safeFetch)(path, {
+    const init: RequestInit = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
         signal,
-    });
+    };
+    const fetched = guarded
+        ? await liveFetch(path, init, boundDefault())
+        : await safeFetch(path, init);
     if (!fetched.ok) {
         return { kind: fetched.kind, message: fetched.message };
     }

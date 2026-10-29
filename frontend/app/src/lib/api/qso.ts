@@ -30,7 +30,7 @@
 */
 
 import { isPlainObject, readJsonBody, WRITE_TIMEOUT_MS } from './_helpers';
-import { guardedFetch } from './archive-guard';
+import { liveFetch } from './archive-guard';
 
 export type SubmitOutcome =
     /** archiveId: the archive whose daemon stored it (the response's archive_id),
@@ -69,14 +69,22 @@ function answeringArchive(body: Record<string, unknown>): string | null {
     return typeof body.archive_id === 'string' && body.archive_id !== '' ? body.archive_id : null;
 }
 
+/** The logbook a live submit names, with the UUID the tab asserts is the
+ *  default (ADR 0097 §4): both come from the one established station context
+ *  and travel together, so neither can be refreshed without the other. */
+export interface LiveLogbook {
+    id: number;
+    uuid: string;
+}
+
 export async function submitQso(
     adif: string,
-    logbookID: number,
+    logbook: LiveLogbook,
     options: SubmitOptions = {}
 ): Promise<SubmitOutcome> {
-    const params = new URLSearchParams({ logbook: String(logbookID) });
+    const params = new URLSearchParams({ logbook: String(logbook.id) });
     if (options.force) params.set('force', '1');
-    const fetched = await guardedFetch(
+    const fetched = await liveFetch(
         `/v1/qso?${params.toString()}`,
         {
             method: 'POST',
@@ -84,6 +92,7 @@ export async function submitQso(
             body: adif,
             signal: options.signal,
         },
+        logbook.uuid,
         // Logging a QSO is a write: a timed-out POST is ambiguous (the daemon
         // may have committed it), so use the longer write timeout to give it
         // room to complete before the latch releases, rather than the default.

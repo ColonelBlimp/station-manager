@@ -36,7 +36,14 @@ func ft8QsoTestServer(t *testing.T, callsign string) *Server {
 
 func postFt8Qso(t *testing.T, srv *Server, path, body string, h http.HandlerFunc) *httptest.ResponseRecorder {
 	t.Helper()
+	// Calls the handler directly: the start routes' default guard is middleware
+	// (requireDefault), exercised through the router in default_guard_test.go.
 	req := withServedArchive(httptest.NewRequest(http.MethodPost, path, strings.NewReader(body)))
+	// Arm and skip-off check the default in the handler: name the server's
+	// default when it has one (never seeded here — several tests need none).
+	if _, def, err := srv.effectiveDefault(context.Background()); err == nil && def != "" {
+		req.Header.Set(defaultLogbookHeader, def)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -343,7 +350,7 @@ func TestHandleFt8QsoAbandon(t *testing.T) {
 // it is ft8_no_answerer rather than 404/405 proves both the route and the mapping.
 func TestHandleFt8QsoNext_RouteIsWiredAndRefusesWithoutAnAnswerer(t *testing.T) {
 	srv := testServerWithFt8(t, nil, ft8.NewService(types.Ft8Config{Enabled: true}, &logging.Service{}, ""))
-	req := withServedArchive(httptest.NewRequest(http.MethodPost, "/v1/ft8/qso/next", strings.NewReader(`{}`)))
+	req := withLiveContext(t, srv, httptest.NewRequest(http.MethodPost, "/v1/ft8/qso/next", strings.NewReader(`{}`)))
 	req.Header.Set("Content-Type", "application/json")
 	req.Host = "127.0.0.1:8080" // loopback: satisfies requireSameOrigin, which wraps the mux
 	w := httptest.NewRecorder()
@@ -365,7 +372,7 @@ func TestHandleFt8QsoNext_RouteIsWiredAndRefusesWithoutAnAnswerer(t *testing.T) 
 // which proves route, body parsing and mapping in one pass.
 func TestHandleFt8CqPick_RouteIsWiredAndRefusesWithoutARun(t *testing.T) {
 	srv := testServerWithFt8(t, nil, ft8.NewService(types.Ft8Config{Enabled: true}, &logging.Service{}, ""))
-	req := withServedArchive(httptest.NewRequest(http.MethodPost, "/v1/ft8/cq/pick", strings.NewReader(`{"call":"DL9UW"}`)))
+	req := withLiveContext(t, srv, httptest.NewRequest(http.MethodPost, "/v1/ft8/cq/pick", strings.NewReader(`{"call":"DL9UW"}`)))
 	req.Header.Set("Content-Type", "application/json")
 	req.Host = "127.0.0.1:8080" // loopback: satisfies requireSameOrigin, which wraps the mux
 	w := httptest.NewRecorder()
@@ -383,7 +390,7 @@ func TestHandleFt8CqPick_RouteIsWiredAndRefusesWithoutARun(t *testing.T) {
 // matching the start handlers' invalid_field_value convention.
 func TestHandleFt8CqPick_MissingCallIs400(t *testing.T) {
 	srv := testServerWithFt8(t, nil, ft8.NewService(types.Ft8Config{Enabled: true}, &logging.Service{}, ""))
-	req := withServedArchive(httptest.NewRequest(http.MethodPost, "/v1/ft8/cq/pick", strings.NewReader(`{}`)))
+	req := withLiveContext(t, srv, httptest.NewRequest(http.MethodPost, "/v1/ft8/cq/pick", strings.NewReader(`{}`)))
 	req.Header.Set("Content-Type", "application/json")
 	req.Host = "127.0.0.1:8080"
 	w := httptest.NewRecorder()

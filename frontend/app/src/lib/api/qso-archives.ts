@@ -15,6 +15,7 @@
 import {
     daemonErrorMessage,
     isPlainObject,
+    isUuidV7,
     readJsonBody,
     safeFetch,
     WRITE_TIMEOUT_MS,
@@ -86,6 +87,9 @@ export type ActivateArchiveOutcome =
 export interface DaemonIdentity {
     instance: string;
     archiveId: string;
+    /** The default logbook this daemon generation serves (W-0024 slice 4);
+     *  '' when it names none (unconfigured, or an older daemon). */
+    defaultLogbookUuid: string;
 }
 
 export async function fetchDaemonIdentity(signal?: AbortSignal): Promise<DaemonIdentity | null> {
@@ -94,9 +98,14 @@ export async function fetchDaemonIdentity(signal?: AbortSignal): Promise<DaemonI
     const body = await readJsonBody(fetched.response);
     if (!isPlainObject(body) || typeof body.instance !== 'string') return null;
     const archive = isPlainObject(body.archive) ? body.archive : null;
+    // Absent: an unconfigured or older daemon names no default. Present but
+    // malformed proves nothing: the identity is unreadable (the tab gates).
+    const def = archive?.default_logbook_uuid;
+    if (def !== undefined && !isUuidV7(def)) return null;
     return {
         instance: body.instance,
         archiveId: archive && typeof archive.id === 'string' ? archive.id : '',
+        defaultLogbookUuid: def ?? '',
     };
 }
 
