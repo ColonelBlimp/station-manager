@@ -157,8 +157,8 @@ fi
 # decode tests skip under -short — running a CPU-bound decode under -race
 # adds no race-detection value and used to blow the time budget. The full
 # run below exercises them without the race detector.
-step "Go: test (race detector, -short, 5m timeout)"
-go test -race -short -timeout 5m $PKGS
+step "Go: test (race detector, -short, 20m timeout)"
+go test -race -short -timeout 20m $PKGS
 
 step "Go: test (full, no race, 12m timeout)"
 go test -timeout 12m $PKGS

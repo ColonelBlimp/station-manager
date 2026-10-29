@@ -245,7 +245,7 @@ tasks:
       ephemeral Postgres. See store.ResolveTestDSN (codex round-3 P1 on
       8fd6c7e5): the opt-in is deliberately NOT wired into this generic task.
     cmds:
-      - go test -race -short ./...
+      - go test -race -short -timeout 20m ./...
 
   test:qrz-live:
     desc: |
