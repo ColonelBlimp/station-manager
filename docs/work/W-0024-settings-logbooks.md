@@ -1,8 +1,10 @@
 # W-0024 — Settings → Logbooks, slice 2
 
-**Status:** Selected for design — criteria proposed and reviewed 2026-10-29; the restart application
-and transition contract are decided in [ADR 0097](../decisions/0097-change-the-default-logbook-at-an-attended-restart.md)
-(Accepted 2026-10-29); **no implementation authorised**
+**Status:** In implementation — slices 1–3b committed 2026-10-29 (see *Implementation progress*);
+the restart application and transition contract are decided in
+[ADR 0097](../decisions/0097-change-the-default-logbook-at-an-attended-restart.md) (Accepted
+2026-10-29). **Set as default is not released:** its daemon routes stay unregistered until slices 4
+and 5 land.
 **Selected:** 2026-10-29 (operator: "Let's do 3 first as it is prereq for the contesting work")
 **Outcome:** The operator can choose which logbook in the active archive receives live contacts, and
 can describe each logbook, without any open tab silently logging into the previous one.
@@ -192,6 +194,25 @@ contacts going to one logbook and Phone / CW to another; the running process ado
 before the restart; uploads moving with the default; the former default's SM Cloud recovery stranded; the header
 naming the new logbook while submits go to the old one; a different-call logbook made default and
 uploading under the personal accounts.
+
+## Implementation progress
+
+Each slice was test-first: failing tests reviewed before implementation, then reversion proofs.
+
+| Slice | Commit | What it delivers |
+|---|---|---|
+| 1 | `20c7f65f` | AC1: logbook descriptions in Settings → Logbooks (Add, Edit with name and description, partial PATCH, leave guard). |
+| 2 | `9eebb500` | SM Cloud prerequisite (ADR 0097 §5): adoption follows its marker, not the default; a claimed Home binding re-enables off the default; per-binding adopter state. |
+| 3a | `76295c98` | A default change applied at start (ADR 0097 §1): the config record and its tombstones, confirmation only by a durable write holding them, the durable archive-pointer write, the read-back matrix; activation and deletion refuse while a change is unresolved. |
+| 3b | `027d5845` | The request path (ADR 0097 §2–§3): FT8, rig and live-entry seals; the shared single flight with activation and deletion; withdrawal on a failed restart; Cancel / Confirm / Retry cleanup by request id; the status read. Its routes are **gated** (`api.DefaultChangeRoutesReleased` is false). |
+
+**CI budget (2026-10-29):** the race step's 10-minute per-package timeout failed CI on 3a and 3b
+(`cmd/smd`, `internal/archive`, an uncached `internal/database/sqlite`; no assertion failed).
+`e4c711af` raises it to 20 minutes and the job to 45, and runs once with `-count=1` to measure
+uncached durations; a follow-up removes `-count=1`.
+
+**Next:** slice 4, the stale-tab guard (ADR 0097 §4); then slice 5, the confirmation (ADR 0097
+§4a). The routes are released only after both.
 
 ## Out of scope
 
