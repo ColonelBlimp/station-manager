@@ -65,14 +65,20 @@ func wantAdoption(t *testing.T, row types.LogbookBindingView, state, message str
 	}
 }
 
-// statusOf is a fixed adopter status for the subject of the binding read.
-func statusOf(t *testing.T, cfgSvc *config.Service, read types.LogbookDestination, state, message string) func() AdoptionStatus {
+// statusOf is a fixed adopter status for the subject of the binding read,
+// reported for that binding only.
+func statusOf(t *testing.T, cfgSvc *config.Service, read types.LogbookDestination, state, message string) func(string) AdoptionStatus {
 	t.Helper()
 	sub, err := SubjectOf(cfgSvc.Snapshot(), read)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return func() AdoptionStatus { return AdoptionStatus{Subject: sub, State: state, Message: message} }
+	return func(forwarder string) AdoptionStatus {
+		if forwarder != read.ForwarderName {
+			return AdoptionStatus{}
+		}
+		return AdoptionStatus{Subject: sub, State: state, Message: message}
+	}
 }
 
 func TestAdoptionStatus_AS1_ConfirmedReadsAdopted(t *testing.T) {
@@ -153,8 +159,8 @@ func TestAdoptionStatus_AS2_StatusBelongsToItsSubject(t *testing.T) {
 		m, cfgSvc := homeManagerCfg(t, db, a)
 		m.SetActiveBindings(db, nil)
 		other := statusOf(t, cfgSvc, read, state, message)
-		m.SetAdoptionStatus(func() AdoptionStatus {
-			s := other()
+		m.SetAdoptionStatus(func(forwarder string) AdoptionStatus {
+			s := other(forwarder)
 			s.Subject.ArchiveID = "019fd5c5-efcc-7193-be4f-1fee532ee3a9"
 			return s
 		})

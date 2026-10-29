@@ -53,7 +53,7 @@ const REASONS = [
     'the SM Cloud server does not support per-logbook backups; upgrade it',
     'SM Cloud server support could not be checked; the daemon log has the cause',
     'the SM Cloud server changed since the daemon started; restart to check it',
-    'this binding belongs to an SM Cloud adoption; make its logbook the default to use it',
+    'this binding belongs to an SM Cloud adoption; re-enabling it is supported only in the Home archive',
     'this binding carries conflicting identity and adoption markers; manual recovery is required',
 ];
 

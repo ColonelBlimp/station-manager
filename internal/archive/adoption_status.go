@@ -10,9 +10,9 @@ import (
 )
 
 // AdoptionSubject is what an adoption status describes (ADR 0091, "status
-// belongs to its subject"): the active archive, the default logbook's binding,
-// the name it uploads under and the station account's fingerprint. A status is
-// shown only while every one of them is still current.
+// belongs to its subject"): the active archive, the binding, the name it
+// uploads under and the station account's fingerprint. A status is shown only
+// while every one of them is still current.
 type AdoptionSubject struct {
 	ArchiveID     string
 	ForwarderName string
@@ -81,20 +81,22 @@ func (m *Manager) SetHeldUploads(names []string) {
 	m.heldUploads = held
 }
 
-// SetAdoptionStatus wires the adopter's status (cmd/smd); nil until then.
-func (m *Manager) SetAdoptionStatus(status func() AdoptionStatus) {
+// SetAdoptionStatus wires the adopter's per-binding status, by forwarder name
+// (cmd/smd); nil until then.
+func (m *Manager) SetAdoptionStatus(status func(forwarder string) AdoptionStatus) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.adoptionStatus = status
 }
 
 // annotateAdoption sets each held binding's uploads_held line (ruling C2), and
-// the adoption status on Home's default SM Cloud row
-// (ADR 0090 T4, ADR 0091). A binding confirmed under the current account is
-// adopted, pending a restart while the running generation started without
-// that confirmation. Otherwise, on an enabled binding, the adopter's status is
-// shown only when its subject is this binding's current one; a binding adopted
-// under another account with no such status needs confirmation.
+// the adoption status on Home's default SM Cloud row and on every claimed one,
+// default or not (ADR 0090 T4, ADR 0091, ADR 0097 §5). A binding confirmed
+// under the current account is adopted, pending a restart while the running
+// generation started without that confirmation. Otherwise, on an enabled
+// binding, the adopter's status for that binding is shown only when its
+// subject is this binding's current one; a binding adopted under another
+// account with no such status needs confirmation.
 func (m *Manager) annotateAdoption(ctx context.Context, db BindingsDB, cfg config.Config, entry *types.QsoArchiveConfig, view *types.ArchiveBindingsView) error {
 	if entry == nil || !adoptedArchive(entry) {
 		return nil
@@ -110,7 +112,7 @@ func (m *Manager) annotateAdoption(ctx context.Context, db BindingsDB, cfg confi
 		if _, ok := held[b.ForwarderName]; ok {
 			setRowUploadsHeld(view, b, uploadsHeldOf(cfg, b))
 		}
-		if b.LogbookID != cfg.DefaultLogbookID {
+		if b.LogbookID != cfg.DefaultLogbookID && !adoptionClaimed(b) {
 			continue
 		}
 		sub, err := SubjectOf(cfg, b)
@@ -124,7 +126,7 @@ func (m *Manager) annotateAdoption(ctx context.Context, db BindingsDB, cfg confi
 	return nil
 }
 
-func adoptionOf(b types.LogbookDestination, sub AdoptionSubject, status func() AdoptionStatus, started types.LogbookDestination) *types.BindingAdoptionView {
+func adoptionOf(b types.LogbookDestination, sub AdoptionSubject, status func(string) AdoptionStatus, started types.LogbookDestination) *types.BindingAdoptionView {
 	switch {
 	case IdentityConflict(b):
 		return nil // its hold line says what is wrong; no adoption step repairs it
@@ -136,7 +138,7 @@ func adoptionOf(b types.LogbookDestination, sub AdoptionSubject, status func() A
 		return nil
 	}
 	if status != nil {
-		if s := status(); s.Subject == sub && s.State != "" {
+		if s := status(b.ForwarderName); s.Subject == sub && s.State != "" {
 			return &types.BindingAdoptionView{State: s.State, Message: s.Message}
 		}
 	}

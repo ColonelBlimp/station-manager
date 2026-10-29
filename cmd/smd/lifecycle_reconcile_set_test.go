@@ -39,7 +39,9 @@ import (
           The aggregate lists the enabled five in listing order (held before
           unresolved), omits the disabled one; the identity entry asks only
           its scoped paths, the name entry only /v1/logbooks; one "reconciler
-          started" line per running binding.
+          started" line per running binding. (The held binding is also the
+          adopter's to recover, W-0024 slice 2; its start-time check settles
+          before the aggregate is measured.)
      DR2  a reconciler that cannot be built is a fixed fault; its healthy
           peer still runs. One binding's cloud failing leaves its peer's
           summary (200).
@@ -321,6 +323,15 @@ func TestReconcileSet_DR1_PerBindingWire(t *testing.T) {
 	if got := reconcilersStarted(t, f.d)[len(f.before):]; strings.Join(got, ",") != "smcloud,smcloud-b" {
 		t.Fatalf("reconcilers started = %v; want smcloud and smcloud-b only", got)
 	}
+	// smcloud-h, adopted under another account, is the adopter's to recover
+	// whichever logbook is the default (ADR 0097 §5): its start-time check
+	// reads /v1/version, and this old server's 404 is terminal until a
+	// relevant change. Let it settle so the window holds the aggregate's
+	// requests only.
+	waitUntil(t, "the adopter's start-time check of smcloud-h", func() bool {
+		st := f.d.adopter.StatusFor("smcloud-h").State
+		return st != "" && st != "checking" && st != "confirming"
+	})
 	mark := f.cloud.mark()
 	code, results, body := reconcileAll(t, f.d)
 	if code != http.StatusOK {

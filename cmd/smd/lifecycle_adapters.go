@@ -1095,7 +1095,7 @@ func (d *daemon) startAdoption(ctx context.Context) error {
 		return nil
 	}
 	d.adopter = adoption.New(d.cfgSvc, d.archives, d.db, d.bindingsAtStart, d.logger)
-	d.archives.SetAdoptionStatus(d.adopter.Status)
+	d.archives.SetAdoptionStatus(d.adopter.StatusFor)
 	onPanic := func(name string, pv any, stack []byte) {
 		d.logger.ErrorWith().Str("goroutine", name).Interface("panic", pv).
 			Bytes("stack", stack).Msg("smcloud adoption panic recovered")

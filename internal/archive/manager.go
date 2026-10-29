@@ -72,9 +72,10 @@ type Manager struct {
 	// startBindings is the same set by forwarder name: an adoption confirmed
 	// since the start applies at the next one (ADR 0090, T1).
 	startBindings map[string]types.LogbookDestination
-	// adoptionStatus is the adopter's status (SetAdoptionStatus); nil until
-	// wired, when only what the archive records is shown.
-	adoptionStatus func() AdoptionStatus
+	// adoptionStatus is the adopter's status of one binding, by forwarder name
+	// (SetAdoptionStatus); nil until wired, when only what the archive records
+	// is shown.
+	adoptionStatus func(forwarder string) AdoptionStatus
 	// heldUploads names the bindings this generation started held
 	// (SetHeldUploads, ruling C2).
 	heldUploads map[string]struct{}

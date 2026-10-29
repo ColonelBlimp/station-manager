@@ -22,8 +22,10 @@ import (
      CF1  reserve then record under the pinned account: the confirmation and
           its account are written together and confirm that account only.
      CF2  the pin is rechecked under the locks before the reservation AND the
-          confirmation: another active archive, a moved default or a changed
-          account abandons the step; the judge does not run; nothing is written.
+          confirmation: another active archive or a changed account abandons
+          the step, and so does a moved default before an unmarked binding's
+          reservation; the judge does not run; nothing is written. (A moved
+          default after the reservation: RF2.)
      CF3  an account replacement leaves the confirmation unmatched; the binding
           is reserved again (judged again) and re-confirmed under the new one.
      CF4  a token rotation does the same; a trailing slash on the URL does not.
@@ -151,6 +153,12 @@ func TestConfirmation_CF2_ThePinIsRecheckedBeforeEachWrite(t *testing.T) {
 				t.Fatalf("reserved after the pin changed: %+v", r)
 			}
 		})
+		if name == "the default moved" {
+			// By the confirmation the binding is reserved, and a reserved
+			// binding's recovery no longer depends on the default (ADR 0097
+			// §5): RF2, bindings_former_default_test.go.
+			continue
+		}
 		t.Run(name+": the confirmation", func(t *testing.T) {
 			db, a, _, read := unadoptedHome(t)
 			m, cfgSvc := homeManagerCfg(t, db, a)

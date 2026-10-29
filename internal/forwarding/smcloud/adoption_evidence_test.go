@@ -66,7 +66,7 @@ func binding(logbookID int64, name string, enabled bool, creds string) types.Log
 // disabled binding uses another name and has work queued; QRZ shares nothing.
 func safeEvidence() AdoptionEvidence {
 	e := AdoptionEvidence{
-		DefaultLogbookID: defaultLB,
+		LogbookID: defaultLB,
 		Bindings: []types.LogbookDestination{
 			binding(defaultLB, "smcloud", true, `{"logbook":"  shack "}`),
 			binding(otherLB, "smcloud.u2", false, `{"logbook":"portable"}`),
@@ -166,10 +166,10 @@ func TestAdoptionEvidence_E3_QueuedUploadsUnderTheNameAreNamed(t *testing.T) {
 func TestAdoptionEvidence_E4_ACloudUUIDOutsideTheDefaultLogbookRefuses(t *testing.T) {
 	e := safeEvidence()
 	e.CloudUUIDs = append(e.CloudUUIDs, uuidOther)
-	wantAmbiguous(t, judge(t, e), "1 QSO in the cloud logbook \"shack\" is not a QSO of the default logbook")
+	wantAmbiguous(t, judge(t, e), "1 QSO in the cloud logbook \"shack\" is not a QSO of its logbook")
 	e = safeEvidence()
 	e.CloudUUIDs = append(e.CloudUUIDs, uuidOther, "0192cccc-0000-7000-8000-000000000001")
-	wantAmbiguous(t, judge(t, e), "2 QSOs in the cloud logbook \"shack\" are not QSOs of the default logbook")
+	wantAmbiguous(t, judge(t, e), "2 QSOs in the cloud logbook \"shack\" are not QSOs of its logbook")
 }
 
 func TestAdoptionEvidence_E5_AnUnreadableNameOnAnotherBindingRefuses(t *testing.T) {

@@ -67,7 +67,7 @@ const (
 	reasonHistoryRecords = "previous SM Cloud upload history exists; automatic conversion needs manual recovery"
 	reasonHistoryQsos    = "this logbook already holds QSOs and the archive cannot show that none reached SM Cloud; automatic conversion needs manual recovery"
 	reasonRunning        = "this binding still uploads by its Cloud logbook name until the daemon restarts; restart, then turn it on"
-	reasonClaimed        = "this binding belongs to an SM Cloud adoption; make its logbook the default to use it"
+	reasonClaimed        = "this binding belongs to an SM Cloud adoption; re-enabling it is supported only in the Home archive"
 	reasonConflict       = "this binding carries conflicting identity and adoption markers; manual recovery is required"
 	// supportUnverifiedMessage is the SM Cloud card's line while the start
 	// could not reach the server (ruling J3).
@@ -121,7 +121,10 @@ func (g gate) planSmcloud(ctx context.Context, db BindingsDB, cfg config.Config,
 	case b != nil && BornOnIdentity(*b):
 		return smcloudPlan{}, nil // its wire is decided: no history, running or support rule
 	case b != nil && adoptionClaimed(*b):
-		if home && isDefault || b.Enabled {
+		// The claim fixes the owner: in Home a claimed binding turns on again
+		// on its own logbook, default or not, and keeps its adoption path
+		// (ADR 0097 §5). Elsewhere only an enabled one stays as it is.
+		if home || b.Enabled {
 			return smcloudPlan{}, nil
 		}
 		return smcloudPlan{reason: reasonClaimed}, nil
@@ -731,14 +734,15 @@ func (m *Manager) ApplyBindings(ctx context.Context, id string, req types.Archiv
 // station account it was made under, in one durable write. Under bindingsMu,
 // as a PUT, and then the config read lock, so neither a bindings save nor an
 // account save can land between the checks and the write: the pin must still
-// hold (same active archive, default logbook and account), and the binding
-// must still be reserved, enabled, hold the credentials read and not be
-// confirmed under this account already. false with a nil error means the pin
+// hold (same active archive and account, and the default logbook unless the
+// binding is claimed; underPin), and the binding must still be reserved,
+// enabled, hold the credentials read and not be confirmed under this account
+// already. false with a nil error means the pin
 // or the binding changed: the completion is discarded and the reservation
 // stays. A save started meanwhile waits for this local write.
 func (m *Manager) RecordAdoption(ctx context.Context, pin AdoptionPin) (bool, error) {
 	recorded := false
-	err := m.underPin(pin, func(db BindingsDB) error {
+	err := m.underPin(ctx, pin, func(db BindingsDB) error {
 		var err error
 		recorded, err = db.RecordLogbookDestinationAdoptedWithContext(ctx, pin.Binding.ForwarderName, pin.Binding.LogbookID, pin.Binding.Credentials, pin.Account)
 		return err
@@ -750,25 +754,29 @@ func (m *Manager) RecordAdoption(ctx context.Context, pin AdoptionPin) (bool, er
 }
 
 // AdoptionPin is what an adoption attempt read and acts for (ADR 0091): the
-// active archive, its default logbook's binding as read, and the fingerprint
-// of the station account the attempt uses (CurrentAccount). Each local write
-// rechecks it.
+// active archive, the binding as read (the default logbook's, or a claimed
+// one's; ADR 0097 §5), and the fingerprint of the station account the attempt
+// uses (CurrentAccount). Each local write rechecks it.
 type AdoptionPin struct {
 	ArchiveID string
 	Binding   types.LogbookDestination
 	Account   string
 }
 
-// errPinMoved reports that the pinned archive, default or account no longer
-// holds.
+// errPinMoved reports that the pinned archive or account no longer holds, or
+// that the default moved off a binding that is not claimed.
 var errPinMoved = errors.New("the adoption's pinned archive, default logbook or account changed")
 
 // underPin runs write with the active database while holding bindingsMu and
 // then the config read lock — the only order that cannot deadlock, since a
 // bindings PUT reads the config while holding bindingsMu — once the pin still
-// holds against the saved config. write must not call the config service or
-// the network: every save waits on it.
-func (m *Manager) underPin(pin AdoptionPin, write func(db BindingsDB) error) error {
+// holds against the saved config: the same active archive and account, and
+// the binding still on the default logbook unless its STORED row is claimed
+// now (ADR 0097 §5). The stored row decides, not the pinned snapshot: an
+// attempt that read the binding unclaimed and then reserved it carries its
+// own reservation through a move of the default. write must not call the
+// config service or the network: every save waits on it.
+func (m *Manager) underPin(ctx context.Context, pin AdoptionPin, write func(db BindingsDB) error) error {
 	m.bindingsMu.Lock()
 	defer m.bindingsMu.Unlock()
 	m.mu.Lock()
@@ -782,14 +790,39 @@ func (m *Manager) underPin(pin AdoptionPin, write func(db BindingsDB) error) err
 		return fmt.Errorf("destination %q has no remote adoption", pin.Binding.Destination)
 	}
 	return m.cfg.WithSnapshot(func(cfg config.Config) error {
-		if cfg.ActiveQsoArchiveID != pin.ArchiveID || cfg.DefaultLogbookID != pin.Binding.LogbookID {
+		if cfg.ActiveQsoArchiveID != pin.ArchiveID {
 			return errPinMoved
 		}
 		if current, err := CurrentAccount(cfg, pin.Binding.Destination, pin.ArchiveID); err != nil || current != pin.Account {
 			return errPinMoved
 		}
+		if cfg.DefaultLogbookID != pin.Binding.LogbookID {
+			claimed, err := storedClaim(ctx, db, pin.Binding)
+			if err != nil {
+				return err
+			}
+			if !claimed {
+				return errPinMoved
+			}
+		}
 		return write(db)
 	})
+}
+
+// storedClaim reports whether the binding read is claimed in the archive now:
+// the stored row with its forwarder name, on its logbook, holds a reservation
+// or an adoption.
+func storedClaim(ctx context.Context, db BindingsDB, read types.LogbookDestination) (bool, error) {
+	rows, err := db.ListLogbookDestinationsWithContext(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, r := range rows {
+		if r.ForwarderName == read.ForwarderName && r.LogbookID == read.LogbookID {
+			return adoptionClaimed(r), nil
+		}
+	}
+	return false, nil
 }
 
 // CurrentAccount is the fingerprint of the station account cfg holds for typ,
@@ -958,8 +991,9 @@ const (
 
 // ReserveAdoption is the step between an adoption attempt's unlocked reads and
 // its request (ADR 0091). Under bindingsMu, as a PUT, and then the config read
-// lock, it checks that the pin still holds (same active archive, default
-// logbook and account) and that the binding is still the one the attempt read
+// lock, it checks that the pin still holds (underPin: same active archive and
+// account, and the default logbook unless the binding is claimed) and that the
+// binding is still the one the attempt read
 // (same name, logbook, credentials; enabled; not already confirmed under the
 // pinned account), runs judge over the local evidence, and on a safe verdict
 // ("") reserves the binding's name. No bindings or account save can come
@@ -970,7 +1004,7 @@ const (
 // (ruling R2), and so does a re-confirmation under a new account.
 func (m *Manager) ReserveAdoption(ctx context.Context, pin AdoptionPin, judge func(context.Context) (string, error)) (ReserveOutcome, string, error) {
 	outcome, reason := ReserveChanged, ""
-	err := m.underPin(pin, func(db BindingsDB) error {
+	err := m.underPin(ctx, pin, func(db BindingsDB) error {
 		bindings, err := db.ListLogbookDestinationsWithContext(ctx)
 		if err != nil {
 			return err

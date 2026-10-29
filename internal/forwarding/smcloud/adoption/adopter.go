@@ -1,9 +1,12 @@
 // Package adoption runs Home's SM Cloud adoption in the background (ADR 0090,
-// ADR 0091, W-0021 5F.3): at start and hourly, it judges whether Home's default
-// SM Cloud binding may claim its legacy cloud logbook, reserves the name
-// durably, asks the server to adopt it, and records the confirmation under the
-// station account it was made with. It sits beside smcloud rather than inside
-// it because it drives the archive manager, whose tests import smcloud.
+// ADR 0091, W-0021 5F.3): at start and hourly, it judges whether an SM Cloud
+// binding may claim its legacy cloud logbook, reserves the name durably, asks
+// the server to adopt it, and records the confirmation under the station
+// account it was made with. A new adoption starts only on Home's default
+// binding; a binding already claimed (reserved, or adopted but not confirmed
+// for the current account) is carried through whichever logbook is the
+// default (ADR 0097 §5). It sits beside smcloud rather than inside it because
+// it drives the archive manager, whose tests import smcloud.
 package adoption
 
 import (
@@ -56,8 +59,8 @@ var messages = map[string]string{
 	StateUncertain:       "Adoption outcome uncertain: no confirmation was received from the server. Retrying.",
 	StateUnauthorized:    "Not adopted: the token was refused.",
 	StateUnreadable:      "Not adopted: the server's answer could not be read.",
-	StateUnsafe:          "Not adopted: the legacy cloud logbook cannot be matched safely to Home's default logbook; manual recovery is required.",
-	StateBlocked:         "Adoption confirmation blocked: the legacy cloud logbook can no longer be matched safely to Home's default logbook; manual recovery is required.",
+	StateUnsafe:          "Not adopted: the legacy cloud logbook cannot be matched safely to this binding's logbook; manual recovery is required.",
+	StateBlocked:         "Adoption confirmation blocked: the legacy cloud logbook can no longer be matched safely to this binding's logbook; manual recovery is required.",
 	StateLocalUnreadable: "Not yet: the local archive could not be read (retrying).",
 	StateRecordFailed:    "Cloud adoption succeeded; local confirmation could not be saved. Retrying.",
 	stateAdopted:         "Adopted; applies after a restart.",
@@ -91,13 +94,21 @@ type Adopter struct {
 	log     *logging.Service
 	after   func(time.Duration) <-chan time.Time
 
-	// Owned by the checking goroutine.
+	// Owned by the checking goroutine: one track per binding, by forwarder
+	// name, so one binding's outcome never resolves, suppresses or replaces
+	// another's (ADR 0097 §5).
+	tracks map[string]*track
+
+	mu       sync.Mutex
+	statuses map[string]archive.AdoptionStatus // by forwarder name
+}
+
+// track is one binding's state across checks. Each compares whole subjects
+// (archive, binding, logbook, name and account), as a single binding's did.
+type track struct {
 	suppressed *archive.AdoptionSubject // a terminal outcome's subject (ruling Q4)
 	unresolved archive.AdoptionStatus   // an unresolved outcome and its subject (ruling A5)
 	logged     archive.AdoptionStatus   // the last outcome logged
-
-	mu     sync.Mutex
-	status archive.AdoptionStatus
 }
 
 // New builds the adopter. running is the bindings the daemon started with;
@@ -109,7 +120,8 @@ func New(cfg Config, arch Archive, db *sqlite.Service, running []types.LogbookDe
 			routes = append(routes, b)
 		}
 	}
-	return &Adopter{cfg: cfg, archive: arch, db: db, running: routes, log: log, after: time.After}
+	return &Adopter{cfg: cfg, archive: arch, db: db, running: routes, log: log, after: time.After,
+		tracks: map[string]*track{}, statuses: map[string]archive.AdoptionStatus{}}
 }
 
 // Run checks at once, then every Interval, until ctx is cancelled. It keeps
@@ -130,11 +142,12 @@ func (a *Adopter) Run(ctx context.Context) {
 	}
 }
 
-// Status is the latest status and the subject it describes.
-func (a *Adopter) Status() archive.AdoptionStatus {
+// StatusFor is one binding's latest status, by forwarder name, and the
+// subject it describes.
+func (a *Adopter) StatusFor(forwarder string) archive.AdoptionStatus {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.status
+	return a.statuses[forwarder]
 }
 
 // target is what one attempt acts for, read from the saved state.
@@ -146,69 +159,80 @@ type target struct {
 	client  *smcloud.AdoptionClient
 }
 
-// check is one check: read the saved state and, when an attempt is due, make
-// it. A terminal outcome waits until its subject changes (ruling Q4); a
-// binding confirmed under the current account needs nothing.
+// check is one check: read the saved state and, for each eligible binding in
+// turn, make an attempt when one is due. A terminal outcome waits until its
+// subject changes (ruling Q4); a binding confirmed under the current account
+// needs nothing. A binding no longer eligible loses its status and its
+// suppression, but keeps an unresolved outcome for when it returns.
 func (a *Adopter) check(ctx context.Context) {
-	t, ok, err := a.target(ctx)
+	targets, err := a.targets(ctx)
 	if err != nil {
-		// Not evidence of ineligibility: the suppression and the status stay,
-		// and the next check reads again.
+		// Not evidence of ineligibility: the suppressions and the statuses
+		// stay, and the next check reads again.
 		a.log.WarnWith().Err(err).Msg("smcloud adoption: the archive could not be read; the next check retries")
 		return
 	}
-	if !ok {
-		a.suppressed, a.logged = nil, archive.AdoptionStatus{}
-		a.set(archive.AdoptionStatus{})
-		return
+	eligible := make(map[string]bool, len(targets))
+	for _, t := range targets {
+		name := t.subject.ForwarderName
+		eligible[name] = true
+		tr := a.track(name)
+		if archive.AdoptionConfirmed(t.binding, t.subject.Account) {
+			tr.suppressed = nil
+			a.set(name, archive.AdoptionStatus{})
+			continue
+		}
+		if tr.suppressed != nil && *tr.suppressed == t.subject {
+			continue
+		}
+		tr.suppressed = nil
+		a.attempt(ctx, tr, t)
+		if ctx.Err() != nil {
+			return
+		}
 	}
-	if archive.AdoptionConfirmed(t.binding, t.subject.Account) {
-		a.suppressed = nil
-		a.set(archive.AdoptionStatus{})
-		return
+	for name, tr := range a.tracks {
+		if !eligible[name] {
+			tr.suppressed, tr.logged = nil, archive.AdoptionStatus{}
+			a.set(name, archive.AdoptionStatus{})
+		}
 	}
-	if a.suppressed != nil && *a.suppressed == t.subject {
-		return
-	}
-	a.suppressed = nil
-	a.attempt(ctx, t)
 }
 
-// target reads Home's default SM Cloud binding, enabled on a live logbook,
-// with a complete station account; false when there is nothing eligible. An
-// error is a failed read, which says nothing about eligibility.
-func (a *Adopter) target(ctx context.Context) (target, bool, error) {
+func (a *Adopter) track(name string) *track {
+	tr, ok := a.tracks[name]
+	if !ok {
+		tr = &track{}
+		a.tracks[name] = tr
+	}
+	return tr
+}
+
+// targets reads the bindings an attempt may act for, enabled on live Home
+// logbooks with a complete station account: each claimed binding (reserved,
+// or adopted), whichever logbook is the default, and the default's unclaimed
+// binding, the only place a new adoption starts (ADR 0097 §5). A binding born
+// on identity is never adopted (ADR 0092), nor is one carrying conflicting
+// markers. An error is a failed read, which says nothing about eligibility.
+func (a *Adopter) targets(ctx context.Context) ([]target, error) {
 	cfg := a.cfg.Snapshot()
 	entry := cfg.QsoArchiveByID(cfg.ActiveQsoArchiveID)
 	if entry == nil || entry.Ownership != types.QsoArchiveOwnershipLegacy {
-		return target{}, false, nil
+		return nil, nil
 	}
 	bindings, err := a.db.ListLogbookDestinationsWithContext(ctx)
 	if err != nil {
-		return target{}, false, err
+		return nil, err
 	}
 	logbooks, err := a.db.FetchAllLogbooksWithContext(ctx)
 	if err != nil {
-		return target{}, false, err
+		return nil, err
 	}
-	t := target{label: entry.Label}
+	live := make(map[int64]types.Logbook, len(logbooks))
 	for _, lb := range logbooks {
-		if lb.ID == cfg.DefaultLogbookID && lb.UUID != "" {
-			t.logbook = lb
+		if lb.UUID != "" {
+			live[lb.ID] = lb
 		}
-	}
-	for _, b := range bindings {
-		// A binding born on identity is never adopted (ADR 0092), even once its
-		// logbook becomes the default; the reservation write refuses it too.
-		if b.Destination == smcloud.Type && b.LogbookID == cfg.DefaultLogbookID && b.Enabled && b.IdentitySince == nil {
-			t.binding = b
-		}
-	}
-	if t.logbook.ID == 0 || t.binding.ForwarderName == "" {
-		return target{}, false, nil
-	}
-	if t.subject, err = archive.SubjectOf(cfg, t.binding); err != nil {
-		return target{}, false, nil
 	}
 	var account types.ForwarderConfig
 	for _, fc := range cfg.Forwarders {
@@ -216,38 +240,57 @@ func (a *Adopter) target(ctx context.Context) (target, bool, error) {
 			account = fc
 		}
 	}
-	fc, err := forwarding.BindingConfig(t.binding, account)
-	if err == nil {
-		t.client, err = smcloud.NewAdoptionClient(fc)
+	var out []target
+	for _, b := range bindings {
+		if b.Destination != smcloud.Type || !b.Enabled || b.IdentitySince != nil {
+			continue
+		}
+		claimed := b.AdoptionReservedAt != nil || b.RemoteAdoptedAt != nil
+		if !claimed && b.LogbookID != cfg.DefaultLogbookID {
+			continue
+		}
+		lb, ok := live[b.LogbookID]
+		if !ok {
+			continue
+		}
+		t := target{binding: b, label: entry.Label, logbook: lb}
+		if t.subject, err = archive.SubjectOf(cfg, b); err != nil {
+			continue
+		}
+		fc, err := forwarding.BindingConfig(b, account)
+		if err == nil {
+			t.client, err = smcloud.NewAdoptionClient(fc)
+		}
+		if err != nil {
+			continue
+		}
+		out = append(out, t)
 	}
-	if err != nil {
-		return target{}, false, nil
-	}
-	return t, true, nil
+	return out, nil
 }
 
 // attempt is one adoption attempt (ADR 0091): the version, the cloud
 // manifest, the judgement and durable reservation, the request, and the
 // confirmation. A cancelled attempt (shutdown) reports nothing more.
-func (a *Adopter) attempt(ctx context.Context, t target) {
+func (a *Adopter) attempt(ctx context.Context, tr *track, t target) {
 	sub := t.subject
 	if t.binding.RemoteAdoptedAt != nil {
-		a.report(sub, StateConfirming, "")
+		a.report(tr, sub, StateConfirming, "")
 	} else {
-		a.report(sub, StateChecking, "")
+		a.report(tr, sub, StateChecking, "")
 	}
 	protocol, err := t.client.IdentityProtocol(ctx)
 	if err != nil {
-		a.failed(ctx, sub, err, false)
+		a.failed(ctx, tr, sub, err, false)
 		return
 	}
 	if protocol < 1 {
-		a.terminal(sub, StateUnsupported)
+		a.terminal(tr, sub, StateUnsupported)
 		return
 	}
 	uuids, err := t.client.CloudUUIDs(ctx, sub.Name)
 	if err != nil {
-		a.failed(ctx, sub, err, false)
+		a.failed(ctx, tr, sub, err, false)
 		return
 	}
 	pin := archive.AdoptionPin{ArchiveID: sub.ArchiveID, Binding: t.binding, Account: sub.Account}
@@ -256,17 +299,17 @@ func (a *Adopter) attempt(ctx context.Context, t target) {
 	case ctx.Err() != nil:
 		return
 	case err != nil:
-		a.report(sub, StateLocalUnreadable, "", err)
+		a.report(tr, sub, StateLocalUnreadable, "", err)
 		return
 	case outcome == archive.ReserveChanged:
 		// The saved state moved under the attempt; the next check re-reads it.
-		a.set(archive.AdoptionStatus{})
+		a.set(sub.ForwarderName, archive.AdoptionStatus{})
 		return
 	case outcome == archive.ReserveUnsafe && t.binding.AdoptionReservedAt != nil:
-		a.report(sub, StateBlocked, reason)
+		a.report(tr, sub, StateBlocked, reason)
 		return
 	case outcome == archive.ReserveUnsafe:
-		a.report(sub, StateUnsafe, reason)
+		a.report(tr, sub, StateUnsafe, reason)
 		return
 	}
 	err = t.client.Adopt(ctx, smcloud.AdoptRequest{
@@ -274,30 +317,31 @@ func (a *Adopter) attempt(ctx context.Context, t target) {
 		LogbookUUID: t.logbook.UUID, LogbookName: t.logbook.Name, Callsign: t.logbook.Callsign,
 	})
 	if err != nil {
-		a.failed(ctx, sub, err, true)
+		a.failed(ctx, tr, sub, err, true)
 		return
 	}
 	recorded, err := a.archive.RecordAdoption(ctx, pin)
 	switch {
 	case err != nil:
-		a.report(sub, StateRecordFailed, "", err)
+		a.report(tr, sub, StateRecordFailed, "", err)
 	case !recorded:
 		// The account, default or binding changed since the attempt read
 		// them: the completion is discarded and its status is not carried
 		// to the new subject (ruling R3).
 		a.log.InfoWith().Str("forwarder", sub.ForwarderName).Int64("logbook_id", sub.LogbookID).
 			Msg("smcloud adoption: the cloud confirmed, but the binding or the station account changed meanwhile; the confirmation was discarded and the next check judges again")
-		a.set(archive.AdoptionStatus{})
+		a.set(sub.ForwarderName, archive.AdoptionStatus{})
 	default:
-		a.report(sub, stateAdopted, "")
+		a.report(tr, sub, stateAdopted, "")
 	}
 }
 
 // judge is the T3 judgement over the local evidence and the cloud UUIDs, run
-// by ReserveAdoption under its locks: it reads only the archive.
-func (a *Adopter) judge(defaultLogbookID int64, cloud []string) func(context.Context) (string, error) {
+// by ReserveAdoption under its locks: it reads only the archive. The evidence
+// is the binding's own logbook's, default or not (ADR 0097 §5).
+func (a *Adopter) judge(logbookID int64, cloud []string) func(context.Context) (string, error) {
 	return func(ctx context.Context) (string, error) {
-		evidence, err := smcloud.LocalAdoptionEvidence(ctx, a.db, defaultLogbookID, a.running)
+		evidence, err := smcloud.LocalAdoptionEvidence(ctx, a.db, logbookID, a.running)
 		if err != nil {
 			return "", err
 		}
@@ -322,44 +366,44 @@ func (a *Adopter) judge(defaultLogbookID int64, cloud []string) func(context.Con
 // subject: the store never clears a mapping, and a replay of one in effect
 // answers 200 (internal/cloud/store/identity.go, adoptArchive and
 // adoptLogbook). Any other 409 resolves nothing.
-func (a *Adopter) failed(ctx context.Context, sub archive.AdoptionSubject, err error, sent bool) {
+func (a *Adopter) failed(ctx context.Context, tr *track, sub archive.AdoptionSubject, err error, sent bool) {
 	if ctx.Err() != nil {
 		return
 	}
 	var ae *smcloud.AdoptionError
 	if !stderr.As(err, &ae) {
-		a.report(sub, StateUnreachable, "", err)
+		a.report(tr, sub, StateUnreachable, "", err)
 		return
 	}
 	switch ae.Failure {
 	case smcloud.AdoptionUnreachable:
 		if sent {
-			a.report(sub, StateUncertain, "", err)
+			a.report(tr, sub, StateUncertain, "", err)
 		} else {
-			a.report(sub, StateUnreachable, "", err)
+			a.report(tr, sub, StateUnreachable, "", err)
 		}
 	case smcloud.AdoptionUnauthorized:
-		a.terminal(sub, StateUnauthorized, err)
+		a.terminal(tr, sub, StateUnauthorized, err)
 	case smcloud.AdoptionUnreadable:
 		// After the adoption request the server may have committed it.
-		if sent && a.unresolved.Subject != sub {
-			a.unresolved = archive.AdoptionStatus{Subject: sub, State: StateUncertain}
+		if sent && tr.unresolved.Subject != sub {
+			tr.unresolved = archive.AdoptionStatus{Subject: sub, State: StateUncertain}
 		}
-		a.terminal(sub, StateUnreadable, err)
+		a.terminal(tr, sub, StateUnreadable, err)
 	case smcloud.AdoptionConflict:
-		if sent && ae.Code != "" && a.unresolved.Subject == sub && a.unresolved.State == StateUncertain {
-			a.unresolved = archive.AdoptionStatus{}
+		if sent && ae.Code != "" && tr.unresolved.Subject == sub && tr.unresolved.State == StateUncertain {
+			tr.unresolved = archive.AdoptionStatus{}
 		}
 		blocker := "the adoption conflicts"
 		if ae.Code != "" {
 			blocker = fmt.Sprintf("the adoption conflicts (%s)", ae.Code)
 		}
-		a.suppressed = &sub
-		a.publish(sub, StateConflict, "Not adopted: "+blocker+".", blocker, "", err)
+		tr.suppressed = &sub
+		a.publish(tr, sub, StateConflict, "Not adopted: "+blocker+".", blocker, "", err)
 	default:
 		blocker := fmt.Sprintf("the server returned HTTP %d", ae.Status)
-		a.suppressed = &sub
-		a.publish(sub, StateRefused, "Adoption could not be confirmed: "+blocker+".", blocker, "", err)
+		tr.suppressed = &sub
+		a.publish(tr, sub, StateRefused, "Adoption could not be confirmed: "+blocker+".", blocker, "", err)
 	}
 }
 
@@ -369,8 +413,8 @@ var blockers = map[string]string{
 	StateUnauthorized: "the server rejected authentication (HTTP 401)",
 	StateUnreadable:   "the server's answer could not be read",
 	StateUnsupported:  "the server does not support archive identity",
-	StateUnsafe:       "the legacy cloud logbook can no longer be matched safely to Home's default logbook; manual recovery is required",
-	StateBlocked:      "the legacy cloud logbook can no longer be matched safely to Home's default logbook; manual recovery is required",
+	StateUnsafe:       "the legacy cloud logbook can no longer be matched safely to this binding's logbook; manual recovery is required",
+	StateBlocked:      "the legacy cloud logbook can no longer be matched safely to this binding's logbook; manual recovery is required",
 }
 
 // kept opens the message of a status that keeps an unresolved outcome while
@@ -381,15 +425,15 @@ var kept = map[string]string{
 }
 
 // terminal reports an outcome that waits for a relevant change (ruling Q4).
-func (a *Adopter) terminal(sub archive.AdoptionSubject, state string, errs ...error) {
-	a.suppressed = &sub
-	a.publish(sub, state, messages[state], blockers[state], "", errs...)
+func (a *Adopter) terminal(tr *track, sub archive.AdoptionSubject, state string, errs ...error) {
+	tr.suppressed = &sub
+	a.publish(tr, sub, state, messages[state], blockers[state], "", errs...)
 }
 
 // report publishes a state with its standard message; reason is the
 // judgement's, for the log only.
-func (a *Adopter) report(sub archive.AdoptionSubject, state, reason string, errs ...error) {
-	a.publish(sub, state, messages[state], blockers[state], reason, errs...)
+func (a *Adopter) report(tr *track, sub archive.AdoptionSubject, state, reason string, errs ...error) {
+	a.publish(tr, sub, state, messages[state], blockers[state], reason, errs...)
 }
 
 // publish sets the status and logs the transition once. An unresolved outcome
@@ -397,36 +441,36 @@ func (a *Adopter) report(sub archive.AdoptionSubject, state, reason string, errs
 // until evidence resolves it (ruling A5): a transient state shows it as it
 // is, and any other names the current blocker beside it. "adopted" clears the
 // status, since the archive shows the confirmation.
-func (a *Adopter) publish(sub archive.AdoptionSubject, state, message, blocker, reason string, errs ...error) {
-	u := a.unresolved
+func (a *Adopter) publish(tr *track, sub archive.AdoptionSubject, state, message, blocker, reason string, errs ...error) {
+	u := tr.unresolved
 	if u.Subject != sub {
 		u = archive.AdoptionStatus{}
 	}
 	shown := archive.AdoptionStatus{Subject: sub, State: state, Message: message}
 	switch {
 	case state == stateAdopted:
-		a.unresolved, shown = archive.AdoptionStatus{}, archive.AdoptionStatus{}
+		tr.unresolved, shown = archive.AdoptionStatus{}, archive.AdoptionStatus{}
 	case u.State == StateRecordFailed && state == StateUncertain, u.State != "" && transient[state]:
 		shown = archive.AdoptionStatus{Subject: sub, State: u.State, Message: messages[u.State]}
 	case sticky[state]:
-		a.unresolved = archive.AdoptionStatus{Subject: sub, State: state}
+		tr.unresolved = archive.AdoptionStatus{Subject: sub, State: state}
 	case u.State != "":
 		shown = archive.AdoptionStatus{Subject: sub, State: u.State, Message: kept[u.State] + " Confirmation is blocked: " + blocker + "."}
 	}
-	a.set(shown)
+	a.set(sub.ForwarderName, shown)
 	if transient[state] && shown.State != state {
 		return
 	}
-	first := a.logged.Subject != sub
+	first := tr.logged.Subject != sub
 	switch {
 	case state == StateChecking || state == StateConfirming:
 		if !first {
 			return
 		}
-	case !first && a.logged.State == shown.State && a.logged.Message == shown.Message:
+	case !first && tr.logged.State == shown.State && tr.logged.Message == shown.Message:
 		return
 	}
-	a.logged = shown
+	tr.logged = shown
 	ev := a.log.InfoWith()
 	if !transient[state] && state != stateAdopted {
 		ev = a.log.WarnWith()
@@ -446,8 +490,12 @@ func (a *Adopter) publish(sub archive.AdoptionSubject, state, message, blocker, 
 	ev.Msg("smcloud adoption: " + message)
 }
 
-func (a *Adopter) set(s archive.AdoptionStatus) {
+func (a *Adopter) set(forwarder string, s archive.AdoptionStatus) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.status = s
+	if s.State == "" {
+		delete(a.statuses, forwarder)
+		return
+	}
+	a.statuses[forwarder] = s
 }

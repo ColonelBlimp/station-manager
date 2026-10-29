@@ -38,8 +38,9 @@ import (
           an unreadable local archive, a pin that moved.
      AD4  recovery through a fresh judgement and an idempotent adoption: a lost
           response, a failed local confirmation, a restart with a reservation.
-     AD5  a moved default or a changed account never inherits an attempt's
-          status, a late completion included; the completion is discarded.
+     AD5  a changed account never inherits an attempt's status, a late
+          completion included; the completion is discarded. (A moved default:
+          FD7, adopter_recovery_test.go.)
      AD6  terminal outcomes (401, unreadable, refused, each 409, unsupported)
           stay suppressed across unchanged checks, an unrelated config edit
           and the adopter's own reservation timestamp; each relevant change
@@ -81,10 +82,46 @@ type fakeCloud struct {
 	dropReply bool   // the next adoption commits, then the connection drops
 	badReply  string // each adoption commits, then answers 200 with this body
 	hook      func(path string)
+
+	// More cloud logbooks beside "shack" (W-0024 slice 2: two bindings, each
+	// with its own name): name → UUIDs, listed with ids from 8 in name order.
+	// Each name keeps its own first mapping; conflictFor and dropFor act on
+	// one name's adoption only.
+	others      map[string][]string
+	mappedBy    map[string]smcloud.AdoptRequest
+	conflictFor map[string]string
+	dropFor     map[string]bool
+}
+
+// otherIDs numbers the other cloud logbooks from 8, in name order.
+func (c *fakeCloud) otherIDs() map[string]int {
+	names := make([]string, 0, len(c.others))
+	for n := range c.others {
+		names = append(names, n)
+	}
+	slices.Sort(names)
+	ids := make(map[string]int, len(names))
+	for i, n := range names {
+		ids[n] = 8 + i
+	}
+	return ids
+}
+
+// adoptionsFor lists the adoption requests made for one cloud name.
+func (c *fakeCloud) adoptionsFor(name string) []smcloud.AdoptRequest {
+	var out []smcloud.AdoptRequest
+	for _, r := range c.adoptions() {
+		if r.LegacyName == name {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 func newFakeCloud(t *testing.T) *fakeCloud {
-	c := &fakeCloud{t: t, protocol: 1, forced: map[string]int{}, uuids: []string{qso1, qso2}}
+	c := &fakeCloud{t: t, protocol: 1, forced: map[string]int{}, uuids: []string{qso1, qso2},
+		others: map[string][]string{}, mappedBy: map[string]smcloud.AdoptRequest{},
+		conflictFor: map[string]string{}, dropFor: map[string]bool{}}
 	c.srv = httptest.NewServer(http.HandlerFunc(c.serve))
 	t.Cleanup(c.srv.Close)
 	return c
@@ -145,18 +182,31 @@ func (c *fakeCloud) serve(w http.ResponseWriter, r *http.Request) {
 		if c.uuids != nil {
 			books = append(books, map[string]any{"id": 7, "name": "shack"})
 		}
+		for name, id := range c.otherIDs() {
+			books = append(books, map[string]any{"id": id, "name": name})
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"logbooks": books})
 	case "/v1/logbooks/7/manifest":
-		var entries []map[string]any
-		for _, u := range c.uuids {
-			entries = append(entries, map[string]any{"uuid": u, "modified_at": "2026-10-01T00:00:00Z", "deleted": false})
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"entries": entries})
+		writeManifest(w, c.uuids)
 	case "/v1/archives/adopt":
 		c.adopt(w, r)
 	default:
+		for name, id := range c.otherIDs() {
+			if r.URL.Path == fmt.Sprintf("/v1/logbooks/%d/manifest", id) {
+				writeManifest(w, c.others[name])
+				return
+			}
+		}
 		w.WriteHeader(http.StatusNotFound)
 	}
+}
+
+func writeManifest(w http.ResponseWriter, uuids []string) {
+	var entries []map[string]any
+	for _, u := range uuids {
+		entries = append(entries, map[string]any{"uuid": u, "modified_at": "2026-10-01T00:00:00Z", "deleted": false})
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{"entries": entries})
 }
 
 func (c *fakeCloud) adopt(w http.ResponseWriter, r *http.Request) {
@@ -165,20 +215,42 @@ func (c *fakeCloud) adopt(w http.ResponseWriter, r *http.Request) {
 		c.t.Errorf("adopt body: %v", err)
 	}
 	c.bodies = append(c.bodies, req)
-	if c.conflict != "" {
+	conflict := c.conflict
+	if code := c.conflictFor[req.LegacyName]; code != "" {
+		conflict = code
+	}
+	if conflict != "" {
 		w.WriteHeader(http.StatusConflict)
-		_, _ = fmt.Fprintf(w, `{"code":%q,"message":"m"}`, c.conflict)
+		_, _ = fmt.Fprintf(w, `{"code":%q,"message":"m"}`, conflict)
 		return
 	}
-	if c.mapped != nil && *c.mapped != req {
+	// A test may seed "shack"'s mapping through c.mapped.
+	if _, ok := c.mappedBy["shack"]; !ok && c.mapped != nil {
+		c.mappedBy["shack"] = *c.mapped
+	}
+	prior, mapped := c.mappedBy[req.LegacyName]
+	if mapped && prior != req {
 		w.WriteHeader(http.StatusConflict)
 		_, _ = io.WriteString(w, `{"code":"logbook_mapping_conflict","message":"m"}`)
 		return
 	}
-	changed := c.mapped == nil
-	c.mapped = &req
+	changed := !mapped
+	c.mappedBy[req.LegacyName] = req
+	if req.LegacyName == "shack" {
+		c.mapped = &req
+	}
 	if c.badReply != "" {
 		_, _ = io.WriteString(w, c.badReply)
+		return
+	}
+	if c.dropFor[req.LegacyName] {
+		c.dropFor[req.LegacyName] = false
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			c.t.Errorf("hijack: %v", err)
+			return
+		}
+		_ = conn.Close()
 		return
 	}
 	if c.dropReply {
@@ -204,6 +276,8 @@ type spyArchive struct {
 	judgements int
 	reserveErr error
 	recordErr  error // once
+	// recordErrFor fails one binding's confirmation, once (W-0024 slice 2).
+	recordErrFor map[string]error
 	// duringJudge, when set, runs inside the reservation's judgement: a change
 	// that lands after the attempt read the binding and before its write.
 	duringJudge func()
@@ -232,6 +306,10 @@ func (s *spyArchive) RecordAdoption(ctx context.Context, pin archive.AdoptionPin
 	s.mu.Lock()
 	err := s.recordErr
 	s.recordErr = nil
+	if e := s.recordErrFor[pin.Binding.ForwarderName]; e != nil {
+		err = e
+		delete(s.recordErrFor, pin.Binding.ForwarderName)
+	}
 	s.mu.Unlock()
 	if err != nil {
 		return false, err
@@ -376,7 +454,7 @@ func newStation(t *testing.T) *station {
 	m.SetActiveBindings(s.db, running)
 	s.arch = &spyArchive{m: m}
 	s.a = New(s.cfgSvc, s.arch, s.db, running, logger)
-	m.SetAdoptionStatus(s.a.Status)
+	m.SetAdoptionStatus(s.a.StatusFor)
 	return s
 }
 
@@ -434,7 +512,7 @@ func (s *station) check() { s.a.check(context.Background()) }
 
 func (s *station) wantStatus(state, message string) {
 	s.t.Helper()
-	got := s.a.Status()
+	got := s.a.StatusFor("cloud")
 	if got.State != state || got.Message != message {
 		s.t.Fatalf("status = %q %q; want %q %q", got.State, got.Message, state, message)
 	}
@@ -463,8 +541,8 @@ const (
 	msgUncertain   = "Adoption outcome uncertain: no confirmation was received from the server. Retrying."
 	msgUnauth      = "Not adopted: the token was refused."
 	msgUnreadable  = "Not adopted: the server's answer could not be read."
-	msgUnsafe      = "Not adopted: the legacy cloud logbook cannot be matched safely to Home's default logbook; manual recovery is required."
-	msgBlocked     = "Adoption confirmation blocked: the legacy cloud logbook can no longer be matched safely to Home's default logbook; manual recovery is required."
+	msgUnsafe      = "Not adopted: the legacy cloud logbook cannot be matched safely to this binding's logbook; manual recovery is required."
+	msgBlocked     = "Adoption confirmation blocked: the legacy cloud logbook can no longer be matched safely to this binding's logbook; manual recovery is required."
 	msgLocal       = "Not yet: the local archive could not be read (retrying)."
 	msgRecord      = "Cloud adoption succeeded; local confirmation could not be saved. Retrying."
 	msgChecking    = "Checking whether the legacy cloud logbook can be adopted."
@@ -699,28 +777,9 @@ func (s *station) wantRecovered(attempts int) {
 // ---- AD5 -------------------------------------------------------------------
 
 func TestAdopter_AD5_NoInheritedStatus(t *testing.T) {
-	t.Run("the default moves during the attempt: the late completion is discarded", func(t *testing.T) {
-		s := newStation(t)
-		s.exec(`INSERT INTO logbook_destination (logbook_id, destination, forwarder_name, enabled, credentials)
-			VALUES (?, 'smcloud', 'cloud2', 1, '{"logbook":"portable"}')`, s.second)
-		s.cloud.set(func(c *fakeCloud) {
-			c.hook = func(path string) {
-				if path == "/v1/archives/adopt" {
-					s.update(func(c *config.Config) { c.DefaultLogbookID = s.second })
-				}
-			}
-		})
-		s.check()
-		if b := s.binding(s.main); b.RemoteAdoptedAt != nil {
-			t.Fatalf("the late completion was recorded: %+v", b)
-		}
-		if v := s.view(s.second); v != nil {
-			t.Fatalf("the new default shows %+v", v)
-		}
-		if v := s.view(s.main); v != nil {
-			t.Fatalf("the old default shows %+v", v)
-		}
-	})
+	// The default moving during an attempt is FD7 (W-0024 slice 2): before
+	// the reservation the unmarked initiation is abandoned; after it, the
+	// reserved binding's completion is recorded (ADR 0097 §5).
 	t.Run("the account changes during the attempt", func(t *testing.T) {
 		s := newStation(t)
 		s.cloud.set(func(c *fakeCloud) {
@@ -842,8 +901,8 @@ func TestAdopter_AD6_TerminalOutcomesWaitForARelevantChange(t *testing.T) {
 
 func (s *station) wantState(state string) {
 	s.t.Helper()
-	if got := s.a.Status().State; got != state {
-		s.t.Fatalf("state = %q (%q); want %q", got, s.a.Status().Message, state)
+	if got := s.a.StatusFor("cloud").State; got != state {
+		s.t.Fatalf("state = %q (%q); want %q", got, s.a.StatusFor("cloud").Message, state)
 	}
 }
 
@@ -890,7 +949,7 @@ func TestAdopter_AD7_StatusTexts(t *testing.T) {
 				c.forced["/v1/logbooks"] = 502
 				c.hook = func(path string) {
 					if path == "/v1/version" {
-						during = s.a.Status()
+						during = s.a.StatusFor("cloud")
 					}
 				}
 			})
@@ -924,7 +983,7 @@ func TestAdopter_AD7_StatusTexts(t *testing.T) {
 				c.forced["/v1/logbooks"] = 502
 				c.hook = func(path string) {
 					if path == "/v1/version" {
-						during = s.a.Status()
+						during = s.a.StatusFor("cloud")
 					}
 				}
 			})
@@ -1131,7 +1190,7 @@ func TestAdopter_AD10_ALaterRefusalKeepsTheUncertainty(t *testing.T) {
 		"a refusal":            {func(c *fakeCloud) { c.forced["/v1/logbooks/7/manifest"] = 403 }, "the server returned HTTP 403."},
 		"an old server":        {func(c *fakeCloud) { c.protocol = nil }, "the server does not support archive identity."},
 		"an unsafe judgement": {func(c *fakeCloud) { c.uuids = append(c.uuids, "019fd5c5-0000-7000-8000-0000000000ff") },
-			"the legacy cloud logbook can no longer be matched safely to Home's default logbook; manual recovery is required."},
+			"the legacy cloud logbook can no longer be matched safely to this binding's logbook; manual recovery is required."},
 	} {
 		t.Run("lost response, then "+name, func(t *testing.T) {
 			s := newStation(t)

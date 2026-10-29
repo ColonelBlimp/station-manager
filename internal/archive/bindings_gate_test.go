@@ -49,9 +49,9 @@ import (
      FH9  a managed logbook holding QSOs and other destinations' records is
           enabled and stamped: no history gate there (E3).
      FH10 Home's default enables with no stamp: the adoption path, as before.
-     FH11 a clean reserved or adopted binding off the default refuses
-          re-enable with J4's text and is never stamped; one already enabled
-          stays as it is.
+     FH11 a clean reserved or adopted binding off the default re-enables
+          (W-0024 slice 2, ADR 0097 §5: the claim fixes the owner) and is never
+          stamped; one already enabled stays as it is.
      FH12 a binding the running generation started enabled on the name wire
           refuses conversion after a saved disable until a restart; after the
           restart, empty, it qualifies.
@@ -78,7 +78,7 @@ const (
 	wantUnsupported      = "the SM Cloud server does not support per-logbook backups; upgrade it"
 	wantSupportError     = "SM Cloud server support could not be checked; the daemon log has the cause"
 	wantChanged          = "the SM Cloud server changed since the daemon started; restart to check it"
-	wantClaimed          = "this binding belongs to an SM Cloud adoption; make its logbook the default to use it"
+	wantClaimed          = "this binding belongs to an SM Cloud adoption; re-enabling it is supported only in the Home archive"
 	wantConflict         = "this binding carries conflicting identity and adoption markers; manual recovery is required"
 	supportUnverifiedMsg = "SM Cloud server support is not verified: the server could not be reached at startup. Uploads wait and retry until a supporting server is available."
 )
@@ -326,8 +326,8 @@ func TestGate_AG2_ACleanBornBindingReEnablesUnderAnySupport(t *testing.T) {
 		}
 		_, err := putVia(m, homeID, types.LogbookBindingEdit{LogbookID: b, Enabled: true})
 		wantRefused(t, db, b, err, wantConflict)
-		if strings.Contains(err.Error(), "make its logbook the default") {
-			t.Fatalf("a conflicting binding was offered the default as its repair: %v", err)
+		if strings.Contains(err.Error(), wantClaimed) {
+			t.Fatalf("a conflicting binding was given the claimed binding's reason: %v", err)
 		}
 	})
 }
@@ -552,17 +552,24 @@ func TestGate_FH11_AClaimedBindingOffTheDefault(t *testing.T) {
 		"reserved": `adoption_reserved_at = datetime('now')`,
 		"adopted":  `adoption_reserved_at = datetime('now'), remote_adopted_at = datetime('now'), remote_adopted_account = 'fp'`,
 	} {
-		t.Run(name+", disabled, refuses", func(t *testing.T) {
+		// W-0024 slice 2 (ADR 0097 §5): the claim fixes the owner, so a
+		// claimed Home binding re-enables on its own logbook, default or not;
+		// it is never stamped born on identity.
+		t.Run(name+", disabled, re-enables", func(t *testing.T) {
 			db, m, _, b := gateHome(t)
 			execArchive(t, db, `INSERT INTO logbook_destination (logbook_id, destination, forwarder_name, enabled, credentials)
 				VALUES (?, 'smcloud', 'smcloud.second', 0, '{"logbook":"portable"}')`, b)
 			execArchive(t, db, `UPDATE logbook_destination SET `+marker+` WHERE logbook_id = ?`, b)
 			startAsStored(t, m, db)
-			if r := rowOf(t, gateView(t, m, homeID), b).Reason; r != wantClaimed {
-				t.Fatalf("row reason = %q; want %q", r, wantClaimed)
+			if r := rowOf(t, gateView(t, m, homeID), b).Reason; r != "" {
+				t.Fatalf("row reason = %q; want none", r)
 			}
-			_, err := putVia(m, homeID, types.LogbookBindingEdit{LogbookID: b, Enabled: true})
-			wantRefused(t, db, b, err, wantClaimed)
+			if _, err := putVia(m, homeID, types.LogbookBindingEdit{LogbookID: b, Enabled: true}); err != nil {
+				t.Fatalf("re-enabling a claimed binding off the default: %v", err)
+			}
+			if r, _ := smcloudRow(t, db, b); !r.Enabled {
+				t.Fatalf("after re-enabling: %+v", r)
+			}
 			wantNotStamped(t, db, b)
 		})
 		t.Run(name+", already enabled, stays", func(t *testing.T) {
@@ -575,6 +582,33 @@ func TestGate_FH11_AClaimedBindingOffTheDefault(t *testing.T) {
 				t.Fatalf("re-saving an enabled claimed binding: %v", err)
 			}
 			wantNotStamped(t, db, b)
+		})
+	}
+}
+
+// FH11b (W-0024 slice 2): outside Home the claimed-binding rule is unchanged
+// but for its text: a disabled one is refused, naming Home as the only place
+// it re-enables; one already enabled stays as it is.
+func TestGate_FH11b_AClaimedBindingOutsideHome(t *testing.T) {
+	for name, enabled := range map[string]int{"disabled, refuses": 0, "already enabled, stays": 1} {
+		t.Run(name, func(t *testing.T) {
+			db, m, l := gateManaged(t)
+			execArchive(t, db, `INSERT INTO logbook_destination (logbook_id, destination, forwarder_name, enabled, credentials, adoption_reserved_at)
+				VALUES (?, 'smcloud', 'smcloud.drill', ?, '{"logbook":"drill"}', datetime('now'))`, l, enabled)
+			startAsStored(t, m, db)
+			_, err := putVia(m, managedID, types.LogbookBindingEdit{LogbookID: l, Enabled: true})
+			if enabled == 1 {
+				if err != nil {
+					t.Fatalf("re-saving an enabled claimed binding outside Home: %v", err)
+				}
+				wantNotStamped(t, db, l)
+				return
+			}
+			if r := rowOf(t, gateView(t, m, managedID), l).Reason; r != wantClaimed {
+				t.Fatalf("row reason = %q; want %q", r, wantClaimed)
+			}
+			wantRefused(t, db, l, err, wantClaimed)
+			wantNotStamped(t, db, l)
 		})
 	}
 }

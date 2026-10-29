@@ -12,12 +12,13 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
-// AdoptionEvidence is what Home's adoption is judged on (ADR 0090, T3). The
+// AdoptionEvidence is what an adoption is judged on (ADR 0090, T3). The
 // caller gathers it; a read that failed or came back incomplete is not
 // evidence, so the caller retries rather than judging.
 type AdoptionEvidence struct {
-	// DefaultLogbookID is Home's default logbook, the one adoption maps.
-	DefaultLogbookID int64
+	// LogbookID is the logbook adoption maps: the binding's own, Home's
+	// default for a new adoption or a claimed former default (ADR 0097 §5).
+	LogbookID int64
 	// Bindings is every binding of Home's live logbooks, enabled or not; only
 	// SM Cloud's are read.
 	Bindings []types.LogbookDestination
@@ -28,23 +29,23 @@ type AdoptionEvidence struct {
 	Running []types.LogbookDestination
 	// Queued is the upload queue by forwarder name.
 	Queued map[string]sqlite.ForwarderQueueCounts
-	// LocalUUIDs is every QSO of the default logbook, soft-deleted included.
+	// LocalUUIDs is every QSO of that logbook, soft-deleted included.
 	LocalUUIDs []string
-	// CloudUUIDs is every QSO the cloud holds under the default binding's
-	// cloud name, tombstones included; empty when the name was never pushed.
+	// CloudUUIDs is every QSO the cloud holds under the binding's cloud name,
+	// tombstones included; empty when the name was never pushed.
 	CloudUUIDs []string
 }
 
 // AdoptionVerdict is the judgement: Safe, or the first reason it is not, for
-// the log. CloudName is the default binding's normalized cloud name.
+// the log. CloudName is the binding's normalized cloud name.
 type AdoptionVerdict struct {
 	Safe      bool
 	CloudName string
 	Reason    string
 }
 
-// JudgeAdoption decides whether Home's default SM Cloud binding may adopt its
-// legacy cloud logbook (ADR 0090, T3). Every other SM Cloud binding is judged
+// JudgeAdoption decides whether the SM Cloud binding of logbook LogbookID may
+// adopt its legacy cloud logbook (ADR 0090, T3). Every other SM Cloud binding is judged
 // twice: as the running worker uploads (Running, its name at start) and as
 // the next start will (Bindings, its saved name). All of these must hold:
 //   - (a) no other binding, enabled or disabled, running or saved, has the
@@ -53,26 +54,26 @@ type AdoptionVerdict struct {
 //     flight or failed — a failed upload can be retried); reported in
 //     preference to (a) as the more specific reason;
 //   - (c) every cloud UUID under the name, tombstones included, is a local QSO
-//     of the default logbook, soft-deleted included.
+//     of that logbook, soft-deleted included.
 //
 // Cloud-only UUIDs refuse too: they prove nothing either way. Queue rows of a
 // forwarder in neither list are inert: no worker sends them now or after the
-// restart. An error means there is nothing to judge: no saved default SM
-// Cloud binding, or one whose name cannot be read.
+// restart. An error means there is nothing to judge: no saved SM Cloud
+// binding on the logbook, or one whose name cannot be read.
 func JudgeAdoption(e AdoptionEvidence) (AdoptionVerdict, error) {
 	const op errors.Op = "smcloud.JudgeAdoption"
 	var def *types.LogbookDestination
 	for i := range e.Bindings {
-		if e.Bindings[i].Destination == Type && e.Bindings[i].LogbookID == e.DefaultLogbookID {
+		if e.Bindings[i].Destination == Type && e.Bindings[i].LogbookID == e.LogbookID {
 			def = &e.Bindings[i]
 		}
 	}
 	if def == nil {
-		return AdoptionVerdict{}, errors.New(op).WithMsgf("logbook %d has no SM Cloud binding", e.DefaultLogbookID)
+		return AdoptionVerdict{}, errors.New(op).WithMsgf("logbook %d has no SM Cloud binding", e.LogbookID)
 	}
 	name, err := CloudName(def.Credentials)
 	if err != nil {
-		return AdoptionVerdict{}, errors.New(op).WithErr(err).WithMsgf("the default binding %s", def.ForwarderName)
+		return AdoptionVerdict{}, errors.New(op).WithErr(err).WithMsgf("the binding %s", def.ForwarderName)
 	}
 	v := AdoptionVerdict{CloudName: name}
 	if v.Reason = sharedName(e.Running, "as started", def.ForwarderName, name, e.Queued); v.Reason != "" {
@@ -96,7 +97,7 @@ func JudgeAdoption(e AdoptionEvidence) (AdoptionVerdict, error) {
 		if n > 1 {
 			verb, noun = "are", "QSOs"
 		}
-		v.Reason = fmt.Sprintf("%d QSO%s in the cloud logbook %q %s not %s of the default logbook (first: %s)",
+		v.Reason = fmt.Sprintf("%d QSO%s in the cloud logbook %q %s not %s of its logbook (first: %s)",
 			n, plural(n), name, verb, noun, foreign[0])
 		return v, nil
 	}
@@ -155,11 +156,11 @@ func plural(n int64) string {
 }
 
 // LocalAdoptionEvidence reads the local half of the evidence from the open
-// archive: the saved bindings, the upload queue, and every QSO UUID of the
-// default logbook, soft-deleted included. running is the routing snapshot the
+// archive: the saved bindings, the upload queue, and every QSO UUID of
+// logbookID, soft-deleted included. running is the routing snapshot the
 // daemon started its workers from. The caller adds CloudUUIDs. Any failed read
 // is an error, never partial evidence.
-func LocalAdoptionEvidence(ctx context.Context, db *sqlite.Service, defaultLogbookID int64, running []types.LogbookDestination) (AdoptionEvidence, error) {
+func LocalAdoptionEvidence(ctx context.Context, db *sqlite.Service, logbookID int64, running []types.LogbookDestination) (AdoptionEvidence, error) {
 	const op errors.Op = "smcloud.LocalAdoptionEvidence"
 	bindings, err := db.ListLogbookDestinationsWithContext(ctx)
 	if err != nil {
@@ -169,19 +170,19 @@ func LocalAdoptionEvidence(ctx context.Context, db *sqlite.Service, defaultLogbo
 	if err != nil {
 		return AdoptionEvidence{}, errors.New(op).WithErr(err).WithMsg("count the upload queue")
 	}
-	manifest, err := db.FetchQsoManifestWithContext(ctx, defaultLogbookID)
+	manifest, err := db.FetchQsoManifestWithContext(ctx, logbookID)
 	if err != nil {
-		return AdoptionEvidence{}, errors.New(op).WithErr(err).WithMsg("list the default logbook's QSOs")
+		return AdoptionEvidence{}, errors.New(op).WithErr(err).WithMsg("list the logbook's QSOs")
 	}
 	local := make([]string, 0, len(manifest))
 	for _, m := range manifest {
 		local = append(local, m.UUID)
 	}
 	return AdoptionEvidence{
-		DefaultLogbookID: defaultLogbookID,
-		Bindings:         bindings,
-		Running:          running,
-		Queued:           queued,
-		LocalUUIDs:       local,
+		LogbookID:  logbookID,
+		Bindings:   bindings,
+		Running:    running,
+		Queued:     queued,
+		LocalUUIDs: local,
 	}, nil
 }
