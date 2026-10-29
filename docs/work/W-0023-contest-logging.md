@@ -101,13 +101,16 @@ before they become fixtures):
 
 1. The **duplicate policy**: once per band? Are duplicates to be logged (and the robot zero-scores
    them) or omitted? **Unanswered by every sponsor document read** — organiser question 3 below.
+   **Answered 2026-10-29:** once per band; duplicates may stay or be removed (*Organiser's reply*).
 2. The **Cabrillo header**: version, the `CONTEST:` value, required `CATEGORY-*` and other header
    fields, given that categories are chosen at upload; and whether power must be stated in the file,
-   given rule 5's High Power default.
+   given rule 5's High Power default. **Answered 2026-10-29** except which prevails when the file
+   and the upload selection differ (*Organiser's reply*, Q1–Q2).
 3. The **definition of "Europe"** for the points table. (Whether multipliers sum across bands is
    answered: they do, rule 7.2.)
 4. The district codes with no DXCC suffix (the London codes `EC`, `EL`, `NL`, `NW`, `SE`, `SW`, `WC`,
-   `WL`) and the dual-entity codes (`CH`, `HR`, `LD`, `SY`, `TD`).
+   `WL`) and the dual-entity codes (`CH`, `HR`, `LD`, `SY`, `TD`). **Answered 2026-10-29:** London
+   counts as England; the 2026 list prevails (*Organiser's reply*, Q5).
 5. The ADIF `CONTEST_ID` value for this contest. **Answered:** ADIF 3.1.6 has no enumeration value;
    a sponsor-defined string is permitted (findings, question 3).
 
@@ -153,7 +156,7 @@ Product decisions (the operator's):
    behaviour on bands with no published segment, and whether the warning ever affects logging
    (proposal: it informs and never refuses, as for duplicates).
 10. **Contest membership scope:** ruled 2026-10-28 — see *Contest membership* below.
-11. **Duplicate key and local retention:** the sponsor's duplicate key (question 1); every logged
+11. **Duplicate key and local retention** (settled 2026-10-29: organiser Q3 and ruling A): the sponsor's duplicate key (question 1); every logged
     contact is preserved locally whatever the key, and any exclusion from an export needs an explicit
     rule.
 
@@ -265,15 +268,15 @@ Not defined in any sponsor document read. Deferred until scoring is designed.
   single-transmitter multi-op to UK/EI. S1 prevails; irrelevant to a single-op DX entry.
 - **Deadline:** C5 (2016) says two hours; S1 says 24 hours.
 
-### Provisional export contract (pending the organiser's answers)
+### Provisional export contract (revised for the organiser's reply, 2026-10-29)
 
 ```
 START-OF-LOG: 3.0
-CONTEST: <UKEIDXSSB | UKEIDXCW per the sponsor's translations; UKEI-DX per C1b — unresolved>
+CONTEST: <UKEIDXSSB | UKEIDXCW>   (organiser reply 1)
 CALLSIGN: 7Q5MLV
 CATEGORY-OPERATOR: SINGLE-OP
-CATEGORY-ASSISTED: <ASSISTED | NON-ASSISTED per C3a; UNASSISTED per the translations — unresolved>
-CATEGORY-POWER: <HIGH | LOW | QRP>   (always written: proposed policy, see 1)
+CATEGORY-ASSISTED: <ASSISTED | NON-ASSISTED>   (Cabrillo 3.0 values, organiser reply 4)
+CATEGORY-POWER: <HIGH | LOW | QRP>   (always written; organiser reply 3 calls it best practice)
 CATEGORY-TIME: <24-HOURS | 12-HOURS>
 QSO: <kHz> PH <yyyy-mm-dd> <hhmm> 7Q5MLV <rs> <nnn> -- <call> <rs> <nnn> <district | -->
 END-OF-LOG:
@@ -282,11 +285,12 @@ END-OF-LOG:
 The `CALLSIGN:` tag and any `CREATED-BY:`/`OPERATORS:` lines are C3a common tags, not sponsor
 requirements; the sponsor's need for them is unconfirmed.
 
-### Questions for the organiser (sent; awaiting a reply)
+### Questions for the organiser (sent; answered 2026-10-29)
 
-**Sent by the operator** (reported 2026-10-29) as the drafted email built from the questions below;
-**awaiting the organiser's reply.** Answers are recorded here as they arrive. Until then, the
-sponsor-dependent items in ADR 0096 *Unresolved* stay open.
+**Sent by the operator** (reported 2026-10-29) as the drafted email built from the questions below.
+**The organiser replied the same day**; the answers, and what each settles or leaves open, are in
+*Organiser's reply* below. ADR 0096 is a record and is not rewritten; its *Unresolved* items are
+settled here.
 
 1. Which `CONTEST:` value does the robot expect for the SSB and CW contests — `UKEIDXSSB` /
    `UKEIDXCW` (the translated rules) or `UKEI-DX` (contestcalendar.com)? Which Cabrillo version?
@@ -318,6 +322,73 @@ Added 2026-10-28 for the export rulings and the window boundary (included in the
 11. **Serial gaps and duplicates:** if a number is sent but the contact is not completed, should the
     next contact skip it (a gap) or reuse it? If two contacts carry the same sent serial, should both
     be submitted as sent? (Export rulings 2 and 3.)
+
+### Organiser's reply (received 2026-10-29)
+
+From "UK/EI DX Contest Team", pasted by the operator. The reply restates that the English rules page
+(S1) is definitive over its translations, and suggests the entrants' group
+(groups.io/g/UKEICC) for further questions. Answers are quoted or closely paraphrased; **Settles**
+marks what the answer closes, **Open** what it does not, **Ruling needed** a product consequence for
+the operator to decide. Nothing below changes a ruling by itself.
+
+| Q | Organiser's answer | Effect |
+|---|---|---|
+| 1 | "Standard contest identifiers (such as UKEIDXSSB or UKEIDXCW) will be required by contest logging software"; "Cabrillo version 3.0 should be used." Logs are uploaded with the contest chosen from a drop-down. | **Settles** `CONTEST:` (`UKEIDXSSB` / `UKEIDXCW`; C1b's `UKEI-DX` is not used) and `START-OF-LOG: 3.0`. Also fixes the ADIF `CONTEST_ID` proposal (findings 3): the same strings. |
+| 2 | Categories and overlays "are selected and created automatically when you upload your logfile to the robot" (rule 8.2). `CATEGORY-POWER`: rule 5's High Power default applies to a file without power; "It is best practice to include CATEGORY-POWER: in your file." `CATEGORY-ASSISTED`: "follow the Cabrillo 3.0 standard values". | **Settles** always writing `CATEGORY-POWER` (the proposed policy, now the organiser's advice) and `NON-ASSISTED` over the translations' `UNASSISTED`. **Open:** which prevails when the file's `CATEGORY-*` lines and the robot's selection differ was not answered; the export writes the lines consistently and the upload selection is the operator's. |
+| 3 | "Stations count once per band (Rule 7.2). You may leave duplicate contacts in your submitted log for the checker to zero-score, or remove them prior to submission." | **Settles** the duplicate key (callsign per band, within the one-mode contest) and that duplicates **may stay** in the file. **Ruling needed (A):** export ruling 7 withheld "sponsor-ready" from an all-contact export because the policy was unknown. Proposal: the submission export keeps every member, duplicates included and reported; nothing is removed, so no duplicate key decides an exclusion. |
+| 4 | Serials "are sequential starting from 1"; "standard Cabrillo/integer formatting handles numbers above 999 naturally." | **Settles** width: no fixed width is required. **Ruling needed (B), minor:** pad to three digits as the samples do (`001`, then `1000`), or write plain integers. Proposal: pad to three, matching the samples and the received-serial `000` the organiser also accepts. |
+| 5 | London codes "count as England"; the current published list (Appendix 2) "is fully authoritative over any older translations". | **Settles** the London codes (England) and the dual-entity codes: S1's 2026 G / GW and G / GM treatment prevails. Matters only to scoring (deferred). |
+| 6 | "There is no live pre-contest test upload facility"; inspect the Cabrillo file in a text editor (rule 8.4) or compatible software. | **Settles:** no organiser-provided pre-contest test upload exists. Local fixtures and export validation are the pre-submission gate; the robot can still report problems after submission (rule 8.4). |
+| 7 | "Standard DXCC entity definitions apply for Europe as used in standard international contesting." | **Open, deferred with scoring.** No list is named; the likely reading (DXCC entities whose continent is EU) is an inference, not the organiser's statement. |
+| 8 | "All contests run strictly from 1200z on Saturday to 1200z on Sunday"; "A QSO at exactly 1200z on Sunday is at the boundary; contacts must be completed within the active contest window. Timing is applied by your contest logging software, i.e. when the QSO is completed." | **Partly settles.** Saturday `1200` inside is not stated but follows from "from 1200z". Sunday `1200` is called "the boundary" without saying in or out; "must be completed within the window" supports M3 excluding it, so M3's `[start, end)` stands as the conservative reading. **Ruling needed (C):** the organiser times a QSO **when it is completed**. M2 judges eligibility by `TIME_ON`, and the Cabrillo `QSO:` time is not yet tied to a field. Today the Phone / CW form stamps `TIME_ON` when the callsign is committed and keeps `TIME_OFF` ticking until save (`frontend/app/src/lib/operate/qso.svelte.ts`, `stampOn` and the QSO clock), so completion is `TIME_OFF`. Proposal: keep `TIME_ON` as the ADIF start time and judge contest eligibility and write the Cabrillo `QSO:` time from **`TIME_OFF`** (completion), revising M2 for contest members. Alternative: stamp `TIME_ON` at completion in the contest panel, which misstates ADIF's start time. |
+| 9 | Missing received serial: "log a zero"; "logged as 0 (or 000 as appropriate for your logger's formatting)". Missing district for a UK/EI station: "use -- in the field." | **Settles** both. **Ruling needed (D):** export ruling 4b blocked a UK/EI member with no received district until resolved; the answer is `--`. Proposal: an explicit "district not copied" record exports as `--`, mirroring 4a's explicit "no serial received" (an absent value with no such record still blocks). |
+| 10 | Submit an unknown code "exactly as received over the air" (rule 11.7: log callsigns and exchanges as actually exchanged). | **Settles;** matches export ruling 5 (preserve, warn). |
+| 11 | Gap: "use the next sequential number for your next contact (leaving a gap). Do not reuse sent serial numbers." Duplicate sent serials: "submit them exactly as sent; the automated checker will handle" them (rule 9.1). | **Settles;** matches option B's never-reuse rule and export rulings 2 and 3. |
+
+**Still unresolved after the reply:** which source prevails if file categories and the robot
+selection differ (Q2); whether Sunday `1200` is inside (Q8, M3 keeps it outside); the Europe list
+(Q7, with scoring). Rulings A–D were ruled 2026-10-29; see below.
+
+### Organiser-reply rulings — ruled 2026-10-29 (operator)
+
+Design rulings only; W-0023 stays design-only. They **supersede** the proposals named against each,
+which are kept above as history. ADR 0096 is not rewritten: **these amendments are captured in a
+follow-on ADR before any contest implementation.**
+
+- **A — Keep duplicates.** Supersedes export ruling 7 and the *Unresolved* item 11's open exclusion.
+  The submission export includes **every explicit contest member**, duplicate contacts and duplicate
+  sent serials included, and **reports** them. The existing export blockers still apply; nothing is
+  silently omitted or renumbered. No duplicate key ever excludes a member.
+- **B — Serials three digits minimum.** Answers organiser Q4. Export `001` through `999`, then `1000`
+  onward without truncation. Formatting only: stored serial values are unchanged. An explicitly
+  missing received serial (export ruling 4a's record) exports as `000`.
+- **C — Completion time.** Supersedes M2's `TIME_ON` basis for contest eligibility, and adopts M3.
+  - Eligibility and the Cabrillo `QSO:` date/time use the **resolved UTC end date and `TIME_OFF`**.
+    `QSO_DATE`/`TIME_ON` are preserved as the ADIF start.
+  - **`[start, end)` is the product rule:** Saturday 12:00 is inside; Sunday 12:00 is outside. The
+    organiser's exact-boundary interpretation (Q8, "at the boundary") stays recorded as
+    **unresolved**.
+  - **Recorded completion versus a defaulted end time.** Ingest substitutes `TIME_ON` for an empty
+    `TIME_OFF` (`internal/qsoservice/submit.go`, the `TIME_OFF` default after the `TIME_ON` check),
+    so a populated stored end time does not prove completion was recorded. The design must carry
+    that uncertainty for imported or historical members: **unresolved completion blocks the
+    submission export, never logging.**
+  - **Capture completion once.** The Phone / CW form's end time ticks every second
+    (`frontend/app/src/lib/operate/qso.svelte.ts`, `tickOff` / `startQso`) and keeps ticking after a
+    refused or uncertain save. The contest path captures completion **once**, preserves an
+    operator-entered value, and **retains it across retries**; a retry never moves a contact across
+    the contest boundary.
+  - **Precision.** Eligibility is judged at the stored precision (`HHMMSS` where stored); Cabrillo
+    formats to minutes by **truncation, never rounding into the next minute**. Tests cover midnight
+    (end date differs from start date), delayed logging, retries, and the exact closing boundary.
+- **D — Explicit missing district.** Supersedes export ruling 4b. An explicit **"district not
+  copied"** record exports as `--`. A blank required district without that record **still blocks**
+  the submission export. The record stays distinguishable from a DX contact, for which no district
+  is required (`--` by the samples).
+- **Header choices accepted** (organiser Q1–Q2): `CONTEST: UKEIDXSSB` / `UKEIDXCW`, the same strings
+  as ADIF `CONTEST_ID` (a String field, [ADIF 3.1.6](https://adif.org/316/ADIF_316.htm)),
+  `START-OF-LOG: 3.0`, `CATEGORY-POWER` always written, and `NON-ASSISTED` — the Cabrillo spelling
+  for an unassisted entry ([Cabrillo v3 header](https://wwrof.org/cabrillo/cabrillo-v3-header/)).
 
 ## Contest membership — ruled 2026-10-28 (operator)
 
@@ -389,10 +460,10 @@ the organiser questions) are separate and unchanged by these rulings.
 | 2 | **Duplicate sent serials** (from D3 or from allocation) | The actual duplicate sent serials are **preserved** and **every affected contact is reported**. Whether the sponsor accepts a duplicate serial is unverified. |
 | 3 | **Serial gaps** | **Diagnostic only**; no gap pattern blocks the export. Serials are **never renumbered**. |
 | 4a | A member **missing its received serial** | An explicit operator record of **"no serial received"** may export as `0` (rule 6: a missing received serial is logged as zero). An absent value with no such record is not exported as `0`. |
-| 4b | A member **missing a required received district** | **Unresolved.** Rule 6 does not establish `--` for a missing UK/EI district; the samples establish `--` only for DX stations. Until resolved, the submission export is **blocked** for such a member. |
+| 4b | A member **missing a required received district** | **Unresolved.** Rule 6 does not establish `--` for a missing UK/EI district; the samples establish `--` only for DX stations. Until resolved, the submission export is **blocked** for such a member. *Superseded 2026-10-29 by ruling D.* |
 | 5 | An **unknown district code** | For a **syntactically representable** code: the unknown two-letter code is **preserved** and exported with a **warning**. **Invalid field syntax** is reported; it is never silently altered and never allowed to corrupt the Cabrillo file. |
 | 6 | An **imported `CONTEST_ID` with no association** (M5) | Relevant unassociated imports are **reported separately**; they are never exported as occurrence members. |
-| 7 | The **sponsor's duplicate policy** in the file (question 1) | **Unresolved.** All contacts are preserved locally. An **all-contact diagnostic export** is acceptable, but it is not called sponsor-ready, and **no provisional duplicate key is invented**. |
+| 7 | The **sponsor's duplicate policy** in the file (question 1) | **Unresolved.** All contacts are preserved locally. An **all-contact diagnostic export** is acceptable, but it is not called sponsor-ready, and **no provisional duplicate key is invented**. *Superseded 2026-10-29 by ruling A.* |
 | 8 | A member flagged with **exchange uncertainty** (T3: both *H* and *Y* sent, carried serial unclear) | The submission export is **blocked** until the carried serial is **explicitly resolved**. Both transmitted numbers and the resolution history are preserved. |
 
 Source for 4: [UK/EI DX Contest rules](https://www.ukeicc.com/dx-contest-rules.php) (S1), rule 6 and
@@ -670,35 +741,39 @@ protection, are the requirement.)
 
 ## Proposed acceptance criteria (first slice; proposal, not ruled)
 
-Scoring is **out of the first slice** until questions 1–4 are settled.
+Scoring is **out of the first slice** (the Europe definition, question 3, is still open).
 
 1. **Declared contest:** the operator declares a contest with an id, a start and end (UTC), a mode and
    the sent exchange (here: RS and serial; `--` for the district as a DX entrant), as an occurrence
    with its own identity owned by one logbook (M1). Membership is an explicit association written
-   with the QSO in contest mode (M5, D1); eligibility follows the QSO's own time and mode (M2–M4).
+   with the QSO in contest mode (M5, D1); eligibility follows the QSO's recorded completion time
+   and mode, in `[start, end)` (ruling C, M3–M4).
 2. **Explicit sent serial:** every contest QSO stores the serial actually sent, in ADIF `STX`, written
    at logging time; it is never derived later from a count of rows. Allocation, holds and the
    reconciliation of a serial sent for a QSO that is never saved follow *Serial allocation* (option B,
    ruled 2026-10-28).
 3. **Received exchange stored:** the received serial in `SRX` (0 when none was sent, per the rules) and
-   the received district (`--` for a DX station, per the samples) in a stored field (ADIF `SRX_STRING` is the candidate), both
+   the received district (`--` for a DX station, per the samples; an explicit "district not copied"
+   record for a UK/EI station, ruling D) in a stored field (ADIF `SRX_STRING` is the candidate), both
    visible in the Session panel and the Logbook.
 4. **Duplicate detection, kept apart from the sponsor's policy:** inside a declared window the form and
-   Band Activity show "already worked in this contest" by the sponsor-defined duplicate key, pending
-   verification (question 1), and logging still proceeds — detection informs, it never refuses. Every
-   logged contact is preserved locally. Whether a duplicate is logged, omitted or zero-scored is the
-   sponsor's policy, applied at export only under an explicit rule (question 11).
+   Band Activity show "already worked in this contest" by callsign per band (organiser Q3), and
+   logging still proceeds — detection informs, it never refuses. Every logged contact is preserved
+   locally, and duplicates stay in the submission export, reported (ruling A).
 5. **Cabrillo export:** the declared contest's QSOs export to a Cabrillo file in serial order, with
    frequency in kHz, the mode code (`PH` for SSB) and the sent and received exchanges in the sponsor's
-   order, plus the header fields the sponsor requires (question 2). The submission export follows
+   order, serials at three digits minimum (ruling B), the time from recorded completion (ruling C),
+   plus the accepted header fields (organiser Q1–Q2). The submission export follows
    *Export-validation rulings*: it is blocked, naming the QSOs, when a member lacks a stored sent
-   serial, a received serial without an explicit "no serial received" record, or a required received
-   district (4b), and it never invents a value. Export rules never refuse saving a contact.
+   serial, a received serial without an explicit "no serial received" record, a required received
+   district without an explicit "district not copied" record (ruling D), or an unresolved completion
+   time (ruling C), and it never invents a value. Export rules never refuse saving a contact.
 6. **Proof against the reference contest:** fixtures built from the UK/EI rules (exchange, serial
    continuity across bands, district codes, `--` for DX, the sample `QSO:` lines) produce a file that
-   passes validation: an acknowledgement reporting no problems requiring correction (rule 8.4), not
-   the acknowledgement alone. A rehearsal submission is made only through a test facility the sponsor
-   supports or with the organiser's agreement.
+   passes the local export validation. **Local fixtures are the pre-submission gate:** the organiser
+   provides no pre-contest test upload (organiser Q6). The robot can still report problems after
+   submission (rule 8.4); an acknowledgement is acceptance only when it reports no problems requiring
+   correction, not by its arrival alone.
 
 Nearest confusable outcomes: a serial reconstructed from a row count after a deletion; a pre-contest
 QSO greyed as a contest duplicate; a duplicate refused at entry; a Cabrillo file in time order instead
