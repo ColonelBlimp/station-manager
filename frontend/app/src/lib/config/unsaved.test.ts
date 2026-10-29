@@ -362,20 +362,27 @@ describe('which sections have unsaved edits', () => {
 });
 
 // Settings → Logbooks' drafts (operator ruling 2026-09-29): the Add form and a
-// changed Rename join the guard. The form arrives prefilled with the station
-// callsign and a Rename arrives filled with the current name, so neither of
+// changed Edit join the guard. The form arrives prefilled with the station
+// callsign and an Edit arrives filled with the current values, so neither of
 // those alone is an edit — a guard firing on them is the false alarm R2 guards.
 describe('the Logbooks tab’s drafts', () => {
     afterEach(makeAllClean);
 
-    it('L1: an untouched, prefilled Add form and a merely opened Rename are not edits', () => {
+    it('L1: an untouched, prefilled Add form and a merely opened Edit are not edits', () => {
         prefilledLogbooks();
-        logbooksState.startRename({ id: 2, name: 'Portable', callsign: '7Q5MLV', count: 0 });
-        expect(logbooksState.renameName).toBe('Portable');
+        logbooksState.startEdit({
+            id: 2,
+            name: 'Portable',
+            callsign: '7Q5MLV',
+            description: 'Holiday ops',
+            count: 0,
+        });
+        expect(logbooksState.editName).toBe('Portable');
+        expect(logbooksState.editDescription).toBe('Holiday ops');
         expect(unsavedSections()).toEqual([]);
     });
 
-    it('L2: a typed name, a changed callsign, a ticked SM Cloud or a changed rename is one', () => {
+    it('L2: a typed name, a changed callsign, a ticked SM Cloud or a changed edit is one', () => {
         prefilledLogbooks();
         logbooksState.addName = 'Contest';
         expect(unsavedSections()).toEqual(['Logbooks']);
@@ -396,9 +403,66 @@ describe('the Logbooks tab’s drafts', () => {
         makeAllClean();
 
         prefilledLogbooks();
-        logbooksState.startRename({ id: 2, name: 'Portable', callsign: '7Q5MLV', count: 0 });
-        logbooksState.renameName = 'Field day';
+        logbooksState.startEdit({
+            id: 2,
+            name: 'Portable',
+            callsign: '7Q5MLV',
+            description: 'Holiday ops',
+            count: 0,
+        });
+        logbooksState.editName = 'Field day';
         expect(unsavedSections()).toEqual(['Logbooks']);
+    });
+
+    // W-0024 AC1: the description joins the guard as the name does.
+    it('L2a: a description typed in the Add form, or changed in an Edit, is one', () => {
+        prefilledLogbooks();
+        logbooksState.addDescription = 'UK/EI DX';
+        expect(unsavedSections()).toEqual(['Logbooks']);
+        makeAllClean();
+
+        prefilledLogbooks();
+        logbooksState.startEdit({
+            id: 2,
+            name: 'Portable',
+            callsign: '7Q5MLV',
+            description: 'Holiday ops',
+            count: 0,
+        });
+        logbooksState.editDescription = 'Field day ops';
+        expect(unsavedSections()).toEqual(['Logbooks']);
+        makeAllClean();
+
+        // Cleared is a change too.
+        prefilledLogbooks();
+        logbooksState.startEdit({
+            id: 2,
+            name: 'Portable',
+            callsign: '7Q5MLV',
+            description: 'Holiday ops',
+            count: 0,
+        });
+        logbooksState.editDescription = '';
+        expect(unsavedSections()).toEqual(['Logbooks']);
+    });
+
+    it('L2b: restoring the original values, or only adding surrounding spaces, is not one', () => {
+        prefilledLogbooks();
+        logbooksState.startEdit({
+            id: 2,
+            name: 'Portable',
+            callsign: '7Q5MLV',
+            description: 'Holiday ops',
+            count: 0,
+        });
+        logbooksState.editName = 'Field day';
+        logbooksState.editDescription = 'Something else';
+        logbooksState.editName = 'Portable';
+        logbooksState.editDescription = ' Holiday ops ';
+        expect(unsavedSections()).toEqual([]);
+
+        logbooksState.addDescription = '   ';
+        expect(unsavedSections()).toEqual([]);
     });
 
     it('L3: sits between Station and Rigs in the order the tabs are shown', () => {
@@ -601,22 +665,30 @@ describe('leaving Settings', () => {
         expect(router.view).toBe('config');
     });
 
-    it('L5: a confirmed leave clears the Add form and cancels the rename', () => {
+    it('L5: a confirmed leave clears the Add form and cancels the edit', () => {
         prefilledLogbooks();
         logbooksState.addName = 'Contest';
         logbooksState.addSmcloud = true;
-        logbooksState.startRename({ id: 2, name: 'Portable', callsign: '7Q5MLV', count: 0 });
-        logbooksState.renameName = 'Field day';
+        logbooksState.addDescription = 'UK/EI DX';
+        logbooksState.startEdit({
+            id: 2,
+            name: 'Portable',
+            callsign: '7Q5MLV',
+            description: 'Holiday ops',
+            count: 0,
+        });
+        logbooksState.editName = 'Field day';
         vi.spyOn(window, 'confirm').mockReturnValue(true);
         navigate('logbook');
         expect(logbooksState.addName).toBe('');
         expect(logbooksState.addSmcloud).toBe(false);
+        expect(logbooksState.addDescription).toBe('');
         expect(logbooksState.addCallsign).toBe('7Q5MLV');
-        expect(logbooksState.renameId).toBe(0);
+        expect(logbooksState.editId).toBe(0);
         expect(unsavedSections()).toEqual([]);
     });
 
-    it('L6: a create, rename or delete in flight refuses the leave, and discards nothing', () => {
+    it('L6: a create, edit or delete in flight refuses the leave, and discards nothing', () => {
         prefilledLogbooks();
         logbooksState.addName = 'Contest';
         logbooksState.busy = true;

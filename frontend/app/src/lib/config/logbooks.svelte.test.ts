@@ -12,7 +12,7 @@ vi.mock('../api/logbooks', () => ({
     fetchLogbooks: vi.fn(),
     fetchLogbookCount: vi.fn(),
     createLogbook: vi.fn(),
-    renameLogbook: vi.fn(),
+    updateLogbook: vi.fn(),
     deleteLogbook: vi.fn(),
 }));
 vi.mock('../api/seams', () => ({ fetchStationContext: vi.fn() }));
@@ -36,7 +36,7 @@ import {
     deleteLogbook,
     fetchLogbookCount,
     fetchLogbooks,
-    renameLogbook,
+    updateLogbook,
 } from '../api/logbooks';
 import { fetchStationContext } from '../api/seams';
 import { fetchDaemonIdentity } from '../api/qso-archives';
@@ -77,7 +77,7 @@ function bindingsAnswer(destinations: unknown[]) {
 }
 
 function daemonHas(opts: {
-    logbooks?: { id: number; name: string; callsign: string }[];
+    logbooks?: { id: number; name: string; callsign: string; description?: string }[];
     counts?: Record<number, number | null>;
     destinations?: unknown[];
 }) {
@@ -86,7 +86,12 @@ function daemonHas(opts: {
         { id: 2, name: 'Portable', callsign: '7Q5MLV/P' },
     ];
     const counts = opts.counts ?? { 1: 12, 2: 0 };
-    vi.mocked(fetchLogbooks).mockResolvedValue({ kind: 'ok', logbooks });
+    // fetchLogbooks returns the decoded shape: an omitted description is ''
+    // (the decoder's rule, logbooks.test.ts).
+    vi.mocked(fetchLogbooks).mockResolvedValue({
+        kind: 'ok',
+        logbooks: logbooks.map((l) => ({ ...l, description: l.description ?? '' })),
+    });
     vi.mocked(fetchLogbookCount).mockImplementation((id: number) => {
         const n = counts[id];
         return Promise.resolve(
@@ -131,8 +136,8 @@ describe('logbooksState.load', () => {
         expect(logbooksState.defaultId).toBe(1);
         expect(logbooksState.stationCallsign).toBe('7Q5MLV');
         expect(logbooksState.rows).toEqual([
-            { id: 1, name: 'Default', callsign: '7Q5MLV', count: 12 },
-            { id: 2, name: 'Portable', callsign: '7Q5MLV/P', count: 0 },
+            { id: 1, name: 'Default', callsign: '7Q5MLV', description: '', count: 12 },
+            { id: 2, name: 'Portable', callsign: '7Q5MLV/P', description: '', count: 0 },
         ]);
     });
 
@@ -178,6 +183,17 @@ describe('logbooksState.load', () => {
             expect(logbooksState.smcloudAvailable).toBe(false);
             expect(logbooksState.smcloudRefusal).toBe(why);
         }
+    });
+
+    it('W-0024 AC1: each row carries its stored description; none is empty', async () => {
+        daemonHas({
+            logbooks: [
+                { id: 1, name: 'Default', callsign: '7Q5MLV', description: 'Home station log' },
+                { id: 2, name: 'Portable', callsign: '7Q5MLV/P' },
+            ],
+        });
+        await logbooksState.load();
+        expect(logbooksState.rows.map((r) => r.description)).toEqual(['Home station log', '']);
     });
 
     it('a failed logbook read is an error, not an empty list', async () => {
@@ -242,6 +258,31 @@ describe('logbooksState.create', () => {
         expect(saveArchiveBindings).not.toHaveBeenCalled();
         expect(fetchLogbooks).toHaveBeenCalledTimes(2); // re-read
         expect(toast('info', /Logbook “Contest” added/)).toBe(true);
+    });
+
+    it('W-0024 AC1: sends a typed description, trimmed, and none when it is blank', async () => {
+        daemonHas({});
+        await logbooksState.load();
+        vi.mocked(createLogbook).mockResolvedValue({ kind: 'ok', id: 3 });
+        await logbooksState.create({
+            name: 'Contest',
+            callsign: '7Q5MLV',
+            smcloud: false,
+            description: '  UK/EI DX 2026 ',
+        });
+        expect(createLogbook).toHaveBeenLastCalledWith({
+            name: 'Contest',
+            callsign: '7Q5MLV',
+            description: 'UK/EI DX 2026',
+        });
+
+        await logbooksState.create({
+            name: 'Field',
+            callsign: '7Q5MLV',
+            smcloud: false,
+            description: '   ',
+        });
+        expect(createLogbook).toHaveBeenLastCalledWith({ name: 'Field', callsign: '7Q5MLV' });
     });
 
     it('ticked, enables only the new logbook’s SM Cloud binding, and says it applies after a restart', async () => {
@@ -331,36 +372,162 @@ describe('logbooksState.create', () => {
     });
 });
 
-describe('logbooksState.rename', () => {
+describe('logbooksState.saveEdit', () => {
+    const edit = (row: { id: number; name: string; description?: string }) =>
+        logbooksState.startEdit({
+            id: row.id,
+            name: row.name,
+            callsign: '7Q5MLV',
+            description: row.description ?? '',
+            count: 0,
+        });
+
     it('renaming the default logbook also renames it in the header', async () => {
         daemonHas({});
         await logbooksState.load();
-        vi.mocked(renameLogbook).mockResolvedValue({ kind: 'ok' });
-        expect(await logbooksState.rename(1, 'Home station')).toBe(true);
-        expect(renameLogbook).toHaveBeenCalledWith(1, 'Home station');
+        vi.mocked(updateLogbook).mockResolvedValue({ kind: 'ok' });
+        edit({ id: 1, name: 'Default' });
+        logbooksState.editName = 'Home station';
+        expect(await logbooksState.saveEdit()).toBe(true);
+        expect(updateLogbook).toHaveBeenCalledWith(1, { name: 'Home station' });
         expect(setStationInfo).toHaveBeenCalledWith({ logbookName: 'Home station' });
 
         vi.mocked(setStationInfo).mockClear();
-        expect(await logbooksState.rename(2, 'Field')).toBe(true);
+        edit({ id: 2, name: 'Portable' });
+        logbooksState.editName = 'Field';
+        expect(await logbooksState.saveEdit()).toBe(true);
         expect(setStationInfo).not.toHaveBeenCalled();
     });
 
-    it('a refusal is named and the list re-read; a timeout is unknown', async () => {
+    it('a refusal is named and the list re-read; a timeout is unknown; the draft stays', async () => {
         daemonHas({});
         await logbooksState.load();
-        vi.mocked(renameLogbook).mockResolvedValue({
+        vi.mocked(updateLogbook).mockResolvedValue({
             kind: 'error',
             code: 'duplicate_name',
             message: 'a logbook with that name already exists',
         });
-        expect(await logbooksState.rename(2, 'Default')).toBe(false);
+        edit({ id: 2, name: 'Portable' });
+        logbooksState.editName = 'Default';
+        expect(await logbooksState.saveEdit()).toBe(false);
         expect(toast('error', /already exists/)).toBe(true);
         expect(fetchLogbooks).toHaveBeenCalledTimes(2);
+        expect(logbooksState.editId).toBe(2);
+        expect(logbooksState.editName).toBe('Default');
 
-        vi.mocked(renameLogbook).mockResolvedValue({ kind: 'error', message: 'x', timedOut: true });
-        expect(await logbooksState.rename(2, 'Field')).toBe(false);
+        vi.mocked(updateLogbook).mockResolvedValue({ kind: 'error', message: 'x', timedOut: true });
+        logbooksState.editName = 'Field';
+        expect(await logbooksState.saveEdit()).toBe(false);
         expect(toast('warn', /outcome is unknown/)).toBe(true);
         expect(setStationInfo).not.toHaveBeenCalled();
+        expect(logbooksState.editId).toBe(2);
+        expect(logbooksState.editName).toBe('Field');
+    });
+
+    // ---- W-0024 AC1: descriptions ----
+
+    it('a description-only change sends only the description, never the name', async () => {
+        daemonHas({});
+        await logbooksState.load();
+        vi.mocked(updateLogbook).mockResolvedValue({ kind: 'ok' });
+        edit({ id: 2, name: 'Portable' });
+        logbooksState.editDescription = '  Holiday ops  ';
+        expect(await logbooksState.saveEdit()).toBe(true);
+        // Trimmed as the daemon trims; the name is absent, so a concurrent
+        // rename elsewhere is not overwritten by this snapshot of it.
+        expect(updateLogbook).toHaveBeenCalledWith(2, { description: 'Holiday ops' });
+        expect(logbooksState.editId).toBe(0);
+    });
+
+    // The header names the Default logbook. A description-only save sent no
+    // name, so the draft's name — possibly stale — must not reach the header.
+    it('a description-only save on the Default logbook leaves the header’s name alone', async () => {
+        daemonHas({});
+        await logbooksState.load();
+        vi.mocked(updateLogbook).mockResolvedValue({ kind: 'ok' });
+        edit({ id: 1, name: 'Default' });
+        logbooksState.editDescription = 'Home station log';
+        expect(await logbooksState.saveEdit()).toBe(true);
+        expect(updateLogbook).toHaveBeenCalledWith(1, { description: 'Home station log' });
+        expect(setStationInfo).not.toHaveBeenCalled();
+    });
+
+    it('a name and description save on the Default logbook names the saved name in the header', async () => {
+        daemonHas({});
+        await logbooksState.load();
+        vi.mocked(updateLogbook).mockResolvedValue({ kind: 'ok' });
+        edit({ id: 1, name: 'Default' });
+        logbooksState.editName = ' Home station ';
+        logbooksState.editDescription = 'Home station log';
+        expect(await logbooksState.saveEdit()).toBe(true);
+        expect(setStationInfo).toHaveBeenCalledWith({ logbookName: 'Home station' });
+    });
+
+    it('a name-only change sends only the name, never the description', async () => {
+        daemonHas({});
+        await logbooksState.load();
+        vi.mocked(updateLogbook).mockResolvedValue({ kind: 'ok' });
+        edit({ id: 2, name: 'Portable', description: 'Holiday ops' });
+        logbooksState.editName = 'Field';
+        expect(await logbooksState.saveEdit()).toBe(true);
+        expect(updateLogbook).toHaveBeenCalledWith(2, { name: 'Field' });
+    });
+
+    it('clearing a description sends an explicit empty description', async () => {
+        daemonHas({});
+        await logbooksState.load();
+        vi.mocked(updateLogbook).mockResolvedValue({ kind: 'ok' });
+        edit({ id: 2, name: 'Portable', description: 'Holiday ops' });
+        logbooksState.editDescription = '   ';
+        expect(await logbooksState.saveEdit()).toBe(true);
+        expect(updateLogbook).toHaveBeenCalledWith(2, { description: '' });
+    });
+
+    it('both changed sends both', async () => {
+        daemonHas({});
+        await logbooksState.load();
+        vi.mocked(updateLogbook).mockResolvedValue({ kind: 'ok' });
+        edit({ id: 2, name: 'Portable' });
+        logbooksState.editName = 'Field';
+        logbooksState.editDescription = 'Portable ops';
+        expect(await logbooksState.saveEdit()).toBe(true);
+        expect(updateLogbook).toHaveBeenCalledWith(2, {
+            name: 'Field',
+            description: 'Portable ops',
+        });
+    });
+
+    it('a refused or timed-out description save keeps the draft and the existing outcome handling', async () => {
+        daemonHas({});
+        await logbooksState.load();
+        edit({ id: 2, name: 'Portable' });
+        logbooksState.editDescription = 'Holiday ops';
+        vi.mocked(updateLogbook).mockResolvedValue({
+            kind: 'error',
+            code: 'not_found',
+            message: 'logbook not found',
+        });
+        expect(await logbooksState.saveEdit()).toBe(false);
+        expect(updateLogbook).toHaveBeenCalledWith(2, { description: 'Holiday ops' });
+        expect(toast('error', /logbook not found/)).toBe(true);
+        expect(logbooksState.editDescription).toBe('Holiday ops');
+        expect(logbooksState.dirty).toBe(true);
+
+        vi.mocked(updateLogbook).mockResolvedValue({ kind: 'error', message: 'x', timedOut: true });
+        expect(await logbooksState.saveEdit()).toBe(false);
+        expect(toast('warn', /outcome is unknown/)).toBe(true);
+        expect(logbooksState.editDescription).toBe('Holiday ops');
+        expect(logbooksState.dirty).toBe(true);
+    });
+
+    it('an unchanged edit, or one changed only by surrounding spaces, sends nothing', async () => {
+        daemonHas({});
+        await logbooksState.load();
+        edit({ id: 2, name: 'Portable', description: 'Holiday ops' });
+        logbooksState.editName = ' Portable ';
+        logbooksState.editDescription = 'Holiday ops ';
+        expect(await logbooksState.saveEdit()).toBe(false);
+        expect(updateLogbook).not.toHaveBeenCalled();
     });
 });
 
@@ -402,8 +569,16 @@ describe('Settings → Forwarding stays in step', () => {
         vi.mocked(createLogbook).mockResolvedValue({ kind: 'ok', id: 3 });
         await logbooksState.create({ name: 'Contest', callsign: '7Q5MLV', smcloud: false });
         expect(bindingsReload).toHaveBeenCalledTimes(1);
-        vi.mocked(renameLogbook).mockResolvedValue({ kind: 'ok' });
-        await logbooksState.rename(2, 'Field');
+        vi.mocked(updateLogbook).mockResolvedValue({ kind: 'ok' });
+        logbooksState.startEdit({
+            id: 2,
+            name: 'Portable',
+            callsign: '7Q5MLV/P',
+            description: '',
+            count: 0,
+        });
+        logbooksState.editName = 'Field';
+        await logbooksState.saveEdit();
         expect(bindingsReload).toHaveBeenCalledTimes(2);
         vi.mocked(deleteLogbook).mockResolvedValue({ kind: 'ok' });
         await logbooksState.remove(2);
@@ -436,43 +611,104 @@ describe('a draft typed while a write is pending', () => {
         expect(logbooksState.dirty).toBe(false);
     });
 
-    it('rename keeps a newer rename draft, and closes the one it submitted', async () => {
-        daemonHas({});
-        await logbooksState.load();
+    const portable = { id: 2, name: 'Portable', callsign: '7Q5MLV/P', description: '', count: 0 };
+    const holdUpdate = (): ((v: unknown) => void) => {
         let answer: (v: unknown) => void = () => {};
-        vi.mocked(renameLogbook).mockImplementation(
+        vi.mocked(updateLogbook).mockImplementation(
             () => new Promise((r) => (answer = r)) as never
         );
-        logbooksState.startRename({ id: 2, name: 'Portable', callsign: '7Q5MLV/P', count: 0 });
-        logbooksState.renameName = 'Field';
-        const pending = logbooksState.rename(2, 'Field');
-        logbooksState.renameName = 'Field day';
+        return (v) => answer(v);
+    };
+
+    it('an edit keeps a newer draft, and closes the one it submitted', async () => {
+        daemonHas({});
+        await logbooksState.load();
+        const answer = holdUpdate();
+        logbooksState.startEdit(portable);
+        logbooksState.editName = 'Field';
+        const pending = logbooksState.saveEdit();
+        logbooksState.editName = 'Field day';
         answer({ kind: 'ok' });
         await pending;
-        expect(logbooksState.renameId).toBe(2);
-        expect(logbooksState.renameName).toBe('Field day');
+        expect(logbooksState.editId).toBe(2);
+        expect(logbooksState.editName).toBe('Field day');
 
-        vi.mocked(renameLogbook).mockResolvedValue({ kind: 'ok' });
-        await logbooksState.rename(2, 'Field day');
-        expect(logbooksState.renameId).toBe(0);
+        vi.mocked(updateLogbook).mockResolvedValue({ kind: 'ok' });
+        await logbooksState.saveEdit();
+        expect(logbooksState.editId).toBe(0);
     });
 
-    it('a kept rename draft measures against the name just saved', async () => {
+    it('a kept draft measures against the name just saved', async () => {
+        daemonHas({});
+        await logbooksState.load();
+        const answer = holdUpdate();
+        logbooksState.startEdit(portable);
+        logbooksState.editName = 'Field';
+        const pending = logbooksState.saveEdit();
+        logbooksState.editName = 'Portable'; // typed back while saving
+        answer({ kind: 'ok' });
+        await pending;
+        expect(logbooksState.editId).toBe(2);
+        expect(logbooksState.editFromName).toBe('Field');
+        expect(logbooksState.dirty).toBe(true); // "Portable" is now a change
+    });
+
+    // W-0024 AC1: a successful save does not erase description edits made
+    // while it was pending.
+    it('a description typed while a name-only save is pending stays, and stays guarded', async () => {
+        daemonHas({});
+        await logbooksState.load();
+        const answer = holdUpdate();
+        logbooksState.startEdit(portable);
+        logbooksState.editName = 'Field';
+        const pending = logbooksState.saveEdit();
+        logbooksState.editDescription = 'Portable ops';
+        answer({ kind: 'ok' });
+        await pending;
+        expect(updateLogbook).toHaveBeenCalledWith(2, { name: 'Field' });
+        expect(logbooksState.editId).toBe(2);
+        expect(logbooksState.editDescription).toBe('Portable ops');
+        expect(logbooksState.editFromName).toBe('Field');
+        expect(logbooksState.editFromDescription).toBe('');
+        expect(logbooksState.dirty).toBe(true);
+    });
+
+    it('a description changed again while its save is pending stays, measured against the saved one', async () => {
+        daemonHas({});
+        await logbooksState.load();
+        const answer = holdUpdate();
+        logbooksState.startEdit(portable);
+        logbooksState.editDescription = 'Holiday';
+        const pending = logbooksState.saveEdit();
+        logbooksState.editDescription = 'Holiday ops';
+        answer({ kind: 'ok' });
+        await pending;
+        expect(updateLogbook).toHaveBeenCalledWith(2, { description: 'Holiday' });
+        expect(logbooksState.editId).toBe(2);
+        expect(logbooksState.editDescription).toBe('Holiday ops');
+        expect(logbooksState.editFromDescription).toBe('Holiday');
+        expect(logbooksState.dirty).toBe(true);
+    });
+
+    it('the Add form’s description typed while a create is pending stays', async () => {
         daemonHas({});
         await logbooksState.load();
         let answer: (v: unknown) => void = () => {};
-        vi.mocked(renameLogbook).mockImplementation(
+        vi.mocked(createLogbook).mockImplementation(
             () => new Promise((r) => (answer = r)) as never
         );
-        logbooksState.startRename({ id: 2, name: 'Portable', callsign: '7Q5MLV/P', count: 0 });
-        logbooksState.renameName = 'Field';
-        const pending = logbooksState.rename(2, 'Field');
-        logbooksState.renameName = 'Portable'; // typed back while saving
-        answer({ kind: 'ok' });
+        logbooksState.addName = 'Contest';
+        const pending = logbooksState.create({
+            name: 'Contest',
+            callsign: '7Q5MLV',
+            smcloud: false,
+            description: '',
+        });
+        logbooksState.addDescription = 'UK/EI DX';
+        answer({ kind: 'ok', id: 3 });
         await pending;
-        expect(logbooksState.renameId).toBe(2);
-        expect(logbooksState.renameFrom).toBe('Field');
-        expect(logbooksState.dirty).toBe(true); // "Portable" is now a change
+        expect(logbooksState.addDescription).toBe('UK/EI DX');
+        expect(logbooksState.dirty).toBe(true);
     });
 });
 

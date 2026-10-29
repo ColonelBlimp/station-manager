@@ -43,8 +43,9 @@ names it: archives are switched from **Settings → Archives** alone.
 one Station Manager has open. To add a logbook to another archive, activate
 that archive first.
 
-- **Add logbook** takes a name and a callsign. The callsign starts as your
-  station callsign; any valid callsign is accepted. Adding a logbook does not
+- **Add logbook** takes a name, a callsign and an optional description,
+  which the list shows under the name. The callsign starts as your station
+  callsign; any valid callsign is accepted. Adding a logbook does not
   switch archives, does not make it the Default, and turns on no uploads you
   did not choose.
 - **Live contacts keep going to the Default logbook.** A new logbook receives
@@ -57,7 +58,8 @@ that archive first.
   Forwarding). Ticked, the new logbook's SM Cloud uploads start after a
   restart, under its own identity. Other services are set up per logbook on
   the **Forwarding** tab.
-- **Rename** changes the name; a logbook's callsign cannot be changed.
+- **Edit** changes the name and the description; clearing the description
+  removes it. A logbook's callsign cannot be changed.
 - **Delete** works only on an empty logbook that is not the Default; the
   button's tooltip says why when it is unavailable.
 

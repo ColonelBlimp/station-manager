@@ -1,12 +1,12 @@
 // Settings → Logbooks, first slice (W-0021 dossier, operator ruling 2026-09-29):
-// the SPA's create / rename / delete over the daemon's existing POST, PATCH and
+// the SPA's create / edit / delete over the daemon's existing POST, PATCH and
 // DELETE /v1/logbook. Each outcome keeps the daemon's refusal code so the page
 // can name it, and marks a write whose response never came (timedOut) so the
 // page reports an unknown outcome instead of a failure. safeFetch/readJsonBody
 // are the real thing over a mocked fetch.
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createLogbook, deleteLogbook, renameLogbook } from './logbooks';
+import { createLogbook, deleteLogbook, updateLogbook } from './logbooks';
 
 afterEach(() => {
     vi.restoreAllMocks();
@@ -51,6 +51,26 @@ describe('createLogbook', () => {
         expect(JSON.parse(init.body as string)).toEqual({ name: 'Portable', callsign: '7Q5MLV/P' });
     });
 
+    // W-0024 AC1: an optional description. Without one, nothing is sent for
+    // it (the daemon stores it empty); with one, it is sent as typed — the
+    // daemon trims it.
+    it('sends a description when one is given, and omits it otherwise', async () => {
+        const fn = mockFetch(201, { id: 8 });
+        await createLogbook({ name: 'Contest', callsign: '7Q5MLV', description: 'UK/EI DX 2026' });
+        expect(JSON.parse(sent(fn).init.body as string)).toEqual({
+            name: 'Contest',
+            callsign: '7Q5MLV',
+            description: 'UK/EI DX 2026',
+        });
+
+        const bare = mockFetch(201, { id: 9 });
+        await createLogbook({ name: 'Field', callsign: '7Q5MLV' });
+        expect(JSON.parse(sent(bare).init.body as string)).toEqual({
+            name: 'Field',
+            callsign: '7Q5MLV',
+        });
+    });
+
     it('keeps the daemon’s refusal code and message', async () => {
         mockFetch(409, {
             code: 'duplicate_name',
@@ -75,10 +95,14 @@ describe('createLogbook', () => {
     });
 });
 
-describe('renameLogbook', () => {
-    it('PATCHes only the name', async () => {
+// W-0024 AC1: the daemon's PATCH changes only the fields present
+// (handler_logbook.go: "pass only present members through"), so the SPA sends
+// only what the operator changed — a stale snapshot of the other field would
+// otherwise overwrite a concurrent edit of it.
+describe('updateLogbook', () => {
+    it('PATCHes only the name when only the name changed', async () => {
         const fn = mockFetch(200, { id: 3, name: 'Contest', callsign: '7Q5MLV' });
-        const out = await renameLogbook(3, 'Contest');
+        const out = await updateLogbook(3, { name: 'Contest' });
         expect(out).toEqual({ kind: 'ok' });
         const { url, init } = sent(fn);
         expect(url).toBe('/v1/logbook/3');
@@ -86,14 +110,40 @@ describe('renameLogbook', () => {
         expect(JSON.parse(init.body as string)).toEqual({ name: 'Contest' });
     });
 
+    it('PATCHes only the description when only the description changed', async () => {
+        const fn = mockFetch(200, { id: 3, name: 'Contest', callsign: '7Q5MLV' });
+        await updateLogbook(3, { description: 'UK/EI DX 2026' });
+        expect(JSON.parse(sent(fn).init.body as string)).toEqual({
+            description: 'UK/EI DX 2026',
+        });
+    });
+
+    it('clears a description with an explicit empty string', async () => {
+        const fn = mockFetch(200, { id: 3, name: 'Contest', callsign: '7Q5MLV' });
+        await updateLogbook(3, { description: '' });
+        expect(JSON.parse(sent(fn).init.body as string)).toEqual({ description: '' });
+    });
+
+    it('sends both when both changed', async () => {
+        const fn = mockFetch(200, { id: 3, name: 'Field', callsign: '7Q5MLV' });
+        await updateLogbook(3, { name: 'Field', description: 'Portable ops' });
+        expect(JSON.parse(sent(fn).init.body as string)).toEqual({
+            name: 'Field',
+            description: 'Portable ops',
+        });
+    });
+
     it('keeps a refusal code and marks a timeout', async () => {
         mockFetch(404, { code: 'not_found', message: 'logbook not found' });
-        expect(await renameLogbook(3, 'Contest')).toMatchObject({
+        expect(await updateLogbook(3, { name: 'Contest' })).toMatchObject({
             kind: 'error',
             code: 'not_found',
         });
         mockTimeout();
-        expect(await renameLogbook(3, 'Contest')).toMatchObject({ kind: 'error', timedOut: true });
+        expect(await updateLogbook(3, { name: 'Contest' })).toMatchObject({
+            kind: 'error',
+            timedOut: true,
+        });
     });
 });
 

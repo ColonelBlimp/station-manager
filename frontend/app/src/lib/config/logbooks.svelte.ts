@@ -13,7 +13,7 @@ import {
     deleteLogbook,
     fetchLogbookCount,
     fetchLogbooks,
-    renameLogbook,
+    updateLogbook,
     type LogbookWriteOutcome,
 } from '../api/logbooks';
 import { fetchStationContext } from '../api/seams';
@@ -33,8 +33,18 @@ export interface LogbookRow {
     id: number;
     name: string;
     callsign: string;
+    /** Its description; '' when it has none. */
+    description: string;
     /** QSOs held; null when the count could not be read. */
     count: number | null;
+}
+
+/** What the Add form submits; the description is optional. */
+export interface AddInput {
+    name: string;
+    callsign: string;
+    smcloud: boolean;
+    description?: string;
 }
 
 const qsos = (n: number): string => `${n.toLocaleString()} ${n === 1 ? 'QSO' : 'QSOs'}`;
@@ -55,7 +65,7 @@ class LogbooksState {
     loaded = $state(false);
     loading = $state(false);
     error = $state('');
-    /** A create, rename or delete is in flight. */
+    /** A create, edit or delete is in flight. */
     busy = $state(false);
 
     // The drafts live here, not in the component, so the Settings leave guard
@@ -65,10 +75,14 @@ class LogbooksState {
     /** The operator typed a callsign; a later load no longer prefills it. */
     addCallsignTouched = $state(false);
     addSmcloud = $state(false);
-    /** The logbook being renamed, 0 when none; renameFrom is its current name. */
-    renameId = $state(0);
-    renameName = $state('');
-    renameFrom = $state('');
+    addDescription = $state('');
+    /** The logbook being edited, 0 when none; editFromName / editFromDescription
+     *  are its saved values, which the draft is measured against. */
+    editId = $state(0);
+    editName = $state('');
+    editDescription = $state('');
+    editFromName = $state('');
+    editFromDescription = $state('');
     #archiveId = '';
     // Each read takes a generation; only the newest may apply, so an older read
     // that answers last (a tab opening while a write's re-read runs) never
@@ -101,6 +115,7 @@ class LogbooksState {
                     id: l.id,
                     name: l.name,
                     callsign: l.callsign,
+                    description: l.description,
                     count: c.kind === 'ok' ? c.count : null,
                 };
             });
@@ -166,19 +181,28 @@ class LogbooksState {
         }
     }
 
-    /** Unsaved drafts: a typed name, a callsign other than the prefill, a ticked
-     *  SM Cloud, or a changed rename. The prefilled form and a merely opened
-     *  Rename are not edits. */
+    /** Unsaved drafts: a typed name or description, a callsign other than the
+     *  prefill, a ticked SM Cloud, or a changed edit. The prefilled form, a
+     *  merely opened Edit, and one typed back to its saved values are not
+     *  edits; values compare trimmed, as the daemon stores them. */
     get dirty(): boolean {
         const callsignChanged =
             this.addCallsignTouched &&
             this.addCallsign.trim().toUpperCase() !== this.stationCallsign.trim().toUpperCase();
-        const addDirty = this.addName.trim() !== '' || callsignChanged || this.addSmcloud;
-        const renameDirty = this.renameId !== 0 && this.renameName.trim() !== this.renameFrom;
-        return addDirty || renameDirty;
+        const addDirty =
+            this.addName.trim() !== '' ||
+            this.addDescription.trim() !== '' ||
+            callsignChanged ||
+            this.addSmcloud;
+        return addDirty || this.editChanged;
     }
 
-    /** A create, rename or delete is on the wire: its outcome cannot be recalled. */
+    /** The open edit differs from its saved values. */
+    get editChanged(): boolean {
+        return this.editId !== 0 && Object.keys(this.#editChanges()).length > 0;
+    }
+
+    /** A create, edit or delete is on the wire: its outcome cannot be recalled. */
     get saving(): boolean {
         return this.busy;
     }
@@ -193,9 +217,10 @@ class LogbooksState {
         this.addCallsign = value.toUpperCase();
     }
 
-    #addDraftIs(input: { name: string; callsign: string; smcloud: boolean }): boolean {
+    #addDraftIs(input: AddInput): boolean {
         return (
             this.addName.trim() === input.name &&
+            this.addDescription.trim() === (input.description ?? '').trim() &&
             this.addCallsign.trim().toUpperCase() === input.callsign.toUpperCase() &&
             // As the form submits it: a tick counts only while SM Cloud is offered.
             (this.addSmcloud && this.smcloudAvailable) === input.smcloud
@@ -204,27 +229,43 @@ class LogbooksState {
 
     clearAdd(): void {
         this.addName = '';
+        this.addDescription = '';
         this.addSmcloud = false;
         this.addCallsignTouched = false;
         this.addCallsign = this.stationCallsign;
     }
 
-    startRename(row: LogbookRow): void {
-        this.renameId = row.id;
-        this.renameName = row.name;
-        this.renameFrom = row.name;
+    startEdit(row: LogbookRow): void {
+        this.editId = row.id;
+        this.editName = row.name;
+        this.editFromName = row.name;
+        this.editDescription = row.description;
+        this.editFromDescription = row.description;
     }
 
-    cancelRename(): void {
-        this.renameId = 0;
-        this.renameName = '';
-        this.renameFrom = '';
+    /** The open edit's fields that differ from their saved values, trimmed as
+     *  the daemon stores them; a cleared description is an explicit ''. */
+    #editChanges(): { name?: string; description?: string } {
+        const changes: { name?: string; description?: string } = {};
+        const name = this.editName.trim();
+        const description = this.editDescription.trim();
+        if (name !== this.editFromName) changes.name = name;
+        if (description !== this.editFromDescription) changes.description = description;
+        return changes;
     }
 
-    /** The leave guard's confirmed discard: clear the Add form, cancel the rename. */
+    cancelEdit(): void {
+        this.editId = 0;
+        this.editName = '';
+        this.editDescription = '';
+        this.editFromName = '';
+        this.editFromDescription = '';
+    }
+
+    /** The leave guard's confirmed discard: clear the Add form, cancel the edit. */
     reset(): void {
         this.clearAdd();
-        this.cancelRename();
+        this.cancelEdit();
     }
 
     /** Why Delete is unavailable for a row, or null when it may be offered. The
@@ -237,7 +278,7 @@ class LogbooksState {
     }
 
     /** Create a logbook; true when it exists (the caller clears its form). */
-    async create(input: { name: string; callsign: string; smcloud: boolean }): Promise<boolean> {
+    async create(input: AddInput): Promise<boolean> {
         if (!this.#mayWrite()) return false;
         // Refused whole, before the wire: creating the logbook and then failing
         // to bind it would leave a logbook the operator did not ask for alone.
@@ -248,7 +289,13 @@ class LogbooksState {
         }
         this.busy = true;
         try {
-            const out = await createLogbook({ name: input.name, callsign: input.callsign });
+            // A blank description is not sent: the daemon stores it empty.
+            const description = (input.description ?? '').trim();
+            const out = await createLogbook({
+                name: input.name,
+                callsign: input.callsign,
+                ...(description !== '' ? { description } : {}),
+            });
             if (out.kind === 'error') {
                 this.#reportFailure(out, 'Check the Logbooks list before adding it again.');
                 return false;
@@ -281,24 +328,35 @@ class LogbooksState {
         }
     }
 
-    /** Rename a logbook; true when renamed. */
-    async rename(id: number, name: string): Promise<boolean> {
+    /** Save the open edit; true when saved. Only the changed fields are sent;
+     *  nothing is sent when nothing changed or the name is blank. */
+    async saveEdit(): Promise<boolean> {
+        const id = this.editId;
+        const changes = this.#editChanges();
+        if (id === 0 || changes.name === '' || Object.keys(changes).length === 0) return false;
         if (!this.#mayWrite()) return false;
+        const savedName = changes.name ?? this.editFromName;
         this.busy = true;
         try {
-            const out = await renameLogbook(id, name);
+            const out = await updateLogbook(id, changes);
             if (out.kind === 'error') {
-                this.#reportFailure(out, 'Check the Logbooks list before renaming it again.');
+                this.#reportFailure(out, 'Check the Logbooks list before saving it again.');
                 return false;
             }
-            // The header names the Default logbook; keep it in step.
-            if (id === this.defaultId) setStationInfo({ logbookName: name });
-            toasts.info(`Logbook renamed “${name}”.`);
-            if (this.renameId === id) {
+            // The header names the Default logbook; keep it in step — only
+            // with a name this save sent, never the draft's unsent one.
+            if (id === this.defaultId && changes.name !== undefined) {
+                setStationInfo({ logbookName: changes.name });
+            }
+            toasts.info(`Logbook “${savedName}” saved.`);
+            if (this.editId === id) {
                 // A draft typed while saving stays open, measured against the
-                // name just saved (not the one it replaced).
-                if (this.renameName.trim() === name) this.cancelRename();
-                else this.renameFrom = name;
+                // values just saved (not the ones they replaced).
+                if (changes.name !== undefined) this.editFromName = changes.name;
+                if (changes.description !== undefined) {
+                    this.editFromDescription = changes.description;
+                }
+                if (!this.editChanged) this.cancelEdit();
             }
             return true;
         } finally {
@@ -365,5 +423,6 @@ export function _resetLogbooksForTests(): void {
     logbooksState.addCallsign = '';
     logbooksState.addCallsignTouched = false;
     logbooksState.addSmcloud = false;
-    logbooksState.cancelRename();
+    logbooksState.addDescription = '';
+    logbooksState.cancelEdit();
 }

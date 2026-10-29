@@ -1,9 +1,10 @@
 <script lang="ts">
     // Logbooks section, first slice (W-0021 dossier, operator ruling 2026-09-29):
-    // the ACTIVE archive's logbooks — add, rename, delete. It never activates an
-    // archive, makes a logbook the default, or enables an upload unasked: the
-    // Default tag is read-only here, and only the Default logbook receives live
-    // contacts until default selection exists.
+    // the ACTIVE archive's logbooks — add, edit (name and description; W-0024
+    // AC1), delete. It never activates an archive, makes a logbook the
+    // default, or enables an upload unasked: the Default tag is read-only here,
+    // and only the Default logbook receives live contacts until default
+    // selection exists.
     import { onMount, untrack } from 'svelte';
     import ManualLink from './ManualLink.svelte';
     import { logbooksState, type LogbookRow } from './logbooks.svelte';
@@ -66,14 +67,8 @@
             name: logbooksState.addName.trim(),
             callsign: logbooksState.addCallsign.trim().toUpperCase(),
             smcloud: logbooksState.addSmcloud && logbooksState.smcloudAvailable,
+            description: logbooksState.addDescription.trim(),
         });
-    }
-
-    // ---- Rename ----
-    async function saveRename(row: LogbookRow): Promise<void> {
-        const next = logbooksState.renameName.trim();
-        if (next === '' || next === row.name) return;
-        await logbooksState.rename(row.id, next);
     }
 
     // ---- Delete ----
@@ -129,12 +124,18 @@
                         {@const block = logbooksState.deleteBlock(row)}
                         <tr class="border-t border-line" data-testid="logbook-row-{row.id}">
                             <td class="py-2 pr-3">
-                                {#if logbooksState.renameId === row.id}
+                                {#if logbooksState.editId === row.id}
                                     <input
                                         class="input w-56"
-                                        aria-label="New name for {row.name}"
-                                        bind:value={logbooksState.renameName}
+                                        aria-label="Name for {row.name}"
+                                        bind:value={logbooksState.editName}
                                         maxlength="80"
+                                    />
+                                    <input
+                                        class="input mt-1 w-56"
+                                        aria-label="Description for {row.name}"
+                                        placeholder="Description (optional)"
+                                        bind:value={logbooksState.editDescription}
                                     />
                                 {:else}
                                     <span class="text-ink">{row.name}</span
@@ -143,29 +144,35 @@
                                             title="Live contacts go to this logbook"
                                             data-testid="logbook-default-{row.id}">Default</span
                                         >{/if}
+                                    {#if row.description}
+                                        <span
+                                            class="block text-xs text-muted"
+                                            data-testid="logbook-description-{row.id}"
+                                            >{row.description}</span
+                                        >
+                                    {/if}
                                 {/if}
                             </td>
                             <td class="py-2 pr-3 font-mono">{row.callsign}</td>
                             <td class="py-2 pr-3">{qsoCountFmt(row.count)}</td>
                             <td class="py-2 text-right whitespace-nowrap">
-                                {#if logbooksState.renameId === row.id}
+                                {#if logbooksState.editId === row.id}
                                     <button
                                         class="btn btn-primary"
                                         disabled={locked ||
-                                            logbooksState.renameName.trim() === '' ||
-                                            logbooksState.renameName.trim() === row.name}
-                                        onclick={() => saveRename(row)}>Save name</button
+                                            logbooksState.editName.trim() === '' ||
+                                            !logbooksState.editChanged}
+                                        onclick={() => logbooksState.saveEdit()}>Save</button
                                     >
-                                    <button class="btn" onclick={() => logbooksState.cancelRename()}
+                                    <button class="btn" onclick={() => logbooksState.cancelEdit()}
                                         >Cancel</button
                                     >
                                 {:else}
                                     <button
                                         class="btn"
                                         disabled={locked}
-                                        aria-label="Rename {row.name}"
-                                        onclick={() => logbooksState.startRename(row)}
-                                        >Rename</button
+                                        aria-label="Edit {row.name}"
+                                        onclick={() => logbooksState.startEdit(row)}>Edit</button
                                     >
                                     <button
                                         class="btn"
@@ -207,6 +214,10 @@
                         >3–32 letters, digits or /, with at least one letter and one digit</span
                     >
                 {/if}
+            </label>
+            <label class="flex w-72 flex-col gap-1 text-sm text-ink">
+                Description (optional)
+                <input class="input" bind:value={logbooksState.addDescription} />
             </label>
             {#if logbooksState.smcloudAvailable}
                 <label class="flex items-center gap-2 pb-2 text-sm text-ink">

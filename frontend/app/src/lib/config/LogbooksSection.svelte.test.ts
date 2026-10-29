@@ -14,7 +14,7 @@ vi.mock('../api/logbooks', () => ({
     fetchLogbooks: vi.fn(),
     fetchLogbookCount: vi.fn(),
     createLogbook: vi.fn(),
-    renameLogbook: vi.fn(),
+    updateLogbook: vi.fn(),
     deleteLogbook: vi.fn(),
 }));
 vi.mock('../api/seams', () => ({ fetchStationContext: vi.fn() }));
@@ -35,7 +35,7 @@ import {
     deleteLogbook,
     fetchLogbookCount,
     fetchLogbooks,
-    renameLogbook,
+    updateLogbook,
 } from '../api/logbooks';
 import { fetchStationContext } from '../api/seams';
 import { fetchDaemonIdentity } from '../api/qso-archives';
@@ -50,9 +50,9 @@ function daemonHas(smcloudReason: string | null = '', counts: Record<number, num
     vi.mocked(fetchLogbooks).mockResolvedValue({
         kind: 'ok',
         logbooks: [
-            { id: 1, name: 'Default', callsign: '7Q5MLV' },
-            { id: 2, name: 'Portable', callsign: '7Q5MLV/P' },
-            { id: 3, name: 'Contest', callsign: '7Q5MLV' },
+            { id: 1, name: 'Default', callsign: '7Q5MLV', description: '' },
+            { id: 2, name: 'Portable', callsign: '7Q5MLV/P', description: '' },
+            { id: 3, name: 'Contest', callsign: '7Q5MLV', description: 'UK/EI DX 2026' },
         ],
     });
     const n = { 1: 12, 2: 0, 3: 4, ...counts };
@@ -166,27 +166,74 @@ describe('LogbooksSection', () => {
         expect(deleteLogbook).toHaveBeenCalledWith(2);
     });
 
-    it('Rename edits the name in place; Cancel sends nothing', async () => {
+    // W-0024 AC1: each logbook's description is shown with it.
+    it('shows a logbook’s description, and nothing for one without', async () => {
         daemonHas();
         await renderLoaded();
-        await fireEvent.click(screen.getByRole('button', { name: 'Rename Portable' }));
+        expect(screen.getByTestId('logbook-description-3')).toHaveTextContent('UK/EI DX 2026');
+        expect(screen.queryByTestId('logbook-description-2')).toBeNull();
+    });
+
+    it('Edit opens the name and description in place; Cancel sends nothing', async () => {
+        daemonHas();
+        await renderLoaded();
+        await fireEvent.click(screen.getByRole('button', { name: 'Edit Contest' }));
         flushSync();
-        const input = screen.getByRole('textbox', { name: 'New name for Portable' });
-        expect(input).toHaveValue('Portable');
+        expect(screen.getByRole('textbox', { name: 'Name for Contest' })).toHaveValue('Contest');
+        expect(screen.getByRole('textbox', { name: 'Description for Contest' })).toHaveValue(
+            'UK/EI DX 2026'
+        );
+        // Opened unchanged: nothing to save.
+        expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
         await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
         flushSync();
-        expect(renameLogbook).not.toHaveBeenCalled();
-        expect(screen.queryByRole('textbox', { name: 'New name for Portable' })).toBeNull();
+        expect(updateLogbook).not.toHaveBeenCalled();
+        expect(screen.queryByRole('textbox', { name: 'Name for Contest' })).toBeNull();
+    });
 
-        await fireEvent.click(screen.getByRole('button', { name: 'Rename Portable' }));
+    it('Edit saves a renamed logbook', async () => {
+        daemonHas();
+        await renderLoaded();
+        await fireEvent.click(screen.getByRole('button', { name: 'Edit Portable' }));
         flushSync();
-        vi.mocked(renameLogbook).mockResolvedValue({ kind: 'ok' });
-        await fireEvent.input(screen.getByRole('textbox', { name: 'New name for Portable' }), {
+        vi.mocked(updateLogbook).mockResolvedValue({ kind: 'ok' });
+        await fireEvent.input(screen.getByRole('textbox', { name: 'Name for Portable' }), {
             target: { value: 'Field day' },
         });
-        await fireEvent.click(screen.getByRole('button', { name: 'Save name' }));
+        await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
         await flush();
-        expect(renameLogbook).toHaveBeenCalledWith(2, 'Field day');
+        expect(updateLogbook).toHaveBeenCalledWith(2, { name: 'Field day' });
+    });
+
+    it('Edit saves a description-only change, sending only the description', async () => {
+        daemonHas();
+        await renderLoaded();
+        await fireEvent.click(screen.getByRole('button', { name: 'Edit Portable' }));
+        flushSync();
+        vi.mocked(updateLogbook).mockResolvedValue({ kind: 'ok' });
+        await fireEvent.input(screen.getByRole('textbox', { name: 'Description for Portable' }), {
+            target: { value: 'Holiday ops' },
+        });
+        flushSync();
+        const save = screen.getByRole('button', { name: 'Save' });
+        expect(save).toBeEnabled();
+        await fireEvent.click(save);
+        await flush();
+        expect(updateLogbook).toHaveBeenCalledWith(2, { description: 'Holiday ops' });
+    });
+
+    it('Edit clears a description with an explicit empty one', async () => {
+        daemonHas();
+        await renderLoaded();
+        await fireEvent.click(screen.getByRole('button', { name: 'Edit Contest' }));
+        flushSync();
+        vi.mocked(updateLogbook).mockResolvedValue({ kind: 'ok' });
+        await fireEvent.input(screen.getByRole('textbox', { name: 'Description for Contest' }), {
+            target: { value: '' },
+        });
+        await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+        await flush();
+        expect(updateLogbook).toHaveBeenCalledWith(3, { description: '' });
     });
 
     it('the add form prefills the station callsign and says where live contacts go', async () => {
@@ -233,6 +280,25 @@ describe('LogbooksSection', () => {
         expect(name).toHaveValue('');
     });
 
+    it('W-0024 AC1: adds a logbook with a typed description and clears it', async () => {
+        daemonHas();
+        await renderLoaded();
+        vi.mocked(createLogbook).mockResolvedValue({ kind: 'ok', id: 4 });
+        await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'Contest 2' } });
+        const description = screen.getByLabelText('Description (optional)');
+        await fireEvent.input(description, { target: { value: 'UK/EI DX 2027' } });
+        await fireEvent.click(screen.getByRole('button', { name: 'Add logbook' }));
+        await flush();
+        await flush();
+        flushSync();
+        expect(createLogbook).toHaveBeenCalledWith({
+            name: 'Contest 2',
+            callsign: '7Q5MLV',
+            description: 'UK/EI DX 2027',
+        });
+        expect(description).toHaveValue('');
+    });
+
     it('holds the submit for a missing name or a malformed callsign', async () => {
         daemonHas();
         await renderLoaded();
@@ -248,15 +314,18 @@ describe('LogbooksSection', () => {
 
     // Operator ruling 2026-09-29: switching tabs inside Settings keeps the
     // drafts, unprompted — including across the tab's own re-read.
-    it('keeps a typed Add form and an open rename across a tab switch', async () => {
+    it('keeps a typed Add form and an open edit across a tab switch', async () => {
         daemonHas();
         const { rerender } = await renderLoaded({ visible: true });
         await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'Contest 2' } });
         await fireEvent.input(screen.getByLabelText('Callsign'), { target: { value: '7q8ac' } });
-        await fireEvent.click(screen.getByRole('button', { name: 'Rename Portable' }));
+        await fireEvent.click(screen.getByRole('button', { name: 'Edit Portable' }));
         flushSync();
-        await fireEvent.input(screen.getByRole('textbox', { name: 'New name for Portable' }), {
+        await fireEvent.input(screen.getByRole('textbox', { name: 'Name for Portable' }), {
             target: { value: 'Field day' },
+        });
+        await fireEvent.input(screen.getByRole('textbox', { name: 'Description for Portable' }), {
+            target: { value: 'Holiday ops' },
         });
         await rerender({ visible: false });
         await rerender({ visible: true });
@@ -265,8 +334,9 @@ describe('LogbooksSection', () => {
         flushSync();
         expect(screen.getByLabelText('Name')).toHaveValue('Contest 2');
         expect(screen.getByLabelText('Callsign')).toHaveValue('7Q8AC');
-        expect(screen.getByRole('textbox', { name: 'New name for Portable' })).toHaveValue(
-            'Field day'
+        expect(screen.getByRole('textbox', { name: 'Name for Portable' })).toHaveValue('Field day');
+        expect(screen.getByRole('textbox', { name: 'Description for Portable' })).toHaveValue(
+            'Holiday ops'
         );
     });
 
@@ -276,7 +346,7 @@ describe('LogbooksSection', () => {
         archivesState.switchUnresolved = true;
         flushSync();
         expect(screen.getByRole('button', { name: 'Delete Portable' })).toBeDisabled();
-        expect(screen.getByRole('button', { name: 'Rename Portable' })).toBeDisabled();
+        expect(screen.getByRole('button', { name: 'Edit Portable' })).toBeDisabled();
         await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'X' } });
         flushSync();
         expect(screen.getByRole('button', { name: 'Add logbook' })).toBeDisabled();

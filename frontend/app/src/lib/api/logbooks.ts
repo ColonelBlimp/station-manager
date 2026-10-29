@@ -7,8 +7,8 @@
 
     And the write surface Settings → Logbooks uses (W-0021, ruling 2026-09-29),
     always on the ACTIVE archive — the only file the daemon has open:
-      - POST   /v1/logbook       → create {name, callsign} → {id}
-      - PATCH  /v1/logbook/{id}  → rename {name}
+      - POST   /v1/logbook       → create {name, callsign, description?} → {id}
+      - PATCH  /v1/logbook/{id}  → edit {name?, description?} (only the fields sent change)
       - DELETE /v1/logbook/{id}  → delete (refused: has_qsos, default_logbook)
 
     Cursor pagination is forward-only: each page carries a `next_cursor` (null when
@@ -30,8 +30,12 @@ export interface Logbook {
     id: number;
     name: string;
     callsign: string;
-    description?: string;
+    /** '' when it has none: the daemon omits an empty description. */
+    description: string;
 }
+
+/** A logbook as it arrives, before an omitted description is made ''. */
+type LogbookRecord = Omit<Logbook, 'description'> & { description?: string };
 
 /**
  * A QSO row as served by the daemon. types.Qso embeds QsoDetails / ContactedStation
@@ -96,12 +100,15 @@ const transportMessage = (kind: string): string =>
 // renders (the logbook selector, the QSO table), so a malformed or duplicate-keyed record would
 // throw mid-render rather than degrade one row. decodeRecords drops the bad ones (keeping the
 // good), deduplicates on the render key, and warns ONCE per response with the drop count.
-function isLogbook(v: unknown): v is Logbook {
+// The description is optional, but when present it must be a string: the
+// editor trims it (W-0024 AC1).
+function isLogbook(v: unknown): v is LogbookRecord {
     return (
         isPlainObject(v) &&
         typeof v.id === 'number' &&
         typeof v.name === 'string' &&
-        typeof v.callsign === 'string'
+        typeof v.callsign === 'string' &&
+        (v.description === undefined || typeof v.description === 'string')
     );
 }
 // A page row keys selection, edit, and rendering on uuid, so a row without a usable one is unkeyed
@@ -160,7 +167,10 @@ export async function fetchLogbooks(signal?: AbortSignal): Promise<LogbooksOutco
     if (!fetched.response.ok)
         return { kind: 'error', message: daemonErrorMessage(fetched.response.status, body) };
     if (!Array.isArray(body)) return { kind: 'error', message: 'Unexpected logbooks response.' };
-    const logbooks = decodeRecords(body, isLogbook, (l) => l.id, 'logbooks');
+    const logbooks = decodeRecords(body, isLogbook, (l) => l.id, 'logbooks').map((l) => ({
+        ...l,
+        description: l.description ?? '',
+    }));
     return { kind: 'ok', logbooks };
 }
 
@@ -251,23 +261,33 @@ const jsonWrite = (method: string, body: unknown): RequestInit => ({
 export async function createLogbook(input: {
     name: string;
     callsign: string;
+    description?: string;
 }): Promise<LogbookWriteOutcome<{ id: number }>> {
     const fetched = await safeFetch('/v1/logbook', jsonWrite('POST', input), {
         timeoutMs: WRITE_TIMEOUT_MS,
     });
     const failed = await writeFailure(fetched);
     if (failed) return failed;
-    const body = fetched.ok ? await readJsonBody(fetched.response) : null;
-    if (!isPlainObject(body) || typeof body.id !== 'number') {
+    const reply = fetched.ok ? await readJsonBody(fetched.response) : null;
+    if (!isPlainObject(reply) || typeof reply.id !== 'number') {
         return { kind: 'error', message: 'Unexpected create-logbook response.' };
     }
-    return { kind: 'ok', id: body.id };
+    return { kind: 'ok', id: reply.id };
 }
 
-/** Rename a logbook (its callsign is not editable). */
-export async function renameLogbook(id: number, name: string): Promise<LogbookWriteOutcome> {
+/** Edit a logbook's name and description (its callsign is not editable). Only
+ *  the fields given are sent: the daemon changes only the fields present, so a
+ *  stale value of the other field never overwrites a concurrent edit of it. An
+ *  explicit '' clears the description. */
+export async function updateLogbook(
+    id: number,
+    fields: { name?: string; description?: string }
+): Promise<LogbookWriteOutcome> {
+    const body: { name?: string; description?: string } = {};
+    if (fields.name !== undefined) body.name = fields.name;
+    if (fields.description !== undefined) body.description = fields.description;
     const failed = await writeFailure(
-        await safeFetch(`/v1/logbook/${id}`, jsonWrite('PATCH', { name }), {
+        await safeFetch(`/v1/logbook/${id}`, jsonWrite('PATCH', body), {
             timeoutMs: WRITE_TIMEOUT_MS,
         })
     );

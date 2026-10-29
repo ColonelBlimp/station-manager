@@ -54,7 +54,34 @@ describe('fetchLogbooks — per-record decode (F-03c)', () => {
         const out = await fetchLogbooks();
         expect(out.kind).toBe('ok');
         if (out.kind !== 'ok') return;
-        expect(out.logbooks).toEqual([{ id: 7, name: 'first', callsign: 'M0ABC' }]);
+        expect(out.logbooks).toEqual([
+            { id: 7, name: 'first', callsign: 'M0ABC', description: '' },
+        ]);
+    });
+
+    // W-0024 AC1: the description is optional (the daemon omits an empty one),
+    // but when present it must be a string — the editor trims it.
+    it('drops a logbook whose description is present but not a string', async () => {
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+        mockFetchJSON(200, [
+            LB({ id: 1, description: 'Home station log' }),
+            LB({ id: 2, description: 5 }),
+            LB({ id: 3, description: null }),
+            LB({ id: 4, description: { text: 'x' } }),
+            LB({ id: 5 }),
+        ]);
+        const out = await fetchLogbooks();
+        expect(out.kind).toBe('ok');
+        if (out.kind !== 'ok') return;
+        expect(out.logbooks.map((l) => l.id)).toEqual([1, 5]);
+    });
+
+    it('decodes an omitted description as empty, and keeps a stored one', async () => {
+        mockFetchJSON(200, [LB({ id: 1 }), LB({ id: 2, description: 'Contest' })]);
+        const out = await fetchLogbooks();
+        expect(out.kind).toBe('ok');
+        if (out.kind !== 'ok') return;
+        expect(out.logbooks.map((l) => l.description)).toEqual(['', 'Contest']);
     });
 
     it('warns exactly once per response, summarising the drop count', async () => {
