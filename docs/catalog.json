@@ -356,6 +356,15 @@
       "summary": "W-0023 is the design-only contest logging dossier: the UK/EI DX Contest as the reference case, its rules with sources, unresolved sponsor and product questions, and proposed first-slice acceptance criteria (declared contest, explicit sent serial, received exchange, in-contest duplicate detection kept apart from the sponsor's policy, Cabrillo export; scoring deferred)."
     },
     {
+      "id": "work.w-0024",
+      "path": "docs/work/W-0024-settings-logbooks.md",
+      "class": "work-item",
+      "audiences": ["operator", "contributor", "agent"],
+      "topics": ["logbooks", "settings", "archives"],
+      "scopes": ["frontend/app/src/lib/config/**", "internal/api/handler_logbook.go"],
+      "summary": "W-0024 is Settings → Logbooks slice 2: choosing which logbook in the active archive receives live contacts (Set as default) and logbook descriptions, without any open tab silently logging into the previous logbook; criteria reviewed; an ADR on restart application and the transition contract precedes any implementation."
+    },
+    {
       "id": "work.dogfood-inbox",
       "path": "docs/dogfood-inbox.md",
       "class": "work-item",
