@@ -298,3 +298,28 @@ func (s *Service) CheckIntegrityWithContext(ctx context.Context) error {
 	}
 	return rows.Err()
 }
+
+// SetArchiveDefaultLogbookDurablyWithContext points the file's default logbook
+// at a LIVE logbook in a durable transaction (durableTx): the commit point of a
+// default change applied at start (ADR 0097 §1), which must survive a power
+// loss before config forgets the change. Unlike SetArchiveDefaultLogbookWithContext
+// it refuses a soft-deleted logbook: deletion is a soft delete, which the
+// pointer's foreign key never sees. A refusal changes nothing.
+func (s *Service) SetArchiveDefaultLogbookDurablyWithContext(ctx context.Context, logbookID int64) error {
+	const op errors.Op = "sqlite.Service.SetArchiveDefaultLogbookDurablyWithContext"
+	if err := checkService(op, s); err != nil {
+		return err
+	}
+	if logbookID < 1 {
+		return errors.New(op).WithMsg(errMsgInvalidId)
+	}
+	set, err := s.durableUpdate(ctx, op, "set the archive's default logbook", `UPDATE archive_metadata SET default_logbook_id = ?
+		WHERE singleton = 1 AND EXISTS (SELECT 1 FROM logbook WHERE id = ? AND deleted_at IS NULL)`, logbookID, logbookID)
+	if err != nil {
+		return err
+	}
+	if !set {
+		return errors.New(op).WithMsgf("no archive identity row, or logbook %d is not a live logbook", logbookID)
+	}
+	return nil
+}

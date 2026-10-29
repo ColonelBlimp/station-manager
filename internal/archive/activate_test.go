@@ -316,3 +316,63 @@ func TestActivate_RestartFailureWithUnclearablePendingIsReported(t *testing.T) {
 		t.Fatalf("entry holds %q, want the code %q", e.LastActivationError, FailPendingUnclear)
 	}
 }
+
+// W-0024 slice 3a (ADR 0097 §2 step 1): an activation is refused, before
+// anything is sealed or written, while a default change is pending or a
+// removal of one is unconfirmed. Config holds a tombstone only until a
+// durable write holding it confirms the removal, so an unconfirmed one is
+// made here the way it arises: by an uncertain write (the config directory
+// without read permission fails only the directory sync).
+func TestActivate_RefusedWhileADefaultChangeIsUnresolved(t *testing.T) {
+	record := func(f *activationFixture, removed string) *config.DefaultLogbookChange {
+		return &config.DefaultLogbookChange{RequestID: "019fd5c5-0000-7000-8000-00000000c0de",
+			ArchiveID: f.home, LogbookUUID: "019fd5c5-0000-7000-8000-0000000000b0", Removed: removed}
+	}
+	write := func(t *testing.T, f *activationFixture, rec *config.DefaultLogbookChange, uncertain bool) {
+		t.Helper()
+		if uncertain {
+			dir := filepath.Dir(f.cfgSvc.Path)
+			if err := os.Chmod(dir, 0o300); err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = os.Chmod(dir, 0o700) }()
+		}
+		dur, err := f.cfgSvc.Update(func(c *config.Config) error { c.DefaultLogbookChange = rec; return nil })
+		if err != nil {
+			t.Fatal(err)
+		}
+		if uncertain != (dur == config.DurabilityUncertain) {
+			t.Fatalf("write durability = %v; want uncertain=%v", dur, uncertain)
+		}
+	}
+	refused := func(t *testing.T, f *activationFixture, code string) {
+		t.Helper()
+		_, err := f.activate(t)
+		if err == nil || codeOf(t, err) != code {
+			t.Fatalf("Activate = %v; want %s", err, code)
+		}
+		f.nothingHappened(t)
+		if d := f.onDisk(t); d.PendingQsoArchiveID != "" || d.DefaultLogbookChange == nil {
+			t.Fatalf("on disk: pending %q, change %+v; want no activation and the record kept", d.PendingQsoArchiveID, d.DefaultLogbookChange)
+		}
+	}
+	t.Run("a pending change", func(t *testing.T) {
+		f := newActivationFixture(t)
+		write(t, f, record(f, ""), false) // durable: a pending selector is never confirmed away
+		refused(t, f, "default_change_pending")
+	})
+	for _, removed := range []string{config.RemovedCancelled, config.RemovedWithdrawn, config.RemovedAbandoned, config.RemovedApplied} {
+		t.Run("an unconfirmed "+removed+" tombstone", func(t *testing.T) {
+			f := newActivationFixture(t)
+			write(t, f, record(f, removed), true)
+			refused(t, f, "default_change_unconfirmed")
+		})
+	}
+	t.Run("a tombstone written durably is confirmed, and blocks nothing", func(t *testing.T) {
+		f := newActivationFixture(t)
+		write(t, f, record(f, config.RemovedCancelled), false)
+		if _, err := f.activate(t); err != nil {
+			t.Fatalf("Activate = %v; want it to proceed", err)
+		}
+	})
+}

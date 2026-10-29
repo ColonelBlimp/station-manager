@@ -176,10 +176,26 @@ func (s *Server) handleDeleteLogbook(w http.ResponseWriter, r *http.Request) {
 	// default_logbook_id dangling (new submits then resolve a non-existent
 	// logbook) with no UI to repair it (review 2026-07-22 #1). The operator must
 	// point the default elsewhere first.
-	if def := s.cfg.Snapshot().DefaultLogbookID; def == id {
+	snap := s.cfg.Snapshot()
+	if snap.DefaultLogbookID == id {
 		s.writeError(w, http.StatusConflict, "default_logbook",
 			"cannot delete the default logbook; set another default first", op)
 		return
+	}
+	// Nor the target of a default change that is pending or whose removal is not
+	// yet confirmed on disk (ADR 0097): config holds the record exactly while it
+	// is either, and a later start could still apply it.
+	if c := snap.DefaultLogbookChange; c != nil {
+		lb, err := s.db.FetchLogbookByIDWithContext(r.Context(), id)
+		if err != nil && !stderr.Is(err, errors.ErrNotFound) {
+			s.writeServerError(w, op, err, "db_error", "database operation failed")
+			return
+		}
+		if err == nil && lb.UUID != "" && lb.UUID == c.LogbookUUID {
+			s.writeError(w, http.StatusConflict, "default_change_target",
+				"cannot delete the target of a default logbook change that is pending or not yet confirmed", op)
+			return
+		}
 	}
 
 	if err = s.db.DeleteLogbookByIDWithContext(r.Context(), id); err != nil {

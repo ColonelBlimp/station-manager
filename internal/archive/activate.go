@@ -137,7 +137,8 @@ func (m *Manager) CreateArchive(ctx context.Context, req types.QsoArchiveCreateR
 // the attended restart is the switch, this process never swaps handles. In
 // order, each step refusing with a *RequestError before anything later runs:
 // single flight (one activation per process; a second is activation_in_progress);
-// the entry exists (archive_not_found) and is not the active one (archive_active);
+// no default logbook change pending or unconfirmed (default_change_pending,
+// default_change_unconfirmed; ADR 0097); the entry exists (archive_not_found) and is not the active one (archive_active);
 // a restart port is wired (restart_unavailable); the file holds this archive's
 // identity (archive_unavailable — a missing file or another archive's identity
 // would only fail at the next start); the FT8 seal, then the bridge seal, each a
@@ -161,6 +162,15 @@ func (m *Manager) Activate(ctx context.Context, id string) (types.QsoArchiveActi
 		return types.QsoArchiveActivation{}, &RequestError{Code: "activation_in_progress", Message: "an activation is already pending; the daemon is restarting"}
 	}
 	snap := m.cfg.Snapshot()
+	// A default change pending, or one whose removal is not yet confirmed
+	// durable, is resolved before another archive is activated (ADR 0097 §2
+	// step 1): config holds the record exactly while it is either.
+	if c := snap.DefaultLogbookChange; c != nil {
+		if c.Removed == "" {
+			return types.QsoArchiveActivation{}, &RequestError{Code: "default_change_pending", Message: "a change of the default logbook is pending; it must be applied or cancelled first"}
+		}
+		return types.QsoArchiveActivation{}, &RequestError{Code: "default_change_unconfirmed", Message: "the removal of a default logbook change is not yet confirmed on disk; confirm it first"}
+	}
 	entry := snap.QsoArchiveByID(id)
 	if entry == nil {
 		return types.QsoArchiveActivation{}, &RequestError{Code: "archive_not_found", Message: "no such archive"}

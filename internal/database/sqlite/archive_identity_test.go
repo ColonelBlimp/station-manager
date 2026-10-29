@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	stderr "errors"
 	"path/filepath"
 	"testing"
@@ -248,4 +249,128 @@ func TestWriteArchiveIdentity_RetryCompletesTheBackfill(t *testing.T) {
 	if err != nil || !utils.IsValidUUIDv7(lb.UUID) {
 		t.Fatalf("retry left logbook 5 without a uuid: %q (%v)", lb.UUID, err)
 	}
+}
+
+// W-0024 slice 3a (ADR 0097 §1): the start's commit point. It writes the
+// pointer only to a LIVE logbook (deletion is a soft delete, which never fires
+// the pointer's foreign key), and only as a durable transaction: one pinned
+// connection set to synchronous=FULL before its transaction begins, read back
+// inside it, and restored to NORMAL after the commit, as the adoption
+// reservation does. These tests observe that connection through the
+// setSynchronous seam; none can prove power-loss durability itself.
+func TestSetArchiveDefaultLogbookDurably(t *testing.T) {
+	ctx := context.Background()
+	type call struct {
+		level    string
+		pointer  int64 // the pointer on the pinned connection when the level was set
+		readback int   // PRAGMA synchronous on that connection afterwards
+	}
+	var conns []*sql.Conn // the connection each call was made on, in order
+	setup := func(t *testing.T) (svc *Service, a, b, c int64) {
+		t.Helper()
+		svc = testService(t)
+		a, _ = svc.InsertLogbookWithContext(ctx, types.Logbook{Name: "A", Callsign: "G4ABC"})
+		b, _ = svc.InsertLogbookWithContext(ctx, types.Logbook{Name: "B", Callsign: "G4ABC"})
+		c, _ = svc.InsertLogbookWithContext(ctx, types.Logbook{Name: "C", Callsign: "G4ABC"})
+		if _, err := svc.EnsureArchiveIdentityWithContext(ctx, a); err != nil {
+			t.Fatalf("ensure: %v", err)
+		}
+		return svc, a, b, c
+	}
+	pointer := func(t *testing.T, svc *Service) int64 {
+		t.Helper()
+		got, err := svc.ArchiveIdentityWithContext(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got.DefaultLogbookID
+	}
+	observe := func(t *testing.T, override func(ctx context.Context, conn *sql.Conn, level string) error) *[]call {
+		t.Helper()
+		calls := &[]call{}
+		conns = nil
+		real := setSynchronous
+		setSynchronous = func(ctx context.Context, conn *sql.Conn, level string) error {
+			var err error
+			if override != nil {
+				err = override(ctx, conn, level)
+			} else {
+				err = real(ctx, conn, level)
+			}
+			c := call{level: level}
+			var p sql.NullInt64
+			if qerr := conn.QueryRowContext(ctx, `SELECT default_logbook_id FROM archive_metadata WHERE singleton = 1`).Scan(&p); qerr != nil {
+				t.Errorf("observe the pointer on the pinned connection: %v", qerr)
+			}
+			c.pointer = p.Int64
+			if qerr := conn.QueryRowContext(ctx, `PRAGMA synchronous`).Scan(&c.readback); qerr != nil {
+				t.Errorf("observe synchronous on the pinned connection: %v", qerr)
+			}
+			*calls = append(*calls, c)
+			conns = append(conns, conn)
+			return err
+		}
+		t.Cleanup(func() { setSynchronous = real })
+		return calls
+	}
+	t.Run("FULL before the write, NORMAL after the commit, on the same connection", func(t *testing.T) {
+		svc, a, b, _ := setup(t)
+		calls := observe(t, nil)
+		if err := svc.SetArchiveDefaultLogbookDurablyWithContext(ctx, b); err != nil {
+			t.Fatalf("durable set: %v", err)
+		}
+		want := []call{{level: "FULL", pointer: a, readback: 2}, {level: "NORMAL", pointer: b, readback: 1}}
+		if len(*calls) != 2 || (*calls)[0] != want[0] || (*calls)[1] != want[1] {
+			t.Fatalf("synchronous calls = %+v; want %+v", *calls, want)
+		}
+		if len(conns) != 2 || conns[0] == nil || conns[0] != conns[1] {
+			t.Fatalf("connections = %p; want FULL and NORMAL set on one pinned connection", conns)
+		}
+		if p := pointer(t, svc); p != b {
+			t.Fatalf("pointer = %d; want %d", p, b)
+		}
+	})
+	t.Run("a failed FULL setting writes nothing", func(t *testing.T) {
+		svc, a, b, _ := setup(t)
+		observe(t, func(ctx context.Context, conn *sql.Conn, level string) error {
+			if level == "FULL" {
+				return stderr.New("pragma refused")
+			}
+			_, err := conn.ExecContext(ctx, "PRAGMA synchronous = "+level)
+			return err
+		})
+		if err := svc.SetArchiveDefaultLogbookDurablyWithContext(ctx, b); err == nil {
+			t.Fatal("durable set succeeded; want an error")
+		}
+		if p := pointer(t, svc); p != a {
+			t.Fatalf("pointer = %d after a failed FULL setting; want %d", p, a)
+		}
+	})
+	t.Run("a FULL setting that did not take writes nothing", func(t *testing.T) {
+		svc, a, b, _ := setup(t)
+		observe(t, func(ctx context.Context, conn *sql.Conn, level string) error {
+			_, err := conn.ExecContext(ctx, "PRAGMA synchronous = NORMAL") // claims success, leaves NORMAL
+			return err
+		})
+		if err := svc.SetArchiveDefaultLogbookDurablyWithContext(ctx, b); err == nil {
+			t.Fatal("durable set succeeded; want an error (the transaction would commit at NORMAL)")
+		}
+		if p := pointer(t, svc); p != a {
+			t.Fatalf("pointer = %d after a commit at NORMAL was refused; want %d", p, a)
+		}
+	})
+	t.Run("only a live logbook", func(t *testing.T) {
+		svc, a, _, c := setup(t)
+		if err := svc.DeleteLogbookByIDWithContext(ctx, c); err != nil {
+			t.Fatalf("soft-delete C: %v", err)
+		}
+		for name, id := range map[string]int64{"a missing logbook": 999, "a soft-deleted logbook": c} {
+			if err := svc.SetArchiveDefaultLogbookDurablyWithContext(ctx, id); err == nil {
+				t.Fatalf("%s was accepted", name)
+			}
+			if p := pointer(t, svc); p != a {
+				t.Fatalf("after refusing %s, pointer = %d; want %d unchanged", name, p, a)
+			}
+		}
+	})
 }

@@ -149,6 +149,12 @@ type Config struct {
 	PendingQsoArchiveID string                   `json:"pending_qso_archive_id,omitempty"`
 	QsoArchives         []types.QsoArchiveConfig `json:"qso_archives,omitempty"`
 
+	// DefaultLogbookChange is a change of the default logbook that takes
+	// effect at the next start (ADR 0097): a pending selector, or the tombstone
+	// a removal leaves until its removal is confirmed durable. Server-managed,
+	// like the archive selectors: PUT /v1/config carries no field for it.
+	DefaultLogbookChange *DefaultLogbookChange `json:"default_logbook_change,omitempty"`
+
 	// RestoreRigOnModeSwitch controls whether switching the operating mode
 	// (Phone/CW ↔ FT8) auto re-tunes a CAT-LIVE rig back to that mode's last
 	// freq/mode: the SPA snapshots each mode's operating state on leave and
@@ -2469,6 +2475,7 @@ func (s *Service) Update(fn func(cfg *Config) error) (Durability, error) {
 	// renamed config.json into place (it is the live on-disk file), so in-memory must
 	// match it (PT-6). The caveat rides out in the Durability return.
 	s.Cfg = next
+	s.confirmRemoval(next, dur)
 	return dur, nil
 }
 
@@ -2513,6 +2520,7 @@ func (s *Service) UpdateIfChanged(forceWrite bool, fn func(cfg *Config) error) (
 	}
 
 	s.Cfg = next
+	s.confirmRemoval(next, dur)
 	return changes, dur, nil
 }
 
@@ -2557,7 +2565,26 @@ func (s *Service) UpdateInMemoryThenPersist(fn func(cfg *Config) error) (Durabil
 		return Durable, fmt.Errorf(
 			"config.Service.UpdateInMemoryThenPersist: in-memory update applied but writing config failed: %w", err)
 	}
+	s.confirmRemoval(next, dur)
 	return dur, nil
+}
+
+// confirmRemoval drops a default-change tombstone from memory once a write
+// whose document held it reported durable (ADR 0097 §1): only then can a power
+// loss no longer bring the removed change back. Nothing else confirms it — not
+// an uncertain or failed write, not a no-op that wrote nothing — and a pending
+// selector is never dropped. The drop is from memory only: the confirming
+// document holds the tombstone, and the next write is the first without it; a
+// start that finds it on disk confirms it again. Called under s.mu, after the
+// write.
+func (s *Service) confirmRemoval(written Config, dur Durability) {
+	w := written.DefaultLogbookChange
+	if dur != Durable || w == nil || w.Removed == "" {
+		return
+	}
+	if c := s.Cfg.DefaultLogbookChange; c != nil && *c == *w {
+		s.Cfg.DefaultLogbookChange = nil
+	}
 }
 
 // Initialize prepares the service for use. Resolves the working directory.
@@ -2731,3 +2758,23 @@ func (s *Service) LookupServiceConfig(name string) (types.LookupConfig, error) {
 // disable themselves cleanly rather than fail startup when the
 // operator hasn't configured them.
 var ErrLookupConfigNotFound = fmt.Errorf("lookup: provider config not found")
+
+// DefaultLogbookChange is the default-change record (ADR 0097 §1). Removed is
+// "" while the change is pending; a removal replaces the selector with a
+// tombstone naming how it ended (RemovedCancelled, RemovedWithdrawn,
+// RemovedAbandoned or RemovedApplied), kept until a durable write confirms it.
+type DefaultLogbookChange struct {
+	RequestID   string `json:"request_id"`
+	ArchiveID   string `json:"archive_id"`
+	LogbookUUID string `json:"logbook_uuid"`
+	Removed     string `json:"removed,omitempty"`
+	FailureCode string `json:"failure_code,omitempty"`
+}
+
+// How a default-change record was removed (its tombstone).
+const (
+	RemovedCancelled = "cancelled"
+	RemovedWithdrawn = "withdrawn"
+	RemovedAbandoned = "abandoned"
+	RemovedApplied   = "applied"
+)

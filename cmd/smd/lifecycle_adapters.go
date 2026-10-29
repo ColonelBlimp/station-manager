@@ -118,6 +118,9 @@ type daemon struct {
 	// SM Cloud binding of the start snapshot, in listing order.
 	smcloudSet []reconcileEntry
 	adopter    *adoption.Adopter
+	// defaultChange is the default-change state this generation started with
+	// and its later confirmations (ADR 0097 §1).
+	defaultChange defaultChangeState
 	// support is this start's SM Cloud server support check (W-0021 5F.4,
 	// ruling J3), run in the adoption node.
 	support supportCheck
@@ -432,6 +435,13 @@ func (d *daemon) initQso() error {
 // catalogue was persisted.
 func (d *daemon) startQso(context.Context) error {
 	const op errors.Op = "smd.startQso"
+	// A pending default change, or a removal's tombstone, is reconciled before
+	// anything reads the default (ADR 0097 §1).
+	report, err := reconcileDefaultChange(context.Background(), newDefaultPointer(d.db), d.cfgSvc, d.logger)
+	if err != nil {
+		return errors.New(op).WithErr(err).WithMsg("reconcile the default logbook change")
+	}
+	d.defaultChange.set(d.cfgSvc, report)
 	if err := ensureDefaultLogbook(context.Background(), d.db, d.cfgSvc, d.logger); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("ensure default logbook")
 	}
