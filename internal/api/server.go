@@ -96,6 +96,10 @@ type Server struct {
 	// archives is the QSO archive port (ADR 0071). Injected by cmd/smd via
 	// SetArchiveManager; nil → the /v1/qso-archives routes answer 503.
 	archives ArchiveManager
+	// defaultChanger is the default-logbook change port (ADR 0097); liveEntry
+	// the gate live Phone / CW submissions are admitted through (nil: no gate).
+	defaultChanger DefaultChanger
+	liveEntry      *LiveEntryGate
 	// archiveSummaryNotifier is the active archive summary's dirty signal (ADR
 	// 0084): called after a logbook is created, renamed or deleted. Non-blocking;
 	// nil until SetArchiveSummaryNotifier.
@@ -308,6 +312,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *l
 	apiMux.HandleFunc("GET /v1/qso-archives", s.handleListQsoArchives)
 	apiMux.HandleFunc("POST /v1/qso-archives", s.handleCreateQsoArchive)
 	apiMux.HandleFunc("POST /v1/qso-archives/{uuid}/activate", s.handleActivateQsoArchive)
+	s.registerDefaultChangeRoutes(apiMux)
 	// Destination bindings of the ACTIVE archive (ADR 0082, W-0021 5D).
 	apiMux.HandleFunc("GET /v1/qso-archives/{uuid}/bindings", s.handleGetArchiveBindings)
 	apiMux.HandleFunc("PUT /v1/qso-archives/{uuid}/bindings", s.handlePutArchiveBindings)

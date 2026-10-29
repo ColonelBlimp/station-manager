@@ -63,6 +63,30 @@ type Manager struct {
 	txSeal, rigSeal Seal
 	restart         func() error
 	activated       bool
+	// liveSeal is the live Phone / CW entry seal (SetLiveEntrySeal); a default
+	// change takes it after the TX seals (ADR 0097).
+	liveSeal Seal
+	// defaultReport is this generation's start report of a default change
+	// (SetDefaultChangeReport); nil until wired.
+	defaultReport func() StartReport
+	// lastOutcome is the latest outcome of a default change this process acted
+	// on — a restart failure, a Cancel, a Confirm, a Retry — kept so a client
+	// that lost the response finds it in the status once config no longer
+	// holds the record.
+	lastOutcome types.DefaultChangeView
+	// outcomeVersion counts changes to lastOutcome, so the status can tell
+	// whether it moved while it read config. (defaultRequested needs none: it
+	// is read only beside a snapshot holding its request's record, which it
+	// always follows.)
+	outcomeVersion uint64
+	// defaultRequested is the request id of a default change whose restart was
+	// requested by this process; the change then applies at the exit.
+	defaultRequested string
+	// opMu guards op, the single flight a default change, an activation and a
+	// logbook deletion share (ADR 0097 §2 step 1): a competitor is refused at
+	// once, never queued.
+	opMu sync.Mutex
+	op   string
 
 	// Bindings port (SetActiveBindings): the ACTIVE archive's database and the
 	// bindings this generation started with (ADR 0082, 5D). nil until the

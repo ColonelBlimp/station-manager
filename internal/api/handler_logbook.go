@@ -171,7 +171,22 @@ func (s *Server) handleDeleteLogbook(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "invalid_id", err.Error(), op)
 		return
 	}
+	// Under the single flight a default change and an archive activation share
+	// (ADR 0097 §2 step 1), so a delete never races a change of the default.
+	if s.defaultChanger != nil {
+		if err := s.defaultChanger.WithLogbookChange(func() error {
+			s.deleteLogbook(w, r, op, id)
+			return nil
+		}); err != nil {
+			s.writeArchiveError(w, op, err, "db_error", "database operation failed")
+		}
+		return
+	}
+	s.deleteLogbook(w, r, op, id)
+}
 
+// deleteLogbook is the delete itself, with its refusals.
+func (s *Server) deleteLogbook(w http.ResponseWriter, r *http.Request, op errors.Op, id int64) {
 	// Refuse to delete the configured default logbook: doing so leaves
 	// default_logbook_id dangling (new submits then resolve a non-existent
 	// logbook) with no UI to repair it (review 2026-07-22 #1). The operator must
@@ -198,7 +213,7 @@ func (s *Server) handleDeleteLogbook(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err = s.db.DeleteLogbookByIDWithContext(r.Context(), id); err != nil {
+	if err := s.db.DeleteLogbookByIDWithContext(r.Context(), id); err != nil {
 		if stderr.Is(err, errors.ErrNotFound) {
 			s.writeError(w, http.StatusNotFound, "not_found", "logbook not found", op)
 			return

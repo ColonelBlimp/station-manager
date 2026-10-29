@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/ColonelBlimp/station-manager/internal/archive"
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
@@ -87,6 +88,16 @@ func (s *defaultChangeState) get() defaultChangeReport {
 	}
 	r.State, r.Unconfirmed = r.settled, false
 	return r
+}
+
+// startReport is the start's raw report for the archive manager's status,
+// which judges it against its own config snapshot: State while config holds
+// the record, Settled once it does not.
+func (s *defaultChangeState) startReport() archive.StartReport {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r := s.report
+	return archive.StartReport{RequestID: r.RequestID, LogbookUUID: r.LogbookUUID, State: r.State, Settled: r.settled, FailureCode: r.FailureCode}
 }
 
 // reconcileDefaultChange settles config's default-change record at start,

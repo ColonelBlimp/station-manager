@@ -121,6 +121,9 @@ type daemon struct {
 	// defaultChange is the default-change state this generation started with
 	// and its later confirmations (ADR 0097 §1).
 	defaultChange defaultChangeState
+	// liveEntry admits live Phone / CW submissions; a default change seals it
+	// (ADR 0097 §2 step 4).
+	liveEntry *api.LiveEntryGate
 	// support is this start's SM Cloud server support check (W-0021 5F.4,
 	// ruling J3), run in the adoption node.
 	support supportCheck
@@ -1191,6 +1194,14 @@ func (d *daemon) initHTTP() error {
 	d.support.expect(hasAccount)
 	d.archives.SetSmcloudSupport(d.support.stateFor)
 	d.server.SetArchiveManager(d.archives)
+	// The default logbook's change at an attended restart (ADR 0097): the same
+	// manager, seals and restart port; its routes stay unregistered until
+	// released (api.DefaultChangeRoutesReleased).
+	d.liveEntry = api.NewLiveEntryGate()
+	d.server.SetLiveEntryGate(d.liveEntry)
+	d.archives.SetLiveEntrySeal(d.liveEntry)
+	d.archives.SetDefaultChangeReport(d.defaultChange.startReport)
+	d.server.SetDefaultChanger(d.archives)
 	if d.activeSummary != nil {
 		d.archives.SetActiveSummary(d.activeSummary)
 		d.server.SetArchiveSummaryNotifier(d.activeSummary.Notify)

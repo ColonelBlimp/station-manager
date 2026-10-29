@@ -136,7 +136,9 @@ func (m *Manager) CreateArchive(ctx context.Context, req types.QsoArchiveCreateR
 // Activate requests that the next daemon start serve archive `id` (ADR 0071):
 // the attended restart is the switch, this process never swaps handles. In
 // order, each step refusing with a *RequestError before anything later runs:
-// single flight (one activation per process; a second is activation_in_progress);
+// the single flight it shares with a default change and a logbook deletion
+// (a competitor in flight is refused, *_in_progress), and one activation per
+// process (a second is activation_in_progress);
 // no default logbook change pending or unconfirmed (default_change_pending,
 // default_change_unconfirmed; ADR 0097); the entry exists (archive_not_found) and is not the active one (archive_active);
 // a restart port is wired (restart_unavailable); the file holds this archive's
@@ -156,6 +158,10 @@ func (m *Manager) CreateArchive(ctx context.Context, req types.QsoArchiveCreateR
 // pending with it (pending_unclear) — the next restart, whenever it comes,
 // performs the activation with the ordinary rollback.
 func (m *Manager) Activate(ctx context.Context, id string) (types.QsoArchiveActivation, error) {
+	if err := m.beginOp(opActivation); err != nil {
+		return types.QsoArchiveActivation{}, err
+	}
+	defer m.endOp()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.activated {
