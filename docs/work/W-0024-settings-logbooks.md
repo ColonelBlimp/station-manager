@@ -209,7 +209,11 @@ Each slice was test-first: failing tests reviewed before implementation, then re
 **CI budget (2026-10-29):** the race step's 10-minute per-package timeout failed CI on 3a and 3b
 (`cmd/smd`, `internal/archive`, an uncached `internal/database/sqlite`; no assertion failed).
 `e4c711af` raises it to 20 minutes and the job to 45, and runs once with `-count=1` to measure
-uncached durations; a follow-up removes `-count=1`.
+uncached durations. **Measured** (run 40864387932, green): the slowest packages took `cmd/smd`
+504 s, `internal/database/sqlite` 459 s and `internal/archive` 439 s (8.4 minutes at most, against
+the 20-minute budget); the next were `adoption` 119 s, `qsoservice` 109 s and `forwarding/worker`
+108 s. The race step took 9 min 56 s and the whole job 18 min 15 s (budget 45). The follow-up
+removes `-count=1`, so caching resumes.
 
 **Next:** slice 4, the stale-tab guard (ADR 0097 §4); then slice 5, the confirmation (ADR 0097
 §4a). The routes are released only after both.
