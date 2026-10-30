@@ -31,6 +31,7 @@ import {
 import { OUTCOME_UNKNOWN_LEAD } from '../api/_helpers';
 import { toasts } from '../ui/toasts.svelte';
 import { draft, draftInProgress, logOutcomeUnknown, submitState } from '../operate/qso.svelte';
+import { reloadPage as fullReload } from '../utils/reload';
 
 export const archivesState: {
     list: QsoArchive[];
@@ -106,9 +107,10 @@ function refuseOverLogInFlight(): boolean {
 // FT8 state are all fetched at boot for the archive the daemon serves, and a
 // partial reconciliation would leave one of them logging into the old archive.
 // Guarded: it runs only once a DIFFERENT daemon instance answered AND the fresh
-// catalogue read succeeded — never on an unknown outcome. Injectable for tests
-// (jsdom cannot reload).
-let reloadPage: () => void = () => window.location.reload();
+// catalogue read succeeded — never on an unknown outcome. Through the shared
+// seam (lib/utils/reload), which survives an earlier refused reload (W-0024
+// acceptance F6). Injectable for tests (jsdom cannot reload).
+let reloadPage: () => void = () => fullReload();
 
 /** Every reload the store requests goes through here: the gate is LATCHED
  *  first (review P1), so an unload the operator cancels — the Settings
