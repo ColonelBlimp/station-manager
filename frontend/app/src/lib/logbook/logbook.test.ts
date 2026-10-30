@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { logbookState } from './logbook.svelte';
 import { navigate, takeLogbookMissingFrom } from '../router.svelte';
 import type { LogbookQso } from '../api/logbooks';
+import { setBoundDefault } from '../api/archive-guard';
+import { TEST_DEFAULT_LOGBOOK } from '../../test/archive';
 
 function qso(id: number, uuid: string): LogbookQso {
     return { id, uuid, call: `C${id}` };
@@ -790,5 +792,98 @@ describe('mount with a missing-from handoff', () => {
         expect(urls.find((u) => u.startsWith('/v1/logbook/1/count'))).toContain('missing_from=qrz');
         // Consumed: a re-init (e.g. navigating away and back) starts unfiltered.
         expect(takeLogbookMissingFrom()).toBeUndefined();
+    });
+});
+
+// W-0024 acceptance F5: the Logbook view opens on the ESTABLISHED effective
+// default — the one this tab's station context asserts — not on whichever
+// logbook the list happens to put first. An explicit navigation target and the
+// operator's own earlier choice still win. The fixture puts the default second,
+// so "first" and "default" differ.
+describe('the initial selection (W-0024 F5)', () => {
+    const U1 = '01a187bc-0100-7000-8000-000000000001';
+    const U2 = '01a187bc-0200-7000-8000-000000000002';
+    const U3 = '01a187bc-0300-7000-8000-000000000003';
+    let urls: string[];
+
+    function stubLogbooks(): void {
+        urls = [];
+        vi.stubGlobal(
+            'fetch',
+            vi.fn((input: RequestInfo | URL) => {
+                const url = urlText(input);
+                urls.push(url);
+                const json = (body: unknown) =>
+                    Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+                if (url.startsWith('/v1/config')) return json({ mailer: { enabled: false } });
+                if (url === '/v1/logbook')
+                    return json([
+                        { id: 1, uuid: U1, name: 'Main', callsign: 'G4ABC' },
+                        { id: 2, uuid: U2, name: 'Contest', callsign: 'G4ABC' },
+                        { id: 3, uuid: U3, name: 'Portable', callsign: 'G4ABC/P' },
+                    ]);
+                if (/^\/v1\/logbook\/\d+\/qso/.test(url))
+                    return json({ items: [], next_cursor: null });
+                if (/^\/v1\/logbook\/\d+\/count/.test(url)) return json({ count: 0 });
+                if (/^\/v1\/logbook\/\d+\/destinations/.test(url))
+                    return json({ destinations: [] });
+                return Promise.resolve(new Response('{}', { status: 404 }));
+            })
+        );
+    }
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        logbookState.rows = [];
+        logbookState.selectedId = null;
+        logbookState.forgetChoiceForTests();
+        logbookState.selectedDestination = '';
+        setBoundDefault(TEST_DEFAULT_LOGBOOK);
+        navigate('operate');
+    });
+
+    it('opens on the established effective default, not the first logbook', async () => {
+        stubLogbooks();
+        setBoundDefault(U2);
+        await logbookState.init();
+        expect(logbookState.selectedId).toBe(2);
+        expect(urls.some((u) => u.startsWith('/v1/logbook/1/'))).toBe(false);
+    });
+
+    it('an explicit navigation target wins over the default', async () => {
+        stubLogbooks();
+        setBoundDefault(U2);
+        navigate('logbook', { missingFrom: 'qrz.x', logbookId: 3 });
+        await logbookState.init();
+        expect(logbookState.selectedId).toBe(3);
+    });
+
+    it('the operator’s own choice of another logbook survives leaving and returning', async () => {
+        stubLogbooks();
+        setBoundDefault(U2);
+        await logbookState.init();
+        // Logbook 3: neither the first nor the default, so only the choice explains it.
+        await logbookState.chooseLogbook(3);
+        await logbookState.init(); // the view remounts
+        expect(logbookState.selectedId).toBe(3);
+    });
+
+    it('a chosen logbook that no longer exists falls back to the default', async () => {
+        stubLogbooks();
+        setBoundDefault(U2);
+        await logbookState.init();
+        await logbookState.chooseLogbook(9);
+        await logbookState.init();
+        expect(logbookState.selectedId).toBe(2);
+    });
+
+    it.each([
+        ['no established default', null],
+        ['a default not in the list', '01a187bc-0900-7000-8000-000000000009'],
+    ])('with %s, the first logbook', async (_n, bound) => {
+        stubLogbooks();
+        setBoundDefault(bound);
+        await logbookState.init();
+        expect(logbookState.selectedId).toBe(1);
     });
 });

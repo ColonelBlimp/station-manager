@@ -115,8 +115,26 @@ describe('Set as default on each row', () => {
         expect(contest).toBeEnabled();
         expect(screen.queryByTestId('logbook-set-default-1')).toBeNull();
         const portable = screen.getByTestId('logbook-set-default-2');
-        expect(portable).toBeDisabled();
+        expect(portable).toHaveAttribute('aria-disabled', 'true');
         expect(portable.getAttribute('title') ?? '').toMatch(/callsign/i);
+    });
+
+    // W-0024 acceptance F4: the reason is visible without a tooltip.
+    it('clicking the unavailable Set as default shows its reason under the row and asks nothing', async () => {
+        const confirm = vi.fn(() => true);
+        vi.stubGlobal('confirm', confirm);
+        render(LogbooksSection);
+        await flush();
+        await flush();
+        const portable = screen.getByTestId('logbook-set-default-2');
+        expect(portable).not.toBeDisabled(); // focusable
+        await fireEvent.click(portable);
+        await flush();
+        expect(confirm).not.toHaveBeenCalled();
+        expect(requestDefaultChange).not.toHaveBeenCalled();
+        const reason = screen.getByTestId('logbook-reason-2');
+        expect(reason).toBeVisible();
+        expect(reason.textContent ?? '').toMatch(/7Q5MLV\/P is not the station callsign/);
     });
 
     it('hidden everywhere when the daemon does not serve it', async () => {
@@ -137,8 +155,14 @@ describe('Set as default on each row', () => {
         await flush();
         await flush();
         const contest = screen.getByTestId('logbook-set-default-3');
-        expect(contest).toBeDisabled();
+        expect(contest).toHaveAttribute('aria-disabled', 'true');
         expect(contest.getAttribute('title') ?? '').toMatch(/could not be read/i);
+        await fireEvent.click(contest);
+        await flush();
+        expect(requestDefaultChange).not.toHaveBeenCalled();
+        expect(screen.getByTestId('logbook-reason-3').textContent ?? '').toMatch(
+            /could not be read/i
+        );
     });
 
     it('clicking asks first, then requests the change', async () => {
@@ -204,7 +228,12 @@ describe('the change in play (W-0024 slice 5b)', () => {
         await flush();
         await flush();
         const del = screen.getByRole('button', { name: 'Delete Contest' });
-        expect(del).toBeDisabled();
+        expect(del).toHaveAttribute('aria-disabled', 'true');
         expect(del.getAttribute('title') ?? '').toMatch(/change/i);
+        await fireEvent.click(del);
+        await flush();
+        expect(screen.getByTestId('logbook-reason-3').textContent ?? '').toMatch(
+            /default logbook change names this logbook/
+        );
     });
 });

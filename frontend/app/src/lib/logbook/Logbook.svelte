@@ -46,7 +46,7 @@
             aria-label="Logbook"
             value={logbookState.selectedId ?? ''}
             disabled={logbookState.logbooks.length === 0}
-            onchange={(e) => logbookState.selectLogbook(Number(e.currentTarget.value))}
+            onchange={(e) => logbookState.chooseLogbook(Number(e.currentTarget.value))}
         >
             {#each logbookState.logbooks as lb (lb.id)}
                 <option value={lb.id}>{lb.name} ({lb.callsign})</option>

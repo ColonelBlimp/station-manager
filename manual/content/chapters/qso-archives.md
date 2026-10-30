@@ -51,10 +51,13 @@ that archive first.
 - **Live contacts — Phone / CW and FT8 — go to the Default logbook.** Another
   logbook receives QSOs by import or restore (see [Importing](#importing)),
   or becomes the Default with **Set as default** (below).
+- **The Logbook view opens on the Default logbook**, or on the logbook you
+  last picked there while it still exists. A link that names a logbook, such
+  as a failed-upload count on the Forwarding tab, opens that one instead.
 - **Set as default** appears on each logbook other than the Default. It can
   be used on a logbook whose callsign matches the Default's; on one with
-  another callsign it is unavailable, and its tooltip says why — such a
-  logbook cannot become the Default.
+  another callsign it is shown greyed out — such a logbook cannot become the
+  Default. Click a greyed-out button to see why, in a line under its row.
 - **Upload to SM Cloud** appears, unticked, only when a new logbook in this
   archive can upload to SM Cloud: the station has an SM Cloud account, and
   the server's support for keeping logbooks apart has been checked (see
@@ -64,8 +67,8 @@ that archive first.
 - **Edit** changes the name and the description; clearing the description
   removes it. A logbook's callsign cannot be changed.
 - **Delete** works only on an empty logbook that is not the Default, and not
-  on a logbook a default change still names; the button's tooltip says why
-  when it is unavailable.
+  on a logbook a default change still names. When it is greyed out, click it
+  to see why, in a line under its row; nothing is deleted.
 
 ### Changing the Default logbook
 

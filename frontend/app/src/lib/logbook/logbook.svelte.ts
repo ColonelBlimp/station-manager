@@ -26,6 +26,7 @@ import { enqueueUploads } from '../api/uploads';
 import { enrichCallsign } from '../api/enrichment';
 import { forwarderLabel, hasUploadStamp, type ForwarderInfo } from './uploadStatus';
 import { takeLogbookMissingFrom, takeLogbookHandoffLogbook } from '../router.svelte';
+import { boundDefault } from '../api/archive-guard';
 
 const PAGE_SIZES = [25, 50, 100] as const;
 
@@ -336,7 +337,25 @@ export class LogbookState {
         return true;
     }
 
-    /** Load the logbook list on mount, then auto-select the first one. The mailer
+    /** The logbook the operator last picked in this view (W-0024 acceptance
+     *  F5): it survives leaving and returning, while it still exists. */
+    #chosenId: number | null = null;
+
+    /** Which logbook the view opens on: an explicit navigation target, else
+     *  the operator's own earlier choice, else the established effective
+     *  default — the one this tab's station context asserts (ADR 0097 §4) —
+     *  and only failing all three, the first in the list. */
+    #initialLogbook(logbooks: { id: number; uuid: string }[], target: number | undefined): number {
+        const has = (id: number | null | undefined): id is number =>
+            id != null && logbooks.some((l) => l.id === id);
+        if (has(target)) return target;
+        if (has(this.#chosenId)) return this.#chosenId;
+        const established = boundDefault();
+        const effective = logbooks.find((l) => established !== null && l.uuid === established);
+        return effective?.id ?? logbooks[0].id;
+    }
+
+    /** Load the logbook list on mount, then select the logbook to open on. The mailer
      *  block is fetched alongside (fire-and-forget): the email-out controls gate on
      *  it, but a failure there must not block browsing, so it's not awaited here. */
     async init(): Promise<void> {
@@ -365,8 +384,7 @@ export class LogbookState {
         this.logbooks = out.logbooks;
         this.loading = false;
         if (out.logbooks.length > 0) {
-            const named = out.logbooks.find((l) => l.id === handoffLogbook);
-            await this.selectLogbook((named ?? out.logbooks[0]).id);
+            await this.selectLogbook(this.#initialLogbook(out.logbooks, handoffLogbook));
         }
     }
 
@@ -594,6 +612,17 @@ export class LogbookState {
             if (n > 0) bits.push(`${n} ${label}`);
         }
         this.notice = bits.join(' \u00b7 ') + '.';
+    }
+
+    /** The operator picked a logbook: remembered for the next visit. */
+    async chooseLogbook(id: number): Promise<void> {
+        this.#chosenId = id;
+        await this.selectLogbook(id);
+    }
+
+    /** Test seam. */
+    forgetChoiceForTests(): void {
+        this.#chosenId = null;
     }
 
     /** Switch logbooks: reset paging, refresh count + first page. */

@@ -4,10 +4,12 @@
 // are covered by logbook.test.ts; this pins the state ↔ view wiring.
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { render, screen } from '@testing-library/svelte';
+import { fireEvent, render, screen } from '@testing-library/svelte';
 import { flushSync } from 'svelte';
 import Logbook from './Logbook.svelte';
 import { logbookState } from './logbook.svelte';
+import { setBoundDefault } from '../api/archive-guard';
+import { TEST_DEFAULT_LOGBOOK } from '../../test/archive';
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
@@ -495,5 +497,64 @@ describe('Logbook destination dropdown labelling', () => {
         // The unlabelled one still names itself, so L3 is not "labels only".
         const plain = screen.getByRole<HTMLOptionElement>('option', { name: /clublog/ });
         expect(plain.value).toBe('clublog');
+    });
+});
+
+// W-0024 acceptance F5 through the page: it opens on the established effective
+// default (second in the list), and the operator's own pick in the dropdown is
+// what the next visit opens on.
+describe('Logbook page — which logbook it opens on', () => {
+    const U1 = '01a187bc-0100-7000-8000-000000000001';
+    const U2 = '01a187bc-0200-7000-8000-000000000002';
+    const U3 = '01a187bc-0300-7000-8000-000000000003';
+
+    beforeEach(() => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn((input: RequestInfo | URL) => {
+                const url = urlText(input);
+                if (url.startsWith('/v1/config'))
+                    return Promise.resolve(jsonResponse({ mailer: { enabled: false } }));
+                if (url.endsWith('/destinations'))
+                    return Promise.resolve(jsonResponse({ destinations: [] }));
+                if (url === '/v1/logbook')
+                    return Promise.resolve(
+                        jsonResponse([
+                            { id: 1, uuid: U1, name: 'Main', callsign: '7Q5MLV' },
+                            { id: 2, uuid: U2, name: 'Contest', callsign: '7Q5MLV' },
+                            { id: 3, uuid: U3, name: 'Portable', callsign: '7Q5MLV/P' },
+                        ])
+                    );
+                if (url.includes('/count')) return Promise.resolve(jsonResponse({ count: 0 }));
+                if (url.includes('/qso'))
+                    return Promise.resolve(jsonResponse({ items: [], next_cursor: null }));
+                return Promise.resolve(new Response('not found', { status: 404 }));
+            })
+        );
+        setBoundDefault(U2);
+    });
+
+    afterEach(() => {
+        logbookState.forgetChoiceForTests();
+        setBoundDefault(TEST_DEFAULT_LOGBOOK);
+    });
+
+    it('opens on the effective default, and a pick in the dropdown is kept for the next visit', async () => {
+        const first = render(Logbook);
+        await flush();
+        await flush();
+        flushSync();
+        const select = screen.getByRole('combobox', { name: /logbook/i });
+        expect(select).toHaveValue('2');
+
+        await fireEvent.change(select, { target: { value: '3' } });
+        await flush();
+        first.unmount();
+
+        render(Logbook);
+        await flush();
+        await flush();
+        flushSync();
+        expect(screen.getByRole('combobox', { name: /logbook/i })).toHaveValue('3');
     });
 });

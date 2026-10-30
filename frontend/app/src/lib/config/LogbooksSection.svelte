@@ -53,6 +53,24 @@
     // request this notice shows, captured when it is clicked; no dialog.
     const notice = $derived(changeNotice());
 
+    // Why an action is unavailable (W-0024 acceptance F4). A disabled button's
+    // tooltip is not shown in every browser, so an action unavailable for a
+    // REASON stays focusable (aria-disabled), does nothing, and on click shows
+    // the reason as text under its row. Transient locks (a switch, a save, a
+    // pending request) stay plainly disabled: they are explained elsewhere and
+    // clear by themselves. The text is read live, so it never goes stale.
+    let reasonShown = $state<{ id: number; action: 'default' | 'delete' } | null>(null);
+    function unavailable(row: LogbookRow, action: 'default' | 'delete'): string {
+        if (action === 'default') {
+            const offer = setDefaultOffer(row);
+            return offer.offered ? '' : offer.reason;
+        }
+        return logbooksState.deleteBlock(row) ?? pendingTargetBlock(row) ?? '';
+    }
+    function shownReason(row: LogbookRow): string {
+        return reasonShown?.id === row.id ? unavailable(row, reasonShown.action) : '';
+    }
+
     const qsoCountFmt = (n: number | null): string =>
         n === null ? '—' : `${n.toLocaleString()} ${n === 1 ? 'QSO' : 'QSOs'}`;
 
@@ -159,6 +177,7 @@
                     {#each logbooksState.rows as row (row.id)}
                         {@const block = logbooksState.deleteBlock(row) ?? pendingTargetBlock(row)}
                         {@const offer = setDefaultOffer(row)}
+                        {@const reason = shownReason(row)}
                         <tr class="border-t border-line" data-testid="logbook-row-{row.id}">
                             <td class="py-2 pr-3">
                                 {#if logbooksState.editId === row.id}
@@ -213,26 +232,44 @@
                                     >
                                     {#if offer.offered || offer.reason !== ''}
                                         <button
-                                            class="btn"
+                                            class="btn aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
                                             data-testid="logbook-set-default-{row.id}"
-                                            disabled={locked ||
-                                                !offer.offered ||
-                                                defaultChangeState.requesting}
+                                            disabled={locked || defaultChangeState.requesting}
+                                            aria-disabled={offer.offered ? undefined : 'true'}
                                             title={offer.reason || gate || undefined}
-                                            onclick={() => void setAsDefault(row.id)}
-                                            >Set as default</button
+                                            onclick={() =>
+                                                offer.offered
+                                                    ? void setAsDefault(row.id)
+                                                    : (reasonShown = {
+                                                          id: row.id,
+                                                          action: 'default',
+                                                      })}>Set as default</button
                                         >
                                     {/if}
                                     <button
-                                        class="btn"
-                                        disabled={locked || block !== null}
+                                        class="btn aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+                                        disabled={locked}
+                                        aria-disabled={block !== null ? 'true' : undefined}
                                         title={block ?? undefined}
                                         aria-label="Delete {row.name}"
-                                        onclick={() => onDelete(row)}>Delete</button
+                                        onclick={() =>
+                                            block === null
+                                                ? onDelete(row)
+                                                : (reasonShown = { id: row.id, action: 'delete' })}
+                                        >Delete</button
                                     >
                                 {/if}
                             </td>
                         </tr>
+                        {#if reason}
+                            <tr data-testid="logbook-reason-row-{row.id}">
+                                <td colspan="4" class="pb-2 text-right text-xs text-muted">
+                                    <span role="status" data-testid="logbook-reason-{row.id}"
+                                        >{reason}</span
+                                    >
+                                </td>
+                            </tr>
+                        {/if}
                     {:else}
                         <tr><td colspan="4" class="py-2 text-muted">No logbooks.</td></tr>
                     {/each}

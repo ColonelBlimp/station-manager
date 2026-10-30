@@ -160,19 +160,45 @@ describe('LogbooksSection', () => {
         expect(vi.mocked(fetchLogbooks).mock.calls.length).toBe(reads + 1);
     });
 
-    it('Delete is disabled with its reason for the default and a logbook holding QSOs', async () => {
+    it('Delete is unavailable for the default and a logbook holding QSOs, with its reason', async () => {
         daemonHas();
         await renderLoaded();
         const del = (name: string) => screen.getByRole('button', { name: `Delete ${name}` });
-        expect(del('Default')).toBeDisabled();
+        expect(del('Default')).toHaveAttribute('aria-disabled', 'true');
         expect(del('Default')).toHaveAttribute('title', 'The Default logbook can’t be deleted');
-        expect(del('Contest')).toBeDisabled();
+        expect(del('Contest')).toHaveAttribute('aria-disabled', 'true');
         expect(del('Contest')).toHaveAttribute(
             'title',
             'Holds 4 QSOs — only an empty logbook can be deleted'
         );
         expect(del('Portable')).toBeEnabled();
+        expect(del('Portable')).not.toHaveAttribute('aria-disabled', 'true');
     });
+
+    // W-0024 acceptance F4: Firefox shows no tooltip on a disabled button, so
+    // the reason must be visible without one. The unavailable button stays
+    // focusable (aria-disabled, not disabled), does nothing, and says why.
+    it.each([
+        ['Default', 1, /The Default logbook can’t be deleted/],
+        ['Contest', 3, /Holds 4 QSOs — only an empty logbook can be deleted/],
+    ] as [string, number, RegExp][])(
+        'clicking an unavailable Delete on %s shows the reason under the row and deletes nothing',
+        async (name, id, re) => {
+            daemonHas();
+            await renderLoaded();
+            const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+            const del = screen.getByRole('button', { name: `Delete ${name}` });
+            expect(del).not.toBeDisabled(); // focusable: keyboard users can reach the reason
+            expect(screen.queryByTestId(`logbook-reason-${id}`)).toBeNull();
+            await fireEvent.click(del);
+            flushSync();
+            expect(confirm).not.toHaveBeenCalled();
+            expect(deleteLogbook).not.toHaveBeenCalled();
+            const reason = screen.getByTestId(`logbook-reason-${id}`);
+            expect(reason).toBeVisible();
+            expect(reason.textContent ?? '').toMatch(re);
+        }
+    );
 
     it('Delete asks first; declined sends nothing, confirmed deletes', async () => {
         daemonHas();
