@@ -51,7 +51,11 @@ import {
     verifyAfterRigReconnect,
     verifyArchiveGeneration,
 } from './lib/config/archives.svelte';
-import { defaultChangeGate } from './lib/config/defaultChange.svelte';
+import {
+    bootDefaultChange,
+    defaultChangeGate,
+    recheckDefaultChange,
+} from './lib/config/defaultChange.svelte';
 import { setFt8AudioWindow } from './lib/operate/audioLevel.svelte';
 import { setTxDriveConfig, onRigMeters } from './lib/operate/txDrive.svelte';
 import { setFt8Enricher, setFt8Dupe } from './lib/operate/ft8Enrich.svelte';
@@ -463,7 +467,15 @@ setEntryGate(() => archiveEntryLock() ?? defaultChangeGate());
 // reloads (or gates) when the daemon serves another archive.
 void bootArchiveScoped(
     async () => {
-        const [c] = await Promise.all([fetchStationContext(), loadArchives()]);
+        // The default change's status is read beside the context, inside the
+        // bracket (ADR 0097 §4): live work stays locked until it settles, and a
+        // status arriving first is still compared with this context's default.
+        const context = fetchStationContext();
+        const [c] = await Promise.all([
+            context,
+            loadArchives(),
+            bootDefaultChange(context.then((ctx) => (ctx.configOk ? ctx.logbookUuid : null))),
+        ]);
         applyStationContext(c);
         // First-run gate: only a REACHED config saying setup_complete=false shows
         // setup — a daemon outage falls through to the fail-soft shell instead of
@@ -483,6 +495,9 @@ setSetupSave(async (callsign) => {
     const out = await completeSetup(callsign);
     if (out.kind !== 'ok') return { ok: false, message: out.message };
     applyStationContext(await fetchStationContext());
+    // A first run has no default until this save: re-read the change's status
+    // so a boot read that could not be answered does not keep live work locked.
+    void recheckDefaultChange();
     return { ok: true, message: '' };
 });
 

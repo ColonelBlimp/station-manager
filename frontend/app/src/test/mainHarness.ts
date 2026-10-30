@@ -34,6 +34,8 @@ export interface Sent {
 export interface Daemon {
     version: unknown;
     config: unknown;
+    /** When set, GET /v1/config answers only once this settles. */
+    configHold?: Promise<void>;
     /** Answers to other requests, by "METHOD url"; unlisted ones 404. An
      *  answer with `hold` is sent only once that promise settles. */
     routes: Record<string, { status: number; body: unknown; hold?: Promise<void> }>;
@@ -63,7 +65,10 @@ export function installDaemon(d: Daemon): void {
                 defaultLogbook: h.get('X-SM-Default-Logbook'),
             });
             if (method === 'GET' && url === '/v1/version') return Promise.resolve(json(d.version));
-            if (method === 'GET' && url === '/v1/config') return Promise.resolve(json(d.config));
+            if (method === 'GET' && url === '/v1/config') {
+                if (d.configHold) return d.configHold.then(() => json(d.config));
+                return Promise.resolve(json(d.config));
+            }
             const r = d.routes[`${method} ${url.split('?')[0]}`];
             if (r?.hold) return r.hold.then(() => json(r.body, r.status));
             if (r) return Promise.resolve(json(r.body, r.status));

@@ -23,7 +23,8 @@ import Settings from './Settings.svelte';
 import { restartDaemon, fetchDaemonInstance, waitForDaemonBack } from '../api/restart';
 import { reloadPage } from '../utils/reload';
 import { draft, clearDraft } from '../operate/qso.svelte';
-import { showFtSettings, takeSettingsTab } from '../router.svelte';
+import { router, showFtSettings, showLogbooksSettings, takeSettingsTab } from '../router.svelte';
+import { stationState } from './station.svelte';
 import { toastsState, _resetForTests } from '../ui/toasts.svelte';
 import { archivesState, _resetArchivesForTests } from './archives.svelte';
 
@@ -315,5 +316,32 @@ describe('Settings — the Logbooks tab', () => {
         await fireEvent.click(screen.getByRole('button', { name: 'Logbooks' }));
         await flush();
         expect(logbookReads()).toBe(atMount + 2);
+    });
+});
+
+describe('Settings → Logbooks requested while Settings is already open (W-0024 slice 5b)', () => {
+    it('the banner’s link selects Logbooks over Station, keeping Station’s draft', async () => {
+        router.view = 'config';
+        render(Settings);
+        await flush();
+        await flush();
+        flushSync();
+        const logbooksPanel = (): Element | null =>
+            screen.getByRole('heading', { name: 'Logbooks', level: 2 }).closest('.hidden');
+        expect(logbooksPanel()).not.toBeNull(); // Station is the tab shown
+        stationState.form = { ...stationState.form, station_callsign: '7Q5MLV/M' };
+        flushSync();
+        expect(stationState.dirty).toBe(true);
+
+        showLogbooksSettings();
+        await flush();
+        flushSync();
+        expect(logbooksPanel()).toBeNull();
+        expect(router.view).toBe('config');
+        expect(stationState.dirty).toBe(true);
+        expect(stationState.form.station_callsign).toBe('7Q5MLV/M');
+        // Consumed: a later mount does not re-open Logbooks unasked.
+        expect(takeSettingsTab()).toBeUndefined();
+        stationState.reset();
     });
 });

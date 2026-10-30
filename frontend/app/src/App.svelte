@@ -2,6 +2,7 @@
     import Sidebar from './lib/ui/Sidebar.svelte';
     import Header from './lib/ui/Header.svelte';
     import TxAlarmBanner from './lib/ui/TxAlarmBanner.svelte';
+    import DefaultChangeBanner from './lib/ui/DefaultChangeBanner.svelte';
     import DriveAlarmBanner from './lib/ui/DriveAlarmBanner.svelte';
     import ArchiveSwitchGate from './lib/ui/ArchiveSwitchGate.svelte';
     import { archivesState } from './lib/config/archives.svelte';
@@ -104,6 +105,9 @@
     {#if setup.status === 'loading'}
         <Toasts />
     {:else if setupGateOpen()}
+        <!-- The setup card replaces the shell, so a default-change gate's
+             recovery control must show here too (W-0024 slice 5b). -->
+        <DefaultChangeBanner />
         <SetupCard />
         <Toasts />
     {:else if router.view === 'map'}
@@ -124,6 +128,7 @@
         <div class="content-wrap flex h-screen flex-col pl-[var(--sidebar-w)]">
             <Header />
             <TxAlarmBanner />
+            <DefaultChangeBanner />
             <DriveAlarmBanner />
             <DriveMonitorNotice />
             <!-- main is the horizontal (and vertical) scroll container. Its width is

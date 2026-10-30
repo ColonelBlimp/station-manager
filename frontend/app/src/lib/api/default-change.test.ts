@@ -2,7 +2,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ARCHIVE_HEADER, setBoundArchive } from './archive-guard';
 import { TEST_ARCHIVE } from '../../test/archive';
-import { fetchDefaultChangeStatus, requestDefaultChange } from './default-change';
+import {
+    defaultChangeAction,
+    fetchDefaultChangeStatus,
+    requestDefaultChange,
+} from './default-change';
 // The two producers of a change's state, read from the daemon's source so a
 // state added there cannot go unread here.
 import { readFileSync } from 'node:fs';
@@ -290,6 +294,79 @@ describe('requestDefaultChange', () => {
         stub(202, { request_id: REQ, durability: 'durable' });
         setBoundArchive(null);
         const out = await requestDefaultChange(B, A);
+        expect(sent).toHaveLength(0);
+        expect(out).toMatchObject({ kind: 'refused', code: 'archive_unproven' });
+    });
+});
+
+describe('defaultChangeAction (W-0024 slice 5b)', () => {
+    it.each([
+        ['cancel', '/v1/default-logbook/cancel'],
+        ['confirm', '/v1/default-logbook/confirm'],
+        ['retry-cleanup', '/v1/default-logbook/retry-cleanup'],
+    ] as const)('%s names the request it was shown, archive-guarded', async (action, url) => {
+        stub(200, { effective, change: held({ state: 'withdrawal_unconfirmed' }) });
+        const out = await defaultChangeAction(action, REQ);
+        expect(sent).toHaveLength(1);
+        expect(sent[0]).toMatchObject({ url, method: 'POST', archive: TEST_ARCHIVE });
+        expect(JSON.parse(sent[0].body ?? '')).toEqual({ request_id: REQ });
+        expect(out).toMatchObject({ kind: 'ok' });
+    });
+
+    it('a 200 carries the returned state, which may still be unconfirmed', async () => {
+        stub(200, { effective, change: held({ state: 'withdrawal_unconfirmed' }) });
+        const out = await defaultChangeAction('confirm', REQ);
+        expect(out).toEqual({
+            kind: 'ok',
+            status: {
+                effective,
+                change: {
+                    requestId: REQ,
+                    logbookUuid: B,
+                    state: 'withdrawal_unconfirmed',
+                    removed: '',
+                    failureCode: '',
+                    unconfirmed: true,
+                },
+            },
+        });
+    });
+
+    it('a 200 whose status cannot be read is unknown: re-read, not trusted', async () => {
+        stub(200, { effective: { ...effective, uuid: 'x' } });
+        expect((await defaultChangeAction('cancel', REQ)).kind).toBe('unknown');
+    });
+
+    it.each([
+        [409, 'already_resolved'],
+        [409, 'pending_changed'],
+        [409, 'default_change_in_progress'],
+        [409, 'not_permitted'],
+        [500, 'default_change_write_failed'],
+    ])('a %i %s is a refusal in the daemon’s words', async (status, code) => {
+        stub(status, { code, message: `words for ${code}` });
+        expect(await defaultChangeAction('cancel', REQ)).toEqual({
+            kind: 'refused',
+            code,
+            message: `words for ${code}`,
+        });
+    });
+
+    it('no answer is unknown, sent once', async () => {
+        stubFailure(new DOMException('timed out', 'TimeoutError'));
+        expect((await defaultChangeAction('confirm', REQ)).kind).toBe('unknown');
+        expect(sent).toHaveLength(1);
+    });
+
+    it('an uncoded proxy answer is unknown', async () => {
+        stub(502, '<html>bad gateway</html>', true);
+        expect((await defaultChangeAction('confirm', REQ)).kind).toBe('unknown');
+    });
+
+    it('is not sent before the archive is proven', async () => {
+        stub(200, { effective });
+        setBoundArchive(null);
+        const out = await defaultChangeAction('cancel', REQ);
         expect(sent).toHaveLength(0);
         expect(out).toMatchObject({ kind: 'refused', code: 'archive_unproven' });
     });

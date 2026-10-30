@@ -10,8 +10,11 @@
     import { logbooksState, type LogbookRow } from './logbooks.svelte';
     import { archiveSwitchGate } from './archives.svelte';
     import {
+        changeNotice,
         defaultChangeState,
         loadDefaultChange,
+        pendingTargetBlock,
+        runChangeAction,
         setAsDefault,
         setDefaultOffer,
     } from './defaultChange.svelte';
@@ -46,6 +49,9 @@
     // page may be bound to the archive being left.
     const gate = $derived(archiveSwitchGate());
     const locked = $derived(gate !== null || logbooksState.busy);
+    // The change in play and its action (W-0024 slice 5b). The action names the
+    // request this notice shows, captured when it is clicked; no dialog.
+    const notice = $derived(changeNotice());
 
     const qsoCountFmt = (n: number | null): string =>
         n === null ? '—' : `${n.toLocaleString()} ${n === 1 ? 'QSO' : 'QSOs'}`;
@@ -102,6 +108,26 @@
                 >
             </p>
         {/if}
+        {#if notice}
+            <div
+                data-testid="default-change-notice"
+                class="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-line bg-surface-muted px-3 py-2 text-sm text-ink"
+                role="status"
+            >
+                <span>{notice.text}</span>
+                {#if notice.action}
+                    {@const action = notice.action}
+                    {@const requestId = notice.requestId}
+                    <button
+                        class="btn"
+                        data-testid="default-change-action"
+                        disabled={defaultChangeState.acting}
+                        onclick={() => void runChangeAction(action.kind, requestId)}
+                        >{action.label}</button
+                    >
+                {/if}
+            </div>
+        {/if}
         {#if gate}
             <p
                 class="mb-3 rounded-md border border-line bg-surface-muted px-3 py-2 text-sm text-ink"
@@ -131,7 +157,7 @@
                 </thead>
                 <tbody>
                     {#each logbooksState.rows as row (row.id)}
-                        {@const block = logbooksState.deleteBlock(row)}
+                        {@const block = logbooksState.deleteBlock(row) ?? pendingTargetBlock(row)}
                         {@const offer = setDefaultOffer(row)}
                         <tr class="border-t border-line" data-testid="logbook-row-{row.id}">
                             <td class="py-2 pr-3">

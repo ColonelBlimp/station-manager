@@ -241,19 +241,32 @@ function fallBackFromFt(): void {
     if (router.view === 'operate') window.history.replaceState({}, '', urlFor('operate', 'phone'));
 }
 
-// A Settings tab another view asked to open (the note's link). Settings takes it
-// once, on mount; its tab strip is local state and does not route.
-export type SettingsTab = 'ft8';
-let pendingSettingsTab: SettingsTab | undefined;
+// A Settings tab another view asked to open (the note's link, the default
+// change's banner). Settings takes it on mount and, when it is already open,
+// as soon as it is asked: the strip is local state and does not route, and
+// switching tabs keeps every section's draft.
+export type SettingsTab = 'ft8' | 'logbooks';
+const settingsTabRequest = $state<{ tab: SettingsTab | undefined }>({ tab: undefined });
 
 export function showFtSettings(): void {
-    pendingSettingsTab = 'ft8';
+    settingsTabRequest.tab = 'ft8';
     navigate('config');
 }
 
+/** Open Settings → Logbooks (the default change's actions live there). */
+export function showLogbooksSettings(): void {
+    settingsTabRequest.tab = 'logbooks';
+    navigate('config');
+}
+
+/** The tab asked for and not yet taken (reactive). */
+export function requestedSettingsTab(): SettingsTab | undefined {
+    return settingsTabRequest.tab;
+}
+
 export function takeSettingsTab(): SettingsTab | undefined {
-    const t = pendingSettingsTab;
-    pendingSettingsTab = undefined;
+    const t = settingsTabRequest.tab;
+    settingsTabRequest.tab = undefined;
     return t;
 }
 

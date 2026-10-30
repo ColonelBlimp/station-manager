@@ -109,12 +109,11 @@ export async function fetchDefaultChangeStatus(): Promise<DefaultChangeStatusOut
     if (res.status === 404) return { kind: 'unsupported' };
     const body = await readJsonBody(res);
     if (!res.ok) return { kind: 'unreadable', message: daemonErrorMessage(res.status, body) };
-    const effective = isPlainObject(body) ? toEffective(body.effective) : null;
-    const change = isPlainObject(body) ? toChange(body.change) : undefined;
-    if (effective === null || change === undefined) {
+    const status = toStatus(body);
+    if (status === null) {
         return { kind: 'unreadable', message: 'malformed /v1/default-logbook response' };
     }
-    return { kind: 'ok', status: { effective, change } };
+    return { kind: 'ok', status };
 }
 
 export async function requestDefaultChange(
@@ -150,6 +149,60 @@ export async function requestDefaultChange(
     }
     // Only the daemon's coded envelope says what happened; anything else (a
     // proxy's HTML page) cannot prove the request was not accepted.
+    if (isPlainObject(body) && typeof body.code === 'string' && body.code !== '') {
+        const message =
+            typeof body.message === 'string' ? body.message : daemonErrorMessage(res.status, body);
+        return { kind: 'refused', code: body.code, message };
+    }
+    return { kind: 'unknown', message: daemonErrorMessage(res.status, body) };
+}
+
+/** A recovery action on the change in play (ADR 0097 §1–§3). */
+export type DefaultChangeAction = 'cancel' | 'confirm' | 'retry-cleanup';
+
+export type DefaultChangeActionOutcome =
+    /** 200 with the status: its state, not necessarily durable completion. */
+    | { kind: 'ok'; status: DefaultChangeStatus }
+    | { kind: 'refused'; code: string; message: string }
+    /** No answer, or an answer that cannot prove what happened: re-read. */
+    | { kind: 'unknown'; message: string; timedOut?: boolean };
+
+/** Decode a status body; null when it cannot be read. */
+function toStatus(body: unknown): DefaultChangeStatus | null {
+    const effective = isPlainObject(body) ? toEffective(body.effective) : null;
+    const change = isPlainObject(body) ? toChange(body.change) : undefined;
+    if (effective === null || change === undefined) return null;
+    return { effective, change };
+}
+
+/** Cancel, Confirm or Retry cleanup, naming the request the operator was
+ *  shown. Never retried: an unknown outcome is reconciled by the status read. */
+export async function defaultChangeAction(
+    action: DefaultChangeAction,
+    requestId: string
+): Promise<DefaultChangeActionOutcome> {
+    const fetched = await guardedFetch(
+        `/v1/default-logbook/${action}`,
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ request_id: requestId }),
+        },
+        { timeoutMs: WRITE_TIMEOUT_MS }
+    );
+    if (!fetched.ok) {
+        const timedOut = fetched.kind === 'network' ? fetched.timedOut : undefined;
+        return { kind: 'unknown', message: fetched.message, timedOut };
+    }
+    const res = fetched.response;
+    const body = await readJsonBody(res);
+    if (res.status === 200) {
+        const status = toStatus(body);
+        if (status === null) {
+            return { kind: 'unknown', message: 'The daemon’s answer could not be read.' };
+        }
+        return { kind: 'ok', status };
+    }
     if (isPlainObject(body) && typeof body.code === 'string' && body.code !== '') {
         const message =
             typeof body.message === 'string' ? body.message : daemonErrorMessage(res.status, body);

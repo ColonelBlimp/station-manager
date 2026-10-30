@@ -19,7 +19,7 @@
     import { toasts } from '../ui/toasts.svelte';
     import { reloadPage } from '../utils/reload';
     import { draftInProgress } from '../operate/qso.svelte';
-    import { takeSettingsTab } from '../router.svelte';
+    import { requestedSettingsTab, takeSettingsTab } from '../router.svelte';
 
     // Strip order groups the station and how it operates (Station, Rigs, FT8)
     // ahead of the outside services it talks to (Forwarding, Email,
@@ -54,8 +54,15 @@
         { id: 'archives', label: 'Archives' },
     ];
     // Another view may ask for a tab (the Phone / CW 'FT8 and FT4 are turned off'
-    // note links here); taken once, at mount.
+    // note, the default change's banner): taken at mount, and again whenever
+    // one is asked while Settings is already open. Only the shown tab changes;
+    // every section stays mounted, so no draft is lost.
     let active = $state<SectionId>(takeSettingsTab() ?? 'station');
+    $effect(() => {
+        if (requestedSettingsTab() === undefined) return;
+        const tab = takeSettingsTab();
+        if (tab !== undefined) active = tab;
+    });
 
     // A confirmed restart reloads the page, as archive activation does
     // (fresh-install ruling 2026-09-26): the SPA reads restart-bound state once at

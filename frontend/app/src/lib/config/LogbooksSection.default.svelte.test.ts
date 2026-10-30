@@ -29,6 +29,7 @@ vi.mock('../api/archive-bindings', () => ({
 vi.mock('../api/default-change', () => ({
     fetchDefaultChangeStatus: vi.fn(),
     requestDefaultChange: vi.fn(),
+    defaultChangeAction: vi.fn(),
 }));
 vi.mock('../api/restart', () => ({
     fetchDaemonInstance: vi.fn(),
@@ -40,7 +41,12 @@ import { fetchLogbookCount, fetchLogbooks } from '../api/logbooks';
 import { fetchStationContext } from '../api/seams';
 import { fetchDaemonIdentity } from '../api/qso-archives';
 import { fetchArchiveBindings } from '../api/archive-bindings';
-import { fetchDefaultChangeStatus, requestDefaultChange } from '../api/default-change';
+import {
+    defaultChangeAction,
+    fetchDefaultChangeStatus,
+    requestDefaultChange,
+    type DefaultChangeActionOutcome,
+} from '../api/default-change';
 import { fetchDaemonInstance, waitForDaemonBack } from '../api/restart';
 import { setBoundDefault } from '../api/archive-guard';
 import { _resetLogbooksForTests } from './logbooks.svelte';
@@ -148,5 +154,57 @@ describe('Set as default on each row', () => {
             /^Set ‘Contest \(7Q5MLV\)’ as default/
         );
         expect(requestDefaultChange).toHaveBeenCalledWith(C, A);
+    });
+});
+
+describe('the change in play (W-0024 slice 5b)', () => {
+    const REQ = '01a187bc-0400-7000-8000-000000000004';
+    const effective = { id: 1, uuid: A, name: 'Home', callsign: '7Q5MLV' };
+    const held = (state: string) => ({
+        kind: 'ok' as const,
+        status: {
+            effective,
+            change: {
+                requestId: REQ,
+                logbookUuid: C,
+                state,
+                removed: '',
+                failureCode: '',
+                unconfirmed: true,
+            },
+        },
+    });
+
+    it('shows the state, and its action labelled with the target; no confirmation dialog', async () => {
+        const dialog = vi.fn(() => true);
+        vi.stubGlobal('confirm', dialog);
+        vi.mocked(fetchDefaultChangeStatus).mockResolvedValue(held('pending_unclear'));
+        let answer: (v: DefaultChangeActionOutcome) => void = () => {};
+        vi.mocked(defaultChangeAction).mockReturnValue(new Promise((r) => (answer = r)));
+        render(LogbooksSection);
+        await flush();
+        await flush();
+        expect(screen.getByTestId('default-change-notice').textContent ?? '').toMatch(
+            /next restart/
+        );
+        const button = screen.getByTestId('default-change-action');
+        expect(button.textContent ?? '').toMatch(/Cancel change.*Contest/);
+        await fireEvent.click(button);
+        expect(dialog).not.toHaveBeenCalled();
+        expect(defaultChangeAction).toHaveBeenCalledWith('cancel', REQ);
+        // Overlapping actions are prevented while it is on the wire.
+        expect(screen.getByTestId('default-change-action')).toBeDisabled();
+        answer({ kind: 'ok', status: { effective, change: null } });
+        await flush();
+    });
+
+    it('Delete is not offered for the change’s target while config holds it', async () => {
+        vi.mocked(fetchDefaultChangeStatus).mockResolvedValue(held('pending_unclear'));
+        render(LogbooksSection);
+        await flush();
+        await flush();
+        const del = screen.getByRole('button', { name: 'Delete Contest' });
+        expect(del).toBeDisabled();
+        expect(del.getAttribute('title') ?? '').toMatch(/change/i);
     });
 });

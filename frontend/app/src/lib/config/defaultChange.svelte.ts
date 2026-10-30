@@ -13,10 +13,19 @@
     gated (defaultChangeGate, wired by main.ts): the reload discards it. An
     answer that cannot prove what happened is reconciled — by the new instance,
     else by the status read — and the request is never retried.
+
+    The change in play (5b): its status is read at boot inside the identity
+    bracket, and live work stays locked until a readable status naming this
+    tab's default proves it open; pending_restart keeps it sealed. A failed read
+    never clears a gate. Settings → Logbooks shows the state and its action
+    (Cancel change, Confirm, Retry cleanup), each naming the request it was
+    shown and never retried; the shell banner links there.
 */
 import {
+    defaultChangeAction,
     fetchDefaultChangeStatus,
     requestDefaultChange,
+    type DefaultChangeAction,
     type DefaultChangeRequestOutcome,
     type DefaultChangeStatus,
 } from '../api/default-change';
@@ -28,10 +37,8 @@ import { submitState } from '../operate/qso.svelte';
 import { toasts } from '../ui/toasts.svelte';
 import {
     archiveSwitchGate,
-    gateUnprovenRestart,
     reloadForAnotherDefault,
     reloadRestarted,
-    settleRestart,
     unfinishedEntryText,
 } from './archives.svelte';
 import { logbooksState, type LogbookRow } from './logbooks.svelte';
@@ -49,6 +56,11 @@ interface DefaultChangeState {
      *  old default (ADR 0097 §4) — unlike pending_unclear, where admission
      *  has reopened. A failed read proves nothing, so it keeps the latch. */
     sealed: boolean;
+    /** No readable status has proved admission open since boot or since a
+     *  restart could not be proven: live work is gated until one does. */
+    unproven: boolean;
+    /** A recovery action (Cancel / Confirm / Retry cleanup) is on the wire. */
+    acting: boolean;
 }
 
 /** Whether this daemon serves Set as default, and what it last reported. */
@@ -57,6 +69,8 @@ export const defaultChangeState: DefaultChangeState = $state({
     status: null,
     requesting: false,
     sealed: false,
+    unproven: false,
+    acting: false,
 });
 
 const RESTARTED_WITH_ANOTHER_DEFAULT =
@@ -65,8 +79,42 @@ const RESTARTED_WITH_ANOTHER_DEFAULT =
 /** Why live work in this tab is refused while a change is pending, or null.
  *  Wired into the operate seams by main.ts, beside the archive gate. */
 export function defaultChangeGate(): string | null {
-    if (!defaultChangeState.requesting && !defaultChangeState.sealed) return null;
-    return 'A default logbook change is in progress — wait for the daemon to restart and the page to reload.';
+    if (defaultChangeState.requesting || defaultChangeState.sealed) {
+        return 'A default logbook change is in progress — wait for the daemon to restart and the page to reload.';
+    }
+    if (!defaultChangeState.unproven) return null;
+    if (defaultChangeState.read === 'unread') {
+        return 'Station Manager is confirming the default logbook — try again in a moment.';
+    }
+    return 'Station Manager could not read the state of a default logbook change — check again or reload before logging or transmitting.';
+}
+
+/** Take a readable status: it reopens live work only when its effective
+ *  default is the established context's. Another default means this tab is
+ *  stale: it reloads, and live work stays locked meanwhile — never a silent
+ *  rebind. `contextDefault` null: no established default to compare. */
+function applyStatus(status: DefaultChangeStatus, contextDefault = boundDefault()): void {
+    defaultChangeState.read = 'ok';
+    defaultChangeState.status = status;
+    defaultChangeState.sealed = status.change?.state === 'pending_restart';
+    if (contextDefault !== null && status.effective.uuid !== contextDefault) {
+        defaultChangeState.unproven = true;
+        reloadForAnotherDefault();
+        return;
+    }
+    defaultChangeState.unproven = false;
+}
+
+/** A read that could not be answered: nothing is proven, so every gate stays
+ *  as it was — never cleared. A 404 means the routes are not served: nothing
+ *  can be pending, and nothing is gated. */
+function applyUnread(kind: 'unsupported' | 'unreadable'): void {
+    defaultChangeState.read = kind;
+    defaultChangeState.status = null;
+    if (kind === 'unsupported') {
+        defaultChangeState.sealed = false;
+        defaultChangeState.unproven = false;
+    }
 }
 
 // Overlapping reads: only the latest one lands.
@@ -77,14 +125,8 @@ export async function loadDefaultChange(): Promise<void> {
     const generation = ++readGeneration;
     const out = await fetchDefaultChangeStatus();
     if (generation !== readGeneration) return;
-    if (out.kind === 'ok') {
-        defaultChangeState.read = 'ok';
-        defaultChangeState.status = out.status;
-        defaultChangeState.sealed = out.status.change?.state === 'pending_restart';
-        return;
-    }
-    defaultChangeState.read = out.kind === 'unsupported' ? 'unsupported' : 'unreadable';
-    defaultChangeState.status = null;
+    if (out.kind === 'ok') applyStatus(out.status);
+    else applyUnread(out.kind === 'unsupported' ? 'unsupported' : 'unreadable');
 }
 
 function isCurrentDefault(row: LogbookRow): boolean {
@@ -283,7 +325,11 @@ async function settle(
                 ? `Making “${target.name}” the default — the request was recorded (durability unconfirmed); restarting the daemon…`
                 : `Making “${target.name}” the default — restarting the daemon…`
         );
-        await settleRestart(before, RESTARTED_WITH_ANOTHER_DEFAULT);
+        if (await waitForDaemonBack(before)) {
+            reloadRestarted(RESTARTED_WITH_ANOTHER_DEFAULT);
+        } else {
+            await reconcileUnseenRestart(before);
+        }
         return true;
     }
     if (out.kind === 'refused') {
@@ -298,32 +344,30 @@ async function settle(
         return false;
     }
     toasts.warn(`${OUTCOME_UNKNOWN_LEAD} Waiting to see whether the daemon restarts…`);
-    await reconcileUnknown(before);
+    if (await waitForDaemonBack(before)) {
+        reloadRestarted(RESTARTED_WITH_ANOTHER_DEFAULT);
+    } else {
+        await reconcileUnseenRestart(before);
+    }
     return false;
 }
 
-/** An unknown outcome: a new instance proves the restart; otherwise the old
- *  daemon's status says what it holds. Only an unreadable status gates. */
-async function reconcileUnknown(before: string): Promise<void> {
-    if (await waitForDaemonBack(before)) {
-        reloadRestarted(RESTARTED_WITH_ANOTHER_DEFAULT);
-        return;
-    }
+/**
+ * No new instance answered after the request (accepted, or of unknown
+ * outcome): the old daemon's status says what it holds. pending_restart keeps
+ * live work sealed; an unreadable status leaves it unproven; both keep watching
+ * for the restart and reload when it comes. A readable status naming this
+ * tab's default with admission reopened releases live work and shows the
+ * recovery state — the archive overlay is not raised, so it stays reachable.
+ */
+async function reconcileUnseenRestart(before: string): Promise<void> {
     await loadDefaultChange();
-    const status = defaultChangeState.status;
-    if (defaultChangeState.read !== 'ok' || status === null) {
-        gateUnprovenRestart(before, RESTARTED_WITH_ANOTHER_DEFAULT);
-        return;
-    }
-    if (status.effective.uuid !== boundDefault()) {
-        reloadForAnotherDefault();
-        return;
-    }
-    if (defaultChangeState.sealed) {
+    if (defaultChangeState.read !== 'ok') defaultChangeState.unproven = true;
+    if (defaultChangeState.sealed || defaultChangeState.unproven) {
         toasts.warn(
-            'The daemon recorded the change and has not restarted yet; live work stays paused until it does.'
+            'The daemon has not restarted yet; live work stays paused until the change is resolved.'
         );
-        void watchSealedRestart(before);
+        void watchForRestart(before);
         return;
     }
     toasts.warn(
@@ -332,16 +376,177 @@ async function reconcileUnknown(before: string): Promise<void> {
     void logbooksState.load();
 }
 
-/** How many waits a sealed change keeps watching for the restart. */
-const SEALED_WATCH_ROUNDS = 10;
+/** How many waits a held or unproven change keeps watching for the restart. */
+const WATCH_ROUNDS = 10;
 
-async function watchSealedRestart(before: string): Promise<void> {
-    for (let round = 0; round < SEALED_WATCH_ROUNDS && defaultChangeState.sealed; round++) {
+async function watchForRestart(before: string): Promise<void> {
+    for (
+        let round = 0;
+        round < WATCH_ROUNDS && (defaultChangeState.sealed || defaultChangeState.unproven);
+        round++
+    ) {
         if (await waitForDaemonBack(before)) {
             reloadRestarted(RESTARTED_WITH_ANOTHER_DEFAULT);
             return;
         }
     }
+}
+
+// ---- The change's state and its recovery actions (5b) ----
+
+/** What Settings → Logbooks and the shell show for the change in play. */
+export interface ChangeNotice {
+    /** The request the notice describes: an action names this one. */
+    requestId: string;
+    /** sealed: live entry is paused; action: something to do; info: history. */
+    tone: 'sealed' | 'action' | 'info';
+    text: string;
+    action: { kind: DefaultChangeAction; label: string } | null;
+}
+
+/**
+ * Boot: the status read inside the identity bracket (ADR 0097 §4). Live work
+ * is locked from the start of the read until a readable status proves it
+ * open. `contextDefault` resolves to the default of the station context read
+ * beside it, so a status arriving first is still compared with that context.
+ */
+export async function bootDefaultChange(
+    contextDefault: Promise<string | null> = Promise.resolve(boundDefault())
+): Promise<void> {
+    defaultChangeState.unproven = true;
+    const generation = ++readGeneration;
+    const [out, context] = await Promise.all([fetchDefaultChangeStatus(), contextDefault]);
+    if (generation !== readGeneration) return;
+    if (out.kind === 'ok') applyStatus(out.status, context);
+    else applyUnread(out.kind === 'unsupported' ? 'unsupported' : 'unreadable');
+}
+
+/** The recovery control: read the status again. */
+export function recheckDefaultChange(): Promise<void> {
+    return loadDefaultChange();
+}
+
+/** A start's or a failure's code, in the operator's words. */
+function reasonOf(code: string): string {
+    switch (code) {
+        case '':
+            return 'no reason was recorded';
+        case 'default_change_target_missing':
+            return 'the logbook no longer exists';
+        case 'default_change_target_ineligible':
+            return 'its callsign no longer matches the current default’s callsign';
+        case 'default_change_wrong_archive':
+            return 'it names a logbook of another archive';
+        case 'restart_failed':
+            return 'the restart failed';
+        case 'restart_failed_withdrawal_unconfirmed':
+            return 'the restart failed, and the withdrawal is not yet confirmed on disk';
+        default:
+            return code;
+    }
+}
+
+/** The notice for the status last read, or null when there is nothing to show. */
+export function changeNotice(): ChangeNotice | null {
+    const change = defaultChangeState.status?.change;
+    if (!change) return null;
+    const name = logbooksState.rows.find((r) => r.uuid === change.logbookUuid)?.name;
+    const target = name !== undefined ? `“${name}”` : 'a logbook no longer listed';
+    const notice = (
+        tone: ChangeNotice['tone'],
+        text: string,
+        action: ChangeNotice['action'] = null
+    ): ChangeNotice => ({ requestId: change.requestId, tone, text, action });
+    const cancel = { kind: 'cancel' as const, label: `Cancel change to ${target}` };
+    const removed = change.removed || 'withdrawn';
+    switch (change.state) {
+        case 'pending_restart':
+            return notice(
+                'sealed',
+                `Changing the default to ${target} — restarting. Live entry is paused until the restart completes.`
+            );
+        case 'pending_unclear':
+            return notice('action', `The change to ${target} applies at the next restart.`, cancel);
+        case 'not_applied_intent_pending':
+            return notice(
+                'action',
+                `The change to ${target} was not applied at this start and is still pending: ${reasonOf(change.failureCode)}.`,
+                cancel
+            );
+        case 'withdrawal_unconfirmed':
+            return notice(
+                'action',
+                `The change to ${target} was ${removed}, but this is not yet confirmed on disk. ` +
+                    `If power is lost before it is, the change to ${target} may still apply at a later start.`,
+                { kind: 'confirm', label: `Confirm the change to ${target} is ${removed}` }
+            );
+        case 'applied_cleanup_pending':
+            return notice(
+                'action',
+                `Default: ${target}. Cleanup pending: the record of this completed change has not been removed durably. ` +
+                    'Set as default and archive activation are unavailable until it is.',
+                { kind: 'retry-cleanup', label: 'Retry cleanup' }
+            );
+        case 'not_applied_abandoned':
+            return notice(
+                'info',
+                `The change to ${target} was not applied: ${reasonOf(change.failureCode)}.`
+            );
+        case 'restart_failed':
+            return notice(
+                'info',
+                `The change to ${target} was withdrawn: ${reasonOf(change.failureCode || 'restart_failed')}.`
+            );
+        case 'cancelled':
+        case 'withdrawn':
+            return notice('info', `The change to ${target} was ${change.state}.`);
+        case 'effective':
+            return notice('info', `${target} is now the default.`);
+        default:
+            return null;
+    }
+}
+
+/**
+ * Run a recovery action on the request the operator was shown. One at a time;
+ * never retried. A 200 is rendered as returned — not necessarily durable
+ * completion — unless a newer status read landed meanwhile, when the answer is
+ * stale and the status is read again instead.
+ */
+export async function runChangeAction(kind: DefaultChangeAction, requestId: string): Promise<void> {
+    if (defaultChangeState.acting) return;
+    defaultChangeState.acting = true;
+    const generation = readGeneration;
+    try {
+        const out = await defaultChangeAction(kind, requestId);
+        if (out.kind === 'ok') {
+            if (generation !== readGeneration) {
+                await loadDefaultChange();
+                return;
+            }
+            readGeneration++;
+            applyStatus(out.status);
+            return;
+        }
+        if (out.kind === 'refused') {
+            // The status shows what the daemon holds now: another request, a
+            // restart under way, or — after a failed write — the same state.
+            toasts.error(out.message);
+            await loadDefaultChange();
+            return;
+        }
+        toasts.warn(`${OUTCOME_UNKNOWN_LEAD} Reading the change’s state again…`);
+        await loadDefaultChange();
+    } finally {
+        defaultChangeState.acting = false;
+    }
+}
+
+/** Why a logbook cannot be deleted while a change holds it, or null. */
+export function pendingTargetBlock(row: LogbookRow): string | null {
+    const change = defaultChangeState.status?.change;
+    if (!change?.unconfirmed || row.uuid === '' || change.logbookUuid !== row.uuid) return null;
+    return 'A default logbook change names this logbook — it can’t be deleted until that change is resolved.';
 }
 
 /** Test seam. */
@@ -352,4 +557,6 @@ export function _resetDefaultChangeForTests(): void {
     defaultChangeState.status = null;
     defaultChangeState.requesting = false;
     defaultChangeState.sealed = false;
+    defaultChangeState.unproven = false;
+    defaultChangeState.acting = false;
 }

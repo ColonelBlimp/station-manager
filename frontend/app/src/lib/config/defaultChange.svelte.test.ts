@@ -545,9 +545,16 @@ describe('the request and its outcome', () => {
 
     it('accepted but no new instance seen: gated, never reported as done', async () => {
         vi.mocked(waitForDaemonBack).mockResolvedValue(false);
+        vi.mocked(fetchDefaultChangeStatus).mockResolvedValue(
+            heldChange({ state: 'pending_restart' })
+        );
         await setAsDefault(3, yes);
         expect(reloads).toBe(0);
-        expect(archivesState.switchUnresolved).toBe(true);
+        // 5b (ruling 2026-10-30): gated in default-change words, not the
+        // archive overlay, so the recovery state stays reachable.
+        expect(archivesState.switchUnresolved).toBe(false);
+        expect(defaultChangeGate() ?? '').toMatch(/default logbook/i);
+        expect(toast('info', /default.*(set|changed)/i)).toBe(false);
     });
 
     it('default_stale: this tab’s context is stale — reload', async () => {
