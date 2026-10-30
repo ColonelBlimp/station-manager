@@ -58,9 +58,11 @@ export type DefaultChangeRequestOutcome =
     /** No answer, or an answer that cannot prove what happened: reconcile. */
     | { kind: 'unknown'; message: string; timedOut?: boolean };
 
-// The states the daemon reports (internal/archive/default_change.go). Anything
+// The states the daemon reports: the status's own (internal/archive/
+// default_change.go) and the start's (cmd/smd/default_change.go). Anything
 // else is a status this client cannot interpret: unreadable, never idle.
 const STATES = new Set([
+    'not_applied_intent_pending',
     'pending_restart',
     'pending_unclear',
     'applied_cleanup_pending',

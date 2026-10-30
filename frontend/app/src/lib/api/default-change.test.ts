@@ -1,7 +1,19 @@
+/// <reference types="node" />
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ARCHIVE_HEADER, setBoundArchive } from './archive-guard';
 import { TEST_ARCHIVE } from '../../test/archive';
 import { fetchDefaultChangeStatus, requestDefaultChange } from './default-change';
+// The two producers of a change's state, read from the daemon's source so a
+// state added there cannot go unread here.
+import { readFileSync } from 'node:fs';
+
+// The repository root, from this file; held in a variable so Vite does not
+// rewrite the URL into an asset import.
+const here = import.meta.url;
+const goSource = (rel: string): string =>
+    readFileSync(new URL(`../../../../../${rel}`, here), 'utf8');
+const archiveSource = goSource('internal/archive/default_change.go');
+const startSource = goSource('cmd/smd/default_change.go');
 
 // W-0024 slice 5a: the Set as default wire. Unsupported (404) is not unreadable;
 // an answer that cannot prove what happened is an unknown outcome.
@@ -62,17 +74,21 @@ function held(over: Record<string, unknown> = {}): Record<string, unknown> {
     };
 }
 
-// The daemon's states (internal/archive/default_change.go).
+/** The string constants of the const block that follows `heading`. */
+function constBlock(source: string, heading: string): string[] {
+    const start = source.indexOf(heading);
+    if (start < 0) throw new Error(`heading not found: ${heading}`);
+    const open = source.indexOf('const (', start);
+    const block = source.slice(open, source.indexOf('\n)', open));
+    return [...block.matchAll(/=\s*"([a-z_]+)"/g)].map((m) => m[1]);
+}
+
+// The status's states (internal/archive) and the start's (cmd/smd).
 const STATES = [
-    'pending_restart',
-    'pending_unclear',
-    'applied_cleanup_pending',
-    'withdrawal_unconfirmed',
-    'restart_failed',
-    'cancelled',
-    'withdrawn',
-    'not_applied_abandoned',
-    'effective',
+    ...new Set([
+        ...constBlock(archiveSource, '// The states a default change reports'),
+        ...constBlock(startSource, '// The default-change states a start can leave'),
+    ]),
 ];
 
 describe('fetchDefaultChangeStatus', () => {
@@ -108,6 +124,37 @@ describe('fetchDefaultChangeStatus', () => {
                     state: 'pending_unclear',
                     removed: '',
                     failureCode: 'default_change_pending_unclear',
+                    unconfirmed: true,
+                },
+            },
+        });
+    });
+
+    it('both producers are read: the start’s not_applied_intent_pending among them', () => {
+        expect(STATES).toContain('pending_restart');
+        expect(STATES).toContain('not_applied_intent_pending');
+        expect(STATES.length).toBeGreaterThanOrEqual(10);
+    });
+
+    it('a start’s change still pending is readable, held, and keeps its reason', async () => {
+        stub(200, {
+            effective,
+            change: held({
+                state: 'not_applied_intent_pending',
+                failure_code: 'default_change_target_missing',
+                unconfirmed: true,
+            }),
+        });
+        expect(await fetchDefaultChangeStatus()).toEqual({
+            kind: 'ok',
+            status: {
+                effective,
+                change: {
+                    requestId: REQ,
+                    logbookUuid: B,
+                    state: 'not_applied_intent_pending',
+                    removed: '',
+                    failureCode: 'default_change_target_missing',
                     unconfirmed: true,
                 },
             },
