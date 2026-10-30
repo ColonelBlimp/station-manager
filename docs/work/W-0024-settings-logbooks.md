@@ -238,8 +238,9 @@ control had been unreachable. Seventeen plus four reversion proofs; the clean-ro
 in `46a07d07`. CI on 5b (`20fe5377`, run 41009559138) is green.
 
 **Operator acceptance: pending.** Recorded separately from implementation completion. Before
-deployment: green CI on `46a07d07`. Deployment and acceptance testing (and any RF test) need the
-operator's own approval; none is given by the release approval.
+deployment: green CI on `46a07d07` — **met** (run 41012359480 on `43d0ed98`, which contains it,
+green 2026-10-30). Deployment and acceptance testing (and any RF test) need the operator's own
+approval; none is given by the release approval. The candidate is `43d0ed98`.
 
 ### Slice 5 proposal (2026-10-29, for review; not ruled)
 
