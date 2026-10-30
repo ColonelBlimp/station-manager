@@ -44,6 +44,11 @@ interface DefaultChangeState {
     status: DefaultChangeStatus | null;
     /** A Set as default request is on the wire, or its restart awaited. */
     requesting: boolean;
+    /** The last READABLE status said pending_restart: the daemon holds its
+     *  admission seals until it restarts, though the status still names the
+     *  old default (ADR 0097 §4) — unlike pending_unclear, where admission
+     *  has reopened. A failed read proves nothing, so it keeps the latch. */
+    sealed: boolean;
 }
 
 /** Whether this daemon serves Set as default, and what it last reported. */
@@ -51,6 +56,7 @@ export const defaultChangeState: DefaultChangeState = $state({
     read: 'unread',
     status: null,
     requesting: false,
+    sealed: false,
 });
 
 const RESTARTED_WITH_ANOTHER_DEFAULT =
@@ -59,15 +65,8 @@ const RESTARTED_WITH_ANOTHER_DEFAULT =
 /** Why live work in this tab is refused while a change is pending, or null.
  *  Wired into the operate seams by main.ts, beside the archive gate. */
 export function defaultChangeGate(): string | null {
-    if (!defaultChangeState.requesting && !admissionSealed()) return null;
+    if (!defaultChangeState.requesting && !defaultChangeState.sealed) return null;
     return 'A default logbook change is in progress — wait for the daemon to restart and the page to reload.';
-}
-
-/** pending_restart: the daemon holds its admission seals until it restarts,
- *  though the status still names the old default (ADR 0097 §4). Unlike
- *  pending_unclear, where admission has reopened. */
-function admissionSealed(): boolean {
-    return defaultChangeState.status?.change?.state === 'pending_restart';
 }
 
 // Overlapping reads: only the latest one lands.
@@ -81,6 +80,7 @@ export async function loadDefaultChange(): Promise<void> {
     if (out.kind === 'ok') {
         defaultChangeState.read = 'ok';
         defaultChangeState.status = out.status;
+        defaultChangeState.sealed = out.status.change?.state === 'pending_restart';
         return;
     }
     defaultChangeState.read = out.kind === 'unsupported' ? 'unsupported' : 'unreadable';
@@ -319,7 +319,7 @@ async function reconcileUnknown(before: string): Promise<void> {
         reloadForAnotherDefault();
         return;
     }
-    if (admissionSealed()) {
+    if (defaultChangeState.sealed) {
         toasts.warn(
             'The daemon recorded the change and has not restarted yet; live work stays paused until it does.'
         );
@@ -336,7 +336,7 @@ async function reconcileUnknown(before: string): Promise<void> {
 const SEALED_WATCH_ROUNDS = 10;
 
 async function watchSealedRestart(before: string): Promise<void> {
-    for (let round = 0; round < SEALED_WATCH_ROUNDS && admissionSealed(); round++) {
+    for (let round = 0; round < SEALED_WATCH_ROUNDS && defaultChangeState.sealed; round++) {
         if (await waitForDaemonBack(before)) {
             reloadRestarted(RESTARTED_WITH_ANOTHER_DEFAULT);
             return;
@@ -351,4 +351,5 @@ export function _resetDefaultChangeForTests(): void {
     defaultChangeState.read = 'unread';
     defaultChangeState.status = null;
     defaultChangeState.requesting = false;
+    defaultChangeState.sealed = false;
 }

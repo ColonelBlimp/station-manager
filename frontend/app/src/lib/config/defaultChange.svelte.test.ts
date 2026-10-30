@@ -689,6 +689,31 @@ describe('a sealed change after an unknown outcome', () => {
     });
 });
 
+describe('the sealed gate across later status reads', () => {
+    it('a failed re-read keeps live work gated; only a readable status that is no longer pending_restart releases it', async () => {
+        vi.mocked(requestDefaultChange).mockResolvedValue({ kind: 'unknown', message: 'reset' });
+        vi.mocked(waitForDaemonBack).mockResolvedValue(false);
+        vi.mocked(fetchDefaultChangeStatus).mockResolvedValue(
+            heldChange({ state: 'pending_restart' })
+        );
+        await setAsDefault(3, yes);
+        expect(defaultChangeGate() ?? '').toMatch(/default logbook/i);
+
+        vi.mocked(fetchDefaultChangeStatus).mockResolvedValue({
+            kind: 'unreadable',
+            message: 'HTTP 500',
+        });
+        await loadDefaultChange();
+        expect(defaultChangeGate() ?? '').toMatch(/default logbook/i);
+
+        vi.mocked(fetchDefaultChangeStatus).mockResolvedValue(
+            heldChange({ state: 'pending_unclear' })
+        );
+        await loadDefaultChange();
+        expect(defaultChangeGate()).toBeNull();
+    });
+});
+
 describe('the wait for the baseline instance', () => {
     it.each([
         ['a Logbooks save', () => (logbooksState.busy = true)],
