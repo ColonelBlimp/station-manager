@@ -47,6 +47,8 @@ import { logbooksState, _resetLogbooksForTests } from './logbooks.svelte';
 import { toastsState, _resetForTests as resetToasts } from '../ui/toasts.svelte';
 
 const ARCHIVE = '01a0e79a-7b32-7cf5-a72c-57cf437a362d';
+// Each logbook's identity, as the daemon serves it (ADR 0071).
+const lbUuid = (id: number): string => `01a187bc-0000-7000-8000-${String(id).padStart(12, '0')}`;
 
 function smcloud(reason = '', newLogbookReason = '', support: unknown = null) {
     return {
@@ -90,7 +92,11 @@ function daemonHas(opts: {
     // (the decoder's rule, logbooks.test.ts).
     vi.mocked(fetchLogbooks).mockResolvedValue({
         kind: 'ok',
-        logbooks: logbooks.map((l) => ({ ...l, description: l.description ?? '' })),
+        logbooks: logbooks.map((l) => ({
+            ...l,
+            uuid: lbUuid(l.id),
+            description: l.description ?? '',
+        })),
     });
     vi.mocked(fetchLogbookCount).mockImplementation((id: number) => {
         const n = counts[id];
@@ -140,8 +146,22 @@ describe('logbooksState.load', () => {
         expect(logbooksState.defaultId).toBe(1);
         expect(logbooksState.stationCallsign).toBe('7Q5MLV');
         expect(logbooksState.rows).toEqual([
-            { id: 1, name: 'Default', callsign: '7Q5MLV', description: '', count: 12 },
-            { id: 2, name: 'Portable', callsign: '7Q5MLV/P', description: '', count: 0 },
+            {
+                id: 1,
+                uuid: lbUuid(1),
+                name: 'Default',
+                callsign: '7Q5MLV',
+                description: '',
+                count: 12,
+            },
+            {
+                id: 2,
+                uuid: lbUuid(2),
+                name: 'Portable',
+                callsign: '7Q5MLV/P',
+                description: '',
+                count: 0,
+            },
         ]);
     });
 
@@ -380,6 +400,7 @@ describe('logbooksState.saveEdit', () => {
     const edit = (row: { id: number; name: string; description?: string }) =>
         logbooksState.startEdit({
             id: row.id,
+            uuid: lbUuid(row.id),
             name: row.name,
             callsign: '7Q5MLV',
             description: row.description ?? '',
@@ -576,6 +597,7 @@ describe('Settings → Forwarding stays in step', () => {
         vi.mocked(updateLogbook).mockResolvedValue({ kind: 'ok' });
         logbooksState.startEdit({
             id: 2,
+            uuid: lbUuid(2),
             name: 'Portable',
             callsign: '7Q5MLV/P',
             description: '',
@@ -615,7 +637,14 @@ describe('a draft typed while a write is pending', () => {
         expect(logbooksState.dirty).toBe(false);
     });
 
-    const portable = { id: 2, name: 'Portable', callsign: '7Q5MLV/P', description: '', count: 0 };
+    const portable = {
+        id: 2,
+        uuid: lbUuid(2),
+        name: 'Portable',
+        callsign: '7Q5MLV/P',
+        description: '',
+        count: 0,
+    };
     const holdUpdate = (): ((v: unknown) => void) => {
         let answer: (v: unknown) => void = () => {};
         vi.mocked(updateLogbook).mockImplementation(

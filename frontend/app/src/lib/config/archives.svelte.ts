@@ -269,25 +269,32 @@ function entrySummary(): string {
     return draft.timeOn !== '' ? `${call} (Time On ${draft.timeOn})` : call;
 }
 
+/** This window's unfinished Phone / CW work, as a restart's confirmation names
+ *  it (ADR 0087 items 2, 8), or '' when there is none: an unknown Log outcome
+ *  may already be logged — check `where` — and is never called unlogged; OK
+ *  discards the entry and does `effect`. */
+export function unfinishedEntryText(where: string, effect: string): string {
+    if (!draftInProgress() && !logOutcomeUnknown()) return '';
+    let entry: string;
+    if (logOutcomeUnknown()) {
+        // Uncertain, so never called unlogged (review 2026-10-05).
+        entry =
+            `This window has a Phone / CW entry whose Log outcome is unknown: ${entrySummary()}. ` +
+            `It may already be logged; check ${where} before logging it again. `;
+    } else {
+        entry = `This window has an unlogged QSO on Phone / CW: ${entrySummary()}. `;
+    }
+    return entry + `OK discards this window’s entry and ${effect}; Cancel keeps it.\n\n`;
+}
+
 /** The confirmation the operator answers before the daemon restarts (ADR 0087
  *  items 2, 8, 9). It names the destination; when this window holds unlogged
  *  work — a partial entry included — it names that and says OK discards it;
  *  an unknown Log outcome says the QSO may already be logged in `from`; and
  *  it always warns that unlogged work in other windows is lost. */
 export function activateConfirmText(label: string, from = ''): string {
-    let entry = '';
-    if (draftInProgress() || logOutcomeUnknown()) {
-        if (logOutcomeUnknown()) {
-            // Uncertain, so never called unlogged (review 2026-10-05).
-            const where = from !== '' ? `the Logbook in “${from}”` : 'the Logbook';
-            entry =
-                `This window has a Phone / CW entry whose Log outcome is unknown: ${entrySummary()}. ` +
-                `It may already be logged; check ${where} before logging it again. `;
-        } else {
-            entry = `This window has an unlogged QSO on Phone / CW: ${entrySummary()}. `;
-        }
-        entry += 'OK discards this window’s entry and switches; Cancel keeps it.\n\n';
-    }
+    const where = from !== '' ? `the Logbook in “${from}”` : 'the Logbook';
+    const entry = unfinishedEntryText(where, 'switches');
     return (
         `Switch to the archive “${label}”?\n\n` +
         entry +
@@ -361,37 +368,52 @@ export async function activateArchive(
     }
 }
 
+const RESTARTED_ON_ANOTHER_ARCHIVE =
+    'The daemon restarted on another archive; this page must reload to rebind.';
+
 /**
- * After an accepted (or ambiguous) activation the SPA's bindings are suspect
- * until it reloads on the new daemon generation. A DIFFERENT instance answering
- * proves the generation: reload at once, whatever the catalogue says. Anything
- * else — no baseline instance to compare against, or the wait expiring — leaves
- * the generation unknown: the app is gated (archivesState.switchUnresolved:
- * overlay + the operate seams refuse) and, when a baseline exists, the new
- * instance is watched for a while longer and the reload follows on sight.
+ * After an accepted (or ambiguous) activation — or default change — the SPA's
+ * bindings are suspect until it reloads on the new daemon generation. A
+ * DIFFERENT instance answering proves the generation: reload at once, whatever
+ * the catalogue says. Anything else — no baseline instance to compare against,
+ * or the wait expiring — leaves the generation unknown: the app is gated
+ * (archivesState.switchUnresolved: overlay + the operate seams refuse) and,
+ * when a baseline exists, the new instance is watched for a while longer and
+ * the reload follows on sight. `reloadDetail` says why the page reloads.
  */
-async function settleRestart(before: string): Promise<void> {
+export async function settleRestart(
+    before: string,
+    reloadDetail = RESTARTED_ON_ANOTHER_ARCHIVE
+): Promise<void> {
     if (before !== '' && (await waitForDaemonBack(before))) {
-        toasts.info('Daemon restarted. Reloading…');
-        requestReload('The daemon restarted on another archive; this page must reload to rebind.');
+        reloadRestarted(reloadDetail);
         return;
     }
+    gateUnprovenRestart(before, reloadDetail);
+}
+
+/** A new daemon instance answered: rebind by reloading. */
+export function reloadRestarted(reloadDetail: string): void {
+    toasts.info('Daemon restarted. Reloading…');
+    requestReload(reloadDetail);
+}
+
+/** The restart could not be proven: gate the app, and keep watching for the
+ *  new instance when there is a baseline to tell it from the old. */
+export function gateUnprovenRestart(before: string, reloadDetail: string): void {
     archivesState.switchUnresolved = true;
     archivesState.switchDetail =
         before === ''
             ? 'The daemon’s identity could not be read before the switch, so the new one cannot be told from the old.'
             : 'The daemon did not answer as a new instance within the wait.';
     toasts.warn(`${OUTCOME_UNKNOWN_LEAD} Reload the page before logging or transmitting.`);
-    if (before !== '') void keepWatching(before);
+    if (before !== '') void keepWatching(before, reloadDetail);
 }
 
-async function keepWatching(before: string): Promise<void> {
+async function keepWatching(before: string, reloadDetail: string): Promise<void> {
     for (let round = 0; round < WATCH_ROUNDS && archivesState.switchUnresolved; round++) {
         if (await waitForDaemonBack(before)) {
-            toasts.info('Daemon restarted. Reloading…');
-            requestReload(
-                'The daemon restarted on another archive; this page must reload to rebind.'
-            );
+            reloadRestarted(reloadDetail);
             return;
         }
     }
@@ -594,13 +616,16 @@ setArchiveMismatchSink(() => {
 });
 // The daemon refused a live request for naming another default: this tab's
 // context is stale. Reload at once (there is nothing to verify first).
-setDefaultMismatchSink(() => {
+setDefaultMismatchSink(reloadForAnotherDefault);
+
+/** This tab's established default is not the daemon's any more: reload. */
+export function reloadForAnotherDefault(): void {
     if (archivesState.switchUnresolved) return;
     toasts.info('The daemon now serves another default logbook. Reloading…');
     requestReload(
         'The daemon now serves another default logbook; this page must reload to rebind.'
     );
-});
+}
 // A Session or engagement write that names another archive is the same signal,
 // raised before any request: verify at once instead of waiting for the always-on
 // stream's reconnect, so the reload follows promptly.

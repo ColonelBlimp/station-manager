@@ -151,8 +151,13 @@ export function unsavedSections(): string[] {
     return atRisk().map((s) => s.label);
 }
 
+/** Sections with a write on the wire, in tab order. */
+export function savingSections(): string[] {
+    return SECTIONS.filter((s) => s.saving()).map((s) => s.label);
+}
+
 /** "Station, Email and Enrichment" — an Oxford-comma-free English list. */
-function listOf(labels: string[]): string {
+export function listOf(labels: string[]): string {
     if (labels.length <= 1) return labels[0] ?? '';
     return `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`;
 }

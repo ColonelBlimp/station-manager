@@ -50,9 +50,27 @@ function daemonHas(smcloudReason: string | null = '', counts: Record<number, num
     vi.mocked(fetchLogbooks).mockResolvedValue({
         kind: 'ok',
         logbooks: [
-            { id: 1, name: 'Default', callsign: '7Q5MLV', description: '' },
-            { id: 2, name: 'Portable', callsign: '7Q5MLV/P', description: '' },
-            { id: 3, name: 'Contest', callsign: '7Q5MLV', description: 'UK/EI DX 2026' },
+            {
+                id: 1,
+                uuid: `01a187bc-0000-7000-8000-000000000001`,
+                name: 'Default',
+                callsign: '7Q5MLV',
+                description: '',
+            },
+            {
+                id: 2,
+                uuid: `01a187bc-0000-7000-8000-000000000002`,
+                name: 'Portable',
+                callsign: '7Q5MLV/P',
+                description: '',
+            },
+            {
+                id: 3,
+                uuid: `01a187bc-0000-7000-8000-000000000003`,
+                name: 'Contest',
+                callsign: '7Q5MLV',
+                description: 'UK/EI DX 2026',
+            },
         ],
     });
     const n = { 1: 12, 2: 0, 3: 4, ...counts };

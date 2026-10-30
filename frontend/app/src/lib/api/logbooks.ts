@@ -19,6 +19,7 @@
 import {
     daemonErrorMessage,
     isPlainObject,
+    isUuidV7,
     readJsonBody,
     safeFetch,
     WRITE_TIMEOUT_MS,
@@ -28,6 +29,9 @@ import {
 /** One logbook (mirrors types.Logbook; only the fields the SPA shows). */
 export interface Logbook {
     id: number;
+    /** Its stable identity (ADR 0071); '' when absent or malformed — such a
+     *  logbook cannot be named in a Set as default request. */
+    uuid: string;
     name: string;
     callsign: string;
     /** '' when it has none: the daemon omits an empty description. */
@@ -35,7 +39,10 @@ export interface Logbook {
 }
 
 /** A logbook as it arrives, before an omitted description is made ''. */
-type LogbookRecord = Omit<Logbook, 'description'> & { description?: string };
+type LogbookRecord = Omit<Logbook, 'description' | 'uuid'> & {
+    description?: string;
+    uuid?: unknown;
+};
 
 /**
  * A QSO row as served by the daemon. types.Qso embeds QsoDetails / ContactedStation
@@ -169,6 +176,8 @@ export async function fetchLogbooks(signal?: AbortSignal): Promise<LogbooksOutco
     if (!Array.isArray(body)) return { kind: 'error', message: 'Unexpected logbooks response.' };
     const logbooks = decodeRecords(body, isLogbook, (l) => l.id, 'logbooks').map((l) => ({
         ...l,
+        // Absent or malformed leaves the row listed but unusable as a target.
+        uuid: isUuidV7(l.uuid) ? l.uuid : '',
         description: l.description ?? '',
     }));
     return { kind: 'ok', logbooks };

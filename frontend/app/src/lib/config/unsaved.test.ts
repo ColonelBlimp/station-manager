@@ -372,6 +372,7 @@ describe('the Logbooks tab’s drafts', () => {
         prefilledLogbooks();
         logbooksState.startEdit({
             id: 2,
+            uuid: `01a187bc-0000-7000-8000-000000000002`,
             name: 'Portable',
             callsign: '7Q5MLV',
             description: 'Holiday ops',
@@ -405,6 +406,7 @@ describe('the Logbooks tab’s drafts', () => {
         prefilledLogbooks();
         logbooksState.startEdit({
             id: 2,
+            uuid: `01a187bc-0000-7000-8000-000000000002`,
             name: 'Portable',
             callsign: '7Q5MLV',
             description: 'Holiday ops',
@@ -424,6 +426,7 @@ describe('the Logbooks tab’s drafts', () => {
         prefilledLogbooks();
         logbooksState.startEdit({
             id: 2,
+            uuid: `01a187bc-0000-7000-8000-000000000002`,
             name: 'Portable',
             callsign: '7Q5MLV',
             description: 'Holiday ops',
@@ -437,6 +440,7 @@ describe('the Logbooks tab’s drafts', () => {
         prefilledLogbooks();
         logbooksState.startEdit({
             id: 2,
+            uuid: `01a187bc-0000-7000-8000-000000000002`,
             name: 'Portable',
             callsign: '7Q5MLV',
             description: 'Holiday ops',
@@ -450,6 +454,7 @@ describe('the Logbooks tab’s drafts', () => {
         prefilledLogbooks();
         logbooksState.startEdit({
             id: 2,
+            uuid: `01a187bc-0000-7000-8000-000000000002`,
             name: 'Portable',
             callsign: '7Q5MLV',
             description: 'Holiday ops',
@@ -672,6 +677,7 @@ describe('leaving Settings', () => {
         logbooksState.addDescription = 'UK/EI DX';
         logbooksState.startEdit({
             id: 2,
+            uuid: `01a187bc-0000-7000-8000-000000000002`,
             name: 'Portable',
             callsign: '7Q5MLV',
             description: 'Holiday ops',

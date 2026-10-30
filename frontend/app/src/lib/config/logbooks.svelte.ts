@@ -31,6 +31,8 @@ import { toasts } from '../ui/toasts.svelte';
 
 export interface LogbookRow {
     id: number;
+    /** Its stable identity; '' when the daemon did not serve a usable one. */
+    uuid: string;
     name: string;
     callsign: string;
     /** Its description; '' when it has none. */
@@ -113,6 +115,7 @@ class LogbooksState {
                 const c = counts[i];
                 return {
                     id: l.id,
+                    uuid: l.uuid,
                     name: l.name,
                     callsign: l.callsign,
                     description: l.description,

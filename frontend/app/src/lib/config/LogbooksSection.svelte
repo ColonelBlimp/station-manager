@@ -9,6 +9,12 @@
     import ManualLink from './ManualLink.svelte';
     import { logbooksState, type LogbookRow } from './logbooks.svelte';
     import { archiveSwitchGate } from './archives.svelte';
+    import {
+        defaultChangeState,
+        loadDefaultChange,
+        setAsDefault,
+        setDefaultOffer,
+    } from './defaultChange.svelte';
     import { SUPPORT_POLL_MS } from './bindings.svelte';
     import { isValidCallsign } from '../validators/callsign';
 
@@ -21,6 +27,10 @@
     });
     $effect(() => {
         if (visible) untrack(() => void logbooksState.load());
+    });
+    // Whether Set as default is served, and any change in play (W-0024 slice 5).
+    $effect(() => {
+        if (visible) untrack(() => void loadDefaultChange());
     });
 
     // While SM Cloud's server support is still being checked, the visible tab
@@ -122,6 +132,7 @@
                 <tbody>
                     {#each logbooksState.rows as row (row.id)}
                         {@const block = logbooksState.deleteBlock(row)}
+                        {@const offer = setDefaultOffer(row)}
                         <tr class="border-t border-line" data-testid="logbook-row-{row.id}">
                             <td class="py-2 pr-3">
                                 {#if logbooksState.editId === row.id}
@@ -174,6 +185,18 @@
                                         aria-label="Edit {row.name}"
                                         onclick={() => logbooksState.startEdit(row)}>Edit</button
                                     >
+                                    {#if offer.offered || offer.reason !== ''}
+                                        <button
+                                            class="btn"
+                                            data-testid="logbook-set-default-{row.id}"
+                                            disabled={locked ||
+                                                !offer.offered ||
+                                                defaultChangeState.requesting}
+                                            title={offer.reason || gate || undefined}
+                                            onclick={() => void setAsDefault(row.id)}
+                                            >Set as default</button
+                                        >
+                                    {/if}
                                     <button
                                         class="btn"
                                         disabled={locked || block !== null}

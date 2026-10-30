@@ -34,8 +34,9 @@ export interface Sent {
 export interface Daemon {
     version: unknown;
     config: unknown;
-    /** Answers to other requests, by "METHOD url"; unlisted ones 404. */
-    routes: Record<string, { status: number; body: unknown }>;
+    /** Answers to other requests, by "METHOD url"; unlisted ones 404. An
+     *  answer with `hold` is sent only once that promise settles. */
+    routes: Record<string, { status: number; body: unknown; hold?: Promise<void> }>;
     sent: Sent[];
 }
 
@@ -64,6 +65,7 @@ export function installDaemon(d: Daemon): void {
             if (method === 'GET' && url === '/v1/version') return Promise.resolve(json(d.version));
             if (method === 'GET' && url === '/v1/config') return Promise.resolve(json(d.config));
             const r = d.routes[`${method} ${url.split('?')[0]}`];
+            if (r?.hold) return r.hold.then(() => json(r.body, r.status));
             if (r) return Promise.resolve(json(r.body, r.status));
             return Promise.resolve(json({ code: 'not_stubbed' }, 404));
         })

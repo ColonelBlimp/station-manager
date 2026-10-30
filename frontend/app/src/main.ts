@@ -51,6 +51,7 @@ import {
     verifyAfterRigReconnect,
     verifyArchiveGeneration,
 } from './lib/config/archives.svelte';
+import { defaultChangeGate } from './lib/config/defaultChange.svelte';
 import { setFt8AudioWindow } from './lib/operate/audioLevel.svelte';
 import { setTxDriveConfig, onRigMeters } from './lib/operate/txDrive.svelte';
 import { setFt8Enricher, setFt8Dupe } from './lib/operate/ft8Enrich.svelte';
@@ -445,11 +446,14 @@ setModeChangeHook((from, to) => void onOperatingModeChange(from, to));
 void loadBuildIdentity();
 // Fail closed across an archive switch (ADR 0071): a QSO submit and every FT8
 // TX-starting intent are refused while a switch is in flight or unresolved.
-setSubmitGate(archiveSwitchGate);
-setFt8AdmissionGate(archiveSwitchGate);
-setTuneGate(archiveSwitchGate);
+// A Set as default request and its restart gate the same way (W-0024 slice 5):
+// the reload that follows discards this tab's live state.
+const operateGate = (): string | null => archiveSwitchGate() ?? defaultChangeGate();
+setSubmitGate(operateGate);
+setFt8AdmissionGate(operateGate);
+setTuneGate(operateGate);
 // Phone / CW entry is locked while the switch's reload is pending (ADR 0087, item 7).
-setEntryGate(archiveEntryLock);
+setEntryGate(() => archiveEntryLock() ?? defaultChangeGate());
 
 // The archive-scoped boot reads — the station context (default logbook id, name,
 // count) and the archive catalogue for the header selector — run inside the

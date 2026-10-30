@@ -32,6 +32,27 @@ const LB = (over: Record<string, unknown> = {}) => ({
 });
 const ROW = (over: Record<string, unknown> = {}) => ({ uuid: 'u-1', call: 'K1ABC', ...over });
 
+describe('fetchLogbooks — the logbook uuid (W-0024 slice 5a)', () => {
+    // Set as default names its target by uuid; a missing or malformed one
+    // keeps the row (it is still listed) but leaves it unnameable ('').
+    it('reads each logbook’s uuid; absent or malformed is empty', async () => {
+        mockFetchJSON(200, [
+            LB({ id: 1, uuid: '01a187bc-0173-7649-8ff3-71db8170c309' }),
+            LB({ id: 2 }),
+            LB({ id: 3, uuid: 'not-a-uuid' }),
+            LB({ id: 4, uuid: 7 }),
+        ]);
+        const out = await fetchLogbooks();
+        if (out.kind !== 'ok') throw new Error(out.message);
+        expect(out.logbooks.map((l) => [l.id, l.uuid])).toEqual([
+            [1, '01a187bc-0173-7649-8ff3-71db8170c309'],
+            [2, ''],
+            [3, ''],
+            [4, ''],
+        ]);
+    });
+});
+
 describe('fetchLogbooks — per-record decode (F-03c)', () => {
     it('drops a logbook with a non-numeric id, non-string name, or non-string callsign', async () => {
         vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -55,7 +76,7 @@ describe('fetchLogbooks — per-record decode (F-03c)', () => {
         expect(out.kind).toBe('ok');
         if (out.kind !== 'ok') return;
         expect(out.logbooks).toEqual([
-            { id: 7, name: 'first', callsign: 'M0ABC', description: '' },
+            { id: 7, uuid: '', name: 'first', callsign: 'M0ABC', description: '' },
         ]);
     });
 
