@@ -206,6 +206,7 @@ Each slice was test-first: failing tests reviewed before implementation, then re
 | 3a | `76295c98` | A default change applied at start (ADR 0097 §1): the config record and its tombstones, confirmation only by a durable write holding them, the durable archive-pointer write, the read-back matrix; activation and deletion refuse while a change is unresolved. |
 | 3b | `027d5845` | The request path (ADR 0097 §2–§3): FT8, rig and live-entry seals; the shared single flight with activation and deletion; withdrawal on a failed restart; Cancel / Confirm / Retry cleanup by request id; the status read. Its routes are **gated** (`api.DefaultChangeRoutesReleased` is false). |
 | 4 | `457c9ba2` | The stale-tab default guard (ADR 0097 §4): live requests name the default of the tab's established station context (`X-SM-Default-Logbook`), checked after the archive guard and before any side effect, outside the submit rate limiter. FT8 admission is refused on another default before the service is asked; `POST /v1/qso` naming the asserted logbook is live (refused unless effective, never retargeted, sealed while a change drains), any other logbook deliberate. `/v1/version` reports the served default; the app reloads on another default at boot and on every reconnect; first-run setup establishes it without a reload. `loadgen` reads it at startup. Routes still **gated**. |
+| 5a | `04ffdd08`, `8d80d467` | Set as default in Settings → Logbooks and its confirmation (ADR 0097 §4a, §5; ADR 0087): offered on a same-callsign logbook other than the default, hidden when the routes are not served, disabled when the status cannot be read or a change is held. The prompt names the target and its effect, this tab's unfinished entry or unknown Log outcome, its unsaved Settings edits, other windows' unlogged work and, when it applies, the SM Cloud adoption note. The request asserts the established context's default; a Log in flight, a Settings save or an archive operation refuses it before the prompt, after each await and immediately before the POST; without a readable baseline instance nothing is sent. `main.ts` gates submit, entry, FT8 admission and tune while it is pending; an unknown outcome is reconciled, never retried, and `pending_restart` keeps live work gated until the restart reloads the tab. Routes still **gated**. |
 
 **CI budget (2026-10-29):** the race step's 10-minute per-package timeout failed CI on 3a and 3b
 (`cmd/smd`, `internal/archive`, an uncached `internal/database/sqlite`; no assertion failed).
@@ -216,8 +217,119 @@ the 20-minute budget); the next were `adoption` 119 s, `qsoservice` 109 s and `f
 108 s. The race step took 9 min 56 s and the whole job 18 min 15 s (budget 45). The follow-up
 removes `-count=1`, so caching resumes.
 
-**Next:** slice 5, the confirmation (ADR 0097 §4a, ADR 0087's policy for unlogged work). The
-routes stay gated until its confirmation flow is complete and reviewed.
+**5a review (2026-10-30):** the clean-room review of `04ffdd08` found one P2 — after an unknown
+outcome reconciled as `pending_restart`, a later failed status read cleared the stored status,
+reopening Phone / CW entry and stopping the restart watch. **Fixed** in `8d80d467`: the seal is
+its own latch, kept by a failed read and released only by a readable status that is no longer
+`pending_restart` (regression test and reversion proofs; that commit's review is clean).
+
+**Next:** slice 5b — the status read at boot inside the identity bracket, the pending and sealed
+indication in Operate, the recovery state and its actions (Cancel / Confirm / Retry cleanup by
+request id; *not applied, intent still pending* distinct from *abandoned*), no Delete for a
+pending target, and default-change wording replacing the temporary archive wording of the
+unproven-restart gate. The routes stay gated through 5b.
+
+### Slice 5 proposal (2026-10-29, for review; not ruled)
+
+Slice 5 is the client of Set as default: no app code exists for it yet. Proposed in three
+commits, each test-first; the release flag (`api.DefaultChangeRoutesReleased`) flips only in the
+last, after review.
+
+**5a — Set as default and its confirmation (AC2, ADR 0097 §4a).**
+- **Offered** on each logbook that is not the default and whose callsign equals the default's;
+  another callsign shows it disabled with the reason (AC2). It is shown only when the daemon
+  serves `GET /v1/default-logbook` (a 404 — the routes gated — hides it), and refused while an
+  archive switch is unresolved, a write is in flight, or a change is already in play.
+- **Refused** while this tab's Log is in flight: checked before the confirmation and again
+  before the request (ADR 0087 item 9).
+- **The confirmation** (`window.confirm`, as Activate) names the target and the effect ("Live
+  contacts — Phone / CW and FT8 — will go to *Contest 2026 (7Q5MLV)* after the restart"); names
+  this tab's unfinished entry, partial included, with OK discarding it and Cancel keeping it;
+  says an unknown Log outcome **may already be logged** in the current default's Logbook; and
+  always warns that unlogged work in any other window — a Phone / CW QSO, unsaved Settings
+  edits, a submit refused while the change is pending — is lost. Cancel sends nothing.
+- **The request** names the target's `uuid` and, as `believed_default_uuid`, the default of this
+  tab's established station context (the bound default) — never a fresh read. With none bound,
+  nothing is sent. The logbook list decoder gains `uuid`.
+- **Outcomes:** `202` → wait for a new daemon instance, then reload (the archive switch's
+  settle path); no new instance → gated, never reported as done. `409 default_stale` → this
+  tab's context is stale: reload. Any other refusal → the daemon's message, list and status
+  re-read. A transport failure or timeout → **unknown outcome**: never success or failure; the
+  tab waits for a new instance, and if the old one answers, reads the status and shows it.
+
+**5b — the change's state and its recovery actions (AC8, ADR 0097 §1–§3).**
+Settings → Logbooks reads `GET /v1/default-logbook` with the list and shows the change in play:
+pending its restart; pending beside this process (*Pending, unclear*: **Cancel**); removal
+unconfirmed (**Confirm**); applied, cleanup pending (**Retry cleanup**); not applied, with the
+start's reason. Each action names its `request_id`; `already_resolved` / `pending_changed` →
+re-read, never retried. Delete is not offered for a pending or unconfirmed target (the daemon
+still decides).
+
+**5c — release.** Flip `api.DefaultChangeRoutesReleased`; update the manual (Settings →
+Logbooks; switching restarts and reloads every window, as for an archive) and the RG test to
+assert the released routes.
+
+**Rulings (operator, 2026-10-29)** — the split is approved (5a, 5b, 5c; the routes stay gated
+through both client commits), with these amendments, which supersede the proposal above where
+they differ:
+- **Wording:** the confirmation opens "Set ‘Contest 2026 (7Q5MLV)’ as default and restart Station
+  Manager?", then the target-and-effect sentence, then the unfinished-entry, unknown-outcome and
+  other-window warnings. It does **not** warn of losing an active FT8 exchange: an active run,
+  armed TX or tune refuses this change.
+- **SM Cloud note (ADR 0097 §5):** when the current default has an enabled, unmarked SM Cloud
+  binding, the confirmation says its existing uploads continue, but starting adoption for it
+  later requires making that logbook the default again. *Detection (an inference from the
+  bindings read, to be pinned by tests):* the default's enabled SM Cloud row whose `logbook` is
+  neither in `locked_fields` (reserved or adopted) nor in `hidden_fields` (born on identity).
+- **Unsaved Settings edits are named in this confirmation,** by the existing unsaved-section
+  detection (`lib/config/unsaved.ts`), Logbooks drafts included: the unload prompt cannot cancel
+  a restart already requested — cancelling it leaves the old page gated (`requestReload`). The
+  leave guard stays as a backstop. Cancel preserves everything and sends nothing; a definitive
+  refusal also preserves the drafts; agreeing does not erase them before the reload.
+- **5c** also updates the API reference's release-gate wording and verifies the routes through
+  the production router.
+- **Status at boot:** the status is read inside the identity bracket, not only in Settings →
+  Logbooks; a fresh Operate tab during `pending_restart` shows the pending change and sealed
+  live entry (ADR 0097 §4). (5b.)
+- **Recovery stays reachable:** the archive overlay makes the whole app inert; the default
+  change must not copy it unchanged. Once the status proves the old default still effective and
+  admission reopened, the recovery state is shown with its action — including *not applied,
+  intent still pending* → **Cancel**, distinct from *abandoned*. (5b.)
+- **Unsupported is not unreadable:** a 404 hides the feature; a timeout, a malformed status or a
+  server error is never treated as idle or unsupported. An unknown mutation outcome reconciles by
+  the status read, never by an automatic retry of the POST. (5a and 5b.)
+
+**Rulings (operator, 2026-10-29, on the 5a red tests)** — two of my unruled choices accepted, and
+four test gaps to close before implementation:
+- **A 502 with an HTML body** is an unknown outcome, reconciled by the status read; no POST
+  retry.
+- **Bindings that cannot be read** give the SM Cloud note conditionally, qualified on both
+  conditions: merely uploading to SM Cloud does not mean adoption would require returning to the
+  default — only an enabled binding that is not yet adopted, reserved or born on identity does.
+- **Gap 1 — where the believed default comes from.** The request asserts the established station
+  context's default. A test makes the context, the fresh status and the list disagree: the tab
+  reloads or blocks, or sends its original assertion — never silently adopts the other.
+- **Gap 2 — asynchronous boundaries.** Barriers prove the instance baseline is read before the
+  POST; an unreadable baseline (`waitForDaemonBack('')` accepts any answering instance) cannot
+  prove a restart. A second click during preparation is refused. Live entry and admission are
+  actually gated (the `main.ts` wiring, not only a state flag) while the POST or the restart wait
+  is pending.
+- **Gap 3 — held records versus history.** A settled change with `unconfirmed: false` permits
+  another change. A malformed effective UUID, a missing or non-boolean `unconfirmed` and an
+  unknown state are unusable status. For the three restart-failure codes, the store's resulting
+  status is tested, including a failed reconciliation read.
+- **Gap 4 — other writes and drafts.** Refuse while a Logbooks save or an archive activation or
+  verification is in progress, including one starting during the awaited preparation. Unsaved
+  edits in another Settings section, with Logbooks clean, are named.
+- **Follow-up (operator, 2026-10-30, on the 5a implementation):** recheck the refusals after
+  the baseline instance read, immediately before the POST — the live-work gate does not stop a
+  Settings write or an archive operation starting in that wait. After an unknown outcome, a
+  status of `pending_restart` keeps live work gated (it still names the old default while the
+  daemon holds its admission seals); `pending_unclear` has reopened admission and releases it.
+  Accepted: the unreadable-baseline refusal and hiding the action until the status is read; the
+  archive wording of the unproven-restart gate is temporary, to be replaced in 5b.
+- The locked/hidden distinction agrees with the daemon's binding projection
+  (`internal/archive/bindings.go:241`). Boot status and recovery actions remain in 5b.
 
 ## Out of scope
 
