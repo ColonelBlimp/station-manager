@@ -209,6 +209,7 @@ Each slice was test-first: failing tests reviewed before implementation, then re
 | 5a | `04ffdd08`, `8d80d467` | Set as default in Settings → Logbooks and its confirmation (ADR 0097 §4a, §5; ADR 0087): offered on a same-callsign logbook other than the default, hidden when the routes are not served, disabled when the status cannot be read or a change is held. The prompt names the target and its effect, this tab's unfinished entry or unknown Log outcome, its unsaved Settings edits, other windows' unlogged work and, when it applies, the SM Cloud adoption note. The request asserts the established context's default; a Log in flight, a Settings save or an archive operation refuses it before the prompt, after each await and immediately before the POST; without a readable baseline instance nothing is sent. `main.ts` gates submit, entry, FT8 admission and tune while it is pending; an unknown outcome is reconciled, never retried, and `pending_restart` keeps live work gated until the restart reloads the tab. Routes still **gated**. |
 | 5a fix | `cb0cc972` | The status decoder reads the start's `not_applied_intent_pending` (`cmd/smd`); its test derives the states from both producers' Go source and pins that state with a held fixture. |
 | 5b | `d748080d` | The change's state and its recovery (ADR 0097 §1–§4): the status read at boot inside the identity bracket, compared with the context's default, locking live work until a readable status proves it open (a 404 gates nothing; a failed read never clears a gate); Settings → Logbooks shows the state with **Cancel change**, **Confirm** (with the power-loss qualification) or **Retry cleanup**, each naming the request shown, one at a time, never retried; Delete refused for a held change's target; a shell banner (also above the first-run setup card) that links to Settings → Logbooks and, when the status cannot be read, offers Check again and Reload; an unseen restart re-reads the status and keeps watching instead of raising the archive overlay. Routes still **gated**. |
+| 5c | `46a07d07` | Release (operator approved the route release 2026-10-30): `api.DefaultChangeRoutesReleased` is true; the release-gate test proves through the production router that every `/v1/default-logbook` route is registered, each mutation archive-guarded, and its probes write no record and request no restart. The API reference's release-gate wording and the manual's Logbooks section (Set as default; changing the Default logbook; recovery) updated with it. |
 
 **CI budget (2026-10-29):** the race step's 10-minute per-package timeout failed CI on 3a and 3b
 (`cmd/smd`, `internal/archive`, an uncached `internal/database/sqlite`; no assertion failed).
@@ -233,10 +234,12 @@ production boundary — which also put the banner above the setup card, where th
 control had been unreachable. Seventeen plus four reversion proofs; the clean-room review of
 `d748080d` is clean.
 
-**Next:** slice 5c — flip `api.DefaultChangeRoutesReleased`; the manual (Settings → Logbooks;
-switching restarts and reloads every window, as for an archive); the API reference's
-release-gate wording; the routes verified through the production router. Release needs the
-operator's approval.
+**Implementation complete (2026-10-30):** slices 1–5c are committed; Set as default is released
+in `46a07d07`. CI on 5b (`20fe5377`, run 41009559138) is green.
+
+**Operator acceptance: pending.** Recorded separately from implementation completion. Before
+deployment: green CI on `46a07d07`. Deployment and acceptance testing (and any RF test) need the
+operator's own approval; none is given by the release approval.
 
 ### Slice 5 proposal (2026-10-29, for review; not ruled)
 
