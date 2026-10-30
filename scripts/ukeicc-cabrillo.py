@@ -61,8 +61,8 @@ class AdifError(Exception):
 
 def parse_adif(data: bytes):
     """Records as {FIELD: value} dicts; field names upper case, lengths in bytes.
-    A truncated value or a record without its <EOR> is an AdifError: a contact
-    must never vanish silently."""
+    A truncated value, a tag cut short or a record without its <EOR> is an
+    AdifError: a contact must never vanish silently."""
     eoh = re.search(rb"<eoh>", data, re.I)
     i = eoh.end() if eoh else 0
     records, cur = [], {}
@@ -82,6 +82,8 @@ def parse_adif(data: bytes):
             raise AdifError(f"ADIF field {name} is cut short (record {len(records) + 1})")
         cur[name] = data[m.end():m.end() + n].decode("utf-8", "replace")
         i = m.end() + n
+    if b"<" in data[i:]:
+        raise AdifError(f"ADIF ends inside a tag after record {len(records)}: the file is incomplete")
     if cur:
         raise AdifError(f"ADIF record {len(records) + 1} ({cur.get('CALL', '?')}) has no <EOR>: the file is incomplete")
     return records

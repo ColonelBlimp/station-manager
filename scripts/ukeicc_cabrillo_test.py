@@ -200,7 +200,8 @@ class Converter(unittest.TestCase):
 
     def test_truncated_adif_stops_the_export(self):
         whole = rec("G4ABC", "1", district="OX")
-        for text in [whole.replace("<EOR>", ""), whole[:whole.index("G4ABC") + 2]]:
+        partial = [whole + "<CALL:", whole + "<", whole + "<CALL:5", whole + "<EO"]  # cut inside a tag
+        for text in [whole.replace("<EOR>", ""), whole[:whole.index("G4ABC") + 2]] + partial:
             code, lines, err = run(text)
             self.assertEqual(code, 1, text)
             self.assertEqual(lines, [])

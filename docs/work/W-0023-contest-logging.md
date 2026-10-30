@@ -802,7 +802,9 @@ deliberate subset of the design above, not its implementation:
   separate logbook per event is not required.
 - **Daemon:** `contest_serial_allocation` (log schema 19): one row per serial handed out, per logbook,
   `CONTEST_ID` and occurrence, durable write; `POST /v1/contest-serial` (archive-guarded). A draft
-  keeps its serial whatever other drafts take in between (Codex review 2026-10-30, finding 3). `SRX_STRING` added to `types.QsoDetails`; `CONTEST_ID`, `STX`, `SRX` already existed.
+  keeps its serial whatever other drafts take in between (Codex review 2026-10-30, finding 3). A new
+  serial goes above any Sent # already saved for the occurrence, so a serial typed by hand is never
+  handed out again (Codex review of `b2ad69dd`). `SRX_STRING` added to `types.QsoDetails`; `CONTEST_ID`, `STX`, `SRX` already existed.
 - **Phone / CW form:** a Contest toggle with the contest ID (default `UKEIDXSSB`) and start date,
   remembered per browser; no serial is allocated, and Log stays disabled (a typed Sent # included),
   without a valid contest ID (the daemon's rule: 1–40 of `A-Z 0-9 _ -`) and start date; both stay
