@@ -21,9 +21,9 @@ import (
    A raw BEGIN IMMEDIATE on that file is the barrier that holds a real write
    (a Phone / CW submit, a logbook deletion) once it is admitted.
 
-     RG   the release gate: in a shipped build (api.DefaultChangeRoutesReleased
-          at its shipped value) the production router serves none of the
-          /v1/default-logbook routes.
+     RG   the release gate (W-0024 slice 5c): in a shipped build
+          (api.DefaultChangeRoutesReleased at its shipped value) the production
+          router serves every /v1/default-logbook route, each archive-guarded.
      AD1  an admitted live submit to A, held at its write, finishes on A
           before the change is persisted; the change waits for it. Later live
           submits are refused and write nothing; a submit naming another
@@ -36,8 +36,8 @@ import (
           start applies it and the status says so.
 */
 
-// releaseRoutes registers the default-change routes for this test's
-// generations, as a build with W-0024 slices 4 and 5 would.
+// releaseRoutes pins the default-change routes registered for this test's
+// generations, whatever the build's value (released since W-0024 slice 5c).
 func releaseRoutes(t *testing.T) {
 	t.Helper()
 	prev := api.DefaultChangeRoutesReleased
@@ -154,27 +154,61 @@ func answered(t *testing.T, what string, ch chan httpResult) httpResult {
 
 // ---- RG ----------------------------------------------------------------------
 
-func TestDefaultChange_RG_UnreleasedInAShippedBuild(t *testing.T) {
-	if api.DefaultChangeRoutesReleased {
-		t.Fatal("api.DefaultChangeRoutesReleased is true: the shipped build must keep the routes unregistered until W-0024 slices 4 and 5")
+func TestDefaultChange_RG_ReleasedInAShippedBuild(t *testing.T) {
+	if !api.DefaultChangeRoutesReleased {
+		t.Fatal("api.DefaultChangeRoutesReleased is false: W-0024 slice 5c releases the routes in a shipped build")
 	}
 	withRestartPort(t)
 	f := newChangeFixture(t)
 	d := f.mustStart(t)
-	for _, route := range []struct{ method, path, body string }{
-		{http.MethodGet, "/v1/default-logbook", ""},
-		{http.MethodPost, "/v1/default-logbook", `{"logbook_uuid":"` + f.uuid[f.b] + `","believed_default_uuid":"` + f.uuid[f.a] + `"}`},
-		{http.MethodPost, "/v1/default-logbook/cancel", `{"request_id":"x"}`},
-		{http.MethodPost, "/v1/default-logbook/confirm", `{"request_id":"x"}`},
-		{http.MethodPost, "/v1/default-logbook/retry-cleanup", `{"request_id":"x"}`},
+	guard := map[string]string{"X-SM-Archive-Id": f.archive}
+	other := map[string]string{"X-SM-Archive-Id": "01a0e79a-7b32-7cf5-a72c-57cf437a362d"}
+
+	// The status is served, naming the effective default and nothing in play.
+	code, body := apiCallHeaders(t, d, http.MethodGet, "/v1/default-logbook", "", nil)
+	if code != http.StatusOK {
+		t.Fatalf("GET /v1/default-logbook = %d %s; want 200", code, body)
+	}
+	var status types.DefaultChangeStatus
+	if err := json.Unmarshal(body, &status); err != nil {
+		t.Fatalf("status: %v (%s)", err, body)
+	}
+	if status.Effective.UUID != f.uuid[f.a] || status.Change != nil {
+		t.Fatalf("status = %+v; want effective %s, no change", status, f.uuid[f.a])
+	}
+
+	request := `{"logbook_uuid":"` + f.uuid[f.b] + `","believed_default_uuid":"` + f.uuid[f.a] + `"}`
+	stale := `{"logbook_uuid":"` + f.uuid[f.b] + `","believed_default_uuid":"` + f.uuid[f.b] + `"}`
+	for _, route := range []struct {
+		path, body, wantCode string
+		wantStatus           int
+	}{
+		// Each reaches its handler: a stale request is refused before any
+		// seal or write, and an action with nothing in play is resolved.
+		{"/v1/default-logbook", stale, "default_stale", http.StatusConflict},
+		{"/v1/default-logbook/cancel", `{"request_id":"x"}`, "already_resolved", http.StatusConflict},
+		{"/v1/default-logbook/confirm", `{"request_id":"x"}`, "already_resolved", http.StatusConflict},
+		{"/v1/default-logbook/retry-cleanup", `{"request_id":"x"}`, "already_resolved", http.StatusConflict},
 	} {
-		code, body := apiCallHeaders(t, d, route.method, route.path, route.body, map[string]string{"X-SM-Archive-Id": f.archive})
-		if code != http.StatusNotFound {
-			t.Fatalf("%s %s = %d %s; want 404 in a shipped build", route.method, route.path, code, body)
+		code, body := apiCallHeaders(t, d, http.MethodPost, route.path, route.body, guard)
+		if code != route.wantStatus || !strings.Contains(string(body), `"`+route.wantCode+`"`) {
+			t.Errorf("POST %s = %d %s; want %d %s", route.path, code, body, route.wantStatus, route.wantCode)
+		}
+		// Every mutation is archive-guarded: another archive's tab is refused.
+		probe := route.body
+		if route.path == "/v1/default-logbook" {
+			probe = request
+		}
+		code, body = apiCallHeaders(t, d, http.MethodPost, route.path, probe, other)
+		if code != http.StatusConflict || !strings.Contains(string(body), `"archive_mismatch"`) {
+			t.Errorf("POST %s from another archive = %d %s; want 409 archive_mismatch", route.path, code, body)
 		}
 	}
 	if d.cfgSvc.Snapshot().DefaultLogbookChange != nil {
 		t.Fatal("a record was written")
+	}
+	if restartRequested.Load() {
+		t.Fatal("a restart was requested")
 	}
 }
 

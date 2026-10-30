@@ -1195,7 +1195,7 @@ func (d *daemon) initHTTP() error {
 	d.archives.SetSmcloudSupport(d.support.stateFor)
 	d.server.SetArchiveManager(d.archives)
 	// The default logbook's change at an attended restart (ADR 0097): the same
-	// manager, seals and restart port; its routes stay unregistered until
+	// manager, seals and restart port; its routes are registered when
 	// released (api.DefaultChangeRoutesReleased).
 	d.liveEntry = api.NewLiveEntryGate()
 	d.server.SetLiveEntryGate(d.liveEntry)

@@ -48,10 +48,13 @@ that archive first.
   callsign; any valid callsign is accepted. Adding a logbook does not
   switch archives, does not make it the Default, and turns on no uploads you
   did not choose.
-- **Live contacts keep going to the Default logbook.** A new logbook receives
-  QSOs by import or restore (see [Importing](#importing)). A logbook whose
-  callsign differs from your station callsign cannot receive live contacts
-  yet.
+- **Live contacts — Phone / CW and FT8 — go to the Default logbook.** Another
+  logbook receives QSOs by import or restore (see [Importing](#importing)),
+  or becomes the Default with **Set as default** (below).
+- **Set as default** appears on each logbook other than the Default. It can
+  be used on a logbook whose callsign matches the Default's; on one with
+  another callsign it is unavailable, and its tooltip says why — such a
+  logbook cannot become the Default.
 - **Upload to SM Cloud** appears, unticked, only when a new logbook in this
   archive can upload to SM Cloud: the station has an SM Cloud account, and
   the server's support for keeping logbooks apart has been checked (see
@@ -60,8 +63,64 @@ that archive first.
   the **Forwarding** tab.
 - **Edit** changes the name and the description; clearing the description
   removes it. A logbook's callsign cannot be changed.
-- **Delete** works only on an empty logbook that is not the Default; the
-  button's tooltip says why when it is unavailable.
+- **Delete** works only on an empty logbook that is not the Default, and not
+  on a logbook a default change still names; the button's tooltip says why
+  when it is unavailable.
+
+### Changing the Default logbook
+
+**Set as default** restarts Station Manager, as switching archives does: the
+new Default takes effect when the daemon starts again, and every open window
+reloads. Before you confirm:
+
+- stop any transmission and **disarm FT8**. The change is refused while FT8
+  is armed or running, or the tune carrier is keyed, and it says which. It is
+  also refused while a QSO is still being logged in this window, while an
+  archive switch or a Settings save is in progress, and while another default
+  change is unresolved.
+- read the confirmation. It names the logbook live contacts will go to after
+  the restart. If this window holds a QSO you are typing on Phone / CW, even a
+  partly typed one, it is named: **OK** discards it and restarts, **Cancel**
+  keeps it and changes nothing. If a Log's outcome is unknown, the
+  confirmation says the QSO **may already be logged**: check the current
+  Default's Logbook before logging it again. Unsaved Settings edits in this
+  window are named too: the reload loses them.
+- **every other open window loses its unlogged work** — a QSO typed but not
+  logged and unsaved Settings changes — exactly as for an archive switch.
+  Logged QSOs are never affected.
+- if the current Default uploads to SM Cloud and its binding has not yet been
+  adopted, reserved or created on its own identity, the confirmation says so:
+  its existing uploads continue, but to start its adoption later you make it
+  the Default again. A binding that is already adopted, reserved or created
+  on its identity is not affected, and no note is shown.
+
+From the request until the restart, logging and transmitting in this window
+are paused, and a banner at the top of the main app views says so (the
+standalone Map view has none). The page reloads
+on its own when the daemon is back.
+
+If the change does not complete normally, **Settings → Logbooks** shows what
+happened above the list, and the banner links there:
+
+- *applies at the next restart*, or *not applied at this start and still
+  pending* with the reason: **Cancel change** withdraws it.
+- *not yet confirmed on disk*: the change was cancelled, withdrawn or
+  abandoned, but if power is lost before that is confirmed, the change may
+  still apply at a later start. **Confirm** writes it again.
+- *Cleanup pending*: the change applied, but its record has not been removed
+  durably; **Retry cleanup** removes it (the next start also does). Set as
+  default and archive switching are unavailable until it is.
+- a change that was cancelled, withdrawn or not applied is reported with its
+  reason, and needs nothing from you.
+
+Each action names the change you were shown and is sent once. If its answer
+is lost, Station Manager reads the state again rather than repeating it.
+
+If Station Manager cannot read the state of a default change while logging
+is paused for it — when the page loads, after a restart it could not
+confirm, or while a change is pending — logging and transmitting stay
+paused, and the banner offers **Check again** and **Reload**. Once logging
+has been confirmed open, a later failed read does not pause it again.
 
 ## Creating an archive
 

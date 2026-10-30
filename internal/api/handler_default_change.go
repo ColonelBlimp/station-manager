@@ -26,11 +26,12 @@ func (s *Server) SetDefaultChanger(c DefaultChanger) { s.defaultChanger = c }
 // SetLiveEntryGate injects the live-entry gate POST /v1/qso admits through.
 func (s *Server) SetLiveEntryGate(g *LiveEntryGate) { s.liveEntry = g }
 
-// DefaultChangeRoutesReleased registers the /v1/default-logbook routes. It is
-// false in a shipped build until W-0024 slices 4 (the stale-tab guard) and 5
-// (the confirmation) land: hiding the button would not make an exposed
-// mutation safe. Read when New builds the routes; tests set it before.
-var DefaultChangeRoutesReleased = false
+// DefaultChangeRoutesReleased registers the /v1/default-logbook routes. It
+// stayed false until W-0024 slices 4 (the stale-tab guard) and 5 (the
+// confirmation and recovery) landed — hiding the button would not have made an
+// exposed mutation safe — and is released by slice 5c. Read when New builds
+// the routes; tests may set it before.
+var DefaultChangeRoutesReleased = true
 
 // registerDefaultChangeRoutes registers the default logbook's change at an
 // attended restart (ADR 0097), only when released.
