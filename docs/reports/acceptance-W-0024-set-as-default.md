@@ -490,3 +490,213 @@ deployment.**
 backup afterwards; that discards intervening data and needs the **station operator's** consent,
 and the operator chooses the outage window. Neither decision has been made. Live deployment is
 not approved.
+
+## F4 and F5 fixed — awaiting browser acceptance (2026-10-30)
+
+`ea1ee70c` (reviewer approved; clean-room review clean): **F4** — Set as default and Delete,
+unavailable for a reason, are `aria-disabled` (greyed, inert, focusable) and a click or Enter
+shows the reason as text under the row, read live; transient locks stay `disabled`. **F5** — the
+Logbook view opens on an explicit navigation target, else the operator's own earlier pick (while
+it exists), else the established effective default (the tab's context UUID), else the first;
+the dropdown records the operator's pick separately. The manual's Logbooks section updated with
+it. Failing tests first; nine reversion proofs. **Both remain fixed, awaiting browser
+acceptance**, which **invalidates candidate `43d0ed98`**: a new artifact is built after green
+CI, and A1 and the affected A2 journeys are repeated.
+
+**Rerun requirements (reviewer, 2026-10-30):** A1 (`ci:local`, one build, full hashes,
+version agreement) for the new commit; A2 in a fresh guest by the same method — the clean
+install and the rehearsal; in Firefox, **both a click and keyboard activation (Tab to the
+greyed button, then Enter and Space)** reveal the reason for an unavailable Set as default and
+an unavailable Delete **without opening a confirmation or sending a mutation** (Network panel);
+the Logbook view opening on the effective default when it is not the first logbook, a pick in
+its dropdown kept across leaving and returning, and an explicit target (Forwarding's failed
+count link) still opening its logbook. The rehearsal's two contacts take explicit Time On
+values in different minutes.
+
+## Execution log — candidate 2 (`ea1ee70c`)
+
+11. **2026-10-30 — CI and A1 step 1.** CI run 41036837352 green on `ea1ee70c` (job
+    "Releasability gate": success). Worktree `/home/mveary/sm-w0024-build2` (detached at
+    `ea1ee70c`): `git status --porcelain` empty; `git describe` `v2.0.0-alpha.5-50-gea1ee70c`;
+    `scripts/version.sh` → `2.0.0-alpha.5-50-gea1ee70c` / RPM `2.0.0~alpha.5.50.gea1ee70c`.
+    `task ci:local`: **exit 0**, "All CI gates passed locally"; 133 Go `ok` lines, none
+    `(cached)`; log `/home/mveary/sm-w0024/ci-local-2.log`. `frontend/app/dist/index.html`
+    restored from `HEAD` (alpha.3 Finding #1); `git status --porcelain` empty. The build waits for
+    the operator (private key).
+12. **A2 step 4, fresh guest (agent).** `/home/mveary/sm-guest-w0024b` (0700, absent before).
+    Image, CHECKSUM and `fedora.gpg` fetched again: "Good signature from Fedora (44)", key
+    `36F612DCF27F7D1A48A835E4DBFCF71C6D9F90A6`; `sha256sum -c` OK; image SHA-256
+    `28680fe5b371a5a82ebf43a31926e086a168e59949d03969c5093e7071f90b7f` (unchanged), read-only.
+    Domain `sm-w0024-clean2`, configuration identical to entry 3 (XML reviewed: one `passt`
+    interface, only forward `127.0.0.1:2222` → 22; no shared folders, host devices, graphics or
+    sound). First boot: Fedora Linux 44 (Cloud Edition), kernel 6.19.10; cloud-init `done`; no
+    `station-manager` package, no 9p or virtiofs mounts, `Linger=no`, nothing on 8080.
+13. **A1 step 2, build — by the operator.** First attempt exit 1: `.env` had not been copied
+    into the new worktree, and the script stopped at its key check ("requires a non-empty"),
+    building nothing. After the operator copied it (0600): exit 0. RPM
+    `station-manager-2.0.0~alpha.5.50.gea1ee70c-1.x86_64`, SHA-256
+    `6ab46bf7deaea878776f0cfe879a6edcf70f1b95d6603606330ce1fc9eecd0da` (9,676,933 bytes), PocketFFT
+    (CGO); retained as `build/private/station-manager-2.0.0~alpha.5.50.gea1ee70c-1.x86_64.rpm`
+    (0600; absent before; SHA re-verified) before the worktree was removed. Unpacked (removed
+    after): `usr/bin/smd` SHA-256
+    `d2f06f5eb520feb33f02cbf51e4989835f521e5ff7a9ef636381fc383e6b3e78`, one embedded version
+    `2.0.0-alpha.5-50-gea1ee70c`, the private marker; file list as before. Only
+    `frontend/app/dist/index.html` was rewritten. `.env` copy `shred -u` (btrfs caveat), worktree
+    removed and pruned.
+14. **A2 step 5, install (agent; §2–§3).** In-guest SHA `6ab46bf7…e3b78`… matching; `dnf install`
+    exit 0 ("skipped OpenPGP checks", "Complete!"); `smd` SHA `d2f06f5e…3e78` matching; enable
+    `--now` 0; self-linger "Access denied" (no `polkit`; `sudo loginctl enable-linger smtest` →
+    `Linger=yes`, the recorded lane deviation); "SM is running."; healthz ok; `/v1/version`
+    `2.0.0-alpha.5-50-gea1ee70c`, schema 18 clean, Home; pre-setup status
+    `{"effective":{"id":1,"uuid":""…}}`; every lookup seeded disabled. Capture started
+    11:01:27Z (same command and filter as entry 7) before any callsign; tunnel 18080 open;
+    fresh profile `/home/mveary/sm-guest-w0024b/ff-smtest`.
+15. **A2 step 5, clean-install checks — candidate 2 (operator drove the UI; screenshots
+    `Screenshot_20261030_130754` … `_131941`).** Welcome only, amber banner (F1, unfixed); **a
+    spaces-only callsign keeps Save disabled** (operator) — the candidate-1 gap now exercised;
+    `7Q5@MLV` → "Invalid callsign format", no request; ` 7q5mlv ` saved as `'7Q5MLV'`; "Setup
+    complete" with both journeys, the banner cleared by itself (`PUT config` then re-reads);
+    reload: normal app, header "Logbook Default (0)", badge `2.0.0-alpha.5-50-gea1ee70c`;
+    daemon restart by the agent at 11:10:32Z (instance `dmi4dlv57ltt` → `dmi4kstyfosq`,
+    `setup_complete` true) and reload, no banner. **F4 on Delete (Default):** a click, **Enter**
+    and **Space** each showed "The Default logbook can’t be deleted" under the row, with no dialog
+    and no `DELETE` request (Network panel); keyboard activation reached the greyed button; a
+    visible focus ring was not separately confirmed. Manual (`/manual/`): the three `ea1ee70c`
+    texts present. First QSO `POST qso?logbook=1` 201, "Default (1)".
+16. **A2 step 6, rehearsal — candidate 2 (`_132119` … `_134127`).** Lookups seeded disabled. T
+    (id 2) and P (id 3) created; every destination for every logbook unbound and disabled.
+    - **F4 on Set as default (P):** a click, Enter and Space each showed "Its callsign 7Q5MLV/P is
+      not the station callsign 7Q5MLV: only a logbook for the station callsign can be the
+      default." under P's row, with no dialog and no `POST`. **AC-2 met** (visible reason).
+    - **AC-3** confirmation as candidate 1; **AC-4** Cancel: no request, instance `dmi4kstyfosq`
+      and status unchanged, `Draft` kept.
+    - **AC-5/AC-6:** `POST default-logbook` 202; exit 11:27:24.57Z, down ≈5.3 s, new instance
+      `dmi4xtk7u53y` serving T, settled; window B reloaded onto T (entry discarded). Window A had
+      `Draft` still typed: Firefox's leave prompt appeared (**O8**); **Stay on Page** left the page
+      gated under the overlay — "The daemon restarted with another default logbook; this page must
+      reload to rebind." — with logging paused (**O9**: archive-centred heading and gate line).
+      Then **Reload now** raised the leave prompt, and **Leave Page did not reload** — the page
+      stayed (session timer kept running), repeatedly (**F6**). **F5 then Leave Page reloaded
+      it**: "“W-0024 Acceptance” is now the default."
+    - **F5 (Logbook view):** window C reloaded after the switch and **opened on "W-0024
+      Acceptance (7Q5MLV)"** — the effective default, second in the list ("No QSOs in this
+      logbook."). After choosing Default, leaving to Phone / CW and returning, it **opened on
+      Default** (the operator's pick kept) while T was effective. An explicit target (Forwarding's
+      failed-count link) was **not exercised** — the guest has no forwarders.
+    - **AC-7:** two contacts in T at 11:35:23 (20m) and 11:35:43 (40m) — the form filled Time On,
+      so again the same minute (both stored; bands differ). A **third** contact, Time On typed
+      **11:37:00** (20m, same band as the first, different minute), stored as `113700` with no
+      duplicate warning: **minute separation exercised and passed**. T 3, Default 1.
+    - **AC-10:** T's Delete unavailable while effective; P deleted (soft).
+    - **AC-8:** exit 11:41:14.00Z, down ≈5.5 s, new instance `dmi58emojl78` serving Default,
+      settled; window B "Logbook Default (1)". The transient pending state again not observed
+      (R3), even at 0.25 s sampling.
+    - *Network measurement:* capture 11:01:27Z–11:41:56Z, same filter: **no traffic matching TCP
+      port 80/443 excluding 127.0.0.1 was observed** (24-byte file). (The candidate-1 positive
+      control applies to the identical command and filter.)
+17. **A2 step 7 and disposal — candidate 2.** Evidence first:
+    `/home/mveary/sm-w0024/guest-evidence-2` (0700; 38 files in `MANIFEST.sha256`, 31
+    screenshots). Daemon log: 7,182 `info`, **no `error`**, one `warn` (11:01:05.685Z, before
+    setup: "could not record the default logbook in the archive" — O7, as before). The daemon was
+    **stopped before** the working directory was hashed; after `disable --now`, `dnf remove`
+    (exit 0, unit `not-found`, `/usr/bin/smd` absent) the working directory is **byte-identical**
+    (5 files) — candidate 1's method limitation resolved. Read-only after: integrity ok; QSOs
+    Default 1, T 3 (`113523`, `113543`, `113700`); P soft-deleted; **`qso_upload` rows 0**. Guest
+    destroyed and undefined with its storage; tunnel ended with it; directory removed; no domain
+    left.
+
+### Candidate 2 (`ea1ee70c`) — A1 and A2 result
+
+**A1: complete** (CI and `ci:local` green; one build; full hashes; version agreement across RPM,
+binary, `/v1/version`, badge). **A2: procedure complete, with findings.** F4 and F5 now pass in
+the browser: **AC-2 met**; the Logbook view opens on the effective default and keeps a
+deliberate pick. Not exercised: an explicit navigation target (no forwarders in the guest; covered
+by tests). New:
+
+| Item | Status | Note |
+|---|---|---|
+| **F6** — the overlay's **Reload now** does not reload after Firefox's **Leave Page** while Settings holds unsaved edits | **candidate finding; severity for the reviewer** | The page stays gated (logging paused — the safety property holds) but its own way out fails; the browser's reload (F5 → Leave Page) works. Both paths reload the same way in code; the cause is not yet established. Likely shared with archive switching (same reload path); not yet verified. |
+| **O8** — Set as default with unsaved Settings edits: the confirmation names them, then Firefox's leave prompt asks again on the reload | observation | The designed backstop; a double prompt. |
+| **O9** — the post-restart overlay's heading and first sentence, and the Settings gate line, speak of an archive switch | observation (wording) | The reused reload latch, with default-specific detail (accepted 2026-10-30). |
+
+### Reviewer rulings on candidate 2 (2026-10-30)
+
+- **F6 is a P2 recovery defect and blocks acceptance.** The gate preserved safety and F5 is a
+  demonstrated workaround, which limits severity; but the recovery the application offers
+  (Reload now → Leave Page) repeatedly failed — an unresolved supported journey under the gate
+  (`docs/dogfood-acceptance.md`, acceptance boundary). Fix before acceptance; only the station
+  operator could waive it. Required outcome: after Stay on Page the stale tab stays gated with its
+  unsaved edits intact; Reload now → Leave Page actually reloads, establishes the effective
+  default and restores usable logging; choosing Stay again preserves the gate and a later retry
+  still works; archive switching exercised as a regression case (its involvement unverified).
+  Start from a reproducible Firefox failure; the regression assertion goes at the boundary the
+  investigation identifies (the existing gate test only counts calls to a replacement reload
+  function and cannot prove navigation completed); then the reversion proof and a packaged-browser
+  rerun — a third artifact.
+- **F4 / AC-2: satisfied.** Visible keyboard focus remains unverified — check it next run.
+- **F5:** effective-default selection and deliberate-pick preservation passed; the
+  explicit-target **browser** case remains not exercised (automated coverage does not satisfy the
+  required browser check).
+- **O8, O9:** non-blocking follow-ups on present evidence.
+- **Candidate 2: A1 complete; A2 procedure complete with a blocking finding (F6)** — not an
+  acceptance pass.
+- **A3 on hold**; the reviewer recommends keeping the accepted candidate and restoring the
+  pre-test backup afterwards; the station operator must explicitly consent to discarding all
+  intervening writes and choose the outage window. Live deployment not approved.
+
+## F6 investigation and fix (2026-10-30)
+
+**Reproduced outside the app** — headless Firefox 159.0 over WebDriver BiDi, a bare page whose
+`beforeunload` guard always prompts, prompt answers driven explicitly (probe and output kept at
+`/home/mveary/sm-w0024/f6-probe/`):
+
+| Sequence | Result |
+|---|---|
+| `location.reload()`, Leave | reloaded (control) |
+| `location.reload()` Stay, then `location.reload()` Leave | **same page** (F6) |
+| `location.reload()` Stay, guard removed, `location.reload()` | **same page, no prompt** |
+| `location.reload()` Stay, then `location.assign(href)` / `location.href = href`, Leave | reloaded |
+| `location.reload()` Stay, `location.replace(href)` Stay, `location.replace(href)` Leave | Stay kept the page each time; Leave reloaded |
+| `location.replace(href)` Stay, Stay, Leave | as above |
+| `location.replace(href)` Leave, no prior Stay | reloaded |
+
+**Cause (observed, not cited):** once a `location.reload()` has been refused at the prompt, a later
+`location.reload()` in the same document never completes in this Firefox — even with the guard
+removed — while a navigation to the same address does, still honouring the prompt. The app's two
+reload call sites both used `location.reload()`: `lib/utils/reload.ts` (Settings' Restart
+daemon) and a private copy in `lib/config/archives.svelte.ts` (the gate's **Reload now**, the
+default-change and archive-switch rebinds). In F6 the first reload (the rebind) was refused, so
+**Reload now** — a second `location.reload()` — could never complete; the browser's own reload
+(F5) is not a script reload and worked. Archive switching uses the same private copy and is
+therefore exposed to the same failure (to confirm in the packaged rerun).
+
+**Fix (test-first):** one seam. `lib/utils/reload.ts` navigates with `location.replace` to the
+current address without its fragment (a fragment-only change would scroll, not reload); every
+SPA response is `Cache-Control: no-cache` (`internal/api/spa.go`), so the navigation refetches as
+a reload would. The archives store reloads through that seam. **Regression assertions at that
+boundary:** `lib/utils/reload.test.ts` (replace, never reload; query kept; fragment dropped) and
+`lib/config/archives.reload.svelte.test.ts` (the store's Reload now goes through the seam).
+**Reversion proofs:** reload restored → all three seam cases fail; fragment kept → the fragment
+case fails; the store bypassing the seam → its case fails. Gates: lint, format, svelte-check
+(0/0), 2,612 tests, maintainability gate. **Browser acceptance pending** a third artifact and the
+packaged rerun, which must show: after Stay the tab stays gated with its unsaved edits intact;
+Reload now → Leave reloads onto the effective default with logging usable; Stay again keeps the
+gate and a later retry works; and the same for an **archive switch** with unsaved Settings edits
+(regression case). Also to check then: visible keyboard focus (F4) and the explicit-target
+browser case (F5) — the latter needs a forwarder failed-count link in the guest.
+
+*Note:* the host rebooted at 11:54Z (after candidate 2's guest was disposed); the agent's
+scratchpad was cleared, `~/sm-w0024` (evidence) survived, and the live daemon restarted on its own
+(`active`); nothing on the live station was touched.
+
+**Review and commit (2026-10-30):** reviewer approved the fix (no blocking findings; probe accepted
+as observed Firefox 159 behaviour; dropping the fragment matches the HTML navigation algorithm).
+Committed `736ccd70` (fix and tests, Codex clean), pushed; CI run 41062947285 green. Reviewer
+additions to the packaged rerun: include **Settings → Restart daemon** (it uses the changed seam);
+for F5's explicit-target case, a guest-local HTTP responder returning 401 with a dummy QRZ key and
+the endpoint pointed at guest loopback (a closed port retries indefinitely,
+`internal/forwarding/worker/worker.go`; HTTP 401 is a terminal failure,
+`internal/forwarding/qrz/qrz.go`), a separate fixture logbook and labelled synthetic contact, and the
+actual Forwarding link clicked while its target differs from both the effective default and the
+previously selected logbook. F6 remains **fixed, awaiting packaged-browser acceptance**; A3 stays on
+hold; live deployment unapproved.
