@@ -241,6 +241,7 @@ in `46a07d07`. CI on 5b (`20fe5377`, run 41009559138) is green.
 deployment: green CI on `46a07d07` — **met** (run 41012359480 on `43d0ed98`, which contains it,
 green 2026-10-30). Deployment and acceptance testing (and any RF test) need the operator's own
 approval; none is given by the release approval. The candidate is `43d0ed98`.
+Acceptance criteria and run sheet: [record](../reports/acceptance-W-0024-set-as-default.md) — the no-RF scope and AC-1…AC-11 accepted with amendments (reviewer, 2026-10-30). **Acceptance incomplete; A3 on hold.** The isolated run of candidate `43d0ed98` found F4 (disabled reasons not visible, AC-2 partial) and F5 (the Logbook view does not open on the effective default), both to be fixed before acceptance resumes; deployment not approved.
 
 ### Slice 5 proposal (2026-10-29, for review; not ruled)
 
