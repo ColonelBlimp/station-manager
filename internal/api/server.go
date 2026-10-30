@@ -330,6 +330,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *l
 
 	// Contest
 	apiMux.HandleFunc("GET /v1/contest-dupe", s.handleContestDupe)
+	// The durable sent-serial counter (W-0023 weekend slice): a write to the
+	// active archive, so it carries the archive guard like a QSO write.
+	apiMux.Handle("POST /v1/contest-serial", s.requireArchive(http.HandlerFunc(s.handleContestSerial)))
 
 	// QSO draft support
 	apiMux.HandleFunc("GET /v1/contact-history", s.handleContactHistory)

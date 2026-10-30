@@ -732,3 +732,32 @@ describe('formatAdifRecord — QSO_DATE_OFF (midnight rollover)', () => {
         expect(formatAdifRecord({ ...baseFields, qsoDateOff: '' })).not.toContain('<QSO_DATE_OFF:');
     });
 });
+
+// W-0023 weekend slice: the contest exchange as standard ADIF fields.
+describe('formatAdifRecord — contest exchange', () => {
+    it('emits CONTEST_ID, STX, SRX and SRX_STRING before <EOR>', () => {
+        const rec = formatAdifRecord({
+            ...baseFields,
+            contest: {
+                contestId: 'UKEIDXSSB',
+                contestStart: '20261031',
+                stx: '42',
+                srx: '36',
+                srxString: 'OX',
+            },
+        });
+        expect(rec).toContain(
+            '<CONTEST_ID:9>UKEIDXSSB\n<APP_SM_CONTEST_START:8>20261031\n<STX:2>42\n<SRX:2>36\n<SRX_STRING:2>OX\n<EOR>'
+        );
+    });
+
+    it('omits the empty ones, and all of them without a contest', () => {
+        const rec = formatAdifRecord({
+            ...baseFields,
+            contest: { contestId: 'UKEIDXSSB', contestStart: '', stx: '7', srx: '', srxString: '' },
+        });
+        expect(rec).toContain('<STX:1>7');
+        expect(rec).not.toContain('<SRX');
+        expect(formatAdifRecord(baseFields)).not.toMatch(/CONTEST_ID|<STX|<SRX/);
+    });
+});

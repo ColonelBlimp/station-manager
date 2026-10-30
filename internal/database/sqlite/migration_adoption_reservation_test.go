@@ -63,8 +63,8 @@ func TestMigrate0016_Down_RefusesToEraseAReservationOrAnAdoption(t *testing.T) {
 				if _, err := svc.DowngradeLogSchemaTo(target); err == nil {
 					t.Fatalf("downgrade to %d succeeded; want it refused", target)
 				}
-				if v := schemaVersion(t, svc); v != 18 {
-					t.Fatalf("schema version = %d after a refused downgrade, want 18", v)
+				if v := schemaVersion(t, svc); v != 19 {
+					t.Fatalf("schema version = %d after a refused downgrade, want 19", v)
 				}
 				if n := countT(t, svc, `SELECT COUNT(*) FROM `+schemaMigrationsTable(MigrationSetLog)+` WHERE dirty = 1`); n != 0 {
 					t.Fatal("a refused downgrade left the schema dirty")

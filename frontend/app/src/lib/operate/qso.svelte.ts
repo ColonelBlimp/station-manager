@@ -11,6 +11,7 @@ import { usesSignalReport } from '../utils/mode';
 import { rig, rigReady } from './rig.svelte';
 import { toasts } from '../ui/toasts.svelte';
 import { commentHistory } from './commentHistory.svelte';
+import { contest, contestId, contestStart } from './contest.svelte';
 
 export interface QsoDraft {
     callsign: string;
@@ -29,7 +30,15 @@ export interface QsoDraft {
     rig: string; // ADIF RIG — contacted station's rig / working conditions
     notes: string; // ADIF NOTES — operator's PRIVATE notes (distinct from COMMENT)
     rxPwr: string; // ADIF RX_PWR — contacted station's TX power in watts (their signal, as received)
+    // The contest exchange (W-0023 weekend slice), shown and sent only in contest mode.
+    stx: string; // ADIF STX — the serial sent, allocated when the callsign is committed
+    srx: string; // ADIF SRX — the serial received
+    srxString: string; // ADIF SRX_STRING — the district received (UK/EI entrants)
 }
+
+/** What the submit seam receives: the draft plus the contest it belongs to
+ *  ('' outside contest mode, when the exchange fields are blank too). */
+export type SubmittedQso = QsoDraft & { contestId: string; contestStart: string };
 
 /**
  * RST default values — voice modes use the two-digit Readability/Strength
@@ -59,6 +68,9 @@ function blank(): QsoDraft {
         rig: '',
         notes: '',
         rxPwr: '',
+        stx: '',
+        srx: '',
+        srxString: '',
     };
 }
 
@@ -103,6 +115,7 @@ function tickOff(): void {
 }
 
 export function startQso(): void {
+    void ensureSerial(); // contest mode: this QSO's sent serial (a re-Tab retries a failed one)
     if (qsoClock.started) return; // typo-fix re-Tab: the QSO already began
     qsoClock.started = true;
     qsoClock.ticking = true;
@@ -110,6 +123,81 @@ export function startQso(): void {
     stampOn();
     tickOff();
     ticker = setInterval(tickOff, 1_000);
+}
+
+// --- Contest serial (W-0023 weekend slice) ---------------------------------
+// Committing the callsign of a contest QSO consumes the next sent serial for
+// good — duplicate, abandoned or never saved, the daemon never hands it out
+// again. The draft key ties a retry to this draft, so a lost response gets
+// the same number back rather than consuming another; the next draft gets a
+// new key. Injected like the submit seam (ADR 0045).
+
+export type SerialResult = { ok: true; serial: number } | { ok: false; message: string };
+type SerialFn = (contestId: string, start: string, draftKey: string) => Promise<SerialResult>;
+let allocateSerial: SerialFn | null = null;
+let draftKey = '';
+// The draft whose request is out; another draft (after a Clear) is never held up by it.
+let pendingKey = '';
+// The contest occurrence this draft's serial belongs to, fixed at its first
+// allocation: changing the contest ID or start mid-draft cannot file the number
+// under another event.
+// $state: the card locks the contest controls once a draft is bound — and only
+// then, so a bad start date can be corrected mid-QSO before any serial exists.
+const draftContest = $state({ id: '', start: '' });
+
+/** This draft's serial is (being) allocated under a fixed contest occurrence. */
+export function contestBound(): boolean {
+    return draftContest.id !== '';
+}
+
+function validOccurrence(o: { id: string; start: string }): boolean {
+    return o.id !== '' && o.start !== '';
+}
+
+/** The occurrence the draft would be logged under: its bound one, else the form's. */
+function draftOccurrence(): { id: string; start: string } {
+    return contestBound() ? { ...draftContest } : { id: contestId(), start: contestStart() };
+}
+
+export function setSerialAllocator(fn: SerialFn | null): void {
+    allocateSerial = fn;
+}
+
+async function ensureSerial(): Promise<void> {
+    if (!contest.on || allocateSerial === null || draft.stx !== '') return;
+    if (draftKey === '') {
+        if (contestId() === '') {
+            toasts.error('Set the contest ID (letters, digits, - or _) to allocate serials.');
+            return;
+        }
+        if (contestStart() === '') {
+            toasts.error('Set the contest start date (YYYY-MM-DD) to allocate serials.');
+            return;
+        }
+        draftKey = crypto.randomUUID();
+        Object.assign(draftContest, { id: contestId(), start: contestStart() });
+    }
+    const key = draftKey;
+    if (pendingKey === key) return;
+    pendingKey = key;
+    let res: SerialResult;
+    try {
+        res = await allocateSerial(draftContest.id, draftContest.start, key);
+    } catch {
+        res = { ok: false, message: 'request failed' };
+    } finally {
+        if (pendingKey === key) pendingKey = '';
+    }
+    // Cleared while the request was out: that number stays consumed (a gap),
+    // and never lands in the next draft.
+    if (key !== draftKey) return;
+    if (res.ok) {
+        if (draft.stx === '') draft.stx = String(res.serial);
+        return;
+    }
+    toasts.error(
+        `No serial allocated (${res.message}). Tab out of the callsign to try again, or type the Sent # you send.`
+    );
 }
 
 /** Operator edited Date/Time Off by hand — stop ticking over their value. */
@@ -218,6 +306,8 @@ export function resetDraft(): void {
 export function clearDraft(): void {
     resetDraft();
     resetClock();
+    draftKey = '';
+    Object.assign(draftContest, { id: '', start: '' });
     submitState.error = '';
     submitState.duplicate = false;
     submitState.uncertain = false;
@@ -238,6 +328,10 @@ const TIME_RE = /^\d{2}:\d{2}(:\d{2})?$/;
 // backtracks quadratically on a huge malformed paste and would freeze the reactive
 // draftProblems() check (codex 21aa0c29 P2, ReDoS). Keep this form.
 const RX_PWR_RE = /^(?:\d+(?:\.\d*)?|\.\d+)$/;
+// The contest exchange: serials are digits; a UK/EI district is two letters,
+// or '--' when it was not copied.
+const SERIAL_RE = /^\d{1,5}$/;
+const DISTRICT_RE = /^(?:[A-Za-z]{2}|--)$/;
 
 export interface DraftProblems {
     callsign: boolean;
@@ -248,6 +342,9 @@ export interface DraftProblems {
     dateOff: boolean;
     timeOff: boolean;
     rxPwr: boolean;
+    stx: boolean;
+    srx: boolean;
+    srxString: boolean;
 }
 
 /** Per-field validity (true = malformed) for the card's red outlines. */
@@ -272,6 +369,20 @@ export function draftProblems(): DraftProblems {
         dateOff: bad(DATE_RE, draft.dateOff),
         timeOff: bad(TIME_RE, draft.timeOff),
         rxPwr: bad(RX_PWR_RE, draft.rxPwr),
+        ...exchangeProblems(bad),
+    };
+}
+
+// Outside contest mode the exchange fields are hidden and never sent, so they
+// never flag.
+function exchangeProblems(
+    bad: (re: RegExp, v: string) => boolean
+): Pick<DraftProblems, 'stx' | 'srx' | 'srxString'> {
+    if (!contest.on) return { stx: false, srx: false, srxString: false };
+    return {
+        stx: bad(SERIAL_RE, draft.stx),
+        srx: bad(SERIAL_RE, draft.srx),
+        srxString: bad(DISTRICT_RE, draft.srxString),
     };
 }
 
@@ -282,6 +393,10 @@ export function draftProblems(): DraftProblems {
 // invariant.)
 export function canLog(): boolean {
     if (draft.callsign.trim() === '' || draft.dateOn === '' || draft.timeOn === '') return false;
+    // The serial sent is the exchange, and the occurrence decides which event the
+    // contact (and that serial) belongs to — a typed serial needs it too.
+    if (contest.on && (draft.stx.trim() === '' || !validOccurrence(draftOccurrence())))
+        return false;
     const p = draftProblems();
     return !Object.values(p).some(Boolean);
 }
@@ -295,7 +410,7 @@ export function canLog(): boolean {
 // failure on a write) — the QSO may be in the log.
 export type SubmitResult =
     { ok: true } | { ok: false; message: string; duplicate?: boolean; uncertain?: boolean };
-type SubmitFn = (qso: QsoDraft, opts?: { force?: boolean }) => Promise<SubmitResult>;
+type SubmitFn = (qso: SubmittedQso, opts?: { force?: boolean }) => Promise<SubmitResult>;
 let submit: SubmitFn | null = null;
 
 export function setSubmit(fn: SubmitFn): void {
@@ -352,6 +467,21 @@ export function dismissDuplicate(): void {
     submitState.duplicate = false;
 }
 
+function submittedSnapshot(): SubmittedQso {
+    if (!contest.on) {
+        return { ...draft, stx: '', srx: '', srxString: '', contestId: '', contestStart: '' };
+    }
+    const occurrence = draftOccurrence();
+    return {
+        ...draft,
+        stx: draft.stx.trim(),
+        srx: draft.srx.trim(),
+        srxString: draft.srxString.trim().toUpperCase(),
+        contestId: occurrence.id,
+        contestStart: occurrence.start,
+    };
+}
+
 export async function logDraft(force = false): Promise<boolean> {
     // The CAT/rig gate is enforced HERE, not only on the buttons — a
     // button-level-only guard grew a bypass once already (the duplicate
@@ -362,6 +492,13 @@ export async function logDraft(force = false): Promise<boolean> {
         submitState.error = blocked;
         toasts.error(blocked);
         return false;
+    }
+    // Contest completion is captured ONCE, at the first Log press: freezing the
+    // ticking Time Off keeps a retry from moving the contact's end time (W-0023
+    // ruling C). Outside contest mode the clock behaves as it always has.
+    if (contest.on && qsoClock.ticking) {
+        tickOff(); // now, not the last tick: a press just past a minute is that minute
+        holdOffTimes();
     }
     stampOff(); // QSO end = now, unless the operator entered one
     const call = draft.callsign.trim().toUpperCase();
@@ -374,7 +511,7 @@ export async function logDraft(force = false): Promise<boolean> {
     submitState.duplicate = false;
     let res: SubmitResult;
     try {
-        res = (await submit?.({ ...draft }, { force })) ?? { ok: true };
+        res = (await submit?.(submittedSnapshot(), { force })) ?? { ok: true };
     } catch {
         res = { ok: false, message: 'Submit failed unexpectedly — the QSO was NOT logged.' };
     } finally {

@@ -284,6 +284,13 @@ The station-global archive catalogue (`config.md` §3): the archive the daemon s
 - **Response:** **200** `{"duplicate": bool}`.
 - **Errors:** 400 `missing_required_param`/`invalid_id`/`invalid_field_value`; 404 `logbook_not_found`; 500 `db_error`.
 
+### `POST /v1/contest-serial`
+- **Purpose:** The durable sent-serial counter for contest logging (W-0023 weekend slice). The Phone / CW form calls it when a contest QSO's callsign is committed. The serial is consumed for good: abandoned, duplicate or never saved, it is never handed out again, so the sequence may have gaps but never repeats. Each allocation is a row in `contest_serial_allocation` (log schema 19), per (logbook, contest, occurrence), written durably across a power loss; the next serial is the highest so far plus one.
+- **Gating:** Archive guard (`X-SM-Archive-Id`, like a QSO write).
+- **Request:** Query `logbook` (int, **req**), `contest` (**req**, the ADIF `CONTEST_ID`, upper-cased, 1–40 of `A-Z 0-9 _ -`), `start` (**req**, the occurrence: the event's start date `YYYYMMDD`, which the QSO also carries as `APP_SM_CONTEST_START`; each edition, or a dry run under another date, is its own sequence), `draft` (**req**, 1–64 characters: the form's draft key). A draft keeps its serial: asking again (a lost response) gets the same number back, whatever other drafts took in between; a new draft gets the next one.
+- **Response:** **200** `{"serial": n}`, starting at 1.
+- **Errors:** 400 `invalid_id`/`invalid_field_value`; 404 `logbook_not_found`; 409 from the archive guard; 500 `db_error`.
+
 ### `GET /v1/contact-history`
 - **Purpose:** "Worked this callsign before, and where?" — recent-contacts panel.
 - **Gating:** Always-on.

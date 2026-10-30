@@ -187,6 +187,20 @@ export interface AdifQsoFields {
      * stays minimal for the common case.
      */
     appSmRequestQsl?: boolean;
+
+    /**
+     * The contest exchange (W-0023 weekend slice): ADIF CONTEST_ID,
+     * APP_SM_CONTEST_START (the occurrence, YYYYMMDD), STX (serial
+     * sent), SRX (serial received), SRX_STRING (district received). Each is
+     * omitted when empty.
+     */
+    contest?: {
+        contestId: string;
+        contestStart: string;
+        stx: string;
+        srx: string;
+        srxString: string;
+    };
 }
 
 // Reused across every tag emit; module-scope so we don't allocate one
@@ -378,6 +392,18 @@ export function formatAdifRecord(f: AdifQsoFields): string {
         lines.push(adifTag('APP_SM_REQUEST_QSL', 'Y'));
     }
 
-    lines.push('<EOR>');
+    lines.push(...contestTags(f.contest), '<EOR>');
     return lines.join('\n');
+}
+
+function contestTags(c: AdifQsoFields['contest']): string[] {
+    if (c === undefined) return [];
+    const pairs: Array<[string, string]> = [
+        ['CONTEST_ID', c.contestId],
+        ['APP_SM_CONTEST_START', c.contestStart],
+        ['STX', c.stx],
+        ['SRX', c.srx],
+        ['SRX_STRING', c.srxString],
+    ];
+    return pairs.filter(([, v]) => v !== '').map(([tag, v]) => adifTag(tag, v));
 }

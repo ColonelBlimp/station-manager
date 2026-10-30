@@ -22,8 +22,8 @@ const (
 
 func TestMigrate0017_AdoptionAccount_UpAndDown(t *testing.T) {
 	svc := testService(t)
-	if v := schemaVersion(t, svc); v != 18 {
-		t.Fatalf("schema version = %d, want 18", v)
+	if v := schemaVersion(t, svc); v != 19 {
+		t.Fatalf("schema version = %d, want 19", v)
 	}
 	seedSmcloudBinding(t, svc)
 	if n := countT(t, svc, `SELECT COUNT(*) FROM logbook_destination WHERE remote_adopted_account IS NULL`); n != 1 {
@@ -56,8 +56,8 @@ func TestMigrate0017_Down_RefusesToEraseAConfirmation(t *testing.T) {
 			if _, err := svc.DowngradeLogSchemaTo(16); err == nil {
 				t.Fatal("downgrade to 16 succeeded; want it refused")
 			}
-			if v := schemaVersion(t, svc); v != 18 {
-				t.Fatalf("schema version = %d after a refused downgrade, want 18", v)
+			if v := schemaVersion(t, svc); v != 19 {
+				t.Fatalf("schema version = %d after a refused downgrade, want 19", v)
 			}
 			if n := countT(t, svc, `SELECT COUNT(*) FROM `+schemaMigrationsTable(MigrationSetLog)+` WHERE dirty = 1`); n != 0 {
 				t.Fatal("a refused downgrade left the schema dirty")

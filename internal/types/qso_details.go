@@ -30,9 +30,10 @@ type QsoDetails struct {
 	QsoComplete string `json:"qso_complete,omitempty"`
 	RstRcvd     string `json:"rst_rcvd,omitempty"`
 	RstSent     string `json:"rst_sent,omitempty"`
-	RxPwr       string `json:"rx_pwr,omitempty"` // the contacted station's transmitter power in Watts with a value greater than or equal to 0
-	SRX         string `json:"srx,omitempty"`    // contest QSO received serial number with a value greater than or equal to 0
-	STX         string `json:"stx,omitempty"`    // contest QSO transmitted serial number with a value greater than or equal to 0
+	RxPwr       string `json:"rx_pwr,omitempty"`     // the contacted station's transmitter power in Watts with a value greater than or equal to 0
+	SRX         string `json:"srx,omitempty"`        // contest QSO received serial number with a value greater than or equal to 0
+	SrxString   string `json:"srx_string,omitempty"` // contest QSO received information, e.g. the UK/EI district code
+	STX         string `json:"stx,omitempty"`        // contest QSO transmitted serial number with a value greater than or equal to 0
 	TimeOff     string `json:"time_off,omitempty"`
 	TimeOn      string `json:"time_on,omitempty"`
 	TxPwr       string `json:"tx_pwr,omitempty"` // the logging station's power in Watts with a value greater than or equal to 0

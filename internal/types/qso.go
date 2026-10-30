@@ -100,6 +100,14 @@ type Qso struct {
 	// sync carries the QSO JSON as its payload, this field is also what lets
 	// SMC answer "logged this run" without any schema addition of its own.
 	AppSmRunID string `json:"app_sm_run_id,omitempty"`
+
+	// AppSmContestStart names the contest occurrence a contest QSO belongs to
+	// (W-0023 weekend slice): the event's start date, ADIF Date YYYYMMDD,
+	// alongside CONTEST_ID — which an annual event repeats. Its sent serial was
+	// allocated in that occurrence's sequence, and the Cabrillo export selects
+	// by both. Same APP_ extension mechanism as AppSmRunID; empty outside
+	// contest mode.
+	AppSmContestStart string `json:"app_sm_contest_start,omitempty"`
 	/*
 		All the below fields are compatible with the ADI format and are populated by the adapter.
 		The only exception to this is the [xx]ID/ID fields, which are required by database functions.

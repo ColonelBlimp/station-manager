@@ -26,6 +26,7 @@
         submitState,
         draftProblems,
         qsoClock,
+        contestBound,
         draftAgeText,
         entryLock,
     } from './qso.svelte';
@@ -41,6 +42,7 @@
     import { callsignStack } from './callsignStack.svelte';
     import { commentHistory } from './commentHistory.svelte';
     import CommentField from './CommentField.svelte';
+    import { contest, contestId, contestStart } from './contest.svelte';
     import { sessionEdit } from './sessionEdit.svelte';
 
     // Contact-details disclosure (grid / QTH / rig / RX power / notes to edit; QRZ
@@ -342,6 +344,48 @@
     <!-- A disabled fieldset disables every field and button inside it: the
          entry lock (ADR 0087) in one place. -->
     <fieldset class="flex flex-col" disabled={lock !== null}>
+        <!-- Contest mode (W-0023 weekend slice): the exchange row below, the
+             sent serial allocated when the callsign is committed, and the QSO
+             logged with this CONTEST_ID. Out of the tab order: set once.
+             Locked once this QSO has its serial (it belongs to the occurrence
+             it was allocated under); editable before that, so a bad start
+             date can be corrected mid-QSO. -->
+        <div class="mb-2 flex items-center gap-x-2 text-sm text-ink">
+            <label class="flex items-center gap-x-1">
+                <input
+                    type="checkbox"
+                    tabindex={-1}
+                    bind:checked={contest.on}
+                    disabled={contestBound()}
+                    data-testid="contest-on"
+                />
+                Contest
+            </label>
+            {#if contest.on}
+                <input
+                    aria-label="Contest ID"
+                    class="input w-32 uppercase"
+                    class:input-error={contestId() === ''}
+                    tabindex={-1}
+                    spellcheck="false"
+                    bind:value={contest.id}
+                    disabled={contestBound()}
+                    data-testid="contest-id"
+                />
+                <input
+                    aria-label="Contest start date (UTC)"
+                    title="The event's start date (UTC). Each date is its own serial sequence."
+                    class="input w-28"
+                    class:input-error={contest.start !== '' && contestStart() === ''}
+                    tabindex={-1}
+                    placeholder="YYYY-MM-DD"
+                    spellcheck="false"
+                    bind:value={contest.start}
+                    disabled={contestBound()}
+                    data-testid="contest-start"
+                />
+            {/if}
+        </div>
         <div class="flex flex-row gap-x-6">
             <div class="flex flex-col">
                 <div class="flex items-end gap-x-2">
@@ -404,6 +448,53 @@
                         />
                     </div>
                 </div>
+                {#if contest.on}
+                    <div class="mt-2 flex items-end gap-x-2" data-testid="contest-exchange">
+                        <div>
+                            <label for="lc-stx" class="block text-sm font-medium text-ink"
+                                >Sent #</label
+                            >
+                            <!-- Filled when the callsign is committed; editable,
+                                 but out of the tab order: the number is already
+                                 the one to send. -->
+                            <input
+                                id="lc-stx"
+                                class="input w-15"
+                                class:input-error={p.stx}
+                                tabindex={-1}
+                                autocomplete="off"
+                                bind:value={draft.stx}
+                            />
+                        </div>
+                        <div>
+                            <label for="lc-srx" class="block text-sm font-medium text-ink"
+                                >Rcvd #</label
+                            >
+                            <input
+                                id="lc-srx"
+                                class="input w-15"
+                                class:input-error={p.srx}
+                                autocomplete="off"
+                                inputmode="numeric"
+                                bind:value={draft.srx}
+                            />
+                        </div>
+                        <div>
+                            <label for="lc-srx-string" class="block text-sm font-medium text-ink"
+                                >District</label
+                            >
+                            <input
+                                id="lc-srx-string"
+                                class="input w-15 uppercase"
+                                class:input-error={p.srxString}
+                                autocomplete="off"
+                                spellcheck="false"
+                                placeholder="--"
+                                bind:value={draft.srxString}
+                            />
+                        </div>
+                    </div>
+                {/if}
                 <div class="mt-2 flex items-end gap-x-2">
                     <div>
                         <label for="lc-date-on" class="block text-sm font-medium text-ink"

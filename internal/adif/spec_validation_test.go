@@ -148,6 +148,7 @@ var specField = map[string]adifType{
 	"RST_SENT":     typString,
 	"RX_PWR":       typNumber,
 	"SRX":          typInt,
+	"SRX_STRING":   typString,
 	"STX":          typInt,
 	"TIME_OFF":     typTime,
 	"TIME_ON":      typTime,
@@ -233,10 +234,11 @@ var specField = map[string]adifType{
 	"QSL_WANTED":              typBoolean,
 
 	// APP_ extension fields (type by APP_ convention)
-	"APP_SM_QSO_ID":      typString,
-	"APP_SM_RUN_ID":      typString,
-	"APP_SM_REQUEST_QSL": typBoolean,
-	"APP_QRZLOG_LOGID":   typString,
+	"APP_SM_QSO_ID":        typString,
+	"APP_SM_RUN_ID":        typString,
+	"APP_SM_CONTEST_START": typDate,
+	"APP_SM_REQUEST_QSL":   typBoolean,
+	"APP_QRZLOG_LOGID":     typString,
 }
 
 // emittedFieldNames mirrors parseToAdifString's tag resolution (prefer the

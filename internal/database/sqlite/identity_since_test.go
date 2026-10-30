@@ -46,8 +46,8 @@ func stampOf(t *testing.T, svc *Service, name string) (bool, string) {
 
 func TestMigrate0018_IdentitySince_UpAndDown(t *testing.T) {
 	svc := testService(t)
-	if v := schemaVersion(t, svc); v != 18 {
-		t.Fatalf("schema version = %d, want 18", v)
+	if v := schemaVersion(t, svc); v != 19 {
+		t.Fatalf("schema version = %d, want 19", v)
 	}
 	seedSmcloudBinding(t, svc)
 	if n := countT(t, svc, `SELECT COUNT(*) FROM logbook_destination WHERE identity_since IS NULL`); n != 1 {
@@ -274,8 +274,8 @@ func TestMigrate0018_Down_RefusesToEraseAStamp(t *testing.T) {
 				if _, err := svc.DowngradeLogSchemaTo(target); err == nil {
 					t.Fatalf("downgrade to %d succeeded; want it refused", target)
 				}
-				if v := schemaVersion(t, svc); v != 18 {
-					t.Fatalf("schema version = %d after a refused downgrade, want 18", v)
+				if v := schemaVersion(t, svc); v != 19 {
+					t.Fatalf("schema version = %d after a refused downgrade, want 19", v)
 				}
 				if n := countT(t, svc, `SELECT COUNT(*) FROM `+schemaMigrationsTable(MigrationSetLog)+` WHERE dirty = 1`); n != 0 {
 					t.Fatal("a refused downgrade left the schema dirty")

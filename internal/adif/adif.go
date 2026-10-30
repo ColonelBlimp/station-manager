@@ -38,8 +38,10 @@ type Record struct {
 	// AppSmRunID carries the FT8 run identity (types.Qso.AppSmRunID) — a
 	// plain string both ways, no conversion at the boundary; empty (non-run
 	// contacts, Phone/CW) is dropped by omitempty.
-	AppSmRunID     string `adif:"app_sm_run_id,omitempty"`
-	AppQrzlogLogid string `adif:"app_qrzlog_logid,omitempty"`
+	AppSmRunID string `adif:"app_sm_run_id,omitempty"`
+	// AppSmContestStart carries the contest occurrence (types.Qso.AppSmContestStart).
+	AppSmContestStart string `adif:"app_sm_contest_start,omitempty"`
+	AppQrzlogLogid    string `adif:"app_qrzlog_logid,omitempty"`
 }
 
 // ApplyQslDefaults fills the record's outgoing-QSL fields (QSL_VIA, QSLMSG,
@@ -149,6 +151,7 @@ func QsoToRecord(q types.Qso) Record {
 	}
 	r.AppSmQsoID = q.UUID
 	r.AppSmRunID = q.AppSmRunID
+	r.AppSmContestStart = q.AppSmContestStart
 	r.AppQrzlogLogid = q.QrzlogLogid
 	if q.AppSmRequestQsl {
 		// "Y" is the project's encoding for the operator's "request a
@@ -206,6 +209,7 @@ func RecordToQso(rec Record, logbookID int64) types.Qso {
 		QrzlogLogid:         rec.AppQrzlogLogid,
 		AppSmRequestQsl:     rec.AppSmRequestQsl == "Y",
 		AppSmRunID:          rec.AppSmRunID,
+		AppSmContestStart:   rec.AppSmContestStart,
 	}
 	return q
 }

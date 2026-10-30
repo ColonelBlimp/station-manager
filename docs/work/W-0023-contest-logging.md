@@ -1,6 +1,7 @@
 # W-0023 — Contest logging
 
-**Status:** Design only — no implementation authorised (operator, 2026-10-28)
+**Status:** Design, plus a minimal weekend slice built 2026-10-30 for the 2026 SSB event (operator
+direction; see *Weekend slice* below). The full design stays unimplemented.
 **Decision record:** [ADR 0096](../decisions/0096-contest-occurrences-reserved-serials-and-submission-export.md) (accepted design and alternatives; unresolved items excluded)
 **Selected:** 2026-10-28 for design (operator: "Open W-0023 as a design-only dossier")
 **Outcome:** The operator can log a contest in Station Manager — a declared contest with its exchange,
@@ -783,7 +784,67 @@ needs the explicit contest mode); a member silently dropped from the export afte
 annual editions sharing a serial sequence because they share a `CONTEST_ID` (M1); a QSO filed under
 whichever contest the daemon thinks is active rather than the occurrence the request named.
 
-## Interim: operating the 2026 SSB event on alpha.5 (not authorised)
+## Weekend slice — built 2026-10-30 for the 2026 SSB event (operator direction)
+
+The operator directed a minimal slice to operate the 31 October – 1 November 2026 SSB event on Station
+Manager ("only one user/deployment"), after a design exchange with Codex the operator relayed. It is a
+deliberate subset of the design above, not its implementation:
+
+- **Serial rule (operator, 2026-10-30):** committing the callsign of a contest QSO (Tab) consumes one
+  serial for good — duplicate, Clear, abandoned, unsaved or power loss, the number stays consumed and
+  gaps are accepted. The number belongs to the draft: a re-Tab, a callsign correction or a save retry
+  keeps it. This supersedes the option B ledger *for this slice only*: no returning numbers, no
+  reconciliation, no correction UI.
+- **Occurrence (operator, 2026-10-30, option 1):** the event's start date names the occurrence. It
+  keys the serial sequence, is fixed to the draft with the contest ID, and is saved on each contact as
+  `APP_SM_CONTEST_START` (ADIF Date, the `APP_SM_RUN_ID` mechanism), so a dry run under another date,
+  or next year's edition under the same `CONTEST_ID`, is its own sequence and its own export. A
+  separate logbook per event is not required.
+- **Daemon:** `contest_serial_allocation` (log schema 19): one row per serial handed out, per logbook,
+  `CONTEST_ID` and occurrence, durable write; `POST /v1/contest-serial` (archive-guarded). A draft
+  keeps its serial whatever other drafts take in between (Codex review 2026-10-30, finding 3). `SRX_STRING` added to `types.QsoDetails`; `CONTEST_ID`, `STX`, `SRX` already existed.
+- **Phone / CW form:** a Contest toggle with the contest ID (default `UKEIDXSSB`) and start date,
+  remembered per browser; no serial is allocated, and Log stays disabled (a typed Sent # included),
+  without a valid contest ID (the daemon's rule: 1–40 of `A-Z 0-9 _ -`) and start date; both stay
+  editable for correction; in contest mode a Sent # (allocated, editable, out of the tab order), Rcvd # and District
+  row; Log needs a Sent #. The toggle, contest ID and start date lock once the QSO's serial is
+  allocated — not before, so a bad date can be corrected mid-QSO and a re-Tab then allocates — and
+  the occurrence a serial was allocated under stays that QSO's. Completion is captured once — the
+  time of the first Log press, not the last clock tick — and kept across retries (ruling C); an end
+  time the operator typed is kept. Serials are counted in the logbook the form logs to (the
+  established default); a separate logbook per event is not required.
+- **Not sent as comments:** the exchange travels as the standard ADIF fields. Comments and Notes are
+  both uploaded (`internal/adif/string.go`), so the comment convention below is retired. How upstream
+  services display `STX`/`SRX`/`SRX_STRING` is not established.
+- **Missing exchange (rulings B and D, applied as recorded):** a received serial typed `0` and a
+  district typed `--` are the explicit "not copied" records and export as `000` and `--`. A blank
+  received serial, or a blank district for a UK/EI callsign, stops the export. A DX station has no
+  district and exports `--`.
+- **Cabrillo:** `scripts/ukeicc-cabrillo.py`, a standalone converter over the logbook's ADIF export,
+  with tests (`scripts/ukeicc_cabrillo_test.py`): members by `CONTEST_ID` and occurrence (another
+  occurrence is listed and left out); window `[start, start+24h)` on completion; `QSO:` time truncated
+  to the minute; numeric serial order; a station worked twice on a band and a serial sent twice are
+  kept and listed; gaps listed; serials `001`–`999` then unpadded. Errors stop the export and leave the
+  `-o` file untouched (written to a temporary file and renamed only on success): a truncated ADIF file
+  or a record without `<EOR>`, a mode other than SSB (USB/LSB) for the SSB event or CW for the CW
+  event — AM and FM included — a band outside 80/40/20/15/10 m or disagreeing with the frequency,
+  malformed serials, districts or calls, the blank exchange above, and a contact of this occurrence
+  completed outside its window (ruling C: it cannot be submitted and must not vanish); an SSB contact outside the sponsor's required 80/20 m segments is listed with
+  rule 9.2's consequence (all QSOs disallowed). Proven end to end
+  on 2026-10-30: contacts submitted through `qsoservice`, exported by the daemon's ADIF composer, then
+  converted.
+- **Rollback is not lossless.** alpha.5 is at log schema 18; this build is at 19. Both use config
+  version 6.
+  `smd db-downgrade --to 18` keeps every QSO row but drops the allocation record. alpha.5 has no
+  `SRX_STRING` or `APP_SM_CONTEST_START` field, so it cannot export the district or the occurrence,
+  and editing a contact there can discard them: export the contest log (ADIF and Cabrillo) before any
+  rollback. No config downgrade step removes
+  `default_logbook_change`, which alpha.5 refuses; the key is written only once a default change is
+  requested, so logging the contest into the existing default keeps the config alpha.5-readable.
+- **Later migration:** the stored exchange values carry forward unchanged; contest membership and
+  the allocation record will need an explicit migration into the full design (occurrence keys).
+
+## Interim: operating the 2026 SSB event on alpha.5 (superseded by the weekend slice)
 
 If the operator enters the 31 October – 1 November 2026 SSB event before the slice exists, the interim
 proposal is to log on alpha.5 and convert afterwards. Operator corrections, 2026-10-28:

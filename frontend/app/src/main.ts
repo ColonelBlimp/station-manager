@@ -2,7 +2,13 @@ import { mount } from 'svelte';
 import App from './App.svelte';
 import { enrich, prefs, setEnricher, setMyGrid } from './lib/operate/enrich.svelte';
 import { setHistory } from './lib/operate/worked.svelte';
-import { setEntryGate, setSubmit, setSubmitGate } from './lib/operate/qso.svelte';
+import {
+    setEntryGate,
+    setSerialAllocator,
+    setSubmit,
+    setSubmitGate,
+} from './lib/operate/qso.svelte';
+import { allocateContestSerial } from './lib/api/contest-serial';
 import { fileSessionQso } from './lib/operate/session.svelte';
 import { fileFt8Logged } from './lib/operate/ft8Logged';
 import { setMailer } from './lib/operate/mailer.svelte';
@@ -454,6 +460,15 @@ void loadBuildIdentity();
 // the reload that follows discards this tab's live state.
 const operateGate = (): string | null => archiveSwitchGate() ?? defaultChangeGate();
 setSubmitGate(operateGate);
+// Contest serials are counted in the logbook the Phone form logs to: the
+// established station context's default (W-0023 weekend slice).
+setSerialAllocator(async (contestId, start, draftKey) => {
+    if (ctx.logbookId < 1) return { ok: false, message: 'daemon config unavailable' };
+    const out = await allocateContestSerial(ctx.logbookId, contestId, start, draftKey);
+    return out.kind === 'ok'
+        ? { ok: true, serial: out.serial }
+        : { ok: false, message: out.message };
+});
 setFt8AdmissionGate(operateGate);
 setTuneGate(operateGate);
 // Phone / CW entry is locked while the switch's reload is pending (ADR 0087, item 7).
@@ -589,6 +604,13 @@ setSubmit(async (q, opts) => {
         stationCallsign: ctx.stationCallsign,
         operator: ctx.operator || undefined,
         myGridSquare: ctx.myGrid || undefined,
+        contest: {
+            contestId: q.contestId,
+            contestStart: q.contestStart,
+            stx: q.stx,
+            srx: q.srx,
+            srxString: q.srxString,
+        },
     });
 
     const out = await submitQso(
