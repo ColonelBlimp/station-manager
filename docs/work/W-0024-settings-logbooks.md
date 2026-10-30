@@ -207,6 +207,8 @@ Each slice was test-first: failing tests reviewed before implementation, then re
 | 3b | `027d5845` | The request path (ADR 0097 §2–§3): FT8, rig and live-entry seals; the shared single flight with activation and deletion; withdrawal on a failed restart; Cancel / Confirm / Retry cleanup by request id; the status read. Its routes are **gated** (`api.DefaultChangeRoutesReleased` is false). |
 | 4 | `457c9ba2` | The stale-tab default guard (ADR 0097 §4): live requests name the default of the tab's established station context (`X-SM-Default-Logbook`), checked after the archive guard and before any side effect, outside the submit rate limiter. FT8 admission is refused on another default before the service is asked; `POST /v1/qso` naming the asserted logbook is live (refused unless effective, never retargeted, sealed while a change drains), any other logbook deliberate. `/v1/version` reports the served default; the app reloads on another default at boot and on every reconnect; first-run setup establishes it without a reload. `loadgen` reads it at startup. Routes still **gated**. |
 | 5a | `04ffdd08`, `8d80d467` | Set as default in Settings → Logbooks and its confirmation (ADR 0097 §4a, §5; ADR 0087): offered on a same-callsign logbook other than the default, hidden when the routes are not served, disabled when the status cannot be read or a change is held. The prompt names the target and its effect, this tab's unfinished entry or unknown Log outcome, its unsaved Settings edits, other windows' unlogged work and, when it applies, the SM Cloud adoption note. The request asserts the established context's default; a Log in flight, a Settings save or an archive operation refuses it before the prompt, after each await and immediately before the POST; without a readable baseline instance nothing is sent. `main.ts` gates submit, entry, FT8 admission and tune while it is pending; an unknown outcome is reconciled, never retried, and `pending_restart` keeps live work gated until the restart reloads the tab. Routes still **gated**. |
+| 5a fix | `cb0cc972` | The status decoder reads the start's `not_applied_intent_pending` (`cmd/smd`); its test derives the states from both producers' Go source and pins that state with a held fixture. |
+| 5b | `d748080d` | The change's state and its recovery (ADR 0097 §1–§4): the status read at boot inside the identity bracket, compared with the context's default, locking live work until a readable status proves it open (a 404 gates nothing; a failed read never clears a gate); Settings → Logbooks shows the state with **Cancel change**, **Confirm** (with the power-loss qualification) or **Retry cleanup**, each naming the request shown, one at a time, never retried; Delete refused for a held change's target; a shell banner (also above the first-run setup card) that links to Settings → Logbooks and, when the status cannot be read, offers Check again and Reload; an unseen restart re-reads the status and keeps watching instead of raising the archive overlay. Routes still **gated**. |
 
 **CI budget (2026-10-29):** the race step's 10-minute per-package timeout failed CI on 3a and 3b
 (`cmd/smd`, `internal/archive`, an uncached `internal/database/sqlite`; no assertion failed).
@@ -223,11 +225,18 @@ reopening Phone / CW entry and stopping the restart watch. **Fixed** in `8d80d46
 its own latch, kept by a failed read and released only by a readable status that is no longer
 `pending_restart` (regression test and reversion proofs; that commit's review is clean).
 
-**Next:** slice 5b — the status read at boot inside the identity bracket, the pending and sealed
-indication in Operate, the recovery state and its actions (Cancel / Confirm / Retry cleanup by
-request id; *not applied, intent still pending* distinct from *abandoned*), no Delete for a
-pending target, and default-change wording replacing the temporary archive wording of the
-unproven-restart gate. The routes stay gated through 5b.
+**5b review (2026-10-30):** two operator review rounds before the commit closed boot ordering
+(the status held inside the bracket; a status arriving before the context), consistent state
+fixtures, restart watching after a failed re-read, the recovery banner after a sealed status
+became unreadable, the Logbooks link with Settings already open, and first-run recovery at the
+production boundary — which also put the banner above the setup card, where the recovery
+control had been unreachable. Seventeen plus four reversion proofs; the clean-room review of
+`d748080d` is clean.
+
+**Next:** slice 5c — flip `api.DefaultChangeRoutesReleased`; the manual (Settings → Logbooks;
+switching restarts and reloads every window, as for an archive); the API reference's
+release-gate wording; the routes verified through the production router. Release needs the
+operator's approval.
 
 ### Slice 5 proposal (2026-10-29, for review; not ruled)
 
@@ -330,6 +339,115 @@ four test gaps to close before implementation:
   archive wording of the unproven-restart gate is temporary, to be replaced in 5b.
 - The locked/hidden distinction agrees with the daemon's binding projection
   (`internal/archive/bindings.go:241`). Boot status and recovery actions remain in 5b.
+
+### Slice 5b proposal (2026-10-30, for review; not ruled)
+
+**A 5a defect found while preparing 5b.** The status decoder (`lib/api/default-change.ts`)
+accepts only the states named in `internal/archive/default_change.go`, and its test enshrined
+that list. A start can also report `not_applied_intent_pending` (`cmd/smd/default_change.go`),
+so that status reads as *unreadable* and the change it reports can never be cancelled. The
+routes are gated, so nothing shipped is affected. Fix: accept it, and derive the test's list from
+both Go sources.
+
+**Behaviour, by the ADR 0097 state table.** Settings → Logbooks shows the change in play above the
+list, by state; each action names the `request_id` it was shown and is never retried.
+
+| State | Shown | Action | Live work |
+|---|---|---|---|
+| `pending_restart` | Changing to B — restarting | none (restart requested) | gated (seals held) |
+| `pending_unclear` | The change to B applies at the next restart | **Cancel** | open |
+| `not_applied_intent_pending` | Not applied at this start and still pending: *reason* | **Cancel** | open |
+| `withdrawal_unconfirmed` | Cancelled, withdrawn or abandoned, not yet confirmed on disk | **Confirm** | open |
+| `applied_cleanup_pending` | Default B; cleanup pending | **Retry cleanup** | open |
+| `not_applied_abandoned`, `restart_failed`, `cancelled`, `withdrawn`, `effective` (settled) | the outcome and its reason | none | open |
+
+- **Action outcomes:** 200 → the returned status. `already_resolved`, `pending_changed` or
+  `not_permitted` → the daemon's words and a status re-read. `default_change_in_progress` → the
+  daemon's words. `default_change_write_failed` → the daemon's words; the state is unchanged. An
+  unknown outcome → status re-read, never a retry.
+- **Boot:** the status is read inside the identity bracket (`bootArchiveScoped`), with the
+  station context. A 404 means unsupported, and boot proceeds. An unreadable status leaves the
+  state *unreadable* and does not block boot; the daemon's seals still refuse live work. A
+  `pending_restart` status latches the live-work gate.
+- **Operate:** while a change is pending (`pending_restart`), a banner says live entry is paused
+  for the default change, and entry is locked. Other states that need an action show a one-line
+  notice linking to Settings → Logbooks.
+- **Recovery reachable; temporary archive wording replaced.** After an accepted request with no new
+  instance, the tab no longer raises the archive overlay at once. It re-reads the status:
+  - `pending_restart` latches the sealed gate and keeps watching.
+  - A readable status naming the old default with admission reopened clears the gate and shows the
+    recovery state.
+  - Another default reloads.
+  - An unreadable status keeps the gate, with default-change wording and *Reload*.
+- **Delete** is not offered for the target of a change that config still holds
+  (`unconfirmed: true`); the daemon still decides.
+
+**Decisions wanted:**
+1. **Where the actions live.** Proposed: Settings → Logbooks only; Operate shows the banner or
+   notice with a link. The alternative is buttons in Operate too.
+2. **No confirmation dialog for Cancel, Confirm or Retry cleanup.** Each is a single idempotent
+   write naming its request, and none restarts or discards work.
+3. **An unreadable status at boot does not block the tab.** Proposed: the daemon's seals still
+   refuse live work. The alternative is to gate the tab until the status is read.
+4. **The decoder fix** goes in 5b's first commit, or now as its own commit.
+
+**Rulings (operator, 2026-10-30)** — 5b's direction is approved (design, not release; the routes
+stay gated), with these rulings, which supersede the proposal above where they differ:
+1. **Actions live in Settings → Logbooks only.** Operate shows the banner or notice linking there.
+   Settings stays reachable while live work is gated.
+2. **No confirmation dialogs** for Cancel, Confirm or Retry cleanup. Clear labels — especially
+   **Cancel change** — naming the target. The displayed `request_id` is captured; overlapping
+   actions are prevented; an unknown outcome reconciles by the status read, never by retrying
+   the POST. A 200 is not necessarily durable completion: its returned state is rendered.
+3. **An unreadable status at boot gates live work.** The daemon's seals stop writes and
+   transmission, but not an entry typed and then discarded by the impending reload. The shell and
+   Settings load; entry, Log, FT8 admission and tune are locked, with default-change wording and a
+   recovery control. A 404 stays unsupported and imposes no gate.
+4. **The decoder fix lands now, as its own commit with its test.** It covers both state
+   producers, plus an explicit `not_applied_intent_pending` fixture with `unconfirmed: true` — a
+   copied list alone is insufficient evidence.
+- **Amendment:** `default_change_in_progress` also re-reads the status: the displayed action may be
+  obsolete because a restart is under way.
+- **Amendment:** every status result — an action's 200 included — checks the effective default
+  against the established context before reopening live work. Another default reloads; never a
+  silent rebind.
+- **Red tests must cover:** boot unreadability; failed reads preserving an existing gate; a stale
+  action response arriving after a newer status; uncertain removal staying actionable; the
+  startup state exposing Cancel; and ADR 0097's power-loss qualification for an unconfirmed
+  removal.
+
+**Rulings (operator, 2026-10-30, on the 5b red tests)** — proceed to implementation once these
+are strengthened:
+- **Boot ordering:** hold the status response behind a barrier and prove live work stays locked
+  until it settles inside the identity bracket; also a status arriving before the station context
+  with disagreeing defaults.
+- **State fixtures:** cover `cancelled`, `withdrawn` and `effective`; assert settled failures'
+  reasons; make the cleanup fixture consistent (Contest effective when it is the applied change);
+  for *target no longer exists*, remove Contest from the list and prove the notice and Cancel stay
+  usable.
+- **Restart watching:** the accepted-but-unseen path keeps watching and reloads, including after a
+  failed status re-read.
+- **Stale action response:** ignoring it preserves the gate as well as the newer status.
+- **Choices accepted:** a later failed read imposes no new gate once admission was proven open —
+  unless later restart or pending-change evidence invalidated that proof — and never clears an
+  existing one; the ineligible reason reads "its callsign no longer matches the current
+  default's callsign", with a useful fallback when no failure code is supplied; the banner is
+  shell-wide beside the TX alarm banner; Settings opens at Logbooks by the existing tab handoff.
+
+**Rulings (operator, 2026-10-30, on the 5b implementation)** — two defects and a coverage gap to
+close before the commit:
+- **The recovery banner must show whenever an unreadable status leaves live work gated** — also
+  after `pending_restart`, where a failed read clears the status (and the notice) but keeps the
+  seal. Test pending_restart → failed read → Check again, including the recovery.
+- **The banner's link must select Logbooks when Settings is already open** — the tab handoff was
+  read only on mount — without discarding drafts; tested with the real Settings mounted.
+- **First-run recovery at the production boundary:** before setup the served endpoint answers
+  an effective logbook without a UUID (`effectiveDefault`, `internal/archive/default_change.go`),
+  which the client reads as unreadable. Cover: unreadable before setup, setup succeeds, the
+  re-read pending, then a valid status releasing logging; and a failed re-read keeping the gate
+  and the recovery controls.
+- Accepted: the existing reload latch with default-specific detail for a proven mismatch;
+  settled history confined to Settings.
 
 ## Out of scope
 
