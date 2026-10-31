@@ -126,4 +126,37 @@ describe('unticking Contest', () => {
         expect(contest.on).toBe(false);
         setSerialAllocator(null);
     });
+
+    // Codex review 48af7b77: ticking Contest on an event that is already over
+    // must stay on, so another event can be chosen (the dropdown needs it on).
+    it('ticking Contest after the chosen event ended keeps it on, to choose another', async () => {
+        vi.setSystemTime(Date.UTC(2027, 3, 1, 9, 0)); // long after the 2026 SSB event
+        contest.on = false;
+        render(Header);
+        await fireEvent.click(screen.getByTestId('contest-on'));
+        await vi.advanceTimersByTimeAsync(2_000);
+        flushSync();
+        expect(contest.on).toBe(true);
+        const select = screen.getByTestId('contest-select');
+        expect(select).toBeEnabled();
+        await fireEvent.change(select, { target: { value: 'UKEIDXCW|2027-04-24' } });
+        expect(contest.id).toBe('UKEIDXCW');
+        await vi.advanceTimersByTimeAsync(2_000);
+        flushSync();
+        expect(contest.on).toBe(true);
+    });
+
+    it('switching to an event that is already over during another does not switch Contest off', async () => {
+        vi.setSystemTime(Date.UTC(2027, 3, 24, 13, 0)); // during the April 2027 CW event
+        contest.id = 'UKEIDXCW';
+        contest.start = '2027-04-24';
+        render(Header);
+        await vi.advanceTimersByTimeAsync(1_000);
+        await fireEvent.change(screen.getByTestId('contest-select'), {
+            target: { value: 'UKEIDXSSB|2026-10-31' }, // over
+        });
+        await vi.advanceTimersByTimeAsync(2_000);
+        flushSync();
+        expect(contest.on).toBe(true);
+    });
 });

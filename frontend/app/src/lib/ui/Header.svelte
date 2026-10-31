@@ -60,10 +60,20 @@
 
     // At the end of the contest, Contest switches itself off (operator,
     // 2026-10-31: there is no "finished" step yet) — never mid-QSO: it waits
-    // until the contact in progress is logged or cleared.
+    // until the contact in progress is logged or cleared. Only an event that
+    // ended while Contest was on: ticking it on an event already over leaves it
+    // on, so another can be chosen (Codex review 48af7b77).
+    let onDuringEvent = false;
+    let eventKey = '';
     $effect(() => {
-        if (contest.on && contestEnded(now) && !contestBound()) {
+        const key = `${contestId()}|${contestStart()}`;
+        if (!contest.on || key !== eventKey) onDuringEvent = false; // per event, while on
+        eventKey = key;
+        if (!contest.on) return;
+        if (contestRunning(now)) onDuringEvent = true;
+        if (onDuringEvent && contestEnded(now) && !contestBound()) {
             untrack(() => {
+                onDuringEvent = false;
                 contest.on = false;
                 toasts.info(`${contestName()} has ended — Contest is now off.`, 0);
             });
