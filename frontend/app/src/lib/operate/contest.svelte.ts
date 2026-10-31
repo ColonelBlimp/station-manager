@@ -8,6 +8,9 @@
 // contest mode; storage failure just starts it off.
 
 import { UKEI_DISTRICTS } from './ukeiDistricts';
+import { rig } from './rig.svelte';
+import { parseFrequency } from '../validators/frequency';
+import { resolveModeAndSubmode } from '../utils/mode';
 
 const KEY = 'sm.contest';
 
@@ -20,7 +23,34 @@ export interface ContestOccurrence {
     rcvdSerialDefault?: string;
     // The districts a received district must be one of ('--' = not copied).
     districts?: Readonly<Record<string, string>>;
+    // The event's mode (ADIF MODE family) and bands: each band the contest
+    // uses, with its required segments in kHz, or null where the whole band
+    // may be used. The UI warns outside them.
+    mode?: 'SSB' | 'CW';
+    bands?: Readonly<Record<string, ReadonlyArray<readonly [number, number]> | null>>;
 }
+
+// UK/EI rule 3 (the page, read 2026-10-31): 3.5, 7, 14, 21 and 28 MHz;
+// "contest-preferred segments must be observed" — on 80 m and 20 m, SSB
+// 3600-3650, 3700-3800 and 14125-14300 kHz, CW 3510-3560 and 14000-14060 kHz.
+// Rule 9.2: operating outside the published band segments, all QSOs disallowed.
+const UKEI_SSB_BANDS = {
+    '80m': [
+        [3600, 3650],
+        [3700, 3800],
+    ],
+    '40m': null,
+    '20m': [[14125, 14300]],
+    '15m': null,
+    '10m': null,
+} as const;
+const UKEI_CW_BANDS = {
+    '80m': [[3510, 3560]],
+    '40m': null,
+    '20m': [[14000, 14060]],
+    '15m': null,
+    '10m': null,
+} as const;
 
 // The supported contests (operator, 2026-10-31: chosen from a dropdown in the
 // shell header). Dates from the sponsor's rules page as recorded in W-0023;
@@ -35,6 +65,8 @@ export const CONTESTS: readonly ContestOccurrence[] = [
         label: 'UK/EI DX SSB — 31 Oct 2026',
         rcvdSerialDefault: '0',
         districts: UKEI_DISTRICTS,
+        mode: 'SSB',
+        bands: UKEI_SSB_BANDS,
     },
     {
         id: 'UKEIDXCW',
@@ -42,6 +74,8 @@ export const CONTESTS: readonly ContestOccurrence[] = [
         label: 'UK/EI DX CW — 24 Apr 2027',
         rcvdSerialDefault: '0',
         districts: UKEI_DISTRICTS,
+        mode: 'CW',
+        bands: UKEI_CW_BANDS,
     },
     {
         id: 'UKEIDXSSB',
@@ -49,6 +83,8 @@ export const CONTESTS: readonly ContestOccurrence[] = [
         label: 'UK/EI DX SSB — 23 Oct 2027',
         rcvdSerialDefault: '0',
         districts: UKEI_DISTRICTS,
+        mode: 'SSB',
+        bands: UKEI_SSB_BANDS,
     },
 ];
 
@@ -133,3 +169,58 @@ $effect.root(() => {
         }
     });
 });
+
+/** The contest chosen in the header, from the catalogue. */
+function chosenContest(): ContestOccurrence | undefined {
+    return CONTESTS.find((c) => c.id === contestId());
+}
+
+const mhz = (khz: number): string => (khz / 1000).toFixed(3);
+
+/** A breach of the contest's rules: its kind (stable while the operator
+ *  retunes within it — the segment on a band, a band, a mode) and its text. */
+export interface ContestRuleProblem {
+    key: string;
+    message: string;
+}
+
+/** In contest mode, how the rig is outside the contest's rules — a band it
+ *  does not use, outside the sponsor's segments, or the wrong mode — or null.
+ *  A warning only: it never blocks logging. Silent while the frequency is
+ *  unknown. */
+export function contestRuleProblem(): ContestRuleProblem | null {
+    const c = chosenContest();
+    if (!contest.on || c?.bands === undefined) return null;
+    const hz = parseFrequency(rig.freq);
+    if (hz === null) return null;
+    const name = c.label.split(' — ')[0];
+    if (!Object.hasOwn(c.bands, rig.band)) {
+        const list = Object.keys(c.bands).map((b) => b.replace('m', ''));
+        const bands = `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]} m`;
+        return {
+            key: `band:${rig.band}`,
+            message: `${rig.band} is not a ${name} band (${bands}).`,
+        };
+    }
+    const segments = c.bands[rig.band];
+    const khz = hz / 1000;
+    if (segments !== null && !segments.some(([lo, hi]) => khz >= lo && khz <= hi)) {
+        const ranges = segments.map(([lo, hi]) => `${mhz(lo)}–${mhz(hi)}`).join(', ');
+        return {
+            key: `segment:${rig.band}`,
+            message: `${mhz(khz)} is outside the ${name} segment ${ranges} — rule 9.2: all QSOs disallowed.`,
+        };
+    }
+    if (c.mode !== undefined && resolveModeAndSubmode(rig.mode).mode !== c.mode) {
+        return {
+            key: `mode:${rig.mode}`,
+            message: `${rig.mode} is not this contest's mode (${c.mode}).`,
+        };
+    }
+    return null;
+}
+
+/** The text of contestRuleProblem(), or null. */
+export function contestRuleWarning(): string | null {
+    return contestRuleProblem()?.message ?? null;
+}

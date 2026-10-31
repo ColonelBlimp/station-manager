@@ -11,6 +11,7 @@ import { draft, clearDraft, setSerialAllocator } from './qso.svelte';
 import { contest } from './contest.svelte';
 import { setContestDupeCheck } from './contestDupe.svelte';
 import { rig } from './rig.svelte';
+import { toastsState, dismissToast, _resetForTests as resetToasts } from '../ui/toasts.svelte';
 
 describe('LoggingCard: contest exchange', () => {
     beforeEach(() => {
@@ -115,5 +116,72 @@ describe('LoggingCard: contest exchange', () => {
         flushSync();
         expect(screen.queryByTestId('district-name')).toBeNull();
         expect(screen.getByLabelText('District')).toHaveClass('input-error');
+    });
+
+    // Operator, 2026-10-31: a sticky toast (consistent with the app's other
+    // warnings), not a box that pushes the form down.
+    it('warns with a sticky toast while the rig is outside the rules, and clears it', () => {
+        resetToasts();
+        contest.on = true;
+        rig.mode = 'USB';
+        rig.band = '20m';
+        rig.freq = '14.100.000';
+        const { unmount } = render(LoggingCard);
+        flushSync();
+        const warns = () => toastsState.items.filter((t) => t.level === 'warn');
+        expect(screen.queryByTestId('contest-rule-warning')).toBeNull();
+        expect(warns()).toHaveLength(1);
+        expect(warns()[0].message).toContain('rule 9.2');
+        expect(warns()[0].ttl).toBe(0); // sticky
+
+        rig.band = '17m'; // another problem replaces it
+        rig.freq = '18.150.000';
+        flushSync();
+        expect(warns()).toHaveLength(1);
+        expect(warns()[0].message).toContain('17m');
+
+        rig.band = '20m'; // fixed: it goes
+        rig.freq = '14.200.000';
+        flushSync();
+        expect(warns()).toHaveLength(0);
+
+        rig.freq = '14.100.000'; // and comes back; leaving the card removes it
+        flushSync();
+        expect(warns()).toHaveLength(1);
+        unmount();
+        expect(warns()).toHaveLength(0);
+    });
+
+    it('a dismissed warning stays dismissed until the problem changes', () => {
+        resetToasts();
+        contest.on = true;
+        rig.mode = 'USB';
+        rig.band = '20m';
+        rig.freq = '14.100.000';
+        render(LoggingCard);
+        flushSync();
+        dismissToast(toastsState.items[0].id);
+        rig.freq = '14.101.000'; // retuning within the same problem: no nag
+        flushSync();
+        expect(toastsState.items).toHaveLength(0);
+        rig.band = '17m'; // a different problem: shown again
+        rig.freq = '18.150.000';
+        flushSync();
+        expect(toastsState.items.filter((t) => t.level === 'warn')).toHaveLength(1);
+    });
+
+    it('while shown, the toast follows the frequency', () => {
+        resetToasts();
+        contest.on = true;
+        rig.mode = 'USB';
+        rig.band = '20m';
+        rig.freq = '14.100.000';
+        render(LoggingCard);
+        flushSync();
+        rig.freq = '14.110.000';
+        flushSync();
+        const warns = toastsState.items.filter((t) => t.level === 'warn');
+        expect(warns).toHaveLength(1);
+        expect(warns[0].message).toContain('14.110');
     });
 });

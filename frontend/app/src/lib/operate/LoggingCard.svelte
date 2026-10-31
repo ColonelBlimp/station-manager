@@ -33,7 +33,8 @@
     import { observeWorked, openWorkedForQso } from './worked.svelte';
     import { rig, rigReady, rigGate } from './rig.svelte';
     import { operate, closeExport, registerCallsignInput } from './state.svelte';
-    import { toasts } from '../ui/toasts.svelte';
+    import { toasts, toastsState, dismissToast } from '../ui/toasts.svelte';
+    import { untrack } from 'svelte';
     import EnrichmentCard from './EnrichmentCard.svelte';
     import { enrich } from './enrich.svelte';
     import { isValidMaidenhead } from '../validators/maidenhead';
@@ -41,7 +42,12 @@
     import { callsignStack } from './callsignStack.svelte';
     import { commentHistory } from './commentHistory.svelte';
     import CommentField from './CommentField.svelte';
-    import { contest, contestRcvdDefault, districtName } from './contest.svelte';
+    import {
+        contest,
+        contestRcvdDefault,
+        contestRuleProblem,
+        districtName,
+    } from './contest.svelte';
     import { contestDupeShown } from './contestDupe.svelte';
     import { sessionEdit } from './sessionEdit.svelte';
 
@@ -304,6 +310,35 @@
     // callsign field, so it hosts the observation. (Enrichment observes from
     // EnrichmentCard, which is always mounted.)
     $effect(() => observeWorked(draft.callsign));
+
+    // Contest rules (W-0023 weekend slice; operator, 2026-10-31): a sticky toast
+    // while the rig is outside the contest's rules — a band it does not use, a
+    // segment, the mode. It follows the frequency while shown, goes when the
+    // problem is fixed or the card closes, and once dismissed stays away until
+    // the KIND of problem changes (no nag on every retune). Never blocks logging.
+    let ruleToast: { id: number; key: string } | null = null;
+    let dismissedKey = '';
+    function showRuleProblem(problem: { key: string; message: string } | null): void {
+        const shown = ruleToast !== null && toastsState.items.some((t) => t.id === ruleToast?.id);
+        if (ruleToast !== null && !shown && problem?.key === ruleToast.key)
+            dismissedKey = ruleToast.key;
+        if (ruleToast !== null) dismissToast(ruleToast.id);
+        ruleToast = null;
+        if (problem === null) {
+            dismissedKey = '';
+            return;
+        }
+        if (problem.key === dismissedKey) return;
+        dismissedKey = '';
+        ruleToast = { id: toasts.warn(problem.message, 0), key: problem.key };
+    }
+    $effect(() => {
+        const problem = contestRuleProblem();
+        untrack(() => showRuleProblem(problem));
+    });
+    $effect(() => () => {
+        if (ruleToast !== null) dismissToast(ruleToast.id);
+    });
 
     // Per-field malformed flags → red outlines; canLog() blocks on any of them.
     const p = $derived(draftProblems());

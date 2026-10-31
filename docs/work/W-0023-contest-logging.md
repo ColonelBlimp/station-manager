@@ -821,6 +821,14 @@ deliberate subset of the design above, not its implementation:
 - **Not sent as comments:** the exchange travels as the standard ADIF fields. Comments and Notes are
   both uploaded (`internal/adif/string.go`), so the comment convention below is retired. How upstream
   services display `STX`/`SRX`/`SRX_STRING` is not established.
+- **Rules warning (operator, 2026-10-31):** the catalogue carries each event's mode and bands with
+  the sponsor's segments (UK/EI rule 3, re-read from the page 2026-10-31: 3.5/7/14/21/28 MHz; SSB
+  3600–3650, 3700–3800, 14125–14300 kHz; CW 3510–3560, 14000–14060 kHz). In contest mode a sticky
+  warning toast (operator: consistent with the app's other warnings) shows while the Phone card is
+  open and the rig is on another band, outside a segment (naming rule 9.2: all QSOs disallowed) or on
+  the wrong mode; it follows the frequency, clears when fixed, and once dismissed stays away until the
+  kind of problem changes. A warning only. The `contests.json` config system that
+  replaces the hard-coded catalogue follows the contest (inbox, 2026-10-31).
 - **Dupe warning (dogfood 2026-10-31: 7Q7EB logged twice on 20m unwarned):** in contest mode,
   committing the callsign — and any later band change — asks `GET /v1/contest-dupe` with the contest
   occurrence (only that occurrence's contacts count, by band); a hit shows "DUPE on <band>" under the
