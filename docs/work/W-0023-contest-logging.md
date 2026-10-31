@@ -829,15 +829,17 @@ deliberate subset of the design above, not its implementation:
   the wrong mode; it follows the frequency, clears when fixed, and once dismissed stays away until the
   kind of problem changes. A warning only. The `contests.json` config system that
   replaces the hard-coded catalogue follows the contest (inbox, 2026-10-31).
-- **Contest timers (operator, 2026-10-31):** in contest mode the shell header shows "Last" — full
-  minutes since the last contest QSO, green with "off ✓" once the gap is an off period — and "Op",
-  operating time so far against the limited-time category's limit (amber from an hour before, red
-  past it). Counted as N1MM+ documents the scorers do (n1mmwp.hamdocs.com, Entry window → Off Times):
-  full clock minutes, a gap is off only once it reaches the minimum (UK/EI rule 4.4b, 12-hour
-  category: 60 minutes), the lead-in before the first QSO is off. The occurrence's contacts load from
-  the daemon (the logbook list, newest first, stopping before the start date); each contact logged
-  is counted at once. The catalogue carries each contest's start time, length, off-time minimum and
-  operating limit (`contests.json` later). Shown always, whatever category is entered.
+- **Contest timers (operator, 2026-10-31):** in contest mode the shell header shows three labelled
+  timers (operator: say what each means; never wrap). "Last QSO": whole minutes since the last contest
+  QSO, counted from the clock minute after it as N1MM+ does (n1mmwp.hamdocs.com, Info window → QSO
+  timers), green with "✓" once the gap reaches the contest's off-time minimum (UK/EI rule 4.4b,
+  12-hour category: 60 minutes). "Rate": the contest QSOs completed in the last 60 minutes (N1MM's
+  "last hour" rate). "Elapsed": the time since the first contest QSO — deliberately not the contest's
+  operating-time rules (operator: it replaced an "Operating time" readout that could not move before
+  the start). The occurrence's contacts load from the daemon (the logbook list, newest first,
+  stopping before the start date); each contact logged is counted at once, and one logged during a
+  load is kept. A failed read shows "Timers unavailable — retry", never zeros. The catalogue carries
+  each contest's off-time minimum (`contests.json` later).
 - **Dupe warning (dogfood 2026-10-31: 7Q7EB logged twice on 20m unwarned):** in contest mode,
   committing the callsign — and any later band change — asks `GET /v1/contest-dupe` with the contest
   occurrence (only that occurrence's contacts count, by band); a hit shows "DUPE on <band>" under the

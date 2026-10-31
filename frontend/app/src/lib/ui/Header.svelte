@@ -21,7 +21,7 @@
         CONTESTS,
         contestId,
         contestStart,
-        contestWindow,
+        contestOffMinutes,
     } from '../operate/contest.svelte';
     import { contestHistory, loadContestHistory } from '../operate/contestHistory.svelte';
     import { computeTimers } from '../operate/contestTimers';
@@ -54,10 +54,9 @@
         }
     });
     const timers = $derived.by(() => {
-        const w = contestWindow();
-        if (!contest.on || w === null) return null;
-        const r = computeTimers(contestHistory.completions, w.startMs, w.endMs, now, w.offMin);
-        return { ...r, maxOpMin: w.maxOpMin, offMin: w.offMin };
+        const offMin = contestOffMinutes();
+        if (!contest.on || offMin === null) return null;
+        return { ...computeTimers(contestHistory.completions, now, offMin), offMin };
     });
     const hm = (min: number): string =>
         `${Math.floor(min / 60)}:${String(min % 60).padStart(2, '0')}`;
@@ -172,30 +171,37 @@
                 title="Full minutes since your last contest QSO, counted from the clock minute after it. Green once the gap is long enough to count as an off period ({timers.offMin} min)."
                 data-testid="timer-last"
             >
-                <span class="text-muted">Since last QSO</span>
+                <span class="text-muted">Last QSO</span>
                 <span
                     class="text-sm font-medium text-ink tabular-nums"
                     class:text-green-500={timers.offQualifies}
                     data-testid="timer-last-value"
                     >{timers.sinceLastMin === null
                         ? '–'
-                        : hm(timers.sinceLastMin)}{timers.offQualifies ? ' off period ✓' : ''}</span
+                        : `${timers.sinceLastMin} min`}{timers.offQualifies ? ' ✓' : ''}</span
                 >
             </div>
             <div
                 class="flex flex-col text-xs leading-tight whitespace-nowrap"
-                title="Operating time so far, counted as the contest scorers do: off periods of {timers.offMin} minutes or more are excluded, shorter gaps count. Against the limited-time category's {hm(
-                    timers.maxOpMin
-                )}."
-                data-testid="timer-op"
+                title="QSOs per hour: the contest QSOs you completed in the last 60 minutes."
+                data-testid="timer-rate"
             >
-                <span class="text-muted">Operating time</span>
+                <span class="text-muted">Rate</span>
                 <span
                     class="text-sm font-medium text-ink tabular-nums"
-                    class:text-amber-500={timers.opMin >= timers.maxOpMin - 60 &&
-                        timers.opMin <= timers.maxOpMin}
-                    class:text-red-500={timers.opMin > timers.maxOpMin}
-                    data-testid="timer-op-value">{hm(timers.opMin)} of {hm(timers.maxOpMin)}</span
+                    data-testid="timer-rate-value">{timers.ratePerHour}/hr</span
+                >
+            </div>
+            <div
+                class="flex flex-col text-xs leading-tight whitespace-nowrap"
+                title="Time since your first contest QSO."
+                data-testid="timer-elapsed"
+            >
+                <span class="text-muted">Elapsed</span>
+                <span
+                    class="text-sm font-medium text-ink tabular-nums"
+                    data-testid="timer-elapsed-value"
+                    >{timers.elapsedMin === null ? '–' : hm(timers.elapsedMin)}</span
                 >
             </div>
         {/if}
