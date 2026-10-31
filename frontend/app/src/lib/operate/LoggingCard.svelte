@@ -45,11 +45,13 @@
     import CommentField from './CommentField.svelte';
     import {
         contest,
+        contestId,
         contestRcvdDefault,
         contestRuleProblem,
+        contestStart,
         districtName,
     } from './contest.svelte';
-    import { contestDupeShown } from './contestDupe.svelte';
+    import { clearContestDupe, contestDupeShown } from './contestDupe.svelte';
     import { sessionEdit } from './sessionEdit.svelte';
 
     // Contact-details disclosure (grid / QTH / rig / RX power / notes to edit; QRZ
@@ -358,10 +360,18 @@
     // checking needed a Tab out of the callsign, which commits the contact and
     // spends a serial. A valid typed call is checked once typing pauses; only a
     // commit allocates.
+    // Re-checked when the contest changes; Contest off drops any result or
+    // check in flight (Codex review 4249d4d7).
     $effect(() => {
         const call = draft.callsign.trim().toUpperCase();
         void rig.band;
-        if (!contest.on || isValidCallsign(call) !== null) return;
+        void contestId();
+        void contestStart();
+        if (!contest.on) {
+            untrack(() => clearContestDupe());
+            return;
+        }
+        if (isValidCallsign(call) !== null) return;
         const t = setTimeout(() => askContestDupe(), 400);
         return () => clearTimeout(t);
     });

@@ -7,6 +7,7 @@
 
 import { draft } from './qso.svelte';
 import { rig } from './rig.svelte';
+import { contest, contestId, contestStart } from './contest.svelte';
 
 type DupeCheck = (
     call: string,
@@ -18,7 +19,7 @@ let check: DupeCheck | null = null;
 let seq = 0;
 
 /** The last answer: which call and band it is for, and whether it is a dupe. */
-export const contestDupeState = $state({ call: '', band: '', dupe: false });
+export const contestDupeState = $state({ call: '', band: '', occurrence: '', dupe: false });
 
 export function setContestDupeCheck(fn: DupeCheck | null): void {
     check = fn;
@@ -40,19 +41,28 @@ export async function checkContestDupe(
         dupe = null;
     }
     if (n !== seq) return; // a later question (or a Clear) has superseded this one
-    Object.assign(contestDupeState, { call, band, dupe: dupe === true });
+    Object.assign(contestDupeState, {
+        call,
+        band,
+        occurrence: `${contestId}|${start}`,
+        dupe: dupe === true,
+    });
 }
 
 /** Forget the answer, and any question still out. */
 export function clearContestDupe(n = ++seq): void {
     seq = n;
-    Object.assign(contestDupeState, { call: '', band: '', dupe: false });
+    Object.assign(contestDupeState, { call: '', band: '', occurrence: '', dupe: false });
 }
 
-/** Show the warning: the answer is a dupe for the call and band on the form now. */
+/** Show the warning: the answer is a dupe for the call, band and contest
+ *  occurrence on the form now, in contest mode (Codex review 4249d4d7: a
+ *  result never outlives the contest it was checked against). */
 export function contestDupeShown(): boolean {
     return (
+        contest.on &&
         contestDupeState.dupe &&
+        contestDupeState.occurrence === `${contestId()}|${contestStart()}` &&
         contestDupeState.call === draft.callsign.trim().toUpperCase() &&
         contestDupeState.band === rig.band
     );

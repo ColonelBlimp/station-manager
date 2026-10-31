@@ -240,4 +240,45 @@ describe('LoggingCard: contest exchange', () => {
         expect(draft.stx).toBe('');
         setContestDupeCheck(null);
     });
+
+    // Codex review 4249d4d7: before a serial binds the contest controls, a
+    // typed-call result must not outlive the contest it was checked against.
+    it('a typed-call dupe clears when Contest goes off or the event changes', async () => {
+        vi.useFakeTimers({
+            toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+        });
+        vi.setSystemTime(Date.UTC(2026, 9, 31, 13, 0));
+        const check = vi.fn((_c: string, _b: string, id: string) =>
+            Promise.resolve(id === 'UKEIDXSSB')
+        );
+        setContestDupeCheck(check);
+        contest.on = true;
+        contest.id = 'UKEIDXSSB';
+        contest.start = '2026-10-31';
+        rig.band = '20m';
+        render(LoggingCard);
+        await fireEvent.input(screen.getByLabelText('Callsign'), { target: { value: 'G4ABC' } });
+        await vi.advanceTimersByTimeAsync(500);
+        flushSync();
+        expect(screen.getByTestId('contest-dupe')).toBeInTheDocument();
+
+        contest.id = 'UKEIDXCW'; // another event: cleared at once, then re-checked
+        contest.start = '2027-04-24';
+        flushSync();
+        expect(screen.queryByTestId('contest-dupe')).toBeNull();
+        await vi.advanceTimersByTimeAsync(500);
+        flushSync();
+        expect(check).toHaveBeenLastCalledWith('G4ABC', '20m', 'UKEIDXCW', '20270424');
+        expect(screen.queryByTestId('contest-dupe')).toBeNull();
+
+        contest.id = 'UKEIDXSSB';
+        contest.start = '2026-10-31';
+        await vi.advanceTimersByTimeAsync(500);
+        flushSync();
+        expect(screen.getByTestId('contest-dupe')).toBeInTheDocument();
+        contest.on = false; // Contest off: gone
+        flushSync();
+        expect(screen.queryByTestId('contest-dupe')).toBeNull();
+        setContestDupeCheck(null);
+    });
 });
