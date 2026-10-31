@@ -64,6 +64,19 @@ SSB_SEGMENTS = {"80m": [(3600, 3650), (3700, 3800)], "20m": [(14125, 14300)]}
 UKEI_PREFIX = re.compile(r"^(?:[GM]|2[DEIJMUW]|E[IJ])[A-Z]?\d")
 SERIAL = re.compile(r"^\d{1,5}$")
 DISTRICT = re.compile(r"^(?:[A-Z]{2}|--)$")
+# The 155 UK/EI District Codes, Appendix 2 of the rules ("Version 19 - 2nd May
+# 2026"); the Phone form's list is frontend/app/src/lib/operate/ukeiDistricts.ts,
+# and the test keeps the two identical.
+UKEI_DISTRICTS = frozenset((
+    "AB AL AN AR BA BB BD BH BL BM BN BR BS CA CB CE CF CH CK CL "
+    "CM CN CO CR CT CV CW DA DD DE DG DH DL DN DO DR DT DU DW DY "
+    "EC EH EL EN EX FE FK FY GA GL GS GU GY HA HD HG HP HR HS HU "
+    "HX IG IM IP IV JE KA KD KE KI KT KW KY LA LD LE LF LH LI LL "
+    "LN LO LP LS LT LU MA ME MK ML MO MR MT NE NG NL NN NP NK NW "
+    "OF OL OX PA PE PH PL PO PR RG RH RM RO SA SD SE SG SI SK SL "
+    "SM SN SO SP SR SS ST SW SY TA TD TF TI TN TQ TR TS TW TY UB "
+    "WA WC WD WF WI WL WM WN WR WS WT WV WX YO ZE "
+).split())
 
 
 class AdifError(Exception):
@@ -137,6 +150,8 @@ def check(r, a, errors, notes):
         bad.append("UK/EI station with no district: type it, or -- if it was not copied")
     elif district != "" and not DISTRICT.match(district):
         bad.append(f"district {r.get('SRX_STRING')!r} is not two letters or --")
+    elif district not in ("", "--") and district not in UKEI_DISTRICTS:
+        bad.append(f"district {district} is not a UK/EI District Code (Appendix 2)")
     mode, submode = r.get("MODE", "").upper(), r.get("SUBMODE", "").upper()
     want_cw = a.contest.endswith("CW")
     ok_mode = mode == "CW" if want_cw else (mode == "SSB" and submode in SSB_SUBMODES)

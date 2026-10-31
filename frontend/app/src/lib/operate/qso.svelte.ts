@@ -12,7 +12,7 @@ import { usesSignalReport } from '../utils/mode';
 import { rig, rigReady } from './rig.svelte';
 import { toasts } from '../ui/toasts.svelte';
 import { commentHistory } from './commentHistory.svelte';
-import { contest, contestId, contestStart, rcvdDefaultFor } from './contest.svelte';
+import { contest, contestId, contestStart, districtsFor, rcvdDefaultFor } from './contest.svelte';
 import { checkContestDupe, clearContestDupe } from './contestDupe.svelte';
 
 export interface QsoDraft {
@@ -408,8 +408,17 @@ function exchangeProblems(
     return {
         stx: bad(SERIAL_RE, draft.stx),
         srx: bad(SERIAL_RE, draft.srx),
-        srxString: bad(DISTRICT_RE, draft.srxString),
+        srxString: bad(DISTRICT_RE, draft.srxString) || unlistedDistrict(draft.srxString),
     };
+}
+
+// A contest with a district list (UK/EI, Appendix 2) accepts only a listed
+// code — a mis-heard district is never logged. '--' (not copied) and blank (a
+// DX station has none) are not codes.
+function unlistedDistrict(value: string): boolean {
+    const v = value.trim().toUpperCase();
+    const list = districtsFor(draftOccurrence().id);
+    return list !== null && v !== '' && v !== '--' && !Object.hasOwn(list, v);
 }
 
 // Frontend gate: a well-formed callsign + start date/time are the minimum to

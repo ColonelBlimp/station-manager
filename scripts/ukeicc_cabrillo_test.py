@@ -194,6 +194,23 @@ class Converter(unittest.TestCase):
             self.assertEqual(code, 1, text)
             self.assertEqual(lines, [], text)
 
+    def test_a_district_not_in_appendix_2_stops_the_export(self):
+        code, lines, err = run(rec("G4ABC", "1", district="QQ"))
+        self.assertEqual(code, 1)
+        self.assertEqual(lines, [])
+        self.assertIn("not a UK/EI District Code", err)
+        for ok in ["OX", "DU", "ZE", "EC", "--"]:
+            code, _, err = run(rec("G4ABC", "1", district=ok))
+            self.assertEqual(code, 0, (ok, err))
+
+    def test_the_district_list_matches_the_phone_forms(self):
+        ts = open(os.path.join(_here, "..", "frontend", "app", "src", "lib", "operate", "ukeiDistricts.ts"),
+                  encoding="utf-8").read()
+        import re
+        form = set(re.findall(r"^\s+([A-Z]{2}):", ts, re.M))
+        self.assertEqual(len(form), 155)
+        self.assertEqual(set(cab.UKEI_DISTRICTS), form)
+
     def test_band_field_and_frequency_must_agree(self):
         code, lines, err = run(rec("G4ABC", "1", district="OX", freq="7.100000", band="20m"))
         self.assertEqual(code, 1)

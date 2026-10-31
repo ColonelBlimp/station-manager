@@ -41,7 +41,7 @@
     import { callsignStack } from './callsignStack.svelte';
     import { commentHistory } from './commentHistory.svelte';
     import CommentField from './CommentField.svelte';
-    import { contest, contestRcvdDefault } from './contest.svelte';
+    import { contest, contestRcvdDefault, districtName } from './contest.svelte';
     import { contestDupeShown } from './contestDupe.svelte';
     import { sessionEdit } from './sessionEdit.svelte';
 
@@ -447,15 +447,28 @@
                             <label for="lc-srx-string" class="block text-sm font-medium text-ink"
                                 >District</label
                             >
-                            <input
-                                id="lc-srx-string"
-                                class="input w-15 uppercase"
-                                class:input-error={p.srxString}
-                                autocomplete="off"
-                                spellcheck="false"
-                                placeholder="--"
-                                bind:value={draft.srxString}
-                            />
+                            <!-- The district's name, so a mis-heard code shows. Out of
+                                 the flow, to the right of the box (operator, 2026-10-31:
+                                 below it, it pushed the row's other fields down), wrapping
+                                 within the room before the enrichment panel. -->
+                            <div class="relative">
+                                <input
+                                    id="lc-srx-string"
+                                    class="input w-15 uppercase"
+                                    class:input-error={p.srxString}
+                                    autocomplete="off"
+                                    spellcheck="false"
+                                    placeholder="--"
+                                    bind:value={draft.srxString}
+                                />
+                                {#if districtName(draft.srxString)}
+                                    <span
+                                        class="absolute top-1/2 left-full ml-2 w-20 -translate-y-1/2 text-xs leading-tight wrap-anywhere text-muted"
+                                        data-testid="district-name"
+                                        >{districtName(draft.srxString)}</span
+                                    >
+                                {/if}
+                            </div>
                         </div>
                     </div>
                 {/if}

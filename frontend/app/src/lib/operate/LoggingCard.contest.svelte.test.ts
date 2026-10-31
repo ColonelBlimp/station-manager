@@ -102,4 +102,18 @@ describe('LoggingCard: contest exchange', () => {
         const at = order.indexOf('lc-call');
         expect(order.slice(at, at + 3)).toEqual(['lc-call', 'lc-rst-s', 'lc-rst-r']);
     });
+
+    it('names a valid district beside the field, so a mis-hear shows', async () => {
+        contest.on = true;
+        render(LoggingCard);
+        await fireEvent.input(screen.getByLabelText('District'), { target: { value: 'ox' } });
+        flushSync();
+        expect(screen.getByTestId('district-name')).toHaveTextContent('Oxford');
+        // Out of the flow, so it never moves the row's other fields.
+        expect(screen.getByTestId('district-name')).toHaveClass('absolute');
+        await fireEvent.input(screen.getByLabelText('District'), { target: { value: 'QQ' } });
+        flushSync();
+        expect(screen.queryByTestId('district-name')).toBeNull();
+        expect(screen.getByLabelText('District')).toHaveClass('input-error');
+    });
 });

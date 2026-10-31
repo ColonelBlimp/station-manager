@@ -7,6 +7,8 @@
 // Remembered per browser — a convenience, so a reload mid-contest stays in
 // contest mode; storage failure just starts it off.
 
+import { UKEI_DISTRICTS } from './ukeiDistricts';
+
 const KEY = 'sm.contest';
 
 /** One supported contest occurrence: what the header's dropdown offers. */
@@ -16,6 +18,8 @@ export interface ContestOccurrence {
     label: string;
     // What a blank Rcvd # is logged as, when the contest's rules give one.
     rcvdSerialDefault?: string;
+    // The districts a received district must be one of ('--' = not copied).
+    districts?: Readonly<Record<string, string>>;
 }
 
 // The supported contests (operator, 2026-10-31: chosen from a dropdown in the
@@ -23,30 +27,46 @@ export interface ContestOccurrence {
 // the Cabrillo converter (scripts/ukeicc-cabrillo.py) supports these IDs.
 export const CONTESTS: readonly ContestOccurrence[] = [
     // UK/EI rule 6: a received serial not copied is logged as zero and still
-    // scores (operator, 2026-10-31: blank Rcvd # is logged as 0).
+    // scores (operator, 2026-10-31: blank Rcvd # is logged as 0). Districts:
+    // Appendix 2 (operator, 2026-10-31: no bogus district is logged).
     {
         id: 'UKEIDXSSB',
         start: '2026-10-31',
         label: 'UK/EI DX SSB — 31 Oct 2026',
         rcvdSerialDefault: '0',
+        districts: UKEI_DISTRICTS,
     },
     {
         id: 'UKEIDXCW',
         start: '2027-04-24',
         label: 'UK/EI DX CW — 24 Apr 2027',
         rcvdSerialDefault: '0',
+        districts: UKEI_DISTRICTS,
     },
     {
         id: 'UKEIDXSSB',
         start: '2027-10-23',
         label: 'UK/EI DX SSB — 23 Oct 2027',
         rcvdSerialDefault: '0',
+        districts: UKEI_DISTRICTS,
     },
 ];
 
 /** What a blank Rcvd # is logged as for this contest ID ('' when none). */
 export function rcvdDefaultFor(id: string): string {
     return CONTESTS.find((c) => c.id === id)?.rcvdSerialDefault ?? '';
+}
+
+/** The district list for this contest ID, or null when it has none. */
+export function districtsFor(id: string): Readonly<Record<string, string>> | null {
+    return CONTESTS.find((c) => c.id === id)?.districts ?? null;
+}
+
+/** The name of a district of the contest chosen in the header ('' when not one). */
+export function districtName(code: string): string {
+    const list = districtsFor(contestId());
+    const key = code.trim().toUpperCase();
+    return list !== null && Object.hasOwn(list, key) ? list[key] : '';
 }
 
 /** The Rcvd # default of the contest chosen in the header. */

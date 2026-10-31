@@ -21,7 +21,7 @@ import {
     type SubmittedQso,
     type SubmitResult,
 } from './qso.svelte';
-import { contest, contestRcvdDefault } from './contest.svelte';
+import { contest, contestRcvdDefault, districtName } from './contest.svelte';
 import { rig, confirmRig } from './rig.svelte';
 import { _resetForTests as resetToasts, toastsState } from '../ui/toasts.svelte';
 
@@ -270,6 +270,23 @@ describe('logging a contest QSO', () => {
             srx: '36',
             srxString: 'OX',
         });
+    });
+
+    it('a district not in the UK/EI list is flagged and blocks Log; listed, -- and blank pass', () => {
+        fill();
+        draft.stx = '42';
+        for (const bad of ['QQ', 'XX', 'OZ', 'GB']) {
+            draft.srxString = bad;
+            expect(draftProblems().srxString, bad).toBe(true);
+            expect(canLog(), bad).toBe(false);
+        }
+        for (const ok of ['OX', 'ox', 'DU', 'ZE', 'EC', '--', '']) {
+            draft.srxString = ok;
+            expect(draftProblems().srxString, ok).toBe(false);
+            expect(canLog(), ok).toBe(true);
+        }
+        expect(districtName('ox')).toBe('Oxford');
+        expect(districtName('QQ')).toBe('');
     });
 
     it('a blank Rcvd # is saved as the contest default, 0 for UK/EI (sponsor rule)', async () => {

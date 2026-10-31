@@ -821,6 +821,9 @@ deliberate subset of the design above, not its implementation:
 - **Not sent as comments:** the exchange travels as the standard ADIF fields. Comments and Notes are
   both uploaded (`internal/adif/string.go`), so the comment convention below is retired. How upstream
   services display `STX`/`SRX`/`SRX_STRING` is not established.
+- **District validation (operator, 2026-10-31):** the received district must be one of the 155 UK/EI
+  District Codes (Appendix 2, rules "Version 19 - 2nd May 2026"; `ukeiDistricts.ts`), `--` or blank;
+  an unlisted code blocks Log, and a valid one shows its name. The converter checks the same list.
 - **Blank Rcvd # (operator, 2026-10-31; revises ruling B for entry):** for the UK/EI contests a blank
   Rcvd # is logged as `0` (sponsor rule 6: a received serial not copied is logged as zero and still
   scores); the field shows a `0` placeholder. Per contest, in the header catalogue
