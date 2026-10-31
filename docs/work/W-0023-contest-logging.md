@@ -849,7 +849,8 @@ deliberate subset of the design above, not its implementation:
 - **Dupe warning (dogfood 2026-10-31: 7Q7EB logged twice on 20m unwarned):** in contest mode,
   committing the callsign — and any later band change — asks `GET /v1/contest-dupe` with the contest
   occurrence (only that occurrence's contacts count, by band); a hit shows "DUPE on <band>" under the
-  enrichment panel. It warns, never refuses (ruling A); a failed check shows nothing.
+  enrichment panel. It warns, never refuses (ruling A); a failed check shows nothing. During the contest (operator) it also runs as a valid callsign is typed, once typing pauses, so a
+  dupe shows before the Tab that commits the contact and spends a serial.
 - **Tab order (operator, 2026-10-31):** contest RST is always 59 and Sent # is allocated, so in
   contest mode Tab goes Callsign → Rcvd # → District; RST and Sent # stay clickable.
 - **Correcting the exchange (operator, 2026-10-31):** the edit panel has a Contest section for a

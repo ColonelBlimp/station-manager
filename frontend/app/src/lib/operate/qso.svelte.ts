@@ -204,9 +204,10 @@ async function ensureSerial(): Promise<void> {
     );
 }
 
-// Contest mode: is the committed call a duplicate in this occurrence, on the
-// rig's band? Asked on every commit, so a corrected call is asked about too.
-function askContestDupe(): void {
+// Contest mode: is the call a duplicate in this occurrence, on the rig's band?
+// Asked on every commit (so a corrected call is asked about too) and, from the
+// card, as a valid call is typed — the check never allocates a serial.
+export function askContestDupe(): void {
     if (!contest.on) return;
     const o = draftOccurrence();
     if (o.id === '' || o.start === '') return;

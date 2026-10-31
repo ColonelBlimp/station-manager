@@ -208,4 +208,36 @@ describe('LoggingCard: contest exchange', () => {
         expect(warns).toHaveLength(1);
         expect(warns[0].message).toContain('14.110');
     });
+
+    // Operator, during the contest (2026-10-31): checking for a dupe needed a
+    // Tab out of the callsign, which commits the contact and spends a serial.
+    // The check now runs as the callsign is typed; only a commit allocates.
+    it('checks for a dupe as the callsign is typed, without allocating a serial', async () => {
+        vi.useFakeTimers({
+            toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+        });
+        vi.setSystemTime(Date.UTC(2026, 9, 31, 13, 0));
+        const alloc = vi.fn(() => Promise.resolve({ ok: true as const, serial: 9 }));
+        const check = vi.fn((call: string) => Promise.resolve(call === 'G4ABC'));
+        setSerialAllocator(alloc);
+        setContestDupeCheck(check);
+        contest.on = true;
+        rig.band = '20m';
+        render(LoggingCard);
+        const call = screen.getByLabelText('Callsign');
+        await fireEvent.input(call, { target: { value: 'G4' } }); // not yet a valid call
+        await vi.advanceTimersByTimeAsync(500);
+        expect(check).not.toHaveBeenCalled();
+        await fireEvent.input(call, { target: { value: 'G4AB' } });
+        await vi.advanceTimersByTimeAsync(100);
+        await fireEvent.input(call, { target: { value: 'G4ABC' } }); // still typing: one check, not two
+        await vi.advanceTimersByTimeAsync(500);
+        flushSync();
+        expect(check).toHaveBeenCalledTimes(1);
+        expect(check).toHaveBeenCalledWith('G4ABC', '20m', 'UKEIDXSSB', '20261031');
+        expect(screen.getByTestId('contest-dupe')).toHaveTextContent('DUPE on 20m');
+        expect(alloc).not.toHaveBeenCalled();
+        expect(draft.stx).toBe('');
+        setContestDupeCheck(null);
+    });
 });

@@ -28,6 +28,7 @@
         qsoClock,
         draftAgeText,
         entryLock,
+        askContestDupe,
     } from './qso.svelte';
     import DuplicateDialog from './DuplicateDialog.svelte';
     import { observeWorked, openWorkedForQso } from './worked.svelte';
@@ -351,6 +352,18 @@
     });
     $effect(() => () => {
         if (ruleToast !== null) dismissToast(ruleToast.id);
+    });
+
+    // Contest dupe as you type (operator, during the contest, 2026-10-31):
+    // checking needed a Tab out of the callsign, which commits the contact and
+    // spends a serial. A valid typed call is checked once typing pauses; only a
+    // commit allocates.
+    $effect(() => {
+        const call = draft.callsign.trim().toUpperCase();
+        void rig.band;
+        if (!contest.on || isValidCallsign(call) !== null) return;
+        const t = setTimeout(() => askContestDupe(), 400);
+        return () => clearTimeout(t);
     });
 
     // Per-field malformed flags → red outlines; canLog() blocks on any of them.
