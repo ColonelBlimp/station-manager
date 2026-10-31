@@ -57,7 +57,7 @@
         const w = contestWindow();
         if (!contest.on || w === null) return null;
         const r = computeTimers(contestHistory.completions, w.startMs, w.endMs, now, w.offMin);
-        return { ...r, maxOpMin: w.maxOpMin };
+        return { ...r, maxOpMin: w.maxOpMin, offMin: w.offMin };
     });
     const hm = (min: number): string =>
         `${Math.floor(min / 60)}:${String(min % 60).padStart(2, '0')}`;
@@ -154,27 +154,50 @@
                 <option value={`${c.id}|${c.start}`}>{c.label}</option>
             {/each}
         </select>
-        {#if timers !== null}
-            <span
-                class="tabular-nums"
-                class:text-green-500={timers.offQualifies}
-                title="Minutes since your last contest QSO (from the clock minute after it); green once the gap counts as an off period"
+        {#if contest.on && contestHistory.failed}
+            <span class="text-xs text-muted" data-testid="timers-unavailable">
+                Timers unavailable —
+                <button
+                    type="button"
+                    class="cursor-pointer underline"
+                    onclick={() => void loadContestHistory(contestId(), contestStart())}
+                    >retry</button
+                >
+            </span>
+        {:else if timers !== null}
+            <!-- Labelled like the Archive / Logbook block (operator, 2026-10-31:
+                 say what each timer means; never wrap). -->
+            <div
+                class="flex flex-col text-xs leading-tight whitespace-nowrap"
+                title="Full minutes since your last contest QSO, counted from the clock minute after it. Green once the gap is long enough to count as an off period ({timers.offMin} min)."
                 data-testid="timer-last"
             >
-                Last {timers.sinceLastMin === null
-                    ? '–'
-                    : hm(timers.sinceLastMin)}{timers.offQualifies ? ' off ✓' : ''}
-            </span>
-            <span
-                class="tabular-nums"
-                class:text-amber-500={timers.opMin >= timers.maxOpMin - 60 &&
-                    timers.opMin <= timers.maxOpMin}
-                class:text-red-500={timers.opMin > timers.maxOpMin}
-                title="Operating time so far (off periods excluded) against the limited-time category's limit"
+                <span class="text-muted">Since last QSO</span>
+                <span
+                    class="text-sm font-medium text-ink tabular-nums"
+                    class:text-green-500={timers.offQualifies}
+                    data-testid="timer-last-value"
+                    >{timers.sinceLastMin === null
+                        ? '–'
+                        : hm(timers.sinceLastMin)}{timers.offQualifies ? ' off period ✓' : ''}</span
+                >
+            </div>
+            <div
+                class="flex flex-col text-xs leading-tight whitespace-nowrap"
+                title="Operating time so far, counted as the contest scorers do: off periods of {timers.offMin} minutes or more are excluded, shorter gaps count. Against the limited-time category's {hm(
+                    timers.maxOpMin
+                )}."
                 data-testid="timer-op"
             >
-                Op {hm(timers.opMin)} / {hm(timers.maxOpMin)}
-            </span>
+                <span class="text-muted">Operating time</span>
+                <span
+                    class="text-sm font-medium text-ink tabular-nums"
+                    class:text-amber-500={timers.opMin >= timers.maxOpMin - 60 &&
+                        timers.opMin <= timers.maxOpMin}
+                    class:text-red-500={timers.opMin > timers.maxOpMin}
+                    data-testid="timer-op-value">{hm(timers.opMin)} of {hm(timers.maxOpMin)}</span
+                >
+            </div>
         {/if}
     </div>
 

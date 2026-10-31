@@ -37,6 +37,25 @@ describe('contest history store', () => {
         expect(contestHistory.completions).toEqual([7]);
     });
 
+    // Codex review ad746e2f: a contact logged while the history is loading
+    // must survive the load's earlier snapshot.
+    it('keeps a contact logged while the history was loading', async () => {
+        let release: (v: number[]) => void = () => {};
+        setContestHistoryLoader(() => new Promise<number[]>((r) => (release = r)));
+        const load = loadContestHistory('UKEIDXSSB', '20261031');
+        noteContestQso('UKEIDXSSB', '20261031', 9000);
+        release([1000, 9000 - 0, 3000].filter((v) => v !== 9000)); // the daemon had not seen it
+        await load;
+        expect([...contestHistory.completions].sort()).toEqual([1000, 3000, 9000]);
+        // ...and one the daemon already returned is not counted twice.
+        setContestHistoryLoader(() => new Promise<number[]>((r) => (release = r)));
+        const again = loadContestHistory('UKEIDXSSB', '20261031');
+        noteContestQso('UKEIDXSSB', '20261031', 5000);
+        release([1000, 5000]);
+        await again;
+        expect([...contestHistory.completions].sort()).toEqual([1000, 5000]);
+    });
+
     it('a failed load leaves no history rather than a wrong one', async () => {
         setContestHistoryLoader(vi.fn(() => Promise.resolve(null)));
         await loadContestHistory('UKEIDXSSB', '20261031');

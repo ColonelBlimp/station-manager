@@ -45,18 +45,23 @@ describe('Header contest timers', () => {
     it('shows Last and Op in contest mode, from the occurrence history', async () => {
         await renderWith([at(12, 10)], at(12, 31));
         expect(contestHistory.key).toBe('UKEIDXSSB|20261031');
-        expect(screen.getByTestId('timer-last')).toHaveTextContent('Last 0:20');
-        expect(screen.getByTestId('timer-op')).toHaveTextContent('Op 0:21 / 12:00');
+        // Labelled, so each timer says what it is (operator, 2026-10-31).
+        expect(screen.getByTestId('timer-last')).toHaveTextContent('Since last QSO');
+        expect(screen.getByTestId('timer-last-value')).toHaveTextContent(/^0:20$/);
+        expect(screen.getByTestId('timer-op')).toHaveTextContent('Operating time');
+        expect(screen.getByTestId('timer-op-value')).toHaveTextContent(/^0:21 of 12:00$/);
+        expect(screen.getByTestId('timer-last')).toHaveAttribute('title');
+        expect(screen.getByTestId('timer-op')).toHaveAttribute('title');
     });
 
     it('ticks, and Last turns green as an off period at 60 minutes', async () => {
         await renderWith([at(12, 10)], at(13, 10));
-        expect(screen.getByTestId('timer-last')).toHaveTextContent('Last 0:59');
-        expect(screen.getByTestId('timer-last')).not.toHaveClass('text-green-500');
+        expect(screen.getByTestId('timer-last-value')).toHaveTextContent(/^0:59$/);
+        expect(screen.getByTestId('timer-last-value')).not.toHaveClass('text-green-500');
         await vi.advanceTimersByTimeAsync(60_000);
         flushSync();
-        expect(screen.getByTestId('timer-last')).toHaveTextContent('Last 1:00 off ✓');
-        expect(screen.getByTestId('timer-last')).toHaveClass('text-green-500');
+        expect(screen.getByTestId('timer-last-value')).toHaveTextContent(/^1:00 off period ✓$/);
+        expect(screen.getByTestId('timer-last-value')).toHaveClass('text-green-500');
     });
 
     it('Op turns amber from 11:00 and red past 12:00', async () => {
@@ -66,22 +71,45 @@ describe('Header contest timers', () => {
             return out;
         };
         await renderWith(every(at(12, 0), at(23, 0)), at(23, 1));
-        expect(screen.getByTestId('timer-op')).toHaveClass('text-amber-500');
+        expect(screen.getByTestId('timer-op-value')).toHaveClass('text-amber-500');
         await vi.advanceTimersByTimeAsync(60 * 60_000); // 00:01: a 61-minute gap is off
         flushSync();
-        expect(screen.getByTestId('timer-op')).toHaveClass('text-amber-500');
+        expect(screen.getByTestId('timer-op-value')).toHaveClass('text-amber-500');
         contestHistory.completions = every(at(12, 0), at(24, 30));
         await vi.advanceTimersByTimeAsync(60_000);
         flushSync();
-        expect(screen.getByTestId('timer-op')).toHaveClass('text-red-500');
+        expect(screen.getByTestId('timer-op-value')).toHaveClass('text-red-500');
     });
 
     it('nothing logged yet: Last is a dash; no timers outside contest mode', async () => {
         await renderWith([], at(12, 5));
-        expect(screen.getByTestId('timer-last')).toHaveTextContent('Last –');
+        expect(screen.getByTestId('timer-last-value')).toHaveTextContent(/^–$/);
         contest.on = false;
         flushSync();
         expect(screen.queryByTestId('timer-last')).toBeNull();
         expect(screen.queryByTestId('timer-op')).toBeNull();
+    });
+
+    // Codex review ad746e2f: a failed history load must not show zeros as if
+    // nothing had been logged; it says so and offers a retry.
+    it('a failed history load shows no timers, and a retry that reloads', async () => {
+        vi.setSystemTime(at(12, 31));
+        const loader = vi
+            .fn()
+            .mockResolvedValueOnce(null)
+            .mockResolvedValueOnce([at(12, 10)]);
+        setContestHistoryLoader(loader);
+        render(Header);
+        await vi.advanceTimersByTimeAsync(0);
+        flushSync();
+        expect(screen.queryByTestId('timer-last')).toBeNull();
+        expect(screen.queryByTestId('timer-op')).toBeNull();
+        const retry = screen.getByRole('button', { name: /retry/i });
+        expect(screen.getByTestId('timers-unavailable')).toHaveTextContent('Timers unavailable');
+        retry.click();
+        await vi.advanceTimersByTimeAsync(0);
+        flushSync();
+        expect(loader).toHaveBeenCalledTimes(2);
+        expect(screen.getByTestId('timer-last-value')).toHaveTextContent(/^0:20$/);
     });
 });
