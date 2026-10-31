@@ -14,6 +14,7 @@ import { toasts } from '../ui/toasts.svelte';
 import { commentHistory } from './commentHistory.svelte';
 import { contest, contestId, contestStart, districtsFor, rcvdDefaultFor } from './contest.svelte';
 import { checkContestDupe, clearContestDupe } from './contestDupe.svelte';
+import { noteContestQso } from './contestHistory.svelte';
 
 export interface QsoDraft {
     callsign: string;
@@ -502,6 +503,15 @@ export function dismissDuplicate(): void {
     submitState.duplicate = false;
 }
 
+// A logged contest contact's completion (QSO_DATE_OFF / TIME_OFF, UTC).
+function noteContestCompletion(q: SubmittedQso): void {
+    const d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(q.dateOff);
+    const t = /^(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(q.timeOff);
+    if (q.contestId === '' || d === null || t === null) return;
+    const ms = Date.UTC(+d[1], +d[2] - 1, +d[3], +t[1], +t[2], +(t[3] ?? 0));
+    noteContestQso(q.contestId, q.contestStart, ms);
+}
+
 function submittedSnapshot(): SubmittedQso {
     if (!contest.on) {
         return { ...draft, stx: '', srx: '', srxString: '', contestId: '', contestStart: '' };
@@ -545,9 +555,10 @@ export async function logDraft(force = false): Promise<boolean> {
     submitState.busy = true;
     submitState.error = '';
     submitState.duplicate = false;
+    const snapshot = submittedSnapshot();
     let res: SubmitResult;
     try {
-        res = (await submit?.(submittedSnapshot(), { force })) ?? { ok: true };
+        res = (await submit?.(snapshot, { force })) ?? { ok: true };
     } catch {
         res = { ok: false, message: 'Submit failed unexpectedly — the QSO was NOT logged.' };
     } finally {
@@ -559,6 +570,7 @@ export async function logDraft(force = false): Promise<boolean> {
         // duplicate "Log anyway" — DuplicateDialog → logDraft(true), which never
         // reaches the card's log handler — records it too (review c4f7474d P2).
         commentHistory.add(comment);
+        noteContestCompletion(snapshot); // the header's contest timers count it now
         clearDraft(); // next QSO starts now
         toasts.info(`Logged ${call}`);
         return true;

@@ -9,6 +9,8 @@ import {
     setSubmitGate,
 } from './lib/operate/qso.svelte';
 import { setContestDupeCheck } from './lib/operate/contestDupe.svelte';
+import { setContestHistoryLoader } from './lib/operate/contestHistory.svelte';
+import { fetchContestCompletions } from './lib/api/contest-history';
 import { allocateContestSerial } from './lib/api/contest-serial';
 import { fileSessionQso } from './lib/operate/session.svelte';
 import { fileFt8Logged } from './lib/operate/ft8Logged';
@@ -476,6 +478,12 @@ setContestDupeCheck(async (call, band, contestId, start) => {
     });
     return out.kind === 'ok' ? out.duplicate : null;
 });
+// The header's contest timers read the occurrence's contacts from this logbook.
+setContestHistoryLoader((contestId, start) =>
+    ctx.logbookId < 1
+        ? Promise.resolve(null)
+        : fetchContestCompletions(ctx.logbookId, contestId, start)
+);
 setSerialAllocator(async (contestId, start, draftKey) => {
     if (ctx.logbookId < 1) return { ok: false, message: 'daemon config unavailable' };
     const out = await allocateContestSerial(ctx.logbookId, contestId, start, draftKey);

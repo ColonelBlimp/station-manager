@@ -29,7 +29,25 @@ export interface ContestOccurrence {
     // may be used. The UI warns outside them.
     mode?: 'SSB' | 'CW';
     bands?: Readonly<Record<string, ReadonlyArray<readonly [number, number]> | null>>;
+    // When it runs and the off-time rules the header timers count by.
+    timing?: ContestTiming;
 }
+
+export interface ContestTiming {
+    startUtc: string; // HH:MM on the start date
+    hours: number;
+    offTimeMinutes: number; // a gap this long is an off period
+    maxOperatingMinutes: number; // the limited-time category's operating time
+}
+
+// UK/EI rule 2: every contest runs from 1200z Saturday to 1200z Sunday; rule
+// 4.4(b): in the 12-hour category each off period is at least 60 minutes.
+const UKEI_TIMING: ContestTiming = {
+    startUtc: '12:00',
+    hours: 24,
+    offTimeMinutes: 60,
+    maxOperatingMinutes: 12 * 60,
+};
 
 // UK/EI rule 3 (the page, read 2026-10-31): 3.5, 7, 14, 21 and 28 MHz;
 // "contest-preferred segments must be observed" — on 80 m and 20 m, SSB
@@ -66,6 +84,7 @@ export const CONTESTS: readonly ContestOccurrence[] = [
         label: 'UK/EI DX SSB — 31 Oct 2026',
         rcvdSerialDefault: '0',
         districts: UKEI_DISTRICTS,
+        timing: UKEI_TIMING,
         mode: 'SSB',
         bands: UKEI_SSB_BANDS,
     },
@@ -75,6 +94,7 @@ export const CONTESTS: readonly ContestOccurrence[] = [
         label: 'UK/EI DX CW — 24 Apr 2027',
         rcvdSerialDefault: '0',
         districts: UKEI_DISTRICTS,
+        timing: UKEI_TIMING,
         mode: 'CW',
         bands: UKEI_CW_BANDS,
     },
@@ -84,6 +104,7 @@ export const CONTESTS: readonly ContestOccurrence[] = [
         label: 'UK/EI DX SSB — 23 Oct 2027',
         rcvdSerialDefault: '0',
         districts: UKEI_DISTRICTS,
+        timing: UKEI_TIMING,
         mode: 'SSB',
         bands: UKEI_SSB_BANDS,
     },
@@ -230,4 +251,24 @@ export function contestRuleProblem(): ContestRuleProblem | null {
 /** The text of contestRuleProblem(), or null. */
 export function contestRuleWarning(): string | null {
     return contestRuleProblem()?.message ?? null;
+}
+
+/** The chosen contest's window and off-time rules, or null when it has none. */
+export function contestWindow(): {
+    startMs: number;
+    endMs: number;
+    offMin: number;
+    maxOpMin: number;
+} | null {
+    const c = chosenContest();
+    const start = contestStart();
+    if (c?.timing === undefined || start === '') return null;
+    const [h, m] = c.timing.startUtc.split(':').map(Number);
+    const startMs = Date.UTC(+start.slice(0, 4), +start.slice(4, 6) - 1, +start.slice(6, 8), h, m);
+    return {
+        startMs,
+        endMs: startMs + c.timing.hours * 3_600_000,
+        offMin: c.timing.offTimeMinutes,
+        maxOpMin: c.timing.maxOperatingMinutes,
+    };
 }

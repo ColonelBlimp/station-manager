@@ -16,7 +16,15 @@
     import { router } from '../router.svelte';
     import SessionTimer from './SessionTimer.svelte';
     import { archivesState, activeArchive } from '../config/archives.svelte';
-    import { contest, CONTESTS } from '../operate/contest.svelte';
+    import {
+        contest,
+        CONTESTS,
+        contestId,
+        contestStart,
+        contestWindow,
+    } from '../operate/contest.svelte';
+    import { contestHistory, loadContestHistory } from '../operate/contestHistory.svelte';
+    import { computeTimers } from '../operate/contestTimers';
     import { contestBound } from '../operate/qso.svelte';
 
     // Contest mode (W-0023 weekend slice; operator, 2026-10-31): ticked, the
@@ -25,6 +33,35 @@
     // contest ID and start date together. Both lock once the QSO in progress
     // has its serial: the number belongs to the occurrence it came from.
     const contestValue = $derived(`${contest.id}|${contest.start}`);
+    // Contest timers (operator, 2026-10-31): "Last" — full minutes since the
+    // last contest QSO, green once the gap is an off period (UK/EI rule 4.4b:
+    // 60 minutes) — and "Op", operating time so far against the limited-time
+    // category's limit (amber from an hour before it, red past it). Counted
+    // the scorers' way (contestTimers.ts). The occurrence's contacts load from
+    // the daemon when it is chosen; the clock ticks each second.
+    let now = $state(Date.now());
+    $effect(() => {
+        if (!contest.on) return;
+        const t = setInterval(() => (now = Date.now()), 1_000);
+        return () => clearInterval(t);
+    });
+    $effect(() => {
+        if (!contest.on) return;
+        const id = contestId();
+        const start = contestStart();
+        if (id !== '' && start !== '' && contestHistory.key !== `${id}|${start}`) {
+            void loadContestHistory(id, start);
+        }
+    });
+    const timers = $derived.by(() => {
+        const w = contestWindow();
+        if (!contest.on || w === null) return null;
+        const r = computeTimers(contestHistory.completions, w.startMs, w.endMs, now, w.offMin);
+        return { ...r, maxOpMin: w.maxOpMin };
+    });
+    const hm = (min: number): string =>
+        `${Math.floor(min / 60)}:${String(min % 60).padStart(2, '0')}`;
+
     function chooseContest(value: string): void {
         const c = CONTESTS.find((o) => `${o.id}|${o.start}` === value);
         if (c) Object.assign(contest, { id: c.id, start: c.start });
@@ -117,6 +154,28 @@
                 <option value={`${c.id}|${c.start}`}>{c.label}</option>
             {/each}
         </select>
+        {#if timers !== null}
+            <span
+                class="tabular-nums"
+                class:text-green-500={timers.offQualifies}
+                title="Minutes since your last contest QSO (from the clock minute after it); green once the gap counts as an off period"
+                data-testid="timer-last"
+            >
+                Last {timers.sinceLastMin === null
+                    ? '–'
+                    : hm(timers.sinceLastMin)}{timers.offQualifies ? ' off ✓' : ''}
+            </span>
+            <span
+                class="tabular-nums"
+                class:text-amber-500={timers.opMin >= timers.maxOpMin - 60 &&
+                    timers.opMin <= timers.maxOpMin}
+                class:text-red-500={timers.opMin > timers.maxOpMin}
+                title="Operating time so far (off periods excluded) against the limited-time category's limit"
+                data-testid="timer-op"
+            >
+                Op {hm(timers.opMin)} / {hm(timers.maxOpMin)}
+            </span>
+        {/if}
     </div>
 
     <!-- Station identity: the logbook this session writes to + the configured rig.

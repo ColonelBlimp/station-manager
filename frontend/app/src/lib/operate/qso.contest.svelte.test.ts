@@ -22,6 +22,7 @@ import {
     type SubmitResult,
 } from './qso.svelte';
 import { contest, contestRcvdDefault, districtName } from './contest.svelte';
+import { contestHistory } from './contestHistory.svelte';
 import { rig, confirmRig } from './rig.svelte';
 import { _resetForTests as resetToasts, toastsState } from '../ui/toasts.svelte';
 
@@ -302,6 +303,15 @@ describe('logging a contest QSO', () => {
         Object.assign(draft, { stx: '42', srx: '36', srxString: 'OX' });
         expect(await logDraft()).toBe(true);
         expect(submitted[0]).toMatchObject({ srx: '36' });
+    });
+
+    it('a logged contest QSO counts at once in the header timers', async () => {
+        contestHistory.key = 'UKEIDXSSB|20261031';
+        contestHistory.completions = [];
+        fill();
+        Object.assign(draft, { stx: '42', dateOff: '2026-10-31', timeOff: '12:03:15' });
+        expect(await logDraft()).toBe(true);
+        expect(contestHistory.completions).toEqual([Date.UTC(2026, 9, 31, 12, 3, 15)]);
     });
 
     it('outside contest mode sends no contest fields', async () => {
