@@ -60,6 +60,15 @@ describe('contest rule warning (UK/EI SSB)', () => {
         expect(at('10.120.000', '30m')).not.toBeNull();
     });
 
+    // Codex review 92dacbe8: the rig keeps its last band when tuned outside
+    // every amateur band (7.150 → 7.400), so the band comes from the frequency.
+    it('warns when the frequency leaves the band, whatever band the rig last reported', () => {
+        expect(at('7.400.000', '40m')).toContain('7.400');
+        expect(at('21.500.000', '15m')).not.toBeNull();
+        expect(at('29.800.000', '10m')).not.toBeNull();
+        expect(at('7.150.000', '20m')).toBeNull(); // a stale band name, a good frequency
+    });
+
     it('warns on the wrong mode for the event', () => {
         expect(at('14.200.000', '20m', 'AM')).toContain('SSB');
         expect(at('14.200.000', '20m', 'CW')).toContain('SSB');

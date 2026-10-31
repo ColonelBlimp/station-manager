@@ -10,6 +10,7 @@
 import { UKEI_DISTRICTS } from './ukeiDistricts';
 import { rig } from './rig.svelte';
 import { parseFrequency } from '../validators/frequency';
+import { frequencyToBand } from '../utils/frequency';
 import { resolveModeAndSubmode } from '../utils/mode';
 
 const KEY = 'sm.contest';
@@ -194,20 +195,26 @@ export function contestRuleProblem(): ContestRuleProblem | null {
     const hz = parseFrequency(rig.freq);
     if (hz === null) return null;
     const name = c.label.split(' — ')[0];
-    if (!Object.hasOwn(c.bands, rig.band)) {
+    // The band comes from the frequency, not rig.band: the rig keeps its last
+    // band when tuned outside every amateur band (Codex review 92dacbe8).
+    const band = frequencyToBand(hz);
+    if (!Object.hasOwn(c.bands, band)) {
         const list = Object.keys(c.bands).map((b) => b.replace('m', ''));
         const bands = `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]} m`;
         return {
-            key: `band:${rig.band}`,
-            message: `${rig.band} is not a ${name} band (${bands}).`,
+            key: `band:${band || 'none'}`,
+            message:
+                band !== ''
+                    ? `${band} is not a ${name} band (${bands}).`
+                    : `${mhz(hz / 1000)} is outside the amateur bands — not a ${name} band (${bands}).`,
         };
     }
-    const segments = c.bands[rig.band];
+    const segments = c.bands[band];
     const khz = hz / 1000;
     if (segments !== null && !segments.some(([lo, hi]) => khz >= lo && khz <= hi)) {
         const ranges = segments.map(([lo, hi]) => `${mhz(lo)}–${mhz(hi)}`).join(', ');
         return {
-            key: `segment:${rig.band}`,
+            key: `segment:${band}`,
             message: `${mhz(khz)} is outside the ${name} segment ${ranges} — rule 9.2: all QSOs disallowed.`,
         };
     }
