@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ColonelBlimp/station-manager/internal/adif"
+	"github.com/ColonelBlimp/station-manager/internal/enums/source"
 	"github.com/stretchr/testify/require"
 )
 
@@ -37,4 +38,28 @@ func TestSubmit_ContestExchangeSurvivesStorageAndExport(t *testing.T) {
 	for _, want := range []string{"<contest_id:9>UKEIDXSSB", "<stx:3>042", "<srx:2>36", "<srx_string:2>OX", "<app_sm_contest_start:8>20261031"} {
 		require.Contains(t, strings.ToLower(out), strings.ToLower(want))
 	}
+}
+
+// The edit panel's Contest section (W-0023 weekend slice) corrects the
+// exchange through the ordinary edit: STX, SRX and SRX_STRING are saved, and
+// the contest and its occurrence stay as logged.
+func TestUpdate_CorrectsTheContestExchange(t *testing.T) {
+	s := newTestService(t)
+	lbID := seedLogbook(t, s, "Main", "7Q5MLV")
+	ctx := context.Background()
+	rec := ssbRec("7Q5MLV", "G4ABC")
+	rec.QsoDetails.ContestId, rec.QsoDetails.STX = "UKEIDXSSB", "4"
+	rec.AppSmContestStart = "20261031"
+	res, err := s.Submit(ctx, lbID, rec, false)
+	require.NoError(t, err)
+	existing, err := s.DB.FetchQsoByUUIDWithContext(ctx, res.UUID)
+	require.NoError(t, err)
+
+	_, err = s.Update(ctx, existing, []byte(`{"stx":"5","srx":"0","srx_string":"OX"}`), source.API)
+	require.NoError(t, err)
+	got, err := s.DB.FetchQsoByUUIDWithContext(ctx, res.UUID)
+	require.NoError(t, err)
+	require.Equal(t,
+		[5]string{"5", "0", "OX", "UKEIDXSSB", "20261031"},
+		[5]string{got.QsoDetails.STX, got.QsoDetails.SRX, got.QsoDetails.SrxString, got.QsoDetails.ContestId, got.AppSmContestStart})
 }

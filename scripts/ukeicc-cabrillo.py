@@ -40,7 +40,8 @@ Rules it applies (docs/work/W-0023-contest-logging.md, organiser-reply rulings):
     segments on 80/20 m is listed: rule 9.2 disallows all QSOs for operating
     outside them.
 
-ERROR lines (a record or the file needs fixing) stop the export: the -o file
+Findings are printed and kept in <output>.issues.txt (removed after a clean
+run). ERROR lines (a record or the file needs fixing) stop the export: the -o file
 is not written or replaced (an earlier export stays as it was) and the exit
 status is 1, so an incomplete file is never submitted by accident. The file is
 written to a temporary name and renamed into place only on success. NOTE lines
@@ -258,23 +259,33 @@ def main(argv=None):
             with open(a.adif, "rb") as f:
                 records = parse_adif(f.read())
     except (urllib.error.URLError, OSError, ValueError) as e:
-        print(f"ERROR: could not read the contacts: {e}", file=sys.stderr)
-        print("no Cabrillo written", file=sys.stderr)
-        return 1
+        return report(a.output, [f"could not read the contacts: {e}"], [], None)
     except AdifError as e:
-        print(f"ERROR: {e}", file=sys.stderr)
-        print("no Cabrillo written", file=sys.stderr)
-        return 1
+        return report(a.output, [str(e)], [], None)
     lines, errors, notes = convert(records, a)
-    for line in notes:
-        print(f"NOTE: {line}", file=sys.stderr)
-    for line in errors:
-        print(f"ERROR: {line}", file=sys.stderr)
-    if errors:
-        print(f"{len(errors)} error(s): fix them in the logbook, export again — no Cabrillo written", file=sys.stderr)
+    return report(a.output, errors, notes, lines)
+
+
+def report(output, errors, notes, lines):
+    """Print the findings, keep them in <output>.issues.txt (removed on a clean
+    run, so an old one never misleads), and write the Cabrillo only when there
+    are no errors. Returns the exit status."""
+    found = [f"NOTE: {n}" for n in notes] + [f"ERROR: {e}" for e in errors]
+    for line in found:
+        print(line, file=sys.stderr)
+    issues = output + ".issues.txt"
+    if found:
+        write_atomically(issues, "\n".join(found) + "\n")
+    elif os.path.exists(issues):
+        os.remove(issues)
+    if errors or lines is None:
+        print(f"{len(errors)} error(s): fix them in the logbook and run again — no Cabrillo written; "
+              f"the list is in {issues}", file=sys.stderr)
         return 1
-    write_atomically(a.output, "\n".join(lines) + "\n")
-    print(f"{a.output}: {sum(l.startswith('QSO:') for l in lines)} QSO line(s); {len(notes)} note(s)", file=sys.stderr)
+    write_atomically(output, "\n".join(lines) + "\n")
+    tail = f"; notes in {issues}" if notes else ""
+    print(f"{output}: {sum(l.startswith('QSO:') for l in lines)} QSO line(s); {len(notes)} note(s){tail}",
+          file=sys.stderr)
     return 0
 
 

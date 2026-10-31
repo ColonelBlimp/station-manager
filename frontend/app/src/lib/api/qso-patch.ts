@@ -79,6 +79,11 @@ export interface QsoPatch {
     cqz?: string;
     ituz?: string;
     cont?: string;
+    // The contest exchange, corrected in the edit panel's Contest section
+    // (W-0023 weekend slice). The contest and occurrence are not editable.
+    stx?: string;
+    srx?: string;
+    srx_string?: string;
 }
 
 export type PatchOutcome =

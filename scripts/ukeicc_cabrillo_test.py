@@ -153,6 +153,38 @@ class Converter(unittest.TestCase):
             if os.path.exists(OUT):
                 os.remove(OUT)
 
+    def test_issues_are_written_to_a_file_beside_the_output(self):
+        issues = OUT + ".issues.txt"
+        try:
+            # Errors: no Cabrillo, but the issues file lists them.
+            code, lines, err = run(rec("G4ABC", "1", district="QQ"))
+            self.assertEqual(code, 1)
+            self.assertEqual(lines, [])
+            text = open(issues, encoding="utf-8").read()
+            self.assertIn("ERROR: G4ABC", text)
+            self.assertIn("not a UK/EI District Code", text)
+            # Notes only: the Cabrillo is written, and so are the notes.
+            code, lines, err = run(rec("G4A", "1", district="OX") + rec("G4B", "3", district="OX"))
+            self.assertEqual(code, 0, err)
+            self.assertIn("NOTE: unused serials", open(issues, encoding="utf-8").read())
+            # Clean: no issues file is left behind to mislead.
+            code, lines, err = run(rec("G4A", "1", district="OX"))
+            self.assertEqual(code, 0, err)
+            self.assertFalse(os.path.exists(issues))
+        finally:
+            if os.path.exists(issues):
+                os.remove(issues)
+
+    def test_unreadable_input_is_written_to_the_issues_file(self):
+        issues = OUT + ".issues.txt"
+        try:
+            code, lines, _ = run(rec("G4ABC", "1", district="OX").replace("<EOR>", ""))
+            self.assertEqual(code, 1)
+            self.assertIn("ERROR: ADIF", open(issues, encoding="utf-8").read())
+        finally:
+            if os.path.exists(issues):
+                os.remove(issues)
+
     def test_outside_the_segment_says_all_qsos_are_disallowed(self):
         code, lines, err = run(rec("G4ABC", "1", district="OX", freq="14.100000"))
         self.assertEqual(code, 0, err)

@@ -21,6 +21,7 @@
     import type { EnrichmentStation, EnrichmentCountry } from '../api/enrichment';
     import type { LogbookQso } from '../api/logbooks';
     import type { QsoPatch } from '../api/qso-patch';
+    import { districtsFor } from '../operate/contest.svelte';
 
     interface Props {
         row: LogbookQso;
@@ -62,8 +63,46 @@
             name: row.name ?? '',
             gridsquare: row.gridsquare ?? '',
             comment: row.comment ?? '',
+            stx: row.stx ?? '',
+            srx: row.srx ?? '',
+            srx_string: row.srx_string ?? '',
         }))
     );
+
+    // The Contest section (W-0023 weekend slice; operator, 2026-10-31): a contest
+    // contact's exchange can be corrected here, with the Phone form's checks —
+    // a serial sent, numeric serials, and a district from the contest's list (or
+    // '--' / blank). The contest and its occurrence are shown, not editable.
+    // One-shot, like the form seed: the modal is mounted fresh for each row.
+    const { isContest, occurrence, contestId } = untrack(() => {
+        const id = row.contest_id ?? '';
+        return {
+            isContest: id !== '',
+            contestId: id,
+            occurrence:
+                id !== '' ? `${id} · ${formatQsoDate(row.app_sm_contest_start) || '?'}` : '',
+        };
+    });
+    const districtOf = (code: string): string => {
+        const list = districtsFor(contestId);
+        const key = code.trim().toUpperCase();
+        return list !== null && Object.hasOwn(list, key) ? list[key] : '';
+    };
+    const exchangeOk = $derived.by(() => {
+        if (!isContest) return true;
+        const serial = /^\d{1,5}$/;
+        const d = form.srx_string.trim().toUpperCase();
+        const list = districtsFor(contestId);
+        const districtOk =
+            d === '' ||
+            d === '--' ||
+            (list !== null ? Object.hasOwn(list, d) : /^[A-Z]{2}$/.test(d));
+        return (
+            serial.test(form.stx.trim()) &&
+            (form.srx.trim() === '' || serial.test(form.srx.trim())) &&
+            districtOk
+        );
+    });
 
     // Re-enrich (the repair path for stale/missing enrichment — nameless
     // flaky-link QSOs, misfiled countries): force-fresh lookup
@@ -266,6 +305,11 @@
         // callsign still matches the form — an independent recheck of the generation
         // guard, so A's hidden dxcc/zones can never be saved under B (F-02). Only
         // non-empty values, never blanking an existing stored field.
+        if (isContest) {
+            patch.stx = form.stx.trim();
+            patch.srx = form.srx.trim();
+            patch.srx_string = form.srx_string.trim().toUpperCase();
+        }
         if (enrichExtras !== null && enrichExtras.call === form.call.trim().toUpperCase()) {
             for (const k of ['dxcc', 'cqz', 'ituz', 'cont'] as const) {
                 const v = enrichExtras[k];
@@ -280,7 +324,7 @@
     // bypass it, and closing (or re-saving) mid-PATCH races the write-back
     // onto whichever row the modal shows next.
     function save(): void {
-        if (saving) return;
+        if (saving || !exchangeOk) return;
         onSave(buildPatch());
     }
 
@@ -410,6 +454,54 @@
                 <span class="text-muted">Comment</span>
                 <input type="text" class="input mt-0" bind:value={form.comment} />
             </label>
+
+            {#if isContest}
+                <fieldset
+                    class="grid grid-cols-1 gap-x-4 gap-y-3 border-t border-line pt-3 sm:col-span-3 sm:grid-cols-3"
+                >
+                    <legend class="text-sm font-semibold text-ink">Contest</legend>
+                    <p class="text-sm text-muted sm:col-span-3">{occurrence}</p>
+                    <label class="flex flex-col gap-1 text-sm">
+                        <span class="text-muted">Sent #</span>
+                        <input
+                            type="text"
+                            class="input mt-0 font-mono"
+                            class:input-error={!/^\d{1,5}$/.test(form.stx.trim())}
+                            inputmode="numeric"
+                            bind:value={form.stx}
+                        />
+                    </label>
+                    <label class="flex flex-col gap-1 text-sm">
+                        <span class="text-muted">Rcvd #</span>
+                        <input
+                            type="text"
+                            class="input mt-0 font-mono"
+                            class:input-error={form.srx.trim() !== '' &&
+                                !/^\d{1,5}$/.test(form.srx.trim())}
+                            inputmode="numeric"
+                            bind:value={form.srx}
+                        />
+                    </label>
+                    <label class="flex flex-col gap-1 text-sm">
+                        <span class="text-muted">District</span>
+                        <input
+                            type="text"
+                            class="input mt-0 font-mono uppercase"
+                            class:input-error={!exchangeOk &&
+                                form.srx_string.trim() !== '' &&
+                                form.srx_string.trim() !== '--' &&
+                                districtOf(form.srx_string) === ''}
+                            placeholder="--"
+                            bind:value={form.srx_string}
+                        />
+                        {#if districtOf(form.srx_string)}
+                            <span class="text-xs text-muted" data-testid="edit-district-name"
+                                >{districtOf(form.srx_string)}</span
+                            >
+                        {/if}
+                    </label>
+                </fieldset>
+            {/if}
         </form>
 
         {#if error !== null}
@@ -437,7 +529,12 @@
             {/if}
             <span class="ml-auto"></span>
             <button type="button" class="btn" disabled={saving} onclick={close}>Cancel</button>
-            <button type="button" class="btn btn-primary" disabled={saving} onclick={save}>
+            <button
+                type="button"
+                class="btn btn-primary"
+                disabled={saving || !exchangeOk}
+                onclick={save}
+            >
                 {saving ? 'Saving…' : 'Save'}
             </button>
         </div>

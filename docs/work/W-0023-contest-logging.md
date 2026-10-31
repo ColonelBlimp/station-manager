@@ -821,6 +821,10 @@ deliberate subset of the design above, not its implementation:
 - **Not sent as comments:** the exchange travels as the standard ADIF fields. Comments and Notes are
   both uploaded (`internal/adif/string.go`), so the comment convention below is retired. How upstream
   services display `STX`/`SRX`/`SRX_STRING` is not established.
+- **Correcting the exchange (operator, 2026-10-31):** the edit panel has a Contest section for a
+  contest contact — the contest and occurrence shown read-only, Sent #, Rcvd # and District editable
+  with the Phone form's checks (Save disabled on a bad exchange); saved through the ordinary edit.
+  The converter keeps its findings in `<output>.issues.txt`, removed after a clean run.
 - **District validation (operator, 2026-10-31):** the received district must be one of the 155 UK/EI
   District Codes (Appendix 2, rules "Version 19 - 2nd May 2026"; `ukeiDistricts.ts`), `--` or blank;
   an unlisted code blocks Log, and a valid one shows its name. The converter checks the same list.

@@ -85,6 +85,12 @@ export interface LogbookQso {
     lon?: string;
     my_lat?: string;
     my_lon?: string;
+    // The contest exchange (W-0023 weekend slice): set on a contest contact.
+    contest_id?: string;
+    app_sm_contest_start?: string; // the occurrence, ADIF Date YYYYMMDD
+    stx?: string;
+    srx?: string;
+    srx_string?: string;
     // Upload/forward status (e.g. "Y") — drive the callsign tint.
     sm_fwrd_by_email_status?: string;
     qrzcom_qso_upload_status?: string;
