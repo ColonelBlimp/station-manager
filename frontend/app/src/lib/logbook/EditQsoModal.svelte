@@ -21,7 +21,7 @@
     import type { EnrichmentStation, EnrichmentCountry } from '../api/enrichment';
     import type { LogbookQso } from '../api/logbooks';
     import type { QsoPatch } from '../api/qso-patch';
-    import { districtsFor } from '../operate/contest.svelte';
+    import { districtsFor, isSupportedContest } from '../operate/contest.svelte';
 
     interface Props {
         row: LogbookQso;
@@ -77,7 +77,10 @@
     const { isContest, occurrence, contestId } = untrack(() => {
         const id = row.contest_id ?? '';
         return {
-            isContest: id !== '',
+            // Only a contest the catalogue supports: another contest's contact
+            // (an import, FT8 Field Day) keeps its exchange untouched and its
+            // edits unblocked (Codex review 0de71512).
+            isContest: isSupportedContest(id),
             contestId: id,
             occurrence:
                 id !== '' ? `${id} · ${formatQsoDate(row.app_sm_contest_start) || '?'}` : '',

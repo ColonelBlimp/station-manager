@@ -57,6 +57,11 @@ export function rcvdDefaultFor(id: string): string {
     return CONTESTS.find((c) => c.id === id)?.rcvdSerialDefault ?? '';
 }
 
+/** A contest the catalogue supports — the only ones whose exchange the app checks. */
+export function isSupportedContest(id: string): boolean {
+    return CONTESTS.some((c) => c.id === id);
+}
+
 /** The district list for this contest ID, or null when it has none. */
 export function districtsFor(id: string): Readonly<Record<string, string>> | null {
     return CONTESTS.find((c) => c.id === id)?.districts ?? null;

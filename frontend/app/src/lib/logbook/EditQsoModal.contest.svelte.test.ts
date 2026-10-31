@@ -78,4 +78,19 @@ describe('EditQsoModal: Contest section', () => {
         expect(patch).not.toHaveProperty('srx');
         expect(patch).not.toHaveProperty('srx_string');
     });
+
+    // Codex review 0de71512: an imported or FT8 Field Day contact carries another
+    // contest's ID and exchange; the UK/EI checks must not lock it.
+    it('a contact of an unsupported contest keeps its exchange and can be saved', async () => {
+        const onSave = vi.fn();
+        render(EditQsoModal, {
+            props: props({ contest_id: 'ARRL-FD', srx_string: '2A EMA', stx: '' }, onSave),
+        });
+        expect(screen.queryByRole('group', { name: 'Contest' })).toBeNull();
+        expect(saveBtn()).toBeEnabled();
+        await fireEvent.click(saveBtn());
+        const patch: unknown = onSave.mock.calls[0][0];
+        expect(patch).not.toHaveProperty('stx');
+        expect(patch).not.toHaveProperty('srx_string');
+    });
 });
