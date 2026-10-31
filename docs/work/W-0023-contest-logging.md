@@ -805,8 +805,11 @@ deliberate subset of the design above, not its implementation:
   keeps its serial whatever other drafts take in between (Codex review 2026-10-30, finding 3). A new
   serial goes above any Sent # already saved for the occurrence, so a serial typed by hand is never
   handed out again (Codex review of `b2ad69dd`). `SRX_STRING` added to `types.QsoDetails`; `CONTEST_ID`, `STX`, `SRX` already existed.
-- **Phone / CW form:** a Contest toggle with the contest ID (default `UKEIDXSSB`) and start date,
-  remembered per browser; no serial is allocated, and Log stays disabled (a typed Sent # included),
+- **Contest choice (operator, 2026-10-31: in the shell header):** a Contest checkbox and, when
+  ticked, a dropdown of the supported contests — each entry one occurrence (UK/EI DX SSB 31 Oct 2026,
+  CW 24 Apr 2027, SSB 23 Oct 2027), so choosing it sets the contest ID and start date together;
+  remembered per browser.
+- **Phone / CW form:** no serial is allocated, and Log stays disabled (a typed Sent # included),
   without a valid contest ID (the daemon's rule: 1–40 of `A-Z 0-9 _ -`) and start date; both stay
   editable for correction; in contest mode a Sent # (allocated, editable, out of the tab order), Rcvd # and District
   row; Log needs a Sent #. The toggle, contest ID and start date lock once the QSO's serial is
@@ -818,10 +821,21 @@ deliberate subset of the design above, not its implementation:
 - **Not sent as comments:** the exchange travels as the standard ADIF fields. Comments and Notes are
   both uploaded (`internal/adif/string.go`), so the comment convention below is retired. How upstream
   services display `STX`/`SRX`/`SRX_STRING` is not established.
+- **Blank Rcvd # (operator, 2026-10-31; revises ruling B for entry):** for the UK/EI contests a blank
+  Rcvd # is logged as `0` (sponsor rule 6: a received serial not copied is logged as zero and still
+  scores); the field shows a `0` placeholder. Per contest, in the header catalogue
+  (`rcvdSerialDefault`). The converter still refuses a blank `SRX` in a file, which the form no
+  longer produces for these contests.
 - **Missing exchange (rulings B and D, applied as recorded):** a received serial typed `0` and a
   district typed `--` are the explicit "not copied" records and export as `000` and `--`. A blank
   received serial, or a blank district for a UK/EI callsign, stops the export. A DX station has no
   district and exports `--`.
+- **Cabrillo source (operator, 2026-10-31):** `--from-daemon URL` reads every contact of the logbook
+  from the running daemon (`GET /v1/logbook/{id}/qso`, all pages, read-only; the default logbook
+  unless `--logbook` names one), because the only ADIF export is a tab's Session list. **The script
+  is temporary, for the 2026 SSB event:** the operator wants a Cabrillo export in the product (inbox
+  2026-10-28, "cabrillo format session and logbook export"), built through the contest catalogue;
+  the script's tests and these rulings carry over to it.
 - **Cabrillo:** `scripts/ukeicc-cabrillo.py`, a standalone converter over the logbook's ADIF export,
   with tests (`scripts/ukeicc_cabrillo_test.py`): members by `CONTEST_ID` and occurrence (another
   occurrence is listed and left out); window `[start, start+24h)` on completion; `QSO:` time truncated

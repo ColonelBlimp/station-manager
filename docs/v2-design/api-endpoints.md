@@ -280,7 +280,7 @@ The station-global archive catalogue (`config.md` §3): the archive the daemon s
 ### `GET /v1/contest-dupe`
 - **Purpose:** "Worked this call on this band (and mode) in this logbook?" — hot-path contest/FT8 dupe check.
 - **Gating:** Always-on.
-- **Request:** Query `logbook` (int, **req**), `call` (**req**, validated), `band` (**req**, validated), `mode` (optional, validated), `submode` (optional, ADR 0080 — narrows a mode match to one ADIF SUBMODE, exact match on the stored value, not enumeration-checked: an FT4 contact is filed `MFSK`/`FT4`, and "worked on FT4" must not answer for JS8).
+- **Request:** Query `logbook` (int, **req**), `call` (**req**, validated), `band` (**req**, validated), `mode` (optional, validated), `submode` (optional, ADR 0080 — narrows a mode match to one ADIF SUBMODE, exact match on the stored value, not enumeration-checked: an FT4 contact is filed `MFSK`/`FT4`, and "worked on FT4" must not answer for JS8). `contest` + `start` (optional, together; W-0023 weekend slice): a contest occurrence — `CONTEST_ID` and its start date `YYYYMMDD`. Then only that occurrence's own contacts count (`CONTEST_ID` and `APP_SM_CONTEST_START` both match), by band — `mode`/`submode` are ignored — so a station worked before the contest is not a contest duplicate. The Phone form's contest-mode DUPE warning asks this; it warns and never refuses (the sponsor keeps duplicates). Either one alone, or an invalid value, is 400 `invalid_field_value`.
 - **Response:** **200** `{"duplicate": bool}`.
 - **Errors:** 400 `missing_required_param`/`invalid_id`/`invalid_field_value`; 404 `logbook_not_found`; 500 `db_error`.
 

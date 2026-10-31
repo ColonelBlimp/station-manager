@@ -6,7 +6,9 @@ import (
 	stderr "errors"
 	"strings"
 
+	"github.com/ColonelBlimp/station-manager/internal/database/sqlite/models"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/aarondl/sqlboiler/v4/queries/qm"
 )
 
 // AllocateContestSerialWithContext hands out the sent serial for one draft of
@@ -54,4 +56,40 @@ func (s *Service) AllocateContestSerialWithContext(ctx context.Context, logbookI
 		return 0, errors.New(op).WithErr(err).WithMsg("allocate contest serial")
 	}
 	return serial, nil
+}
+
+// IsContestOccurrenceDuplicateWithContext answers "have I worked this call on
+// this band in this contest occurrence already?" (W-0023 weekend slice). Only
+// the occurrence's own contacts count — CONTEST_ID and APP_SM_CONTEST_START
+// both match — so a contact before the contest, or in another edition, is not
+// a duplicate. Band only: the UK/EI contests are one mode each. Deleted
+// contacts do not count (the models' default filter). A duplicate is reported,
+// never refused: the sponsor keeps duplicates in the log (ruling A).
+func (s *Service) IsContestOccurrenceDuplicateWithContext(ctx context.Context, logbookID int64, callsign, band, contestID, occurrence string) (bool, error) {
+	const op errors.Op = "sqlite.Service.IsContestOccurrenceDuplicateWithContext"
+	if err := checkService(op, s); err != nil {
+		return false, err
+	}
+	callsign, band = strings.TrimSpace(callsign), strings.TrimSpace(band)
+	contestID, occurrence = strings.TrimSpace(contestID), strings.TrimSpace(occurrence)
+	if logbookID < 1 || callsign == "" || band == "" || contestID == "" || occurrence == "" {
+		return false, errors.New(op).WithMsg("logbook, callsign, band, contest and occurrence are required")
+	}
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return false, err
+	}
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+	exists, err := models.Qsos(
+		models.QsoWhere.Call.EQ(callsign),
+		models.QsoWhere.Band.EQ(band),
+		models.QsoWhere.LogbookID.EQ(logbookID),
+		qm.Where("json_extract(additional_data, '$.contest_id') = ?", contestID),
+		qm.Where("json_extract(additional_data, '$.app_sm_contest_start') = ?", occurrence),
+	).Exists(ctx, h)
+	if err != nil {
+		return false, errors.New(op).WithErr(err)
+	}
+	return exists, nil
 }

@@ -8,6 +8,7 @@ import {
     setSubmit,
     setSubmitGate,
 } from './lib/operate/qso.svelte';
+import { setContestDupeCheck } from './lib/operate/contestDupe.svelte';
 import { allocateContestSerial } from './lib/api/contest-serial';
 import { fileSessionQso } from './lib/operate/session.svelte';
 import { fileFt8Logged } from './lib/operate/ft8Logged';
@@ -462,6 +463,19 @@ const operateGate = (): string | null => archiveSwitchGate() ?? defaultChangeGat
 setSubmitGate(operateGate);
 // Contest serials are counted in the logbook the Phone form logs to: the
 // established station context's default (W-0023 weekend slice).
+// The contest dupe warning asks about this logbook and contest occurrence; a
+// failed check shows nothing (null), never a false alarm.
+setContestDupeCheck(async (call, band, contestId, start) => {
+    if (ctx.logbookId < 1) return null;
+    const out = await fetchContestDupe({
+        logbook: ctx.logbookId,
+        call,
+        band,
+        contest: contestId,
+        start,
+    });
+    return out.kind === 'ok' ? out.duplicate : null;
+});
 setSerialAllocator(async (contestId, start, draftKey) => {
     if (ctx.logbookId < 1) return { ok: false, message: 'daemon config unavailable' };
     const out = await allocateContestSerial(ctx.logbookId, contestId, start, draftKey);

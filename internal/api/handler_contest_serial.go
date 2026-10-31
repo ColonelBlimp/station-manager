@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -13,6 +14,21 @@ import (
 // contestIDPattern: an ADIF CONTEST_ID as the SPA sends it — no spaces, so it
 // can sit in a Cabrillo CONTEST: header unchanged.
 var contestIDPattern = regexp.MustCompile(`^[A-Z0-9_-]{1,40}$`)
+
+// contestOccurrence reads and checks a request's contest occurrence: contest
+// (an ADIF CONTEST_ID, upper-cased) and start (the event's start date,
+// YYYYMMDD). msg is the refusal, "" when both are valid.
+func contestOccurrence(q url.Values) (contest, start, msg string) {
+	contest = strings.ToUpper(strings.TrimSpace(q.Get("contest")))
+	if !contestIDPattern.MatchString(contest) {
+		return "", "", "contest must be 1-40 letters, digits, '-' or '_'"
+	}
+	start = strings.TrimSpace(q.Get("start"))
+	if _, err := time.Parse("20060102", start); err != nil || len(start) != 8 {
+		return "", "", "start must be a date, YYYYMMDD"
+	}
+	return contest, start, ""
+}
 
 // handleContestSerial hands out the next sent serial for a contest in a
 // logbook (W-0023 weekend slice). The Phone form calls it when a contest QSO
@@ -34,15 +50,9 @@ func (s *Server) handleContestSerial(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "invalid_id", "logbook must be a positive integer", op)
 		return
 	}
-	contest := strings.ToUpper(strings.TrimSpace(q.Get("contest")))
-	if !contestIDPattern.MatchString(contest) {
-		s.writeError(w, http.StatusBadRequest, "invalid_field_value",
-			"contest must be 1-40 letters, digits, '-' or '_'", op)
-		return
-	}
-	start := strings.TrimSpace(q.Get("start"))
-	if _, err := time.Parse("20060102", start); err != nil || len(start) != 8 {
-		s.writeError(w, http.StatusBadRequest, "invalid_field_value", "start must be a date, YYYYMMDD", op)
+	contest, start, msg := contestOccurrence(q)
+	if msg != "" {
+		s.writeError(w, http.StatusBadRequest, "invalid_field_value", msg, op)
 		return
 	}
 	draft := strings.TrimSpace(q.Get("draft"))

@@ -243,8 +243,15 @@ describe('Header archive name (H1)', () => {
         archivesState.list = [HOME, CONTEST];
         const { container } = render(Header);
         expect(screen.queryByLabelText('Active archive')).toBeNull();
-        expect(container.querySelector('header select')).toBeNull();
-        expect(screen.queryByRole('combobox')).toBeNull();
+        // The header's one dropdown is the contest choice (W-0023 weekend slice,
+        // 2026-10-31); nothing in it may name or switch an archive (ADR 0087).
+        const selects = [...container.querySelectorAll('header select')];
+        expect(selects.map((el) => el.getAttribute('data-testid'))).toEqual(['contest-select']);
+        expect(screen.getAllByRole('combobox')).toHaveLength(1);
+        const options = selects.flatMap((el) => [...el.querySelectorAll('option')]);
+        for (const label of [HOME.label, CONTEST.label]) {
+            expect(options.some((o) => o.textContent === label || o.value === label)).toBe(false);
+        }
     });
 
     it('names a pending candidate while the restart is awaited', () => {

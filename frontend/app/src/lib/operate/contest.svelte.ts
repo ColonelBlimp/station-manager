@@ -9,6 +9,51 @@
 
 const KEY = 'sm.contest';
 
+/** One supported contest occurrence: what the header's dropdown offers. */
+export interface ContestOccurrence {
+    id: string; // ADIF CONTEST_ID
+    start: string; // the event's start date, YYYY-MM-DD (UTC)
+    label: string;
+    // What a blank Rcvd # is logged as, when the contest's rules give one.
+    rcvdSerialDefault?: string;
+}
+
+// The supported contests (operator, 2026-10-31: chosen from a dropdown in the
+// shell header). Dates from the sponsor's rules page as recorded in W-0023;
+// the Cabrillo converter (scripts/ukeicc-cabrillo.py) supports these IDs.
+export const CONTESTS: readonly ContestOccurrence[] = [
+    // UK/EI rule 6: a received serial not copied is logged as zero and still
+    // scores (operator, 2026-10-31: blank Rcvd # is logged as 0).
+    {
+        id: 'UKEIDXSSB',
+        start: '2026-10-31',
+        label: 'UK/EI DX SSB — 31 Oct 2026',
+        rcvdSerialDefault: '0',
+    },
+    {
+        id: 'UKEIDXCW',
+        start: '2027-04-24',
+        label: 'UK/EI DX CW — 24 Apr 2027',
+        rcvdSerialDefault: '0',
+    },
+    {
+        id: 'UKEIDXSSB',
+        start: '2027-10-23',
+        label: 'UK/EI DX SSB — 23 Oct 2027',
+        rcvdSerialDefault: '0',
+    },
+];
+
+/** What a blank Rcvd # is logged as for this contest ID ('' when none). */
+export function rcvdDefaultFor(id: string): string {
+    return CONTESTS.find((c) => c.id === id)?.rcvdSerialDefault ?? '';
+}
+
+/** The Rcvd # default of the contest chosen in the header. */
+export function contestRcvdDefault(): string {
+    return rcvdDefaultFor(contestId());
+}
+
 interface ContestSettings {
     on: boolean;
     id: string;
@@ -16,7 +61,7 @@ interface ContestSettings {
 }
 
 function load(): ContestSettings {
-    const fallback = { on: false, id: 'UKEIDXSSB', start: '' };
+    const fallback = { on: false, id: CONTESTS[0].id, start: CONTESTS[0].start };
     let v: unknown;
     try {
         v = JSON.parse(localStorage.getItem(KEY) ?? 'null');
@@ -25,8 +70,10 @@ function load(): ContestSettings {
     }
     if (v === null || typeof v !== 'object') return fallback;
     const { on, id, start } = v as { on?: unknown; id?: unknown; start?: unknown };
-    if (typeof on !== 'boolean' || typeof id !== 'string') return fallback;
-    return { on, id, start: typeof start === 'string' ? start : '' };
+    if (typeof on !== 'boolean') return fallback;
+    // Only a supported occurrence is kept: the dropdown can show nothing else.
+    const known = CONTESTS.some((c) => c.id === id && c.start === start);
+    return known ? { on, id: id as string, start: start as string } : { ...fallback, on };
 }
 
 export const contest = $state(load());

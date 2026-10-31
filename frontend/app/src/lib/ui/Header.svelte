@@ -16,6 +16,19 @@
     import { router } from '../router.svelte';
     import SessionTimer from './SessionTimer.svelte';
     import { archivesState, activeArchive } from '../config/archives.svelte';
+    import { contest, CONTESTS } from '../operate/contest.svelte';
+    import { contestBound } from '../operate/qso.svelte';
+
+    // Contest mode (W-0023 weekend slice; operator, 2026-10-31): ticked, the
+    // Phone / CW card shows the exchange and allocates serials for the contest
+    // chosen here. Each entry is one occurrence, so choosing it sets the
+    // contest ID and start date together. Both lock once the QSO in progress
+    // has its serial: the number belongs to the occurrence it came from.
+    const contestValue = $derived(`${contest.id}|${contest.start}`);
+    function chooseContest(value: string): void {
+        const c = CONTESTS.find((o) => `${o.id}|${o.start}` === value);
+        if (c) Object.assign(contest, { id: c.id, start: c.start });
+    }
 
     // Thousands-grouped QSO count (e.g. "1,234") beside the logbook name.
     const countFmt = new Intl.NumberFormat();
@@ -81,6 +94,30 @@
         </svg>
         <SessionTimer />
     </span>
+
+    <div class="flex items-center gap-x-2 text-sm text-ink">
+        <label class="flex items-center gap-x-1">
+            <input
+                type="checkbox"
+                bind:checked={contest.on}
+                disabled={contestBound()}
+                data-testid="contest-on"
+            />
+            Contest
+        </label>
+        <select
+            aria-label="Contest"
+            class="input py-1 text-sm"
+            value={contestValue}
+            disabled={!contest.on || contestBound()}
+            onchange={(e) => chooseContest(e.currentTarget.value)}
+            data-testid="contest-select"
+        >
+            {#each CONTESTS as c (`${c.id}|${c.start}`)}
+                <option value={`${c.id}|${c.start}`}>{c.label}</option>
+            {/each}
+        </select>
+    </div>
 
     <!-- Station identity: the logbook this session writes to + the configured rig.
          Config-sourced (not CAT), so it's the operator's always-on "am I logging

@@ -21,7 +21,7 @@ import {
     type SubmittedQso,
     type SubmitResult,
 } from './qso.svelte';
-import { contest } from './contest.svelte';
+import { contest, contestRcvdDefault } from './contest.svelte';
 import { rig, confirmRig } from './rig.svelte';
 import { _resetForTests as resetToasts, toastsState } from '../ui/toasts.svelte';
 
@@ -270,6 +270,21 @@ describe('logging a contest QSO', () => {
             srx: '36',
             srxString: 'OX',
         });
+    });
+
+    it('a blank Rcvd # is saved as the contest default, 0 for UK/EI (sponsor rule)', async () => {
+        fill();
+        Object.assign(draft, { stx: '42', srx: '', srxString: 'OX' });
+        expect(await logDraft()).toBe(true);
+        expect(submitted[0]).toMatchObject({ srx: '0' });
+        expect(contestRcvdDefault()).toBe('0');
+    });
+
+    it('a typed Rcvd # is kept', async () => {
+        fill();
+        Object.assign(draft, { stx: '42', srx: '36', srxString: 'OX' });
+        expect(await logDraft()).toBe(true);
+        expect(submitted[0]).toMatchObject({ srx: '36' });
     });
 
     it('outside contest mode sends no contest fields', async () => {

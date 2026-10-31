@@ -1,7 +1,9 @@
 package api
 
 import (
+	stderr "errors"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -88,9 +90,12 @@ func (s *Server) handleContestDupe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dupe, err := s.db.IsContestDuplicateByLogbookIDWithContext(
-		r.Context(), logbookID, callsign, band, mode, submode,
-	)
+	dupe, err := s.contestDupe(r, q, logbookID, callsign, band, mode, submode)
+	var bad errBadOccurrence
+	if stderr.As(err, &bad) {
+		s.writeError(w, http.StatusBadRequest, "invalid_field_value", string(bad), op)
+		return
+	}
 	if err != nil {
 		s.writeServerError(w, op, err, "db_error", "database operation failed")
 		return
@@ -101,4 +106,25 @@ func (s *Server) handleContestDupe(w http.ResponseWriter, r *http.Request) {
 	}{
 		Duplicate: dupe,
 	})
+}
+
+// errBadOccurrence marks a refused contest/start pair, so the handler answers
+// 400 rather than 500.
+type errBadOccurrence string
+
+func (e errBadOccurrence) Error() string { return string(e) }
+
+// contestDupe asks the logbook-wide question, or — given contest and start
+// (W-0023 weekend slice) — the contest occurrence's: only that occurrence's
+// own contacts count, band only, so a station worked before the contest is not
+// a contest duplicate. contest and start come together or not at all.
+func (s *Server) contestDupe(r *http.Request, q url.Values, logbookID int64, callsign, band, mode, submode string) (bool, error) {
+	if !q.Has("contest") && !q.Has("start") {
+		return s.db.IsContestDuplicateByLogbookIDWithContext(r.Context(), logbookID, callsign, band, mode, submode)
+	}
+	contest, start, msg := contestOccurrence(q)
+	if msg != "" {
+		return false, errBadOccurrence(msg)
+	}
+	return s.db.IsContestOccurrenceDuplicateWithContext(r.Context(), logbookID, callsign, band, contest, start)
 }

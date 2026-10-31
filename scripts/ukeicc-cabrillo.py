@@ -4,9 +4,17 @@
 A standalone converter, outside the product: export the contest logbook as ADIF
 from the Logbook view, then
 
-  python3 -I scripts/ukeicc-cabrillo.py LOG.adi -o 7Q5MLV.cbr --contest UKEIDXSSB \\
-      --callsign 7Q5MLV --start 2026-10-31T12:00 \\
+  python3 -I scripts/ukeicc-cabrillo.py --from-daemon http://127.0.0.1:8080 \\
+      -o 7Q5MLV.cbr --contest UKEIDXSSB --callsign 7Q5MLV --start 2026-10-31T12:00 \\
       --power LOW --assisted NON-ASSISTED --time 24-HOURS
+
+--from-daemon reads every contact of the logbook straight from the running
+daemon (GET /v1/logbook/{id}/qso, all pages; the daemon's default logbook
+unless --logbook names another), so the log does not depend on which browser
+tab or session logged what. Read-only. Instead, LOG.adi reads an ADIF export.
+
+A temporary tool for the 2026 UK/EI DX SSB event: a Cabrillo export in the
+product replaces it (W-0023).
 
 Rules it applies (docs/work/W-0023-contest-logging.md, organiser-reply rulings):
   - Members are the records whose CONTEST_ID is the contest and whose
@@ -43,7 +51,10 @@ import datetime as dt
 import os
 import re
 import sys
+import json
 import tempfile
+import urllib.error
+import urllib.request
 
 SSB_SUBMODES = {"", "USB", "LSB"}
 BANDS = {"80m": (3500, 3800), "40m": (7000, 7200), "20m": (14000, 14350), "15m": (21000, 21450),
@@ -212,7 +223,9 @@ def convert(records, a):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    p.add_argument("adif")
+    p.add_argument("adif", nargs="?", help="an ADIF export (or use --from-daemon)")
+    p.add_argument("--from-daemon", metavar="URL", help="read the contacts from the running daemon, e.g. http://127.0.0.1:8080")
+    p.add_argument("--logbook", type=int, help="with --from-daemon: the logbook id (default: the daemon's default logbook)")
     p.add_argument("-o", "--output", required=True, help="the Cabrillo file; replaced only on success")
     p.add_argument("--contest", required=True, type=str.upper, choices=["UKEIDXSSB", "UKEIDXCW"])
     p.add_argument("--callsign", required=True, type=str.upper)
@@ -221,10 +234,18 @@ def main(argv=None):
     p.add_argument("--assisted", required=True, choices=["ASSISTED", "NON-ASSISTED"])
     p.add_argument("--time", required=True, choices=["24-HOURS", "12-HOURS"])
     a = p.parse_args(argv)
-    with open(a.adif, "rb") as f:
-        data = f.read()
+    if (a.adif is None) == (a.from_daemon is None):
+        p.error("give an ADIF file or --from-daemon URL, not both")
     try:
-        records = parse_adif(data)
+        if a.from_daemon:
+            records = fetch_daemon(a.from_daemon, a.logbook)
+        else:
+            with open(a.adif, "rb") as f:
+                records = parse_adif(f.read())
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        print(f"ERROR: could not read the contacts: {e}", file=sys.stderr)
+        print("no Cabrillo written", file=sys.stderr)
+        return 1
     except AdifError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         print("no Cabrillo written", file=sys.stderr)
@@ -240,6 +261,32 @@ def main(argv=None):
     write_atomically(a.output, "\n".join(lines) + "\n")
     print(f"{a.output}: {sum(l.startswith('QSO:') for l in lines)} QSO line(s); {len(notes)} note(s)", file=sys.stderr)
     return 0
+
+
+def _get(base, path):
+    with urllib.request.urlopen(base.rstrip("/") + path, timeout=30) as r:
+        return json.load(r)
+
+
+def fetch_daemon(base, logbook=None):
+    """Every QSO of the logbook as {ADIF FIELD: value} records, from the daemon's
+    paged list (the default logbook unless one is named). Read-only."""
+    if logbook is None:
+        default = (_get(base, "/v1/version").get("archive") or {}).get("default_logbook_uuid")
+        books = [b for b in _get(base, "/v1/logbook") if b.get("uuid") == default]
+        if not default or len(books) != 1:
+            raise AdifError("the daemon reports no default logbook; name one with --logbook")
+        logbook = books[0]["id"]
+    records, after = [], None
+    while True:
+        path = f"/v1/logbook/{int(logbook)}/qso?limit=500" + (f"&after={after}" if after else "")
+        page = _get(base, path)
+        for item in page.get("items") or []:
+            records.append({k.upper(): str(v) for k, v in item.items()
+                            if v is not None and isinstance(v, (str, int, float))})
+        after = page.get("next_cursor")
+        if not after:
+            return records
 
 
 def write_atomically(path, text):

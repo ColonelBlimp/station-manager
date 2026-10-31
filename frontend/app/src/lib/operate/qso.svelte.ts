@@ -11,7 +11,8 @@ import { usesSignalReport } from '../utils/mode';
 import { rig, rigReady } from './rig.svelte';
 import { toasts } from '../ui/toasts.svelte';
 import { commentHistory } from './commentHistory.svelte';
-import { contest, contestId, contestStart } from './contest.svelte';
+import { contest, contestId, contestStart, rcvdDefaultFor } from './contest.svelte';
+import { checkContestDupe, clearContestDupe } from './contestDupe.svelte';
 
 export interface QsoDraft {
     callsign: string;
@@ -116,6 +117,7 @@ function tickOff(): void {
 
 export function startQso(): void {
     void ensureSerial(); // contest mode: this QSO's sent serial (a re-Tab retries a failed one)
+    askContestDupe(); // contest mode: worked already in this contest? (a re-Tab asks again)
     if (qsoClock.started) return; // typo-fix re-Tab: the QSO already began
     qsoClock.started = true;
     qsoClock.ticking = true;
@@ -198,6 +200,15 @@ async function ensureSerial(): Promise<void> {
     toasts.error(
         `No serial allocated (${res.message}). Tab out of the callsign to try again, or type the Sent # you send.`
     );
+}
+
+// Contest mode: is the committed call a duplicate in this occurrence, on the
+// rig's band? Asked on every commit, so a corrected call is asked about too.
+function askContestDupe(): void {
+    if (!contest.on) return;
+    const o = draftOccurrence();
+    if (o.id === '' || o.start === '') return;
+    void checkContestDupe(draft.callsign.trim().toUpperCase(), rig.band, o.id, o.start);
 }
 
 /** Operator edited Date/Time Off by hand — stop ticking over their value. */
@@ -307,6 +318,7 @@ export function clearDraft(): void {
     resetDraft();
     resetClock();
     draftKey = '';
+    clearContestDupe();
     Object.assign(draftContest, { id: '', start: '' });
     submitState.error = '';
     submitState.duplicate = false;
@@ -475,7 +487,8 @@ function submittedSnapshot(): SubmittedQso {
     return {
         ...draft,
         stx: draft.stx.trim(),
-        srx: draft.srx.trim(),
+        // Blank Rcvd # is logged as the contest's default (UK/EI: 0, rule 6).
+        srx: draft.srx.trim() !== '' ? draft.srx.trim() : rcvdDefaultFor(occurrence.id),
         srxString: draft.srxString.trim().toUpperCase(),
         contestId: occurrence.id,
         contestStart: occurrence.start,

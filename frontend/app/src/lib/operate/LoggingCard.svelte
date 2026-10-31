@@ -26,13 +26,12 @@
         submitState,
         draftProblems,
         qsoClock,
-        contestBound,
         draftAgeText,
         entryLock,
     } from './qso.svelte';
     import DuplicateDialog from './DuplicateDialog.svelte';
     import { observeWorked, openWorkedForQso } from './worked.svelte';
-    import { rigReady, rigGate } from './rig.svelte';
+    import { rig, rigReady, rigGate } from './rig.svelte';
     import { operate, closeExport, registerCallsignInput } from './state.svelte';
     import { toasts } from '../ui/toasts.svelte';
     import EnrichmentCard from './EnrichmentCard.svelte';
@@ -42,7 +41,8 @@
     import { callsignStack } from './callsignStack.svelte';
     import { commentHistory } from './commentHistory.svelte';
     import CommentField from './CommentField.svelte';
-    import { contest, contestId, contestStart } from './contest.svelte';
+    import { contest, contestRcvdDefault } from './contest.svelte';
+    import { contestDupeShown } from './contestDupe.svelte';
     import { sessionEdit } from './sessionEdit.svelte';
 
     // Contact-details disclosure (grid / QTH / rig / RX power / notes to edit; QRZ
@@ -344,48 +344,6 @@
     <!-- A disabled fieldset disables every field and button inside it: the
          entry lock (ADR 0087) in one place. -->
     <fieldset class="flex flex-col" disabled={lock !== null}>
-        <!-- Contest mode (W-0023 weekend slice): the exchange row below, the
-             sent serial allocated when the callsign is committed, and the QSO
-             logged with this CONTEST_ID. Out of the tab order: set once.
-             Locked once this QSO has its serial (it belongs to the occurrence
-             it was allocated under); editable before that, so a bad start
-             date can be corrected mid-QSO. -->
-        <div class="mb-2 flex items-center gap-x-2 text-sm text-ink">
-            <label class="flex items-center gap-x-1">
-                <input
-                    type="checkbox"
-                    tabindex={-1}
-                    bind:checked={contest.on}
-                    disabled={contestBound()}
-                    data-testid="contest-on"
-                />
-                Contest
-            </label>
-            {#if contest.on}
-                <input
-                    aria-label="Contest ID"
-                    class="input w-32 uppercase"
-                    class:input-error={contestId() === ''}
-                    tabindex={-1}
-                    spellcheck="false"
-                    bind:value={contest.id}
-                    disabled={contestBound()}
-                    data-testid="contest-id"
-                />
-                <input
-                    aria-label="Contest start date (UTC)"
-                    title="The event's start date (UTC). Each date is its own serial sequence."
-                    class="input w-28"
-                    class:input-error={contest.start !== '' && contestStart() === ''}
-                    tabindex={-1}
-                    placeholder="YYYY-MM-DD"
-                    spellcheck="false"
-                    bind:value={contest.start}
-                    disabled={contestBound()}
-                    data-testid="contest-start"
-                />
-            {/if}
-        </div>
         <div class="flex flex-row gap-x-6">
             <div class="flex flex-col">
                 <div class="flex items-end gap-x-2">
@@ -425,6 +383,9 @@
                             </button>
                         </div>
                     </div>
+                    <!-- In contest mode RST is 59 both ways and Sent # is allocated, so
+                         Tab goes Callsign → Rcvd # → District (operator, 2026-10-31);
+                         the reports stay clickable. -->
                     <div>
                         <label for="lc-rst-s" class="block text-sm font-medium text-ink"
                             >RST Sent</label
@@ -433,6 +394,7 @@
                             id="lc-rst-s"
                             class="input w-15"
                             class:input-error={p.rstSent}
+                            tabindex={contest.on ? -1 : undefined}
                             bind:value={draft.rstSent}
                         />
                     </div>
@@ -444,6 +406,7 @@
                             id="lc-rst-r"
                             class="input w-15"
                             class:input-error={p.rstRcvd}
+                            tabindex={contest.on ? -1 : undefined}
                             bind:value={draft.rstRcvd}
                         />
                     </div>
@@ -476,6 +439,7 @@
                                 class:input-error={p.srx}
                                 autocomplete="off"
                                 inputmode="numeric"
+                                placeholder={contestRcvdDefault()}
                                 bind:value={draft.srx}
                             />
                         </div>
@@ -556,8 +520,22 @@
                     </div>
                 </div>
             </div>
-            <div class="flex w-56 h-45 shrink-0">
-                <EnrichmentCard call={draft.callsign} />
+            <div class="flex w-56 shrink-0 flex-col" data-testid="enrichment-column">
+                <div class="flex h-45">
+                    <EnrichmentCard call={draft.callsign} />
+                </div>
+                <!-- Contest dupe (W-0023 weekend slice; operator, 2026-10-31: under the
+                     enrichment panel, where there is room, as "DUPE on <band>"). A
+                     warning only: duplicates stay in the log. -->
+                {#if contestDupeShown()}
+                    <p
+                        role="status"
+                        class="mt-4.5 text-center text-lg font-semibold text-amber-600"
+                        data-testid="contest-dupe"
+                    >
+                        DUPE on {rig.band}
+                    </p>
+                {/if}
             </div>
         </div>
         <div class="mt-2 flex w-full items-end gap-x-2">

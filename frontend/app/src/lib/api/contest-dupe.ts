@@ -37,6 +37,10 @@ export interface ContestDupeQuery {
     mode?: string;
     /** Narrows the mode match to one ADIF SUBMODE (an FT4 contact is MFSK/FT4, ADR 0080). */
     submode?: string;
+    /** A contest occurrence (W-0023 weekend slice): CONTEST_ID and its start
+     *  date YYYYMMDD, together. Only that occurrence's contacts count, by band. */
+    contest?: string;
+    start?: string;
 }
 
 export async function fetchContestDupe(
@@ -50,6 +54,10 @@ export async function fetchContestDupe(
     });
     if (q.mode) params.set('mode', q.mode);
     if (q.submode) params.set('submode', q.submode);
+    if (q.contest && q.start) {
+        params.set('contest', q.contest);
+        params.set('start', q.start);
+    }
 
     const fetched = await safeFetch(`/v1/contest-dupe?${params.toString()}`, {
         method: 'GET',
