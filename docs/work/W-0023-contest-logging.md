@@ -821,6 +821,12 @@ deliberate subset of the design above, not its implementation:
 - **Not sent as comments:** the exchange travels as the standard ADIF fields. Comments and Notes are
   both uploaded (`internal/adif/string.go`), so the comment convention below is retired. How upstream
   services display `STX`/`SRX`/`SRX_STRING` is not established.
+- **Dupe warning (dogfood 2026-10-31: 7Q7EB logged twice on 20m unwarned):** in contest mode,
+  committing the callsign — and any later band change — asks `GET /v1/contest-dupe` with the contest
+  occurrence (only that occurrence's contacts count, by band); a hit shows "DUPE on <band>" under the
+  enrichment panel. It warns, never refuses (ruling A); a failed check shows nothing.
+- **Tab order (operator, 2026-10-31):** contest RST is always 59 and Sent # is allocated, so in
+  contest mode Tab goes Callsign → Rcvd # → District; RST and Sent # stay clickable.
 - **Correcting the exchange (operator, 2026-10-31):** the edit panel has a Contest section for a
   contest contact — the contest and occurrence shown read-only, Sent #, Rcvd # and District editable
   with the Phone form's checks (Save disabled on a bad exchange); saved through the ordinary edit.
