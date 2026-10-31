@@ -316,10 +316,13 @@
     // segment, the mode. It follows the frequency while shown, goes when the
     // problem is fixed or the card closes, and once dismissed stays away until
     // the KIND of problem changes (no nag on every retune). Never blocks logging.
-    let ruleToast: { id: number; key: string } | null = null;
+    let ruleToast: { id: number; key: string; message: string } | null = null;
     let dismissedKey = '';
     function showRuleProblem(problem: { key: string; message: string } | null): void {
         const shown = ruleToast !== null && toastsState.items.some((t) => t.id === ruleToast?.id);
+        // Unchanged (the clock re-checks every second): leave the toast be — no flicker.
+        if (shown && problem?.key === ruleToast?.key && problem?.message === ruleToast?.message)
+            return;
         if (ruleToast !== null && !shown && problem?.key === ruleToast.key)
             dismissedKey = ruleToast.key;
         if (ruleToast !== null) dismissToast(ruleToast.id);
@@ -330,10 +333,20 @@
         }
         if (problem.key === dismissedKey) return;
         dismissedKey = '';
-        ruleToast = { id: toasts.warn(problem.message, 0), key: problem.key };
+        ruleToast = {
+            id: toasts.warn(problem.message, 0),
+            key: problem.key,
+            message: problem.message,
+        };
     }
+    // The contest's hours count too, so the check follows the clock.
+    let ruleNow = $state(Date.now());
     $effect(() => {
-        const problem = contestRuleProblem();
+        const t = setInterval(() => (ruleNow = Date.now()), 1_000);
+        return () => clearInterval(t);
+    });
+    $effect(() => {
+        const problem = contestRuleProblem(ruleNow);
         untrack(() => showRuleProblem(problem));
     });
     $effect(() => () => {

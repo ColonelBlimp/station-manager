@@ -19,11 +19,15 @@ afterEach(() => {
     contest.on = false;
 });
 
-function at(freq: string, band: string, mode = 'USB'): string | null {
+// Inside the 2026 SSB event's hours, so the band/segment/mode checks are tested
+// on their own (the real clock would otherwise decide).
+const DURING = Date.UTC(2026, 9, 31, 13, 0);
+
+function at(freq: string, band: string, mode = 'USB', now = DURING): string | null {
     rig.freq = freq;
     rig.band = band;
     rig.mode = mode;
-    return contestRuleWarning();
+    return contestRuleWarning(now);
 }
 
 describe('contest rule warning (UK/EI SSB)', () => {
@@ -78,14 +82,29 @@ describe('contest rule warning (UK/EI SSB)', () => {
     it('the CW event has its own segments', () => {
         contest.id = 'UKEIDXCW';
         contest.start = '2027-04-24';
-        expect(at('14.030.000', '20m', 'CW')).toBeNull();
-        expect(at('14.070.000', '20m', 'CW')).toContain('14.000–14.060');
-        expect(at('14.030.000', '20m', 'USB')).toContain('CW');
+        const cw = Date.UTC(2027, 3, 24, 13, 0);
+        const atCw = (f: string, b: string, m: string) => at(f, b, m, cw);
+        expect(atCw('14.030.000', '20m', 'CW')).toBeNull();
+        expect(atCw('14.070.000', '20m', 'CW')).toContain('14.000–14.060');
+        expect(atCw('14.030.000', '20m', 'USB')).toContain('CW');
     });
 
     it('is silent outside contest mode, and when the frequency is unknown', () => {
         expect(at('', '20m')).toBeNull();
         contest.on = false;
         expect(at('14.100.000', '20m')).toBeNull();
+    });
+
+    // Operator, 2026-10-31: contacts logged with Contest ticked outside the
+    // contest's hours would not count (and would stop the Cabrillo export).
+    it('warns outside the contest hours when nothing else is wrong', () => {
+        const before = Date.UTC(2026, 9, 31, 11, 59, 59);
+        const after = Date.UTC(2026, 10, 1, 12, 0);
+        expect(at('14.200.000', '20m', 'USB', before)).toContain("hasn't started");
+        expect(at('14.200.000', '20m', 'USB', before)).toContain('12:00Z');
+        expect(at('14.200.000', '20m', 'USB', after)).toContain('has ended');
+        expect(at('14.200.000', '20m', 'USB', Date.UTC(2026, 9, 31, 12, 0))).toBeNull();
+        // A rig problem is still named first, so it can be put right before the start.
+        expect(at('14.100.000', '20m', 'USB', before)).toContain('rule 9.2');
     });
 });

@@ -10,7 +10,9 @@
     // Header.svelte.test.ts for the full reasoning). Leading (left) is the
     // operating-session timer — the other always-visible ambient readout, at
     // the opposite end so the eye finds each.
+    import { untrack } from 'svelte';
     import { rig, rigGate } from '../operate/rig.svelte';
+    import { toasts, toastsState, dismissToast } from './toasts.svelte';
     import { station } from '../operate/station.svelte';
     import { toggleTile } from '../operate/layout.svelte';
     import { router } from '../router.svelte';
@@ -22,6 +24,9 @@
         contestId,
         contestStart,
         contestOffMinutes,
+        contestName,
+        contestRunning,
+        contestEnded,
     } from '../operate/contest.svelte';
     import { contestHistory, loadContestHistory } from '../operate/contestHistory.svelte';
     import { computeTimers } from '../operate/contestTimers';
@@ -41,17 +46,57 @@
     // the daemon when it is chosen; the clock ticks each second.
     let now = $state(Date.now());
     $effect(() => {
-        if (!contest.on) return;
         const t = setInterval(() => (now = Date.now()), 1_000);
         return () => clearInterval(t);
     });
+    // Loaded whenever contest mode is ticked or the contest changes — re-ticking
+    // reloads, so contacts another tab logged meanwhile count (operator, 2026-10-31).
     $effect(() => {
         if (!contest.on) return;
         const id = contestId();
         const start = contestStart();
-        if (id !== '' && start !== '' && contestHistory.key !== `${id}|${start}`) {
-            void loadContestHistory(id, start);
+        if (id !== '' && start !== '') untrack(() => void loadContestHistory(id, start));
+    });
+
+    // At the end of the contest, Contest switches itself off (operator,
+    // 2026-10-31: there is no "finished" step yet) — never mid-QSO: it waits
+    // until the contact in progress is logged or cleared.
+    $effect(() => {
+        if (contest.on && contestEnded(now) && !contestBound()) {
+            untrack(() => {
+                contest.on = false;
+                toasts.info(`${contestName()} has ended — Contest is now off.`, 0);
+            });
         }
+    });
+
+    // Contest off during the contest's own hours (operator, 2026-10-31): contacts
+    // logged now carry no contest fields, so they drop out of the entry unseen —
+    // a sticky warning says so, gone when Contest is ticked or the contest ends.
+    // Once dismissed it stays away until the situation changes.
+    const offWarning = $derived(
+        !contest.on && contestRunning(now)
+            ? `Contest is off — contacts you log now won't count in ${contestName()}.`
+            : null
+    );
+    let offToast: number | null = null;
+    let offDismissed = false;
+    $effect(() => {
+        const message = offWarning;
+        untrack(() => {
+            const shown = offToast !== null && toastsState.items.some((t) => t.id === offToast);
+            if (message === null) {
+                if (offToast !== null) dismissToast(offToast);
+                offToast = null;
+                offDismissed = false;
+                return;
+            }
+            if (offToast !== null && !shown) offDismissed = true;
+            if (offToast === null && !offDismissed) offToast = toasts.warn(message, 0);
+        });
+    });
+    $effect(() => () => {
+        if (offToast !== null) dismissToast(offToast);
     });
     const timers = $derived.by(() => {
         const offMin = contestOffMinutes();

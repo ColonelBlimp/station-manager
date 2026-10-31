@@ -829,6 +829,12 @@ deliberate subset of the design above, not its implementation:
   the wrong mode; it follows the frequency, clears when fixed, and once dismissed stays away until the
   kind of problem changes. A warning only. The `contests.json` config system that
   replaces the hard-coded catalogue follows the contest (inbox, 2026-10-31).
+- **Contest hours (operator, 2026-10-31; a stopgap until contest mode has a designed way in and
+  out — inbox):** the catalogue carries each contest's start time and length (UK/EI: 12:00Z, 24 h).
+  Unticking Contest during those hours shows a sticky warning that contacts logged now won't count;
+  with Contest ticked outside them, the Phone card's rules toast says the contest hasn't started or
+  has ended (after any rig problem). At the end Contest switches itself off, never mid-QSO. Re-ticking
+  reloads the occurrence's history.
 - **Contest timers (operator, 2026-10-31):** in contest mode the shell header shows three labelled
   timers (operator: say what each means; never wrap). "Last QSO": whole minutes since the last contest
   QSO, counted from the clock minute after it as N1MM+ does (n1mmwp.hamdocs.com, Info window → QSO

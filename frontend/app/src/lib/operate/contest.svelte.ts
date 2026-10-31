@@ -31,6 +31,10 @@ export interface ContestOccurrence {
     bands?: Readonly<Record<string, ReadonlyArray<readonly [number, number]> | null>>;
     // A gap this long is an off period (the header's Last QSO turns green).
     offTimeMinutes?: number;
+    // When it runs: HH:MM UTC on the start date, for this many hours (UK/EI
+    // rule 2: 1200z Saturday to 1200z Sunday).
+    startUtc?: string;
+    hours?: number;
 }
 
 // UK/EI rule 4.4(b): in the 12-hour category each off period is at least 60 minutes.
@@ -72,6 +76,8 @@ export const CONTESTS: readonly ContestOccurrence[] = [
         rcvdSerialDefault: '0',
         districts: UKEI_DISTRICTS,
         offTimeMinutes: UKEI_OFF_TIME_MINUTES,
+        startUtc: '12:00',
+        hours: 24,
         mode: 'SSB',
         bands: UKEI_SSB_BANDS,
     },
@@ -82,6 +88,8 @@ export const CONTESTS: readonly ContestOccurrence[] = [
         rcvdSerialDefault: '0',
         districts: UKEI_DISTRICTS,
         offTimeMinutes: UKEI_OFF_TIME_MINUTES,
+        startUtc: '12:00',
+        hours: 24,
         mode: 'CW',
         bands: UKEI_CW_BANDS,
     },
@@ -92,6 +100,8 @@ export const CONTESTS: readonly ContestOccurrence[] = [
         rcvdSerialDefault: '0',
         districts: UKEI_DISTRICTS,
         offTimeMinutes: UKEI_OFF_TIME_MINUTES,
+        startUtc: '12:00',
+        hours: 24,
         mode: 'SSB',
         bands: UKEI_SSB_BANDS,
     },
@@ -197,7 +207,7 @@ export interface ContestRuleProblem {
  *  does not use, outside the sponsor's segments, or the wrong mode — or null.
  *  A warning only: it never blocks logging. Silent while the frequency is
  *  unknown. */
-export function contestRuleProblem(): ContestRuleProblem | null {
+export function contestRuleProblem(nowMs: number = Date.now()): ContestRuleProblem | null {
     const c = chosenContest();
     if (!contest.on || c?.bands === undefined) return null;
     const hz = parseFrequency(rig.freq);
@@ -232,15 +242,65 @@ export function contestRuleProblem(): ContestRuleProblem | null {
             message: `${rig.mode} is not this contest's mode (${c.mode}).`,
         };
     }
+    return hoursProblem(name, nowMs);
+}
+
+// Outside the contest's hours (operator, 2026-10-31): a contact logged then does
+// not count, and would stop the Cabrillo export. Named after any rig problem,
+// so the rig can be put right before the start.
+function hoursProblem(name: string, nowMs: number): ContestRuleProblem | null {
+    const w = contestHours();
+    if (w === null) return null;
+    if (nowMs < w.startMs) {
+        const d = new Date(w.startMs).toISOString();
+        return {
+            key: 'hours:before',
+            message: `${name} hasn't started (${d.slice(11, 16)}Z ${d.slice(0, 10)}) — contacts logged now won't count.`,
+        };
+    }
+    if (nowMs >= w.endMs) {
+        return {
+            key: 'hours:after',
+            message: `${name} has ended — contacts logged now won't count.`,
+        };
+    }
     return null;
 }
 
 /** The text of contestRuleProblem(), or null. */
-export function contestRuleWarning(): string | null {
-    return contestRuleProblem()?.message ?? null;
+export function contestRuleWarning(nowMs: number = Date.now()): string | null {
+    return contestRuleProblem(nowMs)?.message ?? null;
 }
 
 /** The chosen contest's off-time minimum in minutes, or null when it has none. */
 export function contestOffMinutes(): number | null {
     return chosenContest()?.offTimeMinutes ?? null;
+}
+
+/** The chosen contest's hours as [startMs, endMs), or null when it has none. */
+function contestHours(): { startMs: number; endMs: number } | null {
+    const c = chosenContest();
+    const start = contestStart();
+    if (c?.startUtc === undefined || c.hours === undefined || start === '') return null;
+    const [h, m] = c.startUtc.split(':').map(Number);
+    const startMs = Date.UTC(+start.slice(0, 4), +start.slice(4, 6) - 1, +start.slice(6, 8), h, m);
+    return { startMs, endMs: startMs + c.hours * 3_600_000 };
+}
+
+/** The chosen contest is running now (its hours, [start, end)), whether or not
+ *  contest mode is on — so unticking Contest during it can be warned about. */
+export function contestRunning(nowMs: number): boolean {
+    const w = contestHours();
+    return w !== null && nowMs >= w.startMs && nowMs < w.endMs;
+}
+
+/** The chosen contest's hours are over. */
+export function contestEnded(nowMs: number): boolean {
+    const w = contestHours();
+    return w !== null && nowMs >= w.endMs;
+}
+
+/** The chosen contest's display name, e.g. "UK/EI DX SSB". */
+export function contestName(): string {
+    return chosenContest()?.label.split(' — ')[0] ?? contestId();
 }

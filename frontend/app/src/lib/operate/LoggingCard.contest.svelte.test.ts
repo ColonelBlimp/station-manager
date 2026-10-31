@@ -24,6 +24,7 @@ describe('LoggingCard: contest exchange', () => {
         clearDraft();
         contest.on = false;
         setSerialAllocator(null);
+        vi.useRealTimers();
     });
 
     it('shows no exchange fields while contest mode is off, and never the contest choice itself', () => {
@@ -122,6 +123,8 @@ describe('LoggingCard: contest exchange', () => {
     // warnings), not a box that pushes the form down.
     it('warns with a sticky toast while the rig is outside the rules, and clears it', () => {
         resetToasts();
+        vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+        vi.setSystemTime(Date.UTC(2026, 9, 31, 13, 0)); // inside the event's hours
         contest.on = true;
         rig.mode = 'USB';
         rig.band = '20m';
@@ -154,6 +157,8 @@ describe('LoggingCard: contest exchange', () => {
 
     it('a dismissed warning stays dismissed until the problem changes', () => {
         resetToasts();
+        vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+        vi.setSystemTime(Date.UTC(2026, 9, 31, 13, 0)); // inside the event's hours
         contest.on = true;
         rig.mode = 'USB';
         rig.band = '20m';
@@ -170,8 +175,27 @@ describe('LoggingCard: contest exchange', () => {
         expect(toastsState.items.filter((t) => t.level === 'warn')).toHaveLength(1);
     });
 
+    it('the same warning stays the same toast as the clock ticks (no flicker)', async () => {
+        resetToasts();
+        vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+        vi.setSystemTime(Date.UTC(2026, 9, 31, 13, 0));
+        contest.on = true;
+        rig.mode = 'USB';
+        rig.band = '20m';
+        rig.freq = '14.100.000';
+        render(LoggingCard);
+        flushSync();
+        const id = toastsState.items[0]?.id;
+        expect(id).toBeDefined();
+        await vi.advanceTimersByTimeAsync(5_000);
+        flushSync();
+        expect(toastsState.items.map((t) => t.id)).toEqual([id]);
+    });
+
     it('while shown, the toast follows the frequency', () => {
         resetToasts();
+        vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+        vi.setSystemTime(Date.UTC(2026, 9, 31, 13, 0)); // inside the event's hours
         contest.on = true;
         rig.mode = 'USB';
         rig.band = '20m';
