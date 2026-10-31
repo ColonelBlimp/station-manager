@@ -97,6 +97,27 @@ describe('contest dupe warning', () => {
         expect(contestDupeShown()).toBe(false);
     });
 
+    it('asks again when the band changes on a committed contest draft (Codex review d0f85c93)', async () => {
+        check.mockImplementation((_c, band) => Promise.resolve(band === '40m'));
+        draft.callsign = 'G4ABC';
+        startQso(); // committed on 20m: not a dupe there
+        await settle();
+        expect(contestDupeShown()).toBe(false);
+        rig.band = '40m'; // moved to a band where G4ABC was already worked
+        flushSync();
+        await settle();
+        expect(check).toHaveBeenLastCalledWith('G4ABC', '40m', 'UKEIDXSSB', '20261031');
+        expect(contestDupeShown()).toBe(true);
+    });
+
+    it('a band change with no committed draft asks nothing', async () => {
+        draft.callsign = 'G4ABC'; // typed, not committed
+        rig.band = '40m';
+        flushSync();
+        await settle();
+        expect(check).not.toHaveBeenCalled();
+    });
+
     it('a failed check shows nothing (never a false alarm)', async () => {
         check.mockResolvedValueOnce(null);
         draft.callsign = 'G4ABC';

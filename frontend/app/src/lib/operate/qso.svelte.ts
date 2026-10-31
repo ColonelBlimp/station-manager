@@ -5,6 +5,7 @@
 // they live in the rig state and merge in at log time — so this stays the
 // operator-entered per-QSO data only. Presentation (LoggingCard) is separate.
 
+import { untrack } from 'svelte';
 import { isValidCallsign } from '../validators/callsign';
 import { isValidRs, isValidRst, isValidSignalReport } from '../validators/rst';
 import { usesSignalReport } from '../utils/mode';
@@ -210,6 +211,19 @@ function askContestDupe(): void {
     if (o.id === '' || o.start === '') return;
     void checkContestDupe(draft.callsign.trim().toUpperCase(), rig.band, o.id, o.start);
 }
+
+// A band change on a committed contest draft asks again (Codex review
+// d0f85c93): the dupe rule is per band, so moving 20m → 40m, or correcting the
+// band after the callsign was committed, needs the new band's answer. Only the
+// band is tracked; the stale-answer guard in checkContestDupe still applies.
+$effect.root(() => {
+    $effect(() => {
+        void rig.band;
+        untrack(() => {
+            if (qsoClock.started) askContestDupe();
+        });
+    });
+});
 
 /** Operator edited Date/Time Off by hand — stop ticking over their value. */
 export function holdOffTimes(): void {
