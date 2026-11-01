@@ -559,6 +559,61 @@ describe('Phone/CW pile-up keyboard', () => {
     });
 });
 
+// Search-and-pounce (operator, UK/EI DX SSB 2026-10-31 / 11-01): the frequency
+// steps must work while the cursor sits in the Callsign field — a callsign has
+// no words for Ctrl+Shift+Arrow to select. Every other text field keeps native
+// word-select, so the steps stand down there.
+describe('frequency steps from the Callsign field', () => {
+    let sent: { op: string; value: unknown }[];
+    beforeEach(() => {
+        sent = [];
+        setCommandSender((op, value) => {
+            sent.push({ op, value });
+            return Promise.resolve({ kind: 'accepted' });
+        });
+        setRigCaps({ ops: ['set_freq', 'set_freq_b'], tune: false, rigModes: [] });
+        rig.cat = 'connected';
+        rig.vfoA = 14_255_000;
+        rig.selectedVfo = 'A';
+        render(LoggingCard);
+        render(RigKeys);
+    });
+
+    function keyIn(id: string, init: KeyboardEventInit): KeyboardEvent {
+        const field = document.getElementById(id) as HTMLInputElement;
+        field.focus();
+        const e = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init });
+        field.dispatchEvent(e);
+        flushSync();
+        return e;
+    }
+
+    it.each([
+        ['ArrowUp', false, 14_255_100],
+        ['ArrowDown', false, 14_254_900],
+        ['ArrowRight', false, 14_255_010],
+        ['ArrowLeft', false, 14_254_990],
+        ['ArrowUp', true, 14_260_000],
+        ['ArrowDown', true, 14_250_000],
+    ])('Ctrl+Shift+%s (Alt %s) in Callsign steps the rig to %d', async (code, altKey, hz) => {
+        const e = keyIn('lc-call', { code, key: code, ctrlKey: true, shiftKey: true, altKey });
+        expect(e.defaultPrevented, 'the step owns the key, not word-select').toBe(true);
+        await vi.waitFor(() => expect(sent).toEqual([{ op: 'set_freq', value: String(hz) }]));
+    });
+
+    it('Ctrl+Shift+ArrowUp in another text field (Comment) is left to word-select', async () => {
+        const e = keyIn('lc-comment', {
+            code: 'ArrowUp',
+            key: 'ArrowUp',
+            ctrlKey: true,
+            shiftKey: true,
+        });
+        await Promise.resolve();
+        expect(e.defaultPrevented).toBe(false);
+        expect(sent).toEqual([]);
+    });
+});
+
 describe('F2 lookup-only peek + mouse stack icon (restored 2026-08-18, W-0003)', () => {
     it('F2 reveals the worked-before panel for a valid call WITHOUT starting the QSO clock', () => {
         render(LoggingCard);

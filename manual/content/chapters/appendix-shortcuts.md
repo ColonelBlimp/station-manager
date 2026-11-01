@@ -54,8 +54,10 @@ do nothing.
 | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>\\</kbd> | Swaps VFO A and VFO B. |
 
 The frequency keys stand down while you're typing in a text field, where
-<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+arrow selects words as usual. The band and
-VFO keys work whatever has focus.
+<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+arrow selects words as usual. The Phone / CW
+Callsign field is the exception: a callsign has no words to select, so the
+frequency keys work there, and you can tune while searching and pouncing
+without leaving the field. The band and VFO keys work whatever has focus.
 
 ## Editing a logged contact (Logbook → Edit, Session → Edit)
 

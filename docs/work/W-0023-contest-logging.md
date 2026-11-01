@@ -853,6 +853,10 @@ deliberate subset of the design above, not its implementation:
   dupe shows before the Tab that commits the contact and spends a serial.
 - **Tab order (operator, 2026-10-31):** contest RST is always 59 and Sent # is allocated, so in
   contest mode Tab goes Callsign → Rcvd # → District; RST and Sent # stay clickable.
+- **Frequency steps from the Callsign field (operator, 2026-10-31/11-01: the S&P workflow):** the
+  Ctrl+Shift+arrow frequency steps work while the Phone/CW Callsign field has focus (it is marked
+  `data-rig-steps`; a callsign has no words to select). Every other text field keeps native
+  word-select, so the steps stand down there; the exchange fields were not opened up.
 - **Correcting the exchange (operator, 2026-10-31):** the edit panel has a Contest section for a
   contest contact — the contest and occurrence shown read-only, Sent #, Rcvd # and District editable
   with the Phone form's checks (Save disabled on a bad exchange); saved through the ordinary edit.

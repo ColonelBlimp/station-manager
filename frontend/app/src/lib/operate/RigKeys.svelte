@@ -30,8 +30,12 @@
     // A text field is focused → Ctrl+Shift+Arrow is native word-select, so the
     // freq-step arrows stand down (matches the shipping SPA). Swap / band / digit
     // aren't native editing combos, so they fire regardless of focus.
+    // A field marked data-rig-steps (the Phone/CW Callsign) is the exception: a
+    // callsign has no words to select, and search-and-pounce tunes from there
+    // (operator, UK/EI DX SSB contest 2026-10-31).
     function isTextEntry(t: EventTarget | null): boolean {
         if (!(t instanceof HTMLElement)) return false;
+        if (t.dataset.rigSteps !== undefined) return false;
         const tag = t.tagName;
         return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t.isContentEditable;
     }

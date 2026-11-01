@@ -430,6 +430,7 @@
                                 autocomplete="off"
                                 spellcheck="false"
                                 placeholder="Callsign"
+                                data-rig-steps
                                 bind:this={callInput}
                                 bind:value={draft.callsign}
                                 oninput={upperCall}
