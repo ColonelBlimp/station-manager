@@ -30,7 +30,12 @@ func TestFormerDefault_FW1_ConfirmedThenRestarted(t *testing.T) {
 		t.Fatal(err)
 	}
 	u1 := logQso(t, d, "DL9UW") // into logbook 1, the default for now
+	// The first generation tries its pre-adoption path and is refused (503); let
+	// that attempt happen so the restart boundary below is always exercised
+	// (CI run 41267199244 hit it by chance under -race).
+	waitUntil(t, "the first generation's refused upload attempt", func() bool { return len(cloud.seen()) > 0 })
 	stopGen(t, orch)
+	before := len(cloud.seen()) // from here on, every upload is the identity path's
 
 	rawExec(t, d, `INSERT INTO logbook_destination (logbook_id, destination, forwarder_name, enabled, credentials)
 		VALUES (?, 'smcloud', 'smcloud-b', 1, '{"logbook":"portable"}')`, second)
@@ -60,7 +65,7 @@ func TestFormerDefault_FW1_ConfirmedThenRestarted(t *testing.T) {
 	d3, _ := restartGen(t, d2, orch2)
 	waitUntil(t, "the former default's held upload to drain", func() bool { return uploadStatus(t, d3, u1) == "uploaded" })
 	want := identityPath(t, d3) // logbook 1's identity path
-	for _, p := range cloud.seen() {
+	for _, p := range cloud.seen()[before:] {
 		if p != want {
 			t.Fatalf("an upload went to %s; want only %s", p, want)
 		}
