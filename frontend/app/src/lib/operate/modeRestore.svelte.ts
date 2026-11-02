@@ -123,8 +123,9 @@ export function snapshotOperating(): OperatingSnapshot {
 }
 
 /** True while the rig may be keyed: FT8 TX armed or actually transmitting, a
- *  sequencer contact in flight, or the tune carrier up. */
-function transmitting(): boolean {
+ *  sequencer contact in flight, or the tune carrier up. Exported for the band
+ *  selection sequence's recheck between writes (W-0012 slice 2). */
+export function transmitting(): boolean {
     return ft8State.tx.armed || ft8State.tx.transmitting || ft8State.qso.active || rig.tuneActive;
 }
 

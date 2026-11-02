@@ -1045,6 +1045,51 @@ function cancelPendingLost(): void {
     }
 }
 
+/*
+    CONFIRMED rig state (W-0012 slice 2): only what the rig itself reported on
+    this link. rig.modeLiteral and rig.selectedVfo are written optimistically by
+    setMode/selectVfo, so they cannot answer "is the rig already there?". Cleared
+    when the link drops: a report from before a loss is not confirmation after it.
+*/
+export type ConfirmedRig = {
+    vfoA: number | null;
+    vfoB: number | null;
+    selectedVfo: 'A' | 'B' | null;
+    modeLiteral: string | null;
+};
+
+const confirmed: ConfirmedRig = { vfoA: null, vfoB: null, selectedVfo: null, modeLiteral: null };
+
+export function confirmedRig(): ConfirmedRig {
+    return { ...confirmed };
+}
+
+function clearConfirmed(): void {
+    confirmed.vfoA = null;
+    confirmed.vfoB = null;
+    confirmed.selectedVfo = null;
+    confirmed.modeLiteral = null;
+}
+
+type RigReportListener = (p: RigStatePayload) => void;
+const reportListeners: RigReportListener[] = [];
+
+/** Observe every rig-state report after it is applied; returns the unsubscribe. */
+export function onRigReport(fn: RigReportListener): () => void {
+    reportListeners.push(fn);
+    return () => {
+        const i = reportListeners.indexOf(fn);
+        if (i !== -1) reportListeners.splice(i, 1);
+    };
+}
+
+/** The rig literal for an operator-friendly mode: the first advertised rigModes
+ *  literal whose merged mapping names it (FTdx10 CW → CW-U; ruling 3,
+ *  2026-11-02). Undefined when the rig offers none. */
+export function literalForMode(friendly: string): string | undefined {
+    return rigCaps.rigModes.find((lit) => mappedName(lit) === friendly);
+}
+
 /** CAT-link state transitions, fed by the SSE transport injected in main.ts. */
 export const catLink = {
     /** Transport open is not rig-alive — 'connected' waits for a rig-state. */
@@ -1055,6 +1100,7 @@ export const catLink = {
      *  was live goes 'lost' — a never-connected stream stays manual. */
     onTransportError(): void {
         cancelPendingLost();
+        clearConfirmed();
         if (rig.cat === 'connected') rig.cat = 'lost';
     },
 
@@ -1063,6 +1109,10 @@ export const catLink = {
         // with the last-known VFOs + selection held in the state itself. Each
         // field present is also a REPORT of that field — see rigReports.
         if (p.rigIdentity !== undefined) rig.identity = p.rigIdentity;
+        if (p.vfoA !== undefined) confirmed.vfoA = p.vfoA;
+        if (p.vfoB !== undefined) confirmed.vfoB = p.vfoB;
+        if (p.selectedVfo === 'A' || p.selectedVfo === 'B') confirmed.selectedVfo = p.selectedVfo;
+        if (p.mode !== undefined) confirmed.modeLiteral = p.mode;
         if (p.vfoA !== undefined) {
             rig.vfoA = p.vfoA;
             rigReports.vfoA++;
@@ -1112,6 +1162,7 @@ export const catLink = {
         matchWatch('selectedVfo', p);
         matchWatch('modeLiteral', p);
         matchWatch('band', p);
+        for (const fn of [...reportListeners]) fn(p);
     },
 
     onRigDisconnected(p: BridgeCodePayload): void {
@@ -1122,6 +1173,7 @@ export const catLink = {
         pendingLostTimer = setTimeout(() => {
             pendingLostTimer = null;
             rig.cat = 'lost';
+            clearConfirmed();
             rig.tuneRestoreMode = ''; // the hold dies with the link; the post-INIT READ re-reports the mode
             // Surface the friendly reason ONLY once we actually flip to 'lost':
             // a blip that recovers inside the window clears via onRigState and so
@@ -1214,6 +1266,7 @@ export function dismissDriveAlarm(): void {
 /** Test seam — restore the module singleton between cases. */
 export function resetCatLink(): void {
     cancelPendingLost();
+    clearConfirmed();
     modeMappings = {};
     ftProfileLabel = '';
     tuneSender = null;

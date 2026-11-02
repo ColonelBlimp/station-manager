@@ -715,6 +715,42 @@ so, rather than that no bands are configured.
 - Unknown current band: next → the first configured eligible band; previous → the last.
 - No eligible bands: an explanation only; no stop/disarm, no rig command.
 
+**Slice 2 built (2026-11-02):** D1/D2 in `internal/api/handler_rig_command.go`; the sequence in
+`frontend/app/src/lib/operate/bandSequence.svelte.ts` (unwired); confirmed rig state and a report
+listener in `rig.svelte.ts`.
+
+**Ruling — the recheck race (operator, 2026-11-02): option (a).** A credible, code-derived race (not
+observed): the frequency report and the FT8 disarm arrive on independent streams, so a recheck
+straight after the frequency report could see the daemon's own stop as still "armed". Rejected: a
+"stopped" field in the 202 — the 202 already follows the stop hook and guarded write, and a historical
+acknowledgement cannot show whether a new transmission started afterwards. Boundaries:
+
+- The transmit state is observed from before the first write, so events during the POST count.
+- One absolute deadline: the first write's HTTP 202 plus 2 s. The frequency confirmation and the
+  stop observation wait concurrently; no second allowance after the frequency report.
+- The complete stopped state is required: FT8 disarmed, not transmitting, no active contact (and no
+  tune carrier). `armed: false` alone does not count.
+- Once stopped — or idle from the start — a newly observed arm, contact or transmission invalidates
+  the sequence, even if it has ended again.
+- Supersession, connection loss or a TX alarm ends the wait. Immediately before the mode is
+  dispatched: recheck the VFO, the frequency and the TX guards.
+- Expiry sends no mode. With the frequency confirmed: "Frequency changed, but transmit-stop
+  confirmation did not arrive; mode was not set." A late event does not resume the sequence.
+- The true no-op writes, stops and waits for nothing.
+- Built as one recording mechanism: a reactive effect, active for the whole selection — including
+  while a POST is pending and nothing is awaited (review 2026-11-02 gap: disarm → re-arm → disarm
+  during the POST) — latches stopped / keyed-again and wakes the waits; the guard reads the latch.
+  Each SSE message is its own task, so the effect has run before the next report is handled.
+
+**Ruling — unknown selected VFO (operator, 2026-11-02):** refused with zero commands — neither the
+default A nor an optimistic selection establishes which physical VFO to write — at startup and after
+a reconnect, until a fresh selected-VFO report arrives.
+
+**Ruling — mode-only selection while keyed (operator, 2026-11-02):** completion requires both the
+reported mode and the observed stop, within 2 s of that write's 202. "Mode changed, but
+transmit-stop confirmation did not arrive." only when the mode was confirmed; otherwise the generic
+unknown-outcome message. A late stop does not resume the sequence.
+
 **Build order and test discipline (review, 2026-11-02):** AC6 is a prerequisite of every new live
 band-selection path — no new live path becomes reachable before its safety sequence is built and
 tested. Separate commits, in this order:
@@ -732,6 +768,89 @@ every mode change stop FT. Distinct tests: VFO-B frequency selection invokes sto
 same-frequency/different-mode band selection invokes it; standalone mode changes keep their existing
 behaviour; an unresolved stop prevents destination writes and memory updates. Each AC carries a case
 matrix; no single failing test is taken to prove a whole criterion.
+
+**Slice 1 committed** `01a75a9a` (destinations, eligibility, CAT-off; no production caller).
+
+**Slice 2 — live selection sequence: proposed design (for ruling, 2026-11-02).** Found in the tree:
+
+- Daemon: `handleRigCommand` calls `stopTxForRetune` — composed from `bridge.StopTune` and
+  `ft8.Service.StopForRetune` (`internal/api/server.go` `retuneStopper`) — only when
+  `retunesTheRig` sees `set_band`/`set_freq`. `StopForRetune` is a no-op when nothing is armed and
+  otherwise disarms with `EndReasonBandChange`; it never re-arms.
+- SPA (corrected by review, 2026-11-02): `confirmWrite` arms a per-field watch (`band`,
+  `modeLiteral`, `selectedVfo`, `tune`) but **does not wait for the rig after HTTP 202** — its
+  `accepted` branch returns at once; the watch is awaited only after a fired timeout, within the
+  2 s grace. Absolute frequency writes (`setFreq`) use `driveRig`, with no watch at all. A newer
+  write on a lane marks the older one `superseded`, today silently. So no existing path proves the
+  rig reached a value before the next write.
+  `modeRestore.svelte.ts` `transmitting()` is the existing "rig may be keyed" test (FT armed or
+  transmitting, an FT contact active, tune carrier up); `rig.txAlarmActive` is the daemon's "cannot
+  confirm unkeyed".
+- FTdx10 literals: `CW-U` and `CW-L` both map to CW (`internal/cat/rigs/yaesu-ftdx10.json`).
+
+Proposed:
+
+- **D1 (daemon):** add `set_freq_b` to `retunesTheRig`, for every caller — a VFO-B frequency write
+  moves the operating dial when B is selected (and the transmit VFO in split), exactly the case
+  `set_freq` is already stopped for. This also makes ordinary VFO-B frequency steps stop FT, as
+  VFO-A steps already do. `set_mode` stays excluded.
+- **D2 (daemon):** `POST /v1/rig/command` gains an optional `"band_selection": true`. When set, the
+  stop hook runs before writing whatever the batch holds — a mode-only band selection included. No
+  other request changes; standalone `set_mode` keeps its behaviour. Documented in
+  `api-endpoints.md`.
+- **D3 (sequence):** resolve the destination (slice 1); with `rig.txAlarmActive`, refuse before any
+  write ("TX state unresolved"). Write 1 is the frequency (`set_freq` or `set_freq_b` by the selected
+  VFO); if the frequency already matches, write 1 is the mode; if both match, nothing is written and
+  nothing is stopped. Every write in the sequence carries `band_selection`. Each write must be
+  confirmed by push before the next; any other outcome — refused (including 409
+  `rig_tx_stop_failed`), transport, unknown, superseded — ends the sequence and is returned for
+  display. Before write 2, recheck `transmitting()` and the TX alarm; either aborts. Nothing ever
+  re-arms.
+- **D4 (modes):** FT8/FT4 use the configured FT data literal (empty = leave the mode). Phone/CW maps
+  its friendly mode to the first rig literal in `rigModes` order that maps to it (FTdx10 CW →
+  `CW-U`); no literal → refused before any write.
+- **D5 (ordering):** selections are serialised; a new selection supersedes the pending one, whose
+  remaining writes are abandoned and whose supersession is reported, not silent. Next/previous
+  steps from the pending destination's band, else the displayed band.
+- **D6:** an unknown-outcome write is recorded as unresolved, for slice 3's attributable-manual rule.
+- Slice 2 leaves `selectBandLive` unwired; D1 is reachable at once through the existing VFO-B
+  frequency step.
+
+**Slice 2 rulings (operator, 2026-11-02):**
+
+1. **D1 approved:** every `set_freq_b` request stops TX first, regardless of `band_selection` — the
+   existing frequency-write policy applied consistently. The effect on ordinary VFO-B steps is
+   accepted. Standalone mode changes are unchanged. **D2** and leaving the sequence unwired are
+   approved.
+2. **True no-op stays a no-op:** both targets already satisfied → no write, no stop; a redundant
+   band selection does not end FT8. "Already satisfied" means **confirmed rig state** — never
+   optimistic display values, nor a stale baseline while an earlier write is outstanding. The
+   TX-alarm refusal takes precedence.
+3. **CW → `CW-U` approved** as deterministic canonicalisation, using the merged mode mappings and
+   the advertised `rigModes` order (FTdx10 rigdef lists `CW-U` before `CW-L`; both map to CW). A
+   friendly CW memory deliberately recalls as `CW-U`; a previous `CW-L` choice is not preserved.
+4. **Cancellation wording:** "Band selection to 40m replaced by a newer selection." If a step had
+   already completed, the report says so too. No wording may imply that nothing reached the rig or
+   that the replacement succeeded.
+
+**D3 correction (review, 2026-11-02):** the sequence needs an explicit confirmation wait, armed
+before sending, for **every** issued step — including the final mode write before success is
+declared. First decisive failing test: HTTP 202 without a matching frequency report does not release
+the mode write; nor does an unrelated report, nor a report for the other VFO.
+
+Tightened boundaries:
+
+- **Before the mode write:** recheck the selected VFO and the confirmed destination frequency,
+  alongside TX eligibility. A VFO switch or a dial change invalidates the remaining sequence.
+- **D5/D6:** cancellation abandons unsent work; it cannot retract an issued write. Unresolved writes
+  are retained across supersession and ambiguous transport failures. Required test: 20m → pending
+  40m → 20m — the replacement cannot claim "already satisfied" from the old 20m report while the
+  40m write could still land.
+
+**Confirmation deadline (operator, 2026-11-02): 2 seconds** after HTTP 202 for the rig's own report
+of each step's value; past it the outcome is unknown and the sequence stops. A separate, named
+deadline — the existing 2 s timeout grace is a different rule and does not define it. No measured
+report latency exists (smd.log records "rig command applied", not the arrival of the rig's report).
 
 ## Verification boundary
 

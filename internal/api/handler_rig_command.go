@@ -22,10 +22,16 @@ const maxRigCommandBatch = 32
 // — {"commands": [ {op, value}, ... ]} — but not both. value is a JSON scalar
 // (number for set_freq, string for set_mode); one generic conversion feeds
 // every op, so there is no per-op extraction.
+//
+// BandSelection marks an explicit band selection (W-0012, ruling D2): the stop
+// hook runs before the write whatever the batch holds, so a selection whose only
+// necessary write is a mode change still stops TX first. Without it a
+// standalone set_mode keeps rule 21's behaviour.
 type rigCommandRequest struct {
-	Op       string            `json:"op,omitempty"`
-	Value    any               `json:"value,omitempty"`
-	Commands []rigCommandEntry `json:"commands,omitempty"`
+	Op            string            `json:"op,omitempty"`
+	Value         any               `json:"value,omitempty"`
+	Commands      []rigCommandEntry `json:"commands,omitempty"`
+	BandSelection bool              `json:"band_selection,omitempty"`
 }
 
 type rigCommandEntry struct {
@@ -57,7 +63,7 @@ func (s *Server) handleRigCommand(w http.ResponseWriter, r *http.Request) {
 	// left a band button behaving differently from the VFO for the same intent), we
 	// perform the same teardown the dial guard performs — PTT down, session ended,
 	// TX disarmed — and only then write. Dogfood 2026-07-27.
-	if s.stopTxForRetune != nil && retunesTheRig(cmds) {
+	if s.stopTxForRetune != nil && (req.BandSelection || retunesTheRig(cmds)) {
 		if err := s.stopTxForRetune(); err != nil {
 			// Could not confirm the rig is unkeyed. Leaving the operator
 			// transmitting where they are beats switching a keyed rig.
@@ -87,7 +93,9 @@ func (s *Server) handleRigCommand(w http.ResponseWriter, r *http.Request) {
 func retunesTheRig(cmds []bridge.RigCommand) bool {
 	for _, c := range cmds {
 		switch c.Op {
-		case "set_band", "set_freq":
+		// set_freq_b too (W-0012 ruling D1): a VFO-B write moves the operating
+		// dial when B is selected, and the transmit VFO in split.
+		case "set_band", "set_freq", "set_freq_b":
 			return true
 		}
 	}

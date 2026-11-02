@@ -157,6 +157,11 @@ func TestRigRetune_OnlyRetuningCommandsStopTransmit(t *testing.T) {
 	}{
 		{"set_band retunes", `{"op":"set_band","value":"40m"}`, true},
 		{"set_freq retunes", `{"op":"set_freq","value":7074000}`, true},
+		// W-0012 slice 2 (ruling D1, 2026-11-02): a VFO-B frequency write moves the
+		// operating dial when B is selected, and the transmit VFO in split — the
+		// existing frequency-write policy applies to it, for every caller.
+		{"set_freq_b retunes", `{"op":"set_freq_b","value":7074000}`, true},
+		{"a batch containing set_freq_b counts", `{"commands":[{"op":"set_mode","value":"USB"},{"op":"set_freq_b","value":7074000}]}`, true},
 		{"set_mode does not", `{"op":"set_mode","value":"USB"}`, false},
 		{"a batch containing a retune counts", `{"commands":[{"op":"set_mode","value":"USB"},{"op":"set_band","value":"40m"}]}`, true},
 	}
@@ -264,4 +269,60 @@ func TestRigRetune_StopsBothTuneAndFt8(t *testing.T) {
 			t.Fatal("a hook with nothing to stop could only fail confusingly")
 		}
 	})
+}
+
+// --- W-0012 slice 2 (ruling D2, 2026-11-02): an explicit band selection ------
+
+// A band selection stops TX before writing whatever it carries — including a
+// mode-only write, when the destination frequency already matches. Without the
+// flag the same mode write keeps rule 21's behaviour: no stop.
+func TestRigRetune_BandSelectionStopsEvenForAModeOnlyWrite(t *testing.T) {
+	cases := []struct {
+		name     string
+		body     string
+		wantStop bool
+	}{
+		{"mode-only band selection stops", `{"op":"set_mode","value":"LSB","band_selection":true}`, true},
+		{"mode-only batch band selection stops", `{"commands":[{"op":"set_mode","value":"LSB"}],"band_selection":true}`, true},
+		{"frequency band selection stops", `{"op":"set_freq","value":7100000,"band_selection":true}`, true},
+		{"band_selection false is ordinary", `{"op":"set_mode","value":"LSB","band_selection":false}`, false},
+		{"standalone set_mode is unchanged", `{"op":"set_mode","value":"LSB"}`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, calls := retuneServer(t, nil)
+
+			w := postRigCommand(t, srv, tc.body)
+
+			if got := *calls > 0; got != tc.wantStop {
+				t.Fatalf("stopped = %v, want %v (HTTP %d %s)", got, tc.wantStop, w.Code, w.Body.String())
+			}
+			if code := rigErrorCode(t, w.Body.String()); code != "rig_not_connected" {
+				t.Fatalf("the command must go on to be written (rig_not_connected proves the "+
+					"attempt); got %q / %d", code, w.Code)
+			}
+		})
+	}
+}
+
+// A band selection whose stop fails never reaches the rig, the mode-only case
+// included — rule 20 applied to the flag.
+func TestRigRetune_BandSelectionDoesNotWriteWhenTxCannotBeStopped(t *testing.T) {
+	for _, body := range []string{
+		`{"op":"set_mode","value":"LSB","band_selection":true}`,
+		`{"op":"set_freq_b","value":7100000}`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			srv, calls := retuneServer(t, errStopFailed)
+
+			w := postRigCommand(t, srv, body)
+
+			if *calls != 1 {
+				t.Fatalf("the stop must have been attempted; calls = %d", *calls)
+			}
+			if code := rigErrorCode(t, w.Body.String()); code != "rig_tx_stop_failed" {
+				t.Fatalf("want 409 rig_tx_stop_failed and no write; got %q / %d", code, w.Code)
+			}
+		})
+	}
 }
