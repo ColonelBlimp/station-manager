@@ -902,6 +902,16 @@ deliberate subset of the design above, not its implementation:
   requested, so logging the contest into the existing default keeps the config alpha.5-readable.
 - **Later migration:** the stored exchange values carry forward unchanged; contest membership and
   the allocation record will need an explicit migration into the full design (occurrence keys).
+- **First submission (2026-11-02, 7Q5MLV, UK/EI DX SSB 2026):** 158 QSOs from
+  `scripts/ukeicc-cabrillo.py --from-daemon`, header SINGLE-OP / NON-ASSISTED / HIGH / 12-HOURS / SSB,
+  no section line. The rules (Version 19, re-read 2026-11-02) name no required header line, and rule
+  8.2 creates the categories from the robot's selections; the robot's first page asks for the section
+  (DX stations / UK and EI stations / checklog), chosen there as DX. The converter first refused four
+  UK/EI contacts with a blank district; the operator set one from the exchange (GW0GTZ #011, `SA`) and
+  three to `--` as not copied. The robot **accepted** the log; its acknowledgement listed "QSOs with
+  missing UK District Received #012 #070 #154" with "The above warnings might result in loss of
+  points for the affected QSOs". So an explicit `--` for a UK/EI contact is accepted and flagged, not
+  refused, consistent with ruling D.
 
 ## Interim: operating the 2026 SSB event on alpha.5 (superseded by the weekend slice)
 
