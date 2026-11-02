@@ -368,6 +368,53 @@ describe('rechecks before the mode write', () => {
     });
 });
 
+// Codex review of 18994842 (2026-11-02), two P2s: the mode decision must not go
+// stale across the frequency write, a queued frequency write must still target
+// the selected VFO, and success needs the whole destination confirmed.
+describe('state that changes while a write is pending', () => {
+    it('the mode changed during the frequency POST: the mode is re-evaluated and written', async () => {
+        const sel = start({ band: '15m' }); // USB, like the current 20m USB
+        await flush();
+        expect(calls.map((c) => c.op)).toEqual(['set_freq']);
+        report({ mode: 'LSB' }); // the operator turned the mode knob
+        calls[0].reply(ACCEPTED);
+        report({ vfoA: 21_300_000 });
+        await flush();
+        expect(calls[1]).toMatchObject({ op: 'set_mode', value: 'USB' });
+        expect(sel.result()).toBeUndefined();
+        calls[1].reply(ACCEPTED);
+        report({ mode: 'USB' });
+        await flush();
+        expect(sel.result()).toEqual({ status: 'done', band: '15m' });
+    });
+
+    it('a queued frequency write is not dispatched after the VFO changed', async () => {
+        start({ band: '40m' });
+        await flush();
+        const queued = start({ band: '15m' }); // waits behind 40m's request
+        await flush();
+        report({ selectedVfo: 'B' });
+        await flush();
+        calls[0].reply(ACCEPTED);
+        await flush();
+        expect(calls).toHaveLength(1);
+        expect(queued.result()).toMatchObject({ status: 'failed', kind: 'invalidated' });
+    });
+
+    it('the dial moved while the mode was awaited: not done', async () => {
+        const sel = start({ band: '40m' });
+        await flush();
+        calls[0].reply(ACCEPTED);
+        report({ vfoA: 7_100_000 });
+        await flush();
+        calls[1].reply(ACCEPTED);
+        report({ vfoA: 7_101_000 });
+        report({ mode: 'LSB' });
+        await flush();
+        expect(sel.result()).toMatchObject({ status: 'failed', kind: 'invalidated' });
+    });
+});
+
 describe('ordering and supersession (D5/D6)', () => {
     it('a newer selection replaces the pending one, which is reported', async () => {
         const first = start({ band: '40m' });

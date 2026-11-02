@@ -335,12 +335,20 @@ async function runSequence(
 
     const ctx: Ctx = { id, band: dest.band, tx: watchTx() };
     try {
+        let writeMode = needMode;
         if (needFreq) {
             const op = vfo === 'A' ? 'set_freq' : 'set_freq_b';
-            const r = await writeStep(ctx, field, op, dest.hz, false, () => txGuard(ctx.tx));
+            // A queued write may wait behind another request: the VFO it was
+            // aimed at must still be the selected one when it is dispatched.
+            const r = await writeStep(ctx, field, op, dest.hz, false, () =>
+                frequencyPrecheck(ctx.tx, vfo)
+            );
             if (r !== 'confirmed') return r;
+            // The mode may have changed while the frequency was pending: decide
+            // again from what the rig has now confirmed (Codex review 18994842).
+            writeMode = needMode || (literal !== null && confirmedRig().modeLiteral !== literal);
         }
-        if (needMode && literal !== null) {
+        if (writeMode && literal !== null) {
             // The recheck reads the latched TX state, not "keyed now": a mode-only
             // selection's first write is meant to go out while keyed, since the
             // daemon stops TX before writing it.
@@ -349,10 +357,42 @@ async function runSequence(
             );
             if (r !== 'confirmed') return r;
         }
+        // Success only for the whole destination, as the rig confirms it now.
+        const away = leftDestination(vfo, field, dest.hz, literal);
+        if (away !== null) return failed('invalidated', away);
         return { status: 'done', band: dest.band };
     } finally {
         ctx.tx.dispose();
     }
+}
+
+function frequencyPrecheck(tx: TxWatch, vfo: 'A' | 'B'): BandSelectionResult | null {
+    const guard = txGuard(tx);
+    if (guard !== null) return guard;
+    if (confirmedRig().selectedVfo !== vfo) {
+        return failed(
+            'invalidated',
+            'The VFO changed before the band selection was sent — the band was not changed.'
+        );
+    }
+    return null;
+}
+
+function leftDestination(
+    vfo: 'A' | 'B',
+    field: 'vfoA' | 'vfoB',
+    hz: number,
+    literal: string | null
+): string | null {
+    const c = confirmedRig();
+    if (
+        c.selectedVfo !== vfo ||
+        c[field] !== hz ||
+        (literal !== null && c.modeLiteral !== literal)
+    ) {
+        return 'The rig left the band-selection destination before it completed — check the rig.';
+    }
+    return null;
 }
 
 // Immediately before the mode is dispatched: the rig must still be where this

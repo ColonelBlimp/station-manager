@@ -751,6 +751,13 @@ reported mode and the observed stop, within 2 s of that write's 202. "Mode chang
 transmit-stop confirmation did not arrive." only when the mode was confirmed; otherwise the generic
 unknown-outcome message. A late stop does not resume the sequence.
 
+**Slice 2 committed** `18994842`. Codex review of it (two P2s, fixed in the follow-up): the
+mode decision went stale across the frequency write (a mode change during the POST could end in
+"done" in the wrong mode) — now re-evaluated from confirmed state after the frequency is confirmed;
+and a queued frequency write could go to a VFO no longer selected — now rechecked immediately
+before dispatch. Success additionally requires the whole destination (VFO, frequency, mode) as
+the rig confirms it at completion.
+
 **Build order and test discipline (review, 2026-11-02):** AC6 is a prerequisite of every new live
 band-selection path — no new live path becomes reachable before its safety sequence is built and
 tested. Separate commits, in this order:
