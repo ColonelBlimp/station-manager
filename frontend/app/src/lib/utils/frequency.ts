@@ -46,6 +46,12 @@ export function frequencyToBand(hz: number): string {
     return '';
 }
 
+/** A band's lower edge in Hz, or undefined for a name the table does not know —
+ *  the canonical frequency order for band-to-band comparisons. */
+export function bandLowerEdgeHz(name: string): number | undefined {
+    return BANDS.find((b) => b.name === name)?.low;
+}
+
 /**
  * Format a frequency in Hz as the operator-readable display string
  * MHz.kHz.Hz (3-digit-zero-padded), e.g. 14_250_000 → "14.250.000".

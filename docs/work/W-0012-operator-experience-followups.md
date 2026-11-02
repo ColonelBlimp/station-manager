@@ -674,7 +674,10 @@ Criteria:
   is armed: see the ruling below.
 - **AC7 — CAT off.** The same memory and defaults apply to the displayed context (band, mode,
   frequency); no rig is touched. Memory accepts valid operator-entered frequency and mode — no rig
-  report is required. 60m without memory: unchanged plus the ruling-6 message.
+  report is required. 60m without memory: unchanged plus the ruling-6 message. **FT8/FT4 with CAT
+  off** keep today's behaviour (operator ruling 2026-11-02): band and dial change, the displayed mode
+  is preserved. An FT dial that is not on its band (config accepts any positive dial) is refused
+  with an explanation and the display is left unchanged (review 2026-11-02, P2).
 
 **Ruling — band selection while FT is armed (operator, 2026-11-02): option (a), stop-then-retune.**
 Background: today a retuning command is not refused while SM is keyed; `handleRigCommand`
@@ -697,6 +700,38 @@ rig not retuned). The alternative, (b) refuse the selection while armed, was wei
 selection) or a mode-only sequence (destination frequency already matches, mode differs). Do not
 assume the existing hook covers every new path; tests exercise VFO-B selection and the
 same-frequency/different-mode destination under an armed FT session.
+
+**Ruling — next/previous band (operator, 2026-11-02): wrap, nearest eligible when off-list.**
+Eligible bands: Phone/CW — the operating bands with a usable destination (valid memory or a
+default); FT8/FT4 — operating bands whose configured dial lies on that band. A band with no usable
+destination is skipped by next/previous (second ruling, option (a), 2026-11-02); selecting it
+directly still gives its message. When no configured band has a destination the explanation says
+so, rather than that no bands are configured.
+
+- On-list: next/previous follows the configured order and wraps.
+- Off-list (a known band not eligible): canonical frequency order — next selects the nearest higher
+  eligible band, previous the nearest lower, wrapping to the lowest/highest eligible band when none
+  lies that way. Example: from excluded 60m, next → 40m, previous → 80m.
+- Unknown current band: next → the first configured eligible band; previous → the last.
+- No eligible bands: an explanation only; no stop/disarm, no rig command.
+
+**Build order and test discipline (review, 2026-11-02):** AC6 is a prerequisite of every new live
+band-selection path — no new live path becomes reachable before its safety sequence is built and
+tested. Separate commits, in this order:
+
+1. Pure destination selection and CAT-off behaviour (AC1, AC2, AC7).
+2. The live selection sequence, including AC6's stop, failure, supersession and ordering cases.
+3. Memory ownership, persistence and return behaviour (AC3–AC5), then wiring the controls to the
+   completed action.
+
+Standalone `set_mode` stays excluded from stop-then-retune
+(`internal/api/handler_rig_retune_test.go`, `TestRigRetune_OnlyRetuningCommandsStopTransmit`). The
+same-frequency/different-mode case is fixed in the band-selection action — it carries
+stop-then-retune semantics even when its only necessary write is a mode change — never by making
+every mode change stop FT. Distinct tests: VFO-B frequency selection invokes stop-then-retune;
+same-frequency/different-mode band selection invokes it; standalone mode changes keep their existing
+behaviour; an unresolved stop prevents destination writes and memory updates. Each AC carries a case
+matrix; no single failing test is taken to prove a whole criterion.
 
 ## Verification boundary
 
