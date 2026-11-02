@@ -6,7 +6,7 @@ package hamnut
 // internal.go (unmarshalResponse).
 type PrefixLookupResponse struct {
 	Status            string `json:"status"`
-	Found             bool   `json:"found"`
+	Found             *bool  `json:"found"` // nil: the body did not say; never read as "not found"
 	Timestamp         string `json:"_t"`
 	Continent         string `json:"continent"`
 	CountryName       string `json:"countryName"`

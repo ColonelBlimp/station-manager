@@ -275,6 +275,23 @@ func TestResult_MarshalJSON_OmitsLayersOnSourceNone(t *testing.T) {
 	}
 }
 
+// TestResult_MarshalJSON_NotFoundOmitsCountry: not_found carries no country
+// data, so the object is omitted like none, and the source says which it is.
+func TestResult_MarshalJSON_NotFoundOmitsCountry(t *testing.T) {
+	r := lookup.Result{Callsign: "0H5RW", CountrySource: lookup.SourceNotFound, StationSource: lookup.SourceNone}
+	b, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	s := string(b)
+	if strings.Contains(s, `"country"`) {
+		t.Errorf("country object present on source=not_found: %s", s)
+	}
+	if !strings.Contains(s, `"country_source":"not_found"`) {
+		t.Errorf("country_source not_found missing: %s", s)
+	}
+}
+
 // TestResult_MarshalJSON_IncludesPresentLayer confirms a populated layer still
 // serializes (only the source=none layers are dropped).
 func TestResult_MarshalJSON_IncludesPresentLayer(t *testing.T) {
@@ -874,6 +891,74 @@ func TestEnrich_ColdMiss_HamnutDown_NoRow(t *testing.T) {
 	}
 	if _, err := db.FetchCountryByPrefix("M0"); err == nil {
 		t.Error("country row written despite upstream failure")
+	}
+}
+
+// ----- unrecognised prefix (W-0012 slice, operator rulings 2026-11-02) -----
+
+// An explicit "not recognised" verdict from the country provider is the one
+// result reported as not_found; nothing is cached for it.
+func TestEnrich_ColdMiss_PrefixNotRecognised_IsNotFoundSource(t *testing.T) {
+	db := newTestSqlite(t)
+	hamnut := &stubCountryProvider{name: "hamnut",
+		err: errors.New("test.hamnut").WithErr(lookup.ErrPrefixNotRecognised)}
+	o := &lookup.Orchestrator{DB: db, Country: hamnut, CountryTTL: time.Hour, Refresher: &syncRefresher{}}
+
+	got := o.Enrich(context.Background(), "0H5RW")
+	if got.CountrySource != lookup.SourceNotFound {
+		t.Fatalf("CountrySource = %q, want %q", got.CountrySource, lookup.SourceNotFound)
+	}
+	if got.Country != (types.Country{}) {
+		t.Errorf("Country = %+v, want empty on not_found", got.Country)
+	}
+	if _, err := db.FetchCountryByCallsign("0H5RW"); err == nil {
+		t.Error("country row written for an unrecognised prefix")
+	}
+}
+
+// Everything that is not the explicit verdict stays none: a bare ErrNotFound
+// (HamNut's 404), a transport failure, a cancellation, the disabled sentinel.
+func TestEnrich_ColdMiss_NonVerdictFailures_StayNone(t *testing.T) {
+	cases := map[string]*stubCountryProvider{
+		"bare not found": {name: "hamnut", err: errors.ErrNotFound},
+		"transport":      {name: "hamnut", err: stderrErrTransport()},
+		"cancelled":      {name: "hamnut", err: context.Canceled},
+		"disabled":       {name: "hamnut", result: types.Country{Name: "Unknown"}},
+	}
+	for name, hamnut := range cases {
+		t.Run(name, func(t *testing.T) {
+			o := &lookup.Orchestrator{DB: newTestSqlite(t), Country: hamnut, CountryTTL: time.Hour, Refresher: &syncRefresher{}}
+			if got := o.Enrich(context.Background(), "0H5RW"); got.CountrySource != lookup.SourceNone {
+				t.Fatalf("CountrySource = %q, want %q", got.CountrySource, lookup.SourceNone)
+			}
+		})
+	}
+}
+
+// A cache hit is a country result, never evidence of an unrecognised prefix:
+// the provider is not asked, so its verdict cannot leak in.
+func TestEnrich_CacheHit_IsNeverNotFound(t *testing.T) {
+	db := newTestSqlite(t)
+	if err := db.UpsertCountry(types.Country{Name: "Finland", Prefix: "OH"}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	hamnut := &stubCountryProvider{name: "hamnut", err: lookup.ErrPrefixNotRecognised}
+	o := &lookup.Orchestrator{DB: db, Country: hamnut, CountryTTL: time.Hour, Refresher: &syncRefresher{}}
+
+	got := o.Enrich(context.Background(), "OH5RWW")
+	if got.CountrySource != lookup.SourceCountryTable || got.Country.Name != "Finland" {
+		t.Fatalf("got %q / %q, want country_table / Finland", got.CountrySource, got.Country.Name)
+	}
+}
+
+// A force refresh asks the provider directly, so its explicit verdict is
+// reported as not_found there too.
+func TestEnrichRefresh_PrefixNotRecognised_IsNotFoundSource(t *testing.T) {
+	hamnut := &stubCountryProvider{name: "hamnut", err: lookup.ErrPrefixNotRecognised}
+	o := &lookup.Orchestrator{DB: newTestSqlite(t), Country: hamnut, CountryTTL: time.Hour, Refresher: &recordingRefresher{}}
+
+	if got := o.EnrichRefresh(context.Background(), "0H5RW"); got.CountrySource != lookup.SourceNotFound {
+		t.Fatalf("CountrySource = %q, want %q", got.CountrySource, lookup.SourceNotFound)
 	}
 }
 

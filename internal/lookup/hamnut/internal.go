@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/lookup"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
@@ -15,10 +16,12 @@ import (
 //
 // Hamnut returns 200 + `{"found": false}` when it doesn't have a
 // prefix, so a successful HTTP call may still represent "no record."
-// We translate this into errors.ErrNotFound so the orchestrator can
-// branch the same way it does on a 404 — per ADR 0017's "hamnut no-
-// data: no row" decision, the orchestrator writes nothing in either
-// case.
+// That explicit verdict becomes lookup.ErrPrefixNotRecognised (which wraps
+// errors.ErrNotFound, so ADR 0017's "hamnut no-data: no row" still holds).
+// A body that does not state `found` (`{}`, `null`, a missing or null field)
+// is unusable rather than a verdict: it is an ordinary error, so a malformed
+// response never raises the Phone form's unrecognised-callsign warning
+// (W-0012, operator ruling 2026-11-02).
 func (s *Service) unmarshalResponse(body []byte) (types.Country, error) {
 	const op errors.Op = "hamnut.Service.unmarshalResponse"
 	var country types.Country
@@ -28,9 +31,12 @@ func (s *Service) unmarshalResponse(body []byte) (types.Country, error) {
 		return country, errors.New(op).WithErr(err).WithMsg("decoding Hamnut response")
 	}
 
-	if !resp.Found {
-		return country, errors.New(op).WithErr(errors.ErrNotFound).
-			WithMsg("prefix not found by Hamnut (found=false)")
+	if resp.Found == nil {
+		return country, errors.New(op).WithMsg("unusable Hamnut response: no found field")
+	}
+	if !*resp.Found {
+		return country, errors.New(op).WithErr(lookup.ErrPrefixNotRecognised).
+			WithMsg("prefix not recognised by Hamnut (found=false)")
 	}
 
 	country.Name = resp.CountryName

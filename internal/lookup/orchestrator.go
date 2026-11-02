@@ -37,7 +37,17 @@ const (
 	// SourceContactedTable — the station fields came from the local
 	// contacted_station table (read-side cache hit).
 	SourceContactedTable = "contacted_station"
+	// SourceNotFound — the country provider was asked and explicitly did not
+	// recognise the callsign's prefix (ErrPrefixNotRecognised). It carries no
+	// country data. A cache hit is never this: the provider is not asked.
+	SourceNotFound = "not_found"
 )
+
+// ErrPrefixNotRecognised is a country provider's explicit verdict that it does
+// not recognise the callsign's prefix — distinct from "could not ask"
+// (transport, timeout, cancellation, disabled, unusable response). It wraps
+// errors.ErrNotFound, so the no-row-write handling of ADR 0017 is unchanged.
+var ErrPrefixNotRecognised = fmt.Errorf("%w: prefix not recognised", errors.ErrNotFound)
 
 // AsyncRefresher schedules background work — the stale-hit branch of
 // the orchestrator's three-state read policy uses it to fire a
@@ -63,7 +73,7 @@ type Result struct {
 }
 
 // MarshalJSON omits the country / station layers entirely when their source is
-// SourceNone. Go's encoding/json does not treat a zero-value struct as empty,
+// SourceNone (and the country layer on SourceNotFound, which carries no data). Go's encoding/json does not treat a zero-value struct as empty,
 // so the value-typed fields above would otherwise serialize as `"country":{}`
 // / `"station":{}` on a no-data result — contradicting the SPA contract that a
 // failed/absent layer is "source=none with no object" (review 2026-06-04 H2).
@@ -82,7 +92,7 @@ func (r Result) MarshalJSON() ([]byte, error) {
 		CountrySource: r.CountrySource,
 		StationSource: r.StationSource,
 	}
-	if r.CountrySource != SourceNone {
+	if r.CountrySource != SourceNone && r.CountrySource != SourceNotFound {
 		c := r.Country
 		w.Country = &c
 	}
@@ -534,8 +544,12 @@ func (o *Orchestrator) readCountry(ctx context.Context, callsign string, force b
 	}
 	res, lerr := o.Country.LookupWithContext(ctx, callsign)
 	if lerr != nil {
-		// ErrNotFound + transport failures both fall here. Per ADR
-		// 0017 #9, no row is written.
+		// No row is written either way (ADR 0017 #9). Only the provider's
+		// explicit verdict is reported as not_found; a bare ErrNotFound (a
+		// 404), transport failure or cancellation could not ask, so none.
+		if stderrs.Is(lerr, ErrPrefixNotRecognised) {
+			return countryReadResult{source: SourceNotFound}
+		}
 		return countryReadResult{source: SourceNone}
 	}
 	if res.Name == "Unknown" {

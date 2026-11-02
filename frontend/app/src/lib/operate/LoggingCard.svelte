@@ -37,7 +37,7 @@
     import { toasts, toastsState, dismissToast } from '../ui/toasts.svelte';
     import { untrack } from 'svelte';
     import EnrichmentCard from './EnrichmentCard.svelte';
-    import { enrich } from './enrich.svelte';
+    import { enrich, callsignNotRecognised } from './enrich.svelte';
     import { isValidMaidenhead } from '../validators/maidenhead';
     import { isValidCallsign } from '../validators/callsign';
     import { callsignStack } from './callsignStack.svelte';
@@ -619,6 +619,18 @@
                         data-testid="contest-dupe"
                     >
                         DUPE on {rig.band}
+                    </p>
+                {/if}
+                <!-- Unrecognised callsign (W-0012; operator rulings 2026-11-02): the
+                     lookup explicitly did not recognise the prefix. Describes the
+                     result, never claims the call is invalid; a warning only. -->
+                {#if callsignNotRecognised(draft.callsign)}
+                    <p
+                        role="status"
+                        class="mt-2 text-center text-sm font-semibold text-amber-600"
+                        data-testid="callsign-not-recognised"
+                    >
+                        No country found for {draft.callsign.trim().toUpperCase()} — check the callsign
                     </p>
                 {/if}
             </div>

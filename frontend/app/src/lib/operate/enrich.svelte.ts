@@ -40,6 +40,12 @@ export interface Enrichment {
     cqZone: string;
     /** ITU zone (country layer). Displayed + logged as ADIF ITUZ. '' when unknown. */
     ituZone: string;
+    /**
+     * The lookup explicitly did not recognise the call's prefix (daemon
+     * country_source "not_found"). false for a country result AND for a lookup
+     * that could not run — only the explicit verdict warns (W-0012).
+     */
+    countryNotFound: boolean;
 }
 
 export type EnrichStatus = 'idle' | 'pending' | 'done';
@@ -105,6 +111,36 @@ let lastPathResetCall = '';
  * matters. Note the validator's floor: a digit-bearing partial like "DL3" is
  * a structurally valid call, so only the debounce stops those.
  */
+/**
+ * A not-recognised verdict and nothing else: no country and no station facts.
+ * Only this reads as "No match" on the shared card — a country miss that still
+ * carries station data (a grid, a name) keeps the station-derived display
+ * (review 2026-11-02, P2).
+ */
+export function verdictOnly(e: Enrichment): boolean {
+    return (
+        e.countryNotFound &&
+        [e.country, e.ccode, e.dxcc, e.grid, e.name, e.qth, e.email, e.cqZone, e.ituZone].every(
+            (v) => v === ''
+        )
+    );
+}
+
+/**
+ * The Phone/CW unrecognised-callsign warning is shown for `raw` (W-0012,
+ * operator rulings 2026-11-02): the settled lookup belongs to exactly this
+ * normalised call and explicitly did not recognise its prefix. Tying it to the
+ * call hides it the moment the field changes — inside the debounce, before any
+ * new lookup — and a late answer for another call can never satisfy it.
+ */
+export function callsignNotRecognised(raw: string): boolean {
+    return (
+        enrich.status === 'done' &&
+        enrich.data?.countryNotFound === true &&
+        enrich.call === raw.trim().toUpperCase()
+    );
+}
+
 export function observeCall(raw: string): void {
     const call = raw.trim().toUpperCase();
     clearTimeout(timer);

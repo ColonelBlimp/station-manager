@@ -10,6 +10,7 @@ import (
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
+	"github.com/ColonelBlimp/station-manager/internal/lookup"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
@@ -152,6 +153,34 @@ func TestLookup_HamnutFoundFalse_ReturnsErrNotFound(t *testing.T) {
 	_, err := s.Lookup("ZZ9XYZ")
 	if !stderrors.Is(err, errors.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+// A 404 keeps its no-data handling but is not the explicit verdict: a wrong URL
+// or path also answers 404, so it must not raise the callsign warning.
+func TestLookup_404_IsNotPrefixNotRecognised(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	s := initializedService(t, srv.URL, srv.Client())
+	_, err := s.Lookup("ZZ9XYZ")
+	if stderrors.Is(err, lookup.ErrPrefixNotRecognised) {
+		t.Fatalf("err = %v; a 404 must not be the explicit not-recognised verdict", err)
+	}
+}
+
+func TestLookup_HamnutFoundFalse_IsPrefixNotRecognised(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"OK","found":false}`))
+	}))
+	defer srv.Close()
+
+	s := initializedService(t, srv.URL, srv.Client())
+	_, err := s.Lookup("0H5RW")
+	if !stderrors.Is(err, lookup.ErrPrefixNotRecognised) {
+		t.Fatalf("err = %v, want ErrPrefixNotRecognised", err)
 	}
 }
 
@@ -299,6 +328,44 @@ func TestUnmarshalResponse_PropagatesNotFound(t *testing.T) {
 	_, err := s.unmarshalResponse(body)
 	if !stderrors.Is(err, errors.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+// An explicit `found: false` is HamNut saying it does not recognise the prefix —
+// the one result the Phone form warns on (W-0012 unrecognised-callsign slice).
+// It still matches ErrNotFound, so the no-row-write path is unchanged.
+func TestUnmarshalResponse_ExplicitFoundFalse_IsPrefixNotRecognised(t *testing.T) {
+	s := &Service{}
+	_, err := s.unmarshalResponse([]byte(`{"status":"OK","found":false}`))
+	if !stderrors.Is(err, lookup.ErrPrefixNotRecognised) {
+		t.Fatalf("err = %v, want ErrPrefixNotRecognised", err)
+	}
+	if !stderrors.Is(err, errors.ErrNotFound) {
+		t.Fatalf("err = %v, want it to remain an ErrNotFound", err)
+	}
+}
+
+// A body that does not say `found` at all is unusable, not a verdict: treating
+// its zero value as "not found" would raise the callsign warning on a
+// malformed response (operator ruling 2026-11-02, AC2).
+func TestUnmarshalResponse_UnusableBody_IsNotANotFoundVerdict(t *testing.T) {
+	for name, body := range map[string]string{
+		"empty object":   `{}`,
+		"null":           `null`,
+		"found missing":  `{"status":"OK"}`,
+		"found null":     `{"status":"OK","found":null}`,
+		"found a string": `{"status":"OK","found":"false"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := &Service{}
+			_, err := s.unmarshalResponse([]byte(body))
+			if err == nil {
+				t.Fatalf("body %s decoded without error; want an unusable-response error", body)
+			}
+			if stderrors.Is(err, errors.ErrNotFound) || stderrors.Is(err, lookup.ErrPrefixNotRecognised) {
+				t.Fatalf("body %s gave %v; an unusable body must not read as not found", body, err)
+			}
+		})
 	}
 }
 

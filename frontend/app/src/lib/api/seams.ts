@@ -14,7 +14,7 @@
 //   the action module can reconcile it against pushed state (F-04, ADR 0078).
 //   A write must never collapse to "nothing happened" — it may have.
 
-import { enrichCallsign } from './enrichment';
+import { enrichCallsign, type EnrichmentResult } from './enrichment';
 import { fetchContactHistory, type ContactHistory } from './contact-history';
 import { isPlainObject, isUuidV7, readJsonBody, safeFetch } from './_helpers';
 
@@ -30,17 +30,24 @@ import type { Ft8TxOutcome } from './ft8tx';
 import type { RigTuneOutcome } from './rig-tune';
 import type { RigCommandOutcome } from './rig-command';
 
+/** Nothing known: both layers "none". The explicit "not recognised" verdict
+ *  carries no objects but IS a result — the Phone form warns on it, so it must
+ *  not collapse into null (W-0012, operator rulings 2026-11-02). */
+function nothingKnown(r: EnrichmentResult): boolean {
+    return r.country === undefined && r.station === undefined && r.country_source !== 'not_found';
+}
+
 /** Real enricher for setEnricher — GET /v1/enrich/callsign. The signal lets a
  *  superseded lookup cancel its in-flight daemon/upstream request. */
-// BASELINE DEBT 2026-07-31 (complexity 27) — maps each enrichment field from the
+// BASELINE DEBT 2026-07-31 (complexity 26 since 2026-11-02, was 27) — maps each enrichment field from the
 // daemon response, tolerating absent ones (enrichment never blocks logging).
 // eslint-disable-next-line complexity
 export async function apiEnrich(call: string, signal?: AbortSignal): Promise<Enrichment | null> {
     const out = await enrichCallsign(call, signal);
     if (out.kind !== 'ok') return null;
 
+    if (nothingKnown(out.result)) return null;
     const { country, station } = out.result;
-    if (country === undefined && station === undefined) return null; // both sources "none"
 
     return {
         country: country?.name ?? '',
@@ -61,6 +68,7 @@ export async function apiEnrich(call: string, signal?: AbortSignal): Promise<Enr
         // country entity is the authoritative source).
         cqZone: country?.cq_zone ?? '',
         ituZone: country?.itu_zone ?? '',
+        countryNotFound: out.result.country_source === 'not_found',
     };
 }
 

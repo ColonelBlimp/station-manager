@@ -482,6 +482,66 @@ readout and the header chip; (5) showing the data literal as "FT8/FT4" in Phone/
 label stands — recommended hold. Hiding rarely used variants would need a per-rig configured mode
 list, like operating bands, and is not proposed.
 
+## Slice — unrecognised-callsign warning (Phone/CW)
+
+**Selected:** 2026-11-02, first of the post-contest order (operator).
+**Origin:** dogfood inbox 2026-10-31: `0H5RW` (zero-H, for OH5RW) was logged in the UK/EI DX SSB
+contest; the lookup found no country, ClubLog refused the upload (HTTP 400, terminal) and QRZ took the
+call as typed. Nothing on the Phone form said the prefix was not recognised.
+
+**Found (2026-11-02):** HamNut answers an unknown prefix with `200 {"found": false}` (and, per the
+service's own comment, 404), mapped to `errors.ErrNotFound` (`internal/lookup/hamnut/service.go`,
+`internal.go`). The orchestrator collapses that with transport failure, a disabled provider and other
+errors into `country_source: "none"` (`internal/lookup/orchestrator.go` `readCountry`), so the SPA
+could not tell "not recognised" from "could not ask".
+
+**Rulings (operator, 2026-11-02):**
+
+- **Trigger:** only an explicit "not recognised" result. Offline, timeout, disabled lookup,
+  cancellation and malformed responses produce no callsign warning.
+- **Warn only:** no confirmation step, no logging block (enrichment never blocks logging).
+- **AC1:** a typed Phone/CW callsign whose lookup says the prefix is not recognised shows, under the
+  country panel, "No country found for <CALL> — check the callsign". The wording describes the lookup
+  result; it does not claim the call is invalid.
+- **AC2 (nearest confusable):** a lookup that could not run or could not be read shows no warning.
+- **AC3:** logging succeeds while the warning is visible; the warning can coexist with the contest
+  dupe warning.
+- **AC4:** the warning hides immediately when the normalised callsign changes or the contact is
+  cleared; a late response for the previous call never restores it, including within the debounce.
+- **Scope:** Phone/CW only; FT8 never shows it (its calls come from decodes).
+- **Prerequisite:** `PrefixLookupResponse.Found` is a plain bool, so `{}`, `null` or a missing or null
+  `found` decode as "not found". Tests must separate an explicit `found: false` from these unusable
+  responses, which must become ordinary errors.
+- **Contract:** add `country_source: "not_found"`; HTTP 200 with the `country` object omitted
+  (`Result.MarshalJSON` today assumes every source except `none` carries country data). The SPA seam
+  (`apiEnrich`, `frontend/app/src/lib/api/seams.ts`) must keep the negative result even when both the
+  country and station objects are absent. A cache hit stays a country result, never evidence of an
+  unrecognised prefix; document that boundary with the new value in `api-endpoints.md`.
+
+**Agent's reading of "explicit" (open to the operator's correction):** only the `200 {"found":
+false}` body counts. An HTTP 404 keeps today's no-data handling but raises no warning, because a 404
+can also come from a wrong URL or path.
+
+**Limit (stated to the operator 2026-11-02):** the local country table answers first, by the
+longest prefix HamNut has already confirmed, so a call with a known prefix and a mistyped suffix
+(`OH5RWW`, `G0KHX`) reads as that country and is not flagged. The warning catches an unrecognised
+prefix, not an invalid callsign.
+
+**Built 2026-11-02 (uncommitted at writing):** `lookup.ErrPrefixNotRecognised` (wraps
+`errors.ErrNotFound`) and `SourceNotFound`; HamNut's `found` is a `*bool`, so an absent or null field
+is an unusable-response error; `readCountry` reports `not_found` only for the explicit verdict;
+`Result.MarshalJSON` omits `country` for it; `api-endpoints.md` documents the value and the
+cache-hit boundary. SPA: `Enrichment.countryNotFound`, the seam keeps the verdict
+(`nothingKnown`), `callsignNotRecognised(call)` ties the warning to the settled lookup of exactly
+the current normalised call, and the Phone/CW card shows it under the enrichment panel. The shared
+`EnrichmentCard` reads a verdict-only result (no country, no station facts: `verdictOnly`) as
+"No match", as it did when the seam returned null; a country miss that still carries station data
+keeps the station-derived display — grid, bearing and distance, path controls, local time — in
+both views (review 2026-11-02, P2), and only Phone/CW adds the country warning. Tests:
+`internal/lookup/hamnut/service_test.go`, `internal/lookup/orchestrator_test.go`,
+`frontend/app/src/lib/api/seams.enrich.test.ts`,
+`frontend/app/src/lib/operate/LoggingCard.callsignWarning.svelte.test.ts` (AC1–AC4, FT8 card).
+
 ## Verification boundary
 
 Every slice states its operator-visible outcome and nearest confusable state first. Frontend work

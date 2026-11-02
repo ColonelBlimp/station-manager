@@ -302,7 +302,7 @@ The station-global archive catalogue (`config.md` §3): the archive the daemon s
 - **Purpose:** Enrichment-pipeline lookup (country + station data); SPA fires it on Tab-out of the callsign field (ADR 0017).
 - **Gating:** Always-on (tolerates a nil orchestrator).
 - **Request:** Query `call` (**req**, validated, uppercased), `refresh` (optional; only `"true"` bypasses cache).
-- **Response:** **Always 200** (ADR 0017 #12), body = `lookup.Result` (country/station fields + `CountrySource`/`StationSource`). Nil orchestrator → empty result, `source=none`.
+- **Response:** **Always 200** (ADR 0017 #12), body = `lookup.Result` (country/station fields + `CountrySource`/`StationSource`). Nil orchestrator → empty result, `source=none`. `country_source` is one of `country_table` (local cache hit, fresh or stale), `hamnut` (cold-miss provider answer), `none` (no country data: no provider, disabled, transport failure, timeout, cancellation, an unusable response, or a bare 404) and `not_found` (added 2026-11-02, W-0012): HamNut was asked and answered explicitly `{"found": false}`, i.e. it does not recognise the callsign's prefix. `not_found` and `none` both omit the `country` object. A cache hit is never `not_found` — the local table matches the longest prefix HamNut has already confirmed, so a call with a known prefix and a mistyped suffix still reads as that country; `not_found` flags an unrecognised **prefix**, not an invalid callsign.
 - **Errors:** Only malformed input: 400 `missing_required_param`/`invalid_field_value`. Upstream failures fold into empty fields, never non-2xx (enrichment-never-blocks-logging). Request context propagates so the SPA's AbortController cancels in-flight upstream calls.
 
 ---

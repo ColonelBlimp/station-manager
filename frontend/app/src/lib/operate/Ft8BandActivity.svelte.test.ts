@@ -178,6 +178,7 @@ describe('Ft8BandActivity renderer', () => {
                 email: '',
                 cqZone: '',
                 ituZone: '',
+                countryNotFound: false,
             })
         );
         render(Ft8BandActivity);
@@ -202,6 +203,7 @@ describe('Ft8BandActivity renderer', () => {
                 email: '',
                 cqZone: '',
                 ituZone: '',
+                countryNotFound: false,
             })
         );
         render(Ft8BandActivity);

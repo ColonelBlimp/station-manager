@@ -27,6 +27,7 @@ function enrichment(over: Partial<Enrichment> = {}): Enrichment {
         email: '',
         cqZone: '',
         ituZone: '',
+        countryNotFound: false,
         ...over,
     };
 }

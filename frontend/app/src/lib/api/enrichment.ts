@@ -88,7 +88,9 @@ export interface EnrichmentResult {
     station?: EnrichmentStation;
     // Daemon emits "country_table" for a cache hit (NOT "cache"), "hamnut" for
     // a cold-miss upstream call, or "none". See review 2026-06-04 L2.
-    country_source: 'hamnut' | 'country_table' | 'none';
+    // "not_found" (W-0012, 2026-11-02): HamNut was asked and explicitly does not
+    // recognise the prefix; no country object accompanies it.
+    country_source: 'hamnut' | 'country_table' | 'none' | 'not_found';
     /** Provider service name (e.g. "qrzlookupservice"), "contacted_station" (cache hit), or "none". */
     station_source: string;
 }

@@ -9,7 +9,7 @@
     // the Phone/CW logging card passes its draft callsign, the FT8 Operate panel
     // passes the worked station — same card, different source. An empty call
     // renders the blank frame (observeCall resets to idle).
-    import { enrich, station, prefs, observeCall } from './enrich.svelte';
+    import { enrich, station, prefs, observeCall, verdictOnly } from './enrich.svelte';
     import { ccodeToFlag } from '../utils/flag';
     import { pathInfo, gridToDecimal } from '../utils/bearing';
 
@@ -70,7 +70,10 @@
 </script>
 
 <div class="flex h-full w-full flex-col rounded-lg border border-line bg-surface-muted p-3">
-    {#if enrich.status === 'done' && enrich.data !== null}
+    <!-- A verdict-only result (country not recognised, no station facts) reads as
+         "No match", as before; one that carries station data keeps its display.
+         The Phone/CW card adds the country warning itself (W-0012). -->
+    {#if enrich.status === 'done' && enrich.data !== null && !verdictOnly(enrich.data)}
         <div class="flex items-center gap-x-2">
             {#if flag !== ''}
                 <div

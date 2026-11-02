@@ -50,7 +50,7 @@
       "path": "frontend/app/src/lib/api/seams.ts",
       "function": "apiEnrich",
       "direction": "maximum",
-      "value": 27
+      "value": 26
     },
     {
       "language": "frontend",
