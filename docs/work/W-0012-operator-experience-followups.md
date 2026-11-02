@@ -542,6 +542,162 @@ both views (review 2026-11-02, P2), and only Phone/CW adds the country warning. 
 `frontend/app/src/lib/api/seams.enrich.test.ts`,
 `frontend/app/src/lib/operate/LoggingCard.callsignWarning.svelte.test.ts` (AC1–AC4, FT8 card).
 
+## Proposed slice — Phone/CW keeps its own frequency and mode per band
+
+**Status:** ruled 2026-11-02; AC1–AC7 approved with amendments (revised below); AC6 interaction
+ruled (option a). Ready for RED. No code.
+**Origin:** dogfood inbox 2026-11-01 ("Rig Control doesn't remember previous settings, particularly
+mode") and 2026-11-02 ("changing from DIGI mode to PHONE/CW should remember the last settings …
+or have defaults"), from the UK/EI DX SSB weekend.
+
+**Found (2026-11-02):**
+
+- `modeRestore.svelte.ts` already snapshots the outgoing view's operating point on every Phone/CW ↔
+  FT switch and restores the incoming one (config `restore_rig_on_mode_switch`, live: on). It holds
+  ONE operating point per view, in memory only; a reload starts empty except the boot-into-FT8
+  capture (A26). Phone/CW has no default ("phone has no canonical home").
+- The restore worked on 2026-11-01: 02:57:56Z `set_freq 7145000` then `set_mode LSB` after leaving
+  FT8. The friction came next: 02:58:03Z onward, six `set_band 20m` in eight seconds. A Phone/CW band
+  pick sends `set_band`, so the rig recalls its own band-stack entry for 20m — which FT8 had left at
+  14.074 DATA-U (`rig.svelte.ts` `selectBand`).
+- The Operate-wide band keys (Ctrl+Shift+digit, `[`/`]`, `RigKeys.svelte`) call the same Phone/CW
+  `selectBand` even in the FT8 view, so a key band change there also recalls the rig's band stack
+  rather than the FT8 dial; the FT8 band buttons use `ft8SelectBand`.
+- `BAND_DEFAULT_HZ` (`rig.svelte.ts`) already holds a default frequency per band, used only CAT-off.
+
+**Proposed behaviour (for ruling):**
+
+- **B1:** a Phone/CW band change (button, digit key, next/previous band) goes to Phone/CW's own last
+  frequency and mode on that band, not the rig's band stack.
+- **B2:** a band with no Phone/CW memory goes to a default frequency and mode for that band.
+- **B3:** returning from FT8 with no Phone/CW memory at all (e.g. after a reload) goes to the default
+  for the rig's current band instead of staying on the FT dial in the data mode.
+- **B4:** the memory is written whenever Phone/CW leaves a band or the view — including a frequency or
+  mode set by hand on the rig — and never from the FT views.
+- **B5 (kept):** nothing re-tunes while the rig may be keyed; the existing restore guards stand.
+- **Nearest confusable:** FT8/FT4 band picks keep going to the configured FT dial in the data mode.
+
+**Questions for the operator:** (1) does the per-band memory survive a reload and a daemon restart,
+or only the browser session (today's restore deliberately forgets on reload); (2) the defaults —
+`BAND_DEFAULT_HZ` frequencies, with LSB below 10 MHz and USB above, or a table the operator gives;
+(3) should the band keys in the FT8 view go to the FT dial like the FT8 band buttons (a separate
+inconsistency found here).
+
+**Rulings (operator, 2026-11-02):**
+
+1. **Persistent memory.** Phone/CW memories survive reloads and daemon restarts, kept in this browser
+   and scoped to its station and rig. Loading them never retunes: recall happens only on an
+   operator's band selection or a return to Phone/CW, and the return respects
+   `restore_rig_on_mode_switch`. This deliberately revises the "forget on reload" choice in
+   `modeRestore.svelte.ts`: the protection against surprise tuning becomes a rule about *when* recall
+   happens, not a requirement that memories vanish.
+2. **Explicit defaults.** Frequencies from `BAND_DEFAULT_HZ`; modes: 160m, 80m, 40m LSB; 30m CW at
+   10.125 MHz; 20m, 17m, 15m, 12m, 10m, 6m USB. **60m: see ruling 6** (USB is the IARU Region 1 voice
+   recommendation below 10 MHz; the existing 5.357 MHz default matches the app's FT8 dial; the
+   station-specific frequency is the operator's choice). Source given with the ruling: IARU Region 1
+   HF band plan, <https://www.iaru-r1.org/wp-content/uploads/2019/08/hf_r1_bandplan.pdf> (60m USB
+   exception; 10.125 MHz in the CW segment). A remembered frequency and mode always win over a
+   default: a saved 20m CW position returns as CW.
+3. **One band action per view.** Buttons, digit keys and next/previous use the same view-aware band
+   selection. FT8 selects its configured FT8 dial and FT4 its own FT4 dial (separate tables,
+   `config.md` §4.2), each with the configured data mode; next/previous visits only bands that profile
+   carries, in configured order. Fixed in this slice.
+4. **Tightened B4:** inherited or partially restored FT state never becomes Phone/CW memory — the
+   boot capture (`noteRigReport`, a report received in an FT view) cannot stay an unconditional
+   source, and a refused restore must not overwrite good memory with the rig's unchanged FT position.
+5. **Tightened B3:** returning from FT still restores Phone/CW's last band and position; the
+   current-band default is only the fallback when no return position exists. B5 (no re-tune while
+   the rig may be keyed) is exercised on every entry path, including rapid selections and partial
+   command failures.
+
+6. **60m (second ruling, 2026-11-02).** Mode USB; **no default frequency in this slice**. With no
+   saved 60m position, a Phone/CW 60m selection leaves frequency and mode unchanged and says "No
+   Phone/CW default configured for 60m." The same applies to the AC3 fallback and to CAT-off display.
+   Falling back to the rig's stored setting would contradict AC1. A saved 60m position recalls as usual.
+
+**Acceptance criteria (approved with amendments, 2026-11-02 — revised text):**
+
+The reviewer approved AC1–AC7 subject to amendments to AC3–AC7, folded in below. Two definitions are
+used throughout:
+
+- **Confirmed position.** CAT live: a frequency and mode the rig itself reported. CAT off: a valid
+  frequency and mode the operator entered. A commanded value the rig has not reported is never
+  confirmed.
+- **Phone/CW owns the rig** from the moment a return to Phone/CW (or a Phone/CW band selection)
+  completes successfully — every command in its sequence confirmed — or an attributable manual
+  operation establishes a position, until the operator leaves the view or starts another selection.
+  Displaying Phone/CW alone is not ownership. With `restore_rig_on_mode_switch` off, entering the view
+  does **not** establish ownership: the rig is untouched and may still show FT's position and delayed
+  reports, so existing Phone/CW memory is preserved until a Phone/CW selection or an attributable
+  manual operation establishes a position.
+- **Attributable manual operation.** A confirmed position the operator set by hand, with no Phone/CW
+  command outstanding whose outcome is unknown. A report that merely differs from the last known
+  position is not proof of hand-tuning: it may be the delayed result of an earlier command.
+
+Criteria:
+
+- **AC1 — Phone/CW band selection.** Button, digit key and next/previous in Phone/CW go to the
+  remembered frequency and mode for that band when one exists, otherwise to the band default
+  (ruling 2; 60m per ruling 6); never to the rig's band stack. Nearest confusable: today's `set_band`
+  recall, which must no longer occur.
+- **AC2 — FT band selection.** In FT8/FT4, the same three inputs go to that profile's configured dial
+  in the configured data mode; next/previous skips bands the profile has no dial for, keeping the
+  configured order. Phone/CW memory is neither read nor written.
+- **AC3 — return to Phone/CW.** Leaving FT restores Phone/CW's last return position (band, frequency,
+  mode); with none, the default for the rig's current band (60m: unchanged plus the ruling-6
+  message). `restore_rig_on_mode_switch` keeps its existing scope (`modeRestore.svelte.ts`
+  `setRestoreOnModeSwitch`): off prevents the live re-tune only; the CAT-off displayed context is still
+  restored. Band selections still apply AC1.
+- **AC4 — persistence without surprise.** Memories survive a reload and a daemon restart, keyed to
+  station and rig; a reload, a restart or opening the page sends no rig command. **Required case:**
+  hand-tune on the rig, receive the rig's confirmation, reload without navigating away; a later
+  selection of that band recalls that exact frequency and mode.
+- **AC5 — what writes memory.** Every confirmed position (CAT live or CAT off, per the definition
+  above) received while Phone/CW owns the rig is persisted at once — not only on leaving a band or the
+  view — so the latest knob change survives a reload. Never written: a report received in an FT view
+  (the boot capture stops being a memory source); a late FT confirmation that arrives after navigating
+  to Phone/CW but before Phone/CW owns the rig; the position left by a refused, failed or partial
+  restore or selection; an unconfirmed commanded value; and any stale rig data replayed or re-read
+  across a connection loss — after a reconnect, only a fresh report counts. **Resumption:** after an
+  unsuccessful restore or selection, recording resumes when the operator next completes a selection
+  successfully, or recovers by hand — an attributable manual operation (definition above). While any
+  command's outcome is unresolved, a differing report is not relabelled as hand-tuning; a test covers
+  a delayed result from an earlier unknown-outcome command arriving after the failure.
+- **AC6 — safety on every path.** Every entry (buttons, keys, next/previous, return from FT) is
+  serialised. Each sequence is two or more commands (frequency, then mode); TX eligibility is
+  rechecked before each command, not once per sequence. Refusal, transport failure, unknown outcome
+  and supersession each stop the remaining sequence: no data mode on a phone frequency, no memory
+  written from the half-applied state, and the failure stays visible to the operator. Rapid
+  next/previous presses accumulate from the pending destination, not the displayed band: two presses
+  while the first is pending advance two eligible bands. "Last wins" applies when that last request
+  succeeds; a superseded or failed earlier request is reported, not hidden. Band selection while FT
+  is armed: see the ruling below.
+- **AC7 — CAT off.** The same memory and defaults apply to the displayed context (band, mode,
+  frequency); no rig is touched. Memory accepts valid operator-entered frequency and mode — no rig
+  report is required. 60m without memory: unchanged plus the ruling-6 message.
+
+**Ruling — band selection while FT is armed (operator, 2026-11-02): option (a), stop-then-retune.**
+Background: today a retuning command is not refused while SM is keyed; `handleRigCommand`
+(`internal/api/handler_rig_command.go`) first performs the dial guard's teardown — PTT down, session
+ended, TX disarmed — and writes only if that stop is confirmed (otherwise 409 `rig_tx_stop_failed`,
+rig not retuned). The alternative, (b) refuse the selection while armed, was weighed and not chosen.
+
+- Applies to explicit band selections — buttons, digits and next/previous — consistently in Phone/CW,
+  FT8 and FT4.
+- Sequence: resolve a valid destination; stop/disarm through the existing daemon path; then apply the
+  destination subject to the existing TX guards.
+- A failed stop or unresolved TX state prevents every further write and every memory update.
+- Never re-arms automatically afterwards.
+- A 60m selection with no destination only shows the ruling-6 message: no stop, no write.
+- Returning between views is not covered: it keeps its existing restore guard and
+  `restore_rig_on_mode_switch` behaviour.
+
+**Implementation boundaries the tests must cover (review, 2026-11-02):** the stop trigger
+`retunesTheRig` lists only `set_band` and `set_freq`. It does not cover `set_freq_b` (VFO-B
+selection) or a mode-only sequence (destination frequency already matches, mode differs). Do not
+assume the existing hook covers every new path; tests exercise VFO-B selection and the
+same-frequency/different-mode destination under an armed FT session.
+
 ## Verification boundary
 
 Every slice states its operator-visible outcome and nearest confusable state first. Frontend work
