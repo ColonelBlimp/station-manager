@@ -1061,12 +1061,57 @@ until the test can distinguish correct from incorrect behaviour. A counterexampl
 settlement mechanism; adopting either fallback needs an explicit requirement change. Implementation
 and bench execution stay on hold.
 
+*Follow-up review (2026-11-03), after `b817ab93`.* The four corrections are closed. Remaining: the
+candidate identification rule — matching frame counts does not identify which frame answered the
+query; counts may serve only as a consistency check, attribution may stay inconclusive when totals
+match, and with Auto Information off earlier buffered replies still need accounting. ADR 0098 stays
+Proposed with E4 unresolved; the identification method is the next review target. Revision 2 of the
+rule is in the bench plan below.
+
+*Second follow-up review (2026-11-03): stop strengthening attribution.* Not approved: switching Auto
+Information off as part of D4. It widens the feature into changing how the daemon observes the rig
+without resolving attribution: (a) other consumers depend on the reports — the bridge's reported dial
+state (`internal/bridge/tune.go` `CurrentDialMHz`) feeds FT8's frequency checks and dial-movement
+detection, so turning reports off opens an observation gap; (b) the liveness probe re-sends INIT and
+READ (`internal/bridge/pipeline.go`, read-deadline branch of the pipeline loop), and INIT re-enables
+Auto Information, so coordinating a toggle — including a failed re-enable — needs broader bridge
+changes; (c) reports off still give no query identity or ordering guarantee and do not identify
+earlier buffered replies. The fences are useful experimental markers, but bench results are
+conditional on the stated ordering assumption, never unambiguous attribution. Conclusion: D4's
+stated guarantee is unsupported on the FTdx10 with the available evidence; that does not make
+ordinary readback unusable. The operator notes the earlier reviews pushed toward stronger attribution
+than the protocol demonstrably provides, and returns the question to an explicit **product
+decision**: may report-driven memory use best-effort attribution with documented limitations? If
+not, the narrower "memory from completed selections only" needs an explicit amendment to the
+hand-tuning requirement (AC4). ADR 0098 stays Proposed; implementation and bench execution stay on
+hold.
+
+*Ruling (2026-11-03): best-effort report-driven memory.* Accepted: report-driven memory with
+best-effort attribution; AC4's hand-tuning requirement is retained. Imperfect attribution of actual
+rig reports is an acceptable limitation for this feature. Boundaries, explicit:
+
+- Known FT/tune activity, incomplete operations and unconfirmed commanded values stay excluded from
+  recording. The ruling accepts residual ambiguity; it does not remove those checks.
+- The possible result is described as a **stale or incorrect remembered position** — not as rare or
+  slightly stale; neither has been established.
+- Memory recording never keys TX, but recall changes frequency and mode; recall keeps every existing
+  guard and refusal rule.
+- Correction: the reservation's design is affected — D4 controlled its automatic release. D4–D6 are
+  revised together so release no longer depends on proven settlement. The refuse-only return
+  requirement is unchanged.
+- The bench is no longer a gate: it was designed to prove a guarantee that is no longer required.
+
+ADR 0098 stays Proposed; implementation and bench execution stay on hold. Next: a simplified design
+against the relaxed requirement, keeping only machinery with a concrete purpose.
+
 *Documentation result:* the FTDX10 CAT Operation Reference Manual (`FTDX10_CAT_OM_ENG_2308-F`, 25
 pages, Yaesu) shows set / read / answer forms on page 4 and is otherwise silent on processing order,
 buffering, processing time and telling solicited answers from Auto Information output; an answer
 carries nothing identifying its query. E4's guarantee stays unverified.
 
 *Non-transmitting bench plan — for separate operator approval; nothing below may run without it.*
+**Superseded as a gate (ruling 2026-11-03):** best-effort attribution is accepted, so nothing
+waits on this plan; it is kept only as a record.
 
 - **Purpose:** decide whether a complete, fresh answer reflecting every earlier effect can be
   identified on the FTdx10 (model, firmware version and conditions recorded; results apply to those
@@ -1077,12 +1122,36 @@ carries nothing identifying its query. E4's guarantee stays unverified.
 - **Setup:** the operator stops `smd` (the probe needs the Enhanced COM port alone), notes the
   firmware version from the rig's menu, and restarts `smd` afterwards. The probe is a small dev-only
   tool that writes the allowlisted commands and logs every received byte with a monotonic timestamp.
-- **Identifying the solicited answer.** With Auto Information on, the rig also reports positions on
-  its own, so an `FA` frame after a read is not necessarily the read's answer. Each case states how
-  the test tells them apart; where it cannot, the trial is *inconclusive*, never a pass. The first
-  candidate rule: run the case with Auto Information off, where every frame is a solicited answer;
-  with it on, a trial is decisive only if the frames received match the number of reads issued plus
-  the reports the set commands can explain, and inconclusive otherwise.
+- **Identifying the solicited answer (revision 2; reviewed 2026-11-03 — results are conditional,
+  see the review below).** An answer carries no query
+  identity, so attribution is something the test must earn, not assume. Rules:
+  - *Counts are a consistency check only.* Frames received versus reads issued can reject a trial
+    (any mismatch makes it inconclusive and is logged), but matching totals never say which frame
+    answered which read.
+  - *Bracketing fences with trial-unique values.* Each trial is
+    `FB<u₁>;FB;` → wait for the frame `FB<u₁>` → the case's commands → `FB<u₂>;FB;` → wait for
+    `FB<u₂>`, where `u₁`, `u₂` are VFO-B frequencies never used before in the run (VFO A stays
+    selected, so B is not the operating dial). Frames received before `FB<u₁>` belong to earlier
+    activity — buffered replies from previous trials or startup — and are logged and counted as
+    such, never attributed to this trial. Frames between the two fences are the trial's window.
+  - *Consistent, never decisive.* With Auto Information **off**, a trial is *consistent* if its
+    window holds exactly one frame per read in the case, each of the read's command type, and no
+    frame arrives after `FB<u₂>` until the next trial's leading fence; otherwise it is inconclusive.
+    A consistent trial's attribution is conditional on the ordering assumption below, not
+    unambiguous: a unique `FB<u₁>` identifies an observed value, not that every earlier reply arrived
+    before it — an older response could fall inside the window while the intended one arrives later,
+    with counts and types still consistent.
+  - *What remains assumed.* Attribution inside the window still rests on the rig answering reads in
+    the order received. The fences can falsify that (an out-of-window or surplus frame, a fence
+    answer arriving early) but cannot prove it; case 5 probes it directly. Results are reported with
+    that assumption named.
+  - *Auto Information on.* A fence's set produces its own report carrying the same `u`, so a fence
+    frame no longer marks that the read was answered, and position reports of intermediate values
+    are expected. No attribution rule is proposed for this mode: its trials record the frame
+    sequence as a consistency check and are counted as inconclusive for attribution. This matters
+    beyond the bench — the daemon runs with Auto Information on, so a daemon readback (ADR 0098 D4)
+    would face the same attribution problem. Switching it off around D4's readback was reviewed and
+    not approved (below).
 - **Cases**, each repeated, with Auto Information both on (as the daemon runs it) and off. The trial
   count stays proposed (200 was suggested) until the operator approves the identification rule —
   repetition only matters once the test can tell correct from incorrect behaviour:

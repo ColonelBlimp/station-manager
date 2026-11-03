@@ -177,7 +177,26 @@ explicitly unverified. A non-transmitting bench plan is prepared in W-0012 for s
 approval. A bench run can reject the mechanism with one counterexample; it cannot establish the
 missing protocol guarantee — the best it can report is "no counterexample observed under the
 recorded conditions", and only for cases where the test can tell the solicited answer from Auto
-Information output. Any measurement supports the tested model, firmware and conditions only, not
+Information output. The same attribution problem applies to D4 itself: the daemon runs with Auto
+Information on, where a read's answer and an unsolicited report of the same value are
+indistinguishable. Switching Auto Information off around the readback was reviewed and not approved
+(2026-11-03): FT8's frequency checks and dial-movement detection depend on the reports, the liveness
+probe's INIT re-enables them, and reports off still give no query identity or ordering guarantee.
+
+**Status of D4 after review (2026-11-03):** its stated guarantee is unsupported on the FTdx10 with the
+available evidence. Bench results could only be conditional on an ordering assumption. Ordinary
+readback is not thereby unusable. The open question is a product decision, not further mechanism:
+whether report-driven memory may use best-effort attribution with documented limitations, or whether
+the hand-tuning requirement is amended to adopt "memory from completed selections only".
+
+**Ruling (2026-11-03):** best-effort report-driven memory is accepted and AC4's hand-tuning
+requirement retained. Known FT/tune activity, incomplete operations and unconfirmed commanded values
+stay excluded; the residual risk is a stale or incorrect remembered position, of unestablished
+frequency and size; recall keeps its existing guards. D4's settlement guarantee is no longer
+required, and because D4 also released D6's reservation, D4–D6 are to be revised together so release
+no longer depends on proven settlement; the refuse-only return requirement is unchanged. The bench
+is no longer a gate. The decision above is retained as reviewed until that revision is written; this
+ADR stays Proposed. Any measurement supports the tested model, firmware and conditions only, not
 every supported rig; CI-V rigs, which ACK each frame, need their own argument.
 
 ## Consequences
