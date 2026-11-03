@@ -1,6 +1,9 @@
 # W-0024 acceptance — Set as default (revision 3, for ratification)
 
-Status: **ACCEPTANCE INCOMPLETE — A3 ON HOLD. Deployment is not approved.** F4 and F5 are to be fixed (reviewer, 2026-10-30), followed by a new artifact and the affected reruns. Revision 1's no-RF scope was approved with
+Status (2026-11-03): **ACCEPTANCE INCOMPLETE — A3 ON HOLD.** Superseded baseline: the candidate,
+station, rollback and sidecar facts below describe 30 October; **[revision 4](#revision-4--reconciled-with-the-installed-artifact-2026-11-03-for-ratification)
+reconciles the run sheet with the artifact now installed.** Original status line:
+**ACCEPTANCE INCOMPLETE — A3 ON HOLD. Deployment is not approved.** F4 and F5 are to be fixed (reviewer, 2026-10-30), followed by a new artifact and the affected reruns. Revision 1's no-RF scope was approved with
 amendments (operator, 2026-10-30); revisions 2 and 3 incorporate them. Deployment approval follows
 this run sheet's ratification, the exact artifact evidence, the clean-install result and the
 verified backup ([gate](../dogfood-acceptance.md), Gate A). **Full operator acceptance is a separate
@@ -700,3 +703,130 @@ the endpoint pointed at guest loopback (a closed port retries indefinitely,
 actual Forwarding link clicked while its target differs from both the effective default and the
 previously selected logbook. F6 remains **fixed, awaiting packaged-browser acceptance**; A3 stays on
 hold; live deployment unapproved.
+
+## Revision 4 — reconciled with the installed artifact (2026-11-03, for ratification)
+
+**Ratified 2026-11-03** (below). R0–R2 may proceed; R4–R6 stay on hold until the station operator
+chooses the outage window and consents to discarding intervening writes.
+
+**Installed artifact (verified read-only, 2026-11-03).**
+
+- `rpm -q`: `station-manager-2.0.0~alpha.5.89.gb766a145.dirty-1.x86_64`, built and installed
+  2026-11-03 13:59 CAT by `task deploy:local:dev` at the operator's direction. `GET /v1/version`:
+  `2.0.0-alpha.5-89-gb766a145-dirty`, schema 19 clean, archive Home, Default effective.
+- RPM file `build/private/station-manager-dev.x86_64.rpm`, SHA-256
+  `fe792081d7e0a1350bf0a177839add64da8aeb2dd2efe582d37c3c01340e2fd3`; its `usr/bin/smd` SHA-256
+  `8a2d89eccb943d2a0ca2dbef8e798bdb674758e73639f39f01bb4a7ad8ae2923` equals the installed
+  `/usr/bin/smd`; one embedded version string. The next `task deploy:local:dev` overwrites that
+  file, so step R0 preserves it.
+- `-dirty`: one uncommitted Markdown file (`docs/work/W-0012-…`) at build time; no code difference
+  from `b766a145`, on which CI run 41626326294 is green. **Recorded deviation from A1**
+  (`docs/dogfood-acceptance.md`, A1: the build worktree is clean): the artifact was built from a
+  worktree with a Markdown-only difference. Kept by ruling (2026-11-03) — a rebuild would be another
+  artifact to accept; its exact hashes are preserved (R0).
+- Contains W-0024 slices 1–5c (`46a07d07`), the F4/F5 fix (`ea1ee70c`) and the F6 fix (`736ccd70`).
+  W-0024 has been live since the contest install of 2026-10-31 (`c5e52fa3`), made outside this run
+  sheet at the operator's direction; the "deployment not approved" gate is therefore moot, and
+  acceptance now evaluates the installed artifact.
+- New since candidate 2 and outside W-0024's journeys: schema 19 (the contest serial ledger) and the
+  contest form. AC-9's comparison covers them (expected unchanged).
+
+**Void for this run:** the candidates `43d0ed98` and `ea1ee70c`; "Station now: alpha.5"; the
+alpha.5 rollback RPM (alpha.5 cannot open schema 19 without `smd db-downgrade --to 18`); the
+30 October sidecar inventory; and every existing backup — including
+`station-manager-20261031T0309Z-pre-contest.tar.gz` — as a restore source. Only the fresh pre-test
+backup of step R4 may be restored.
+
+**Remaining checks** (reviewer rulings, 2026-10-30):
+
+- **F6** packaged-browser recovery: with unsaved Settings edits, after **Stay on Page** the tab stays
+  gated with its edits intact; **Reload now → Leave Page** reloads onto the effective default with
+  logging usable; **Stay** again keeps the gate and a later retry works. The same for an **archive
+  switch**. **Settings → Restart daemon** with unsaved edits is a separate case: its handler
+  (`frontend/app/src/lib/config/Settings.svelte`, `restarted()`) reloads directly and, with the
+  archive and default unchanged, raises no switch overlay, so it has no **Reload now** step.
+- **F4** visible keyboard focus on the greyed Set as default and Delete buttons.
+- **F5** the actual Forwarding failed-count link opens its explicit target logbook, distinct from
+  both the effective default and the previously selected logbook.
+
+**Evidence retained:** F4's visible disabled reasons by click, Enter and Space with no dialog or
+mutation (candidate 2, entries 15–16; AC-2 met); F5's effective-default selection and preserved pick
+(entry 16). **U1–U7 stay unexercised** — not passed and not waived — unless new evidence or an
+operator waiver resolves them. Closing F6 alone does not close this record: AC-1 to AC-11 on the
+station remain.
+
+### Revised run sheet (revision 4)
+
+- **R0 — preserve the artifact (no outage).** Copy the RPM to
+  `build/private/station-manager-2.0.0~alpha.5.89.gb766a145.dirty-1.x86_64.rpm` (absent before,
+  0600); its SHA-256 equals `fe792081…2fd3`; unpacked in `$W/unpack` (0700), `usr/bin/smd` equals
+  `8a2d89ec…2923` and the installed binary; unpack removed. Every later step names this file.
+- **R1 — A1 for the installed commit (no outage).** No new build. CI run 41626326294 recorded; `task
+  ci:local` once in a clean scratch worktree at `b766a145`, exit 0 recorded (required by the gate's
+  A1; ruling 2026-11-03).
+- **R2 — A2 in a fresh guest (no live paths).** The candidate-2 method (entries 12–17), domain
+  `sm-w0024-clean3` under `/home/mveary/sm-guest-w0024c`, with the R0 RPM. Clean install (§2–§3),
+  lookups seeded disabled, packet capture as before. Then:
+  1. **F6 — default change.** Settings with an unsaved edit; Set as default on T → OK; on the reload
+     prompt **Stay**: the tab stays gated, the edit intact, logging paused. **Reload now → Stay**:
+     still gated. **Reload now → Leave**: reloads onto T, the settled notice, a contact can be
+     logged (labelled synthetic).
+  2. **F6 — archive switch** (regression): a second archive created in the guest; the same
+     Stay / Stay / Leave sequence across a switch to it and back.
+  3. **F6 — Settings → Restart daemon** (separate sequence; no overlay, no Reload now). With an
+     unsaved Settings edit and **no** unlogged Phone / CW entry: **Restart daemon** → on the leave
+     prompt **Stay**; the edit survives. **Restart daemon** again → **Stay**; the edit survives.
+     **Restart daemon** a third time → **Leave**: the page actually reloads (fresh page load, the
+     edit gone as warned). Each invocation is a separate daemon restart: record each new
+     `/v1/version` instance and its journal exit/start lines.
+  4. **F4 — focus.** Tab to the greyed Set as default (P) and Delete (Default): a visible focus
+     ring, screenshot.
+  5. **F5 — explicit target.** A guest-local HTTP responder returning 401; a QRZ forwarder with a
+     dummy key pointed at it, bound only to fixture logbook F with one labelled synthetic contact,
+     so the upload fails terminally (`internal/forwarding/qrz/qrz.go`). In the Logbook view select a
+     logbook that is neither the effective default nor F; go to Settings → Forwarding and click the
+     failed-count link: the Logbook view opens on F.
+
+  Evidence, uninstall and disposal as entry 17. **Uploads in the guest:** fixture F's failed upload
+  is deliberate and expected (one `qso_upload` row for F's contact, terminal failure); every other
+  guest contact has no upload row. Candidate 2's zero-upload result does not carry over to this
+  guest. The station's AC-9 still requires zero test uploads.
+- **R3 — Readings A (station, daemon running, read-only).** As step 8, plus `rpm -q`, the installed
+  `smd` SHA-256 (must equal R0's) and the schema version.
+- **R4 — stop, sidecars, baseline, fresh backup and verification (outage begins).** As steps 9–14,
+  with two changes. **Sidecars:** the inventory is taken afresh after the clean stop; the single
+  allowed exception is the premigrate pair named above, and it is re-verified now — present
+  byte-identical to the recorded hashes. Any other `-wal`, `-shm` or `-journal` file, or a change to
+  that pair, stops the run (files preserved as found, daemon left stopped, operator reviews).
+  **Backup:** named `station-manager-<UTC>-gb766a145-pre-w0024.tar.gz`. **This backup is the only
+  restore source.**
+- **R5 — accept on the station (same outage).** Step 15 becomes: no install; `systemctl --user
+  start smd`; **AC-1** — `rpm -q`, `/v1/version`, sidebar badge and the startup log line agree on
+  `2.0.0-alpha.5-89-gb766a145-dirty`, Default effective, `GET /v1/default-logbook` shows no change.
+  Steps 16–23 as written; the post-test backup is named
+  `station-manager-<UTC>-gb766a145-post-w0024.tar.gz`; AC-9's preserved set includes the contest
+  serial ledger (expected unchanged).
+- **R6 — after the test.** Step 24 as written, restoring R4's backup with the installed artifact
+  kept. Step 25 (package rollback) is withdrawn: the installed artifact stays, and a package
+  downgrade below schema 19 would need its own data-downgrade plan and ruling. Step 26 as written.
+- **AC-11 (revised):** R4's backup verified (complete-set comparison and integrity) and R0's
+  artifact hash equal to the installed binary before step R5. No rollback RPM.
+
+### Rulings on revision 4 (2026-11-03)
+
+1. **Artifact:** the installed `-dirty` RPM, exact hashes preserved; the Markdown-only build
+   difference recorded as a deviation from A1.
+2. **F4–F6:** in the guest, including the dummy forwarder.
+3. **R1:** `task ci:local` once at `b766a145` in the scratch worktree (gate A1).
+4. **Fixture:** `7Q5MLV`, labelled synthetic; lookups disabled and verified before any entry;
+   station test logbooks have no enabled destination.
+5. Corrections applied: R2.3 rewritten as the Restart daemon sequence; R4's sidecar exception made
+   explicit; R2's expected fixture-F upload stated.
+
+**Still the station operator's:** the outage window for R4–R6, and consent to step 24's discard of
+everything written between R4's backup and the restore.
+
+**Ratified (reviewer, 2026-11-03):** revision 4 is the acceptance run plan; the three corrections
+match the rulings. R0–R2 may proceed as specified. R4–R6 stay on hold until the station operator
+supplies the outage window and explicit consent to discard intervening writes. W-0024 acceptance
+remains incomplete.
