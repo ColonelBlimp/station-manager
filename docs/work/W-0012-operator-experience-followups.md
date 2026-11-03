@@ -1153,11 +1153,14 @@ placeholders.
     | Earlier steps confirmed; the rejected step definitely had no effect; nothing outstanding | *Failed with partial changes*; reservation released |
     | Any issued step's effect uncertain or unconfirmed | *Recovery* |
     | Every step confirmed; complete destination still reported at completion | *Confirmed*; reservation released |
-    | Every step confirmed; destination no longer reported at completion | *Invalidated*; reservation released |
+    | Every issued step confirmed; nothing outstanding; destination no longer matches the latest report | *Invalidated*; reservation released |
 
     *Confirmed* carries slice 2's final check (`bandSequence.svelte.ts`, "Success only for the whole
-    destination"): a knob change after an earlier step never produces false success or overwrites
-    memory (operator, 2026-11-03).
+    destination"): a position change after an earlier step never produces false success or
+    overwrites memory (operator, 2026-11-03). *Invalidated* (ruled 2026-11-03): abandoned without
+    retry, memory unchanged, only this reservation released, ordinary TX guards remain; wording "The
+    rig position changed before the return completed." — the mismatch does not establish that the
+    operator moved the rig.
     A known partial failure (e.g. "frequency restored, mode refused", both facts established)
     reports those facts, preserves the previous memory and abandons the remaining steps; it does not
     block arming.
@@ -1186,7 +1189,8 @@ placeholders.
   recovery; definite refusal of the first step → failed, released; frequency confirmed then mode
   definitely refused → failed with partial changes, both facts reported, memory unchanged,
   arming not blocked; a CI-V multi-frame step rejected after an earlier frame → recovery; every
-  step confirmed then a knob change before completion → invalidated, memory untouched, released.
+  step confirmed then a reported position changes before the final check → invalidated, no retry,
+  memory unchanged, reservation released.
 - **Rulings (2026-11-03):** 2 s per return step after successful write completion; rejection enters
   recovery only when effects remain uncertain (table above); generic `rig_command_failed` is
   uncertain; the whole restore is exposed as incomplete while active or in recovery; *confirmed*

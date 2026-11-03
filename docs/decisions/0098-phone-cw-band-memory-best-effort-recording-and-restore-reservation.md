@@ -86,9 +86,14 @@ reservation.
      deadline. Expiry abandons the remaining steps and enters recovery; it never releases the
      reservation.
    - **Confirmed** requires every step confirmed *and* the complete destination still matching the
-     latest reported state at completion (as slice 2's final check). A knob change after an earlier
-     step never produces false success or overwrites memory; it ends the restore as *invalidated* —
-     reported, memory untouched, reservation released, since every issued step is confirmed.
+     latest reported state at completion (as slice 2's final check), so a position change after an
+     earlier step never produces false success or overwrites memory.
+   - **Invalidated** — only when every issued step is confirmed, no write remains outstanding, and
+     the complete destination no longer matches the latest reported state. The restore is abandoned
+     without retrying, memory is left unchanged, and only this restore's reservation is released
+     (ordinary TX guards remain). The operator sees "The rig position changed before the return
+     completed." — never a claim that the operator moved the rig, since the mismatch alone does not
+     establish its cause.
    - **Outcomes** are classified from the actual write and confirmation evidence, never from a
      rejection code alone (a CI-V step can span several frames; earlier frames may apply before the
      rejection):
@@ -96,7 +101,7 @@ reservation.
      | Evidence | Result |
      |---|---|
      | Every step confirmed; complete destination still reported at completion | *Confirmed*; reservation released |
-     | Every step confirmed; destination no longer reported at completion | *Invalidated*; reservation released |
+     | Every issued step confirmed; nothing outstanding; destination no longer matches the latest report | *Invalidated*; reservation released |
      | Nothing applied; definite refusal | *Failed*; reservation released |
      | Earlier steps confirmed; the rejected step definitely had no effect; nothing outstanding | *Failed with partial changes*; reservation released |
      | Any issued step's effect uncertain or unconfirmed | *Recovery* |
@@ -185,8 +190,9 @@ Available only through an explicit change to the return requirement.
   admission still refused.
 - Per-step deadline counted from write completion; a confirmation arriving during the write counts;
   an unrelated report does not restart it; expiry abandons remaining steps and enters recovery.
-- Every step confirmed, then a knob change before completion: *invalidated*, not confirmed; memory
-  untouched; reservation released.
+- All steps confirm, then a reported position changes before the final check: *invalidated*, not
+  confirmed; no retry; memory unchanged; only this reservation released; the message is "The rig
+  position changed before the return completed."
 - Definite refusal of the first step: *failed*, released. Frequency confirmed then mode definitely
   refused: *failed with partial changes*, both facts reported, memory unchanged, arming not blocked.
   A CI-V multi-frame step rejected after an earlier frame: recovery.
