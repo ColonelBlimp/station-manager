@@ -1042,7 +1042,7 @@ TX-safety mechanism. Three details the ADR resolves: void-floor retention (an ad
 never altered by the floor; a lost reconcile response cannot turn `written` into `not_written`), the
 restore's request-completion versus recovery states and the operator's feedback when settlement never
 arrives, and the reservation's scope for other pages' ordinary writes. Written as
-[ADR 0098](../decisions/0098-phone-cw-band-memory-command-ledger-settlement-and-restore-reservation.md)
+[ADR 0098](../decisions/0098-phone-cw-band-memory-best-effort-recording-and-restore-reservation.md)
 (Proposed).
 
 *Operator review of ADR 0098 and the bench plan (2026-11-03).* The operator's copy of the manual is
@@ -1103,6 +1103,96 @@ rig reports is an acceptable limitation for this feature. Boundaries, explicit:
 
 ADR 0098 stays Proposed; implementation and bench execution stay on hold. Next: a simplified design
 against the relaxed requirement, keeping only machinery with a concrete purpose.
+
+*Slice 3 revision 4 — simplified design against the ruling (proposed, for review; 2026-11-03).*
+Each element names the concrete purpose that keeps it. Endpoint, event and field names are
+placeholders.
+
+- **S1 Recording rule (browser, Phone/CW view).** Record the rig's *reported* frequency and mode,
+  under the band the reported frequency falls in, only when all hold: CAT connected and the selected
+  VFO's frequency and mode confirmed by report; the Phone/CW view owns the rig (existing rulings);
+  daemon TX activity idle (S3); no known incomplete operation — this page's band sequence and return
+  idle, and the daemon's in-flight write count zero (S2). Never a commanded value. Startup and
+  reconnect record nothing until both replayed signals (S2, S3) arrive. *Residual, documented:* the
+  remembered position can be stale or incorrect — e.g. a report from between another page's
+  sequence steps, or a write that reached the daemon only after the page gave up on it. Recall keeps
+  every existing guard.
+- **S2 In-flight writes signal.** The daemon counts rig writes from entry to `SendCommands` (before
+  `keyMu`) to return, and publishes the count on `/v1/rig/events`, replayed to late subscribers. The
+  same signal marks a daemon restore (S5) incomplete for its whole life — active or in recovery — so
+  a zero write count between its steps never lets a page record an intermediate position.
+  *Purpose:* the "incomplete operations" exclusion must cover other pages' writes, which the browser
+  cannot see. *Residual:* a request not yet at the handler is invisible. Replaces the ledger,
+  reconcile, void floor, acknowledgement and `sessionStorage` outstanding list (ADR 0098 D1–D2),
+  whose purpose was attribution.
+- **S3 TX activity signal.** The daemon publishes FT8 armed/session/in-flight and tune state as one
+  `tx-activity` event on `/v1/rig/events`, replayed. *Purpose:* `transmitting()` reads local
+  `ft8State`, which only an FT view populates, so another tab's run is invisible today.
+- **S4 Outcome mapping.** `normalizeRigSend` maps 504 `rig_command_no_ack`, generic
+  `rig_command_failed` (500) and transport failures to *unknown*, not *refused*; only a definite
+  refusal before the write means "nothing changed". *Purpose:* the
+  earlier correction on app-action uncertainty; operator wording must not claim no change.
+- **S5 Restore operation and reservation.** One daemon operation `restore {selected_vfo, vfo_a,
+  vfo_b, mode}`. Under `seqGate → txMu` it refuses if FT8 is armed, in a session or in flight, or
+  tune is up; otherwise it sets the reservation every admission path checks (`armTx`, session start,
+  `TransmitNext`, `ClaimProfile`, `StartTune`) and releases the mutexes. It writes without a TX stop
+  (nothing can be keyed).
+  - *Sequential confirmation (ruling 2026-11-03):* steps run in order — VFO selection, VFO-A, VFO-B,
+    mode — each issued only after the previous one is confirmed. Reports are observed before each
+    step is dispatched, so a confirmation arriving during the write counts. Each issued step gets
+    **2 s after its write completes successfully** (matching slice 2); unrelated reports never
+    restart that deadline. Expiry abandons the remaining steps and enters recovery; it never
+    releases the reservation.
+  - *Outcomes — classified from the actual write and confirmation evidence, never from a rejection
+    code alone* (a CI-V rejection cannot establish zero effect: a step can span several frames, and
+    earlier frames may apply before the rejection):
+
+    | Evidence | Result |
+    |---|---|
+    | Nothing applied; definite refusal | *Failed*; reservation released |
+    | Earlier steps confirmed; the rejected step definitely had no effect; nothing outstanding | *Failed with partial changes*; reservation released |
+    | Any issued step's effect uncertain or unconfirmed | *Recovery* |
+    | Every step confirmed; complete destination still reported at completion | *Confirmed*; reservation released |
+    | Every step confirmed; destination no longer reported at completion | *Invalidated*; reservation released |
+
+    *Confirmed* carries slice 2's final check (`bandSequence.svelte.ts`, "Success only for the whole
+    destination"): a knob change after an earlier step never produces false success or overwrites
+    memory (operator, 2026-11-03).
+    A known partial failure (e.g. "frequency restored, mode refused", both facts established)
+    reports those facts, preserves the previous memory and abandons the remaining steps; it does not
+    block arming.
+  - *Recovery release, without settlement:* when the bridge's reported state matches the destination
+    (the same best-effort report evidence the confirmation uses), by the operator's **Release**
+    (semantics as already ruled: only this reservation; nothing confirmed; no step resumes;
+    recording rules unchanged; logged), or by daemon stop. No timer.
+  - *Purpose of recovery:* the FT8 dial guard ends a session when the dial moves
+    (`internal/ft8/sequencer.go` `EndReasonDialMoved`), so a return write landing after a new arm
+    would end that run — the return disarming FT8, which refuse-only forbids.
+  - *Scope:* other pages' ordinary writes are refused (`not_written`) while active, allowed in
+    recovery; disarm, stop and unkey are never blocked (unchanged).
+- **Removed:** the command ledger and reconciliation (D1–D2), the settlement readback and
+  `rig-settlement` event (D4), and the bench as a gate.
+- **Acceptance cases (3a):** recording refused while another tab's FT8 is armed (S3 replayed on
+  subscribe); recording refused while another page's write is in flight; recording resumes on a hand
+  tune once both are idle; a commanded value never recorded before its report; 504 shown as
+  uncertain, not refused; restore refused when FT8 is armed or tune up, never stopping it; arm,
+  session start, manual send, profile claim and tune during an active or recovering restore refused
+  with "rig being restored", disarm/stop/unkey still work; other page's write during active restore
+  `not_written`, during recovery allowed; recovery released by matching reports, by Release (with
+  the Release case already ruled), never by a timer; generic 500 shown as uncertain; recording
+  refused between restore steps although the write count is zero, and throughout recovery; per-step
+  deadline counted from write completion, a confirmation arriving during the write counts, an
+  unrelated report does not restart the deadline, expiry abandons remaining steps and enters
+  recovery; definite refusal of the first step → failed, released; frequency confirmed then mode
+  definitely refused → failed with partial changes, both facts reported, memory unchanged,
+  arming not blocked; a CI-V multi-frame step rejected after an earlier frame → recovery; every
+  step confirmed then a knob change before completion → invalidated, memory untouched, released.
+- **Rulings (2026-11-03):** 2 s per return step after successful write completion; rejection enters
+  recovery only when effects remain uncertain (table above); generic `rig_command_failed` is
+  uncertain; the whole restore is exposed as incomplete while active or in recovery; *confirmed*
+  requires the complete destination still reported at completion. ADR 0098 rewritten to revision 4
+  (renamed `0098-phone-cw-band-memory-best-effort-recording-and-restore-reservation.md`); the ledger
+  and guaranteed settlement now appear there only as alternatives.
 
 *Documentation result:* the FTDX10 CAT Operation Reference Manual (`FTDX10_CAT_OM_ENG_2308-F`, 25
 pages, Yaesu) shows set / read / answer forms on page 4 and is otherwise silent on processing order,
