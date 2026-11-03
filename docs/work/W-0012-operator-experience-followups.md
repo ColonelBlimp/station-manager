@@ -758,6 +758,353 @@ and a queued frequency write could go to a VFO no longer selected — now rechec
 before dispatch. Success additionally requires the whole destination (VFO, frequency, mode) as
 the rig confirms it at completion.
 
+**Slice 3 — memory ownership, persistence, return and wiring: proposed design (for ruling,
+2026-11-03).** Design only; implementation needs the operator's explicit instruction. Settled and not
+reopened: browser-local persistence scoped to station and rig, immediate saving of confirmed
+positions, recall only on explicit selection or return (rulings 1, AC4/AC5).
+
+*S3-1 Storage, keys, validation.*
+
+- One localStorage record per archive, registered through the ADR 0094 archive-store scheme
+  (`archiveStores.svelte.ts`), so Home and Drill never share memories and nothing loads before the
+  archive is proven.
+- Inside it, one entry per **station + rig**: the station is `logging_station.station_callsign`
+  (upper-cased); the rig is **[Q1]** either the rig-catalogue id (`default_rig_id`, stable across
+  renames and distinct for two rigs of one model, but the Operate page does not load it today: it
+  would need `GET` of the rigs view at boot or the active rig id added to `BridgeInfo`) or the CAT
+  driver name (`bridge.driver`, already served, but two rigs of one model share it). No default rig →
+  the "no rig" entry, used CAT-off.
+- Entry: `{ v: 1, ret: band | null, bands: { [band]: { hz, mode } } }`; `mode` is the friendly
+  mode (ruling 3: CW recalls as `CW-U`). Validated per field on load: `v === 1`; each band one the
+  frequency table knows; `hz` whole hertz inside that band; `mode` non-empty and not an FT data mode
+  (`FT8`/`FT4`). An invalid band entry is dropped alone; `ret` naming a dropped band becomes null;
+  unparseable JSON is an empty entry and never blocks boot. Loading sends nothing to the rig.
+
+*S3-2 Ownership (per tab).*
+
+- **Not owned:** at load; on leaving the Phone/CW view; from the start of any Phone/CW selection or
+  return until it succeeds; on link loss (`lost`, transport error) and so after a reconnect; after
+  any failed, invalidated or superseded selection or return.
+- **Owned:** a Phone/CW selection or return that ends `done` or `alreadySatisfied` while Phone/CW is
+  displayed; or an attributable manual operation (S3-3).
+- **While owned, every confirmed position is saved at once:** CAT live — a rig report changing the
+  operating VFO's frequency or the mode; CAT off — **[Q4]** each valid operator edit of band,
+  frequency or mode, or only on Set/Confirm. Saving writes `bands[band]` and `ret = band`.
+- **Never saved:** an FT data mode; anything while `transmitting()` (covers FT activity from another
+  tab); anything while an FT view is displayed.
+
+*S3-3 Hand-tuning versus delayed command results.*
+
+- **Unresolved writes** are those the band sequence or the return issued whose value the rig has not
+  yet reported (slice 2's `issued` set, shared by the return). The operator's own app actions in
+  Phone/CW — frequency-step keys, the Mode dropdown, VFO select — are operator intent: they never
+  enter that set.
+- **Attributable manual operation:** Phone/CW displayed, CAT connected, **no unresolved write**, and
+  a fresh report that changes the operating VFO's frequency or the mode from the last confirmed
+  value. After a reconnect the first report is a baseline, not a change.
+- A report **equal** to an unresolved write's value resolves it: it is the command landing, not
+  hand-tuning, and it is saved only if Phone/CW already owns the rig. A **different** report while any
+  write is unresolved is ambiguous: nothing is saved and ownership does not change.
+- **Clearing an unresolved write [Q3].** (i) Its value is reported — always. (ii) Proposed: a write
+  that got HTTP 202 was already on the serial line, so a later write to the same field confirmed by
+  the rig settles it — *inference: assumes the rig applies CAT commands in arrival order; unverified*.
+  (iii) A timed-out or transport-failed request may still be written later: `SendCommands` holds the
+  bridge `keyMu` for the write, and waiting for that lock is not cancelled when the browser gives
+  up. Choice: keep such a write unresolved until its value is seen (hand-tuning recognition stays
+  off; recovery only through a successful selection or return, which re-establishes ownership but
+  does not clear it), or let it lapse after a bound the operator sets.
+
+*S3-4 Return to Phone/CW and the shared sequence.*
+
+- Leaving Phone/CW no longer snapshots a Phone position (memory is saved continuously); the A26 boot
+  capture (`noteRigReport`) stops being a Phone source (ruling 4). FT snapshots and the FT seed are
+  unchanged.
+- Entering Phone/CW goes to `ret` (from memory), else the rig's current band through memory or
+  default (60m with none: unchanged, ruling-6 message). CAT off: the displayed context is restored
+  regardless of `restore_rig_on_mode_switch` (existing scope). Knob off: nothing moves.
+- CAT live, knob on: the slice 2 sequence in **return form** — no `band_selection` flag; refused up
+  front when `transmitting()` (the existing guard and toast); any TX observed during it invalidates
+  it (nothing was keyed, so there is no stop to wait for). Same confirmation wait, deadline,
+  supersession and unresolved-write rules as a selection.
+- **[Q2] Scope:** the return sets the selected VFO's frequency and the mode only, leaving the VFO
+  selection and the other VFO as they are; today's restore also restores both VFOs and the
+  selection.
+- **Critical case — failed return, then a late report:** the return fails → not owned; memory is
+  untouched. A late report equal to a return write resolves it and is not saved; a different late
+  report while anything is unresolved is not saved. Recovery: an explicit band selection that
+  succeeds, or leaving and re-entering Phone/CW (a fresh return), or — once nothing is unresolved —
+  hand-tuning.
+
+*S3-5 Wiring.* Band buttons, digit keys and next/previous in every view call the view-aware action:
+`selectBandLive` CAT live, `selectBandCatOff` CAT off (AC1/AC2); this replaces `set_band` and the
+rig's `band_up`/`band_down` for these inputs. The rig-command client gains the `band_selection`
+option for the selection sender. **[Q5]** Failures, invalidations and supersessions show as toasts
+with the sequence's message; `done` and `alreadySatisfied` are silent.
+
+**Slice 3 — review of the proposal and revision 2 (2026-11-03).** Implementation stays on hold
+until the ownership and recovery gaps are resolved.
+
+*Answers (operator, 2026-11-03):*
+
+1. **Q1 — rig-catalogue id, tied to the running rig.** Two rigs of one model stay separate. Correction:
+   `/v1/config` already serves `default_rig.id` (`internal/api/handler_config.go` `DefaultRigInfo`),
+   but that is saved configuration; the running rig changes only after a restart
+   (`docs/v2-design/config.md`, "Changing `default_rig_id` changes persisted intent"). The design needs
+   a runtime identity or an explicit gate during a mismatch. Unknown identity never falls into the "no
+   rig" bucket.
+2. **Q2 — keep today's return contract:** both VFO frequencies, the selected VFO and the mode. Band
+   selection keeps targeting the selected VFO. Per-band memories stay simple; the last-return
+   position gets its own snapshot (`ret: band` cannot represent the contract). Reducing the contract
+   would be a separate operator decision.
+3. **Q3 — no time-based expiry and no clearing by presumed command order.** Neither proves an old
+   command cannot land. Even a matching report is insufficient while dispatch itself is unknown: the
+   rig may have reached that value another way while the request is still pending. An explicit
+   reconciliation mechanism is required, with evidence that older requests are finished or cannot
+   execute. A successful retry must not restore unrestricted recording while an older request can
+   still overwrite its result. Correction to the rationale: acquiring `keyMu` is not cancellable, but
+   the serial write loop checks cancellation before writing (`internal/serial/serial.go` `writeAll`),
+   so the lock alone does not prove eventual execution; browser timeout still leaves uncertainty.
+4. **Q4 — CAT off: save each valid operator edit immediately.** Validate the complete band /
+   frequency / mode tuple; invalid intermediate text leaves memory untouched. Loading, prefilling and
+   mirroring stale CAT values are not operator edits. Separate from the logging card's Set/Confirm
+   gate; CAT off is distinguished from a lost connection.
+5. **Q5 — silent success; visible failures and supersessions.** Supersession is informational and
+   names any change already applied; a failure never implies the rig stayed unchanged when part of the
+   sequence completed.
+
+*Corrections (review, 2026-11-03), all verified against the tree:*
+
+- **No other-tab FT guard exists.** `transmitting()` reads local `ft8State`; the FT stream opens only
+  in the FT view and `stopFt8()` clears its TX/QSO state. A data-mode filter does not close the gap:
+  an FT frequency report can arrive while the mode still reads USB. Needed: authoritative activity
+  information outside the FT view, without extending the FT presence subscription.
+- **Omitting `band_selection` does not make a return refuse-only:** `handleRigCommand` stops TX
+  before any `set_freq`/`set_freq_b`. With stale browser state a return could stop another tab's
+  run. The refusal needs daemon enforcement.
+- **App actions have uncertain outcomes too.** Frequency keys, Mode and VFO select express intent,
+  but their commands can fail or arrive late; delayed FT seed/restore writes likewise. They cannot be
+  exempt from outstanding-write accounting. Recovery case to hold: failed return → successful
+  selection → the old return's result arrives → the recovered memory is preserved (S3-2's
+  unconditional saving while owned conflicts with it).
+- **The outcome adapter loses uncertainty:** `normalizeRigSend` (`frontend/app/src/lib/api/seams.ts`)
+  maps every daemon error to a definite refusal, but `rig_command_no_ack` is HTTP 504 — no ACK does
+  not mean nothing happened. To be resolved before the outstanding-write set is relied on.
+- Also: tighten mode validation beyond "non-empty"; specify how concurrent tabs preserve each
+  other's stored entries. Archive scoping and per-band corruption recovery accepted.
+
+*Revision 2 — proposed mechanisms (for ruling):*
+
+- **R1 Runtime rig identity.** The daemon serves the catalogue id the running bridge was built from
+  (`running_rig_id`, fixed for the process) beside `default_rig`. Memory is keyed on it. Not yet
+  known → memory disabled (no read, no write). No bridge in the running process → the explicit "no
+  rig" bucket (CAT-off station). A saved `default_rig.id` that differs from the running one changes
+  nothing until restart.
+- **R2 Command outcome evidence.** Every rig write from the app (band sequence, return, FT
+  seed/restore, frequency keys, Mode, VFO select, tune excepted) carries a client operation id. The
+  daemon publishes `rig-command-outcome {client_op_id, outcome}` on `/v1/rig/events` once the request
+  can no longer execute: `written`, `rejected` (by the rig), or `not_written` (refused before the
+  wire, or cancelled before the serial write). The browser keeps one shared outstanding registry in
+  `rig.svelte.ts`; an entry ends only on its outcome event — never on time, order or a matching
+  report. A request the daemon never received produces no event and stays outstanding.
+- **R3 Restricted recording while anything is outstanding.** Only the destination of a selection or
+  return that completed is saved; later reports are not, so an old result landing afterwards cannot
+  overwrite the recovered memory. Unrestricted recording (every confirmed report) resumes only when
+  the registry is empty.
+- **R4 Daemon-enforced refuse-only return.** `POST /v1/rig/command` gains `"restore": true`: if any
+  SM transmitter is armed, keyed, in a session or tuning, the daemon answers 409 and writes nothing —
+  no stop. Residual race: an arm made between that check and the write; the dial guard would then
+  disarm it (existing behaviour). Closing it fully means holding FT8's sequencer gate across the
+  write.
+- **R5 Activity outside the FT view.** The daemon publishes `tx-activity {ft_armed, ft_transmitting,
+  ft_session_active, tune_active}` on `/v1/rig/events`, replayed to late subscribers. That stream is
+  not the FT presence subscription, so presence is unchanged. Phone/CW recording uses it instead of
+  local `ft8State`.
+- **R6 Outcome adapter.** Pre-write rejections stay `refused` (validation 4xx, `rig_not_connected`,
+  `rig_identity_unverified`, `rig_tx_active`, `rig_tx_uncertain`, `rig_tx_stop_failed`, the rig's own
+  `rig_command_rejected`); `rig_command_no_ack` (504) and `rig_command_failed` (500) become unknown.
+- **R7 Return snapshot.** `ret = { vfoA, vfoB, selectedVfo, modeLiteral }`, saved with each owned
+  confirmed position; restored exactly as today (selection first, then both VFOs, then the mode)
+  through the confirmed sequence with `restore: true`. Validated on load: each frequency whole hertz
+  inside a known band or null; `selectedVfo` A/B; mode literal checked at use against the advertised
+  `rigModes` and never the FT data literal.
+- **R8 Mode set.** Per-band memory modes limited to USB, LSB, CW, AM, FM; RTTY waits for W-0025.
+- **R9 Concurrent tabs.** Each save re-reads the stored entry, changes only its own band (and
+  `ret`), and writes back; a `storage` event refreshes other tabs' copies. Per band, last writer
+  wins.
+- **R10 CAT-off edits.** Saved from the Rig panel's own edit handlers when `rig.cat === 'off'` and
+  the full tuple validates; never from a reactive watch on `rig` (which also sees loading, prefills
+  and mirrored values), never while `lost`.
+- **Split:** 3a daemon evidence and adapter (R1, R2, R4, R5, R6) — no visible change; 3b memory store,
+  ownership and recording (R3, R7–R10); 3c return and wiring.
+- **Open:** R2 leaves a request the daemon never received outstanding forever — recording stays
+  restricted (R3) until the page reloads. Accept, or add a daemon query of received ids? R4's
+  residual race — accept or hold the sequencer gate?
+
+**Slice 3 — review of revision 2 and revision 3 (2026-11-03).** Rulings: add reconciliation; close
+the return race. Neither reload-only recovery nor a return that can disarm FT8 is acceptable. The
+3a → 3b → 3c split stands, but 3a's evidence and exclusion contracts needed another pass.
+
+*Review findings (all verified against the tree):*
+
+- **Reconciliation.** "Which ids have you received?" can answer "absent" and the delayed original
+  can then arrive and execute. Required: an operation that returns a request's recorded status or
+  atomically records that the id must never execute (a later arrival is rejected); ids scoped to a
+  daemon instance; retries deduplicated; outcomes recoverable after a missed event; a reload
+  reconciles outstanding work instead of forgetting it.
+- **Return exclusion.** Atomic exclusion against new arms, session starts and tune/keying. Holding
+  `seqGate` alone does not do it: `armTx` takes `txMu` without `seqGate`. Recommended: a restore
+  reservation following the TX admission-seal pattern (`SealTxAdmission`), with explicit ownership
+  and cleanup; emergency stop/unkey keeps access; release must account for pending rig effects
+  (releasing once the bytes are written allows an arm on the old reported frequency, then the late
+  restore movement and a disarm); no ordinary mutex held across browser round trips.
+- **Completion is not settlement (R2/R3).** B succeeds; old A emits `written`; the registry empties;
+  A's delayed frequency report arrives; R3 saves A over B. The command path separates writing from
+  asynchronous confirmation (`internal/bridge/command.go`). "Can still dispatch" and "effects
+  unresolved" are separate states; a terminal request event alone never enables unrestricted
+  recording; settlement needs confirmation or readback evidence that does not assume command order.
+- **Partial and uncertain outcomes.** A CI-V rejection can follow earlier ACKed frames
+  (`sendCommandsCIV`: "a mid-batch failure leaves earlier ops applied"). Only evidence of zero
+  effects permits "nothing changed"; an HTTP status or a rejection code alone does not.
+- **Scope.** A registry in `rig.svelte.ts` is per page; another tab's selection also produces
+  intermediate reports. Reconciliation and activity cover the running rig, across pages. Unknown
+  activity at startup or reconnect keeps recording restricted until authoritative state arrives.
+- **R9 lost updates.** Two tabs can each read the record, change different bands, and overwrite each
+  other's whole record; storage events make nothing atomic (the HTML standard advises assuming no
+  locking). Independently updated bands and the return snapshot need separate keys, or transactional
+  storage where they must commit together.
+- **R7 CAT off.** `{vfoA, vfoB, selectedVfo, modeLiteral}` cannot represent a manual
+  `{band, frequency, friendly mode}`; both forms and their transitions need defining.
+
+*Revision 3 — proposed (for ruling):*
+
+- **E1 Command ledger (daemon, per instance).** The daemon issues an instance id at start (served
+  with the bridge info). A page registers a client (`POST /v1/rig/clients` → client id bound to the
+  instance) and numbers its writes `seq` 1, 2, 3 …. Every write carries `{instance, client, seq}`.
+  The daemon refuses a stale instance or an unknown client, and returns the recorded status for a
+  repeated `(client, seq)` without executing it again (retries are idempotent).
+- **E2 Reconcile with a void floor.** `POST /v1/rig/clients/{id}/reconcile {through: n}` atomically,
+  under the same lock as admission of that client's writes: returns the recorded status of every seq
+  ≤ n it has seen, and sets the client's floor to n, so any seq ≤ n not yet seen is void and refused
+  if it ever arrives. A page reconciles on any timeout or transport failure, on event-stream
+  reconnect (missed events), and the outstanding list is kept in `sessionStorage`, so a reload
+  reconciles the previous page's client instead of forgetting it. Daemon memory: per client, the
+  floor plus the statuses above it; an evicted client is refused entirely (its writes can never
+  execute), so eviction is safe for dispatch.
+- **E3 Outcomes.** `not_written` (proven zero effect: refused before any byte reached the wire, or
+  void) is the only outcome that means "nothing changed". `written` (all bytes / all frames ACKed),
+  `partial {applied, of}` (CI-V mid-batch), `unknown` (no ACK, I/O error or cancellation after the
+  write began) all leave effects unresolved. The browser adapter (R6) maps HTTP errors through these
+  daemon outcomes rather than status codes.
+- **E4 Settlement, separate from dispatch.** After any write finishes with effects possible, the
+  daemon marks the rig **unsettled** and issues its own readback (`FA;FB;MD0;VS;` on the FTdx10; the
+  CI-V READ-back already exists). The rig is **settled** when that readback's answers arrive with no
+  write admitted after it. The daemon publishes `rig-settlement {settled, epoch}` on
+  `/v1/rig/events` (replayed to late subscribers). *Open evidence:* this treats a query answered after
+  a write on one serial link as reflecting that write — **an assumption about the rig's command
+  processing that needs an FTdx10 CAT manual citation or a bench measurement**; no matching claim was
+  found in `docs/ftdx10-cat.md`.
+- **E5 Recording (replaces R3).** Unrestricted recording only while the daemon reports settled and
+  no write is admitted (any client, any page) and `tx-activity` is known and idle. Otherwise only
+  the confirmed destination of a selection or return that completed — and only if the rig was
+  settled at its completion — is saved. Startup and reconnect: restricted until both replayed
+  snapshots arrive.
+- **E6 Restore as one daemon operation with a reservation.** `POST /v1/rig/restore {selected_vfo,
+  vfo_a, vfo_b, mode}` replaces the browser-driven return sequence. Under `seqGate → txMu` (the seal's
+  order) it refuses if FT8 is armed, in a session, in flight, or tune is up; otherwise it sets a
+  `restoreReserved` flag that every admission path checks — `armTx`, session starts, `TransmitNext`,
+  `ClaimProfile`, bridge `StartTune` — refusing with a distinct "rig being restored" error.
+  Disarm, stop and unkey are never blocked. The daemon then writes selection, VFO-A, VFO-B, mode,
+  each confirmed by push, and releases the reservation only when settled (E4) after the last write,
+  or on failure once settled; no mutex is held across any of this, and no browser round trip is
+  inside it. The reservation is owned by the operation and released on every exit path, including
+  context cancellation and bridge disconnect (then on settlement after reconnect, or on daemon stop).
+- **E7 Storage keys (replaces R9).** One key per band — `sm.bandmem.<archive>.<station>.<rig>.<band>`
+  — and one for the return snapshot; `setItem` replaces each key whole, so tabs never overwrite each
+  other's bands. Each key is validated alone.
+- **E8 Return snapshot forms (replaces R7).** `{ kind: 'rig', vfoA, vfoB, selectedVfo, modeLiteral }`,
+  saved from owned CAT-live positions; `{ kind: 'manual', band, hz, mode }`, saved from CAT-off edits.
+  Latest wins. Return CAT live with a manual form: treated as a band selection of that band at that
+  frequency and mode on the selected VFO, restore-form (E6 refusal rules). Return CAT off with a rig
+  form: the selected VFO's frequency, its band, and the friendly form of the literal.
+- **Decision record.** E1–E6 change TX admission and the rig command contract; they warrant an ADR
+  before 3a is built.
+- **3a acceptance cases (to include):** delayed arrival after cancellation (void floor refuses it);
+  missed outcome event (reconcile recovers it); `written` before the rig's report (unsettled until
+  readback); arm, session start, manual send and tune attempts during a restore (all refused,
+  disarm/unkey still work); a restore whose write is unknown (reservation held until settled);
+  partial CI-V batch.
+
+**Slice 3 — ADR and settlement evidence (2026-11-03).** Operator: documentation first; write a
+Proposed ADR recording alternatives and unresolved evidence, not accepting E1–E6 wholesale;
+implementation stays on hold. Scope correction: ADR 0057 accepts anonymous CAT replies and rejects a
+TX confirmation barrier — the ADR respects it, and memory correctness must not become another
+TX-safety mechanism. Three details the ADR resolves: void-floor retention (an admitted request is
+never altered by the floor; a lost reconcile response cannot turn `written` into `not_written`), the
+restore's request-completion versus recovery states and the operator's feedback when settlement never
+arrives, and the reservation's scope for other pages' ordinary writes. Written as
+[ADR 0098](../decisions/0098-phone-cw-band-memory-command-ledger-settlement-and-restore-reservation.md)
+(Proposed).
+
+*Operator review of ADR 0098 and the bench plan (2026-11-03).* The operator's copy of the manual is
+also 2308-F, with no extra application note. Corrections, applied before committing as Proposed:
+(1) settlement also releases a recovery reservation, so it indirectly governs FT8 arming and tune —
+stated; the reservation is a workflow exclusion, not automatically an RF-safety mechanism under ADR
+0057, so dropping the live return is not required merely because it touches admission. (2) Release
+clears only that restore's reservation; settlement stays unknown, memory recording restricted, the
+TX-alarm and readiness guards intact; no remaining restore steps resume; it never reads as confirming
+the rig's position — acceptance case added. (3) Reconciliation: terminal outcomes are immutable;
+pending requests may advance; acknowledgement never discards an unfinished request or lets a
+duplicate execute. (4) Bench: an Auto Information report of an intermediate value is not a
+counterexample; the test must identify the solicited answer or call the trial inconclusive; the
+result is "no counterexample observed under the recorded conditions"; the trial count stays proposed
+until the test can distinguish correct from incorrect behaviour. A counterexample rejects the
+settlement mechanism; adopting either fallback needs an explicit requirement change. Implementation
+and bench execution stay on hold.
+
+*Documentation result:* the FTDX10 CAT Operation Reference Manual (`FTDX10_CAT_OM_ENG_2308-F`, 25
+pages, Yaesu) shows set / read / answer forms on page 4 and is otherwise silent on processing order,
+buffering, processing time and telling solicited answers from Auto Information output; an answer
+carries nothing identifying its query. E4's guarantee stays unverified.
+
+*Non-transmitting bench plan — for separate operator approval; nothing below may run without it.*
+
+- **Purpose:** decide whether a complete, fresh answer reflecting every earlier effect can be
+  identified on the FTdx10 (model, firmware version and conditions recorded; results apply to those
+  only).
+- **Never transmits.** The probe's command allowlist is `FA`, `FB`, `MD0`, `VS`, `AI`, `ID` and their
+  reads; it refuses anything else (no `TX`, `PC`, `PS`, `AC`, no tune). Antenna connected or not is
+  the operator's choice; nothing keys.
+- **Setup:** the operator stops `smd` (the probe needs the Enhanced COM port alone), notes the
+  firmware version from the rig's menu, and restarts `smd` afterwards. The probe is a small dev-only
+  tool that writes the allowlisted commands and logs every received byte with a monotonic timestamp.
+- **Identifying the solicited answer.** With Auto Information on, the rig also reports positions on
+  its own, so an `FA` frame after a read is not necessarily the read's answer. Each case states how
+  the test tells them apart; where it cannot, the trial is *inconclusive*, never a pass. The first
+  candidate rule: run the case with Auto Information off, where every frame is a solicited answer;
+  with it on, a trial is decisive only if the frames received match the number of reads issued plus
+  the reports the set commands can explain, and inconclusive otherwise.
+- **Cases**, each repeated, with Auto Information both on (as the daemon runs it) and off. The trial
+  count stays proposed (200 was suggested) until the operator approves the identification rule —
+  repetition only matters once the test can tell correct from incorrect behaviour:
+  1. `FA<new>;` then `FA;` immediately: does the solicited answer show the new value?
+  2. `FA<a>;FA<b>;` then `FA;`: is the solicited answer always `b`? An Auto Information report of the
+     intermediate `a` is expected and is not a counterexample; only a solicited answer showing `a`
+     (or anything but `b`) is. If the `a` report and the answer cannot be told apart, the trial is
+     inconclusive.
+  3. A band-crossing `FA` (relay change) then `FA;MD0;`: answer latency and correctness.
+  4. `MD0<new>;` then `MD0;`.
+  5. Set, then read, then the marker `ID;`: do answers arrive in request order, so `ID`'s answer
+     marks the end of everything before it? How do Auto Information frames interleave?
+  6. The operator turns the VFO knob during cases 1–2: can a hand-tune frame be told apart from the
+     read's answer?
+- **Records:** raw logs under `~/sm-bench/` (outside the repo), a summary in this dossier, the
+  firmware version, decisive and inconclusive counts per case, and every counterexample.
+- **Decision rule:** a run can only reject. One counterexample rejects the proposed settlement
+  mechanism (ADR 0098 D4). Otherwise the result is reported as "no counterexample observed under the
+  recorded conditions" — never as the guarantee holding, which no number of trials can establish.
+  Adopting either fallback ("memory from completed selections only", "no live return") still needs an
+  explicit change to the agreed hand-tuning or return requirement.
+
 **Build order and test discipline (review, 2026-11-02):** AC6 is a prerequisite of every new live
 band-selection path — no new live path becomes reachable before its safety sequence is built and
 tested. Separate commits, in this order:
