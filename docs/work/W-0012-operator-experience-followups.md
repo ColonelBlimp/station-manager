@@ -274,8 +274,35 @@ stated before a build):
 - **Settings tab widths (inbox 2026-10-05):** standardise the content width across the Settings
   tabs; many differ today.
 - **Logbook column headings overlap (alpha.5 Finding #2, 2026-10-24):** the last two headings render
-  overlapped, "EMAIL" over "COMMENT" (alpha.5 acceptance record, B2-08 screenshot). Cause and wider
-  impact not investigated.
+  overlapped, "EMAIL" over "COMMENT" (alpha.5 acceptance record, B2-08 screenshot). **Reproduced
+  2026-11-03** in the W-0024 revision 4 guest (headed Firefox 159, screenshot `07d` in
+  `/home/mveary/sm-w0024/guest-evidence-3-browser/`; the CSS viewport width was not recorded):
+  Logbook view on F with the Uploads filter row shown, "COMMENT" drawn over "EMAIL". *Likely cause
+  (code reading; inference, not measured):* `Logbook.svelte` uses `table-fixed w-full`, fixed
+  widths on every column except Comment (about 60.75 rem ≈ 972 CSS px in total), and no
+  `overflow-hidden` on the headings, so when the container is narrower than that sum plus Comment's
+  padding, Comment's width collapses toward zero and its heading spills over Email's. A related
+  symptom in screenshot `05k` (the right-hand panel open): the columns after Name are cut off.
+  Fix direction: give the table a minimum width that includes Comment (it scrolls rather than
+  collapses), and clip headings like cells. **Reviewer recommendation (2026-11-04):** supports that
+  direction. *Acceptance:* every heading is readable and every column is reachable by horizontal
+  scrolling, including with the right-hand side panel open; merely hiding the overlap is
+  insufficient. Non-blocking for W-0024 (not one of its journeys; present since at least alpha.5).
+- **Rig Control panel covers the Phone/CW form (W-0024 revision 4 O11a, 2026-11-03; provisional
+  P2, reviewer recommendation 2026-11-04):** in the revision 4 guest (screenshot `05h` in
+  `/home/mveary/sm-w0024/guest-evidence-3-browser/`, agent-driven Firefox 159), the open Rig Control
+  panel lay over the Phone/CW date and time fields and took clicks meant for them. Tracked
+  separately from O11b.
+- **Malformed manual frequency shown without a malformed state (W-0024 revision 4 O11b,
+  2026-11-03; severity not assigned):** with CAT off, the obstruction above put time text into the
+  manual frequency field, and `14.25514:02:00.0` was shown in the field and the header before the
+  automation corrected it. *Submission boundary (code reading 2026-11-04, not exercised):* such a
+  value cannot be logged. `parseFrequency` (`frontend/app/src/lib/validators/frequency.ts:52`)
+  rejects it, and the Phone/CW submit sink refuses when it returns null (`frontend/app/src/main.ts:587`).
+  *Remaining defects, for severity ruling:* the refusal says "Rig frequency is not set — enter it in
+  the Rig panel.", which is wrong for a value that is set but malformed; and the panel gives no
+  malformed indication (`freqOutOfBand` in `RigPanel.svelte` returns false for an unparseable value,
+  and `isValidFrequency` has no UI caller). `syncBand` ignores it, so the band keeps its last value.
 - **No individual-QSO delete in the SPA (alpha.5 Finding #3, 2026-10-24):** the daemon supports
   `DELETE /v1/qso/{uuid}` (soft delete, audited, archive-guarded) but the SPA offers no delete action
   for a QSO; no recorded decision excludes it. A product gap for separate prioritisation.

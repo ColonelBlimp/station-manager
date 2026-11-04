@@ -830,3 +830,125 @@ everything written between R4's backup and the restore.
 match the rulings. R0–R2 may proceed as specified. R4–R6 stay on hold until the station operator
 supplies the outage window and explicit consent to discard intervening writes. W-0024 acceptance
 remains incomplete.
+
+## Execution log — revision 4
+
+18. **2026-11-03 — R0 (agent).** Copied `build/private/station-manager-dev.x86_64.rpm` to
+    `build/private/station-manager-2.0.0~alpha.5.89.gb766a145.dirty-1.x86_64.rpm` (absent before;
+    0600; 9,691,225 bytes); SHA-256 `fe792081…2fd3`, as recorded. Unpacked in `$W/unpack` (0700,
+    absent before, removed after): `usr/bin/smd` `8a2d89ec…2923`, equal to the installed
+    `/usr/bin/smd`; one embedded version `2.0.0-alpha.5-89-gb766a145-dirty`.
+19. **R1 (agent).** Worktree `/home/mveary/sm-w0024-build3` (detached at `b766a145`):
+    `git status --porcelain` empty; `git describe` `v2.0.0-alpha.5-89-gb766a145`. `task ci:local`:
+    **exit 0**, "All CI gates passed locally"; 133 Go `ok` lines, none `(cached)`, no `FAIL`; log
+    `/home/mveary/sm-w0024/ci-local-3.log` (0600). The SPA build rewrote
+    `frontend/app/dist/index.html` (alpha.3 Finding #1); restored, worktree clean, removed, pruned.
+    No build (R0's artifact is the acceptance artifact).
+20. **R2 guest preparation (agent).** `/home/mveary/sm-guest-w0024c` (0700, absent before). Image,
+    CHECKSUM and `fedora.gpg` fetched again: "Good signature from Fedora (44)", key
+    `36F612DCF27F7D1A48A835E4DBFCF71C6D9F90A6`; `sha256sum -c` OK; image SHA-256 `28680fe5…90b7f`
+    (unchanged), read-only. 20 GiB overlay; guest-only ed25519 key; `cidata` seed (user `smtest`,
+    key login, passwordless `sudo`). Domain `sm-w0024-clean3` on `qemu:///session`, 2 vCPU, 2 GiB;
+    XML reviewed: one `passt` interface forwarding only `127.0.0.1:2222` → 22; no graphics, sound,
+    shared folders or host devices. First boot: Fedora Linux 44 (Cloud Edition), kernel 6.19.10;
+    cloud-init `done`; no `station-manager`, no `polkit`, no 9p/virtiofs mounts, `Linger=no`,
+    nothing on 8080.
+21. **R2 install (agent; install.md §2–§3).** RPM `scp`'d; in-guest SHA-256 `fe792081…2fd3`
+    matching; `dnf install` exit 0 ("skipped OpenPGP checks"); `/usr/bin/smd` `8a2d89ec…2923`
+    matching; `enable --now` 0; `sudo loginctl enable-linger smtest` → `Linger=yes` (lane deviation,
+    as before); "SM is running."; `/v1/version` `2.0.0-alpha.5-89-gb766a145-dirty`, schema 19 clean,
+    Home; pre-setup `default-logbook` `{"effective":{"id":1,"uuid":""…}}`; lookups seeded disabled
+    (`hamnut`, `qrzcqlookupservice`, `qrzlookupservice` false). `tcpdump` installed, then the
+    capture (entry 7's command and filter, unit `w0024-capture`) from **13:50:24Z**, before any
+    callsign.
+22. **R2 F5 fixture (agent).** Guest-local responder (`w0024-r401`, Python `http.server` on
+    `127.0.0.1:18401`, every request answered 401); control POST → 401. With the guest daemon
+    stopped, its `config.json` QRZ account given the dummy key `DUMMY-W0024-NOT-A-KEY` and every
+    endpoint `http://127.0.0.1:18401/api` (loopback http is allowed, `qrz.go`
+    `CheckCredentialedURL`); the Settings UI has no endpoint field. Restarted: instance
+    `dmlmhuhdstp0`, no `error` line. No logbook is bound to it yet. Browser tunnel
+    `127.0.0.1:18080` → guest 8080 open; throwaway profile `/home/mveary/sm-guest-w0024c/ff-smtest`
+    (0700, empty).
+23. **R2 browser steps 1–9 — agent-driven (Codex via Firefox WebDriver BiDi, headed Firefox
+    159.0, the throwaway profile), not by the station operator personally.** Evidence:
+    `/home/mveary/sm-w0024/guest-evidence-3-browser/` (`RESULTS.txt`, `transcript.jsonl`, 41
+    screenshots, `MANIFEST.sha256`); no state changed by script or direct API write. Results as
+    reported there:
+    - **F4 PASS:** a visible focus ring on P's greyed Set as default and Default's greyed Delete
+      (`04a`, `04b`; `04` shows P's Edit focus and is not the evidence).
+    - **F6 default change PASS:** Stay, then Reload now → Stay, each kept the draft and the
+      logging-paused gate; Reload now → Leave loaded a new document on T; one labelled synthetic
+      contact saved in T (14:02:00Z, 20m) (`05b`–`05d`, `05j`, `05k`).
+    - **F5 PASS:** Default effective, T deliberately selected, the Forwarding link opened F (`07a`,
+      `07c`, `07d`). *Observation O10:* the link is "Show the QSOs … not on QRZ Logbook" — the
+      failed count itself is plain text — and it applies the `missing_from` filter, not a
+      failed-only filter.
+    - **F6 archive switch PASS, both directions:** archive `W-0024 Archive switch` (first logbook
+      `W-0024 Archive fixture`) created; Stay / Reload now → Stay kept the draft and gate; Reload now
+      → Leave loaded the destination archive (`08b`–`08g`); no contact in the second archive.
+    - **F6 Restart daemon PASS:** no Phone / CW entry; the first two restarts' Stay kept the draft
+      and the same document (`performance.timeOrigin` unchanged); the third's Leave loaded a new
+      document, draft empty (`09a`–`09d`). Instances `dmlmy8tl2jv0` → `dmlmzahrbms4` →
+      `dmlmzoqfzud9` → `dmln02z4jyig`.
+    - *Automation corrections (as recorded there):* an open Rig panel intercepted date/time clicks
+      in step 5 and a shifted button index picked 6m in step 6; both corrected before saving; no
+      extra contacts. *Observation O11* (`05h`): the open Rig Control panel covers the Phone / CW
+      form's date and time fields, and the manual frequency draft accepted the text
+      `14.25514:02:00.0` (shown in the header pill) before correction — triage pending.
+24. **R2 corroboration (agent, from the guest).**
+    - *Restarts (journal and `smd.log`):* default changes at 13:59:36Z (→ T), 14:05:12Z (→ F),
+      14:08:08Z (→ Default); archive activation 14:11:11Z (→ second archive) and 14:12:17Z (→ Home);
+      plain restarts 14:13:39.639Z, 14:14:10.568Z, 14:14:41.678Z — matching the three Restart daemon
+      confirmations (14:13:39.648, 14:14:10.578, 14:14:41.688). Each exit `status=3` (the respawn
+      code), each followed by a start 5 s later.
+    - *Uploads (stopped daemon, `immutable=1`; integrity `ok` on all three databases):* Home
+      logbooks Default 0, T 1, P 0, F 1; second archive's fixture logbook 0. **One `qso_upload` row**
+      — F's contact, `insert`, `failed`, `failure_class` `auth`, `last_error` "QRZ returned HTTP 401
+      (body: unauthorized)"; T's contact has none; the only enabled binding is F → `qrz`. As expected
+      for the fixture.
+    - *Responder:* six POSTs to `/api` — the agent's 13:50:25Z control, then 14:08:13Z (the first
+      attempt, at the start after F's contact was queued at 14:07:20Z) and one at each later Home
+      start (14:12:22Z, 14:13:44Z, 14:14:15Z, 14:14:46Z), each `outcome: terminal`: the boot re-arm
+      of auth failures (W-0010 Outcome 9), by design; none during the second archive's start.
+    - *Daemon log:* 785 `info`, 15 `warn`, **no `error`**. Warns: two pre-setup "could not record the
+      default logbook" (O7; the second from the agent's fixture restart, before setup); eight "the v5
+      recovery copy could not be written" — **caused by the agent's fixture**: the hand-edited QRZ
+      account carried `api_key` at account level, a v5-shaped field (`hasLegacyForwarderFields`,
+      `cmd/smd/config_v6_strip.go`), so each Home start tried the strip and could not build the v5
+      copy; the browser step entered the key on F's binding as well, which the upload used. Not seen
+      on the station (`smd.log` holds no such line). The fixture edit was unnecessary; a deviation,
+      not a product finding. Five "forwarding: attempt" warns (the 401s above).
+    - *Capture:* 13:50:24Z–14:40:42Z, entry 7's filter: **no matching traffic** (24-byte file). The
+      responder is on loopback, outside the filter.
+25. **R2 uninstall and disposal (agent).** Daemon stopped first; working directory hashed (6 files);
+    `disable --now`, `dnf remove` exit 0, `/usr/bin/smd` absent, unit `not-found`; the working
+    directory **byte-identical** after. Evidence kept in `/home/mveary/sm-w0024/guest-evidence-3`
+    (0700; journal, responder log, `smd.log` archive, capture, hash list; `MANIFEST.sha256`). Guest
+    destroyed and undefined with its storage; the tunnel ended with it; no domain left; guest
+    files removed **except the throwaway Firefox profile** `ff-smtest`, still in use by the
+    browser left open for inspection. 2026-11-04: browser closed (no process using the profile);
+    `/home/mveary/sm-guest-w0024c` (94 MB, only `ff-smtest`) removed. Disposal complete.
+
+### Revision 4 — R2 result
+
+**R0, R1 and R2 complete.** F4 (visible focus), F5 (explicit target) and F6 (default change,
+archive switch, Restart daemon) **passed** in the packaged guest, by agent-driven browser evidence
+corroborated from the guest's logs and database; the reviewer rules the result. Retained from
+candidate 2: F4's visible reasons, F5's effective-default selection and preserved pick. **U1–U7
+unexercised, not waived.** W-0024 acceptance stays **incomplete**: R4–R6 (station AC-1 to AC-11)
+await the station operator's outage window and explicit consent to discard all intervening
+writes. Completing R4–R6 does **not** by itself close acceptance: U1–U7 stay unexercised and
+unwaived, and the operator's sign-off is still required. Next is R3's passive station readings.
+
+**Triage (reviewer recommendations, 2026-11-04; recorded in W-0012):**
+- *Finding #2 (heading overlap):* the minimum-width and heading-clipping direction is supported.
+  Acceptance needs readable headings and every column reachable by horizontal scrolling, also with
+  the side panel open; only hiding the overlap is not enough.
+- *O10:* keep the wording. The explanation beside it
+  (`frontend/app/src/lib/config/DestinationsSection.svelte:530`, text at line 532) already says the link covers every
+  missing QSO, not only failed uploads. Closed, no change.
+- *O11:* split into two W-0012 items. **O11a**, the Rig panel covering the form, is provisionally
+  P2. **O11b** is the malformed manual frequency. A code reading found that the submit sink refuses
+  a value `parseFrequency` rejects (`frontend/app/src/main.ts:587`), so it cannot be logged; this
+  was not exercised. Its severity is not assigned. The defects left are a refusal message that
+  says the frequency is "not set" when it is malformed, and no malformed indication in the panel.
