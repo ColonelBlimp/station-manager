@@ -337,6 +337,12 @@ stated before a build):
 
   These are maximums, not averages, and A must pass both configurations. The mechanism is not yet
   approved; implementation is not authorised.
+  *Review, 2026-11-04:* mechanism approval is blocked on three items, all recorded in ADR 0099:
+  - D1-ii workload evidence. One slow FT enrichment lookup can occupy the only free connection; the
+    offline pending-lookup case is demonstration step 2b.
+  - The Q3 startup design. The reviewer prefers opening once, after the first config attempt
+    settles.
+  - Q4's bootstrap ownership.
 - **No individual-QSO delete in the SPA (alpha.5 Finding #3, 2026-10-24):** the daemon supports
   `DELETE /v1/qso/{uuid}` (soft delete, audited, archive-guarded) but the SPA offers no delete action
   for a QSO; no recorded decision excludes it. A product gap for separate prioritisation.

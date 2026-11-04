@@ -13,6 +13,15 @@ The smaller candidate, one combined shell-and-rig stream per window, is evaluate
 is review direction, not a decision. The operator ruled D1 and D2 on 2026-11-04 (see Operator
 rulings); mechanism approval and implementation remain pending.
 
+**Mechanism approval is blocked (reviewer, 2026-11-04) on:**
+1. evidence for D1-ii under a representative request workload (see "Request workload in D1-ii");
+2. the Q3 startup design;
+3. Q4's bootstrap ownership.
+
+Candidate A stays Proposed until these are resolved. If A fails, the agreed fallback is B or C.
+Because of A's D1-ii workload risk, B's and C's costs are worked up alongside A's feasibility
+evidence (reviewer, 2026-11-04). Implementation remains pending.
+
 **Severity (reviewer's ruling):** P1 availability, blocking W-0024 acceptance (AC-6). An ordinary
 three-window workflow becomes unusable while the daemon stays healthy. No data corruption or
 RF-safety failure has been demonstrated.
@@ -39,7 +48,8 @@ held each socket was not measured.
 | `/v1/rig/events` | `main.ts:418`, inside `applyStationContext`, once the asynchronous config shows `catEnabled`, unless the tab is a settled Map tab | CAT state, meters, tune state, TX alarm, `rig-clients`; build identity and archive re-verification ride its reopen (W-0004 AC3) |
 | `/v1/ft8/events` | the FT8/FT4 view only | decodes and occupancy; **the open subscription is the operator-presence signal** (see below) |
 
-**FT8 presence.** The FT8 subscriber count drives the capture device and the attended-only disarm.
+**FT8 presence.** The FT8 subscriber count drives the capture device and a TX disarm after the last
+FT subscription has stayed absent through the linger. That disarm does not prove human attendance.
 When the **last** subscriber leaves, `onSubscriberRemoved` starts the 5 s `captureLinger`
 (`internal/ft8/service.go:463`). When the linger expires, `onLingerExpired` re-checks the aggregate
 `subCount`. If any subscriber has returned, it keeps the session. Only with none does it disarm TX
@@ -134,6 +144,21 @@ tests. The SPA moves to the new endpoint.
 
 - **Connection budget.** The formula and table above. A meets O1 only for configurations with R ≥ 1
   that also pass D2.
+- **Request workload in D1-ii (code-supported risk, not a measured failure).**
+  - *The mechanism:*
+    - FT enrichment allows two concurrent `/v1/enrich/callsign` lookups per window
+      (`FT8_ENRICH_CONCURRENCY = 2`, `frontend/app/src/lib/operate/ft8Enrich.svelte.ts:63`).
+    - The handler replies only after `Enrich` returns (`internal/api/handler_enrich.go:77`).
+    - A lookup can take a long time. HamNut's default HTTP timeout is 10 s
+      (`internal/lookup/hamnut/service.go:40`). The alpha.2 acceptance record, entry 36, measured
+      1.5–2.5 s per enrichment request, daemon-side (not per individual upstream lookup).
+      Citation: `docs/reports/dogfood-acceptance-v2.0.0-alpha.2.md:1281`.
+  - *The effect:* under A, D1-ii holds five persistent connections, so one slow lookup can occupy
+    the only free connection. An otherwise fast Settings request or archive check then waits beyond
+    D2a.
+  - *What would miss it:* an FT window with no decodes makes no lookups, so it would not show this.
+  - *Required before A is selected:* the offline browser case in demonstration step 2b. If A fails
+    it, the decision moves to B or C.
 - **Event routing.** The two vocabularies are disjoint:
   - `qso.*` and `forward.*` (`internal/events`)
   - `rig-state`, `rig-meters`, `rig-disconnected`, `bridge-error`, `tune-state`, `tx-alarm`,
@@ -145,30 +170,49 @@ tests. The SPA moves to the new endpoint.
   `/v1/events` contract (open first, then fetch). `: connected` comes first, then the rig bootstrap
   poll (`bridge.TriggerBootstrap`, ADR 0019), as today. That is one poll per window with the rig part,
   so the count is unchanged.
-- **Startup sequence — open question Q3.** Today the shell's stream opens at module load. CAT and
-  setup state arrive later, from the asynchronous config read inside `bootArchiveScoped`. The rig
-  stream opens in `applyStationContext` only after that read, guarded by `rigEventsOpen`, because the
-  function runs again after first-run setup. The design must say how the first combined connection
-  gets its `rig=1` choice. Options to compare:
-  1. Open shell-only at load, then make one deliberate upgrade to `rig=1` once the context shows
-     `catEnabled` and the tab is not a settled Map tab. The upgrade must not fire the shell's
-     `onReconnect`, build identity or archive re-verification as if it were a drop.
-  2. Hold the shell stream until the config resolves. A failed config read must still open it
-     shell-only, because ADR 0079's reconnection signal is needed most when config is unreachable.
+- **Startup sequence (Q3; reviewer prefers option 2).** Today the shell's stream opens at module
+  load. CAT and setup state arrive later, from the asynchronous config read inside
+  `bootArchiveScoped`. The rig stream opens in `applyStationContext` only after that read, guarded
+  by `rigEventsOpen`, because the function runs again after first-run setup.
+  - *Option 1 (not preferred).* Open shell-only at load, then replace the stream with `rig=1` once
+    the context shows CAT. This replaces a connection on every normal CAT-enabled boot.
+  - *Option 2 (reviewer's preference, 2026-11-04).* Open **once**, after the initial configuration
+    attempt settles:
+    1. install the handlers;
+    2. choose shell-only or shell-plus-rig;
+    3. open the combined stream before route consumers start.
 
-  Both must also cover:
-  - first-run completion, where setup completes in place and the rig part must be added without a
-    reload
-  - a later config change
-  - the settled-Map exception (ADR 0079 update, and the `setup_complete` refinement): a settled Map
-    tab never asks for the rig part
-- **Daemon integration — open question Q4.** The new path must be added explicitly to:
-  - **SSE classification.** `isSSEPath` (`internal/api/middleware.go:47`) enumerates paths, and a
-    stream left out would hold an ordinary request slot under `limitConcurrent`.
-  - **Subscriber admission.** One `limitEventSubscribers` admission per combined connection; its H3
-    log counts SSE requests.
-  - **Shutdown.** Observe `shutdownCh` as both existing handlers do.
-  - **Bounded writes.** One per-write deadline (`armWrite`) across frames from both sources.
+    A failed configuration read still produces a shell-only stream, and the existing boot identity
+    gate and recovery watch (`bootArchiveScoped`, `verifyArchiveGeneration`) are preserved.
+  - *Distinctions to preserve:*
+    - CAT disabled, and a settled Map tab, use shell-only.
+    - A Map-route window awaiting first-run setup may need rig events. That exception is
+      characterized by `frontend/app/src/main.mapsetupboot.test.ts`.
+    - Re-applying an unchanged context must not reopen the stream.
+    - First-run completion must keep any necessary late rig subscription.
+    - Restart-bound Settings changes keep their existing restart and reload semantics.
+  - *Any later replacement must define its recovery.* This covers first-run completion adding the
+    rig part, and any other case. The streams keep no backlog, so an intentional replacement can
+    still leave an event gap: genuine outage state is kept, and the affected baselines are refreshed.
+- **Daemon integration (Q4).** The handler composition is accepted in principle. **Bootstrap
+  ownership is unresolved.** The design must assign it. The target shape:
+  - one writer serving both typed subscriptions (`events.Hub` and the bridge hub);
+  - one `limitEventSubscribers` admission per combined connection (its H3 log counts SSE requests);
+  - **both** subscriptions established before the response opens. Today the rig handler subscribes
+    after `WriteHeader` and the shell handler before; the combined handler subscribes both first;
+  - `: connected` written and flushed immediately;
+  - the rig bootstrap poll (`bridge.TriggerBootstrap`, ADR 0019) run after that. Naming an owner is
+    not enough: the bootstrap **must not block shell event forwarding**, and the design must define
+    its outstanding work, its cancellation and how it completes at shutdown. Today the call is
+    synchronous in the rig handler, and on CI-V it waits on `cmdMu` with a plain `Lock()`
+    (`internal/bridge/pipeline.go:1413`), which request cancellation cannot interrupt. Inside a
+    combined handler, that wait would stall QSO events for the window. This is why ownership
+    remains unresolved;
+  - both subscriptions released on request cancellation, on `shutdownCh`, or when either hub ends
+    its channel;
+  - the new path added to `isSSEPath` (`internal/api/middleware.go:47`, which enumerates paths), so
+    the stream never holds an ordinary `limitConcurrent` slot;
+  - one per-write deadline (`armWrite`) across frames from both sources.
 - **Reconnect.** If **either** hub evicts a slow reader or closes, the whole stream ends. The client
   reconnects and re-syncs both sides. *Consequence:* a rig-meter eviction now also re-fetches the
   count and the archive state. `openReviving` is unchanged: it revives only a dead stream, and only
@@ -250,8 +294,9 @@ connection.
   per-window archive guard (`X-SM-Archive-Id`, `frontend/app/src/lib/api/archive-guard.ts`) and
   reload decisions stay per window.
 - **Known costs:**
-  - `rig-clients` would read 1 however many windows are open, losing the multi-window warning unless
-    it is re-derived.
+  - `rig-clients` counting semantics would change: it would read 1 however many windows are open.
+    The current SPA does not display that count (`frontend/app/src/lib/api/rig-sse.ts:13`), so no
+    visible warning is lost today; a future consumer would need it re-derived.
   - FT8 keeps its per-window transport by the same scoped decision as A, so each FT window still
     adds a connection.
   - Worker test infrastructure is new to the project.
@@ -291,6 +336,17 @@ Firefox driving the normal UI.
    no rig attached.
 2. **D1-ii, four windows, one of them on FT8/FT4.** The FT window's stream opens and its subscriber
    appears, and every window's ordinary requests still meet D2a.
+   2b. **D1-ii under a controlled pending lookup (offline).** Enrichment points at a guest-local
+   responder that holds lookup responses open on command. With lookups held in flight, as the FT
+   window's two-lookup cap allows, exercise Settings loads and archive verification from the
+   other windows; each must meet D2a. **Barrier:** before the timed requests, confirm that a
+   cache miss reached the local responder and is still pending, from the responder's own log and
+   the browser's pending request. Otherwise a cached enrichment answers at once and the pass is
+   misleading. Two things must be established before the run:
+   - an offline decode source that makes Band Activity issue lookups. Otherwise a Phone/CW
+     callsign lookup stands in. That substitute can establish the connection-contention case, but
+     not the FT window's two-lookup workload, and the record labels it as a substitute;
+   - that the lookup provider's URL policy allows a loopback responder.
 3. **Default switch from A, in each of D1-i and D1-ii.** Every window reloads by itself onto the
    destination, and B's partial entry is gone as warned (AC-6 shape). Then a plain daemon restart.
    Both meet D2b, measured per window from the new instance being observed ready (the `/v1/version`
