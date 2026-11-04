@@ -952,3 +952,161 @@ unwaived, and the operator's sign-off is still required. Next is R3's passive st
   a value `parseFrequency` rejects (`frontend/app/src/main.ts:587`), so it cannot be logged; this
   was not exercised. Its severity is not assigned. The defects left are a refusal message that
   says the frequency is "not set" when it is malformed, and no malformed indication in the panel.
+
+### Revision 4 — station checks
+
+26. **2026-11-04 05:21:25–05:22:05Z — R3 Readings A (agent; station, daemon running, read-only).**
+    HTTP GETs on `127.0.0.1:8080` plus local package and file reads only; no database file opened.
+    Saved in `/home/mveary/sm-w0024/r3-readings` (0700, files 0600); `/v1/config` was not saved
+    raw, only the lookup flags below.
+    - *Identity:* `rpm -q` `station-manager-2.0.0~alpha.5.89.gb766a145.dirty-1.x86_64`;
+      `/usr/bin/smd` SHA-256 `8a2d89ec…2923`, **equal to R0's**; `/v1/version` daemon
+      `2.0.0-alpha.5-89-gb766a145-dirty`, env `release`, **schema 19, not dirty**, instance
+      `dmm552w2b559`; unit active since 2026-11-04 04:27:38Z, main PID 4976.
+    - *Health:* `/v1/healthz` status, database and logging all `ok`.
+    - *Logbooks:* one, Default (id 1, `7Q5MLV`), **8,327 QSOs** (`/v1/logbook/1/count`).
+    - *Archives:* Home (legacy, active, current, 23,425,024 bytes, modified 2026-11-03 15:48:53Z;
+      Default is its default with 8,327); Drill (managed, inactive, stale; one QSO).
+    - *Home bindings (Default):* ClubLog on and enabled; QRZ Logbook on and enabled; QRZCQ off
+      (binding disabled); **SM Cloud on and enabled, adoption `adopted`, locked field `logbook`**
+      (fixes AC-3's expectation). Every queue waiting 0, failed 0, in flight 0.
+    - *Forwarder queues:* clublog, qrz, smcloud and qrzcq all 0 waiting, 0 failed, 0 clearable,
+      0 in flight.
+    - *Lookups:* HamNut enabled; chain `qrzlookupservice` enabled, `qrzcqlookupservice` disabled.
+    - The counts and the archive's size and modification time are mutable. If the station logs
+      before R4's stop, they are re-read then, so restore comparisons use the true baseline.
+27. **2026-11-04 — R4 (agent; outage authorised by the station operator for 2026-11-04, no time
+    limit, with explicit consent to discard every write between this backup and its restore,
+    including test contacts, default and logbook changes and any real contact; rig off).**
+    - *Pre-stop re-read, 05:27:18Z:* Default 8,327; Home 23,425,024 bytes, modified
+      2026-11-03 15:48:53Z; Drill 1; every queue 0; instance `dmm552w2b559`. Unchanged from R3, so
+      R3 stands as the baseline.
+    - *Step 9:* `systemctl --user stop smd` 05:27:19.011Z, returned 05:27:19.054Z; `inactive`, `0`,
+      `success`; `smd.log` shows the daemon's own exit ("shutdown signal received" …
+      "HTTP server shutdown complete", "smd stopped").
+    - *Step 10:* exactly the premigrate pair; `-wal` 0 B `e3b0c442…b855`, `-shm` 32,768 B
+      `fd4c9fda…89eb`, byte-identical to the recorded hashes. Nothing else.
+    - *Step 11:* `$W/baseline.sha256` (73 files), `$W/baseline.modes` (81 lines).
+    - *Step 12:* `/home/mveary/sm-backup/station-manager-20261104T0527Z-gb766a145-pre-w0024.tar.gz`,
+      mode 600, 35,280,173 bytes, 81 entries, SHA-256
+      `ae7990f9eb8d655bd05ccefd5e44861487e5ae6cc9f06a55e70164b9c6542ed6`. **The only restore
+      source.**
+    - *Step 13:* extracted to `$W/pre`; hash and mode comparisons with the baseline both empty;
+      `w0024-check.py integrity` `ok` for Home, Drill, `reference.db` and `evidence.db`, exit 0.
+      Counts (Home): logbook 1 only, 8,327 QSOs; `qso_upload` clublog 2,554, qrz 2,874, smcloud
+      11,102, all `uploaded`; destinations clublog 1, qrz 1, qrzcq 0, smcloud 1. Counts (Drill):
+      1 QSO; one smcloud upload `uploaded`; smcloud binding enabled. `c-rows.py snap` written for
+      Home, Drill and evidence (0600).
+    - *Deviation — `reference.db` snapshot.* `c-rows.py snap` on the `reference.db` copy failed
+      ("Could not decode to UTF-8 column 'name'"), with no output. Ruled 2026-11-04 (reviewer):
+      take the snapshot through a wrapper that tags undecodable TEXT unambiguously, keeping AC-9's
+      row comparison. The wrapper `$W/c-rows-tagged.py` (0600, SHA-256 `856bf07d…3b85`, retained
+      for R6's snapshot) loads the helper unchanged and alters only TEXT decoding: valid UTF-8
+      stays a string; invalid TEXT becomes `{"invalid_utf8_text_hex": "<hex>"}`. Opening stays the
+      helper's read-only, immutable URI; output stays 0600, never overwritten. *Synthetic
+      demonstration* (scratch databases): identical databases compare `unchanged`; changing an
+      invalid TEXT byte (ff → fe), replacing it with the literal text `ff`, or with the BLOB
+      x'ff', are each reported `CHANGED` (column `v`, one row); the source database's hash is
+      unchanged and it gained no sidecars. *Reversion proof:* the same fixture snapshotted
+      with plain hex for invalid TEXT (the helper's BLOB conversion,
+      `build/private/c-rows.py:28`) reports both the literal-text and the BLOB replacement
+      `unchanged`. *Pre-test snapshot:* `$W/pre-reference.json` (0600; `contacted_station` 11,019
+      rows, `country` 664, `sqlite_stat4` 73). Tagged cells: **15, all `contacted_station.name`**,
+      none elsewhere. The earlier 36 `sqlite_stat4` count was mine, wrong: those cells are BLOB
+      samples, as SQLite's format defines (https://www.sqlite.org/fileformat2.html#the_sqlite_stat4_table).
+      After the snapshot the copy still equals the baseline and has no new sidecar. The helper's
+      own conversion still cannot tell a BLOB from TEXT spelling the same hex; that limit is
+      unchanged and outside this ruling. **AC-11 met** (backup verified).
+    - *Step 14:* the live directory re-hashed at 05:28:21Z and again at 05:35:13Z: identical to the
+      baseline. The daemon stays stopped until R5.
+    - *Correction:* in an earlier message I gave QRZ lookups during test entry as a reason
+      `reference.db` would change. That is wrong. R5 step 16 disables every lookup, restarts the
+      daemon, and verifies them off before any synthetic entry. Lookups are not an agreed
+      explanation for `reference.db` changes.
+28. **2026-11-04 — R5 step 15 (agent).** No install. `systemctl --user start smd` 05:35:58.256Z;
+    healthy by 05:36:00Z; active, PID 37055. `smd.log` "smd starting" at 05:35:58.280Z with
+    version `2.0.0-alpha.5-89-gb766a145-dirty`; `rpm -q` `…alpha.5.89.gb766a145.dirty-1`;
+    `/usr/bin/smd` `8a2d89ec…2923`; `/v1/version` the same build, schema 19 not dirty, instance
+    `dmm6ledjow37`, Home, `default_logbook_uuid` Default's; `/v1/default-logbook` 200, effective
+    Default, no change in play. No `error` line since the start; warnings are the known start-up set
+    (RTS assertion notice, SM Cloud plain-http notice), plus the rig liveness strikes expected with
+    the rig off. **AC-1:** agent readings agree; the sidebar build badge is for the browser step.
+29. **2026-11-04 — R5 step 16.** *UI (agent-driven browser, action record
+    `/home/mveary/sm-w0024/station-evidence-r5-browser/RESULTS-step16.txt`, retained privately):*
+    HamNut and QRZ disabled, saved, Settings → Restart daemon; QRZCQ already disabled; all three
+    still Disabled after reload; sidebar build matches the acceptance artifact (AC-1's badge);
+    no callsign entered, no test logbook created. *Agent corroboration, 05:53:45Z:* `smd.log`
+    "config saved" 05:43:02.348Z; "restart requested (POST /v1/restart)" 05:43:34.805Z, orderly
+    shutdown to "smd stopped" 05:43:34.834Z (systemd: exit status 3, the respawn code; restart
+    05:43:39Z); "smd starting" 05:43:39.977Z; then "lookup: chain entry disabled, skipping" (×2)
+    and "lookup: pipeline disabled (no providers enabled)". **`/v1/config`:** `hamnut.enabled`
+    false; chain `qrzlookupservice` false, `qrzcqlookupservice` false. Instance `dmm6rah68wow`,
+    schema 19; logbooks: Default only, 8,327; `/v1/default-logbook` effective Default; every queue
+    0; no `error` line since R5's start.
+30. **2026-11-04 — R5 steps 17–18; blocked before step 19 (Cancel check).** *Agent-driven browser
+    record:* `/home/mveary/sm-w0024/station-evidence-r5-browser/RESULTS-steps17-22.txt` (retained
+    privately). **Step 17 passed:** T and P created; P's callsign-mismatch reason shown; every
+    forwarding destination disabled for both (AC-2). **Blocked:** with windows A, B and C open, A's
+    Settings request timed out after 15 s, and C showed "Archive binding unproven". Direct daemon
+    reads stayed healthy. Closing C and pressing Retry restored Settings; its config request then
+    completed in about 1 ms. *Reviewer's hypothesis, not verified:* HTTP/1.1 per-origin connection
+    exhaustion. Six Firefox connections were observed, which matches the per-browser SSE
+    connection limit (https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events);
+    which window held each socket was not established. The reviewer recommends triage before
+    resuming. *Agent reading after the operator's power cut, 06:07:22Z:* daemon unaffected (active
+    since 05:43:39Z, instance `dmm6rah68wow`). Logbooks: Default 8,327, `W-0024 Acceptance` (T,
+    id 2) 0, `W-0024 Other call` (P, id 3) 0. `/v1/default-logbook` effective Default. Every queue
+    0; lookups all disabled. No default switch, QSO submission or deletion has occurred. Windows A
+    and B remain open (C closed). Step 23 and R6 not started; the R4 backup remains the only
+    restore source. **Paused by the operator: continue later.**
+31. **2026-11-04 — reboot observation (agent, read-only).** The host rebooted at 11:38:14Z, after
+    the operator's power cut; the kernel changed (7.2.14 → 7.2.15). The daemon started by itself at
+    11:38:39Z (instance `dmmeb350k68x`) with the paused state intact: Default effective at 8,327; T
+    and P present and empty; every queue 0; lookups disabled; R4's backup present (unchanged).
+32. **2026-11-04 — triage of entry 30 (reviewer, code reading; agent re-checked the citations; no
+    station request).** With CAT enabled, each SPA window holds two persistent streams for the
+    page's life: the shell's `/v1/events` (`frontend/app/src/main.ts:719`, "Never closed") and
+    `/v1/rig/events` (`frontend/app/src/main.ts:418`; handler `internal/bridge/handler.go:102`).
+    That stream opens independently of the view, and is not removed by powering off the rig. FT8/FT4
+    adds one more while its view is active. Windows A, B and C therefore hold **six** streams. The
+    daemon serves a plain listener via `http.Server.Serve` (`internal/api/server.go:595`), with no
+    TLS or unencrypted HTTP/2, so browsers speak HTTP/1.1 (https://pkg.go.dev/net/http#Server.Serve).
+    Firefox's six connections per host are shared across windows, and SSE holds connections that
+    ordinary requests also need (https://bugzilla.mozilla.org/show_bug.cgi?id=906896). Six streams
+    can leave Settings and archive-verification requests waiting, and closing C frees two. This
+    strongly explains entry 30. Which socket each window held during the incident remains
+    unmeasured. The code is unchanged since `b766a145`. **Ruling (reviewer recommendation, adopted
+    by the operator):** AC-6 stays blocked. Closing B or C cannot show the simultaneous automatic
+    reloads AC-6 requires. End this run through R6, hold R5 for a fix, and start a future run
+    with a fresh R4 backup. The defect is tracked separately in W-0012.
+33. **2026-11-04 — R6 (agent; step 24, installed artifact kept).**
+    - *Stop:* readings at 11:44:02Z: Default 8,327, T 0, P 0. `systemctl --user stop smd` 11:44:02.291Z;
+      `inactive`, `0`, `success`; `smd.log` ends "smd stopped". Sidecars: only the premigrate pair,
+      at the recorded hashes.
+    - *Preservation:* `$WD` moved to
+      `/home/mveary/.local/share/station-manager.w0024-post-20261104T1144Z` (0755
+      `mveary:mveary`); its 73-file hash list is `$W/r6-moved.sha256`. It is kept until the
+      operator instructs deletion.
+    - *Restore:* R4's backup re-hashed (`ae7990f9…2ed6`) and extracted. **While still stopped,** the
+      hash and mode comparisons with `$W/baseline.sha256` and `$W/baseline.modes` were both
+      **empty**. The restored files are byte-identical to the verified backup, so QSOs, bindings
+      and the upload queue equal R4's counts.
+    - *Start:* 11:44:20.157Z, healthy 11:44:23Z, instance `dmmeffujdtti`, the same build, schema
+      19, Home, `default_logbook_uuid` Default's. Compared with R3's saved readings: `/v1/logbook`
+      **equal** (Default only); count **equal** (8,327); lookups **equal** (HamNut and QRZ enabled,
+      QRZCQ disabled); Home bindings **equal**, excluding queue counters. `/v1/default-logbook`:
+      effective Default. Every queue 0; no `error` line; warnings only the two start-up notices.
+      Home's `modified_at` reads 05:27:19Z, against R3's 2026-11-03 15:48:53Z: the file's mtime
+      from R4's clean stop, which the backup preserved. Its content is the hashed baseline.
+    - **The station is back to its pre-test state.** No synthetic contact was ever created; T, P,
+      the disabled lookups and the step 16 restart are discarded under the operator's consent.
+
+### Revision 4 — outcome of this run (2026-11-04)
+
+**Run ended after R6; R5 held for a fix.** Passed in this run: R3, R4 (AC-11), R5 step 15 (AC-1),
+step 16 (lookups off, verified) and step 17 (AC-2). **Not reached:** AC-3 to AC-10, step 23 and AC-9.
+The cause is the multi-window connection defect, entries 30 and 32, tracked in W-0012. W-0024
+acceptance remains **incomplete**; U1–U7 remain unexercised and unwaived; the operator's sign-off
+is still required. A future run starts with a fresh R4 backup. The R4 backup of this run and
+`$W/pre` are superseded for restore once that run's backup is verified. Their cleanup (step 26) is
+the operator's call.

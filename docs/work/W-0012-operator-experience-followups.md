@@ -303,6 +303,20 @@ stated before a build):
   the Rig panel.", which is wrong for a value that is set but malformed; and the panel gives no
   malformed indication (`freqOutOfBand` in `RigPanel.svelte` returns false for an unparseable value,
   and `isValidFrequency` has no UI caller). `syncBand` ignores it, so the band keeps its last value.
+- **Three open windows exhaust the browser's connections (W-0024 revision 4 entries 30 and 32,
+  2026-11-04; blocks W-0024 AC-6; severity for ruling):** with CAT enabled, each SPA window holds
+  two persistent streams for the page's life: the shell's `/v1/events` (`frontend/app/src/main.ts:719`)
+  and `/v1/rig/events` (`frontend/app/src/main.ts:418`). FT8/FT4 adds a third while its view is
+  active. The daemon serves HTTP/1.1 only (`internal/api/server.go:595`, plain `http.Server.Serve`),
+  so Firefox's six connections per host, shared across windows, are all held by three windows.
+  On the station, Settings timed out after 15 s and the Logbook window showed "Archive binding
+  unproven"; closing one window restored Settings. That is the reviewer's code analysis plus the
+  observed symptom; which window held each socket was not measured. Separate from W-0024's
+  default-switch logic. *Acceptance outcome (reviewer):* all three windows (Settings, Operate
+  Phone/CW, Logbook) stay usable together, and all recover automatically across a daemon restart.
+  *Nearest confusable:* a fix that only frees connections when a window is idle or hidden, so the
+  simultaneous-reload case still stalls. Mechanism not chosen; it needs a design and the
+  operator's ruling.
 - **No individual-QSO delete in the SPA (alpha.5 Finding #3, 2026-10-24):** the daemon supports
   `DELETE /v1/qso/{uuid}` (soft delete, audited, archive-guarded) but the SPA offers no delete action
   for a QSO; no recorded decision excludes it. A product gap for separate prioritisation.
