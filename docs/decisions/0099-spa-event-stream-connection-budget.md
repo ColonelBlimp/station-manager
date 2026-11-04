@@ -10,7 +10,8 @@ date: 2026-11-04
 **Proposed (2026-11-04). Design only. The mechanism is not accepted and nothing is built.** This ADR
 compares the candidates against the reviewer's outcomes and records what each must still establish.
 The smaller candidate, one combined shell-and-rig stream per window, is evaluated first; that order
-is review direction, not a decision. D1 and D2 are the operator's to decide and are unresolved here.
+is review direction, not a decision. The operator ruled D1 and D2 on 2026-11-04 (see Operator
+rulings); mechanism approval and implementation remain pending.
 
 **Severity (reviewer's ruling):** P1 availability, blocking W-0024 acceptance (AC-6). An ordinary
 three-window workflow becomes unusable while the daemon stays healthy. No data corruption or
@@ -91,9 +92,9 @@ counted per SSE request across all its event endpoints. That cap is not what is 
 
 Evaluate first **one combined shell stream per window**, carrying the shell and rig streams on a
 single connection. As a scoped decision, `/v1/ft8/events` keeps its current transport. The operator
-decides the **supported configurations** (D1) and the **usability thresholds** (D2) before
-acceptance. If the configurations D1 requires leave too little request capacity under A, or A fails
-D2 when measured, the decision moves to B (HTTP/2) or C (one connection shared across windows).
+has ruled the **supported configurations** (D1) and **usability thresholds** (D2). A must pass
+both configurations. If it fails D2 in either, measured, the decision moves to B (HTTP/2) or C (one
+connection shared across windows).
 
 ## Connection budget
 
@@ -282,16 +283,18 @@ Firefox driving the normal UI.
 3. **Socket evidence** on the guest: established TCP connections to the daemon's port, counted at
    each step.
 
-**Steps:**
-1. **Three windows.** A Settings, B Operate Phone/CW with a partial entry, C Logbook, with CAT
+**Steps.** Every limit is a maximum per exercised request or per window, never an average.
+
+1. **D1-i, three windows.** A Settings, B Operate Phone/CW with a partial entry, C Logbook, with CAT
    enabled. The SSE requests, sockets and request capacity match the candidate's budget, and ordinary
    requests meet D2a. Before the run, establish whether the guest's bridge serves the rig stream with
    no rig attached.
-2. **The configurations D1 names**, for example four windows with one on FT8. The FT window's stream
-   opens and its subscriber appears, and the other windows' requests still meet D2a.
-3. **Default switch from A.** Every window reloads by itself onto the destination, and B's partial
-   entry is gone as warned (AC-6 shape). Then a plain daemon restart, where all windows recover within
-   D2b.
+2. **D1-ii, four windows, one of them on FT8/FT4.** The FT window's stream opens and its subscriber
+   appears, and every window's ordinary requests still meet D2a.
+3. **Default switch from A, in each of D1-i and D1-ii.** Every window reloads by itself onto the
+   destination, and B's partial entry is gone as warned (AC-6 shape). Then a plain daemon restart.
+   Both meet D2b, measured per window from the new instance being observed ready (the `/v1/version`
+   instance, read outside the browser) until the window is usable on the correct binding.
 4. **Disturbances.** Hide and restore windows; close one and reopen it. Make a **real network
    interruption** (the guest's interface taken down and up), kept distinct from **dispatching a
    synthetic `online` event**: the first exercises the browser's teardown, the second only the
@@ -311,17 +314,26 @@ off (the reviewer's reading), so the browser run alone cannot establish capture 
 Unit and integration tests still cover routing, eviction, bootstrap order, reconnect transitions and
 Q2's verification boundaries. The demonstration is the acceptance evidence for O1–O3 and O5.
 
-## Decisions wanted from the operator
+## Operator rulings (2026-11-04)
 
-- **D1 Supported configurations.** Which window counts, and how many of them on FT8, must stay
-  usable together? This is stated as configurations and their R, per the table, not a single number.
-  A can only meet a configuration with R ≥ 1 that also passes D2. B and C relax the arithmetic.
-- **D2 Usability thresholds,** in two separate parts. Persistent SSE responses never complete, so
-  they carry no completion-latency requirement.
-  - **D2a Ordinary request latency:** for example, the longest acceptable time for a Settings load, a
-    save or an archive verification while the D1 configuration is open.
-  - **D2b Restart recovery:** the longest acceptable time from the daemon being ready to every window
-    reloaded or re-bound after a restart or default switch.
+These settle the acceptance criteria. The mechanism is still not approved, and nothing is built.
+
+- **D1 Supported configurations (confirmed):**
+  - **D1-i:** Settings, Operate Phone/CW and Logbook open at the same time. Under A, 3 connections
+    and R = 3.
+  - **D1-ii:** those three plus a fourth window on FT8/FT4. Under A, 5 connections and R = 1.
+- **D2a Ordinary request latency:** at most **1 s** for each ordinary local API request exercised.
+  It is measured in the browser, so it includes connection queueing and response transfer, not just
+  daemon processing. SSE lifetimes are excluded.
+- **D2b Restart recovery:** at most **10 s**. The clock starts when the new daemon instance is
+  observed ready independently (not through the SPA), and stops when every window is usable with the
+  correct archive and default binding. A default switch must also meet AC-6: every window reloads by
+  itself, and the drafts it warned about are discarded.
+- **Maximums, not averages.** Both limits apply to every case demonstrated. An average must not hide
+  a stalled window.
+- **A must pass both D1-i and D1-ii** against D2a and D2b. Free connection capacity alone does not
+  establish acceptance. D1-ii, with one free connection shared by every ordinary request in four
+  windows, is expected to be the binding case. If A fails it, the decision moves to B or C.
 
 ## Consequences
 

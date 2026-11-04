@@ -328,7 +328,15 @@ stated before a build):
   - Q2 settled as one shell-owned verification per combined reconnect
   - D2 split into D2a (request latency) and D2b (restart recovery)
 
-  D1 and D2 are still the operator's to rule. Implementation is not authorised.
+  **Operator rulings, 2026-11-04 (acceptance criteria only):**
+  - D1-i: Settings, Operate Phone/CW and Logbook together.
+  - D1-ii: those three plus a fourth window on FT8/FT4.
+  - D2a: at most 1 s per ordinary request, measured in the browser.
+  - D2b: at most 10 s from the new instance being observed ready to every window usable on the
+    correct binding, with AC-6 for default switches.
+
+  These are maximums, not averages, and A must pass both configurations. The mechanism is not yet
+  approved; implementation is not authorised.
 - **No individual-QSO delete in the SPA (alpha.5 Finding #3, 2026-10-24):** the daemon supports
   `DELETE /v1/qso/{uuid}` (soft delete, audited, archive-guarded) but the SPA offers no delete action
   for a QSO; no recorded decision excludes it. A product gap for separate prioritisation.
