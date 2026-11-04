@@ -13,6 +13,10 @@ The smaller candidate, one combined shell-and-rig stream per window, is evaluate
 is review direction, not a decision. The operator ruled D1 and D2 on 2026-11-04 (see Operator
 rulings); mechanism approval and implementation remain pending.
 
+**Feasibility probe (2026-11-04):** a held lookup made otherwise-fast requests take about 5.2 s
+with five streams open, against D2a's 1 s (see "Feasibility probe"). The B/C comparison now takes
+priority over refining A.
+
 **Mechanism approval is blocked (reviewer, 2026-11-04) on:**
 1. evidence for D1-ii under a representative request workload (see "Request workload in D1-ii");
 2. the Q3 startup design;
@@ -369,6 +373,74 @@ off (the reviewer's reading), so the browser run alone cannot establish capture 
 
 Unit and integration tests still cover routing, eviction, bootstrap order, reconnect transitions and
 Q2's verification boundaries. The demonstration is the acceptance evidence for O1–O3 and O5.
+
+## Feasibility probe (2026-11-04): a held lookup starves ordinary requests
+
+**This is a transport-equivalent contention probe. It is not acceptance of candidate A, and not a
+D1-ii result.** It reproduced A's D1-ii connection count, five persistent streams on one origin, on
+the existing build, to test the workload risk directly.
+
+*Setup.* Entirely offline, with no hardware and no production change:
+- an isolated guest (`sm-w0099-probe`, Fedora 44, the image verified as before) running the R0
+  artifact `b766a145-dirty`;
+- synthetic setup (`7Q5MLV`);
+- the bridge enabled against an absent serial port (`/dev/ttyPROBE-ABSENT`). The serial open
+  failed and no pipeline started, yet `/v1/rig/events` was served (200), so the SPA treated CAT as
+  enabled;
+- HamNut pointed at a guest-local responder that logs each request on arrival and holds it until
+  released.
+
+*Browser.* Headless Firefox 159 with a fresh, unmodified profile, driven over WebDriver BiDi through
+the tunnel `127.0.0.1:18080`. Three windows:
+- w1 `/operate/phone`: 2 streams
+- w2 `/config` (Settings): 2 streams
+- w3 `/map`, a settled Map tab: 1 stream
+
+The ordinary requests timed were transport-equivalent page `fetch` calls on the same origin:
+`/v1/config`, `/v1/version` (the identity read behind archive verification), `/v1/qso-archives` and
+`/v1/default-logbook`. The held lookup was the request a Phone/CW callsign lookup makes
+(`/v1/enrich/callsign`): a substitute for connection contention, not the FT window's two-lookup
+workload.
+
+*Evidence.* `/home/mveary/sm-w0024/probe-evidence/` (0700, `MANIFEST.sha256`):
+- the driver's log
+- the responder journal
+- the guest `smd.log` extract
+- the driver and responder sources
+- attempt 1, which stopped on a bug in my driver before any lookup
+
+| Step | Result |
+|---|---|
+| 1. Streams | daemon SSE subscribers **5** (H3 log); Firefox sockets to the tunnel **6** |
+| 1. Baseline, nothing held | all four requests **1–2 ms** (delay before request start ≤ 1 ms) |
+| 2. Barrier | cache miss `9X0PRB` **reached the responder** at 13:07:53.146Z (`ARRIVED /v1/call-signs/prefixes?prefix=9X0PRB`); browser lookup **pending**; still 5 subscribers and 6 sockets |
+| 3. Held, from w2 | after 5 s all four still pending; on completion **5,158–5,159 ms each, of which 5,157–5,158 ms elapsed before the request started** (`requestStart − startTime`; the driver's raw field is named `queued_ms`) |
+| 4. Release (13:07:58.520Z) | lookup completed (200, 5,519 ms; daemon 5,516 ms); the four held requests reached the daemon at 13:07:58.662–.664Z with **0 ms** processing, then completed; afterwards **2–3 ms** each |
+
+*Reading.*
+- **The held lookup made otherwise-fast requests exceed D2a's 1 s by about five times.** Almost all
+  of the delay came before each request started. `requestStart − startTime` is not by itself a
+  measure of connection queueing: in Resource Timing it spans everything before the request is sent
+  (https://www.w3.org/TR/resource-timing/#dom-performanceresourcetiming-requeststart). Connection
+  contention is the reading of the combined evidence:
+  - five streams plus six sockets;
+  - the pending lookup confirmed at the responder;
+  - the daemon receiving the four requests only in the millisecond the lookup completed, with 0 ms
+    processing;
+  - immediate recovery on release.
+- They recovered at once on release.
+- The sixth socket was the one connection left for ordinary requests. While the lookup held it,
+  nothing else could pass.
+- The hold length was artificial. Real enrichment requests measured 1.5–2.5 s each, daemon-side
+  (alpha.2 record, entry 36), and HamNut's default timeout is 10 s. Whether a given overlapping
+  request breaches D2a depends on how long the lookup keeps occupying the connection after that
+  request is issued, not on the lookup's total duration alone.
+
+*Consequence (the reviewer's rule).* The B/C cost comparison takes priority over refining A's Q3 and
+Q4. A in its proposed form keeps one free connection in D1-ii. An ordinary request breaches D2a when
+the lookup continues occupying the sole available connection for more than 1 s after that request
+is issued. Any variant of A would have to remove that contention, not only reduce the stream
+count.
 
 ## Operator rulings (2026-11-04)
 

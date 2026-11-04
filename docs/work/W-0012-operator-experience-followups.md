@@ -343,6 +343,12 @@ stated before a build):
   - The Q3 startup design. The reviewer prefers opening once, after the first config attempt
     settles.
   - Q4's bootstrap ownership.
+  *Feasibility probe, 2026-11-04 (offline guest, existing build; transport-equivalent, not
+  acceptance):* with five persistent streams on one origin, a held cache-miss lookup made four
+  otherwise 1–2 ms requests take about 5.16 s, almost all of it before each request started. They
+  recovered on release; the combined evidence supports connection contention. Evidence: `/home/mveary/sm-w0024/probe-evidence/`; detail in ADR 0099,
+  "Feasibility probe". Next: the B/C cost comparison, ahead of A's Q3/Q4. The probe guest stays shut off as the control
+  through the comparison and the first comparative rerun.
 - **No individual-QSO delete in the SPA (alpha.5 Finding #3, 2026-10-24):** the daemon supports
   `DELETE /v1/qso/{uuid}` (soft delete, audited, archive-guarded) but the SPA offers no delete action
   for a QSO; no recorded decision excludes it. A product gap for separate prioritisation.
