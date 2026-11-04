@@ -304,7 +304,8 @@ stated before a build):
   malformed indication (`freqOutOfBand` in `RigPanel.svelte` returns false for an unparseable value,
   and `isValidFrequency` has no UI caller). `syncBand` ignores it, so the band keeps its last value.
 - **Three open windows exhaust the browser's connections (W-0024 revision 4 entries 30 and 32,
-  2026-11-04; blocks W-0024 AC-6; severity for ruling):** with CAT enabled, each SPA window holds
+  2026-11-04; blocks W-0024 AC-6; **P1 availability**, reviewer ruling 2026-11-04; design: ADR 0099,
+  Proposed):** with CAT enabled, each SPA window holds
   two persistent streams for the page's life: the shell's `/v1/events` (`frontend/app/src/main.ts:719`)
   and `/v1/rig/events` (`frontend/app/src/main.ts:418`). FT8/FT4 adds a third while its view is
   active. The daemon serves HTTP/1.1 only (`internal/api/server.go:595`, plain `http.Server.Serve`),
@@ -315,8 +316,19 @@ stated before a build):
   default-switch logic. *Acceptance outcome (reviewer):* all three windows (Settings, Operate
   Phone/CW, Logbook) stay usable together, and all recover automatically across a daemon restart.
   *Nearest confusable:* a fix that only frees connections when a window is idle or hidden, so the
-  simultaneous-reload case still stalls. Mechanism not chosen; it needs a design and the
-  operator's ruling.
+  simultaneous-reload case still stalls. *Design (2026-11-04):* ADR 0099 (Proposed) compares a
+  combined shell-and-rig stream per window (evaluated first), HTTP/2 over TLS, and a connection
+  shared across windows, against the reviewer's outcomes O1–O5, including a real-browser
+  demonstration with a negative control on `b766a145`. Revised after review the same day:
+  - the connection formula and a configuration table (D1 is now stated as configurations)
+  - SSE requests distinguished from TCP sockets in the evidence
+  - A's startup sequence (Q3) and daemon integration (Q4) recorded as open questions
+  - the FT linger re-check stated, with FT capture proven outside the browser run
+  - B's sources and trust options corrected
+  - Q2 settled as one shell-owned verification per combined reconnect
+  - D2 split into D2a (request latency) and D2b (restart recovery)
+
+  D1 and D2 are still the operator's to rule. Implementation is not authorised.
 - **No individual-QSO delete in the SPA (alpha.5 Finding #3, 2026-10-24):** the daemon supports
   `DELETE /v1/qso/{uuid}` (soft delete, audited, archive-guarded) but the SPA offers no delete action
   for a QSO; no recorded decision excludes it. A product gap for separate prioritisation.
