@@ -27,8 +27,9 @@ starved them. B is paused, and WebSocket event delivery is proposed as the leadi
 "WebSocket event transport").
 
 **WebSocket design comparison (2026-11-05):** recommends W1, separate shell and rig WebSockets
-with FT kept on SSE: a transport-only change. Mechanism approval and five decisions are pending (see
-"WebSocket event delivery").
+with FT kept on SSE: a transport-only change. **W1, the dependency, Origin policy and timeouts were
+ruled by the operator on 2026-11-05**; the implementation contract stays pending review of the
+grace-enforcement correction (see "WebSocket event delivery").
 
 **Mechanism approval is blocked (reviewer, 2026-11-04) on:**
 1. evidence for D1-ii under a representative request workload (see "Request workload in D1-ii");
@@ -1187,13 +1188,28 @@ below are from its v1.8.15 docs and source (`accept.go`, `close.go`, `read.go`, 
   bytes are in flight, the library closes the connection (`setupWriteTimeout`'s `AfterFunc` in
   `conn.go`), so a wedged peer ends the handler within the bound. A shutdown cancels `stopCtx` and
   ends an in-flight write the same way.
-- **Reads.** None by the application. `connCtx := c.CloseRead(baseCtx)` runs the library's reader:
-  - it answers pings and the close handshake;
-  - it closes the connection with 1008 ("unexpected data message") on any data message;
-  - it cancels `connCtx` when the connection closes.
-
-  `baseCtx` is a long-lived `context.Background()`-derived context, cancelled only for a forced
-  close, because cancelling CloseRead's context closes the connection with no handshake.
+- **Reads: an SMD-owned reader, not `CloseRead`.**
+  - **Why not `CloseRead`.** In v1.8.15, on a data message its goroutine calls
+    `Close(StatusPolicyViolation, …)` from inside itself. `Close` then waits in `waitGoroutines` for
+    `closeReadDone`, which that same goroutine closes only after it returns: a wait on itself until
+    the library's 15 s timer (`read.go` L60–86, `close.go` L217–252,
+    https://github.com/coder/websocket/blob/v1.8.15/read.go#L60). Closing the socket does not
+    interrupt that channel wait.
+  - **The reader.** One goroutine per connection loops on `c.Reader(readCtx)`. `readCtx` is
+    `context.Background()`, never cancelled, because a cancelled read context makes the library
+    close the connection without a handshake.
+    - Inside `Reader` the library still handles protocol control frames: it answers pings, records
+      pongs, and on a peer close frame echoes the close and closes the connection (`read.go`
+      `readLoop` and `handleControl`, L183–218, L303–366).
+    - **A data message:** `Reader` returns with no error. The reader reports
+      `unexpectedData` to the handler's close coordinator and exits, without reading the message.
+    - **Any error:** the reader exits. That includes a peer close frame (a `CloseError`), a closed
+      connection (`net.ErrClosed`), or a transport error.
+    - **Done signal.** On exit it closes `readerDone` (deferred), and records why it exited.
+      `readerDone` is the explicit completion signal; no context cancellation is relied on to show
+      a goroutine has finished.
+  - **The reader never closes the connection itself.** Only the coordinator (responsibility 7)
+    does.
 - **Liveness.** A 30 s `{"event":"keepalive"}` text frame, mirroring the SSE keepalive. A dead
   peer fails its write deadline.
 
@@ -1205,15 +1221,29 @@ owns:
 | Context | Cancelled when |
 |---|---|
 | `stopCtx` | `shutdownCh` closes |
-| `connCtx` (from `CloseRead`) | the connection closes for any reason: peer gone, write timeout, policy close |
-| `workCtx` | either of the above; used for the rig bootstrap |
+| `workCtx` | `stopCtx` is cancelled, or the reader has exited (peer gone, peer close, transport error, unexpected data); used for the rig bootstrap |
+
+`readerDone` is a channel, not a context: it is the reader's own completion signal.
 
 **4. Frame envelope.** One JSON text frame per event: `{"event": "<name>", "data": <payload>}`.
 - The payload is the same object the SSE `data:` line carries today, and names are unchanged (the
   shell's `qso.*` and `forward.*`; the rig's `rig-state`, `tx-alarm` and the rest).
 - `{"event":"connected"}` is the first frame after Subscribe, matching today's `: connected` contract.
 - Keepalive is as above.
-- The client's decoders take `data` exactly as they take `ev.data` today.
+- **Adapting to the existing decoders.** Today's decoders take a JSON **string**:
+  `decodeFrame(data: string, …)` (`lib/api/sse-decode.ts:39`) and `decodeQsoEvent(data: string)`
+  (`lib/api/log-events.ts`). Each parses and then validates. The envelope instead delivers `data`
+  as an already-parsed value, so the adaptation is explicit:
+  - each decoder is split into a **value-level validator entry**, for example
+    `decodeFrameValue(value: unknown, …)` and `decodeQsoEventValue(value: unknown)`;
+  - the existing string functions become `JSON.parse`, then that entry. The SSE path and its tests
+    are unchanged, and one validation implementation serves both transports;
+  - the socket transport parses each frame once. It drops the frame with the existing throttled
+    warning if the frame is not JSON, not an object, has no string `event`, or has no `data`
+    member (except for `connected` and `keepalive`). It then dispatches `data` by `event` to the
+    value-level entry;
+  - an unknown `event` name is ignored, as EventSource ignores an unregistered event type today;
+  - nothing is re-stringified or double-encoded.
 
 **5. Bounded buffering: unchanged.**
 - The handler consumes the same hub channel.
@@ -1241,28 +1271,76 @@ connections such as WebSockets" (`server.go:3142`). So `api.Server` gains a smal
 - **Interruption.** `stopCtx` is cancelled by `shutdownCh`:
   - **A handler in its select loop** sees `stopCtx` and closes.
   - **A blocked `Write`** is ended by `stopCtx`; the library closes the connection.
-  - **There are no application reads.** The CloseRead reader ends when the connection closes.
+  - **The SMD reader** is not interrupted by `stopCtx`. It ends when the coordinator's close
+    completes, or when the transport is closed at grace expiry.
   - **A handler inside the rig bootstrap** is covered under 8.
-- **Close: best effort, then forced.**
-  - **Attempt:** the handler calls `c.Close(StatusGoingAway, "shutdown")` in a goroutine.
-  - **Library timeouts:** the library writes the close frame with a 5 s timeout, waits up to 5 s
-    for the peer's close frame, then up to 15 s for its goroutines (`close.go` v1.8.15).
-  - **Grace:** the handler waits a short close grace (proposed 1 s; a timeout value for the
-    operator), then calls `c.CloseNow()` (no handshake). That closes the socket, so the library's
-    goroutines unwind.
-  - **Result:** a wedged peer never receives 1001, and the socket still closes within the grace.
+- **Close: best effort, then forced at the transport.** In v1.8.15, `CloseNow()` called after
+  `Close()` has started does not interrupt it. Both go through `casClosing()`, and the second caller
+  only waits in `waitGoroutines()`, for up to 15 s, until the first reaches `Conn.close()`
+  (`close.go` L99–155, L230–252, https://github.com/coder/websocket/blob/v1.8.15/close.go#L123).
+  Calling `CloseNow` at grace expiry therefore cannot guarantee closure. The helper closes the
+  underlying transport itself:
+  1. **Capture the `net.Conn`.** The helper passes `Accept` a thin wrapper `ResponseWriter` whose
+     `Hijack()` calls `http.NewResponseController(inner).Hijack()` and records the returned
+     `net.Conn` before handing it on. `Accept` obtains its connection through that method
+     (`accept.go` L129, L160) and uses it as the `Conn`'s transport (L173). Because the wrapper
+     is itself a Hijacker, it is reached before any `Unwrap`. A test asserts that the captured
+     connection is non-nil after `Accept`.
+  2. **One close coordinator per connection** owns every close. It is started by the first of:
+     - `stopCtx` (shutdown): close code 1001, reason `"shutdown"`;
+     - the reader's `unexpectedData` report: 1008, reason `"unexpected data message"`;
+     - hub eviction: 1001.
+
+     It runs `go func() { closeDone <- c.Close(code, reason) }()` exactly once. Because the SMD
+     reader has already exited before a 1008 close (it reports, then returns), `Close` runs in the
+     coordinator's goroutine and never waits on itself. `waitGoroutines` has no `closeReadDone`
+     to wait for, because `CloseRead` is never called.
+  3. **Grace.** The grace runs to `min(start + 1 s, the shutdown context's deadline)` (the
+     operator's ruling), for the policy close and the shutdown close alike. If shutdown begins
+     while a policy close is already underway, the coordinator does not start a second close. It
+     only moves the deadline to the earlier of the two. The registry hands each handler the
+     shutdown context's deadline.
+  4. **Completion, or forced closure.** The coordinator waits for the first of:
+     - `closeDone`: the handshake completed;
+     - `readerDone`: the reader, which holds `readMu` while blocked in `Reader`, consumed the
+       peer's close reply or saw the transport fail. `Close`'s `waitCloseHandshake` needs that
+       same `readMu` within a 5 s budget (`close.go` L198–206), so with a live reader the peer's
+       reply is observed by the reader;
+     - grace expiry.
+
+     Unless `closeDone` has already fired, the coordinator then calls `netConn.Close()` on the
+     captured transport. Go's `net.Conn.Close` contract is that "any blocked Read or Write operations
+     will be unblocked and return errors" (`/usr/local/go/src/net/net.go:136`):
+     - a pending `writeClose` write fails, and `writeClose` ignores `net.ErrClosed` (`close.go`
+       L192);
+     - `waitCloseHandshake`'s read, or its `readMu` wait, ends;
+     - the SMD reader's read fails.
+
+     `Close` then reaches `Conn.close()` (L117), which closes `c.closed`. `waitGoroutines` waits only
+     for `c.closed`.
+  5. **Join.** The coordinator waits on `closeDone` and on `readerDone`, both explicit signals.
+     Only then does cleanup continue.
+
+  A wedged peer never receives 1001 or 1008, but its transport is closed at grace expiry. Two
+  library paths were not read here: `readMu`'s lock implementation, and `write.go`'s control-frame
+  write. Both are covered by the tests below rather than assumed.
 - **Order of cleanup, then done.**
-  1. The socket is closed (Close or CloseNow returned).
-  2. `connCtx` is cancelled, which shows the reader goroutine has ended.
-  3. The hub subscription is released (`unsub`).
-  4. The registry marks the handler done.
-  5. The handler returns, which releases the admission slot.
+  1. The transport is closed (step 4, or the handshake completed).
+  2. The `Close` operation is joined (`closeDone`).
+  3. The reader is joined (`readerDone`).
+  4. The hub subscription is released (`unsub`).
+  5. The registry marks the handler done.
+  6. The handler returns, which releases the admission slot.
 - **What `Shutdown` promises.** After `httpServer.Shutdown`, `Server.Shutdown` waits for the
   registry with the caller's context. Only a return before the context expires means **every
   tracked handler has ended**. A context-expired return reports the deadline, as today's drain
   timeout does, and makes no such promise.
-- **Budget.** The default `shutdown_timeout_sec` is 10, and the grace plus a bootstrap wait (8)
-  must fit within it. Fixing the grace is a decision below.
+- **Budget.** The default `shutdown_timeout_sec` is 10. The grace is capped by what remains of it.
+  A bootstrap wait (8) is not bounded, so it may consume the budget; in that case `Shutdown`
+  returns the deadline.
+- **If the library does not unwind.** If a join does not complete after the transport is closed,
+  the handler is not marked done. `Shutdown` then returns at its deadline without the promise,
+  rather than reporting a completion that did not happen.
 
 **8. The rig bootstrap under a hijacked connection** (W1's rig handler; the shell has none).
 - **The call.** The handler calls `TriggerBootstrap(workCtx)` synchronously, as today, after
@@ -1270,19 +1348,28 @@ connections such as WebSockets" (`server.go:3142`). So `api.Server` gains a smal
 - **Today's SSE path.** Inside `TriggerBootstrap` (`internal/bridge/service.go:1030`):
   - The pipeline-not-running and CI-V-while-keyed skips return at once, as today.
   - On CI-V, `underCmdMuCIV` takes `cmdMu.Lock()` (`pipeline.go:1413`). **That wait observes no
-    context.** It ends only when the current holder releases. Each holder is bounded by its own
-    limits:
+    context.** It ends only when the mutex is granted, which can come after **every holder queued
+    ahead** releases, not just the current one. Each individual hold is bounded by its own limits:
     - CI-V ACK waits are bounded per frame (`civAckTimeout`, `pipeline.go:535` comment);
     - meter polls run under `ft8MeterPollTimeout` (`meterpoll.go`);
     - every serial write is bounded by the write watchdog (`internal/serial/serial.go:255`).
   - Inside the lock, `writeSnapshotReads(ctx, …)` checks `ctx` between frames
     (`pipeline.go:1438`). `writeAll` checks it before every write, including the first
     (`serial.go:324`). So a cancelled `ctx` writes no further frame.
-- **Under W1.** On a disconnect or a shutdown, `workCtx` is cancelled, because `connCtx` or
-  `stopCtx` fires.
-  - **Waiting for `cmdMu`:** the handler still waits until the holder releases, a bounded time as
-    above. It then writes nothing, because `writeAll` sees the cancelled context, and returns. The
-    loop sees the cancelled context and cleans up per 7.
+- **Under W1.** On a disconnect or a shutdown, `workCtx` is cancelled: the reader exits (a peer
+  close or a transport error), or `stopCtx` fires.
+  - **Waiting for `cmdMu`:** the handler still waits until the mutex is granted. It then writes
+    nothing, because `writeAll` sees the cancelled context, and returns. The loop sees the
+    cancelled context and cleans up per 7.
+  - **No total bound is claimed.** Per-operation timeouts bound each hold, not the wait across
+    queued holders and batches. Command bursts, meter polls during a live FT8 capture, and other
+    bootstraps can all be queued, and Go's `sync.Mutex` makes no fairness promise that would cap
+    the queue.
+
+    This is today's behaviour too: the SSE handler waits on the same mutex. W1 adds no new wait.
+
+    While waiting, the handler is not draining its hub channel, so slow-reader eviction still
+    bounds its buffering. Its admission slot stays held until it returns, as today.
   - **Mid-snapshot:** the bootstrap returns at the next frame boundary.
 - **What changes and what doesn't.** Under SSE today the same wait exists; the request context's
   cancellation is what ends the snapshot early. W1 keeps that behaviour, but with `workCtx` in
@@ -1373,7 +1460,8 @@ that benefit does not outweigh the three questions it brings back from A.
   - a WebSocket stream helper in `internal/api`, built on `github.com/coder/websocket`. It holds:
     - the exact-Origin check, then `Accept` with `InsecureSkipVerify: true`;
     - registration;
-    - `CloseRead`;
+    - the SMD-owned reader and its `readerDone` signal (no `CloseRead`);
+    - the close coordinator;
     - the per-write `Write` context;
     - the keepalive;
     - the envelope;
@@ -1404,7 +1492,14 @@ that benefit does not outweigh the three questions it brings back from A.
   - the rig bootstrap is still sent on connect;
   - an evicted slow reader gets a close frame;
   - a wedged peer is ended by the write deadline;
-  - an inbound data message closes the connection with 1008;
+  - unexpected data:
+    - an inbound data message makes the reader report and exit;
+    - the coordinator closes with 1008, and a cooperative peer completes the handshake promptly,
+      well inside the 15 s library timer;
+    - a peer that never answers has its transport closed at grace expiry;
+    - shutdown arriving while that policy close is underway starts no second close, honours the
+      earlier deadline, and the handler completes the cleanup order;
+    - `readerDone` and `closeDone` are both observed before the handler is marked done;
   - shutdown:
     - a registration after `closing` gets 503 and no upgrade;
     - a responsive peer receives 1001;
@@ -1413,6 +1508,14 @@ that benefit does not outweigh the three questions it brings back from A.
     - an expired context returns the deadline;
   - the bootstrap with `cmdMu` held, then the client disconnecting: after release, no frame is
     written and the handler ends;
+  - shutdown with `cmdMu` held past the shutdown context: `Shutdown` returns the deadline and does
+    not report completion;
+  - the grace enforcement: a peer that never answers the close handshake, with the transport
+    closed at grace expiry, and then `Close` and the reader both joined. With a cooperative peer,
+    `Close` completes before the grace and the transport is not closed early;
+  - the captured `net.Conn` is the `Conn`'s transport (closing it fails the `Conn`'s next write);
+  - envelope adaptation: a valid frame reaches the same handler as the SSE path; malformed frames
+    and unknown events are dropped or ignored, as specified;
   - the subscriber cap is applied;
   - the stream path is exempt from `limitConcurrent`.
 - **SPA:** `openRevivingSocket`, against the rules in responsibility 9:
@@ -1440,17 +1543,26 @@ that benefit does not outweigh the three questions it brings back from A.
    presence signal.
 5. **Refreshed R0–R2, then a fresh R4–R6** with a new R4 backup, per the W-0024 record.
 
-### Decisions for the operator and reviewer
+### Operator rulings (2026-11-05)
 
-1. **Approve W1** as the mechanism. ADR 0099 then moves toward Accepted for W1, with A, B and C
-   recorded as considered.
-2. **The dependency:** `github.com/coder/websocket`, at a pinned version (v1.8.15 is the latest
-   listed), added with the code that uses it. Recommended by the reviewer; operator to confirm.
-3. **The retry interval** for `openRevivingSocket`. Proposed: a fixed 1 s. The reviewer has no
-   objection, and the restart demonstration must still prove D2b.
-4. **The shutdown close grace** before `CloseNow`. Proposed: 1 s, to fit with a bootstrap wait inside
-   the 10 s default shutdown budget.
-5. **The Origin rule** exactly as in responsibility 1, including the dev-proxy object configuration.
+1. **W1** is approved as the mechanism.
+2. **`github.com/coder/websocket` v1.8.15** is confirmed.
+3. **Reconnect:** a fixed 1 s retry interval is approved.
+4. **Shutdown grace:** 1 s maximum, capped by the remaining shutdown budget.
+5. **Origin:** the specified SMD check and the dev-proxy configuration are approved.
+
+These need no further decision round. **The implementation contract stays pending** the
+grace-enforcement correction (applied above: an independent transport close at grace expiry, then
+joins), together with:
+- the envelope adaptation to the existing string decoders;
+- the explicit statement that no total CI-V mutex-wait bound is claimed.
+
+**Reviewer, 2026-11-05 (follow-up).** The independent transport close fixes grace enforcement. The
+previously unread reader path showed that `CloseRead` would self-wait on a data message. The design
+now uses an SMD-owned reader built on `Reader`, a single close coordinator for the 1008 and 1001
+closes, and explicit `readerDone` and `closeDone` signals. Unexpected-data tests, including
+shutdown during a policy close, were added. The envelope adaptation and the qualified CI-V wait
+description were accepted.
 
 B stays paused. RPC and asynchronous enrichment stay deferred. Still Proposed.
 
