@@ -7,6 +7,8 @@
 // main.boot.test.ts; that file pins the positive half (CAT on, an Operate route
 // → the rig stream opens) — see its bridge-enabled case.
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { FakeWebSocket, socketFor } from './test/fakeSocket';
+import { setSocketRetryMsForTests } from './lib/api/socket-reviving';
 
 class FakeEventSource {
     static instances: FakeEventSource[] = [];
@@ -50,12 +52,14 @@ function fakeFetch(input: RequestInfo | URL): Promise<Response> {
     if (url === '/v1/logbook/1/count') return Promise.resolve(json({ count: 7468 }));
     return Promise.resolve(json({ error: 'not stubbed' }, 404));
 }
-const sourceFor = (url: string): FakeEventSource | undefined =>
-    FakeEventSource.instances.find((s) => s.url === url);
+// The shell and rig streams are WebSockets since ADR 0099 W1 (the '/ws' twins).
+const sourceFor = (url: string): FakeWebSocket | undefined => socketFor(url + '/ws');
 
 describe('main.ts: a Map tab holds the log stream only', () => {
     beforeAll(async () => {
         vi.stubGlobal('EventSource', FakeEventSource);
+        vi.stubGlobal('WebSocket', FakeWebSocket);
+        setSocketRetryMsForTests(0);
         vi.stubGlobal('fetch', fakeFetch);
         const base = import.meta.env.BASE_URL.replace(/\/$/, '');
         window.history.replaceState({}, '', `${base}/map`);

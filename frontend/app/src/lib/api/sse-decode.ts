@@ -35,7 +35,8 @@ export function makeSseWarn(
 
 /** decodeFrame parses one SSE frame and validates it with a per-event guard. On malformed
  *  JSON or a wrong shape it warns (throttled) and returns null, so the caller drops the
- *  frame and the last known good state stands. */
+ *  frame and the last known good state stands. It is JSON.parse followed by
+ *  decodeFrameValue, so the SSE path and the WebSocket path share one validator. */
 export function decodeFrame<T>(
     data: string,
     event: string,
@@ -49,9 +50,20 @@ export function decodeFrame<T>(
         warn(event, 'invalid_json');
         return null;
     }
-    if (!validate(parsed)) {
-        warn(event, 'invalid_shape', parsed);
+    return decodeFrameValue(parsed, event, validate, warn);
+}
+
+/** decodeFrameValue validates an already-parsed payload — the `data` member of a
+ *  WebSocket envelope (ADR 0099 W1), which the transport parsed once. */
+export function decodeFrameValue<T>(
+    value: unknown,
+    event: string,
+    validate: (v: unknown) => v is T,
+    warn: (event: string, reason: string, detail?: unknown) => void
+): T | null {
+    if (!validate(value)) {
+        warn(event, 'invalid_shape', value);
         return null;
     }
-    return parsed;
+    return value;
 }

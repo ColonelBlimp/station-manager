@@ -8,6 +8,7 @@
 // be logged where the operator never meant: the pairs below are the guard.
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { installDaemon, pairOf, shellStream, submits, type Daemon } from './test/mainHarness';
+import { nextSocket } from './test/fakeSocket';
 import { _setReloadForTests, archivesState } from './lib/config/archives.svelte';
 import { draft, logDraft } from './lib/operate/qso.svelte';
 import { rig } from './lib/operate/rig.svelte';
@@ -85,7 +86,7 @@ describe('main.ts: the live submit pair', () => {
         const src = shellStream();
         src.emit('open');
         src.emit('error');
-        src.emit('open');
+        (await nextSocket(src, (fn) => vi.waitFor(fn))).emit('open');
         await vi.waitFor(() => expect(reloads).toBe(1));
 
         // The reload is stubbed, so this tab is still the old page: a further

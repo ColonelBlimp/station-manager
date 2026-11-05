@@ -1,7 +1,12 @@
 // A transport-only harness for tests that import the REAL main.ts (the
-// composition root): fetch and EventSource are stubbed, the daemon's answers
+// composition root): fetch, EventSource (FT8) and WebSocket (the shell and rig
+// streams, ADR 0099 W1) are stubbed, the daemon's answers
 // are mutable, and every request is recorded with the headers the guards read.
 import { vi } from 'vitest';
+import { FakeWebSocket, socketFor } from './fakeSocket';
+import { setSocketRetryMsForTests } from '../lib/api/socket-reviving';
+
+export { FakeWebSocket };
 
 export class FakeEventSource {
     static instances: FakeEventSource[] = [];
@@ -51,6 +56,8 @@ function json(body: unknown, status = 200): Response {
 
 export function installDaemon(d: Daemon): void {
     vi.stubGlobal('EventSource', FakeEventSource);
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    setSocketRetryMsForTests(0);
     vi.stubGlobal(
         'fetch',
         vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -86,8 +93,9 @@ export const pairOf = (s: Sent): [string | null, string | null] => [
     s.defaultLogbook,
 ];
 
-export function shellStream(): FakeEventSource {
-    const src = FakeEventSource.instances.find((s) => s.url === '/v1/events');
+/** The shell's current stream socket (the newest on /v1/events/ws). */
+export function shellStream(): FakeWebSocket {
+    const src = socketFor('/v1/events/ws');
     if (!src) throw new Error('the shell stream was not opened');
     return src;
 }

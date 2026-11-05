@@ -31,6 +31,12 @@ with FT kept on SSE: a transport-only change. **W1, the dependency, Origin polic
 ruled by the operator on 2026-11-05**; the implementation contract stays pending review of the
 grace-enforcement correction (see "WebSocket event delivery").
 
+**W1 demonstrations (2026-11-05):** on the W1 build, four D1-ii windows kept ordinary requests at 1–2
+ms with up to four lookups held. After a real restart, stream and request recovery took 5.207 s; full
+D2b binding and usability verification is still pending, for the acceptance run. The R0 SSE
+build starved in the same setup. W-0024 acceptance (AC-6, the station run) remains (see "W1
+demonstrations").
+
 **Mechanism approval is blocked (reviewer, 2026-11-04) on:**
 1. evidence for D1-ii under a representative request workload (see "Request workload in D1-ii");
 2. the Q3 startup design;
@@ -1595,6 +1601,114 @@ corrections, all applied above:
 - Go 1.26 clearing deadlines on hijack;
 - W2 saving WebSocket connections, not HTTP slots;
 - the dependency added with its code, and the canonical API reference updated.
+
+## W1 demonstrations (2026-11-05): four windows, held lookups, a real restart
+
+**Offline demonstrations of the W1 build. This is not W-0024 acceptance.** They show whether SMD
+with W1 meets D1-ii, D2a and D2b in a real browser. AC-6 and the station run (refreshed R0–R2, then
+a fresh R4–R6) remain.
+
+*Setup.*
+- **Guest.** A new clone, `sm-w0099-probe-w1`, with its own copy of the control's overlay and seed.
+- **Containment:**
+  - the domain has **no network interface** and is controlled over AF_VSOCK only (CID 3100);
+  - in the guest only `lo` is up, and the IPv4 and IPv6 routes are empty;
+  - outbound connections by IP and by name failed (`containment.txt`).
+- **Control untouched.** `sm-w0099-probe` stayed shut off. Its overlay, domain definition and seed
+  were byte-identical before and after.
+- **W1 build.** `smd` built from `3f7af877` plus the uncommitted SPA slice, with the PocketFFT CGO
+  build like the R0 artifact. SHA-256 `5a1c6181…2697`. It embeds both `/ws` paths and links only
+  core glibc.
+- **How it was installed:** as `~/smd-w1` through a systemd drop-in. The RPM's `/usr/bin/smd` (R0,
+  `b766a145-dirty`, SSE) stayed in place for the negative control.
+- **Config.** The control's synthetic setup, with one change: `ft8.enabled` set from false to true,
+  so the fourth window is a real FT8 view holding `/v1/ft8/events`. The guest has no audio device.
+- **Lookups.** HamNut pointed at the guest-local holding responder, as in the earlier probes.
+- **Browser.** Headless Firefox 159 with fresh profiles, a BiDi session with
+  `acceptInsecureCerts: false`, through an SSH tunnel (`127.0.0.1:18090`).
+- **The four D1-ii windows:**
+  - Settings (`/config`);
+  - Operate Phone/CW (`/operate/phone`);
+  - Logbook (`/logbook`);
+  - Operate FT8 (`/operate/ft8`).
+- **Timed requests.** The four ordinary GETs (`/v1/config`, `/v1/version`, `/v1/qso-archives`,
+  `/v1/default-logbook`), timed from Settings through complete body receipt.
+- **Held lookups.** `/v1/enrich/callsign` page fetches from the Phone/CW window, each a distinct
+  cache miss confirmed at the responder and still pending in the browser before timing. These are
+  synthetic holds of the enrichment request, as in the probes; with no decodes, there was no live
+  FT enrichment.
+
+*Evidence.* `/home/mveary/sm-guest-probe-w1/evidence/` (0700, `MANIFEST.sha256`):
+- both drivers' logs: `driver-w1.jsonl` and `driver-sse.jsonl`, plus the void first attempt
+  `attempt1-…jsonl`;
+- the guest's `smd` logs for both builds, the responder journal and the guest state;
+- the driver and Vite wrapper sources.
+
+The first W1 attempt is void. The FT8 window fell back to `/operate/phone`, because FT8 was disabled
+in the control's config, and the driver read the R0 build's log file (the W1 binary logs to
+`smd-w1.log`). Both were corrected before the recorded run.
+
+| Case | W1 build | R0 build (SSE negative control) |
+|---|---|---|
+| Windows load | all four complete | Settings, Phone/CW and Logbook complete; **FT8 still `interactive` after 15 s** |
+| Streams (daemon H3 log) | `/v1/events/ws` 4, `/v1/rig/events/ws` 4, `/v1/ft8/events` 1: **9 subscribers**; 14 Firefox sockets | `/v1/events` 3 and `/v1/rig/events` 3: **6 subscribers** on 6 Firefox sockets (the fourth window never connected) |
+| Baseline (nothing held) | 2 ms | **not complete after 6 s** |
+| 1 held | barrier passed; **2 ms**, the hold still pending | the lookup **never reached the responder** (no connection to carry it) |
+| 3 held | barrier passed (3 distinct misses); **1–2 ms** | — |
+| 4 held | barrier passed (4 distinct misses); **2 ms** | — |
+| Recovery after release | 1–2 ms | — |
+| **Real restart** (`systemctl --user restart smd`) | new instance observed ready **222 ms** after the restart (a host-side `GET /v1/version`, not a browser window); **stream and request recovery** in every window **5,207 ms** after that. Full D2b binding and usability: **not verified** (see below) | — |
+
+"Recovered" after the restart means all four of these held:
+- all 9 stream subscribers were back;
+- each window's own `GET /v1/version` returned 200 from the **new** instance;
+- no window had reloaded, shown by a page marker set before the restart;
+- no archive-binding gate was showing.
+
+**What this does not check (reviewer, 2026-11-05).** The driver did not read each window's archive
+and default binding, or whether its post-reconnect verification had finished. A window can remain
+blocked by verification (`archivesState.verifying`, `frontend/app/src/lib/config/archives.svelte.ts:81`)
+without the overlay showing. So this is **stream and request recovery in 5.207 s**, not D2b's
+"every window usable on the correct binding". That check moves into the planned acceptance run.
+
+*Restart breakdown.* All eight WebSockets reconnected within 1 ms of each other, about 1 s after
+the restart: one fixed retry. The remaining time to 5.2 s was the **FT8 EventSource**, unchanged
+SSE reconnecting on the browser's own retry. So W1's contribution to D2b is about 1 s, and FT's SSE
+retry dominates. A further cut would mean changing FT's transport, which this design leaves alone
+deliberately.
+
+*Dev proxy.* This was verified with the committed `/v1` proxy object. Only the target port was
+substituted (`18090`), because the live station occupies `:8080` on this host.
+- **Committed object** (`ws: true`, `changeOrigin: false`): both stream upgrades went through Vite
+  on port 5176 and were admitted, with no refusal.
+- **Old string shorthand** (`changeOrigin: true`): every upgrade was refused with 403,
+  `host=localhost:18090` against `origin=http://localhost:5176`. This is the reason for the object
+  form.
+
+*Reading.*
+- **On the W1 build, D1-ii's four windows stayed usable.** Ordinary requests took 1–2 ms with up to
+  four distinct lookups held, against D2a's 1 s.
+- **After a real restart, streams and requests recovered in every window in 5.207 s.** D2b's full
+  criterion, every window usable on the correct binding, was not verified here; it is carried into
+  the acceptance run.
+- **The R0 build in the same guest, with the same windows, starved before any lookup was held.**
+  That isolates the transport as the cause.
+
+*Not shown:*
+- AC-6 (the W-0024 default-switch flow);
+- FT audio capture: the guest has no audio device, so the FT window held its SSE stream but captured
+  nothing;
+- real FT enrichment load;
+- more than four held requests;
+- other browsers;
+- the station itself.
+
+*Observation for review.* `limitEventSubscribers` admits a request, and logs "subscriber
+connected", **before** the WebSocket handler's Origin check refuses it. So a refused cross-origin
+attempt briefly takes a subscriber slot and adds a connected/disconnected pair to the H3 log, once
+per retry (every 1 s from a misconfigured page). It is harmless for admission, because the slot is
+released at once, but it makes the log misleading. One option is to check Origin before
+admission. Not changed here.
 
 ## Operator rulings (2026-11-04)
 

@@ -10,6 +10,8 @@
 //       after a rig-stream drop they refill AT ONCE — no reading from before
 //       the drop is held for a save any more (C3b; ADR 0085 held it).
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { FakeWebSocket, nextSocket, socketFor } from './test/fakeSocket';
+import { setSocketRetryMsForTests } from './lib/api/socket-reviving';
 import { _setReloadForTests, archivesState } from './lib/config/archives.svelte';
 import { draft } from './lib/operate/qso.svelte';
 import { rig } from './lib/operate/rig.svelte';
@@ -71,13 +73,15 @@ function fakeFetch(input: RequestInfo | URL): Promise<Response> {
     if (url === '/v1/qso-archives') return Promise.resolve(json({ archives: [] }));
     return Promise.resolve(json({ error: 'not stubbed' }, 404));
 }
-const sourceFor = (url: string): FakeEventSource | undefined =>
-    FakeEventSource.instances.find((s) => s.url === url);
+// The shell and rig streams are WebSockets since ADR 0099 W1 (the '/ws' twins).
+const sourceFor = (url: string): FakeWebSocket | undefined => socketFor(url + '/ws');
 
 describe('main.ts after ADR 0087', () => {
     beforeAll(async () => {
         spies = installBrowserStorageSpies();
         vi.stubGlobal('EventSource', FakeEventSource);
+        vi.stubGlobal('WebSocket', FakeWebSocket);
+        setSocketRetryMsForTests(0);
         vi.stubGlobal('fetch', fakeFetch);
         _setReloadForTests(reload);
         document.body.innerHTML = '<div id="app"></div>';
@@ -105,11 +109,12 @@ describe('main.ts after ADR 0087', () => {
         await vi.waitFor(() => expect(sourceFor('/v1/rig/events')).toBeDefined());
         rig.mode = 'USB';
         flushSync();
-        sourceFor('/v1/rig/events')!.emit('error');
+        const dropped = sourceFor('/v1/rig/events')!;
+        dropped.emit('error');
         rig.mode = 'CW';
         flushSync();
         expect([draft.rstSent, draft.rstRcvd]).toEqual(['599', '599']);
-        sourceFor('/v1/rig/events')!.emit('open');
+        (await nextSocket(dropped, (fn) => vi.waitFor(fn))).emit('open');
     });
 
     it('R1/O1 a foreign rebind reloads at once, saving nothing and touching no browser storage', async () => {
@@ -119,7 +124,7 @@ describe('main.ts after ADR 0087', () => {
         const src = sourceFor('/v1/events')!;
         src.emit('error');
         identity = { instance: 'i2', archive: { id: 'arch-b', label: 'Away' } };
-        src.emit('open');
+        (await nextSocket(src, (fn) => vi.waitFor(fn))).emit('open');
         await vi.waitFor(() => expect(reload).toHaveBeenCalledOnce());
         expect(archivesState.switchUnresolved).toBe(true); // latched before the reload
         expect(spies.opens).toEqual([]);

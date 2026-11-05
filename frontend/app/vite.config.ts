@@ -15,7 +15,12 @@ export default defineConfig({
         // they can run side by side during the consolidation).
         port: 5176,
         proxy: {
-            '/v1': 'http://localhost:8080',
+            // An object, not the string shorthand: Vite expands a string target to
+            // changeOrigin: true, which rewrites Host — and the daemon admits a
+            // stream WebSocket only when Origin equals Host exactly (ADR 0099 W1).
+            // ws: true proxies the /v1/events/ws and /v1/rig/events/ws upgrades;
+            // with rewriteWsOrigin left unset, Origin is forwarded unchanged.
+            '/v1': { target: 'http://localhost:8080', ws: true, changeOrigin: false },
         },
     },
     build: {

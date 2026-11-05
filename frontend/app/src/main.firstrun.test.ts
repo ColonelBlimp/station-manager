@@ -4,6 +4,7 @@
 // start then assert it, and a reconnect to the same daemon changes nothing.
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { installDaemon, pairOf, shellStream, submits, type Daemon } from './test/mainHarness';
+import { nextSocket } from './test/fakeSocket';
 import { _setReloadForTests, archivesState } from './lib/config/archives.svelte';
 import { saveSetup } from './lib/setup.svelte';
 import { draft, logDraft } from './lib/operate/qso.svelte';
@@ -85,7 +86,7 @@ describe('main.ts: first-run setup establishes the live context', () => {
         const src = shellStream();
         src.emit('open');
         src.emit('error');
-        src.emit('open');
+        (await nextSocket(src, (fn) => vi.waitFor(fn))).emit('open');
         await vi.waitFor(() => expect(archivesState.verifying).toBe(false));
         await Promise.resolve();
         expect(reloads).toBe(0);

@@ -1,23 +1,30 @@
-// EventSource transport for GET /v1/rig/events — the bridge's SSE stream
-// (ADR 0010 wire shape). Transport only: parses each event's JSON and hands
+// Transport for the bridge's rig stream: GET /v1/rig/events/ws, the WebSocket
+// twin of the SSE /v1/rig/events (ADR 0010 event vocabulary; ADR 0099 W1 — an
+// open WebSocket does not hold one of the browser's six HTTP connections).
+// Transport only: parses each event's JSON and hands
 // the payload to injected handlers (ADR 0045 — the rig state module owns the
 // transitions and never imports this layer). The path is relative because the
-// SPA is served from the daemon's origin; cross-origin EventSource is not a
-// supported topology. The browser owns reconnect on transient drops;
-// openReviving adds the two cases it does not — a stream that died while the
-// tab was hidden is recreated on return, and one killed by a network bounce
-// with the tab visible (the 2026-08-06 router swap, which parked the CAT
-// banner on 'lost') is recreated on the window 'online' event. Both ONLY
-// when dead.
+// SPA is served from the daemon's origin, and the daemon admits a stream
+// socket only from that exact origin. openRevivingSocket owns reconnect: a
+// fixed-interval retry, brought forward when the tab becomes visible or the
+// window reports 'online' (the 2026-08-06 router swap, which parked the CAT
+// banner on 'lost') — never touching a connecting or healthy socket.
 //
 // rig-clients is a daemon event this SPA doesn't consume yet (no multi-tab
-// banner in frontend/app) — it arrives on the same stream and is not listened
-// for. tune-state IS consumed (ADR 0027 tune carrier — the Tune button
+// banner in frontend/app) — it arrives on the same stream and has no route, so
+// it is ignored. tune-state IS consumed (ADR 0027 tune carrier — the Tune button
 // reflects it, confirm-by-push).
 
 /** Mirrors internal/bridge.RigStatePayload — all fields optional (partial merge). */
-import { openReviving } from './sse-reviving';
-import { decodeFrame, makeSseWarn, isPlainObject, optNum, optStr, optBool } from './sse-decode';
+import { openRevivingSocket } from './socket-reviving';
+import {
+    decodeFrameValue,
+    makeSseWarn,
+    isPlainObject,
+    optNum,
+    optStr,
+    optBool,
+} from './sse-decode';
 
 export interface RigStatePayload {
     rigIdentity?: string;
@@ -149,56 +156,58 @@ function isRigMeters(v: unknown): v is RigMetersPayload {
     return isPlainObject(v) && typeof v.meter === 'string' && typeof v.value === 'number';
 }
 
-const SSE_URL = '/v1/rig/events';
+const STREAM_PATH = '/v1/rig/events/ws';
 
 /**
  * Open the stream and wire the handlers. Returns a close function; calling
- * it tears the EventSource down (the handlers see no further events).
+ * it tears the socket down (the handlers see no further events).
  */
 export function openRigEvents(handlers: RigEventHandlers): () => void {
-    // One throttled warn per subscription (survives openReviving's internal revives; a fresh
+    // One throttled warn per subscription (survives reconnects; a fresh
     // openRigEvents after close resets it — F-03, ADR 0077).
     const warn = makeSseWarn('rig-sse');
-    return openReviving(SSE_URL, (src) => {
-        src.addEventListener('open', () => handlers.onOpen());
-        src.addEventListener('error', () => handlers.onTransportError());
-
-        src.addEventListener('rig-state', (ev: MessageEvent<string>) => {
-            const p = decodeFrame(ev.data, 'rig-state', isRigState, warn);
+    // One route per event, each with its own validator; an event with no route
+    // (rig-clients) is ignored. The drive alarm is deliberately separate from
+    // the TX alarm — never mis-delivered to the safety handler.
+    const routes: Record<string, (data: unknown) => void> = {
+        'rig-state': (d) => {
+            const p = decodeFrameValue(d, 'rig-state', isRigState, warn);
             if (p !== null) handlers.onRigState(p);
-        });
-
-        src.addEventListener('rig-disconnected', (ev: MessageEvent<string>) => {
-            const p = decodeFrame(ev.data, 'rig-disconnected', isBridgeCode, warn);
+        },
+        'rig-disconnected': (d) => {
+            const p = decodeFrameValue(d, 'rig-disconnected', isBridgeCode, warn);
             if (p !== null) handlers.onRigDisconnected(p);
-        });
-
-        src.addEventListener('bridge-error', (ev: MessageEvent<string>) => {
-            const p = decodeFrame(ev.data, 'bridge-error', isBridgeCode, warn);
+        },
+        'bridge-error': (d) => {
+            const p = decodeFrameValue(d, 'bridge-error', isBridgeCode, warn);
             if (p !== null) handlers.onBridgeError(p);
-        });
-
-        src.addEventListener('tune-state', (ev: MessageEvent<string>) => {
-            const p = decodeFrame(ev.data, 'tune-state', isTuneState, warn);
+        },
+        'tune-state': (d) => {
+            const p = decodeFrameValue(d, 'tune-state', isTuneState, warn);
             if (p !== null) handlers.onTuneState(p);
-        });
-
-        src.addEventListener('tx-alarm', (ev: MessageEvent<string>) => {
-            const p = decodeFrame(ev.data, 'tx-alarm', isTxAlarm, warn);
+        },
+        'tx-alarm': (d) => {
+            const p = decodeFrameValue(d, 'tx-alarm', isTxAlarm, warn);
             if (p !== null) handlers.onTxAlarm(p);
-        });
-
-        // A separate listener because it is a separate event: EventSource delivers
-        // only the named types registered here, so an unregistered event vanishes in
-        // the browser with nothing to show it arrived.
-        src.addEventListener('drive-alarm', (ev: MessageEvent<string>) => {
-            const p = decodeFrame(ev.data, 'drive-alarm', isDriveAlarm, warn);
+        },
+        'drive-alarm': (d) => {
+            const p = decodeFrameValue(d, 'drive-alarm', isDriveAlarm, warn);
             if (p !== null) handlers.onDriveAlarm(p);
-        });
-
-        src.addEventListener('rig-meters', (ev: MessageEvent<string>) => {
-            const p = decodeFrame(ev.data, 'rig-meters', isRigMeters, warn);
+        },
+        'rig-meters': (d) => {
+            const p = decodeFrameValue(d, 'rig-meters', isRigMeters, warn);
             if (p !== null) handlers.onRigMeters(p);
-        });
-    });
+        },
+    };
+    return openRevivingSocket(
+        STREAM_PATH,
+        {
+            onOpen: () => handlers.onOpen(),
+            onTransportError: () => handlers.onTransportError(),
+            onFrame: (name, data) => {
+                if (Object.hasOwn(routes, name)) routes[name](data);
+            },
+        },
+        warn
+    );
 }

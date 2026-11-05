@@ -1,6 +1,6 @@
 // PRODUCTION-BOUNDARY PIN for the header "(n)" logbook count (alpha.2 dogfood
 // Finding #16, W-0012). This imports the REAL main.ts — the composition root —
-// with only the transport stubbed (fetch + EventSource), and asserts at the
+// with only the transport stubbed (fetch + the stream sockets), and asserts at the
 // request level, so removing the one wiring line in main.ts turns it red.
 //
 // Rule under test: the count is fetched once at boot (the seed) and then again
@@ -9,6 +9,8 @@
 // reopen with no new error. The stream is opened with CAT OFF (bridge disabled),
 // because Finding #16's originating case is a fresh install with no rig.
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { FakeWebSocket, nextSocket, socketFor } from './test/fakeSocket';
+import { setSocketRetryMsForTests } from './lib/api/socket-reviving';
 
 class FakeEventSource {
     static instances: FakeEventSource[] = [];
@@ -57,12 +59,14 @@ function fakeFetch(input: RequestInfo | URL): Promise<Response> {
     return Promise.resolve(json({ error: 'not stubbed' }, 404));
 }
 const countRequests = (): number => requests.filter((u) => u === '/v1/logbook/1/count').length;
-const sourceFor = (url: string): FakeEventSource | undefined =>
-    FakeEventSource.instances.find((s) => s.url === url);
+// The shell and rig streams are WebSockets since ADR 0099 W1 (the '/ws' twins).
+const sourceFor = (url: string): FakeWebSocket | undefined => socketFor(url + '/ws');
 
 describe('main.ts: header count refresh on the shell stream reconnection', () => {
     beforeAll(async () => {
         vi.stubGlobal('EventSource', FakeEventSource);
+        vi.stubGlobal('WebSocket', FakeWebSocket);
+        setSocketRetryMsForTests(0);
         vi.stubGlobal('fetch', fakeFetch);
         document.body.innerHTML = '<div id="app"></div>';
         await import('./main');
@@ -89,11 +93,12 @@ describe('main.ts: header count refresh on the shell stream reconnection', () =>
 
         // One drop then a reopen is one transition: exactly one more request.
         src!.emit('error');
-        src!.emit('open');
+        const next = await nextSocket(src!, (fn) => vi.waitFor(fn));
+        next.emit('open');
         await vi.waitFor(() => expect(countRequests()).toBe(2));
 
         // A further reopen with no new error is not a transition: nothing.
-        src!.emit('open');
+        next.emit('open');
         await Promise.resolve();
         expect(countRequests()).toBe(2);
     });

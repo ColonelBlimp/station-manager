@@ -1,35 +1,12 @@
 // Transport tests — event routing + parse guards. The state transitions the
 // handlers drive are covered in rig.svelte.test.ts; here the handlers are
-// spies and the EventSource is a capture-everything fake (jsdom has none).
+// spies and the socket is a capture-everything fake (jsdom has none). Since
+// ADR 0099 W1 the rig stream rides a WebSocket; each frame is the envelope
+// {event, data}, and the per-event validators below are unchanged.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { openRigEvents, type RigEventHandlers } from './rig-sse';
-
-class FakeEventSource {
-    static instances: FakeEventSource[] = [];
-    listeners = new Map<string, ((ev: MessageEvent<string>) => void)[]>();
-    closed = false;
-
-    constructor(public url: string) {
-        FakeEventSource.instances.push(this);
-    }
-
-    addEventListener(type: string, fn: (ev: MessageEvent<string>) => void): void {
-        const list = this.listeners.get(type) ?? [];
-        list.push(fn);
-        this.listeners.set(type, list);
-    }
-
-    close(): void {
-        this.closed = true;
-    }
-
-    emit(type: string, data?: string): void {
-        for (const fn of this.listeners.get(type) ?? []) {
-            fn({ data } as MessageEvent<string>);
-        }
-    }
-}
+import { FakeWebSocket } from '../../test/fakeSocket';
 
 function makeHandlers(): RigEventHandlers {
     return {
@@ -46,8 +23,8 @@ function makeHandlers(): RigEventHandlers {
 }
 
 beforeEach(() => {
-    FakeEventSource.instances = [];
-    vi.stubGlobal('EventSource', FakeEventSource);
+    FakeWebSocket.instances = [];
+    vi.stubGlobal('WebSocket', FakeWebSocket);
 });
 
 afterEach(() => {
@@ -60,8 +37,8 @@ describe('openRigEvents', () => {
         const h = makeHandlers();
         openRigEvents(h);
 
-        const src = FakeEventSource.instances[0];
-        expect(src.url).toBe('/v1/rig/events');
+        const src = FakeWebSocket.instances[0];
+        expect(src.path).toBe('/v1/rig/events/ws');
 
         src.emit('open');
         expect(h.onOpen).toHaveBeenCalledOnce();
@@ -88,10 +65,8 @@ describe('openRigEvents', () => {
         src.emit('tx-alarm', '{"active":true,"code":"tx_unconfirmed"}');
         expect(h.onTxAlarm).toHaveBeenCalledWith({ active: true, code: 'tx_unconfirmed' });
 
-        // The drive alarm is a SEPARATE event, so it must be listened for
-        // separately: EventSource delivers only the named types registered, and
-        // an unregistered event is dropped silently in the browser with nothing
-        // to show it happened.
+        // The drive alarm is a SEPARATE event, so it must be routed separately:
+        // an event name with no route is ignored, never mis-delivered.
         src.emit('drive-alarm', '{"active":true,"code":"drive_no_output"}');
         expect(h.onDriveAlarm).toHaveBeenCalledWith({ active: true, code: 'drive_no_output' });
         expect(h.onTxAlarm).toHaveBeenCalledTimes(1);
@@ -108,15 +83,22 @@ describe('openRigEvents', () => {
         const h = makeHandlers();
         openRigEvents(h);
 
-        FakeEventSource.instances[0].emit('rig-state', '{not json');
+        FakeWebSocket.instances[0].raw('{not json');
         expect(h.onRigState).not.toHaveBeenCalled();
         expect(warn).toHaveBeenCalled();
+    });
+
+    it('ignores an event it does not route (rig-clients), as EventSource ignored an unregistered type', () => {
+        const h = makeHandlers();
+        openRigEvents(h);
+        FakeWebSocket.instances[0].emit('rig-clients', '{"count":2}');
+        for (const fn of Object.values(h)) expect(fn).not.toHaveBeenCalled();
     });
 
     it('returns a close function that tears the source down', () => {
         const close = openRigEvents(makeHandlers());
         close();
-        expect(FakeEventSource.instances[0].closed).toBe(true);
+        expect(FakeWebSocket.instances[0].closeCalls).toBe(1);
     });
 });
 
@@ -131,7 +113,7 @@ describe('openRigEvents — wrong-shape frames are dropped (F-03)', () => {
     function emit(type: string, data: string): RigEventHandlers {
         const h = makeHandlers();
         const close = openRigEvents(h);
-        FakeEventSource.instances[FakeEventSource.instances.length - 1].emit(type, data);
+        FakeWebSocket.instances[FakeWebSocket.instances.length - 1].emit(type, data);
         close();
         return h;
     }
@@ -201,7 +183,7 @@ describe('openRigEvents — wrong-shape frames are dropped (F-03)', () => {
     it('drops a non-object frame (array or primitive)', () => {
         const h = makeHandlers();
         openRigEvents(h);
-        const src = FakeEventSource.instances[0];
+        const src = FakeWebSocket.instances[0];
         src.emit('rig-state', '[]');
         src.emit('tune-state', '5');
         expect(h.onRigState).not.toHaveBeenCalled();
@@ -212,7 +194,7 @@ describe('openRigEvents — wrong-shape frames are dropped (F-03)', () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         const h = makeHandlers();
         openRigEvents(h);
-        const src = FakeEventSource.instances[0];
+        const src = FakeWebSocket.instances[0];
         src.emit('tune-state', '{"active":"true"}'); // wrong shape → 1 warn
         src.emit('tune-state', '{"active":"false"}'); // same (event, reason) → no second warn
         expect(warn).toHaveBeenCalledTimes(1);
@@ -223,10 +205,27 @@ describe('openRigEvents — wrong-shape frames are dropped (F-03)', () => {
     it('resets the warn throttle on a fresh subscription (close/reopen)', () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         const close = openRigEvents(makeHandlers());
-        FakeEventSource.instances[0].emit('tune-state', '{"active":"true"}');
+        FakeWebSocket.instances[0].emit('tune-state', '{"active":"true"}');
         close();
         openRigEvents(makeHandlers()); // new subscription → throttle reset
-        FakeEventSource.instances[1].emit('tune-state', '{"active":"true"}');
+        FakeWebSocket.instances[1].emit('tune-state', '{"active":"true"}');
         expect(warn).toHaveBeenCalledTimes(2);
+    });
+});
+
+// The value-level entry the socket transport uses: decodeFrame is JSON.parse then
+// this same check (ADR 0099 W1 envelope adaptation) — one validator, two entries.
+describe('decodeFrameValue', () => {
+    it('returns the value when the guard accepts it, and drops (with a throttled warn) when not', async () => {
+        const { decodeFrameValue, decodeFrame } = await import('./sse-decode');
+        const isOk = (v: unknown): v is { ok: true } =>
+            typeof v === 'object' && v !== null && (v as { ok?: unknown }).ok === true;
+        const warn = vi.fn();
+        expect(decodeFrameValue({ ok: true }, 'e', isOk, warn)).toEqual({ ok: true });
+        expect(decodeFrameValue({ ok: 1 }, 'e', isOk, warn)).toBeNull();
+        expect(warn).toHaveBeenCalledWith('e', 'invalid_shape', { ok: 1 });
+        // The string entry agrees with the value entry.
+        expect(decodeFrame('{"ok":true}', 'e', isOk, warn)).toEqual({ ok: true });
+        expect(decodeFrame('{"ok":1}', 'e', isOk, warn)).toBeNull();
     });
 });

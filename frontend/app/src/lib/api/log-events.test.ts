@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { decodeQsoEvent, openLogEvents } from './log-events';
+import { decodeQsoEvent, decodeQsoEventValue, openLogEvents } from './log-events';
+import { FakeWebSocket } from '../../test/fakeSocket';
+import { SOCKET_RETRY_MS } from './socket-reviving';
 
 // AW-1 alpha.2: the qso.* event decode is additive — it prefers the canonical qso_uuid but
 // still accepts a legacy qso_id-only event, and rejects one carrying neither identifier.
@@ -45,38 +47,45 @@ describe('decodeQsoEvent (AW-1 alpha.2 additive decode)', () => {
     });
 });
 
+// The WebSocket transport delivers an already-parsed value; the string decoder
+// above is JSON.parse then this same value-level validator (one implementation,
+// two entries — ADR 0099 W1 envelope adaptation).
+describe('decodeQsoEventValue (the value-level entry the socket transport uses)', () => {
+    it('accepts the same payloads as the string decoder', () => {
+        expect(decodeQsoEventValue({ qso_uuid: 'u-1', logbook_id: 3 })?.qso_uuid).toBe('u-1');
+        expect(decodeQsoEventValue({ qso_id: 7, logbook_id: 3 })?.qso_id).toBe(7);
+    });
+    it('rejects the same payloads as the string decoder', () => {
+        expect(decodeQsoEventValue({ logbook_id: 3 })).toBeNull();
+        expect(decodeQsoEventValue({ qso_uuid: '', logbook_id: 3 })).toBeNull();
+        expect(decodeQsoEventValue({ qso_uuid: 'u-1', logbook_id: '3' })).toBeNull();
+        expect(decodeQsoEventValue(null)).toBeNull();
+        expect(decodeQsoEventValue([])).toBeNull();
+        expect(decodeQsoEventValue('{"qso_uuid":"u-1","logbook_id":3}')).toBeNull(); // a string is not parsed again
+    });
+});
+
 // Transport-specific reconnection callback (ADR 0079, dogfood Finding #16): fires
 // once per error → reopen transition, never on the boot open, never again on a
 // reopen with no new error. The production-boundary pin for the header count that
-// consumes it lives in src/main.boot.test.ts.
-class FakeEventSource {
-    static instances: FakeEventSource[] = [];
-    listeners = new Map<string, ((ev: MessageEvent<string>) => void)[]>();
-    readyState = 0;
-    constructor(public url: string) {
-        FakeEventSource.instances.push(this);
-    }
-    addEventListener(type: string, fn: (ev: MessageEvent<string>) => void): void {
-        const list = this.listeners.get(type) ?? [];
-        list.push(fn);
-        this.listeners.set(type, list);
-    }
-    close(): void {
-        this.readyState = 2;
-    }
-    emit(type: string, data?: string): void {
-        if (type === 'open') this.readyState = 1;
-        if (type === 'error') this.readyState = 0; // CONNECTING: the browser is retrying
-        for (const fn of this.listeners.get(type) ?? []) fn({ data } as MessageEvent<string>);
-    }
+// consumes it lives in src/main.boot.test.ts. Since ADR 0099 W1 the transport is a
+// WebSocket: a reopen arrives on a NEW socket after the fixed retry.
+const latest = (): FakeWebSocket => FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+/** Drop the current socket and let the fixed retry open the next one. */
+function bounce(): FakeWebSocket {
+    latest().emit('error');
+    vi.advanceTimersByTime(SOCKET_RETRY_MS);
+    return latest();
 }
 
 describe('openLogEvents onReconnect', () => {
     beforeEach(() => {
-        FakeEventSource.instances = [];
-        vi.stubGlobal('EventSource', FakeEventSource);
+        vi.useFakeTimers();
+        FakeWebSocket.instances = [];
+        vi.stubGlobal('WebSocket', FakeWebSocket);
     });
     afterEach(() => {
+        vi.useRealTimers();
         vi.unstubAllGlobals();
     });
 
@@ -88,8 +97,14 @@ describe('openLogEvents onReconnect', () => {
             onReconnect: vi.fn(),
         };
         const close = openLogEvents(h);
-        return { h, close, src: FakeEventSource.instances[0] };
+        return { h, close, src: FakeWebSocket.instances[0] };
     }
+
+    it('opens the shell stream on the WebSocket twin of /v1/events', () => {
+        const { close, src } = open();
+        expect(src.path).toBe('/v1/events/ws');
+        close();
+    });
 
     it('does not fire on the boot open', () => {
         const { h, src, close } = open();
@@ -102,8 +117,7 @@ describe('openLogEvents onReconnect', () => {
     it('fires exactly once after an error → reopen transition', () => {
         const { h, src, close } = open();
         src.emit('open');
-        src.emit('error');
-        src.emit('open');
+        bounce().emit('open');
         expect(h.onTransportError).toHaveBeenCalledOnce();
         expect(h.onReconnect).toHaveBeenCalledOnce();
         close();
@@ -112,30 +126,28 @@ describe('openLogEvents onReconnect', () => {
     it('does not fire again on a reopen with no new error', () => {
         const { h, src, close } = open();
         src.emit('open');
-        src.emit('error');
-        src.emit('open');
-        src.emit('open');
+        const next = bounce();
+        next.emit('open');
+        next.emit('open');
         expect(h.onReconnect).toHaveBeenCalledOnce();
         close();
     });
 
-    it('counts a drop followed by an openReviving replacement stream as one transition', () => {
-        // The drop half lands on the ORIGINAL source; openReviving then replaces it
-        // (a stream left CONNECTING after an error is revived when the tab is
-        // visible, sse-reviving V4) and the reopen half lands on the REPLACEMENT.
-        // The flag must therefore live in the subscription, not the wire closure —
-        // a per-source flag would start false on the new source and miss this.
+    it('counts a drop followed by a visibility-revived replacement socket as one transition', () => {
+        // The drop half lands on the ORIGINAL socket; becoming visible brings the
+        // waiting retry forward and the reopen half lands on the REPLACEMENT. The
+        // flag must therefore live in the subscription, not the wire closure.
         const { h, close } = open();
-        const first = FakeEventSource.instances[0];
+        const first = FakeWebSocket.instances[0];
         first.emit('open');
-        first.emit('error'); // dropped, retrying, never recovers
+        first.emit('error');
         Object.defineProperty(document, 'visibilityState', {
             configurable: true,
             get: () => 'visible',
         });
         document.dispatchEvent(new Event('visibilitychange'));
-        expect(FakeEventSource.instances).toHaveLength(2);
-        const replacement = FakeEventSource.instances[1];
+        expect(FakeWebSocket.instances).toHaveLength(2);
+        const replacement = FakeWebSocket.instances[1];
         replacement.emit('open');
         expect(h.onReconnect).toHaveBeenCalledOnce();
         replacement.emit('open');
@@ -146,29 +158,45 @@ describe('openLogEvents onReconnect', () => {
     it('is optional: a subscriber without it survives a transition', () => {
         const h = { onOpen: vi.fn(), onTransportError: vi.fn(), onQsoChanged: vi.fn() };
         const close = openLogEvents(h);
-        const src = FakeEventSource.instances[0];
+        const src = FakeWebSocket.instances[0];
         expect(() => {
             src.emit('open');
-            src.emit('error');
-            src.emit('open');
+            bounce().emit('open');
         }).not.toThrow();
+        close();
+    });
+
+    it('drops a rejected qso.* payload with a warning and delivers the next valid one', () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const { h, src, close } = open();
+        src.emit('open');
+        src.emit('qso.stored', JSON.stringify({ logbook_id: 3 }));
+        expect(h.onQsoChanged).not.toHaveBeenCalled();
+        expect(warn).toHaveBeenCalled();
+        src.emit('qso.updated', JSON.stringify({ qso_uuid: 'u-9', logbook_id: 3 }));
+        expect(h.onQsoChanged).toHaveBeenCalledWith('qso.updated', {
+            qso_uuid: 'u-9',
+            logbook_id: 3,
+        });
+        src.emit('forward.succeeded', JSON.stringify({ qso_uuid: 'u-9', logbook_id: 3 }));
+        expect(h.onQsoChanged).toHaveBeenCalledOnce(); // forward.* is not a qso.* event here
+        warn.mockRestore();
         close();
     });
 });
 
 // ONE stream per tab (ADR 0079 dated update 2026-09-14, dogfood 2026-09-11/13):
-// every openLogEvents call in a tab rides the same EventSource. The Map view used
-// to open its own /v1/events beside the shell's always-on one, and with the
-// Operate tab's three streams that made six long-lived connections — the
-// browser's per-host cap — so the map's own data request never left the browser
-// ("Cannot reach the daemon"). Subscribers are ref-counted: the connection opens
-// with the first, is left alone while any remain, and closes with the last.
+// every openLogEvents call in a tab rides the same connection. Subscribers are
+// ref-counted: the connection opens with the first, is left alone while any
+// remain, and closes with the last.
 describe('openLogEvents shares one connection per tab', () => {
     beforeEach(() => {
-        FakeEventSource.instances = [];
-        vi.stubGlobal('EventSource', FakeEventSource);
+        vi.useFakeTimers();
+        FakeWebSocket.instances = [];
+        vi.stubGlobal('WebSocket', FakeWebSocket);
     });
     afterEach(() => {
+        vi.useRealTimers();
         vi.unstubAllGlobals();
     });
 
@@ -181,14 +209,14 @@ describe('openLogEvents shares one connection per tab', () => {
         };
     }
 
-    it('a second subscriber opens no second EventSource and both receive the events', () => {
+    it('a second subscriber opens no second connection and both receive the events', () => {
         const a = handlers();
         const b = handlers();
         const closeA = openLogEvents(a);
         const closeB = openLogEvents(b);
-        expect(FakeEventSource.instances).toHaveLength(1);
+        expect(FakeWebSocket.instances).toHaveLength(1);
 
-        const src = FakeEventSource.instances[0];
+        const src = FakeWebSocket.instances[0];
         src.emit('open');
         src.emit('qso.stored', JSON.stringify({ qso_uuid: 'u-1', logbook_id: 3 }));
         expect(a.onOpen).toHaveBeenCalledOnce();
@@ -208,11 +236,11 @@ describe('openLogEvents shares one connection per tab', () => {
     it('a subscriber joining an OPEN stream is told so at once — the map schedules its catch-up on onOpen', () => {
         const shell = handlers();
         const closeShell = openLogEvents(shell);
-        FakeEventSource.instances[0].emit('open');
+        FakeWebSocket.instances[0].emit('open');
 
         const map = handlers();
         const closeMap = openLogEvents(map);
-        expect(FakeEventSource.instances).toHaveLength(1);
+        expect(FakeWebSocket.instances).toHaveLength(1);
         expect(map.onOpen).toHaveBeenCalledOnce();
         expect(map.onReconnect).not.toHaveBeenCalled();
         closeMap();
@@ -222,14 +250,15 @@ describe('openLogEvents shares one connection per tab', () => {
     it('a subscriber joining a stream that is down is not told open until it reopens', () => {
         const shell = handlers();
         const closeShell = openLogEvents(shell);
-        const src = FakeEventSource.instances[0];
+        const src = FakeWebSocket.instances[0];
         src.emit('open');
         src.emit('error');
 
         const map = handlers();
         const closeMap = openLogEvents(map);
         expect(map.onOpen).not.toHaveBeenCalled();
-        src.emit('open');
+        vi.advanceTimersByTime(SOCKET_RETRY_MS);
+        latest().emit('open');
         expect(map.onOpen).toHaveBeenCalledOnce();
         // The reconnection transition belongs to the subscriber that saw the
         // drop: the shell re-fetches its count; the newcomer saw no error.
@@ -244,22 +273,22 @@ describe('openLogEvents shares one connection per tab', () => {
         const map = handlers();
         const closeShell = openLogEvents(shell);
         const closeMap = openLogEvents(map);
-        const src = FakeEventSource.instances[0];
+        const src = FakeWebSocket.instances[0];
         src.emit('open');
 
         closeMap(); // the Map view unmounts (route change) — the shell keeps its stream
-        expect(src.readyState).toBe(1);
+        expect(src.closeCalls).toBe(0);
         src.emit('qso.deleted', JSON.stringify({ qso_uuid: 'u-2', logbook_id: 3 }));
         expect(shell.onQsoChanged).toHaveBeenCalledOnce();
         expect(map.onQsoChanged).not.toHaveBeenCalled();
         closeMap(); // idempotent
 
         closeShell();
-        expect(src.readyState).toBe(2);
+        expect(src.closeCalls).toBe(1);
         // A later subscriber gets a fresh connection, not the closed one.
         const later = handlers();
         const closeLater = openLogEvents(later);
-        expect(FakeEventSource.instances).toHaveLength(2);
+        expect(FakeWebSocket.instances).toHaveLength(2);
         closeLater();
     });
 });

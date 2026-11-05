@@ -7,6 +7,8 @@
 // controls. The boot must land on Phone / CW with the note, never mount the FT
 // view, and never request an FT8 route.
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { FakeWebSocket } from './test/fakeSocket';
+import { setSocketRetryMsForTests } from './lib/api/socket-reviving';
 
 class FakeEventSource {
     static instances: FakeEventSource[] = [];
@@ -48,6 +50,8 @@ function fakeFetch(input: RequestInfo | URL): Promise<Response> {
 describe('main.ts: FT8/FT4 turned off at boot', () => {
     beforeAll(async () => {
         vi.stubGlobal('EventSource', FakeEventSource);
+        vi.stubGlobal('WebSocket', FakeWebSocket);
+        setSocketRetryMsForTests(0);
         vi.stubGlobal('fetch', fakeFetch);
         window.localStorage.setItem('sm-op-mode', 'ft8');
         window.history.replaceState({}, '', '/operate/ft8');
