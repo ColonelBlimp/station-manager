@@ -442,6 +442,256 @@ the lookup continues occupying the sole available connection for more than 1 s a
 is issued. Any variant of A would have to remove that contention, not only reduce the stream
 count.
 
+## B/C comparison (2026-11-04; design only)
+
+Authorised by the reviewer after the feasibility probe. Mechanism approval and implementation remain
+pending. Both candidates are assessed against:
+- the concurrent FT lookups
+- D2a and D2b
+- AC-6
+- FT subscription lifetime, which stays per window, unchanged, in both
+
+Revised after the reviewer's corrections of 2026-11-05 (see "Review of the comparison").
+
+### Request capacity under load (both)
+
+The probe showed that the binding quantity is **connections free for ordinary requests while
+lookups are in flight**, not persistent streams alone. In D1-ii, at least four lookups can be in
+flight at once:
+- **FT decode-row enrichment:** up to `FT8_ENRICH_CONCURRENCY = 2`
+  (`frontend/app/src/lib/operate/ft8Enrich.svelte.ts:63`).
+- **FT worked-station card:** 1. `Ft8Operate.svelte:375` mounts an `EnrichmentCard`, which drives the
+  separate callsign enricher (`enrich.svelte.ts`). That enricher keeps one request in flight per
+  tab, aborting a superseded one, and is outside the FT cap.
+- **Phone/CW logging card:** 1, from its `EnrichmentCard` (`LoggingCard.svelte:610`).
+
+All four are `GET /v1/enrich/callsign` requests. No `singleflight` coalescing was found in
+`internal/`, so a card lookup and a decode-row lookup of the same call are separate requests. That
+comes from a repository search, not a measurement.
+
+This is a **sufficient contention example, not an established maximum**: other windows' lookups
+were not surveyed.
+
+| | Persistent | Free | Free with 3 lookups held more than 1 s | Free with 4 held |
+|---|---|---|---|---|
+| Today | 9 (4 windows × 2, plus FT) | starved | starved | starved |
+| A | 5 | 1 | starved | starved |
+| **B** (HTTP/2) | streams on one connection | not bound by the six-connection limit | see below | see below |
+| **C** (shared shell and rig, FT per window) | 3 | 3 | **0** | **0** |
+
+**C** fails D2a **if** three lookups keep their connections occupied for more than 1 s after an
+ordinary request is issued. To pass, it needs an additional rule that always leaves an
+ordinary-request connection free, for example a lookup budget shared across windows. Any such rule
+changes enrichment behaviour, so it needs its own ruling.
+
+**B** removes this six-connection exhaustion mechanism. Stream count is not its only constraint:
+- **Flow control and scheduling** still govern how streams progress (RFC 9113 §5.2,
+  https://www.rfc-editor.org/rfc/rfc9113.html#section-5.2).
+- **The advertised stream limit.** The server advertises `SETTINGS_MAX_CONCURRENT_STREAMS`. If
+  the daemon terminated TLS itself, Go's default of 250 would apply (`http2defaultMaxStreams`,
+  `/usr/local/go/src/net/http/h2_bundle.go:4042`). **In the proxy probe, the proxy's advertised
+  limit applies instead.**
+- **The daemon's own limits** (`internal/config/config.go:556`, `:561`):
+  - `max_concurrent_requests`, default 128. SSE paths are exempt (`isSSEPath`).
+  - `max_event_subscribers`, default 16. One count is shared by all three SSE paths
+    (`internal/api/server.go:362`, `:402`, `:434`); D1-ii today uses 9.
+
+Whether B meets D2a with four held lookups is an inference from the protocol. The probe measures it.
+
+### B. HTTP/2 over TLS
+
+- **Certificate provisioning.** Two shapes:
+  - **Per-install self-signed certificate:** SANs `127.0.0.1`, `localhost` and the host name,
+    generated at first run into the working directory, with the key at 0600.
+  - **Per-install local CA** that issues the server certificate. Renewal is then automatic, but a
+    trusted CA key can impersonate any site for this host's users unless it is name-constrained.
+
+  Which shape is the narrower grant depends on the trust mechanism that installs it (below). A
+  self-signed certificate installed with CA trust is itself a trusted CA.
+- **Trust on the station, measured on this host.**
+  - **Measured wiring:** the Fedora-packaged Firefox (`firefox-159.0-1.fc44`) resolves NSS's
+    built-in roots module `libnssckbi.so` through alternatives to
+    `/usr/lib64/pkcs11/p11-kit-trust.so` (`p11-kit-trust-0.26.5-1.fc44`).
+  - **Inferred, not verified:** it reads Fedora's system trust store, so an anchor in
+    `/etc/pki/ca-trust/source/anchors` plus `update-ca-trust` should be trusted.
+  - **Not established:** how narrowly that anchor is trusted, as a CA or only for this server.
+  - **Root:** anchoring needs root, through an RPM scriptlet or an install step.
+- **Trust elsewhere.** Source: Mozilla's policy reference,
+  https://firefox-admin-docs.mozilla.org/reference/policies/certificates/, last updated
+  2026-11-04.
+  - **`ImportEnterpriseRoots`** "only works on Windows and macOS. For Linux discussion, see bug
+    1600509."
+  - **`Certificates.Install` locations.** It installs into the Firefox certificate store. Bare
+    filenames are looked up on Linux in `/usr/lib/mozilla/certificates`,
+    `/usr/lib64/mozilla/certificates` and `~/.mozilla/certificates`, with the user directory
+    searched first.
+  - **Trust flags.** "Certificates are installed using the trust string `CT,CT,`." In NSS's
+    certutil reference
+    (https://nss-crypto.org/reference/security/nss/legacy/tools/nss_tools_certutil/index.html):
+    - `C` is "Trusted CA to issue server certificates" and `T` is "Trusted CA to issue client
+      certificates". Both imply `c`, "Valid CA".
+    - This route therefore trusts the certificate **as a CA** for SSL and email. It does not
+      implement narrowly scoped leaf trust.
+    - The reference lists `P`, "Trusted peer", without defining its effect.
+  - **Peer-only trust is pending.** Whether any peer-only trust route exists for this purpose
+    awaits verification of the actual mechanism.
+  - **Persistence.** "Certificates added with `Install` stay in each user's profile even after you
+    remove them from the policy." On this route, uninstall cannot withdraw trust.
+  - **Not covered by the page:** the Linux `policies.json` location and p11-kit. Both are to verify.
+- **Renewal.** Certificate lifetime, the expiry warning surface, and who re-anchors. Clean install,
+  upgrade and uninstall each touch a trust store. Removing a system anchor is possible, but a
+  `Certificates.Install` copy persists in profiles (above).
+- **Localhost and LAN.** Loopback is the supported posture. A non-loopback TCP bind is refused unless
+  `server.allow_insecure_network` is set (`internal/config/config.go`, ST-3b), and TLS adds no
+  authentication to that posture. B serves loopback names only, and LAN stays out of scope.
+- **Browser-origin data.** `http://127.0.0.1:8080` and `https://…` are different origins. Left behind
+  on the old origin:
+  - `localStorage`: `sm-theme`, `sm-nav`, `sm-util`, `sm-op-mode`, `sm.ft8.cqModifier`
+  - per-tab `sessionStorage`: `sm.session.qsos.*` (the Session list of ADR 0094) and
+    `sm.ft8.engaged.*`
+
+  An ordinary upgrade reload **keeps** the Session list. `session.svelte.ts` deliberately persists it
+  to `sessionStorage` so a redeploy or F5 does not lose the sitting's contacts
+  (`frontend/app/src/lib/operate/session.svelte.ts:5`). An origin change would lose it. That loss is
+  new, not existing restart behaviour, and needs its own migration or reset decision.
+
+  The options include an announced one-time reset, or a one-shot hand-over from the old origin that
+  carries the five preferences and the tab's Session list. Whether per-tab `sessionStorage` content
+  can be handed over safely is still to design.
+- **Verified negotiation.** Measured, not assumed:
+  - the Network panel's Protocol column;
+  - `performance.getEntriesByType('navigation')[0].nextHopProtocol === 'h2'`, and the same check
+    for the tested resources;
+  - a single socket to the TLS port while the D1-ii windows are open.
+- **Redirects, separately from HTTP/1.1 fallback.**
+  - **Redirect.** The plain-http listener stays for non-browser clients (`smctl`,
+    `scripts/ukeicc-cabrillo.py --from-daemon`). For browsers it can redirect to HTTPS, so an old
+    bookmark redirected to HTTPS runs over h2 and does not keep the starvation.
+  - **Fallback.** Serving the SPA itself over HTTP/1.1 does keep it. That covers a plain-http SPA
+    that is not redirected, ALPN settling on `http/1.1` behind an intermediary, and
+    `network.http.http2.enabled` set to false.
+  - **Warning.** The SPA can detect a non-`h2` `nextHopProtocol` and say so. That makes the
+    limitation visible but **does not satisfy D1/D2**: on HTTP/1.1, B is not delivered.
+- **D2b and AC-6.** A restart drops the one connection; all of a window's streams reconnect over a
+  new TLS connection, and the reload logic is unchanged. FT's stream rides the same connection, but
+  its subscription lifetime is untouched. The transport probe does not establish this.
+
+### C. Share the existing shell and rig streams across windows (variant without A's composition)
+
+One `SharedWorker` per origin owns `/v1/events` and `/v1/rig/events`, exactly as served today, and
+fans their events out to windows over `MessagePort`s. FT stays per window. D1-ii holds 3 persistent
+connections. No daemon change.
+- **Late-window initialisation.**
+  - **Shell:** unchanged open-then-fetch. The worker must acknowledge a window's port before that
+    window fetches its baseline.
+  - **Rig:** there is **no REST rig snapshot** today, only `GET /v1/rigs`, the catalogue. A late
+    window currently gets state from its own subscription's bootstrap poll (`TriggerBootstrap`) and
+    the hub's cached TX alarm. Under C, one of two changes is needed:
+    - the worker caches the latest frame of each rig event kind. `rig-state` is merged
+      client-side, so the cache must merge the same way;
+    - a new bootstrap trigger is added. A bootstrap is a CAT read sent to the rig.
+- **Owner failure.**
+  - **Windows closing.** MDN: "A shared worker will remain alive as long as any open page holds a
+    reference to it" (https://developer.mozilla.org/en-US/docs/Web/API/SharedWorker). This covers
+    windows closing.
+  - **The spec gives no failure signal.** The WHATWG `MessagePort` interface
+    (https://html.spec.whatwg.org/multipage/web-messaging.html#message-ports, §9.4.4) defines
+    `postMessage`, `start()` and `close()`, with only `onmessage` and `onmessageerror` handlers.
+    `close()` disentangles without notifying the peer. The non-normative §9.4.5 advises "a simple
+    protocol whereby the other side acknowledges it still exists".
+  - **To verify.** Whether Firefox signals a crashed or terminated SharedWorker to its windows is
+    browser behaviour the spec text does not settle.
+  - **Detection.** Windows need a heartbeat to detect a lost owner.
+  - **Recovery must preserve the connection budget.** Reverting every window to its own streams
+    recreates the defect, so it **cannot count as successful recovery**. Recovery means
+    re-establishing one shared owner within D2b, for example a new worker instance or a single
+    elected window. Until then the windows are degraded and must say so.
+- **Reconnect recovery.**
+  - **Broadcast.** The worker sees each drop and reopen and broadcasts the transition.
+  - **Baseline refresh, per window.** Each window then runs its own count and its archive and
+    default verification (Q2's one verification per reconnect, per window).
+  - **`openReviving` cannot move as it is.** It keys on `document.visibilityState` and `window`
+    `online`, which a worker lacks. Windows must report visibility and `online` to the worker, and
+    "revive only when dead" must be preserved.
+- **Bounded buffering.** The spec states no bound on a port message queue (§9.4.4–9.4.6), so
+  `postMessage` to a throttled or frozen hidden window is assumed to queue without bound. The
+  worker needs a per-port bound with eviction and a forced resync, mirroring the daemon's
+  slow-reader policy. That eviction must not depend on the hidden window to release anything (O3).
+- **Browser support.**
+  - **SharedWorker.** MDN marks it "Baseline 2026 … Newly available". The per-browser table did not
+    render for the fetcher.
+  - **Module workers.** `type: 'module'` is a documented constructor option
+    (https://developer.mozilla.org/en-US/docs/Web/API/SharedWorker/SharedWorker).
+  - **EventSource.** It is "available in Web Workers"
+    (https://developer.mozilla.org/en-US/docs/Web/API/EventSource). Its availability in a
+    SharedWorker specifically is to verify.
+- **Upgrade skew** (cf. alpha.5 Finding #4). The worker script's hashed name changes per build, so
+  windows of two builds run two workers during a rollout, transiently doubling the shell's
+  connections.
+- **Semantics.** `rig-clients` would count 1 worker rather than windows; the SPA does not display it
+  today. Archive guard and reload decisions stay per window.
+- **D2b and AC-6.** On a restart the worker's streams reconnect once for all windows. Each window's
+  default-switch reload is unchanged, but a reload can briefly leave the worker with no clients, and
+  it may be torn down and re-created. Recovery must not depend on which window reconnects first.
+- **What can be probed offline.** C's request capacity can be probed without building a worker:
+  three existing streams (shell, rig and FT) plus three held lookups. Its ownership, failure and
+  recovery semantics cannot be probed until the worker exists.
+
+### Assessment and the next evidence
+
+- **B** is the only candidate that removes the six-connection exhaustion mechanism. It remains
+  bounded by flow control, scheduling, the advertised stream limit and the daemon's caps. Its costs:
+  - installation and trust: anchoring, renewal, uninstall, and the persistence of profile copies;
+  - the origin migration of preferences and the Session list;
+  - HTTP/1.1 serving, which leaves D1/D2 unmet.
+
+  B remains the preferred next investigation (reviewer, 2026-11-05).
+- **C** needs no install change, but adds a cross-window coordination layer: a heartbeat, a rig
+  cache, a revive relay and per-port bounds. Its recovery must also keep the budget. Even then, it
+  fails D2a whenever three lookups stay held for more than 1 s, unless a lookup budget is also
+  ruled, and that budget changes enrichment behaviour.
+- **Next evidence: the B transport probe.** The reviewer approved it on 2026-11-05 as transport
+  evidence only. It does not establish production trust, D2b/AC-6 recovery, or acceptance of B.
+  1. **Isolation.**
+     - The control `sm-w0099-probe` stays untouched. The probe uses an offline clone and a
+       throwaway Firefox profile.
+     - A TLS-terminating reverse proxy sits in front of the unchanged daemon: HTTP/2 to the browser,
+       HTTP/1.1 upstream, SSE unbuffered.
+     - The certificate is trusted only in that profile.
+  2. **Cases.** Baseline, held lookup, release, and recovery. Then three and four overlapping held
+     requests. Before timing, confirm that each is a distinct cache miss that reached the responder
+     and is still pending in the browser.
+  3. **Criterion.** Each ordinary request finishes within 1 s while the lookups remain held.
+  4. **Records.**
+     - protocol evidence for the tested traffic (`nextHopProtocol`);
+     - daemon subscriber counts;
+     - both proxy legs: the browser-to-proxy sockets and the proxy-to-daemon connections;
+     - the proxy configuration, including its advertised HTTP/2 limits;
+     - per-request timings;
+     - SSE flushing: events arrive unbuffered;
+     - cancellation propagation: an aborted browser request ends the upstream request.
+  5. **Negative control.** HTTP/1.1 through the same proxy, with five streams and one held lookup, to
+     isolate the effect of HTTP/2.
+
+### Review of the comparison (reviewer, 2026-11-05)
+
+The reviewer approved committing this comparison after six corrections, all applied above:
+1. **Session list.** It survives an ordinary upgrade reload, so its loss on an origin change is a
+   separate decision.
+2. **Lookup overlap.** 2 + 1 is a sufficient example, not a maximum. The FT worked-station card adds
+   a lookup, so the probe includes a fourth held request. C's failure is stated conditionally.
+3. **B's capacity claim.** It is narrowed to the six-connection mechanism. Flow control,
+   scheduling, the 16-subscriber cap and, in the probe, the proxy's advertised limit still apply.
+4. **C's fallback.** Reverting to per-window streams is not recovery. Crash signalling is cited from
+   the MessagePort interface and left to verify in browsers. C's capacity can be probed without a
+   worker.
+5. **Certificate costs.** They come from Mozilla's current policy reference and NSS's trust flags.
+   `CT,CT,` is CA trust, so narrow leaf trust is pending verification.
+6. **Redirects.** They are separated from HTTP/1.1 serving. A warning does not satisfy D1/D2.
+
+The reviewer also approved the transport probe above. B remains the preferred next investigation;
+mechanism approval is still pending.
+
 ## Operator rulings (2026-11-04)
 
 These settle the acceptance criteria. The mechanism is still not approved, and nothing is built.
