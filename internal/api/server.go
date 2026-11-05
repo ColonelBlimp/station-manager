@@ -363,9 +363,8 @@ func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *l
 	// general concurrent-request limit since SSE connections are
 	// long-lived by design).
 	apiMux.Handle("GET /v1/events", s.limitEventSubscribers(http.HandlerFunc(s.handleEvents)))
-	// Its WebSocket twin (ADR 0099 W1): the SPA's shell transport, off the
-	// browser's six-connection HTTP pool. Same subscriber cap.
-	apiMux.Handle("GET "+wsEventsRoute, s.limitEventSubscribers(http.HandlerFunc(s.handleEventsWS)))
+	// Its WebSocket twin (ADR 0099 W1); origin is checked before the cap.
+	apiMux.Handle("GET "+wsEventsRoute, s.requireStreamOrigin(s.limitEventSubscribers(http.HandlerFunc(s.handleEventsWS))))
 
 	// Config — operator's writable subset (logging_station,
 	// default_*_id) plus joined display details for the default
@@ -406,7 +405,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *l
 	// slot" resource.
 	if br != nil && br.Enabled() {
 		apiMux.Handle("GET /v1/rig/events", s.limitEventSubscribers(br.HTTPHandler(s.shutdownCh)))
-		apiMux.Handle("GET "+wsRigEventsRoute, s.limitEventSubscribers(s.rigEventsWSHandler(br)))
+		apiMux.Handle("GET "+wsRigEventsRoute, s.requireStreamOrigin(s.limitEventSubscribers(s.rigEventsWSHandler(br))))
 		// Inbound command path (ADR 0026) — same enablement gate as the
 		// SSE route. A normal request (not long-lived), so the global
 		// limitConcurrent middleware covers it; no per-route SSE cap.

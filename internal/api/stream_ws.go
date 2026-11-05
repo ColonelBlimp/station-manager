@@ -159,6 +159,23 @@ func wsOriginExact(r *http.Request) bool {
 	return u.Scheme == want && strings.EqualFold(u.Host, r.Host)
 }
 
+// requireStreamOrigin applies wsOriginExact BEFORE subscriber admission: it
+// wraps limitEventSubscribers on the WebSocket routes, so a refused upgrade
+// never takes a subscriber slot or logs a subscriber transition (reviewer,
+// 2026-11-05). serveWSStream keeps the same check as a second gate for any
+// caller that mounts it directly.
+func (s *Server) requireStreamOrigin(next http.Handler) http.Handler {
+	const op errors.Op = "api.requireStreamOrigin"
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !wsOriginExact(r) {
+			s.logOriginRefused(r, r.Header.Get("Origin"))
+			s.writeError(w, http.StatusForbidden, "cross_origin", "cross-origin request rejected", op)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // hijackCapture records the net.Conn the library hijacks, so the coordinator
 // can close the transport directly at grace expiry. The library finds its
 // Hijacker by type before any Unwrap (coder/websocket hijack.go), so this

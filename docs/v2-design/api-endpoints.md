@@ -59,7 +59,8 @@ SSE endpoints are unchanged and stay for non-browser clients. `/v1/ft8/events` h
 subscription is the FT8 presence signal.
 - **Admission.**
   - **Origin:** the exact same origin is required, else **403 `cross_origin`** before any
-    upgrade. Origin must be present, an absolute `http(s)` URL with no userinfo, path, query or
+    upgrade. It is checked before the subscriber cap, so a refused upgrade takes no subscriber
+    slot and logs no subscriber transition. Origin must be present, an absolute `http(s)` URL with no userinfo, path, query or
     fragment, with a scheme equal to the daemon's and a host:port equal to `Host`. `null`,
     missing and malformed values are refused.
   - **Shutdown:** once shutdown has begun, **503 `shutting_down`** and no upgrade.

@@ -16,6 +16,9 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+
+	"github.com/ColonelBlimp/station-manager/internal/config"
+	"github.com/ColonelBlimp/station-manager/internal/logging"
 )
 
 // ADR 0099 W1: the shell and rig event streams over WebSocket. These tests pin
@@ -643,4 +646,76 @@ func TestWSStream_PanicAfterUpgradeClosesTransport(t *testing.T) {
 		}
 	}
 	waitFor(t, "handler unregistered", time.Second, func() bool { return srv.streams.active() == 0 })
+}
+
+// =====================================================================
+// Origin before admission (reviewer, 2026-11-05): a refused upgrade must not
+// take a subscriber slot or log a subscriber transition; valid upgrades still
+// obey the shared cap.
+// =====================================================================
+
+// lockedBuffer is a goroutine-safe log sink (handlers log concurrently).
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func wsLogServer(t *testing.T, maxSubs int) (*Server, *httptest.Server, *lockedBuffer) {
+	t.Helper()
+	logs := &lockedBuffer{}
+	srv := testServerWithLogger(t, func(cfg *config.Config) {
+		if maxSubs > 0 {
+			cfg.Server.MaxEventSubscribers = maxSubs
+		}
+	}, nil, logging.NewForWriter(logs))
+	ts := httptest.NewServer(srv.httpServer.Handler)
+	t.Cleanup(ts.Close)
+	return srv, ts, logs
+}
+
+func TestWSStream_RefusedOriginTakesNoSubscriberSlot(t *testing.T) {
+	_, ts, logs := wsLogServer(t, 0)
+	for _, origin := range []string{"", "null", "http://evil.example", "https://" + hostOf(ts)} {
+		ws, resp := rawDial(t, hostOf(ts), wsEventsPath, hostOf(ts), origin)
+		_ = ws.conn.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("origin %q: status %d, want 403", origin, resp.StatusCode)
+		}
+	}
+	out := logs.String()
+	if !strings.Contains(out, "cross-origin refused: origin not allowed") {
+		t.Fatalf("refusals not logged:\n%s", out)
+	}
+	if strings.Contains(out, "sse: subscriber connected") || strings.Contains(out, "sse: subscriber disconnected") {
+		t.Fatalf("a refused upgrade produced a subscriber transition:\n%s", out)
+	}
+}
+
+func TestWSStream_ValidUpgradesObeyTheSubscriberCap(t *testing.T) {
+	_, ts, logs := wsLogServer(t, 1)
+	first, resp := rawDial(t, hostOf(ts), wsEventsPath, hostOf(ts), ts.URL)
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("first upgrade: status %d, want 101", resp.StatusCode)
+	}
+	defer first.conn.Close()
+	second, resp := rawDial(t, hostOf(ts), wsEventsPath, hostOf(ts), ts.URL)
+	defer second.conn.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("second upgrade over the cap of 1: status %d, want 503", resp.StatusCode)
+	}
+	if n := strings.Count(logs.String(), "sse: subscriber connected"); n != 1 {
+		t.Fatalf("subscriber connected logged %d times, want 1", n)
+	}
 }
