@@ -26,6 +26,10 @@ HTTP slots. With 9 open and 4 HTTP requests held, ordinary requests took 1–2 m
 starved them. B is paused, and WebSocket event delivery is proposed as the leading candidate (see
 "WebSocket event transport").
 
+**WebSocket design comparison (2026-11-05):** recommends W1, separate shell and rig WebSockets
+with FT kept on SSE: a transport-only change. Mechanism approval and five decisions are pending (see
+"WebSocket event delivery").
+
 **Mechanism approval is blocked (reviewer, 2026-11-04) on:**
 1. evidence for D1-ii under a representative request workload (see "Request workload in D1-ii");
 2. the Q3 startup design;
@@ -1041,6 +1045,428 @@ and page sources, plus the driver and server logs.
 - **It covers:** Origin, reconnect, recovery, bounded buffering and shutdown, while retaining the
   agreed four-window (D1) and restart (D2b/AC-6) acceptance criteria.
 - **Unchanged:** B stays paused; RPC and asynchronous enrichment remain deferred.
+
+## WebSocket event delivery: design comparison (2026-11-05; design only)
+
+**Scope (reviewer, 2026-11-05).** Two options:
+- **W1:** separate shell and rig WebSockets, keeping their current subscription ownership.
+- **W2:** one combined shell/rig WebSocket per window, only if it demonstrably simplifies the
+  implementation.
+
+Fixed for both:
+- FT stays on SSE and enrichment on its existing HTTP API.
+- The probe removes any need to combine streams to save HTTP slots, so the option with fewer
+  lifecycle changes is preferred.
+- No transport or certificate probe is needed before this review.
+
+Nothing is built. Mechanism approval is pending.
+
+### Current paths, traced
+
+**Startup** (`frontend/app/src/main.ts`).
+1. **Shell stream.** At module load the shell calls `openLogEvents` (`main.ts:719`). It opens
+   `/v1/events` once per tab, ref-counted so the map joins it rather than opening its own
+   (ADR 0079, 2026-09-14 update). It is never closed.
+2. **Boot bracket.** `bootArchiveScoped` (`lib/config/archives.svelte.ts:458`) brackets the station
+   context and catalogue reads between two identity reads. It runs with the check counter raised, so
+   guarded requests wait. On agreement it binds the archive. On disagreement it reloads. On an
+   unreadable identity it latches the gate and watches for the daemon.
+3. **Rig stream.** `applyStationContext` (`main.ts:328`) opens `/v1/rig/events` once
+   (`rigEventsOpen`), only when `catEnabled` is set and not in a settled Map tab (`main.ts:418`). It
+   runs again after first-run setup, and the guard prevents a second open.
+
+**Rig bootstrap** (`internal/bridge/handler.go`). The handler:
+1. sets headers and flushes;
+2. calls `Subscribe()`, which replays the hub's cached TX alarm to a late subscriber
+   (`service.go:957`);
+3. writes `: connected`;
+4. calls `TriggerBootstrap(r.Context())` **synchronously**, a CAT identity and state poll whose
+   replies fan out to every subscriber;
+5. loops.
+
+So a late window learns rig state from its own subscription's bootstrap.
+
+**Reconnect.**
+- **`openReviving`** (`lib/api/sse-reviving.ts`) wraps every EventSource. The browser owns transient
+  retries. The wrapper recreates a stream that is CLOSED, or CONNECTING after an error, when the tab
+  becomes visible or `online` fires, and only while it is visible. A healthy stream is never touched.
+- **Shell.** Per subscriber, `sawError` turns the next `open` into `onReconnect`. That calls
+  `refreshLogbookCount()` and `verifyArchiveGeneration()` (`main.ts:723`).
+- **Rig.** Every `open` calls `catLink.onOpen()`, `noteStreamReopen()` and
+  `verifyAfterRigReconnect()` (`main.ts:431`):
+  - `noteStreamReopen()` re-fetches build identity only after a drop (W-0004 AC3, which ratified
+    that build identity rides the rig stream);
+  - `verifyAfterRigReconnect()` does nothing before the boot bracket has proven a baseline.
+
+**Archive and default verification** (`archives.svelte.ts:535`, `:588`).
+- Both verifiers read identity with retries. The result decides:
+  - the same archive and default: nothing happens;
+  - another archive or another default: the page reloads;
+  - unreadable: `switchUnresolved` latches, fail-closed.
+- `verifyArchiveGeneration` also reloads when there is no proven baseline.
+- A reconnect that drops both streams therefore runs one verification per stream. Q2 (one
+  shell-owned verification per combined reconnect) applied only to A's composition.
+
+**Daemon side.**
+- **Shell handler** (`internal/api/handler_events.go`): Subscribe before the 200. `: connected` is
+  the first body bytes. Each write gets a 10 s deadline (`sseWriteTimeout`), and there is a 30 s
+  keepalive. It returns on `r.Context()`, on `shutdownCh`, on a closed hub channel (slow-reader
+  eviction), or on a write error.
+- **Rig handler:** the same shape, plus the bootstrap.
+- **Admission:**
+  - `limitEventSubscribers` wraps each stream route (`server.go:362`, `:402`, `:434`), with one
+    shared cap, default 16;
+  - `isSSEPath` exempts the stream paths from `limitConcurrent` (`middleware.go:47`).
+- **Middleware chain** (`server.go:214`): `securityHeaders → logRequests → rejectWhenDraining →
+  limitConcurrent → recoverPanic → requireSameOrigin`.
+  - Host is validated for every method.
+  - **Origin is checked only for unsafe methods** (`csrf.go:42`), and `originAllowed` accepts any
+    loopback origin on any port (`csrf.go:112`).
+  - `responseRecorder` implements `Unwrap` (`middleware.go:367`), which
+    `http.ResponseController.Hijack` follows (Go 1.26 `net/http/responsecontroller.go:66`).
+- **Shutdown** (`server.go:784`): it closes `shutdownCh` first, then calls
+  `http.Server.Shutdown`.
+
+### Responsibilities WebSockets add, common to both options
+
+Library: `github.com/coder/websocket` v1.8.15 (ISC, GPL-3.0-compatible per `docs/licensing.md`;
+the reviewer's recommendation; https://pkg.go.dev/github.com/coder/websocket). The library facts
+below are from its v1.8.15 docs and source (`accept.go`, `close.go`, `read.go`, `write.go`,
+`conn.go`, `hijack.go`) and must be re-checked against the pinned version when it is added.
+
+**1. Origin: exact same origin, checked by SMD before `Accept`.**
+- **Why it is needed.** The browser reads an SSE response only for a same-origin page, because
+  EventSource fetches in CORS mode. A WebSocket is not subject to that: a page from another origin
+  can open it and read every frame unless the server refuses the handshake.
+- **The rule** (an explicit SMD check; the library's own check is not relied on):
+  - `Origin` must be present. A browser always sends it on a WebSocket handshake (RFC 6455 §4.1,
+    §10.2).
+  - It must parse as an absolute URL with no userinfo, path, query or fragment. `null` and
+    malformed values are refused.
+  - Its **scheme** must equal the daemon's own: `http` when `r.TLS == nil`, otherwise `https`.
+  - Its **host:port** must equal `r.Host` exactly, with the host compared case-insensitively.
+    `r.Host` has already passed `hostAllowed`, as today.
+  - Otherwise SMD answers 403 before calling `Accept`, logged like the existing refusals.
+- **Why not the library's check.** The library's default is not this rule. Its `authenticateOrigin`
+  returns nil for an absent `Origin`, and compares `u.Host` with `r.Host` while ignoring the scheme
+  (`accept.go` v1.8.15, https://github.com/coder/websocket/blob/v1.8.15/accept.go). SMD therefore
+  performs its own check and then calls `Accept` with `InsecureSkipVerify: true`, so that only one
+  rule, SMD's, applies. The alternative of keeping the library check as a second gate would be
+  redundant at best.
+- **Dev proxy.**
+  - Today's string shorthand `'/v1': 'http://localhost:8080'` (`vite.config.ts`) is expanded by
+    Vite 8.1.3 to `changeOrigin: true` (`node_modules/vite/dist/node/chunks/node.js:18271`), so it
+    **does** rewrite `Host`.
+  - The `/v1` entry becomes an object:
+    `{ target: 'http://localhost:8080', ws: true, changeOrigin: false }`, with no
+    `rewriteWsOrigin`. Vite rewrites `Origin` only when `rewriteWsOrigin` is set (`node.js:18252`).
+  - A dev page on the configured port 5176 (`vite.config.ts:16`) then arrives with
+    `Host: localhost:5176` and `Origin: http://localhost:5176`, so it passes the rule. `hostAllowed`
+    accepts loopback on any port.
+- **Tests.** Allowed:
+  - the production same origin, `http://127.0.0.1:8080` and `http://localhost:8080`, each with its
+    matching `Host`;
+  - the dev case above.
+
+  Refused:
+  - a missing `Origin`;
+  - `null`;
+  - a malformed value;
+  - a different scheme (`https://` against plain http);
+  - a different port on the same host;
+  - a foreign host;
+  - an `Origin` carrying a path.
+
+**2. Timeouts after the upgrade.**
+- **What Go does.** Go 1.26 clears the connection's deadlines on hijack (`hijackLocked`:
+  `rwc.SetDeadline(time.Time{})`, `/usr/local/go/src/net/http/server.go:317`), so the server's
+  `ReadTimeout` and `WriteTimeout` no longer apply. The required behaviour is set through the
+  library instead.
+- **Writes.** Every frame is written with `Conn.Write(wctx, MessageText, …)`, where
+  `wctx = context.WithTimeout(stopCtx, sseWriteTimeout)` (10 s, as today). If `wctx` expires while
+  bytes are in flight, the library closes the connection (`setupWriteTimeout`'s `AfterFunc` in
+  `conn.go`), so a wedged peer ends the handler within the bound. A shutdown cancels `stopCtx` and
+  ends an in-flight write the same way.
+- **Reads.** None by the application. `connCtx := c.CloseRead(baseCtx)` runs the library's reader:
+  - it answers pings and the close handshake;
+  - it closes the connection with 1008 ("unexpected data message") on any data message;
+  - it cancels `connCtx` when the connection closes.
+
+  `baseCtx` is a long-lived `context.Background()`-derived context, cancelled only for a forced
+  close, because cancelling CloseRead's context closes the connection with no handshake.
+- **Liveness.** A 30 s `{"event":"keepalive"}` text frame, mirroring the SSE keepalive. A dead
+  peer fails its write deadline.
+
+**3. Contexts.** The request context is not used after `Accept`. The library advises against it,
+and Go cancels it only "until the Request's ServeHTTP method returns"
+(`/usr/local/go/src/net/http/server.go:202`), so it no longer signals a disconnect. Each handler
+owns:
+
+| Context | Cancelled when |
+|---|---|
+| `stopCtx` | `shutdownCh` closes |
+| `connCtx` (from `CloseRead`) | the connection closes for any reason: peer gone, write timeout, policy close |
+| `workCtx` | either of the above; used for the rig bootstrap |
+
+**4. Frame envelope.** One JSON text frame per event: `{"event": "<name>", "data": <payload>}`.
+- The payload is the same object the SSE `data:` line carries today, and names are unchanged (the
+  shell's `qso.*` and `forward.*`; the rig's `rig-state`, `tx-alarm` and the rest).
+- `{"event":"connected"}` is the first frame after Subscribe, matching today's `: connected` contract.
+- Keepalive is as above.
+- The client's decoders take `data` exactly as they take `ev.data` today.
+
+**5. Bounded buffering: unchanged.**
+- The handler consumes the same hub channel.
+- **Slow-reader eviction** closes it. The handler then ends the stream as below, and the client
+  reconnects and resyncs, as with SSE.
+- **Wedged peer:** it fails the per-write deadline.
+- **Inbound:** the browser sends nothing but control frames, and data messages are refused (1008).
+
+**6. Admission: unchanged in meaning.**
+- **Routes:** the new routes sit behind `limitEventSubscribers`, and `isSSEPath` (renamed
+  `isStreamPath`) includes them. They count against the shared cap of 16 and are exempt from
+  `limitConcurrent`.
+- **Draining:** `rejectWhenDraining` applies before the upgrade.
+- **The admission slot is held for the handler's whole life:** `limitEventSubscribers` releases it
+  when the handler returns, which is after cleanup (below).
+- **Capacity:** D1-ii still uses 9 subscribers.
+
+**7. Shutdown contract.** Go's `Shutdown` "does not attempt to close nor wait for hijacked
+connections such as WebSockets" (`server.go:3142`). So `api.Server` gains a small stream registry
+(a mutex, a `closing` flag and a `sync.WaitGroup`):
+- **Registration happens before the connection leaves HTTP ownership.** The handler calls
+  `register()` before `Accept`. If `closing` is set, it answers 503 and never upgrades. `Shutdown`
+  sets `closing` under the same mutex, in the existing `shutdownOnce`, before closing `shutdownCh`.
+  So no handler can register after shutdown has begun, and every upgraded connection is counted.
+- **Interruption.** `stopCtx` is cancelled by `shutdownCh`:
+  - **A handler in its select loop** sees `stopCtx` and closes.
+  - **A blocked `Write`** is ended by `stopCtx`; the library closes the connection.
+  - **There are no application reads.** The CloseRead reader ends when the connection closes.
+  - **A handler inside the rig bootstrap** is covered under 8.
+- **Close: best effort, then forced.**
+  - **Attempt:** the handler calls `c.Close(StatusGoingAway, "shutdown")` in a goroutine.
+  - **Library timeouts:** the library writes the close frame with a 5 s timeout, waits up to 5 s
+    for the peer's close frame, then up to 15 s for its goroutines (`close.go` v1.8.15).
+  - **Grace:** the handler waits a short close grace (proposed 1 s; a timeout value for the
+    operator), then calls `c.CloseNow()` (no handshake). That closes the socket, so the library's
+    goroutines unwind.
+  - **Result:** a wedged peer never receives 1001, and the socket still closes within the grace.
+- **Order of cleanup, then done.**
+  1. The socket is closed (Close or CloseNow returned).
+  2. `connCtx` is cancelled, which shows the reader goroutine has ended.
+  3. The hub subscription is released (`unsub`).
+  4. The registry marks the handler done.
+  5. The handler returns, which releases the admission slot.
+- **What `Shutdown` promises.** After `httpServer.Shutdown`, `Server.Shutdown` waits for the
+  registry with the caller's context. Only a return before the context expires means **every
+  tracked handler has ended**. A context-expired return reports the deadline, as today's drain
+  timeout does, and makes no such promise.
+- **Budget.** The default `shutdown_timeout_sec` is 10, and the grace plus a bootstrap wait (8)
+  must fit within it. Fixing the grace is a decision below.
+
+**8. The rig bootstrap under a hijacked connection** (W1's rig handler; the shell has none).
+- **The call.** The handler calls `TriggerBootstrap(workCtx)` synchronously, as today, after
+  Subscribe and the `connected` frame.
+- **Today's SSE path.** Inside `TriggerBootstrap` (`internal/bridge/service.go:1030`):
+  - The pipeline-not-running and CI-V-while-keyed skips return at once, as today.
+  - On CI-V, `underCmdMuCIV` takes `cmdMu.Lock()` (`pipeline.go:1413`). **That wait observes no
+    context.** It ends only when the current holder releases. Each holder is bounded by its own
+    limits:
+    - CI-V ACK waits are bounded per frame (`civAckTimeout`, `pipeline.go:535` comment);
+    - meter polls run under `ft8MeterPollTimeout` (`meterpoll.go`);
+    - every serial write is bounded by the write watchdog (`internal/serial/serial.go:255`).
+  - Inside the lock, `writeSnapshotReads(ctx, …)` checks `ctx` between frames
+    (`pipeline.go:1438`). `writeAll` checks it before every write, including the first
+    (`serial.go:324`). So a cancelled `ctx` writes no further frame.
+- **Under W1.** On a disconnect or a shutdown, `workCtx` is cancelled, because `connCtx` or
+  `stopCtx` fires.
+  - **Waiting for `cmdMu`:** the handler still waits until the holder releases, a bounded time as
+    above. It then writes nothing, because `writeAll` sees the cancelled context, and returns. The
+    loop sees the cancelled context and cleans up per 7.
+  - **Mid-snapshot:** the bootstrap returns at the next frame boundary.
+- **What changes and what doesn't.** Under SSE today the same wait exists; the request context's
+  cancellation is what ends the snapshot early. W1 keeps that behaviour, but with `workCtx` in
+  place of the request context. The bootstrap stays in the handler's own goroutine: not combined,
+  and not unowned.
+- **Shutdown during a held lock.** `Shutdown` can wait as long as the current `cmdMu` holder. If
+  that exceeds the context, `Shutdown` returns the deadline without the all-ended promise (7).
+  Before any shutdown change ships, a test with a held `cmdMu` should show the bootstrap ending
+  after release with no frame written.
+
+**9. Client reconnect: `openRevivingSocket`, a state machine beside `openReviving`.**
+- **States:** `connecting` (one active attempt), `open`, `waiting` (one retry timer armed), and
+  `closed` (torn down).
+- **Rules:**
+  - **One attempt and one timer.** There is at most one active WebSocket and at most one armed
+    retry timer.
+  - **Retries.** A failed attempt, or a drop from `open`, arms the timer once. An `error` followed by
+    `close` is the same failure and is deduplicated: it gives one `onTransportError` and one timer.
+    The timer fires after the retry interval (proposed fixed 1 s), with no backoff ramp.
+  - **Visibility and `online` revive only a `waiting` socket.** When the tab becomes visible, or
+    `online` fires, a socket in `waiting` cancels its timer and connects now. **A `connecting`
+    socket is not dead and is left alone**, as is an `open` one. This keeps "revive only when
+    dead", including the initial connect.
+  - **Automatic retries do not depend on visibility.** They match the browser's own EventSource
+    retries in a hidden tab today. Visibility and `online` only bring a waiting retry forward,
+    which keeps the existing distinction between automatic retry and revival.
+  - **Stale callbacks.** Each socket's handlers check that it is still the current one. Events from
+    a replaced socket are ignored.
+  - **Teardown.** Cancels the timer, closes the current socket, removes the `visibilitychange` and
+    `online` listeners, and moves to `closed`. No later callback acts.
+- **Events to callers** are as today: `onOpen` on every open, with `sawError` turning it into
+  `onReconnect` (once per drop, never on the boot open), and `onTransportError` once per failure.
+- **Proof.** The 1 s interval is a design choice. It does not by itself prove D2b; the restart
+  demonstration does.
+
+**10. Access log.** A hijacked connection's line is written when the handler returns, and its status
+is not the recorder's. It is logged as `101` with the connection duration. The H3 subscriber
+transitions (`middleware.go:239`) come from the shared admission layer and are unchanged.
+
+**11. The SSE endpoints stay.** `cmd/loadgen` and the documented API use `/v1/events`, and FT
+keeps `/v1/ft8/events`. The WebSocket routes are added beside them, for example `/v1/events/ws`
+and `/v1/rig/events/ws`. The canonical API reference `docs/v2-design/api-endpoints.md` is updated
+in the same change. Historical design documents stay as records.
+
+### W1: separate shell and rig WebSockets
+
+Two routes, each a WebSocket twin of today's SSE handler with the same body:
+- **Shell:** Subscribe before the 101 is observable. A `connected` frame is first. Hub events are
+  forwarded as `{event, data}` text frames.
+- **Rig:** Subscribe (TX-alarm replay unchanged), then `connected`, then `TriggerBootstrap`
+  synchronously as today, then forward.
+
+**Client side.** `log-events.ts` and `rig-sse.ts` keep their handler interfaces and decoders; only
+the transport under them changes. Their callers in `main.ts` and `mapData.svelte.ts` are
+unchanged. Paths that stay as they are:
+- the shared, ref-counted shell connection;
+- the rig open in `applyStationContext`, with the same `catEnabled` and Map-tab conditions;
+- build identity on the rig stream;
+- the two verifications per double drop.
+
+**Lifecycle changes:** the transport only. No ownership, bootstrap or verification change. Q3 and
+Q4 do not arise, because there is no combined writer and no combined admission.
+
+### W2: one combined shell/rig WebSocket per window
+
+One route carrying both vocabularies. What it would have to add:
+- **Conditional rig subscription.** The rig half depends on config read after the socket opens
+  (`catEnabled`, settled Map tab), so it needs an in-band subscribe or unsubscribe message, or a
+  reconnect, when the context arrives or changes. This is the Q3 problem.
+- **Bootstrap ownership.** `TriggerBootstrap` is synchronous and, on CI-V, takes `cmdMu.Lock()`
+  (`internal/bridge/pipeline.go:1413`), which cannot be cancelled. On a combined writer it must not
+  stall shell forwarding, so it moves to its own goroutine with a single writer. This is the Q4
+  problem.
+- **Admission.** One connection stands for two subscriptions, both taken before the 101.
+- **One reconnect for both halves.** It drives today's two verifications and the build-identity
+  re-fetch from a single transition, which needs Q2's single-verification design.
+
+**Simplification claimed:** none that applies. It would save one WebSocket connection per window.
+That is a real benefit, but it does not outweigh the composition work: Q2, Q3 and Q4 return.
+
+### Recommendation: W1
+
+W1 changes the transport and nothing else. W2 would save WebSocket connections, not HTTP slots;
+that benefit does not outweigh the three questions it brings back from A.
+
+**Concrete changes.**
+- **Daemon (`internal/api`, `internal/bridge`):**
+  - a WebSocket stream helper in `internal/api`, built on `github.com/coder/websocket`. It holds:
+    - the exact-Origin check, then `Accept` with `InsecureSkipVerify: true`;
+    - registration;
+    - `CloseRead`;
+    - the per-write `Write` context;
+    - the keepalive;
+    - the envelope;
+    - close on eviction or shutdown, with the grace;
+    - the cleanup order in responsibility 7;
+  - the shell twin of `handleEvents`;
+  - `bridge.Service.WSHandler(shutdownCh)`, the twin of `HTTPHandler`. The bridge keeps owning its
+    bootstrap. The upgrade mechanics come from a small injected helper, so `internal/bridge`
+    imports nothing new from `internal/api`;
+  - route registration behind `limitEventSubscribers`;
+  - `isStreamPath`;
+  - the stream registry and its wait in `Server.Shutdown`;
+  - the dependency, added with the code that uses it, with `docs/licensing.md` noting it if it
+    lists dependencies;
+  - `docs/v2-design/api-endpoints.md` updated (the canonical reference).
+- **SPA (`frontend/app`):**
+  - `openRevivingSocket` beside `openReviving`;
+  - `log-events.ts` and `rig-sse.ts` moved onto it, with decoders and handler interfaces unchanged;
+  - the Vite proxy `/v1` entry as an object with `ws: true` and `changeOrigin: false`.
+- **Unchanged:** FT8 SSE and its presence and linger semantics, the enrichment API, the archive
+  guard, and the boot bracket.
+
+**Tests, written RED first.**
+- **Daemon:**
+  - Origin: the allowed and refused cases in responsibility 1, with every refusal a 403 before the
+    upgrade;
+  - Subscribe happens before the 101 is observable;
+  - the rig bootstrap is still sent on connect;
+  - an evicted slow reader gets a close frame;
+  - a wedged peer is ended by the write deadline;
+  - an inbound data message closes the connection with 1008;
+  - shutdown:
+    - a registration after `closing` gets 503 and no upgrade;
+    - a responsive peer receives 1001;
+    - a wedged peer is force-closed after the grace;
+    - `Shutdown` returns success only after every handler has completed the cleanup order;
+    - an expired context returns the deadline;
+  - the bootstrap with `cmdMu` held, then the client disconnecting: after release, no frame is
+    written and the handler ends;
+  - the subscriber cap is applied;
+  - the stream path is exempt from `limitConcurrent`.
+- **SPA:** `openRevivingSocket`, against the rules in responsibility 9:
+  - a `connecting` or `open` socket is never replaced by visibility or `online`;
+  - a `waiting` one is brought forward;
+  - one attempt and one timer at a time;
+  - an `error` followed by `close` counts once;
+  - callbacks from a replaced socket are ignored;
+  - teardown cancels everything and leaks no listener;
+  - `onReconnect` fires once per drop and never on the boot open.
+- **Reversion proofs** for the Origin rule, the registration-before-upgrade rule and the shutdown
+  wait.
+
+**Validation against the agreed criteria** (the real-browser demonstration in this ADR):
+1. **D1-i and D1-ii.**
+   - The windows: Settings, Operate Phone/CW, Logbook, and a fourth on FT8/FT4.
+   - Socket evidence: the HTTP pool holds only FT's SSE; the WebSockets are in their own pool.
+   - Timing: D2a is measured in the browser for ordinary requests, including with lookups held
+     (the barrier case, as in the probes).
+2. **D2b and AC-6.** A real daemon restart, not a synthetic `online`: every window is usable on the
+   correct binding within 10 s of the new instance being observed ready. The default-switch reload
+   is unchanged.
+3. **Negative control.** The same build with the SPA forced back to SSE reproduces the starvation.
+4. **FT capture.** Proven separately, as already required: an ordinary open window is not an FT
+   presence signal.
+5. **Refreshed R0–R2, then a fresh R4–R6** with a new R4 backup, per the W-0024 record.
+
+### Decisions for the operator and reviewer
+
+1. **Approve W1** as the mechanism. ADR 0099 then moves toward Accepted for W1, with A, B and C
+   recorded as considered.
+2. **The dependency:** `github.com/coder/websocket`, at a pinned version (v1.8.15 is the latest
+   listed), added with the code that uses it. Recommended by the reviewer; operator to confirm.
+3. **The retry interval** for `openRevivingSocket`. Proposed: a fixed 1 s. The reviewer has no
+   objection, and the restart demonstration must still prove D2b.
+4. **The shutdown close grace** before `CloseNow`. Proposed: 1 s, to fit with a bootstrap wait inside
+   the 10 s default shutdown budget.
+5. **The Origin rule** exactly as in responsibility 1, including the dev-proxy object configuration.
+
+B stays paused. RPC and asynchronous enrichment stay deferred. Still Proposed.
+
+**Review of this comparison (reviewer, 2026-11-05).** W1 recommended; commit after corrections. The
+corrections, all applied above:
+- the dev-proxy trace (the shorthand sets `changeOrigin: true`, and the port is 5176), with the
+  object configuration;
+- exact same origin including scheme, with null, missing and malformed values refused;
+- the shutdown contract: registration before upgrade, interruption, best-effort 1001, the cleanup
+  order, and what a successful return promises;
+- the bootstrap traced under hijack;
+- the reconnect state-machine rules;
+- `coder/websocket`, with its contexts, write timeout, close behaviour and envelope resolved;
+- Go 1.26 clearing deadlines on hijack;
+- W2 saving WebSocket connections, not HTTP slots;
+- the dependency added with its code, and the canonical API reference updated.
 
 ## Operator rulings (2026-11-04)
 
