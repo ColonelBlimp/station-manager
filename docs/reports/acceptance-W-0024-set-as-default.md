@@ -1318,3 +1318,150 @@ completing R4–R6 does not by itself close acceptance.
 
 The marker receives its normal code review, and R0–R2 use the resulting candidate with green CI.
 **Still open:** the outage window for R4–R6, and consent to discard intervening writes.
+
+## Execution log — revision 5
+
+1. **2026-11-05 — candidate and CI (agent).** Candidate **`b2a16f5a`**
+   (`b2a16f5a0ca044b8eb2fb952f1ada5e500076ede`; the reviewer's choice, 2026-11-05). It differs from
+   the marker commit `a1a8b92e` only by the run-sheet documentation. Pushed `c41302c4..b2a16f5a`. CI run
+   **42008949059: success** on `headSha` `b2a16f5a0ca0…`. CI run 42003712188 was green on `c41302c4`.
+2. **R1 — `task ci:local` (agent).** A clean detached worktree `/home/mveary/sm-w0024/wt-b2a16f5a`
+   (outside the repository tree; `HEAD` `b2a16f5a0ca0…`; `git status --porcelain` empty).
+   `task ci:local`: **exit 0**, "All CI gates passed locally"; 133 Go `ok` lines, none `(cached)`.
+   The log is kept privately at `/home/mveary/sm-w0024/ci-local-b2a16f5a.log` (0600). As before,
+   the CI mirror's SPA build rewrote the tracked `frontend/app/dist/index.html`; it was restored
+   from `HEAD`, and the porcelain is empty again.
+3. **R0 — build and preserve, at `b2a16f5a` (agent; the operator supplied the key).**
+   - **The key.** The operator copied `.env` into the worktree (0600, `mveary:mveary`, verified
+     byte-for-byte, contents not displayed; Git-ignored, so the worktree stayed clean).
+   - **The build.** `SM_FFT=pocketfft scripts/dev-rpm.sh` exited 0: "Built
+     2.0.0-alpha.5-110-gb2a16f5a", with no `-dirty` suffix. The log is kept privately at
+     `/home/mveary/sm-w0024/build-b2a16f5a.log` (0600).
+   - **The RPM:** `station-manager-2.0.0~alpha.5.110.gb2a16f5a-1.x86_64`, SHA-256
+     **`7fc165ae1308fde19f49f91f07027351fb5440db47aa4072cd9f2fe72d5b876f`** (9,755,207 bytes).
+     Preserved as `build/private/station-manager-2.0.0~alpha.5.110.gb2a16f5a-1.x86_64.rpm` (0600;
+     absent before; SHA re-verified after the copy) **before** the worktree was removed.
+   - **Unpacked** in `$W/unpack` (0700, removed after):
+     - `usr/bin/smd` SHA-256 **`3c6915d9d4089ea32d103fde755193781b2fef5bae61a720bf5e340440d9c964`**;
+     - one embedded version string, `2.0.0-alpha.5-110-gb2a16f5a`;
+     - the file list as before: `smd`, `smctl`, `smd.service`, the manual, and the private
+       marker file `usr/share/doc/station-manager/PRIVATE-BUILD-DO-NOT-DISTRIBUTE`. The marker is
+       a packaged file, not a string in `smd`.
+     - Sanity check only: `strings` finds `/v1/events/ws` and `/v1/rig/events/ws`. The SPA proof
+       is in R2.
+   - **Rollback RPM re-verified:** `fe792081…2fd3`.
+   - **Cleanup.** The worktree's `.env` copy was `shred -u` (btrfs: the overwrite is not assured;
+     the deletion is). The build had rewritten `frontend/app/dist/index.html` only; it was restored.
+     The worktree was removed (`git worktree remove --force`, then pruned).
+4. **R2 preparation (agent; nothing defined or booted).** `/home/mveary/sm-guest-w0024d` (0700):
+   - **Image.** `Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2`, the CHECKSUM file and
+     `fedora.gpg` fetched again from Fedora. `gpgv`: "Good signature from Fedora (44)", key
+     `36F612DCF27F7D1A48A835E4DBFCF71C6D9F90A6`; `sha256sum -c --ignore-missing`: OK. Image SHA-256
+     `28680fe5…0b7f`, identical to before; made read-only.
+   - **Guest.** A guest-only ed25519 key; a `cidata` seed (user `smtest`, key login only,
+     passwordless `sudo`); a 20 GiB overlay. Domain XML for `sm-w0024-clean4`: **no network
+     interface**, vsock CID 3101.
+   - **Package.** The RPM declares no package requirements (`rpm -qp --requires` is empty), so the
+     offline install needs nothing staged.
+5. **R2 — containment and install (agent; 2026-11-05 11:29–11:31Z).**
+   - **Containment.** Domain `sm-w0024-clean4` defined and booted: Fedora Linux 44 (Cloud Edition),
+     kernel 6.19.10, cloud-init `done`. `virsh domiflist` empty; in the guest only `lo`; empty IPv4
+     and IPv6 routes; outbound by IP and by name both failed. No `station-manager` package,
+     `Linger=no`, nothing on 8080.
+   - **Install.** The R0 RPM was streamed in over vsock; in-guest SHA-256 `7fc165ae…876f`, matching.
+     `dnf install --disablerepo='*'`: "Complete!" (skipped OpenPGP checks, a local file).
+     `/usr/bin/smd` `3c6915d9…c964`, matching R0. `enable --now` exit 0; `loginctl enable-linger`
+     → `Linger=yes`; `healthz` ok.
+   - **Version.** `/v1/version`: `2.0.0-alpha.5-110-gb2a16f5a`, schema 19 clean, archive Home.
+   - **Lookups seeded disabled:** `hamnut`, `qrzcqlookupservice` and `qrzlookupservice` all false.
+6. **R2 step 1 — A2 first run: PASS (agent-driven; headless Firefox 159 over WebDriver BiDi,
+   `acceptInsecureCerts: false`, a throwaway profile).** Evidence `a2-01`…`a2-06`,
+   `transcript-a2-*.jsonl`.
+   - **Before setup:** only the welcome card. Save disabled for empty and blank-only input; `7Q5!!`
+     → "Invalid callsign format", still on the welcome card.
+   - **Setup:** ` 7q5mlv ` normalised and saved; "Setup complete" offers **Open Settings** and
+     **Start logging**. `Default` (`7Q5MLV`) created.
+   - **Survival:** a reload, and a real `systemctl --user restart smd` (new instance
+     `dmn8s3g3z3km`).
+   - **Discoverable:** Settings, Manual, and the Phone/CW form.
+   - **Marker:** `unproven` before setup (no default yet), then `verified` with the new instance.
+7. **R2 fixture for W1 (agent; a config edit with the daemon stopped, recorded as a fixture
+   edit).**
+   - Rig `yaesu-ftdx10` on `/dev/ttyPROBE-ABSENT` (`default_rig_id` 1); `bridge.enabled`;
+     `ft8.enabled`.
+   - HamNut at a loopback holding responder for the W1 cases only. Verified in `/v1/config`:
+     `bridge_enabled` true, `ft8_enabled` and `ft8_running` true; the QRZ providers false.
+   - The serial open fails, "serial port not found", as intended. The rig WebSocket route is
+     served.
+8. **R2 W1-1 — four windows, held lookups: PASS.**
+   - **SPA proof:** the served `/assets/index.js` contains `/v1/events/ws` and `/v1/rig/events/ws`.
+   - **Streams by path** (daemon log): `/v1/events/ws` 4, `/v1/rig/events/ws` 4,
+     `/v1/ft8/events` 1.
+   - **Timings:** the four GETs from Settings took 1–5 ms at baseline and with 1, 3 and 4
+     distinct, barrier-confirmed held lookups; 1–3 ms on recovery.
+9. **R2 W1-2 — real restart, binding by marker: PASS.**
+   - **Before:** all four windows `verified` with the expected archive `01a1ab79…1fe3` and default
+     `01a1ab7a…38d0`.
+   - **T0:** 54 ms after `systemctl --user restart smd`, the new instance `dmn8viu6d4e1` observed
+     host-side.
+   - **Recovery after T0** (monotonic clock): Settings 4,972 ms, Phone/CW 4,973, Logbook 4,974,
+     FT8 4,975. Each with the marker `verified`, the new instance, the expected UUIDs, no gate, no
+     reload, and all 9 streams back.
+   - **What bounds the time:** the all-streams condition. The eight WebSockets reconnected about
+     1 s after T0; the FT8 SSE stream came back at about 5 s.
+   - **Corroboration:** the prepared contact `9X4W12` was submitted after recovery and stored in
+     `Default` (QSO `01a1ab7e-8936-7a9c-a1bd-4affca1e7bb5`).
+   - **Correction (review, 2026-11-05):** the earlier observation that Log QSO "was still
+     disabled" at preparation is unsupported. The evidence's `log_enabled: false` is a driver
+     defect. `bidi.mjs:42` JSON-parses the string `"true"` into the boolean `true`, and
+     `r2-w1.mjs:108` then compares that boolean with the string `'true'`. So `log_enabled`
+     records `false` whether the button was enabled or disabled. The original evidence is kept
+     unchanged. W1-2 is unaffected: its binding checks, its restored streams and the stored
+     contact are independent of this field. No guest rerun is needed.
+10. **R2 step 2 — F6 re-run: PASS (after a void attempt).**
+    - **Void attempt 1.** It stalled on a driver deadlock: "Reload now" was clicked inside
+      `script.evaluate`, and the beforeunload prompt it opened blocked that call. Its first Stay
+      matched the expected result. It is kept as `attempt1-*`. It had committed the default
+      change to T, so attempt 2 first set Default back, with no unsaved edit. Every
+      prompt-opening click is now dispatched asynchronously.
+    - **How the edit was made.** The unsaved Settings edit (Operator → `7Q5MLVQ`) was **typed**
+      through BiDi keyboard input. Firefox arms beforeunload only after real user activation.
+    - **F6.1, default change to T:**
+      - Stay: the same document, the edit intact, the "Reload now" gate showing, marker
+        `unresolved`;
+      - Reload now → Stay: the same;
+      - Reload now → Leave: a new document on T, marker `verified` with T `01a1ab80…f9a1` and
+        instance `dmn96adnbftw`, header "Logbook T";
+      - a synthetic contact `9X4F61` stored in T.
+    - **F6.2, archive switch** to `W-0024 R2 Archive switch`:
+      - the same Stay, then Reload now → Stay results;
+      - Reload now → Leave: on the destination archive `01a1ab8c…85b9`, with its own default,
+        `verified`;
+      - back to Home: a new document, `verified` on Home.
+    - **F6.3, Settings → Restart daemon** (instances `dmn9740a1zrc` → `dmn97hg05m9a` →
+      `dmn97l083odp` → `dmn97phe0rmn`):
+      - restarts 1 and 2 → Stay: the same document (`timeOrigin` unchanged), the edit intact;
+      - restart 3 → Leave: a new document, the edit gone as warned.
+    - **F4 and F5** carry over (ruling).
+11. **R2 corroboration (stopped daemon; `immutable=1` opens).**
+    - **Databases:** `station-manager.db` integrity `ok`, 2 QSOs (`9X4W12` in Default, `9X4F61` in
+      T), **0 `qso_upload` rows**. The second archive's database: integrity `ok`, 0 QSOs, 0 upload
+      rows.
+    - **Daemon log:** 1,476 `info`, 81 `warn`, 80 `error`. **Every error** is the fixture's
+      "bridge: serial open failed; pipeline not started", one per serial open attempt. 80 warns
+      are the matching RTS/DTR notice; one is the known pre-setup "could not record the default
+      logbook" (O7).
+12. **R2 uninstall and disposal (agent).**
+    - **Uninstall.** The daemon stopped; the working directory hashed (6 files); `disable --now`
+      exit 0; `dnf remove` complete; `/usr/bin/smd` absent; the unit not found. The working
+      directory was **byte-identical** afterwards.
+    - **Evidence:** `/home/mveary/sm-w0024/guest-evidence-5` (0700, 46 files, `MANIFEST.sha256`):
+      transcripts, screenshots, the journal, the responder journal, `smd.log`, the hash list,
+      the drivers and the domain XML.
+    - **Disposal.** Firefox stopped, the tunnel closed, the domain destroyed and undefined, and
+      `/home/mveary/sm-guest-w0024d` removed. The ADR 0099 control guest was verified
+      byte-identical.
+
+**R0–R2 complete for candidate `b2a16f5a`.** Next: the station's R3–R6, which need the station
+operator's outage window and consent to discard intervening writes. W-0024 acceptance stays
+**incomplete**; U1–U7 stay unexercised and unwaived; the operator's sign-off is still required.
