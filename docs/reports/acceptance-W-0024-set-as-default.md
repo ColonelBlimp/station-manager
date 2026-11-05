@@ -1696,3 +1696,84 @@ recur.
   then.
 - **Cleanups (step 26) are the operator's call:** this run's `r4/pre` and `r6/post` copies, the
   moved post-test directory, revision 4's superseded backup and its `$W/pre`.
+
+26. **2026-11-05 — step 26 cleanup (approved by the reviewer after `c2e8f6e2`).**
+    - **Checked before removal:**
+      - the moved post-test directory's content hashes equal the post-test backup's;
+      - both retained archives re-hashed: pre `ffb38a68…9eae8`, post `12873abd…f0c8` OK.
+    - **Removed with `shred -u` on files, then the empty directories:**
+      - `r5-station/r4/pre` and `r5-station/r6/post`;
+      - `/home/mveary/.local/share/station-manager.w0024-post-20261105T1354Z`;
+      - revision 4's `$W/pre`;
+      - revision 4's backup `station-manager-20261104T0527Z-gb766a145-pre-w0024.tar.gz`.
+    - **Caveat:** btrfs is copy-on-write, so `shred` is not a guarantee; the 0700 directories
+      remain the boundary.
+    - **Retained:**
+      - this run's pre-test and post-test archives;
+      - both RPMs;
+      - `r5-station` with its manifest, re-verified: 122 files OK.
+    - **Not listed, so untouched:** revision 4's moved directory
+      `station-manager.w0024-post-20261104T1144Z` and the throwaway Firefox profile.
+27. **2026-11-05 — the CI failure on `62bec1f0`: mechanism demonstrated (agent; local tests only).**
+    The reviewer's gap: reading the `connected` frame (`internal/api/stream_ws_test.go:397`) does
+    not show that the server's initial write has returned, and `StatusCode(-1)` alone does not
+    show a missing close frame, because the test discards the read error.
+    - **Library code** (coder/websocket v1.8.15):
+      - every `Write` with a cancellable context registers `context.AfterFunc(ctx, c.close)`
+        (`conn.go:176-178`);
+      - the hook is removed only by the deferred `clearWriteTimeout` at the end of `writeFrame`,
+        after `Flush` has put the bytes on the wire (`write.go:321-322, 354`).
+      - SMD's write context derives from `stopCtx` (`internal/api/stream_ws.go:294`), which
+        `Shutdown` cancels.
+      - **Consequence:** a shutdown in the window between the flush and that deferred call
+        closes the transport with no close frame, and `Write` can still return nil.
+    - **Scratch diagnostic.**
+      - **Method:** a test file outside the commit; no production change. It wraps the test
+        server's connections at the listener, recording whether a close frame was written and
+        the stack of whoever closed the transport. The read error is captured.
+      - **Variant 1:** the server's `connected` write stalls for 150 ms after its bytes are
+        delivered, and `Shutdown` runs during the stall.
+      - **Variant 2:** `Shutdown` runs after the transport-level `Write` carrying the
+        `connected` bytes has returned, plus a 50 ms sleep. That is a signal from the transport
+        write plus a delay, **not a proven barrier** after the library's `Conn.Write` returns.
+        The permanent test replaces the sleep with a real server-side barrier.
+      - **Runs:** `-race`, 5 runs each, all consistent.
+    - **Results:**
+
+      | Variant | Client status | Underlying error | Close frame written | Transport closed by |
+      |---|---|---|---|---|
+      | Shutdown during the initial write | `-1` | `failed to read frame header: EOF` | no | the library's write-context hook (`setupWriteTimeout` → `c.close`) |
+      | Shutdown after the transport write returned, plus 50 ms | 1001 | `received close frame: … "shutdown"` | yes | SMD's `closeWithGrace` path (the library's `Close` after the handshake) |
+
+    - **Evidence:** `/home/mveary/sm-w0024/shutdown-diag` (0700): the diagnostic source,
+      `diag-run.txt`, the commit and Go version, `MANIFEST.sha256`. The file is removed from the
+      tree.
+    - **What this establishes.** The CI symptom (`-1`) matches variant 1's signature, and the
+      failing test does not exclude that interleaving.
+    - **Not established.** CI's own read error was discarded, so it is unknown whether CI took
+      exactly this path.
+    - **Scope, by code reading, not exercised.** The same window applies to every write whose
+      context derives from `stopCtx` (events and keepalives), so a shutdown landing in a
+      write's tail can give the peer an abnormal close instead of 1001.
+    - **Client side:** the client retries after any close (`frontend/app/src/lib/api/socket-reviving.ts:128`).
+      That supports a recovery inference, but this failure path has not been demonstrated in a
+      browser.
+    - **Ruling (reviewer, 2026-11-05): correct the tests, and keep the product's shutdown
+      behaviour.**
+      - **Why it is not a contract violation:** the agreed contract already says shutdown
+        cancels an in-flight write (ADR 0099, "Timeouts after the upgrade", `docs/decisions/0099-spa-event-stream-connection-budget.md:1192`).
+        It also says 1001 is best effort (same ADR, lines 1283 and 1596). The diagnostic shows
+        a real consequence of that policy.
+      - **Why not change the product:** waiting up to 10 s only to improve close signalling is
+        not justified.
+      - **The permanent tests must distinguish two cases:**
+        - **Write completed:** an explicit server-side barrier after `Conn.Write` returns; 1001
+          required, plus complete cleanup.
+        - **Write in progress:** deliberately held, then shutdown; interruption and complete
+          cleanup verified. An abnormal close is permitted.
+      - **Failure reports:** they keep the underlying client error.
+      - **No weakening:** the existing test is not weakened to accept either outcome
+        indiscriminately.
+      - **Still unknown:** CI's actual interleaving.
+      - **Technical sign-off stays pending** until the test correction lands and CI is green on
+        it. Repeated successful stress runs do not resolve the faulty precondition.
