@@ -1110,3 +1110,211 @@ acceptance remains **incomplete**; U1–U7 remain unexercised and unwaived; the 
 is still required. A future run starts with a fresh R4 backup. The R4 backup of this run and
 `$W/pre` are superseded for restore once that run's backup is verified. Their cleanup (step 26) is
 the operator's call.
+
+## Revision 5 — the W1 candidate (2026-11-05; ratified with amendments)
+
+**Why a new revision.** Revision 4 evaluated the installed artifact and assumed no installation
+(its R5: "no install"). The multi-window fix, ADR 0099 W1, is a new artifact. It moves the shell
+and rig streams to WebSocket twins, keeps FT8 on SSE, and makes no schema change: the schema stays
+19. This revision prepares that candidate, refreshes R0–R2 for it, and puts the fresh R4 backup
+**before** installation.
+
+**Mandatory pre-deploy gate** (`docs/dogfood-acceptance.md`, "Ready to deploy"). Live installation
+needs all of the following first:
+- the identified candidate (R0);
+- its clean-install evidence (R2);
+- a verified backup (R4);
+- the operator's ratification of this revision.
+
+Nothing below touches the station until then.
+
+**Candidate.**
+- **Commit.** The commit that adds the read-only binding marker (W1-2), on top of `c41302c4`, the
+  Origin-before-admission change. CI must be green on it.
+- **Clean build.** It is built in a clean scratch worktree, so the artifact is **not** `-dirty`.
+  That removes revision 4's recorded A1 deviation.
+- **Contents:** `3f7af877` (daemon WebSocket twins), `fa2cddf8` (SPA on WebSocket), `c41302c4`
+  (Origin before admission) and the binding marker. There is no migration and no config change. One changed journey:
+  multiple windows. Operator-visible behaviour is otherwise unchanged.
+
+### Revised run sheet (revision 5)
+
+- **R0 — build and preserve the candidate (no outage).**
+  1. Clean scratch worktree at the candidate commit (`git worktree add`, outside the tree):
+     `git status` clean.
+  2. Build `SM_FFT=pocketfft scripts/dev-rpm.sh`.
+  3. Copy the RPM to `build/private/` under its versioned name (absent before, 0600), and record its
+     full SHA-256.
+  4. Unpack it in `$W/unpack` (0700). Record `usr/bin/smd`'s full SHA-256 and its one embedded
+     version string. Never run `smd` with a guessed subcommand.
+     - **Sanity check only:** `strings` on the binary finds `/v1/events/ws` and
+       `/v1/rig/events/ws`. The daemon's own route table contains those strings too, so this cannot
+       show that the **SPA** uses WebSockets.
+     - **The SPA proof is in R2:** the installed artifact's **served JavaScript** (the bundle
+       fetched from the guest daemon contains both paths), and the browser connections the daemon
+       logs in W1-1 by path.
+  5. Remove the unpack directory.
+
+  The **rollback artifact** is revision 4's preserved
+  `build/private/station-manager-2.0.0~alpha.5.89.gb766a145.dirty-1.x86_64.rpm` (`fe792081…2fd3`).
+  It is re-verified now.
+- **R1 — A1 for the candidate (no outage).** `task ci:local` once in that worktree, exit 0
+  recorded. The CI run on the candidate commit is recorded green. Then the worktree is removed.
+- **R2 — A2 in a fresh guest (no live paths).**
+  - **Guest.** Domain `sm-w0024-clean4` under `/home/mveary/sm-guest-w0024d` (0700), from the
+    Fedora 44 Cloud image fetched again and verified (`gpgv`, then `sha256sum -c`). Only the R0 RPM
+    is copied in, SHA-256 verified inside the guest.
+  - **Containment (approved 2026-11-05).** The domain has **no network interface** and is
+    controlled over AF_VSOCK, as in ADR 0099's W1 demonstrations. Proof: `virsh domiflist` empty;
+    only `lo`; empty IPv4 and IPv6 routes; outbound attempts by IP and by name fail.
+    - **What this proves:** external network containment. It does **not** prove that no lookup was
+      attempted, so the disabled-provider checks stay: providers seeded disabled, verified in
+      `GET /v1/config` before any synthetic callsign is typed, plus the journal and enrichment
+      fields as corroboration.
+    - **No packet capture.** Revision 4's capture is not needed for containment.
+    - **Packages.** The guest cannot fetch packages, but offline installation from a host-staged,
+      signature-checked package set remains possible (the method of ADR 0099's trust run sheet), if
+      the run needs a tool the image lacks.
+  - **Fixture for W1** (set after first-run setup, before W1-1):
+    - **CAT bridge enabled**, so every non-Map window opens a rig stream. Settings → Rig control:
+      a rig (FTdx10 definition) on a serial port that does not exist, `/dev/ttyPROBE-ABSENT`.
+      Verify in `GET /v1/config` that the bridge is enabled. The serial open fails and no pipeline
+      starts, yet `/v1/rig/events/ws` is served, as observed in the probes. No device means nothing
+      can reach a rig.
+    - **FT8 enabled** (`ft8.enabled`), with no audio device in the guest. The FT8 window then holds
+      its SSE stream, but nothing is captured or transmitted.
+    - **HamNut pointed at a guest-local holding responder.** For the held cases only; every other
+      provider stays disabled.
+  - **Steps:**
+    1. **A2 clean install** as revision 4: install, enable, linger, health, version, logs, first
+       run, setup with `7Q5MLV`, survival across reload and restart, lookups seeded disabled.
+    2. **F6 re-run.** The default change, the archive switch and Settings → Restart daemon, each
+       as revision 4 R2.1–R2.3. These reload and gate decisions now run on the WebSocket
+       reconnect, so revision 4's F6 pass does not carry over.
+    3. **F4 and F5: carried over, not re-run.** They are UI surfaces the W1 change does not touch.
+       Their revision 4 evidence stands unless the reviewer rules otherwise.
+    4. **W1-1 — four windows, held lookups (D1-ii, D2a).** Settings, Operate Phone/CW, Logbook,
+       Operate FT8 (FT8 enabled in the guest), with a guest-local holding responder as HamNut:
+       - streams by path from the daemon's subscriber log: 4 `/v1/events/ws`, 4
+         `/v1/rig/events/ws`, 1 `/v1/ft8/events`;
+       - the four ordinary GETs timed from Settings: baseline, then 1, 3 and 4 distinct held
+         lookups, barrier-confirmed;
+       - each request within 1 s.
+    5. **W1-2 — real restart with full binding (D2b).**
+       - **The observable: a read-only binding marker** (approved 2026-11-05), shipped in the
+         candidate as its own reviewed commit before R0. The archive layer publishes four attributes
+         on `document.documentElement`:
+         - `data-sm-archive` — the window's actual bound archive UUID;
+         - `data-sm-default` — its established default logbook UUID;
+         - `data-sm-binding` — `verifying`, `verified`, `unresolved` or `unproven`;
+         - `data-sm-verified-instance` — the daemon instance accepted by the latest
+           **successful** binding verification.
+
+         Its contract:
+         - It reflects the existing context and binding gates. It never reports `verified` while a
+           verification is pending or an existing gate blocks operations.
+         - Success is recorded only after the identity and binding checks pass.
+         - An older overlapping check never overwrites a newer one's evidence.
+         - It is observational: no application decision reads it, and publishing it makes no
+           request.
+
+         The driver reads it passively in every window, the FT8 view included, with
+         `script.evaluate`: no clicks, no requests.
+       - **Why instance and not time.** A `verified-at` later than T0 is not a reliable test. A
+         healthy verification can finish before the host observes readiness, and an old-instance
+         response can finish afterwards. Instance identity distinguishes the two.
+       - **Expected values.** Before the restart, read host-side from the daemon (`GET
+         /v1/version`): the archive UUID and the effective default logbook UUID.
+       - **Before the restart:**
+         - each window's marker is `verified`, with the expected UUIDs;
+         - a page marker is set in each window;
+         - in Phone/CW, a labelled synthetic contact is **prepared**: fields filled, not submitted.
+       - **The restart:** `systemctl --user restart smd`. The host polls `GET /v1/version` until a
+         new instance answers. **T0** is that moment, on the driver's monotonic clock, and the new
+         instance ID is captured with it.
+       - **Per window — passes when, measured from T0 on the driver's monotonic clock:**
+         - `data-sm-binding` is `verified`;
+         - `data-sm-verified-instance` equals the **new** instance;
+         - `data-sm-archive` and `data-sm-default` equal the expected UUIDs;
+         - the existing checks hold: no gate overlay, the page marker intact (no reload), and all 9
+           streams back in the daemon's subscriber log by path.
+
+         A verification that completed **before** T0 with the new instance is acceptable. Requiring
+         another one would reject a successful early recovery.
+       - **Pass:** every window's recovery time is ≤ 10 s after T0.
+       - **Corroboration:** once its window passes, the prepared Phone/CW contact is submitted. It
+         is accepted, and the stored QSO's logbook is the expected default (`GET /v1/qso/{uuid}`).
+       - **AC-6 is separate:** it still requires the expected reloads and the new destination
+         bindings.
+       - **No FT8 TX intents** are exercised.
+    6. **W1-3 — negative control: optional.** It was already shown in ADR 0099's W1
+       demonstrations, on the same build lineage. Rerun it only if the reviewer asks: the preserved
+       `b766a145` RPM installed in the guest, starvation reproduced, then the candidate reinstalled
+       and verified by hash.
+  - **Evidence, uninstall and disposal** as revision 4.
+- **R3 — Readings A (station, daemon running, read-only).** As revision 4: `rpm -q` and the
+  installed `smd` SHA-256 equal `b766a145`'s (`8a2d89ec…2923`), the schema, and the readings.
+- **R4 — stop, sidecars, baseline, fresh backup and verification (outage begins).** As revision 4
+  R4, **before any installation**. The backup is named
+  `station-manager-<UTC>-gb766a145-pre-w0024.tar.gz`, because it is taken with the old artifact
+  installed. It is the only restore source. AC-11 is this backup verified, plus R0's candidate hash
+  re-verified and the rollback RPM re-verified.
+- **R5 — install and accept on the station (same outage).** Step 15 is restored:
+  1. Re-verify the candidate's SHA-256.
+  2. The operator installs: `sudo dnf install <candidate rpm>`; `systemctl --user daemon-reload`;
+     `systemctl --user start smd`.
+  3. **AC-1:** `rpm -q`, `/v1/version`, the sidebar badge and the startup log line agree on the
+     candidate version; schema 19; Default effective; the journal has no `error`.
+
+  Steps 16–23 then run as written: windows A, B and C, plus a fourth window on Operate FT8 for
+  D1-ii, opened before step 19.
+  - **This supersedes the "No RF" condition's "the FT8 view stays closed"** (top of this record)
+    for this revision. The rest of that condition stays: **the rig stays off and TX stays
+    unarmed throughout**; FT8 is opened as a view, never armed, and nothing is transmitted.
+  - **The W1-2 marker** is read in all four windows across AC-6's reloads and restart, as the
+    station's binding evidence. AC-6's reloads are the station's real-restart
+  check. The post-test backup is named `…-g<candidate>-post-w0024.tar.gz`.
+- **R6 — after the test.**
+  - **Keep (recommended):** step 24 as written. Restore R4's backup with the candidate kept, verify
+    while stopped, then start.
+  - **Rollback, reinstated (approved 2026-11-05)** on any failure the operator calls, including an
+    early one:
+    1. **Stop and confirm stopped first:** `systemctl --user stop smd`; `systemctl --user show smd
+       -p ActiveState -p MainPID -p Result` shows `inactive`, `0`, `success`; the journal shows the
+       daemon's orderly exit. If it is not stopped, stop here and let the operator review.
+    2. The preserved `b766a145` RPM's hash is re-verified (`fe792081…2fd3`; the reviewer matched it
+       to the record, 2026-11-05). Then `sudo rpm -Uvh --oldpackage <rollback rpm>` and
+       `systemctl --user daemon-reload`.
+    3. With the daemon still stopped, move the live directory aside and restore R4's backup.
+       Verify the **complete** snapshot against R4's hash and mode lists (both diffs empty).
+    4. Start; `GET /v1/version` shows `2.0.0-alpha.5-89-gb766a145-dirty`, Home, Default.
+
+    **Why this is compatible:** the candidate changes neither the schema (19) nor the
+    configuration, and the complete snapshot taken under the rollback artifact is restored.
+  - **Cleanup:** step 26 as written, including revision 4's superseded backup and `$W/pre` once
+    this run's R4 backup is verified, on the operator's instruction.
+
+**Unchanged:** U1–U7 stay unexercised and unwaived; the operator's sign-off is still required;
+completing R4–R6 does not by itself close acceptance.
+
+**Rulings so far (reviewer, 2026-11-05).**
+- **Origin commit:** approved and pushed as `c41302c4`; its CI result is recorded with R1.
+- **Containment:** a guest with no network interface is approved; the disabled-provider checks
+  stay.
+- **F4 and F5:** carry over; F6 is re-run.
+- **Negative control:** the existing SSE negative control stands.
+- **Rollback:** reinstated, with the stop-and-confirm step and the complete R4 snapshot.
+- **W1-2:** not yet sufficient. It has been rewritten above; it now depends on the read-only
+  binding marker.
+- **R0:** the `strings` check is a sanity check only.
+- **R5:** the FT8-view restriction is superseded; rig off and TX unarmed are kept.
+
+**Ratified (reviewer, 2026-11-05), with these amendments incorporated above:**
+- the binding marker is approved as a separate pre-R0 change, with `data-sm-verified-instance`
+  replacing a timestamp, under the contract in W1-2;
+- W1-2 passes on instance identity, timed from T0 on the driver's monotonic clock;
+- the prepared contact stays as corroboration;
+- AC-6 stays separate.
+
+The marker receives its normal code review, and R0–R2 use the resulting candidate with green CI.
+**Still open:** the outage window for R4–R6, and consent to discard intervening writes.
