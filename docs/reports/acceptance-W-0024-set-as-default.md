@@ -1465,3 +1465,234 @@ The marker receives its normal code review, and R0–R2 use the resulting candid
 **R0–R2 complete for candidate `b2a16f5a`.** Next: the station's R3–R6, which need the station
 operator's outage window and consent to discard intervening writes. W-0024 acceptance stays
 **incomplete**; U1–U7 stay unexercised and unwaived; the operator's sign-off is still required.
+
+### Revision 5 — station run (2026-11-05)
+
+Evidence for every entry below is in `/home/mveary/sm-w0024/r5-station` (0700; files 0600),
+subdirectories `r3`, `r4`, `r5`, `r6` and `browser`. The browser was agent-driven: headless
+Firefox 159.0 with a fresh profile, over WebDriver BiDi, through one persistent session. The
+transcript, every command and its result are in `browser/ev/transcript.jsonl`, with screenshots
+alongside. The driver's `eval` returns values unconverted, so entry 9's coercion defect cannot
+recur.
+
+13. **Authority.** The station operator authorised the outage on 2026-11-05 starting now, and
+    explicitly consented to discarding every write made after R4's backup when it is restored,
+    including real contacts and configuration changes. R6 restores that backup on either path.
+    The rig stayed off and TX unarmed throughout. CI on `b2a16f5a` was green (R1).
+14. **R3 Readings A, 13:29:14Z (read-only).**
+    - *Package:* `rpm -q` `…alpha.5.89.gb766a145.dirty-1`; `/usr/bin/smd` `8a2d89ec…2923`.
+    - *Daemon:* `/v1/version` `2.0.0-alpha.5-89-gb766a145-dirty`, schema 19 not dirty, Home,
+      instance `dmmyxjvwxwih`. Healthz `ok`.
+    - *Logbooks:* Default only, **8,428 QSOs** (8,327 in revision 4: real contacts logged since).
+    - *Home bindings:* byte-equal to revision 4's reading. ClubLog, QRZ and SM Cloud are enabled
+      (SM Cloud `adopted`); QRZCQ is disabled.
+    - *Queues:* all 0.
+    - *Lookups:* HamNut and QRZ enabled; QRZCQ disabled.
+15. **R4 — stop, sidecars, baseline, backup, verification (outage begins).**
+    - *Pre-stop re-read, 13:29:39Z:* Default 8,428; queues 0; instance unchanged. The archive line
+      of this re-read failed on a `jq` path error; R3's reading 25 s earlier stands for size and
+      modification time.
+    - *Step 9:* stopped 13:29:39.663Z–.721Z; `inactive`, `0`, `success`; `smd.log` ends with
+      "HTTP server shutdown complete", "smd stopped".
+    - *Step 10:* exactly the premigrate pair, at the recorded hashes.
+    - *Step 11:* `r4/baseline.sha256` (74 files) and `r4/baseline.modes` (82 lines).
+    - *Step 12:* the backup.
+      - **Path:** `/home/mveary/sm-backup/station-manager-20261105T1329Z-gb766a145-pre-w0024.tar.gz`.
+      - **File:** mode 600, 36,774,100 bytes, 82 entries.
+      - **SHA-256:** `ffb38a6823b88b5fae321973dc6a14d64d5c4c9f34b0a6209fcbcc876929eae8`.
+      - **The only restore source.**
+    - *Step 13:* extracted to `r4/pre`; the hash and mode diffs were both empty.
+      - **Integrity:** `w0024-check.py integrity` `ok` on all four databases, exit 0.
+      - **Counts (Home):** 8,428 QSOs. `qso_upload`: clublog 2,655, qrz 2,975, smcloud 11,304,
+        all `uploaded`. Destinations: clublog 1, qrz 1, qrzcq 0, smcloud 1.
+      - **Counts (Drill):** 1 QSO, with one smcloud upload.
+      - **Snapshots:** Home, Drill and evidence through `c-rows.py`; `reference.db` through the
+        ruled wrapper `c-rows-tagged.py` (`856bf07d…3b85`, re-verified).
+      - **After the snapshots:** the copy still equals the baseline.
+    - *Step 14:* the live directory was re-hashed at 13:30:10Z: identical.
+    - **AC-11 met:** the backup is verified, and both RPMs were re-verified just before the stop
+      (candidate `7fc165ae…876f`, rollback `fe792081…2fd3`).
+16. **R5 step 15 — install and AC-1.**
+    - *Install:* the station operator ran `sudo dnf install` on the candidate RPM, since the agent
+      has no `sudo`: "Upgrading … 2.0.0~alpha.5.110.gb2a16f5a-1, replacing …89.gb766a145.dirty-1",
+      "Complete!", OpenPGP checks skipped (a command-line package).
+    - *Identity:* `rpm -q` `…alpha.5.110.gb2a16f5a-1`; `/usr/bin/smd` `3c6915d9…c964`, **equal to
+      R0's**.
+    - *Start:* `daemon-reload`; started 13:41:46.786Z; healthy 13:41:51.848Z.
+    - **AC-1 pass:**
+      - `smd.log` "smd starting" with version `2.0.0-alpha.5-110-gb2a16f5a`;
+      - `/v1/version` the same build, schema 19 not dirty, Home, Default's UUID;
+      - `/v1/default-logbook` effective Default, no change in play;
+      - Default 8,428; queues 0;
+      - the sidebar build badge `2.0.0-alpha.5-110-gb2a16f5a` (`browser/ev/16-00-settings-start.png`);
+      - no `error` line. The warnings are the known start-up set (RTS/DTR notice, SM Cloud
+        plain-http notice) and the rig-off liveness strikes.
+17. **R5 step 16 — lookups off (UI).** Window A, Settings → Enrichment: HamNut and QRZ.com
+    unticked, then Save. The restart-owed banner appeared, and its Restart daemon was confirmed.
+    - **Before the restart:** `/v1/config` already showed `hamnut.enabled` false, with
+      `qrzlookupservice` and `qrzcqlookupservice` false.
+    - **The restart:** instance `dmnbjwn1fe6t` → `dmnblpejfx25` (13:44:08Z).
+    - **After the restart:** `smd.log` "lookup: chain entry disabled, skipping" ×2 and "lookup:
+      pipeline disabled (no providers enabled)", with `/v1/config` unchanged (`r5/step16-lookups.json`).
+    - **Ordering:** no callsign had been typed before this point.
+18. **R5 step 17 — T and P, AC-2: PASS.**
+    - **Created through the Add form:** T `W-0024 Acceptance` (id 2, `7Q5MLV`, the specified
+      description) and P `W-0024 Other call` (id 3, `7Q5MLV/P`). Upload to SM Cloud stayed
+      unticked for both.
+    - **Set as default:** Default has none. T's is offered. P's is `aria-disabled`, titled "Its
+      callsign 7Q5MLV/P is not the station callsign 7Q5MLV: only a logbook for the station
+      callsign can be the default." Clicking it showed that reason and opened no prompt.
+    - **Descriptions:** T's shows under its name.
+    - **Bindings:** every destination is unbound and disabled for T and P (`r5/step17-bindings.json`).
+19. **R5 step 18 — windows B, C, D.** B is Operate → Phone / CW, C is Logbook, and D is Operate →
+    FT8, opened before step 19.
+    - **All four windows:** marker `verified`, instance `dmnblpejfx25`, Home, Default; no gate.
+    - **Streams by path:** 4 `/v1/events/ws`, 4 `/v1/rig/events/ws`, 1 `/v1/ft8/events`.
+    - **D (FT8):** sent `POST /v1/ft8/claim`, the view's presence claim. `smd.log`: "ft8: capture
+      deferred — rig/CAT not live". Nothing armed, nothing keyed.
+    - **B's partial entry:** callsign `7Q5MLV`, typed as real keystrokes, never logged.
+    - **Page markers:** set in all four windows.
+20. **R5 step 19 — the confirmation and its Cancel: AC-3, AC-4 and R1 PASS.**
+    - **Setup:** window A went in-app to Phone / CW and typed the partial `7Q5MLV`, then in-app to
+      Settings → Logbooks, where it typed an unsaved Add name (`Draft W24`).
+    - **AC-3:** Set as default on T opened: "Set ‘W-0024 Acceptance (7Q5MLV)’ as default and
+      restart Station Manager?"
+      - It names the target and the effect.
+      - "This window has an unlogged QSO on Phone / CW: 7Q5MLV. OK discards this window’s entry
+        and restarts; Cancel keeps it."
+      - "The reload loses the unsaved Settings edits in this window: Logbooks."
+      - Other windows' unlogged work is lost.
+      - Transmit must be idle and FT8 disarmed.
+      - **No SM Cloud note**, as R3 fixed it: Default's SM Cloud binding is `adopted`.
+    - **AC-4:** Cancel.
+      - The browser's network events after the dialog opened show only a bindings `GET`.
+      - The daemon log has no non-GET request after 15:44:53 local time.
+      - The instance is unchanged, Default is still effective, the Add draft is intact.
+      - Opening the confirmation again showed the same entry line, so the partial entry was
+        intact. Cancel was pressed again, again with no non-GET request.
+    - *Driver deviations, no effect:*
+      - The first in-app click aimed at a hidden Phone / CW button and did nothing. The six
+        keystrokes meant for it went to `<body>`: no request, no unsaved change.
+      - Leaving Settings to look at the partial entry raised the SPA's own "Unsaved changes in
+        Logbooks will be discarded. Leave Settings?" guard. It was answered Cancel, keeping A on
+        Settings with the draft.
+21. **R5 step 20 — switch to T: AC-5, AC-6 and R2 PASS.**
+    - **The switch:** Set as default on T → OK at 13:49:00Z, with A's draft and entry kept, as
+      the dialog had warned.
+    - **The restart:** `smd.log` "default logbook change requested; live entry and transmit
+      admission sealed, restarting", "smd stopped", "smd starting", "startup: the default logbook
+      change was applied". The new instance `dmnbpi2pazxc` answered at 13:49:05.8Z.
+    - **R3, the pending banner:** B showed "The daemon now serves another default logbook; this
+      page must reload to rebind." and "Logging and transmitting are paused" before it reloaded.
+    - **A:** Firefox's leave-page prompt opened in A, the only window with keyed unsaved Settings
+      edits. This is the F6 behaviour seen in R2. It was answered Leave, as OK had warned.
+    - **B, C and D:** they reloaded with no prompt.
+    - **After the reloads:**
+      - every page marker is gone and each window is a new document;
+      - all four markers are `verified`, with instance `dmnbpi2pazxc` and default T;
+      - every header names "W-0024 Acceptance (0)";
+      - B's partial entry is gone;
+      - no gate.
+    - **Streams:** all nine were back by 15:49:07 local time (about 1.2 s after the new
+      instance), and A's again after its Leave.
+    - **The daemon:** `/v1/default-logbook` shows T effective (`state: effective`). Settings →
+      Logbooks: "“W-0024 Acceptance” is now the default." (R2). Delete on T is refused: "The
+      Default logbook can’t be deleted".
+22. **R5 step 21 — two contacts and delete: AC-7 and AC-10 PASS.** Window B, Rig panel in manual
+    mode ("Manual — confirm to log"). Tune was never pressed. No request was made by the panel
+    actions.
+    - **Contact 1:** 20m, USB, 14.255, Confirm; `7Q5MLV` typed; Time On 13:49:00, today; the
+      labelled comment; Log QSO.
+    - **Contact 2:** 40m (7.100.000, USB kept), Confirm; Time On 13:50:00; Log QSO.
+    - **Requests:** each produced exactly one `POST /v1/qso?logbook=2` and the notice "Logged
+      7Q5MLV".
+    - **Stored:** `01a1abfa-2dc4-7630-8635-ed750189b02f` (20m SSB/USB, 134900) and
+      `01a1abfa-d913-7ab9-9004-6f5531fd1573` (40m SSB/USB, 135000), both in T with the comment.
+    - **Counts:** T 2, Default 8,428 unchanged.
+    - **AC-10:** Delete on P: "Delete the logbook “W-0024 Other call”? It holds no QSOs." OK →
+      `DELETE /v1/logbook/3`; P gone. Together with T's refusal, AC-10 passes.
+23. **R5 step 22 — switch back: AC-8 PASS.** Set as default on Default → OK, from window A with no
+    unsaved edits.
+    - **The restart:** new instance `dmnbrwo30o2e` at 13:52:14Z.
+    - **The windows:** all four reloaded by themselves with **no prompt**. Each is `verified` on
+      the new instance with Default, and every header names "Default (8,428)".
+    - **No contact was logged:** Default 8,428, T 2.
+    - **Streams:** 4 + 4 + 1 live after the reloads, by connect and disconnect count.
+    - **The daemon log:** no `error` from install to stop. The warnings are the start-up and
+      rig-off set only.
+24. **R5 step 23 — post-test snapshot: AC-9 PASS.**
+    - **Before the stop:** the browser session was ended and Firefox closed.
+    - **The stop:** 13:53:28Z, clean (`inactive`, `0`, `success`, "smd stopped"); the sidecars are
+      the premigrate pair only.
+    - **The backup:**
+      - **Path:** `/home/mveary/sm-backup/station-manager-20261105T1353Z-gb2a16f5a-post-w0024.tar.gz`.
+      - **File:** mode 600, 36,800,742 bytes, 82 entries.
+      - **SHA-256:** `12873abdd6245f4f8ead3cdfc679d46cda518e675f917dce3cdbfd1f3655f0c8`.
+    - **Verification:** extracted to `r6/post`; the hash and mode diffs against the stopped live
+      directory were both empty; integrity `ok` on all four.
+    - **Diffs, pre → post:**
+      - **Home:** `qso` +2, both `logbook_id` 2 (T). `logbook` +2: T active, P with `deleted_at`
+        set.
+        - Unchanged: `logbook_destination`, `operator_event`, `qso_history`, `qso_upload` (16,934
+          → 16,934), `archive_metadata` (pointer `default_logbook_id` 1, Default) and
+          `contest_serial_allocation`.
+        - Pre-existing rows: no `qso` or `logbook` row changed.
+        - Changes from SQLite's statistics and autoincrement bookkeeping: `sqlite_stat1`,
+          `sqlite_stat4` and `sqlite_sequence`.
+      - **Drill:** unchanged.
+      - **`evidence.db`:** `profile_active` reports changes, yet its band → profile mapping is
+        identical as a set. Only the rowids moved: each start's `reconcileProfiles` deletes the
+        table and reinserts it from a Go map (`internal/evidence/profiles.go:276-284`), whose
+        iteration order varies. All other tables are unchanged.
+      - **`reference.db`:** `contacted_station` +1, a row for `7Q5MLV` with country `Unknown`,
+        created at 13:51 (the contact times). It is the QSO submit path's best-effort cache warm
+        after commit (`internal/qsoservice/submit.go:557`), not a lookup: lookups were off, which
+        the `Unknown` country corroborates. Otherwise only the SQLite statistics changed.
+    - **Uploads:** `w0024-check.py uploads` on Home's pre and post snapshots: added QSOs
+      `8429` and `8430` in logbook 2; **0 `qso_upload` rows** name them; exit 0.
+    - **Change record:** the post copy's `config.json` holds no `default_logbook_change` key, so
+      no record is in play on disk. The running instance had reported the settled change
+      (`state: effective`) behind R2's notice.
+    - *Agent error, corrected:* the first `uploads` call was given database paths instead of
+      snapshots and failed to parse. It was rerun with the snapshots.
+25. **R6 — step 24, the candidate kept.**
+    - **Stopped first:** confirmed `inactive`, PID 0.
+    - **The backup:** R4's backup re-hashed: equal.
+    - **The move:** `$WD` moved to
+      `/home/mveary/.local/share/station-manager.w0024-post-20261105T1354Z` (0755
+      `mveary:mveary`; 74-file hash list `r6/moved.sha256`). It is kept until the operator
+      instructs deletion.
+    - **The restore:** R4's backup extracted. **While still stopped**, the hash and mode diffs
+      against `r4/baseline.*` were both **empty**.
+    - **The start:** 13:54:58.550Z; healthy 13:55:03Z; instance `dmnbu0dbvgnp`, build
+      `2.0.0-alpha.5-110-gb2a16f5a`, schema 19, Home, Default.
+    - **Compared with R3:** `/v1/logbook` **equal** (Default only); count **equal** (8,428);
+      `/v1/default-logbook` **equal** (no change record in play); lookups **equal** (HamNut and
+      QRZ enabled, QRZCQ disabled); Home bindings **equal** apart from queue counters. Queues 0.
+      Warnings are the two start-up notices only.
+    - **The station runs the candidate on its pre-test data.** The synthetic contacts, T, P, the
+      lookup change and the three restarts are discarded under the operator's consent.
+
+### Revision 5 — station result
+
+**R3–R6 complete; AC-1 to AC-11 passed on the station.** The two former blockers are cleared:
+- **AC-6's simultaneous reloads with windows B and C open, plus an FT8 window:**
+  - On the first switch (to T), B, C and D reloaded automatically, without a prompt. Their
+    streams were back about 1.2 s after the new instance answered.
+  - Window A held Firefox's leave-page prompt because of its keyed unsaved Settings edits. It
+    completed its reload only after the agent answered Leave, later and separately from that
+    1.2 s observation.
+  - On the switch back, all four windows reloaded automatically, without a prompt.
+- **W1-2's binding evidence, in all four windows across AC-6's restarts:** each reached
+  `verified` on the new instance with the expected archive and default.
+
+**Open:**
+- **CI is red on `62bec1f0`** (docs only, after the candidate). In the release gate's race step,
+  `TestWSStream_ShutdownSends1001AndWaits` failed: "peer saw close StatusCode(-1), want 1001"
+  (run 42036078646). The test is in the candidate's daemon change (`3f7af877`). It passed on
+  `b2a16f5a` (CI and R1) and in 300 local race runs. The cause is not yet established.
+- **U1–U7** stay unexercised and unwaived.
+- **The operator's sign-off** is still required. W-0024 acceptance stays **incomplete** until
+  then.
+- **Cleanups (step 26) are the operator's call:** this run's `r4/pre` and `r6/post` copies, the
+  moved post-test directory, revision 4's superseded backup and its `$W/pre`.
