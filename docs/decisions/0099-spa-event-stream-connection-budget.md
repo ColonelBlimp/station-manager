@@ -778,6 +778,173 @@ The private keys are not in the evidence.
 *Disposal.* Both guests are shut off and still defined. Disposal of both guests is the operator's
 decision, now that this comparative evidence is recorded.
 
+## B trust-lifecycle probe: run sheet (2026-11-05; prepared, not run)
+
+**Reviewer direction (2026-11-05).** Transport feasibility now has evidence. Provisioning is still
+an unresolved cost of choosing B, so the next probe tests the certificate-trust lifecycle on a
+disposable clone, with Firefox running inside the guest so that trust-store changes stay there. It
+measures four things:
+- **Installation:** does the system-anchor route give warning-free HTTPS and verified h2, in both
+  an existing and a fresh profile?
+- **Trust scope:** is an otherwise-valid certificate from that CA, issued for an out-of-scope
+  hostname, rejected?
+- **Renewal:** does replacing the leaf under the same CA need any new trust action?
+- **Removal:** does removing the anchor restore rejection after a Firefox restart, in both
+  profiles?
+
+It records the exact steps and the trust state before and after each. Amended after the
+reviewer's approval (2026-11-05): explicit certificate validation, tightened rejection criteria,
+profile-trust checks rather than an empty database, and keys kept apart from the evidence. Network containment must be
+established first, because default-route removal alone was insufficient. B remains Proposed.
+Origin migration and D1/D2 recovery need their own resolution. Both guests stay shut off while this
+sheet is prepared. Nothing below has been run.
+
+**Route under test (the proposed system-anchor route).**
+- A per-install CA, name-constrained to the loopback names (`permitted;IP:127.0.0.1/32`,
+  `permitted;DNS:localhost`; `CA:TRUE`, `pathlen:0`), issues the server leaf.
+- Install: `install -m 0644 <ca> /etc/pki/ca-trust/source/anchors/station-manager-local-ca.pem`,
+  then `update-ca-trust`.
+- Remove: delete that file, then `update-ca-trust`.
+- Firefox is expected to see the anchor through NSS's `libnssckbi.so` → `p11-kit-trust.so` (the
+  wiring measured on the host); step 3 re-measures it in the guest.
+
+A leaf-only anchor is not tested. The transport probe found that Firefox refused peer trust of a
+self-signed leaf, and leaf-only renewal cannot reuse an anchor. `Certificates.Install` (CA trust
+`CT,CT,`, persistent in profiles) is also not tested.
+
+**Guest.** A new clone, `sm-w0099-probe-t`, gets its own copy of the control's overlay and seed,
+created while both existing guests are shut off. The control `sm-w0099-probe` and the transport
+clone `sm-w0099-probe-b` stay untouched and shut off; the control's checksums are verified before
+and after, as last time. The new clone is disposable, and its disposal is the operator's decision
+after the evidence is recorded.
+
+**Containment (established before anything is copied in or run).**
+1. **The domain has no network interface.**
+   - `domain.xml` drops `<interface>` and adds `<vsock model="virtio"><cid auto="no"
+     address="3099"/></vsock>`.
+   - Control is over AF_VSOCK only: `ssh -i guest_key smtest@vsock/3099`, through the host's
+     `systemd-ssh-proxy`. File transfer uses `scp` over the same path.
+   - The guest's `systemd-ssh-generator` binds sshd to vsock port 22 when it runs in a VM with
+     AF_VSOCK and sshd is installed (`systemd-ssh-generator(8)`; the guest side is an inference until
+     step 2 shows it).
+2. **Verify containment before step 3, and stop if any check fails** (do not re-add a network
+   interface):
+   - host: `virsh domiflist sm-w0099-probe-t` lists no interfaces;
+   - guest: `ip -br link` shows only `lo`, and `ip route` and `ip -6 route` are empty;
+   - guest: `curl -m 3 https://1.1.1.1`, `curl -m 3 https://fedoraproject.org` and
+     `getent hosts fedoraproject.org` all fail;
+   - record all output.
+3. **Hostname mapping and resolver.**
+   - The probe hostname `scope-out.test` resolves only through `/etc/hosts` (`127.0.0.1
+     scope-out.test`), added in the guest.
+   - Each profile's `user.js` sets `network.trr.mode` to 5, so DNS-over-HTTPS cannot be attempted.
+     This is the only **explicit** probe preference change, recorded per profile. Firefox's
+     automation machinery may apply further preferences of its own
+     (https://github.com/mozilla-firefox/firefox/blob/main/remote/shared/RecommendedPreferences.sys.mjs);
+     the driver records the effective values of the certificate-related ones it can read.
+
+**Staging (host side; nothing in the guest fetches anything).**
+4. **Download the browser and driver packages.**
+   - `dnf download --resolve --alldeps --destdir pkgs firefox-<host's VERSION-RELEASE> nodejs
+     nss-tools openssl p11-kit-trust`. Every tool the run needs (`firefox`, `node`, `certutil`,
+     `openssl`, `trust`) must then be present in the guest from that local staging. If any is
+     missing, stop.
+     If the host's exact Firefox build has left the repositories, take the available one and record
+     the version.
+   - Verify every package with `rpm -K` against Fedora's key (`fedora.gpg`, already used for the
+     image).
+   - Write a SHA-256 manifest.
+5. **Make the certificates on the host** in a separate private working directory,
+   `~/sm-guest-probe-t/keys/` (0700, keys 0600). Only public certificates, their text dumps and
+   fingerprints are copied into `trust-evidence/`; no key ever enters it:
+   - **CA-S**, the scoped CA, constrained as above.
+   - **leaf-1**, issued by CA-S: SANs `IP:127.0.0.1`, `DNS:localhost`; `serverAuth`.
+   - **leaf-2**, the renewal: a new key and serial from CA-S, with the same SANs.
+   - **leaf-out**, issued by CA-S: SAN `DNS:scope-out.test` only, and otherwise valid (dates, EKU,
+     key usage). Its SAN matches the tested hostname, so a rejection cannot be a hostname mismatch.
+   - **CA-U**, an unconstrained positive-control CA, issuing **leaf-ctl** for `DNS:scope-out.test`.
+     It is served on a different port (`:8446`) under the same hostname and `/etc/hosts` mapping.
+   - Record each certificate's text dump (`openssl x509 -noout -text`) and SHA-256 fingerprint.
+6. **Copy into the contained guest over vsock:** `pkgs/`, the certificates and leaf keys, the
+   existing `probe-proxy` (SHA `d593b734…`), and the driver. Then install from local files only:
+   `sudo dnf install --disablerepo='*' ./pkgs/*.rpm`. Record the transaction and
+   `rpm -q firefox nodejs nss-tools openssl p11-kit-trust`. The leaf keys are copied into the guest
+   for the proxies; they never leave `keys/` and the guest.
+
+**Proxy instances in the guest** (unchanged daemon upstream, as in the transport probe):
+
+| Port | Leaf | Purpose |
+|---|---|---|
+| `:8443` | leaf-1, then leaf-2 | installation and renewal |
+| `:8445` | leaf-out (CA-S) | scope |
+| `:8446` | leaf-ctl (CA-U) | scope positive control |
+
+**The trust-state snapshot (taken at every state below).**
+- **System:**
+  - `ls -l /etc/pki/ca-trust/source/anchors/`;
+  - `trust list --filter=ca-anchors`, filtered to the probe labels;
+  - `readlink -f /usr/lib64/libnssckbi.so`;
+  - `rpm -q p11-kit-trust ca-certificates`.
+- **Per profile, checking profile trust rather than requiring an empty or identical
+  database.** In NSS, a certificate's presence and its assigned trust are distinct
+  (https://nss-crypto.org/reference/security/nss/legacy/tools/certutil/index.html).
+  - `certutil -L -d sql:<profile>`: every nickname with its trust attributes.
+  - `certutil -L -d sql:<profile> -n <nick>`: the SHA-256 fingerprint of any entry.
+  - The requirement: no profile entry for CA-S, CA-U or any probe leaf (matched by fingerprint)
+    carries trust attributes of its own (`C`, `T`, `c` or `P` in any position).
+  - `cert_override.txt` must not exist or must hold no probe entry, since a stored exception would
+    not count as warning-free.
+- **Served leaf:** the fingerprint of the certificate on each port, from `openssl s_client`.
+
+**The browser check (per profile, per state).** Headless Firefox in the guest, driven over local
+WebDriver BiDi by the driver. Every session is requested with `acceptInsecureCerts: false`
+(https://www.w3.org/TR/webdriver/#capabilities), and the capability the session returns is
+recorded. An absent `cert_override.txt` alone does not show that validation was on. It navigates
+to:
+- `https://127.0.0.1:8443/operate/phone`
+- `https://localhost:8443/operate/phone`
+- `https://scope-out.test:8445/`
+- `https://scope-out.test:8446/`
+
+For each, it records:
+- success, or the navigation error code (for example `SEC_ERROR_UNKNOWN_ISSUER`, or a
+  name-constraint error);
+- listener health at the same moment: from the guest, `openssl s_client` completes a handshake on
+  each port and reports the served fingerprint. A rejection only counts when its listener is
+  healthy;
+- on success: `location.protocol`, the navigation entry's `nextHopProtocol` (`h2` required), and
+  that the SPA document loaded;
+- after the run, a check that no `cert_override.txt` was written.
+
+**Sequence.**
+
+| # | State | Action | Expected |
+|---|---|---|---|
+| T0 | before install | create profile **P-old** (empty, 0700); run the browser check; snapshot | every URL fails with a certificate-trust rejection, listeners healthy; no anchor; no trusted probe entry in P-old |
+| T1 | install | anchor CA-S and CA-U with the steps above; snapshot | both anchors listed by `trust list`; no trusted probe entry in either profile |
+| T2 | installed, existing profile | restart Firefox on P-old; run the check | `:8443`: both names succeed with `h2`, and no exception is stored. **Scope enforcement is established only if `:8445` fails with a name-constraint validation error (e.g. `SEC_ERROR_CERT_NOT_IN_NAME_SPACE`) while `:8446` succeeds**, both listeners healthy. A timeout, a refused connection or an unknown-issuer error is **inconclusive** for scope |
+| T3 | installed, fresh profile | create **P-new** after the install; run the check | the same as T2 |
+| T4 | renewal | swap leaf-2 onto `:8443` and restart that proxy (dropping its connections), with no trust action; snapshot (served fingerprint = leaf-2); run the check in both profiles: first in the running Firefox, then after a restart | `:8443` succeeds in both profiles, both times; the anchors are unchanged; still no trusted probe entry in either profile |
+| T5 | removal | remove both anchors with the steps above; snapshot; run the check once in the still-running Firefox (informational: it may cache trust), then restart Firefox and run the check in both profiles | after the restart, every URL fails with a **certificate-trust rejection** (an unknown-issuer class error) in both profiles, **with every listener healthy**; no anchor; no independently trusted profile copy and no exception |
+
+**Records** (to `trust-evidence/`, 0700, with a SHA-256 manifest):
+- the containment proof (step 2);
+- the package manifest and the `rpm -K` output;
+- the public certificate dumps and fingerprints (no keys);
+- the exact commands run at each step, with their output;
+- every snapshot and every browser-check result;
+- the guest journal extract;
+- the control's checksums, before and after.
+
+**Not established by this probe:**
+- the production install path (RPM scriptlet, upgrade, uninstall);
+- non-Fedora or Flatpak Firefox;
+- other browsers;
+- whether p11-kit honours name constraints for non-NSS consumers (curl or Python in the guest
+  may be recorded as side observations only);
+- origin migration;
+- D2b/AC-6.
+
 ## Operator rulings (2026-11-04)
 
 These settle the acceptance criteria. The mechanism is still not approved, and nothing is built.
