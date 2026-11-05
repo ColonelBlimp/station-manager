@@ -21,6 +21,11 @@ priority over refining A.
 at 2–4 ms with one, three and four distinct lookups held; the same proxy on HTTP/1.1 starved them
 (about 4.4 s). This is transport evidence only (see "B transport probe").
 
+**WebSocket pool probe (2026-11-05):** in Firefox 159, open WebSockets did not consume the six
+HTTP slots. With 9 open and 4 HTTP requests held, ordinary requests took 1–2 ms; SSE in their place
+starved them. B is paused, and WebSocket event delivery is proposed as the leading candidate (see
+"WebSocket event transport").
+
 **Mechanism approval is blocked (reviewer, 2026-11-04) on:**
 1. evidence for D1-ii under a representative request workload (see "Request workload in D1-ii");
 2. the Q3 startup design;
@@ -944,6 +949,98 @@ For each, it records:
   may be recorded as side observations only);
 - origin migration;
 - D2b/AC-6.
+
+## WebSocket event transport: the pool probe (2026-11-05)
+
+**Why this, before more of B.** The operator questioned the cost of the B trust probe. A browser
+page has only browser networking (fetch, EventSource, WebSocket, WebTransport, WebRTC), and RPC
+libraries ride on those. But WebSockets need not draw from the HTTP per-host pool:
+- **Firefox 159's built-in defaults on this host** (read from `omni.ja`):
+  - `network.http.max-persistent-connections-per-server` 6;
+  - `network.websocket.max-connections` 200;
+  - `network.http.max-connections` 900.
+- **Chromium's source.** The reviewer cited it as separating the normal and WebSocket pools, with
+  per-group defaults of 6 and 255
+  (https://chromium.googlesource.com/chromium/src/+/refs/heads/main/net/socket/client_socket_pool_manager.cc).
+
+**Reviewer's direction (2026-11-05).**
+- Assess WebSockets **for events** before moving any requests to RPC. If moving the persistent
+  event streams out of the HTTP pool is enough, the current enrichment API stays, cancellation
+  included, and no asynchronous-job design is needed.
+- One WebSocket per window is optional. Keeping FT on its own connection may preserve its ownership
+  and presence semantics more directly.
+- Capacity sketch, a calculation and not a latency guarantee; four lookups is not an established
+  maximum:
+  - all events on WebSockets: four held HTTP lookups leave 2 of the 6 HTTP slots free;
+  - shell and rig on WebSockets with FT kept on SSE: they leave 1 free.
+- Asynchronous enrichment over a socket is not free. Response matching, cancellation, concurrency
+  limits and settling pending requests after a disconnect are application design. It is added only
+  if the event-transport change proves insufficient.
+- The transport change itself still needs:
+  - explicit Origin validation, because the current guard skips Origin for GET
+    (`internal/api/csrf.go:42`);
+  - reconnect and state recovery;
+  - bounded buffering;
+  - daemon shutdown handling;
+  - unchanged FT subscription lifetime: an ordinary open window must not become an FT presence
+    signal.
+- B and its trust-lifecycle probe are paused. The guest `sm-w0099-probe-t` is shut off and
+  retained: it is contained, staged, and nothing has run in it.
+
+**Setup.**
+- **Server.** A throwaway loopback server, not Station Manager: stdlib Go with a minimal RFC 6455
+  endpoint (`main.go` in the evidence). One host and port, `127.0.0.1:18700`, served the page, the
+  ordinary endpoints, SSE (headers and an initial `data: hello` flushed at once) and the
+  WebSocket endpoint (sends `hello`, echoes).
+- **Held requests** blocked until released. The driver read server state and released holds over a
+  separate control port, so its own reads never used the browser's connections.
+- **Browser.** Headless Firefox 159, fresh profile, BiDi session with `acceptInsecureCerts: false`.
+  One page. The per-host pool is browser-wide, so the windows were not modelled.
+- **Timed requests.** Four uncached GETs (`Cache-Control: no-store`, a unique query string,
+  `transferSize` about 360 B), measured through complete body receipt.
+- **Barriers.**
+  - Every WebSocket opened, received `hello` and echoed a message before timing.
+  - Every EventSource received its first message.
+  - Every held request was confirmed both received and holding at the server, and pending in the
+    browser.
+- **Chromium was not installed, so it was not tested.**
+
+*Evidence.* `/home/mveary/sm-ws-probe/evidence/` (0700, `MANIFEST.sha256`): the driver, server
+and page sources, plus the driver and server logs.
+
+| Configuration | Open (server count; Firefox sockets) | Baseline | 1 held | 4 held | Recovery |
+|---|---|---|---|---|---|
+| **All events on WebSockets** (9 WS ≈ D1-ii's 4 × 2 + FT) | 9 WS, all echoed; 10 sockets | 1–3 ms | **1–2 ms**, hold still pending | **1–2 ms**, all 4 still pending; 15 sockets | 1–3 ms |
+| **Shell and rig on WebSockets, FT on SSE** (8 WS + 1 SSE) | 8 WS + 1 SSE; 14 sockets | 0–1 ms | **0–2 ms**, still pending | **0–1 ms**, all 4 still pending; 14 sockets | 1–2 ms |
+| Negative control: 6 SSE | 6 SSE, all first messages; 6 sockets | **not complete after 4 s** | — | — | — |
+| Negative control: 5 SSE + 1 held | 5 SSE; 5 sockets, then 6 | 1 ms | **4,026 ms** each, 4,025–4,026 ms of it before request start (completed only after release) | — | 1–2 ms |
+
+*Reading.*
+- **In Firefox 159, open WebSockets did not consume the six HTTP slots.** With 9 WebSockets open
+  and 4 HTTP requests held, ordinary requests completed in 1–2 ms. The same server, page and
+  browser, with SSE in place of WebSockets, starved exactly as in the daemon probes. The socket
+  counts match the capacity sketch:
+  - 8 WS + 1 SSE + 4 held + 1 free = 14;
+  - the HTTP pool's six held 1 SSE, the 4 holds and 1 ordinary connection.
+- **With event connections on WebSockets, four synthetic HTTP holds did not block ordinary
+  requests.** This supports retaining the current enrichment API for the SMD implementation and
+  acceptance run. The probe exercised synthetic held requests, not SMD's enrichment API.
+- **Not established:**
+  - SMD itself;
+  - four-window acceptance;
+  - restart recovery (D2b/AC-6);
+  - Chromium or any other browser;
+  - more than four held requests;
+  - Origin validation, buffering, shutdown and FT presence semantics, which are design work for
+    the candidate.
+
+**Next step (reviewer, 2026-11-05):** a design comparison for WebSocket event delivery.
+- **Starting shape:** shell and rig on WebSockets, with FT remaining on its existing SSE
+  connection. That configuration was measured, and it disturbs FT's lifetime semantics least.
+  Moving FT is compared only where there is a concrete benefit.
+- **It covers:** Origin, reconnect, recovery, bounded buffering and shutdown, while retaining the
+  agreed four-window (D1) and restart (D2b/AC-6) acceptance criteria.
+- **Unchanged:** B stays paused; RPC and asynchronous enrichment remain deferred.
 
 ## Operator rulings (2026-11-04)
 
