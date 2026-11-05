@@ -17,6 +17,10 @@ rulings); mechanism approval and implementation remain pending.
 with five streams open, against D2a's 1 s (see "Feasibility probe"). The B/C comparison now takes
 priority over refining A.
 
+**B transport probe (2026-11-05):** through a TLS proxy, HTTP/2 kept every timed ordinary request
+at 2–4 ms with one, three and four distinct lookups held; the same proxy on HTTP/1.1 starved them
+(about 4.4 s). This is transport evidence only (see "B transport probe").
+
 **Mechanism approval is blocked (reviewer, 2026-11-04) on:**
 1. evidence for D1-ii under a representative request workload (see "Request workload in D1-ii");
 2. the Q3 startup design;
@@ -691,6 +695,88 @@ The reviewer approved committing this comparison after six corrections, all appl
 
 The reviewer also approved the transport probe above. B remains the preferred next investigation;
 mechanism approval is still pending.
+
+## B transport probe (2026-11-05): HTTP/2 keeps ordinary requests fast under four held lookups
+
+**This is transport evidence only.** It does not establish production trust, D2b/AC-6 recovery, or
+acceptance of B. It ran with the reviewer's approval of 2026-11-05.
+
+*Setup.*
+- **Guest.** A clone, `sm-w0099-probe-b`, with its own copy of the control's overlay and seed, its
+  own name and MAC, and SSH on port 2223. It shares only the read-only base image.
+- **Same build and config as the control.** The R0 artifact `b766a145-dirty`, synthetic setup, the
+  bridge against an absent serial port, and HamNut pointed at the same guest-local holding responder.
+- **Default route removed.** The clone's default route was removed before the probe, and an
+  outbound connection attempt then failed. The connected `192.168.1.0/24` route remained
+  (`guest-state.txt`), so this is not strict network isolation.
+- **Control untouched.** `sm-w0099-probe` stayed shut off. Its overlay, domain definition and seed
+  were byte-identical before and after (`control-before.sha256`).
+- **Proxy.** A purpose-built Go 1.26.2 reverse proxy (`main.go` in the evidence) in front of the
+  unchanged daemon:
+  - TLS on the browser leg, HTTP/1.1 upstream;
+  - `FlushInterval: -1`, so every write is flushed;
+  - advertised `SETTINGS_MAX_CONCURRENT_STREAMS` 100;
+  - two instances: `:8443` offering h2, and `:8444` with HTTP/1.1 only, for the negative control.
+
+  Every request and connection is logged on both legs.
+- **Browser.** Headless Firefox 159 with fresh throwaway profiles, through an SSH tunnel. The same
+  three windows as the feasibility probe: `/operate/phone`, `/config` and `/map`, giving 5 SSE
+  subscribers.
+- **Measured workload.** Four ordinary GETs, `/v1/config`, `/v1/version`, `/v1/qso-archives` and
+  `/v1/default-logbook`, were timed as page `fetch` calls from the Settings window (`/config`).
+  The other windows kept their streams open meanwhile. The held lookups were issued from the
+  Phone/CW window.
+- **Trust, profile-only.**
+  - **Attempt 1.** A self-signed leaf (`CA:FALSE`), added to the profile with `P,,` (trusted peer),
+    was **refused by Firefox: `MOZILLA_PKIX_ERROR_SELF_SIGNED_CERT`**. That run is kept as
+    `attempt1-h2-selfsigned-peer-trust.jsonl`.
+  - **Runs used.** A throwaway CA instead (`CA:TRUE`, `pathlen:0`, name-constrained to
+    `127.0.0.1` and `localhost`), trusted `C,,` in each profile only, issuing the proxy's leaf.
+
+  This bears on B's provisioning shape: Firefox did not accept peer trust of a self-signed leaf.
+
+*Evidence.* `/home/mveary/sm-guest-probe-b/evidence/` (0700, `MANIFEST.sha256`):
+- the driver and proxy sources;
+- both drivers' logs and both proxies' logs;
+- the responder journal and the guest `smd.log` extract;
+- the guest state, the tooling versions and the certificate fingerprints.
+
+The private keys are not in the evidence.
+
+| Case | HTTP/2 (`:8443`) | HTTP/1.1 control (`:8444`) |
+|---|---|---|
+| Streams | 5 SSE subscribers; **1** Firefox socket; navigation and all timed requests `nextHopProtocol` `h2`; the proxy logged all 6 stream requests (4 `/v1/events`, including the flush check, and 2 `/v1/rig/events`) as `HTTP/2.0` | 5 subscribers; **7** Firefox sockets; `http/1.1` |
+| Baseline | 2–4 ms | 2–4 ms |
+| 1 held (`9X0PRA`) | barrier: distinct miss at the responder, pending in the browser. Then **3 ms** each, with the lookup still pending afterwards | barrier as for HTTP/2. After 4 s, still pending; completed after release at **4,437–4,439 ms**, of which 4,436–4,439 ms came before request start |
+| Recovery | 2–3 ms | 2–3 ms |
+| 3 held (`9X0PRC`–`E`) | 3 distinct misses arrived; all pending. **2–3 ms** each, still pending afterwards | not run (control scope) |
+| 4 held (`9X0PRF`–`J`) | 4 distinct misses arrived; all pending. **2–3 ms** each, still pending afterwards | not run |
+| Cancellation (`9X0PRK`) | browser abort, then the proxy's request ended with `context canceled`, its upstream connection closed (13 → 12), and the daemon's enrich handler returned at the same moment (512 ms, the time of the abort) | not run |
+| SSE flushing | `fetch('/v1/events')` read through the proxy: headers and first body bytes (`: connected`) at **3 ms** | not run |
+
+*Reading.*
+- **Through the proxy, HTTP/2 held D2a's 1 s with one, three and four distinct lookups pending.**
+  Every timed ordinary request (the four GETs above, from Settings) took 2–4 ms. The lookups were
+  confirmed still pending after those requests completed.
+- **The HTTP/1.1 control reproduced the starvation.** The setup was the same apart from the
+  browser-leg protocol: same proxy, same daemon, five streams, one held lookup. The control result
+  matches the feasibility probe over plain HTTP. So the difference is attributable to HTTP/2 on the
+  browser leg, not to the proxy.
+- **Observed but not explained:** the control showed 7 Firefox sockets, not 6. The control still
+  starved, so a seventh socket did not carry the ordinary requests. Firefox may pool some
+  connections separately (an inference, not verified).
+- **What this does not show:**
+  - the daemon serving h2 itself;
+  - Go's default stream limit;
+  - flow-control behaviour under heavy streams;
+  - D1-ii's four-window layout with real FT enrichment;
+  - restart recovery;
+  - any production trust route.
+
+  The lookups were page `fetch` calls of the request enrichment makes, as in the feasibility probe.
+
+*Disposal.* Both guests are shut off and still defined. Disposal of both guests is the operator's
+decision, now that this comparative evidence is recorded.
 
 ## Operator rulings (2026-11-04)
 
