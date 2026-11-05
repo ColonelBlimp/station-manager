@@ -30,12 +30,18 @@
     import { installSettingsGuards } from './lib/config/unsaved';
     import { computeTitle } from './lib/ui/title';
     import { isDevDaemon } from './lib/ui/buildIdentity.svelte';
+    import { publishBindingMarker } from './lib/config/bindingMarker.svelte';
 
     // Ask before unsaved Settings edits are discarded. Installed from the SHELL,
     // not from Settings: Settings unmounts the moment the operator navigates
     // away, which is precisely when the guard has to still be listening.
     // installSettingsGuards returns its uninstall, which onMount runs on destroy.
     onMount(installSettingsGuards);
+
+    // The read-only binding marker on <html> (ADR 0099 W1-2): what this tab is
+    // bound to, for passive observation by an acceptance driver. Observational
+    // only — attributes written, nothing read back, no request made.
+    $effect(() => publishBindingMarker(document.documentElement));
 
     // Reflect shell state onto <html> (drives the token swap + collapse rules)
     // and persist it. Initial attributes are set pre-mount in index.html, so

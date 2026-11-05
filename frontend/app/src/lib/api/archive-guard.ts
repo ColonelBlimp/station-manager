@@ -20,10 +20,19 @@ let unproven: () => boolean = () => false;
 let onMismatch: () => void = () => {};
 let boundDefaultUuid: string | null = null;
 let onDefaultMismatch: () => void = () => {};
+// Told when the bound archive or default changes, so the read-only binding
+// marker (lib/config/bindingMarker.svelte.ts) re-publishes. Observational only.
+let onBindingChange: () => void = () => {};
+
+/** The archive layer's hook for binding changes (ADR 0099 W1-2 marker). */
+export function setBindingChangeListener(fn: () => void): void {
+    onBindingChange = fn;
+}
 
 /** The archive the boot bracket proved; null (or '') = nothing proven. */
 export function setBoundArchive(id: string | null): void {
     bound = id !== null && id !== '' ? id : null;
+    onBindingChange();
 }
 
 /** The archive guarded requests name now; null when none is proven. */
@@ -101,6 +110,7 @@ export const DEFAULT_HEADER = 'X-SM-Default-Logbook';
 /** The default logbook UUID of the established station context; null = none. */
 export function setBoundDefault(uuid: string | null): void {
     boundDefaultUuid = uuid !== null && uuid !== '' ? uuid : null;
+    onBindingChange();
 }
 
 /** The default live FT8 requests assert now; null when the context has none. */

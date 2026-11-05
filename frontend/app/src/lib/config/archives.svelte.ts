@@ -20,6 +20,7 @@ import {
     boundDefault,
     setArchiveBindingGate,
     setArchiveMismatchSink,
+    setBindingChangeListener,
     setBoundArchive,
     setDefaultMismatchSink,
 } from '../api/archive-guard';
@@ -429,6 +430,34 @@ async function keepWatching(before: string, reloadDetail: string): Promise<void>
 // cannot read after retries means it cannot prove anything — gate.
 
 let bootIdentity: DaemonIdentity | null = null;
+
+/*
+    Verification EVIDENCE for the read-only binding marker (ADR 0099 W1-2,
+    lib/config/bindingMarker.svelte.ts). Observational only: nothing in the
+    application reads it to decide anything.
+      instance — the daemon instance accepted by the latest SUCCESSFUL binding
+                 verification (boot bracket, or a reconnect check that found the
+                 same archive and default). Recorded only on that success path,
+                 never when a read merely finishes.
+      seq      — the order the recorded check STARTED in: an older check that
+                 completes after a newer one never overwrites its evidence.
+      revision — bumped when the bound archive or default changes, so the marker
+                 re-publishes (those live in archive-guard, outside $state).
+*/
+export const bindingEvidence: { instance: string; seq: number; revision: number } = $state({
+    instance: '',
+    seq: 0,
+    revision: 0,
+});
+let checkSeq = 0;
+function recordVerified(seq: number, instance: string): void {
+    if (seq <= bindingEvidence.seq) return;
+    bindingEvidence.seq = seq;
+    bindingEvidence.instance = instance;
+}
+setBindingChangeListener(() => {
+    bindingEvidence.revision++;
+});
 const IDENTITY_TRIES = 3;
 
 // Overlapping identity checks (successive reconnects launch one each, unawaited)
@@ -459,6 +488,7 @@ export async function bootArchiveScoped<T>(
     reads: () => Promise<T>,
     contextDefault?: (result: T) => string | null
 ): Promise<T> {
+    const seq = ++checkSeq;
     beginCheck(); // the shell may open inside `reads`; nothing is admitted until the bracket decides
     let before: DaemonIdentity | null;
     let result: T;
@@ -487,6 +517,7 @@ export async function bootArchiveScoped<T>(
             // per-archive browser stores select it (archiveStores.svelte.ts).
             setBoundArchive(after.archiveId);
             bindArchiveStores(after.archiveId);
+            recordVerified(seq, after.instance);
         } else {
             bootIdentity = null;
             toasts.info('The daemon changed while the page was loading. Reloading…');
@@ -534,6 +565,7 @@ async function readIdentityWithRetries(): Promise<DaemonIdentity | null> {
  */
 export async function verifyArchiveGeneration(): Promise<void> {
     if (archivesState.switchUnresolved) return;
+    const seq = ++checkSeq;
     beginCheck();
     let now: DaemonIdentity | null;
     try {
@@ -561,7 +593,7 @@ export async function verifyArchiveGeneration(): Promise<void> {
         requestReload('The daemon now serves another archive; this page must reload to rebind.');
         return;
     }
-    reloadOnAnotherDefault(now);
+    if (!reloadOnAnotherDefault(now)) recordVerified(seq, now.instance);
 }
 
 /**
@@ -570,13 +602,14 @@ export async function verifyArchiveGeneration(): Promise<void> {
  * identity's. Another one — none included — reloads; the assertion is never
  * refreshed in place (ADR 0097 §4).
  */
-function reloadOnAnotherDefault(now: DaemonIdentity): void {
+function reloadOnAnotherDefault(now: DaemonIdentity): boolean {
     const mine = boundDefault() ?? bootIdentity?.defaultLogbookUuid ?? '';
-    if (now.defaultLogbookUuid === mine) return;
+    if (now.defaultLogbookUuid === mine) return false;
     toasts.info('The daemon now serves another default logbook. Reloading…');
     requestReload(
         'The daemon now serves another default logbook; this page must reload to rebind.'
     );
+    return true;
 }
 
 /** The rig stream reopened (after its last failed retry). The daemon's served
@@ -588,6 +621,7 @@ function reloadOnAnotherDefault(now: DaemonIdentity): void {
 export async function verifyAfterRigReconnect(): Promise<void> {
     if (bootIdentity === null || bootIdentity.archiveId === '') return;
     if (archivesState.switchUnresolved) return;
+    const seq = ++checkSeq;
     beginCheck();
     let now: DaemonIdentity | null;
     try {
@@ -606,7 +640,7 @@ export async function verifyAfterRigReconnect(): Promise<void> {
         requestReload('The daemon now serves another archive; this page must reload to rebind.');
         return;
     }
-    reloadOnAnotherDefault(now);
+    if (!reloadOnAnotherDefault(now)) recordVerified(seq, now.instance);
 }
 
 // The client half of the archive request guard: hold guarded requests while the
@@ -649,6 +683,9 @@ export function _resetArchivesForTests(): void {
     bootIdentity = null;
     setBoundArchive(null);
     pendingChecks = 0;
+    checkSeq = 0;
+    bindingEvidence.instance = '';
+    bindingEvidence.seq = 0;
     archivesState.list = [];
     archivesState.loaded = false;
     archivesState.loading = false;
