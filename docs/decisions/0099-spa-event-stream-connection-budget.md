@@ -1286,41 +1286,41 @@ connections such as WebSockets" (`server.go:3142`). So `api.Server` gains a smal
      (`accept.go` L129, L160) and uses it as the `Conn`'s transport (L173). Because the wrapper
      is itself a Hijacker, it is reached before any `Unwrap`. A test asserts that the captured
      connection is non-nil after `Accept`.
-  2. **One close coordinator per connection** owns every close. It is started by the first of:
-     - `stopCtx` (shutdown): close code 1001, reason `"shutdown"`;
-     - the reader's `unexpectedData` report: 1008, reason `"unexpected data message"`;
-     - hub eviction: 1001.
+  2. **One close coordinator per connection** owns every close. Its transitions depend on why it
+     starts (corrected after review, 2026-11-05):
 
-     It runs `go func() { closeDone <- c.Close(code, reason) }()` exactly once. Because the SMD
-     reader has already exited before a 1008 close (it reports, then returns), `Close` runs in the
-     coordinator's goroutine and never waits on itself. `waitGoroutines` has no `closeReadDone`
-     to wait for, because `CloseRead` is never called.
+     | Trigger | Action | What ends the wait |
+     |---|---|---|
+     | **Unexpected data** (the reader reports, then exits) | start `Close(1008, "unexpected data message")` once | `closeDone`, or grace expiry. The reader has **already** finished, so its completion is not a reason to force closure; a cooperative peer gets its grace to reply |
+     | **Shutdown** (`stopCtx`) or **hub eviction** | start `Close(1001, …)` once | `closeDone`, or grace expiry. A later reader exit only **records progress** and does not end the grace |
+     | **Peer close or transport failure** (the reader exits with an error, no close in progress) | **clean up directly**, with no wait for a later shutdown, eviction or keepalive: `CloseNow()` (no other close is in progress, so it does not wait on one) | `CloseNow` returns |
+
+     - **One close at a time.** If a second trigger arrives while a close is underway, no second
+       close starts. Shutdown during a policy close only moves the deadline to the earlier of the
+       two.
+     - **No self-wait.** A 1008 close runs in the coordinator's goroutine after the reader has
+       exited, so it never waits on itself. `waitGoroutines` has no `closeReadDone` to wait for,
+       because `CloseRead` is never called.
   3. **Grace.** The grace runs to `min(start + 1 s, the shutdown context's deadline)` (the
-     operator's ruling), for the policy close and the shutdown close alike. If shutdown begins
-     while a policy close is already underway, the coordinator does not start a second close. It
-     only moves the deadline to the earlier of the two. The registry hands each handler the
-     shutdown context's deadline.
-  4. **Completion, or forced closure.** The coordinator waits for the first of:
-     - `closeDone`: the handshake completed;
-     - `readerDone`: the reader, which holds `readMu` while blocked in `Reader`, consumed the
-       peer's close reply or saw the transport fail. `Close`'s `waitCloseHandshake` needs that
-       same `readMu` within a 5 s budget (`close.go` L198–206), so with a live reader the peer's
-       reply is observed by the reader;
-     - grace expiry.
-
-     Unless `closeDone` has already fired, the coordinator then calls `netConn.Close()` on the
-     captured transport. Go's `net.Conn.Close` contract is that "any blocked Read or Write operations
-     will be unblocked and return errors" (`/usr/local/go/src/net/net.go:136`):
+     operator's ruling), for the policy close and the shutdown close alike. The registry hands each
+     handler the shutdown context's deadline.
+  4. **Forced closure at grace expiry.** If `closeDone` has not completed by the deadline, the
+     coordinator calls `netConn.Close()` on the captured transport. Go's `net.Conn.Close` contract
+     is that "any blocked Read or Write operations will be unblocked and return errors"
+     (`/usr/local/go/src/net/net.go:136`):
      - a pending `writeClose` write fails, and `writeClose` ignores `net.ErrClosed` (`close.go`
        L192);
      - `waitCloseHandshake`'s read, or its `readMu` wait, ends;
-     - the SMD reader's read fails.
+     - a still-running SMD reader's read fails.
 
      `Close` then reaches `Conn.close()` (L117), which closes `c.closed`. `waitGoroutines` waits only
      for `c.closed`.
-  5. **Join.** The coordinator waits on `closeDone` and on `readerDone`, both explicit signals.
-     Only then does cleanup continue.
-
+  5. **Completion notifications that stay observable.** The `Close` operation and the reader each
+     publish a **completion**: its result is stored in a field first, and then a channel is closed,
+     never sent on. The coordinator can therefore observe `closeDone` while it waits, and the
+     cleanup can join it afterwards, without either consuming a one-shot value. The same holds for
+     `readerDone`.
+  6. **Join.** Cleanup waits on both completions, then reads their stored results.
   A wedged peer never receives 1001 or 1008, but its transport is closed at grace expiry. Two
   library paths were not read here: `readMu`'s lock implementation, and `write.go`'s control-frame
   write. Both are covered by the tests below rather than assumed.
@@ -1468,9 +1468,9 @@ that benefit does not outweigh the three questions it brings back from A.
     - close on eviction or shutdown, with the grace;
     - the cleanup order in responsibility 7;
   - the shell twin of `handleEvents`;
-  - `bridge.Service.WSHandler(shutdownCh)`, the twin of `HTTPHandler`. The bridge keeps owning its
-    bootstrap. The upgrade mechanics come from a small injected helper, so `internal/bridge`
-    imports nothing new from `internal/api`;
+  - the rig WebSocket handler, in `internal/api` beside the shell's. `internal/api` already depends
+    on `*bridge.Service` (`server.go:66`), so it calls the bridge's exported `Subscribe` and
+    `TriggerBootstrap` directly. The bridge keeps owning its bootstrap and imports nothing new;
   - route registration behind `limitEventSubscribers`;
   - `isStreamPath`;
   - the stream registry and its wait in `Server.Shutdown`;
@@ -1492,6 +1492,12 @@ that benefit does not outweigh the three questions it brings back from A.
   - the rig bootstrap is still sent on connect;
   - an evicted slow reader gets a close frame;
   - a wedged peer is ended by the write deadline;
+  - **written first (RED):**
+    - a policy close where the reader has already finished and the cooperative peer has not yet
+      replied: the transport is not closed before the 1008 close frame is sent, and the peer gets
+      its grace;
+    - an ordinary disconnect, with no shutdown and no hub event: the handler cleans up at once,
+      without waiting for a keepalive, eviction or shutdown;
   - unexpected data:
     - an inbound data message makes the reader report and exit;
     - the coordinator closes with 1008, and a cooperative peer completes the handshake promptly,
@@ -1563,6 +1569,16 @@ now uses an SMD-owned reader built on `Reader`, a single close coordinator for t
 closes, and explicit `readerDone` and `closeDone` signals. Unexpected-data tests, including
 shutdown during a policy close, were added. The envelope adaptation and the qualified CI-V wait
 description were accepted.
+
+**Reviewer, 2026-11-05 (coordinator transitions).** As first written, `readerDone` would have forced
+transport closure before a cooperative peer could answer a 1008 close, and peer closure or
+transport failure was missing from the coordinator's triggers. Both are corrected in
+responsibility 7:
+- the trigger table;
+- completions that stay observable, with results stored separately;
+- two RED-first tests.
+
+The W1 build proceeds RED-first. The four-window and restart acceptance gates are unchanged.
 
 B stays paused. RPC and asynchronous enrichment stay deferred. Still Proposed.
 

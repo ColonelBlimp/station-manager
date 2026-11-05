@@ -111,6 +111,9 @@ type Server struct {
 	// Shutdown blocked until the configured graceful-shutdown timeout
 	// expires and the listener force-closes the connection.
 	shutdownCh chan struct{}
+	// streams tracks the hijacked WebSocket stream handlers (ADR 0099 W1):
+	// http.Server.Shutdown neither closes nor waits for them.
+	streams streamRegistry
 	// shutdownOnce guards the shutdownCh close so Shutdown is idempotent —
 	// http.Server.Shutdown is itself safe to call repeatedly, but an
 	// unguarded close(shutdownCh) panics ("close of closed channel") on a
@@ -360,6 +363,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *l
 	// general concurrent-request limit since SSE connections are
 	// long-lived by design).
 	apiMux.Handle("GET /v1/events", s.limitEventSubscribers(http.HandlerFunc(s.handleEvents)))
+	// Its WebSocket twin (ADR 0099 W1): the SPA's shell transport, off the
+	// browser's six-connection HTTP pool. Same subscriber cap.
+	apiMux.Handle("GET "+wsEventsRoute, s.limitEventSubscribers(http.HandlerFunc(s.handleEventsWS)))
 
 	// Config — operator's writable subset (logging_station,
 	// default_*_id) plus joined display details for the default
@@ -400,6 +406,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *l
 	// slot" resource.
 	if br != nil && br.Enabled() {
 		apiMux.Handle("GET /v1/rig/events", s.limitEventSubscribers(br.HTTPHandler(s.shutdownCh)))
+		apiMux.Handle("GET "+wsRigEventsRoute, s.limitEventSubscribers(s.rigEventsWSHandler(br)))
 		// Inbound command path (ADR 0026) — same enablement gate as the
 		// SSE route. A normal request (not long-lived), so the global
 		// limitConcurrent middleware covers it; no per-route SSE cap.
@@ -782,7 +789,13 @@ func (s *Server) StopAccepting() {
 // leftover — the one case unlink-on-close misses — is the pre-bind
 // cleanup's job in ListenAndServe.
 func (s *Server) Shutdown(ctx context.Context) error {
-	s.shutdownOnce.Do(func() { close(s.shutdownCh) })
+	s.shutdownOnce.Do(func() {
+		// Stream registration closes BEFORE the shutdown signal, so no WebSocket
+		// handler can upgrade untracked after this point (ADR 0099 W1).
+		deadline, _ := ctx.Deadline()
+		s.streams.beginShutdown(deadline)
+		close(s.shutdownCh)
+	})
 	// The drain's result and the listener's one close result are both reported,
 	// whichever caller closed first: after a drain timeout, net/http returns
 	// only the deadline, and once Serve has returned it no longer tracks the
@@ -795,6 +808,12 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		if closeErr := owner.result(); closeErr != nil && !stderr.Is(err, closeErr) {
 			err = stderr.Join(err, closeErr)
 		}
+	}
+	// Hijacked stream handlers are invisible to httpServer.Shutdown: wait for
+	// them here. Success means every tracked handler has ended; an expired
+	// context reports the deadline and promises nothing.
+	if werr := s.streams.wait(ctx); werr != nil && err == nil {
+		err = werr
 	}
 	// Completion is logged only on SUCCESS, and only once. A failed Shutdown
 	// (deadline exceeded with connections still open) has NOT completed the

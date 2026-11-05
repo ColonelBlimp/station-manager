@@ -18,6 +18,8 @@ github.com/aarondl/strmangle v0.0.9 h1:VCT+O1FqRSE9DTK3qR0zRHtB384fdRzuyKfx2ux2x
 github.com/aarondl/strmangle v0.0.9/go.mod h1:ezNIwvvnuVGuKedP5qt2T+wvzPD8yuOoMzamifXNMlk=
 github.com/apmckinlay/gsuneido v0.0.0-20190404155041-0b6cd442a18f/go.mod h1:JU2DOj5Fc6rol0yaT79Csr47QR0vONGwJtBNGRD7jmc=
 github.com/cockroachdb/apd v1.1.0/go.mod h1:8Sl8LxpKi29FqWXR16WEFZRNSz3SoPzUzeMeY4+DwBQ=
+github.com/coder/websocket v1.8.15 h1:6B2JPeOGlpff2Uz6vOEH1Vzpi0iUz20A+lPVhPHtNUA=
+github.com/coder/websocket v1.8.15/go.mod h1:NX3SzP+inril6yawo5CQXx8+fk145lPDC6pumgx0mVg=
 github.com/containerd/errdefs v1.0.0 h1:tg5yIfIlQIrxYtu9ajqY42W3lpS19XqdxRQeEwYG8PI=
 github.com/containerd/errdefs v1.0.0/go.mod h1:+YBYIdtsnF4Iw6nWZhJcqGSg/dwvV7tyJ/kCkyJ2k+M=
 github.com/containerd/errdefs/pkg v0.3.0 h1:9IKJ06FvyNlexW690DXuQNx2KA2cUJXx151Xdx3ZPPE=

@@ -168,7 +168,7 @@ func (s *Server) rejectWhenDraining(next http.Handler) http.Handler {
 func (s *Server) limitConcurrent(next http.Handler) http.Handler {
 	const op errors.Op = "api.limitConcurrent"
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isSSEPath(r.URL.Path) {
+		if isStreamPath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}

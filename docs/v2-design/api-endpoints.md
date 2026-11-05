@@ -31,8 +31,8 @@ carry only a generic message (the real cause is logged server-side). Some subsys
 (bridge, FT8 errors over SSE) carry a richer `{code, details}` shape.
 
 **Middleware chain** (outermost first, `internal/api/limits.go`):
-`logRequests` → `limitConcurrent` (non-SSE concurrent-request semaphore; over budget →
-**503 `server_busy`**; the SSE routes are exempt) → `recoverPanic` (panic → **500
+`logRequests` → `limitConcurrent` (non-stream concurrent-request semaphore; over budget →
+**503 `server_busy`**; the SSE and WebSocket stream routes are exempt) → `recoverPanic` (panic → **500
 `internal_error`**) → mux. Body-reading endpoints cap at `Server.MaxBodyBytes`
 (**413 `body_too_large`** / **400 `read_error`**); malformed JSON → **400 `invalid_json`**.
 `POST /v1/qso` additionally has a per-endpoint token bucket (**429 `rate_limited`**). The
@@ -51,6 +51,31 @@ headers — an observation; that the first body bytes gate `open` in that enviro
 inference, not an established browser fact. All three send a `: keepalive` comment every 30s,
 clear/re-arm write deadlines so long-lived streams survive `WriteTimeout`, and return promptly
 on graceful shutdown. Comment lines carry no event and are ignored by every consumer.
+
+**WebSocket stream twins (ADR 0099 W1).** `GET /v1/events/ws` and, only when the bridge is
+enabled, `GET /v1/rig/events/ws` carry the same events as `/v1/events` and `/v1/rig/events`
+over a WebSocket, which does not hold one of the browser's six per-host HTTP connections. The
+SSE endpoints are unchanged and stay for non-browser clients. `/v1/ft8/events` has no twin: its
+subscription is the FT8 presence signal.
+- **Admission.**
+  - **Origin:** the exact same origin is required, else **403 `cross_origin`** before any
+    upgrade. Origin must be present, an absolute `http(s)` URL with no userinfo, path, query or
+    fragment, with a scheme equal to the daemon's and a host:port equal to `Host`. `null`,
+    missing and malformed values are refused.
+  - **Shutdown:** once shutdown has begun, **503 `shutting_down`** and no upgrade.
+  - **Caps:** the routes share the stream subscriber cap (**503 `server_busy`**) and are exempt
+    from `limitConcurrent`.
+- **Frames.** One JSON text frame per event: `{"event": "<name>", "data": <payload>}`, where
+  `data` is the same object the SSE `data:` line carries. The first frame is
+  `{"event":"connected"}`, sent after the subscription exists; the rig stream's bootstrap
+  follows it. `{"event":"keepalive"}` is sent every 30 s. The `/v1/events` SSE `id:` is not
+  carried.
+- **Server-side behaviour.**
+  - Each write is bounded (10 s); a wedged peer is closed.
+  - A client data message is refused with close **1008**.
+  - Slow-reader eviction and shutdown close with **1001**: best effort, then the transport is
+    closed after at most 1 s, capped by the remaining shutdown budget.
+  - Graceful shutdown waits for every stream handler to end.
 
 **Event identity (AW-1).** The `qso.*` (`qso.stored`/`qso.updated`/`qso.deleted`) and
 `forward.*` (`forward.succeeded`/`forward.failed`) payloads on `/v1/events` carry
