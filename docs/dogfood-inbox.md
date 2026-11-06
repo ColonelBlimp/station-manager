@@ -201,6 +201,8 @@ implementation authorisation; the operator's decisions are marked under each ite
          alters them counts;
        - the logging-station `MY_*` fields, `OPERATOR`, `STATION_CALLSIGN`, `OWNER_CALLSIGN`.
      - **Not in the model:** no LoTW or eQSL fields exist.
+     - **Selected 2026-11-06:** the operator authorised the fix, design first. The transaction design
+       is W-0010 outcome 11 ([dossier](work/W-0010-forwarding-data-and-sync-reliability.md)).
      - **Coverage of today's attachment:** it carried 49 distinct fields
        (`sent-adif/session-20261106-070013.adi`). Excluded among them: only the four `CLUBLOG_*`
        and `QRZCOM_*` upload fields.

@@ -1,6 +1,6 @@
 # W-0010 — Improve forwarding, data, and synchronization reliability
 
-**Status:** Selected — outcome 9 CLOSED 2026-09-21 (operator: test proof plus passive station evidence); outcomes 1–8 remain unselected
+**Status:** Selected — outcome 9 CLOSED 2026-09-21 (operator: test proof plus passive station evidence); outcomes 1–8 remain unselected; outcome 11 SELECTED 2026-11-06 (operator: "yes, authorised — start with the transaction design")
 **Selected:** 2026-09-20 (operator: "Select W-0010 and start outcome 9")
 **Outcome:** Upload recovery, synchronization, email, and duplicate handling preserve operator
 intent and converge without routine full-log churn or forbidden third-party API use.
@@ -53,6 +53,11 @@ intent and converge without routine full-log churn or forbidden third-party API 
     Cloud's "Cloud logbook name" and Service URL, because the daemon reports only that a value is
     set. Showing the value needs an API contract change: the descriptor marks each field secret or
     non-secret, and the view carries the value for non-secret fields only. Secrets stay write-only.
+
+11. A session-email mark is not lost to delivery bookkeeping (inbox 2026-11-06, triage item 1).
+    A QSO whose attached contact content is unchanged between compose and mark is marked, even when
+    an upload stamp moved its `revision` meanwhile. A real content change or a deletion leaves it
+    unmarked. Nearest confusable outcome: marking a row whose exported content did change.
 
 ## Outcome 9 — slice plan (2026-09-20)
 
@@ -157,6 +162,229 @@ Rulings for slices 2–4 (2026-09-20):
 - (d) **Migration 0011 leaves every existing row's `failure_class` NULL.** In particular, the
   preserved 2026-08-06 QRZ fixture remains untouched by automatic boot recovery. It moves only if
   the operator explicitly invokes "Retry failed", consistent with (a).
+
+## Outcome 11 — transaction design (2026-11-06, PROPOSAL for review; no code yet)
+
+Authorised by the operator, design first: "yes, authorised — start with the transaction design".
+The comparison policy is the reviewed one in the inbox triage (item 1): ignore the listed
+delivery-bookkeeping fields; compare every other field actually emitted, including QSL fields,
+exported enrichment and QSO identity; keep comparison and marking atomic; preserve `revision`
+increments and cloud propagation. Size is not estimated until this design is reviewed.
+**Implementation waits for review of the retry and result contract below (revision 2).**
+
+### Today (verified against the tree at `9db1351d`)
+
+- `handleSessionEmail` (`internal/api/handler_session_email.go`):
+  1. fetches each QSO by UUID with `fetchSessionQsos`, one `FetchQsoByUUIDWithContext` per UUID
+     (`handler_session_export.go:52`), up to `maxSessionQsoUUIDs` = 10,000;
+  2. composes with `adif.ComposeToAdifString`, archives, and sends;
+  3. after a successful send, `stampSessionEmailed` calls
+     `MarkSessionEmailedAtRevisionWithContext` (`internal/database/sqlite/api_context.go:2433`).
+- **The mark** is one autocommit `UPDATE … WHERE deleted_at IS NULL AND (id, revision) IN
+  (json_each(?)) RETURNING id`. The composed revision is the guard, so any later update (an
+  upload stamp included) makes the row miss: the observed defect.
+- **Hypothesis, not demonstrated:** a failure while the Go code scans `RETURNING` might leave rows
+  marked but unreported.
+  - SQLite performs a `RETURNING` statement's changes on the first step, but says those changes
+    are not necessarily committed then. An implicit transaction commits only when the statement
+    completes ([RETURNING, ACID changes](https://www.sqlite.org/lang_returning.html#acid_changes);
+    [implicit versus explicit transactions](https://www.sqlite.org/lang_transaction.html#implicit_versus_explicit_transactions)).
+  - What the modernc driver does on the scan-error and `rows.Close` path is **not established**.
+  - Only a focused driver-level reproduction of a scan error, not an injected error after a
+    completed autocommit `UPDATE`, could prove it. The design below does not depend on it: it
+    commits explicitly either way.
+- **Revision and sync:** the `qso` update trigger bumps `revision` on every update, including the
+  mark itself (ADR 0050). Afterwards `EnqueueStampSync` re-enqueues the stamped ids to row-mirror
+  forwarders (SM Cloud), best-effort (`internal/qsoservice/stamp_sync.go`).
+- **The cloud guarantee is convergence to the latest row, not delivery of every revision.**
+  - The worker fetches the **current** row when it processes a queue item (`fetchQsoForAction`,
+    `internal/forwarding/worker/worker.go`).
+  - The cloud upsert is guarded by `revision` (ADR 0050; the guard ordering is described at
+    `internal/cloud/store/store.go:85`).
+  - The hourly reconcile is the backstop.
+
+  Intermediate revisions may be skipped. **This design adds no requirement that any intermediate
+  revision reach the cloud.**
+- **Database:**
+  - WAL, a connection pool larger than one (`SetMaxOpenConns`, `service.go:145`), deferred
+    `BEGIN` (`BeginTxContext`, `service.go:303`) and `busy_timeout`.
+  - A deferred transaction that reads first can strand on a concurrent commit when it later tries
+    to write. The repository already pins that premise with a real pool on a temporary file
+    (`TestReadFirstTxStrandsOnConcurrentCommit`, `internal/database/sqlite/review_findings_test.go:201`).
+  - The shared `:memory:` helpers pin `MaxOpenConns` to 1, so they cannot show it.
+
+### Design
+
+1. **One definition of "emitted".**
+   - **Refactor:** `parseToAdifString` (`internal/adif/string.go:63`) is refactored into a field
+     visitor that yields `(TAG, formatted value)` for each field it would write. That is after
+     `formatField` (FREQ in MHz, dates without dashes, times without colons), the `adif`-then-`json`
+     tag fallback, and the DXCC numeric filter.
+   - **Two users:** `Record.String()` writes the visitor's output exactly as now. A new
+     `adif.EmittedFields(Record) map[string]string` collects it. The comparison and the attachment
+     therefore cannot disagree about which fields exist or how they read.
+   - **Deterministic golden test, written before the refactor:**
+     - the header's `CreatedTimestamp` is **fixed** in the fixture. `HeaderSection.String`
+       otherwise stamps `time.Now()` (`string.go:16-20`), so comparing two live calls proves
+       nothing;
+     - the expected output is a checked-in literal, compared byte for byte;
+     - the fixture QSOs cover:
+       - FREQ/FREQ_RX conversion, and date and time formatting;
+       - empty fields being omitted;
+       - a field taking its tag from the `json` fallback;
+       - a non-numeric DXCC being dropped;
+       - several records, in order.
+2. **The ignore list is a named, reviewed set** in `internal/adif`, next to the visitor:
+   - `CLUBLOG_QSO_UPLOAD_DATE`, `CLUBLOG_QSO_UPLOAD_STATUS`;
+   - `QRZCOM_QSO_UPLOAD_DATE`, `QRZCOM_QSO_UPLOAD_STATUS`;
+   - `APP_QRZLOG_LOGID`;
+   - `SM_QSO_UPLOAD_DATE`, `SM_QSO_UPLOAD_STATUS`;
+   - `SM_FWRD_BY_EMAIL_DATE`, `SM_FWRD_BY_EMAIL_STATUS`;
+   - `QRZCOM_QSO_DOWNLOAD_DATE`, `QRZCOM_QSO_DOWNLOAD_STATUS` (prospective).
+
+   **Guard tests:**
+   - the set equals exactly this list, so any change is a reviewed change;
+   - every member is a real `adif` tag of `Record`, so a typo cannot silently ignore nothing.
+
+   Every other emitted field is compared, `APP_SM_QSO_ID` (the QSO's identity) included.
+3. **Comparison key:** for a QSO `q`, `contentOf(q) = EmittedFields(QsoToRecord(q))` minus the
+   ignore list. This is the same function `ComposeToAdifString` applies per record, so the
+   composed side is exactly what was attached.
+4. **Verify, then mark, per attempt, with a compare-and-set on the revision just verified.**
+
+   After a successful send, the daemon takes **one stamp date** (UTC `YYYYMMDD`, one clock reading)
+   for the whole operation. It keeps `committed`, a set of ids, empty at first, and runs up to
+   **three attempts in total**. That is a proposal for operator confirmation: three attempts, not
+   three retries after a first attempt. Each attempt works on the composed rows not yet in
+   `committed` that are still candidates:
+
+   - **(a) Verification read**
+     - **One bounded read transaction:** batched by id (up to the 10,000-row cap) and **finished
+       and closed** before any marking begins. The rows are fully read, `rows.Close` is called and
+       checked, and the read transaction is committed (or rolled back) and checked.
+     - **The candidates:** a soft-deleted or missing row stops being a candidate.
+   - **(b) Compare in Go,** holding no transaction. A row is *eligible* when
+     `contentOf(current) == contentOf(composed)`; its current revision `r'` is remembered. A row
+     whose content differs stops being a candidate.
+   - **(c) One marking transaction** for this attempt's eligible rows:
+     1. `BEGIN`;
+     2. `UPDATE … WHERE deleted_at IS NULL AND (id, revision) IN (eligible id, r') RETURNING id`,
+        with the operation's stamp date;
+     3. **consume every returned id, call `rows.Close`, and check `rows.Err` and the close error**;
+     4. `COMMIT`, and check its error.
+
+     **Rollback and failure:**
+     - Any error in steps 2–3 leads to an explicit `ROLLBACK`, and its error is checked too.
+     - **A failed `COMMIT` is not assumed to have rolled back.** SQLite does not guarantee that in
+       every case ([transaction](https://www.sqlite.org/lang_transaction.html)). The method issues
+       `ROLLBACK`, treats this attempt's ids as **not committed**, and reports the outcome as
+       uncertain in the log. A read-back in the tests establishes what actually happened in the
+       cases the tests produce.
+
+     **Ids added to `committed`:** only those of an attempt whose `COMMIT` succeeded.
+
+     **The write lock:** the `UPDATE` is the transaction's first statement, so the transaction is a
+     writer from its first statement. There is no read-to-write upgrade.
+   - **(d) Lost races.** An eligible row the `UPDATE` did not return was written by someone else
+     between (a) and (c). It stays a candidate for the next attempt.
+   - **The end of the loop:**
+     - **Normal end:** the loop ends when no candidates remain or the third attempt is done.
+     - **Early end:** the loop also ends on an attempt's error, on cancellation, or when the overall
+       budget runs out.
+     - **The overall budget:** the whole loop runs inside the request's existing extended deadline
+       (`sessionEmailResponseMargin`) and its context. No attempt starts after the context is done.
+5. **The result contract (revision 2).**
+   - **Committed marks are never discarded.** A later attempt cannot undo an earlier commit. So
+     `emailed` is the union of `committed` across **all** attempts, in request order, even when a
+     later attempt fails, the context is cancelled, or the budget runs out. Today's rule, where any
+     stamp error gives `emailed: []`, applies only when **no** attempt committed.
+   - **One stamp date** is used by every attempt and reported as `date`. `date` is empty only when
+     `emailed` is empty.
+   - **Stamp sync:** `EnqueueStampSync` is called once, after the loop, with the whole union,
+     however the loop ended. It stays best-effort, so its failure is logged and changes nothing
+     reported.
+   - **Atomicity is per attempt.** Within an attempt, the eligible rows are marked all-or-nothing,
+     and each only at the revision whose content was compared. **The retry loop as a whole is not
+     atomic.** An operation can end with some rows marked by an earlier attempt and others
+     unmarked, and the response says exactly which.
+   - **Sent and marked stay distinct (ADR 0095):**
+     - `sent` lists every composed UUID in request order, and `omitted` the UUIDs not found at
+       compose;
+     - `emailed` is the committed subset;
+     - the response stays `200`, because the mail left.
+   - **The log line** gives the reason counts: marked, content changed, deleted, lost race after the
+     last attempt, and stopped by error or cancellation. It carries no QSO content.
+6. **Unchanged:** upload stamps keep bumping `revision`, and the mark's own bump propagates through
+   the stamp-sync enqueue or the reconcile. Nothing in this design alters the trigger, the queue, the
+   worker, the upsert guard or the reconcile.
+7. **Why not one transaction around read, compare and mark.**
+   - **A deferred transaction** would not hold the writer lock while the rows are read and compared.
+     It takes a read snapshot, and becomes a writer only at its first write. But that upgrade fails
+     if another connection committed meanwhile: the stranded-snapshot premise pinned by
+     `review_findings_test.go:201`. So it would refuse exactly in the race this fix is about.
+   - **An immediate transaction** would avoid the strand, but would hold SQLite's single write lock
+     while up to 10,000 rows are read, mapped and compared. Every QSO submit would wait behind it,
+     against the invariant that the operator can always log.
+   - **The per-attempt compare-and-set** gives the per-row guarantee without either cost.
+
+### Known limitation (not changed by this fix)
+
+**The mark runs on the request context.** A client disconnect after a successful send cancels the
+remaining attempts, and the mail is left unmarked for the rows not yet committed. Detaching the
+mark from client cancellation is **out of scope** (reviewer direction). Rows committed before the
+cancellation stay marked and are reported and enqueued, as in §5, if a response can still be
+written.
+
+### Tests (barriers, not sleeps)
+
+- **Seams:** unexported hooks, nil in production, like `wsWriteDone`:
+  - `sessionEmailAfterSend`, on `Server`, between the send and the first attempt's (a);
+  - `sessionEmailBeforeMark(attempt)`, on `Server`, between (b) and (c) of each attempt;
+  - a fault seam in the sqlite marking method for steps 2–4.
+- **Two fixture shapes:**
+  - **in-memory SQLite** (the ordinary single-connection helpers) for the comparison and for writes
+    placed **between** attempts with the seams;
+  - **a temporary-file WAL database with a real multi-connection pool** (`concurrentCacheService`,
+    `internal/database/sqlite/enrichment_cache_test.go:250`) for every claim about snapshots,
+    write locks and concurrent commits.
+
+| # | Case | Fixture | Expected |
+|---|---|---|---|
+| 1 | Stamp only: the worker's `MarkUploadSuccessWithAdifStampWithContext` (`worker.go:945`) for ClubLog/QRZ after send | memory | marked; `revision` bumped by the stamp and again by the mark; the stamp-sync enqueue holds the id |
+| 2 | Content edit (`NAME`) after send | memory | not marked; in `sent`, not in `emailed` |
+| 3 | Enrichment change to an exported field (`COUNTRY`) | memory | not marked |
+| 4 | QSL field change (`QSL_SENT`) | memory | not marked |
+| 5 | Deletion after send | memory | not marked |
+| 6 | Mixed batch: unchanged, stamp-only, edited, deleted | memory | marked = {unchanged, stamp-only}; `sent` = all four, in order |
+| 7 | Lost race: a stamp-only write at `sessionEmailBeforeMark(1)` | memory | attempt 2 re-verifies and marks |
+| 8 | Lost race with a content edit at `sessionEmailBeforeMark(1)` | memory | attempt 2 finds the content changed; not marked |
+| 9 | Attempts exhausted: a write at every `sessionEmailBeforeMark` | memory | unmarked after the third attempt; reason logged |
+| 10 | **Mixed success then failure:** attempt 1 marks A and loses B to a race; attempt 2's marking transaction fails (fault seam) | memory | `emailed` = [A] in request order; `date` = the one stamp date; A marked on read-back, B not; the stamp-sync enqueue holds exactly [A] |
+| 11 | **Cancellation after a commit:** attempt 1 marks A and loses B; the request context is cancelled at `sessionEmailBeforeMark(2)` | memory | no attempt 2 `UPDATE`; A stays marked on read-back and is enqueued; `emailed` = [A] if the response is written |
+| 12 | Rollback within an attempt: fault after the `UPDATE`, before `COMMIT` | memory | nothing from that attempt on read-back; earlier attempts' ids kept |
+| 13 | Edit then revert (A→B→A) before verification | memory | marked: the marked content equals the sent content |
+| 14 | Re-send of an already-emailed row | memory | marked; the email-mark fields are ignored |
+| 15 | Concurrent writer on another connection, committing between the verification snapshot and the mark | WAL file, pool | the compare-and-set misses that row; the next attempt marks it if only bookkeeping changed |
+| 16 | The marking transaction is a writer from its first statement: a concurrent commit just before `BEGIN` does not strand it | WAL file, pool | no `SQLITE_BUSY_SNAPSHOT`; marks commit |
+| 17 | Cloud: after a mark, the mirror's queue holds the row's id, and the worker sends the **current** row | memory | id enqueued. No assertion on intermediate revisions. |
+
+**Golden and guard tests:** the deterministic compose golden, and the ignore-list guards (design 1–2).
+
+**Reversion proofs:**
+- with the comparison reverted to composed-revision equality, cases 1, 6 and 7 fail ("stamp-only row
+  unmarked");
+- with the ignore list emptied, case 1 fails;
+- with the union replaced by the last attempt's result, case 10 fails (`emailed` = [], A marked on
+  read-back).
+
+Each proof is checked to reach its assertion.
+
+### Open for review
+
+- **Attempts:** three in total (proposed; needs operator confirmation).
+- **Batched verification:** one bounded read snapshot (supported by the reviewer).
+- **The `RETURNING` hypothesis:** reproduce it at driver level, or drop it. It is not needed for
+  this fix.
 
 ## Verification boundary
 
