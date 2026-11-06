@@ -2,7 +2,7 @@
 
 **Status:** Design, plus a minimal weekend slice built 2026-10-30 for the 2026 SSB event (operator
 direction; see *Weekend slice* below). The full design stays unimplemented.
-**Decision record:** [ADR 0096](../decisions/0096-contest-occurrences-reserved-serials-and-submission-export.md) (accepted design and alternatives; unresolved items excluded)
+**Decision record:** [ADR 0096](../decisions/0096-contest-occurrences-reserved-serials-and-submission-export.md) (accepted design and alternatives; unresolved items excluded); follow-on [ADR 0101](../decisions/0101-contest-occurrence-records-slice-serials-and-daemon-held-contest-mode.md) (Proposed 2026-11-06: organiser rulings, slice serials, occurrence records, daemon-held contest mode)
 **Selected:** 2026-10-28 for design (operator: "Open W-0023 as a design-only dossier")
 **Outcome:** The operator can log a contest in Station Manager — a declared contest with its exchange,
 an explicitly recorded sent serial, in-contest duplicate detection, and a sponsor-ready Cabrillo log —
@@ -928,6 +928,103 @@ proposal is to log on alpha.5 and convert afterwards. Operator corrections, 2026
 
 Any converter for this would be an out-of-product tool and is **not authorised**; it needs the
 operator's go-ahead, and question 2 answered, before it is written.
+
+## Follow-on ADR: scope proposal (2026-11-06; agent; PROPOSAL, nothing ruled or authorised)
+
+The operator directed "start the W-0023 design" on 2026-11-06. Design only.
+
+**Why a follow-on ADR is due.** Three bodies of decision have accumulated since ADR 0096:
+- **The organiser-reply rulings** A–D and the header choices (2026-10-29). The dossier already
+  requires them to be captured in a follow-on ADR "before any contest implementation".
+- **The weekend slice** that operated the real 2026 SSB event (submitted and accepted 2026-11-02).
+  It deliberately diverged from ADR 0096 in three places, *for that slice only*:
+  - **serials** are consumed at Tab, with gaps accepted, instead of option B's ledger with
+    reservation and release;
+  - **the occurrence** is named by `CONTEST_ID` plus its start date (`APP_SM_CONTEST_START`), not
+    by an occurrence record with its own identity (M1);
+  - **membership** is read from those two QSO fields, not from an explicit association (M5).
+- **ADR 0100's U3 ruling** (2026-11-06): session gap expiry is suspended only by an explicit,
+  daemon-owned contest-active state on which every window agrees. Today the contest selection is
+  per tab (remembered per browser), so that state does not exist.
+
+**Proposed scope of the follow-on ADR:**
+1. **Record the organiser-reply rulings A–D and the header choices** as amendments to ADR 0096.
+   They are already ruled, so this is recording, not deciding.
+2. **Reconcile the slice with the design.** For each of serials, occurrence identity and
+   membership, either adopt the slice's rule for the full design or return to ADR 0096's. Define
+   the migration of the slice's data: the 158 members of the 2026 SSB event and
+   `contest_serial_allocation`.
+3. **The daemon-owned contest-active state.** One designed way into and out of contest mode, as
+   the inbox asks (2026-10-31). It must say:
+   - who starts and ends it, and whether it ends itself at the window's end, as the slice does;
+   - its scope (station or archive) and its restart behaviour;
+   - how windows agree, with the same stale-action protection as ADR 0100 §5.
+
+   **One tension to resolve:** the 2026-10-28 concurrency ruling says the daemon "never infers
+   intent from whichever contest is currently active". The recommendation is to keep that ruling:
+   logging requests still **name** their occurrence. The contest-active state then governs only
+   shared presentation and the session gap. Whether the daemon also **refuses** a contest log
+   request that names an occurrence other than the active one is a decision to make.
+4. **The contest catalogue** (`contests.json`, inbox 2026-10-31): an embedded file with an
+   operator override, served by the daemon, replacing the hard-coded header catalogue. It covers
+   only the definition fields the first slice needs: occurrences, mode, bands and segments,
+   exchange fields, the received-serial default, the district list, the Cabrillo name, and the
+   off-time minimum.
+
+**Proposed for later ADRs or slices, not this one:**
+- the per-contest panel (inbox 2026-10-31);
+- the in-product Cabrillo export and a Logbook ADIF export, which replace
+  `scripts/ukeicc-cabrillo.py` (temporary for the 2026 event);
+- scoring and the Score Distributor feed;
+- FT8 contest modes;
+- different-call contests (W-0014).
+
+**Decisions for the operator before drafting** (asked 2026-11-06):
+- the serial rule for the full design;
+- occurrence identity;
+- how the contest-active state starts and ends;
+- whether a log request naming another occurrence is refused while a contest is active.
+
+**Operator rulings (2026-11-06).** All four choices below follow the reviewer's recommendations,
+which matched the agent's proposed options. The station operator chose the first three in the
+question dialog and confirmed all four as their own rulings ("a", 2026-11-06), together with the
+end-of-window and restart rules.
+- **Serials: the slice rule.** Committing the callsign (Tab) consumes the serial for good. Gaps are
+  accepted, and there is no release or correction UI. This supersedes ADR 0096's option B for the
+  full design.
+- **Occurrence: a record with its own UUID** in the archive, owned by one logbook. It is unique per
+  logbook, `CONTEST_ID` and start, and carries the window and mode. The slice's members migrate onto
+  it by their stored `APP_SM_CONTEST_START`.
+- **The contest-active state: explicit, and it ends itself.** The operator starts it by choosing the
+  occurrence and can stop it early. It ends itself at the window's end, never mid-QSO. It is held by
+  the daemon and shared by every window.
+
+**Further operator rulings (2026-11-06, the reviewer's recommendations, confirmed by the operator):**
+- **Question 4: accept as named.** A log request is filed under the occurrence it names, even while
+  another occurrence is active. A QSO begun under occurrence A stays saveable under A after another
+  window activates B; the shared state never silently redirects or prevents saving it. The
+  safeguards:
+  - validate the named occurrence, and that its logbook and archive own it;
+  - preserve the draft's occurrence and its allocated serial;
+  - show a clear mismatch warning, without discarding or rewriting the draft;
+  - protect contest Start and Stop against stale state (as ADR 0100 §5), and refresh the controls
+    for subsequent drafts.
+
+  A mismatch alone never refuses logging. Time or mode ineligibility stays visible and follows the
+  separate eligibility and export rules.
+- **The end of the window, clarified.**
+  - **At the window's end:** new drafts stop being contest contacts, and the shared contest-active
+    state ends. An existing draft keeps its occurrence and serial, so the operator can finish and
+    save it. Its eligibility remains a separate check against the recorded QSO time.
+  - **No indefinite contest mode:** an abandoned draft must not keep contest mode, or the session
+    gap suspension, active.
+  - **An early Stop** follows the same draft-preservation rule.
+  - **Every window follows the daemon's state,** with stale-action protection.
+  - **After a restart,** a contest that was **active** is restored only if its window is still
+    open. A contest that was **stopped** stays stopped. A contest is never started merely because
+    its window opens.
+  - **Left to ADR 0100:** whether ending contest mode immediately expires an overdue operating
+    session.
 
 ## Verification boundary
 
