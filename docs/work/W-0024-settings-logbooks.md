@@ -1,10 +1,11 @@
 # W-0024 — Settings → Logbooks, slice 2
 
-**Status:** In implementation — slices 1–4 committed 2026-10-29 (see *Implementation progress*);
-the restart application and transition contract are decided in
-[ADR 0097](../decisions/0097-change-the-default-logbook-at-an-attended-restart.md) (Accepted
-2026-10-29). **Set as default is not released:** its daemon routes stay unregistered until slices 4
-and 5 land.
+**Status:** **Accepted 2026-11-06** — the station operator signed off on candidate `b2a16f5a`
+([acceptance record](../reports/acceptance-W-0024-set-as-default.md), entry 34). U1, U5 and the
+keyed U6 cases were waived on the automated tests; the live exercises of U5 and keyed U6 are
+deferred; follow-ups O-a and O-b are open. The restart application and transition contract are
+decided in [ADR 0097](../decisions/0097-change-the-default-logbook-at-an-attended-restart.md)
+(Accepted 2026-10-29). Set as default was released in `46a07d07`.
 **Selected:** 2026-10-29 (operator: "Let's do 3 first as it is prereq for the contesting work")
 **Outcome:** The operator can choose which logbook in the active archive receives live contacts, and
 can describe each logbook, without any open tab silently logging into the previous one.

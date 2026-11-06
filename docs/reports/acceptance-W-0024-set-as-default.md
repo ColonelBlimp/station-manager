@@ -2448,3 +2448,32 @@ wording.**
     deferred.
 - **Still required:** the station operator's overall sign-off.
 - **Follow-ups:** O-a and O-b (entry 30).
+
+### Sign-off (2026-11-06)
+
+34. **W-0024 ACCEPTED: signed off by the station operator on candidate `b2a16f5a`** (operator,
+    2026-11-06: "yes, record the sign-off").
+    - **Attribution:** the acceptance decision is the station operator's alone. The reviewer's
+      technical reviews and rulings (the run sheets, the corrections, R1–R6, the evidence checks)
+      informed it but are not the acceptance. Waivers 31–33 are likewise the operator's grants.
+    - **The accepted artifact:**
+      - `station-manager-2.0.0~alpha.5.110.gb2a16f5a-1.x86_64.rpm` (`7fc165ae…876f`);
+      - `smd` `3c6915d9…c964`;
+      - installed on the station in R5 (2026-11-05), kept in R6, and running.
+    - **Basis:**
+      - revision 5: R0–R6 passed, AC-1 to AC-11 passed on the station (entries 13–25);
+      - CI green on `0c84d5f9` (shutdown-test corrections, entries 27–28);
+      - guest cases U2, U3 (recovery UI), U4, U6(a)–(c) and U7 passed (entries 29–30); U6(d) on RQ6;
+      - waived by the operator on the automated tests: U1 (entry 31), U5 and the keyed U6 cases
+        (entries 32–33).
+    - **Additional observation, same day:** six windows were open at once in ordinary use: 6 shell
+      and 5 rig WebSockets plus 1 FT8 stream, with no warnings, no errors, no request over 500 ms,
+      and every stream disconnecting cleanly on close.
+    - **Carried forward, not blocking:**
+      - the live exercises of U5 and the keyed U6 cases (deferred);
+      - follow-ups O-a (the unknown-outcome "timed out" wording) and O-b (the internal path in the
+        write-failed toast);
+      - the reassessment triggers in entries 31–33.
+    - **`main` beyond the artifact:** since `b2a16f5a`, `main` adds only the test seam
+      `Server.wsWriteDone`, nil in production, plus tests and documentation. No redeployment is
+      needed for acceptance.
