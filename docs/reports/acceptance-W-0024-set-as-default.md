@@ -2385,3 +2385,66 @@ wording.**
     - **Reassess** this waiver if the restart wiring or the state's reachability changes.
     - **Scope:** this waiver applies only to U1. U5, the keyed U6 cases and overall acceptance
       remain open.
+
+
+### U5 disposition discussion (2026-11-06; nothing run)
+
+- **The station run sheet is withdrawn** (operator, 2026-11-06). Nothing goes on air: a real
+  contact would leave a loose end for the remote station. Any test must use a throw-away database
+  with no remote station and no forwarding, SM Cloud included.
+- **What the shipped build allows without RF** (agent, code reading):
+  - No route logs an FT8 contact directly. Every FT8 route either sets up an on-air exchange
+    (claim, arm, send, start, work, CQ) or controls one (abandon, next, skip), and FT8 has no
+    simulation or audio-replay mode.
+  - FT8 contacts are logged only by the sequencer, after real decodes and transmissions
+    (`cmd/smd/lifecycle_adapters.go:666`).
+  - A contact typed into Phone/CW, even in FT8 mode, exercises the Phone/CW path, which AC-7
+    already showed on the station. It does **not** exercise U5's FT8 path.
+- **Evidence available for U5 without RF:**
+  - AD1 (`cmd/smd/default_change_request_test.go:280-292`): the daemon's real FT8 QSO logger
+    stores a completed contact in the logbook pinned when the run was armed (ADR 0055), not the
+    fallback.
+  - `TestDefaultGuard_Ft8RefusesAStaleDefault` (`internal/api/default_guard_test.go:231`): a tab
+    still holding the old default cannot start FT8.
+- **Open for the operator:**
+  - waive U5's live run, on the automated evidence above, as for U1; or
+  - leave U5 open until an exchange can be exercised without a remote station.
+
+### U5 and keyed U6 disposition (2026-11-06)
+
+32. **U5 — WAIVED by the station operator for candidate `b2a16f5a`, on the automated tests; the
+    live exercise is DEFERRED for later** (operator, 2026-11-06: "waive U5 and keyed U6 on the
+    tests - for later deferred").
+    - **Why:** nothing may go on air for this, and the shipped build has no way to complete an
+      FT8 exchange without a remote station (see "U5 disposition discussion" above).
+    - **Supporting evidence:**
+      - AD1 (`cmd/smd/default_change_request_test.go:280-292`): the real FT8 QSO logger stores
+        the contact in the logbook pinned when the run was armed.
+      - `TestDefaultGuard_Ft8RefusesAStaleDefault` (`internal/api/default_guard_test.go:231`).
+    - **No end-to-end or browser PASS is claimed.**
+    - **Deferred:** exercise it later, when an exchange can be completed without a remote
+      station, or on an occasion the operator agrees.
+    - **Reassess** if the FT8 logbook pinning or the stale-default guard changes.
+33. **U6, keyed cases — WAIVED by the station operator for candidate `b2a16f5a`, on the
+    automated tests; the live exercise is DEFERRED for later** (same instruction).
+    - **The cases:** FT8 armed or running (`tx_busy` from the FT8 seal), and Tune keyed (`tx_busy`
+      from the rig seal).
+    - **Supporting evidence:**
+      - `TestSealTxAdmission_RefusedWhileArmed` and
+        `TestSealTxAdmission_RefusedWhileASessionIsActive` (`internal/ft8/archive_seal_test.go`);
+      - `TestSealTx_RefusedWhileTuneIsKeyed` and `TestSealTx_RefusedWhileFt8IsKeyed`
+        (`internal/bridge/tx_seal_test.go`);
+      - RQ3 (`internal/archive/default_change_request_test.go:369`): `tx_busy`, with earlier seals
+        released.
+    - **No station or browser PASS is claimed.**
+    - **Deferred:** exercise it later, on an occasion the operator agrees.
+    - **Reassess** if the FT8 or rig seals, or the request's seal order, change.
+    - **Not waived:** U6(a)–(c) passed in the guest (entry 30), and U6(d) rests on RQ6 (R4).
+
+**W-0024 acceptance status after entries 31–33:**
+- **U1–U7 dispositioned.**
+  - Passed: U2, U3 (recovery UI), U4, U6(a)–(c) and U7 in the guest; U6(d) on RQ6.
+  - Waived on the automated tests: U1, U5 and keyed U6, with the live exercise of U5 and keyed U6
+    deferred.
+- **Still required:** the station operator's overall sign-off.
+- **Follow-ups:** O-a and O-b (entry 30).
