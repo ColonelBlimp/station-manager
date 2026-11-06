@@ -1777,3 +1777,29 @@ recur.
       - **Still unknown:** CI's actual interleaving.
       - **Technical sign-off stays pending** until the test correction lands and CI is green on
         it. Repeated successful stress runs do not resolve the faulty precondition.
+28. **2026-11-06 — the correction landed (`4696e3c1`); CI red on a sibling test (agent).**
+    - **The CI run:** its run on `4696e3c1` was cancelled by the push of `f925df30` (docs only).
+      Run 42161998519 on `f925df30`:
+      - the race step passed `internal/api`, including both corrected tests;
+      - the no-race step failed `TestWSStream_ShutdownForceClosesSilentPeerAtGrace`: "Shutdown
+        took 64.691µs; want about the 1 s grace".
+    - **Cause:** the same faulty precondition. The test read the `connected` frame as proof that
+      the handler had reached its loop (`stream_ws_test.go`, the comment "connected frame sent").
+      A shutdown in the write's tail interrupts the write and ends the handler at once instead
+      of at the grace.
+    - **Audit:** every `Shutdown` call in the WebSocket tests.
+      - `TestWSStream_ShutdownDuringPolicyClose` is sound: it shuts down only after reading the
+        1008 close frame, which proves the handler left the write and began the policy close.
+      - Tests closed by a data message, a disconnect or a hub close are unaffected: none of these
+        cancels the write context, so an in-flight write completes.
+    - **Fix (test only):** the silent-peer test waits for the server-side barrier, the seam's
+      `("connected", nil)`, before `Shutdown`. The barrier proves that `Conn.Write` returned,
+      so no write is in flight when `Shutdown` starts.
+    - **RED:** with the `connected` write held at `Shutdown`, the old precondition reproduced
+      CI's symptom 10/10 ("Shutdown took …µs") through that demonstrated interleaving. CI's
+      exact interleaving remains unobserved.
+    - **Green:** the corrected shutdown tests, 15 runs each with and without `-race`; the full
+      package both ways; `gofmt`, `vet`, maintainability (0 regressions).
+    - **Evidence:** `/home/mveary/sm-w0024/shutdown-diag` (`red-silentpeer-old-precondition.txt`
+      and the scratch source).
+    - **Status:** uncommitted, for review. Technical sign-off stays pending.

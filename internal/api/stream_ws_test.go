@@ -594,16 +594,21 @@ func TestWSStream_ShutdownDuringWriteInterrupts(t *testing.T) {
 // A peer that never answers the close handshake: its transport is closed at
 // grace expiry and Shutdown still returns success, promptly.
 func TestWSStream_ShutdownForceClosesSilentPeerAtGrace(t *testing.T) {
-	srv, ts := wsTestServer(t)
+	srv, ts, done := wsTestServerObserved(t, nil)
 	ws, resp := rawDial(t, hostOf(ts), wsEventsPath, hostOf(ts), ts.URL)
 	if resp.StatusCode != http.StatusSwitchingProtocols {
 		t.Fatalf("status %d", resp.StatusCode)
 	}
-	// Wait for the handler to reach its loop (connected frame sent): a shutdown
-	// that lands mid-handshake aborts the first write and takes the direct
-	// cleanup path instead, which is not the case under test.
 	if _, err := readOneText(ws); err != nil {
 		t.Fatalf("connected: %v", err)
+	}
+	// The server-side barrier: the "connected" Conn.Write has RETURNED, so no
+	// write is in flight when Shutdown starts. Reading the frame is not that
+	// barrier — a shutdown in the write's tail interrupts it and takes the
+	// direct cleanup path, ending at once instead of at the grace (CI run
+	// 42161998519).
+	if d := awaitWriteDone(t, done, "connected"); d.err != nil {
+		t.Fatalf("connected write failed: %v", d.err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
