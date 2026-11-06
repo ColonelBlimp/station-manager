@@ -39,3 +39,97 @@ Raw dogfooding notes for later triage.
 - [2026-11-06] Operator 2026-11-06: "We need a way of rebuilding/backup/restore". Today's gap (agent, code reading, not exercised): SM Cloud rebuilds QSO data only — `smd provision` recreates a cloud archive as a NEW managed file (archive + logbook UUIDs, metadata, QSO rows incl. tombstones, default; internal/archive/provision.go) and `smd restore` fills an existing logbook by identity (cmd/smd/restore.go). NOT rebuilt from the cloud: config.json (settings, rigs, lookups, all credentials incl. the SM Cloud token restore needs), destination bindings (logbook_destination), the upload queue (qso_upload), qso_history, operator_event, contest_serial_allocation, evidence.db; reference.db is a refillable cache. Only logbooks with an enabled SM Cloud binding are in the cloud. Unverified: recreating a lost LEGACY Home (provision builds managed files and never writes over an existing one). Full recovery today relies on the stopped-daemon tarball backups taken by hand (~/sm-backup). Wanted: a supported, operator-facing backup / restore / rebuild path covering everything above.
 - [2026-11-06] Session email 2026-11-06 09:00 local: "session email: some rows changed or were removed between compose and stamp; not marked" (stamped 137, sent 138). Cause (agent, from smd.log + code): the email composed at 09:00:13 with TJ1GD's QSO (id 8566, 06:58:46Z) at its then revision; the once-a-minute ClubLog/QRZ uploads at 09:00:19 wrote their upload stamps on that row, bumping its revision ("stamp sync: re-enqueued revision-bumped rows"); the stamp at 09:00:21 matches by revision (internal/api/handler_session_email.go:270-306), so TJ1GD was sent but left unmarked (no sm_fwrd_by_email_status) and would be re-sent by a later session email. Operator wants it looked at: upload-status stamps should not make a row count as "changed" for the session-email mark. Likely to recur whenever a session email is sent within ~1 min of the last QSO.
 - [2026-11-06] Map vs Session panel (2026-11-06, 4-window check): a newly opened Map window still showed this morning's contacts while the Session panel in the new windows was empty. By design today (agent, code reading): the Map plots QSOs logged in the last N hours (operator-picked window, default 6 h, persisted as `sm-map-window`; frontend/app/src/lib/map/mapData.svelte.ts:1-16 — "no session entity … 'this sitting' is just 'QSOs in the last N minutes'", ADR 0049 rejection), while the Session list is per tab and per archive (ADR 0094), so a new window starts empty. Operator: "We either change the design or log it in the manual. That I didn't expect it suggest we need to change this." Leaning: change the design (revisit the ADR 0049 decision) rather than only documenting it.
+
+## Triage proposal — 2026-11-06 notes (agent; reviewer-corrected 2026-11-06; PROPOSAL, backlog unchanged)
+
+Scope was checked against the code; nothing is implemented. The order is by operator impact, not
+by size. The reviewer supports the order and the homes. These are review recommendations, not
+implementation authorisation; the operator's decisions are marked under each item.
+
+1. **Session-email mark skipped after an upload stamp** → home: W-0010 (forwarding data and sync
+   reliability; session email is forwarding by email). **Not selected:** W-0010's earlier selection
+   was outcome 9, now closed.
+   - **Observed:** a QSO sent in the email but not marked, because the ClubLog/QRZ upload stamps
+     moved its `revision` between compose and mark. It would be re-sent by a later session email.
+   - **Intended:** a row whose contact content, as represented in the attachment, is unchanged is
+     marked. A real content change or a deletion leaves it unmarked.
+   - **Evidence:** `smd.log` 09:00:13–21 local; the mark matches `(id, revision)`
+     (`internal/database/sqlite/api_context.go:2433-2480`); every `qso` update bumps `revision`
+     through the trigger (`log/0005_qso_revision.up.sql`, ADR 0050).
+   - **Scope, not small:** `revision` is the SM Cloud sync marker, so stamps must keep bumping it.
+     The mark needs its own content comparison.
+   - **Reviewer recommendation:**
+     - compare the contact content represented in the attachment, excluding delivery bookkeeping
+       and storage metadata such as `revision` and `modified_at`;
+     - **enumerate the excluded fields before implementation**;
+     - enrichment changes that alter the exported contact content **count** as changes;
+     - keep comparison and marking **atomic**, keep rejecting deleted rows, and keep the
+       `revision` bumps and their cloud propagation.
+   - **Impact:** a repeat email to the recipient. **Reproduced when an upload stamp overlaps
+     compose-to-mark.** The evidence establishes the race, not its frequency.
+   - **Acceptance:** separate cases for:
+     - a stamp-only change (marked);
+     - an actual content change (unmarked);
+     - a deletion (unmarked);
+     - a mixed batch (each row judged on its own);
+     - SM Cloud still receiving every revision.
+
+     This fixes one cause of repeat email, not general email idempotency.
+   - **Operator decision:** the field policy, meaning the exact excluded fields.
+2. **FT8 repeat hold after Ignore** → home: W-0011 (Deferred until a recognised operator problem
+   is chosen; this is one), not W-0019 (closed).
+   - **Observed:** a station Ignored on a worked-before hold stays excluded for the rest of the
+     run.
+   - **Intended (operator ruling 2026-11-06, already recorded):** after an Ignore, a station with
+     no QSO in the relevant Session-panel session is answered directly, with no hold. The hold
+     shows no date.
+     - This is recorded as a **scoped exception** to the 2026-09-13 ruling "never auto-skip and
+       never auto-answer it" (`internal/ft8/repeathold.go:1-20`).
+     - It does **not** extend to the first worked-before hold, which stays as it is; that broader
+       change is not authorised.
+   - **Scope, not small:** the daemon, where the sequencer runs, has no notion of the Session
+     panel's session. It lives per tab in `sessionStorage`
+     (`frontend/app/src/lib/operate/session.svelte.ts`, ADR 0094), and several tabs mean several
+     sessions. The hold's check reads the run's whole logbook (`repeathold.go:70-87`).
+   - **Unresolved: session ownership.** Reviewer recommendation for the design proposal: the
+     session belonging to the tab that starts the run, with an explicit definition of what
+     happens on reload, session clearing, tab closure, or another tab taking control. Neither the
+     FT8 run nor the calendar day is substituted silently.
+   - **Impact:** callers excluded or delayed in a pile-up, as in today's 12m trace. Completed
+     contacts lost are not established by that trace.
+   - **Acceptance:** to be written once session ownership is decided.
+   - **Operator decision:** session ownership.
+3. **O-a: "The request timed out…" shown for every unknown outcome** → home: W-0012 (Open;
+   diagnostics).
+   - **Observed:** the shared lead sentence (`frontend/app/src/lib/api/_helpers.ts:69-70`; 32
+     call sites in 14 files) says "timed out" after an immediate network error or an uncoded 502
+     (entry 30).
+   - **Intended:** neutral wording. Reviewer recommendation: "Station Manager could not confirm
+     the result, so the outcome is unknown."
+   - **Impact:** misdiagnosis at exactly the moments the operator must judge an uncertain outcome.
+     It ranks above polish, per the false-alarm ruling.
+   - **Acceptance:** every unknown-outcome path uses the neutral sentence, and each operation keeps
+     its existing recovery guidance. Distinguishing every transport failure is not needed for this
+     correction.
+4. **Backup / restore / rebuild path (design question)** → home: W-0014's parked "DB
+   backup/restore/integrity UI". Proposed: promote it to its own work item once its outcome is
+   set.
+   - **Observed:** SM Cloud rebuilds QSO data only; full recovery relies on hand-made tarballs.
+   - **Impact:** high consequence, low frequency; no incident today.
+   - **Decisions:** what must be recoverable (config, credentials, bindings, queue, evidence),
+     from where (local, cloud), the operator flow, and how often.
+   - **Acceptance:** defined after those decisions.
+5. **Map versus Session panel (design question)** → home: W-0012 (map).
+   - **Observed:** the Map shows the last N hours of the logbook; the Session panel shows this
+     tab's sitting (ADR 0094). These are separate concepts, by design (ADR 0049).
+   - **Operator leaning:** change the design.
+   - **Decisions:** the intended outcome (the Map follows the tab's session; or a time window,
+     clearly labelled; or both), and whether ADR 0049's rejection of a session entity is
+     revisited (a new ADR).
+6. **O-b: internal path in the write-failed toast** → home: W-0012.
+   - **Observed:** `default_change_write_failed` carries the raw write error, including the
+     temporary-file path, to the browser.
+   - **Intended:** the operator sees "config.json could not be written"; the path and the error
+     chain stay in `smd.log`, as the archive routes already promise.
+   - **Impact:** low; it is not a secret.
+   - **Acceptance:** no file path in the default-change error bodies; the path still logged.
