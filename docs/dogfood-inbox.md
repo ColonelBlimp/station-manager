@@ -79,6 +79,49 @@ implementation authorisation; the operator's decisions are marked under each ite
      compare exported contact content, excluding explicitly listed delivery bookkeeping and
      storage metadata; enrichment changes that alter that content count. The exact exclusion
      list is reviewed before implementation. **Not authorised for implementation.**
+   - **Draft exclusion list (agent, 2026-11-06; revised after review; PROPOSAL, not authorised):**
+     - **The comparison:** the fields **actually emitted** for each record by the attachment path
+       (`adif.QsoToRecord`, `internal/adif/adif.go:114`, written by `adif.ComposeToAdifString`,
+       `internal/api/handler_session_email.go:176`). It is not every member of `adif.Record`:
+       embedded structs also carry non-exported metadata.
+       - The composed record's emitted fields are compared with the current row's, field by
+         field, with the excluded fields removed from both.
+       - It runs in one transaction with the mark, so comparison and marking stay atomic.
+       - Deleted rows stay unmarked.
+     - **Excluded: delivery bookkeeping emitted by this path:**
+       1. `clublog_qso_upload_date`, `clublog_qso_upload_status`: the ClubLog forwarder's stamp
+          (`internal/forwarding/clublog/clublog.go:315`). These caused the observed race.
+       2. `qrzcom_qso_upload_date`, `qrzcom_qso_upload_status`: the QRZ forwarder's stamp
+          (`internal/forwarding/qrz/qrz.go:203`). These caused the observed race.
+       3. `app_qrzlog_logid`: QRZ's per-QSO log id, provenance that is not client-editable
+          (`internal/qsoservice/update.go:102-103`).
+       4. `sm_qso_upload_date`, `sm_qso_upload_status`: the SM upload stamp.
+       5. `sm_fwrd_by_email_date`, `sm_fwrd_by_email_status`: the email mark itself. A re-send of
+          an already-emailed row emits it.
+     - **Excluded as prospective policy:** `qrzcom_qso_download_date` and
+       `qrzcom_qso_download_status` exist in `adif.Record`, but the current `QsoToRecord` does not
+       populate them, so this attachment path does not carry them today. They are excluded in case
+       a later path does.
+     - **Not compared, because this path does not emit them** (storage metadata): `id`,
+       `logbook_id`, `dedupe_key`, `revision`, `modified_at`, `created_at`, `deleted_at`
+       (deletion is rejected separately), `country_details`, `contact_history`.
+     - **Counted as contact content:** every other emitted field, including:
+       - `APP_SM_QSO_ID`. The QSO's UUID **is** exported under this name and stays in the
+         comparison;
+       - `APP_SM_RUN_ID`, `APP_SM_CONTEST_START`, and `APP_SM_REQUEST_QSL` (the request-QSL
+         flag);
+       - **the exported QSL fields** (`qsl_sent`, `qsl_sent_via`, `qslsdate`, `qsl_rcvd`,
+         `qsl_rcvd_via`, `qslrdate`, `qsl_rcvd_notes`, `qslmsg`, `qslmsg_rcvd`, `qsl_via`). Per
+         the reviewer's recommendation, they affect what the recipient needs to know;
+       - the exported enriched values, held in the contacted-station fields (`COUNTRY`, `DXCC`,
+         `CQZ`, `ITUZ`, `CONT`, `NAME`, `QTH`, `ADDRESS`, `EMAIL`, `GRIDSQUARE`, `LAT`, `LON`,
+         `IOTA`, `DISTANCE`, `ANT_AZ`, `ANT_PATH`). Per the decision, an enrichment change that
+         alters them counts;
+       - the logging-station `MY_*` fields, `OPERATOR`, `STATION_CALLSIGN`, `OWNER_CALLSIGN`.
+     - **Not in the model:** no LoTW or eQSL fields exist.
+     - **Coverage of today's attachment:** it carried 49 distinct fields
+       (`sent-adif/session-20261106-070013.adi`). Excluded among them: only the four `CLUBLOG_*`
+       and `QRZCOM_*` upload fields.
 2. **FT8 repeat hold after Ignore** → home: W-0011 (Deferred until a recognised operator problem
    is chosen; this is one), not W-0019 (closed).
    - **Observed:** a station Ignored on a worked-before hold stays excluded for the rest of the
@@ -105,6 +148,78 @@ implementation authorisation; the operator's decisions are marked under each ite
      the design resolves reload, session clearing, tab closure and control from another tab,
      particularly how each affects eligibility to answer an Ignored caller.
    - **Acceptance:** to be written with that design. **Not authorised for implementation.**
+   - **Draft session design (agent, 2026-11-06; revised after review; PROPOSAL, NOT APPROVED, not
+     authorised):**
+     - **Facts it rests on:**
+       - The Session list is per tab in `sessionStorage`: it survives a reload and ends when the
+         tab closes (`frontend/app/src/lib/operate/session.svelte.ts:1-12`).
+       - There is no operator action to clear a session; the only reset is a test seam (`:145`).
+       - FT8 teardown starts **only when the last** `/v1/ft8/events` subscriber leaves
+         (`onSubscriberRemoved`, `internal/ft8/service.go:463-474`). The capture then lingers 5 s
+         (`:21`), and TX is disarmed `unattended` (`internal/ft8/servicetx.go:319`).
+       - A run's `declinedRepeats` is cleared when the run ends (`internal/ft8/repeathold.go:140`).
+       - Each run has a `RunID`, a UUIDv7 (`internal/ft8/sequencer.go:288-294`).
+       - Holds have no identity of their own today.
+       - Runs have no tab owner: `POST /v1/ft8/claim` selects the profile only, and any FT8 tab
+         may send Answer anyway or Ignore.
+     - **Policy change, stated plainly:** eligibility is decided from **the session of the tab
+       that presses Ignore** (the deciding tab), not the initiating tab. This avoids a new
+       run-owner concept, but two FT8 tabs with different sessions may reach **different
+       answers** for the same caller. The operator rules on this.
+     - **Scope of "no QSO in the session" (operator choice):**
+       - **Recommended:** the existing same-call, same-band, same-mode/profile scope, consistent
+         with the worked-before hold.
+       - **Alternative:** "any QSO with this call", which is broader and needs an explicit
+         operator choice.
+     - **Mechanism, attributed and staleness-safe:**
+       1. **Hold identity.** Each hold gets an id (a per-run counter), published with the hold.
+          The Ignore intent names `run_id`, `hold_id` and the held station's call, band and
+          mode, and carries the deciding tab's verdict "no qualifying QSO in my session".
+       2. **Stale intents.** The daemon applies an Ignore only if `run_id` is the live run and
+          `hold_id` is the hold still open for that station. Otherwise it refuses with a distinct
+          stale-intent code and changes nothing. A delayed Ignore can never grant eligibility to a
+          different held caller or to a replacement run. The tab shows the refusal and the current
+          hold.
+       3. **What is granted.** An eligible Ignore records a **single-use bypass** for that call,
+          band and mode **in that run**. It is not a stored "eligible" flag that is trusted later.
+       4. **Invalidation.** The bypass is void as soon as any QSO with that call, band and mode is
+          stored after the Ignore, by any tab or path. The daemon sees every stored QSO, so it
+          rechecks the worked-since-Ignore condition when the bypass would be used, and a
+          completed contact always voids it. It is also void when the run ends.
+       5. **Consumption.** The bypass is consumed when the station is next picked and answered
+          directly. After that, the station is under the normal rules again.
+       6. **An unsuccessful direct answer.** If that answer reaches no completed contact (no
+          answer after the repeat cap, abandoned, stalled), the bypass is already spent. The
+          ordinary stall rules apply (CQ-round exclusion, cooloff), and a later call meets the
+          normal worked-before hold. Nothing is re-granted automatically.
+       7. **A not-eligible Ignore:** declined for the run, as today.
+       8. **Unchanged:** the first worked-before hold.
+     - **Lifecycle (corrected):**
+       - **Reload:** the session survives. A pending bypass belongs to the run, not to the tab,
+         and is unaffected. On reconnect the tab sees the hold state and any bypass state.
+       - **Tab closure:** the run continues while **any** FT8 tab stays subscribed. Bypasses and
+         declines already granted survive with the run, including those granted by the closed
+         tab. Only when the last FT8 subscriber leaves does teardown start (5 s linger, TX
+         disarmed). The run ends, and every bypass and decline with it.
+       - **Session clearing:** no such action exists. If one is added, bypasses already granted
+         stay void-on-QSO as above, and later Ignores use the cleared session.
+       - **Another tab acting:** any FT8 tab may Ignore the current hold. Its decision applies
+         only through the attributed intent (item 2), so a stale or delayed intent from another
+         tab is refused.
+     - **Feedback (recommended):** Ignore says which it did: "skipped for now — eligible to answer
+       a later call", or "ignored for this run". The two lead to different later transmissions.
+     - **Acceptance, draft:**
+       - An eligible Ignore, then the station calls: answered directly, once.
+       - A QSO with that station logged before its next call voids the bypass: the normal hold
+         returns.
+       - An unsuccessful direct answer: no new bypass; normal rules apply.
+       - A not-eligible Ignore: declined for the run.
+       - A stale Ignore (wrong run, or a superseded hold): refused, nothing changed.
+       - Two tabs with different sessions: each decision applies as attributed.
+       - Each lifecycle event behaves as above.
+       - The first hold is unchanged.
+       - Each decision and its basis are logged.
+     - **Open for the operator:** the deciding-tab policy, the scope, and the feedback wording.
 3. **O-a: "The request timed out…" shown for every unknown outcome** → home: W-0012 (Open;
    diagnostics).
    - **Observed:** the shared lead sentence (`frontend/app/src/lib/api/_helpers.ts:69-70`; 32
