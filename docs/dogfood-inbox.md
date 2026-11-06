@@ -124,6 +124,9 @@ implementation authorisation; the operator's decisions are marked under each ite
   - **Operator direction (2026-11-06):** "this is what we need to design — something that looks
     and feels the same" as today's Session panel, but daemon-owned, without its flaws. Session
     controls (buttons; "I suspect they will be needed") go on the Session panel.
+  - **ADR drafted (2026-11-06):** [ADR 0100](decisions/0100-daemon-owned-operating-sessions-with-explicit-membership.md),
+    Proposed, design only. Activity, the default gap and contest policy are left for operator
+    ruling; item 1 stays independent. Nothing is authorised.
 
 1. **Session-email mark skipped after an upload stamp** → home: W-0010 (forwarding data and sync
    reliability; session email is forwarding by email). **Not selected:** W-0010's earlier selection
