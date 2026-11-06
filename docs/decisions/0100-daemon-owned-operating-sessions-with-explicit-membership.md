@@ -70,7 +70,7 @@ The daemon owns the **operating session**:
   - the Session panel offers New session and pick-up (resume a closed session);
   - a window that opens with no session in progress asks "Continue the previous session or start a
     new one?";
-  - an effective archive or default-logbook change closes the session at the moment of departure.
+  - an archive or default-logbook change closes the session when the change takes effect.
 - **Consumers:** the Session panel in every window, the Map, session email and export, and FT8
   repeat-hold eligibility all read this one membership.
 - **Stale actions:** each operator action names the archive's session-state generation it was
@@ -89,7 +89,7 @@ The daemon owns the **operating session**:
     transition in that archive. That includes an automatic open, New, pick-up, and each close
     (gap, archive, logbook). A QSO joining an already open session is not a transition, so the
     generation does not move.
-  - **Departure mark** (§4).
+  - **`seen_serve_epoch` and `default_epoch`** (§4).
   - **Applied-request records** (§5).
 - **Home:** the archive file, beside the logbooks and QSOs it describes. This follows ADR 0094 (per
   archive) and ADR 0096 (contest occurrences live in the archive file).
@@ -109,10 +109,15 @@ The daemon owns the **operating session**:
 - **The logging transaction, in order.** All of this happens inside the QSO's own transaction (the
   atomic-write invariant), at the daemon's current instant `now`, never at the QSO's `time_on`:
   1. Read the archive's open session, if any.
-  2. **Evaluate expiry:** if it is open and `now − last_activity_at` exceeds the gap, close it with
-     `gap` (§3) and advance the generation.
+  2. **Evaluate departure, then expiry:**
+     - if a change has taken effect (§4), close the session with `archive_changed` or
+       `logbook_changed`;
+     - otherwise, if it is open and `now − last_activity_at` exceeds the gap, close it with `gap`
+       (§3).
+
+     Either close advances the generation.
   3. **If none is open now,** create a session: `opened_at = last_activity_at = now`, bound to the
-     effective default logbook. Advance the generation.
+     effective default logbook and the archive's current `default_epoch`. Advance the generation.
   4. Write the membership association.
   5. Set `last_activity_at = max(last_activity_at, now)`. This assumes a QSO counts as activity,
      which U1 must confirm; U1 may add further sources but cannot exclude a logged QSO without
@@ -158,11 +163,11 @@ The daemon owns the **operating session**:
     `picked_up_other`);
   - after the configured **gap** with no activity (`gap`; U1 and U2). For a gap close, `closed_at`
     is the session's `last_activity_at`: the sitting ended then, not when the daemon noticed;
-  - on an effective logbook or archive change, at the moment of departure (§4).
+  - when an archive or default-logbook change takes effect, at `last_activity_at` (§4).
 - **Activity baseline for operator actions:**
   - **New session:** `opened_at = last_activity_at = now`.
-  - **Pick-up:** reopening a session starts a new open interval and sets `last_activity_at = now`,
-    whatever U1 decides. The resume is the baseline, so a resumed session's old timestamp cannot
+  - **Pick-up:** reopening a session starts a new open interval, sets `last_activity_at = now`
+    whatever U1 decides, and sets the session's `default_epoch` to the archive's current one. The resume is the baseline, so a resumed session's old timestamp cannot
     expire it again at once.
 - **Pick-up (the operator's "restart"):**
   - It resumes a closed session, which becomes the open one; **future** live QSOs are added to it.
@@ -172,7 +177,7 @@ The daemon owns the **operating session**:
   - Only an **eligible** session can be picked up: one whose `logbook` is the current effective
     default. Others are refused, because they would mix logbooks. Every offer (§6, §8) lists eligible
     sessions only, so the panel never offers an action the daemon would refuse.
-- **Where expiry is evaluated:**
+- **Where departure (§4) and expiry are evaluated, in that order:**
   - **The logging transaction** (§2), which is the load-bearing evaluation;
   - **every session-control transaction** (§5), as its first step;
   - **a daemon timer** set for the open session's expiry instant. It persists the `gap` close and
@@ -194,80 +199,123 @@ The daemon owns the **operating session**:
   - **Forwards:** a step can close a session by gap; pick-up recovers it for future logging.
   - A guest host's clock stepped during W-0021 acceptance.
 
-### 4. Archive and default-logbook changes: closure at departure
+### 4. Archive and default-logbook changes: closure when the change takes effect
 
-The rule is that the session closes **when the archive or logbook is left**. Two facts shape the
-mechanism:
-- **The outcome is unknown at departure.** An archive activation can fail and fall back to the
-  last-known-good archive. A default change (ADR 0097) can end `cancelled`,
-  `not_applied_intent_pending`, `withdrawal_unconfirmed` or `pending_unclear`, as well as
-  `effective`.
-- **The commit instant is known, but admission is not always sealed after it.**
-  - A default change seals live Phone/CW entry, FT8 and the rig (ADR 0097 §2).
-  - Archive activation seals FT8 and the rig, but **does not seal Phone/CW submissions** (ADR 0097,
-    Context; `internal/archive/activate.go`). A Phone/CW QSO can therefore still be stored in the
-    departing archive between the commit and the process exit.
-  - That QSO is a live QSO in the archive still being served. It joins the departing session
-    normally (§2), because session policy never refuses a QSO. The closure time accounts for it
-    (below).
+*Revised 2026-11-06 after review. The first committed form (`abe5b7b1`) used a departure mark
+written when the change was requested. That mark is withdrawn. Three cases showed that evidence
+written at request time cannot be trusted later:*
+- *a selector persist failure that left a committed mark behind;*
+- *a retained `not_applied_intent_pending` intent whose mark an unsuccessful start would clear;*
+- *a promotion that became durable before its mark was resolved.*
 
-The departure is therefore recorded in two stages.
+**The rule:** a session closes when an archive or default-logbook change **takes effect**. The
+evidence is written by the write that makes the change take effect, so evidence and effect cannot
+diverge. Nothing is written when a change is merely requested.
 
-- **1. The departure mark, written before the change's own durable selector.**
-  - **Where:** when the operation commits (after its seals, before its selector), the departing
-    process writes into **the departing archive's file** a departure mark. It names the operation
-    (`archive_activation` or `default_change`), its request id, the target, and the instant `D`.
-  - **Order:** the mark is written **before** the change's own durable selector in config (ADR
-    0097's pending selector, or `pending_qso_archive_id`). A crash between the two writes leaves a
-    mark with no selector.
-  - **While the mark stands:**
-    - live QSOs still join the departing session as in §2;
-    - session **controls** (New, Continue, pick-up) are refused with a distinct "change pending"
-      code. That refuses a control, never a QSO;
-    - if the operation is cancelled before its restart and the process carries on serving, the
-      cancel clears the mark in the same process.
-  - **The effective closure time** is `D* = max(D, last_activity_at)`, evaluated when the mark is
-    resolved. That is the departure, or a later live QSO the unsealed path admitted before the exit.
-- **2. Resolution, the next time that archive is served.**
+- **Archive changes: a serve epoch.**
+  - **In config:** `archive_serve_epoch`, a station-global counter. It is incremented **in the same
+    config write that promotes a candidate to active** (`startArchivePromote`,
+    `cmd/smd/archive_adopt.go`: active = candidate, pending cleared). That write runs before
+    `http`, so no live QSO reaches a candidate before it.
+  - **In each archive file:** `seen_serve_epoch`, the value of `archive_serve_epoch` when that
+    archive last evaluated its sessions.
+  - **The test:** an archive's `seen_serve_epoch` differing from the current `archive_serve_epoch`
+    means a promotion has taken effect since this archive last evaluated. Only a promotion moves the
+    counter, and an archive can be promoted only while it is not active
+    (`archive_active` refusal), so a difference means **this archive was left** after its last
+    evaluation. The open session closes with `archive_changed`, and `seen_serve_epoch` is updated,
+    in one transaction.
+  - **Inequality, not ordering:** the test is a difference, not an ordering. An epoch restored to a
+    **different** older value (an old `config.json`) also closes the session.
+  - **Unresolved restoration limitation (O7):** a restore can bring back an **equal** epoch.
+    - **Example:** A records 7; A→B promotes to 8; an older `config.json` is restored, naming A
+      active at 7. A's stored value is also 7, so A's session silently continues although B was
+      served in between.
+    - **Consequence:** later QSOs merge into a session that should have closed. New and pick-up only
+      correct future logging; they cannot repair membership already merged.
+    - **Status:** the mechanism (for example, invalidating every archive's `seen_serve_epoch`, or
+      closing open sessions, as a step of a supported restore) is **undecided**. It belongs with the
+      backup and restore design (inbox item 4).
+- **Default-logbook changes: a default epoch.**
+  - **In the archive file:** `default_epoch`, advanced **only by an actual change of the default
+    pointer**, not by every pointer write (`applyDefaultChange`, `cmd/smd/default_change.go`):
+    - **X→Y:** the pointer and the incremented epoch are written in one SQLite transaction;
+    - **Y→Y**, the deliberate durable rewrite of an already-selected target (the crash-recovery
+      branch, `cmd/smd/default_change.go:170`, and `commitPointer`): the epoch is **preserved**.
+      A retained selector followed by another restart therefore closes no legitimate session;
+    - **crash recovery:** the pointer and its epoch commit together or not at all. A start finds
+      either (X, e) or (Y, e+1), never a mixed pair, and keeps whichever pair committed.
+  - **In each session:** the `default_epoch` it was opened, or last picked up, under.
+  - **The test:** a session whose `default_epoch` differs from the archive's closes with
+    `logbook_changed`. That covers X→Y→X too, which a plain comparison of logbooks would miss: the
+    epoch moved twice even though the logbook is X again.
+- **The closure time** is the session's `last_activity_at`.
+  - Every member was stored at or before it (§2, step 5), and nothing joins after a change takes
+    effect.
+  - The true departure instant is not recorded durably, and no evidence written before the change
+    took effect is trusted for it. The operator sees "closed at hh:mm (archive changed)", the end of
+    the sitting, as for a gap close.
+- **Where the departure test runs:** in the **same evaluation step as expiry** (§3):
+  - every logging transaction, before membership;
+  - every control transaction;
+  - every read;
+  - a start node before `http`.
 
-  | How the archive comes to be served next | Meaning | Action |
+  The test is derived from durable state on both sides, so the start node is not load-bearing. If
+  its write fails, the next session transaction repeats it. **Departure is tested before expiry:**
+  both close the session at `last_activity_at`, and departure names the stronger reason.
+- **What each activation and default-change outcome does** (from `internal/archive/activate.go`
+  and `cmd/smd/default_change.go`):
+
+  | Outcome | Epoch moves? | Sessions and controls |
   |---|---|---|
-  | As the **activated candidate** of a later activation into it | it was left at `D*` | close the open session: `closed_at = D*`, `archive_changed` |
-  | As the **last-known-good fallback** after a failed candidate | it was never left | clear the mark; the session continues, subject to expiry from `last_activity_at` |
-  | A **plain start** with no selector naming another archive (activation cancelled, or a crash before the selector) | it was never left | clear the mark; the session continues |
-  | A start where the **effective default differs** from the session's `logbook` (the default change became `effective`) | the logbook was left at `D*` | close: `closed_at = D*`, `logbook_changed` |
-  | A start where the default change ended **not effective** (cancelled, not applied, withdrawal unconfirmed) | the logbook was never left | clear the mark; the session continues |
-  | `pending_unclear` | undecided | keep the mark. Admission stays governed by ADR 0097, and the mark resolves when that state resolves. |
+  | `activation_persist_failed` (definitive; seals released, nothing on disk) | no | unchanged; nothing to clean up |
+  | `restart_failed` (pending cleared, seals released) | no | unchanged |
+  | Archive activation, error code `pending_unclear` (restart failed, pending could not be cleared; the next restart activates) | not yet | unchanged until a later start promotes; that promotion moves the epoch |
+  | Candidate failed at start, fallback to last-known-good (no promotion write) | no | the departing archive's session continues; time down counts towards its gap |
+  | Candidate promoted | yes, in the promotion write | the departed archive's session closes when that archive next evaluates |
+  | Default change `effective` / `applied_cleanup_pending` | yes, if the pointer changed X→Y (in that transaction); a Y→Y durability rewrite does not move it | the session closes at the first evaluation after an X→Y change |
+  | `not_applied_intent_pending` (the selector survives; a later start retries) | no | unchanged **between attempts**; a later `effective` start moves the epoch then |
+  | Default change, status `pending_unclear` (error code `default_change_pending_unclear`: restart failed and the change could not be withdrawn; it applies at the next restart unless cancelled; `internal/archive/default_change.go:255,463`) | not yet | unchanged until a start applies it; an X→Y pointer change moves the epoch then |
+  | `not_applied_abandoned`, cancelled, `withdrawal_unconfirmed` | no | unchanged |
 
-  - **Fallback rule:** a start that cannot classify itself by the rows above compares the
-    session's `logbook` with the effective default, and the served archive with the mark's origin.
-    A difference closes the session at `D*`; no difference clears the mark. The rows above are
-    that comparison made explicit; the fallback only covers states this table missed.
-  - **Expiry first:** a session that had already passed its gap before `D` closes as `gap` at its
-    `last_activity_at`, not as a departure.
-  - Resolution and the close are one transaction, and they advance the generation. Repeating the
-    resolution after a crash is idempotent.
-- **Closure is effective at departure, recorded on return.** The close time is `D*`, not the
-  return time.
-  - **This is deliberately deferred recording, not deferred closure.** While another archive is
-    served, no process serves the departed archive's file, so no QSO can join that session and no
-    consumer reads it. Nothing can observe it as open between the exit and the return.
-  - Resolving the mark only writes down a closure that had already taken effect.
-  - **A requirement on any future feature** that reads a non-served archive's sessions (for
-    example an archive summary or export): it must apply the same rule, so that a session with a
-    departure mark, in an archive not being served, reads as closed at `D*`.
+  - **Status versus error code:** `pending_unclear` is a default-change **status**, and
+    `default_change_pending_unclear` is its **error code**. Archive activation uses
+    `pending_unclear` as an **error code**. Whether the default-change status is reachable in
+    production is the separately recorded wiring limitation, not this ADR's concern.
+
+  - **Session controls are never blocked by a pending change.** There is nothing to block on.
+    Between attempts of a retained intent, New, Continue and pick-up work normally. Whatever session
+    is open when the change finally takes effect is the one it closes.
+  - Live admission during a change stays governed by its own seals (ADR 0097, archive activation),
+    not by this ADR.
 - **Worked sequences:**
-  - **A→B:** A's mark is written at `D`. A Phone QSO logged before A's exit joins A's session.
-    B comes up and serves its own sessions. When A is next served, A's session is closed at `D*`.
-  - **A→B, restart B, then B→A:** the restart of B is plain, and B's session continues. B→A writes
-    B's mark at `D'`. A starts as the activated candidate and closes its own session at A's `D*`,
-    the original departure, not `D'` or the return time. B's session is closed at its own `D'*`
-    when B is next served.
-  - **A→B where B fails:** the fallback serves A, and A's mark is cleared. A's session continues,
-    and time spent down counts towards its gap.
-  - **A crash between the mark and the selector:** a plain start of A, so the mark is cleared.
-  - **A crash after the selector:** the start proceeds as the activation would, and the table
-    applies.
+  - **A→B:** B's promotion moves the epoch from E to E+1. When A is next served, its
+    `seen_serve_epoch` (E) differs, so A's open session closes at its `last_activity_at`.
+  - **A→B, restart B, then B→A, with a crash** straight after A's promotion became durable and before
+    A evaluated anything:
+    - the epoch is E+2, written in the promotion's own write;
+    - A's `seen_serve_epoch` is still E;
+    - the next start looks plain, but the epochs differ, so A's session closes.
+
+    No window exists, because the evidence is the promotion write itself.
+  - **A→B where B fails at start:** there is no promotion and the epoch stays E, so A's session
+    continues.
+  - **A selector persist failure:** nothing was written, so nothing changes.
+  - **A default change retained across two starts, then effective:** sessions and controls are
+    normal throughout. The `effective` start moves `default_epoch`, and the session open at that
+    point closes.
+- **Residual: a lost promotion write.** The promotion is a config write. If a crash loses it (its
+  durability was reported uncertain), the station's durable record says the promotion never
+  happened, and sessions follow that record:
+  - **if the retried start promotes again,** the epoch moves then;
+  - **if it falls back instead,** the departing archive's session continues, although the
+    candidate briefly served live QSOs, which stay in the candidate's own sessions.
+
+  Pick-up and New recover either case. This ADR does not add machinery against it.
+- **A requirement on any future feature** that reads a non-served archive's sessions (for example
+  an archive summary or export): it must apply the same epoch test, so that such a session reads as
+  closed.
 - **Returning to an archive:** its last session is closed, and the opening question offers it if it
   is eligible (§6). That matches today's per-archive restore (ADR 0094), but it is now the
   operator's choice.
@@ -292,13 +340,23 @@ The departure is therefore recorded in two stages.
      result** (the generation and the session it produced), and change nothing. The stale check is
      not applied to an already-applied retry. If the same request id arrives with a different
      action or target, it is refused as a misuse.
-  2. **Expiry evaluation** (§3).
+  2. **Departure and expiry evaluation** (§3, §4).
   3. **Stale check.** If the expected generation is not the current one, refuse with a distinct
      stale-action code, change nothing, and return the current state with its generation; the window
-     redraws to it. Refusals are not recorded, so a retry of a refused action is refused again on
-     the same check.
+     redraws to it.
   4. **Apply** the transition, advance the generation, and write the applied-request record (the
      request id, the action, the target, the result and the time), all in one transaction.
+- **Which outcomes are replayed, and which are evaluated afresh:**
+  - **Replayed:** only **applied** outcomes. They are the only ones recorded, and a retry of an
+    applied action returns its recorded result.
+  - **Evaluated afresh:** every refusal, because a refusal changes nothing and is not recorded.
+    - **A stale-generation refusal** stays stale on an unchanged retry, because the generation never
+      returns to an earlier value. The window must redraw and the operator must act again.
+    - **Other refusals can become applicable** on an unchanged retry once their condition clears.
+      For example, a transient database failure leaves the generation where it was, so the retry
+      can apply. A refusal whose condition clears only through a session transition (for example
+      a pick-up made eligible by a later default change) meets the stale check instead, because
+      that transition moved the generation.
 - **Applied-request records:**
   - **Durable across restart:** they are written to the archive file, in the transition's
     transaction. A retry after a crash or restart therefore returns the recorded result, or, if
@@ -431,6 +489,9 @@ only where it can act.
 - **O6. The first start after this ships:** no session exists, and the first live QSO opens one.
   Each open tab's `sessionStorage` list is not imported. That avoids trusting tab-supplied
   membership, but the panel empties once at upgrade.
+- **O7. Restoration with an equal epoch (§4):** how a supported restore invalidates session state.
+  This is decided with the backup and restore design (inbox item 4). Until then it is a recorded
+  limitation.
 
 ## Alternatives considered
 
@@ -503,7 +564,8 @@ Rejected, as in ADR 0049: the everyday operator would forget, and the panel woul
   - read the current session and its members; list sessions (scope per O3);
   - New, Continue and pick-up, each with an expected generation and a request id, plus their
     durable applied-request records;
-  - departure marks, written by archive activation and the default change, and resolved at start;
+  - `archive_serve_epoch` in config, incremented in the promotion write, and `default_epoch` in the
+    archive file, incremented in the default pointer's write;
   - `operating_session.*` events;
   - `docs/v2-design/api-endpoints.md` changes with them.
 - **ADR 0094 is superseded in part** when this is accepted: per-archive Session lists stay, but
