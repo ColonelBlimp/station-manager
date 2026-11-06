@@ -112,8 +112,8 @@ The daemon owns the **operating session**:
   2. **Evaluate departure, then expiry:**
      - if a change has taken effect (§4), close the session with `archive_changed` or
        `logbook_changed`;
-     - otherwise, if it is open and `now − last_activity_at` exceeds the gap, close it with `gap`
-       (§3).
+     - otherwise, if it is open, `now − last_activity_at` exceeds the gap, and the daemon-owned
+       contest-active state is off (U3), close it with `gap` (§3).
 
      Either close advances the generation.
   3. **If none is open now,** create a session: `opened_at = last_activity_at = now`, bound to the
@@ -167,8 +167,8 @@ The daemon owns the **operating session**:
 - **Activity baseline for operator actions:**
   - **New session:** `opened_at = last_activity_at = now`.
   - **Pick-up:** reopening a session starts a new open interval, sets `last_activity_at = now`
-    whatever U1 decides, and sets the session's `default_epoch` to the archive's current one. The resume is the baseline, so a resumed session's old timestamp cannot
-    expire it again at once.
+    whatever U1 decides, and sets the session's `default_epoch` to the archive's current one. The
+    resume is the baseline, so a resumed session's old timestamp cannot expire it again at once.
 - **Pick-up (the operator's "restart"):**
   - It resumes a closed session, which becomes the open one; **future** live QSOs are added to it.
     Nothing already logged moves (O1).
@@ -182,6 +182,7 @@ The daemon owns the **operating session**:
   - **every session-control transaction** (§5), as its first step;
   - **a daemon timer** set for the open session's expiry instant. It persists the `gap` close and
     emits the event, so open panels show "closed" without waiting for the next action;
+  - **a change of the configured gap** (U2), which also reschedules the timer;
   - **every read:** if a read finds the open session expired, the daemon persists the close and
     emits the event before answering. A reported state is therefore always a persisted state with
     its generation (§5).
@@ -457,17 +458,47 @@ only where it can act.
 - A run can cross a session boundary (New or pick-up mid-run). Its next QSO joins whichever
   session is open at storage time.
 - An archive or logbook change ends both, because it requires a restart.
-- Whether a selected contest suspends gap closing is U3.
+- Gap closing is suspended while the daemon-owned contest-active state is on (U3).
 
-## Unresolved (operator rulings, not decided here)
+## Operator rulings on U1–U3 (2026-11-06) and what stays open
 
-- **U1. What counts as activity:** a logged QSO only, or any operator action. Also, whether FT8
-  decoding, an armed FT8 run or a CQ with no answer keeps a session open.
-- **U2. The default gap** (configurable, per the operator). Pick-up makes an early gap close cheap
-  to recover from, but not free (O1).
-- **U3. Contest policy:** a gap longer than typical contest off-times (about 1 h), or suspending gap
-  closing while a contest is selected (the Phone form's contest toggle or the header contest,
-  W-0023), or another rule.
+**Attribution:** U1 and U3 were recommended by the reviewer and then **confirmed by the station
+operator** in their own words: "yes, confirm U1 (b) and U3 (b)" (2026-11-06). U2's number stays
+open.
+
+- **U1. Activity: ruled (b).** Activity is a logged QSO plus a **finite, documented set of
+  deliberate operating actions**.
+  - **Not activity:** passive decodes, an open window, and merely remaining armed. They never reset
+    the clock.
+  - **Still to define:** the exact list of counted actions, written into the design before
+    implementation.
+  - **Unchanged:** §2, step 5 (a logged QSO is activity); New session and pick-up reset the
+    baseline (§3).
+- **U2. The gap: configurable (operator ruling), number open.**
+  - **Where (proposal):** a station-wide `config.json` setting, edited from Settings and documented
+    in `docs/v2-design/config.md` when it is built. One value applies to every window and archive.
+    The operator raised Settings and `config.json` as a question; it is not yet a settled ruling.
+  - **When a change takes effect (agent proposal):** immediately, without a restart.
+    - Saving a new gap **re-evaluates expiry** of the open session and **reschedules its timer**
+      (§3) to the new deadline, so shortening it never waits for the old deadline.
+    - Lowering it below the current idle time closes the open session at once, at its
+      `last_activity_at`, **unless the contest suspension (U3) is active**.
+  - **Open:** the default value is the operator's to choose. Contest off-times do not establish the
+    everyday threshold. Pick-up makes an early gap close cheap to recover from for future logging,
+    but not free (O1).
+- **U3. Contest policy: ruled (b), with a design condition.** Gap expiry is suspended while a contest
+  is active.
+  - **The condition:** the suspension depends on an **explicit, daemon-owned contest-active state**,
+    not on whichever browser tab has a contest selected. Every window must agree on when that state
+    starts and ends.
+  - **Today:** the contest selection (the Phone form's contest toggle and the header contest,
+    W-0023) is per-tab state, so that daemon-owned state does not exist yet. Designing it, with its
+    own start, end, restart and several-window semantics, is a prerequisite. It belongs with W-0023.
+  - **While suspended:** the session ends only by New session, pick-up of another session, or an
+    archive or logbook change (§4).
+  - **Open: the baseline when the contest state ends.** One choice is that an expiry already due is
+    applied at once; the other is that the contest's end counts as activity. Decide it with the
+    contest-active state's design.
 
 ## Open questions (operator or reviewer)
 
@@ -492,6 +523,22 @@ only where it can act.
 - **O7. Restoration with an equal epoch (§4):** how a supported restore invalidates session state.
   This is decided with the backup and restore design (inbox item 4). Until then it is a recorded
   limitation.
+- **O8. The header session clock** (`frontend/app/src/lib/ui/SessionTimer.svelte`, rendered in
+  `lib/ui/Header.svelte`).
+  - **Today:** a third per-tab "session". Its start is the tab's first page load, kept in
+    `sessionStorage` under `sm.session.startedAt`. It is separate from the Session panel's list,
+    so a new window restarts it.
+  - **Under this design:** its replacement **must use the shared daemon session**, so every window
+    shows the same clock. The open question is what it shows:
+    - time since the session's `opened_at`;
+    - time since the current open interval began (after a pick-up);
+    - or total open time across intervals.
+
+    It also needs a state for no session open.
+  - **Not affected:** operating-session duration is **distinct from contest operating time**. The
+    contest timers in the same header (Last, Op, Elapsed) are counted per contest occurrence by the
+    scorers' rules (`contestTimers.ts`) and stay as they are. The session clock must not be
+    presented as, or substitute for, contest operating time.
 
 ## Alternatives considered
 
