@@ -2211,3 +2211,160 @@ wording.**
       stopped.
     - **Evidence:** `/home/mveary/sm-w0024/rehearsal` (0700; the driver, the transcript,
       `MANIFEST.sha256` with 16 files); the guest snapshot is inside the guest.
+
+### Guest case run (2026-11-06; agent; isolated guest, no RF)
+
+30. **U2, U3, U4, U6(a)–(c), U7(a), (b), (c1), (c2), 10 cases and subcases: all PASS (agent).**
+    One agent measurement error was corrected, and two driver substitutions are recorded.
+    - **Basis.** Authorised by the reviewer after `c77abb80` (entry 29 and the approved plan
+      edits); green CI on `0c84d5f9` is recorded in entry 29.
+    - **Setup.** Guest `sm-w0024-rehearsal` (no network interface, vsock CID 3102), the
+      rehearsal's install and fixture: Default effective, T (`W-0024 Acceptance`) live, lookups
+      off, every destination disabled.
+    - **Driver.** Headless Firefox 159 over WebDriver BiDi with a fresh profile, through a vsock
+      tunnel. A page-side observer copies toasts into `sessionStorage`, so they survive reloads.
+    - **Cases:** 10 named cases and subcases: U2, U3, U4, U6(a), U6(b), U6(c), U7(a), U7(b),
+      U7(c1) and U7(c2).
+    - **Restoration check:** the stopped-state snapshot restored; hash and mode lists **equal**;
+      integrity `ok,ok` on both databases. It ran **12 times, all equal**:
+      - once before the first case;
+      - after each case, with no shared cycle; U7(c1) had two, one after each of its two attempts;
+      - the final restore after U3.
+    - **U4 — the unreadable-status banner: PASS.**
+      - **Baseline:** a valid draft (`9X4U04`, date, time, comment, manual rig settings
+        confirmed); Log QSO **enabled**.
+      - **Fault:** M3 failed every `GET /v1/default-logbook` before it was sent, then the window
+        reloaded.
+        - The banner: "Station Manager could not read the state of a default logbook change.
+          Live entry is paused until it can." with Check again and Reload.
+        - The marker: `unproven`.
+        - The entry lock: "Station Manager could not read the state of a default logbook change
+          — check again or reload before logging or transmitting."
+        - With the draft re-entered, Log QSO **disabled**.
+        - Set as default on T: `aria-disabled`, "The default logbook’s status could not be read;
+          reopen Settings to try again."
+        - Check again with the fault still active: the banner stayed.
+        - The daemon log: **no** `/v1/default-logbook` request while the fault was active.
+      - **Recovery, Check again:** with the fault removed, one `GET` (200); the banner and lock
+        cleared; Log QSO **enabled** with the same draft; the marker `verified`.
+      - **Recovery, Reload:** fault on, reload, fault off, then Reload in the banner: a new
+        document (`timeOrigin` changed), no banner, and Log QSO **enabled** once the draft was
+        re-entered.
+      - **No QSO written:** Default's count stayed 0.
+      - *Agent measurement error, corrected:* the first fault reading reported Log QSO
+        "enabled". It read `button.disabled`, which reflects only the button's own attribute.
+        The form disables the button through `<fieldset disabled>`
+        (`frontend/app/src/lib/operate/LoggingCard.svelte:417-851`). Read with `:disabled`, the
+        same state is **disabled**, with the fieldset disabled and the entry-lock text shown.
+        The baseline and recovery readings were taken with the corrected helper.
+      - *Substitution:* a locked form cannot be typed into, so during the fault the driver set
+        the draft's values programmatically. The lock is then the only thing that can disable
+        Log QSO.
+    - **U6(a) — a Log in flight: PASS.**
+      - **Setup:** a valid draft (`9X4U06`); Log QSO clicked with `POST /v1/qso` held by M3
+        ("Logging…").
+      - **Result:** Set as default on T gave the toast "A QSO is being logged on Phone / CW —
+        wait for it to finish, then change the default." No confirmation dialog, and no `POST
+        /v1/default-logbook` in the daemon log.
+      - **Released:** the QSO landed in Default (count 1). The snapshot was restored.
+    - **U6(b) — a Settings save in flight: PASS.**
+      - **Setup:** the Enrichment save (`PUT /v1/config`) held, the button showing "Saving…".
+      - **Result:** Set as default gave the toast "Saving Enrichment — wait for it to finish."
+        No dialog, and no `POST`.
+      - **Released:** the save applied. The snapshot was restored.
+    - **U6(c) — an archive operation in flight: PASS.**
+      - **Setup:** a second archive (`W-0024 U6c archive`) created; its activation `POST` held
+        after the switch confirmation was accepted.
+      - **Result:** Set as default on T was **disabled** (`:disabled`), titled "An archive switch
+        is in progress — wait for the daemon to restart and the page to reload.", and the
+        Logbooks gate showed the same text. No `POST /v1/default-logbook`.
+      - **Released:** the daemon switched to the second archive; the snapshot then restored Home.
+    - **U7(a) — an altered acceptance response: PASS.** Windows A (Settings) and B (Phone/CW)
+      open; Set as default on T, then OK.
+      - **The request:** the daemon logged `POST /v1/default-logbook 202` (05:23:04.323Z).
+      - **The alteration:** the driver changed the status to `502` at response time, keeping the
+        body (`intercept-status`).
+      - **The page:** the warning "The request timed out before Station Manager confirmed the
+        result, so the outcome is unknown. Waiting to see whether the daemon restarts…", then
+        "Daemon restarted. Reloading…".
+      - **The daemon:** exactly one `POST`; "default logbook change requested…", "smd stopped",
+        "smd starting", "startup: the default logbook change was applied"; instance
+        `dmnvkbqkcced` → `dmnvkogmhf5f`.
+      - **Every window:** A and B reloaded, each `verified` on the new instance with default T.
+        B's toast: "The daemon now serves another default logbook. Reloading…".
+    - **U7(b) — the request never sent: PASS.**
+      - **Setup:** M3 failed the `POST` before it was sent.
+      - **The page:** the same unknown-outcome warning; after the SPA's 30 s restart wait, "The
+        daemon has not restarted. Settings → Logbooks shows what it holds for the change."
+      - **The daemon:** no `POST`; the instance unchanged; no change record.
+      - **The default-change and archive gates released:** no entry lock, no banner, and the
+        marker `verified`. Under contract M1 the marker is never `verified` while an existing gate
+        blocks operations, so it supports this conclusion.
+      - **Not directly observed:** Log QSO's enabled state. The in-app Phone / CW link was
+        collapsed, so the button was not read (driver slip).
+    - **U7(c1) — the daemon's stale refusal: PASS.**
+      - **Request:** a direct `POST` with `believed_default_uuid` set to T while Default was
+        effective, carrying the tab's `X-SM-Archive-Id`. Sent twice, once also with a stale
+        `X-SM-Default-Logbook`.
+      - **Result:** both answered `409 default_stale`; the instance and the `config.json` hash
+        unchanged; no change record.
+      - **First attempt:** without the archive header, the archive guard refused it earlier
+        (`400 missing_required_field`), with no effect.
+    - **U7(c2) — the SPA's stale handling: PASS.**
+      - **Setup:** M3 answered the `POST` before sending, with a synthesized `409
+        default_stale`.
+      - **The page:** it reloaded ("The daemon now serves another default logbook.
+        Reloading…"), and its marker still showed Default: nothing was retargeted.
+      - **The daemon:** **no** `POST`; the instance and the `config.json` hash unchanged.
+      - **Scope:** this does not demonstrate a naturally stale browser end to end (R5).
+    - **U2 — `not_applied_intent_pending`, with Cancel change: PASS.**
+      - **Setup:** M1 placed a selector for T and soft-deleted T (Python `sqlite3`); M2 made `WD`
+        read-only (recorded mode `755`).
+      - **The start:** "startup: the default logbook change was not applied". The status:
+        `not_applied_intent_pending`, `default_change_target_missing`, `unconfirmed: true`. The
+        selector still in `config.json`, with `removed` empty.
+      - **The UI:** the banner and the notice "The change to a logbook no longer listed was not
+        applied at this start and is still pending: the logbook no longer exists.", with
+        **Cancel change to a logbook no longer listed**. Set as default not offered.
+      - **Cancel under M2:** `POST /v1/default-logbook/cancel 500 default_change_write_failed`;
+        the status and the record unchanged.
+      - **Cancel with M2 lifted** (the recorded mode restored): `200`; the notice "…was
+        cancelled."; the banner and action gone.
+        - The status: `cancelled`, `unconfirmed: false`.
+        - The confirming write kept the `cancelled` tombstone in `config.json`.
+      - **After a restart:** Default effective, no change in play. A later write had removed the
+        tombstone from disk, as the approved wording allows.
+    - **U3 — `withdrawal_unconfirmed`, with Confirm and the power-loss wording: PASS (recovery UI
+      only, R2).**
+      - **Setup:** M1 placed a `cancelled` tombstone for T (T live); M2 made `WD` read-only.
+      - **The start:** "startup: a default logbook change's removal could not be confirmed on
+        disk; it stays unconfirmed". The status: `withdrawal_unconfirmed`, `removed: cancelled`,
+        `unconfirmed: true`.
+      - **The UI:** "The change to “W-0024 Acceptance” was cancelled, but this is not yet
+        confirmed on disk. If power is lost before it is, the change to “W-0024 Acceptance” may
+        still apply at a later start.", with **Confirm the change to “W-0024 Acceptance” is
+        cancelled**. Set as default on T: `aria-disabled`, "A default logbook change is already
+        in progress."
+      - **Confirm under M2:** `500 default_change_write_failed`; the status unchanged.
+      - **Confirm with M2 lifted:** `200`; the status `cancelled`, `unconfirmed: false`; the
+        tombstone kept by the confirming write; Set as default offered again.
+      - **After a restart:** Default effective, no change in play; the tombstone removed by a
+        later write.
+    - **Observations, not acceptance criteria; O-a and O-b are kept for follow-up (reviewer,
+      2026-11-06):**
+      - **O-a.** The unknown-outcome warning always begins "The request timed out…"
+        (`OUTCOME_UNKNOWN_LEAD`). In U7(b) the request failed immediately with a network error,
+        and in U7(a) the browser received a `502`; neither was a timeout.
+      - **O-b.** The `default_change_write_failed` toast shows an internal path
+        (`/home/smtest/.local/share/station-manager/config.json-….tmp`). It is not a secret, but
+        it is internal detail shown to the operator.
+      - **O-c.** Both M2 starts also logged "startup: archive adopted in memory but the
+        catalogue could not be persisted to config.json…". That supports, though it does not
+        prove, archive adoption as a startup config write (entry 29's untraced explanation).
+    - **Afterwards.** The final restore was equal (hash, modes, integrity). The guest is shut off
+      and retained, its disposal pending. Firefox, the driver and the tunnel are stopped.
+    - **Evidence:** `/home/mveary/sm-w0024/rehearsal` (0700): the transcript, 18 screenshots,
+      the fixture scripts in `cases/`, `MANIFEST.sha256` (52 files).
+    - **Still open:** U1's browser acceptance; U5 and the keyed U6 cases, which need the station
+      operator's agreement for each occasion; contact retention; any waiver; the operator's
+      sign-off.
