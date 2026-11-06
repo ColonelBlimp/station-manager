@@ -171,8 +171,10 @@ delivery-bookkeeping fields; compare every other field actually emitted, includi
 exported enrichment and QSO identity; keep comparison and marking atomic; preserve `revision`
 increments and cloud propagation. Size is not estimated until this design is reviewed.
 **Implementation waits for review of the retry and result contract below.** Revision 2 is
-`4ef2b9bd`; revision 3 (this text) corrects the deadline, the enqueue after cancellation, the
-failed-commit behaviour and the result wording.
+`4ef2b9bd`, and revision 3 is `83127331` (the deadline, the enqueue after cancellation, the
+failed-commit behaviour, the result wording). Revision 4 (this text) aligns the retry rule,
+restates the marking context as an admission budget, replaces case 12a's trigger, and qualifies
+the response estimate.
 
 ### Today (verified against the tree at `9db1351d`)
 
@@ -285,13 +287,16 @@ failed-commit behaviour and the result wording.
        (`modernc.org/sqlite@v1.48.1/tx.go:35`) checks `sqlite3_get_autocommit`, and if the failed
        `COMMIT` left the transaction active, it executes `rollback` itself, ignoring that
        rollback's error, before returning the commit error.
-     - **The attempt's state after a failed commit is *uncertain*,** not "unmarked":
+     - **The attempt's state after a failed commit is *uncertain*,** not "unmarked". Another
+       attempt follows (see "Which outcomes allow another attempt"):
        - its ids are **not** added to the confirmed set;
        - they are **not** reported or logged as definitively unmarked; the log calls them
          "unconfirmed";
-       - they stay candidates. If an attempt remains, its verification read re-reads them: a mark
-         that did commit has changed only the ignored email-mark fields and `revision`, so the row
-         is still eligible. Re-marking it is idempotent (the same stamp date) and confirms it;
+       - they stay candidates. If an attempt remains, its verification read re-reads them. A mark
+         that did commit has changed only the ignored email-mark fields and `revision`, so the read
+         establishes only that the row is still **eligible**. The row is **confirmed**, and added
+         to `emailed`, only when that attempt's own marking `COMMIT` succeeds. Re-marking is
+         idempotent, with the same stamp date;
        - earlier confirmed commits are unaffected.
 
      **The confirmed set:** only the ids an attempt returned **and** whose `tx.Commit()` returned
@@ -301,21 +306,48 @@ failed-commit behaviour and the result wording.
      writer from its first statement. There is no read-to-write upgrade.
    - **(d) Lost races.** An eligible row the `UPDATE` did not return was written by someone else
      between (a) and (c). It stays a candidate for the next attempt.
-   - **The end of the loop:**
-     - **Normal end:** the loop ends when no candidates remain or the third attempt is done.
-     - **Early end:** the loop also ends on an attempt's error, on cancellation, or when the overall
-       budget runs out.
-     - **The overall budget:** an explicit **marking context**, created after the send:
-       `context.WithDeadline(r.Context(), markDeadline)`.
-       - `markDeadline` is the write deadline set at `handler_session_email.go:156`
-         (`now + mailer.Timeout() + sessionEmailResponseMargin`, computed once and kept), minus a
-         fixed reserve for writing the response. The reserve is an implementation constant,
-         stated in review.
-       - It keeps client cancellation, because detaching is out of scope. It adds the bound that
-         `r.Context()` lacks.
-       - Every attempt and every database call runs on it. The per-call bounds above still apply
-         inside it.
-       - No attempt starts after it is done.
+   - **Which outcomes allow another attempt (revision 4).** One rule, stated once:
+     - **Another attempt follows** while attempts remain (three in total) and the marking context is
+       not done, after any of these, each leaving the affected rows as candidates:
+       - a **lost race** (an eligible row the `UPDATE` did not return). This is not an error;
+       - a **verification-read error** in (a). Nothing was written;
+       - a **failed `BEGIN`**. There is no transaction, so there is nothing to roll back;
+       - a **marking-transaction error after `BEGIN` and before `COMMIT`** (the `UPDATE`, the
+         scan, or `rows.Close`), after an explicit `tx.Rollback()`;
+       - a **failed `COMMIT`**, where the attempt is *uncertain*. The next attempt's verification
+         read resolves it.
+     - **The loop ends early** only when the marking context is done (cancellation or budget),
+       **or** when the explicit `tx.Rollback()` after an error between `BEGIN` and `COMMIT` itself
+       fails. In that
+       case the connection's state is unknown, so the loop stops rather than compound it, and the
+       log names the reason.
+     - **Normal end:** no candidates remain, or the third attempt is done.
+   - **The marking context: a cancellation and admission budget, not a completion deadline.**
+     - **What it is:** `markCtx := context.WithDeadline(r.Context(), markDeadline)`, created after
+       the send. `markDeadline` is the write deadline set at `handler_session_email.go:156`
+       (`now + mailer.Timeout() + sessionEmailResponseMargin`, computed once and kept), minus the
+       response reserve (below).
+     - **What it does:** it decides whether an attempt or a database operation is **admitted**. No
+       attempt starts, and no new verification or marking statement is issued, after it is done.
+       It keeps client cancellation, because detaching is out of scope.
+     - **Cleanup is exempt.** Closing rows, closing the verification read transaction, and
+       `tx.Rollback()` after an error still run after the budget is spent. They are never skipped
+       because it has expired.
+     - **What it does not do: guarantee completion.**
+       - Passing a context that has a deadline **bypasses** the package defaults:
+         `ensureCtxTimeout` returns a context with a deadline as-is (`internal.go:129`), and
+         `BeginTxContext` adds `TransactionContextTimeout` only when there is no deadline
+         (`service.go:317-321`).
+       - The pinned driver runs `COMMIT` and `ROLLBACK` on `context.Background()`
+         (`modernc.org/sqlite@v1.48.1/tx.go:35-59`), so a `COMMIT` already issued can outlive the
+         marking context.
+       - `database/sql` checks the transaction's context before `COMMIT` and returns `ctx.Err()`
+         without committing when it is done (`sql.go:2287`).
+     - **Shorter per-operation limits are preserved explicitly.** Each database operation runs on
+       its own child context: `context.WithTimeout(markCtx, limit)`, where `limit` is the existing
+       default for that kind of call (`ContextTimeout` for the verification read and the marking
+       statement, and `TransactionContextTimeout` for the marking transaction). `WithTimeout`
+       takes the earlier of the two deadlines, so neither bound is lost.
 5. **The result contract (revision 2).**
    - **`emailed` means confirmed commits.** It is the union of the confirmed set across **all**
      attempts, in request order. A later attempt cannot undo an earlier confirmed commit, so it
@@ -392,10 +424,10 @@ mirror.
 | 7 | Lost race: a stamp-only write at `sessionEmailBeforeMark(1)` | memory | attempt 2 re-verifies and marks |
 | 8 | Lost race with a content edit at `sessionEmailBeforeMark(1)` | memory | attempt 2 finds the content changed; not marked |
 | 9 | Attempts exhausted: a write at every `sessionEmailBeforeMark` | memory | unmarked after the third attempt; reason logged |
-| 10 | **Mixed success then failure:** attempt 1 marks A and loses B to a race; attempt 2's marking transaction fails (fault seam) | memory | `emailed` = [A] in request order; `date` = the one stamp date; A marked on read-back, B not; the stamp-sync enqueue holds exactly [A] |
+| 10 | **Mixed success then failure:** attempt 1 marks A and loses B to a race; the marking transactions of attempts 2 **and 3** fail before `COMMIT` (fault seam), so retries run out | memory | `emailed` = [A] in request order; `date` = the one stamp date; A marked on read-back, B not; the stamp-sync enqueue holds exactly [A] |
 | 11 | **Cancellation after a commit:** attempt 1 marks A and loses B; the request context is cancelled at `sessionEmailBeforeMark(2)` | memory | no attempt 2 `UPDATE`; A stays marked on read-back; A is in the accumulated result (`emailed` = [A] when the response is written). **No assertion that the enqueue succeeded**: it is best-effort, and the reconcile is the backstop |
 | 12 | Rollback within an attempt: fault after the `UPDATE`, before `COMMIT` | memory | real SQL rollback; nothing from that attempt on read-back; earlier confirmed ids kept |
-| 12a | **Failed commit:** the `COMMIT` fails with the transaction left active. Driven on the WAL fixture by another connection holding a read snapshot that makes the commit return `SQLITE_BUSY`, or by a driver-level fault, whichever is reproducible | WAL file, pool | `tx.Commit` returns an error; `tx.Rollback` afterwards returns `ErrTxDone`; read-back shows the attempt's rows unmarked (the driver's own rollback); the ids are not in the confirmed set and are logged "unconfirmed"; the next attempt re-verifies and confirms them; earlier confirmed ids kept |
+| 12a | **Failed commit**, triggered by a **test-only deferred foreign-key violation**. The fault seam runs `PRAGMA defer_foreign_keys = ON` and writes a row that violates a foreign key, inside the marking transaction. SQLite reports a deferred violation at `COMMIT`, and the `COMMIT` fails, leaving the transaction open ([deferred constraints](https://www.sqlite.org/foreignkeys.html#fk_deferred)). That exercises modernc's cleanup branch. **To be verified against the pinned driver before the test is relied on** (not yet reproduced). A reader snapshot is **not** a trigger: in WAL a reader does not block a writer's commit ([WAL concurrency](https://www.sqlite.org/wal.html#concurrency)) | memory or WAL file | `tx.Commit` returns the constraint error; a later `tx.Rollback` returns `ErrTxDone`; read-back shows the attempt's rows unmarked (the driver's own rollback); the ids are not confirmed and are logged "unconfirmed"; attempt 2's read finds them eligible, and only attempt 2's successful `COMMIT` adds them to `emailed`; earlier confirmed ids kept. **Status: UNVERIFIED** until the driver check passes |
 | 12b | **Deadline:** the marking context's deadline passes before attempt 2 | memory (fake clock or short deadline) | no attempt 2; attempt 1's confirmed ids reported; the log reason is "budget" |
 | 13 | Edit then revert (A→B→A) before verification | memory | marked: the marked content equals the sent content |
 | 14 | Re-send of an already-emailed row | memory | marked; the email-mark fields are ignored |
@@ -416,10 +448,34 @@ Each proof is checked to reach its assertion.
 
 ### Open for review
 
-- **Attempts:** three in total. The reviewer supports this as the technical recommendation; it
-  needs operator confirmation, within the marking-context deadline above.
-- **The response-write reserve** subtracted from `markDeadline`: an implementation constant, to be
-  stated in review.
+- **Attempts:** three in total (not three retries). **Approved by the reviewer** as the technical
+  choice (2026-11-06). That is reviewer approval, not an operator ruling. It operates within the
+  marking context's admission budget above.
+- **The response-write reserve** subtracted from `markDeadline`. **Provisional: 5 s.** The reviewer
+  calls it reasonable as a provisional value, and it is to be confirmed by measurement.
+  - **The size estimate, and what bounds it:**
+    - **The all-valid case:** every requested string is a canonical 36-character UUID, all are
+      found, and all are emailed. `sent` and `emailed` then hold about 20,000 × 39 bytes ≈ 780 KB.
+      That is an estimate for that case, **not an enforced maximum**.
+    - **`omitted` is not length-validated.** Request strings are checked only for count
+      (`maxSessionQsoUUIDs`, `handler_session_email.go:129`). Strings that do not resolve are
+      echoed back in `omitted` as received (`handler_session_export.go:63`). Their total size is
+      bounded only indirectly, by the request body cap `server.max_body_bytes` (default 1 MiB,
+      configurable; `internal/config/defaults.go:51`).
+    - **JSON escaping can enlarge them.** For example, the encoder writes `<` as `\u003c`, six bytes
+      for one. A pathological `omitted` could therefore approach six times the body cap.
+    - Imposing a bound on `omitted` is **not** part of this fix. It is recorded here as an
+      observation.
+  - **The measurement**, before the value is fixed:
+    - a real `httptest.Server` (not a `ResponseRecorder`, which cannot measure transport time),
+      and a client that reads the **entire** response body;
+    - timing the encoding and delivery of two responses: the all-valid 10,000-UUID one, and a
+      pathological `omitted` at the default body cap.
+  - **What the measurement can show:** loopback timings support the choice; they cannot establish
+    performance on slower connections. The browser normally runs on the station host, over
+    loopback.
+  - **No reserve guarantees timely completion.** A `COMMIT` issued before the deadline can outlive
+    it (above). The reserve only reduces how often the response misses its write deadline.
 - **Batched verification:** one bounded read snapshot (supported by the reviewer).
 - **Case 12a's trigger:** to be confirmed reproducible. If it is not, it is replaced by a
   driver-level fault, with the expected behaviour unchanged.
