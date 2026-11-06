@@ -75,7 +75,10 @@ implementation authorisation; the operator's decisions are marked under each ite
      - SM Cloud still receiving every revision.
 
      This fixes one cause of repeat email, not general email idempotency.
-   - **Operator decision:** the field policy, meaning the exact excluded fields.
+   - **Operator decision (2026-11-06, "agreed", following the reviewer's recommendation):**
+     compare exported contact content, excluding explicitly listed delivery bookkeeping and
+     storage metadata; enrichment changes that alter that content count. The exact exclusion
+     list is reviewed before implementation. **Not authorised for implementation.**
 2. **FT8 repeat hold after Ignore** → home: W-0011 (Deferred until a recognised operator problem
    is chosen; this is one), not W-0019 (closed).
    - **Observed:** a station Ignored on a worked-before hold stays excluded for the rest of the
@@ -97,8 +100,11 @@ implementation authorisation; the operator's decisions are marked under each ite
      FT8 run nor the calendar day is substituted silently.
    - **Impact:** callers excluded or delayed in a pile-up, as in today's 12m trace. Completed
      contacts lost are not established by that trace.
-   - **Acceptance:** to be written once session ownership is decided.
-   - **Operator decision:** session ownership.
+   - **Operator decision (2026-11-06, "agreed", following the reviewer's recommendation):** the
+     initiating tab's session is the basis for the design. Ownership stays **provisional** until
+     the design resolves reload, session clearing, tab closure and control from another tab,
+     particularly how each affects eligibility to answer an Ignored caller.
+   - **Acceptance:** to be written with that design. **Not authorised for implementation.**
 3. **O-a: "The request timed out…" shown for every unknown outcome** → home: W-0012 (Open;
    diagnostics).
    - **Observed:** the shared lead sentence (`frontend/app/src/lib/api/_helpers.ts:69-70`; 32
