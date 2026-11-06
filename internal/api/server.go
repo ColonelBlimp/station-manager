@@ -132,6 +132,12 @@ type Server struct {
 	// StopAccepting / Shutdown sequence in a chosen order (W-0022).
 	innerListenerHook func(net.Listener) net.Listener
 	listenerHook      func(net.Listener) net.Listener
+	// wsWriteDone, when set, is called by each WebSocket stream handler with
+	// the frame name and the error immediately after Conn.Write returns. Nil in
+	// production; package tests set it before serving and leave it unchanged
+	// until every handler has finished, to tell a completed write from one a
+	// shutdown interrupted (ADR 0099 W1; W-0024 acceptance entry 27).
+	wsWriteDone func(name string, err error)
 	// draining is set by StopAccepting at the very start of shutdown. The
 	// rejectWhenDraining middleware turns it into a 503 for NEW requests: closing
 	// the listener frees the port but leaves existing keep-alive connections

@@ -391,16 +391,134 @@ func TestWSStream_WedgedPeerEndedByWriteDeadline(t *testing.T) {
 // Shutdown (responsibility 7).
 // =====================================================================
 
-func TestWSStream_ShutdownSends1001AndWaits(t *testing.T) {
-	srv, ts := wsTestServer(t)
-	c := libDial(t, ts, wsEventsPath)
-	_ = libRead(t, c)
-	// The library client answers the close handshake only while reading.
-	got := make(chan websocket.StatusCode, 1)
+// writeDone is one wsWriteDone report: the frame name and Conn.Write's error.
+type writeDone struct {
+	name string
+	err  error
+}
+
+// wsTestServerObserved is wsTestServer with the write-completion seam set
+// before serving (it stays unchanged until every handler has finished) and,
+// optionally, the accepted transports wrapped.
+func wsTestServerObserved(t *testing.T, wrap func(net.Conn) net.Conn) (*Server, *httptest.Server, <-chan writeDone) {
+	t.Helper()
+	srv := testServer(t)
+	done := make(chan writeDone, 16)
+	srv.wsWriteDone = func(name string, err error) { done <- writeDone{name, err} }
+	ts := httptest.NewUnstartedServer(srv.httpServer.Handler)
+	if wrap != nil {
+		ts.Listener = &wrapListener{Listener: ts.Listener, wrap: wrap}
+	}
+	ts.Start()
+	t.Cleanup(ts.Close)
+	return srv, ts, done
+}
+
+type wrapListener struct {
+	net.Listener
+	wrap func(net.Conn) net.Conn
+}
+
+func (l *wrapListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	return l.wrap(c), nil
+}
+
+// holdConn holds the server's "connected" write AFTER its bytes reach the
+// peer, until the transport is closed — an interruptible in-flight write.
+// Closing the transport releases the held write with an error. It also
+// reports when a read blocked on the transport returns after the close (the
+// SMD-owned reader is the only reader of a hijacked stream).
+type holdConn struct {
+	net.Conn
+	held          chan struct{} // the "connected" bytes are out; the write is now held
+	writeReleased chan struct{} // the held Write has returned
+	closed        chan struct{} // Close was called
+	readEnded     chan struct{} // a Read returned after Close
+	heldOnce      sync.Once
+	closeOnce     sync.Once
+	readOnce      sync.Once
+}
+
+func newHoldConn(c net.Conn) *holdConn {
+	return &holdConn{Conn: c, held: make(chan struct{}), writeReleased: make(chan struct{}),
+		closed: make(chan struct{}), readEnded: make(chan struct{})}
+}
+
+func (h *holdConn) Write(b []byte) (int, error) {
+	n, err := h.Conn.Write(b)
+	if err != nil || !strings.Contains(string(b), `"connected"`) {
+		return n, err
+	}
+	first := false
+	h.heldOnce.Do(func() { first = true; close(h.held) })
+	if !first {
+		return n, err
+	}
+	<-h.closed
+	close(h.writeReleased)
+	return n, net.ErrClosed
+}
+
+func (h *holdConn) Read(b []byte) (int, error) {
+	n, err := h.Conn.Read(b)
+	if err != nil {
+		select {
+		case <-h.closed:
+			h.readOnce.Do(func() { close(h.readEnded) })
+		default:
+		}
+	}
+	return n, err
+}
+
+func (h *holdConn) Close() error {
+	h.closeOnce.Do(func() { close(h.closed) })
+	return h.Conn.Close()
+}
+
+// clientCloseWait starts the library client's read (it answers the close
+// handshake only while reading) and returns where its terminal error lands.
+func clientCloseWait(c *websocket.Conn) <-chan error {
+	got := make(chan error, 1)
 	go func() {
 		_, _, err := c.Read(context.Background())
-		got <- websocket.CloseStatus(err)
+		got <- err
 	}()
+	return got
+}
+
+func awaitWriteDone(t *testing.T, done <-chan writeDone, name string) writeDone {
+	t.Helper()
+	select {
+	case d := <-done:
+		if d.name != name {
+			t.Fatalf("first completed write %q, want %q", d.name, name)
+		}
+		return d
+	case <-time.After(5 * time.Second):
+		t.Fatalf("no completion reported for the %q write", name)
+	}
+	return writeDone{}
+}
+
+// Write completed: the "connected" Conn.Write has RETURNED (the server-side
+// barrier) before Shutdown, so no write is in flight and the close coordinator
+// owns the close: the peer must see 1001, and every handler must have ended.
+// Reading the frame client-side is not that barrier: the bytes arrive before
+// the library's write returns, and a shutdown in that tail interrupts the
+// write (the next test; ADR 0099 "Timeouts after the upgrade").
+func TestWSStream_ShutdownSends1001AndWaits(t *testing.T) {
+	srv, ts, done := wsTestServerObserved(t, nil)
+	c := libDial(t, ts, wsEventsPath)
+	_ = libRead(t, c)
+	if d := awaitWriteDone(t, done, "connected"); d.err != nil {
+		t.Fatalf("connected write failed: %v", d.err)
+	}
+	got := clientCloseWait(c)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
@@ -410,10 +528,64 @@ func TestWSStream_ShutdownSends1001AndWaits(t *testing.T) {
 		t.Fatalf("Shutdown returned success with %d stream handlers still active", n)
 	}
 	select {
-	case code := <-got:
-		if code != websocket.StatusGoingAway {
-			t.Fatalf("peer saw close %v, want 1001", code)
+	case err := <-got:
+		if code := websocket.CloseStatus(err); code != websocket.StatusGoingAway {
+			t.Fatalf("peer saw close %v, want 1001 (client error: %v)", code, err)
 		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("peer saw no close")
+	}
+}
+
+// Write in progress: the "connected" bytes have reached the peer but the
+// server's write is held when Shutdown starts. Shutdown cancels the write
+// (agreed contract: an in-flight write is interrupted; 1001 is best effort), so
+// an abnormal close is permitted. Required: the write is interrupted (it
+// returns with an error), the transport is closed, the reader's blocked read
+// returns, the handler ends, and Shutdown succeeds.
+func TestWSStream_ShutdownDuringWriteInterrupts(t *testing.T) {
+	conns := make(chan *holdConn, 1)
+	srv, ts, done := wsTestServerObserved(t, func(c net.Conn) net.Conn {
+		h := newHoldConn(c)
+		conns <- h
+		return h
+	})
+	c := libDial(t, ts, wsEventsPath)
+	h := <-conns
+	_ = libRead(t, c) // the bytes are out ...
+	<-h.held          // ... and the server's write is still held
+	select {
+	case d := <-done:
+		t.Fatalf("the %q write completed before Shutdown (err %v): the fixture did not hold it", d.name, d.err)
+	default:
+	}
+	got := clientCloseWait(c)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	if d := awaitWriteDone(t, done, "connected"); d.err == nil {
+		t.Fatal("the held write reported success: Shutdown did not interrupt it")
+	}
+	for what, ch := range map[string]chan struct{}{
+		"held write released": h.writeReleased,
+		"transport closed":    h.closed,
+		"reader's read ended": h.readEnded,
+	} {
+		select {
+		case <-ch:
+		default:
+			t.Fatalf("after Shutdown returned: %s not observed", what)
+		}
+	}
+	if n := srv.streams.active(); n != 0 {
+		t.Fatalf("Shutdown returned success with %d stream handlers still active", n)
+	}
+	select {
+	case err := <-got:
+		t.Logf("peer saw close %v (permitted: the write was interrupted); client error: %v",
+			websocket.CloseStatus(err), err)
 	case <-time.After(2 * time.Second):
 		t.Fatal("peer saw no close")
 	}

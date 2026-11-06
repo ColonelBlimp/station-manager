@@ -293,7 +293,11 @@ func serveWSStream[E any](s *Server, w http.ResponseWriter, r *http.Request, spe
 		}
 		wctx, cancel := context.WithTimeout(stopCtx, sseWriteTimeout)
 		defer cancel()
-		return c.Write(wctx, websocket.MessageText, b)
+		err = c.Write(wctx, websocket.MessageText, b)
+		if s.wsWriteDone != nil {
+			s.wsWriteDone(name, err)
+		}
+		return err
 	}
 
 	if err := write("connected", nil); err != nil {
