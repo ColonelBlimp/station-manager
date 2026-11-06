@@ -1930,8 +1930,9 @@ Cancel change.**
     is unchanged.
 - **After M2 is lifted:** Cancel change pressed again.
   - The status settles to `cancelled` with `unconfirmed: false`.
-  - `config.json` **retains** the `cancelled` tombstone, the confirming document's copy, as
-    `confirmRemoval` keeps it. Its presence is expected, not a failure.
+  - The confirming write retains the tombstone in `config.json`; a subsequent config write may
+    remove it. Its presence, or its absence after a later write such as a restart's, is
+    expected, not a failure.
   - After a restart, Default is still effective and the status shows no change in play.
 - **Cleanup:** the recorded `WD` mode restored; the stopped-state snapshot restored.
 
@@ -1960,8 +1961,8 @@ wording.**
   - Confirm pressed under M2 is refused (`default_change_write_failed`), and the status is
     unchanged;
   - after M2 is lifted, Confirm succeeds: the status settles to `cancelled` with
-    `unconfirmed: false`. `config.json` **retains** the tombstone, as the confirming document's
-    copy, which is expected;
+    `unconfirmed: false`. The confirming write retains the tombstone in `config.json`; a
+    subsequent config write may remove it. Either is expected;
   - after a restart, Default is still effective and the status shows no change in play.
 - **Cleanup:** as U2.
 
@@ -2060,9 +2061,13 @@ wording.**
   `internal/api/live_entry.go:53`). Recorded as such (R6).
 
 **U7 — an unknown outcome (lost response), and a stale tab's `default_stale`.**
-- **(a) The response lost after the daemon accepted**, guest, M3.
-  - **Trigger:** substitute the answer to `POST /v1/default-logbook` at response time with a
-    non-coded body (for example a 502 with an HTML page). The request reaches the daemon.
+- **(a) An altered acceptance response** (not a literal lost response), guest, M3.
+  - **Trigger:** the `POST /v1/default-logbook` is delivered. At response time its status is
+    changed from the daemon's `202` to `502`, keeping the daemon's uncoded acceptance body
+    (revised after rehearsal, entry 29; body replacement is BLOCKED in Firefox 159).
+  - **Why this reaches the unknown branch (code inspection):** a non-`202` answer without a
+    `code` is classed unknown (`requestDefaultChange`,
+    `frontend/app/src/lib/api/default-change.ts`).
   - **Expected:**
     - the warning "… Waiting to see whether the daemon restarts…";
     - the daemon restarts, every window reloads, and T is effective (`settle`,
@@ -2070,8 +2075,13 @@ wording.**
     - no second `POST` is sent.
   - **Misleading outcomes:** "nothing changed" reported while the change applied; a retried
     request; the old default kept on screen.
-  - **Evidence:** exactly one `POST` in the daemon log, the restart, the transcript, and the
-    markers in every window.
+  - **Evidence:**
+    - the daemon's original `202` (its access log), and the browser-visible `502` (transcript and
+      page);
+    - the unknown-outcome warning;
+    - exactly one `POST` in the daemon log;
+    - the restart (new instance);
+    - the correct binding in every window: the marker `verified` on the new instance, default T.
 - **(b) The request never sent**, guest, M3.
   - **Trigger:** fail the `POST` before it is sent.
   - **Expected:** the same unknown-outcome warning; then, with no restart, "The daemon has not
@@ -2127,3 +2137,77 @@ wording.**
   `WATCH_ROUNDS`). The guest rehearsal's checks of M2 and M3 decide only whether a case can run.
 - **Still open:** the plan's ratification; the operator's U5 and keyed U6 decisions; U1's
   browser acceptance.
+
+### Fixture rehearsal (2026-11-06; agent; isolated guest, no RF)
+
+29. **Fixture rehearsal: M1, M2, M4 supported; M3 partly BLOCKED; one evidence item needs
+    revising.** Run after green CI on `0c84d5f9` (run 42164533618) and the plan's push
+    (`e682f7a2`). No U-case was exercised.
+    - **Guest.** Domain `sm-w0024-rehearsal` under `/home/mveary/sm-guest-w0024e` (0700), vsock
+      CID 3102.
+      - **Image:** the base image retained under `sm-guest-probe`, copied and verified again
+        (`gpgv` "Good signature from Fedora (44)", key `36F612DC…9F90A6`; `sha256sum -c` OK).
+        *Deviation from R2:* verified rather than fetched again.
+      - **Containment:** `virsh domiflist` empty; only `lo`; empty IPv4 and IPv6 routes; outbound
+        by IP and by name failed.
+      - **Install:** the candidate RPM, in-guest hash `7fc165ae…876f`; `/usr/bin/smd`
+        `3c6915d9…c964`; `/v1/version` `2.0.0-alpha.5-110-gb2a16f5a`, schema 19; lookups seeded
+        disabled.
+      - **Fixture:** first-run setup with `7Q5MLV` and T created through the UI; every
+        destination disabled for both logbooks.
+      - **Snapshot:** stopped-state hash and mode lists plus a tarball, with `WD` mode `755`
+        recorded.
+    - **M1, stopped-daemon edits: SUPPORTED, with a tool substitution.**
+      - **Tool:** the guest has no `sqlite3` command-line tool. The edit uses Python's `sqlite3`
+        module (SQLite 3.51.2) with the same SQL.
+      - **Tombstone:** a `cancelled` tombstone of the product's shape (`default_logbook_change`;
+        `request_id` from Python's `uuid.uuid7()`) was accepted, and the daemon started clean.
+      - **Database edit:** soft-deleting T took effect (`/v1/logbook` listed only Default) and
+        left no sidecars.
+      - **Restore:** byte- and mode-identical to the snapshot after each check.
+    - **M2, `WD` made read-only: SUPPORTED.**
+      - With `WD` at `0555` the daemon started, `healthz` ok, `/v1/default-logbook` served; a
+        file write in `WD` was refused; no `error` line.
+      - The recorded mode (`755`) was restored.
+    - **M3, browser-side interception (Firefox 159 WebDriver BiDi), against harmless page
+      `fetch()` calls.**
+      - **Fail before sending: SUPPORTED.** The page got a network error and the daemon saw no
+        request.
+      - **Answer before sending, request not forwarded: SUPPORTED.** The page received a
+        synthesized `409` `default_stale`; the daemon saw no request. This is U7(c2)'s method.
+      - **Hold, then release: SUPPORTED.** The daemon saw nothing while it was held, and the
+        request completed (`200`) after release. This is U6(a)–(c)'s method.
+      - **Replace the response body after delivery: BLOCKED.** Firefox: "The `body` parameter is
+        only supported for the beforeRequestSent phase at the moment". This is U7(a)'s method as
+        written ("a 502 with an HTML page"). The blocked request was unblocked; the driver now
+        does this automatically after an error.
+      - **Replace the status after delivery, keeping the body: SUPPORTED.** The request was
+        delivered (+1 at the daemon), and the page received `502` with the daemon's original
+        body.
+    - **M4, direct requests:** `curl` is present in the guest.
+    - **Two plan changes, approved by the reviewer on 2026-11-06 and applied to the plan above;
+      the Python `sqlite3` substitution was also accepted:**
+      1. **U7(a), mechanism.** Substitute the **status** of the delivered `POST
+         /v1/default-logbook` answer with `502`, keeping the daemon's body, instead of an HTML
+         page. It is described as an altered acceptance response, not a literal lost response.
+         - **By code reading, not yet observed:** the SPA classes a non-`202` answer without a
+           `code` as an unknown outcome (`frontend/app/src/lib/api/default-change.ts`,
+           `requestDefaultChange`), and the daemon's `202` body has no `code`.
+         - **To verify when the case runs:** that the substituted answer is indeed classed
+           unknown.
+      2. **U2/U3, evidence.** After a startup reconfirmation the tombstone was **absent** from
+         `config.json` once startup finished (seen twice), although the start's own rewrite keeps
+         it.
+         - **Likely cause, inferred and not traced:** a later config write in the same start, the
+           first written without it. The candidate is the archive adoption step
+           (`cmd/smd/archive_adopt.go:69`).
+         - **Approved wording:** "the confirming write retains the tombstone; a subsequent
+           config write may remove it." Its absence after startup is compatible with that. The
+           settled status with `unconfirmed: false`, and Default unchanged after a restart,
+           remain essential.
+    - **Afterwards.** The guest `WD` was restored (hash and mode equal to the snapshot) and the
+      daemon stopped. The guest is shut off and **retained** for the case run; its disposal is
+      pending, like the other retained resources. Firefox, the driver and the tunnel are
+      stopped.
+    - **Evidence:** `/home/mveary/sm-w0024/rehearsal` (0700; the driver, the transcript,
+      `MANIFEST.sha256` with 16 files); the guest snapshot is inside the guest.
