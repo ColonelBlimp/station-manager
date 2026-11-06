@@ -25,6 +25,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/lookup"
 	"github.com/ColonelBlimp/station-manager/internal/qsoservice"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/ColonelBlimp/station-manager/manual"
 )
 
@@ -138,6 +139,20 @@ type Server struct {
 	// until every handler has finished, to tell a completed write from one a
 	// shutdown interrupted (ADR 0099 W1; W-0024 acceptance entry 27).
 	wsWriteDone func(name string, err error)
+	// Session-email mark seams (W-0010 outcome 11), nil in production: package
+	// tests set them before the request and leave them unchanged until it
+	// returns. sessionEmailAfterSend runs between a successful send and the first
+	// marking attempt; sessionEmailBeforeMark runs before each attempt's marking
+	// transaction, with the 1-based attempt number; sessionMarkContext replaces
+	// the derivation of the marking budget; sessionVerifyRead, sessionMark and
+	// sessionStampSync replace the verification read, the database mark and the
+	// stamp-sync enqueue.
+	sessionEmailAfterSend  func()
+	sessionEmailBeforeMark func(attempt int)
+	sessionMarkContext     func(parent context.Context, deadline time.Time) (context.Context, context.CancelFunc)
+	sessionVerifyRead      func(ctx context.Context, ids []int64) (map[int64]types.Qso, error)
+	sessionMark            func(ctx context.Context, targets []sqlite.SessionEmailTarget, stampDate string) ([]int64, error)
+	sessionStampSync       func(ctx context.Context, ids []int64) (int, error)
 	// draining is set by StopAccepting at the very start of shutdown. The
 	// rejectWhenDraining middleware turns it into a 503 for NEW requests: closing
 	// the listener frees the port but leaves existing keep-alive connections

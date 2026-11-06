@@ -555,6 +555,49 @@ an unloaded host.
   performance on slower connections, and the pathological case is the response-size observation,
   kept separate from this fix.
 
+### Implementation (2026-11-06; authorised: "authorised — implement W-0010 outcome 11")
+
+Uncommitted at the time of writing; awaiting review.
+
+- **What was built:**
+  - `internal/adif`: a field visitor shared by `Record.String` and `EmittedFields`, plus
+    `EmailMarkContent` and the reviewed ignore list.
+  - `internal/database/sqlite/session_email_mark.go`: the explicit-transaction mark, with
+    classified failures (`ErrSessionMarkUncertain`, `ErrSessionRollbackFailed`), a test-only
+    fault seam, the batched verification read, and per-operation limits that survive a longer
+    caller deadline.
+  - `internal/api/handler_session_email.go`: the three-attempt loop on a marking context
+    (`writeDeadline − 5 s`), the accumulated confirmed result, and the best-effort stamp sync.
+    It has seams on `Server`, nil in production.
+- **Tests:** the deterministic compose golden; the guard tests; cases 1–14, 12a and 12b; the WAL
+  pool case (15 and 16); and the per-operation limit.
+- **Reversion proofs, each failing at its assertion, with each restore verified by hash:**
+  - R1: revision equality instead of content;
+  - R2: an empty ignore list;
+  - R3: a failure discarding earlier marks;
+  - R4: commit instead of rollback;
+  - R5: no admission check before the mark;
+  - R6: changed FREQ formatting (golden);
+  - R7: a caller deadline replacing the per-operation limit.
+- **Gates:** whole-tree `gofmt` and `go vet`, `go test ./...`, `-race` on `adif`, `api` and
+  `sqlite`, the maintainability observatory (0 regressions), and `golangci-lint` (0 issues).
+- **Canonical reference updated:** `docs/v2-design/api-endpoints.md` (`POST /v1/session/email`).
+- **Review corrections (2026-11-06, before commit)**, each with deterministic coverage and a
+  reversion proof (F1–F5, plus R4 re-run):
+  1. **The statement limit:** the marking `UPDATE` runs on its own child context, limited by
+     `ContextTimeout`, inside the transaction's `TransactionContextTimeout`. It is observed on the
+     real marking path.
+  2. **An automatic rollback is not a failure:** `sql.ErrTxDone` from the explicit rollback means
+     `database/sql` already rolled the transaction back when its context ended. It is classified
+     as rolled back, not as a rollback failure, so retries continue while the budget remains.
+  3. **One cleanup-failure classification:** `ErrSessionRollbackFailed` now covers the
+     verification read as well as the mark. The loop stops on either, matching the stop rule;
+     an ordinary read error still allows another attempt.
+  4. **The budget test:** it controls expiry exactly after the first confirmed commit, through a
+     marking-context seam, so it no longer depends on a 250 ms clock window. The stop reason is
+     taken from the context's cause, so a budget ended with `context.DeadlineExceeded` reads as
+     "budget", and a client cancellation as "cancelled".
+
 ## Verification boundary
 
 Fixtures must make retry, historical backfill, deliberate repeat, accidental duplicate, stale

@@ -3,7 +3,6 @@ package sqlite
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	stderr "errors"
 	"regexp"
 	"sort"
@@ -2397,103 +2396,6 @@ WHERE  id = ?`,
 		return errors.New(op).WithErr(err).WithMsg("commit")
 	}
 	return nil
-}
-
-// SessionEmailTarget names a QSO row to stamp as session-emailed, together with the
-// revision that was composed into the sent attachment (PT-3, W-0008). The stamp
-// matches on BOTH id and revision so a row edited (or deleted) between composition
-// and stamp is not marked as carrying content it never sent.
-type SessionEmailTarget struct {
-	ID       int64
-	Revision int64
-}
-
-// MarkSessionEmailedAtRevisionWithContext stamps the "forwarded by email" ADIF
-// fields on the QSO rows that are STILL at the revision composed into the sent
-// attachment, after a successful session email. It is the manual-send analogue of
-// the forwarder's MarkUploadSuccessWithAdifStampWithContext: the stamp lands inside
-// each qso row's `additional_data` JSON blob via json_set, writing
-//
-//	$.sm_fwrd_by_email_status = "Y"          (adif.YesString)
-//	$.sm_fwrd_by_email_date   = stampDate (UTC YYYYMMDD, from the caller)
-//
-// These keys match the JSON tags on types.Qso (SmFwrdByEmailStatus /
-// SmFwrdByEmailDate), so the next read via QsoModelToType surfaces the stamp as
-// struct fields automatically — no schema column, no migration.
-//
-// The whole set is stamped in one atomic UPDATE. A row matches only when its id AND
-// revision match a target AND it is not soft-deleted, so a QSO edited (its revision
-// bumped by the 0005 trigger) or deleted after composition matches nothing and is
-// left unmarked — a durable "emailed" stamp therefore certifies that the marked
-// content is the content that was sent (PT-3). RETURNING reports the ids actually
-// stamped; SQLite does not guarantee its row order, so the caller keys by id.
-// Stamping a row already marked is harmless — json_set overwrites the date with the
-// latest send. stampDate comes from the CALLER so the date it reports onward matches
-// the date stored (codex 2026-08-08 P3).
-func (s *Service) MarkSessionEmailedAtRevisionWithContext(ctx context.Context, targets []SessionEmailTarget, stampDate string) ([]int64, error) {
-	const op errors.Op = "sqlite.Service.MarkSessionEmailedAtRevisionWithContext"
-	if err := checkService(op, s); err != nil {
-		return nil, err
-	}
-	if len(targets) == 0 {
-		return nil, nil
-	}
-
-	h, err := s.getOpenHandle(op)
-	if err != nil {
-		return nil, err
-	}
-	ctx, cancel := s.ensureCtxTimeout(ctx)
-	defer cancel()
-
-	// Carry the whole target set in ONE JSON-array argument, matched through
-	// json_each — NOT a generated OR-chain or a multi-row VALUES. At the documented
-	// 10,000-target request cap an OR-chain would blow SQLITE_MAX_EXPR_DEPTH (1000)
-	// and a multi-row VALUES risks SQLITE_MAX_COMPOUND_SELECT (500); json_each keeps
-	// the statement at a constant three bound parameters at any scale. Every
-	// id/revision rides inside the JSON (no interpolation of caller data); the two
-	// stamp values are static literals.
-	pairs := make([][2]int64, len(targets))
-	for i, tgt := range targets {
-		pairs[i] = [2]int64{tgt.ID, tgt.Revision}
-	}
-	targetsJSON, err := json.Marshal(pairs)
-	if err != nil {
-		return nil, errors.New(op).WithErr(err).WithMsg("marshal stamp targets")
-	}
-
-	const query = `
-UPDATE qso
-SET    additional_data = json_set(
-           additional_data,
-           '$.sm_fwrd_by_email_status', ?,
-           '$.sm_fwrd_by_email_date', ?
-       )
-WHERE  deleted_at IS NULL
-  AND  (id, revision) IN (
-           SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]')
-           FROM   json_each(?)
-       )
-RETURNING id`
-
-	rows, err := h.QueryContext(ctx, query, adif.YesString, stampDate, string(targetsJSON))
-	if err != nil {
-		return nil, errors.New(op).WithErr(err).WithMsg("stamp session-emailed flag")
-	}
-	defer func() { _ = rows.Close() }()
-
-	var stamped []int64
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return nil, errors.New(op).WithErr(err).WithMsg("scan stamped id")
-		}
-		stamped = append(stamped, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, errors.New(op).WithErr(err).WithMsg("iterate stamped ids")
-	}
-	return stamped, nil
 }
 
 // MarkUploadTransientRetryWithContext records a transient failure

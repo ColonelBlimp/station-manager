@@ -62,9 +62,31 @@ func (a *Adif) String() string {
 
 func parseToAdifString(obj any) string {
 	var buf bytes.Buffer
-	var parser func(v reflect.Value)
+	visitEmitted(obj, func(tag, value string) {
+		buf.WriteString(fmt.Sprintf(elementFormat, tag, len(value), value))
+	})
+	buf.WriteString(EorStr)
+	buf.WriteString(NewLineStr)
+	return buf.String()
+}
 
-	parser = func(v reflect.Value) {
+// EmittedFields returns the (TAG, value) pairs Record.String writes for rec, with
+// the same tags and the same formatted values: one definition of "emitted" for
+// the attachment and for comparisons against it (the session-email mark, W-0010
+// outcome 11).
+func EmittedFields(rec Record) map[string]string {
+	out := make(map[string]string)
+	visitEmitted(&rec, func(tag, value string) { out[tag] = value })
+	return out
+}
+
+// visitEmitted calls emit, in struct order, for every field the ADIF writer
+// emits from obj (a pointer to a struct): non-empty strings only, tagged by the
+// adif tag or, for the embedded types sections, the json tag; the DXCC field
+// only when numeric; values formatted as the ADIF standard requires.
+func visitEmitted(obj any, emit func(tag, value string)) {
+	var walk func(v reflect.Value)
+	walk = func(v reflect.Value) {
 		for i := 0; i < v.NumField(); i++ {
 			field := v.Field(i)
 			if field.Kind() == reflect.Ptr {
@@ -72,7 +94,7 @@ func parseToAdifString(obj any) string {
 			}
 
 			if field.Kind() == reflect.Struct {
-				parser(field)
+				walk(field)
 				continue
 			}
 
@@ -94,16 +116,12 @@ func parseToAdifString(obj any) string {
 				if strings.EqualFold(tag, "dxcc") && !isAsciiDigits(field.String()) {
 					continue
 				}
-				buf.WriteString(formatField(tag, field.String()))
+				name := strings.ToUpper(tag)
+				emit(name, formatValue(name, field.String()))
 			}
 		}
 	}
-
-	parser(reflect.ValueOf(obj).Elem())
-	buf.WriteString(EorStr)
-	buf.WriteString(NewLineStr)
-
-	return buf.String()
+	walk(reflect.ValueOf(obj).Elem())
 }
 
 // isAsciiDigits reports whether s is non-empty and composed solely of
@@ -120,20 +138,18 @@ func isAsciiDigits(s string) bool {
 	return true
 }
 
-func formatField(tagName string, value string) string {
-	tagName = strings.ToUpper(tagName)
-
-	// Special formatting required for certain fields by the ADIF standard.
+// formatValue applies the ADIF standard's special formatting for a field,
+// given its upper-case tag.
+func formatValue(tagName, value string) string {
 	switch tagName {
 	case "FREQ", "FREQ_RX":
-		value = hzToMHz(value)
+		return hzToMHz(value)
 	case "QSO_DATE", "QSO_DATE_OFF", "QSLRDATE", "QSLSDATE":
-		value = strings.ReplaceAll(value, DashStr, emptyString)
+		return strings.ReplaceAll(value, DashStr, emptyString)
 	case "TIME_ON", "TIME_OFF":
-		value = strings.ReplaceAll(value, ColonStr, emptyString)
+		return strings.ReplaceAll(value, ColonStr, emptyString)
 	}
-
-	return fmt.Sprintf(elementFormat, tagName, len(value), value)
+	return value
 }
 
 // hzToMHz converts a raw integer Hz frequency string (7 or 8 digits) to an MHz string.

@@ -4,6 +4,7 @@ import (
 	"context"
 	stderrs "errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/mail"
 	"os"
@@ -153,7 +154,8 @@ func (s *Server) handleSessionEmail(w http.ResponseWriter, r *http.Request) {
 	// the send. Best-effort: a recorder or a transport without deadlines
 	// just keeps today's shape.
 	rc := http.NewResponseController(w)
-	_ = rc.SetWriteDeadline(time.Now().Add(s.mailer.Timeout() + sessionEmailResponseMargin))
+	writeDeadline := time.Now().Add(s.mailer.Timeout() + sessionEmailResponseMargin)
+	_ = rc.SetWriteDeadline(writeDeadline)
 
 	// Rebuild the ADIF from the live DB rows. The daemon is the source
 	// of truth: it emails exactly the rows it will stamp, current as of
@@ -248,10 +250,16 @@ func (s *Server) handleSessionEmail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Stamp the durable "forwarded by email" flag AFTER a successful send, matching
-	// each row on the composed revision so only content that was actually sent is
-	// marked (PT-3) — see stampSessionEmailed.
-	emailed, stampDate := s.stampSessionEmailed(r.Context(), qsos)
+	// Stamp the durable "forwarded by email" flag AFTER a successful send, on the
+	// rows whose current content still equals what was sent (W-0010 outcome 11) —
+	// see stampSessionEmailed. The marking context is an admission budget: it ends
+	// with the client's request, or a reserve before the response's write deadline.
+	if s.sessionEmailAfterSend != nil {
+		s.sessionEmailAfterSend()
+	}
+	markCtx, cancelMark := s.markingContext(r.Context(), writeDeadline.Add(-sessionEmailResponseReserve))
+	emailed, stampDate := s.stampSessionEmailed(markCtx, qsos)
+	cancelMark()
 
 	sent := make([]string, len(qsos))
 	for i, q := range qsos {
@@ -266,58 +274,207 @@ func (s *Server) handleSessionEmail(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// stampSessionEmailed marks the sent QSOs as forwarded-by-email at the revision that
-// was composed into the attachment, and returns the durable outcome for the response:
-// the UUIDs actually stamped (in request order) and the stamp date — or an empty set
-// and empty date when nothing was durably marked. Split out of handleSessionEmail
-// (PT-3): a row edited or deleted between compose and stamp no longer matches its
-// target and is left unmarked, so a durable "emailed" mark certifies the marked
-// content is the content that was sent. A stamp error does not fail the request — the
-// mail has already left — so it is logged and reported as an empty set (the Logbook
-// SPA / a re-send reconciles). ONE clock reading, passed into the stamp, so the stored
-// and reported dates cannot diverge across UTC midnight (codex 2026-08-08 P3).
+// sessionMarkAttempts is the total number of marking attempts — three in total,
+// not three retries (W-0010 outcome 11; reviewer-approved, operator-confirmed).
+const sessionMarkAttempts = 3
+
+// sessionEmailResponseReserve is held back from the response's write deadline so
+// the marking attempts stop being admitted while the response can still be
+// written. Provisional (W-0010 outcome 11, measured on loopback); it cannot
+// guarantee completion, because a COMMIT already issued can outlive it.
+const sessionEmailResponseReserve = 5 * time.Second
+
+// sessionMarkTally counts why rows ended where they did, for one log line.
+type sessionMarkTally struct {
+	changed, deleted, unconfirmed, remaining int
+	stopped                                  string // "", "cancelled", "budget", "rollback_failed"
+}
+
+// stampSessionEmailed marks the sent QSOs as forwarded-by-email (W-0010 outcome
+// 11). A row is marked when its CURRENT emitted content, less the delivery
+// bookkeeping adif.EmailMarkContent ignores, equals the content composed into the
+// attachment — so an upload stamp between compose and mark no longer costs the
+// mark, while a real content change or a deletion still leaves the row re-sendable.
+//
+// Each of up to sessionMarkAttempts attempts reads the candidates' current rows in
+// one snapshot, compares content outside any transaction, then marks the eligible
+// rows in one transaction guarded by the revision it verified (a compare-and-set:
+// a write in between is a miss, never a wrong mark). Atomicity is per attempt, not
+// across the loop. A lost race, a read error, a statement error (rolled back) or a
+// failed COMMIT (uncertain) leave the rows as candidates for the next attempt; the
+// loop stops early only when ctx is done or a rollback itself failed.
+//
+// It returns the confirmed marks — rows an attempt returned AND whose commit
+// succeeded — as UUIDs in request order, across ALL attempts: a later failure never
+// discards an earlier confirmed commit. One stamp date is used throughout and
+// returned; it is "" only when nothing was confirmed. The stamp-sync enqueue of the
+// confirmed set is best-effort (it runs on ctx and may fail after a cancellation;
+// the reconcile is the backstop). ONE clock reading for the date, so the stored and
+// reported dates cannot diverge across UTC midnight (codex 2026-08-08 P3).
 func (s *Server) stampSessionEmailed(ctx context.Context, qsos types.QsoSlice) (emailed []string, stampDate string) {
 	stampDate = time.Now().UTC().Format("20060102")
-	targets := make([]sqlite.SessionEmailTarget, len(qsos))
-	for i, q := range qsos {
-		targets[i] = sqlite.SessionEmailTarget{ID: q.ID, Revision: q.Revision}
-	}
-	stampedIDs, err := s.db.MarkSessionEmailedAtRevisionWithContext(ctx, targets, stampDate)
-	if err != nil {
-		s.logger.ErrorWith().Err(err).Int("qso_count", len(targets)).
-			Msg("session email sent but stamping forwarded-by-email flag failed")
-		return []string{}, "" // an empty array, never null: the response contract (ADR 0095)
-	}
-
-	// emailed lists ONLY the rows durably stamped at the sent revision, in request
-	// order. A QSO edited or deleted after compose is excluded so it stays re-sendable.
-	stampedSet := make(map[int64]struct{}, len(stampedIDs))
-	for _, id := range stampedIDs {
-		stampedSet[id] = struct{}{}
-	}
-	emailed = make([]string, 0, len(qsos))
+	composed := make(map[int64]map[string]string, len(qsos))
+	candidates := make([]int64, 0, len(qsos))
 	for _, q := range qsos {
-		if _, ok := stampedSet[q.ID]; ok {
-			emailed = append(emailed, q.UUID)
+		composed[q.ID] = adif.EmailMarkContent(q)
+		candidates = append(candidates, q.ID)
+	}
+	confirmed := make(map[int64]struct{}, len(qsos))
+	var tally sessionMarkTally
+	unconfirmed := map[int64]struct{}{}
+
+	for attempt := 1; attempt <= sessionMarkAttempts && len(candidates) > 0; attempt++ {
+		if stop := markStopReason(ctx); stop != "" {
+			tally.stopped = stop
+			break
+		}
+		current, err := s.verifyCurrentQsos(ctx, candidates)
+		if err != nil {
+			s.logger.WarnWith().Err(err).Int("attempt", attempt).
+				Msg("session email: verification read failed")
+			if stderrs.Is(err, sqlite.ErrSessionRollbackFailed) {
+				tally.stopped = "rollback_failed"
+				break
+			}
+			continue
+		}
+		targets := make([]sqlite.SessionEmailTarget, 0, len(candidates))
+		eligible := make([]int64, 0, len(candidates))
+		for _, id := range candidates {
+			cur, ok := current[id]
+			switch {
+			// A row left uncertain by an earlier failed COMMIT stays counted as
+			// unconfirmed even when it now drops out: that mark may have committed.
+			case !ok:
+				if _, u := unconfirmed[id]; !u {
+					tally.deleted++
+				}
+			case !maps.Equal(adif.EmailMarkContent(cur), composed[id]):
+				if _, u := unconfirmed[id]; !u {
+					tally.changed++
+				}
+			default:
+				targets = append(targets, sqlite.SessionEmailTarget{ID: id, Revision: cur.Revision})
+				eligible = append(eligible, id)
+			}
+		}
+		candidates = eligible
+		if len(targets) == 0 {
+			break
+		}
+		if s.sessionEmailBeforeMark != nil {
+			s.sessionEmailBeforeMark(attempt)
+		}
+		if stop := markStopReason(ctx); stop != "" {
+			tally.stopped = stop
+			break
+		}
+		stamped, err := s.markSessionEmailed(ctx, targets, stampDate)
+		if err != nil {
+			if stderrs.Is(err, sqlite.ErrSessionMarkUncertain) {
+				for _, id := range eligible {
+					unconfirmed[id] = struct{}{}
+				}
+			}
+			s.logger.WarnWith().Err(err).Int("attempt", attempt).Int("qso_count", len(targets)).
+				Msg("session email: marking attempt failed")
+			if stderrs.Is(err, sqlite.ErrSessionRollbackFailed) {
+				tally.stopped = "rollback_failed"
+				break
+			}
+			continue
+		}
+		got := make(map[int64]struct{}, len(stamped))
+		for _, id := range stamped {
+			got[id] = struct{}{}
+			confirmed[id] = struct{}{}
+			delete(unconfirmed, id)
+		}
+		next := candidates[:0]
+		for _, id := range candidates {
+			if _, ok := got[id]; !ok {
+				next = append(next, id)
+			}
+		}
+		candidates = next
+	}
+	tally.unconfirmed = len(unconfirmed)
+	for _, id := range candidates {
+		if _, u := unconfirmed[id]; !u {
+			tally.remaining++
 		}
 	}
-	if len(stampedIDs) != len(targets) {
-		s.logger.WarnWith().Int("stamped", len(stampedIDs)).Int("sent", len(targets)).
-			Msg("session email: some rows changed or were removed between compose and stamp; not marked")
+
+	emailed = make([]string, 0, len(confirmed))
+	confirmedIDs := make([]int64, 0, len(confirmed))
+	for _, q := range qsos {
+		if _, ok := confirmed[q.ID]; ok {
+			emailed = append(emailed, q.UUID)
+			confirmedIDs = append(confirmedIDs, q.ID)
+		}
 	}
-	if len(stampedIDs) > 0 {
-		// The stamp bumped each stamped row's revision — re-enqueue ONLY those to the
-		// row-mirror forwarder(s) (SM Cloud) so their copies don't drift until the
-		// hourly reconcile. Best-effort: the stamp is committed and the mail has left.
-		if _, serr := s.qso.EnqueueStampSync(ctx, stampedIDs); serr != nil {
-			s.logger.WarnWith().Err(serr).Int("qso_count", len(stampedIDs)).
+	if len(emailed) != len(qsos) {
+		s.logger.WarnWith().Int("sent", len(qsos)).Int("marked", len(emailed)).
+			Int("content_changed", tally.changed).Int("deleted", tally.deleted).
+			Int("unconfirmed", tally.unconfirmed).Int("unmarked_candidates", tally.remaining).
+			Str("stopped", tally.stopped).
+			Msg("session email: some sent rows were not confirmed as marked")
+	}
+	if len(confirmedIDs) > 0 {
+		// Each mark bumped its row's revision — re-enqueue ONLY the confirmed rows to
+		// the row-mirror forwarder(s) (SM Cloud) so their copies don't drift until the
+		// hourly reconcile. Best-effort: the marks are committed and the mail has left.
+		if _, serr := s.enqueueStampSync(ctx, confirmedIDs); serr != nil {
+			s.logger.WarnWith().Err(serr).Int("qso_count", len(confirmedIDs)).
 				Msg("session email: stamp sync enqueue failed (reconcile will heal)")
 		}
 	}
 	if len(emailed) == 0 {
-		return emailed, ""
+		return emailed, "" // an empty array, never null: the response contract (ADR 0095)
 	}
 	return emailed, stampDate
+}
+
+// markStopReason reports why no further marking attempt may be admitted. The
+// cause, not Err, tells the budget's expiry ("budget") from the client's
+// cancellation ("cancelled").
+func markStopReason(ctx context.Context) string {
+	if ctx.Err() == nil {
+		return ""
+	}
+	if stderrs.Is(context.Cause(ctx), context.DeadlineExceeded) {
+		return "budget"
+	}
+	return "cancelled"
+}
+
+// markingContext derives the marking admission budget from the request context.
+func (s *Server) markingContext(parent context.Context, deadline time.Time) (context.Context, context.CancelFunc) {
+	if s.sessionMarkContext != nil {
+		return s.sessionMarkContext(parent, deadline)
+	}
+	return context.WithDeadline(parent, deadline)
+}
+
+func (s *Server) verifyCurrentQsos(ctx context.Context, ids []int64) (map[int64]types.Qso, error) {
+	if s.sessionVerifyRead != nil {
+		return s.sessionVerifyRead(ctx, ids)
+	}
+	return s.db.FetchCurrentQsosByIDWithContext(ctx, ids)
+}
+
+func (s *Server) markSessionEmailed(ctx context.Context, targets []sqlite.SessionEmailTarget, stampDate string) ([]int64, error) {
+	if s.sessionMark != nil {
+		return s.sessionMark(ctx, targets, stampDate)
+	}
+	return s.db.MarkSessionEmailedAtRevisionWithContext(ctx, targets, stampDate)
+}
+
+func (s *Server) enqueueStampSync(ctx context.Context, ids []int64) (int, error) {
+	if s.sessionStampSync != nil {
+		return s.sessionStampSync(ctx, ids)
+	}
+	return s.qso.EnqueueStampSync(ctx, ids)
 }
 
 // sessionEmailSubject builds the session-email subject: the operator-supplied subject

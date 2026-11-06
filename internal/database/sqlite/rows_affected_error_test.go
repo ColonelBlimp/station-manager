@@ -104,9 +104,12 @@ func TestMarkUploadSuccessWithAdifStamp_RowsAffectedFailureRollsBack(t *testing.
 func TestMarkSessionEmailed_QueryFailureReturnsError(t *testing.T) {
 	s, mock := rowsAffectedTestService(t)
 	fault := stderrors.New("session email query fault")
-	// The revision-guarded stamp reads its result set via UPDATE ... RETURNING, so a
-	// DB fault surfaces on the query itself, not on RowsAffected.
+	// The revision-guarded stamp reads its result set via UPDATE ... RETURNING inside
+	// an explicit transaction (W-0010 outcome 11), so a DB fault surfaces on the
+	// query itself and the transaction is rolled back.
+	mock.ExpectBegin()
 	mock.ExpectQuery("UPDATE qso").WillReturnError(fault)
+	mock.ExpectRollback()
 
 	stamped, err := s.MarkSessionEmailedAtRevisionWithContext(context.Background(),
 		[]SessionEmailTarget{{ID: 1, Revision: 0}, {ID: 2, Revision: 0}}, "20260815")
@@ -115,6 +118,85 @@ func TestMarkSessionEmailed_QueryFailureReturnsError(t *testing.T) {
 	}
 	if !stderrors.Is(err, fault) {
 		t.Fatalf("session stamp error = %v, want query fault", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A statement failure whose explicit rollback ALSO fails leaves the connection's
+// state unknown; the mark classifies it so the caller stops retrying.
+func TestMarkSessionEmailed_RollbackFailureIsClassified(t *testing.T) {
+	s, mock := rowsAffectedTestService(t)
+	fault := stderrors.New("session email query fault")
+	mock.ExpectBegin()
+	mock.ExpectQuery("UPDATE qso").WillReturnError(fault)
+	mock.ExpectRollback().WillReturnError(stderrors.New("rollback fault"))
+
+	stamped, err := s.MarkSessionEmailedAtRevisionWithContext(context.Background(),
+		[]SessionEmailTarget{{ID: 1, Revision: 0}}, "20260815")
+	if stamped != nil {
+		t.Fatalf("stamped = %v, want nil", stamped)
+	}
+	if !stderrors.Is(err, ErrSessionRollbackFailed) || !stderrors.Is(err, fault) {
+		t.Fatalf("err = %v, want ErrSessionRollbackFailed wrapping the statement fault", err)
+	}
+	if stderrors.Is(err, ErrSessionMarkUncertain) {
+		t.Fatalf("a statement failure is not an uncertain commit: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A failed BEGIN has no transaction to roll back: no rollback is attempted.
+func TestMarkSessionEmailed_BeginFailureAttemptsNoRollback(t *testing.T) {
+	s, mock := rowsAffectedTestService(t)
+	fault := stderrors.New("begin fault")
+	mock.ExpectBegin().WillReturnError(fault)
+
+	_, err := s.MarkSessionEmailedAtRevisionWithContext(context.Background(),
+		[]SessionEmailTarget{{ID: 1, Revision: 0}}, "20260815")
+	if !stderrors.Is(err, fault) {
+		t.Fatalf("err = %v, want the begin fault", err)
+	}
+	if stderrors.Is(err, ErrSessionRollbackFailed) || stderrors.Is(err, ErrSessionMarkUncertain) {
+		t.Fatalf("a failed BEGIN is neither a rollback failure nor an uncertain commit: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A verification read whose rollback also fails is classified like the mark's, so
+// the caller stops instead of retrying on a connection in an unknown state.
+func TestFetchCurrentQsos_RollbackFailureIsClassified(t *testing.T) {
+	s, mock := rowsAffectedTestService(t)
+	fault := stderrors.New("read fault")
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT").WillReturnError(fault)
+	mock.ExpectRollback().WillReturnError(stderrors.New("rollback fault"))
+
+	_, err := s.FetchCurrentQsosByIDWithContext(context.Background(), []int64{1})
+	if !stderrors.Is(err, ErrSessionRollbackFailed) || !stderrors.Is(err, fault) {
+		t.Fatalf("err = %v, want ErrSessionRollbackFailed wrapping the read fault", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A verification read whose rollback succeeds returns the read fault alone.
+func TestFetchCurrentQsos_ReadFailureRollsBack(t *testing.T) {
+	s, mock := rowsAffectedTestService(t)
+	fault := stderrors.New("read fault")
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT").WillReturnError(fault)
+	mock.ExpectRollback()
+
+	_, err := s.FetchCurrentQsosByIDWithContext(context.Background(), []int64{1})
+	if !stderrors.Is(err, fault) || stderrors.Is(err, ErrSessionRollbackFailed) {
+		t.Fatalf("err = %v, want the read fault, not a rollback failure", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
