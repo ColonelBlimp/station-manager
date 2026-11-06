@@ -2371,9 +2371,8 @@ wording.**
 
 ### U1 disposition (2026-11-06)
 
-31. **U1 — waiver PROPOSED for candidate `b2a16f5a` (reviewer recommendation, 2026-11-06). NOT
-    GRANTED:** a waiver needs the human station operator's explicit approval. If approved, this
-    entry is attributed to that operator.
+31. **U1 — WAIVED by the station operator for candidate `b2a16f5a`** (approved 2026-11-06:
+    "approve the waiver"). The reviewer recommended it; the grant is the operator's.
     - **Why:** the current production restart callback cannot return an error
       (`cmd/smd/lifecycle_adapters.go:1177-1186`), so the planned restart-failure path to
       `pending_unclear` is unreachable through supported operation.
@@ -2384,5 +2383,5 @@ wording.**
     - **The remaining gap:** browser integration of that recovery state. **No browser PASS is
       claimed.**
     - **Reassess** this waiver if the restart wiring or the state's reachability changes.
-    - **Scope:** the proposed waiver applies only to U1. U5, the keyed U6 cases and overall acceptance
+    - **Scope:** this waiver applies only to U1. U5, the keyed U6 cases and overall acceptance
       remain open.
