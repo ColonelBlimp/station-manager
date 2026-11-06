@@ -2368,3 +2368,21 @@ wording.**
     - **Still open:** U1's browser acceptance; U5 and the keyed U6 cases, which need the station
       operator's agreement for each occasion; contact retention; any waiver; the operator's
       sign-off.
+
+### U1 disposition (2026-11-06)
+
+31. **U1 — waiver PROPOSED for candidate `b2a16f5a` (reviewer recommendation, 2026-11-06). NOT
+    GRANTED:** a waiver needs the human station operator's explicit approval. If approved, this
+    entry is attributed to that operator.
+    - **Why:** the current production restart callback cannot return an error
+      (`cmd/smd/lifecycle_adapters.go:1177-1186`), so the planned restart-failure path to
+      `pending_unclear` is unreachable through supported operation.
+    - **Supporting evidence:** RQ5 and RQ7 (`internal/archive/default_change_request_test.go:435`,
+      `:751`) and the SPA recovery tests (`frontend/app/src/lib/config/defaultChange.recovery.svelte.test.ts`,
+      `frontend/app/src/lib/ui/DefaultChangeBanner.svelte.test.ts`,
+      `frontend/app/src/lib/config/LogbooksSection.default.svelte.test.ts`).
+    - **The remaining gap:** browser integration of that recovery state. **No browser PASS is
+      claimed.**
+    - **Reassess** this waiver if the restart wiring or the state's reachability changes.
+    - **Scope:** the proposed waiver applies only to U1. U5, the keyed U6 cases and overall acceptance
+      remain open.
