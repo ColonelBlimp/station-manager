@@ -427,7 +427,7 @@ mirror.
 | 10 | **Mixed success then failure:** attempt 1 marks A and loses B to a race; the marking transactions of attempts 2 **and 3** fail before `COMMIT` (fault seam), so retries run out | memory | `emailed` = [A] in request order; `date` = the one stamp date; A marked on read-back, B not; the stamp-sync enqueue holds exactly [A] |
 | 11 | **Cancellation after a commit:** attempt 1 marks A and loses B; the request context is cancelled at `sessionEmailBeforeMark(2)` | memory | no attempt 2 `UPDATE`; A stays marked on read-back; A is in the accumulated result (`emailed` = [A] when the response is written). **No assertion that the enqueue succeeded**: it is best-effort, and the reconcile is the backstop |
 | 12 | Rollback within an attempt: fault after the `UPDATE`, before `COMMIT` | memory | real SQL rollback; nothing from that attempt on read-back; earlier confirmed ids kept |
-| 12a | **Failed commit**, triggered by a **test-only deferred foreign-key violation**. The fault seam runs `PRAGMA defer_foreign_keys = ON` and writes a row that violates a foreign key, inside the marking transaction. SQLite reports a deferred violation at `COMMIT`, and the `COMMIT` fails, leaving the transaction open ([deferred constraints](https://www.sqlite.org/foreignkeys.html#fk_deferred)). That exercises modernc's cleanup branch. **To be verified against the pinned driver before the test is relied on** (not yet reproduced). A reader snapshot is **not** a trigger: in WAL a reader does not block a writer's commit ([WAL concurrency](https://www.sqlite.org/wal.html#concurrency)) | memory or WAL file | `tx.Commit` returns the constraint error; a later `tx.Rollback` returns `ErrTxDone`; read-back shows the attempt's rows unmarked (the driver's own rollback); the ids are not confirmed and are logged "unconfirmed"; attempt 2's read finds them eligible, and only attempt 2's successful `COMMIT` adds them to `emailed`; earlier confirmed ids kept. **Status: UNVERIFIED** until the driver check passes |
+| 12a | **Failed commit**, triggered by a **test-only deferred foreign-key violation**. The fault seam runs `PRAGMA defer_foreign_keys = ON` and writes a row that violates a foreign key, inside the marking transaction. SQLite reports a deferred violation at `COMMIT`, and the `COMMIT` fails, leaving the transaction open ([deferred constraints](https://www.sqlite.org/foreignkeys.html#fk_deferred)). That exercises modernc's cleanup branch. A reader snapshot is **not** a trigger: in WAL a reader does not block a writer's commit ([WAL concurrency](https://www.sqlite.org/wal.html#concurrency)) | memory or WAL file | `tx.Commit` returns the constraint error; a later `tx.Rollback` returns `ErrTxDone`; read-back shows the attempt's rows unmarked (the driver's own rollback); the ids are not confirmed and are logged "unconfirmed"; attempt 2's read finds them eligible, and only attempt 2's successful `COMMIT` adds them to `emailed`; earlier confirmed ids kept. **Driver behaviour VERIFIED** by a scratch check, 2026-11-06 (see *Pre-implementation checks*); the repository test is still to be written |
 | 12b | **Deadline:** the marking context's deadline passes before attempt 2 | memory (fake clock or short deadline) | no attempt 2; attempt 1's confirmed ids reported; the log reason is "budget" |
 | 13 | Edit then revert (A→B→A) before verification | memory | marked: the marked content equals the sent content |
 | 14 | Re-send of an already-emailed row | memory | marked; the email-mark fields are ignored |
@@ -448,9 +448,11 @@ Each proof is checked to reach its assertion.
 
 ### Open for review
 
-- **Attempts:** three in total (not three retries). **Approved by the reviewer** as the technical
-  choice (2026-11-06). That is reviewer approval, not an operator ruling. It operates within the
-  marking context's admission budget above.
+- **Attempts: three in total** (not three retries), within the marking context's admission budget.
+  - **Reviewer:** approved as the technical choice (2026-11-06).
+  - **Operator:** the station operator adopted this in their own message on 2026-11-06:
+    "Confirmed: three attempts in total, within the marking admission budget." The wording was
+    suggested by the reviewer; the decision is the operator's.
 - **The response-write reserve** subtracted from `markDeadline`. **Provisional: 5 s.** The reviewer
   calls it reasonable as a provisional value, and it is to be confirmed by measurement.
   - **The size estimate, and what bounds it:**
@@ -477,8 +479,80 @@ Each proof is checked to reach its assertion.
   - **No reserve guarantees timely completion.** A `COMMIT` issued before the deadline can outlive
     it (above). The reserve only reduces how often the response misses its write deadline.
 - **Batched verification:** one bounded read snapshot (supported by the reviewer).
-- **Case 12a's trigger:** to be confirmed reproducible. If it is not, it is replaced by a
-  driver-level fault, with the expected behaviour unchanged.
+- **Case 12a's trigger:** reproduced against the pinned driver (*Pre-implementation checks*,
+  check 2).
+- **The reserve value:** measurements are recorded below. The value stays **provisional** until
+  they are reviewed.
+
+### Pre-implementation checks (2026-11-06; scratch investigations, outside the repository)
+
+These were authorised by the operator as scratch investigations: no product change and no commit.
+The programs live in the session scratchpad, not the repository. Environment: Go 1.26.2,
+`modernc.org/sqlite v1.48.1` (the version pinned in `go.mod`), Linux 7.2.15 (Fedora 44), 24 CPUs,
+an unloaded host.
+
+**Check 2: case 12a's failed-commit trigger. VERIFIED at driver level.**
+
+- **Setup:** a temporary-file database with the daemon's pragmas (WAL, `foreign_keys(on)`,
+  `busy_timeout(5000)`, `synchronous(normal)`), and `MaxOpenConns(1)` so every statement runs on the
+  same connection.
+- **The marking shape:** `tx.QueryContext(UPDATE … RETURNING id)`, with rows consumed, `rows.Err`
+  checked, and `rows.Close` checked.
+- **The fault:** `PRAGMA defer_foreign_keys = ON` plus a violating `INSERT`, both inside the
+  transaction.
+
+| Step | Observed |
+|---|---|
+| journal mode, foreign keys | `wal`, `1` |
+| `UPDATE … RETURNING` | 2 ids returned |
+| violating `INSERT` inside the transaction | no error (deferred) |
+| `tx.Commit()` | `constraint failed: FOREIGN KEY constraint failed (787)` |
+| `tx.Rollback()` afterwards | `sql: transaction has already been committed or rolled back`; `errors.Is(err, sql.ErrTxDone)` is true |
+| `BEGIN` again on the same connection | succeeds: no transaction left open |
+| read-back | marked rows 0, child rows 0: nothing from the attempt persisted |
+| a fresh attempt on the same connection | 2 rows marked and committed; read-back shows 2 |
+
+- **Control (the same faulting sequence, issued as plain statements, bypassing `tx.Commit`):** the
+  plain `COMMIT` fails with the same error. A following `BEGIN` on that connection fails with
+  `cannot start a transaction within a transaction (1)`.
+  - **What it shows:** SQLite does leave the transaction open after this failed `COMMIT`. So the
+    clean connection in the main check is the work of modernc's own `rollback` in its `Commit`
+    cleanup branch (`tx.go:35`), as designed.
+  - **Consequence:** the deferred-FK fault is a valid trigger for case 12a.
+  - **Verified:** the driver's behaviour.
+  - **Not yet written:** the repository acceptance test. It needs the fault seam inside the marking
+    transaction, and will be judged when it is written.
+
+**Check 3: response encode-and-deliver time. MEASURED on loopback.**
+
+- **Setup:** a real `httptest.Server`. The handler mirrors `httpkit.WriteJSON`
+  (`Content-Type`, then `json.NewEncoder(w).Encode`) and the `SessionEmailResponse` shape. The
+  client reads the entire body with `io.ReadAll`. Each case was run 30 times after 3 warm-up runs.
+
+| Case | Body | Client: request to full body (median / max) | Server: encode and write (median / max) |
+|---|---|---|---|
+| all-valid: 10,000 `sent` + 10,000 `emailed` canonical UUIDs | 780,070 B | 1.04 ms / 1.68 ms | 0.78 ms / 1.32 ms |
+| pathological `omitted`: 10,000 distinct strings of 95 `<` plus a 5-digit suffix. The request array is about 1,030,002 B, within the 1 MiB default cap. | 5,780,063 B (`<` escaped as `\u003c`) | 4.81 ms / 6.07 ms | 3.62 ms / 5.19 ms |
+
+- **On loopback:** the station's normal case, with the browser on the station host. Both cases
+  finish in under 7 ms, roughly 700 times inside a 5 s reserve.
+- **Slower links:** arithmetic on the body size only, **not measured**:
+
+  | Case | 10 Mbit/s | 1 Mbit/s |
+  |---|---|---|
+  | all-valid | about 0.62 s | about 6.2 s |
+  | pathological | about 4.6 s | about 46 s |
+
+  So 5 s covers the all-valid case down to about 1.25 Mbit/s. The pathological case exceeds it
+  below about 10 Mbit/s.
+- **The pathological response is synthetic.** It has `sent` and `emailed` empty and everything in
+  `omitted`, and the real handler never produces it: a request with no matching QSOs is refused
+  with `400 no_qsos` (`handler_session_email.go`). A reachable pathological response needs at least
+  one found QSO, so it is slightly smaller. The measurement stands as encoding and transport
+  evidence for a body of that size.
+- **Reading:** the measurement supports 5 s for the station's loopback use. It cannot establish
+  performance on slower connections, and the pathological case is the response-size observation,
+  kept separate from this fix.
 
 ## Verification boundary
 
