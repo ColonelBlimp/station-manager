@@ -450,9 +450,10 @@ Each proof is checked to reach its assertion.
 
 - **Attempts: three in total** (not three retries), within the marking context's admission budget.
   - **Reviewer:** approved as the technical choice (2026-11-06).
-  - **Operator:** the station operator adopted this in their own message on 2026-11-06:
-    "Confirmed: three attempts in total, within the marking admission budget." The wording was
-    suggested by the reviewer; the decision is the operator's.
+  - **Operator:** confirmed by the station operator on 2026-11-06, in their own message: "Confirmed:
+    three attempts in total, within the marking admission budget." The wording was suggested by the
+    reviewer. The operator affirmed the decision as their own when asked to choose: "(b), and
+    commit".
 - **The response-write reserve** subtracted from `markDeadline`. **Provisional: 5 s.** The reviewer
   calls it reasonable as a provisional value, and it is to be confirmed by measurement.
   - **The size estimate, and what bounds it:**
