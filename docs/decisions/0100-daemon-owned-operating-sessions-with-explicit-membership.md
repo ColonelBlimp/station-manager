@@ -463,8 +463,8 @@ only where it can act.
 ## Operator rulings on U1–U3 (2026-11-06) and what stays open
 
 **Attribution:** U1 and U3 were recommended by the reviewer and then **confirmed by the station
-operator** in their own words: "yes, confirm U1 (b) and U3 (b)" (2026-11-06). U2's number stays
-open.
+operator** in their own words: "yes, confirm U1 (b) and U3 (b)" (2026-11-06). The U2 default of
+2 hours was approved by the station operator on the same day.
 
 - **U1. Activity: ruled (b).** Activity is a logged QSO plus a **finite, documented set of
   deliberate operating actions**.
@@ -474,7 +474,7 @@ open.
     implementation.
   - **Unchanged:** §2, step 5 (a logged QSO is activity); New session and pick-up reset the
     baseline (§3).
-- **U2. The gap: configurable (operator ruling), number open.**
+- **U2. The gap: configurable, default 2 hours (both operator rulings).**
   - **Where (proposal):** a station-wide `config.json` setting, edited from Settings and documented
     in `docs/v2-design/config.md` when it is built. One value applies to every window and archive.
     The operator raised Settings and `config.json` as a question; it is not yet a settled ruling.
@@ -483,8 +483,8 @@ open.
       (§3) to the new deadline, so shortening it never waits for the old deadline.
     - Lowering it below the current idle time closes the open session at once, at its
       `last_activity_at`, **unless the contest suspension (U3) is active**.
-  - **Open:** the default value is the operator's to choose. Contest off-times do not establish the
-    everyday threshold. Pick-up makes an early gap close cheap to recover from for future logging,
+  - **Default (operator ruling, 2026-11-06): 2 hours of inactivity** closes a session. It remains
+    configurable. It is longer than the typical one-hour contest off-time, independently of U3. Pick-up makes an early gap close cheap to recover from for future logging,
     but not free (O1).
 - **U3. Contest policy: ruled (b), with a design condition.** Gap expiry is suspended while a contest
   is active.
