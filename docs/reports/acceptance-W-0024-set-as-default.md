@@ -1803,3 +1803,327 @@ recur.
     - **Evidence:** `/home/mveary/sm-w0024/shutdown-diag` (`red-silentpeer-old-precondition.txt`
       and the scratch source).
     - **Status:** uncommitted, for review. Technical sign-off stays pending.
+
+## U1–U7 exercise plan (draft for review, 2026-11-06; NOT RUN)
+
+Directed by the reviewer on 2026-11-06: a plan only; nothing is run until it is ratified. ADR status
+changes and resource disposal stay pending; W-0023 stays after sign-off.
+
+**Revision 2 (2026-11-06):** the reviewer's four corrections are applied (U2/U3 disk evidence, F-c,
+U4's failure, U7(c2)), and the R1–R6 dispositions are recorded below and in the cases. The status
+stays **NOT RUN, for review**. Green CI on `0c84d5f9` is a separate prerequisite; it does not close
+U1–U7.
+
+### What the code does (read before planning)
+
+Every trigger below was read from the code at `4696e3c1`. Four findings change what the U-list
+can show with the acceptance artifact:
+
+- **F-a: U1 cannot be reached in the shipped build.**
+  - **Why:** the restart port is `restart = func() error { trigger(); return nil }`, wired only
+    under `SM_SELF_RESTART=1` (`cmd/smd/lifecycle_adapters.go:1177-1186`). It never returns an
+    error, so `withdraw` never runs (`internal/archive/default_change.go:207-210`). The
+    `restart_failed`, `restart_failed_withdrawal_unconfirmed` and `default_change_pending_unclear`
+    outcomes are therefore unreachable in production.
+  - **The status path too:** `pending_unclear` is otherwise reported only for a selector neither
+    this process requested nor this start reported (`internal/archive/default_change.go:462-463`). A start always
+    reports the selector it found, or fails (`cmd/smd/default_change.go:141-225`).
+- **F-b: U2's recorded trigger yields a different state.**
+  - **What the trigger gives:** a target removed or made ineligible across the restart is
+    *abandoned* at start (`cmd/smd/default_change.go:179-183`): `not_applied_abandoned`, an info
+    notice with no Cancel.
+  - **What "still pending" needs:** `not_applied_intent_pending`, the state with Cancel change,
+    appears only when a start's write fails. That is either the archive pointer's write, with
+    the old default verified (`:203-209`), or the abandonment's config write (`:264`).
+- **F-c: U3's uncertain write needs a directory-fsync failure after a successful rename**
+  (`internal/config/config.go:893-900`).
+  - **How the tests induce it:** the backend tests set the config directory to mode `0300`. The
+    temporary file can then be created and renamed, but the directory cannot be opened for its
+    fsync, so the write reports uncertain (RQ5's "withdrawal uncertain" subtest,
+    `internal/archive/default_change_request_test.go:435`).
+  - **The limitation actually established:** in production wiring, the transition RQ5 drives (a
+    withdrawal after a failed restart) is unreachable (F-a). Whether the `0300` fixture suits the
+    packaged guest, with the daemon running, is **not** established.
+  - **Reachable recovery UI:** `withdrawal_unconfirmed` also arises when a start finds a tombstone
+    on disk and cannot rewrite config durably (`cmd/smd/default_change.go:129-139`). The Confirm
+    action and the power-loss wording are the same (`frontend/app/src/lib/config/defaultChange.svelte.ts:476-481`).
+  - **Disk evidence after a recovery action:** a durable Cancel or Confirm drops the tombstone from
+    memory only. The confirming document keeps it in `config.json`, and the next write is the
+    first without it (`confirmRemoval`, `internal/config/config.go:2572`). A tombstone on disk
+    therefore does **not** mean confirmation failed.
+- **F-d: `live_entry_busy` cannot be reached.**
+  - **Why:** the live-entry seal never refuses; it closes admission and waits for drain
+    (`internal/api/live_entry.go:51-59`).
+  - **What can be reached:** U6's "Log in flight" refusal is the SPA's own check before any
+    request (`defaultChange.svelte.ts:176-178`).
+
+### Common setup (guest)
+
+- **Guest:** a fresh guest with no network interface, controlled over vsock, as in revision 5's
+  R2. The candidate RPM `b2a16f5a` (`7fc165ae…876f`) is installed and verified by hash.
+- **Fixture:** first-run setup with `7Q5MLV`; lookups seeded disabled and verified; T
+  (`7Q5MLV`) created; every destination of T disabled. FT8 and CAT are configured only where a
+  case says so.
+- **Before each case:**
+  - **Stopped-state snapshot:** the guest working directory `WD` and its config hash, so each
+    case starts from a known state and ends by restoring it.
+  - **Restoration check:** `WD` matches the snapshot again (hash and mode lists), the database
+    passes integrity, and `/v1/default-logbook` shows no change in play.
+- **Methods**, each a fixture outside the product, named per case:
+  - **M1, stopped-daemon edits:** with the daemon stopped, place in `config.json` a
+    `default_logbook_change` record of exactly the shape the product writes, or change a logbook
+    row with `sqlite3`. Evidence: a before/after hash, and the edit itself recorded.
+  - **M2, config made unwritable:** `chmod 0555` on `WD` itself, never its subdirectories, so the
+    temporary-file-and-rename write of `config.json` fails while the database and log stay
+    writable. `WD`'s original mode is recorded first (`stat -c %a`) and **that** mode is restored,
+    never a hard-coded one. *Unverified:* that the daemon starts with `WD` read-only; the
+    rehearsal checks this first, and the case stops if it does not. Suitable in principle (R2),
+    subject to rehearsal.
+  - **M3, browser-side faults:** WebDriver BiDi network interception in the throwaway Firefox,
+    blocking, failing or substituting the answer to one named request. The daemon is untouched.
+    *Unverified:* Firefox 159's support for each interception phase used; the rehearsal checks
+    this first.
+  - **M4, direct API requests:** `curl` from inside the guest, for refusals the SPA does not
+    normally send.
+
+### The cases
+
+**U1 — `pending_unclear`: "applies at the next restart", with Cancel change.**
+- **Reachable:** not through the current production wiring (F-a).
+- **Disposition (R1):** no diagnostic build. The supporting evidence is:
+  - the backend restart-failure and recovery tests: RQ5 (a restart failure withdraws: durable,
+    uncertain, failed; `internal/archive/default_change_request_test.go:435`) and RQ7 (recovery
+    actions; `:751`);
+  - the SPA recovery tests: `frontend/app/src/lib/config/defaultChange.recovery.svelte.test.ts`,
+    `frontend/app/src/lib/ui/DefaultChangeBanner.svelte.test.ts` and
+    `frontend/app/src/lib/config/LogbooksSection.default.svelte.test.ts`.
+- **What this does not do:** it neither passes nor waives U1's browser acceptance. That stays
+  open for the operator.
+
+**U2 — `not_applied_intent_pending`: "not applied at this start and is still pending", with
+Cancel change.**
+- **Reachable:** yes, with M1 and M2 (F-b). The rehearsal first checks that M2 lets the daemon
+  start.
+- **Start:** the daemon stopped. M1 places a selector for T: the current archive's id, T's UUID,
+  a new request id. M1 also soft-deletes T (`deleted_at` set), or alternatively changes T's
+  callsign to `7Q5MLV/P`. M2 is then applied.
+- **Trigger:** start the daemon. The start abandons the change; the abandonment's config write
+  fails under M2, so the selector stays.
+- **Expected:**
+  - `smd.log` "startup: the default logbook change was not applied", with the matching state;
+  - Settings → Logbooks and the shell banner: "The change to a logbook no longer listed was not
+    applied at this start and is still pending: the logbook no longer exists." For the
+    ineligible variant, the reason reads "its callsign no longer matches the current default’s
+    callsign".
+  - **Cancel change** is offered, and Set as default is unavailable while the change is in
+    play.
+- **Misleading outcomes:**
+  - `not_applied_abandoned`, an info notice with no Cancel: that would mean the write did not
+    fail and M2 was ineffective;
+  - the start applying the change anyway;
+  - the start failing.
+- **Evidence:**
+  - `config.json`'s record still has `removed` empty;
+  - the status reads `state: not_applied_intent_pending` with the failure code;
+  - the effective default is still Default;
+  - Cancel change pressed under M2 is refused with `default_change_write_failed` and the record
+    is unchanged.
+- **After M2 is lifted:** Cancel change pressed again.
+  - The status settles to `cancelled` with `unconfirmed: false`.
+  - `config.json` **retains** the `cancelled` tombstone, the confirming document's copy, as
+    `confirmRemoval` keeps it. Its presence is expected, not a failure.
+  - After a restart, Default is still effective and the status shows no change in play.
+- **Cleanup:** the recorded `WD` mode restored; the stopped-state snapshot restored.
+
+**U3 — `withdrawal_unconfirmed`: "not yet confirmed on disk", with Confirm and the power-loss
+wording.**
+- **Reachable:** the recovery UI, yes, through the start path (F-c).
+- **Disposition (R2):** the start route demonstrates the recovery UI only. It does **not** prove
+  the uncertain-write transition; the backend tests (RQ5) remain that evidence.
+- **Start:** the daemon stopped. M1 places a **tombstone** for T, as a power loss after an
+  uncertain write would leave it (`removed: "cancelled"`). M2 is then applied.
+- **Trigger:** start the daemon. Its durable rewrite of the tombstone fails under M2.
+- **Expected:**
+  - `smd.log` "startup: a default logbook change's removal could not be confirmed on disk; it
+    stays unconfirmed";
+  - the notice "The change to “W-0024 Acceptance” was cancelled, but this is not yet confirmed
+    on disk. If power is lost before it is, the change to “W-0024 Acceptance” may still apply
+    at a later start.";
+  - **Confirm the change to “W-0024 Acceptance” is cancelled**, with Set as default and
+    activation unavailable.
+- **Misleading outcomes:** "cancelled" shown as settled **before a durable confirming write**;
+  or Confirm that rewrites or removes the record without a durable write. The tombstone still in
+  `config.json` after a durable Confirm is expected, not misleading.
+- **Evidence:**
+  - before Confirm, `config.json` holds the tombstone and the status reads
+    `withdrawal_unconfirmed` with `unconfirmed: true`;
+  - Confirm pressed under M2 is refused (`default_change_write_failed`), and the status is
+    unchanged;
+  - after M2 is lifted, Confirm succeeds: the status settles to `cancelled` with
+    `unconfirmed: false`. `config.json` **retains** the tombstone, as the confirming document's
+    copy, which is expected;
+  - after a restart, Default is still effective and the status shows no change in play.
+- **Cleanup:** as U2.
+
+**U4 — the unreadable-status banner: Check again and Reload.**
+- **Reachable:** yes, with M3. A transport failure, or a non-2xx answer **other than 404**, is
+  classed `unreadable`. A 404 is classed `unsupported`, which hides the offer instead
+  (`frontend/app/src/lib/api/default-change.ts:109`; `defaultChange.svelte.ts:129`).
+- **Start:** Default effective, no change in play, one window on Phone / CW.
+  - **A valid draft, never submitted:** a labelled synthetic callsign, date and time on, and the
+    Rig panel's manual settings confirmed, so every logging prerequisite is met.
+  - **Baseline:** Log QSO is **enabled** with that draft before any fault is injected. If it is
+    not, the case stops: an empty or invalid draft would mask a fail-open defect.
+- **Trigger:** M3 fails every `GET /v1/default-logbook` **before it is sent** (a network
+  failure); then reload the window, so the status is read at boot.
+  - **Variant, if ruled useful:** M3 lets the request through and substitutes a 503 with the
+    daemon's error envelope. "No daemon request" is not evidence for this variant, because the
+    request is delivered.
+- **Expected:**
+  - the shell banner "Station Manager could not read the state of a default logbook change. Live
+    entry is paused until it can." with **Check again** and **Reload**
+    (`frontend/app/src/lib/ui/DefaultChangeBanner.svelte`);
+  - Log QSO **disabled**, with the same valid draft re-entered after the boot reload (the reload
+    clears it), so only the unread status can be what disables it;
+  - Set as default shows the reason "The default logbook’s status could not be read; reopen
+    Settings to try again."
+  - Check again with the fault still active: the banner stays.
+  - M3 removed, then Check again: the banner clears, and Log QSO is **enabled** again with the
+    draft still in place.
+  - Separately: M3 removed, then Reload: the same result through a new document, with the valid
+    draft re-entered before Log QSO is read.
+- **Misleading outcome:** fail-open, meaning no banner and live entry enabled while the status
+  is unknown; or a banner with no working recovery.
+- **Evidence:**
+  - the transcript shows the intercepted requests and their count;
+  - for the pre-send failure only: the daemon log shows no `/v1/default-logbook` request while
+    it is blocked, and one after Check again with the block removed;
+  - Log QSO's state, read without JSON coercion, at all three points (baseline, fault, recovery),
+    with the draft's field values captured beside each reading;
+  - no QSO is written.
+- **Cleanup:** M3 interception removed; no state change on the daemon.
+
+**U5 — the FT8 live path follows the new default.**
+- **Needs:** a completed FT8 exchange, and so a transmission. **Station only, gated on the
+  operator's agreement for that occasion.** It is not planned in the guest.
+- **Disposition (R3):** pending the operator's agreement for that occasion. The choice of
+  logbook, whether the contact is kept, and any acceptance waiver are the operator's decisions.
+- **If on the station:**
+  - **Start:** the target logbook effective, the rig on, an operator-started FT8 session.
+  - **Trigger:** one real QSO completed by the operator.
+  - **Expected:** the stored QSO's logbook is the effective default.
+  - **Misleading outcome:** the QSO is stored in Default.
+  - **Evidence:** `GET /v1/qso/{uuid}` gives its logbook; upload rows follow that logbook's
+    bindings.
+  - **Cleanup:** the operator's call on keeping or moving the contact; default restored by
+    Set as default.
+
+**U6 — busy refusals.**
+- **(a) A Log in flight**, guest, M3.
+  - **Trigger:** hold the `POST /v1/qso` of a Phone / CW submission, then press Set as default
+    on T.
+  - **Expected:** "A QSO is being logged on Phone / CW — wait for it to finish, then change the
+    default."
+  - **Evidence:** no confirmation dialog and no `POST /v1/default-logbook` (transcript and
+    daemon log).
+  - **Cleanup:** release the hold; the QSO lands in Default; snapshot restored.
+- **(b) A Settings save in flight**, guest, M3.
+  - **Trigger:** hold a `PUT /v1/config` from a section save, then press Set as default.
+  - **Expected:** "Saving … — wait for it to finish."
+  - **Evidence and cleanup:** as (a).
+- **(c) An archive operation or verification in flight**, guest, M3.
+  - **Trigger:** hold an archive activation request.
+  - **Expected:** the archive-switch gate's message, and no request sent.
+  - **Evidence and cleanup:** as (a), with Home active again afterwards.
+- **(d) A concurrent request, refused by the daemon's single flight**
+  (`default_change_in_progress`, `activation_in_progress`; `default_change.go:52-60`).
+  - **Disposition (R4):** the deterministic coordination tests are the evidence:
+    `TestDefaultChangeRequest_RQ6_Coordination` (`internal/archive/default_change_request_test.go:529`).
+    They hold the restart port and check that each in-flight operation refuses the others, and
+    that an accepted change refuses another change and its own Cancel while restarting.
+  - **Omitted:** the timing-dependent two-`curl` attempt.
+- **(e) FT8 armed or running (`tx_busy` from the FT8 seal) and tune keyed (`tx_busy` from the rig
+  seal).**
+  - **Needs:** a keyed path. **Station only, gated on the operator's agreement for that
+    occasion**; never in the guest. Pending that agreement (R3).
+  - **If agreed:**
+    - **Trigger:** FT8 armed by the operator, or Tune keyed, then Set as default.
+    - **Expected:** the refusal "FT8 is busy: …" or "the rig is transmitting: …"; nothing
+      written; seals released.
+    - **Misleading outcome:** the change accepted while keyed, or seals left held after the
+      refusal.
+    - **Evidence:** the toast, the daemon log, `config.json` unchanged, and TX afterwards still
+      admitted.
+    - **Cleanup:** disarm or unkey; default unchanged.
+  - *Unverified:* whether FT8 can be armed without CAT, in a guest. It is not attempted.
+- **(f) `live_entry_busy`:** unreachable through the current production wiring (F-d,
+  `internal/api/live_entry.go:53`). Recorded as such (R6).
+
+**U7 — an unknown outcome (lost response), and a stale tab's `default_stale`.**
+- **(a) The response lost after the daemon accepted**, guest, M3.
+  - **Trigger:** substitute the answer to `POST /v1/default-logbook` at response time with a
+    non-coded body (for example a 502 with an HTML page). The request reaches the daemon.
+  - **Expected:**
+    - the warning "… Waiting to see whether the daemon restarts…";
+    - the daemon restarts, every window reloads, and T is effective (`settle`,
+      `defaultChange.svelte.ts:342-349`);
+    - no second `POST` is sent.
+  - **Misleading outcomes:** "nothing changed" reported while the change applied; a retried
+    request; the old default kept on screen.
+  - **Evidence:** exactly one `POST` in the daemon log, the restart, the transcript, and the
+    markers in every window.
+- **(b) The request never sent**, guest, M3.
+  - **Trigger:** fail the `POST` before it is sent.
+  - **Expected:** the same unknown-outcome warning; then, with no restart, "The daemon has not
+    restarted. Settings → Logbooks shows what it holds for the change.", with the status read as
+    showing no change, and live entry released (`:362-375`).
+  - **Misleading outcome:** live work left paused with no way out, or a change reported as
+    applied.
+  - **Evidence:** no `POST` in the daemon log; the instance is unchanged.
+- **(c) A stale tab.**
+  - **Note:** the SPA's gates normally reload a tab bound to another default before it can send
+    a request. The daemon's refusal is defence in depth.
+  - **(c1) The daemon side, M4:** a `POST` with an old `believed_default_uuid` is refused with
+    `default_stale`, and `config.json` is unchanged.
+  - **(c2) The SPA side, M3:** intercept the `POST` **before it is sent** and answer it with a
+    synthesized coded `default_stale` refusal, so the request never reaches the daemon.
+    Substituting the answer to a delivered request is **not** used here: the real change could
+    apply while a refusal is shown. *Unverified:* that Firefox 159 can answer an intercepted
+    request without forwarding it; checked in rehearsal.
+    - **Expected:** the window reloads onto the current default (`reloadForAnotherDefault`,
+      `defaultChange.svelte.ts:336-338`), and nothing is retargeted.
+    - **Evidence:** no `POST /v1/default-logbook` in the daemon log, `config.json` unchanged,
+      and the daemon instance unchanged (no restart).
+  - **Disposition (R5):** the separate daemon-refusal (c1) and SPA-handling (c2) demonstrations
+    are acceptable technical evidence, with the pre-send interception above.
+  - **Scope:** they do **not** demonstrate a naturally stale browser end to end.
+- **Cleanup:** after (a), T back to Default by Set as default, then the snapshot restored.
+
+### Dispositions (reviewer, 2026-11-06)
+
+- **R1, U1:** the backend restart-failure and recovery tests (RQ5, RQ7) and the SPA recovery
+  tests are supporting evidence. No diagnostic build. The production-wiring limitation is
+  recorded (F-a). This neither passes nor waives U1's browser acceptance.
+- **R2, fixtures:** the stopped-daemon fixtures (M1) and the permission fault (M2) are suitable
+  in principle, subject to rehearsal. The recorded original permissions are restored, never a
+  hard-coded mode. U3's start route demonstrates the recovery UI; it does not prove the
+  uncertain-write transition.
+- **R3, U5 and keyed U6:** pending the operator's agreement for each occasion. The choice of
+  logbook, whether the contact is kept, and any acceptance waiver are the operator's decisions.
+- **R4, U6(d):** the deterministic coordination tests (RQ6,
+  `internal/archive/default_change_request_test.go:529`) are the evidence. The timing-dependent
+  two-`curl` attempt is omitted.
+- **R5, U7(c):** the separate daemon-refusal and SPA-handling demonstrations are acceptable
+  technical evidence, with the pre-send interception correction. Their scope is labelled: they do
+  not demonstrate a naturally stale browser end to end.
+- **R6, unreachable branches:** recorded as unreachable through the current production wiring:
+  - the restart-failure outcomes `restart_failed`, `restart_failed_withdrawal_unconfirmed` and
+    `default_change_pending_unclear` (`cmd/smd/lifecycle_adapters.go:1177-1186`,
+    `internal/archive/default_change.go:208`);
+  - `live_entry_busy` (`internal/api/live_entry.go:53`).
+
+  This alone does not justify removing them or reopening the design.
+- **No new thresholds are proposed.** Every wait is the product's own (`waitForDaemonBack`,
+  `WATCH_ROUNDS`). The guest rehearsal's checks of M2 and M3 decide only whether a case can run.
+- **Still open:** the plan's ratification; the operator's U5 and keyed U6 decisions; U1's
+  browser acceptance.
