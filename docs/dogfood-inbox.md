@@ -46,6 +46,85 @@ Scope was checked against the code; nothing is implemented. The order is by oper
 by size. The reviewer supports the order and the homes. These are review recommendations, not
 implementation authorisation; the operator's decisions are marked under each item.
 
+- **Cross-cutting: one operating session, owned by the daemon (operator direction 2026-11-06).**
+  - **The connection (agent):** items 2 (FT8 repeat hold after Ignore) and 5 (Map versus Session)
+    share a root cause. Station Manager has no single "operating session":
+    - the **Session panel** uses this tab's sitting (`sessionStorage`, ADR 0094);
+    - the **Map** uses the last N hours of the logbook (ADR 0049 rejected a session entity);
+    - the **FT8 repeat hold** uses the whole logbook, same band and mode;
+    - the **daemon** knows no session at all.
+
+    The Map surprise and most of the FT8 draft's machinery (deciding-tab verdicts, hold ids,
+    stale-intent refusal, single-use bypasses) follow from that.
+  - **Operator direction:** "The daemon session is the cleanest and gives us one authority on the
+    matter." One daemon-owned operating session that the Session panel, the Map and FT8
+    eligibility all follow.
+  - **Consequences:**
+    - this needs a **new ADR** that revisits ADR 0049's rejection of a session entity, and ADR
+      0094's per-tab Session list;
+    - it must define when a session starts and ends (manual, an activity gap, the UTC day, or
+      another rule), and how it relates to archives and logbooks;
+    - item 2's deciding-tab draft is **on hold**: it is expected to be replaced by a daemon-side
+      check against the daemon session;
+    - item 5 is expected to resolve as "the Map follows the daemon session".
+  - **Status:** direction only. No ADR is written and nothing is authorised. It is to be designed
+    before items 2 and 5 are approved.
+  - **Operator inputs on starting and stopping (2026-11-06, for the ADR):**
+    - **"Mixed plus extended":** sessions start and end automatically by activity, plus a manual
+      "New session". **Extended:** the operator can **restart** a session.
+    - **On browser close:** the operator could be prompted "Close session?".
+    - **Changing archive or logbook mid-session closes the session.** The operator considers this
+      probably the easiest rule. Agent: it aligns with today's per-archive Session lists. A
+      logbook change is a default change, which already restarts the daemon. A plain restart
+      (power cut, deploy) would **not** close the session.
+  - **To settle (agent questions):**
+    - **(a) "Restart" a session:** does it mean resuming a session already closed (continue adding
+      to it), or starting a fresh one?
+    - **(b) The browser-close prompt.**
+      - **The limit:** a page cannot show its own question on close. Firefox shows only its
+        generic leave-page dialog. Observed in this record's station run (acceptance entry 21):
+        "This page is asking you to confirm that you want to leave…". That dialog cannot tell a
+        close from a reload, and the page cannot act on the answer after leaving.
+      - **More:** with several windows open, closing one should probably not close the session.
+      - **Possible alternative:** ask on the **next open** instead: "Continue the previous
+        session or start a new one?"
+    - **(c) The activity gap:** how long without a QSO ends a session automatically. The operator
+      sets the threshold.
+  - **Operator answers (2026-11-06):**
+    - **(a) "Restart" = pick up:** a closed session can be resumed, and new QSOs are added to it.
+    - **(b) Ask on opening, not on close:** "Continue the previous session or start a new one?"
+    - **(c) The gap is configurable.** Reasoning: contests often require minimum off-times
+      (around 1 h), and the session should not close during a contest.
+  - **Agent notes for the ADR:**
+    - **Pick-up makes an early automatic close cheap to recover from.** That lowers the cost of
+      choosing the gap wrongly.
+    - **During a contest, two options:**
+      - the gap's default exceeds typical contest off-times;
+      - or automatic closing is suspended while a contest is selected (the Phone form's contest
+        toggle or the header's contest selection, W-0023).
+
+      Which to use, and the default gap, are the operator's numbers.
+    - **Still to define:** what "activity" is (a QSO logged, or any operator action), and whether
+      FT8 decoding alone keeps a session open.
+  - **Today's baseline (agent, 2026-11-06):**
+    - The **Session panel** list spans the life of the browser tab (`sessionStorage`). It
+      survives reloads (including the automatic reloads after a default change or archive
+      switch), daemon restarts and every new FT8 run, and ends when the tab closes.
+    - It also feeds the session email, which receives the UUIDs from the tab
+      (`internal/api/handler_session_email.go:44`).
+    - **Its flaws:** it belongs to one tab (new windows start empty; the Map's time window
+      disagrees), and nothing outside the tab can see it (not the daemon, FT8 eligibility, the Map
+      or other windows).
+    - FT8 **runs** are shorter: from Call CQ, or answering a CQ or starting auto-work, until Stop
+      or abandon. Each has a `RunID` (`internal/ft8/sequencer.go:2356-2370`), and its QSOs carry
+      `APP_SM_RUN_ID`. A daemon session would sit above runs.
+    - **`smd` keeps no session list:** no session table, no session id on QSOs.
+      `session.terminated` is a Station Events kind for an FT8 contact ending
+      (`internal/stationevents/stationevents.go:42`).
+  - **Operator direction (2026-11-06):** "this is what we need to design — something that looks
+    and feels the same" as today's Session panel, but daemon-owned, without its flaws. Session
+    controls (buttons; "I suspect they will be needed") go on the Session panel.
+
 1. **Session-email mark skipped after an upload stamp** → home: W-0010 (forwarding data and sync
    reliability; session email is forwarding by email). **Not selected:** W-0010's earlier selection
    was outcome 9, now closed.
