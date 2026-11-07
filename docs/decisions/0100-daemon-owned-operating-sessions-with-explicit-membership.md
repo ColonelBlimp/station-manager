@@ -9,8 +9,8 @@ date: 2026-11-06
 
 **Proposed (2026-11-06). Design only. Nothing is authorised or built.** The operator has ruled
 on activity, the gap and the contest policy (U1–U3, P1–P3), the Map (§7), and O4, O5, O6 and O8
-(P4); O1–O3 are deferred with revisit triggers, and O7 is a recorded restoration limitation
-(*Open questions*, below). The session-email mark fix (inbox item 1) was independent of this ADR
+(P4), and the simplification to "A with S2, S3 and S5" (*Simplification review*); O1–O3 are
+deferred with revisit triggers, and O7 is resolved by S3 (*Open questions*, below). The session-email mark fix (inbox item 1) was independent of this ADR
 and has shipped (`c3826281`, W-0010 outcome 11).
 
 ## Context
@@ -44,7 +44,7 @@ by the daemon, with session controls on the Session panel.
 Its revisit trigger was "a session that must carry data *not derivable from its QSOs*". That
 trigger has now fired:
 - **The boundaries are operator decisions**, so QSO times cannot give them: a manual New session,
-  picking up a closed session, and closing on an archive or logbook change.
+  picking up a closed session, and closing on a default-logbook change.
 - **One authority for several consumers:** the Session panel in every window, the Map, email, and
   the daemon's own FT8 eligibility check.
 
@@ -71,7 +71,8 @@ The daemon owns the **operating session**:
   - the Session panel offers New session and pick-up (resume a closed session);
   - a window that opens with no session in progress asks "Continue the previous session or start a
     new one?";
-  - an archive or default-logbook change closes the session when the change takes effect.
+  - a default-logbook change closes the session when the change takes effect; an archive switch
+    does not, and the gap decides on return (§4).
 - **Consumers:** the Session panel in every window, the Map, session email and export, and FT8
   repeat-hold eligibility all read this one membership.
 - **Stale actions:** each operator action names the archive's session-state generation it was
@@ -81,17 +82,16 @@ The daemon owns the **operating session**:
 
 - **Session record:** `id` (UUIDv7), `logbook` (the logbook's UUID), `opened_at`,
   `last_activity_at`, `closed_at` and `close_reason`.
-  - `close_reason` is one of `new_session`, `gap`, `logbook_changed`, `archive_changed` or
-    `picked_up_other`.
+  - `close_reason` is one of `new_session`, `gap`, `logbook_changed` or `picked_up_other`. An
+    archive change does not close a session (§4).
   - A resumed session keeps its `id`. Each open interval is recorded in that session's own interval
     list, so the history stays readable.
 - **Archive-level session state:**
   - **`session_generation`:** one counter per archive, which advances on **every** session-state
     transition in that archive. That includes an automatic open, New, pick-up, and each close
-    (gap, archive, logbook). A QSO joining an already open session is not a transition, so the
+    (gap, logbook). A QSO joining an already open session is not a transition, so the
     generation does not move.
-  - **`seen_serve_epoch` and `default_epoch`** (§4).
-  - **Applied-request records** (§5).
+  - **`default_epoch`** (§4).
 - **Home:** the archive file, beside the logbooks and QSOs it describes. This follows ADR 0094 (per
   archive) and ADR 0096 (contest occurrences live in the archive file).
 - **Authoritative, local only:** sessions are not sent to SM Cloud in this design. A rebuild from
@@ -110,8 +110,8 @@ The daemon owns the **operating session**:
 - **The logging transaction, in order.** All of this happens inside the QSO's own transaction (the
   atomic-write invariant), at the daemon's current instant `now`, never at the QSO's `time_on`:
   1. Read the archive's open session, if any.
-  2. **Evaluate departure, then expiry:**
-     - if a change has taken effect (§4), close the session with `archive_changed` or
+  2. **Evaluate the default change, then expiry:**
+     - if a default-logbook change has taken effect (§4), close the session with
        `logbook_changed`;
      - otherwise, if it is open, it is **expired** (`now ≥ last_activity_at + gap`, the one
        deadline rule used everywhere) and the gap suspension is off (U3; the contest-end rule in
@@ -127,7 +127,7 @@ The daemon owns the **operating session**:
   So a QSO can never join a session that had already expired. That holds even when no read or
   timer ran during the gap.
 - **What can and cannot stop a QSO.**
-  - **Cannot:** no session-policy decision (expiry, a stale generation, a pending departure), no
+  - **Cannot:** no session-policy decision (expiry, a stale generation, a pending default change), no
     operator prompt (the opening question, an unanswered Not now) and no external dependency can
     refuse or delay a live QSO. The transaction resolves the session state itself.
   - **Never silently resumed:** the QSO never resumes an older session. That takes the operator's
@@ -163,7 +163,8 @@ The daemon owns the **operating session**:
     `picked_up_other`);
   - after the configured **gap** with no activity (`gap`; U1 and U2). For a gap close, `closed_at`
     is the session's `last_activity_at`: the sitting ended then, not when the daemon noticed;
-  - when an archive or default-logbook change takes effect, at `last_activity_at` (§4).
+  - when a default-logbook change takes effect, at `last_activity_at` (§4). An archive switch does
+    not close a session; on return the gap decides (§4).
 - **Activity baseline for operator actions:**
   - **New session:** `opened_at = last_activity_at = now`.
   - **Pick-up:** reopening a session starts a new open interval, sets `last_activity_at = now`,
@@ -177,7 +178,7 @@ The daemon owns the **operating session**:
   - Only an **eligible** session can be picked up: one whose `logbook` is the current effective
     default. Others are refused, because they would mix logbooks. Every offer (§6, §8) lists eligible
     sessions only, so the panel never offers an action the daemon would refuse.
-- **Where departure (§4) and expiry are evaluated, in that order:**
+- **Where the default-change test (§4) and expiry are evaluated, in that order:**
   - **The logging transaction** (§2), which is the load-bearing evaluation;
   - **every session-control transaction** (§5), as its first step;
   - **a daemon timer** set for the open session's expiry instant. It persists the `gap` close and
@@ -214,44 +215,33 @@ The daemon owns the **operating session**:
   - **Forwards:** a step can close a session by gap; pick-up recovers it for future logging.
   - A guest host's clock stepped during W-0021 acceptance.
 
-### 4. Archive and default-logbook changes: closure when the change takes effect
+### 4. Archive and default-logbook changes
 
-*Revised 2026-11-06 after review. The first committed form (`abe5b7b1`) used a departure mark
-written when the change was requested. That mark is withdrawn. Three cases showed that evidence
-written at request time cannot be trusted later:*
-- *a selector persist failure that left a committed mark behind;*
-- *a retained `not_applied_intent_pending` intent whose mark an unsuccessful start would clear;*
-- *a promotion that became durable before its mark was resolved.*
+*Revised 2026-11-07 by the operator's simplification ruling (S3): an archive change no longer
+closes a session, so the archive serve epoch, its activation outcomes and the O7 restoration
+limitation are gone. Default-logbook changes keep their epoch (S4 rejected). The earlier forms
+(`abe5b7b1`, then the serve-epoch design) remain in the Git history.*
 
-**The rule:** a session closes when an archive or default-logbook change **takes effect**. The
-evidence is written by the write that makes the change take effect, so evidence and effect cannot
-diverge. Nothing is written when a change is merely requested.
-
-- **Archive changes: a serve epoch.**
-  - **In config:** `archive_serve_epoch`, a station-global counter. It is incremented **in the same
-    config write that promotes a candidate to active** (`startArchivePromote`,
-    `cmd/smd/archive_adopt.go`: active = candidate, pending cleared). That write runs before
-    `http`, so no live QSO reaches a candidate before it.
-  - **In each archive file:** `seen_serve_epoch`, the value of `archive_serve_epoch` when that
-    archive last evaluated its sessions.
-  - **The test:** an archive's `seen_serve_epoch` differing from the current `archive_serve_epoch`
-    means a promotion has taken effect since this archive last evaluated. Only a promotion moves the
-    counter, and an archive can be promoted only while it is not active
-    (`archive_active` refusal), so a difference means **this archive was left** after its last
-    evaluation. The open session closes with `archive_changed`, and `seen_serve_epoch` is updated,
-    in one transaction.
-  - **Inequality, not ordering:** the test is a difference, not an ordering. An epoch restored to a
-    **different** older value (an old `config.json`) also closes the session.
-  - **Known restoration limitation (O7):** a restore can bring back an **equal** epoch.
-    - **Example:** A records 7; A→B promotes to 8; an older `config.json` is restored, naming A
-      active at 7. A's stored value is also 7, so A's session silently continues although B was
-      served in between.
-    - **Consequence:** later QSOs merge into a session that should have closed. New and pick-up only
-      correct future logging; they cannot repair membership already merged.
-    - **Status:** the mechanism (for example, invalidating every archive's `seen_serve_epoch`, or
-      closing open sessions, as a step of a supported restore) is **undecided**. It belongs with the
-      backup and restore design (inbox item 4).
-- **Default-logbook changes: a default epoch.**
+- **Archive changes: the gap decides (S3).**
+  - Each archive holds its own sessions and its own QSOs, so nothing crosses archives: QSOs logged
+    while B is served are in B's file and can never join A's session.
+  - While an archive is not served, its sessions are not evaluated. When it is served again, its
+    first evaluation (§3) applies the gap to the time since its `last_activity_at`, which includes
+    the time it was not served.
+  - **Returned within the gap:** its session continues. **Returned after the gap:** its session
+    closes by `gap`, at its `last_activity_at`, like any idle session, and the opening question
+    offers it if it is eligible (§6).
+  - **Example (gap 2 h):** A's last QSO at 10:00; switch to B at 10:30. Back to A at 11:15: A's
+    session continues. Back to A at 12:30 instead: A's session is closed as of 10:00.
+  - **A requirement on any future feature** that reads a non-served archive's sessions (for
+    example an archive summary): it applies the same gap test, so an expired session reads as
+    closed.
+- **Default-logbook changes: closure when the change takes effect, by a default epoch.**
+  - **The rule:** a session closes when a default-logbook change **takes effect**. The evidence is
+    written by the write that makes the change take effect, so evidence and effect cannot diverge;
+    nothing is written when a change is merely requested. (An earlier departure mark written at
+    request time was withdrawn: a selector persist failure could leave it behind, and a retained
+    `not_applied_intent_pending` intent could have it cleared by an unsuccessful start.)
   - **In the archive file:** `default_epoch`, advanced **only by an actual change of the default
     pointer**, not by every pointer write (`applyDefaultChange`, `cmd/smd/default_change.go`):
     - **X→Y:** the pointer and the incremented epoch are written in one SQLite transaction;
@@ -262,78 +252,44 @@ diverge. Nothing is written when a change is merely requested.
       either (X, e) or (Y, e+1), never a mixed pair, and keeps whichever pair committed.
   - **In each session:** the `default_epoch` it was opened, or last picked up, under.
   - **The test:** a session whose `default_epoch` differs from the archive's closes with
-    `logbook_changed`. That covers X→Y→X too, which a plain comparison of logbooks would miss: the
-    epoch moved twice even though the logbook is X again.
+    `logbook_changed`. That covers X→Y→X too, whether or not anything was evaluated while Y was the
+    default: the epoch moved twice even though the logbook is X again. This determinism is why the
+    epoch is kept (S4 rejected).
 - **The closure time** is the session's `last_activity_at`.
   - Every member was stored at or before it (§2, step 5), and nothing joins after a change takes
     effect.
-  - The true departure instant is not recorded durably, and no evidence written before the change
-    took effect is trusted for it. The operator sees "closed at hh:mm (archive changed)", the end of
-    the sitting, as for a gap close.
-- **Where the departure test runs:** in the **same evaluation step as expiry** (§3):
-  - every logging transaction, before membership;
-  - every control transaction;
-  - every read;
-  - a start node before `http`.
-
-  The test is derived from durable state on both sides, so the start node is not load-bearing. If
-  its write fails, the next session transaction repeats it. **Departure is tested before expiry:**
-  both close the session at `last_activity_at`, and departure names the stronger reason.
-- **What each activation and default-change outcome does** (from `internal/archive/activate.go`
-  and `cmd/smd/default_change.go`):
+  - The true change instant is not recorded durably, and no evidence written before the change
+    took effect is trusted for it. The operator sees "closed at hh:mm (logbook changed)", the end
+    of the sitting, as for a gap close.
+- **Where the test runs:** in the **same evaluation step as expiry** (§3): every logging
+  transaction, before membership; every control transaction; every read; and a start node before
+  `http`. The test is derived from durable state in the archive file, so the start node is not
+  load-bearing: if its write fails, the next session transaction repeats it. **The default test
+  runs before expiry:** both close the session at `last_activity_at`, and `logbook_changed` is the
+  stronger reason.
+- **What each default-change outcome does** (from `cmd/smd/default_change.go` and
+  `internal/archive/default_change.go`):
 
   | Outcome | Epoch moves? | Sessions and controls |
   |---|---|---|
-  | `activation_persist_failed` (definitive; seals released, nothing on disk) | no | unchanged; nothing to clean up |
-  | `restart_failed` (pending cleared, seals released) | no | unchanged |
-  | Archive activation, error code `pending_unclear` (restart failed, pending could not be cleared; the next restart activates) | not yet | unchanged until a later start promotes; that promotion moves the epoch |
-  | Candidate failed at start, fallback to last-known-good (no promotion write) | no | the departing archive's session continues; time down counts towards its gap |
-  | Candidate promoted | yes, in the promotion write | the departed archive's session closes when that archive next evaluates |
-  | Default change `effective` / `applied_cleanup_pending` | yes, if the pointer changed X→Y (in that transaction); a Y→Y durability rewrite does not move it | the session closes at the first evaluation after an X→Y change |
+  | `effective` / `applied_cleanup_pending` | yes, if the pointer changed X→Y (in that transaction); a Y→Y durability rewrite does not move it | the session closes at the first evaluation after an X→Y change |
   | `not_applied_intent_pending` (the selector survives; a later start retries) | no | unchanged **between attempts**; a later `effective` start moves the epoch then |
-  | Default change, status `pending_unclear` (error code `default_change_pending_unclear`: restart failed and the change could not be withdrawn; it applies at the next restart unless cancelled; `internal/archive/default_change.go:255,463`) | not yet | unchanged until a start applies it; an X→Y pointer change moves the epoch then |
-  | `not_applied_abandoned`, cancelled, `withdrawal_unconfirmed` | no | unchanged |
+  | status `pending_unclear` (error code `default_change_pending_unclear`: restart failed and the change could not be withdrawn; it applies at the next restart unless cancelled; `internal/archive/default_change.go:255,463`) | not yet | unchanged until a start applies it; an X→Y pointer change moves the epoch then |
+  | `restart_failed`, `not_applied_abandoned`, cancelled, `withdrawal_unconfirmed` | no | unchanged |
 
-  - **Status versus error code:** `pending_unclear` is a default-change **status**, and
-    `default_change_pending_unclear` is its **error code**. Archive activation uses
-    `pending_unclear` as an **error code**. Whether the default-change status is reachable in
-    production is the separately recorded wiring limitation, not this ADR's concern.
-
+  - Whether the `pending_unclear` status is reachable in production is the separately recorded
+    wiring limitation, not this ADR's concern.
   - **Session controls are never blocked by a pending change.** There is nothing to block on.
     Between attempts of a retained intent, New, Continue and pick-up work normally. Whatever session
     is open when the change finally takes effect is the one it closes.
-  - Live admission during a change stays governed by its own seals (ADR 0097, archive activation),
-    not by this ADR.
+  - Live admission during a change stays governed by its own seals (ADR 0097), not by this ADR.
 - **Worked sequences:**
-  - **A→B:** B's promotion moves the epoch from E to E+1. When A is next served, its
-    `seen_serve_epoch` (E) differs, so A's open session closes at its `last_activity_at`.
-  - **A→B, restart B, then B→A, with a crash** straight after A's promotion became durable and before
-    A evaluated anything:
-    - the epoch is E+2, written in the promotion's own write;
-    - A's `seen_serve_epoch` is still E;
-    - the next start looks plain, but the epochs differ, so A's session closes.
-
-    No window exists, because the evidence is the promotion write itself.
-  - **A→B where B fails at start:** there is no promotion and the epoch stays E, so A's session
-    continues.
   - **A selector persist failure:** nothing was written, so nothing changes.
   - **A default change retained across two starts, then effective:** sessions and controls are
     normal throughout. The `effective` start moves `default_epoch`, and the session open at that
     point closes.
-- **Residual: a lost promotion write.** The promotion is a config write. If a crash loses it (its
-  durability was reported uncertain), the station's durable record says the promotion never
-  happened, and sessions follow that record:
-  - **if the retried start promotes again,** the epoch moves then;
-  - **if it falls back instead,** the departing archive's session continues, although the
-    candidate briefly served live QSOs, which stay in the candidate's own sessions.
-
-  Pick-up and New recover either case. This ADR does not add machinery against it.
-- **A requirement on any future feature** that reads a non-served archive's sessions (for example
-  an archive summary or export): it must apply the same epoch test, so that such a session reads as
-  closed.
-- **Returning to an archive:** its last session is closed, and the opening question offers it if it
-  is eligible (§6). That matches today's per-archive restore (ADR 0094), but it is now the
-  operator's choice.
+  - **X→Y→X with nothing evaluated while Y was the default:** the epoch moved twice, so X's session
+    closes at the first evaluation after the return.
 
 ### 5. Several windows, conflicting choices
 
@@ -344,55 +300,44 @@ diverge. Nothing is written when a change is merely requested.
 - **Each control action carries:**
   - the **expected generation**: the archive's `session_generation` from the state the window
     showed;
-  - the archive identity (the existing `X-SM-Archive-Id` request guard);
-  - a **request id** minted by the window for this press.
+  - the archive identity (the existing `X-SM-Archive-Id` request guard).
+
+  There is no request id and no recorded result (operator ruling 2026-11-07, S2).
 - **Every state carries its generation, including "none open".** A bare "none open" would be
   ambiguous: a delayed action could observe none, another window could open and close a session,
   and the delayed action would still match none. The generation advances across both transitions,
   so the delayed action no longer matches.
 - **The order of a control transaction:**
-  1. **Replay check.** If the request id has an applied-request record, return the **recorded
-     result** (the generation and the session it produced), and change nothing. The stale check is
-     not applied to an already-applied retry. If the same request id arrives with a different
-     action or target, it is refused as a misuse.
-  2. **Departure and expiry evaluation** (§3, §4).
-  3. **Stale check.** If the expected generation is not the current one, refuse with a distinct
+  1. **Default-change and expiry evaluation** (§3, §4).
+  2. **Stale check.** If the expected generation is not the current one, refuse with a distinct
      stale-action code, change nothing, and return the current state with its generation; the window
      redraws to it.
-  4. **Apply** the transition, advance the generation, and write the applied-request record (the
-     request id, the action, the target, the result and the time), all in one transaction.
+  3. **Apply** the transition and advance the generation, in the same transaction.
 - **A refusal is not a rollback** (acceptance review 2026-11-07). "Changes nothing" refers to the
-  **requested control** only. A close found by step 2's evaluation (departure or expiry) is
-  committed, advances the generation, and publishes its event after the commit, **even when step 3
-  or another refusal then rejects the control**. Only a database failure rolls the transaction
+  **requested control** only. A close found by step 1's evaluation (default change or
+  expiry) is committed, advances the generation, and publishes its event after the commit, **even
+  when step 2 or another refusal then rejects the control**. Only a database failure rolls the transaction
   back, closes included; the evaluation is then repeated by the next one (§3, P3's retry).
   - **Example:** a window shows S open at generation g. S's deadline passes and the timer has not
-    yet run. The operator presses New against g. Step 2 closes S by gap (g+1), step 3 finds g
-    stale and refuses New. S's close stands, its
-    event is published, and the window redraws at g+1, where the operator can act again.
+    yet run. The operator presses New against g. Step 1 closes S by gap (g+1), step 2 finds g
+    stale and refuses New. S's close stands, its event is published, and the window redraws at
+    g+1, where the operator can act again.
   - **Consequence the operator sees:** a control pressed on a session that had silently expired is
     refused as stale once, and the window redraws to the closed state. This is deliberate: the
     window's view was out of date. An exemption for closes found by the same transaction was
     considered and not adopted (reviewer, 2026-11-07): the same press would otherwise succeed or fail
     depending on whether the timer or the control discovered the expiry.
-- **Which outcomes are replayed, and which are evaluated afresh:**
-  - **Replayed:** only **applied** outcomes. They are the only ones recorded, and a retry of an
-    applied action returns its recorded result.
-  - **Evaluated afresh:** every refusal, because a refusal changes nothing and is not recorded.
-    - **A stale-generation refusal** stays stale on an unchanged retry, because the generation never
-      returns to an earlier value. The window must redraw and the operator must act again.
-    - **Other refusals can become applicable** on an unchanged retry once their condition clears.
-      For example, a transient database failure leaves the generation where it was, so the retry
-      can apply. A refusal whose condition clears only through a session transition (for example
-      a pick-up made eligible by a later default change) meets the stale check instead, because
-      that transition moved the generation.
-- **Applied-request records:**
-  - **Durable across restart:** they are written to the archive file, in the transition's
-    transaction. A retry after a crash or restart therefore returns the recorded result, or, if
-    the transaction never committed, is evaluated fresh.
-  - **Bounded retention:** the bound is an implementation-design number, and the operator is asked
-    if it is ever visible. After a record expires, a late retry is evaluated as a new action. The
-    generation has moved by then, so the stale check refuses it, which is safe.
+- **Retries after a lost response (S2).** A retry carries the generation of the window's original
+  press, unchanged.
+  - **If the first attempt committed,** the generation has moved, so the retry is refused as stale
+    and the window redraws to the state the first attempt produced. The action can never apply
+    twice. **Accepted:** the operator may see one stale refusal after a lost response, with the
+    correct state shown.
+  - **If the first attempt never committed,** the retry is evaluated as the press it is.
+  - **Client rule:** a retry keeps its original generation. A window never silently re-reads the
+    state and resends the press against the new generation; after a refusal the operator acts again.
+  - **Other refusals** (for example a transient database failure, which leaves the generation
+    where it was) can apply on an unchanged retry once their condition clears.
 - **Examples:**
   - window A presses New at generation g, which becomes g+1; window B's delayed Continue, sent
     against g, is refused;
@@ -400,8 +345,8 @@ diverge. Nothing is written when a change is merely requested.
     is refused;
   - window B saw "none open" at g. Window A then opened (g+1) and closed (g+2) a session. B's
     delayed New at g is refused.
-  - window A's New times out and is retried with the same request id: the first attempt had
-    committed, so the retry returns the recorded result, and no second session is opened.
+  - window A's New times out and is retried at g: the first attempt had committed (g+1), so the
+    retry is refused as stale, the window shows the new session, and no second session is opened.
 - **The opening question** can be shown in several windows at once. The first answer **that
   changes state** (Continue or New) wins. Each other window closes its question when the resulting
   event arrives. A later answer is refused as stale, so nothing changes twice. Not now is local to
@@ -521,7 +466,7 @@ only where it can act.
 | | Operating session | FT8 run | Contest occurrence (ADR 0096) |
 |---|---|---|---|
 | Started by | first live QSO, New, Continue, pick-up | Call CQ, answering, auto-work | declared by the operator |
-| Ends | gap, New, pick-up of another, archive or logbook change | Stop, abandon, last FT8 subscriber gone | its declared window |
+| Ends | gap, New, pick-up of another, default-logbook change | Stop, abandon, last FT8 subscriber gone | its declared window |
 | Identity | session UUIDv7 (archive) | `RunID` UUIDv7, `APP_SM_RUN_ID` on QSOs | occurrence identity (archive) |
 | Membership | explicit, live paths | the run's own QSOs | explicit, in contest mode |
 | Owns | the Session panel, Map, email, FT8 eligibility | the run's declines and bypasses | serials, submission export |
@@ -531,7 +476,9 @@ only where it can act.
   supplies membership for another.
 - A run can cross a session boundary (New or pick-up mid-run). Its next QSO joins whichever
   session is open at storage time.
-- An archive or logbook change ends both, because it requires a restart.
+- A default-logbook change ends both: it requires a restart, which ends the run, and its epoch
+  closes the session. An archive switch ends the run; the departed archive's session is decided by
+  the gap when that archive is next served (§4).
 - Gap closing is suspended while the daemon-owned contest-active state is on (U3).
 
 ## Operator rulings on U1–U3 (2026-11-06) and what stays open
@@ -568,8 +515,8 @@ operator** in their own words: "yes, confirm U1 (b) and U3 (b)" (2026-11-06). Th
   - **Today:** the contest selection (the Phone form's contest toggle and the header contest,
     W-0023) is per-tab state, so that daemon-owned state does not exist yet. Designing it, with its
     own start, end, restart and several-window semantics, is a prerequisite. It belongs with W-0023.
-  - **While suspended:** the session ends only by New session, pick-up of another session, or an
-    archive or logbook change (§4).
+  - **While suspended:** the session ends only by New session, pick-up of another session, or a
+    default-logbook change (§4).
   - **The baseline when the contest state ends:** an expiry already due is applied at once, without
     inventing activity. Ruled 2026-11-07 (operator), P2 below; the rejected alternative (the end
     counts as activity) is recorded there.
@@ -609,7 +556,7 @@ the list never counts.**
   before the response is sent:
   1. **The credit applies only if the generation is unchanged** since the capture, and the capture
      named an open session. The generation advances on every transition (§1): a gap close, New,
-     pick-up (even of the same session), or a departure. So an unchanged generation means the same
+     pick-up (even of the same session), or a default-logbook change. So an unchanged generation means the same
      session, in the same open interval, with nothing in between.
   2. If it applies, set `last_activity_at = max(last_activity_at, accepted_at)`, **the acceptance
      instant, not the write's**.
@@ -708,7 +655,9 @@ the window's end is activity, and neither moves `last_activity_at`.
 brief. **Reviewer approval (2026-11-07): R1–R3 technically approved**, including R2's documented
 restart exception and the serialization clarification. **Operator ruling (2026-11-07):** R1–R3
 "Confirmed", and R2's restart exception "Accept"; R4's values adopted from the reviewer's
-recommendation (below). This ADR remains Proposed. Already ruled and not reopened here: the gap is **configurable**, and its
+recommendation (below). **R2 was then simplified by the operator's ruling S5 (2026-11-07):** the
+boundary design and its restart exception are withdrawn; R2 below is the ruled form. This ADR
+remains Proposed. Already ruled and not reopened here: the gap is **configurable**, and its
 default is **2 hours** (U2, 2026-11-06).
 
 ### Recommendations
@@ -722,54 +671,26 @@ default is **2 hours** (U2, 2026-11-06).
     with R4's granularity and documented in `docs/v2-design/config.md` when built.
   - A non-served archive has no evaluations while it is not served. At its next start, its first
     evaluation (§3) uses the value in force then.
-- **R2. A saved change applies immediately, without a restart** (revised 2026-11-07 for three
-  reviewer clarifications; ruled 2026-11-07, operator).
+- **R2. A saved change applies from the next evaluation, without a restart** (simplified by the
+  operator's ruling of 2026-11-07, S5; the earlier effective-policy boundary, its pending
+  boundaries and its restart exception are withdrawn and remain in the Git history).
   - It becomes config.md §11's second **explicit live side effect**, alongside `ft8.tx.max_repeats`
-    (§11.5). **It needs a stronger guarantee than that precedent.** The FT8 apply path
-    (`applyCommittedFt8MaxRepeats`, `internal/api/handler_config.go`) applies the latest committed
-    snapshot, so a value saved and quickly replaced may never be applied. For the repeat cap that is
-    harmless; for sessions it could skip an irreversible close.
-  - **One effective-policy boundary per change** (revised again 2026-11-07: a check under the old
-    value made before persisting could miss a deadline falling during the write). A gap-change lock
-    serializes changes; the steps are:
-    1. **Validate** the candidate (pure, no session effect). A refusal changes nothing.
-    2. **Persist** it. A failed write leaves the old value in force; nothing else changes.
-    3. **Cross the boundary** at `T_eff`, the instant the write reported success. In **one**
-       transaction, against the current session state:
-       - evaluate under the **old** value as of `T_eff` (§3: departure, the contest end, then expiry
-         with `T_eff ≥ last_activity_at + gap_old`, the contest suspension honoured);
-       - make the new value effective;
-       - evaluate under the **new** value, and reschedule the timer to the new deadline, or to the
-         contest end while suspended.
-
-       Its closes advance the generation, and their events are published after the commit.
-  - **Every other evaluation observes the same ordering.** Logging, controls, reads and the timer
-    are serialized against the boundary transaction: each runs wholly before it, under the old
-    value, or wholly after it, under the new value with the old-value check already applied. None
-    sees the new value without the boundary.
-  - **Observable guarantee:** a session that was overdue under a value while that value was in force
-    is closed, at its `last_activity_at`, whatever the timer did and however soon a later save
-    lengthens the gap. A 30-minute save followed at once by a 3-hour save closes a session idle for
-    45 minutes.
-  - **If the boundary transaction fails** (a database error), the save is not refused or rolled
-    back, and the failure is logged. The new value is in effect, and the boundary (`T_eff` and the
-    old value) is kept **pending**, in order with any later ones. Every later evaluation (the retry,
-    the timer, a QSO, a read, the next change's boundary) first applies the pending boundaries'
-    old-value checks at their own `T_eff`. A failure therefore delays a close but never skips it.
-  - **Serialization covers the handoff from successful persistence to the boundary transaction.**
-    Pending boundaries are resolved before any later evaluation changes session or contest state;
-    a failed replay rolls back that evaluation's database transaction. So a delayed check is never
-    applied against state that has already moved on.
-  - **The documented exception: a restart with a boundary still pending.** Pending boundaries are
-    held in memory; a restart discards them, and the first evaluation after the start uses the value
-    in the file (§3, restart recovery). A session that only the discarded boundary would have closed
-    can then survive. **Accepted by the station operator (2026-11-07).**
-  - **A failed evaluation never leaves the session unscheduled.** A failure (a boundary, the timer,
-    or any other evaluation) must leave a future evaluation scheduled, independent of browser reads
-    or operating activity. The timer is re-armed rather than consumed, so an open session can never
-    stay open indefinitely because its one timer fired into an error. **The retry interval is an
-    operator decision** (R4) and is not invented here.
-  - A save reported `durability: "unconfirmed"` (PT-6) is in effect, so step 3 runs.
+    (§11.5): the PUT persists the candidate first, then hands the committed value to the session
+    service, which **runs an evaluation at once** (§3) under that value and reschedules the timer to
+    the new deadline, or to the contest end while suspended. A rejected or failed write changes
+    nothing. Like the FT8 precedent, the latest committed value is the one applied.
+  - **Accepted explicitly (S5):**
+    - **lengthening can preserve an overdue but still-open session:** if the old deadline has
+      passed but no evaluation has closed the session yet, the save's evaluation uses the new,
+      longer gap, and the session stays open;
+    - **a superseded value may never cause a closure:** a short value replaced before any
+      evaluation ran under it closes nothing;
+    - **already-closed sessions stay closed.**
+  - **A failed evaluation never leaves the session unscheduled.** A failure (the save's evaluation,
+    the timer, or any other evaluation) leaves a future evaluation scheduled, independent of browser
+    reads or operating activity: the timer is re-armed rather than consumed, and retries every 60 s
+    (R4). The saved setting stands and is not rolled back.
+  - A save reported `durability: "unconfirmed"` (PT-6) is in effect, so its evaluation runs.
   - **A settings save is never activity** (P1). It never moves `last_activity_at`.
   - **Closed sessions stay closed.** Lengthening the gap never reopens a session that has already
     closed; pick-up is the way back (§3).
@@ -789,19 +710,14 @@ default is **2 hours** (U2, 2026-11-06).
   with nothing else, the session closes at 17:00, `closed_at` 14:00.
 - **Lengthening after a close.** The session closed by gap at 16:00 (`closed_at` 14:00). At 16:30
   the operator saves 4 hours. It stays closed; pick-up resumes it for future logging.
-- **Lengthening after the old deadline, with the timer delayed.** Last activity 14:00, old deadline
-  16:00, but no close has been persisted yet (the timer is late). At 16:10 the operator saves
-  3 hours. The boundary transaction first evaluates under 2 hours as of `T_eff` (16:10):
-  `16:10 ≥ 16:00`, so the session closes, `closed_at` 14:00. It does not survive just because the
-  timer was late. During a contest suspension, the old-value check closes nothing.
-- **A deadline falling during the write.** Last activity 14:00, old deadline 16:00. The operator
-  saves 3 hours; validation runs at 15:59:59 and the write reports success at 16:00:01, before the
-  timer has run. `T_eff` is 16:00:01, and `16:00:01 ≥ 16:00`, so the old-value check in the boundary
-  closes the session, `closed_at` 14:00. Had the write finished at 15:59:58, the session would stay
-  open under 3 hours, with its timer moved to 17:00.
-- **Two saves in quick succession.** Last activity 14:00. At 14:45 the operator saves 30 minutes,
-  then at once 3 hours. The first change's boundary closes the session under the new 30 minutes
-  (`14:45 ≥ 14:30`) before the second change can be applied; the second finds no open session.
+- **Lengthening after the old deadline, before any evaluation closed it (accepted, S5).** Last
+  activity 14:00, old deadline 16:00, no close persisted yet (the timer is late). At 16:10 the
+  operator saves 3 hours. The save's evaluation uses 3 hours: `16:10 < 17:00`, so the session stays
+  open until 17:00 unless the operator logs or acts again.
+- **Two saves in quick succession (accepted, S5).** Last activity 14:00. At 14:45 the operator
+  saves 30 minutes, and the save's evaluation closes the session at once (`14:45 ≥ 14:30`). Had a
+  3-hour save been committed first, so that no evaluation ran under 30 minutes, the session would
+  stay open: a superseded value may never cause a closure.
 - **Changing it during the contest suspension.** Contest 12:00Z Saturday to 12:00Z Sunday; last
   contest QSO Saturday 17:20.
   - At Saturday 21:00 the operator saves 1 hour. Nothing closes, and the timer stays at the
@@ -813,9 +729,9 @@ default is **2 hours** (U2, 2026-11-06).
   committed under the old policy stands.
   - **Refused at validation** (a value outside R4's limits): the PUT is refused before anything is
     written or evaluated, so the save itself causes no session change.
-  - **Failed while persisting:** the save also makes no session change of its own, because the
-    boundary is crossed only after a successful write. Expiry under the old policy continues, by
-    any evaluation, as if the save had not been attempted.
+  - **Failed while persisting:** the save also makes no session change of its own, because its
+    evaluation runs only after a successful write. Expiry under the old policy continues, by any
+    evaluation, as if the save had not been attempted.
 
 ### R4: validation limits and retry (ruled 2026-11-07)
 
@@ -823,8 +739,8 @@ default is **2 hours** (U2, 2026-11-06).
   - **the minimum** gap;
   - **the maximum** gap, if any;
   - **the unit and granularity** Settings offers (for example whole minutes);
-  - **whether "never close by gap" is allowed.** If it is, only New session, pick-up and an archive
-    or logbook change close a session, and the Session panel would need to say so;
+  - **whether "never close by gap" is allowed.** If it is, only New session, pick-up and a
+    default-logbook change close a session, and the Session panel would need to say so;
   - **an out-of-range value found in `config.json` at start:** refused like any other validation
     error (config.md §12: Load makes error findings fatal, so the daemon would not start), or clamped
     to the nearest limit as the FT8 repeat cap is (config.md §4.3).
@@ -854,9 +770,8 @@ default is **2 hours** (U2, 2026-11-06).
 **Status: ruled 2026-11-07 (operator: "Confirm").** Drafted by the agent to the reviewer's brief.
 **Reviewer approval (2026-11-07):** P4 as written, covering O4, O5, O6 and O8, and the deferral of
 O1–O3 with their stated revisit triggers, after three documentation corrections the reviewer
-verified. O7 stays a visible known limitation. **Operator ruling (2026-11-07):** P4 confirmed,
-including the O1–O3 deferrals. This ADR remains Proposed. O7 stays a recorded limitation (below,
-under *Open questions*).
+verified. **Operator ruling (2026-11-07):** P4 confirmed, including the O1–O3 deferrals. This ADR
+remains Proposed. O7 was later resolved by S3 (below, under *Open questions*).
 
 ### O4. What counts as a qualifying QSO for the Ignore bypass (§7)
 
@@ -1000,11 +915,11 @@ session that has none.
 - **O5.** The FT8 Ignore when no session is open (§7). **Ruled 2026-11-07 (operator): P4 (O5)
   above.**
 - **O6. The first start after this ships.** **Ruled 2026-11-07 (operator): P4 (O6) above.**
-- **O7. Restoration with an equal epoch (§4):** how a supported restore invalidates session state.
-  This is decided with the backup and restore design (inbox item 4). Until then it is a **known,
-  recorded limitation**: restoring an older `config.json` can bring back an epoch equal to an
-  archive's stored one, so that archive's open session wrongly **continues** and later QSOs join a
-  session that should have closed (example in §4). New and pick-up correct only future logging.
+- **O7. Restoration with an equal epoch.** **Resolved by S3 (operator ruling 2026-11-07):** the
+  archive serve epoch it concerned no longer exists; an archive's session is decided by the gap on
+  return (§4). `default_epoch` lives in the archive file with the default pointer, so restoring that
+  file restores both together. The backup and restore design (inbox item 4) still has to state how a
+  restore treats open sessions in general.
 - **O8. The header session clock** (`frontend/app/src/lib/ui/SessionTimer.svelte`, rendered in
   `lib/ui/Header.svelte`). **Ruled 2026-11-07 (operator): P4 (O8) above.**
   - **Today:** a third per-tab "session". Its start is the tab's first page load, kept in
@@ -1018,7 +933,7 @@ session that has none.
     scorers' rules (`contestTimers.ts`) and stay as they are. The session clock must not be
     presented as, or substitute for, contest operating time.
 
-## Simplification review (2026-11-07): proposals pending the operator's rulings
+## Simplification review (2026-11-07): ruled "A with S2, S3 and S5"
 
 **Why:** every mechanism adds persistent state, transaction ordering, recovery paths and
 interactions that future changes must preserve; maintenance cost grows faster than line count
@@ -1059,11 +974,14 @@ evaluation rule, the contest check and the FT8 recheck.
 **Operator decisions needed:** S2 (drop request records), S3 (rely on the gap for archive
 returns), S4 (logbook comparison instead of the default epoch), S5 (simple gap-change rule;
 reopens P3 R2). S6 is deferred (P1 stays as ruled) and does not gate S2–S5. S1, S7 and S8 stay
-unless the operator directs otherwise. After the rulings, the affected sections (§3, §4, §5, P1, P3, O7, *Consequences*) are
-rewritten to the chosen design, so the accepted ADR describes one design, not its history.
+unless the operator directs otherwise. After the rulings, the affected sections are rewritten to the
+chosen design, so the accepted ADR describes one design, not its history.
 
-**Reviewer recommendation (2026-11-07), pending the operator's ruling: "A with S2, S3 and
-S5".** This recommendation does not accept ADR 0100 or authorise implementation.
+**Operator ruling (2026-11-07): "A with S2, S3 and S5"**, adopting the reviewer's recommendation
+(operator: "ADR 0100 - yes"). S2, S3 and S5 are adopted; S4 is rejected and `default_epoch` is
+kept; S1, S7, S8 and P1 are kept; S6 is deferred. §1, §2, §3, §4, §5, §9, U3, P1, P3 R2, O7 and
+*Consequences* have been rewritten to this design. This ruling does not accept ADR 0100 or
+authorise implementation.
 
 | Proposal | Recommendation | Reason given |
 |---|---|---|
@@ -1251,10 +1169,10 @@ Rejected, as in ADR 0049: the everyday operator would forget, and the panel woul
   It is the first log-schema change since schema 19.
 - **New API and events:**
   - read the current session and its members; list sessions (scope per O3);
-  - New, Continue and pick-up, each with an expected generation and a request id, plus their
-    durable applied-request records;
-  - `archive_serve_epoch` in config, incremented in the promotion write, and `default_epoch` in the
-    archive file, incremented in the default pointer's write;
+  - New, Continue and pick-up, each with an expected generation (no request ids or recorded
+    results; S2);
+  - `default_epoch` in the archive file, incremented in the default pointer's write (no archive
+    serve epoch; S3);
   - `operating_session.*` events;
   - `docs/v2-design/api-endpoints.md` changes with them.
 - **ADR 0094 is superseded in part** when this is accepted: per-archive Session lists stay, but
