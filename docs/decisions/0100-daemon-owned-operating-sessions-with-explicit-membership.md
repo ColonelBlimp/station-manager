@@ -407,8 +407,37 @@ current state.
   - the controls New session and Continue or pick-up (§8).
 
   The per-tab `sessionStorage` lists retire.
-- **Map:** in session mode it plots the current session's members. Whether the last-N-hours window
-  remains as a clearly labelled alternative is the Map decision in inbox item 5, not this ADR.
+- **Map — operator ruling (2026-11-07), following the reviewer's recommendation; inbox item 5;
+  this ADR remains Proposed:**
+  - **Operator-observable outcome:** a newly opened Map and a Session panel show the same session
+    identity and underlying member UUIDs, before map filters and coordinate availability. A new
+    window never creates an empty private session. The nearest confusable outcome is a Map that
+    still shows recent contacts excluded from the panel's session.
+  - **Shared display rule (also amends the panel presentation above and §6):** show the open session;
+    when none is open, retain the latest eligible closed session in the effective default logbook,
+    clearly labelled Closed, alongside "No session in progress". If neither exists, both views are
+    empty. This is read-only selection from the daemon's session records, not a second session
+    state. Showing a closed session never resumes it, suspends expiry, or changes §7's FT8 check
+    when no session is open. New session replaces the displayed membership in both views with an
+    empty session; pick-up follows the chosen session. Past-session browsing remains O3.
+  - **First slice:** the Map follows this session automatically. Remove the last-N-hours selector
+    from this view; do not apply a hidden time cutoff or inherit `sm-map-window`. Imports and
+    unrelated contacts remain outside it even when their times fall within the session's intervals.
+    An edit of a member's QSO time does not remove it. Deleted members are excluded as in §2.
+  - **Presentation:** show the session's start and open/closed state. Retain band filtering and
+    distinguish the session's member count from the plotted and filtered counts; a missing location
+    does not remove membership. An empty session, a load failure and partial coverage have distinct
+    presentations. A failed read never falls back to a recent-hours query.
+  - **Several windows and recovery:** New, pick-up, gap closure, archive/default-logbook changes,
+    QSO edits and deletion update both views. A reconnect or return to a visible window re-reads
+    authoritative state and members. A late read from a previous archive or displayed session cannot
+    overwrite the new view. Opening or refreshing the Map is passive and never counts as activity.
+  - **Alternatives weighed:** keeping only the existing time window and documenting the difference
+    leaves the operating surprise intact. Keeping an explicit Recent contacts alternative preserves
+    historical viewing but adds another scope to choose and explain; defer it until requested.
+    Emptying both views immediately at gap closure is consistent, but removes the just-finished
+    sitting from view; retaining the labelled closed session is recommended. None of these choices
+    revives ADR 0049's stamped `qso.session_id` design; membership remains the association in §2.
 - **Session email and export:**
   - the request names the session `id` and the selected member UUIDs, and the daemon refuses
     non-members. The UUIDs are still listed so that a not-yet-emailed delta can be selected;
