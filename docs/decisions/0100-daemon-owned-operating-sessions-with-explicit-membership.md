@@ -1044,11 +1044,11 @@ Continue and pick-up; the shared events; the opening question with local Not now
 | S3 | Archive serve epoch (config counter, per-archive value) and its outcome table (§4) | after A→B→A, QSOs logged on return to A join A's session from before the switch | **Archive switching observed** (alpha.5 acceptance B2-10/11); the merge itself is **hypothetical** (not built) | a config field, an archive field, start-node evaluation, the activation/default-change outcome table, the O7 restore limitation, tests across crash points | **Rely on the gap.** Sessions are already per archive and B's QSOs are in B's file, so nothing crosses archives. **Accepted:** returning to A **within the gap** continues A's session; after the gap it is closed as usual. O7 disappears with it. Changes behaviour from the original design brief, so it needs the operator | **Propose dropping** (agent; the reviewer asked for cuts only with concrete replacement behaviour, which this states) |
 | S4 | Default epoch in the archive file (§4) | X→Y→X default changes within the gap leave the old session open | **Default changes observed** (W-0024 acceptance); X→Y→X within the gap **hypothetical** | an archive field written in the pointer transaction, Y→Y preservation, crash pairing, tests | **Compare the open session's logbook with the effective default** at each evaluation; a mismatch closes it (`logbook_changed`). X→Y is caught by **any** evaluation while Y is the default (a QSO, a control, a read, the timer). **Accepted:** only an X→Y→X sequence with **no evaluation while Y was the default** escapes detection and continues X's session; otherwise X's session is closed and returning to X does not continue it | **Propose replacing** (agent) |
 | S5 | P3 R2's effective-policy boundary, pending boundaries and their replay | a gap change crossing a deadline, a superseded short value, or a failed boundary transaction lets an overdue session survive | **Hypothetical:** the feature is not built | an ordered in-memory list, replay before every evaluation, rollback semantics, the restart exception, tests | **A saved gap applies from the next evaluation**, which runs immediately after the save under the new value only, and reschedules the timer. **Accepted:** a session already overdue under the old value, if the timer has not yet closed it, survives a lengthening; a short value superseded before any evaluation may never close a session. The 60 s retry after a failed evaluation stays | **Propose simplifying.** Reopens the operator's P3 R2 ruling (reviewer agrees it should be reconsidered) |
-| S6 | P1 credit bound to the session at acceptance (generation captured, credit dropped if it moved) | a delayed activity write extends a replacement session | **Hypothetical** | a capture step and a comparison | **Not yet established.** Running capture and write inside one HTTP request does not stop another request or the timer from changing sessions between the FT8 controller's acceptance and the session transaction. A simplification needs a stated serialization boundary between acceptance and the credit, and must keep the rule that a failed activity write never refuses an accepted FT8 action | **Unresolved** (reviewer correction 2026-11-07); P1's capture-and-compare stays until a replacement is specified |
+| S6 | P1 credit bound to the session at acceptance (generation captured, credit dropped if it moved) | a delayed activity write extends a replacement session | **Hypothetical** | a capture step and a comparison | **Not yet established.** Running capture and write inside one HTTP request does not stop another request or the timer from changing sessions between the FT8 controller's acceptance and the session transaction. A simplification needs a stated serialization boundary between acceptance and the credit, and must keep the rule that a failed activity write never refuses an accepted FT8 action | **Deferred** (reviewer, 2026-11-07); P1's capture-and-compare stays as ruled; not needed to adopt S2–S5 |
 | S7 | Contest-end check in every evaluation (§3, P2) | a late contest-end timer lets a session be judged under the suspension after the contest ended | **Power cut during a contest observed** (2026-10-31); a late timer is **hypothetical** | one comparison per evaluation | none simpler that keeps P2's guarantee | **Keep provisionally** (reviewer) |
 | S8 | FT8 bypass recheck at use (§7, O5) | a station answered after a session change made it ineligible | **Hypothetical** in this form; the underlying hold problem was **observed** (12 m pile-up, 2026-11-06) | one query at use | none safer | **Keep provisionally** (reviewer) |
 
-**Net effect if S2–S5 are adopted** (S6 is unresolved): no applied-request table; no config or archive epoch fields;
+**Net effect if S2–S5 are adopted** (S6 deferred): no applied-request table; no config or archive epoch fields;
 no activation outcome table; no pending-boundary list; no O7 limitation. Departure detection
 becomes one comparison (the open session's logbook against the effective default). What remains is
 the session history, the membership link, the generation guard, the gap timer with a simple
@@ -1058,9 +1058,22 @@ evaluation rule, the contest check and the FT8 recheck.
 
 **Operator decisions needed:** S2 (drop request records), S3 (rely on the gap for archive
 returns), S4 (logbook comparison instead of the default epoch), S5 (simple gap-change rule;
-reopens P3 R2). S6 is unresolved until its serialization boundary is specified. S1, S7 and S8 stay unless the operator directs
-otherwise. After the rulings, the affected sections (§3, §4, §5, P1, P3, O7, *Consequences*) are
+reopens P3 R2). S6 is deferred (P1 stays as ruled) and does not gate S2–S5. S1, S7 and S8 stay
+unless the operator directs otherwise. After the rulings, the affected sections (§3, §4, §5, P1, P3, O7, *Consequences*) are
 rewritten to the chosen design, so the accepted ADR describes one design, not its history.
+
+**Reviewer recommendation (2026-11-07), pending the operator's ruling: "A with S2, S3 and
+S5".** This recommendation does not accept ADR 0100 or authorise implementation.
+
+| Proposal | Recommendation | Reason given |
+|---|---|---|
+| S2 | Accept | The generation guard prevents duplicate application; returning the current state after a lost response is sufficient, and durable result replay adds little value. |
+| S3 | Accept | Continuing an archive's sitting within the gap is understandable; membership stays within its archive, and substantial cross-file recovery machinery goes. O7 goes with it (it concerned the config serve epoch). |
+| S4 | **Reject as written; retain `default_epoch`** | Whether a read or timer ran between two switches is invisible to the operator; making continuity depend on that incidental check gives the same actions different outcomes. The epoch keeps closure on a default-logbook change deterministic. |
+| S5 | Accept | The latest saved gap applies at the next evaluation. Accepted explicitly: lengthening can preserve an overdue but still-open session, and a superseded value may never cause a closure. Already-closed sessions stay closed. |
+
+S1, S7, S8 and P1 are kept; S6 stays deferred. The result is called **A with S2, S3 and S5**, not
+A′ as defined below (A′ includes S4).
 
 ## Model comparison (2026-11-07): stored membership versus derived membership
 
@@ -1069,7 +1082,7 @@ model is chosen. ADR 0100 remains Proposed. Query cost is **unmeasured** through
 
 Three models are compared:
 - **A: ADR 0100 as ruled** (stored sessions and membership, the full mechanisms).
-- **A′: A with the simplification proposals S2–S5** (above; S6 is unresolved, so P1 stays as ruled).
+- **A′: A with the simplification proposals S2–S5** (above; S6 is deferred, so P1 stays as ruled).
 - **D: derived membership.** Sessions are computed at read time from live-logged QSOs, and only
   the operator's decisions are stored.
 
@@ -1159,16 +1172,15 @@ Three models are compared:
   press guard, or a display timer. To keep P1, U3 and stable history it needs three more tables,
   and its new hard cases (re-segmentation, bridging, query cost) are of a different kind, not fewer.
 - A′ removes the epochs, the replay table, the pending boundaries and O7, while keeping stable
-  session identity, fixed history and the existing rulings for P2 and O4–O8. It is **not yet fully
-  specified**: S6 is unresolved, so P1's credit mechanism stays as ruled until a serialization
-  boundary is defined.
+  session identity, fixed history and the existing rulings for P1, P2 and O4–O8. **A′ means
+  S2–S5 with P1 retained as ruled.** S6 is deferred and is not needed to choose A′.
 - **The behaviour differences:**
   - **Archive return within the gap:** A closes the old session; A′ and D continue it.
   - **Default X→Y→X within the gap:** A and A′ close X's session (A′ except when no evaluation ran
     while Y was the default); D continues it.
   - **A superseded gap value:** A′ and D may fail to close a session under it; A never does.
   - **Gap lengthened:** D re-segments past sessions; A and A′ do not.
-- If the A′ behaviours are acceptable and S6 can be specified, A′ is the smaller step.
+- If the A′ behaviours are acceptable, A′ is the smaller step.
 
 ## Alternatives considered
 
