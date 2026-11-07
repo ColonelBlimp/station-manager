@@ -74,6 +74,7 @@ Open one workstream per active focus.
   mode (W-0011 ruling), scoring, export and different-call operation, its own ADR. **Design opened
   2026-10-28 as [W-0023](work/W-0023-contest-logging.md) — design only, no implementation authorised**;
   the reference case is the UK/EI DX Contest.
+- **W-0026 · INVESTIGATION — [UI host evaluation](work/W-0026-ui-host-evaluation.md).** Browser or desktop host; no decision.
 - **W-0014 · PARKED — [Deferred product workstreams](work/W-0014-deferred-product-workstreams.md).** Discovery inventory only; each member needs go-ahead and its own design/dossier before implementation.
 - **FT8 Field Day UI:** blocked until the relevant contest; not a 7Q8AC ship concern.
 - **Daemon-initiated FT8 sequencing:** out of scope. Sessions remain operator-initiated; an open event subscription is the presence signal, not proof that a person remains at the desk.
