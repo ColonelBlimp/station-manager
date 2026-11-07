@@ -824,10 +824,11 @@ default is **2 hours** (U2, 2026-11-06).
 
 ## Design proposal P4 (2026-11-07): FT8 eligibility, first start and the header clock (O4, O5, O6, O8)
 
-**Status: drafted by the agent to the reviewer's brief; pending the station operator's ruling.**
+**Status: ruled 2026-11-07 (operator: "Confirm").** Drafted by the agent to the reviewer's brief.
 **Reviewer approval (2026-11-07):** P4 as written, covering O4, O5, O6 and O8, and the deferral of
 O1–O3 with their stated revisit triggers, after three documentation corrections the reviewer
-verified. O7 stays a visible known limitation. Operator confirmation remains separate. This ADR remains Proposed. O1–O3 are proposed for deferral and O7 stays a
+verified. O7 stays a visible known limitation. **Operator ruling (2026-11-07):** P4 confirmed,
+including the O1–O3 deferrals. This ADR remains Proposed. O1–O3 are proposed for deferral and O7 stays a
 recorded limitation (below, under *Open questions*).
 
 ### O4. What counts as a qualifying QSO for the Ignore bypass (§7)
@@ -958,27 +959,27 @@ session that has none.
     explicit action** with a preview of the membership it would move. It is not part of pick-up.
     Whether to build it is left open. It is the correction tooling ADR 0049 feared, deferred.
   - U2 and U3 decide how often a split happens.
-  - **Proposed: deferred** (P4 brief, pending ruling). **Revisit when** a gap close splits a
+  - **Deferred (operator ruling 2026-11-07, P4).** **Revisit when** a gap close splits a
     sitting on air and the split membership matters to an output the operator uses (a session
     email or export, the Map, or FT8 eligibility).
 - **O2.** Explicit Add to session and Remove from session (for example from the Logbook view),
   for existing contacts and imports. Not proposed for the first slice.
-  - **Proposed: deferred.** **Revisit when** the operator needs an imported or pre-upgrade contact,
+  - **Deferred (operator ruling 2026-11-07, P4).** **Revisit when** the operator needs an imported or pre-upgrade contact,
     or a contact logged to the wrong session, in a session email, export or the Map.
 - **O3.** Resuming an older session than the latest, and browsing past sessions on the panel.
-  - **Proposed: deferred.** **Revisit when** the operator wants to resend or review an earlier
+  - **Deferred (operator ruling 2026-11-07, P4).** **Revisit when** the operator wants to resend or review an earlier
     session (its email, export or Map), or needs to resume a session other than the latest.
-- **O4.** The FT8 eligibility scope. **Drafted as P4 (O4) above, pending ruling.**
-- **O5.** The FT8 Ignore when no session is open (§7). **Drafted as P4 (O5) above, pending
-  ruling.**
-- **O6. The first start after this ships.** **Drafted as P4 (O6) above, pending ruling.**
+- **O4.** The FT8 eligibility scope. **Ruled 2026-11-07 (operator): P4 (O4) above.**
+- **O5.** The FT8 Ignore when no session is open (§7). **Ruled 2026-11-07 (operator): P4 (O5)
+  above.**
+- **O6. The first start after this ships.** **Ruled 2026-11-07 (operator): P4 (O6) above.**
 - **O7. Restoration with an equal epoch (§4):** how a supported restore invalidates session state.
   This is decided with the backup and restore design (inbox item 4). Until then it is a **known,
   recorded limitation**: restoring an older `config.json` can bring back an epoch equal to an
   archive's stored one, so that archive's open session wrongly **continues** and later QSOs join a
   session that should have closed (example in §4). New and pick-up correct only future logging.
 - **O8. The header session clock** (`frontend/app/src/lib/ui/SessionTimer.svelte`, rendered in
-  `lib/ui/Header.svelte`). **Drafted as P4 (O8) above, pending ruling.**
+  `lib/ui/Header.svelte`). **Ruled 2026-11-07 (operator): P4 (O8) above.**
   - **Today:** a third per-tab "session". Its start is the tab's first page load, kept in
     `sessionStorage` under `sm.session.startedAt`. It is separate from the Session panel's list,
     so a new window restarts it.
