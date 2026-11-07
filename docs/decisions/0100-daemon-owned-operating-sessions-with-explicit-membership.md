@@ -7,10 +7,11 @@ date: 2026-11-06
 
 # 0100 — Daemon-owned operating sessions with explicit membership
 
-**Proposed (2026-11-06). Design only. Nothing is authorised or built.** Three points are left
-for the operator to rule on: what counts as activity, the default gap, and the contest policy
-(*Unresolved*, below). The session-email mark fix (inbox item 1) is **independent** of this ADR
-and does not wait for it.
+**Proposed (2026-11-06). Design only. Nothing is authorised or built.** The operator has ruled
+on activity, the gap and the contest policy (U1–U3, P1–P3), the Map (§7), and O4, O5, O6 and O8
+(P4); O1–O3 are deferred with revisit triggers, and O7 is a recorded restoration limitation
+(*Open questions*, below). The session-email mark fix (inbox item 1) was independent of this ADR
+and has shipped (`c3826281`, W-0010 outcome 11).
 
 ## Context
 
@@ -120,9 +121,8 @@ The daemon owns the **operating session**:
   3. **If none is open now,** create a session: `opened_at = last_activity_at = now`, bound to the
      effective default logbook and the archive's current `default_epoch`. Advance the generation.
   4. Write the membership association.
-  5. Set `last_activity_at = max(last_activity_at, now)`. This assumes a QSO counts as activity,
-     which U1 must confirm; U1 may add further sources but cannot exclude a logged QSO without
-     revisiting this step.
+  5. Set `last_activity_at = max(last_activity_at, now)`: a logged live QSO is activity (U1, ruled;
+     the complete list of counted activity is P1).
 
   So a QSO can never join a session that had already expired. That holds even when no read or
   timer ran during the gap.
@@ -148,8 +148,7 @@ The daemon owns the **operating session**:
     ADR 0096).
   - **A deleted QSO** keeps its association row, but every consumer excludes it; an undelete brings
     it back.
-  - **Membership never moves on its own.** Explicit add or remove actions are an open question
-    (O2).
+  - **Membership never moves on its own.** Explicit add or remove actions are deferred (O2).
 - **Not derived:** membership is never computed from time windows. ADR 0049's "recomputable"
   advantage does not survive an import or edit that would silently move a QSO in or out.
 
@@ -167,8 +166,8 @@ The daemon owns the **operating session**:
   - when an archive or default-logbook change takes effect, at `last_activity_at` (§4).
 - **Activity baseline for operator actions:**
   - **New session:** `opened_at = last_activity_at = now`.
-  - **Pick-up:** reopening a session starts a new open interval, sets `last_activity_at = now`
-    whatever U1 decides, and sets the session's `default_epoch` to the archive's current one. The
+  - **Pick-up:** reopening a session starts a new open interval, sets `last_activity_at = now`,
+    and sets the session's `default_epoch` to the archive's current one. The
     resume is the baseline, so a resumed session's old timestamp cannot expire it again at once.
 - **Pick-up (the operator's "restart"):**
   - It resumes a closed session, which becomes the open one; **future** live QSOs are added to it.
@@ -243,7 +242,7 @@ diverge. Nothing is written when a change is merely requested.
     in one transaction.
   - **Inequality, not ordering:** the test is a difference, not an ordering. An epoch restored to a
     **different** older value (an old `config.json`) also closes the session.
-  - **Unresolved restoration limitation (O7):** a restore can bring back an **equal** epoch.
+  - **Known restoration limitation (O7):** a restore can bring back an **equal** epoch.
     - **Example:** A records 7; A→B promotes to 8; an older `config.json` is restored, naming A
       active at 7. A's stored value is also 7, so A's session silently continues although B was
       served in between.
@@ -362,6 +361,20 @@ diverge. Nothing is written when a change is merely requested.
      redraws to it.
   4. **Apply** the transition, advance the generation, and write the applied-request record (the
      request id, the action, the target, the result and the time), all in one transaction.
+- **A refusal is not a rollback** (acceptance review 2026-11-07). "Changes nothing" refers to the
+  **requested control** only. A close found by step 2's evaluation (departure or expiry) is
+  committed, advances the generation, and publishes its event after the commit, **even when step 3
+  or another refusal then rejects the control**. Only a database failure rolls the transaction
+  back, closes included; the evaluation is then repeated by the next one (§3, P3's retry).
+  - **Example:** a window shows S open at generation g. S's deadline passes and the timer has not
+    yet run. The operator presses New against g. Step 2 closes S by gap (g+1), step 3 finds g
+    stale and refuses New. S's close stands, its
+    event is published, and the window redraws at g+1, where the operator can act again.
+  - **Consequence the operator sees:** a control pressed on a session that had silently expired is
+    refused as stale once, and the window redraws to the closed state. This is deliberate: the
+    window's view was out of date. An exemption for closes found by the same transaction was
+    considered and not adopted (reviewer, 2026-11-07): the same press would otherwise succeed or fail
+    depending on whether the timer or the control discovered the expiry.
 - **Which outcomes are replayed, and which are evaluated afresh:**
   - **Replayed:** only **applied** outcomes. They are the only ones recorded, and a retry of an
     applied action returns its recorded result.
@@ -389,9 +402,10 @@ diverge. Nothing is written when a change is merely requested.
     delayed New at g is refused.
   - window A's New times out and is retried with the same request id: the first attempt had
     committed, so the retry returns the recorded result, and no second session is opened.
-- **The opening question** can be shown in several windows at once. The first answer wins. Each
-  other window closes its question when the resulting event arrives. A later answer is refused as
-  stale, so nothing changes twice.
+- **The opening question** can be shown in several windows at once. The first answer **that
+  changes state** (Continue or New) wins. Each other window closes its question when the resulting
+  event arrives. A later answer is refused as stale, so nothing changes twice. Not now is local to
+  its window (§6).
 - **Closing a window** never affects the session (the browser cannot ask on close; acceptance
   entry 21).
 
@@ -406,6 +420,22 @@ When a window with a Session panel loads:
   - The question names that session's start time and contact count. It offers Continue (pick-up of
     that session), New session, and Not now.
   - With Not now, the panel shows "No session in progress". The next live QSO opens a new session.
+  - **Not now across windows: local** (operator ruling 2026-11-07, "yes, local Not now",
+    following the reviewer's recommendation; raised in the acceptance review).
+    - **Ruled: local.** Not now dismisses the question **in that window only**. It sends
+      nothing, changes no session state and does not move the generation. Every other window keeps
+      its question, and a Continue or New from any of them still applies against the same
+      generation. The dismissing window then follows that result through the event, like any
+      other window.
+      - **Example:** windows A and B both ask at generation g. A chooses Not now; B then chooses
+        Continue at g, which applies (g+1), and A's panel shows the continued session.
+      - **Why:** Not now expresses "not from this window, not yet", not a station decision. Making
+        it station-wide needs a new recorded state ("declined") with its own reset rules, for one
+        answer that changes no session.
+    - **Rejected alternative: station-wide.** Not now becomes a daemon transition, recorded and advancing
+      the generation, so every window closes its question; a later Continue from B at g is refused
+      as stale and B must press Continue on the panel instead. It gives one answer for the
+      station, at the cost of a new state.
 - **no session is open and no eligible session exists:** no question. That covers a new archive,
   and the first opening after a default change to a logbook with no sessions. The latest closed
   session belonging to the previous default is **not** offered, because pick-up would refuse it.
@@ -462,8 +492,8 @@ current state.
   - the mark race (inbox item 1) is fixed on its own track.
 - **FT8 repeat hold after Ignore (inbox item 2):**
   - **The verdict moves to the daemon.** The deciding tab no longer supplies "no qualifying QSO in
-    my session". The daemon decides from the current session's membership. The scope stays the
-    recommended same call, band and mode or profile (the earlier draft's open choice, O4).
+    my session". The daemon decides from the current session's membership. The scope is the same
+    call, band, mode and submode (P4, O4, ruled).
   - **Stale-action protection remains.** An Ignore names `run_id`, a `hold_id`, and the held
     station's call, band and mode. The daemon applies it only if that run is live and that hold is
     still the open one for that station. Otherwise it refuses as stale and changes nothing. A
@@ -471,8 +501,8 @@ current state.
   - **Rechecked at use:** the single-use bypass is used only if, at the moment of the direct answer,
     the current session still holds no qualifying QSO. A New session or a pick-up between Ignore and
     use is therefore judged against the session in force when it matters.
-  - **With no session open,** "no QSO in the session" holds, and the Ignored caller is eligible.
-    Operator to confirm (O5).
+  - **With no session open,** "no QSO in the session" holds, and the Ignored caller is eligible
+    (P4, O5, ruled).
   - The rest of the draft (consumption, an unsuccessful direct answer, the first hold unchanged)
     carries over. Its deciding-tab and tab-lifecycle parts are replaced by this section.
 
@@ -481,7 +511,7 @@ current state.
 - **New session:** closes the current session and opens an empty one.
 - **Continue:** resumes the most recent **eligible** closed session (§3, §6). It is shown only when
   one exists.
-- **Choosing an older session to resume, or browsing past sessions:** open question O3.
+- **Choosing an older session to resume, or browsing past sessions:** deferred (O3).
 
 Every control obeys §5. Wording follows the no-unactionable-instructions ruling: a control appears
 only where it can act.
@@ -514,15 +544,13 @@ operator** in their own words: "yes, confirm U1 (b) and U3 (b)" (2026-11-06). Th
   deliberate operating actions**.
   - **Not activity:** passive decodes, an open window, and merely remaining armed. They never reset
     the clock.
-  - **Still to define:** the exact list of counted actions, written into the design before
-    implementation. **Ruled 2026-11-07 (operator): P1 below.**
+  - **The counted actions:** ruled 2026-11-07 (operator), P1 below.
   - **Unchanged:** §2, step 5 (a logged QSO is activity); New session and pick-up reset the
     baseline (§3).
 - **U2. The gap: configurable, default 2 hours (both operator rulings).**
-  - **Where (proposal):** a station-wide `config.json` setting, edited from Settings and documented
-    in `docs/v2-design/config.md` when it is built. One value applies to every window and archive.
-    The operator raised Settings and `config.json` as a question. **Ruled 2026-11-07 (operator): P3
-    R1 below.**
+  - **Where:** a station-wide `config.json` setting, edited from Settings and documented in
+    `docs/v2-design/config.md` when it is built. One value applies to every window and archive.
+    Ruled 2026-11-07 (operator), P3 R1 below.
   - **When a change takes effect (ruled 2026-11-07, operator: P3 R2 and R3 below, which refine
     this outline):** immediately, without a restart.
     - Saving a new gap **re-evaluates expiry** of the open session and **reschedules its timer**
@@ -542,10 +570,9 @@ operator** in their own words: "yes, confirm U1 (b) and U3 (b)" (2026-11-06). Th
     own start, end, restart and several-window semantics, is a prerequisite. It belongs with W-0023.
   - **While suspended:** the session ends only by New session, pick-up of another session, or an
     archive or logbook change (§4).
-  - **Open: the baseline when the contest state ends.** One choice is that an expiry already due is
-    applied at once; the other is that the contest's end counts as activity. Decide it with the
-    contest-active state's design. **Ruled 2026-11-07 (operator): an expiry already due is applied
-    at once, without inventing activity (P2 below).**
+  - **The baseline when the contest state ends:** an expiry already due is applied at once, without
+    inventing activity. Ruled 2026-11-07 (operator), P2 below; the rejected alternative (the end
+    counts as activity) is recorded there.
 
 ## Operator rulings P1 and P2 (2026-11-07): counted actions and the contest-end baseline
 
@@ -675,7 +702,7 @@ the window's end is activity, and neither moves `last_activity_at`.
     available by pick-up (with O1's limitation) or by logging within the gap, which keeps the session
     open under either rule.
 
-## Design proposal P3 (2026-11-07): the gap setting (completes U2)
+## Operator ruling P3 (2026-11-07): the gap setting (completes U2)
 
 **Status: ruled 2026-11-07 (operator): R1–R3 and R4. P3 is complete.** Drafted by the agent to the reviewer's
 brief. **Reviewer approval (2026-11-07): R1–R3 technically approved**, including R2's documented
@@ -822,14 +849,14 @@ default is **2 hours** (U2, 2026-11-06).
   For consistency, the same rule applies through Settings, the API and `config.json`: 15–1440
   minutes, in multiples of 15. A missing field still means 120 minutes (the ruled default).
 
-## Design proposal P4 (2026-11-07): FT8 eligibility, first start and the header clock (O4, O5, O6, O8)
+## Operator ruling P4 (2026-11-07): FT8 eligibility, first start and the header clock (O4, O5, O6, O8)
 
 **Status: ruled 2026-11-07 (operator: "Confirm").** Drafted by the agent to the reviewer's brief.
 **Reviewer approval (2026-11-07):** P4 as written, covering O4, O5, O6 and O8, and the deferral of
 O1–O3 with their stated revisit triggers, after three documentation corrections the reviewer
 verified. O7 stays a visible known limitation. **Operator ruling (2026-11-07):** P4 confirmed,
-including the O1–O3 deferrals. This ADR remains Proposed. O1–O3 are proposed for deferral and O7 stays a
-recorded limitation (below, under *Open questions*).
+including the O1–O3 deferrals. This ADR remains Proposed. O7 stays a recorded limitation (below,
+under *Open questions*).
 
 ### O4. What counts as a qualifying QSO for the Ignore bypass (§7)
 
@@ -948,7 +975,7 @@ session that has none.
     with contest operating time. Not recommended for the header; it could appear in the session's
     details later.
 
-## Open questions (operator or reviewer)
+## Open questions: dispositions
 
 - **O1. A split session.**
   - **The case:** a gap closes S0 during a break, and the next QSO opens S1. Picking up S0 then
@@ -983,13 +1010,9 @@ session that has none.
   - **Today:** a third per-tab "session". Its start is the tab's first page load, kept in
     `sessionStorage` under `sm.session.startedAt`. It is separate from the Session panel's list,
     so a new window restarts it.
-  - **Under this design:** its replacement **must use the shared daemon session**, so every window
-    shows the same clock. The open question is what it shows:
-    - time since the session's `opened_at`;
-    - time since the current open interval began (after a pick-up);
-    - or total open time across intervals.
-
-    It also needs a state for no session open.
+  - **Under this design:** its replacement uses the shared daemon session, so every window shows
+    the same clock. What it shows is ruled in P4 (O8): the elapsed time of the current open
+    interval, and "No session" when none is open; the alternatives are recorded there.
   - **Not affected:** operating-session duration is **distinct from contest operating time**. The
     contest timers in the same header (Last, Op, Elapsed) are counted per contest occurrence by the
     scorers' rules (`contestTimers.ts`) and stay as they are. The session clock must not be
