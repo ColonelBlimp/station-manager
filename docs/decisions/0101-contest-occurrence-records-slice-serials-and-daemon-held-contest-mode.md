@@ -193,8 +193,10 @@ This supersedes ADR 0096 §2 (option B) and §3 (T3).
     the window has opened yet (an early Start is restored too).
   - A contest that was **stopped**, or whose window has ended, **stays stopped**.
   - An archive switch carries no active contest into the new archive.
-- **ADR 0100's U3.** The gap suspension lasts exactly while this state is active. Whether ending it
-  immediately expires an operating session already past its gap stays an **ADR 0100 decision**.
+- **ADR 0100's U3.** The gap suspension lasts exactly while this state is active. Under
+  [ADR 0100 P2](0100-daemon-owned-operating-sessions-with-explicit-membership.md#p2-the-baseline-when-the-contest-state-ends-completes-u3s-open-choice)
+  (ruled 2026-11-07), ending it applies overdue session expiry immediately; neither Stop nor
+  automatic end counts as activity or moves `last_activity_at`.
 
 ### 5. Log requests are accepted as named
 
