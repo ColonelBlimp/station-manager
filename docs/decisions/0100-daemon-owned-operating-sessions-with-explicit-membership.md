@@ -521,10 +521,10 @@ operator** in their own words: "yes, confirm U1 (b) and U3 (b)" (2026-11-06). Th
 - **U2. The gap: configurable, default 2 hours (both operator rulings).**
   - **Where (proposal):** a station-wide `config.json` setting, edited from Settings and documented
     in `docs/v2-design/config.md` when it is built. One value applies to every window and archive.
-    The operator raised Settings and `config.json` as a question; it is not yet a settled ruling.
-    Drafted as P3 (R1) below, pending ruling.
-  - **When a change takes effect (agent proposal; drafted as P3, R2 and R3, below, pending
-    ruling):** immediately, without a restart.
+    The operator raised Settings and `config.json` as a question. **Ruled 2026-11-07 (operator): P3
+    R1 below.**
+  - **When a change takes effect (ruled 2026-11-07, operator: P3 R2 and R3 below, which refine
+    this outline):** immediately, without a restart.
     - Saving a new gap **re-evaluates expiry** of the open session and **reschedules its timer**
       (§3) to the new deadline, so shortening it never waits for the old deadline.
     - Lowering it so that `now ≥ last_activity_at + gap` closes the open session at once, at its
@@ -677,8 +677,11 @@ the window's end is activity, and neither moves `last_activity_at`.
 
 ## Design proposal P3 (2026-11-07): the gap setting (completes U2)
 
-**Status: recommendations drafted by the agent to the reviewer's brief, pending the station
-operator's ruling.** Already ruled and not reopened here: the gap is **configurable**, and its
+**Status: ruled 2026-11-07 (operator): R1–R3 and R4. P3 is complete.** Drafted by the agent to the reviewer's
+brief. **Reviewer approval (2026-11-07): R1–R3 technically approved**, including R2's documented
+restart exception and the serialization clarification. **Operator ruling (2026-11-07):** R1–R3
+"Confirmed", and R2's restart exception "Accept"; R4's values adopted from the reviewer's
+recommendation (below). This ADR remains Proposed. Already ruled and not reopened here: the gap is **configurable**, and its
 default is **2 hours** (U2, 2026-11-06).
 
 ### Recommendations
@@ -693,7 +696,7 @@ default is **2 hours** (U2, 2026-11-06).
   - A non-served archive has no evaluations while it is not served. At its next start, its first
     evaluation (§3) uses the value in force then.
 - **R2. A saved change applies immediately, without a restart** (revised 2026-11-07 for three
-  reviewer clarifications; still pending ruling).
+  reviewer clarifications; ruled 2026-11-07, operator).
   - It becomes config.md §11's second **explicit live side effect**, alongside `ft8.tx.max_repeats`
     (§11.5). **It needs a stronger guarantee than that precedent.** The FT8 apply path
     (`applyCommittedFt8MaxRepeats`, `internal/api/handler_config.go`) applies the latest committed
@@ -726,10 +729,14 @@ default is **2 hours** (U2, 2026-11-06).
     old value) is kept **pending**, in order with any later ones. Every later evaluation (the retry,
     the timer, a QSO, a read, the next change's boundary) first applies the pending boundaries'
     old-value checks at their own `T_eff`. A failure therefore delays a close but never skips it.
+  - **Serialization covers the handoff from successful persistence to the boundary transaction.**
+    Pending boundaries are resolved before any later evaluation changes session or contest state;
+    a failed replay rolls back that evaluation's database transaction. So a delayed check is never
+    applied against state that has already moved on.
   - **The documented exception: a restart with a boundary still pending.** Pending boundaries are
     held in memory; a restart discards them, and the first evaluation after the start uses the value
     in the file (§3, restart recovery). A session that only the discarded boundary would have closed
-    can then survive.
+    can then survive. **Accepted by the station operator (2026-11-07).**
   - **A failed evaluation never leaves the session unscheduled.** A failure (a boundary, the timer,
     or any other evaluation) must leave a future evaluation scheduled, independent of browser reads
     or operating activity. The timer is re-armed rather than consumed, so an open session can never
@@ -783,7 +790,7 @@ default is **2 hours** (U2, 2026-11-06).
     boundary is crossed only after a successful write. Expiry under the old policy continues, by
     any evaluation, as if the save had not been attempted.
 
-### Decisions needed from the operator (not invented here)
+### R4: validation limits and retry (ruled 2026-11-07)
 
 - **R4. Validation limits:**
   - **the minimum** gap;
@@ -799,6 +806,21 @@ default is **2 hours** (U2, 2026-11-06).
     consistency alone does not decide it: a consistent clamp would also be consistent.) The choice is
     the operator's, because it decides whether a hand edit can stop the daemon;
   - **the retry interval** after a failed evaluation (R2).
+
+  **Operator ruling (2026-11-07), adopting the reviewer's recommendation** ("yes, adopt them as my
+  ruling"):
+
+  | Decision | Recommendation | Reason given |
+  |---|---|---|
+  | Minimum gap | 15 minutes | Allows short sessions without making brief pauses too disruptive. |
+  | Maximum gap | 24 hours | Substantial flexibility; the contest suspension already handles longer contest runs. |
+  | Settings unit and step | minutes, in 15-minute increments | Simple choices; the default is 120 minutes. |
+  | "Never close by gap" | not offered initially | Keeps automatic expiry predictable; the contest suspension covers the established exception. |
+  | Invalid value at startup | refuse | The error names the field, the supplied value and the allowed values; the policy is never silently changed. |
+  | Failed-check retry | every 60 seconds | Avoids rapid retries while recovering automatically; ordinary evaluations may retry sooner. |
+
+  For consistency, the same rule applies through Settings, the API and `config.json`: 15–1440
+  minutes, in multiples of 15. A missing field still means 120 minutes (the ruled default).
 
 ## Open questions (operator or reviewer)
 
