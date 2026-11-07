@@ -822,6 +822,131 @@ default is **2 hours** (U2, 2026-11-06).
   For consistency, the same rule applies through Settings, the API and `config.json`: 15–1440
   minutes, in multiples of 15. A missing field still means 120 minutes (the ruled default).
 
+## Design proposal P4 (2026-11-07): FT8 eligibility, first start and the header clock (O4, O5, O6, O8)
+
+**Status: drafted by the agent to the reviewer's brief; pending the station operator's ruling.**
+**Reviewer approval (2026-11-07):** P4 as written, covering O4, O5, O6 and O8, and the deferral of
+O1–O3 with their stated revisit triggers, after three documentation corrections the reviewer
+verified. O7 stays a visible known limitation. Operator confirmation remains separate. This ADR remains Proposed. O1–O3 are proposed for deferral and O7 stays a
+recorded limitation (below, under *Open questions*).
+
+### O4. What counts as a qualifying QSO for the Ignore bypass (§7)
+
+**Recommendation: same call, same band, same mode and submode, among the open session's members.**
+A QSO qualifies when **all** of these hold:
+- it is a **member of the currently open session** (§2), and not deleted;
+- its `CALL` equals the held station's call **exactly**, as stored (upper case, whole call):
+  `6W/IK2HKT` and `IK2HKT` are different calls;
+- its `BAND` equals the band of the run's **pinned dial** (`dial_freq_mhz`, the band the contact
+  would be logged on), not live rig state;
+- its ADIF `MODE` equals the run profile's mode, and its `SUBMODE`, with absent read as empty,
+  equals the profile's submode. Today that is FT8 = `MODE FT8`, no submode; FT4 = `MODE MFSK`,
+  `SUBMODE FT4` (`internal/ft8/profile.go`). So an FT8 QSO never qualifies for an FT4 run, or the
+  reverse.
+
+**Unchanged: the first worked-before hold.** It still asks the whole logbook
+(`internal/ft8/repeathold.go`, `IsContestDuplicateByLogbookIDWithContext` in
+`internal/database/sqlite/api_context.go`), with its existing predicate: same call, band and
+`MODE`; `SUBMODE` is compared **only when the run's submode is non-empty**. So an FT4 run
+(`SUBMODE FT4`) matches only `SUBMODE FT4`, while an FT8 run (empty submode) matches any `MODE FT8`
+row whatever its submode. It still holds, never auto-skips and never auto-answers. **The session
+predicate above differs deliberately:** it requires `SUBMODE` equality **including empty**, so an
+FT8 run counts only `MODE FT8` members with no submode. This record does not change the first
+hold's predicate. Only what happens **after Ignore** reads
+the session. The hold's wording must not suggest "this session" (inbox ruling 2026-11-06).
+
+- **Examples:**
+  - JE1TRF worked on 12 m FT8 in July, not today. Held (logbook-wide); Ignore; no qualifying QSO
+    in today's session, so the bypass is granted and its next call is answered directly, once.
+  - JE1TRF worked on 12 m FT8 an hour ago **in this session**. Held; Ignore; a qualifying QSO
+    exists, so it is ignored for the rest of the run, as today.
+  - JE1TRF worked on 12 m **FT4** in this session, now held on a 12 m **FT8** run: FT4 does not
+    qualify, so the bypass is granted.
+  - JE1TRF worked on **15 m** FT8 in this session, held on 12 m FT8: not qualifying; bypass
+    granted.
+- **Alternatives:**
+  - **Any QSO with the call in the session.** Simpler to state, but a station worked on another
+    band (a new band slot for the operator) could then never be answered after an Ignore. Not
+    recommended.
+  - **Mode only, ignoring submode.** FT8 and FT4 already differ by mode (`FT8` versus `MFSK`), so
+    this would not merge them. But several submodes share `MODE MFSK`: FT4 is one
+    (`internal/ft8/profile.go`), and so are Q65 and FST4 (`internal/enums/modes/adif-modes.json`). Ignoring
+    submode would let an `MFSK`/`Q65` member count against an `MFSK`/`FT4` run, a contact in a
+    different mode. Not recommended.
+
+### O5. Ignore when no session is open
+
+**Recommendation: allow the bypass.** With no session open, the session has no qualifying QSO,
+so an Ignore grants the explicit, single-use direct-answer bypass (§7), exactly as with an open
+session that has none.
+- **Rechecked at use.** When the station next calls and would be answered, the daemon checks the
+  session **open at that moment**. If a session has opened since (by another live QSO, New, or
+  pick-up) and it now holds a qualifying QSO, the bypass is void and the station is treated as
+  ignored for the run. Otherwise the station is answered directly, once.
+- **Ignore is not activity and never opens a session** (P1). The direct answer it enables is the
+  run's own automatic continuation, so it does not count either; the completed QSO counts, and
+  opens a session if none is open (§2).
+- **Examples:**
+  - No session open (the last closed by gap). JE1TRF held, Ignore. Its next call is answered
+    directly; when that QSO is logged it opens a new session.
+  - No session open. JE1TRF held, Ignore. Before it calls again, another station's QSO opens a new
+    session; the recheck finds no qualifying QSO with JE1TRF there, so it is answered directly.
+  - No session open. JE1TRF held, Ignore. Before it calls again, the operator picks up the morning
+    session, which already holds a 12 m FT8 QSO with JE1TRF: the bypass is void; JE1TRF stays
+    ignored for the run.
+- **Alternative: refuse the bypass with no session** (ignored for the run, as today). It is
+  safer against repeats, but it brings back the 2026-11-06 surprise exactly when a session has
+  just closed by gap, the moment it is least visible. Not recommended.
+
+### O6. The first start after this ships
+
+**Recommendation: start with an empty daemon session history.**
+- Initially, no session exists. No opening question is shown (§6: no eligible closed session
+  exists); the panel offers New session, and the first live QSO otherwise opens one
+  automatically.
+- **Not imported:** the tabs' `sessionStorage` lists (they are tab-supplied and per tab, so they
+  cannot be trusted as membership), and **no membership is inferred** from existing QSOs (§2,
+  "Never joins: existing contacts").
+- **What the operator is told, once, on the Session panel:** for example "Sessions are now shared
+  by every window. Earlier contacts are unchanged in the logbook; they are not part of a session."
+  The panel, the Map (§7) and the header clock show "No session" until the first session opens.
+- **Examples:** after the upgrade the panel is empty in every window although this morning's
+  contacts are in the Logbook; the first FT8 QSO opens a session, and every window shows it.
+- **Alternatives:**
+  - **Import the tabs' lists.** Rejected: several tabs hold different lists, and membership would
+    rest on browser data the daemon cannot verify.
+  - **Infer a session from today's QSOs by time** (for example, the last gap's worth). Rejected:
+    it is the derived membership §2 rejects; imports and edits would be swept in.
+
+### O8. The header session clock
+
+**Recommendation: the elapsed time of the current open interval.**
+- **Start:** a New session or an automatic open starts it at zero (`opened_at`); a pick-up starts
+  a new open interval (§3), so the clock restarts at zero.
+- **Stable across reloads and ordinary restarts:** the baseline is the daemon's stored interval
+  start, so reloading, opening another window, or a plain daemon restart does not reset it. Every
+  window shows the same value.
+- **With no session open:** the clock shows "No session" and stops ticking. It does not keep
+  counting a closed session.
+- **Distinct from contest operating time:** the contest timers (Last, Op, Elapsed;
+  `contestTimers.ts`) are unchanged and follow the scorers' rules. The session clock is not
+  labelled or used as operating time.
+- **Examples:**
+  - Session opened 06:00; at 07:30 every window shows 1:30:00.
+  - Last activity 06:10, so the session closes by gap at 08:10 (`closed_at` 06:10); the clock
+    shows "No session".
+  - Picked up at 09:00: the clock shows 0:00:00 and counts from 09:00.
+  - The daemon restarts at 07:45 while the session is open: the clock still shows the time since
+    06:00.
+- **Alternatives:**
+  - **Time since the session's original opening.** After a pick-up it would include the closed
+    hours (in the example, 3:00:00 at 09:00), which reads as continuous operating. Not
+    recommended.
+  - **Accumulated open time across intervals.** Accurate as "time open", but a pick-up resumes at a
+    non-zero value that matches neither wall-clock nor any visible start, and it invites confusion
+    with contest operating time. Not recommended for the header; it could appear in the session's
+    details later.
+
 ## Open questions (operator or reviewer)
 
 - **O1. A split session.**
@@ -833,20 +958,27 @@ default is **2 hours** (U2, 2026-11-06).
     explicit action** with a preview of the membership it would move. It is not part of pick-up.
     Whether to build it is left open. It is the correction tooling ADR 0049 feared, deferred.
   - U2 and U3 decide how often a split happens.
+  - **Proposed: deferred** (P4 brief, pending ruling). **Revisit when** a gap close splits a
+    sitting on air and the split membership matters to an output the operator uses (a session
+    email or export, the Map, or FT8 eligibility).
 - **O2.** Explicit Add to session and Remove from session (for example from the Logbook view),
   for existing contacts and imports. Not proposed for the first slice.
+  - **Proposed: deferred.** **Revisit when** the operator needs an imported or pre-upgrade contact,
+    or a contact logged to the wrong session, in a session email, export or the Map.
 - **O3.** Resuming an older session than the latest, and browsing past sessions on the panel.
-- **O4.** The FT8 eligibility scope: same call, band and mode (recommended), or any QSO with the
-  call.
-- **O5.** The FT8 Ignore when no session is open (§7).
-- **O6. The first start after this ships:** no session exists, and the first live QSO opens one.
-  Each open tab's `sessionStorage` list is not imported. That avoids trusting tab-supplied
-  membership, but the panel empties once at upgrade.
+  - **Proposed: deferred.** **Revisit when** the operator wants to resend or review an earlier
+    session (its email, export or Map), or needs to resume a session other than the latest.
+- **O4.** The FT8 eligibility scope. **Drafted as P4 (O4) above, pending ruling.**
+- **O5.** The FT8 Ignore when no session is open (§7). **Drafted as P4 (O5) above, pending
+  ruling.**
+- **O6. The first start after this ships.** **Drafted as P4 (O6) above, pending ruling.**
 - **O7. Restoration with an equal epoch (§4):** how a supported restore invalidates session state.
-  This is decided with the backup and restore design (inbox item 4). Until then it is a recorded
-  limitation.
+  This is decided with the backup and restore design (inbox item 4). Until then it is a **known,
+  recorded limitation**: restoring an older `config.json` can bring back an epoch equal to an
+  archive's stored one, so that archive's open session wrongly **continues** and later QSOs join a
+  session that should have closed (example in §4). New and pick-up correct only future logging.
 - **O8. The header session clock** (`frontend/app/src/lib/ui/SessionTimer.svelte`, rendered in
-  `lib/ui/Header.svelte`).
+  `lib/ui/Header.svelte`). **Drafted as P4 (O8) above, pending ruling.**
   - **Today:** a third per-tab "session". Its start is the tab's first page load, kept in
     `sessionStorage` under `sm.session.startedAt`. It is separate from the Session panel's list,
     so a new window restarts it.
