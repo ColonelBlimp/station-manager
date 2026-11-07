@@ -1018,6 +1018,158 @@ session that has none.
     scorers' rules (`contestTimers.ts`) and stay as they are. The session clock must not be
     presented as, or substitute for, contest operating time.
 
+## Simplification review (2026-11-07): proposals pending the operator's rulings
+
+**Why:** every mechanism adds persistent state, transaction ordering, recovery paths and
+interactions that future changes must preserve; maintenance cost grows faster than line count
+(operator, 2026-11-07: "complexity == higher maintenance"). Acceptance requires the guarantees to be
+**consistent** and **worth their maintenance**. This review was done before acceptance at the
+reviewer's direction; the ADR remains Proposed. Nothing here changes a ruling until the operator
+rules on it.
+
+**How each mechanism is judged:** the operator-visible failure it prevents; whether that failure
+has been **observed** (with the evidence) or is **hypothetical** (no likelihood is estimated);
+its ongoing cost (schema, migrations, recovery, tests, coupling); and the simpler alternative with
+the behaviour that would be explicitly accepted.
+
+**Kept as the feature's core, not reviewed for removal:** the archive-local session records **with
+history** (several sessions per archive, each with its open intervals, which pick-up needs); the
+membership association written in the QSO's transaction; the gap close and its timer; New,
+Continue and pick-up; the shared events; the opening question with local Not now.
+
+| # | Mechanism | Failure it prevents | Observed? | Ongoing cost | Simpler alternative, and the behaviour accepted | Recommendation |
+|---|---|---|---|---|---|---|
+| S1 | Generation guard on every control (§5) | a press from a window showing an older state changes the wrong session | **Observed context:** several windows are ordinary use (four-window check, inbox 2026-11-06) | one counter, one comparison per control | none adequate | **Keep** (reviewer and agent) |
+| S2 | Durable applied-request records and replay of the original result (§5) | a control retried after a lost response returns an error instead of its original success | **Hypothetical:** no lost-response retry has been observed | a table in the archive file, its migration, retention bound, replay and misuse rules, tests | **Drop.** A retry carries its original generation; after a successful first attempt it is refused as stale and the window redraws to the state the first attempt produced. It can never apply twice. **Client rule:** a retry keeps its original generation and never silently re-reads and resends. **Accepted:** the operator may see one stale refusal after a lost response, with the correct state shown | **Drop** (reviewer recommendation; operator to rule) |
+| S3 | Archive serve epoch (config counter, per-archive value) and its outcome table (§4) | after A→B→A, QSOs logged on return to A join A's session from before the switch | **Archive switching observed** (alpha.5 acceptance B2-10/11); the merge itself is **hypothetical** (not built) | a config field, an archive field, start-node evaluation, the activation/default-change outcome table, the O7 restore limitation, tests across crash points | **Rely on the gap.** Sessions are already per archive and B's QSOs are in B's file, so nothing crosses archives. **Accepted:** returning to A **within the gap** continues A's session; after the gap it is closed as usual. O7 disappears with it. Changes behaviour from the original design brief, so it needs the operator | **Propose dropping** (agent; the reviewer asked for cuts only with concrete replacement behaviour, which this states) |
+| S4 | Default epoch in the archive file (§4) | X→Y→X default changes within the gap leave the old session open | **Default changes observed** (W-0024 acceptance); X→Y→X within the gap **hypothetical** | an archive field written in the pointer transaction, Y→Y preservation, crash pairing, tests | **Compare the open session's logbook with the effective default** at each evaluation; a mismatch closes it (`logbook_changed`). X→Y is caught by **any** evaluation while Y is the default (a QSO, a control, a read, the timer). **Accepted:** only an X→Y→X sequence with **no evaluation while Y was the default** escapes detection and continues X's session; otherwise X's session is closed and returning to X does not continue it | **Propose replacing** (agent) |
+| S5 | P3 R2's effective-policy boundary, pending boundaries and their replay | a gap change crossing a deadline, a superseded short value, or a failed boundary transaction lets an overdue session survive | **Hypothetical:** the feature is not built | an ordered in-memory list, replay before every evaluation, rollback semantics, the restart exception, tests | **A saved gap applies from the next evaluation**, which runs immediately after the save under the new value only, and reschedules the timer. **Accepted:** a session already overdue under the old value, if the timer has not yet closed it, survives a lengthening; a short value superseded before any evaluation may never close a session. The 60 s retry after a failed evaluation stays | **Propose simplifying.** Reopens the operator's P3 R2 ruling (reviewer agrees it should be reconsidered) |
+| S6 | P1 credit bound to the session at acceptance (generation captured, credit dropped if it moved) | a delayed activity write extends a replacement session | **Hypothetical** | a capture step and a comparison | **Not yet established.** Running capture and write inside one HTTP request does not stop another request or the timer from changing sessions between the FT8 controller's acceptance and the session transaction. A simplification needs a stated serialization boundary between acceptance and the credit, and must keep the rule that a failed activity write never refuses an accepted FT8 action | **Unresolved** (reviewer correction 2026-11-07); P1's capture-and-compare stays until a replacement is specified |
+| S7 | Contest-end check in every evaluation (§3, P2) | a late contest-end timer lets a session be judged under the suspension after the contest ended | **Power cut during a contest observed** (2026-10-31); a late timer is **hypothetical** | one comparison per evaluation | none simpler that keeps P2's guarantee | **Keep provisionally** (reviewer) |
+| S8 | FT8 bypass recheck at use (§7, O5) | a station answered after a session change made it ineligible | **Hypothetical** in this form; the underlying hold problem was **observed** (12 m pile-up, 2026-11-06) | one query at use | none safer | **Keep provisionally** (reviewer) |
+
+**Net effect if S2–S5 are adopted** (S6 is unresolved): no applied-request table; no config or archive epoch fields;
+no activation outcome table; no pending-boundary list; no O7 limitation. Departure detection
+becomes one comparison (the open session's logbook against the effective default). What remains is
+the session history, the membership link, the generation guard, the gap timer with a simple
+evaluation rule, the contest check and the FT8 recheck.
+
+**A whole-design alternative (derived membership)** is assessed in the *Model comparison* below.
+
+**Operator decisions needed:** S2 (drop request records), S3 (rely on the gap for archive
+returns), S4 (logbook comparison instead of the default epoch), S5 (simple gap-change rule;
+reopens P3 R2). S6 is unresolved until its serialization boundary is specified. S1, S7 and S8 stay unless the operator directs
+otherwise. After the rulings, the affected sections (§3, §4, §5, P1, P3, O7, *Consequences*) are
+rewritten to the chosen design, so the accepted ADR describes one design, not its history.
+
+## Model comparison (2026-11-07): stored membership versus derived membership
+
+**Status: analysis for a choice, no rulings.** Written at the reviewer's direction before any
+model is chosen. ADR 0100 remains Proposed. Query cost is **unmeasured** throughout.
+
+Three models are compared:
+- **A: ADR 0100 as ruled** (stored sessions and membership, the full mechanisms).
+- **A′: A with the simplification proposals S2–S5** (above; S6 is unresolved, so P1 stays as ruled).
+- **D: derived membership.** Sessions are computed at read time from live-logged QSOs, and only
+  the operator's decisions are stored.
+
+### D defined precisely enough to compare
+
+- **Stored state:**
+  - a **live-origin marker** on each QSO, set by the live logging paths only. No such marker exists
+    today: `qso_upload.origin` (`0007_qso_upload_origin.up.sql`) is on upload rows, which exist only
+    for logbooks with an enabled destination, so it cannot serve. The marker is a new `qso`
+    column, so **D also changes the logging path and the schema**;
+  - a **boundary-event table** per archive: `(id, logbook, kind New|Continue, at)`;
+  - for P1 activity other than QSOs, an **activity-event table** (or P1 changes; see below);
+  - for the contest suspension, **contest-mode intervals** (or the suspension changes; see below).
+- **Time basis: logging time, not QSO time.** A QSO is placed by when it was **stored**
+  (`qso.created_at`, supplied on insert; edits change `modified_at`, not `created_at`; whether any
+  path rewrites `created_at` is **unverified**). Using `time_on` instead would let a time edit move
+  a QSO between sessions and would put a late-logged contact in an earlier session; logging time
+  avoids both and matches A's rule (§2: evaluated at `now`, never at `time_on`).
+- **The current session** of the effective default logbook: take that logbook's live-marked,
+  non-deleted QSOs and its boundary events in logging-time order. A session **breaks** at a New
+  event, and between two consecutive activity points **at least** the gap apart (the ruled
+  deadline, `now ≥ last_activity_at + gap`), unless suspended.
+  **Continue** at time c removes the break immediately before c: everything logged after c joins
+  the session that was latest before c.
+- **Which contacts Continue includes (example, gap 2 h):** QSOs at 09:00, 09:30 (session S0); quiet
+  until 13:00; Continue at 13:05; QSOs at 13:10, 13:20. The current session is
+  {09:00, 09:30, 13:10, 13:20}. Variant: a single QSO at 12:00 (2 h 30 m after 09:30, so it starts
+  S1 by itself); quiet again; Continue at 14:30; QSOs at 14:40, 14:50. Continue bridges to S1, the
+  latest, not to S0: {12:00, 14:40, 14:50}. S0 stays separate.
+  This matches A, where pick-up resumes the latest eligible session.
+
+### Each claimed saving, qualified
+
+| Claim | Qualification |
+|---|---|
+| Nothing touches logging | **False.** D needs the new live-origin column, written by the live paths, and its migration. It removes the membership **row** write, not the logging-path change. |
+| Two New presses are harmless | **Not without a guard.** Unguarded: window A presses New at 10:00; a QSO is logged at 10:01; window B's New lands at 10:02, and the 10:01 QSO becomes a session of its own. A delayed retry of a New that had succeeded at 10:00, arriving at 10:20 after five QSOs, would split them off. D therefore needs an **expected latest boundary** on each press, refused if a boundary was added since the window's view: a smaller form of S1. **By S2's reasoning, that guard alone suffices:** B's press and the unchanged retry both carry the boundary they saw and are refused as stale after the first success; a retry whose first attempt never committed applies when it lands, leaving the QSOs before it in the old session. Request ids with recorded results are needed only if replaying the original success remains a requirement. |
+| Archive and default counters disappear | **Only by changing the closure rule.** Filtering by logbook shows the right sitting, but returning to the previous archive or default within the gap **resumes** its old sitting, because nothing breaks it. That is the behaviour A′ proposes in S3 and S4; D gets it automatically and cannot easily avoid it. Keeping A's rule in D needs a recorded boundary on each change, which brings the evidence problem of §4 back. |
+| Contest windows replace contest-end checks | **Only by changing the suspension.** The declared window differs from when contest mode was actually on (an early Start, a Stop, a restart). Preserving U3 needs the contest-mode interval history (ADR 0101's state, logged as intervals). The simpler substitute, "gaps between two QSOs of the same occurrence do not break", is a different rule and needs the operator. |
+| Timers disappear | **The persisted close disappears, a timer does not.** An idle, already-open panel, Map and clock must still change to Closed at the deadline. Each client can compute the deadline (last activity + gap) and re-read then, or the daemon emits an event at the deadline. Either way there is a timer; it just persists nothing. |
+| Gap changes become immediate | **Yes, and history changes with them.** Lengthening the gap re-segments the past: two sittings separated by 2 h 30 m merge under a 3 h gap, and a session shown Closed can read as open again. Shortening splits past sessions. Avoiding that needs the gap recorded per period, which is stored state again. **Accepted only if** the operator agrees that past session boundaries follow the current gap. |
+| No stable session identity | **New cost, not a saving.** Email and export name a session (§7); a derived session has no stored id, and its membership can change with the gap. An id such as its first boundary or first member can serve for display but is not stable under re-segmentation. |
+
+### Operator-visible comparison
+
+| Situation | A (as ruled) | A′ (S2–S5) | D (derived) |
+|---|---|---|---|
+| Lost response, retry of New | original success returned | one stale refusal, correct state shown | one stale refusal, correct state shown (boundary guard) |
+| A→B→A within the gap | A's session closed on return | A's session continues | A's session continues |
+| Default X→Y→X within the gap | X's session closed | X's session closed if any evaluation ran while Y was the default; continues only if none did | X's session continues |
+| Gap lengthened from 2 h to 3 h | open session extended; closed ones stay closed | as A, without the old-value check | past sittings may merge; a closed session may reopen |
+| Time edit on a member | stays a member | stays a member | stays (logging time is unaffected) |
+| Unanswered CQ run, 2 h | session stays open (P1) | as A | closes, unless activity events are stored |
+| Contest Stop early, then QSOs | P2 expiry at Stop | as A | depends on interval history or a changed rule |
+| Idle panel at the deadline | shows Closed (timer event) | as A | shows Closed only with a client or daemon timer |
+
+### Code, persistent state and maintenance
+
+| | A | A′ | D |
+|---|---|---|---|
+| New schema | session table, interval list, membership table, applied-request table, archive epoch fields, config epoch | session table, interval list, membership table | live-origin column, boundary-event table, activity-event table (if P1 kept), contest-interval table (if U3 kept) |
+| Logging transaction | membership write + session evaluation | the same | live-origin column write |
+| Recovery paths | epochs, outcome table, pending boundaries, replay | gap timer only | none persisted; deadline timer for display |
+| Hard cases to test | many (crash points, epochs, boundaries, replay) | fewer (generation, timer, contest check) | segmentation edge cases, re-segmentation after gap change, Continue bridging, query performance |
+| Query cost | membership lookup | the same | segmentation per read: **unmeasured** |
+
+### O4–O8 under D (none carries over automatically)
+
+- **O4 (qualifying QSO):** **preserved** in rule; it runs against the derived current session.
+  Its cost per FT8 answer is **unmeasured**.
+- **O5 (Ignore with no session):** **changed in meaning.** "No session open" becomes "the last
+  activity is older than the gap", a computed state; the rule itself can be kept.
+- **O6 (first start):** **preserved.** Existing QSOs have no live marker and never join.
+- **O7 (restore limitation):** **disappears**, because there are no epochs; this is the closure-rule
+  change above.
+- **O8 (header clock):** **preserved** in rule (the current open interval: since the latest New,
+  Continue, or first QSO after a break), but "open" is computed, so the clock needs the display
+  deadline timer.
+- **Also affected:** P1 (deliberate FT8 actions need an activity-event table, or only QSOs count:
+  **changed**); P2 and U3 (need contest intervals, or a changed rule: **unresolved**); P3 (largely
+  moot, at the cost of re-segmenting history: **changed**); §5 (a smaller guard is still needed:
+  **changed**); §7 email and export (**changed**: no stable session id).
+
+### What the comparison shows (agent reading, for the operator's choice)
+
+- D removes the stored membership and the persisted close, but **not** a logging-path change, a
+  press guard, or a display timer. To keep P1, U3 and stable history it needs three more tables,
+  and its new hard cases (re-segmentation, bridging, query cost) are of a different kind, not fewer.
+- A′ removes the epochs, the replay table, the pending boundaries and O7, while keeping stable
+  session identity, fixed history and the existing rulings for P2 and O4–O8. It is **not yet fully
+  specified**: S6 is unresolved, so P1's credit mechanism stays as ruled until a serialization
+  boundary is defined.
+- **The behaviour differences:**
+  - **Archive return within the gap:** A closes the old session; A′ and D continue it.
+  - **Default X→Y→X within the gap:** A and A′ close X's session (A′ except when no evaluation ran
+    while Y was the default); D continues it.
+  - **A superseded gap value:** A′ and D may fail to close a session under it; A never does.
+  - **Gap lengthened:** D re-segments past sessions; A and A′ do not.
+- If the A′ behaviours are acceptable and S6 can be specified, A′ is the smaller step.
+
 ## Alternatives considered
 
 ### A. Keep the per-tab session and share it between windows (BroadcastChannel or localStorage)
