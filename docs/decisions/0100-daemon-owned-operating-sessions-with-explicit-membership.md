@@ -522,7 +522,9 @@ operator** in their own words: "yes, confirm U1 (b) and U3 (b)" (2026-11-06). Th
   - **Where (proposal):** a station-wide `config.json` setting, edited from Settings and documented
     in `docs/v2-design/config.md` when it is built. One value applies to every window and archive.
     The operator raised Settings and `config.json` as a question; it is not yet a settled ruling.
-  - **When a change takes effect (agent proposal):** immediately, without a restart.
+    Drafted as P3 (R1) below, pending ruling.
+  - **When a change takes effect (agent proposal; drafted as P3, R2 and R3, below, pending
+    ruling):** immediately, without a restart.
     - Saving a new gap **re-evaluates expiry** of the open session and **reschedules its timer**
       (§3) to the new deadline, so shortening it never waits for the old deadline.
     - Lowering it so that `now ≥ last_activity_at + gap` closes the open session at once, at its
@@ -672,6 +674,131 @@ the window's end is activity, and neither moves `last_activity_at`.
     earlier. Its benefit, not splitting a sitting that continues straight after the end, is
     available by pick-up (with O1's limitation) or by logging within the gap, which keeps the session
     open under either rule.
+
+## Design proposal P3 (2026-11-07): the gap setting (completes U2)
+
+**Status: recommendations drafted by the agent to the reviewer's brief, pending the station
+operator's ruling.** Already ruled and not reopened here: the gap is **configurable**, and its
+default is **2 hours** (U2, 2026-11-06).
+
+### Recommendations
+
+- **R1. One station-wide setting in `config.json`, edited from Settings.**
+  - One value for every window and every archive. It is station policy, like the FT8 repeat cap,
+    not archive data, so it is not stored in an archive file and does not travel with an archive.
+  - **Sparse on disk, served resolved** (config.md §4, "read/serve resolver"): absent means the
+    ruled default of 2 hours; `GET /v1/config` serves the effective value, so Settings shows it even
+    when the file does not hold it. The field's name and unit are an implementation detail, settled
+    with R4's granularity and documented in `docs/v2-design/config.md` when built.
+  - A non-served archive has no evaluations while it is not served. At its next start, its first
+    evaluation (§3) uses the value in force then.
+- **R2. A saved change applies immediately, without a restart** (revised 2026-11-07 for three
+  reviewer clarifications; still pending ruling).
+  - It becomes config.md §11's second **explicit live side effect**, alongside `ft8.tx.max_repeats`
+    (§11.5). **It needs a stronger guarantee than that precedent.** The FT8 apply path
+    (`applyCommittedFt8MaxRepeats`, `internal/api/handler_config.go`) applies the latest committed
+    snapshot, so a value saved and quickly replaced may never be applied. For the repeat cap that is
+    harmless; for sessions it could skip an irreversible close.
+  - **One effective-policy boundary per change** (revised again 2026-11-07: a check under the old
+    value made before persisting could miss a deadline falling during the write). A gap-change lock
+    serializes changes; the steps are:
+    1. **Validate** the candidate (pure, no session effect). A refusal changes nothing.
+    2. **Persist** it. A failed write leaves the old value in force; nothing else changes.
+    3. **Cross the boundary** at `T_eff`, the instant the write reported success. In **one**
+       transaction, against the current session state:
+       - evaluate under the **old** value as of `T_eff` (§3: departure, the contest end, then expiry
+         with `T_eff ≥ last_activity_at + gap_old`, the contest suspension honoured);
+       - make the new value effective;
+       - evaluate under the **new** value, and reschedule the timer to the new deadline, or to the
+         contest end while suspended.
+
+       Its closes advance the generation, and their events are published after the commit.
+  - **Every other evaluation observes the same ordering.** Logging, controls, reads and the timer
+    are serialized against the boundary transaction: each runs wholly before it, under the old
+    value, or wholly after it, under the new value with the old-value check already applied. None
+    sees the new value without the boundary.
+  - **Observable guarantee:** a session that was overdue under a value while that value was in force
+    is closed, at its `last_activity_at`, whatever the timer did and however soon a later save
+    lengthens the gap. A 30-minute save followed at once by a 3-hour save closes a session idle for
+    45 minutes.
+  - **If the boundary transaction fails** (a database error), the save is not refused or rolled
+    back, and the failure is logged. The new value is in effect, and the boundary (`T_eff` and the
+    old value) is kept **pending**, in order with any later ones. Every later evaluation (the retry,
+    the timer, a QSO, a read, the next change's boundary) first applies the pending boundaries'
+    old-value checks at their own `T_eff`. A failure therefore delays a close but never skips it.
+  - **The documented exception: a restart with a boundary still pending.** Pending boundaries are
+    held in memory; a restart discards them, and the first evaluation after the start uses the value
+    in the file (§3, restart recovery). A session that only the discarded boundary would have closed
+    can then survive.
+  - **A failed evaluation never leaves the session unscheduled.** A failure (a boundary, the timer,
+    or any other evaluation) must leave a future evaluation scheduled, independent of browser reads
+    or operating activity. The timer is re-armed rather than consumed, so an open session can never
+    stay open indefinitely because its one timer fired into an error. **The retry interval is an
+    operator decision** (R4) and is not invented here.
+  - A save reported `durability: "unconfirmed"` (PT-6) is in effect, so step 3 runs.
+  - **A settings save is never activity** (P1). It never moves `last_activity_at`.
+  - **Closed sessions stay closed.** Lengthening the gap never reopens a session that has already
+    closed; pick-up is the way back (§3).
+- **R3. The contest suspension still prevents a gap close.** While the contest-active state is on
+  and its end has not passed (§3, P2), a gap change is saved and takes effect, but no gap close
+  happens. When the suspension ends, the evaluation P2 requires uses the value in force then.
+
+### Examples (default 2 hours unless stated)
+
+- **Shortening past an existing deadline.** Last activity 14:00. At 15:00 the operator saves
+  30 minutes. `15:00 ≥ 14:30`, so the save's evaluation closes the session at once with `gap`,
+  `closed_at` 14:00. Every window shows it Closed (§7), and the next live QSO opens a new session.
+- **Shortening, not past the deadline.** Last activity 14:00. At 14:10 the operator saves
+  30 minutes. The session stays open, and its timer moves from 16:00 to 14:30.
+- **Lengthening before expiry.** Last activity 14:00. At 15:30 the operator saves 3 hours. The
+  session stays open, and its timer moves from 16:00 to 17:00. The save itself is not activity:
+  with nothing else, the session closes at 17:00, `closed_at` 14:00.
+- **Lengthening after a close.** The session closed by gap at 16:00 (`closed_at` 14:00). At 16:30
+  the operator saves 4 hours. It stays closed; pick-up resumes it for future logging.
+- **Lengthening after the old deadline, with the timer delayed.** Last activity 14:00, old deadline
+  16:00, but no close has been persisted yet (the timer is late). At 16:10 the operator saves
+  3 hours. The boundary transaction first evaluates under 2 hours as of `T_eff` (16:10):
+  `16:10 ≥ 16:00`, so the session closes, `closed_at` 14:00. It does not survive just because the
+  timer was late. During a contest suspension, the old-value check closes nothing.
+- **A deadline falling during the write.** Last activity 14:00, old deadline 16:00. The operator
+  saves 3 hours; validation runs at 15:59:59 and the write reports success at 16:00:01, before the
+  timer has run. `T_eff` is 16:00:01, and `16:00:01 ≥ 16:00`, so the old-value check in the boundary
+  closes the session, `closed_at` 14:00. Had the write finished at 15:59:58, the session would stay
+  open under 3 hours, with its timer moved to 17:00.
+- **Two saves in quick succession.** Last activity 14:00. At 14:45 the operator saves 30 minutes,
+  then at once 3 hours. The first change's boundary closes the session under the new 30 minutes
+  (`14:45 ≥ 14:30`) before the second change can be applied; the second finds no open session.
+- **Changing it during the contest suspension.** Contest 12:00Z Saturday to 12:00Z Sunday; last
+  contest QSO Saturday 17:20.
+  - At Saturday 21:00 the operator saves 1 hour. Nothing closes, and the timer stays at the
+    contest's end. At Sunday 12:00 the evaluation uses 1 hour and closes the session, `closed_at`
+    Saturday 17:20.
+  - Last contest QSO Saturday 17:50, gap saved as 1 hour at 17:55, Stop pressed at 18:00:
+    `18:00 < 18:50`, so the session stays open until 18:50 unless the operator logs or acts again.
+- **A rejected or failed save.** The configured gap remains unchanged. Any ordinary expiry already
+  committed under the old policy stands.
+  - **Refused at validation** (a value outside R4's limits): the PUT is refused before anything is
+    written or evaluated, so the save itself causes no session change.
+  - **Failed while persisting:** the save also makes no session change of its own, because the
+    boundary is crossed only after a successful write. Expiry under the old policy continues, by
+    any evaluation, as if the save had not been attempted.
+
+### Decisions needed from the operator (not invented here)
+
+- **R4. Validation limits:**
+  - **the minimum** gap;
+  - **the maximum** gap, if any;
+  - **the unit and granularity** Settings offers (for example whole minutes);
+  - **whether "never close by gap" is allowed.** If it is, only New session, pick-up and an archive
+    or logbook change close a session, and the Session panel would need to say so;
+  - **an out-of-range value found in `config.json` at start:** refused like any other validation
+    error (config.md §12: Load makes error findings fatal, so the daemon would not start), or clamped
+    to the nearest limit as the FT8 repeat cap is (config.md §4.3).
+    **The reviewer supports rejection**, with an actionable error naming the field and the allowed
+    range, because clamping would silently change the operator's declared policy. (API and startup
+    consistency alone does not decide it: a consistent clamp would also be consistent.) The choice is
+    the operator's, because it decides whether a hand edit can stop the daemon;
+  - **the retry interval** after a failed evaluation (R2).
 
 ## Open questions (operator or reviewer)
 
