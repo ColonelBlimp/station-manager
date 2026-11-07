@@ -183,11 +183,19 @@ This supersedes ADR 0096 §2 (option B) and §3 (T3).
     state ends and the draft lives on.
   - **The draft does not keep the state alive.** An abandoned draft keeps neither contest mode nor
     ADR 0100's session-gap suspension active.
-- **Stale-action protection.** Start and Stop carry the expected generation and a request id, with
-  the replay and refusal rules of ADR 0100 §5:
-  - a delayed Start or Stop from a window showing an older state is refused, and the window
-    redraws;
-  - after any change, every window refreshes its controls for **subsequent** drafts.
+- **Stale-action protection** (aligned 2026-11-07 with ADR 0100 §5 as simplified by its S2
+  ruling; there are no request ids or recorded results).
+  - Start and Stop carry the expected **contest-state generation**, a counter per archive that is
+    **distinct from ADR 0100's operating-session generation**.
+  - **Every contest-state transition advances it:** Start, Stop, the automatic end at the window's
+    end (including an end found by an evaluation after a late timer, ADR 0100 P2), and an end found
+    at restart.
+  - A Start or Stop whose expected generation is not current is refused as stale, changes nothing,
+    and returns the current state; the window redraws.
+  - **Retries:** a retry keeps the generation of the original press. If the first attempt
+    committed, the generation has moved and the retry is refused as stale, so it can never apply
+    twice; if the first attempt never committed, the retry may still apply.
+  - After any change, every window refreshes its controls for **subsequent** drafts.
 - **Restart.**
   - A contest that was **active** is restored if its window's end has not passed, whether or not
     the window has opened yet (an early Start is restored too).
@@ -297,14 +305,14 @@ Rejected (the 2026-11-06 ruling on question 4):
 
 - **A log-schema migration:**
   - an occurrence table, a membership association, and the active-contest state with its
-    generation and applied-request records, all in the archive file;
+    contest-state generation, all in the archive file;
   - `contest_serial_allocation` re-keyed onto occurrences;
   - the slice migration (§3).
 
   It brings the whole-tree test consequences of a head bump.
 - **New API:**
   - `GET /v1/contests`;
-  - contest Start and Stop, with expected generation and request id;
+  - contest Start and Stop, with the expected contest-state generation;
   - reading the active contest;
   - a contest-mode event on the shell stream;
   - log requests naming an occurrence by UUID;

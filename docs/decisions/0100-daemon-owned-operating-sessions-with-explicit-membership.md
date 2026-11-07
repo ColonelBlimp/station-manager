@@ -1137,8 +1137,11 @@ differs.
 
 ### D. One station-wide session across archives
 
-Rejected by the operator's ruling that changing the archive closes the session. Sessions describe
-QSOs, which live in an archive's file.
+Rejected: QSOs and session membership are archive-local. Each archive's file holds its own QSOs
+and its own sessions, so a session spanning archives would have members in several files, and an
+archive's session history would no longer travel with it. (The earlier rationale, that changing the
+archive closes the session, was withdrawn by the S3 ruling: archive returns now follow the gap,
+§4.)
 
 ### E. Ask "Close session?" when a window closes
 
