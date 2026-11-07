@@ -1026,6 +1026,22 @@ end-of-window and restart rules.
   - **Left to ADR 0100:** whether ending contest mode immediately expires an overdue operating
     session.
 
+**ADR 0101 U1–U3 — operator rulings (2026-11-07, the reviewer's recommendations, confirmed by the
+operator):**
+- **U1: an explicitly reviewed list of QSO UUIDs** for the slice migration. Candidates come from
+  the contest id and occurrence date and are reviewed against the original event log; no automatic
+  rule, because the fields also appear on imports and an allocated serial has no QSO link. Reviewed
+  membership survives a missing serial or an eligibility problem. All allocations are preserved,
+  including abandoned drafts'.
+- **U2: an explicit early Start is allowed** and is active immediately, with ADR 0100's gap
+  suspension from that Start and a persistent "event opens at …" message. Pre-opening QSOs stay
+  ineligible; a committed callsign consumes a real serial. After a restart, a started contest is
+  restored before its opening too, provided its end has not passed. This supersedes "restored only
+  if its window is still open" above. The opening performs no Start.
+- **U3: operator entries replace whole contests by contest id**, including editions and nested
+  lists; omitted fields take schema defaults, never embedded values. Occurrence records keep their
+  captured definitions.
+
 ## Verification boundary
 
 Design only. No code, migration, API or SPA change is authorised by this dossier. When implementation

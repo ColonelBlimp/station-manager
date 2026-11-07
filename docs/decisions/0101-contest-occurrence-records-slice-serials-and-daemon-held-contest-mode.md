@@ -13,6 +13,8 @@ This ADR amends [ADR 0096](0096-contest-occurrences-reserved-serials-and-submiss
 and does not rewrite it. It records:
 - the organiser-reply rulings of 2026-10-29;
 - the operator's rulings of 2026-11-06, which follow the reviewer's recommendations;
+- the operator's rulings of 2026-11-07 on the former U1–U3 (migration, early Start, catalogue
+  override), which also follow the reviewer's recommendations;
 - the design that follows from both.
 
 The rulings and their history are in [W-0023](../work/W-0023-contest-logging.md) (*Organiser-reply
@@ -144,8 +146,16 @@ This supersedes ADR 0096 §2 (option B) and §3 (T3).
   - re-keys `contest_serial_allocation` onto it;
   - associates the slice's members.
 
-  Which QSOs count as slice members is **Unresolved** (U1): the fields alone would also match a
-  round-tripped import.
+  **Members come from an explicitly reviewed list of QSO UUIDs** (ruled 2026-11-07):
+  - Candidates are generated from the contest id and occurrence date, then reviewed with the
+    operator against the original event log. The selected QSO UUIDs are recorded, scoped to their
+    archive and logbook. The documented 158 contest QSOs are a cross-check, not proof.
+  - No automatic rule is used. The fields can also appear on a round-tripped import, and a matching
+    allocated serial does not establish identity: the allocation table has no QSO link, and the
+    slice accepts typed serials it never allocated (`AllocateContestSerialWithContext`).
+  - Reviewed membership is kept even where a QSO has a missing serial or an eligibility problem;
+    those stay export-validation issues.
+  - **Every allocation is kept**, including those of abandoned drafts.
 
 ### 4. Contest mode: a daemon-held, shared state
 
@@ -155,7 +165,13 @@ This supersedes ADR 0096 §2 (option B) and §3 (T3).
 - **Start (explicit).**
   - The operator chooses an occurrence (§6) and presses Start.
   - Start is refused if the occurrence's window has already ended.
-  - **A contest is never started merely because its window opens.**
+  - **An early Start is allowed** (ruled 2026-11-07). The state is active immediately, so ADR
+    0100's gap suspension begins at that Start. Every window shows a persistent, shared message, for
+    example "Contest mode on — event opens at 12:00 UTC".
+    - QSOs completed before the opening stay ineligible under ruling C.
+    - Committing a callsign before the opening consumes a real serial, under the normal rule.
+  - **A contest is never started merely because its window opens.** An operator who stopped it
+    before the opening starts it again.
 - **Stop (explicit, early).** The operator can stop it at any time.
 - **Ending itself.** At the window's end the daemon ends the state, and new drafts stop being
   contest contacts.
@@ -173,7 +189,8 @@ This supersedes ADR 0096 §2 (option B) and §3 (T3).
     redraws;
   - after any change, every window refreshes its controls for **subsequent** drafts.
 - **Restart.**
-  - A contest that was **active** is restored only if its window is still open.
+  - A contest that was **active** is restored if its window's end has not passed, whether or not
+    the window has opened yet (an early Start is restored too).
   - A contest that was **stopped**, or whose window has ended, **stays stopped**.
   - An archive switch carries no active contest into the new archive.
 - **ADR 0100's U3.** The gap suspension lasts exactly while this state is active. Whether ending it
@@ -202,6 +219,14 @@ the daemon never infers it from the active contest.
 - **Source.** Contest definitions come from an embedded `contests.json`, plus an operator override
   file in the working directory, following the existing `modes.json` pattern. The daemon serves them
   (`GET /v1/contests`).
+- **Override rule: whole contests, matched by contest id** (ruled 2026-11-07).
+  - Ids only in the embedded catalogue stay available; ids only in the operator file add contests.
+  - A matching operator entry replaces that entire definition, including its editions and nested
+    lists.
+  - Omitted fields follow the schema's defaults or validation requirements. They never inherit
+    embedded values.
+  - Accepted trade-off: overriding one field means copying the whole definition, and that contest
+    no longer receives embedded updates.
 - **It replaces** the hard-coded catalogue in `frontend/app/src/lib/operate/contest.svelte.ts`.
 - **First-slice fields:**
   - the contest id and Cabrillo name;
@@ -292,17 +317,9 @@ Rejected (the 2026-11-06 ruling on question 4):
 
 ## Unresolved (not decided by this record)
 
-- **U1. Which QSOs the slice migration associates.** The candidates are:
-  - QSOs carrying both `CONTEST_ID` and `APP_SM_CONTEST_START` and a saved `STX`;
-  - only those whose serial appears in `contest_serial_allocation`;
-  - an explicit list reviewed with the operator.
-
-  A rule must not sweep in a round-tripped import.
-- **U2. Starting before the window opens.** May an occurrence be started before its window opens,
-  as the slice allowed with a "not started yet" warning? If so, does ADR 0100's gap suspension
-  apply before the opening?
-- **U3. The catalogue override merge rule:** the operator file replaces whole contests, or merges
-  fields.
+- **U1–U3 were ruled on 2026-11-07** (the migration list in §3, the early Start in §4, the override
+  rule in §6). The reviewer's recommendations, as confirmed, are recorded in
+  [W-0023](../work/W-0023-contest-logging.md).
 - **Carried from ADR 0096:** the exact boundary reading, the "Europe" definition and scoring.
 - **Later work, not in this record:**
   - the per-contest panel;
