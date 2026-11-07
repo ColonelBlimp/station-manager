@@ -112,8 +112,9 @@ The daemon owns the **operating session**:
   2. **Evaluate departure, then expiry:**
      - if a change has taken effect (§4), close the session with `archive_changed` or
        `logbook_changed`;
-     - otherwise, if it is open, `now − last_activity_at` exceeds the gap, and the daemon-owned
-       contest-active state is off (U3), close it with `gap` (§3).
+     - otherwise, if it is open, it is **expired** (`now ≥ last_activity_at + gap`, the one
+       deadline rule used everywhere) and the gap suspension is off (U3; the contest-end rule in
+       §3), close it with `gap` (§3).
 
      Either close advances the generation.
   3. **If none is open now,** create a session: `opened_at = last_activity_at = now`, bound to the
@@ -188,6 +189,20 @@ The daemon owns the **operating session**:
     its generation (§5).
 
   Every evaluation is idempotent, and whichever runs first records the close.
+- **The contest end is part of every evaluation** (P2). The suspension is on only while the
+  contest-active state is active **and** `now` is before its window's end. Each evaluation above
+  first checks that: if the state is still recorded as active but its end has passed, the evaluation
+  ends it (as ADR 0101 §4's end of window would), then evaluates expiry with the suspension off. No
+  evaluation depends on the contest-end timer having run punctually.
+  - **Example:** the contest ends at 12:00, its timer is delayed, and a QSO is saved at 12:02 after
+    two quiet hours. The logging transaction ends the contest state, closes the overdue session at its
+    `last_activity_at`, opens a new session and adds the QSO to it.
+  - **Atomic, events after commit:** all the transitions an evaluation finds are persisted in its one
+    transaction, each advancing the generation. Their events (contest ended, session closed, session
+    opened) are published only after the commit, in that order. A rolled-back transaction publishes
+    none.
+  - **The session timer while suspended** is set for the contest's end, where the next evaluation is
+    due.
 - **Restart recovery:**
   - A plain restart (power cut, deploy, crash) **does not close** the session. The open record is
     durable.
@@ -500,7 +515,7 @@ operator** in their own words: "yes, confirm U1 (b) and U3 (b)" (2026-11-06). Th
   - **Not activity:** passive decodes, an open window, and merely remaining armed. They never reset
     the clock.
   - **Still to define:** the exact list of counted actions, written into the design before
-    implementation.
+    implementation. **Ruled 2026-11-07 (operator): P1 below.**
   - **Unchanged:** §2, step 5 (a logged QSO is activity); New session and pick-up reset the
     baseline (§3).
 - **U2. The gap: configurable, default 2 hours (both operator rulings).**
@@ -510,7 +525,7 @@ operator** in their own words: "yes, confirm U1 (b) and U3 (b)" (2026-11-06). Th
   - **When a change takes effect (agent proposal):** immediately, without a restart.
     - Saving a new gap **re-evaluates expiry** of the open session and **reschedules its timer**
       (§3) to the new deadline, so shortening it never waits for the old deadline.
-    - Lowering it below the current idle time closes the open session at once, at its
+    - Lowering it so that `now ≥ last_activity_at + gap` closes the open session at once, at its
       `last_activity_at`, **unless the contest suspension (U3) is active**.
   - **Default (operator ruling, 2026-11-06): 2 hours of inactivity** closes a session. It remains
     configurable. It is longer than the typical one-hour contest off-time, independently of U3. Pick-up makes an early gap close cheap to recover from for future logging,
@@ -527,7 +542,136 @@ operator** in their own words: "yes, confirm U1 (b) and U3 (b)" (2026-11-06). Th
     archive or logbook change (§4).
   - **Open: the baseline when the contest state ends.** One choice is that an expiry already due is
     applied at once; the other is that the contest's end counts as activity. Decide it with the
-    contest-active state's design.
+    contest-active state's design. **Ruled 2026-11-07 (operator): an expiry already due is applied
+    at once, without inventing activity (P2 below).**
+
+## Operator rulings P1 and P2 (2026-11-07): counted actions and the contest-end baseline
+
+**Status: ruled 2026-11-07 by the station operator; design only, and this ADR remains Proposed.**
+Drafted by the agent to the reviewer's brief and approved by the reviewer, with three clarifications
+written in: the credit is bound to the session at acceptance (P1), the contest end is checked in
+every evaluation (§3, P2), and one deadline rule, `now ≥ last_activity_at + gap` (§2). The operator
+then confirmed, in their own words: "I confirm P1 and P2 as my rulings, including the three
+clarifications".
+
+### P1. Counted activity (completes U1)
+
+**Rule (ruled): activity is a small, closed list of daemon-observable events. Anything not on
+the list never counts.**
+
+| Class | Event | Counts when | On failure or refusal |
+|---|---|---|---|
+| Logged QSO | a live QSO stored into the session (§2) | the QSO's transaction commits | rolled back with the QSO; nothing counts |
+| Baseline resets | New session, Continue or pick-up (§3) | the session-control transaction commits | refused or stale (§5): nothing changes |
+| Deliberate operating | `POST /v1/ft8/cq/start` (Call CQ) | the daemon accepts it (202): the run is installed | any refusal or error response (not armed, already in progress, archive guard, bad field, FT8 disabled): not counted |
+| Deliberate operating | `POST /v1/ft8/qso/start` (answer a CQ) | accepted (202) | as above |
+| Deliberate operating | `POST /v1/ft8/qso/work` (work a caller) | accepted (202) | as above |
+| Deliberate operating | `POST /v1/ft8/cq/pick` (answer a listed caller) | accepted (202) | `ft8_answerer_not_listed`, `ft8_no_cq_pick_run`, `ft8_cq_contact_in_flight`: not counted |
+
+- **Accepted, not completed.** A deliberate action counts at the daemon's acceptance, because that
+  is the operator's act. It does not wait for the first transmission or a completed QSO, and a later
+  abandon, silence or timeout does not undo it. Completion is already counted, as a logged QSO.
+- **Bound to the session at acceptance.** When the FT8 controller accepts the action, the daemon
+  captures the **acceptance instant** `accepted_at` and the archive's session state at that instant:
+  its `session_generation` and the open session's `id`, or "none open". Capturing is an ordinary
+  evaluation (§3), so a session already due to close at `accepted_at` is closed first and the
+  capture records "none open".
+- **How the credit is written.** One session transaction, started straight after acceptance and
+  before the response is sent:
+  1. **The credit applies only if the generation is unchanged** since the capture, and the capture
+     named an open session. The generation advances on every transition (§1): a gap close, New,
+     pick-up (even of the same session), or a departure. So an unchanged generation means the same
+     session, in the same open interval, with nothing in between.
+  2. If it applies, set `last_activity_at = max(last_activity_at, accepted_at)`, **the acceptance
+     instant, not the write's**.
+  3. Then evaluate as every evaluation does, at the write's `now` (§3, including the contest end),
+     and reschedule the timer.
+
+  So a delayed write can never extend a replacement session or reopen a closed one. If the generation
+  moved, the credit is dropped, and the transition that moved it already set its own baseline (New,
+  pick-up) or closed the session.
+- **Server-side acceptance is what counts.** The write does not depend on the response reaching the
+  browser. A lost 202 changes nothing, and a client retry after it is refused as already in
+  progress (409), which counts for nothing, so the action is credited once.
+- **An action never opens a session.** With none open at acceptance, it changes nothing; the next
+  live QSO opens one (§2). So a late action cannot rescue a session that had already expired.
+  - **A failed activity write never undoes or refuses the action.** Session policy cannot block
+    operating (§2). The failure is logged, and its only effect is that the session may close earlier
+    than it should; pick-up recovers it for future logging. (A broken database also stops logging, so
+    this is the same failure, seen sooner.)
+- **Never counted:** decodes; an open, visible or refreshed window (including the Map, §7); an open
+  FT8 subscription; remaining armed (`tx/arm`); the run's own automatic CQ repeats, sequencing,
+  retries and the bag drain; Tune (`rig/tune`), rig, VFO and band changes; generic clicks, form
+  typing and drafts; serial allocation (`POST /v1/contest-serial`); settings saves; Abandon, Stop,
+  Next, Skip, Ignore, bag, unbag and Resume.
+- **Observable examples (2-hour gap):**
+  - Last QSO 14:00. At 15:30 the operator presses Call CQ; nobody answers and the run keeps calling
+    by itself. With no further QSO or deliberate action, the session closes at 17:30 with
+    `closed_at` 15:30. The CQ repeats between 15:30 and 17:30 did not count.
+  - Last QSO 14:00. The operator leaves FT8 armed and decoding, with the window open, and walks away.
+    The session closes at 16:00 with `closed_at` 14:00.
+  - Last QSO 14:00. At 15:50 the operator answers a CQ; the daemon refuses with
+    `ft8_tx_not_armed`. Nothing counts, and the session still closes at 16:00.
+  - Last QSO 14:00. At 16:10 (already expired) the operator presses Call CQ. The session closes as
+    of 14:00; no new session opens until the first QSO of the run is logged.
+  - Last QSO 14:00, Call CQ accepted at exactly 16:00:00. The deadline rule is `now ≥
+    last_activity_at + gap`, so the session is already expired at acceptance: it closes as of 14:00
+    and the action is not credited.
+  - Call CQ accepted at 15:59:59, and a New session from another window commits before the credit is
+    written. The generation has moved, so the credit is dropped; the new session's baseline is its
+    own `opened_at`.
+- **Alternatives considered:**
+  - **Logged QSOs only.** The simplest rule, but a long, unanswered CQ run on a quiet band closes the
+    sitting while the operator is plainly operating. Rejected by U1 (b).
+  - **Count at completion only** (the action counts when its exchange logs). That duplicates the
+    logged-QSO rule and adds nothing.
+  - **Count Phone/CW serial allocation** (committing a callsign in contest mode). Deliberate and
+    daemon-observable, but during a contest the gap is suspended anyway, so it matters only in the
+    minutes around a contest's end (P2). Not recommended; it adds a source for one edge.
+  - **Count every operator request, or rig changes.** A band or VFO change, a Tune or a settings
+    save is not operating; counting them keeps a session alive for activity that is not a sitting.
+    Rejected by the brief.
+
+### P2. The baseline when the contest state ends (completes U3's open choice)
+
+**Rule (ruled): when the contest-active state ends, overdue expiry applies at once, and the
+session keeps its last actual activity time.** Neither an explicit Stop nor the automatic end at
+the window's end is activity, and neither moves `last_activity_at`.
+
+- **Mechanism:** the transaction that ends the contest state (a Stop, the end-of-window timer, or
+  any evaluation that finds the end has passed, §3) evaluates expiry as its last step, with the
+  suspension now off. An overdue session closes with `gap`, `closed_at =
+  last_activity_at`, the generation advances and the event is emitted. A session still within its
+  gap stays open, and its timer is rescheduled to `last_activity_at + gap`.
+- **Explicit Stop.** Contest 12:00Z Saturday to 12:00Z Sunday; last contest QSO Saturday 17:20;
+  Stop pressed Saturday 21:00. The session closes at once, `closed_at` Saturday 17:20. A Stop at
+  Saturday 18:00 leaves it open until 19:20 unless the operator logs or acts again.
+- **Automatic end.** Same contest, operator stopped logging Saturday 17:20 and never pressed Stop.
+  At Sunday 12:00 the state ends itself and the session closes as of Saturday 17:20.
+- **Restart after the contest ended.** The daemon was off over the end (power cut Saturday night,
+  restarted Sunday 13:00). ADR 0101 §4 does not restore the contest. The first evaluation after
+  start finds the suspension off and closes the session as of Saturday 17:20.
+- **A QSO in progress at the end or at Stop.** Draft preservation is ADR 0101's: the draft keeps its
+  occurrence and serial and can be saved. **Which operating session receives it is decided
+  separately**, by the logging transaction (§2) when it is saved.
+  - Last QSO 11:40, contest ends 12:00, draft saved 12:03: the session is within its gap and
+    receives it.
+  - Last QSO Saturday 17:20, a draft begun Sunday 11:55, saved 12:02: the session closed at 12:00 as
+    of Saturday 17:20, so the saved QSO opens a new session. It is still a member of the contest
+    occurrence it names (ADR 0101 §5); the two memberships are independent (§9). The draft itself
+    was never activity.
+- **The alternative: a fresh gap from the end.** The contest's end (or the Stop) counts as activity,
+  so the session stays open for one further gap.
+  - **What the operator sees:** after the weekend example's automatic end, the Session panel, the Map
+    and the header clock keep showing the contest weekend's session as open until Sunday 14:00. A
+    non-contest QSO at Sunday 13:00 joins that weekend session instead of starting a new one, and a
+    Session email at 13:30 would include it. Under the ruling they show the weekend session
+    as Closed from 12:00 (§7), and the 13:00 QSO opens a new session.
+  - **Why rejected:** it manufactures activity that did not happen, makes `closed_at` depend
+    on how the contest ended, and keeps a session open after a sitting that may have ended a day
+    earlier. Its benefit, not splitting a sitting that continues straight after the end, is
+    available by pick-up (with O1's limitation) or by logging within the gap, which keeps the session
+    open under either rule.
 
 ## Open questions (operator or reviewer)
 
