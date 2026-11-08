@@ -467,10 +467,26 @@ with measured computed styles; details and images in the POC (`README.md`, `out/
   metrics (188 px for the same sample); GTK4 matches Chromium and Firefox.
 - Elements the app styles itself (text inputs, buttons, tables, cards) render the same in all
   four engines.
-- **Not yet established:** the desktop look (GPU compositing, the desktop's font
-  antialiasing/hinting), which Xvfb cannot show; and whether CSS that removes native control
-  styling (`appearance: none` with the app's own arrow and box) would close the form-control gap
-  in WebKitGTK. Both are open; neither is decided here.
+- **Experiment (POC A15, same day):** with selects and checkboxes drawn by the app
+  (`appearance: none`, an app-drawn arrow and box in the app's own colours), they look the same in
+  all four engines in both themes: select height 28 px everywhere (27/29/37/37 before), and no
+  light-grey select or white checkbox in the dark header. So the form-control gap is closable with
+  CSS that would apply to every host, the browser included. Not covered: the open select popup,
+  which stays native in every engine (a GTK popup in WebKitGTK).
+- **Desktop look, operator's screen (2026-11-08, native Wayland, Wails GTK4, dark theme,
+  without A15):** worse than the Xvfb captures. The Rig Mode select is a white control with
+  near-white text, unreadable (the desktop's GTK theme draws the box light while the app's dark
+  theme sets light text); the header's contest select is a light-grey block with faded text; the
+  Contest checkbox a plain white square. Text otherwise renders cleanly at the desktop's scale.
+  **With A15 on the same desktop:** the Mode select reads clearly in the app's dark styling at the
+  height of the fields beside it, the contest select is dark with a matching outline, and the
+  checkbox is the app-drawn box: the experiment fixes all three on the operator's screen.
+  The open select list (still native, a GTK popup): "looks okay, but not great" (operator).
+  Text in Firefox on the same desktop: "looks the same as Wails" (operator), consistent with the
+  measured identical font face; the text itself is not where the old-fashioned look came from.
+- **Not yet established:** whether the GTK3 text-width difference matters once the GTK3 build
+  is gone (Wails: "until v3.1"); whether the open select list warrants app-drawn dropdowns (a
+  product decision: keyboard and accessibility become the app's). Open; nothing here is decided.
 
 ## Next step
 
