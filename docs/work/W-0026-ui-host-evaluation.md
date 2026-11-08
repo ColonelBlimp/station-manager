@@ -500,7 +500,8 @@ stays ADR 0100's daemon work. Nothing in it is shipped or wired to `smd`.
   **Operator rulings (2026-11-08):** floating panels stay **opt-in** in the POC (not the
   default); a panel's **position and size survive a restart** (built: saved in the app's own
   storage, restored at start and clamped to the window; only the operator's moves and resizes
-  are saved, so a temporary pull-back is undone when the window grows). Open: which panels are
+  are saved, so a temporary pull-back is undone when the window grows). Desktop check (operator,
+  2026-11-08): positions and sizes came back after a real application restart. Open: which panels are
   open at start; a minimum window size.
 - **Operator's idea (2026-11-08, "just thinking", not decided):** the Phone/CW logging panel
   might also need to be movable and resizable; the FT8 view stays fixed for now, as in the
