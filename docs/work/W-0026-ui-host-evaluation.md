@@ -447,6 +447,52 @@ stays ADR 0100's daemon work. Nothing in it is shipped or wired to `smd`.
   docked; which panels were detached is not remembered across a restart. Whether Station Manager
   should restore the workspace layout (which panels are detached) at start is a design decision.
 
+## Proof of concept: movable docking (2026-11-08)
+
+- **Operator rulings:** only the panels move (Rig Control, Session); the workspace (the logging
+  card, or the FT8 view) stays fixed as the centre. Docked panels may split around it or stack
+  as tabs, with resizable dividers. A panel docked again after Detach returns to its previous
+  place. Restoring the layout across restarts remains a separate decision.
+- **Proposed, not ruled** (reviewer recommendation, built in the POC so it can be seen): if the
+  previous place has gone, the panel joins the nearest surviving panel group; failing that, the
+  default place.
+- **Built** (POC A16, `dockview-core` 8.6.2, MIT, in the POC only): one active home per panel,
+  and shared and panel-local state (search text, scroll position) preserved through move,
+  resize, tabbing, detach and re-dock; Hide and Show use the same memory as Detach. Automated
+  evidence in the POC README; dragging by hand is a desktop check.
+- **Finding:** side by side, the panels take width from the logging card, where the product's
+  ambient overlay (ADR 0058) covered part of it instead; at 1400 px the card scrolls
+  horizontally until the divider is moved.
+- **Operator's assessment on the desktop (2026-11-08):** dragging between dock positions works by
+  hand; but "The docked windows are not that pretty :-(" and "They don't immediately stand out
+  as useful - they just seem to take up real estate...". Observed causes: each docked panel
+  stacks three headers (the dock's tab strip, the Detach button, the card's own title and close),
+  and a docked panel claims permanent width the overlay only borrowed while open.
+- **Finding, width:** at a 1400 px window the logging card, Rig (448 px minimum, its card is
+  417 px) and Session (440 px minimum; every table column needs about 704 px) do not fit as three
+  columns; panels squeeze or scroll sideways. The POC's docking logic was verified at 1800 px.
+- **Operator ruling (2026-11-08): record and stop.** Docking is recorded as evaluated and not worth
+  the space it claims; the floating overlay plus detach-to-own-window stays the model (as ADR 0058
+  retired the tile board for the same reason). The POC keeps A16 as evidence, off by default.
+  Operator's view: "More useful is docked windows as with the browser version and then detached
+  - detached being (in my view) more useful." Detached windows are the primary use; this raises
+  the weight of the two open window decisions in §8's results (restoring which panels were
+  detached, and native Wayland versus XWayland, which decides whether their positions come back).
+- **Operator's idea (2026-11-08, not decided):** "having panels resizable and positionable and
+  then allow them to be minimise and restored" — floating panels over the workspace (the overlay
+  model made movable and resizable), minimised and restored to the same place and size. Notes
+  (Claude): positions inside the app's own window are app-controlled, so they come back under
+  native Wayland too; it is plain web UI, so it does not depend on the host (a browser could do
+  it); the one-home rule extends to floating-in-window or detached, never both.
+  Operator's refinement: minimise/restore is the same as closing a panel and opening it again
+  from the rail, so it may be pointless; what matters is that a panel can be positioned and
+  sized, and opens at its set position (or the default). Notes (Claude): closing discards the
+  panel's local state (Session search text and scroll) where a minimise would keep it; the
+  shared list itself returns intact. A panel left near an edge must be pulled back inside the
+  window when the window shrinks.
+- **Scope note:** the Worked panel stays beside the logging card; the product classes it as part
+  of the Phone/CW workflow, not a reference panel. Whether it should move too is open.
+
 ## Proof of concept: rendering comparison (2026-11-08, first pass)
 
 Operator's description of the earlier Wails v2 problem: "Fonts, borders and the overall look (hard
