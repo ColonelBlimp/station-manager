@@ -490,6 +490,23 @@ stays ADR 0100's daemon work. Nothing in it is shipped or wired to `smd`.
   panel's local state (Session search text and scroll) where a minimise would keep it; the
   shared list itself returns intact. A panel left near an edge must be pulled back inside the
   window when the window shrinks.
+- **Built (POC A17, opt-in `?poc-float=on`, 2026-11-08):** Rig Control and Session float over the
+  workspace, move by their own title row, resize from edges and corner, come to the front on a
+  press, on focus and when a dialog opens in them, return to their last place and size when
+  closed and reopened or detached and docked back, and are pulled back inside a shrinking window
+  (even below their minimum). Automated evidence with real mouse input in the POC README.
+  **Operator's verdict on the desktop:** "Now, this looks a lot more useful..." (contrast:
+  docking "just seem[s] to take up real estate").
+  **Operator rulings (2026-11-08):** floating panels stay **opt-in** in the POC (not the
+  default); a panel's **position and size survive a restart** (built: saved in the app's own
+  storage, restored at start and clamped to the window; only the operator's moves and resizes
+  are saved, so a temporary pull-back is undone when the window grows). Open: which panels are
+  open at start; a minimum window size.
+- **Operator's idea (2026-11-08, "just thinking", not decided):** the Phone/CW logging panel
+  might also need to be movable and resizable; the FT8 view stays fixed for now, as in the
+  browser version. Notes (Claude): the Worked panel sits in the same Phone/CW column and opens on
+  Tab beside the logging card, so it would move with it or become its own floating panel; with
+  the logging card floating, the Phone/CW workspace beneath becomes empty background, unlike FT8.
 - **Scope note:** the Worked panel stays beside the logging card; the product classes it as part
   of the Phone/CW workflow, not a reference panel. Whether it should move too is open.
 
