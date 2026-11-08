@@ -242,6 +242,29 @@ Closing a window, stopping an FT8 run, ending contest mode and closing an operat
   ([global-hotkey#28](https://github.com/tauri-apps/global-hotkey/issues/28)). Not needed if
   shortcuts stay window-local.
 - **Decision needed:** confirm window-local shortcuts only.
+- **Shortcuts across windows (operator, 2026-11-08).** The proof of concept found that the rig
+  keys are mounted with the main window's workspace, so they do nothing in a detached Rig Control
+  window.
+  - **Direction:** the rig keys must work in the main window **and** the Rig Control window at a
+    minimum; a standard set that works in all windows is "probably a good move".
+  - **Ruling:** keys that belong to one window (for example the logging card's Escape = clear
+    draft and Ctrl+Enter = log) are bound **only** in that window: elsewhere they are unbound and
+    never invoke a different action. **Dialogs are the exception:** inside an open dialog, Escape
+    and Ctrl+Enter act on that dialog, in any window.
+  - **Standard set (Claude proposal, Codex supported; built in the POC on the operator's
+    direction):** the keys acting on shared, daemon-owned state, starting with the rig family,
+    work with the same meaning in every Station Manager window (main, Rig Control, Session),
+    defined once, one handler per window; they stand down under a dialog and during a daemon
+    outage. A key that raises the main window and focuses its callsign is **deferred**.
+  - **Ruling, typing:** the rig keys do **nothing while typing in an ordinary text field**
+    (search, comment, name…); the Callsign field keeps its deliberate exception (search-and-pounce
+    tuning). This changes today's product, where band, swap and digit keys fire regardless of
+    focus (`RigKeys.svelte`).
+  - **Ruling, rig state without CAT (option b):** the manual rig context (band, frequency,
+    confirmation) stays in the main window, which logs from it; off CAT a detached Rig Control
+    window is a read-out and the rig keys act only in the main window. Sharing the manual context
+    (option a) is the likely product answer and belongs with daemon-owned operating state
+    (ADR 0100), not this evaluation.
 
 ## 9. Files: export and import
 
