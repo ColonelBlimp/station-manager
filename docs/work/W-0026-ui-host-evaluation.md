@@ -587,10 +587,10 @@ with measured computed styles; details and images in the POC (`README.md`, `out/
 - **Native Save dialog (§9):** the host takes the Export dialog's download and, on the desktop,
   shows the native Save dialog (Documents, the daemon's filename, an ADIF filter). Automated: the
   saved file is the daemon's document (its filename, 20 records) and the app reports the daemon's
-  count. **Desktop check pending:** the dialog itself under Wayland (portal).
+  count. **Desktop check (operator, 2026-11-08): good.**
 - **Keys a browser reserves (§8):** Ctrl+W, Ctrl+T and Ctrl+N reach the page in the desktop host
   (Firefox cannot stop them), so the app could bind them; no window opened or closed. **Desktop
-  check pending:** pressing them by hand does nothing (offscreen keys never reach accelerators).
+  check (operator, 2026-11-08): good** (pressing them by hand does nothing).
 - **Window-local shortcuts (§8):** a rig key in the Map window sends nothing; in the main window,
   one command. Per-window handling (never two commands per press) is the rig scenario's evidence.
 
@@ -604,9 +604,9 @@ above and the POC README):**
 | Shared state across windows | Session and Rig follow the daemon in every window; detach/dock keeps panel-local state |
 | Close (§3, §4) | The app's own confirmation lists what would stop; Cancel keeps everything |
 | No user reload (§5) | Holds on the desktop |
-| Daemon unavailable (§6) | One state in every window; recovery without reload or reset |
-| Shortcuts (§8) | Rig keys work in every window, not while typing in ordinary fields, not under dialogs or during an outage (operator rulings); browser-reserved keys reach the page |
-| Files (§9) | Native Save dialog through the host |
+| Daemon unavailable (§6) | One state in the main window and a detached panel window (tested); recovery without reload or reset. The Map window uses the same app shell (by construction, not tested); the static Manual page has none |
+| Shortcuts (§8) | Rig keys work in the main, Rig Control and Session windows (not Map or Manual), with CAT in panel windows, and not while typing in ordinary fields, under dialogs or during an outage (operator rulings); browser-reserved keys reach the page and, by hand, do nothing |
+| Files (§9) | Native Save dialog through the host: the download path and dialog options are verified automatically; the dialog appeared and saved on the operator's desktop (choosing a destination and cancelling were not reported separately) |
 | Rendering (Electron, Wails v3, Firefox) | Same CSS and fonts; WebKitGTK's native form controls caused the "old-fashioned" look (unreadable in dark mode on the operator's desktop); app-drawn controls fix it in every host; the open select list stays native |
 | Layout | Docking evaluated and stopped ("take up real estate"); movable floating panels "a lot more useful", positions kept across restarts; detached windows the primary use |
 | Size and memory | Electron 297 MB (92 MB compressed), ~303 MiB one window, +75 MiB for three more; Wails v3 11.6 MB + WebKitGTK 136 MB, ~311 MiB; Firefox 554-727 MiB |
@@ -628,7 +628,7 @@ limitation seen in the rendering runs). Still open: localhost-specific security 
 8. App-drawn dropdown lists (the open list stays native otherwise).
 9. The close rule and its prompts (§3, §4), no user reload (§5), one unavailable state (§6),
    reload on a changed build (§7).
-10. Native Save dialog wanted (§9), after the desktop check; launcher only, no tray (§10).
+10. Native Save dialog wanted (§9; it works on the operator's desktop); launcher only, no tray (§10).
 
 ## Next step
 
