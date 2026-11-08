@@ -447,6 +447,20 @@ stays ADR 0100's daemon work. Nothing in it is shipped or wired to `smd`.
   docked; which panels were detached is not remembered across a restart. Whether Station Manager
   should restore the workspace layout (which panels are detached) at start is a design decision.
 
+## Proof of concept: package size and memory (2026-11-08)
+
+Measured, not judged (method and caveats in the POC README):
+
+- **Size:** Electron packages to 297 MB (92 MB compressed); almost all is Chromium (the app code
+  is 0.14 MB). Wails v3 is an 11.6 MB binary (3.6 MB compressed) but depends on the distribution's
+  WebKitGTK 6.0, 136 MB installed, which was not installed on the operator's machine before this
+  evaluation. A browser adds nothing. The UI is 2 MB in every case.
+- **Memory (PSS of the whole process tree, Operate with Rig and Session):** Electron 306 MB with
+  the main window, 391 MB with Map, Manual and a detached Session (about 28 MB per extra window);
+  Wails v3 310 MB with one window; Firefox 621 MB with one window in a fresh profile (the whole
+  browser). Measured in a virtual display with software rendering; a desktop measurement would
+  refine the GPU share.
+
 ## Proof of concept: Map and Manual windows (2026-11-08)
 
 - **Built in the Electron host** (no UI change; §2's recommended fixed window set): the app's
