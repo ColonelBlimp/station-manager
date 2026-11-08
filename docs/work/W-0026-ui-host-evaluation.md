@@ -398,6 +398,31 @@ stays ADR 0100's daemon work. Nothing in it is shipped or wired to `smd`.
   window. Why, and whether an activation token passed from the second launch would change that,
   is not established (unverified inference: Wayland compositors restrict focus changes that lack
   an activation token).
+- **No user reload (2026-11-08, native Wayland).** F5 and Ctrl+R in the main window and a
+  detached Session window: a typed callsign (main) and Session search text (detached) both
+  survived, so neither key reloaded. Passes. (The offscreen scenario cannot prove this: synthetic
+  keys never reach Electron's reload accelerators.)
+- **Close confirmation (2026-11-08, native Wayland).** With the simulated FT8 run on and callsign
+  7Q7EB typed, closing the main window showed the application's own native dialog ("Closing
+  Station Manager will stop:") listing both: the FT8 run (stops the run, disarms TX) and the
+  unlogged contact. **Cancel** kept everything; **Close and stop** closed all windows. Passes.
+- **Window positions (2026-11-08).** **Native Wayland:** after a restart the main window kept its
+  size but not its position; the re-detached Session window likewise kept its size but not its
+  position (as Electron documents: programmatic positioning is unavailable under native Wayland).
+  **XWayland:** the main window's size and position were restored after a restart. The Session
+  window's size and position were restored on re-detach **within a run**, but after a restart its
+  size came back and its position did not. Cause (a POC bug, not the desktop): closing the main
+  window destroys the detached windows, and `destroy()` emits no `close` event, so the detached
+  window's final placement was never saved (Electron `BrowserWindow.destroy()` documentation).
+  Fixed in the POC with an automated check (the saved placement now matches the window's last
+  bounds); **desktop re-test 2026-11-08: Session position and size now restored after a restart, both when closed through Close and stop and when closed with nothing to stop (no dialog).**
+- **Pattern so far:** under native Wayland the desktop owns window placement and focus (no
+  raise on second launch, no position restore); under XWayland both work. Whether a released
+  Electron build should run under XWayland, or accept native-Wayland placement, is a decision
+  for the operator (not decided here).
+- **Open question for the operator (not decided):** the proof of concept starts with every panel
+  docked; which panels were detached is not remembered across a restart. Whether Station Manager
+  should restore the workspace layout (which panels are detached) at start is a design decision.
 
 ## Next step
 
