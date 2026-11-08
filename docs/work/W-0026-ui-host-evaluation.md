@@ -456,10 +456,10 @@ Measured, not judged (method and caveats in the POC README):
   WebKitGTK 6.0, 136 MB installed, which was not installed on the operator's machine before this
   evaluation. A browser adds nothing. The UI is 2 MB in every case.
 - **Memory (PSS of the whole process tree in MiB, Operate with Rig and Session; validated runs:
-  live host, 1400x900 page, DPR 1, expected panels, each extra window loaded):** Electron 304 MiB
-  with the main window, 379 MiB with Map, Manual and a detached Session (+75 MiB for that mix);
-  Wails v3 309 MiB with one window; Firefox 554-637 MiB across runs with one window in a fresh
-  profile (the whole browser). Software rendering in a virtual display; a desktop measurement
+  live host, 1400x900 page, DPR 1, expected panels, each extra window loaded, the run's own
+  fixture server and probes):** Electron 303 MiB with the main window, 378 MiB with Map, Manual
+  and a detached Session (+75 MiB for that mix); Wails v3 311 MiB with one window; Firefox
+  554-727 MiB across runs with one window in a fresh profile (the whole browser; it varies widely). Software rendering in a virtual display; a desktop measurement
   would refine the GPU share. (A first, unvalidated run reported 306/391/310/621; superseded.)
 
 ## Proof of concept: Map and Manual windows (2026-11-08)
