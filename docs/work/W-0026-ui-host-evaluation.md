@@ -455,11 +455,12 @@ Measured, not judged (method and caveats in the POC README):
   is 0.14 MB). Wails v3 is an 11.6 MB binary (3.6 MB compressed) but depends on the distribution's
   WebKitGTK 6.0, 136 MB installed, which was not installed on the operator's machine before this
   evaluation. A browser adds nothing. The UI is 2 MB in every case.
-- **Memory (PSS of the whole process tree, Operate with Rig and Session):** Electron 306 MB with
-  the main window, 391 MB with Map, Manual and a detached Session (about 28 MB per extra window);
-  Wails v3 310 MB with one window; Firefox 621 MB with one window in a fresh profile (the whole
-  browser). Measured in a virtual display with software rendering; a desktop measurement would
-  refine the GPU share.
+- **Memory (PSS of the whole process tree in MiB, Operate with Rig and Session; validated runs:
+  live host, 1400x900 page, DPR 1, expected panels, each extra window loaded):** Electron 304 MiB
+  with the main window, 379 MiB with Map, Manual and a detached Session (+75 MiB for that mix);
+  Wails v3 309 MiB with one window; Firefox 554-637 MiB across runs with one window in a fresh
+  profile (the whole browser). Software rendering in a virtual display; a desktop measurement
+  would refine the GPU share. (A first, unvalidated run reported 306/391/310/621; superseded.)
 
 ## Proof of concept: Map and Manual windows (2026-11-08)
 
@@ -473,8 +474,7 @@ Measured, not judged (method and caveats in the POC README):
 - **Operator ruling (2026-11-08):** external links open in the default browser: "the browser is
   fine. The app does not need to open QRZ.com". (Reasons given: the operator's logins live in the
   browser; app windows are trusted and talk to smd, so remote sites stay out of them.)
-- **Desktop check (operator):** open Map and Manual, move them to another screen, restart; and
-  that an external link opens in the browser.
+- **Desktop check (operator, 2026-11-08): "Map and manual are good."**
 
 ## Proof of concept: movable docking (2026-11-08)
 
