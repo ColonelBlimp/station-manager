@@ -106,11 +106,12 @@ The daemon owns the **operating session**:
   session's logbook:
   - the Phone/CW submit that names the effective default logbook. That is the `requireLiveSubmit`
     and `submitClassifiedLive` classification already in `internal/api/handler_qso.go`.
-  - the FT8 completed-exchange sink (`cmd/smd/lifecycle_adapters.go:737`).
+  - the FT8 completed-exchange sink (`cmd/smd/lifecycle_adapters.go:736`).
 - **The logging transaction, in order.** All of this happens inside the QSO's own transaction (the
   atomic-write invariant), at the daemon's current instant `now`, never at the QSO's `time_on`:
   1. Read the archive's open session, if any.
-  2. **Evaluate the default change, then expiry:**
+  2. **Run the evaluation (§3), in its canonical order:** the contest end, then the default
+     change, then expiry:
      - if a default-logbook change has taken effect (§4), close the session with
        `logbook_changed`;
      - otherwise, if it is open, it is **expired** (`now ≥ last_activity_at + gap`, the one
@@ -136,6 +137,15 @@ The daemon owns the **operating session**:
     one fails, the whole transaction rolls back, exactly as a failure of the QSO row or its
     upload-queue rows does today. That is the existing permitted reason not to log (a broken local
     database), and atomic rollback is kept deliberately.
+  - **Contention must not become a failure (acceptance review 2026-11-07).** Session evaluations
+    (the timer, reads, controls, contest Start and Stop, gap saves, P1 credits) and the logging
+    transaction **serialize before reading the mutable state they will update**, so none reads a
+    snapshot that another has already changed and then fails to write. They respect cancellation
+    and the existing transaction limits; unlimited waiting is not promised. Ordinary contention
+    introduced by session work must not become an avoidable QSO failure. The mechanism is left to
+    implementation; the per-connection busy timeout (`internal/database/sqlite/internal.go`, the per-connection PRAGMAs)
+    alone does not establish this. **A concurrent logging-and-evaluation test is required** with
+    the implementation.
 - **Never joins:**
   - **existing contacts**, logged before this ships: sessions run forward only, with no backfill;
   - **imports** of any kind: ADIF import (`SubmitImport`, `SubmitImportBatch`), SM Cloud restore
@@ -166,7 +176,8 @@ The daemon owns the **operating session**:
   - when a default-logbook change takes effect, at `last_activity_at` (§4). An archive switch does
     not close a session; on return the gap decides (§4).
 - **Activity baseline for operator actions:**
-  - **New session:** `opened_at = last_activity_at = now`.
+  - **New session:** `opened_at = last_activity_at = now`, bound to the effective default logbook
+    and the archive's current `default_epoch`, as an automatic open is (§2, step 3).
   - **Pick-up:** reopening a session starts a new open interval, sets `last_activity_at = now`,
     and sets the session's `default_epoch` to the archive's current one. The
     resume is the baseline, so a resumed session's old timestamp cannot expire it again at once.
@@ -178,15 +189,29 @@ The daemon owns the **operating session**:
   - Only an **eligible** session can be picked up: one whose `logbook` is the current effective
     default. Others are refused, because they would mix logbooks. Every offer (§6, §8) lists eligible
     sessions only, so the panel never offers an action the daemon would refuse.
-- **Where the default-change test (§4) and expiry are evaluated, in that order:**
+- **The evaluation and its canonical order:** (1) the contest end (below), (2) the default-change
+  test (§4), (3) expiry. The contest state is read from its **durable record in the archive file,
+  in the same transaction** as the session evaluation, never from an in-memory copy, so the order
+  in which start-up nodes run cannot change the result. **Every evaluation reschedules the
+  timer** (to the new deadline, or to the contest end while suspended). **Where it runs:**
   - **The logging transaction** (§2), which is the load-bearing evaluation;
   - **every session-control transaction** (§5), as its first step;
+  - **contest Start and Stop transactions** (ADR 0101 §4; acceptance review 2026-11-07, B1):
+    - **Start** evaluates under the contest state that exists **before** it. With no contest
+      active, an overdue session is closed before Start enables the suspension. (Without this, a
+      session whose deadline had passed but whose timer had not yet run would survive until the
+      contest's end.)
+    - **Stop** evaluates again **after** disabling contest mode, as P2 requires;
+  - **a start node before `http`** (B2): the first evaluation after every start. It also **arms
+    the timer**. If it fails, the 60 s retry (R4) is armed, so a failed start-up check is retried
+    without waiting for a read or a QSO;
   - **a daemon timer** set for the open session's expiry instant. It persists the `gap` close and
     emits the event, so open panels show "closed" without waiting for the next action;
   - **a change of the configured gap** (U2), which also reschedules the timer;
   - **every read:** if a read finds the open session expired, the daemon persists the close and
     emits the event before answering. A reported state is therefore always a persisted state with
-    its generation (§5).
+    its generation (§5). **If that persist fails, the read answers with an error,** not with an
+    unpersisted state, and the 60 s retry stays armed (acceptance review 2026-11-07, S4).
 
   Every evaluation is idempotent, and whichever runs first records the close.
 - **The contest end is part of every evaluation** (P2). The suspension is on only while the
@@ -206,8 +231,13 @@ The daemon owns the **operating session**:
 - **Restart recovery:**
   - A plain restart (power cut, deploy, crash) **does not close** the session. The open record is
     durable.
-  - Time the daemon was down counts as time without activity. The first evaluation after the start
-    closes a session that expired meanwhile.
+  - Time the daemon was down counts as time without activity. The start node's evaluation closes a
+    session that expired meanwhile, and arms the timer for one that did not.
+  - **Restart during a contest whose window is still open:** the evaluation reads the durable
+    contest record, finds it active and its end not passed, so the suspension holds and the session
+    stays open however long the daemon was down. Example: contest until 12:00Z Sunday, last QSO
+    Saturday 17:20, power cut 18:00, restart Saturday 23:00: the session stays open; the timer is
+    set for 12:00Z Sunday.
 - **Clock steps:** evaluation uses stored UTC instants.
   - **Backwards:** if `now` is earlier than `last_activity_at`, the session is not expired, and
     `last_activity_at` never moves backwards (§2, step 5). A session reopens only by an operator
@@ -222,7 +252,8 @@ closes a session, so the archive serve epoch, its activation outcomes and the O7
 limitation are gone. Default-logbook changes keep their epoch (S4 rejected). The earlier forms
 (`abe5b7b1`, then the serve-epoch design) remain in the Git history.*
 
-- **Archive changes: the gap decides (S3).**
+- **Archive changes: the ordinary evaluation decides (S3): the gap, subject to the contest
+  suspension (U3).**
   - Each archive holds its own sessions and its own QSOs, so nothing crosses archives: QSOs logged
     while B is served are in B's file and can never join A's session.
   - While an archive is not served, its sessions are not evaluated. When it is served again, its
@@ -231,6 +262,11 @@ limitation are gone. Default-logbook changes keep their epoch (S4 rejected). The
   - **Returned within the gap:** its session continues. **Returned after the gap:** its session
     closes by `gap`, at its `last_activity_at`, like any idle session, and the opening question
     offers it if it is eligible (§6).
+  - **An active contest in the departed archive** (operator ruling 2026-11-08, following the
+    reviewer's and agent's recommendation; acceptance review 2026-11-07, S1): A's active contest record is **kept** while
+    B is served. On return, A's evaluation reads that stored state and end time: if the contest is
+    still active and its end has not passed, the suspension applies and A's session stays open
+    whatever the gap; if its end has passed, the evaluation ends it (P2) and then applies expiry.
   - **Example (gap 2 h):** A's last QSO at 10:00; switch to B at 10:30. Back to A at 11:15: A's
     session continues. Back to A at 12:30 instead: A's session is closed as of 10:00.
   - **A requirement on any future feature** that reads a non-served archive's sessions (for
@@ -264,9 +300,9 @@ limitation are gone. Default-logbook changes keep their epoch (S4 rejected). The
 - **Where the test runs:** in the **same evaluation step as expiry** (§3): every logging
   transaction, before membership; every control transaction; every read; and a start node before
   `http`. The test is derived from durable state in the archive file, so the start node is not
-  load-bearing: if its write fails, the next session transaction repeats it. **The default test
-  runs before expiry:** both close the session at `last_activity_at`, and `logbook_changed` is the
-  stronger reason.
+  load-bearing: if its write fails, the next session transaction repeats it. The canonical order
+  is §3's: the contest end, **then the default test, then expiry**; both closes are at
+  `last_activity_at`, and `logbook_changed` is the stronger reason.
 - **What each default-change outcome does** (from `cmd/smd/default_change.go` and
   `internal/archive/default_change.go`):
 
@@ -314,10 +350,12 @@ limitation are gone. Default-logbook changes keep their epoch (S4 rejected). The
      redraws to it.
   3. **Apply** the transition and advance the generation, in the same transaction.
 - **A refusal is not a rollback** (acceptance review 2026-11-07). "Changes nothing" refers to the
-  **requested control** only. A close found by step 1's evaluation (default change or
-  expiry) is committed, advances the generation, and publishes its event after the commit, **even
-  when step 2 or another refusal then rejects the control**. Only a database failure rolls the transaction
-  back, closes included; the evaluation is then repeated by the next one (§3, P3's retry).
+  **requested control** only. **Every transition found by step 1's evaluation** (a contest end, a
+  default-change close, an expiry close) is committed and publishes its event after the commit,
+  **even when step 2 or another refusal then rejects the control**. A contest end advances the
+  **contest-state generation** (ADR 0101 §4) independently of any session transition; a session
+  close advances the session generation. Only a database failure rolls the transaction back,
+  transitions included; the evaluation is then repeated by the next one (§3; R2's 60 s retry, R4).
   - **Example:** a window shows S open at generation g. S's deadline passes and the timer has not
     yet run. The operator presses New against g. Step 1 closes S by gap (g+1), step 2 finds g
     stale and refuses New. S's close stands, its event is published, and the window redraws at
@@ -446,6 +484,11 @@ current state.
   - **Rechecked at use:** the single-use bypass is used only if, at the moment of the direct answer,
     the current session still holds no qualifying QSO. A New session or a pick-up between Ignore and
     use is therefore judged against the session in force when it matters.
+  - **If the recheck's lookup fails** (operator ruling 2026-11-08, following the reviewer's and
+    agent's recommendation; acceptance review 2026-11-07, S4): the existing single-use bypass **stays usable**. It creates
+    no further bypass and bypasses no TX-safety check; it is consumed under the normal
+    direct-answer rule, and the lookup failure is logged. This matches the worked-before lookup's
+    existing failure rule, "never block operation on a lookup" (`internal/ft8/repeathold.go:67-69`).
   - **With no session open,** "no QSO in the session" holds, and the Ignored caller is eligible
     (P4, O5, ruled).
   - The rest of the draft (consumption, an unsuccessful direct answer, the first hold unchanged)
@@ -568,7 +611,9 @@ the list never counts.**
   pick-up) or closed the session.
 - **Server-side acceptance is what counts.** The write does not depend on the response reaching the
   browser. A lost 202 changes nothing, and a client retry after it is refused as already in
-  progress (409), which counts for nothing, so the action is credited once.
+  progress (409), which counts for nothing. If the first run has already ended, a retried
+  `cq/start` is accepted as a new run and credited again; that is harmless, because the credit is
+  `max(last_activity_at, accepted_at)`.
 - **An action never opens a session.** With none open at acceptance, it changes nothing; the next
   live QSO opens one (§2). So a late action cannot rescue a session that had already expired.
   - **A failed activity write never undoes or refuses the action.** Session policy cannot block
@@ -615,8 +660,8 @@ session keeps its last actual activity time.** Neither an explicit Stop nor the 
 the window's end is activity, and neither moves `last_activity_at`.
 
 - **Mechanism:** the transaction that ends the contest state (a Stop, the end-of-window timer, or
-  any evaluation that finds the end has passed, §3) evaluates expiry as its last step, with the
-  suspension now off. An overdue session closes with `gap`, `closed_at =
+  any evaluation that finds the end has passed, §3) then runs the rest of the canonical evaluation
+  (the default test, then expiry), with the suspension now off. An overdue session closes with `gap`, `closed_at =
   last_activity_at`, the generation advances and the event is emitted. A session still within its
   gap stays open, and its timer is rescheduled to `last_activity_at + gap`.
 - **Explicit Stop.** Contest 12:00Z Saturday to 12:00Z Sunday; last contest QSO Saturday 17:20;
@@ -651,13 +696,9 @@ the window's end is activity, and neither moves `last_activity_at`.
 
 ## Operator ruling P3 (2026-11-07): the gap setting (completes U2)
 
-**Status: ruled 2026-11-07 (operator): R1–R3 and R4. P3 is complete.** Drafted by the agent to the reviewer's
-brief. **Reviewer approval (2026-11-07): R1–R3 technically approved**, including R2's documented
-restart exception and the serialization clarification. **Operator ruling (2026-11-07):** R1–R3
-"Confirmed", and R2's restart exception "Accept"; R4's values adopted from the reviewer's
-recommendation (below). **R2 was then simplified by the operator's ruling S5 (2026-11-07):** the
-boundary design and its restart exception are withdrawn; R2 below is the ruled form. This ADR
-remains Proposed. Already ruled and not reopened here: the gap is **configurable**, and its
+**Status: ruled 2026-11-07 (operator): R1, R2 as later simplified by S5, R3 and R4. P3 is
+complete.** Drafted by the agent to the reviewer's brief and approved by the reviewer; R4's values
+adopted from the reviewer's recommendation (below). This ADR remains Proposed. Already ruled and not reopened here: the gap is **configurable**, and its
 default is **2 hours** (U2, 2026-11-06).
 
 ### Recommendations
@@ -1165,7 +1206,9 @@ Rejected, as in ADR 0049: the everyday operator would forget, and the panel woul
 ## Consequences
 
 - **New authoritative state in the archive file:**
-  - a log-set migration (a session table, its open intervals, and the membership association);
+  - a log-set migration: a session table, its open intervals, the membership association, the
+    per-archive `session_generation`, and `default_epoch` (written in the default pointer's
+    transaction);
   - sqlboiler regeneration;
   - the migration-head fallout across whole-tree tests.
 
@@ -1174,8 +1217,7 @@ Rejected, as in ADR 0049: the everyday operator would forget, and the panel woul
   - read the current session and its members; list sessions (scope per O3);
   - New, Continue and pick-up, each with an expected generation (no request ids or recorded
     results; S2);
-  - `default_epoch` in the archive file, incremented in the default pointer's write (no archive
-    serve epoch; S3);
+  - no archive serve epoch (S3); `default_epoch` is schema, above;
   - `operating_session.*` events;
   - `docs/v2-design/api-endpoints.md` changes with them.
 - **ADR 0094 is superseded in part** when this is accepted: per-archive Session lists stay, but

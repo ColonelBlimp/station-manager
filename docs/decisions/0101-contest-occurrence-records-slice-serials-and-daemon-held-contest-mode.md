@@ -165,6 +165,10 @@ This supersedes ADR 0096 §2 (option B) and §3 (T3).
 - **Start (explicit).**
   - The operator chooses an occurrence (§6) and presses Start.
   - Start is refused if the occurrence's window has already ended.
+  - **Start and Stop run ADR 0100's session evaluation** in the same transaction (ADR 0100 §3;
+    acceptance review 2026-11-07): Start evaluates under the contest state that exists before it,
+    so with no contest active an overdue operating session is closed before the suspension begins;
+    Stop evaluates again after contest mode is disabled (ADR 0100 P2).
   - **An early Start is allowed** (ruled 2026-11-07). The state is active immediately, so ADR
     0100's gap suspension begins at that Start. Every window shows a persistent, shared message, for
     example "Contest mode on — event opens at 12:00 UTC".
@@ -201,6 +205,11 @@ This supersedes ADR 0096 §2 (option B) and §3 (T3).
     the window has opened yet (an early Start is restored too).
   - A contest that was **stopped**, or whose window has ended, **stays stopped**.
   - An archive switch carries no active contest into the new archive.
+  - **The departed archive keeps its record** (operator ruling 2026-11-08, following the reviewer's
+    and agent's recommendation; acceptance review 2026-11-07): A's active contest stays recorded in A's file while B
+    is served. On return to A, the evaluation reads that stored state and end time: still active
+    with its end not passed, contest mode and ADR 0100's suspension apply; end passed, it ends then
+    (advancing the contest-state generation), and ADR 0100 P2 applies.
 - **ADR 0100's U3.** The gap suspension lasts exactly while this state is active. Under
   [ADR 0100 P2](0100-daemon-owned-operating-sessions-with-explicit-membership.md#p2-the-baseline-when-the-contest-state-ends-completes-u3s-open-choice)
   (ruled 2026-11-07), ending it applies overdue session expiry immediately; neither Stop nor
