@@ -283,6 +283,13 @@ The operator: complexity "comes with an increased risk of bugs and unexpected be
 single install/operator - that's okay… once SM gets out into the wild - it's whole different ball
 game!"
 
+**Operator evidence (2026-11-08):** "Previous incarnations used wails v2 - the issue there is
+that WebKitGTK does not render the same as Firefox or Chrome." That is first-hand evidence against
+the WebKitGTK hosts on Linux (Tauri, Wails v2 and v3). Wails v3 moves to WebKitGTK 6.0; nothing
+found shows that this closes the rendering gap, so the risk is treated as unchanged until a test
+shows otherwise. Electron renders with Chromium, the engine the SPA is already developed and tested
+in.
+
 Compared on four **separate** dimensions; a desktop host may improve the first and reduce some
 variation, but its presence alone resolves neither authorization nor update responsibility.
 
@@ -331,8 +338,57 @@ to confirm; they are stated here only.
 - Localhost-specific security guidance for Electron and Wails.
 - Release cadence and support windows for Tauri v2.
 
+## Proof of concept: agreed design (2026-11-08)
+
+Agreed with the operator ("I would like to digress a little and do a POC for Electron") and two
+reviewers. It evaluates the **host and the workspace**, not production session correctness, which
+stays ADR 0100's daemon work. Nothing in it is shipped or wired to `smd`.
+
+- **Hosts:** **Electron** for the full evaluation; **Wails v3** for a rendering comparison only.
+  The Wails comparison is extended only if its rendering passes and its smaller distribution
+  offers enough practical benefit. Tauri and Qt are not included (Qt would mean rebuilding the UI;
+  it stays on record as the native-docking option).
+- **Real components and styles, not lookalikes.** Representative current Svelte components and
+  styles are reused, so the evaluation meets the rendering problems it is meant to find.
+  **Narrowly scoped POC adapters** are allowed where the current frontend cannot do what is being
+  evaluated, and **every adaptation is recorded** with the result, so the proof of concept never
+  appears to claim that today's frontend already supports it. Known adaptation: the Session list.
+  `SessionPanel.svelte` reads a frontend store that `session.svelte.ts` persists in per-tab
+  `sessionStorage`, so separate windows would still get separate sessions; the proof of concept
+  supplies an adapter for that store backed by the fixture server.
+- **Backend: a fixture API server** on a dedicated proof-of-concept origin. No proxy to, and no
+  fallback to, the live daemon. It answers only the routes the chosen components use, with fixture
+  data, and can simulate state changes (for example session changes) and disconnects on demand.
+  **Unknown requests fail visibly**, exposing missing fixtures. It never touches the station's
+  data, the rig or the transmitter.
+- **Window roles:** a finite set, including **Rig Control** and **Session**. Each panel has **one
+  active home**: docked in the main window or detached in its own window. A second request reveals
+  the existing panel rather than creating another. Both **docking and separate OS windows** are
+  tested; the docking mechanism (a layout library or our own) is chosen after these criteria, as
+  an implementation choice.
+- **Acceptance scenarios (Electron):**
+  1. Detach Session, change simulated state, close and reopen it, and recover from a simulated
+     disconnect.
+  2. Detach and re-dock Rig Control and Session **without losing state**: shared data **and**
+     panel-local state (for example Session search text, the selected row and the scroll
+     position). Recreating the rows but losing the operator's place counts as a partial success.
+  3. Several windows show one shared state; a change in one appears in all.
+  4. Closing: the application's own confirmation when something would stop (§4); no user reload
+     (§5); the "daemon unavailable" page (§6).
+  5. Window positions restored at start, tested under **native Wayland and XWayland**: Electron
+     documents that programmatic positioning is unavailable under native Wayland
+     ([BrowserWindow, `setPosition`](https://www.electronjs.org/docs/latest/api/browser-window#winsetpositionx-y)),
+     so exact restoration is a test, not an assumption.
+  6. Window-local shortcuts, including keys a browser reserves (§8), and a native Save dialog (§9).
+  7. Measured package size and memory use.
+- **Rendering comparison (Electron, Wails v3, and Firefox as today's reference):** the same
+  components, fixtures, viewport, theme and scale in each engine; specific differences recorded
+  with screenshots. Its purpose is to determine whether the previously observed WebKitGTK problems
+  remain.
+- **Where it lives:** a separate directory outside the product build, so Electron, Wails and their
+  tooling never enter `smd`'s build or dependencies. Its results are recorded in this dossier.
+
 ## Next step
 
-The operator rules on the decisions above. Then a short spike, if still warranted: one desktop
-shell (the leading candidate after the rulings) loading the existing SPA from `smd` unchanged,
-exercising §2 and §4. Only then a UI-host ADR.
+The proof of concept above, then its results recorded here; the operator's rulings on the
+decisions above; only then a UI-host ADR.
