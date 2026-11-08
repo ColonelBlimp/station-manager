@@ -456,6 +456,9 @@ stays ADR 0100's daemon work. Nothing in it is shipped or wired to `smd`.
   the manual) open in the default browser, never in an app window. Window sizes are remembered;
   closing the main window closes the set. Evidence in the POC README (real clicks, reversion
   runs); the manual there is a synthetic placeholder for smd's page.
+- **Operator ruling (2026-11-08):** external links open in the default browser: "the browser is
+  fine. The app does not need to open QRZ.com". (Reasons given: the operator's logins live in the
+  browser; app windows are trusted and talk to smd, so remote sites stay out of them.)
 - **Desktop check (operator):** open Map and Manual, move them to another screen, restart; and
   that an external link opens in the browser.
 
