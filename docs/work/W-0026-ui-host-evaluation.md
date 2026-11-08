@@ -388,6 +388,17 @@ stays ADR 0100's daemon work. Nothing in it is shipped or wired to `smd`.
 - **Where it lives:** a separate directory outside the product build, so Electron, Wails and their
   tooling never enter `smd`'s build or dependencies. Its results are recorded in this dossier.
 
+## Proof of concept: desktop results (operator's desktop)
+
+- **Second launch (2026-11-08, Electron 44.9.3, Wayland session).** In both runs the second
+  launch exits, and the first instance logs that it received the launch and asked to reveal its
+  main window. **Native Wayland** (plain `npm start`): the window did **not** come to the front.
+  **XWayland** (`--ozone-platform=x11`): the window **came to the front**. The application
+  reaches the compositor in both cases; under native Wayland the compositor did not raise the
+  window. Why, and whether an activation token passed from the second launch would change that,
+  is not established (unverified inference: Wayland compositors restrict focus changes that lack
+  an activation token).
+
 ## Next step
 
 The proof of concept above, then its results recorded here; the operator's rulings on the
