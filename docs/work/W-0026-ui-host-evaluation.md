@@ -447,6 +447,18 @@ stays ADR 0100's daemon work. Nothing in it is shipped or wired to `smd`.
   docked; which panels were detached is not remembered across a restart. Whether Station Manager
   should restore the workspace layout (which panels are detached) at start is a design decision.
 
+## Proof of concept: Map and Manual windows (2026-11-08)
+
+- **Built in the Electron host** (no UI change; §2's recommended fixed window set): the app's
+  existing `target="_blank"` links are routed by the host. Map and Manual each open one
+  application window; asking again reveals it (a manual section link moves the Manual to that
+  section). Other app routes stay with the main window. External links (QRZ lookups, links in
+  the manual) open in the default browser, never in an app window. Window sizes are remembered;
+  closing the main window closes the set. Evidence in the POC README (real clicks, reversion
+  runs); the manual there is a synthetic placeholder for smd's page.
+- **Desktop check (operator):** open Map and Manual, move them to another screen, restart; and
+  that an external link opens in the browser.
+
 ## Proof of concept: movable docking (2026-11-08)
 
 - **Operator rulings:** only the panels move (Rig Control, Session); the workspace (the logging
