@@ -447,6 +447,31 @@ stays ADR 0100's daemon work. Nothing in it is shipped or wired to `smd`.
   docked; which panels were detached is not remembered across a restart. Whether Station Manager
   should restore the workspace layout (which panels are detached) at start is a design decision.
 
+## Proof of concept: rendering comparison (2026-11-08, first pass)
+
+Operator's description of the earlier Wails v2 problem: "Fonts, borders and the overall look (hard
+to describe) look old fashion". Method: the POC's frozen UI and fixtures, four views, 1400x900,
+scale 1, light and dark app theme, in Firefox 159 (reference), Electron 44 (Chromium 152), and
+Wails v3.1.0 built two ways: GTK4/WebKitGTK 6.0 (the v3 default) and GTK3/WebKit2GTK 4.1 (the API
+Wails v2 used); both WebKitGTK 2.54.2 (Fedora 44). Automated captures in a private Xvfb display
+with measured computed styles; details and images in the POC (`README.md`, `out/compare-*`).
+
+- **Same CSS and font face everywhere.** Computed styles match; a sample text measures
+  184.5-184.6 px in Firefox, Electron and Wails GTK4.
+- **WebKitGTK draws native form controls with the GTK theme, not the page's styling.** Selects
+  are grey GTK controls with a solid arrow, 37 px tall against 27 (Firefox) and 29 (Electron), which
+  also enlarges the Rig panel. In the dark theme the header's contest select is a light-grey
+  control with faded text in a dark header, and the Contest checkbox a plain white square. This
+  matches "borders … old fashion"; it holds for both Wails builds.
+- **Wails GTK3 (WebKit2GTK 4.1, the Wails v2 API) sets text about 2% wider** with whole-pixel
+  metrics (188 px for the same sample); GTK4 matches Chromium and Firefox.
+- Elements the app styles itself (text inputs, buttons, tables, cards) render the same in all
+  four engines.
+- **Not yet established:** the desktop look (GPU compositing, the desktop's font
+  antialiasing/hinting), which Xvfb cannot show; and whether CSS that removes native control
+  styling (`appearance: none` with the app's own arrow and box) would close the form-control gap
+  in WebKitGTK. Both are open; neither is decided here.
+
 ## Next step
 
 The proof of concept above, then its results recorded here; the operator's rulings on the
