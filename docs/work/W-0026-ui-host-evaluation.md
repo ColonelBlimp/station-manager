@@ -581,7 +581,56 @@ with measured computed styles; details and images in the POC (`README.md`, `out/
   is gone (Wails: "until v3.1"); whether the open select list warrants app-drawn dropdowns (a
   product decision: keyboard and accessibility become the app's). Open; nothing here is decided.
 
+## Proof of concept: final acceptance and summary (2026-11-08)
+
+**Final acceptance (POC `npm run final`, real input, reversion runs):**
+- **Native Save dialog (§9):** the host takes the Export dialog's download and, on the desktop,
+  shows the native Save dialog (Documents, the daemon's filename, an ADIF filter). Automated: the
+  saved file is the daemon's document (its filename, 20 records) and the app reports the daemon's
+  count. **Desktop check pending:** the dialog itself under Wayland (portal).
+- **Keys a browser reserves (§8):** Ctrl+W, Ctrl+T and Ctrl+N reach the page in the desktop host
+  (Firefox cannot stop them), so the app could bind them; no window opened or closed. **Desktop
+  check pending:** pressing them by hand does nothing (offscreen keys never reach accelerators).
+- **Window-local shortcuts (§8):** a rig key in the Map window sends nothing; in the main window,
+  one command. Per-window handling (never two commands per press) is the rig scenario's evidence.
+
+**What the proof of concept established (Electron unless stated; evidence in the sections
+above and the POC README):**
+
+| Area | Result |
+|---|---|
+| Fixed window set (§2) | Main, Map, Manual and detachable Rig/Session windows, one of each; asking again reveals it; external links go to the browser (operator: "Map and manual are good") |
+| Window placement | Sizes always restored; positions restored under XWayland, not under native Wayland; second launch raises the window only under XWayland |
+| Shared state across windows | Session and Rig follow the daemon in every window; detach/dock keeps panel-local state |
+| Close (§3, §4) | The app's own confirmation lists what would stop; Cancel keeps everything |
+| No user reload (§5) | Holds on the desktop |
+| Daemon unavailable (§6) | One state in every window; recovery without reload or reset |
+| Shortcuts (§8) | Rig keys work in every window, not while typing in ordinary fields, not under dialogs or during an outage (operator rulings); browser-reserved keys reach the page |
+| Files (§9) | Native Save dialog through the host |
+| Rendering (Electron, Wails v3, Firefox) | Same CSS and fonts; WebKitGTK's native form controls caused the "old-fashioned" look (unreadable in dark mode on the operator's desktop); app-drawn controls fix it in every host; the open select list stays native |
+| Layout | Docking evaluated and stopped ("take up real estate"); movable floating panels "a lot more useful", positions kept across restarts; detached windows the primary use |
+| Size and memory | Electron 297 MB (92 MB compressed), ~303 MiB one window, +75 MiB for three more; Wails v3 11.6 MB + WebKitGTK 136 MB, ~311 MiB; Firefox 554-727 MiB |
+
+**Unknowns above, now answered by the POC:** Electron's reload binding (the menu is removed and
+F5/Ctrl+R are blocked; desktop-verified); Electron's package size (measured); WebKitGTK and the
+WebSocket/localhost origin (Wails loaded the app and its streams from the fixture origin; no
+limitation seen in the rendering runs). Still open: localhost-specific security guidance; Tauri
+(not evaluated).
+
+**Open decisions for the operator (consolidated; none decided here):**
+1. The host: Electron, Wails v3, or stay in the browser (with app-drawn controls either way).
+2. Remote access and client authorization (§1).
+3. The window set as built (§2), and whether any other view needs its own window.
+4. Native Wayland or XWayland for a released build (window positions and raising).
+5. Which panels are open at start, and whether detached windows reopen at start.
+6. A minimum window size.
+7. Floating panels as the default overlay; the Phone/CW logging panel movable too (FT8 fixed).
+8. App-drawn dropdown lists (the open list stays native otherwise).
+9. The close rule and its prompts (§3, §4), no user reload (§5), one unavailable state (§6),
+   reload on a changed build (§7).
+10. Native Save dialog wanted (§9), after the desktop check; launcher only, no tray (§10).
+
 ## Next step
 
-The proof of concept above, then its results recorded here; the operator's rulings on the
-decisions above; only then a UI-host ADR.
+The proof of concept is complete (summary above). Next: the operator's rulings on the open
+decisions, then a UI-host ADR.
