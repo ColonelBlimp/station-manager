@@ -720,8 +720,13 @@ package size) that makes Electron unsuitable. The host choice is the operator's.
   **7 days** from an applicable upstream fix becoming available (the scenario gates still apply;
   the update still takes effect at the next UI restart). A **daily** scheduled support check, plus
   one at release time, **warns at 8 weeks** before the pinned line's end of support and **blocks
-  desktop releases on that line at 2 weeks**; it never shuts down an installed application. **Claude's advice (2026-11-09,
-  not decided):** (1) ordinary Electron updates settle about 7-14 days and pass the CI scenarios;
+  desktop releases on that line at 2 weeks**; it never shuts down an installed application. The
+  daily cadence is the support check's; how often security releases are monitored is not ruled
+  (it must be frequent enough to meet the 7-day target). **Ruled 2026-11-09 (operator; codex-031's
+  proposal):** the 7-day target counts as met when a tested, signed update is published to the
+  repository (opening a pull request or starting triage does not count); installation, and
+  activation at the operator's next UI restart, are separate milestones.
+  **Claude's advice (2026-11-09; superseded where the ruling above applies):** (1) ordinary Electron updates settle about 7-14 days and pass the CI scenarios;
   security releases (above all fixes for exploited Chromium vulnerabilities) skip the settling
   period and ship within days, never skipping the scenarios; under the update-during-operation
   ruling they still take effect at the next UI restart, with a quiet, non-interrupting
@@ -729,7 +734,8 @@ package size) that makes Electron unsuitable. The host choice is the operator's.
   about 8 weeks (one release cycle) before the pinned major's end of support and fails about 2
   weeks before it, reading the dates from Electron's published schedule (its machine-readable
   form not yet checked).
-  **Codex's additions (codex-030, not decided):** identify security work by reviewing every stable
+  **Codex's additions (codex-030; the daily support cadence and the 8-week/2-week thresholds are
+  now ruled, above; the rest stays recommendations):** identify security work by reviewing every stable
   release on the pinned line (release notes, Electron's security notifications, Chromium and
   Node announcements), not by advisory matching alone; treat component or backport updates of
   unclear security scope as needing prompt review; set an operator-approved response target
