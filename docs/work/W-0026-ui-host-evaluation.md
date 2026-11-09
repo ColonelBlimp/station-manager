@@ -723,9 +723,18 @@ package size) that makes Electron unsuitable. The host choice is the operator's.
   responsibility to check licenses"); packages that download proprietary content during the
   build are "currently a gray area" and "not allowed"; the SRPM-generation step may "use
   network" (so Electron's prebuilt archive could be fetched there), while network access during
-  the RPM build itself is not stated. **Risk to verify before choosing COPR for the shell:**
-  whether Electron's bundled `libffmpeg.so` carries patent-encumbered (proprietary) codecs and,
-  if so, whether a codec-free FFmpeg build can replace it (unverified inference).
+  the RPM build itself is not stated.
+  **FFmpeg, checked 2026-11-09:** Electron's standard build includes proprietary codecs
+  (`build/args/all.gn`: `proprietary_codecs = true`). Electron also publishes a codec-free FFmpeg
+  for each release (`build/args/ffmpeg.gn`: `proprietary_codecs = false`; the release uploader's
+  "Upload free version of ffmpeg"; v44.9.3 ships `ffmpeg-v44.9.3-linux-x64.zip`), and its own
+  `script/verify-ffmpeg.py` copies that "ffmpeg without proprietary codecs" over the app's
+  `libffmpeg.so` and runs a no-proprietary-codecs test, so the swap is an intended path. In the
+  POC, an Electron 44.9.3 copy with the codec-free `libffmpeg.so` passed the smoke, windows,
+  roles and final scenarios (Station Manager plays no media). So the shell can ship without
+  proprietary codecs, removing the codec obstacle to COPR. **Still unchecked:** every other
+  third-party licence bundled with Chromium (its `LICENSES.chromium.html`) against Fedora's
+  allowed list.
   **Ruled 2026-11-09 (operator), update during operation:** "Hold until shutdown or restart (of
   the UI) - nothing interupts any User activity: logbook editing, on-air, etc". An installed
   desktop-app update takes effect only when the operator next shuts down or restarts the UI;
