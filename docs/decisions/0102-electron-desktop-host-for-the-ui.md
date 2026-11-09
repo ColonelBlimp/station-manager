@@ -103,6 +103,12 @@ The operator's rulings (W-0026, 2026-11-09) define the experience:
    not ruled; it must be frequent enough to meet the target. A
    **daily** support check (and one at release time) warns **8 weeks** before the pinned Electron
    line's end of support and blocks releases on it at **2 weeks**; it never stops an installed app.
+9. **Deployments** (ruled 2026-11-09): two packages, the daemon (`smd`, which serves the UI) and
+   the shell; the shell depends on the daemon, never the reverse. **Daemon + shell** is the
+   operating station. **Daemon only** is a supported deployment for the central role of
+   [ADR 0014](0014-upstream-forwarding-deferred.md) (a team or DXpedition server that receives
+   QSOs from operating stations, deduplicates and does the final forwarding); it cannot operate
+   a station. The topology itself stays deferred as ADR 0014 rules.
 
 ## Requirements the rulings carry
 
@@ -126,6 +132,26 @@ ADR" and the update plan) and they must be met by the implementation, not assume
 - **Updates need package acceptance:** an in-place upgrade while the app runs (editing, a detached
   window open) must keep every window working and apply the new runtime only after a restart;
   daemon package scriptlets must not interrupt `smd` during operation.
+- **Route classification has room for a daemon submitter:** besides view-only and operating
+  clients, ADR 0014's daemon-to-daemon QSO submission is a third kind of caller with its own
+  credential (ADR 0014's bearer-token preparation), so the operating-client check and view-only
+  enforcement must not foreclose it. How a headless central daemon is administered (the shell
+  installed there, later authenticated remote administration, or local-only administration) is
+  decided when the topology is built.
+- **The shell verifies `smd` before presenting the operating credential.** While `smd` is down
+  (the waiting page), any local process, another user's included, can listen on its loopback
+  port first and would receive the credential. The shell must establish that the listener is
+  the real `smd` first: for example a challenge-response proving `smd` holds the per-install
+  secret without revealing it, or a connection over a Unix socket with owner-only permissions.
+- **The credential never reaches page script or the network.** It lives in an owner-only file;
+  the shell's main process attaches it only to requests for `smd`'s origin, so an injected
+  script in the UI cannot read it; it is never sent over plain HTTP to another machine
+  (operating stays local).
+- **The host interface stays minimal and checks its caller.** It offers windows and the native
+  dialogs (a Save writes only the file the operator chose), accepts calls only from `smd`'s
+  origin, and gives the page no general file, process or shell access.
+- **The daemon package stands alone:** it installs, runs and upgrades without the shell; only
+  the shell declares the dependency and the compatibility contract.
 - **The shell ships Electron's codec-free FFmpeg** if any distribution requires it (Electron
   publishes one per release; the POC passed with it substituted).
 
@@ -183,6 +209,19 @@ Floating panels plus detached windows replace it.
 - **The shell must keep its privileged surface narrow:** windows, dialogs, shortcuts and the
   waiting page, nothing operating; sandboxed renderers limited to `smd`'s origin (the POC's
   request filter), with a Content Security Policy still to add.
+- **Production hardening still to do** (the HTTP API's own exposure is unchanged by the host:
+  `smd` binds loopback by default, refuses other binds without `server.allow_insecure_network`,
+  checks Host against DNS rebinding and Origin against cross-site requests,
+  `internal/api/csrf.go`):
+  - untrusted text (callsign lookups, FT8 decodes, ADIF imports) stays escaped: no `{@html}`,
+    with the Content Security Policy above; the renderer sandbox and the 7-day security target
+    limit the damage of a Chromium flaw;
+  - external links open only for `https:`, never `file:` or other scheme handlers;
+  - Electron's fuses turn off running the binary as Node (`RunAsNode`, `NODE_OPTIONS`) and turn
+    on packaged-app integrity checking; no remote-debugging port or developer tools ship.
+- **The operating-client check closes a gap that exists today:** requests without an Origin
+  (curl, scripts) are allowed, so any local process, including another user's, can operate the
+  station now; the check stops other users, not the same user's processes (its accepted limit).
 - **ADR 0100 remains necessary:** the shell removes the states browser tabs create, not the need
   for daemon-owned sessions.
 

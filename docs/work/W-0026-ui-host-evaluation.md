@@ -798,6 +798,31 @@ package size) that makes Electron unsuitable. The host choice is the operator's.
   nothing interrupts logbook editing, operating on air or any other activity.
 - **Separate from the host (both):** remote and browser access with authorization (§1), and the
   window-placement platform policy (native Wayland or XWayland).
+- **Deployments, ruled 2026-11-09 (operator; Claude's recommendation):** asked whether the
+  plan is a UI binary and a daemon binary, deployable as daemon only or UI plus daemon, the
+  operator raised the distributed case: "for a distributed (contest team, dxpedition, etc) set up
+  when the local daemon forwards QSOs to a central daemon, which does the final forwarding, if
+  any?" That is ADR 0014's deferred upstream-forwarding topology (the central daemon is "just a
+  daemon" with the bridge off). Ruled: two packages, the shell depending on the daemon and never
+  the reverse; daemon + shell is the operating station; **daemon only is supported** for the
+  central role and cannot operate a station; the topology stays deferred. Carried into ADR 0102 as
+  requirements: the route classification leaves room for daemon-to-daemon submission with its own
+  credential, and the daemon package stands alone. Administering a headless central daemon
+  (shell installed there, later authenticated remote administration, or local only) is decided
+  when the topology is built.
+- **Security of the Electron host (2026-11-09; operator's question, Claude's analysis, recorded
+  in ADR 0102 at the operator's direction):** "Hosting the UI in electron ... the daemon using
+  Http api endpoints ... will it cause any security concerns?" The API's exposure is unchanged
+  (`smd` binds loopback by default, refuses other binds without `server.allow_insecure_network`,
+  checks Host and Origin in `internal/api/csrf.go`); requests without an Origin are allowed, so
+  any local process, another user's included, can operate today, which the operating-client
+  check closes for other users. New with the shell: (1) a process squatting `smd`'s port while
+  `smd` is down would receive the credential, so the shell verifies `smd` first
+  (challenge-response or an owner-only Unix socket); (2) the credential stays out of page script
+  and off the network (main-process header injection, owner-only file, local only); (3) a
+  minimal host interface that checks its caller. Hardening: escaped untrusted text and a CSP,
+  `https:`-only external links, Electron fuses (no `RunAsNode`/`NODE_OPTIONS`, integrity on), no
+  debugging port or developer tools. Not yet reviewed by Codex.
 
 ## Next step
 
