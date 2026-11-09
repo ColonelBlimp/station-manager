@@ -16,19 +16,13 @@ external operator is offline-first; theming and new product work are not ship ga
 
 ## P0 — correctness and safety
 
-None open. The reduced FT8 type-4 ladder is code-complete but still has the operator-initiated
-on-air validation gate in W-0002.
+Reserved for a defect that stops all other work (TX safety, data loss). None open.
 
 ## P1 — verified correctness, in order
 
-1. **W-0008 CC-5 · OPEN — reconcile the alpha.1-generated qrzcq `action_filter` at load** (alpha.2 dogfood
-   Finding #6, B1-01 WAIVED until the next candidate). Narrow by ruling: only a `qrzcq` forwarder whose stored
-   filter is exactly alpha.1's ordered `["insert","update","delete"]` default becomes the literal
-   `["insert"]`; explicit unsupported actions stay rejected. Tests prove both cases. Built 2026-09-06;
-   in the **alpha.3 candidate** (`333427ea`, tag `v2.0.0-alpha.3`, frozen 2026-09-19), whose acceptance
-   retires the B1-01 waiver ([record](reports/dogfood-acceptance-v2.0.0-alpha.3.md)). Evidence in the W-0008 dossier.
+None open. W-0008 CC-5 closed: released in alpha.5, B1-01 waiver retired 2026-10-28.
 
-Conditional: alpha.2 Finding #7 (false TX alarm at bridge open, W-0011) becomes P1 #2 once passively reproduced.
+Conditional: alpha.2 Finding #7 (false TX alarm at bridge open, W-0011) becomes P1 once passively reproduced.
 W-0007's four findings (equal-version SM Cloud conflict, partial station baseline, concurrent QSO delete,
 re-enrichment generation race) are all closed (2026-08-22).
 
@@ -36,11 +30,12 @@ re-enrichment generation race) are all closed (2026-08-22).
 
 Open one workstream per active focus.
 
-1. **W-0021 · SELECTED 2026-09-21 — [First-class QSO archives (ADR 0071 programme)](work/W-0021-qso-archives.md).** Stable archive and logbook identities with in-place adoption, managed catalogue and provisioner with last-known-good startup, create/list/activate over the attended restart, the shell archive selector, SM Cloud keyed by UUIDs. The C.2 refused-save ruling was accepted 2026-10-06 and 5C (config v6 and its data-aware downgrade) was built and deployed; 5F.4 (`73a992b0`…`ea7b189e`) and 5F.5, restore by archive and logbook UUID (`6aa99773`, docs `d93accc9`), are implemented and CI-green. Whole-archive provisioning (Q7, `smd provision`: a new managed file carrying the cloud archive's UUID) is implemented, reviewed and CI-green through `bb796a11`. On 2026-10-21 the station drills A and B and the scratch restore-and-provisioning rehearsal C passed, and 5F's acceptance criterion 6 closed; the pre-schema-7/8 smcloud dumps' retention condition is satisfied, and their disposal is the operator's decision. Next: the replacement candidate's release gates under the alpha.3 Option 1 ruling (alpha.3 superseded); Settings → Logbooks follows. The ADR 0087 removal shipped 2026-10-05.
-2. **W-0024 · ACCEPTED 2026-11-06 (operator sign-off on `b2a16f5a`) — [Settings → Logbooks](work/W-0024-settings-logbooks.md).** Step (4) of the data-model chain (W-0014, 2026-09-19), the "Settings → Logbooks follows" of W-0021: logbook descriptions and Set as default at an attended restart (ADR 0097), released in `46a07d07`, CI-green on `43d0ed98`. Accepted on the station (acceptance record entry 34); live U5 and keyed U6 exercises deferred. W-0023 ([contest logging](work/W-0023-contest-logging.md), step 5) follows in the chain; it is design only until its follow-on ADR to ADR 0096 is accepted.
-3. **W-0010 · SELECTED 2026-09-20 — [Improve forwarding, data, and synchronization reliability](work/W-0010-forwarding-data-and-sync-reliability.md).** Token rotation, duplicate-QSO resolution, legal bulk backfill, idempotent outcomes, and bounded reconciliation. **Outcome 9 CLOSED 2026-09-21** (failed-versus-waiting forwarder rows, `failure_class`, boot re-arm of auth failures, retry endpoint and card; accepted on test proof plus passive station evidence — the QRZ fixture had been discarded on 2026-09-12). Outcomes 1–8 stay unselected; the next selected work is the ADR 0071 archive programme.
-4. **W-0012 · OPEN — [Complete routed operator-experience follow-ups](work/W-0012-operator-experience-followups.md).** UI, map, onboarding, and diagnostic improvements not owned by W-0004. The three slices ruled 2026-09-19 (landing preference, "CQ run" header, Excel export) are independent post-freeze commits outside the data-model chain.
-5. **W-0020 · SELECTED 2026-09-14 — [Station Events](work/W-0020-station-events.md).** Replace the header
+1. **W-0027 · SELECTED 2026-11-09 — [Electron desktop host](work/W-0027-electron-desktop-host.md).** Builds ADR 0102 (W-0026's outcome) in slices, each reviewed by the operator and Codex; baseline tag `pre-w0027`.
+2. **W-0021 · SELECTED 2026-09-21 — [First-class QSO archives (ADR 0071 programme)](work/W-0021-qso-archives.md).** Stable archive and logbook identities with in-place adoption, managed catalogue and provisioner with last-known-good startup, create/list/activate over the attended restart, the shell archive selector, SM Cloud keyed by UUIDs. The C.2 refused-save ruling was accepted 2026-10-06 and 5C (config v6 and its data-aware downgrade) was built and deployed; 5F.4 (`73a992b0`…`ea7b189e`) and 5F.5, restore by archive and logbook UUID (`6aa99773`, docs `d93accc9`), are implemented and CI-green. Whole-archive provisioning (Q7, `smd provision`: a new managed file carrying the cloud archive's UUID) is implemented, reviewed and CI-green through `bb796a11`. On 2026-10-21 the station drills A and B and the scratch restore-and-provisioning rehearsal C passed, and 5F's acceptance criterion 6 closed; the pre-schema-7/8 smcloud dumps' retention condition is satisfied, and their disposal is the operator's decision. Next: the replacement candidate's release gates under the alpha.3 Option 1 ruling (alpha.3 superseded); Settings → Logbooks follows. The ADR 0087 removal shipped 2026-10-05.
+3. **W-0024 · ACCEPTED 2026-11-06 (operator sign-off on `b2a16f5a`) — [Settings → Logbooks](work/W-0024-settings-logbooks.md).** Step (4) of the data-model chain (W-0014, 2026-09-19), the "Settings → Logbooks follows" of W-0021: logbook descriptions and Set as default at an attended restart (ADR 0097), released in `46a07d07`, CI-green on `43d0ed98`. Accepted on the station (acceptance record entry 34); live U5 and keyed U6 exercises deferred. W-0023 ([contest logging](work/W-0023-contest-logging.md), step 5) follows in the chain; it is design only until its follow-on ADR to ADR 0096 is accepted.
+4. **W-0010 · SELECTED 2026-09-20 — [Improve forwarding, data, and synchronization reliability](work/W-0010-forwarding-data-and-sync-reliability.md).** Token rotation, duplicate-QSO resolution, legal bulk backfill, idempotent outcomes, and bounded reconciliation. **Outcome 9 CLOSED 2026-09-21** (failed-versus-waiting forwarder rows, `failure_class`, boot re-arm of auth failures, retry endpoint and card; accepted on test proof plus passive station evidence — the QRZ fixture had been discarded on 2026-09-12). Outcomes 1–8 stay unselected; the next selected work is the ADR 0071 archive programme.
+5. **W-0012 · OPEN — [Complete routed operator-experience follow-ups](work/W-0012-operator-experience-followups.md).** UI, map, onboarding, and diagnostic improvements not owned by W-0004. The three slices ruled 2026-09-19 (landing preference, "CQ run" header, Excel export) are independent post-freeze commits outside the data-model chain.
+6. **W-0020 · SELECTED 2026-09-14 — [Station Events](work/W-0020-station-events.md).** Replace the header
    notification slide-over with a full-page Station Events section; the alarm family (TX/drive alarm
    raised and cleared, non-operator disarm, abnormal exchange termination) joins the `operator_event`
    store under ADR 0076's typed-metadata rule; retention 500 per category; typed facts through a
@@ -48,9 +43,9 @@ Open one workstream per active focus.
    built 2026-09-18 (migration 0009, recorder, producing boundaries, `GET /v1/station-events`, the
    page, docs and manual); close-out awaits the passive AC2 evidence — the first real alarm rows on the
    page — and the operator's acceptance.
-6. **W-0002 · validation gate · OPEN — [Validate the reduced FT8 type-4 ladder on air](work/W-0002-ft8-type4-on-air-validation.md).** Confirm one operator-initiated completed exchange with a real nonstandard station; RF action always requires agreement for that occasion.
-7. **W-0008 · OPEN — [Harden audited contract boundaries](work/W-0008-harden-audited-contract-boundaries.md).** Ordered persistence, configuration, API-wire, and frontend-wire correctness slices.
-8. **W-0018 · OPEN — [Bring the embedded manual to release readiness](work/W-0018-bring-the-embedded-manual-to-release-readiness.md).** Page-by-page standing pass during dogfooding and a release gate before a public release; not a blocker for the next internal candidate (alpha.2 Findings #9, #10, #13, #14, #15).
+7. **W-0002 · validation gate · OPEN — [Validate the reduced FT8 type-4 ladder on air](work/W-0002-ft8-type4-on-air-validation.md).** Confirm one operator-initiated completed exchange with a real nonstandard station; RF action always requires agreement for that occasion.
+8. **W-0008 · OPEN — [Harden audited contract boundaries](work/W-0008-harden-audited-contract-boundaries.md).** Ordered persistence, configuration, API-wire, and frontend-wire correctness slices.
+9. **W-0018 · OPEN — [Bring the embedded manual to release readiness](work/W-0018-bring-the-embedded-manual-to-release-readiness.md).** Page-by-page standing pass during dogfooding and a release gate before a public release; not a blocker for the next internal candidate (alpha.2 Findings #9, #10, #13, #14, #15).
 
 
 
@@ -74,7 +69,6 @@ Open one workstream per active focus.
   mode (W-0011 ruling), scoring, export and different-call operation, its own ADR. **Design opened
   2026-10-28 as [W-0023](work/W-0023-contest-logging.md) — design only, no implementation authorised**;
   the reference case is the UK/EI DX Contest.
-- **W-0027 · SELECTED 2026-11-09, unranked — [Electron desktop host](work/W-0027-electron-desktop-host.md).** Builds ADR 0102 (W-0026's outcome) in reviewed slices.
 - **W-0014 · PARKED — [Deferred product workstreams](work/W-0014-deferred-product-workstreams.md).** Discovery inventory only; each member needs go-ahead and its own design/dossier before implementation.
 - **FT8 Field Day UI:** blocked until the relevant contest; not a 7Q8AC ship concern.
 - **Daemon-initiated FT8 sequencing:** out of scope. Sessions remain operator-initiated; an open event subscription is the presence signal, not proof that a person remains at the desk.

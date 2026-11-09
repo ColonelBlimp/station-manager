@@ -20,7 +20,8 @@ audit reconciliation; [`docs/backlog.md`](../backlog.md) alone ranks this dossie
 2. **Configuration:** CC-3 extends semantic validation to `datastore` and `logging`; CC-4 makes the
    persistence primitives enforce the intended normalize-then-validate contract. CC-2 belongs to
    [W-0006](../archive/work/W-0006-reject-unknown-config-keys.md), not here.
-   CC-5 (alpha.2 dogfood Finding #6, backlog P1 #1): at load, reconcile only the identifiable
+   CC-5 (alpha.2 dogfood Finding #6; **closed**: released in alpha.5, A1-05 and B1-01 PASS and the
+   B1-01 waiver retired 2026-10-28, [record](../reports/dogfood-acceptance-v2.0.0-alpha.5.md)): at load, reconcile only the identifiable
    alpha.1-generated legacy shape — a pre-version-3 document whose `qrzcq` forwarder carries the
    exact ordered slice `["insert","update","delete"]` alpha.1's omitted-filter path emitted — to
    the literal `["insert"]`; any other explicit unsupported action, including a permutation of

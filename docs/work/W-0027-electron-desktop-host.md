@@ -1,7 +1,8 @@
 # W-0027 — Electron desktop host: building ADR 0102
 
-**Status:** Selected 2026-11-09. No slice started. Each slice starts on the operator's direction;
-first comes the baseline tag (slice 0).
+**Status:** Selected 2026-11-09; ranked in [`docs/backlog.md`](../backlog.md). Slice 0 done: annotated tag `pre-w0027`
+on `a9457725` (CI-green, run 42613353737), pushed by the operator. Each further slice starts on the
+operator's direction.
 **Selected:** 2026-11-09 (operator: "yes, accept ADR 0102, commit and open W-0027").
 **Outcome:** Station Manager runs as the Electron desktop app decided in
 [ADR 0102](../decisions/0102-electron-desktop-host-for-the-ui.md), built in small slices that
@@ -81,10 +82,19 @@ design before code.
 
 ## Open questions for the operator
 
-- **Priority:** where W-0027 ranks against P1 (W-0008 CC-5 is open) and the other P2 items.
 - **The order of the tracks:** this proposal starts A1 and B1 together, with C1's design in
   parallel.
 - **Where the shell lives in the repository** (for example `desktop/`), and how it builds in
   `task` and CI.
+
+**Review recommendations (2026-11-09, pasted by the operator; not ruled):**
+
+- **Start B1 alongside A1, with separate, separately reviewable results.**
+- **A1 depends on C1.** ADR 0102 requires authentication before the shell executes daemon-served
+  UI. So A1 builds the window, the independent waiting page and fixture-backed checks, and loading
+  the real daemon's UI waits for C1's reviewed mechanism.
+- **Default-deny permissions belong in the initial shell.**
+- **`desktop/` fits,** with its own package manifest, lockfile, and focused Task and CI checks. The
+  SPA stays in `frontend/app`; the shell consumes the daemon-served UI and keeps no copy of it.
 
 ## Record

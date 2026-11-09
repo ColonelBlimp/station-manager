@@ -389,7 +389,7 @@
       "audiences": ["operator", "contributor", "agent"],
       "topics": ["ui-host", "desktop", "electron", "windows"],
       "scopes": ["frontend/app/**", "internal/api/**"],
-      "summary": "W-0027 builds ADR 0102's Electron desktop host in small slices, each reviewed by the operator and Codex before the next: the shell in the repository, the UI's chrome for a windowed application, the daemon's authenticated channel and operating-client check, and packaging through a signed dnf repository; slice order and priority await the operator."
+      "summary": "W-0027 builds ADR 0102's Electron desktop host in small slices, each reviewed by the operator and Codex before the next: the shell in the repository, the UI's chrome for a windowed application, the daemon's authenticated channel and operating-client check, and packaging through a signed dnf repository; slice order awaits the operator; its ranking lives in the backlog."
     },
     {
       "id": "work.dogfood-inbox",
