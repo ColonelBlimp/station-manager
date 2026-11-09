@@ -617,20 +617,61 @@ WebSocket/localhost origin (Wails loaded the app and its streams from the fixtur
 limitation seen in the rendering runs). Still open: localhost-specific security guidance; Tauri
 (not evaluated).
 
-**Open decisions for the operator (consolidated; none decided here):**
-1. The host: Electron, Wails v3, or stay in the browser (with app-drawn controls either way).
-2. Remote access and client authorization (§1).
-3. The window set as built (§2), and whether any other view needs its own window.
-4. Native Wayland or XWayland for a released build (window positions and raising).
-5. Which panels are open at start, and whether detached windows reopen at start.
-6. A minimum window size.
-7. Floating panels as the default overlay; the Phone/CW logging panel movable too (FT8 fixed).
-8. App-drawn dropdown lists (the open list stays native otherwise).
-9. The close rule and its prompts (§3, §4), no user reload (§5), one unavailable state (§6),
-   reload on a changed build (§7).
-10. Native Save dialog wanted (§9; it works on the operator's desktop); launcher only, no tray (§10).
+**Decisions for the operator (consolidated; all ruled 2026-11-09):**
+1. **Ruled 2026-11-09 (operator): Electron** as the primary desktop host (both reviewers' recommendation); the UI and `smd` stay as they are, and the browser stays a fallback. Wails v3 reopens only for a concrete requirement.
+2. **Ruled 2026-11-09 (operator), §1:** (a) other machines and plain browsers are **view-only**
+   (full operating control only from the station's desktop app; off unless enabled in
+   `config.json`); (b) a **browser is fine for that view-only access**, and operating always
+   requires the desktop app; (c) `smd` **adds an operating-client check** (a per-install secret the
+   desktop app presents; operating routes refuse requests without it), accepting its stated
+   limit: it keeps out other users and machines, not other processes of the same user.
+3. **Ruled 2026-11-09 (operator), §2: the window set as built:** one main window (Operate, Logbook, Events, Settings as views), one Map window, one Manual window, and Rig Control and Session detachable into their own windows; each at most once; external links to the browser. Another view gets its own window only when a need appears.
+4. **Ruled 2026-11-09 (operator): XWayland by default.** The condition is met: on the operator's desktop, XWayland and native Wayland both look sharp at the display scaling (operator: "both look good").
+5. **Ruled 2026-11-09 (operator): as you left them:** open and closed panels, floating places and detached windows come back at start as they were when the app last closed (positions subject to decision 4).
+6. **Ruled 2026-11-09 (operator): the main window has a minimum size of 1024x640.**
+7. **Ruled 2026-11-09 (operator): floating panels** (Rig and Session move, resize and reopen in place) are the product's overlay model; whether the **Phone/CW logging panel** moves too is **decided later**, after using floating panels for a while (FT8 stays fixed).
+8. **Ruled 2026-11-09 (operator): keep native dropdown lists** (the closed controls are app-drawn; the open list stays the toolkit's popup, with its keyboard and screen-reader behaviour); revisit if the popup keeps bothering the operator.
+9. **Ruled 2026-11-09 (operator):** (a) **the stronger close rule (§3):** closing the main window
+   stops the FT8 run and disarms TX, and only the operating desktop app counts as presence (a
+   view-only client never keeps a run alive); closing does nothing else. (b) **§4-§7 as
+   recommended:** close asks only when something would stop (FT8 run or TX armed, a contact being
+   entered, unsaved Settings); no user reload; one "daemon unavailable" state, the UI still served
+   by `smd`; a window reloads itself when it sees a changed daemon build.
+10. **Ruled 2026-11-09 (operator): native Save dialog** for exports (later Cabrillo, and an Open dialog for import), and **launcher only**: no tray icon or desktop notifications for now (§9, §10).
+
+## Host recommendations (2026-11-09; recommendations, not decided)
+
+Both reviewers independently recommend **Electron as the primary desktop host**, keeping the
+Svelte UI and `smd` as they are, and reopening Wails v3 only for a concrete requirement (such as
+package size) that makes Electron unsuitable. The host choice is the operator's.
+
+- **Claude:** the operator's reason for the evaluation holds (the browser cannot own windows;
+  Electron gave every behaviour evaluated). Electron pins one engine, where Wails depends on each
+  distribution's WebKitGTK (absent on the operator's machine; the variance behind the Wails v2
+  experience). Memory is about equal; Wails' small binary stays small only where WebKitGTK is
+  installed. Wails was evaluated for rendering only. The Electron shell is thin, so the browser
+  stays a working fallback and a later change of host stays cheap. Start Linux under XWayland
+  unless fractional scaling looks poor there.
+- **Codex** (as relayed by the operator): appearance is no longer a reason to reject Wails (the
+  form-control fix), but Wails would need the window, lifecycle and interaction acceptance work
+  repeated before an equivalent claim. Production shape: `smd` owns operating state,
+  persistence, rig control and transmission; the daemon serves the UI (frontend and daemon
+  versions stay together); Electron owns windows, native dialogs, application shortcuts and the
+  local waiting page; a narrow host interface connects the UI to those functions. Carry forward
+  detached windows and optional movable overlays; docking stays stopped.
+- **Costs both name:** shipping Electron's security updates (Electron supports its latest three
+  stable majors and assigns updates to application maintainers;
+  [timelines](https://www.electronjs.org/docs/latest/tutorial/electron-timelines),
+  [security](https://www.electronjs.org/docs/latest/tutorial/security)) as part of the release
+  routine, with the privileged interface kept narrow.
+- **Update plan (Claude's proposal):** a dependency bot opens a pull request per Electron release
+  (with a minimum release age; the bot's setting is unverified), CI runs the POC-style scenarios
+  and fails before the pinned major leaves support, and the shell ships as its own package on the
+  existing RPM channel (Flatpak the alternative); no second updater beside RPM.
+- **Separate from the host (both):** remote and browser access with authorization (§1), and the
+  window-placement platform policy (native Wayland or XWayland).
 
 ## Next step
 
-The proof of concept is complete (summary above). Next: the operator's rulings on the open
-decisions, then a UI-host ADR.
+The proof of concept is complete and the operator has ruled on the consolidated decisions
+(2026-11-09; above). Next: the UI-host ADR built from these rulings.
