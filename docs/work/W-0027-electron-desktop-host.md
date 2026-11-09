@@ -1,0 +1,90 @@
+# W-0027 — Electron desktop host: building ADR 0102
+
+**Status:** Selected 2026-11-09. No slice started. Each slice starts on the operator's direction;
+first comes the baseline tag (slice 0).
+**Selected:** 2026-11-09 (operator: "yes, accept ADR 0102, commit and open W-0027").
+**Outcome:** Station Manager runs as the Electron desktop app decided in
+[ADR 0102](../decisions/0102-electron-desktop-host-for-the-ui.md), built in small slices that
+are each reviewed before the next. The evaluation, the proof of concept (POC) and the rulings
+are in [W-0026](W-0026-ui-host-evaluation.md).
+
+`W-0027` is an immutable identity. Its status may change, while priority and ranked position live
+only in [`docs/backlog.md`](../backlog.md).
+
+**Not in scope:** ADR 0100 (daemon-owned operating sessions) and ADR 0014's upstream forwarding
+(deferred). `smd` keeps every operating decision (ADR 0102, Decision).
+
+## Working rules (operator, 2026-11-09)
+
+- **Small parts, each reviewed before the next.** The operator: "As we build each part (small
+  changes), these should be reviewed by me and Codex before moving on to the next part."
+  Per slice:
+  1. state its operator-visible acceptance criteria;
+  2. build it test-first, with reversion proofs;
+  3. run the gates;
+  4. hand it to the operator (a desktop check where it shows) and to Codex through `.scratch/`,
+     with the uncommitted diff;
+  5. fix every finding;
+  6. commit on the operator's direction.
+
+  The next slice starts only after that. The automatic post-commit Codex review still applies to
+  non-Markdown commits.
+- **A way back.** The operator: "we should tag SM before we start the changes so we can go back".
+  Slice 0 is an annotated tag on the last commit before any W-0027 code, following `pre-w0021`.
+- **The browser keeps working.** Until the operating-client check is switched on (track C), the
+  desktop app is one more client of `smd`, and the browser still operates the station, so every
+  slice before then is reversible by not using the app.
+
+## Tracks and proposed slices (Claude's proposal, 2026-11-09; order and contents not ruled)
+
+**Slice 0 — baseline tag** `pre-w0027` on the commit that accepts ADR 0102 and opens this
+dossier (documentation only, so its code is today's). The operator pushes tags.
+
+**A — the shell in the Station Manager repository.** The POC host is rebuilt, not copied, against
+the real `smd` on the operator's machine. It is for development only and is not released.
+
+- A1: skeleton. One main window loading the UI from a local `smd`; sandboxed, context-isolated
+  renderer with no Node; navigation limited to `smd`'s origin; single instance; the local
+  "waiting for the daemon" page.
+- A2: the window set (Map, Manual, detached Rig Control and Session), each at most once.
+- A3: closing (stop the FT8 run, disarm TX, and the confirmation) and no user reload.
+- A4: placement and the XWayland default; restore as left.
+- A5: the native Save dialog; shortcuts (ADR 0102 ruling 5).
+
+**B — the UI's own chrome for a windowed application.** The operator: "There are going to be
+quite a lot of changes - chrome included as some of the way things look don't quite suit a
+windows situation". The SPA stays browser-compatible.
+
+- B1: the operator's list of what does not suit a windowed app (screenshots welcome), recorded
+  here as the brief.
+- B2 onward: one change per slice, each a design exchange recorded here.
+
+**C — the daemon's side and security** (ADR 0102, Requirements). Each needs its own reviewed
+design before code.
+
+- C1: the authenticated channel, a design reviewed by Codex before code. The shell authenticates
+  `smd`'s content and binds that authentication to every later request, stream and reconnect.
+- C2: the operating-client check.
+- C3: the view-only route classification, leaving room for a daemon submitter whose credential
+  grants QSO submission only.
+- C4: presence on the authenticated operating subscription, stopping and disarming through the
+  guaranteed-stop controller.
+- C5: idle-only reload with asset compatibility.
+
+**D — packaging and release.**
+
+- D1: the signed shell package, depending on the daemon package.
+- D2: our own signed dnf repository.
+- D3: the security-update routine and the daily support check.
+- D4: Chromium's third-party licence notices, due before the first public release.
+- D5: production hardening, the CSP and the permission handlers.
+
+## Open questions for the operator
+
+- **Priority:** where W-0027 ranks against P1 (W-0008 CC-5 is open) and the other P2 items.
+- **The order of the tracks:** this proposal starts A1 and B1 together, with C1's design in
+  parallel.
+- **Where the shell lives in the repository** (for example `desktop/`), and how it builds in
+  `task` and CI.
+
+## Record

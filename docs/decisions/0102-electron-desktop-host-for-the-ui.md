@@ -1,13 +1,15 @@
 ---
 number: 0102
 title: Run the Station Manager UI in an Electron desktop host
-status: Proposed
+status: Accepted
 date: 2026-11-09
 ---
 
 # 0102 — Run the Station Manager UI in an Electron desktop host
 
-**Proposed (2026-11-09). Design only. Nothing is authorised or built.** Every decision below was
+**Accepted (operator, 2026-11-09), after design review with no remaining findings
+(codex-032 to codex-035).** Building it is tracked in [W-0027](../work/W-0027-electron-desktop-host.md),
+slice by slice, each reviewed by the operator and Codex before the next. Every decision below was
 ruled by the operator on 2026-11-09 after the W-0026 evaluation and its Electron proof of concept
 (POC); the evidence, the reviewers' recommendations and the rulings are in
 [W-0026](../work/W-0026-ui-host-evaluation.md). This ADR records the resulting architecture and
@@ -136,9 +138,9 @@ ADR" and the update plan) and they must be met by the implementation, not assume
   clients, ADR 0014's daemon-to-daemon QSO submission is a third kind of caller with its own
   credential (ADR 0014's bearer-token preparation), so the operating-client check and view-only
   enforcement must not foreclose it; that credential grants QSO submission only, never rig or TX
-  control or operating presence (ruled 2026-11-09, on codex-034's recommendation). How a headless central daemon
-  is administered (the shell installed there, later authenticated remote administration, or
-  local-only administration) is decided when the topology is built.
+  control or operating presence (ruled 2026-11-09, on codex-034's recommendation). How a
+  headless central daemon is administered (the shell installed there, later authenticated remote
+  administration, or local-only administration) is decided when the topology is built.
 - **The shell authenticates `smd`, its content and every later connection.** While `smd` is
   down (the waiting page), another process able to reach its TCP port can listen there first.
   Checking a listener once is not enough: a later connection, a daemon restart or a reconnect

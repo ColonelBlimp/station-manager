@@ -1,8 +1,9 @@
 # W-0026 — UI host evaluation: browser or desktop application
 
 **Status:** Open — evaluation complete; the operator ruled on all ten decisions on 2026-11-09
-(Electron host; *Proof of concept: final acceptance and summary*). The UI-host ADR follows. No
-implementation is authorised by this dossier.
+(Electron host; *Proof of concept: final acceptance and summary*), recorded in
+[ADR 0102](../decisions/0102-electron-desktop-host-for-the-ui.md) (Accepted 2026-11-09). The build
+is [W-0027](W-0027-electron-desktop-host.md); this dossier authorises no implementation.
 **Opened:** 2026-11-07. The operator: "I am still thinking if there is an alternative UI framework -
 what about using Electron? Keeping the daemon, but using Electron to be the frontend?"; "With
 another technology, we can control how many windows are open and what they contain - we cannot
@@ -838,5 +839,6 @@ package size) that makes Electron unsuitable. The host choice is the operator's.
 ## Next step
 
 The proof of concept is complete and the operator has ruled on the consolidated decisions
-(2026-11-09; above). The UI-host decision is drafted as
-[ADR 0102](../decisions/0102-electron-desktop-host-for-the-ui.md) (Proposed).
+(2026-11-09; above). The UI-host decision is
+[ADR 0102](../decisions/0102-electron-desktop-host-for-the-ui.md) (Accepted 2026-11-09); building it
+is [W-0027](W-0027-electron-desktop-host.md).
