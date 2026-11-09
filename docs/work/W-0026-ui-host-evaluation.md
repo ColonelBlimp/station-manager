@@ -1,6 +1,8 @@
 # W-0026 — UI host evaluation: browser or desktop application
 
-**Status:** Open — investigation only. No priority, no implementation and no migration decision.
+**Status:** Open — evaluation complete; the operator ruled on all ten decisions on 2026-11-09
+(Electron host; *Proof of concept: final acceptance and summary*). The UI-host ADR follows. No
+implementation is authorised by this dossier.
 **Opened:** 2026-11-07. The operator: "I am still thinking if there is an alternative UI framework -
 what about using Electron? Keeping the daemon, but using Electron to be the frontend?"; "With
 another technology, we can control how many windows are open and what they contain - we cannot
@@ -22,7 +24,9 @@ desktop shell may coordinate windows but never owns operating state.
 **recommended** operator-visible behaviour (agent recommendation, not a ruling), the hosts' support
 with sources, what it costs in application code, recovery rules and maintenance, and the decision
 needed from the operator. Platform facts were fetched on 2026-11-07; anything not confirmed is
-marked UNKNOWN.
+marked UNKNOWN. The "Decision needed" lines record the questions as asked during the evaluation;
+the operator's rulings (2026-11-09) are in the consolidated decisions under *Proof of concept:
+final acceptance and summary*.
 
 ## Sources
 
@@ -335,7 +339,7 @@ to confirm; they are stated here only.
 - Client authorization (§1) is independent of the host: it is needed, or explicitly declined, in
   every option, with its limit stated.
 
-## Decisions needed (summary)
+## Decisions needed (summary, as asked; ruled 2026-11-09, see the consolidated decisions below)
 
 1. Remote access: full control, view-only, or none; whether remote operation must work in a
    browser; and, separately, whether to add client authorization, given what it can and cannot
@@ -636,10 +640,29 @@ limitation seen in the rendering runs). Still open: localhost-specific security 
    view-only client never keeps a run alive); closing does nothing else. (b) **§4-§7 as
    recommended:** close asks only when something would stop (FT8 run or TX armed, a contact being
    entered, unsaved Settings); no user reload; one "daemon unavailable" state, the UI still served
-   by `smd`; a window reloads itself when it sees a changed daemon build.
+   by `smd`; a window reloads itself when it sees a changed daemon build, **refined the same day
+   (operator): the reload waits until the window is idle**: while anything is in progress (a
+   contact being entered, a logbook or Settings edit, an FT8 run, TX armed) it is held, a banner
+   says a new version is ready, and the window reloads when idle or when the operator chooses.
 10. **Ruled 2026-11-09 (operator): native Save dialog** for exports (later Cabrillo, and an Open dialog for import), and **launcher only**: no tray icon or desktop notifications for now (§9, §10).
 
-## Host recommendations (2026-11-09; recommendations, not decided)
+**Carry into the ADR (codex-028; boundaries of the rulings, not new decisions):**
+- **Browser fallback means view-only, when enabled** (decisions 1 and 2 together); it is not a
+  fallback operating client. "The UI and `smd` stay as they are" is about architecture and reuse;
+  view-only enforcement needs a complete route classification (log and config mutations too).
+- **Decision 9a depends on 2c:** the ADR must define which authenticated operating subscription
+  supplies FT8 presence and how its loss stops and disarms through the guaranteed-stop controller;
+  a per-install credential alone does not define subscription ownership. Normal close, app or
+  renderer failure and reconnect stay distinct; presence is a connection signal, not proof that a
+  person is at the desk.
+- **Restoring the workspace (decision 5) never restores operation:** no TX armed, no FT8 run
+  started at start; closing leaves contest mode and the operating session alone (§3).
+- **Decision 9b keeps §7's safeguard, now stronger:** a build-change reload waits until nothing is
+  in progress (operator refinement), rather than asking before discarding a contact; the
+  unsaved-Settings close prompt is included. Decision 10 excludes desktop notifications and a
+  tray, not the app's alarms, banners or Events.
+
+## Host recommendations (2026-11-09; given before the operator's rulings, which chose Electron)
 
 Both reviewers independently recommend **Electron as the primary desktop host**, keeping the
 Svelte UI and `smd` as they are, and reopening Wails v3 only for a concrete requirement (such as
@@ -649,9 +672,14 @@ package size) that makes Electron unsuitable. The host choice is the operator's.
   Electron gave every behaviour evaluated). Electron pins one engine, where Wails depends on each
   distribution's WebKitGTK (absent on the operator's machine; the variance behind the Wails v2
   experience). Memory is about equal; Wails' small binary stays small only where WebKitGTK is
-  installed. Wails was evaluated for rendering only. The Electron shell is thin, so the browser
-  stays a working fallback and a later change of host stays cheap. Start Linux under XWayland
-  unless fractional scaling looks poor there.
+  installed. Wails was evaluated for rendering only. The Electron shell is thin, so a later change
+  of host would be contained by the host boundary. Start Linux under XWayland unless fractional
+  scaling looks poor there. *Corrections (codex-027):* Electron reduces engine-version variance,
+  not platform variance (OS, compositor, graphics, fonts and portals still need acceptance); the
+  POC's Wails mismatch was fixed by CSS and is not evidence that Wails is generally unsuitable;
+  Wails keeps an installation-size advantage (neither figure is a full dependency closure; 92 MB
+  is a size-only `xz` artifact, not a production RPM download), and runtime updates mean new
+  downloads, not a one-off; "cheap" to change host is not established.
 - **Codex** (as relayed by the operator): appearance is no longer a reason to reject Wails (the
   form-control fix), but Wails would need the window, lifecycle and interaction acceptance work
   repeated before an equivalent claim. Production shape: `smd` owns operating state,
@@ -664,10 +692,44 @@ package size) that makes Electron unsuitable. The host choice is the operator's.
   [timelines](https://www.electronjs.org/docs/latest/tutorial/electron-timelines),
   [security](https://www.electronjs.org/docs/latest/tutorial/security)) as part of the release
   routine, with the privileged interface kept narrow.
-- **Update plan (Claude's proposal):** a dependency bot opens a pull request per Electron release
-  (with a minimum release age; the bot's setting is unverified), CI runs the POC-style scenarios
-  and fails before the pinned major leaves support, and the shell ships as its own package on the
-  existing RPM channel (Flatpak the alternative); no second updater beside RPM.
+- **Update plan (Claude's proposal, corrected by codex-027; not decided):** a dependency bot
+  proposes Electron upgrades and CI runs the POC-style scenarios, including the failure paths,
+  on a schedule even without commits, failing before the pinned major leaves support (Electron
+  supports the latest three stable majors and only the latest minor in each line). Renovate's
+  `minimumReleaseAge` exists, but its vulnerability-alert path defaults to no delay; Dependabot's
+  cooldown excludes security updates; neither promises a pull request per release
+  ([Renovate](https://docs.renovatebot.com/configuration-options/#minimumreleaseage),
+  [Dependabot](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference#cooldown)).
+  A bot only proposes: SM must test, rebuild, release and distribute the bundled runtime. There
+  is **no automatic delivery channel today** (`docs/install.md` installs a local RPM; releases are
+  operator-driven, `.github/workflows/ci.yml`). Ship the shell as its own package with an explicit
+  shell/daemon compatibility contract and one delivery mechanism per installation (Electron
+  recommends the Linux package manager; Flatpak is an alternative that still needs an updater
+  policy). **Open for the operator:** an expedited security-update exception to any settling
+  period, and the advance-warning threshold for end of support.
+  **Delivery, the operator's aim (2026-11-09):** "I would hope to have SM as part of dnf repo and
+  can be installed from there". Users would `dnf install` and receive updates with `dnf
+  upgrade` (the package-manager route Electron recommends on Linux). Options (Claude; not
+  decided): an own signed repository (createrepo metadata, a GPG key, a release RPM carrying
+  the `.repo` file, CI publishing on each tag; covers `smd` and the shell); Fedora COPR (Fedora
+  builds and hosts per release); the official Fedora repositories (package review; an Electron shell bundling
+  Chromium is very unlikely to be accepted). Claude's suggestion: an own signed repository,
+  with COPR for `smd` alone or for both if its policy allows.
+  **COPR policy, checked 2026-11-09** (COPR user documentation, "What I can build in Copr?",
+  source `fedora-copr/copr` `doc/user_documentation.rst` on GitHub; the docs.pagure.org page was
+  unreachable from here): packages "do **not** need to follow the Fedora Packaging Guidelines",
+  so prebuilt binaries are not ruled out; all material must be under licences on Fedora's
+  allowed list and nothing on its "Not-Allowed" list, with the uploader responsible ("It is your
+  responsibility to check licenses"); packages that download proprietary content during the
+  build are "currently a gray area" and "not allowed"; the SRPM-generation step may "use
+  network" (so Electron's prebuilt archive could be fetched there), while network access during
+  the RPM build itself is not stated. **Risk to verify before choosing COPR for the shell:**
+  whether Electron's bundled `libffmpeg.so` carries patent-encumbered (proprietary) codecs and,
+  if so, whether a codec-free FFmpeg build can replace it (unverified inference).
+  **Ruled 2026-11-09 (operator), update during operation:** "Hold until shutdown or restart (of
+  the UI) - nothing interupts any User activity: logbook editing, on-air, etc". An installed
+  desktop-app update takes effect only when the operator next shuts down or restarts the UI;
+  nothing interrupts logbook editing, operating on air or any other activity.
 - **Separate from the host (both):** remote and browser access with authorization (§1), and the
   window-placement platform policy (native Wayland or XWayland).
 
