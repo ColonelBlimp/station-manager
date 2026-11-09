@@ -802,4 +802,5 @@ package size) that makes Electron unsuitable. The host choice is the operator's.
 ## Next step
 
 The proof of concept is complete and the operator has ruled on the consolidated decisions
-(2026-11-09; above). Next: the UI-host ADR built from these rulings.
+(2026-11-09; above). The UI-host decision is drafted as
+[ADR 0102](../decisions/0102-electron-desktop-host-for-the-ui.md) (Proposed).
