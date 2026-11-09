@@ -661,6 +661,16 @@ limitation seen in the rendering runs). Still open: localhost-specific security 
   in progress (operator refinement), rather than asking before discarding a contact; the
   unsaved-Settings close prompt is included. Decision 10 excludes desktop notifications and a
   tray, not the app's alarms, banners or Events.
+- **Idle-only reload needs an asset compatibility strategy (codex-029):** a window waiting to
+  reload after an `smd` upgrade can lazily load Logbook or Settings, whose hashed chunk files the
+  new build no longer has (`vite.config.ts` hashes chunks and empties the output; `spa.go` then
+  serves `index.html`), the failure §7 records. The ADR needs asset/API compatibility or a
+  coordinated update covering every open window, and acceptance should change the daemon build
+  during editing and operation and then load a lazy view.
+- **Updates need package acceptance (codex-030):** deferring the restart does not prove an
+  in-place RPM upgrade leaves a running Electron intact; an offline test should upgrade while
+  editing with a detached window open, keep all windows working, and apply the new runtime only
+  after the UI restarts. Daemon package scriptlets must not interrupt `smd` during operation.
 
 ## Host recommendations (2026-11-09; given before the operator's rulings, which chose Electron)
 
@@ -705,8 +715,31 @@ package size) that makes Electron unsuitable. The host choice is the operator's.
   operator-driven, `.github/workflows/ci.yml`). Ship the shell as its own package with an explicit
   shell/daemon compatibility contract and one delivery mechanism per installation (Electron
   recommends the Linux package manager; Flatpak is an alternative that still needs an updater
-  policy). **Open for the operator:** an expedited security-update exception to any settling
-  period, and the advance-warning threshold for end of support.
+  policy). **Ruled 2026-11-09 (operator): "7 days, daily check, thresholds as recommended".**
+  Security releases are exempt from the ordinary settling period, with a response target of
+  **7 days** from an applicable upstream fix becoming available (the scenario gates still apply;
+  the update still takes effect at the next UI restart). A **daily** scheduled support check, plus
+  one at release time, **warns at 8 weeks** before the pinned line's end of support and **blocks
+  desktop releases on that line at 2 weeks**; it never shuts down an installed application. **Claude's advice (2026-11-09,
+  not decided):** (1) ordinary Electron updates settle about 7-14 days and pass the CI scenarios;
+  security releases (above all fixes for exploited Chromium vulnerabilities) skip the settling
+  period and ship within days, never skipping the scenarios; under the update-during-operation
+  ruling they still take effect at the next UI restart, with a quiet, non-interrupting
+  "security update ready — restart when convenient" banner. (2) A weekly scheduled CI check warns
+  about 8 weeks (one release cycle) before the pinned major's end of support and fails about 2
+  weeks before it, reading the dates from Electron's published schedule (its machine-readable
+  form not yet checked).
+  **Codex's additions (codex-030, not decided):** identify security work by reviewing every stable
+  release on the pinned line (release notes, Electron's security notifications, Chromium and
+  Node announcements), not by advisory matching alone; treat component or backport updates of
+  unclear security scope as needing prompt review; set an operator-approved response target
+  measured from an upstream fix becoming available (a weekly-only monitor cannot support a target
+  under a week). The banner fits the non-interruption ruling if it is non-modal (no focus change,
+  blocked controls, countdown or automatic restart) and distinguishes "available" from "installed;
+  restart when convenient". Prefer a daily support check plus one at release time, warning at
+  8 weeks and blocking desktop releases on the old line at 2 weeks, checking the minor as well
+  as the major, refreshing dates (Electron marks future dates tentative), reporting a failed
+  lookup as unknown, and never shutting down an installed application.
   **Delivery, the operator's aim (2026-11-09):** "I would hope to have SM as part of dnf repo and
   can be installed from there". Users would `dnf install` and receive updates with `dnf
   upgrade` (the package-manager route Electron recommends on Linux). Options (Claude; not
@@ -714,10 +747,22 @@ package size) that makes Electron unsuitable. The host choice is the operator's.
   the `.repo` file, CI publishing on each tag; covers `smd` and the shell); Fedora COPR (Fedora
   builds and hosts per release); the official Fedora repositories (package review; an Electron shell bundling
   Chromium is very unlikely to be accepted). Claude's suggestion: an own signed repository,
-  with COPR for `smd` alone or for both if its policy allows.
-  **COPR policy, checked 2026-11-09** (COPR user documentation, "What I can build in Copr?",
-  source `fedora-copr/copr` `doc/user_documentation.rst` on GitHub; the docs.pagure.org page was
-  unreachable from here): packages "do **not** need to follow the Fedora Packaging Guidelines",
+  with COPR for `smd` alone or for both if its policy allows. **Ruled 2026-11-09 (operator): our
+  own signed repository for now** ("our own for now"); COPR stays an option for later.
+  **What it needs (codex-030 recommendations):** static HTTPS hosting with immutable versioned
+  RPMs and retained recovery versions, published so metadata, signatures and packages stay
+  consistent; explicit distribution/architecture targets; signed RPMs and repository metadata
+  with `gpgcheck`, `repo_gpgcheck` and `sslverify` on (DNF5's `pkg_gpgcheck` noted; verify on
+  supported clients); a signed release RPM carrying the `.repo` file and public key, with first
+  trust established by an independently published fingerprint; the private key kept out of the
+  repository, hosting account and untrusted CI jobs, signing in a protected release step, a
+  protected backup, and a written compromise and rotation procedure (the next key distributed
+  through the still-trusted release package first); `updateinfo` metadata if security-only
+  `dnf` updates are wanted.
+  **COPR policy, checked 2026-11-09** (the [published COPR documentation, "What I can build in
+  Copr?"](https://docs.copr.fedorainfracloud.org/user_documentation.html#what-i-can-build-in-copr);
+  read here from its source, `fedora-copr/copr` `doc/user_documentation.rst` on GitHub, because the
+  documentation host was unreachable from this machine): packages "do **not** need to follow the Fedora Packaging Guidelines",
   so prebuilt binaries are not ruled out; all material must be under licences on Fedora's
   allowed list and nothing on its "Not-Allowed" list, with the uploader responsible ("It is your
   responsibility to check licenses"); packages that download proprietary content during the
@@ -731,8 +776,14 @@ package size) that makes Electron unsuitable. The host choice is the operator's.
   `script/verify-ffmpeg.py` copies that "ffmpeg without proprietary codecs" over the app's
   `libffmpeg.so` and runs a no-proprietary-codecs test, so the swap is an intended path. In the
   POC, an Electron 44.9.3 copy with the codec-free `libffmpeg.so` passed the smoke, windows,
-  roles and final scenarios (Station Manager plays no media). So the shell can ship without
-  proprietary codecs, removing the codec obstacle to COPR. **Still unchecked:** every other
+  roles and final scenarios (Station Manager plays no media). **Conclusion (narrowed per
+  codex-029):** Electron provides an alternative FFmpeg built with `proprietary_codecs` disabled,
+  and the tested POC flows pass with it substituted; COPR eligibility of the proposed build
+  inputs and the resulting package remains unestablished (the GN flag is a build setting, not a
+  Fedora policy classification, and if the standard archive held prohibited material,
+  downloading it inside COPR and replacing the library afterwards would not satisfy the
+  build-input rule). Own repository is the current ruling, so this matters only if COPR is
+  chosen later. **Still unchecked:** every other
   third-party licence bundled with Chromium (its `LICENSES.chromium.html`) against Fedora's
   allowed list.
   **Ruled 2026-11-09 (operator), update during operation:** "Hold until shutdown or restart (of
