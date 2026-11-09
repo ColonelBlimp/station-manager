@@ -123,3 +123,71 @@ design before code.
   SPA stays in `frontend/app`; the shell consumes the daemon-served UI and keeps no copy of it.
 
 ## Record
+
+### A1 — shell skeleton against the fixture harness (2026-11-09; done)
+
+**Acceptance criteria** (operator-visible where marked; each is a check in
+`desktop/test/scenario-a1.mjs`):
+
+1. *(visible)* With the "daemon" down at start, the window shows the shell's own waiting page,
+   which requests nothing from the origin; when the origin answers, the window loads it by
+   itself.
+2. *(visible)* After daemon loss, a failed load returns to the waiting page, and the window
+   recovers when the daemon returns.
+3. Renderer: sandbox on, context isolation on, Node integration off, no `<webview>`; the page
+   sees no `require`, `process`, `module` or `Buffer`.
+4. A request to another origin is cancelled and never arrives (a real listening server stands in
+   for "elsewhere"); a request to the served origin is allowed.
+5. A page cannot navigate the window to another origin, and `window.open` creates no window;
+   only an `https:` external address goes to the default browser (`http:` and `file:` do not).
+6. Notifications, geolocation and the microphone are refused, by the shell's request and check
+   handlers.
+7. *(visible)* The main window cannot be made smaller than 1024x640.
+8. *(visible)* No application menu.
+8b. *(visible)* The window carries Station Manager's icon in the title bar (operator, 2026-11-09:
+    "yes, add the SVG icon to A1"): `desktop/assets/icon.png`, the SPA's `logo.svg` rendered to
+    256x256. The automated check proves the window is configured with it; the title bar itself is
+    the desktop check. Launcher and native-Wayland icons come with the package (D1).
+9. *(visible)* A second launch exits at once and the running instance is told (and raised).
+10. The shell's availability probe refuses redirects: a replacement listener at the daemon's
+    address that redirects elsewhere reaches nothing and the window keeps waiting (codex-038).
+    The probe says only that something answers; it is never an identity check (that is C1).
+11. A replacement that answers the probe but redirects the window's own load elsewhere: nothing
+    arrives there, the window never shows the other address or an error page, it returns to the
+    waiting page, and it retries at the waiting pace (operator, 2026-11-09: "yes, fix it now",
+    on claude-072's residual).
+
+**Built:** `desktop/` with its own manifest and lockfile (Electron 44.9.3; dev tools ESLint,
+Prettier; all dependency licences permissive and GPL-3.0-compatible). `src/main.mjs` (entry;
+single instance; harness only), `src/hardening.mjs` (permissions, request filter),
+`src/window.mjs` (window, navigation, external links), `src/waiting.mjs` (waiting page, retry,
+failed-load fallback), `harness/server.mjs`. No preload: A1 exposes no host interface. Gates:
+`task desktop:check`, the same steps in `scripts/ci-local.sh`, and CI steps after the SPA gate
+(the CI step lifts Ubuntu's AppArmor user-namespace restriction on the runner so the sandbox
+stays on).
+
+**Evidence:** A1 PASS, 26 checks (the icon added after the operator's first desktop look showed
+the generic X11 icon; the redirect check and a per-permission media check added after codex-038,
+with a fake capture device in automated runs so a refused microphone is the policy's
+NotAllowedError, never a missing device). Reversion proofs, each restored and verified by hash: sandbox
+off; Node in the renderer; request filter not cancelling (first attempt proved nothing because
+"elsewhere" was not listening; fixed with a real server, then proven); navigation unguarded;
+permission request granted; permission check granted; no minimum size; no waiting page; no
+failed-load fallback; single instance off; any scheme handed to the browser; default menu;
+`window.open` allowed; no icon; the probe following redirects; the media permission alone
+granted; no main-frame redirect guard; no retry pause after a stopped redirect (1,157 window
+loads in about 4 s). All 18 failed for their stated reason. Lint and format clean.
+
+**Desktop check (operator, 2026-11-09, XWayland):** the icon "shows in the title bar now"; then
+"all good, a to f pass": the waiting page then the fixture page by itself, no menu bar, no
+shrinking below 1024x640, a second launch raising the first window, a minimised window restored
+by a second launch, and closing the window exiting the application.
+
+**Review:** codex-038 (two findings: the probe followed redirects; the media check could not tell
+refusal from a missing device) and claude-072's own residual (a redirected window load left an
+error page), all fixed with checks and reversion proofs; codex-040 closed the review with no
+remaining objection. Committed on the operator's direction ("yes, commit A1"). The hosted CI
+step (the AppArmor setting) is confirmed only once CI runs it.
+
+**Not covered by A1:** no user reload (A3), window roles (A2), placement and XWayland (A4), the
+host interface (later slices), and loading `smd` (after C1).

@@ -90,6 +90,20 @@ tasks:
     cmds:
       - npm run check
 
+  desktop:install:
+    desc: Install the desktop shell's dependencies (W-0027; its own manifest and lockfile)
+    dir: desktop
+    cmds:
+      - npm ci
+
+  desktop:check:
+    desc: Desktop shell gate (W-0027) — lint, prettier format check, then the A1 scenario in Electron against the fixture harness (under xvfb-run when there is no display)
+    dir: desktop
+    cmds:
+      - npm run lint
+      - npm run format:check
+      - sh -c 'if [ -n "$DISPLAY" ]; then npm run check:a1; else xvfb-run -a npm run check:a1; fi'
+
   frontend:build:all:
     desc: Build the embedded app SPA (the sole operator client). The build:smd* tasks depend on this so the daemon embeds a fresh bundle.
     deps: [frontend:app:build]

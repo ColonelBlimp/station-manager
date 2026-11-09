@@ -100,6 +100,7 @@ jobs:
           cache: npm
           cache-dependency-path: |
             frontend/app/package-lock.json
+            desktop/package-lock.json
 
       # ─── SPA gate ───────────────────────────────────────────────
       # Run the SPA-side checks BEFORE the Go build so the daemon embed picks
@@ -131,6 +132,33 @@ jobs:
       - name: App SPA tests
         working-directory: frontend/app
         run: npx vitest run
+
+      # ─── Desktop shell gate (W-0027) ────────────────────────────
+      # The Electron shell has its own manifest and lockfile. Its A1 scenario runs
+      # against the built-in fixture harness only (never smd). Ubuntu 24.04 restricts
+      # unprivileged user namespaces through AppArmor, which Chromium's sandbox needs;
+      # lifting that restriction on the throwaway runner keeps the renderer sandbox ON
+      # in the test instead of running Electron with --no-sandbox. The original value is
+      # restored when the step ends, so later steps keep the runner's starting posture.
+      - name: Desktop shell install
+        working-directory: desktop
+        run: npm ci
+
+      - name: Desktop shell lint
+        working-directory: desktop
+        run: npm run lint
+
+      - name: Desktop shell format check
+        working-directory: desktop
+        run: npm run format:check
+
+      - name: Desktop shell A1 scenario (Electron, fixture harness)
+        working-directory: desktop
+        run: |
+          orig=$(sysctl -n kernel.apparmor_restrict_unprivileged_userns)
+          trap 'sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns="$orig"' EXIT
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          xvfb-run -a npm run check:a1
 
       - name: App SPA build (produces dist/ for daemon embed)
         working-directory: frontend/app

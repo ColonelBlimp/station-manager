@@ -1,0 +1,26 @@
+{
+    "name": "station-manager-desktop",
+    "private": true,
+    "version": "0.0.0",
+    "description": "Station Manager desktop shell (ADR 0102, W-0027). Development only: not released.",
+    "license": "GPL-3.0-only",
+    "type": "module",
+    "main": "src/main.mjs",
+    "engines": {
+        "node": ">=22"
+    },
+    "scripts": {
+        "start": "electron .",
+        "check:a1": "SM_DESKTOP_SCENARIO=a1 electron .",
+        "lint": "eslint .",
+        "format:check": "prettier --check .",
+        "format": "prettier --write ."
+    },
+    "devDependencies": {
+        "@eslint/js": "10.0.1",
+        "electron": "44.9.3",
+        "eslint": "10.6.0",
+        "globals": "17.7.0",
+        "prettier": "3.9.4"
+    }
+}

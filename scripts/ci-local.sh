@@ -89,6 +89,26 @@ for spa in app; do
     ( cd "frontend/$spa" && npm run build )
 done
 
+# ─── Desktop shell gate (W-0027) ────────────────────────────────────
+# Its own manifest and lockfile; the A1 scenario runs Electron against the fixture
+# harness only (never smd), under xvfb-run when there is no display.
+if [ "${SKIP_NPM_CI:-}" = "1" ]; then
+    step "Desktop: skipping npm ci (SKIP_NPM_CI=1)"
+else
+    step "Desktop: npm ci"
+    ( cd desktop && npm ci )
+fi
+step "Desktop: lint"
+( cd desktop && npm run lint )
+step "Desktop: prettier format check"
+( cd desktop && npm run format:check )
+step "Desktop: A1 scenario (Electron, fixture harness)"
+if [ -n "${DISPLAY:-}" ]; then
+    ( cd desktop && npm run check:a1 )
+else
+    ( cd desktop && xvfb-run -a npm run check:a1 )
+fi
+
 # The generated manual is not committed (only manual/public/.gitkeep is), so —
 # exactly as hosted CI does before its Go gate — build it here so the daemon
 # embed-build compiles against the real page and TestManualHandler_ServesIndexAtRoot
