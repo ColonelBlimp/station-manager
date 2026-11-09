@@ -135,21 +135,39 @@ ADR" and the update plan) and they must be met by the implementation, not assume
 - **Route classification has room for a daemon submitter:** besides view-only and operating
   clients, ADR 0014's daemon-to-daemon QSO submission is a third kind of caller with its own
   credential (ADR 0014's bearer-token preparation), so the operating-client check and view-only
-  enforcement must not foreclose it. How a headless central daemon is administered (the shell
-  installed there, later authenticated remote administration, or local-only administration) is
-  decided when the topology is built.
-- **The shell verifies `smd` before presenting the operating credential.** While `smd` is down
-  (the waiting page), any local process, another user's included, can listen on its loopback
-  port first and would receive the credential. The shell must establish that the listener is
-  the real `smd` first: for example a challenge-response proving `smd` holds the per-install
-  secret without revealing it, or a connection over a Unix socket with owner-only permissions.
+  enforcement must not foreclose it; that credential grants QSO submission only, never rig or TX
+  control or operating presence (ruled 2026-11-09, on codex-034's recommendation). How a headless central daemon
+  is administered (the shell installed there, later authenticated remote administration, or
+  local-only administration) is decided when the topology is built.
+- **The shell authenticates `smd`, its content and every later connection.** While `smd` is
+  down (the waiting page), another process able to reach its TCP port can listen there first.
+  Checking a listener once is not enough: a later connection, a daemon restart or a reconnect
+  could reach a replacement, and a counterfeit UI at the expected origin could call the host
+  interface without ever learning the secret. So the shell executes no daemon-served UI and
+  grants no host capability until the content is authenticated as `smd`'s, and authentication
+  is bound to the transport or session that carries the subsequent requests, streams and
+  reconnects. **Acceptance:** an impostor before startup or after daemon loss supplies no
+  executable UI, receives no operating credential and gains no privileged host call; the local
+  waiting page stays independent of the daemon. The mechanism is left open for its own review: a
+  version response or an origin string is not authentication. A Unix socket in an owner-private
+  directory is viable only as a main-process transport with an explicit adapter covering UI
+  assets, requests, downloads, event streams (WebSocket, EventSource), reconnect and FT8
+  presence (the SPA uses browser `fetch`, `WebSocket` and `EventSource` today); it must not be
+  fronted by an unauthenticated TCP proxy that recreates the gap.
 - **The credential never reaches page script or the network.** It lives in an owner-only file;
-  the shell's main process attaches it only to requests for `smd`'s origin, so an injected
-  script in the UI cannot read it; it is never sent over plain HTTP to another machine
-  (operating stays local).
+  the shell's main process attaches it only to requests for `smd`'s origin, across redirects and
+  every supported request and stream path, so an injected script in the UI cannot read it; it is
+  never sent over plain HTTP to another machine (operating stays local). **Residual:** injected
+  same-origin script can still issue requests that carry the injected credential; the sandbox
+  and CSP do not stop an authorised renderer from misusing the API.
 - **The host interface stays minimal and checks its caller.** It offers windows and the native
-  dialogs (a Save writes only the file the operator chose), accepts calls only from `smd`'s
-  origin, and gives the page no general file, process or shell access.
+  dialogs (a Save writes only the file the operator chose), checks every call's actual sender
+  frame (approved windows and frames, authenticated origin) and its arguments, constrains
+  navigation and window creation, and gives the page no general file, process or shell access.
+- **Electron permissions are denied by default.** Electron approves permission requests
+  automatically without a handler; every session sets both `setPermissionRequestHandler` and
+  `setPermissionCheckHandler`, granting only identified needs (no camera, microphone, device
+  access or notifications by accident).
 - **The daemon package stands alone:** it installs, runs and upgrades without the shell; only
   the shell declares the dependency and the compatibility contract.
 - **The shell ships Electron's codec-free FFmpeg** if any distribution requires it (Electron
@@ -213,15 +231,25 @@ Floating panels plus detached windows replace it.
   `smd` binds loopback by default, refuses other binds without `server.allow_insecure_network`,
   checks Host against DNS rebinding and Origin against cross-site requests,
   `internal/api/csrf.go`):
-  - untrusted text (callsign lookups, FT8 decodes, ADIF imports) stays escaped: no `{@html}`,
-    with the Content Security Policy above; the renderer sandbox and the 7-day security target
+  - untrusted text (callsign lookups, FT8 decodes, ADIF imports) stays escaped (no `{@html}` in
+    `frontend/app/src` today, verified by search, not a complete XSS audit), with the Content
+    Security Policy above; the renderer sandbox and the 7-day security target
     limit the damage of a Chromium flaw;
   - external links open only for `https:`, never `file:` or other scheme handlers;
-  - Electron's fuses turn off running the binary as Node (`RunAsNode`, `NODE_OPTIONS`) and turn
-    on packaged-app integrity checking; no remote-debugging port or developer tools ship.
-- **The operating-client check closes a gap that exists today:** requests without an Origin
-  (curl, scripts) are allowed, so any local process, including another user's, can operate the
-  station now; the check stops other users, not the same user's processes (its accepted limit).
+  - Electron's fuses turn off running the binary as Node (`RunAsNode`), `NODE_OPTIONS` and the
+    Node inspector arguments, each a separate switch; no remote-debugging port or developer
+    tools ship (disabling developer tools alone does not cover the main-process inspector);
+  - Electron documents embedded ASAR integrity for macOS and Windows only, and it would cover the
+    shell's archive, not the UI `smd` serves. On Linux the RPM relies on signed distribution and
+    root-owned installed files, without claiming runtime verification.
+- **The operating-client check closes a gap that exists today:** on the default TCP listener
+  (`127.0.0.1:8080`), requests without an Origin (curl, scripts) are allowed and no user is
+  authenticated, so any process able to reach that listener (other unprivileged users sharing
+  the network namespace, unless OS policy isolates them; loopback is not a per-user boundary)
+  can operate the station now. The Unix-socket mode already requires an owner-private directory
+  and a 0600 socket. WebSocket upgrades require an exact Origin, which a native client can
+  supply, so that is not authentication either. The check stops other users, not the same
+  user's processes (its accepted limit); root is outside any per-user guarantee.
 - **ADR 0100 remains necessary:** the shell removes the states browser tabs create, not the need
   for daemon-owned sessions.
 

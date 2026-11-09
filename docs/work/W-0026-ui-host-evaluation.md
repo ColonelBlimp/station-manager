@@ -822,7 +822,18 @@ package size) that makes Electron unsuitable. The host choice is the operator's.
   and off the network (main-process header injection, owner-only file, local only); (3) a
   minimal host interface that checks its caller. Hardening: escaped untrusted text and a CSP,
   `https:`-only external links, Electron fuses (no `RunAsNode`/`NODE_OPTIONS`, integrity on), no
-  debugging port or developer tools. Not yet reviewed by Codex.
+  debugging port or developer tools. **Corrected after codex-034 (2026-11-09):** checking the
+  listener once is not enough (replacement listener on reconnect or restart; a counterfeit UI
+  could call the host interface without the secret), so the shell authenticates the content and
+  binds authentication to the channel for every later request, stream and reconnect, mechanism
+  left open (a Unix socket needs a main-process transport adapter, never an unauthenticated
+  proxy); injected same-origin script can still use the injected credential (residual); IPC
+  checks sender frame and arguments; Electron permissions default-deny (both handlers); fuses
+  are separate switches and ASAR integrity is documented for macOS and Windows only (Linux relies
+  on the signed RPM and root-owned files); today's gap is scoped to processes able to reach the
+  default TCP listener (the Unix-socket mode is owner-private). **Ruled 2026-11-09 (operator,
+  on codex-034's recommendation):** a future daemon-submitter credential grants QSO submission
+  only, never rig or TX control or operating presence.
 
 ## Next step
 
