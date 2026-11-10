@@ -84,7 +84,9 @@ The operator's rulings (W-0026, 2026-11-09) define the experience:
    - These are page-level bindings; capturing browser-reserved keys moves no operating decision
      into the shell's main process.
 6. **Closing and reloading:** closing the main window **stops the FT8 run and disarms TX**, and
-   only the operating desktop app counts as presence; closing does nothing else. Closing asks only
+   only the operating desktop app counts as presence; closing does nothing else (*amended
+   2026-11-10, operator: a confirmed exit also closes the operating session; see ADR 0100's
+   2026-11-10 rulings*). Closing asks only
    when something would stop (FT8 run or TX armed, a contact being entered, unsaved Settings).
    There is no user reload. One "daemon unavailable" state is required in every window that shows
    daemon state (the POC's tested scope is above). A window that sees a changed daemon build
@@ -126,7 +128,9 @@ ADR" and the update plan) and they must be met by the implementation, not assume
   normal close, an app or renderer failure and a reconnect stay distinct, and presence is a
   connection signal, not proof that a person is at the desk.
 - **Restoring the workspace never restores operation:** no TX armed and no FT8 run at start;
-  closing leaves contest mode and the operating session alone (ADR 0100).
+  closing leaves contest mode alone (ADR 0101). *Amended 2026-11-10 (operator):* a confirmed exit
+  closes the operating session, after FT8 stop/disarm and completion logging; Continue never
+  resumes an FT8 run or arms TX (ADR 0100's 2026-11-10 rulings).
 - **Idle-only reload needs asset compatibility:** a window waiting to reload after an `smd`
   upgrade must still be able to load lazy views (today's hashed chunks vanish with the old build
   and `spa.go` answers `index.html`); asset/API compatibility or a coordinated update must cover

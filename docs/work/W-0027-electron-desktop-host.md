@@ -108,8 +108,9 @@ design before code.
 ## Open questions for the operator
 
 - **C1's design in parallel with A1 and B1** (proposed; not yet directed).
-- **Before A2:** the Session authority and transfer design as a reviewed ADR 0100 prerequisite, or
-  a constrained adapter under its own small design.
+- **Before A2:** the Session authority design. Ruled 2026-11-10 (operator, "1-7 yes"): it is
+  ADR 0100, revised so a session follows the desktop app's lifetime (rulings recorded at the top of
+  ADR 0100). The revision itself and its dependency on C1/C2/C4 are still to be done.
 
 **Review recommendations (codex-036, 2026-11-09, first given in chat; not ruled):**
 

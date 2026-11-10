@@ -13,6 +13,34 @@ on activity, the gap and the contest policy (U1–U3, P1–P3), the Map (§7), a
 deferred with revisit triggers, and O7 is resolved by S3 (*Open questions*, below). The session-email mark fix (inbox item 1) was independent of this ADR
 and has shipped (`c3826281`, W-0010 outcome 11).
 
+> **Operator rulings 2026-11-10: sessions follow the desktop app (revision pending).** With the
+> Electron shell (ADR 0102, W-0027), the operator asked: "should a session start when the shell is
+> opened and close when the shell is closed, with the ability to continue a session". After the
+> design exchange (claude-078 to claude-085, codex-041 to codex-043), the operator ruled "1-7 yes":
+>
+> 1. A session is always open while the operating app runs; a confirmed exit closes it.
+> 2. No inactivity expiry.
+> 3. After a clean exit, a new session starts automatically; after a crash or unconfirmed close,
+>    the app asks Continue / New before the operating workspace.
+> 4. Sessions with no members at all (counting links to soft-deleted QSOs) are discarded when they
+>    close; all others are kept.
+> 5. The Session panel offers New session and Continue from a list of previous sessions for the
+>    current logbook, most recent first (this promotes O3 to resume-from-list only).
+> 6. A successful archive switch or default-logbook change closes the session and starts a new one.
+> 7. Deleting sessions that have contacts is not in the first slice.
+>
+> These supersede the gap (U2, P3), the contest suspension (U3, P2), counted activity (P1), the
+> opening question with Not now (§6) and lazy first-QSO opening as the normal path. The body below
+> still describes the earlier design until it is revised in place. Requirements recorded with the
+> rulings (reviewers): the session never closes on a renderer reload, reconnect, panel close or
+> ordinary daemon restart; FT8 stop/disarm and completion logging finish before the close; the
+> close is acknowledged by the daemon and bound to the authenticated app instance and the session
+> generation; crash detection comes from durable daemon state; Continue after a crash keeps the
+> identity, records the interrupted interval's end as unconfirmed and starts a new interval;
+> Continue never moves contacts, resumes FT8 or arms TX; contest mode stays independent (ADR 0101);
+> an archive switch closes the departing session only once the switch has succeeded (mechanism to
+> be specified); the daemon never refuses a live QSO. ADR 0102 ruling 6 is amended accordingly.
+
 ## Context
 
 The Session panel is today a per-tab list in `sessionStorage`, one list per archive
