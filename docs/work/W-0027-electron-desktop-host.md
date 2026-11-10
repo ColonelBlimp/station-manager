@@ -108,7 +108,10 @@ design before code.
 
 ## Open questions for the operator
 
-- **C1's design in parallel with A1 and B1** (proposed; not yet directed).
+- **C1 design started 2026-11-10** (operator: "keep them Proposed, start C1 design"):
+  [ADR 0103](../decisions/0103-pinned-tls-channel-between-the-desktop-app-and-smd.md), Proposed,
+  for review. Ports ruled 2026-11-10: HTTP 8080 (unchanged), app HTTPS 8443; bind failure
+  reported until C2, fatal after.
 - **Before A2:** the Session authority design. Ruled 2026-11-10 (operator, "1-7 yes"): it is
   ADR 0100, revised 2026-11-10 so a session follows the desktop app's lifetime (rulings in its
   Decision; ADR 0101 revised to match). Building it depends on C1/C2/C4.
