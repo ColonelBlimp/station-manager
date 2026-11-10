@@ -7,7 +7,7 @@
 // - Renderers reach only the served origin. Every other request is cancelled and
 //   reported; data: and blob: stay local to the page.
 
-/** True when url belongs to the served origin (its http pages or its websocket). */
+/** True when url belongs to the served origin: its own scheme or its WebSocket partner. */
 export function onOrigin(url, origin) {
     let u;
     try {
@@ -17,7 +17,18 @@ export function onOrigin(url, origin) {
     }
     const o = new URL(origin);
     if (u.host !== o.host) return false;
-    return u.protocol === o.protocol || (o.protocol === 'http:' && u.protocol === 'ws:');
+    // The origin's own scheme, or its WebSocket partner: http with ws, https with wss
+    // (ADR 0103 point 5). Never a downgrade (https origin, ws or http request).
+    const ws = { 'http:': 'ws:', 'https:': 'wss:' }[o.protocol];
+    return u.protocol === o.protocol || u.protocol === ws;
+}
+
+/** No spellchecker: Electron downloads its Hunspell dictionaries from Google's CDN (found
+ *  in the C1 proof's network log: redirector.gvt1.com/.../en-gb-10-1.bdic), a connection off
+ *  the machine. Nothing leaves the machine (ADR 0102). */
+export function disableSpellchecker(ses) {
+    ses.setSpellCheckerEnabled(false);
+    ses.setSpellCheckerLanguages([]);
 }
 
 export function hardenSession(ses, { origin, onAllowed, onBlocked, onPermission }) {
@@ -30,6 +41,8 @@ export function hardenSession(ses, { origin, onAllowed, onBlocked, onPermission 
         return false;
     });
     ses.setDevicePermissionHandler(() => false);
+
+    disableSpellchecker(ses);
 
     ses.webRequest.onBeforeRequest((details, callback) => {
         const url = details.url;

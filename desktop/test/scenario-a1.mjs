@@ -263,7 +263,9 @@ export async function runA1Scenario(ctx) {
         //     waiting pace rather than in a tight loop.
         let windowLoads = 0;
         const splitter = http.createServer((req, res) => {
-            if (String(req.headers['user-agent']).includes('Electron')) {
+            // The window's own page load is a document navigation; the shell's probe (ses.fetch,
+            // the same Chromium stack and user agent since C1) is not.
+            if (req.headers['sec-fetch-dest'] === 'document') {
                 windowLoads += 1;
                 res.writeHead(302, { location: `${elsewhere}/window-target` });
                 res.end();

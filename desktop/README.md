@@ -31,7 +31,16 @@ What A1 enforces:
   load, until the origin answers;
 - the shell's availability probe refuses redirects; it says only that something answers, never
   that it is `smd` (that is C1);
-- a single instance runs: a second launch exits and raises the first.
+- a single instance runs: a second launch exits and raises the first;
+- no spellchecker (Electron would download its dictionaries from Google's CDN).
+
+## The C1 proof: a pinned TLS identity, still fixture-only
+
+`npm run check:c1` runs the shell against two TLS fixture listeners taking turns at one loopback
+address: a genuine one whose synthetic certificate the shell pins (`src/pin.mjs`, ADR 0103) and
+an impostor with another key. Every transport (page, `fetch`, `wss:`, EventSource, download, the
+probe) is shown to work against the genuine one and to be refused by the impostor. The identities
+are generated per run with `openssl`; nothing touches `smd`.
 
 ## Commands
 
@@ -40,8 +49,9 @@ npm ci                                  # install (Electron fetches its binary o
 npm start                               # interactive: the fixture page
 SM_DESKTOP_HARNESS_DELAY_MS=5000 npm start   # the waiting page for 5 s, then the page
 npm run check:a1                        # A1 acceptance in Electron (xvfb-run -a without a display)
+npm run check:c1                        # C1 proof: the pinned TLS identity (needs openssl)
 npm run lint && npm run format:check
 ```
 
-From the repository root, `task desktop:check` runs lint, format and the A1 scenario, as CI
-does.
+From the repository root, `task desktop:check` runs lint, format and the A1 and C1 scenarios, as
+CI does.

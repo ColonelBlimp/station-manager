@@ -152,13 +152,14 @@ jobs:
         working-directory: desktop
         run: npm run format:check
 
-      - name: Desktop shell A1 scenario (Electron, fixture harness)
+      - name: Desktop shell A1 and C1 scenarios (Electron, fixture harnesses)
         working-directory: desktop
         run: |
           orig=$(sysctl -n kernel.apparmor_restrict_unprivileged_userns)
           trap 'sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns="$orig"' EXIT
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           xvfb-run -a npm run check:a1
+          xvfb-run -a npm run check:c1
 
       - name: App SPA build (produces dist/ for daemon embed)
         working-directory: frontend/app

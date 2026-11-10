@@ -42,6 +42,7 @@ export function mainWindowOptions({ offscreen }) {
             contextIsolation: true,
             nodeIntegration: false,
             webviewTag: false,
+            spellcheck: false,
             offscreen,
         },
         icon: nativeImage.createFromPath(ICON_PATH),

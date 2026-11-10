@@ -28,13 +28,14 @@ export function waitingPageUrl(origin) {
     return 'data:text/html;charset=utf-8,' + encodeURIComponent(html);
 }
 
-// An availability probe only: it says something answers at the origin, not that it is
-// smd. It must never stand in for C1's authentication. Redirects are refused, so a
-// replacement listener cannot send this main-process request (which the renderer's
-// request filter does not see) to another origin (codex-038).
-async function originAnswers(origin) {
+// The availability probe. It goes through the window's own session (`ses.fetch`), so it
+// passes the session's request filter and, over TLS, its certificate pin (ADR 0103 point
+// 6): with a pinned https origin, a listener without smd's key never counts as up. Over
+// plain http (A1's fixture) it says only that something answers. Redirects are refused, so
+// a replacement listener cannot send the probe to another origin (codex-038).
+async function originAnswers(ses, origin) {
     try {
-        const res = await fetch(origin + '/', {
+        const res = await ses.fetch(origin + '/', {
             redirect: 'manual',
             signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
         });
@@ -57,7 +58,7 @@ export async function loadWhenUp(win, url, origin, { afterFailure = false } = {}
             await new Promise((r) => setTimeout(r, RETRY_MS));
         }
         while (!win.isDestroyed()) {
-            if (await originAnswers(origin)) {
+            if (await originAnswers(win.webContents.session, origin)) {
                 if (!win.isDestroyed()) void win.loadURL(url).catch(() => {});
                 return;
             }

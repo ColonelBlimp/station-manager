@@ -191,6 +191,9 @@ the shell trusts that one certificate and nothing else.**
   and no sibling listener survives a failed start.
 - **No fallback to plain HTTP** for the app: a TLS failure is an unavailable daemon, never a reason
   to try `http:`.
+- **Nothing leaves the machine:** the C1 proof found Electron's spellchecker downloading a
+  dictionary from Google (`redirector.gvt1.com`); the shell disables the spellchecker before any
+  request, and a check asserts that the pin is never asked about any host but `127.0.0.1`.
 - **Private key handling:** created `0600`, never logged, never served, never sent anywhere; only
   `smd` opens it, and the shell reads only the certificate. An identity is created only when none
   is published; a published partial or mismatched identity is an error that names the files (no
@@ -252,8 +255,10 @@ be revisited once browsers are view-only.
 
 ## Open questions
 
-- **Whether the WebSocket and EventSource behaviour under the verifier holds as documented:** the
-  first implementation slice proves it with impostor tests before anything else is built on it.
+- **Whether the WebSocket and EventSource behaviour under the verifier holds as documented:**
+  answered for the fixture by the C1 proof (W-0027, 2026-11-10): the verifier covers page loads,
+  `fetch`, `wss:`, EventSource, downloads and the probe, including reconnects after a prior
+  successful verification. It is still to be confirmed against `smd`'s own listener.
 
 ## Triggers to revisit
 

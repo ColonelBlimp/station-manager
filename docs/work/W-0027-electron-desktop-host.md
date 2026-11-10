@@ -196,3 +196,81 @@ step (the AppArmor setting) is confirmed only once CI runs it.
 
 **Not covered by A1:** no user reload (A3), window roles (A2), placement and XWayland (A4), the
 host interface (later slices), and loading `smd` (after C1).
+
+### C1 proof — pinned TLS against fixture listeners (2026-11-10; done)
+
+Started on the operator's direction ("yes, start the C1 proof slice"), on the brief in claude-106
+(codex-049's five points). Confined to `desktop/`: synthetic identities made per run with `openssl`,
+an ephemeral loopback port, a temporary profile; no `smd`, no operator identity. It does **not**
+lift A1's restriction: the daemon listener, the protected identity directory and the rest of
+ADR 0103's acceptance are still to be built.
+
+**Acceptance criteria** (each a check in `desktop/test/scenario-c1.mjs`):
+
+1. With an impostor (another key) at the app address at cold start, the probe tries it, the pin
+   refuses it, nothing reaches it, and the window stays on the waiting page.
+2. The genuine listener then loads by itself, and its page script runs.
+3. **Success before rejection:** `fetch`, `wss:`, EventSource and a download all succeed against the
+   genuine listener.
+4. With the genuine listener replaced by the impostor at the same address (its connections closed),
+   fresh, uniquely marked attempts on every transport are refused, **each with its own evidence of
+   having been attempted** (a handshake the impostor saw refused; a skipped download, or a pending
+   one without observed rejection evidence, fails, codex-050/051); no handshake with the impostor
+   completes; nothing arrives there; the loaded page keeps its draft and panel marker and is not
+   sent to the waiting page.
+5. The genuine listener returns: `fetch`, `wss:`, EventSource and a download recover; the draft is
+   still there.
+6. The pin accepted only the genuine certificate, rejected the impostor's, and never changed.
+7. No downgrade (`http:`, `ws:`) and no other port; no extra window; the page requested only its own
+   origin.
+8. **The certificate verifier was asked only about 127.0.0.1.** This is a bounded observation
+   (verifications are cached and the hook sees only verifications the network service requests),
+   not a network inventory; it is what caught the spellchecker.
+9. The copied-certificate case (the pinned certificate with another key) cannot be served: Node's
+   TLS refuses the pair at set-up (`ERR_OSSL_X509_KEY_VALUES_MISMATCH`). Recorded as a
+   **fixture-set-up rejection, not a handshake result**; the guarantee relied on is TLS key
+   possession (RFC 8446 §4.4.3).
+
+**Built:** `src/pin.mjs` (DER SHA-256 pin, `setCertificateVerifyProc`: `0` only for 127.0.0.1 with
+the pinned fingerprint, `-2` otherwise, never `-3`; installed before the first request); the request
+filter admits `wss:` beside an `https:` origin and nothing else (`src/hardening.mjs`); the probe
+uses the window's session (`ses.fetch`), so it passes the filter and the pin (`src/waiting.mjs`); a
+TLS mode, WebSocket, EventSource and download routes and handshake counting in the harness;
+`test/identity.mjs`; a `c1` mode in `src/main.mjs`; `check:c1` in `task desktop:check`,
+`scripts/ci-local.sh` and CI.
+
+**Finding: the spellchecker reached Google.** The first run's pin log showed a verification for
+`redirector.gvt1.com`; Chromium's network log identified Electron's spellchecker downloading
+`en-gb-10-1.bdic`. The pin refused it, but a connection was attempted off the machine. The shell now
+disables the spellchecker (`setSpellCheckerEnabled(false)`, `setSpellCheckerLanguages([])`) first
+thing at start, and in every hardened session, with `spellcheck: false` on the window; disabling the
+component updater made no difference. A network log of the fixed run shows no host other than
+127.0.0.1 (a bounded observation of that run, not a guarantee). Check 8 watches for it. Consequence:
+no spellchecking in text fields (operator, 2026-11-10: "spellchecking off is fine").
+
+**Evidence:** C1 PASS (17 checks), repeated; A1 PASS (26 checks); lint and format clean;
+`task desktop:check` passes. C1 reversions, each restored and verified by hash: **only the
+fingerprint comparison removed** (acceptance path kept): the impostor's page loads and `fetch`,
+`wss:` and EventSource receive the impostor's answers (`impostor:i1`, `i2`, `i3`); `wss:` partner
+removed: genuine `wss:` refused; downgrade allowed: `http:`/`ws:` requests leave; probe on Node's
+global `fetch`: the pinned listener never counts as up; spellchecker left on: a connection to
+`redirector.gvt1.com`. All 5 fail for their stated reason. A1's 18 reversions rerun: 17 proven;
+R18's fixture had to tell the probe from the window by `Sec-Fetch-Dest: document` (the probe now
+shares Chromium's user agent), after which it fails as before (893 window loads in about 4 s). **R15
+alone (probe following redirects) no longer fails**, because the session filter now also cancels the
+off-origin redirect; with both the manual-redirect setting and the filter's cancellation removed,
+the redirect reaches the other address (three times), so the protection is layered, and neither
+layer alone is proven by itself.
+
+**Answers ADR 0103's open question:** in this fixture, Electron's verifier covers page loads,
+`fetch`, `wss:`, EventSource, downloads and the probe, including reconnects after a prior
+successful verification.
+
+**Review (codex-050):** the pin proof stands, including WebSocket and EventSource, independently
+re-run by Codex outside its sandbox (its first attempt, inside its execution sandbox, aborted at
+Chromium's sandbox start-up with SIGTRAP at 13:29, the crash notice the operator saw; no evidence
+either way). Fixed after review: each refused transport needs its own evidence of having been
+attempted (Codex's counter-test, a skipped download, passed 16/16 before and fails now, as does a
+"pending" download never attempted); a download recovers in step 5; criterion 8 and the spellchecker
+note are worded as bounded observations. The fixture checks show page retention and fresh
+connections, not the product's "daemon unavailable" overlay or its retry policy.

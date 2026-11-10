@@ -12,6 +12,7 @@
     "scripts": {
         "start": "electron .",
         "check:a1": "SM_DESKTOP_SCENARIO=a1 electron .",
+        "check:c1": "SM_DESKTOP_SCENARIO=c1 electron .",
         "lint": "eslint .",
         "format:check": "prettier --check .",
         "format": "prettier --write ."
