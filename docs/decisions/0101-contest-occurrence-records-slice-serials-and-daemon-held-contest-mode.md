@@ -197,8 +197,19 @@ This supersedes ADR 0096 §2 (option B) and §3 (T3).
   - **Every contest-state transition advances it:** Start, Stop, the automatic end at the window's
     end (including an end found late, when the state is next read or used), and an end found at
     restart.
-  - A Start or Stop whose expected generation is not current is refused as stale, changes nothing,
-    and returns the current state; the window redraws.
+  - **Transaction order for Start and Stop** (codex-044; this restores the guarantee ADR 0100's
+    former §5 gave): serialize before reading the mutable state; first apply the end check (`now ≥
+    end`, the half-open window), persisting any automatic end and its generation advance; then the
+    stale check; then the requested transition. **An automatic end found in step one is committed
+    even when the Start or Stop is then refused** (stale, or an ended target). Events are published
+    only after the commit. A database failure rolls the whole transaction back and publishes
+    nothing; a read never returns an unpersisted ended state as authoritative.
+    - **Example:** active A at generation g has passed its end with its timer delayed. Start B at g
+      first ends A (g+1), then is refused as stale. A stays ended; the window redraws at g+1.
+    - **Acceptance** covers that sequence, a Start refused because the target has ended, a read, a
+      restart and a rollback. A valid draft naming A stays saveable after A ends (§5).
+  - A Start or Stop whose expected generation is not current is refused as stale, changes nothing
+    it requested, and returns the current state; the window redraws.
   - **Retries:** a retry keeps the generation of the original press. If the first attempt
     committed, the generation has moved and the retry is refused as stale, so it can never apply
     twice; if the first attempt never committed, the retry may still apply.

@@ -56,9 +56,10 @@ the station.
   **Prerequisite:** a reviewed Session authority and transfer design. Today the Session list is
   renderer-local per tab and archive (`session.svelte.ts`, `sessionStorage`; `main.ts` files
   submit results into it; `SessionPanel` reads it), so another renderer cannot show or maintain
-  the same list; the POC's shared Session was fixture-daemon state, not product evidence. The
-  design either names a reviewed ADR 0100 prerequisite or a constrained adapter, covering
-  archive isolation, edits and email marks, and panel-local state. Acceptance: detach with
+  the same list; the POC's shared Session was fixture-daemon state, not product evidence. Ruled
+  2026-11-10: the design is ADR 0100 (revised); building it is separate prerequisite work outside
+  this dossier's shell scope, covering archive isolation, edits and email marks, and panel-local
+  state. Acceptance: detach with
   existing rows, log another contact in main, see it in the detached Session, re-dock without
   loss or a second active copy.
 - A3: closing (stop the FT8 run, disarm TX, and the confirmation) and no user reload. **Depends
@@ -110,8 +111,7 @@ design before code.
 - **C1's design in parallel with A1 and B1** (proposed; not yet directed).
 - **Before A2:** the Session authority design. Ruled 2026-11-10 (operator, "1-7 yes"): it is
   ADR 0100, revised 2026-11-10 so a session follows the desktop app's lifetime (rulings in its
-  Decision). Building it depends on C1/C2/C4; ADR 0101's coupling to the old gap still needs a
-  matching revision.
+  Decision; ADR 0101 revised to match). Building it depends on C1/C2/C4.
 
 **Review recommendations (codex-036, 2026-11-09, first given in chat; not ruled):**
 

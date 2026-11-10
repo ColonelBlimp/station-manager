@@ -1,9 +1,9 @@
 # Current work
 
-Updated: 2026-11-09
+Updated: 2026-11-10
 
 - **Goal:** build ADR 0102 in reviewed slices ([`W-0027`](work/W-0027-electron-desktop-host.md)); [`backlog`](backlog.md) owns priority.
-- **State:** [`ADR 0102`](decisions/0102-electron-desktop-host-for-the-ui.md) **Accepted** 2026-11-09 (Electron host); W-0027 A1 (fixture-only shell, `desktop/`) done; B1 awaits the brief. ADRs 0100 and 0101 **Proposed**, design only, review fixes and S1/S4 ruled (`e5924514`); 0100 O1–O3 deferred.
+- **State:** [`ADR 0102`](decisions/0102-electron-desktop-host-for-the-ui.md) **Accepted** 2026-11-09 (Electron host); W-0027 A1 done; B1 awaits the brief. ADRs 0100 (sessions follow the app, revised 2026-11-10) and 0101 **Proposed**, design only.
 - **Open:** W-0024 O-a, O-b; backup/restore (item 4); deferred live U5 and keyed U6.
 - **Next:** W-0027 (tag `pre-w0027` pushed): slices on the operator's direction, each reviewed by operator and Codex.
 - **Decisions not to revisit:** W-0004 palettes DECLINED. PT-6 `fsOps` package-private. FT8 timing stays +0.500/+0.660. `txConfirmTimeout` DEFERRED. ClubLog is not a station account. Docking evaluated and stopped (W-0026).

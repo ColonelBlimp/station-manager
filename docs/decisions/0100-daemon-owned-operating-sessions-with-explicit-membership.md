@@ -190,10 +190,17 @@ After the design exchange (claude-078 to claude-085, codex-041 to codex-043), th
     start): open a new session automatically, bound to the effective default logbook, and show it
     ("Session started 09:15"). No question is asked.
   - **An open session held by an earlier lifetime** (the previous app crashed, lost power, or exited
-    without a close the daemon acknowledged): this is a **recovery**. If that session has **no
-    members**, it is discarded and a new session opens without a question: there is nothing to
-    continue. Otherwise the app asks **Continue or New** before it shows the operating workspace
-    (§6).
+    without a close the daemon acknowledged): this is a **recovery**: the app asks **Continue or
+    New** before it shows the operating workspace (§6).
+    - **An empty remnant (operator ruling 2026-11-10: "discard without asking"):** if that
+      session has **no membership rows at all** (counting links to soft-deleted QSOs), it is
+      discarded and a new session opens without the question, since there is nothing to continue.
+      Before it is judged empty, any completion work the earlier lifetime had already earned must
+      have finished: the FT8 logger runs it as a tracked background job that can enrich before
+      submitting (`cmd/smd/lifecycle_adapters.go:743-777`, `cmd/smd/main.go:347-364`), so
+      serialized database writes alone do not prove nothing is pending. Such a contact is
+      preserved and joins the remnant (making it non-empty); the job is never cancelled to make
+      cleanup possible.
   - **The state cannot be read:** the app reports the daemon as unavailable. An unreadable state is
     never treated as a clean exit.
 - **While an operating app is attached and no session is open** (after a default-logbook change or
@@ -223,6 +230,11 @@ After the design exchange (claude-078 to claude-085, codex-041 to codex-043), th
   session's record is removed instead of kept. The check is serialized with membership writes, the
   generation still advances, and the resulting state is published after the commit. Emptiness is
   never inferred from plotted points, filtered rows or a failed query.
+- **The app closes while the recovery question is unanswered:** nothing is resolved; the earlier
+  session stays open, and the next start asks again.
+- **The exit acknowledgement is lost after the close committed:** at its next contact the app
+  reconciles from durable state. A committed clean close is never reopened or reclassified as an
+  unconfirmed exit.
 
 #### Recovery
 
@@ -260,8 +272,9 @@ itself; the boundary is the change **taking effect**.
       restart closes nothing;
     - **crash recovery:** the pointer and its epoch commit together or not at all.
   - **The test:** a session whose `default_epoch` differs from the archive's closes with
-    `logbook_changed`, `closed_at` at the evaluation that finds it. That covers X→Y→X: the epoch
-    moved twice even though the logbook is X again.
+    `logbook_changed`. Its `closed_at` is the **recorded closure time**, the evaluation that
+    persists the close, not a measured instant of the change. That covers X→Y→X: the epoch moved
+    twice even though the logbook is X again.
   - **Where the test runs:** a start node before `http`, every session transaction, and every
     logging transaction before membership (§2). It is derived from durable state, so no single run
     is load-bearing.
@@ -404,6 +417,11 @@ itself; the boundary is the change **taking effect**.
     the chosen one with a new interval, atomically, under the generation guard. A failure leaves the
     current session open. Eligibility is checked again inside the transaction; a foreign, removed or
     newly ineligible target is refused.
+  - **Rebinding (codex-044):** after eligibility is checked, the same transaction sets the resumed
+    session's `default_epoch` to the archive's current one and binds the new interval to the current
+    app lifetime. Its identity and all earlier membership are kept. Without the rebinding, a session
+    chosen after an X→Y→X change would be closed by §4's test at the next contact. **Acceptance:**
+    continue S0 after X→Y→X, then log a contact: S0 stays open and receives it.
   - **Contacts never move.** Contacts already logged in the current session stay in it, and that
     session stays in the list. The panel says so beside the action. Continue is not a merge (O1).
 - **Delete:** not in the first slice for sessions with members (ruling 7); empty sessions are
@@ -457,8 +475,8 @@ ruling).
   - **Keep empty sessions as history.** Rejected (ruling 4): a session with no contacts carries
     nothing to match against the log. A record of on-air time without contacts would be a separate
     station-activity feature.
-- **ADR 0101 still describes the coupling to the old gap** (its references to ADR 0100's U3
-  suspension, P2 and the Start/Stop session evaluation). It needs a matching revision.
+- **ADR 0101 was revised to match** (2026-11-10, `d824755b`): contest mode no longer suspends or
+  evaluates sessions, and it checks its own window end.
 
 ## Open questions
 
