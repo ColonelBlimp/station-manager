@@ -7,7 +7,11 @@ date: 2026-11-06
 
 # 0101 — Contest occurrence records, slice serials and a daemon-held contest mode
 
-**Proposed (2026-11-06). Design only. Nothing is authorised or built.**
+**Proposed (2026-11-06; revised 2026-11-10). Design only. Nothing is authorised or built.** The
+2026-11-10 revision removes this record's coupling to ADR 0100's session gap: ADR 0100 now ties an
+operating session to the desktop app's lifetime, with no inactivity expiry, so there is no gap for
+contest mode to suspend. Contest mode and operating sessions are independent (ADR 0100 §9). The
+coupled text is in the Git history up to `72df5a9d`.
 
 This ADR amends [ADR 0096](0096-contest-occurrences-reserved-serials-and-submission-export.md)
 and does not rewrite it. It records:
@@ -44,10 +48,10 @@ Three things have happened since.
    - **Membership:** read from those two fields, not from an association.
 
    The robot accepted the log. Its acknowledgement flagged only missing UK districts.
-3. **ADR 0100 (Proposed) needs this state.** Its U3 ruling suspends session-gap expiry only while
-   an explicit, **daemon-owned** contest-active state is on, and every window must agree on it.
-   Today the contest choice is per browser (`frontend/app/src/lib/operate/contest.svelte.ts`), so
-   that state does not exist.
+3. **Every window must agree on whether a contest is on.** Today the contest choice is per browser
+   (`frontend/app/src/lib/operate/contest.svelte.ts`), so two windows can disagree, and nothing
+   survives a restart consistently. (ADR 0100 first needed this state for its session-gap
+   suspension; since its 2026-11-10 revision it has no gap, and the state stands on its own.)
 
 ## Decision
 
@@ -161,39 +165,38 @@ This supersedes ADR 0096 §2 (option B) and §3 (T3).
 
 - **What it is:** the daemon holds, per archive, at most one **active contest**: an occurrence, plus
   a state generation for stale-action protection. It is **not** a per-tab or per-browser choice.
-  Every window shows it and follows its events. It is the state ADR 0100's U3 suspension reads.
+  Every window shows it and follows its events. It never opens, closes or continues an operating
+  session, and sessions never start or stop it (ADR 0100 §9).
 - **Start (explicit).**
   - The operator chooses an occurrence (§6) and presses Start.
   - Start is refused if the occurrence's window has already ended.
-  - **Start and Stop run ADR 0100's session evaluation** in the same transaction (ADR 0100 §3;
-    acceptance review 2026-11-07): Start evaluates under the contest state that exists before it,
-    so with no contest active an overdue operating session is closed before the suspension begins;
-    Stop evaluates again after contest mode is disabled (ADR 0100 P2).
-  - **An early Start is allowed** (ruled 2026-11-07). The state is active immediately, so ADR
-    0100's gap suspension begins at that Start. Every window shows a persistent, shared message, for
-    example "Contest mode on — event opens at 12:00 UTC".
+  - **An early Start is allowed** (ruled 2026-11-07). The state is active immediately. Every window
+    shows a persistent, shared message, for example "Contest mode on — event opens at 12:00 UTC".
     - QSOs completed before the opening stay ineligible under ruling C.
     - Committing a callsign before the opening consumes a real serial, under the normal rule.
   - **A contest is never started merely because its window opens.** An operator who stopped it
     before the opening starts it again.
 - **Stop (explicit, early).** The operator can stop it at any time.
 - **Ending itself.** At the window's end the daemon ends the state, and new drafts stop being
-  contest contacts.
+  contest contacts. **A late timer never extends it:** whenever the state is read or used (a log
+  request, Start, Stop, a restart), the daemon first checks the window's end and, if it has passed,
+  ends the state there (advancing the contest-state generation). This keeps the guarantee that
+  ADR 0100's former contest-end check gave, now without any session coupling.
 - **Drafts are preserved, at the end of the window and at a Stop.**
   - **A draft already in progress** keeps its occurrence and its allocated serial, so the operator
     can finish and save it. It saves under that occurrence (§5).
   - **Its eligibility** stays a separate check against its recorded completion time (ruling C).
   - **The end never interrupts the draft.** That is what "never mid-QSO" means here: the contest
     state ends and the draft lives on.
-  - **The draft does not keep the state alive.** An abandoned draft keeps neither contest mode nor
-    ADR 0100's session-gap suspension active.
+  - **The draft does not keep the state alive.** An abandoned draft does not keep contest mode
+    active.
 - **Stale-action protection** (aligned 2026-11-07 with ADR 0100 §5 as simplified by its S2
   ruling; there are no request ids or recorded results).
   - Start and Stop carry the expected **contest-state generation**, a counter per archive that is
     **distinct from ADR 0100's operating-session generation**.
   - **Every contest-state transition advances it:** Start, Stop, the automatic end at the window's
-    end (including an end found by an evaluation after a late timer, ADR 0100 P2), and an end found
-    at restart.
+    end (including an end found late, when the state is next read or used), and an end found at
+    restart.
   - A Start or Stop whose expected generation is not current is refused as stale, changes nothing,
     and returns the current state; the window redraws.
   - **Retries:** a retry keeps the generation of the original press. If the first attempt
@@ -207,13 +210,14 @@ This supersedes ADR 0096 §2 (option B) and §3 (T3).
   - An archive switch carries no active contest into the new archive.
   - **The departed archive keeps its record** (operator ruling 2026-11-08, following the reviewer's
     and agent's recommendation; acceptance review 2026-11-07): A's active contest stays recorded in A's file while B
-    is served. On return to A, the evaluation reads that stored state and end time: still active
-    with its end not passed, contest mode and ADR 0100's suspension apply; end passed, it ends then
-    (advancing the contest-state generation), and ADR 0100 P2 applies.
-- **ADR 0100's U3.** The gap suspension lasts exactly while this state is active. Under
-  [ADR 0100 P2](0100-daemon-owned-operating-sessions-with-explicit-membership.md#p2-the-baseline-when-the-contest-state-ends-completes-u3s-open-choice)
-  (ruled 2026-11-07), ending it applies overdue session expiry immediately; neither Stop nor
-  automatic end counts as activity or moves `last_activity_at`.
+    is served. On return to A, the daemon reads that stored state and end time: still active with
+    its end not passed, contest mode applies; end passed, it ends then (advancing the contest-state
+    generation).
+- **Operating sessions are independent**
+  ([ADR 0100](0100-daemon-owned-operating-sessions-with-explicit-membership.md) §9). Closing a session (the app's exit, New, Continue of another, an archive or default change)
+  never stops contest mode, and New or Continue never starts it. A contest may span several
+  sessions, and a session may span contests. Membership of an occurrence and of a session are
+  separate associations.
 
 ### 5. Log requests are accepted as named
 
@@ -286,7 +290,7 @@ No occurrence table: the identity is the two QSO fields. Rejected:
 ### Contest mode: per tab or per browser, as today
 
 Rejected:
-- ADR 0100's U3 requires one daemon-owned state on which every window agrees.
+- Every window must agree on one state (ADR 0100 also required it until its 2026-11-10 revision).
 - Per-tab state cannot survive a restart consistently.
 - Two windows can disagree today about whether a contest is on.
 
@@ -294,13 +298,11 @@ Rejected:
 
 Active whenever a selected occurrence's window is open, with no Start or Stop. Rejected by the
 ruling:
-- the operator works non-contest contacts during a contest's hours, as on 2026-11-01 (FT8 on 80 m);
-- an automatic start would also suspend session expiry unasked.
+- the operator works non-contest contacts during a contest's hours, as on 2026-11-01 (FT8 on 80 m).
 
 ### Contest mode: explicit only, never ending by itself
 
-Rejected by the ruling: a forgotten Stop would keep contest mode, and the session-gap suspension,
-on indefinitely.
+Rejected by the ruling: a forgotten Stop would keep contest mode on indefinitely.
 
 ### Refuse a log request whose occurrence is not the active one
 
@@ -354,14 +356,15 @@ Rejected (the 2026-11-06 ruling on question 4):
 - A contest needs per-band or per-mode serial sequences: revisit one sequence per occurrence.
 - An operator needs two contests active at once in one archive (overlapping events in different
   logbooks): revisit "at most one active contest per archive".
-- ADR 0100 is rejected or changes U3: §4 still stands for shared presentation and the end-of-window
-  rule, but its session coupling goes.
+- ADR 0100's session lifecycle changes again: §4 is unaffected, because contest mode and sessions
+  are independent.
 
 ## References
 
 - [ADR 0096](0096-contest-occurrences-reserved-serials-and-submission-export.md) (amended),
-  [ADR 0100](0100-daemon-owned-operating-sessions-with-explicit-membership.md) (U3; §5 stale-action
-  pattern), ADR 0056 (per-logbook placement), ADR 0071 (archives).
+  [ADR 0100](0100-daemon-owned-operating-sessions-with-explicit-membership.md) (§5 stale-action
+  pattern; §9 independence; revised 2026-11-10), ADR 0056 (per-logbook placement), ADR 0071
+  (archives).
 - [W-0023](../work/W-0023-contest-logging.md): *Organiser-reply rulings*, *Weekend slice*,
   *Follow-on ADR: scope proposal*.
 - `internal/database/sqlite/migrations/log/0019_contest_serial.up.sql`,
