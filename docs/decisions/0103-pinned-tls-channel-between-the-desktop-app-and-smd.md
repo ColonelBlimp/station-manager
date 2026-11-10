@@ -72,13 +72,19 @@ the shell trusts that one certificate and nothing else.**
      Creating a new key with mode `0600` alone is not enough: the certificate is the pin, so its
      location must be as protected as the key's.
    - **Creation, published as one unit (codex-047):** when no identity directory exists, `smd`
-     prepares a temporary directory beside it (owner-only), writes and syncs both files in it, then
-     publishes it with **one** rename of the directory to its final name and syncs the parent. A
-     crash before that rename leaves no identity (only an unpublished temporary directory,
-     removed at the next start); after it, a complete one. A published directory with a missing,
-     malformed, mismatched or unexpected file is refused, with the files named. Acceptance
-     interrupts each boundary (before the files are complete, before the rename, after it) and
-     distinguishes an unpublished identity from a published partial one.
+     prepares a temporary directory beside it (owner-only) and, in order and each checked: writes
+     and syncs both files, **syncs the prepared directory itself** (a file sync does not persist its
+     directory entry; codex-048), publishes it with **one** rename of the directory to its final
+     name, and syncs the parent. Any failure before the rename prevents publication. If only the
+     final parent sync fails, the identity is published but its durability is unconfirmed: `smd`
+     reports that state and never silently replaces the identity (its own handling, not the config
+     writer's abstraction). Acceptance asserts the order of these barriers and injects failures on
+     both sides of publication; process-termination tests alone do not prove power-loss durability.
+     A crash before that rename leaves no identity (only an unpublished temporary directory, removed
+     at the next start); after it, a complete one. A published directory with a missing, malformed,
+     mismatched or unexpected file is refused, with the files named. Acceptance interrupts each
+     boundary (before the files are complete, before the rename, after it) and distinguishes an
+     unpublished identity from a published partial one.
    - **Replacement** is deliberate: delete the directory; the next `smd` start creates a new
      identity. A running app keeps its pin (point 3) and shows the daemon as unavailable until it
      is restarted, which re-reads the identity.
