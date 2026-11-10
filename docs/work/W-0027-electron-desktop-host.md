@@ -73,10 +73,10 @@ the station.
 quite a lot of changes - chrome included as some of the way things look don't quite suit a
 windows situation". The SPA stays browser-compatible.
 
-- B1: the operator's list of what does not suit a windowed app (screenshots welcome), recorded
-  here as the brief.
+- **No up-front brief (operator, 2026-11-10):** "Let's not concern ourselves too much with B1 as
+  we implement, I will ask for a change". Chrome changes come as the operator asks for them during
+  implementation, each one a small slice with the usual review, recorded here when made.
 - B2: app-drawn form controls (ruled; dropdown lists stay native).
-- B3 onward: one change per slice, each a design exchange recorded here.
 
 **C — the daemon's side and security** (ADR 0102, Requirements). Each needs its own reviewed
 design before code.
