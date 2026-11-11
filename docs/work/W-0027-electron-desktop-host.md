@@ -83,7 +83,8 @@ design before code.
 
 - C1: the authenticated channel, a design reviewed by Codex before code. The shell authenticates
   `smd`'s content and binds that authentication to every later request, stream and reconnect.
-- C2: the operating-client check.
+- C2: the operating-client check. **Depends on D1** (operator ruling 2026-11-11): the browser is
+  not made view-only or removed until a user can launch the desktop app.
 - C3: the view-only route classification, leaving room for a daemon submitter whose credential
   grants QSO submission only.
 - C4: presence on the authenticated operating subscription, stopping and disarming through the
@@ -105,6 +106,11 @@ design before code.
 
 - **2026-11-09 (operator): "yes, commit and start A1 and B1 in desktop/".** A1 (the fixture-only
   skeleton) and B1 (the operator's chrome brief) start together; the shell lives in `desktop/`.
+- **2026-11-11 (operator): "Before we retire the browser readonly or remove, the must be able to
+  launch the desktop app".** The browser stays a full operating client until a user can launch
+  the desktop app (D1: the shell package with its menu launcher, not `npm start` from a checkout).
+  So C2's switch of the browser to view-only, and any removal of the browser path, depend on D1.
+  Today the app runs only from a repository checkout (`cd desktop && npm start`).
 
 ## Open questions for the operator
 
