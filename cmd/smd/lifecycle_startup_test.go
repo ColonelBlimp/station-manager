@@ -16,6 +16,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -57,6 +58,7 @@ func seedOrchestratedConfig(t *testing.T, mut func(*config.Config)) *config.Serv
 	cfg.Datastore.Path = filepath.Join(tmp, "log.db")
 	cfg.Server.Protocol = "unix" // a unix listener at the tmp path validates, so self-heals can persist
 	cfg.SocketPath = filepath.Join(tmp, "smd.sock")
+	cfg.Server.AppPort = freeLoopbackPort(t) // never the station's 8443 (W-0027 C1c)
 	cfg.UserAgent = "station-manager-test/1.0"
 	if mut != nil {
 		mut(&cfg)
@@ -304,4 +306,17 @@ func TestLifecycle_ConsumersInitializedOnlyByTheOrchestrator(t *testing.T) {
 	if d.server == nil {
 		t.Error("http server was not constructed by the orchestrator")
 	}
+}
+
+// freeLoopbackPort is a loopback port free a moment ago, for a daemon's desktop app listener:
+// the setting has no "any port" value (0 is the 8443 default). Losing it to a race only means
+// that daemon reports a failed bind, which never stops it.
+func freeLoopbackPort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+	return ln.Addr().(*net.TCPAddr).Port
 }

@@ -34,6 +34,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/buildinfo"
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
+	"github.com/ColonelBlimp/station-manager/internal/desktopid"
 	"github.com/ColonelBlimp/station-manager/internal/email"
 	"github.com/ColonelBlimp/station-manager/internal/enums/dxcc"
 	"github.com/ColonelBlimp/station-manager/internal/enums/modes"
@@ -1210,10 +1211,23 @@ func (d *daemon) initHTTP() error {
 }
 
 // startHTTP launches ListenAndServe on the daemon socket; a bind error lands on errCh, which run()'s
-// wait loop selects on (exactly as before).
-func (d *daemon) startHTTP(context.Context) error {
-	go func() { d.errCh <- d.server.ListenAndServe(d.cfg.SocketPath) }()
+// wait loop selects on (exactly as before). The desktop app's listener starts only once the
+// browser listener holds its port (codex-058), and its problems are reported, never fatal (C1c).
+func (d *daemon) startHTTP(ctx context.Context) error {
+	go func() { d.errCh <- serveBrowser(d) }()
+	startAppAfterBrowser(ctx, d.server, desktopid.Ensure, d.cfgSvc.WorkingDir(),
+		d.cfg.Server.EffectiveAppPort(), d.reportDesktopListener)
 	return nil
+}
+
+// reportDesktopListener writes a desktop app listener problem to smd.log, and nowhere else
+// (operator ruling 2026-11-11): before C2 it never reaches errCh.
+func (d *daemon) reportDesktopListener(msg string, err error) {
+	ev := d.logger.WarnWith()
+	if err != nil {
+		ev = ev.Err(err)
+	}
+	ev.Msg(msg)
 }
 
 func (d *daemon) httpStopAccepting() {

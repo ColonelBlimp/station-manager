@@ -22,6 +22,14 @@
 #                                                  # source had; 11→9 drops two qso_upload columns)
 #       [--mutate-one-row]   # proof hook: changes one retained value so the verdict MUST fail
 #
+# Listener confinement (W-0027 C1c, codex-058/059): a build with the desktop app listener also
+# binds 127.0.0.1:server.app_port (default 8443, the station's). The scratch config never carries
+# the source's app_port. BEFORE each daemon launch, the binary is asked read-only (its own
+# `config-check`, which starts, binds and writes nothing) whether it knows the key: if it does, its
+# phase gets a free scratch port; if it refuses exactly that key, the phase runs without it; any
+# other answer, or a binary with no config-check, refuses the drill before launch. After each
+# daemon start the drill also fails if its daemon listens on any TCP port but that phase's.
+#
 # The expected versions are asserted at every phase, so a drill whose new
 # binary did not actually migrate (or whose downgrade step was skipped) fails
 # instead of printing ROWS IDENTICAL for a no-op. The database copy is a
@@ -53,12 +61,17 @@ done
 [ "$OLD_SCHEMA" -le "$NEW_SCHEMA" ] && [ "$OLD_CONFIG" -le "$NEW_CONFIG" ] || { echo "old versions must not exceed new versions" >&2; exit 2; }
 [ -x "$NEW" ] && [ -x "$OLD" ] || { echo "binaries must be executable" >&2; exit 2; }
 [ -r "$DB" ] && [ -r "$CFG" ] || { echo "source db/config not readable" >&2; exit 2; }
+command -v ss >/dev/null || { echo "ss (iproute) is required for the listener confinement check" >&2; exit 2; }
+for tool in setsid timeout pgrep pkill; do
+  command -v "$tool" >/dev/null || { echo "$tool is required for the bounded capability probe" >&2; exit 2; }
+done
 
 SCRATCH="$(mktemp -d "$HOME/.sm-rollback-drill.XXXXXX")"
 chmod 700 "$SCRATCH"
-PID=""
+PID=""; PROBE_SID=""
 cleanup() {
   if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then kill -TERM "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true; fi
+  if [ -n "$PROBE_SID" ]; then pkill -KILL -s "$PROBE_SID" 2>/dev/null || true; fi
   if [ "$KEEP" = 1 ]; then echo "kept scratch: $SCRATCH (config copy was scrubbed; remove it when done)"; return; fi
   # Belt and braces only: the scratch config never held a credential (scrubbed
   # before the write), and the daemon replaces it atomically, so shredding by
@@ -91,6 +104,8 @@ doc.setdefault("datastore", {})["path"] = os.path.join(scratch, "db", "station-m
 doc.setdefault("server", {})["protocol"] = "unix"
 doc["server"]["serve_spa"] = False
 doc["socket_path"] = os.path.join(scratch, "smd.sock")
+# Never the source's app port: each phase sets its own scratch port, or none (set_app_port).
+doc["server"].pop("app_port", None)
 for f in doc.get("forwarders", []): f["enabled"] = False
 doc.setdefault("bridge", {})["enabled"] = False
 doc.setdefault("ft8", {})["enabled"] = False
@@ -224,6 +239,83 @@ print(f"  columns dropped by the downgrade, exactly as expected: {sorted(dropped
 PY
 }
 
+free_port() { python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'; }
+set_app_port() { # $1 = a scratch port, or "" to remove server.app_port from the scratch config
+python3 - "$SCRATCH/config.json" "$1" <<'PY'
+import json, os, sys
+path, port = sys.argv[1], sys.argv[2]
+doc = json.load(open(path)); srv = doc.setdefault("server", {})
+if port: srv["app_port"] = int(port)
+else: srv.pop("app_port", None)
+fd = os.open(path + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w") as fh: json.dump(doc, fh, indent=2)
+os.replace(path + ".tmp", path)
+print(f"  server.app_port: {port or 'absent'}")
+PY
+}
+KNOWS=""
+# The probe's bounds (operator ruling 2026-11-11): a config-check finishes in well under a second;
+# one that has not finished in PROBE_LIMIT seconds is sent SIGTERM, and SIGKILL PROBE_GRACE seconds
+# later. Either way the drill refuses before any data phase.
+PROBE_LIMIT=30; PROBE_GRACE=5
+probe_app_port() { # $1 = binary, $2 = phase → sets KNOWS (1/0) from a read-only config-check, before
+                   # the binary is ever launched on data; refuses the drill on any other answer.
+                   # The grep is only a quick negative filter: it does not prove the binary
+                   # dispatches the subcommand, which is why the probe is bounded (codex-060).
+  local bin="$1" phase="$2" probe="$SCRATCH/probe-config.json" outf="$SCRATCH/probe.out" rc=0
+  if ! grep -qa 'config-check' "$bin"; then
+    echo "  REFUSING: the $phase binary has no config-check, so whether it binds server.app_port cannot be checked before launch"; exit 3
+  fi
+  python3 - "$SCRATCH/config.json" "$probe" "$(free_port)" <<'PY'
+import json, os, sys
+doc = json.load(open(sys.argv[1])); doc.setdefault("server", {})["app_port"] = int(sys.argv[3])
+fd = os.open(sys.argv[2], os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w") as fh: json.dump(doc, fh, indent=2)
+PY
+  # Its own session, so every process that remains in that session can be found and killed (one
+  # that starts its own session escapes: a stated limit, W-0027); its output goes to a file, not a
+  # command substitution a surviving child could hold open.
+  ( umask 077; : >"$outf" )
+  SM_WORKING_DIR="$SCRATCH" setsid timeout --kill-after="$PROBE_GRACE" "$PROBE_LIMIT" \
+    "$bin" config-check --config "$probe" >"$outf" 2>&1 </dev/null &
+  PROBE_SID=$!
+  wait "$PROBE_SID" || rc=$?
+  pkill -KILL -s "$PROBE_SID" 2>/dev/null || true
+  for _ in $(seq 1 10); do pgrep -s "$PROBE_SID" >/dev/null || break; sleep 0.2; done
+  if pgrep -s "$PROBE_SID" >/dev/null; then
+    echo "  REFUSING: a process from the $phase binary's config-check probe survived SIGKILL (session $PROBE_SID)"; exit 3
+  fi
+  PROBE_SID=""
+  rm -f "$probe"
+  if [ "$rc" = 124 ] || [ "$rc" = 137 ]; then
+    echo "  REFUSING: the $phase binary's config-check did not finish within ${PROBE_LIMIT} s (exit $rc), so it may not have the subcommand; nothing was launched on the data"
+    rm -f "$outf"; exit 3
+  elif [ "$rc" = 0 ]; then
+    KNOWS=1
+  elif [ "$rc" = 1 ] && grep -q 'has 1 unrecognised configuration key' "$outf" && grep -qx '  server.app_port' "$outf"; then
+    KNOWS=0
+  else
+    echo "  REFUSING: config-check by the $phase binary (exit $rc) gave neither a pass nor a refusal of exactly server.app_port:"
+    sed 's/^/    /' "$outf"; rm -f "$outf"; exit 3
+  fi
+  rm -f "$outf"
+  echo "  $phase binary knows server.app_port: $([ "$KNOWS" = 1 ] && echo yes || echo no) (config-check, before launch)"
+}
+listen_check() { # $1 = the one TCP port this phase's daemon may hold, or "" for none
+  local want="$1" ports=""
+  if [ -n "$want" ]; then # wait for it: the app listener binds after the browser's
+    for _ in $(seq 1 20); do ss -Hltnp | grep -q "pid=$PID," && break; sleep 0.5; done
+  else
+    sleep 2 # let a listener this build did not announce appear before checking
+  fi
+  ports="$(ss -Hltnp | { grep "pid=$PID," || true; } | awk '{print $4}' | sed 's/.*://' | sort -u | tr '\n' ' ')"
+  for p in $ports; do
+    [ "$p" = "$want" ] || { echo "  FAIL: the drill daemon listens on TCP port $p (allowed: ${want:-none})"; exit 1; }
+  done
+  if [ -n "$want" ] && [ "${ports% }" != "$want" ]; then echo "  FAIL: the drill daemon does not listen on its scratch app port $want"; exit 1; fi
+  echo "  ok: the drill daemon's TCP listeners: ${ports:-none} (allowed: ${want:-none})"
+}
+
 start_daemon() { # $1 = binary, $2 = phase name; waits for /v1/version, prints it
   local bin="$1" phase="$2"
   rm -f "$SCRATCH/smd.sock"
@@ -247,8 +339,13 @@ echo "drill[$LABEL]: fingerprint of the copy BEFORE any binary touches it"
 BEFORE="$(fingerprint "$SCRATCH/db/station-manager.db")"; echo "$BEFORE" | sed 's/^/  /'
 
 echo "drill[$LABEL]: phase 1 — NEW binary opens and migrates the copy up"
+probe_app_port "$NEW" "new"
+NEW_PORT=""; [ "$KNOWS" = 1 ] && NEW_PORT="$(free_port)"
+set_app_port "$NEW_PORT"
 start_daemon "$NEW" "new"
+listen_check "$NEW_PORT"
 stop_daemon
+set_app_port "" # before config-downgrade, which would carry it into the older version
 expect "new daemon reported schema" "$(grep -o '"schema":{"version":[0-9]*' "$SCRATCH/new.version" | grep -o '[0-9]*$')" "$NEW_SCHEMA"
 expect "db schema after new start" "$(schema_of "$SCRATCH/db/station-manager.db")" "$NEW_SCHEMA"
 expect "config version after new start" "$(config_version_of "$SCRATCH/config.json")" "$NEW_CONFIG"
@@ -291,7 +388,11 @@ expect "config version after downgrade" "$(config_version_of "$SCRATCH/config.js
 DOWN="$(fingerprint "$SCRATCH/db/station-manager.db")"; echo "$DOWN" | sed 's/^/  /'
 
 echo "drill[$LABEL]: phase 3 — OLD binary opens the downgraded copy"
+probe_app_port "$OLD" "old"
+OLD_PORT=""; [ "$KNOWS" = 1 ] && OLD_PORT="$(free_port)"
+set_app_port "$OLD_PORT"
 start_daemon "$OLD" "old"
+listen_check "$OLD_PORT"
 stop_daemon
 expect "old daemon reported schema" "$(grep -o '"schema":{"version":[0-9]*' "$SCRATCH/old.version" | grep -o '[0-9]*$')" "$OLD_SCHEMA"
 expect "db schema after old start" "$(schema_of "$SCRATCH/db/station-manager.db")" "$OLD_SCHEMA"

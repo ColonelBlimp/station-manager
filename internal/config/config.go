@@ -591,6 +591,12 @@ type ServerConfig struct {
 	// not a stable contract.
 	EnableProfiling bool `json:"enable_profiling,omitempty"`
 
+	// AppPort is the desktop app listener's port (ADR 0103 point 2; W-0027 C1c): HTTPS with
+	// smd's own identity, always on 127.0.0.1. Zero means the default (EffectiveAppPort). It
+	// is a read/serve resolver, never filled in: an older smd refuses a key it does not know,
+	// so writing the default would stop a downgrade from starting.
+	AppPort int `json:"app_port,omitempty"`
+
 	// AllowInsecureNetwork acknowledges the deliberately-insecure posture of a
 	// non-loopback TCP listener (ST-3a — docs/reviews/internal-security-trust-boundary-audit.md).
 	// A TCP bind on any address that is not recognisably loopback — a specific
@@ -715,6 +721,14 @@ func loadDocument(path string, data []byte) (Config, error) {
 // live here, where the input is a zero-valued Config{} with no operator
 // preference attached. applyDefaults below only fills the unambiguously
 // blank fields (empty strings, zero ints with min validation).
+// EffectiveAppPort is the desktop app listener's port: server.app_port, or the default.
+func (s ServerConfig) EffectiveAppPort() int {
+	if s.AppPort == 0 {
+		return defaultAppPort
+	}
+	return s.AppPort
+}
+
 func DefaultConfig(dataDir string) Config {
 	var cfg Config
 	cfg.Logging.WithTimestamp = true

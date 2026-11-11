@@ -353,3 +353,282 @@ need `golang.org/x/sys` as a direct dependency). Power-loss
 durability is designed for, not demonstrated: the tests prove the order and the failure handling of
 the barriers, not survival of a real power cut. The fingerprint format is tested against its
 definition, not cross-checked with the shell at runtime (C1c's acceptance will).
+
+### C1c brief — smd's app listener (2026-11-11; built, see the C1c record below)
+
+Started on the operator's direction ("yes, start the C1c brief"). Implements ADR 0103 points 2 and
+5 on `smd`'s side, using C1b's identity. The shell's real-daemon mode is the next slice (C1d).
+
+**Outcome the operator sees:** `smd` keeps serving the browser on 8080 exactly as today, and also
+serves the same UI and API to the desktop app over HTTPS on 127.0.0.1:8443 with its own identity. If
+the app's port or identity is not available, `smd` still starts and the browser still operates the
+station; the problem is reported. Nearest confusable outcome: a second, separate "station" (its own
+services or state) behind 8443.
+
+**What exists today (read for this brief):**
+- `api.Server` owns **one** `http.Server`, one listener and one close owner
+  (`internal/api/server.go:34,123-129`, `ListenAndServe` 622-655); `StopAccepting` (759) and
+  `Shutdown` (811) act on that one; hijacked streams are tracked by `s.streams` and waited for.
+- The lifecycle's `http` node runs it in a goroutine whose error goes to the daemon's fatal error
+  channel (`cmd/smd/lifecycle_adapters.go` `startHTTP`), so any serve error stops `smd`.
+- Guards: `requireSameOrigin` (Host for every method, Origin for unsafe ones; any loopback Origin on
+  any port is accepted, `internal/api/csrf.go` `originAllowed`); WebSocket upgrades need an exact
+  Origin whose scheme follows `r.TLS` (`internal/api/stream_ws.go` `wsOriginExact`).
+- **Station Event kinds are fixed by a schema `CHECK`** (`internal/stationevents/stationevents.go`
+  `KindsByCategory`; `internal/database/sqlite/migrations/log/0013_operator_event_archive.up.sql`):
+  a new kind is a log-schema migration (schema 20).
+
+**Proposed design:**
+1. **Config:** `server.app_port`, default 8443, always bound to 127.0.0.1, validated (1-65535, not
+   the main listener's port), served resolved and documented in `docs/v2-design/config.md` in the
+   same change. No setting to turn it off (the desktop app is the ruled primary client).
+2. **Identity:** the `http` node calls `desktopid.Ensure(working directory)` before binding the app
+   listener. Outcomes per the operator's 2026-11-11 ruling: failure -> no app listener, reported,
+   `smd` runs; `DurabilityUnconfirmed` -> reported, listener runs. (After C2 an identity failure
+   becomes a start-up error; `DurabilityUnconfirmed` stays report-only in both phases. C2 does not
+   exist yet, so only the pre-C2 behaviour is built.)
+3. **One station, two listeners:** `api.Server` gains a second `http.Server` for the app listener
+   with the **same handler chain** (same services, admission, rate limits, drain gate, stream
+   tracking), serving over `tls.NewListener` with the identity's certificate (TLS 1.3 minimum).
+   `StopAccepting` closes both listeners; `Shutdown` shuts both down and waits for streams once;
+   each listener keeps its own close-once owner so a drain reports both close results. One stalled
+   drain never prevents the other server from beginning its shutdown (codex-056).
+4. **Errors:** the main listener stays fatal as today. The app listener's bind failure, or a serve
+   error, is reported (operator ruling 2026-11-10) and never reaches the fatal channel before C2.
+5. **Origin per listener (corrected after codex-056):** on the app listener, Host must be
+   `127.0.0.1:<app port>` and an unsafe method requires the exact Origin
+   `https://127.0.0.1:<app port>`, bound to the configured app port, not taken from the request's
+   Host; an **absent** Origin stays allowed for ordinary non-browser unsafe requests, as today, but
+   a **WebSocket upgrade without an Origin is refused** before admission, as `wsOriginExact` already
+   does. The HTTP listener's rules are **unchanged for now**, which means it still accepts any
+   loopback Origin, including the app's (`internal/api/csrf.go` `originAllowed`); tightening it is a
+   separate, reviewed change, not part of C1c.
+6. **Reporting:** a warning in `smd.log` naming the port or the identity file (log only, operator
+   ruling 2026-11-11).
+
+**Acceptance (tests in `internal/api` and `cmd/smd`; never the live station):**
+- a request, an SSE stream and a WebSocket each work on both listeners against the same state (a
+  change made through one is seen through the other);
+- a TLS client pinning the identity's fingerprint connects to the app listener; a client expecting a
+  different certificate fails the handshake; plain HTTP to the app port is refused;
+- Origin on the app listener: refuses `http://127.0.0.1:8080`, another port and a wrong scheme for
+  unsafe methods and upgrades, and accepts its own; an absent Origin is accepted for an unsafe
+  request and refused for an upgrade; the HTTP listener behaves exactly as today;
+- app port already in use, or the identity refused: `smd` starts, the main listener serves, the
+  report is written, nothing is fatal; `DurabilityUnconfirmed`: reported, listener serves;
+- partial start-up, a busy main port, cancellation, and a deadline or failure on either drain are
+  each covered; a stalled drain on one server does not hold the other's shutdown;
+- drain and shutdown close both listeners, end streams on both, and report both close results; a
+  failed main bind leaves no app listener running;
+- ephemeral ports in tests; any manual run uses its own working directory (`SM_WORKING_DIR`) and
+  ports other than 8080/8443, because the live station uses them.
+
+**Rulings (operator, 2026-11-11): "b, and no disable setting".** C1c reports in `smd.log` only;
+the Station Event comes once event kinds no longer need a migration (the operator's direction,
+recorded in W-0020, 2026-11-11). No setting disables the app listener.
+
+**Questions as asked:**
+- **Q1. The Station Event needs a schema migration.** Options: (a) add the kind now, a log-schema
+  migration to 20 in C1c, with the rollback note that implies; (b) C1c reports in `smd.log` only,
+  and the Station Event kind is added with the next log-schema change (sessions or contests, which
+  need migrations anyway). Claude recommends (b): it keeps C1c free of a schema change, and the
+  report the operator sees first is still written.
+- **Q2.** Confirm no setting to disable the app listener (Claude's recommendation), or add one.
+
+**Not in C1c:** the shell reading the real identity and connecting to `smd` (C1d); C2's
+operating-client check; any change to the browser path.
+
+### C1c — smd's app listener (2026-11-11; built, uncommitted, awaiting operator and Codex review)
+
+Built on the operator's direction ("yes, defer it and carry on with C1c"), to the brief above.
+
+**What changed:**
+- `internal/config`: `server.app_port` (`omitempty`) with `EffectiveAppPort()`, default 8443
+  (`defaultAppPort`). It is a **read/serve resolver**, not a load-time fill: under ADR 0074 an older
+  `smd` refuses a key it does not know, so writing the default into `config.json` would stop a
+  downgrade from starting. Validation: a value outside 0-65535 is fatal; a port equal to the
+  browser listener's TCP port is a **warning** (`app_port_conflict`), not the refusal the brief
+  proposed. Before C2 nothing about the app listener may stop the station (ruling 2026-11-10), and
+  the listener's bind then fails and is reported.
+- `internal/api`: `BindApp(port, cert)`, `ServeApp()`, `AppPort()`. A second `http.Server` with
+  the main server's handler (the same chain, so the same services, admission, drain gate and stream
+  tracking), the same timeouts and error log, over `tls.NewListener` (TLS 1.3 minimum) on its own
+  close-once owner. A `ConnContext` marks its requests, and `requireSameOrigin` sends them to
+  `requireAppOrigin`. That function enforces Host `127.0.0.1:<bound port>` for every method and,
+  for unsafe methods, a present Origin of exactly `https://127.0.0.1:<bound port>`; both come from
+  the bound port, never from the request. `StopAccepting` closes both listeners; `Shutdown` drains
+  the app server concurrently with the main one and joins both results.
+- `cmd/smd`: `startHTTP` (the `http` node) starts the browser listener as before, then calls
+  `startDesktopListener`. That function runs `desktopid.Ensure(working directory)`, binds and
+  serves; a refused identity, a busy port or a serve error goes to `smd.log` as a warning and
+  never reaches the fatal channel, and `DurabilityUnconfirmed` is reported while the listener serves.
+- Canonical references updated in the same change: `docs/v2-design/config.md` §3.1, §4 and §5,
+  and `docs/v2-design/api-endpoints.md` Conventions.
+
+**Acceptance as tested** (all ephemeral ports and temporary working directories; the live station
+was not touched):
+- `internal/api` `TestApp_*` (9):
+  - pinned TLS 1.3 served, with the handler chain shared;
+  - another certificate, TLS 1.2 and plain HTTP refused;
+  - the Host and Origin matrix;
+  - the browser listener unchanged (it still accepts the app's Origin);
+  - WebSocket upgrades: own Origin 101, absent or browser Origin 403;
+  - stop and shutdown close both listeners;
+  - a bind failure is returned, not fatal;
+  - one station: a logbook created through the app is read through the browser listener, and the
+    SSE stream opens on the app listener;
+  - a stalled drain on either server does not delay the other's (both directions).
+- `internal/config` `TestAppPort_*` (4): the default, explicit value, default not written, and the
+  validation table.
+- `cmd/smd` `TestDesktopListener_*` (8):
+  - five on the start function with fakes: clean start, refused identity, unconfirmed durability,
+    busy port, serve error;
+  - three on an orchestrated daemon:
+    - the `http` node publishes the identity and serves `/v1/version` to a client pinning it, and
+      the port closes with the generation;
+    - a busy app port: the station starts and serves the browser, with nothing on the fatal channel;
+    - a failed browser bind stays fatal, and its stop takes the bound app listener with it.
+- The orchestrated test daemons now get a free loopback app port (`freeLoopbackPort`), so the test
+  suite never binds 8443.
+
+**Reversion proofs: 20 of 20 proven**, each failing at its intended assertion; the tree was
+verified unchanged after each run. Two proofs first came out vacuous and were fixed:
+- The drain-order test passed under a sequential drain, because `StopAccepting`'s
+  `SetKeepAlivesEnabled(false)` already closes idle connections (net/http `closeIdleConns`). The
+  test now calls `Shutdown` alone.
+- A close mutation passed because the harness counted an empty expected-failure list as proven;
+  the harness now refuses one. The listener is closed both by `StopAccepting` and by `Shutdown`,
+  so the proof removes both together.
+
+**Gates:** gofmt (whole tree) clean, `go vet ./...`, golangci-lint `./cmd/... ./internal/...`
+0 issues, maintainability 0 regressions, whole-tree `go test ./...` pass, `-race` for `cmd/smd`,
+`internal/api`, `internal/config` and `internal/desktopid` pass.
+
+**Not covered, and open (none decided here):**
+- **Rollback drill.** From C1c, the new binary in `scripts/rollback-drill.sh` also tries
+  127.0.0.1:8443 and writes `desktop-identity/` under the drill's scratch working directory. If the
+  live station holds 8443, only a warning results. If not, the drill daemon briefly serves its
+  scratch copy there. Writing `app_port` into the drill's config would make the older binary refuse
+  it. This needs an operator ruling: accept, or a drill-side fix.
+- A WebSocket carrying events on the app listener is tested only up to the 101 upgrade; the SSE
+  stream and shared state are tested end to end.
+- A cancelled start between the browser bind and the app bind is not separately tested: the start
+  is synchronous, and every stop path runs `StopAccepting` and `Shutdown`, which close both.
+
+**Corrections after codex-058 (2026-11-11):**
+- **P1, start-up order.** `startHTTP` started the browser listener in a goroutine and bound the
+  app listener immediately. With a shared port (an accepted warning) the app listener could win
+  it, and the browser bind then failed on the fatal channel. Codex reproduced this
+  deterministically. Now `api.Server.BindAttempted()` and `Listening()` report the browser bind,
+  and the `http` node starts the app listener only after the browser listener holds its port
+  (`afterBrowserBind`). A failed browser bind starts no app listener; a cancelled start-up is
+  reported and starts none. `BindApp` also refuses once a stop has begun (`appClosed`), so a late
+  bind can never leave an unclosed listener.
+- **P2, rollback drill.** `scripts/rollback-drill.sh` now:
+  - removes any source `app_port` from the scratch config;
+  - gives the new-binary phase a free scratch port, and removes it before `config-downgrade` and
+    the old-binary phase;
+  - gives an old build with the listener a scratch port only with `--old-knows-app-port`
+    (superseded after codex-059, below);
+  - after each daemon start, fails if its daemon listens on any TCP port but that phase's.
+
+  Codex verified that `config-downgrade` refuses a same-version target and keeps an explicit
+  `app_port`. The explicit-port rollback step is documented in `docs/install.md` §7 and
+  `config.md` §3.1.
+- **Added tests:**
+  - `TestApp_AWebSocketDeliversTheStationsEvents` (a real frame over the app listener);
+  - `TestApp_BindAttemptedSignalsTheBrowserBindEitherWay`;
+  - `TestApp_NoAppListenerOnceTheStopHasBegun`;
+  - `TestApp_ShutdownAloneClosesABoundListenerNeverServed` (Codex's single-layer case);
+  - `TestAfterBrowserBind` (bound, failed, cancelled);
+  - `TestDesktopListener_NeverTakesTheBrowserListenersPort`. Its seam holds the browser bind until
+    the app listener binds, or for 500 ms. It failed on the old ordering with Codex's "address
+    already in use" and passes on the new.
+
+  `TestDesktopListener_AFailedBrowserBindLeavesNoAppListener` now asserts that no app listener
+  ever starts. That is stronger than before, when the stop only closed it.
+- **Reversions:** A11-A16 proven (26 of 26 in all). Drill guard reversions on scratch copies of
+  the script:
+  - D1, the port kept for the old phase: the pre-C1c build refuses `server.app_port`, and the
+    drill fails;
+  - D2, a stray listener in the old phase: the listener check fails.
+- **Drill exercised on synthetic data only:** an empty SQLite file and a minimal config in Claude's
+  scratchpad; the source's `app_port` was a stand-in, 18443. The C1c build ran as new; the
+  `2.0.0~alpha.5.110.gb2a16f5a` RPM's `smd`, extracted read-only, ran as old. ROWS IDENTICAL; the
+  new daemon held only its scratch port, the old none. Port 8443 was free and untouched. The live
+  station's files were not read. All drill scratch was removed.
+
+**Corrections after codex-059 (2026-11-11):**
+- **Cancellation priority.** `afterBrowserBind` chose between a completed browser bind and a
+  cancelled context with one `select`. When both are ready, Go picks either, so a cancelled
+  start-up could still start the app listener. Codex measured this in 125 of 256 calls; the new
+  test failed on the third call. Now the wait ends on either signal and cancellation is then
+  checked first. The decision sits in `startAppAfterBrowser`, which the `http` node calls.
+  `TestStartAppAfterBrowser_ACancelledStartNeverBindsTheApp` drives it 256 times with both
+  ready, and once cancelled mid-wait, asserting that `BindApp` is never called.
+- **Drill capability checked before launch.** The post-start listener check found exposure only
+  after it happened. Now the drill first runs each binary's `config-check` on a probe copy of the
+  config with a scratch `app_port`. That subcommand is read-only by contract: nothing started,
+  bound or written; present since 2026-08-22, so in every build that knows `app_port`. Outcomes:
+  - exit 0: the phase gets a free scratch port;
+  - a refusal of exactly `server.app_port`: the phase runs without the key;
+  - any other answer, or a binary without `config-check`: the drill refuses before launch.
+
+  The listener check stays as a second assertion. `--old-knows-app-port` is removed: the
+  preflight establishes the capability, so a flag could only disagree with it.
+- **Synthetic drill evidence** (scratchpad inputs only, stand-in source port 18443):
+  - A: C1c build as old, no flag; it was given scratch port 46471 before launch, and its log shows
+    it bound only that.
+  - B: the pre-C1c alpha.5.110 build as old; the preflight said no, the daemon held no TCP port,
+    and the rows came out identical.
+  - C: as A, with a migrated source; the rows came out identical.
+  - D3: an unrecognised preflight answer.
+  - D4: an old binary with no `config-check`.
+  - D3 and D4 both refused before the old binary was launched, with no "old version" line.
+  - All drill scratch was removed; the repo script hash was unchanged after the scratch-copy runs.
+- **Reversions:** 27 of 27 proven, including A17: restoring the bound-case early return fails the
+  256-call test. W1, A11, A16 and W7 were re-anchored after the refactor. W7 now targets the node
+  test, because a failed browser bind no longer starts an app listener.
+- **A race in Claude's tests, found during the gates.** One of eight four-package `-race` runs
+  failed. Stressing `TestApp_*` (30 runs at `-cpu 1,2`) reproduced it once:
+  `TestApp_BindAttemptedSignalsTheBrowserBindEitherWay` built a second test server while the first
+  server's goroutine was still writing its "listening" log line. Building a server initialises a
+  logging service, which writes zerolog's process-global `TimeFieldFormat`
+  (`internal/logging/service.go:146`). Production builds one logging service per process, so this
+  is a test-only hazard. Fix, in the tests only:
+  - that test builds both servers before starting either, and waits for its goroutines;
+  - `startTwo`'s cleanup waits until both serve goroutines have returned.
+
+  Afterwards: 80 `TestApp_*` race runs and 20 runs of the desktop-listener tests at `-cpu 1,2`,
+  all clean; the four-package race gate passes. The original failing run's output was cut off, so
+  it is not certain that it was this race.
+
+**Correction after codex-060 (2026-11-11): a bounded probe.** Grepping the binary for
+`config-check` does not prove it dispatches that subcommand. Codex showed this with a stand-in
+that contains the string and hangs, and claude-130's no-bind reasoning was withdrawn in
+claude-131. Changes:
+- The probe now runs as `setsid timeout --kill-after=5 30 <bin> config-check …` (operator ruling
+  2026-11-11: 30 s, then a 5 s grace before SIGKILL), in its own session.
+- Its output goes to a 0600 file, so a surviving child cannot hold a command substitution open.
+- After the wait, anything left in the probe's session is killed, and the drill refuses if
+  anything survives.
+- Only exit 0 (knows the key) or exit 1 with the exact single-key refusal (does not) is accepted.
+  Expiry (124 or 137) and every other status refuse before any data phase, and a timed-out
+  probe's output is never classified.
+- The grep stays as a quick negative filter only.
+
+Evidence:
+- **S1, a stand-in that ignores SIGTERM, and S2, which adds a child that ignores SIGTERM and holds
+  the output.** Both contain the string with no such subcommand, and open no socket. Each ran as
+  the drill's old binary and was refused after 36-37 s with exit 137. Neither printed an
+  "old version" line, and no stand-in process survived (checked with `ps`).
+- **The kill path, measured in the drill's exact form.** `setsid` did not fork: the job's PID is
+  the session and group ID. On expiry GNU `timeout`'s SIGKILL reached the whole group, the S2
+  child included, before the `pkill -s` backstop ran.
+- **Limit:** a process that starts its own session escapes both and would not be detected.
+- **B** (pre-C1c alpha.5.110 as old) and **C** (C1c as old): rows identical, exit 0, as before.
+- **D3** (an unexpected diagnostic) and **D5** (the exact refusal text with exit 2): both refused
+  with exit 3.
+- All drill scratch was removed, and the repo script hash was unchanged after the scratch-copy runs.
+- The zerolog process-global question stays outside C1c (Codex agrees). If it is tracked, it
+  belongs with the existing maintenance work, not in this slice.

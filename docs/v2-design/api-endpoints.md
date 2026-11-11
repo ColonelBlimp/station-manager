@@ -21,6 +21,17 @@ profiling at `/debug/pprof/*`.
 a Unix socket). No authentication — the trust boundary is the loopback interface. A
 non-loopback bind emits a startup warning.
 
+**Desktop app listener (ADR 0103; W-0027 C1c).** Beside that listener, smd serves the same
+handler chain, so the same routes and middleware, over HTTPS on `127.0.0.1:<server.app_port>`
+(default 8443), always loopback. TLS 1.3 only, with smd's per-install desktop identity
+(`desktop-identity/` in the working directory; the desktop app pins its certificate). On this
+listener `Host` must be exactly `127.0.0.1:<bound port>` (else **403 `cross_origin`** for every
+method); an unsafe method's `Origin`, when present, must be exactly `https://127.0.0.1:<bound
+port>` (an absent `Origin` is allowed, as on the browser listener); a WebSocket upgrade needs that
+`Origin` (scheme `https` from the TLS connection). The browser listener's rules are unchanged.
+Until W-0027 C2, a refused identity, a busy port or a serve error only writes a warning to
+`smd.log`. The station keeps serving the browser listener, with no app listener.
+
 **Content negotiation.** JSON in/out except `POST /v1/qso`, which takes ADIF
 (`application/x-adif` / `text/plain` / empty).
 

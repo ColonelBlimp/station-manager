@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -163,6 +164,8 @@ func validateServer(cfg Config) []Finding {
 		out = append(out, Finding{Field: "server.max_body_bytes", Code: "invalid_field_value",
 			Message: fmt.Sprintf("server.max_body_bytes must be a positive value (got %d)", s.MaxBodyBytes)})
 	}
+
+	out = append(out, validateAppPort(cfg)...)
 
 	// Page-limit ordering: a default above the ceiling would clamp every
 	// unspecified-limit request below its own default.
@@ -840,4 +843,27 @@ func validateQsoArchives(cfg Config) []Finding {
 		}
 	}
 	return out
+}
+
+// validateAppPort checks server.app_port (ADR 0103 point 2): an explicit value outside 1-65535
+// is refused like any invalid setting; sharing the browser listener's port is a warning.
+func validateAppPort(cfg Config) []Finding {
+	s := cfg.Server
+	if s.AppPort < 0 || s.AppPort > 65535 {
+		return []Finding{{Field: "server.app_port", Code: "invalid_field_value",
+			Message: fmt.Sprintf("server.app_port must be between 1 and 65535 (got %d); "+
+				"leave it out for the default %d", s.AppPort, defaultAppPort)}}
+	}
+	if s.Protocol != "tcp" {
+		return nil
+	}
+	if _, p, err := net.SplitHostPort(cfg.SocketPath); err == nil && p == strconv.Itoa(s.EffectiveAppPort()) {
+		// A warning, not a refusal: before C2 nothing about the app listener stops the station
+		// (operator rulings 2026-11-10/11). The listener's bind then fails and is reported.
+		return []Finding{{Field: "server.app_port", Code: "app_port_conflict", Warning: true,
+			Message: fmt.Sprintf("server.app_port %d is the browser listener's port (%s); "+
+				"the desktop app listener will not start until it has its own",
+				s.EffectiveAppPort(), cfg.SocketPath)}}
+	}
+	return nil
 }

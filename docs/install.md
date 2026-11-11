@@ -565,6 +565,14 @@ rejection), so the old build would refuse the edited file if it were
 restarted. Stop the old daemon, add the key, install the new build, run
 `smd config-check`, then start.
 
+The same applies in reverse to `server.app_port`, the desktop app listener's
+port. Only an explicit value is ever in the file: the default (8443) is not
+written. `smd config-downgrade` keeps an explicit value, and it has no step
+at all between builds that share a config version. Before you start a build
+that has no desktop app listener, remove `app_port` from the `server` block,
+or that build refuses the file. `scripts/rollback-drill.sh` does this for its
+scratch copy.
+
 Known: upgrading from 2.0.0-alpha.1 to alpha.2 with a `qrzcq` forwarder
 in the config (enabled or not) refuses to start with `type "qrzcq" does
 not support action "update"`, because alpha.1 wrote the old all-actions

@@ -2,12 +2,14 @@ package api
 
 import (
 	"context"
+	"crypto/tls"
 	stderr "errors"
 	stdlog "log"
 	"net"
 	"net/http"
 	"net/http/pprof"
 	"os"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -33,7 +35,19 @@ import (
 type Server struct {
 	httpServer *http.Server
 	listener   net.Listener
-	cfg        *config.Service
+	// The desktop app's listener (ADR 0103; W-0027 C1c): a second http.Server sharing
+	// httpServer's handler chain (one station, two listeners), serving TLS on loopback
+	// with smd's own identity. Nil until BindApp succeeds; guarded by appMu.
+	appMu       sync.Mutex
+	appServer   *http.Server
+	appListener net.Listener       // the TLS listener served by appServer
+	appOwner    *closeOnceListener // close-once owner of the raw TCP listener beneath it
+	appPort     int                // the bound port, which the app's Host and Origin must name
+	appClosed   bool               // the stop has begun: BindApp refuses, as nothing would close it
+	// bindDone is closed once ListenAndServe's bind has finished, bound or not (BindAttempted).
+	bindDoneOnce, bindDoneClose sync.Once
+	bindDone                    chan struct{}
+	cfg                         *config.Service
 	// servedArchiveID is the archive this daemon generation has open, read
 	// from the file's identity at startup (SetServedArchive). Requests that
 	// would act on an archive are checked against it (archive_guard.go).
@@ -624,6 +638,7 @@ func (s *Server) ListenAndServe(socketPath string) error {
 
 	ln, err := s.bindListener(socketPath)
 	if err != nil {
+		s.markBindAttempted()
 		return err
 	}
 	// One close, whoever asks first: StopAccepting closes the listener directly,
@@ -642,6 +657,7 @@ func (s *Server) ListenAndServe(socketPath string) error {
 	s.boundListener = owner
 	s.listener = ln
 	s.listenerMu.Unlock()
+	s.markBindAttempted()
 
 	s.logger.InfoWith().Str("protocol", s.protocol).Str("address", socketPath).Msg("HTTP server listening")
 
@@ -653,6 +669,102 @@ func (s *Server) ListenAndServe(socketPath string) error {
 	}
 
 	return nil
+}
+
+// BindAttempted is closed once ListenAndServe's bind has finished, whether it bound or not;
+// Listening then says which. The desktop app's listener binds only after the browser's, so it can
+// never take the browser listener's port (codex-058).
+func (s *Server) BindAttempted() <-chan struct{} {
+	s.bindDoneOnce.Do(func() { s.bindDone = make(chan struct{}) })
+	return s.bindDone
+}
+
+func (s *Server) markBindAttempted() {
+	_ = s.BindAttempted() // makes bindDone
+	s.bindDoneClose.Do(func() { close(s.bindDone) })
+}
+
+// Listening reports whether ListenAndServe's bind succeeded.
+func (s *Server) Listening() bool {
+	s.listenerMu.Lock()
+	defer s.listenerMu.Unlock()
+	return s.boundListener != nil
+}
+
+// appConnKey marks a request that arrived on the desktop app's listener.
+type appConnKey struct{}
+
+// BindApp binds the desktop app's listener: TLS 1.3 or later on 127.0.0.1:port with smd's
+// desktop identity (ADR 0103 point 2). Port 0 binds an ephemeral port (tests). A bind failure
+// is returned for the caller to report; it is never fatal to the station before C2 (operator
+// ruling 2026-11-10). Serve it with ServeApp.
+func (s *Server) BindApp(port int, cert tls.Certificate) error {
+	const op errors.Op = "api.BindApp"
+	ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err != nil {
+		return errors.New(op).WithErr(err)
+	}
+	owner := &closeOnceListener{Listener: ln}
+	main := s.httpServer
+	srv := &http.Server{
+		Handler:           main.Handler, // the same station: services, admission, drain gate, streams
+		ErrorLog:          main.ErrorLog,
+		ReadHeaderTimeout: main.ReadHeaderTimeout,
+		ReadTimeout:       main.ReadTimeout,
+		WriteTimeout:      main.WriteTimeout,
+		IdleTimeout:       main.IdleTimeout,
+		ConnContext: func(ctx context.Context, _ net.Conn) context.Context {
+			return context.WithValue(ctx, appConnKey{}, true)
+		},
+	}
+	tlsLn := tls.NewListener(owner, &tls.Config{
+		MinVersion:   tls.VersionTLS13,
+		Certificates: []tls.Certificate{cert},
+	})
+	bound := ln.Addr().(*net.TCPAddr).Port
+	s.appMu.Lock()
+	if s.appClosed {
+		s.appMu.Unlock()
+		_ = owner.Close()
+		return errors.New(op).WithMsg("the server is stopping; the desktop app listener is not started")
+	}
+	s.appServer, s.appListener, s.appOwner = srv, tlsLn, owner
+	s.appPort = bound
+	s.appMu.Unlock()
+	s.logger.InfoWith().Int("port", bound).Msg("desktop app listener listening (TLS, loopback)")
+	return nil
+}
+
+// ServeApp serves the listener BindApp bound, returning when it is stopped. A clean stop
+// (StopAccepting or Shutdown) returns nil.
+func (s *Server) ServeApp() error {
+	const op errors.Op = "api.ServeApp"
+	s.appMu.Lock()
+	srv, ln := s.appServer, s.appListener
+	s.appMu.Unlock()
+	if srv == nil {
+		return errors.New(op).WithMsg("no desktop app listener is bound")
+	}
+	if err := srv.Serve(ln); err != nil &&
+		!stderr.Is(err, http.ErrServerClosed) && !stderr.Is(err, net.ErrClosed) {
+		return errors.New(op).WithErr(err)
+	}
+	return nil
+}
+
+// AppPort is the desktop app listener's bound port, or 0 when there is none.
+func (s *Server) AppPort() int {
+	s.appMu.Lock()
+	defer s.appMu.Unlock()
+	return s.appPort
+}
+
+// appOrigin is the one origin the desktop app's pages have: its listener's own address.
+func (s *Server) appHost() string { return "127.0.0.1:" + strconv.Itoa(s.AppPort()) }
+
+func isAppRequest(r *http.Request) bool {
+	v, _ := r.Context().Value(appConnKey{}).(bool)
+	return v
 }
 
 // closeOnceListener closes its listener on the first Close only and keeps
@@ -786,6 +898,14 @@ func (s *Server) StopAccepting() {
 	if ln != nil {
 		_ = ln.Close() // the close-once owner keeps the result for Shutdown
 	}
+	s.appMu.Lock()
+	s.appClosed = true
+	app, appLn := s.appServer, s.appListener
+	s.appMu.Unlock()
+	if app != nil {
+		app.SetKeepAlivesEnabled(false)
+		_ = appLn.Close() // its close-once owner keeps the result for Shutdown
+	}
 }
 
 // Shutdown gracefully shuts down the HTTP server.
@@ -816,6 +936,18 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		s.streams.beginShutdown(deadline)
 		close(s.shutdownCh)
 	})
+	// The desktop app's listener drains concurrently, so a stalled drain on either server
+	// never holds the other's shutdown (codex-056).
+	appDone := make(chan error, 1)
+	s.appMu.Lock()
+	s.appClosed = true
+	app, appOwner := s.appServer, s.appOwner
+	s.appMu.Unlock()
+	if app != nil {
+		go func() { appDone <- shutdownApp(ctx, app, appOwner) }()
+	} else {
+		appDone <- nil
+	}
 	// The drain's result and the listener's one close result are both reported,
 	// whichever caller closed first: after a drain timeout, net/http returns
 	// only the deadline, and once Serve has returned it no longer tracks the
@@ -828,6 +960,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		if closeErr := owner.result(); closeErr != nil && !stderr.Is(err, closeErr) {
 			err = stderr.Join(err, closeErr)
 		}
+	}
+	if appErr := <-appDone; appErr != nil {
+		err = stderr.Join(err, appErr)
 	}
 	// Hijacked stream handlers are invisible to httpServer.Shutdown: wait for
 	// them here. Success means every tracked handler has ended; an expired
@@ -843,6 +978,20 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	// the call that failed.
 	if err == nil && !s.shutdownLogged.Swap(true) {
 		s.logger.InfoWith().Msg("HTTP server shutdown complete")
+	}
+	return err
+}
+
+// shutdownApp drains the desktop app's server and reports its listener's one close result
+// with the drain's, as Shutdown does for the main listener. A server that was bound but never
+// served still has its listener closed here.
+func shutdownApp(ctx context.Context, app *http.Server, owner *closeOnceListener) error {
+	err := app.Shutdown(ctx)
+	if owner != nil {
+		_ = owner.Close()
+		if closeErr := owner.result(); closeErr != nil && !stderr.Is(err, closeErr) {
+			err = stderr.Join(err, closeErr)
+		}
 	}
 	return err
 }

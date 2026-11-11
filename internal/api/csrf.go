@@ -33,6 +33,11 @@ import (
 func (s *Server) requireSameOrigin(next http.Handler) http.Handler {
 	const op errors.Op = "api.requireSameOrigin"
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The desktop app's listener has exactly one origin: its own address (ADR 0103 point 5).
+		if isAppRequest(r) {
+			s.requireAppOrigin(w, r, next)
+			return
+		}
 		// Destination gate — every method, host-first (ST-1).
 		if !s.hostAllowed(hostOnly(r.Host)) {
 			s.logHostRefused(r)
@@ -75,6 +80,33 @@ func (s *Server) requireSameOrigin(next http.Handler) http.Handler {
 // rebinding-proof (Option A, codex 5664434c P1). A LAN deployment must bind a
 // SPECIFIC IP (itself rebinding-proof, since a rebound attacker name won't equal
 // it), not 0.0.0.0, to accept browser writes from the network.
+// requireAppOrigin is requireSameOrigin for the desktop app's listener (ADR 0103 point 5;
+// W-0027 C1c). Its Host must be exactly 127.0.0.1:<app port>, for every method, and an unsafe
+// method's Origin, when present, exactly https://127.0.0.1:<app port>: both bound to the port
+// the listener actually has, never taken from the request. An absent Origin stays allowed for
+// a non-browser client, as on the other listener; a WebSocket upgrade, though, is refused
+// without one by requireStreamOrigin. The browser listener's rules are unchanged.
+func (s *Server) requireAppOrigin(w http.ResponseWriter, r *http.Request, next http.Handler) {
+	const op errors.Op = "api.requireAppOrigin"
+	host := s.appHost()
+	if r.Host != host {
+		s.logHostRefused(r)
+		s.writeError(w, http.StatusForbidden, "cross_origin", "host not allowed", op)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		next.ServeHTTP(w, r)
+		return
+	}
+	if origin := r.Header.Get("Origin"); origin != "" && origin != "https://"+host {
+		s.logOriginRefused(r, origin)
+		s.writeError(w, http.StatusForbidden, "cross_origin", "cross-origin request rejected", op)
+		return
+	}
+	next.ServeHTTP(w, r)
+}
+
 func (s *Server) hostAllowed(h string) bool {
 	if s.protocol != "tcp" {
 		return true

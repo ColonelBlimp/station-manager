@@ -110,7 +110,12 @@ silently dropped. A key an older daemon wrote must be consumed by a migration.
   `max_event_subscribers`;
 - `submit_rate_per_sec` and `submit_rate_burst`;
 - `serve_spa`, whose absent default is true for TCP and false for Unix sockets;
-- `enable_profiling`, default false; and
+- `enable_profiling`, default false;
+- `app_port`, the desktop app's HTTPS listener port on `127.0.0.1` (ADR 0103), absent default
+  8443, with no setting that disables it. Its default is resolved, never written, because an older
+  daemon refuses a key it does not know. An explicit value is kept by `config-downgrade`, so it must
+  be removed by hand before an older build starts (`docs/install.md` §7). It binds only after
+  the browser listener holds its port. Restart-required; and
 - `allow_insecure_network`, a file-only acknowledgement described in §5.1.
 
 ### 3.2 Identity, station, and QSL blocks
@@ -231,7 +236,7 @@ semantics when adding a field.
 |---|---|---|
 | Load-time fill | Zero is unambiguously unset and is replaced by a constant; registered provider/forwarder entries may also be added missing and disabled. | HTTP limits/timeouts, datastore pool, log rotation, forwarder cadence, SMTP port/timeout, evidence cap. |
 | First-run seed | Applied only to a new `Config`, because false/empty is a legitimate persisted choice. | timestamp/file/compressed logging and SMTP STARTTLS. |
-| Read/serve resolver | Keep the file sparse; calculate an effective value for consumers and API responses. | FT8 display, dial frequencies, caller-answer mode, max repeats, audio/meter thresholds, bridge timeouts/tune. |
+| Read/serve resolver | Keep the file sparse; calculate an effective value for consumers and API responses. | `server.app_port`, FT8 display, dial frequencies, caller-answer mode, max repeats, audio/meter thresholds, bridge timeouts/tune. |
 | Pointer default | `nil` means unset while explicit `false` or `0` remains meaningful. | `server.serve_spa`, `ft8.enable_osd`, occupancy guard, lookup TTLs, restore-on-mode-switch. |
 
 ### 4.1 Load-time fallback values
@@ -303,7 +308,9 @@ Every loaded or API-mutated candidate is normalized, then passed to
 `internal/config/validate.go`; important operator-facing groups are:
 
 - listener protocol, positive HTTP limits, page-limit ordering, and network
-  posture;
+  posture; an `app_port` outside 0–65535 blocks, while one equal to the browser listener's TCP
+  port is only a warning (`app_port_conflict`): the app listener's bind then fails and is
+  reported, and the station starts;
 - unique positive rig IDs, known rig models, a `default_rig_id` that is `0` or resolves, and
   valid ADIF mode mappings;
 - registered and usable forwarders, lookup ordering/policy, SMTP, PSK Reporter,

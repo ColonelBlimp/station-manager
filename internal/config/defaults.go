@@ -50,6 +50,7 @@ const (
 	defaultShutdownTimeoutSec       = 10
 	defaultMaxBodyBytes             = 1 << 20 // 1 MiB
 	defaultPageLimit                = 50
+	defaultAppPort                  = 8443 // the desktop app listener (operator ruling 2026-11-10)
 	defaultMaxPageLimit             = 500
 	defaultMaxConcurrentRequests    = 128
 	defaultMaxEventSubscribers      = 16
