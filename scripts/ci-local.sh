@@ -201,6 +201,12 @@ go test -timeout 12m $PKGS
 # wouldn't exercise the shipped CGO-free/static shape. Mirrors release-rpm.sh.
 step "Go: build daemon, static (verifies SPA embed + shipped CGO-free shape)"
 CGO_ENABLED=0 go build -o build/bin/smd ./cmd/smd
+step "Desktop: C1d acceptance against a real smd (temporary working directory, synthetic data)"
+if [ -n "${DISPLAY:-}" ]; then
+    ( cd desktop && SM_DESKTOP_SMD="$PWD/../build/bin/smd" npm run check:c1d )
+else
+    ( cd desktop && SM_DESKTOP_SMD="$PWD/../build/bin/smd" xvfb-run -a npm run check:c1d )
+fi
 
 step "Go: build all cmd/ binaries"
 go build ./cmd/...

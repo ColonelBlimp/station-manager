@@ -8,15 +8,28 @@ The Electron desktop host decided in
 shortcuts and the local "waiting for the daemon" page. The SPA stays in `frontend/app`; the
 shell never keeps a copy of it.
 
-## Slice A1: fixture harness only
+## What the shell runs
 
-The shell runs **no daemon-served UI** until C1's authentication is implemented and validated
-(ADR 0102, Requirements). Until then it loads only the built-in fixture harness
-(`harness/server.mjs`): a stand-in page on a port the OS chooses. The harness never connects to
-`smd`, the rig or the network, and there is deliberately no setting that points the shell at
-`smd`.
+`npm start` opens the local `smd`'s UI over `smd`'s HTTPS app listener (`server.app_port`,
+default 8443), trusting exactly one certificate: `smd`'s own identity (ADR 0103; W-0027 C1d).
+The shell finds it through `smd`'s `config.json`: an explicit `--sm-config <absolute path>`,
+else `$SM_WORKING_DIR/config.json`, else `$XDG_DATA_HOME/station-manager/config.json`. It reads
+only `data_dir` and `server.app_port` from it, then checks
+`<data_dir>/desktop-identity/cert.pem`: owner, modes and every parent directory. It never opens
+`key.pem`, and never falls back to plain HTTP or another port.
 
-What A1 enforces:
+Until `smd` has made its identity, or while it is refused or `smd` is down, the shell shows its
+own waiting page. A refused identity is named on that page with its path and the reason. The
+certificate is fixed for the app's lifetime; a new identity takes effect at the next launch.
+`--sm-data-dir <absolute path>` gives the data root when `data_dir` is relative.
+
+The shell does not change how the browser works: until C2, the browser on 8080 still operates
+the station, and the desktop app is one more client of the same `smd`.
+
+## The window and session rules (A1)
+
+The automated A1 and C1 checks use the built-in fixture harness (`harness/server.mjs`), never
+`smd`. What A1 enforces:
 
 - renderers are sandboxed and context-isolated, with no Node and no `<webview>`;
 - requests reach only the served origin (others are cancelled), and a page can neither navigate
@@ -29,12 +42,12 @@ What A1 enforces:
   256x256); launcher and native-Wayland icons come with the package (D1);
 - the shell's own waiting page is shown while the origin is down, and again after a failed
   load, until the origin answers;
-- the shell's availability probe refuses redirects; it says only that something answers, never
-  that it is `smd` (that is C1);
+- the shell's availability probe (`GET /v1/version` through the pinned session) refuses
+  redirects;
 - a single instance runs: a second launch exits and raises the first;
 - no spellchecker (Electron would download its dictionaries from Google's CDN).
 
-## The C1 proof: a pinned TLS identity, still fixture-only
+## The C1 proof: a pinned TLS identity (fixtures)
 
 `npm run check:c1` runs the shell against two TLS fixture listeners taking turns at one loopback
 address: a genuine one whose synthetic certificate the shell pins (`src/pin.mjs`, ADR 0103) and
@@ -46,12 +59,18 @@ are generated per run with `openssl`; nothing touches `smd`.
 
 ```sh
 npm ci                                  # install (Electron fetches its binary on first run)
-npm start                               # interactive: the fixture page
-SM_DESKTOP_HARNESS_DELAY_MS=5000 npm start   # the waiting page for 5 s, then the page
+npm start                               # interactive: the local smd (see above)
+npm start -- --sm-config /abs/path/config.json   # another install (an absolute path)
 npm run check:a1                        # A1 acceptance in Electron (xvfb-run -a without a display)
 npm run check:c1                        # C1 proof: the pinned TLS identity (needs openssl)
+npm run check:c1d-shell                 # C1d wiring: discovery, pin and waiting page, TLS fixtures
+SM_DESKTOP_SMD=../build/bin/smd npm run check:c1d   # C1d acceptance against a real, already-built smd
+npm run test:unit                       # identity discovery and connection logic, no Electron
 npm run lint && npm run format:check
 ```
 
-From the repository root, `task desktop:check` runs lint, format and the A1 and C1 scenarios, as
-CI does.
+From the repository root, `task desktop:check` runs lint, format, the unit tests and the A1, C1
+and C1d-shell scenarios. `task desktop:check:c1d` builds the static `smd` (rebuilding the SPA)
+and runs the real-`smd` acceptance; to reuse a binary already built, run `check:c1d` directly as
+above. CI runs both, the latter after its SPA and daemon builds. Every check uses a temporary
+working directory, synthetic identities and free loopback ports; none touches the station.

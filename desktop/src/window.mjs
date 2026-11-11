@@ -29,7 +29,7 @@ export function externalOpener(open) {
 
 /** The main window's construction options (exported so the A1 check reads exactly what
  *  createMainWindow uses). */
-export function mainWindowOptions({ offscreen }) {
+export function mainWindowOptions({ offscreen, partition }) {
     return {
         width: 1400,
         height: 900,
@@ -44,15 +44,18 @@ export function mainWindowOptions({ offscreen }) {
             webviewTag: false,
             spellcheck: false,
             offscreen,
+            // A separate session (its own verifier, pin and origin) only for a test that needs
+            // a second, freshly started window (W-0027 C1d); otherwise the default session.
+            ...(partition ? { partition } : {}),
         },
         icon: nativeImage.createFromPath(ICON_PATH),
     };
 }
 
 /** `origin` is the served origin, or a function read on use (W-0027 C1d). */
-export function createMainWindow({ origin, offscreen, openExternal }) {
+export function createMainWindow({ origin, offscreen, openExternal, partition }) {
     const originOf = typeof origin === 'function' ? origin : () => origin;
-    const win = new BrowserWindow(mainWindowOptions({ offscreen }));
+    const win = new BrowserWindow(mainWindowOptions({ offscreen, partition }));
     win.webContents.on('will-navigate', (e, url) => {
         if (onOrigin(url, originOf())) return;
         e.preventDefault();

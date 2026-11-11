@@ -302,6 +302,20 @@ jobs:
       - name: Build daemon, static (verifies SPA embed + shipped CGO-free shape)
         run: CGO_ENABLED=0 go build -o /tmp/smd ./cmd/smd
 
+      # W-0027 C1d: the desktop shell against a REAL smd (the binary just built, with the SPA
+      # embedded), in a temporary working directory with synthetic data and free loopback
+      # ports; never a station. It needs the SPA and daemon builds above, so it runs here
+      # rather than with the fixture scenarios. Same AppArmor handling as those.
+      - name: Desktop shell C1d acceptance (Electron against a real smd)
+        working-directory: desktop
+        env:
+          SM_DESKTOP_SMD: /tmp/smd
+        run: |
+          orig=$(sysctl -n kernel.apparmor_restrict_unprivileged_userns)
+          trap 'sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns="$orig"' EXIT
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          xvfb-run -a npm run check:c1d
+
       - name: Build all cmd/ binaries (catcli, loadgen, etc.)
         run: go build ./cmd/...
 

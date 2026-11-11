@@ -170,7 +170,20 @@ async function runScenario(ctx) {
             JSON.stringify(w3)
         );
         await impostor.stop();
+        // The genuine listener answers / but not yet /v1/version: the probe must keep waiting.
+        genuine.state.versionReady = false;
         await genuine.start();
+        // Wait for any request, so a probe of / fails the check below rather than this wait.
+        await until(() => genuine.requests.length > 0, 'the probe to reach the genuine listener');
+        await sleep(2000);
+        check(
+            'The probe asks /v1/version: with / answering but /v1/version not ready, the shell keeps waiting',
+            genuine.requests.every((r) => r.url === '/v1/version') &&
+                (await tag()) === '' &&
+                (await js(main, `!!document.querySelector('[data-sm-waiting]')`)),
+            `requests: ${[...new Set(genuine.requests.map((r) => r.url))].join(' ')}`
+        );
+        genuine.state.versionReady = true;
         await until(async () => (await tag()) === 'genuine', 'the genuine page to load');
         check(
             '…the genuine listener loads',

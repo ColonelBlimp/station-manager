@@ -1,17 +1,20 @@
-// Station Manager desktop shell (ADR 0102; W-0027 A1). Development only: not released.
+// Station Manager desktop shell (ADR 0102; W-0027). Development only: not released.
 //
-// A1 loads ONLY the built-in fixture harness. The shell executes no daemon-served UI
-// until C1's authentication is implemented and validated (ADR 0102, Requirements), so
-// there is deliberately no way to point it at smd yet.
+// Interactive runs load the local smd's UI over its pinned HTTPS listener (ADR 0103; W-0027
+// C1d): the shell finds smd's identity through config.json (src/discovery.mjs), trusts that one
+// certificate and nothing else, and shows its own waiting page until smd answers. A1's
+// fixture-only restriction lifted with C1d's real-smd acceptance (npm run check:c1d). The
+// automated checks keep their fixture harnesses (A1, C1, C1d-shell) or run a temporary smd
+// (C1d); none touches the station.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { app, Menu, session, shell } from 'electron';
 import { startHarness } from '../harness/server.mjs';
 import { disableSpellchecker, hardenSession } from './hardening.mjs';
-import { connectWhenTrusted } from './daemon.mjs';
-import { recordingFs } from './discovery.mjs';
-import { installPin, oncePin } from './pin.mjs';
+import { parseArgs } from './daemon.mjs';
+import { launchTrusted } from './launch.mjs';
+import { installPin } from './pin.mjs';
 import { createMainWindow, externalOpener } from './window.mjs';
 import { loadWhenUp, returnToWaitingOnFailure } from './waiting.mjs';
 
@@ -65,54 +68,54 @@ if (!app.requestSingleInstanceLock()) {
             // hardening (no origin: nothing allowed) are installed before the window exists; the
             // pin and origin are fixed together at the first valid identity. Interactive runs still
             // load only the fixture harness until C1d's real-smd acceptance passes.
+            // The interactive app: the local smd, over its pinned listener.
+            if (!automated) {
+                const launched = launchTrusted({
+                    args: parseArgs(process.argv),
+                    openExternal: externalOpener((url) => void shell.openExternal(url)),
+                });
+                mainWindow = launched.win;
+                mainWindow.on('closed', () => {
+                    mainWindow = null;
+                });
+                return;
+            }
+
+            // C1d part 3: the acceptance against a real smd (SM_DESKTOP_SMD), in a temporary
+            // working directory with synthetic data and free loopback ports; never the station.
+            if (scenario === 'c1d') {
+                const ok = await (await import('../test/scenario-c1d.mjs')).runC1d();
+                app.exit(ok ? 0 : 1);
+                return;
+            }
             if (scenario === 'c1d-shell') {
                 const s = await (await import('../test/scenario-c1d-shell.mjs')).setupC1dShell();
-                const pin = oncePin();
-                const target = { origin: null };
-                const rec = recordingFs();
-                installPin(session.defaultSession, {
-                    fingerprint: pin.get,
-                    onDecision: (d) => pinDecisions.push(d),
-                });
-                hardenSession(session.defaultSession, {
-                    origin: () => target.origin,
-                    onBlocked: (url) => blocked.push(url),
-                    onPermission: (a) => permissionAsks.push(a),
-                });
-                mainWindow = createMainWindow({
-                    origin: () => target.origin,
+                const launched = launchTrusted({
+                    env: s.env,
                     offscreen: true,
                     openExternal: externalOpener((url) => externalOpened.push(url)),
-                });
-                void connectWhenTrusted({
-                    win: mainWindow,
-                    pin,
-                    target,
-                    env: s.env,
-                    fsb: rec.fs,
                     retryMs: 300,
+                    onPermission: (a) => permissionAsks.push(a),
                 });
+                mainWindow = launched.win;
                 const ok = await s.run({
                     getMain: () => mainWindow,
-                    pinDecisions,
-                    opened: rec.opened,
-                    pin,
-                    blocked,
+                    pinDecisions: launched.decisions,
+                    opened: launched.opened,
+                    pin: launched.pin,
+                    blocked: launched.blocked,
                 });
                 await s.cleanup();
                 app.exit(ok ? 0 : 1);
                 return;
             }
-            // Automated runs start with the "daemon" down to prove the cold start.
-            // SM_DESKTOP_HARNESS_DELAY_MS shows the waiting page by hand.
-            const delay = Number(process.env.SM_DESKTOP_HARNESS_DELAY_MS || 0);
+            // The fixture checks start with the "daemon" down to prove the cold start.
             // The C1 proof (ADR 0103) runs a genuine and an impostor TLS harness at one address
             // and pins the genuine one's synthetic certificate; everything else uses A1's plain
-            // fixture. Neither is smd: there is still no way to point the shell at the daemon.
+            // fixture. Neither is smd.
             let c1 = null;
             if (scenario === 'c1') c1 = await (await import('../test/scenario-c1.mjs')).setupC1();
-            const harness = c1 ? c1.genuine : await startHarness({ up: !automated && delay === 0 });
-            if (!automated && delay > 0) setTimeout(() => void harness.start(), delay);
+            const harness = c1 ? c1.genuine : await startHarness({ up: false });
             const origin = harness.origin;
             const appUrl = origin + '/';
 

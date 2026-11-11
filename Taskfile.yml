@@ -107,6 +107,13 @@ tasks:
       - sh -c 'if [ -n "$DISPLAY" ]; then npm run check:c1; else xvfb-run -a npm run check:c1; fi'
       - sh -c 'if [ -n "$DISPLAY" ]; then npm run check:c1d-shell; else xvfb-run -a npm run check:c1d-shell; fi'
 
+  desktop:check:c1d:
+    desc: Desktop shell C1d acceptance (W-0027) — Electron against a REAL smd (the static build, with the SPA embedded) in a temporary working directory with synthetic data and free loopback ports; never the station
+    deps: [build:smd:static]
+    dir: desktop
+    cmds:
+      - sh -c 'if [ -n "$DISPLAY" ]; then SM_DESKTOP_SMD=../build/bin/smd npm run check:c1d; else SM_DESKTOP_SMD=../build/bin/smd xvfb-run -a npm run check:c1d; fi'
+
   frontend:build:all:
     desc: Build the embedded app SPA (the sole operator client). The build:smd* tasks depend on this so the daemon embeds a fresh bundle.
     deps: [frontend:app:build]

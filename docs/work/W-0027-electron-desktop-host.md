@@ -884,3 +884,79 @@ operator's action.
   free app port, the SPA embedded), the CI ordering after the SPA and `smd` builds, and only then
   the interactive start against the real daemon. The pinned probe moves to `/v1/version` (ADR 0103
   point 6; `waiting.mjs` probes `/` today, codex-068).
+- **Part 2 committed `8f3847a4`** on direction ("yes, commit it and start part 3"); its post-commit
+  clean-room review found nothing actionable.
+- **Part 3, the real-`smd` acceptance and the interactive switch (built, uncommitted, for
+  review):**
+  - The pinned probe asks `GET /v1/version` (ADR 0103 point 6); the fixture harness answers it.
+  - `src/launch.mjs`, `launchTrusted`, is the one launch path: verifier and hardening first,
+    then the window, then discovery. The interactive app, `check:c1d` and `check:c1d-shell`
+    all use it.
+  - **Interactive `npm start` now opens the local `smd`** by discovery (`--sm-config`,
+    `--sm-data-dir`). The fixture harness remains only for the A1 and C1 checks, and
+    `SM_DESKTOP_HARNESS_DELAY_MS` is gone. **This lifts A1's restriction**, in the same change as
+    the passing acceptance, as the brief requires.
+  - `test/scenario-c1d.mjs`, `check:c1d`: a real `smd` (`SM_DESKTOP_SMD`) in a temporary
+    `SM_WORKING_DIR`, with `data_dir` a separate absolute directory (Q1 (a) end to end), a TCP
+    browser listener with the SPA on a free port, a free app port, and bridge, FT8 and evidence
+    off. 14 checks:
+    - cold start with no identity and an impostor on the port: nothing is sent;
+    - `smd` creates the identity under `data_dir`: it is pinned, and the real SPA runs (its
+      script set the title);
+    - `fetch`, `wss:` and EventSource work;
+    - a draft in the SPA's own field: with `smd` replaced by an impostor, every transport is
+      refused with refused handshakes as evidence, nothing arrives, and the draft and URL are
+      kept; after a restart the transports recover and the draft is still there;
+    - a freshly started window (its own session, verifier and pin) with the identity present and
+      an impostor: rejected, then the real SPA loads when `smd` returns;
+    - a new `smd` identity is refused by the already-pinned window;
+    - `key.pem` is never opened; the verifier is asked only about 127.0.0.1; nothing is blocked.
+  - **CI** runs it after the static daemon build (`SM_DESKTOP_SMD=/tmp/smd`), with the same
+    AppArmor handling. `ci-local` runs it after its daemon build, and `task desktop:check:c1d`
+    builds and runs it.
+  - **Reversions:** G1 (fingerprint comparison removed: the impostor's answer reaches the page)
+    and G2 (discovery ignores `data_dir`: never pinned) are proven. Installing the verifier
+    later is **not observable**: no network request exists before the pin, so no proof was
+    attempted.
+  - The README now describes the real-daemon start.
+  - **Live use:** the interactive app reads the live station's `config.json` read-only, and needs
+    a C1c-or-later `smd` on the station for its app listener. Neither the deployment nor a live
+    run has been done; both are the operator's call.
+- **Corrections after codex-070 (2026-11-11; the work was interrupted by a power outage and resumed
+  afterwards, with `git fsck` clean):**
+  - `check:c1d` now seeds a configured workspace (`setup_complete`, a placeholder
+    `station_callsign` `N0CALL`). It asserts the contact form (`#lc-call`, no setup form) and keeps
+    the draft in `#lc-call`.
+  - `smd` is owned by `test/smd-process.mjs` (`managedProcess`) from spawn until it has exited:
+    exit tracked from spawn, a spawn failure or early exit reported, SIGTERM then SIGKILL, and
+    `stop()` returns only after the exit. Every resource is released in `finally` from
+    acquisition. 6 unit tests with synthetic children; `test:unit` is now 27 tests.
+  - Phase 3 no longer claims per-transport attribution, because the SPA's reconnects also reach the
+    impostor; the C1 fixtures attribute each transport.
+  - Phase 5 waits for any handshake.
+  - Phase 6 adds a fresh session that pins the new identity, while the old windows keep the old
+    pin.
+  - A fresh window records `verifier < filter < window`.
+  - `check:c1d-shell` proves the `/v1/version` probe: with `/` answering 200 and `/v1/version`
+    503, the shell keeps waiting. Its wait is for any request, so a root probe fails the check
+    itself.
+  - The README's stale fixture-only text is replaced. An earlier edit had written a stale copy
+    over its own replacements.
+  - Results: C1d 16 checks, C1d-shell 16, `task desktop:check` passes.
+  - Reversions proven: P1 (root probe), P2 (no wait after SIGKILL), P3 (no spawn error handler),
+    P4 (verifier after the window: `filter < window < verifier`), and G1 and G2 again on the
+    rewritten scenario. P1 first failed at its wait and was fixed, the same trap as E6.
+  - "Fresh window" means a fresh, non-persistent session and window, not a restarted process.
+- **Correction after codex-071:**
+  - `managedProcess` treats an `error` event as a spawn failure only before the `spawn` event.
+    Afterwards it is a failed operation on a live child, such as a signal that could not be
+    delivered: it is recorded in `errors`, the handle is kept, and `stop()` fails rather than
+    reporting the child reaped.
+  - New `releaseAfter(proc, dir)` removes the scratch directory only once the exit is confirmed;
+    otherwise it keeps the directory and returns it with the PID. `check:c1d`'s `finally` uses it
+    and fails, naming both, when termination cannot be established.
+  - Three new unit tests (30 in all), each reaping its own child in its own `finally`: a post-spawn
+    EPERM keeps the child owned and alive; the scratch directory is kept when termination is
+    unconfirmed; and removed once it is confirmed.
+  - Reversions Q1 (any error taken as an exit) and Q2 (the directory removed regardless) proven.
+  - `check:c1d` still passes, 16 of 16.

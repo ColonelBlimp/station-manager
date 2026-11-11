@@ -41,6 +41,7 @@ function wsFrame(text) {
 export async function startHarness({ up = true, tls = null, tag = 'fixture', port = 0 } = {}) {
     const requests = [];
     const upgrades = [];
+    const state = { versionReady: true };
     const handshakes = { secure: 0, failed: 0 };
     const sockets = new Set();
     const marker = (url) => new URL(url, 'http://x').searchParams.get('m') ?? '';
@@ -51,6 +52,19 @@ export async function startHarness({ up = true, tls = null, tag = 'fixture', por
         if (req.method === 'GET' && (path === '/' || path === '/index.html')) {
             res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
             res.end(page(tag));
+            return;
+        }
+        if (req.method === 'GET' && path === '/v1/version') {
+            // The shell's availability probe (ADR 0103 point 6), answered like smd's endpoint.
+            // While `versionReady` is false it answers 503 although / answers 200, so a test
+            // can tell a /v1/version probe from a root probe (codex-070).
+            if (!state.versionReady) {
+                res.writeHead(503, { 'content-type': 'text/plain' });
+                res.end('not ready');
+                return;
+            }
+            res.writeHead(200, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ daemon: `fixture-${tag}` }));
             return;
         }
         if (req.method === 'GET' && path === '/favicon.ico') {
@@ -146,6 +160,7 @@ export async function startHarness({ up = true, tls = null, tag = 'fixture', por
             return server !== null;
         },
         tag,
+        state,
         requests,
         upgrades,
         handshakes,

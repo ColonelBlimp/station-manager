@@ -58,7 +58,8 @@ export function waitingPageUrl(origin, detail = null) {
 // a replacement listener cannot send the probe to another origin (codex-038).
 async function originAnswers(ses, origin) {
     try {
-        const res = await ses.fetch(origin + '/', {
+        // ADR 0103 point 6: the pinned probe asks smd's version endpoint (codex-068).
+        const res = await ses.fetch(origin + '/v1/version', {
             redirect: 'manual',
             signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
         });
