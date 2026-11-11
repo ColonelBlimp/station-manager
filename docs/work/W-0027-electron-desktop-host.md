@@ -274,3 +274,82 @@ attempted (Codex's counter-test, a skipped download, passed 16/16 before and fai
 "pending" download never attempted); a download recovers in step 5; criterion 8 and the spellchecker
 note are worded as bounded observations. The fixture checks show page retention and fresh
 connections, not the product's "daemon unavailable" overlay or its retry policy.
+
+### C1b — smd's protected TLS identity (2026-11-11; done)
+
+Started on the operator's direction ("yes, start C1b"). A new Go package, `internal/desktopid`,
+implementing ADR 0103 point 1. It is **not wired into `smd` yet**: C1c (the app listener) is the
+first user. Nothing listens on the network.
+
+**Acceptance criteria** (each a test in `internal/desktopid/desktopid_test.go`):
+
+1. With no identity, `Ensure` creates `desktop-identity/` (0700) holding `key.pem` (0600, PKCS#8)
+   and `cert.pem` (not group/other writable): ECDSA P-256, self-signed, for exactly 127.0.0.1,
+   valid for 10 years; it returns the DER, the fingerprint and a usable TLS certificate.
+2. A second `Ensure` reuses the identity unchanged (same fingerprint, files byte-identical).
+3. The fingerprint is the SHA-256 of the DER in the shell's format (upper-case hex pairs joined by
+   colons, as Node's `X509Certificate.fingerprint256`).
+4. Refused, naming the path, and **nothing changed** (never repaired): a key without its
+   certificate, the reverse, an empty identity directory; a certificate from another identity;
+   a malformed certificate or key; an unexpected file; the directory not 0700, the key readable by
+   group, the certificate writable by others; an ancestor writable by group without the sticky
+   bit; an ancestor owned by another user; an identity file owned by another user; a symlinked
+   identity directory or certificate. A sticky, world-writable ancestor (as `/tmp`) is accepted.
+5. Creation runs its barriers in order: write and sync the key, write and sync the certificate,
+   sync the prepared directory, one rename, sync the parent.
+6. A failure at any barrier up to and including the rename publishes nothing; the next start
+   creates a complete identity and leaves no remnant.
+7. A failed final parent sync publishes a valid identity with its durability **unconfirmed**
+   (reported, not an error), and the next start reuses it rather than replacing it.
+8. An unpublished remnant from an earlier crash is removed at the next start; other files and
+   look-alike directories are left alone.
+9. **Concurrent creators** (codex-053): creation holds an exclusive lock
+   (`.desktop-identity.lock`, owner-only, in the working directory) and re-checks under it, so
+   eight concurrent `Ensure` calls share one identity, a creation in progress is never removed as a
+   remnant (a second creator waits for the lock), and publication never replaces an identity that
+   is already there (it is refused, and the existing one survives unchanged).
+10. A non-regular identity file (a directory named `cert.pem`) is refused.
+11. **The validated path is the path used** (codex-054 P1): the working directory is resolved once
+    and checked, and every later access (load, creation, lock, clean-up) goes through the resolved
+    path, so swapping a symlink in the caller's path after validation cannot redirect a read; an
+    identity reached through an alias is created at the resolved location.
+12. **The creation lock is checked before use** (codex-054 P2): opened without following a symlink,
+    and refused unchanged unless it is a regular file owned by the user with mode 0600 (a symlink,
+    a 0666 lock, a foreign-owned lock, a named pipe and a directory are all refused).
+13. The key must be exactly 0600 (0700 is refused).
+
+**Built:** `internal/desktopid/desktopid.go` (`Ensure`, `Load`, `Fingerprint`, `Durability`),
+`internal/desktopid/fs.go` (a package-private filesystem seam for the barriers, after the config
+writer's precedent but not shared with it, as ADR 0103 says). Errors use `internal/errors`.
+
+**Evidence:** 49 tests and subtests pass, also under `-race`; `go vet` and `go build` across the
+module; `golangci-lint` 0 issues; `scripts/maintainability-metrics.sh` 0 regressions (it first
+refused a package-level function literal used as a test seam, so `ownerOf` now points at a declared
+`statOwner`). Reversions, each restored and verified by hash: no prepared-directory sync; a failed
+parent sync reported as an error; a group-writable ancestor accepted; an unexpected file accepted;
+key, certificate and directory modes unchecked; symlinks accepted; the pair not matched; a refusal
+that recreates; remnants not removed; the files written with a plain rename instead of through the
+seam; the ancestor-owner check removed; the identity-file owner check removed; no creation lock; no
+re-check under the lock; a non-regular file accepted; publication clearing what is there first;
+`Load` reading through the original path (the swap test then returns the substitute identity);
+`Ensure` keeping the original path; the lock following symlinks; the lock's mode, owner and type
+unchecked; the key's mode not exact. **All 25 fail for their stated reason.** Two proofs needed
+fixing on the way: one mutation did not compile (a build failure is not a proof), and a directory
+used as the lock cannot be opened for writing at all, so the regular-file check is now exercised
+with a named pipe. Two tests were sharpened during the proofs: the symlink tests now require "`… is
+a symlink`" (the temporary path contains the test's name, so "symlink" alone matched any message),
+and two owner tests make one path appear foreign through `ownerOf` (changing real ownership needs
+root).
+
+**Ruling for C1c (operator, 2026-11-11):** an identity that cannot be created or validated is
+treated like the busy app port: before C2, `smd` starts without the app listener and reports it (log
+and Station Event, naming the file); after C2, a start-up error. Unconfirmed durability is only
+reported. Recorded in ADR 0103 point 2.
+
+**Limits, stated:** publication uses `os.Rename`, which refuses a non-empty destination (so a
+published identity is never replaced) but would replace an empty directory; the creation lock and
+the re-check under it make that unreachable between cooperating creators (`RENAME_NOREPLACE` would
+need `golang.org/x/sys` as a direct dependency). Power-loss
+durability is designed for, not demonstrated: the tests prove the order and the failure handling of
+the barriers, not survival of a real power cut. The fingerprint format is tested against its
+definition, not cross-checked with the shell at runtime (C1c's acceptance will).

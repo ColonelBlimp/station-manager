@@ -100,6 +100,11 @@ the shell trusts that one certificate and nothing else.**
      Event, because the browser is still the operating client; once C2 is on, it is a start-up
      error. A foreign program holding the port only ever fails the pin (the app shows the waiting
      page), so the report is what makes that situation understandable.
+   - **If the identity cannot be created or validated** (operator ruling 2026-11-11: "yes, agree
+     with that rule", codex-053's question): the same rule. Until C2 is switched on, `smd` starts
+     without the app listener and reports it, naming the file, in `smd.log` and as a Station Event;
+     once C2 is on, it is a start-up error. An identity published with **unconfirmed durability**
+     is only reported, before and after C2, and the listener runs.
 3. **The pin.** At launch the shell finds the identity directory by the same canonical
    resolution `smd` uses: an explicit working directory, then `SM_WORKING_DIR`, then the packaged
    XDG default (`internal/utils/working_dir.go`). It never applies the daemon's
