@@ -647,3 +647,188 @@ the rule is a pure function that the guard calls. At codex-062's suggestion,
 port set to 443, without a socket. It covers portless and explicit GET and POST, another port, an
 `http` Origin, and WebSocket upgrades: the portless pair passes, and no Origin or an `http` Origin
 is refused. Reconnecting the guard to the literal Host or Origin comparison fails it.
+
+### C1d brief — the shell pins smd's real identity (2026-11-11; revised after codex-064; proposed, for review before code)
+
+Started on the operator's direction ("yes, start the C1d brief"). Implements ADR 0103 point 3 (the
+pin, with discovery), point 5's shell side and point 6's waiting page against `smd`'s own listener
+(C1c). Once its acceptance passes, A1's restriction lifts: the shell may load the real `smd`'s UI.
+The A1 and C1 fixture scenarios remain regression gates, including their download and redirect
+coverage.
+
+**Outcome the operator sees:**
+- Starting the desktop app opens Station Manager from the local `smd`, over the pinned HTTPS
+  listener.
+- With `smd` down, or before it has ever made its identity, the app shows its own waiting page and
+  opens by itself when `smd` answers.
+- With an unsafe identity, the waiting page says what is wrong and names the path (Q2); nothing
+  from the listener runs.
+
+Nearest confusable outcome: an app that connects to whatever answers on 8443, or one that trusts
+the identity because a file exists, without checking where it is and who could have written it.
+
+**What exists today (read for this brief, verified after codex-064):**
+- The shell runs fixtures only (`desktop/src/main.mjs`). `src/pin.mjs` pins a given fingerprint;
+  `src/waiting.mjs` probes through the pinned session with redirects refused; `src/hardening.mjs`
+  confines requests to the origin, with `wss:` beside `https:`.
+- **Where `smd` keeps the identity:** `desktopid.Ensure(d.cfgSvc.WorkingDir())`, which is
+  `utils.WorkingDir(cfg.DataDir)` (`internal/config/config.go:2605-2614`).
+  - An absent `data_dir` defaults to the directory of `config.json` (`applyDefaults(&cfg,
+    filepath.Dir(path))`, `config.go:680`).
+  - A relative `data_dir` is made absolute against **the daemon's** working directory
+    (`utils.WorkingDir` → `filepath.Abs`), which the shell may not share.
+  - `config.json` itself is found by `defaultConfigPath` (`SM_WORKING_DIR`, then XDG, then the
+    executable's directory; `cmd/smd/main.go:910`) unless `--config` is given.
+  - The packaged unit sets `SM_WORKING_DIR=%h/.local/share/station-manager`
+    (`packaging/smd.service:22`).
+- **The port** is `server.app_port` in `config.json` (8443 when absent or 0). `config.json` holds
+  credentials and is `0600`.
+- **The real SPA is served only on a `tcp` browser listener with `serve_spa` on**
+  (`internal/api/server.go:551`, a shared handler, so the app listener has it then too). Codex
+  measured `GET /` at 404 with a Unix browser listener and 200 with TCP. The UI's canonical route
+  is `/`; `frontend/embed.go`'s `/app/` comment is stale (outside C1d).
+- CI's `releasability` job has Go (`ci.yml:88`), but runs the desktop scenarios **before** the SPA
+  build (`ci.yml:155-166`).
+- The loaded workspace's "daemon unavailable" state is SPA work (ADR 0102 ruling 6), not the
+  shell's.
+
+**Proposed design:**
+1. **Discovery, read-only, in the main process (Q1).** `config.json` is found by `smd`'s default
+   rule: an explicit `--sm-config <path>` (portable or development layouts), else
+   `SM_WORKING_DIR/config.json`, else `$XDG_DATA_HOME/station-manager/config.json`. The
+   executable-directory fallback is never used. Two fields are extracted, nothing else:
+   - **`data_dir`:** absent or empty means the directory of `config.json`, as `smd` does. An
+     absolute path is used as given. A **relative path is refused** unless an explicit
+     `--sm-data-dir` names the absolute root, because it depends on the daemon's working
+     directory; it is never reinterpreted relative to `config.json`.
+   - **`server.app_port`:** absent or 0 means 8443; a non-integer or out-of-range value is
+     refused, never replaced by a default.
+   - **Handling:** no copy of the document is kept and nothing is written back. No document
+     content, credential, parse-error snippet or raw error object reaches the renderer, IPC or any
+     log. A missing or malformed `config.json` is a local "waiting" state, re-read on each probe
+     before the first pin, so an app started before `smd` has written its config still finds a
+     later non-default root or port. (Dropping a JavaScript reference does not erase memory; no
+     such promise is made.)
+2. **Validation, the shell's role (ADR 0103 point 1), a small Linux-scoped Node module:**
+   - the data root is resolved once (`realpath`), its ancestors are checked (owned by root or the
+     user; not group- or other-writable unless sticky), and only the resolved path is used
+     afterwards, as `trustedRoot` does in `smd`;
+   - `desktop-identity` is checked with `lstat` (no symlink): owned by the process's effective
+     UID, mode `0700`;
+   - `cert.pem` is checked with `lstat`: a regular file, not a symlink, owned by the effective UID,
+     not group- or other-writable, parseable;
+   - the fingerprint is SHA-256 over the certificate's DER encoding;
+   - **`key.pem` is never opened**, and no key-pair check is made: TLS proves possession;
+   - dates are not checked (the ruled date-independent pin);
+   - adversarial fixtures and expected outcomes may be shared with C1b's tests, with no shared
+     runtime framework.
+3. **The pin and the origin are fixed together**, once, at the first valid read. The origin is
+   normalised as a URL (port 443 written as `https://127.0.0.1`). The verifier is installed on
+   the session before any request, so there is no unpinned network phase (Electron caches
+   verification results). Before a pin exists, verification rejects everything. The shell never
+   re-pins in response to a TLS failure.
+4. **Identity states and sequence boundaries:**
+   - **No identity yet** (cold start): the waiting page. No request goes to the app origin until a
+     valid identity is read, which is re-read on each probe.
+   - **A local refusal** (unsafe mode, foreign owner, symlink, non-regular or malformed
+     certificate, unsafe ancestor): the waiting page names the path and the
+     reason (Q2), nothing is pinned, and the shell keeps re-checking.
+   - **A substituted but locally valid certificate read before the first pin:** the shell
+     validly pins it, and the running `smd`'s original certificate is then refused at TLS. That is
+     "unavailable", not a local refusal; the file alone cannot show a mismatch.
+   - **The certificate changes on disk after the pin:** the app keeps its pin. The original
+     daemon still matches; a daemon with a new identity is refused until the next launch.
+5. **Modes:** interactive `npm start` targets the real daemon by this discovery. `check:a1` and
+   `check:c1` are unchanged. A1's "no way to point it at smd" comment and restriction go only in
+   the change that adds C1d's passing acceptance.
+6. **No fallback:** a TLS or pin failure is "unavailable", never a reason to try `http:`, 8080 or
+   the system's PKI.
+
+**Acceptance** (`check:c1d`, against a **real `smd`** built from the tree with the SPA embedded,
+never the live station). Setup:
+- a temporary working directory as `SM_WORKING_DIR`;
+- a synthetic seeded `config.json`: setup complete, a synthetic station, every external
+  integration off, bridge and FT8 off;
+- an ephemeral loopback **TCP** browser listener with `serve_spa` on, and a separate free app
+  port.
+
+In CI it runs **after** the SPA build and the `smd` build. Cases:
+- **cold start, no identity:** the waiting page, and no request to the app origin. Once `smd`
+  starts and creates its identity, the shell pins it and the **real SPA** runs: its own UI is
+  rendered, not a status code or a placeholder;
+- **cold start with an existing valid identity and an impostor** (another key) on the app port:
+  the pin rejects it, nothing reaches it, and the shell stays on the waiting page;
+- **transports:** `fetch`, `wss:` (`/v1/events/ws`) and EventSource (`/v1/events`) work against
+  `smd`; the pinned `/v1/version` probe refuses redirects;
+- **a loaded workspace with a real draft** typed into one of the SPA's own fields: `smd` is
+  stopped and an impostor put in its place, and every fresh attempt is refused with its own
+  evidence, with nothing arriving there. Then `smd` is restarted, the transports recover, and the
+  draft is still in the field;
+- **local refusals, no pin and the reason shown:**
+  - the identity directory at `0755`;
+  - `cert.pem` group-writable;
+  - a foreign owner (with a test seam for the owner lookup, as in C1b);
+  - a symlinked identity directory;
+  - a symlinked `cert.pem`;
+  - a non-regular `cert.pem`;
+  - a malformed `cert.pem`;
+  - an unsafe ancestor;
+  - a valid sticky ancestor is accepted;
+- **a root alias swapped after resolution** (corrected after codex-065; not a refusal): the genuine
+  root is resolved and validated, then its original alias is pointed at another identity before the
+  certificate is read. The shell still pins the genuine certificate from the resolved path, and the
+  substitute is never read, as C1b's `TestLoad_UsesTheResolvedPathNotASwappableAlias` does for
+  `smd`. A mutation that re-opens through the original alias must fail this. Symlinked identity
+  directories and certificates remain refusals;
+- **substitution before the first read:** the shell pins the substitute, and `smd` is then
+  unavailable (refused at TLS);
+- **change after the pin:** the original `smd` still loads; a restarted `smd` with a new identity
+  is refused until relaunch;
+- **discovery:** `data_dir` absent (the `config.json` directory), absolute elsewhere, relative
+  (refused without `--sm-data-dir`); an explicit `server.app_port`; an invalid port type or range
+  (refused); `config.json` missing at launch and written later (found);
+- **the key is never opened by the shell:** the shell's file-system boundary records every
+  attempted open and read. An intentional mutation that opens `key.pem` and swallows the error
+  must fail this. Access times and a mode-`000` copy are not evidence (relatime; a caught error
+  would pass). `smd`'s own reads of the key are attributed separately;
+- **the pin is asked only about 127.0.0.1.**
+
+Reversion proofs, among them:
+- only the fingerprint comparison removed: the impostor's page loads;
+- discovery ignoring `data_dir`: that case fails;
+- each validation rule removed: its case passes wrongly;
+- the key-open mutation, as above;
+- re-pinning on a TLS failure: the after-pin case loads a new identity.
+
+**Rulings (operator, 2026-11-11): "Q1 - a, Q2 - yes".**
+- **Q1 (a):** the shell reads `config.json` read-only for `data_dir` and `server.app_port`, as in
+  design point 1. ADR 0103 point 3 has a dated note.
+- **Q2 (yes):** the waiting page shows the path and a bounded reason as escaped local text.
+
+Implementation is not yet directed.
+
+**Questions as asked:**
+- **Q1. Finding the identity when `data_dir` is set.** Options:
+  - (a) the shell reads `config.json` read-only for `data_dir` and `server.app_port` only, as in
+    design point 1;
+  - (b) the operator passes the identity directory and port to the shell explicitly;
+  - (c) change `smd` so the identity always lives in the canonical working directory, ignoring
+    `data_dir`, which changes committed C1b/C1c behaviour.
+
+  Claude and Codex (codex-064) recommend (a). ADR 0103 point 3 would get a dated note naming
+  `data_dir`.
+- **Q2. A refused identity on the waiting page:** show the path and a bounded, actionable reason
+  as escaped local text, with no config contents and no file access from the page (Claude and
+  Codex recommend this); or only "waiting"?
+
+**Not in C1d:**
+- the SPA's "daemon unavailable" state (ADR 0102 ruling 6);
+- the operating credential (C2);
+- presence and disarm (C4);
+- the window set (A2);
+- live deployment.
+
+Using the app against the **live station** needs a C1c-or-later build deployed there. That
+deployment, and any live use, are the operator's call. Before C2 the app is one more operating
+client, like a browser tab: it adds no new TX path, and an FT8 run still starts only on the
+operator's action.
