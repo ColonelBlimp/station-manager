@@ -759,9 +759,6 @@ func (s *Server) AppPort() int {
 	return s.appPort
 }
 
-// appOrigin is the one origin the desktop app's pages have: its listener's own address.
-func (s *Server) appHost() string { return "127.0.0.1:" + strconv.Itoa(s.AppPort()) }
-
 func isAppRequest(r *http.Request) bool {
 	v, _ := r.Context().Value(appConnKey{}).(bool)
 	return v

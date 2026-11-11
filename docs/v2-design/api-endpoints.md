@@ -28,7 +28,9 @@ handler chain, so the same routes and middleware, over HTTPS on `127.0.0.1:<serv
 listener `Host` must be exactly `127.0.0.1:<bound port>` (else **403 `cross_origin`** for every
 method); an unsafe method's `Origin`, when present, must be exactly `https://127.0.0.1:<bound
 port>` (an absent `Origin` is allowed, as on the browser listener); a WebSocket upgrade needs that
-`Origin` (scheme `https` from the TLS connection). The browser listener's rules are unchanged.
+`Origin` (scheme `https` from the TLS connection). On port 443 only, the portless forms browsers
+send, `127.0.0.1` and `https://127.0.0.1`, are the same address and are accepted. The browser
+listener's rules are unchanged.
 Until W-0027 C2, a refused identity, a busy port or a serve error only writes a warning to
 `smd.log`. The station keeps serving the browser listener, with no app listener.
 

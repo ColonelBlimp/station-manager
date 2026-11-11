@@ -438,7 +438,7 @@ recorded in W-0020, 2026-11-11). No setting disables the app listener.
 **Not in C1c:** the shell reading the real identity and connecting to `smd` (C1d); C2's
 operating-client check; any change to the browser path.
 
-### C1c — smd's app listener (2026-11-11; built, uncommitted, awaiting operator and Codex review)
+### C1c — smd's app listener (2026-11-11; done: committed a27adce7, accepted by the operator)
 
 Built on the operator's direction ("yes, defer it and carry on with C1c"), to the brief above.
 
@@ -632,3 +632,18 @@ Evidence:
 - All drill scratch was removed, and the repo script hash was unchanged after the scratch-copy runs.
 - The zerolog process-global question stays outside C1c (Codex agrees). If it is tracked, it
   belongs with the existing maintenance work, not in this slice.
+
+**Accepted (operator, 2026-11-11): "C1c accepted".** Committed as a27adce7, after review through
+codex-061. The post-commit clean-room review (`.codex-reviews/a27adce74e16.md`) raised one P2:
+with `server.app_port` 443, browsers omit the default port from Host and Origin, so the exact
+comparison would refuse every request. It is triaged as valid. The operator ruled (2026-11-11):
+"yes, accept the portless form for 443". `appHostAllowed` and `appOriginAllowed` in
+`internal/api/csrf.go` now accept `127.0.0.1` and `https://127.0.0.1` when the bound port is 443,
+and only then. `TestApp_AppAddressForms` covers both ports, other hosts, an empty port and the
+wrong scheme. Its RED failed on the 443 portless rows. Reversions: removing the equivalence,
+extending it to every port, and ignoring the Origin's scheme each fail. Tests cannot bind 443, so
+the rule is a pure function that the guard calls. At codex-062's suggestion,
+`TestApp_Port443PortlessFormsThroughTheGuard` also drives the real handler chain with the bound
+port set to 443, without a socket. It covers portless and explicit GET and POST, another port, an
+`http` Origin, and WebSocket upgrades: the portless pair passes, and no Origin or an `http` Origin
+is refused. Reconnecting the guard to the literal Host or Origin comparison fails it.

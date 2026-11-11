@@ -14,6 +14,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -561,4 +562,83 @@ func assertPortFree(t *testing.T, port int) {
 		t.Fatalf("port %d is still held: %v", port, err)
 	}
 	_ = ln.Close()
+}
+
+// Browsers omit a URL's default port: for the app listener on 443, Chromium (so the desktop
+// shell) sends Host "127.0.0.1" and Origin "https://127.0.0.1" (clean-room review of a27adce7).
+// Only that exact equivalence is accepted; every other port keeps its literal form.
+func TestApp_AppAddressForms(t *testing.T) {
+	for _, c := range []struct {
+		port             int
+		host, origin     string
+		hostOK, originOK bool
+	}{
+		{8443, "127.0.0.1:8443", "https://127.0.0.1:8443", true, true},
+		{8443, "127.0.0.1", "https://127.0.0.1", false, false}, // a portless form means 443, not 8443
+		{443, "127.0.0.1:443", "https://127.0.0.1:443", true, true},
+		{443, "127.0.0.1", "https://127.0.0.1", true, true},
+		{443, "127.0.0.1:8443", "https://127.0.0.1:8443", false, false},
+		{443, "localhost", "https://localhost", false, false},
+		{443, "127.0.0.1:", "https://127.0.0.1:", false, false},
+		{443, "127.0.0.1", "http://127.0.0.1", true, false}, // the scheme still matters
+	} {
+		if got := appHostAllowed(c.host, c.port); got != c.hostOK {
+			t.Errorf("port %d: appHostAllowed(%q) = %v, want %v", c.port, c.host, got, c.hostOK)
+		}
+		if got := appOriginAllowed(c.origin, c.port); got != c.originOK {
+			t.Errorf("port %d: appOriginAllowed(%q) = %v, want %v", c.port, c.origin, got, c.originOK)
+		}
+	}
+}
+
+// The request path on 443 (codex-062): requests marked as arriving on the app listener go
+// through the real handler chain with the bound port set to 443, with no socket on 443 (tests
+// cannot bind it). The portless forms browsers send pass the guard; other forms are refused.
+func TestApp_Port443PortlessFormsThroughTheGuard(t *testing.T) {
+	srv := testServer(t)
+	srv.appMu.Lock()
+	srv.appPort = 443
+	srv.appMu.Unlock()
+	h := srv.httpServer.Handler
+	send := func(method, path, host, origin string, upgrade bool) int {
+		t.Helper()
+		req := httptest.NewRequest(method, "https://"+host+path, strings.NewReader("{}"))
+		req.Host = host
+		req.TLS = &tls.ConnectionState{Version: tls.VersionTLS13}
+		req = req.WithContext(context.WithValue(req.Context(), appConnKey{}, true))
+		req.Header.Set("Content-Type", "application/json")
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		if upgrade {
+			req.Header.Set("Upgrade", "websocket")
+			req.Header.Set("Connection", "Upgrade")
+			req.Header.Set("Sec-WebSocket-Version", "13")
+			req.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		return w.Code
+	}
+	for _, c := range []struct {
+		name                 string
+		method, path         string
+		host, origin         string
+		upgrade, wantRefused bool
+	}{
+		{"portless GET", http.MethodGet, "/v1/healthz", "127.0.0.1", "", false, false},
+		{"explicit GET", http.MethodGet, "/v1/healthz", "127.0.0.1:443", "", false, false},
+		{"portless POST, portless Origin", http.MethodPost, "/v1/notifications", "127.0.0.1", "https://127.0.0.1", false, false},
+		{"portless POST, explicit Origin", http.MethodPost, "/v1/notifications", "127.0.0.1", "https://127.0.0.1:443", false, false},
+		{"another port", http.MethodGet, "/v1/healthz", "127.0.0.1:8443", "", false, true},
+		{"http Origin", http.MethodPost, "/v1/notifications", "127.0.0.1", "http://127.0.0.1", false, true},
+		{"WebSocket, portless pair", http.MethodGet, wsEventsPath, "127.0.0.1", "https://127.0.0.1", true, false},
+		{"WebSocket, no Origin", http.MethodGet, wsEventsPath, "127.0.0.1", "", true, true},
+		{"WebSocket, http Origin", http.MethodGet, wsEventsPath, "127.0.0.1", "http://127.0.0.1", true, true},
+	} {
+		got := send(c.method, c.path, c.host, c.origin, c.upgrade)
+		if refused := got == http.StatusForbidden; refused != c.wantRefused {
+			t.Errorf("%s: status %d, want refused=%v", c.name, got, c.wantRefused)
+		}
+	}
 }

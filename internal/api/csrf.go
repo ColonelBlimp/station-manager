@@ -4,6 +4,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 )
@@ -83,13 +85,14 @@ func (s *Server) requireSameOrigin(next http.Handler) http.Handler {
 // requireAppOrigin is requireSameOrigin for the desktop app's listener (ADR 0103 point 5;
 // W-0027 C1c). Its Host must be exactly 127.0.0.1:<app port>, for every method, and an unsafe
 // method's Origin, when present, exactly https://127.0.0.1:<app port>: both bound to the port
-// the listener actually has, never taken from the request. An absent Origin stays allowed for
+// the listener actually has, never taken from the request (on 443 also the portless forms
+// browsers send, appHostAllowed). An absent Origin stays allowed for
 // a non-browser client, as on the other listener; a WebSocket upgrade, though, is refused
 // without one by requireStreamOrigin. The browser listener's rules are unchanged.
 func (s *Server) requireAppOrigin(w http.ResponseWriter, r *http.Request, next http.Handler) {
 	const op errors.Op = "api.requireAppOrigin"
-	host := s.appHost()
-	if r.Host != host {
+	port := s.AppPort()
+	if !appHostAllowed(r.Host, port) {
 		s.logHostRefused(r)
 		s.writeError(w, http.StatusForbidden, "cross_origin", "host not allowed", op)
 		return
@@ -99,7 +102,7 @@ func (s *Server) requireAppOrigin(w http.ResponseWriter, r *http.Request, next h
 		next.ServeHTTP(w, r)
 		return
 	}
-	if origin := r.Header.Get("Origin"); origin != "" && origin != "https://"+host {
+	if origin := r.Header.Get("Origin"); origin != "" && !appOriginAllowed(origin, port) {
 		s.logOriginRefused(r, origin)
 		s.writeError(w, http.StatusForbidden, "cross_origin", "cross-origin request rejected", op)
 		return
@@ -226,4 +229,18 @@ func (s *Server) logOriginRefused(r *http.Request, origin string) {
 		ev = ev.Bool("origin_unparseable", true)
 	}
 	ev.Msg("cross-origin refused: origin not allowed")
+}
+
+// appHostAllowed reports whether a request's Host names the app listener on its bound port.
+// Browsers omit a URL's default port, so on 443 the portless "127.0.0.1" is the same address
+// (clean-room review of a27adce7); on any other port only the literal form is.
+func appHostAllowed(host string, port int) bool {
+	return host == "127.0.0.1:"+strconv.Itoa(port) || (port == 443 && host == "127.0.0.1")
+}
+
+// appOriginAllowed reports whether an Origin is the app listener's own, with the same
+// default-port equivalence as appHostAllowed.
+func appOriginAllowed(origin string, port int) bool {
+	host, ok := strings.CutPrefix(origin, "https://")
+	return ok && appHostAllowed(host, port)
 }
