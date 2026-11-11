@@ -113,6 +113,17 @@ the shell trusts that one certificate and nothing else.**
    or development run), an explicit matching path is required. It validates the location as in
    point 1 and computes the SHA-256 fingerprint of the certificate's **DER encoding** (not the PEM
    file text).
+   - **Dated note (2026-11-11, W-0027 C1d; operator ruling Q1 (a)):** `smd` keeps the identity
+     under `utils.WorkingDir(cfg.DataDir)` (`internal/config/config.go:2605-2614`), so a non-empty
+     `data_dir` in `config.json` wins over `SM_WORKING_DIR`, which the resolution above missed.
+     The shell therefore finds `config.json` by `smd`'s default rule (an explicit path, then
+     `SM_WORKING_DIR`, then the XDG default) and reads only `data_dir` and `server.app_port` from
+     it, read-only, in the main process.
+     - An absent `data_dir` means the directory of `config.json`, as in `smd`.
+     - A relative `data_dir` is refused unless an explicit absolute root is given.
+     - Nothing else from the file is kept or passed on.
+
+     The port in point 3's last bullet comes from the same read.
    - **The verifier contract** (`session.setCertificateVerifyProc`, Electron 44.9.3): it answers
      `0` (accept) **only** when the host is `127.0.0.1` and the presented certificate's fingerprint
      equals the pin, and `-2` (reject) for everything else, including certificates the system
