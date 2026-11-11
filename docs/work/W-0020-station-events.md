@@ -332,3 +332,60 @@ reintroduces the stall on a safety path).
   `internal/ft8/servicetx.go` (`disarmTxLocked`, `endReasonForRefusal`),
   `frontend/app/src/lib/events/` (the page; the rail it replaced is gone), `lib/api/stationEvents.ts`,
   `lib/api/notifications.ts` (the surviving POST).
+
+## Event kinds without schema changes (operator direction, 2026-11-11)
+
+**Proposed, not built.** While planning W-0027 C1c, adding a Station Event kind (a busy app port or
+a refused desktop identity) turned out to need a log-schema migration, because the `operator_event`
+table's `CHECK` lists every (category, kind) pair
+(`internal/database/sqlite/migrations/log/0013_operator_event_archive.up.sql`). The operator:
+"rather than schema changes for new event types, the column type should be generic (TEXT, etc) and
+map to a enum. A schema change to add a type is not good."
+
+Direction (to be designed and ruled before building; it amends ADR 0076):
+- The `kind` column stays `TEXT` without the pair `CHECK`; the closed list stays in code
+  (`stationevents.KindsByCategory`), enforced by the recorder (the only writer) and by the tests.
+- Removing the `CHECK` needs one table rebuild (SQLite cannot drop a constraint in place); Claude
+  recommends doing it with the next log-schema change that sessions or contests need. After that,
+  a new kind needs no migration.
+- Reading tolerates kinds it does not know (for example after a downgrade): shown as a generic
+  event, never a failed page.
+- The `severity` `CHECK` (info, warn, error) can stay; that set is not expected to change.
+- First user: W-0027 C1c's app-listener report, which until then is written to `smd.log` only.
+
+## Revisiting Station Events (operator, 2026-11-11)
+
+The operator: "I also want to revisit the whole Station Events system - I think it is way too much
+for what is needed." Asked whether history is looked back at: "no. I am only interested in an issue
+with TX which might damage equipment, and that it was successfully handled by SMD. Other than that,
+I don't care that much - a simple log viewer panel might be more useful assuming the logs have
+enough useful detail?"
+
+Claude's proposal (not ruled; supersedes the "event kinds without schema changes" direction above
+if adopted): keep the live TX and drive alarm banners (they do not depend on Station Events: the
+bridge publishes them on its own event and logs them, `internal/bridge/txconfirm.go`
+`publishTxAlarm`); add a read-only Log panel over `smd.log` (zerolog JSON lines, rotated by
+lumberjack), filterable by level, highlighting TX entries; remove the `operator_event` store,
+recorder, typed facts, browser `POST` and the Station Events page (one last migration drops the
+table); audit the TX log lines so each says what was detected, what smd did and whether it was
+confirmed; make the log readable only by the operating app once C2 exists. It retires W-0020's
+built feature and replaces parts of ADR 0076 and ADR 0061, so it needs its own ADR.
+
+The operator, continuing: "Honestly, the Station Events is/will not be used. I would prefer a log
+viewer which a chip on the icon link when an event I am interested in has occurred: e.g. FT8 on 30m
+and a TX has failed to respond to a CAT cmd. Mostly, these potential euipment damaging events were
+its original driver - if I remember correctly???" Confirmed from this dossier's *Why this item
+exists*: "The operator's instinct was a log viewer"; the alarm family (TX alarm, disarm, abnormal
+end) was the driver. Claude's refined proposal (not ruled): the few equipment-related log lines
+carry an `alert` field (TX alarm raised and cleared, drive alarm, safety disarm, the rig not
+answering CAT during TX), each saying what happened, what smd did and whether it was confirmed, with
+band and mode where relevant; the Log panel filters by level and "alerts only"; its icon shows a
+chip counting alerts since the panel was last opened (live from the existing alarm events; across
+restarts by the app's last-opened time against the log); Station Events is removed as above.
+
+**Deferred (operator, 2026-11-11): "yes, defer it and carry on with C1c".** The Station Events
+redesign (log viewer, alert chip, removal of the store) waits until the desktop UI is working.
+Station Events keeps working unchanged meanwhile; nothing in the desktop shell depends on it. The
+reviews' requirements (codex-056, codex-057; summarised in claude-126) and the open decisions (which
+occurrences raise the chip, a dot or a count, how far back the panel reaches) are carried to that
+ADR.
