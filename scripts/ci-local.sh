@@ -102,6 +102,8 @@ step "Desktop: lint"
 ( cd desktop && npm run lint )
 step "Desktop: prettier format check"
 ( cd desktop && npm run format:check )
+step "Desktop: unit tests (identity discovery and validation, synthetic files only)"
+( cd desktop && npm run test:unit )
 step "Desktop: A1 scenario (Electron, fixture harness)"
 if [ -n "${DISPLAY:-}" ]; then
     ( cd desktop && npm run check:a1 )

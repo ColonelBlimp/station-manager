@@ -152,6 +152,10 @@ jobs:
         working-directory: desktop
         run: npm run format:check
 
+      - name: Desktop shell unit tests (identity discovery and validation, synthetic files only)
+        working-directory: desktop
+        run: npm run test:unit
+
       - name: Desktop shell A1 and C1 scenarios (Electron, fixture harnesses)
         working-directory: desktop
         run: |

@@ -13,6 +13,7 @@
         "start": "electron .",
         "check:a1": "SM_DESKTOP_SCENARIO=a1 electron .",
         "check:c1": "SM_DESKTOP_SCENARIO=c1 electron .",
+        "test:unit": "node --test test/discovery.test.mjs",
         "lint": "eslint .",
         "format:check": "prettier --check .",
         "format": "prettier --write ."
