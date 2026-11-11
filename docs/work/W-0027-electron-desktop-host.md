@@ -648,7 +648,7 @@ port set to 443, without a socket. It covers portless and explicit GET and POST,
 `http` Origin, and WebSocket upgrades: the portless pair passes, and no Origin or an `http` Origin
 is refused. Reconnecting the guard to the literal Host or Origin comparison fails it.
 
-### C1d brief — the shell pins smd's real identity (2026-11-11; revised after codex-064; proposed, for review before code)
+### C1d brief — the shell pins smd's real identity (2026-11-11; done: c9e9f2f3, accepted by the operator)
 
 Started on the operator's direction ("yes, start the C1d brief"). Implements ADR 0103 point 3 (the
 pin, with discovery), point 5's shell side and point 6's waiting page against `smd`'s own listener
@@ -960,3 +960,13 @@ operator's action.
     unconfirmed; and removed once it is confirmed.
   - Reversions Q1 (any error taken as an exit) and Q2 (the directory removed regardless) proven.
   - `check:c1d` still passes, 16 of 16.
+- **Part 3 committed `c9e9f2f3`** on direction, and pushed. CI run 43026953181 **passed**
+  (28m47s), including `check:c1d`'s first run on CI. The post-commit clean-room review found
+  nothing actionable.
+- **Live desktop check (operator, 2026-11-11):** the operator deployed
+  `2.0.0-alpha.5-212-gc9e9f2f3-dirty` with `task deploy:local:dev` and ran `npm start`. The app
+  opened the station's Operate workspace over the pinned listener: archive Home, logbook Default
+  (8,663), the rig on 14.255.000 USB, 20 m. Known and expected: Map and Manual do not open from
+  the app, because the shell refuses same-origin pop-out windows until the window set (A2).
+- **C1d accepted (operator, 2026-11-11): "yes, C1d accepted, commit it".** A1's fixture-only
+  restriction is lifted: the desktop app loads the local smd's UI over the pinned listener.
