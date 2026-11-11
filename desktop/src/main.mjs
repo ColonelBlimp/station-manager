@@ -9,7 +9,9 @@ import path from 'node:path';
 import { app, Menu, session, shell } from 'electron';
 import { startHarness } from '../harness/server.mjs';
 import { disableSpellchecker, hardenSession } from './hardening.mjs';
-import { installPin } from './pin.mjs';
+import { connectWhenTrusted } from './daemon.mjs';
+import { recordingFs } from './discovery.mjs';
+import { installPin, oncePin } from './pin.mjs';
 import { createMainWindow, externalOpener } from './window.mjs';
 import { loadWhenUp, returnToWaitingOnFailure } from './waiting.mjs';
 
@@ -51,91 +53,142 @@ if (!app.requestSingleInstanceLock()) {
         if (!automated) app.quit();
     });
 
-    app.whenReady().then(async () => {
-        // First, before anything else can use the session: no spellchecker, so no
-        // dictionary download from Google's CDN (see hardening.mjs).
-        disableSpellchecker(session.defaultSession);
-        Menu.setApplicationMenu(null);
-        // Automated runs start with the "daemon" down to prove the cold start.
-        // SM_DESKTOP_HARNESS_DELAY_MS shows the waiting page by hand.
-        const delay = Number(process.env.SM_DESKTOP_HARNESS_DELAY_MS || 0);
-        // The C1 proof (ADR 0103) runs a genuine and an impostor TLS harness at one address
-        // and pins the genuine one's synthetic certificate; everything else uses A1's plain
-        // fixture. Neither is smd: there is still no way to point the shell at the daemon.
-        let c1 = null;
-        if (scenario === 'c1') c1 = await (await import('../test/scenario-c1.mjs')).setupC1();
-        const harness = c1 ? c1.genuine : await startHarness({ up: !automated && delay === 0 });
-        if (!automated && delay > 0) setTimeout(() => void harness.start(), delay);
-        const origin = harness.origin;
-        const appUrl = origin + '/';
+    app.whenReady()
+        .then(async () => {
+            // First, before anything else can use the session: no spellchecker, so no
+            // dictionary download from Google's CDN (see hardening.mjs).
+            disableSpellchecker(session.defaultSession);
+            Menu.setApplicationMenu(null);
 
-        // The pin is installed before the session's first request (ADR 0103 point 3).
-        if (c1) {
-            installPin(session.defaultSession, {
-                fingerprint: c1.fingerprint,
-                onDecision: (d) => pinDecisions.push(d),
+            // C1d part 2 (W-0027): the shell's wiring to a discovered identity, against a synthetic
+            // install and TLS fixtures only. The verifier (empty pin: reject everything) and the
+            // hardening (no origin: nothing allowed) are installed before the window exists; the
+            // pin and origin are fixed together at the first valid identity. Interactive runs still
+            // load only the fixture harness until C1d's real-smd acceptance passes.
+            if (scenario === 'c1d-shell') {
+                const s = await (await import('../test/scenario-c1d-shell.mjs')).setupC1dShell();
+                const pin = oncePin();
+                const target = { origin: null };
+                const rec = recordingFs();
+                installPin(session.defaultSession, {
+                    fingerprint: pin.get,
+                    onDecision: (d) => pinDecisions.push(d),
+                });
+                hardenSession(session.defaultSession, {
+                    origin: () => target.origin,
+                    onBlocked: (url) => blocked.push(url),
+                    onPermission: (a) => permissionAsks.push(a),
+                });
+                mainWindow = createMainWindow({
+                    origin: () => target.origin,
+                    offscreen: true,
+                    openExternal: externalOpener((url) => externalOpened.push(url)),
+                });
+                void connectWhenTrusted({
+                    win: mainWindow,
+                    pin,
+                    target,
+                    env: s.env,
+                    fsb: rec.fs,
+                    retryMs: 300,
+                });
+                const ok = await s.run({
+                    getMain: () => mainWindow,
+                    pinDecisions,
+                    opened: rec.opened,
+                    pin,
+                    blocked,
+                });
+                await s.cleanup();
+                app.exit(ok ? 0 : 1);
+                return;
+            }
+            // Automated runs start with the "daemon" down to prove the cold start.
+            // SM_DESKTOP_HARNESS_DELAY_MS shows the waiting page by hand.
+            const delay = Number(process.env.SM_DESKTOP_HARNESS_DELAY_MS || 0);
+            // The C1 proof (ADR 0103) runs a genuine and an impostor TLS harness at one address
+            // and pins the genuine one's synthetic certificate; everything else uses A1's plain
+            // fixture. Neither is smd: there is still no way to point the shell at the daemon.
+            let c1 = null;
+            if (scenario === 'c1') c1 = await (await import('../test/scenario-c1.mjs')).setupC1();
+            const harness = c1 ? c1.genuine : await startHarness({ up: !automated && delay === 0 });
+            if (!automated && delay > 0) setTimeout(() => void harness.start(), delay);
+            const origin = harness.origin;
+            const appUrl = origin + '/';
+
+            // The pin is installed before the session's first request (ADR 0103 point 3).
+            if (c1) {
+                installPin(session.defaultSession, {
+                    fingerprint: c1.fingerprint,
+                    onDecision: (d) => pinDecisions.push(d),
+                });
+            }
+
+            hardenSession(session.defaultSession, {
+                origin,
+                // Only a page's own requests: the shell's probe (ses.fetch) has no web contents.
+                onAllowed: (d) => {
+                    if (d.webContentsId !== undefined) rendererRequests.push(d.url);
+                },
+                onBlocked: (url) => {
+                    blocked.push(url);
+                    console.error(`shell: blocked a request outside the served origin: ${url}`);
+                },
+                onPermission: (a) => permissionAsks.push(a),
             });
-        }
 
-        hardenSession(session.defaultSession, {
-            origin,
-            // Only a page's own requests: the shell's probe (ses.fetch) has no web contents.
-            onAllowed: (d) => {
-                if (d.webContentsId !== undefined) rendererRequests.push(d.url);
-            },
-            onBlocked: (url) => {
-                blocked.push(url);
-                console.error(`shell: blocked a request outside the served origin: ${url}`);
-            },
-            onPermission: (a) => permissionAsks.push(a),
+            // Automated runs save downloads to a temporary directory and record them.
+            if (automated) {
+                const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sm-desktop-dl-'));
+                session.defaultSession.on('will-download', (_e, item) => {
+                    const rec = { url: item.getURL(), state: 'progressing', path: null };
+                    downloads.push(rec);
+                    rec.path = path.join(dir, item.getFilename());
+                    item.setSavePath(rec.path);
+                    item.once('done', (_e2, state) => (rec.state = state));
+                });
+            }
+
+            const openExternal = externalOpener((url) => {
+                externalOpened.push(url);
+                if (!automated) void shell.openExternal(url);
+            });
+            mainWindow = createMainWindow({ origin, offscreen: automated, openExternal });
+            mainWindow.on('closed', () => {
+                mainWindow = null;
+            });
+            returnToWaitingOnFailure(mainWindow, appUrl, origin);
+            void loadWhenUp(mainWindow, appUrl, origin);
+
+            if (scenario === 'a1') {
+                const { runA1Scenario } = await import('../test/scenario-a1.mjs');
+                const ok = await runA1Scenario({
+                    harness,
+                    getMain: () => mainWindow,
+                    blocked,
+                    rendererRequests: () => rendererRequests.filter((u) => u.startsWith(origin)),
+                    externalOpened,
+                    permissionAsks,
+                    secondInstances,
+                });
+                await harness.stop();
+                app.exit(ok ? 0 : 1);
+            }
+            if (scenario === 'c1') {
+                const ok = await c1.run({
+                    getMain: () => mainWindow,
+                    blocked,
+                    rendererRequests,
+                    pinDecisions,
+                    downloads,
+                });
+                app.exit(ok ? 0 : 1);
+            }
+        })
+        .catch((e) => {
+            // A failed start-up never leaves an automated check hanging (W-0027 C1d: a scenario
+            // set-up error once did).
+            console.error('shell: start-up failed:', e);
+            if (automated) app.exit(1);
         });
-
-        // Automated runs save downloads to a temporary directory and record them.
-        if (automated) {
-            const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sm-desktop-dl-'));
-            session.defaultSession.on('will-download', (_e, item) => {
-                const rec = { url: item.getURL(), state: 'progressing', path: null };
-                downloads.push(rec);
-                rec.path = path.join(dir, item.getFilename());
-                item.setSavePath(rec.path);
-                item.once('done', (_e2, state) => (rec.state = state));
-            });
-        }
-
-        const openExternal = externalOpener((url) => {
-            externalOpened.push(url);
-            if (!automated) void shell.openExternal(url);
-        });
-        mainWindow = createMainWindow({ origin, offscreen: automated, openExternal });
-        mainWindow.on('closed', () => {
-            mainWindow = null;
-        });
-        returnToWaitingOnFailure(mainWindow, appUrl, origin);
-        void loadWhenUp(mainWindow, appUrl, origin);
-
-        if (scenario === 'a1') {
-            const { runA1Scenario } = await import('../test/scenario-a1.mjs');
-            const ok = await runA1Scenario({
-                harness,
-                getMain: () => mainWindow,
-                blocked,
-                rendererRequests: () => rendererRequests.filter((u) => u.startsWith(origin)),
-                externalOpened,
-                permissionAsks,
-                secondInstances,
-            });
-            await harness.stop();
-            app.exit(ok ? 0 : 1);
-        }
-        if (scenario === 'c1') {
-            const ok = await c1.run({
-                getMain: () => mainWindow,
-                blocked,
-                rendererRequests,
-                pinDecisions,
-                downloads,
-            });
-            app.exit(ok ? 0 : 1);
-        }
-    });
 }

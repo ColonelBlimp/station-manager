@@ -156,7 +156,7 @@ jobs:
         working-directory: desktop
         run: npm run test:unit
 
-      - name: Desktop shell A1 and C1 scenarios (Electron, fixture harnesses)
+      - name: Desktop shell A1, C1 and C1d-shell scenarios (Electron, fixture harnesses)
         working-directory: desktop
         run: |
           orig=$(sysctl -n kernel.apparmor_restrict_unprivileged_userns)
@@ -164,6 +164,7 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           xvfb-run -a npm run check:a1
           xvfb-run -a npm run check:c1
+          xvfb-run -a npm run check:c1d-shell
 
       - name: App SPA build (produces dist/ for daemon embed)
         working-directory: frontend/app

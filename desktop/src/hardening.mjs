@@ -9,6 +9,7 @@
 
 /** True when url belongs to the served origin: its own scheme or its WebSocket partner. */
 export function onOrigin(url, origin) {
+    if (!origin) return false; // no origin fixed yet: nothing is on it (W-0027 C1d)
     let u;
     try {
         u = new URL(url);
@@ -31,7 +32,10 @@ export function disableSpellchecker(ses) {
     ses.setSpellCheckerLanguages([]);
 }
 
+/** `origin` is the served origin, or a function read on each request (W-0027 C1d: fixed once,
+ *  together with the pin; null until then). */
 export function hardenSession(ses, { origin, onAllowed, onBlocked, onPermission }) {
+    const originOf = typeof origin === 'function' ? origin : () => origin;
     ses.setPermissionRequestHandler((_wc, permission, callback) => {
         onPermission?.({ kind: 'request', permission });
         callback(false);
@@ -46,7 +50,7 @@ export function hardenSession(ses, { origin, onAllowed, onBlocked, onPermission 
 
     ses.webRequest.onBeforeRequest((details, callback) => {
         const url = details.url;
-        if (onOrigin(url, origin) || url.startsWith('data:') || url.startsWith('blob:')) {
+        if (onOrigin(url, originOf()) || url.startsWith('data:') || url.startsWith('blob:')) {
             onAllowed?.(details);
             callback({});
             return;

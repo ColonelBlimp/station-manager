@@ -49,16 +49,18 @@ export function mainWindowOptions({ offscreen }) {
     };
 }
 
+/** `origin` is the served origin, or a function read on use (W-0027 C1d). */
 export function createMainWindow({ origin, offscreen, openExternal }) {
+    const originOf = typeof origin === 'function' ? origin : () => origin;
     const win = new BrowserWindow(mainWindowOptions({ offscreen }));
     win.webContents.on('will-navigate', (e, url) => {
-        if (onOrigin(url, origin)) return;
+        if (onOrigin(url, originOf())) return;
         e.preventDefault();
         openExternal(url);
     });
     win.webContents.on('will-attach-webview', (e) => e.preventDefault());
     win.webContents.setWindowOpenHandler(({ url }) => {
-        if (!onOrigin(url, origin)) openExternal(url);
+        if (!onOrigin(url, originOf())) openExternal(url);
         return { action: 'deny' };
     });
     return win;

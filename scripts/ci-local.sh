@@ -116,6 +116,12 @@ if [ -n "${DISPLAY:-}" ]; then
 else
     ( cd desktop && xvfb-run -a npm run check:c1 )
 fi
+step "Desktop: C1d-shell scenario (discovered identity, synthetic install, TLS fixtures)"
+if [ -n "${DISPLAY:-}" ]; then
+    ( cd desktop && npm run check:c1d-shell )
+else
+    ( cd desktop && xvfb-run -a npm run check:c1d-shell )
+fi
 
 # The generated manual is not committed (only manual/public/.gitkeep is), so —
 # exactly as hosted CI does before its Go gate — build it here so the daemon

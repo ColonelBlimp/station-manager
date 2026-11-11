@@ -832,3 +832,55 @@ Using the app against the **live station** needs a C1c-or-later build deployed t
 deployment, and any live use, are the operator's call. Before C2 the app is one more operating
 client, like a browser tab: it adds no new TX path, and an FT8 run still starts only on the
 operator's action.
+
+### C1d — progress (2026-11-11)
+
+- **Part 1, committed `6b1c1f94`** on direction ("yes, commit it and start part 2"):
+  `desktop/src/discovery.mjs`, 16 unit tests and 22 reversion proofs. Reviewed through codex-067;
+  the post-commit clean-room review found nothing actionable.
+- **Part 2, the shell's wiring (built, uncommitted, for review):**
+  - `src/pin.mjs`: `oncePin()`, set exactly once; the verifier reads it on each verification, and
+    an empty pin rejects everything.
+  - `src/hardening.mjs` and `src/window.mjs` take the origin as a value read on use; no origin
+    means nothing is allowed on the network.
+  - `src/waiting.mjs` escapes all text and shows the discovery's state, path and reason (Q2).
+  - `src/daemon.mjs`: `--sm-config` and `--sm-data-dir`; discovery until the first valid
+    identity, then the pin and origin fixed together in one synchronous step, never read again;
+    then the existing pinned probe.
+  - `src/main.mjs`: the start-up promise exits an automated run non-zero on any error. A set-up
+    error once hung the check: the test directory name `sm <i>x</i>` contained a `/`.
+  - The interactive start still loads only fixtures (A1's restriction stands until part 3).
+- **Evidence:** `check:c1d-shell` (synthetic install, TLS fixtures, never `smd`), 14 checks:
+  - no identity: the waiting page says so, and nothing is sent to an impostor listening at the
+    address;
+  - an unsafe identity: the path and reason are shown, a path containing markup is shown as text,
+    and still nothing is sent;
+  - a valid identity: pinned; the impostor is refused at TLS; the genuine listener loads;
+  - after the pin: a new identity on disk and at the address is refused, with a refused handshake
+    as evidence; nothing is re-read (12 opens before and after); the original recovers;
+  - a second pin is refused; the verifier is asked only about 127.0.0.1; nothing is blocked.
+
+  Wired into `task desktop:check`, `ci-local` and CI. **Six Electron reversions proven:**
+  - early probing: caught by the request filter, the guarding layer while no origin is fixed;
+  - the path unescaped;
+  - no reason on the waiting page;
+  - re-reading after the pin (12 to 26 opens);
+  - a second pin allowed;
+  - the fingerprint comparison removed: the impostor is accepted. This one needed a fix to the
+    wait, which had been a timeout before.
+- **Corrections after codex-068:**
+  - At the transition to a valid identity, the ordinary pinned-daemon waiting page is shown once,
+    so a repaired refusal ("must be mode 0700") no longer stays on screen while the probe runs.
+  - `parseArgs` refuses a named option with a missing or empty value, or one followed by another
+    option. The error is shown locally, with no discovery and no network, rather than becoming "no
+    override" and selecting the default install.
+  - New `test/daemon.test.mjs`, without Electron (a fake window records the pages loaded), covers
+    no identity to valid and refused to valid while the listener is down, both parser cases, and
+    the local error. `test:unit` now runs 21 tests.
+  - `check:c1d-shell` gains the transition check (15 checks).
+  - Reversions F1 (no transition page; unit and Electron), F2 (a missing value accepted) and F3
+    (the parser error ignored) are proven.
+- **Part 3, next:** `check:c1d` against a real `smd` (TCP browser listener with `serve_spa`, a
+  free app port, the SPA embedded), the CI ordering after the SPA and `smd` builds, and only then
+  the interactive start against the real daemon. The pinned probe moves to `/v1/version` (ADR 0103
+  point 6; `waiting.mjs` probes `/` today, codex-068).
