@@ -291,16 +291,23 @@ itself; the boundary is the change **taking effect**.
 
   - **A rejected or failed change never ends the sitting.** Session controls are never blocked by a
     pending change. Live admission during a change stays governed by its own seals (ADR 0097).
-- **Archive switches (ruling 6): the departing session closes once the switch has succeeded.**
+- **Archive switches (ruling 6; O9 ruled 2026-11-12): a switch closes the current session, and
+  the archive that comes up opens a new one.** The operator: "Switching an archive should close
+  the current session and open a new one - simple for now. If something else is needed will deal
+  with it when there is a need."
   - Each archive holds its own sessions and QSOs; nothing crosses archives.
-  - **The requirement:** after a **successful** switch from A to B, A's session is closed
-    (`archive_switched`) and B gets a new session for the attached app (§3). A failed activation,
-    a fallback to A, and a power loss at any point must not close A's session wrongly, and a later
-    return to A must not continue A's old session silently: returning to A opens a new session
-    there, and Continue from the list brings the old one back.
-  - **The mechanism is open (O9).** `Activate` only requests a restart and cannot prove the target's
-    start succeeded, and the departing file is not served afterwards, so the close cannot simply be
-    written at request time. It must be specified and reviewed before implementation.
+  - **The close is written when the switch is requested:** in the departing archive's file,
+    before the restart is requested, with `close_reason` `archive_switched` and the generation
+    advanced (an empty session is discarded, as at every close). If that write fails, the switch
+    is not requested, so a broken database is reported rather than switched away from.
+  - **Then the ordinary rule applies (§3):** whichever archive the restarted daemon serves (the
+    target, or the departing one after a failed activation or a fallback) has no session open
+    for the attached app, so it opens a new one.
+  - **Accepted cost:** a switch that fails still ends the sitting in the departing archive. Its
+    contacts stay where they are, and Continue from the list brings the closed session back.
+    A power loss after the close leaves the session closed; the next start opens a new one.
+  - **Returning to an archive** later opens a new session there; Continue from the list brings an
+    old one back. Nothing is continued silently.
   - **An active contest** in the departed archive keeps its record (ADR 0101); contest mode is
     independent of sessions (§9).
 
@@ -480,6 +487,10 @@ ruling).
 
 ## Open questions
 
+**All settled (operator, 2026-11-12):** O9 ruled; O1, O2, O3 and O10 stay deferred, each with the
+revisit trigger below, and are not in the first build; O6 was already ruled; the restore rule is
+ruled. Nothing remains open for the first build.
+
 - **O1. A split sitting.** Contacts logged in an automatically opened session stay there when the
   operator then continues an earlier one. Folding them in would be a separate, explicit action with
   a preview, not part of Continue. **Deferred.** Revisit when such a split matters to an output the
@@ -494,15 +505,19 @@ ruling).
   `sessionStorage` lists are not imported and no membership is inferred. The Session panel says
   once, for example: "Sessions are now shared by every window. Earlier contacts are unchanged in the
   logbook; they are not part of a session." (Ruled 2026-11-07, adapted.)
-- **O9. The archive-departure mechanism** (§4): how a successful switch closes the departing
-  archive's session, given that activation only requests a restart, with failure, fallback and
-  power loss handled. To specify and review before implementation.
+- **O9. The archive-departure mechanism.** **Ruled 2026-11-12:** close at the switch request and
+  open a new session in whichever archive comes up; a failed switch ending the sitting is accepted
+  (§4). Revisit only if that cost matters in use.
 - **O10. Deleting sessions with members** (ruling 7: not in the first slice). If selected later:
   confirmation that it removes the grouping, not contacts; contest membership, email marks and
   delivered files unchanged; later email or export naming the removed session refused explicitly;
   stale Continue choices and in-flight exports given their own acceptance rules.
-- **Restore of open sessions:** the backup and restore design (inbox item 4) must state how a
-  restore treats an open session; `default_epoch` travels with the archive file.
+- **Restore of open sessions.** **Ruled 2026-11-12:** a restore is treated like an archive switch.
+  Any session open in the restored file is closed (`close_reason` illustratively
+  `archive_restored`; an empty one is discarded), and a new session opens for the attached app.
+  Nothing is continued silently; Continue from the list can bring the old session back. The
+  backup and restore design (inbox item 4) applies this; `default_epoch` travels with the
+  archive file.
 
 ## Alternatives considered
 
