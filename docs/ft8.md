@@ -530,8 +530,8 @@ CAT-live re-tune is opt-out** via the daemon config `restore_rig_on_mode_switch`
   only "it's in the log" signal, since there's no form to clear) — gated on the same
   **Toast on QSO stored** setting (`qsoDefaults.notifyQsoStored`, My Station →
   Notifications) and worded identically to the Phone/CW logged-toast. The **Country
-  column is populated for FT8 rows** — the daemon enriches the contacted station
-  before submit (see e4 below), so `country` rides the `ft8-logged` event. Distance
+  column is populated for FT8 rows** when the partner's lookup answered during the
+  exchange (see e4 below), so `country` rides the `ft8-logged` event. Distance
   is computed SPA-side from your grid.
 - **Operate tab** (`Ft8MsgPanel`) — the FT8 transmit surface: an **Enable/Disable TX**
   button (the arm gate; red when enabled, gated on a live rig via
@@ -959,8 +959,8 @@ subscriber would duplicate a session-list row):
   just stored (step e4), so the SPA adds it to its session list. Emitted by the e4 sink
   (`cmd/smd`) after a successful `qsoservice.Submit`, via `Service.PublishQsoLogged`;
   `internal/ft8` builds the payload (`NewLoggedQso`) but never touches storage.
-  `country` is the enriched country the sink resolved before submit (so the Session-tab
-  Country column matches Phone/CW).
+  `country` is the enriched country from the partner's lookup if it answered during the
+  exchange (so the Session-tab Country column matches Phone/CW); otherwise it is empty.
 
 ### Archive guard on the control routes (ADR 0094 update, 2026-10-23)
 
@@ -1412,19 +1412,44 @@ read by the e2 resolver. Step (e) breaks into increments:
   root (`cmd/smd`), wired in via the `SetQsoLogger` callback (dependency injection;
   the one-way direction ADR 0029 wanted, achieved without the import). Best-effort:
   a submit failure is logged, never fatal (the QSO already happened on the air).
-  - **Country enrichment at log time (2026-06-13).** Before `Submit`, the sink calls
-    `enrichOrchestrator.Enrich(theirCall)` and copies the merged contacted-station
-    fields (country, DXCC, CQ/ITU zone, …) onto the QSO — the daemon-side equivalent
-    of the SPA calling `/v1/enrich/callsign` before a Phone/CW submit. This both fills
-    the stored QSO's country (otherwise `Submit` defaults it to "Unknown") **and**
-    triggers the cold-miss `country`-table cache write inside `Enrich` (so a worked
-    DXCC entity gets its country record). The on-air grid stays authoritative over any
-    cached locator. The whole sink — enrich + submit + `PublishQsoLogged` — runs in a
-    one-shot `safego` goroutine **off the FT8 decode loop**, because the sink fires on
-    that loop (after the 73) and a cold-miss country lookup is network I/O that would
-    otherwise stall slot decoding and drop slots. `Enrich` never errors (failures fold
-    to empty fields), so logging is never blocked — the "enrichment never blocks
-    logging" invariant holds.
+  - **Enrichment alongside the ladder, never at completion (W-0028, 2026-11-12).** The
+    operator's ruling: "If enrichment occurs with the boundaries of the ladder - great,
+    otherwise log and move on."
+    - **Contact identity.** Every contact has an identity (`contactFlags.id`), assigned by
+      `beginContactLocked` at each of the eight contact starts: an operator start in any
+      mode, a Call-CQ pick, a replacement answerer, an automatic next partner. It is new
+      each time, including for a later contact with the same station, and is never
+      reused within a sequencer. It rides every status frame of the contact (unexported,
+      never on the wire) and its completion (`CompletedQso.ContactID`, captured in the
+      same locked snapshot as `StartedAt`).
+    - **The trigger.** The sequencer's status publication reports each live contact's
+      identity and partner to an injected sink (`Service.SetPartnerSink`). It is called
+      under `Sequencer.mu`, so it only schedules. FT4 is a profile on the same service
+      and sequencer (ADR 0080), so the one hook and the one sink serve both.
+    - **The handoff** (`cmd/smd`'s `ft8Lookups`, owned by the enrichment node, cancelled
+      and waited for when it stops) starts **one** `Enrich(theirCall)` per contact,
+      through the ordinary pipeline with its own cache and freshness rules. There is no
+      retry.
+    - **Completion** takes its own contact's result, **only if it has already answered**.
+      It copies the merged contacted-station fields (country, DXCC, CQ/ITU zone, …) onto
+      the QSO, and the on-air grid stays authoritative. Otherwise the contact is logged at
+      once without them: the country is then "Unknown" (the `Submit` default), and a later
+      edit can add the details. Taking ends the contact in the handoff, ready or not.
+    - **Isolation.** A result belongs to the contact it was started for. An earlier or
+      abandoned contact's late answer never serves another contact, even with the same
+      station. A completion with no identity, or one the handoff has forgotten, is logged
+      without details. The handoff remembers the 16 most recent contacts
+      (`ft8LookupsKept`), which bounds memory, not running lookups: each lookup ends by
+      `ft8LookupTimeout` or at stop. A late result only warms the enrichment cache and
+      never changes an already logged row.
+    - **The write** runs under its own context (`context.WithoutCancel`), bounded by the
+      database's own statement and transaction limits, so no lookup and no job deadline can
+      cancel it. The sink still runs in a one-shot `safego` goroutine **off the FT8 decode
+      loop**, tracked on `qsoLogWG` for the shutdown drain.
+    - **Tests.** `contactidentity_test.go` (a probe in the shared sequencer harness checks
+      the identity rules on every frame and completion any test produces),
+      `partnersink_test.go`, `cmd/smd/ft8_lookups_test.go` and
+      `cmd/smd/ft8qsolog_enrich_test.go`; the ladders and the sink run on both profiles.
   - **Report validation is mode-aware.** FT8 RST_SENT/RST_RCVD are signed dB SNRs
     (`-12`, `+04`), not phone/CW RST digits. The shared `Rst` SPA component takes a
     `mode` prop and switches the validator + input cleaning when the mode is a

@@ -328,7 +328,7 @@ func (s *Sequencer) StartWorkCallerFd(ourCall, ourClass, ourSection, theirCall, 
 	s.theirPeriod = s.profile.SlotRefFromTime(t).Period
 	s.offsetHz = offsetHz
 	s.dialFreqMHz = dialFreqMHz
-	s.startedAt = now.UTC()
+	s.beginContactLocked(now)
 	st := s.statusLocked()
 	theirPeriod := s.theirPeriod // capture under s.mu; the log below runs after Unlock
 	s.publish(st)
@@ -503,7 +503,7 @@ func (s *Sequencer) commitWorkCallerLocked(c *CallerExchange, call, theirPeriod 
 	s.theirPeriod = theirPeriod
 	s.offsetHz = offsetHz
 	s.dialFreqMHz = dialFreqMHz
-	s.startedAt = now.UTC()
+	s.beginContactLocked(now)
 	s.publish(s.statusLocked())
 }
 

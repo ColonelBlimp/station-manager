@@ -113,8 +113,13 @@ type daemon struct {
 	// Promoted infra, constructed once in-node.
 	enrich    *lookup.Orchestrator
 	refresher *refresher.Service
-	mailer    *email.Service
-	server    *api.Server
+	// ft8Lookups is the per-contact enrichment handoff for FT8/FT4: each
+	// contact's partner is looked up while its exchange runs, so the
+	// completed-QSO sink never waits for a lookup (W-0028). Owned by the
+	// enrichment node: built in initEnrichment, stopped with it.
+	ft8Lookups *ft8Lookups
+	mailer     *email.Service
+	server     *api.Server
 	// smcloudSet is this generation's reconcile set: one entry per enabled
 	// SM Cloud binding of the start snapshot, in listing order.
 	smcloudSet []reconcileEntry
@@ -500,7 +505,20 @@ func (d *daemon) initEnrichment() error {
 		return errors.New(op).WithErr(err).WithMsg("build enrichment pipeline")
 	}
 	d.enrich, d.refresher = orch, ref
+	d.ft8Lookups = newFt8Lookups(d.lookupFt8Partner, func(name string, pv any, stack []byte) {
+		d.logger.ErrorWith().Str("goroutine", name).Interface("panic", pv).
+			Str("stack", string(stack)).Msg("ft8: partner lookup goroutine panicked")
+	})
 	return nil
+}
+
+// lookupFt8Partner is one FT8/FT4 partner lookup. It reads d.enrich at call
+// time; with no lookup provider enabled it finds nothing.
+func (d *daemon) lookupFt8Partner(ctx context.Context, call string) lookup.Result {
+	if d.enrich == nil {
+		return lookup.Result{}
+	}
+	return d.enrich.Enrich(ctx, call)
 }
 
 // startEnrichment starts the refresher (buildEnrichment already Initialized it). With no providers
@@ -513,6 +531,8 @@ func (d *daemon) startEnrichment(ctx context.Context) error {
 }
 
 func (d *daemon) closeEnrichment() error {
+	// The partner lookups write to the enrichment cache: none outlives it.
+	d.ft8Lookups.stop()
 	if d.refresher == nil {
 		return nil
 	}
@@ -665,6 +685,9 @@ func (d *daemon) initFt8() error {
 		d.ft8.SetCaptureListener(d.bridge.SetFt8CaptureLive)
 	}
 	d.ft8.SetQsoLogger(d.ft8QsoLogger())
+	// Each contact reports its identity and partner as soon as they are known,
+	// and its lookup starts then, alongside the ladder (W-0028).
+	d.ft8.SetPartnerSink(d.ft8Lookups.partner)
 	// The runs' view of the logbook for the same-band/profile repeat hold
 	// (ft8/repeathold.go): the storage contest-dupe read, one-way import.
 	d.ft8.SetWorkedBefore(d.db.IsContestDuplicateByLogbookIDWithContext)
@@ -752,8 +775,12 @@ func (d *daemon) ft8QsoLogger() func(context.Context, ft8.CompletedQso) {
 			if q.ContestId == "ARRL-FD" && q.RstRcvd == "" && snap.Ft8.FieldDay != nil {
 				q.RstRcvd = strings.TrimSpace(snap.Ft8.FieldDay.DefaultRstRcvd)
 			}
-			if d.enrich != nil {
-				enr := d.enrich.Enrich(ctx, q.Call)
+			// Enrichment never delays logging (W-0028, operator ruling
+			// 2026-11-12): only THIS contact's lookup is used, and only if it
+			// already answered during the ladder; otherwise the contact is
+			// logged without its details, which a later edit can add. Taking it
+			// ends the contact in the handoff, ready or not.
+			if enr, ok := d.ft8Lookups.take(c.ContactID, c.TheirCall); ok {
 				grid := q.Gridsquare
 				q.ContactedStation = enr.Station
 				q.Call = c.TheirCall

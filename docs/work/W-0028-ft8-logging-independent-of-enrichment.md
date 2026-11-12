@@ -3,9 +3,12 @@
 **Status:** Selected 2026-11-12 as a P1 defect (operator: "The FT8/4 logging is, in my mind a
 defect, and needs to be fix as a P1"); ranked in [`docs/backlog.md`](../backlog.md). Built in two
 parts (claude-184). **Part 1, the write's own context, is committed:** a lookup that uses up the
-job's time limit no longer costs the contact. Logging still waits for the lookup until **part 2**
-(the non-waiting handoff), which is in progress. Part 1 alone does not meet the acceptance
-criteria (codex-094).
+job's time limit no longer costs the contact (9b3c4de7). **Part 2, the non-waiting handoff, is
+built and its code review is complete (codex-098):** a lookup starts when a contact learns its partner, and that contact's completion uses
+the result only if it has already answered. The first version keyed the handoff by callsign;
+codex-095 found that a later contact with the same station reused the old result, so it is now
+keyed by a per-contact identity (claude-188, codex-096). Acceptance item 5, the operator's
+station test run, follows the deploy.
 **Outcome:** a completed FT8/FT4 exchange is always stored at once, whatever the lookup
 services do. Enrichment that arrives during the exchange is used; enrichment that has not
 arrived is left for a later edit.
@@ -79,26 +82,39 @@ stops the deadline from expiring, but it still delays logging, so the ruling rej
 - Cover a ready result being included, and a stale or abandoned exchange's result being excluded.
 - Also cover enrichment success, enrichment error, and decode-loop cancellation.
 
-## Design (codex-092, verified 2026-11-12)
+## Design (codex-092, codex-095, codex-096)
 
-1. **The result is handed off; there is no cache read at completion.**
+1. **The result is handed off per contact; there is no cache read at completion.**
    - `internal/lookup` has no cache-only read. `Enrich` and `EnrichRefresh` both enter the
-     pipeline, which can call providers (`internal/lookup/orchestrator.go:246-263`).
-   - Even a local cache read would add a wait to completion.
-   - Instead, `cmd/smd` owns one result per exchange. It is started when the partner is known.
-     Completion takes it only if it is already ready, and otherwise logs the exchange's own
-     fields.
-   - The result is tied to the exchange's identity and callsign. It covers abandon, retry, a new
-     partner and late completion. The on-air grid and identity win over the lookup.
-   - A late result may warm the lookup cache but never changes an already logged row.
-2. **The trigger is an injected partner-known notification**, on the existing
-   `SetQsoLogger`/`SetDecodeSink` pattern (`internal/ft8/servicetx.go:1152-1170`). It is not the
-   hub's status stream, which is a UI path and may drop messages. The notification only
-   schedules work: no provider call and no wait under the sequencing or TX locks. It covers
-   answering a CQ, selected callers and automatic next partners, for both FT8 and FT4.
+     pipeline, which can call providers (`internal/lookup/orchestrator.go:246-263`). Even a
+     local cache read would add a wait to completion.
+   - **Each contact has an identity.** The sequencer assigns it in `beginContactLocked`, the
+     one helper every contact start calls (eight sites: answer, FD answer, Call-CQ pick,
+     replacement answerer, FD work, work a caller including the automatic next partner, type-4
+     answer and work). A monotonic counter, not `(call, StartedAt)`: timestamps repeat under a
+     fake clock and are QSO data, not identity (codex-096). It rides every status frame and
+     the completion (`CompletedQso.ContactID`), captured in the locked completion snapshot.
+   - **`cmd/smd` owns one lookup per contact**, started through the ordinary pipeline when the
+     contact is first reported. The rungs of a contact share it. There is no retry
+     (codex-095 answer 2).
+   - **Completion takes its own contact's result** if it has answered and the station matches,
+     and ends the contact either way. A status published afterwards cannot restart the
+     lookup, and a lookup returning afterwards cannot revive the contact.
+   - **No fallback.** A zero or unknown identity, a mismatched station, an earlier contact's
+     result for the same station: each yields no enrichment, and the contact is still logged.
+   - **Abandon.** An abandoned contact is never taken. Nothing else can reach its entry, and it
+     is forgotten once 16 newer contacts have begun. Its lookup, if running, finishes by itself
+     and only warms the cache. The 16 bounds memory, not running lookups (codex-096 answer 3).
+   - The on-air grid and identity win over the lookup. A late result never changes an already
+     logged row.
+2. **The trigger is an injected notification**, `SetPartnerSink(contact, call)`, on the existing
+   `SetQsoLogger`/`SetDecodeSink` pattern. It is fed by the sequencer's own status publication,
+   not the hub's stream, which is a UI path and may drop messages. The notification only
+   schedules work: no provider call and no wait under the sequencing or TX locks.
    - Lookup work stays out of the earned-write drain (ADR 0100 §4), so a stalled lookup cannot
      hold an archive switch.
-   - Lookup workers still have bounded cancellation and lifecycle cleanup.
+   - Lookup workers have bounded cancellation (`ft8LookupTimeout`, the limit the lookup always
+     had) and lifecycle cleanup (the enrichment node's stop cancels and waits).
 3. **Later edits do not reach every destination.**
    - An edit queues an upload only for enabled routes whose action filter includes update
      (`internal/qsoservice/update.go:292-305`).
@@ -107,6 +123,29 @@ stops the deadline from expiring, but it still delays logging, so the ruling rej
      (`internal/forwarding/clublog/clublog.go:191-192`, `:372-380`).
    - So a later enrichment edit is not promised to correct every earlier upload. No new
      delete-and-reinsert behaviour is in scope.
+
+## FT4 (checked 2026-11-12, operator: "Have you checked the FT4 side of things for the same issue?")
+
+FT4 is not a separate path: it is a timing profile on the same `ft8.Service` and `Sequencer`
+(ADR 0080). A completed FT4 exchange reaches the same `cmd/smd` sink, with `Mode` stamped from
+the sequencer's profile, and the partner hook sits in the one status callback. So the defect
+applied to FT4 exactly as to FT8, and both parts of the fix cover it.
+
+- **Proved by test, not only by reading.**
+  - `internal/ft8/partnersink_test.go` runs the answer-a-CQ ladder and the Call-CQ ladder on both
+    lattices through the production callback: the contact and its partner are reported before
+    the completed exchange reaches the logger, with the same identity.
+  - `internal/ft8/contactidentity_test.go` checks the identity rules in the shared sequencer
+    harness, so the existing tests of every mode, including the FT4 matrix, check them too.
+  - `cmd/smd/ft8qsolog_enrich_test.go` runs every sink test for an FT8 and an FT4 contact, and
+    asserts the stored ADIF pair. FT4 is stored as MODE `MFSK`, SUBMODE `FT4`, a different path
+    through the submit's validation.
+  - The FT4 cases fail under each reversion.
+- **One real difference (inference from the slot lengths, not measured):** an FT4 slot is 7.5 s
+  against FT8's 15 s, so the ladder is about half as long and a lookup has about half the time
+  to answer before the last rung. A lookup that answers in a second or so fits either. A slow
+  provider chain is more likely to miss an FT4 contact, which is then logged without details,
+  as the ruling intends.
 
 ## Related
 

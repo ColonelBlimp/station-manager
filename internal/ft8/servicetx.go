@@ -1158,6 +1158,19 @@ func (s *Service) SetQsoLogger(fn func(ctx context.Context, c CompletedQso)) {
 	s.qsoLogger = fn
 }
 
+// SetPartnerSink injects the observer that learns each live contact's identity
+// and partner callsign as soon as the sequencer publishes them (W-0028): the
+// daemon starts a lookup for that contact then, so completion never waits for
+// one. The identity is CompletedQso.ContactID; it is repeated on every status of
+// the same contact and is new for each new contact, including a replacement or
+// automatic next partner and a later contact with the same station. Set once
+// during wiring, before Start. It is called under the sequencer's lock on every
+// status publication, so it must only schedule work: never block, never call a
+// provider, never re-enter the sequencer.
+func (s *Service) SetPartnerSink(fn func(contact uint64, call string)) {
+	s.partnerSink = fn
+}
+
 // SetDecodeSink injects an observer called once per slot with that slot's decodes
 // (the PSK Reporter uploader). Set once during wiring, before Start. Like
 // SetQsoLogger, it keeps internal/ft8 free of the consumer (one-way import via DI).

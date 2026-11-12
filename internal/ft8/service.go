@@ -239,6 +239,12 @@ type Service struct {
 	// logged. Read only in the seq.onComplete callback (decodeLoop goroutine,
 	// created after wiring — happens-before holds).
 	qsoLogger func(ctx context.Context, c CompletedQso)
+	// partnerSink learns each live contact's identity and partner as its
+	// status is published (W-0028), so the daemon can look the call up
+	// alongside the ladder, for that contact only; injected via SetPartnerSink before Start. nil = no observer.
+	// Called under Sequencer.mu: it must only schedule work, never block or
+	// re-enter the sequencer.
+	partnerSink func(contact uint64, call string)
 	// workedBefore (repeathold.go) is the logbook view the runs consult before
 	// answering a station — injected via SetWorkedBefore before Start (cmd/smd
 	// wires it to the storage contest-dupe read). nil = nothing is ever held.
@@ -303,7 +309,12 @@ func newService(cfg types.Ft8Config, log logging.Logger, src captureSource) *Ser
 	// state out on the ft8-qso SSE; both reference s, so wire it after s exists.
 	s.seq = newSequencer(
 		s.seqTransmit,
-		func(st QsoStatus) { s.hub.publish(hubEvent{name: EventQso, payload: st}) },
+		func(st QsoStatus) {
+			s.hub.publish(hubEvent{name: EventQso, payload: st})
+			if st.Active && st.TheirCall != "" && s.partnerSink != nil {
+				s.partnerSink(st.contactID, st.TheirCall)
+			}
+		},
 		types.ResolveFt8MaxRepeats(cfg.TX),
 		log,
 	)

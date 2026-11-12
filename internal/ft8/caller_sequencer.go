@@ -925,7 +925,7 @@ func (s *Sequencer) parkAnswererLocked(msgs []goft8.DecodedMessage, now time.Tim
 	if pick, _ := s.pickAnswererLocked(msgs, s.theirPeriod, now); pick != nil {
 		s.repeatHold = nil // a contact commits: the operator's attention has moved on
 		s.caller = pick
-		s.startedAt = now.UTC()
+		s.beginContactLocked(now)
 		// Count the rung we are about to transmit. The replacement is handed straight
 		// to this slot's transmit, but we are already INSIDE the switch that would
 		// normally do the increment — leaving it at 0 gave the replacement one extra
@@ -959,7 +959,7 @@ func (s *Sequencer) commitCqContactLocked(c *CallerExchange, now time.Time) {
 	s.repeatHold = nil // a contact commits: the operator's attention has moved on
 	s.contact.allowDuplicate = false
 	s.caller = c
-	s.startedAt = now.UTC()
+	s.beginContactLocked(now)
 	s.contact.repeats = 0
 	s.contact.runID = s.runID
 }
@@ -982,6 +982,7 @@ func (s *Sequencer) completedCallerQsoLocked() CompletedQso {
 		TheirReport:    s.caller.RcvdReport,
 		HasTheirReport: s.caller.HasRcvdReport,
 		StartedAt:      s.startedAt,
+		ContactID:      s.contact.id,
 		OffsetHz:       s.offsetHz,
 		DialFreqMHz:    s.dialFreqMHz,
 	}

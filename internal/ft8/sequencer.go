@@ -335,6 +335,13 @@ type QsoStatus struct {
 	// can only be worked next if it shares this parity, so wrong-parity decodes are
 	// blocked from the queue. Empty when idle.
 	TheirPeriod string `json:"their_period,omitempty"`
+
+	// contactID is the identity of the contact this frame describes (W-0028;
+	// contactFlags.id). It means something only on an Active frame that names
+	// a partner (TheirCall). Unexported: it never reaches the wire. The Service
+	// hands it, with TheirCall, to the partner sink, so a lookup started for
+	// one contact can only ever serve that one.
+	contactID uint64
 }
 
 // CqAnswerer is one operator_pick candidate on the wire (QsoStatus.Answerers):
@@ -370,7 +377,14 @@ type CompletedQso struct {
 	// from the sequencer's live run at completion; BuildQso carries it onto the
 	// QSO as the app_sm_run_id APP field, which is what lets "logged this run"
 	// be answered from the QSO store.
-	RunID          string
+	RunID string
+	// ContactID is the identity of THIS contact (W-0028; contactFlags.id): the
+	// number the partner sink was given when the contact began. Captured in the
+	// same locked snapshot as StartedAt, because a replacement contact may
+	// already be live when the completion is handed on. Unique within one
+	// Sequencer, never reused; zero only for a completion built outside the
+	// sequencer (a direct / unit-test value).
+	ContactID      uint64
 	TheirCall      string
 	TheirGrid      string
 	OurReport      int // the report WE sent (our SNR of their signal)
@@ -461,6 +475,13 @@ type contactFlags struct {
 	// run it started (P1a). Zero for FD/type-4/no-run contacts, because their
 	// starts reset contactFlags and never pin.
 	runID string
+	// id is THIS contact's identity (W-0028), assigned by beginContactLocked
+	// from Sequencer.contactSeq when the contact starts. It rides every status
+	// frame of the contact and its completion, so the daemon can tie a lookup
+	// it started at the first frame to the completion that may use it — and to
+	// no other contact, even a later one with the same station. Per-contact by
+	// definition, hence here: zero again once the flags are reset.
+	id uint64
 }
 
 // autoWorkState is an ACTIVE auto-work-callers run (ADR 0059) — a RUN, not a
@@ -626,6 +647,12 @@ type Sequencer struct {
 	// input — the per-click intent it used to accompany is retired.
 	pendingAnswerMode string
 	startedAt         time.Time // contact start, stamped as the logged QSO's TIME_ON
+	// contactSeq numbers the contacts this sequencer has begun (W-0028): the
+	// source of contactFlags.id. Sequencer-lifetime, never reset — it survives
+	// every retirement, which is why it is NOT in contactFlags — so an identity
+	// is never reused. Distinct from sessionGen: a Call-CQ run is one session
+	// of many contacts.
+	contactSeq uint64
 	// contact holds the flags whose lifetime is exactly one contact, so ending one
 	// is a single assignment — see contactFlags for what deliberately stays out.
 	contact    contactFlags
@@ -846,7 +873,7 @@ func (s *Sequencer) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUT
 	s.theirGrid = theirGrid
 	s.offsetHz = offsetHz
 	s.dialFreqMHz = dialFreqMHz
-	s.startedAt = now.UTC()
+	s.beginContactLocked(now)
 	// Answering a CQ is an operator action, so it arms an auto-work run exactly as
 	// picking a caller does (ADR 0059, autowork_test.go W9). It is also the entry point
 	// the feature was ASKED for — "I answer a CQ call, and now stations are calling me
@@ -910,7 +937,7 @@ func (s *Sequencer) StartQsoFd(ourCall, ourClass, ourSection, theirCall, theirGr
 	s.theirPeriod = s.profile.SlotRefFromTime(t).Period
 	s.offsetHz = offsetHz
 	s.dialFreqMHz = dialFreqMHz
-	s.startedAt = now.UTC()
+	s.beginContactLocked(now)
 	st := s.statusLocked()
 	theirPeriod := s.theirPeriod // capture under s.mu; the log below runs after Unlock
 	s.publish(st)
@@ -1875,6 +1902,7 @@ func (s *Sequencer) completedQsoFdLocked() CompletedQso {
 		OurReport:      s.fdEx.SendSnr,    // our SNR of them → RST_SENT (FD exchanges no report)
 		HasOurReport:   s.fdEx.HasSendSnr, // RST_RCVD is the config default, applied at log time
 		StartedAt:      s.startedAt,
+		ContactID:      s.contact.id,
 		OffsetHz:       s.offsetHz,
 		DialFreqMHz:    s.dialFreqMHz,
 	}
@@ -1894,6 +1922,7 @@ func (s *Sequencer) completedFdWorkQsoLocked() CompletedQso {
 		OurReport:      s.fdWork.SendSnr,    // our SNR of them → RST_SENT (FD exchanges no report)
 		HasOurReport:   s.fdWork.HasSendSnr, // RST_RCVD is the config default, applied at log time
 		StartedAt:      s.startedAt,
+		ContactID:      s.contact.id,
 		OffsetHz:       s.offsetHz,
 		DialFreqMHz:    s.dialFreqMHz,
 	}
@@ -2033,11 +2062,29 @@ func (s *Sequencer) fireOpening(now time.Time) {
 	s.publishCurrent()
 }
 
+// beginContactLocked marks the start of a contact: it stamps the start instant
+// (the logged QSO's TIME_ON) and gives the contact its identity (W-0028). It is
+// the ONLY place either is assigned, and every path that begins a contact calls
+// it — an operator start in any mode, a Call-CQ pick, a replacement answerer,
+// an automatic next partner — after resetting contactFlags where the path does
+// so. The identity is new each time, including for a later contact with the
+// same station, so nothing tied to one contact can serve another. Caller holds
+// s.mu.
+func (s *Sequencer) beginContactLocked(now time.Time) {
+	s.startedAt = now.UTC()
+	s.contactSeq++
+	s.contact.id = s.contactSeq
+}
+
 // statusLocked builds the QsoStatus snapshot for the active session. Caller holds s.mu.
 // statusLocked decorates the per-mode status with the session-wide flags.
 func (s *Sequencer) statusLocked() QsoStatus {
 	st := s.statusModeLocked()
 	if st.Active {
+		// The contact's identity (W-0028). It means something only beside a
+		// partner: a CQ run between answerers is Active with no TheirCall, and
+		// the identity it still holds is the finished contact's.
+		st.contactID = s.contact.id
 		st.SkipArmed = s.contact.skipIfSilent
 		st.NextArmed = s.contact.nextArmed
 		// Session-pinned, not live rig state — see QsoStatus.DialFreqMHz.
@@ -2303,6 +2350,7 @@ func (s *Sequencer) completedQsoLocked() CompletedQso {
 		TheirReport:    s.ex.RcvdReport,
 		HasTheirReport: s.ex.HasRcvdReport,
 		StartedAt:      s.startedAt,
+		ContactID:      s.contact.id,
 		OffsetHz:       s.offsetHz,
 		DialFreqMHz:    s.dialFreqMHz,
 	}

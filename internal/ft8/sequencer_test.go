@@ -118,16 +118,24 @@ func newTestSeq(r *seqRecorder) *Sequencer { return newTestSeqLogged(r, nil) }
 // guard — a second constructor that skipped it would be a hole in the rule.
 func newTestSeqLogged(r *seqRecorder, log logging.Logger) *Sequencer {
 	var s *Sequencer
+	// The contact-identity probe (W-0028, contactidentity_test.go): every frame
+	// and completion any test causes is checked against the identity rules.
+	probe := newContactProbe()
 	publish := func(st QsoStatus) {
 		// Held → TryLock fails. Succeeding means the caller already let go.
 		if s != nil && s.mu.TryLock() {
 			s.mu.Unlock()
 			recordUnlockedPublish()
 		}
+		probe.status(st)
 		r.publish(st)
 	}
 	s = newSequencer(r.transmit, publish, 0, log) // 0 → defaultSeqMaxRepeats
+	// Probed at prepareComplete as well as onComplete: many tests replace
+	// onComplete with their own recorder, and the snapshot is the same value.
+	s.prepareComplete = func(c *CompletedQso) { probe.completed(*c) }
 	s.onComplete = func(c CompletedQso) {
+		probe.completed(c)
 		r.mu.Lock()
 		r.completed = append(r.completed, c)
 		r.mu.Unlock()

@@ -67,7 +67,7 @@ func (s *Sequencer) StartQsoT4(ourCall, theirCall, theirGrid string, theirSnr in
 	s.theirPeriod = s.profile.SlotRefFromTime(t).Period
 	s.offsetHz = offsetHz
 	s.dialFreqMHz = dialFreqMHz
-	s.startedAt = now.UTC()
+	s.beginContactLocked(now)
 	st := s.statusLocked()
 	theirPeriod := s.theirPeriod // capture under s.mu; the log below runs after Unlock
 	s.publish(st)
@@ -255,7 +255,7 @@ func (s *Sequencer) StartWorkCallerT4(ourCall, theirCall, theirGrid string, thei
 	s.theirPeriod = s.profile.SlotRefFromTime(t).Period
 	s.offsetHz = offsetHz
 	s.dialFreqMHz = dialFreqMHz
-	s.startedAt = now.UTC()
+	s.beginContactLocked(now)
 	st := s.statusLocked()
 	theirPeriod := s.theirPeriod // capture under s.mu; the log below runs after Unlock
 	s.publish(st)
@@ -452,6 +452,7 @@ func (s *Sequencer) completedQsoT4Locked() CompletedQso {
 		OurReport:      s.t4Ex.SendSnr,
 		HasOurReport:   s.t4Ex.HasSendSnr,
 		StartedAt:      s.startedAt,
+		ContactID:      s.contact.id,
 		OffsetHz:       s.offsetHz,
 		DialFreqMHz:    s.dialFreqMHz,
 	}
@@ -469,6 +470,7 @@ func (s *Sequencer) completedT4WorkQsoLocked() CompletedQso {
 		OurReport:      s.t4Work.SendSnr,
 		HasOurReport:   s.t4Work.HasSendSnr,
 		StartedAt:      s.startedAt,
+		ContactID:      s.contact.id,
 		OffsetHz:       s.offsetHz,
 		DialFreqMHz:    s.dialFreqMHz,
 	}

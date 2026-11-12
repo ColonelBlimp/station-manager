@@ -76,10 +76,18 @@ var restartRequested atomic.Bool
 // ft8QsoLogTimeout bounds the off-pipeline job of one completed FT8 exchange.
 // Independent of the FT8 decode-loop context so Stop's cancellation can't abort
 // persisting a QSO that already happened on the air (review 2026-06-19 M2). It
-// bounds the best-effort lookup, so a hung lookup can't outlive shutdown; the
-// write runs under its own context (W-0028), so a lookup that uses this limit
-// up never costs the contact. A var only so tests can shorten it.
+// is a cooperative limit for whatever in the job honours its context. Since
+// W-0028 nothing in the job waits for a lookup, and the write deliberately does
+// NOT inherit this context: it runs under its own, bounded by the database's
+// statement and transaction limits, so this is not a bound on the write. A var
+// only so tests can shorten it.
 var ft8QsoLogTimeout = 30 * time.Second
+
+// ft8LookupTimeout bounds one FT8/FT4 partner lookup (ft8Lookups). It is the
+// limit the lookup has always had, from when it ran inside the log job; named
+// apart because the two are now independent — the lookup runs alongside the
+// ladder and nothing waits for it. A var only so tests can shorten it.
+var ft8LookupTimeout = ft8QsoLogTimeout
 
 func main() {
 	// Top-level panic safety net. run()'s own defers (dbSvc close,

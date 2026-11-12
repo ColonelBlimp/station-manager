@@ -66,6 +66,16 @@ func TestMain(m *testing.M) {
 		}
 		code = 1
 	}
+	// The contact-identity probe (W-0028, contactidentity_test.go), collected the
+	// same way and attributed to the test that drove each violation.
+	if v := contactViolationReport(); len(v) > 0 {
+		sort.Strings(v)
+		fmt.Fprintf(os.Stderr, "\nFAIL: %d contact-identity violation(s) (W-0028):\n", len(v))
+		for _, line := range v {
+			fmt.Fprintf(os.Stderr, "  %s\n", line)
+		}
+		code = 1
+	}
 	os.Exit(code)
 }
 
