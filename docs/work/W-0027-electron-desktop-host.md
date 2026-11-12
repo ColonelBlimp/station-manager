@@ -1449,3 +1449,11 @@ it and start part 3").
     evidence; C3, the final check on the original root only.
   - Re-run on the built RPM: 5 of 5 launches pass, and the control passes while all 5
     reversions fail.
+- **On the hosted runner (CI run 43194862069, on `319ba18a`, completed: success):**
+  - the smoke check passed for `a1`, `c1`, `c1d`, `c1d-shell` and `second`, each with
+    `loaded waiting page renderer <pid>`;
+  - `--reversions`: the control passed, and all 5 failed for their own reason;
+  - both sandbox reversions showed `Seccomp is 0` and the runner's own user and PID namespaces.
+
+  Part 3's CI evidence is complete. The clean Fedora guest acceptance remains, and is the
+  operator's.
