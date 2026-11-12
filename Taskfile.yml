@@ -194,13 +194,20 @@ tasks:
       directory, a fresh Electron download verified against its pinned SHA-256, the runtime
       renamed station-manager-desktop, the app in resources/app without tests or harness.
       Same version as the daemon RPM built from the same commit (operator ruling Q4). Then
-      scripts/desktop-rpm-check.py checks the artifact's contents. Needs node, npm, nfpm,
-      rpm, cpio, readelf, desktop-file-validate and network. Development only until D2-D6.
+      scripts/desktop-rpm-check.py checks the artifact's contents, and scripts/desktop-smoke.py
+      launches its runtime once per development selector (installed mode, the waiting page in a
+      sandboxed renderer), then proves on isolated review copies that a wrong or failing waiting
+      page, sandbox: false and --no-sandbox each fail. Needs node, npm, nfpm, rpm, cpio, readelf,
+      desktop-file-validate, Xvfb, unprivileged user namespaces and network. Development only
+      until D2-D6.
     cmds:
       - python3 -I scripts/desktop_rpm_check_test.py
       - python3 -I scripts/desktop_rpm_guard_test.py
+      - python3 -I scripts/desktop_smoke_test.py
       - scripts/desktop-rpm.sh
       - sh -c '. scripts/version.sh; V=$(sm_git_version); python3 -I scripts/desktop-rpm-check.py build/release/station-manager-desktop.x86_64.rpm --version "$(sm_rpm_version "$V")" --app-version "$V"'
+      - python3 -I scripts/desktop-smoke.py build/release/station-manager-desktop.x86_64.rpm
+      - python3 -I scripts/desktop-smoke.py build/release/station-manager-desktop.x86_64.rpm --reversions
 
   rpm:dev:
     desc: |

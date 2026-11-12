@@ -61,6 +61,13 @@ fresh download verified against its pinned SHA-256. Source and checksum override
 and the downloader runs with only `PATH`, an empty `HOME` and its private cache.
 The package is development only until the repository, signing and release gates (D2-D6).
 
+`scripts/desktop-smoke.py <rpm>` is the production smoke check. It unpacks the RPM and launches
+its runtime once per development selector, from an unrelated directory with no Node and no
+daemon. Each launch must show the waiting page in a sandboxed renderer (`Seccomp: 2`, its own
+user and PID namespaces) and ignore the selector. With `--reversions` it proves, on isolated
+copies, that a wrong or failing waiting page, a missing trace, `sandbox: false` and
+`--no-sandbox` each fail. Task `rpm:desktop` and CI run both.
+
 ## The window and session rules (A1)
 
 The automated A1 and C1 checks use the built-in fixture harness (`harness/server.mjs`), never

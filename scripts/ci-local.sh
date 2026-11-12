@@ -122,7 +122,7 @@ if [ -n "${DISPLAY:-}" ]; then
 else
     ( cd desktop && xvfb-run -a npm run check:c1d-shell )
 fi
-step "Desktop: the RPM (W-0027 D1): checker tests, build, content check"
+step "Desktop: the RPM (W-0027 D1): tests, build, content check, production smoke and its reversions"
 task rpm:desktop
 
 # The generated manual is not committed (only manual/public/.gitkeep is), so —

@@ -171,19 +171,29 @@ jobs:
       # verifies its pinned SHA-256; the check inspects the RPM itself (header, file list,
       # modes, extracted contents). A shallow checkout gives a SHA-only version, which is
       # enough: the check compares the package against the version computed here.
-      - name: Desktop app RPM (build and content check)
+      # W-0027 D1 part 3: the production smoke check launches the RPM's runtime (installed
+      # mode) once per development selector, and proves on isolated review copies, on this
+      # runner, that a wrong or failing waiting page, sandbox: false and --no-sandbox each fail
+      # (seccomp can be inherited from the environment, so a host-only proof is not enough).
+      - name: Desktop app RPM (build, content check, production smoke check)
         run: |
+          orig=$(sysctl -n kernel.apparmor_restrict_unprivileged_userns)
+          trap 'sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns="$orig"' EXIT
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           sudo apt-get update -q
           sudo apt-get install -y -q rpm cpio binutils desktop-file-utils
           go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
           export PATH="$(go env GOPATH)/bin:$PATH"
           python3 -I scripts/desktop_rpm_check_test.py
           python3 -I scripts/desktop_rpm_guard_test.py
+          python3 -I scripts/desktop_smoke_test.py
           scripts/desktop-rpm.sh
           . scripts/version.sh
           V=$(sm_git_version)
           python3 -I scripts/desktop-rpm-check.py build/release/station-manager-desktop.x86_64.rpm \
             --version "$(sm_rpm_version "$V")" --app-version "$V"
+          python3 -I scripts/desktop-smoke.py build/release/station-manager-desktop.x86_64.rpm
+          python3 -I scripts/desktop-smoke.py build/release/station-manager-desktop.x86_64.rpm --reversions
 
       - name: App SPA build (produces dist/ for daemon embed)
         working-directory: frontend/app

@@ -1241,8 +1241,8 @@ Then the clean Fedora guest acceptance, which needs the operator.
   line, until `timeout` reaped it (no process was left). Part 3's harness needs the overall
   deadline and the owned-process cleanup that codex-076 asks for.
 
-**Part 2 (built, not committed): the package.** Started on direction ("yes, commit it and start
-part 2").
+**Part 2 (committed 39b015fe on direction; the clean-room review found nothing): the package.**
+Started on direction ("yes, commit it and start part 2").
 - **Measured first, on the scratch staging (this host):**
   - the shipped ELF files' direct `NEEDED` libraries: 34 sonames, one of them (`libffmpeg.so`)
     shipped by Electron. All 33 others resolve to Fedora 44 packages (`rpm -q --whatprovides`):
@@ -1337,3 +1337,94 @@ part 2").
 - **Not in part 2:** `docs/install.md` is unchanged, because nothing is published before D2; the
   documented `dnf install station-manager station-manager-desktop` goes there when there is a
   repository. The production smoke check is part 3. The guest acceptance is the operator's.
+
+**Part 3 (built, not committed): the production smoke check.** Started on direction ("yes, commit
+it and start part 3").
+- **`scripts/desktop-smoke.py <rpm>`** unpacks the built RPM into a temporary directory and runs
+  its renamed runtime directly, once for each of `a1`, `c1`, `c1d`, `c1d-shell` and `second`.
+  Each launch has a hostile `SM_DESKTOP_USERDATA` and runs:
+  - from an unrelated directory, with an empty `PATH` (no Node, no checkout) and an isolated
+    `HOME`;
+  - with a synthetic `config.json` on a free port, and no daemon;
+  - on the script's own Xvfb.
+- **The verdict** (`judge`, pure; `scripts/desktop_smoke_test.py`, 27 tests with the harness's
+  start and cleanup tests) requires, from the
+  trace and from `/proc` read while the launch runs:
+  - a `waiting:` line, a `loaded waiting page renderer <pid>` line that is also the last load,
+    and no `load failed` or `renderer gone` line;
+  - the named pid inspectable, a `--type=renderer` process of this binary, and an inspectable
+    descendant of the launch (intermediate processes allowed, a cycle or an unreadable step
+    fails);
+  - `Seccomp: 2`, and user and PID namespaces different from the main process's;
+  - the main process this binary, still running after the settle window, the config
+    unchanged, no hostile profile, and the profile under the isolated `HOME`'s XDG config (the
+    installed app's own);
+  - no process of the launch left after the reap.
+
+  Anything missing or unreadable is a failure; nothing skips.
+- **Bounds and ownership:** each launch has a 45 s deadline and a 3 s settle window. It runs in
+  its own session. The reap sends SIGTERM, then SIGKILL, to that session and to every process
+  whose `argv[0]` is under that unpacked root, then checks that none is left. The Xvfb is the
+  script's own and is killed at the end.
+- **codex-081, fixed:**
+  - Xvfb's start is bounded: `select()` against a 15 s deadline, not a blocking read. Every
+    unsuccessful start closes both descriptors and kills and waits for the server.
+  - The temporary directory is removed only after a passing run whose processes are confirmed
+    gone. A failed check, or any exception (unpack, Xvfb, a launch's observation or reap),
+    keeps it and names it on stderr, and the run still fails.
+  - Tests:
+    - a live but silent server (it fails within 5 s, without hanging the suite);
+    - a server that exits without reporting a display;
+    - a failure to start Xvfb at all (no descriptor leaks);
+    - unpack, observation and reap failures (the reap case launches a synthetic sleeping
+      child, and the real reap stops it);
+    - a passing run with a process still listed;
+    - success removes the directory.
+  - Reversions, each failing and restored:
+    - X1, the blocking read;
+    - X2, no cleanup on a failed start;
+    - X3, the write end leaking on a failed start;
+    - K1, removal on an exception;
+    - K2, the kept path not reported;
+    - K3, unconfirmed termination ignored.
+- **codex-082, fixed:** the exit status is decided after the cleanup check. A process of the
+  run still listed turns a pass into a failure (non-zero), names the process and keeps the
+  directory; the test asserts all three. Reversions: K4, the status unchanged by survivors;
+  K5, the survivors not named; K1', removal on an exception. Each fails its test.
+- **Measured on this host:** Chromium rewrites a child process's title as one space-joined
+  string with no NULs, so the first smoke run named every renderer "not a renderer". The check
+  failed closed, as intended. The cmdline is now split on spaces when it has one element, and
+  the launch refuses a root path containing a space.
+- **Reversions, on isolated hard-linked review copies** (`--reversions`; the reverted file is
+  unlinked and rewritten, so the shared original is untouched). The control, an unchanged
+  copy, passes. Each of these fails for its own reason:
+  1. a wrong waiting document (`loaded other`): "never reported 'loaded waiting page'";
+  2. a failing waiting-page load: `load failed waiting page -20`;
+  3. `sandbox: false`: `Seccomp is 0`, and the host's user and PID namespaces;
+  4. the window trace removed (part 1's R10): "never reported 'loaded waiting page'", within
+     the deadline;
+  5. `--no-sandbox` on the launch's command line: `Seccomp is 0`, and the host's namespaces.
+
+  `--no-sandbox` appended from `main.mjs` (`app.commandLine.appendSwitch`) was tried first.
+  The renderer crashed on `/dev/shm` instead, a different failure from the one claimed, so the
+  reversion passes the real switch to the launch.
+- **The verdict's own reversions,** each failing its test, then restored and verified:
+  - V1, ancestry not required;
+  - V2, Seccomp not checked;
+  - V3, matching namespaces allowed;
+  - V4, the last load ignored;
+  - V5, failure lines ignored;
+  - V6, a rewritten title not split;
+  - V7, leftovers ignored;
+  - V8, the renderer type not checked;
+  - V9, an uninspectable intermediate assumed;
+  - V10, any line containing the prefix counted. V10 first passed by accident (the slice
+    garbled the line), so a direct trace-parsing test was added; it now fails.
+- **Wiring:**
+  - Task `rpm:desktop` runs the three test suites, the build, the content check, the smoke
+    check and its reversions. On this host it passes in 2 min 40 s; all five launches waited in
+    a sandboxed renderer; no process or temporary directory was left.
+  - CI's RPM step also does this, with unprivileged user namespaces allowed for the step only
+    (as the scenario steps do), so the reversions run on the runner itself.
+  - `ci-local.sh` runs the Task.
+- **Not in part 3:** the clean Fedora guest acceptance, which is the operator's.
