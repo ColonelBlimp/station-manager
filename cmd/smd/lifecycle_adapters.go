@@ -775,7 +775,11 @@ func (d *daemon) ft8QsoLogger() func(context.Context, ft8.CompletedQso) {
 			}
 			rec := adif.QsoToRecord(q)
 			rec.ApplyQslDefaults(snap.Qsl)
-			res, err := d.qso.Submit(ctx, q.LogbookID, rec, c.AllowDuplicate)
+			// The write has its own context (W-0028): the lookup above may have
+			// used up the job's deadline, and enrichment never prevents logging.
+			// Without a deadline here the database's own statement and
+			// transaction limits bound the write, as for a Phone / CW submit.
+			res, err := d.qso.Submit(context.WithoutCancel(ctx), q.LogbookID, rec, c.AllowDuplicate)
 			if err != nil {
 				d.logger.ErrorWith().Err(err).Str("call", c.TheirCall).
 					Msg("ft8: failed to log completed QSO")

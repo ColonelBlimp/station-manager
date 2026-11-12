@@ -1,8 +1,11 @@
 # W-0028 — FT8/FT4 logging independent of enrichment
 
 **Status:** Selected 2026-11-12 as a P1 defect (operator: "The FT8/4 logging is, in my mind a
-defect, and needs to be fix as a P1"); ranked in [`docs/backlog.md`](../backlog.md). Not started;
-the design questions are answered (codex-092). The build starts on the operator's direction.
+defect, and needs to be fix as a P1"); ranked in [`docs/backlog.md`](../backlog.md). Built in two
+parts (claude-184). **Part 1, the write's own context, is committed:** a lookup that uses up the
+job's time limit no longer costs the contact. Logging still waits for the lookup until **part 2**
+(the non-waiting handoff), which is in progress. Part 1 alone does not meet the acceptance
+criteria (codex-094).
 **Outcome:** a completed FT8/FT4 exchange is always stored at once, whatever the lookup
 services do. Enrichment that arrives during the exchange is used; enrichment that has not
 arrived is left for a later edit.
@@ -10,7 +13,7 @@ arrived is left for a later edit.
 `W-0028` is an immutable identity. Its status may change, while priority and ranked position live
 only in [`docs/backlog.md`](../backlog.md).
 
-## The defect (source reading, 2026-11-12; not yet reproduced)
+## The defect (2026-11-12; reproduced by part 1's test)
 
 The completed-exchange job (`launchFt8QsoLog`, `cmd/smd/main.go:346-362`) runs under **one**
 30-second context (`ft8QsoLogTimeout`, `main.go:81`). It looks the call up
@@ -53,6 +56,9 @@ Consequences:
    from an abandoned or earlier exchange, or for another partner, is never used.
 3. A lookup error never prevents or delays storage.
 4. An earned job survives decode-loop cancellation and is drained before shutdown.
+5. **Station test run (operator, 2026-11-12):** after the fix is complete, the operator deploys
+   `smd`, installs the desktop app and operates FT8/FT4, briefly unplugging the Internet. Each
+   contact completed during the outage is logged at once, without lookup details.
 
 **Nearest confusable outcome:** a shorter lookup budget that still waits before the write. That
 stops the deadline from expiring, but it still delays logging, so the ruling rejects it.

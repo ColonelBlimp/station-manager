@@ -73,12 +73,13 @@ const (
 // than the normal 0 after run() returns cleanly.
 var restartRequested atomic.Bool
 
-// ft8QsoLogTimeout bounds the off-pipeline log+enrich of one completed FT8
-// exchange (a DB write plus a best-effort country lookup). Independent of the
-// FT8 decode-loop context so Stop's cancellation can't abort persisting a QSO
-// that already happened on the air (review 2026-06-19 M2); generous enough for a
-// slow enrich on a flaky link, bounded so a hung lookup can't outlive shutdown.
-const ft8QsoLogTimeout = 30 * time.Second
+// ft8QsoLogTimeout bounds the off-pipeline job of one completed FT8 exchange.
+// Independent of the FT8 decode-loop context so Stop's cancellation can't abort
+// persisting a QSO that already happened on the air (review 2026-06-19 M2). It
+// bounds the best-effort lookup, so a hung lookup can't outlive shutdown; the
+// write runs under its own context (W-0028), so a lookup that uses this limit
+// up never costs the contact. A var only so tests can shorten it.
+var ft8QsoLogTimeout = 30 * time.Second
 
 func main() {
 	// Top-level panic safety net. run()'s own defers (dbSvc close,
