@@ -13,6 +13,7 @@ import io
 import os
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import threading
@@ -344,15 +345,98 @@ class KeepOnException(unittest.TestCase):
         smoke.launch = lambda *a, **k: {**valid(), "log": "-"}
         smoke.judge = lambda run: []
         self.addCleanup(setattr, smoke, "judge", Verdict.judge_saved)
-        saved_owned = smoke.owned
-        smoke.owned = lambda root: [4242]  # a process of this root still listed
-        self.addCleanup(setattr, smoke, "owned", saved_owned)
+        saved_owned = smoke.owned_under
+        smoke.owned_under = lambda directory: [4242]  # a process of this run still listed
+        self.addCleanup(setattr, smoke, "owned_under", saved_owned)
         err = io.StringIO()
         with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
             rc = smoke.main(["unused.rpm", "--selectors", "a1"])
         self.assertNotEqual(rc, 0, "unconfirmed termination returned success (codex-082)")
         self.assertKept(err.getvalue())
         self.assertIn("4242", err.getvalue(), "the surviving process was not named")
+
+    def test_a_survivor_from_a_review_copy_fails_the_run(self):
+        # The clean-room review of 8c667809: the final check must cover the review copies,
+        # not only the original root. A real process whose argv[0] is under a review copy.
+        smoke.unpack = lambda rpm, dest: self.remember(dest)
+        child = []
+
+        def run(a, root, work):
+            d = os.path.join(work, "review-1", smoke.LIB)
+            os.makedirs(d)
+            b = os.path.join(d, "sleeper")
+            shutil.copy2("/usr/bin/sleep", b)
+            child.append(subprocess.Popen([b, "30"], start_new_session=True))
+            return 0
+        saved_run = smoke._run
+        smoke._run = lambda a, root, work: (smoke.unpack(a.rpm, root), run(a, root, work))[1]
+        self.addCleanup(setattr, smoke, "_run", saved_run)
+
+        def stop():
+            for c in child:
+                c.kill()
+                c.wait(5)
+        self.addCleanup(stop)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            rc = smoke.main(["unused.rpm", "--selectors", "a1"])
+        self.assertNotEqual(rc, 0, "a survivor under a review copy returned success")
+        self.assertKept(err.getvalue())
+        self.assertIn(str(child[0].pid), err.getvalue())
+
+
+class Reversions(unittest.TestCase):
+    """The clean-room review of 8c667809: a reversion counts as caught only for its own
+    reason, and only when its launch was cleaned up; the sandbox reversions accept any of the
+    sandbox diagnostics, since an inherited seccomp filter shows Seccomp 2 in any process."""
+
+    LEFT = "processes left running after the reap: [77]"
+
+    def setUp(self):
+        self.saved = {k: getattr(smoke, k) for k in ("review_copy", "revert", "smoke")}
+        self.addCleanup(lambda: [setattr(smoke, k, v) for k, v in self.saved.items()])
+        smoke.review_copy = lambda root, dest: None
+        smoke.revert = lambda *a: None
+        self.work = tempfile.mkdtemp(prefix="sm-desktop-smoke-test-")
+        self.addCleanup(shutil.rmtree, self.work)
+
+    def run_with(self, problems_for):
+        # problems_for(title) -> the verdict that reversion's launch returns.
+        titles = iter(["control"] + [r[0] for r in smoke.REVERSIONS]
+                      + [r[0] for r in smoke.ARG_REVERSIONS])
+        smoke.smoke = lambda *a, **k: {"a1": problems_for(next(titles))}
+        with contextlib.redirect_stdout(io.StringIO()):
+            return [t for t, _ in smoke.reversions("/r", self.work, ":0")]
+
+    def expected(self, title):
+        return {"wrong document": ["the trace never reported 'loaded waiting page'"],
+                "failing waiting-page load": ["the trace reports a failure: 'load failed x -20'"],
+                "window trace removed": ["the trace never reported 'loaded waiting page'"],
+                }.get(title, ["renderer 5 Seccomp is 0, not 2 (filter mode)"])
+
+    def test_every_reversion_caught_for_its_reason_passes(self):
+        self.assertEqual(self.run_with(lambda t: [] if t == "control" else self.expected(t)), [])
+
+    def test_a_leftover_process_fails_a_caught_reversion(self):
+        got = self.run_with(lambda t: [] if t == "control" else self.expected(t) + [self.LEFT])
+        self.assertEqual(len(got), len(smoke.REVERSIONS) + len(smoke.ARG_REVERSIONS), got)
+
+    def test_a_leftover_process_fails_the_control(self):
+        self.assertIn("control", self.run_with(
+            lambda t: [self.LEFT] if t == "control" else self.expected(t)))
+
+    def test_sandbox_reversions_accept_namespace_evidence_alone(self):
+        ns = ["renderer 5 user namespace 'user:[1]' is not its own (main 'user:[1]')",
+              "renderer 5 PID namespace 'pid:[2]' is not its own (main 'pid:[2]')"]
+        sandbox = {"sandbox: false", "--no-sandbox"}
+        got = self.run_with(lambda t: [] if t == "control"
+                            else ns if t in sandbox else self.expected(t))
+        self.assertEqual(got, [])
+
+    def test_a_reversion_caught_for_another_reason_is_not_caught(self):
+        got = self.run_with(lambda t: [] if t == "control"
+                            else ["the app is not running after the settle window (it exited)"])
+        self.assertEqual(len(got), len(smoke.REVERSIONS) + len(smoke.ARG_REVERSIONS), got)
 
 
 Verdict.judge_saved = smoke.judge

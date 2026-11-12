@@ -1338,7 +1338,8 @@ Started on direction ("yes, commit it and start part 2").
   documented `dnf install station-manager station-manager-desktop` goes there when there is a
   repository. The production smoke check is part 3. The guest acceptance is the operator's.
 
-**Part 3 (built, not committed): the production smoke check.** Started on direction ("yes, commit
+**Part 3 (committed 8c667809 on direction; its clean-room review's two P2s are fixed in a
+follow-up, below): the production smoke check.** Started on direction ("yes, commit
 it and start part 3").
 - **`scripts/desktop-smoke.py <rpm>`** unpacks the built RPM into a temporary directory and runs
   its renamed runtime directly, once for each of `a1`, `c1`, `c1d`, `c1d-shell` and `second`.
@@ -1428,3 +1429,23 @@ it and start part 3").
     (as the scenario steps do), so the reversions run on the runner itself.
   - `ci-local.sh` runs the Task.
 - **Not in part 3:** the clean Fedora guest acceptance, which is the operator's.
+- **The clean-room review of 8c667809 (two P2s), fixed:**
+  - A reversion counted as caught even when its launch's processes survived the reap, and the
+    final survivor check looked only at the original root, not the review copies. Now a launch
+    with survivors never counts as caught, and the final check covers the whole work
+    directory (`owned_under(work)`).
+  - The sandbox reversions required a `Seccomp` diagnostic. Where the launching environment
+    already applies a seccomp filter, every process shows `Seccomp: 2`, and only the
+    namespaces tell. Now any of the Seccomp, user-namespace or PID-namespace diagnostics is
+    the evidence.
+  - Tests (33 now), for the reversion runner:
+    - all caught passes;
+    - a leftover fails a caught reversion, and fails the control;
+    - namespace evidence alone is accepted for both sandbox reversions;
+    - another reason is not caught;
+    - a real process left under a review copy fails `main`, is named, and the directory is
+      kept.
+  - Reversions, each failing its test: C1, leftovers counted as caught; C2, Seccomp-only
+    evidence; C3, the final check on the original root only.
+  - Re-run on the built RPM: 5 of 5 launches pass, and the control passes while all 5
+    reversions fail.

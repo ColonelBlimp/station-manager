@@ -168,7 +168,13 @@ def snapshot(main, trace_text):
 
 def owned(root):
     """Pids whose argv[0] is under this unpacked root: every process a launch of it started."""
-    lib = os.path.join(root, LIB) + "/"
+    return owned_under(os.path.join(root, LIB))
+
+
+def owned_under(directory):
+    """Pids whose argv[0] is under directory (one root's runtime, or the whole run's work
+    directory, which holds the original root and every review copy)."""
+    lib = directory.rstrip("/") + "/"
     pids = []
     for d in os.listdir("/proc"):
         if not d.isdigit():
@@ -343,6 +349,11 @@ def smoke(root, selectors, work, display, quiet=False, args=()):
 # ─── Reversions: isolated review copies of the unpacked artifact ──────────────
 
 APP = LIB + "/resources/app/src/"
+# Any of the sandbox diagnostics is the evidence for a sandbox reversion. Where the launching
+# environment already applies a seccomp filter, every process shows Seccomp 2, unsandboxed or
+# not, and only the namespaces tell (clean-room review of 8c667809).
+SANDBOX = ("Seccomp", "user namespace", "PID namespace")
+LEFTOVER = "processes left running after the reap"
 REVERSIONS = [
     # (name, file, anchor, replacement, a fragment the verdict must report)
     ("wrong document", "waiting.mjs",
@@ -354,7 +365,7 @@ REVERSIONS = [
      "return remember('data:text/html;charset=utf-8,' + encodeURIComponent(html));",
      "return remember('file:///nonexistent/sm-smoke-reversion.html');",
      "load failed"),
-    ("sandbox: false", "window.mjs", "sandbox: true,", "sandbox: false,", "Seccomp"),
+    ("sandbox: false", "window.mjs", "sandbox: true,", "sandbox: false,", SANDBOX),
     # Part 1's R10: without the window's trace there is no evidence, so the run must fail
     # (bounded by the deadline), never pass for want of a failure line.
     ("window trace removed", "window.mjs", "traceWindow(win.webContents, originOf);",
@@ -363,7 +374,7 @@ REVERSIONS = [
 # The switch itself, on the launch's command line. Appended from main.mjs instead
 # (app.commandLine.appendSwitch), the browser and its children disagree and the renderer
 # crashes on /dev/shm (measured 2026-11-12): a different failure from the one claimed.
-ARG_REVERSIONS = [("--no-sandbox", ["--no-sandbox"], "Seccomp")]
+ARG_REVERSIONS = [("--no-sandbox", ["--no-sandbox"], SANDBOX)]
 
 
 def review_copy(root, dest):
@@ -385,6 +396,16 @@ def revert(copy_root, name, anchor, replacement):
             raise RuntimeError(f"reversion not applied to {name}")
 
 
+def caught(got, needles):
+    """The problems that show this reversion's own reason, or [] when it is not caught. A
+    launch whose processes survived the reap never counts as caught, whatever else it shows."""
+    if isinstance(needles, str):
+        needles = (needles,)
+    if any(LEFTOVER in p for p in got):
+        return []
+    return [p for p in got if any(n in p for n in needles)]
+
+
 def reversions(root, work, display):
     failed = []
     control = os.path.join(work, "review-control")
@@ -398,14 +419,14 @@ def reversions(root, work, display):
         review_copy(root, dest)
         revert(dest, name, anchor, replacement)
         got = smoke(dest, ["a1"], work, display, quiet=True)["a1"]
-        hit = [p for p in got if needle in p]
+        hit = caught(got, needle)
         print(f"[reversion {i}: {title}] {'fails as required' if hit else 'NOT CAUGHT'}: "
               f"{'; '.join(got)}")
         if not hit:
             failed.append((title, got))
     for j, (title, args, needle) in enumerate(ARG_REVERSIONS, len(REVERSIONS) + 1):
         got = smoke(control, ["a1"], work, display, quiet=True, args=args)["a1"]
-        hit = [p for p in got if needle in p]
+        hit = caught(got, needle)
         print(f"[reversion {j}: {title}] {'fails as required' if hit else 'NOT CAUGHT'}: "
               f"{'; '.join(got)}")
         if not hit:
@@ -433,7 +454,9 @@ def main(argv):
         print(f"desktop smoke: the run raised an exception; the run directory is kept: {work}",
               file=sys.stderr)
         raise
-    survivors = owned(root) if os.path.isdir(root) else []
+    # The whole work directory: the original root and every review copy (clean-room review
+    # of 8c667809), not only the root the smoke itself launched.
+    survivors = owned_under(work)
     if rc == 0 and not survivors:
         shutil.rmtree(work)  # exactly the directory this run made
         return 0
