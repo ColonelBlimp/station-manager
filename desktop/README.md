@@ -60,7 +60,10 @@ on the development path and are not shipped: ESLint refuses any `src/` import ot
   Station Manager's entry is removed from Internet.
 
 It requires exactly the `station-manager` version built from the same commit, and the system
-libraries the shipped binaries link against. It has no scriptlets: it never touches `smd` or a
+libraries the shipped binaries link against. So once it is installed, the two packages are
+upgraded together, in one transaction: on a development machine run `task rpm:desktop` and then
+`task deploy:local:dev`, which installs both (and refuses, before stopping `smd`, if the
+desktop RPM of the new version is not there). It has no scriptlets: it never touches `smd` or a
 user service, and installs no autostart. Electron comes from the lockfile-pinned npm install, a
 fresh download verified against its pinned SHA-256. Source and checksum overrides are refused,
 and the downloader runs with only `PATH`, an empty `HOME` and its private cache.

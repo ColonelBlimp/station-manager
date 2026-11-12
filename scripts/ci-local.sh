@@ -230,4 +230,7 @@ fi
 step "Build boundary: ClubLog key stays out of public artifacts (ST-7)"
 bash scripts/test-build-boundary.sh
 
+step "Deploy script: the daemon is never left stopped (temporary copy, stand-in commands)"
+python3 -I scripts/deploy_local_dev_test.py
+
 printf '\n%sAll CI gates passed locally.%s\n' "$BOLD" "$RESET"

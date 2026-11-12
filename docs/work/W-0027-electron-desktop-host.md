@@ -1512,3 +1512,50 @@ is defaulting to Internet". On the proposal below: "yes, build it — only Stati
   `/etc/xdg/menus` should show the group; that is an inference, not a measurement.
 - **Cost of installing it:** the desktop RPM requires the exactly matching daemon version
   (ruling Q4), so a rebuilt desktop RPM needs the daemon redeployed from the same tree.
+
+### D1 addition: upgrading the pair, and a deploy that never leaves `smd` stopped (2026-11-12)
+
+**The incident.** With the desktop package installed, the operator ran `task deploy:local:dev`
+for the menu-group build. The script stopped `smd`, then ran `rpm -Uvh` on the daemon RPM
+alone. rpm refused: "station-manager = 2.0.0~alpha.5.229.g79c4a285-1 is needed by (installed)
+station-manager-desktop-2.0.0~alpha.5.229.g79c4a285-1.x86_64". The script exited there, and the
+station was left without its daemon. The steps the operator had been given (deploy, then
+install the desktop RPM) could not work: with an exact requirement (ruling Q4), the two
+packages can only change in one transaction. The operator installed both RPMs in one
+`rpm -Uvh` and started `smd`; the pair is now `2.0.0~alpha.5.230.gecdbceb3-1`.
+
+**Operator (chat):** "station is back up, fix the deploy script".
+
+- **`scripts/deploy-local-dev.sh` now:**
+  - **refuses early when the pair is needed and is not at hand.** If `station-manager-desktop`
+    is installed and the deploy changes the daemon's version (from `scripts/version.sh`, as
+    `dev-rpm.sh` takes it), `build/release/station-manager-desktop.x86_64.rpm` must have that
+    version. Otherwise it says to run `task rpm:desktop`, before anything is built or stopped.
+    Rebuilding the installed version needs no desktop RPM.
+  - **tries the install before the stop:** `rpm -U --test --replacepkgs` on the transaction it
+    is about to run. Whatever rpm would refuse is refused with `smd` still running.
+  - **installs the pair in one transaction** when the desktop package is installed and the
+    desktop RPM has the version just built.
+  - **never leaves a running daemon stopped:** if the install fails after the stop, a daemon
+    that was running is started again; one that was not running is not started.
+  - It still does not build the desktop RPM itself: that downloads Electron and runs the
+    package's own checks.
+- **Tests** (`scripts/deploy_local_dev_test.py`, 9, also in `task ci:local` and CI): a copy of
+  the script in a temporary directory, with stand-ins for `systemctl`, `sudo`, `rpm`, `ss` and
+  the build. The stand-in `rpm` models the dependency rule. Six failed on the old script; one
+  reproduced the incident.
+- **Reversions D1 to D7,** each caught and restored: no dry run; the desktop RPM left out;
+  no early refusal; a failed install leaving the daemon stopped; a failed install starting a
+  daemon that was not running; the installed version demanding a desktop RPM; the old order.
+- **Against the real system (passive):**
+  - `rpm -U --test --replacepkgs`, unprivileged, accepted the pair and refused the daemon alone
+    with the incident's message.
+  - The real script, with `sudo` and every `systemctl` call except `is-active` blocked by
+    guards, refused at the preflight on a tree whose version differed from the desktop RPM's.
+    It built nothing, and `smd` stayed active.
+- **Not exercised for real:** the stop, the install of the pair and the restart on failure
+  (they need the operator's deploy).
+- **A cost that follows from ruling Q4:** with the desktop app installed, every deploy of a new
+  daemon version needs `task rpm:desktop` first (about five minutes, and an Electron
+  download). **D2 must carry the same rule to a public install:** the repository and
+  `docs/install.md` upgrade the two packages together.
