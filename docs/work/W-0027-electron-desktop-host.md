@@ -977,7 +977,7 @@ operator's action.
 - **C1d accepted (operator, 2026-11-11): "yes, C1d accepted, commit it".** A1's fixture-only
   restriction is lifted: the desktop app loads the local smd's UI over the pinned listener.
 
-### D1 brief — the desktop app as an installable package (2026-11-11; revised after codex-074; proposed, for review before code)
+### D1 brief — the desktop app as an installable package (2026-11-11; revised after codex-074 to codex-076; rulings Q1-Q5 2026-11-12; committed 14db8c23; being built, see the D1 progress below)
 
 Started on the operator's direction ("yes, commit it and start the D1 brief"), after the ruling that
 the browser is not retired until a user can launch the desktop app (Rulings, 2026-11-11). D1
@@ -1075,9 +1075,10 @@ starts but runs the test fixtures, or one whose removal takes `smd` with it.
    `did-finish-load`, classifying its current URL as the local waiting page (a bounded label,
    never the `data:` URL or HTML) with the renderer's process ID from that same `webContents`,
    and one when a load fails or the renderer is gone. That proves the page loaded, not its
-   visual or textual correctness, which the page tests and the guest check cover (codex-076). The trace is a diagnostic, not proof on its own (codex-075). Whether a
-   menu launch's stderr reaches the user journal is a guest observation, not assumed: the guest
-   test records where it lands and the command that retrieves it.
+   visual or textual correctness, which the page tests and the guest check cover (codex-076).
+   The trace is a diagnostic, not proof on its own (codex-075). Whether a menu launch's stderr
+   reaches the user journal is a guest observation, not assumed: the guest test records where it
+   lands and the command that retrieves it.
 8. **The version:** SM's own version, computed once for both packages through the existing
    `scripts/version.sh` conversion, with the RPM version and release contract stated (Q4). Both
    packages are built from the same commit.
@@ -1167,3 +1168,75 @@ lanes; never the station until the operator chooses):
 - window placement (A4).
 
 No package scriptlet restarts or otherwise touches the operating daemon.
+
+### D1 — progress (2026-11-12)
+
+Started on the operator's direction ("yes, commit it and start D1"), after the brief was committed
+(14db8c23). **Parts (Claude's proposal; not ruled):**
+1. **Production mode, the start-up trace and the start guidance** in the shell's own code, with
+   unit tests and a runtime proof against a scratch staging of the renamed runtime.
+2. **The package:** `nfpm-desktop.yaml`, `scripts/desktop-rpm.sh` (Task `rpm:desktop`), the
+   launcher, the desktop entry, the icons, the licences, `Requires` and the shared version; CI's
+   content checks.
+3. **The production smoke check** in CI against the staged artifact, with its reversion proofs on
+   the CI runner (brief item 9).
+Then the clean Fedora guest acceptance, which needs the operator.
+
+**Part 1 (built, not committed):**
+- `src/mode.mjs` decides first, from `app.isPackaged`: an installed app ignores
+  `SM_DESKTOP_SCENARIO`, `SM_DESKTOP_USERDATA` and fake media; only a strict `false` is
+  development. `src/main.mjs` applies it before the profile, any switch or the instance lock, and
+  imports the fixture harness lazily.
+- ESLint's `no-restricted-imports` is an allowlist on `src/`: only `electron`, `node:` built-ins
+  and `./*.mjs` siblings (static `import` and `export … from`). `test/imports.test.mjs` proves it
+  refuses ten static forms, allows dynamic `import()`, applies to `src/` only, and that `src/`
+  passes. A regex scan was tried first and dropped: it misread `export const` and
+  `export function` lines.
+- `src/trace.mjs`: one prefixed stderr line per state change, control characters escaped. The
+  window's lines come from `did-finish-load` itself, with a bounded label (`waiting page`, `app`,
+  `other`) and the pid of that same `webContents`; a main-frame load failure other than `-3`
+  (superseded) and `render-process-gone` are traced too. `src/daemon.mjs` traces each discovery
+  state change once, `refused:` for a malformed option, and `pinned <origin>`.
+- The waiting page (Q3 (a)): "If the daemon is not running, start it with `smctl start`" while
+  waiting (pinned and not answering, or before the identity exists); never on a refusal.
+- **Unit tests:** `test:unit` now covers 7 files, 54 tests (55 after codex-077), all passing; lint and format are clean.
+- **The development path is unchanged:** `check:a1`, `check:c1` and `check:c1d-shell` (16 of 16)
+  and `task desktop:check:c1d` against a real temporary `smd` (16 of 16) pass.
+- **Runtime proof (scratch staging, this host):** Electron's `dist` copied to the scratchpad, the
+  binary renamed `station-manager-desktop`, the app (`src/`, `assets/`, a production
+  `package.json`) in `resources/app`, with no harness or tests. It was run under `xvfb-run`, from an
+  unrelated directory, with a minimal environment, an isolated `HOME`, and a synthetic
+  `config.json` on a free port, once for each of `a1`, `c1`, `c1d`, `c1d-shell` and `second`,
+  each with a hostile `SM_DESKTOP_USERDATA`. Every run gave:
+  - the trace `waiting: smd has not created its identity yet …` and
+    `loaded waiting page renderer <pid>`;
+  - the named pid is a `--type=renderer` descendant, with `Seccomp: 2` and user and PID
+    namespaces different from the main process's;
+  - the main process still running after the settle; no hostile profile; the config unchanged;
+  - the profile under the isolated `HOME`.
+  The D-Bus errors in its log come from the stripped environment.
+- **Reversion proofs, each restored and verified byte for byte:**
+  - R1, packaged honours the selectors: 7 mode tests fail. At runtime, on the staged copy only,
+    the `a1` run creates the hostile profile, tries to load the absent harness and exits.
+  - R2, a static harness import in `main.mjs`: the import test fails.
+  - R3, the trace on `did-start-loading`: two trace tests fail.
+  - R4, `-3` traced as a failure: the failure test fails.
+  - R5, control characters not escaped: the line test fails.
+  - R6 and R7, start advice on a refusal or none at all: their page tests fail.
+  - R8 and R9, no discovery or pin trace: the trace test fails.
+  - R10, the window trace removed: no unit test reaches it (it needs Electron). At runtime, on the
+    staged copy, only the discovery line appears and no `loaded waiting page`. Part 3's smoke
+    check is its automated proof.
+- **codex-077 (P2), fixed:** `pageLabel` had named every `data:` document the waiting page, so
+  an unrelated or blank local document that loaded would have passed for it. `src/waiting.mjs` now
+  remembers the exact waiting documents it generated (the latest 32, in memory only), and the
+  trace names a page the waiting page only when it is one of them; any other `data:` document is
+  `other`. The new tests use unrelated, blank, JSON and altered waiting documents, and check the
+  bound. Reversions: R11 (the scheme rule restored) fails two trace tests; R12 (no eviction)
+  fails the bound test. At runtime Chromium reports the exact URL: `check:c1d-shell` (16 of 16)
+  traced 3 waiting-page loads and 1 app load, and the staged `a1` run traced the waiting page.
+  R13, on the staged copy only: the shell loads a wrong document, and the trace says
+  `loaded other`, never `waiting page`. `test:unit` is now 55 tests.
+- **Not yet in part 1:** a hardened probe. The scratch probe hung when R10 removed the renderer
+  line, until `timeout` reaped it (no process was left). Part 3's harness needs the overall
+  deadline and the owned-process cleanup that codex-076 asks for.

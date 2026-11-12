@@ -6,6 +6,7 @@
 import { fileURLToPath } from 'node:url';
 import { BrowserWindow, nativeImage } from 'electron';
 import { onOrigin } from './hardening.mjs';
+import { traceWindow } from './trace.mjs';
 
 export const MAIN_MIN = { width: 1024, height: 640 };
 // The window icon (title bar and window switcher under X11/XWayland): the SPA's
@@ -62,6 +63,7 @@ export function createMainWindow({ origin, offscreen, openExternal, partition })
         openExternal(url);
     });
     win.webContents.on('will-attach-webview', (e) => e.preventDefault());
+    traceWindow(win.webContents, originOf); // W-0027 D1: the start-up trace
     win.webContents.setWindowOpenHandler(({ url }) => {
         if (!onOrigin(url, originOf())) openExternal(url);
         return { action: 'deny' };

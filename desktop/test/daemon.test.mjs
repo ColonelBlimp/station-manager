@@ -155,3 +155,59 @@ test('a malformed option is shown locally, with no discovery and no network', as
     assert.equal(probed, false, 'the network was used');
     assert.match(lastPage(loaded), /--sm-config needs a value/);
 });
+
+// W-0027 D1: the start-up trace from discovery: one line per state change, then the pin.
+test('discovery traces each state change once, then the pin; no config contents', async () => {
+    const inst = install();
+    fs.writeFileSync(
+        path.join(inst.env.SM_WORKING_DIR, 'config.json'),
+        JSON.stringify({ server: { app_port: 9443 }, secret_marker: 'TOKEN-abc123' }),
+        { mode: 0o600 }
+    );
+    const { win } = fakeWindow({ rounds: 1 });
+    const lines = [];
+    let rounds = 0;
+    await connectWhenTrusted({
+        win,
+        pin: oncePin(),
+        target: { origin: null },
+        env: inst.env,
+        retryMs: 20,
+        trace: (l) => lines.push(l),
+        onDetail: () => {
+            rounds += 1;
+            if (rounds === 3) inst.publish(0o755); // waiting -> refused
+            if (rounds === 5) fs.chmodSync(inst.idDir, 0o700); // refused -> valid
+        },
+    });
+    assert.deepEqual(
+        lines.map((l) => l.split(':')[0]),
+        ['waiting', 'refused', 'pinned https'],
+        lines.join(' | ')
+    );
+    assert.equal(lines[0], `waiting: smd has not created its identity yet ${inst.idDir}`);
+    assert.ok(lines[1].includes(inst.idDir) && lines[1].includes('0700'), lines[1]);
+    assert.equal(lines[2], 'pinned https://127.0.0.1:9443');
+    assert.ok(!lines.join('\n').includes('TOKEN-abc123'), 'config contents reached the trace');
+});
+
+test('a malformed option is traced as refused', async () => {
+    const { win } = fakeWindow({ rounds: 1 });
+    let closed = false;
+    win.isDestroyed = () => closed;
+    const lines = [];
+    const done = connectWhenTrusted({
+        win,
+        pin: oncePin(),
+        target: { origin: null },
+        args: parseArgs(['--sm-config']),
+        retryMs: 20,
+        trace: (l) => lines.push(l),
+    });
+    await new Promise((r) => setTimeout(r, 80));
+    closed = true;
+    await done;
+    assert.deepEqual(lines, [
+        'refused: --sm-config needs a value: --sm-config <path> or --sm-config=<path>',
+    ]);
+});

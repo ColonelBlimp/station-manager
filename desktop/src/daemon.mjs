@@ -7,6 +7,7 @@
 // identity is never read again, and a later TLS failure never re-pins. From then on the
 // existing pinned probe loads the application when smd answers.
 import { configPath, discover, recordingFs } from './discovery.mjs';
+import { trace as stderrTrace } from './trace.mjs';
 import { loadWhenUp, returnToWaitingOnFailure, waitingPageUrl } from './waiting.mjs';
 
 const RETRY_MS = 1000;
@@ -45,11 +46,13 @@ export async function connectWhenTrusted({
     fsb = recordingFs().fs,
     retryMs = RETRY_MS,
     onDetail,
+    trace = stderrTrace,
 }) {
     let shown = '';
     if (args.error) {
         // A malformed option is the operator's to correct: shown locally, with no discovery
         // and no network, until the app is started again.
+        trace(`refused: ${args.error}`);
         void win
             .loadURL(waitingPageUrl(null, { state: 'refused', path: '', reason: args.error }))
             .catch(() => {});
@@ -65,6 +68,7 @@ export async function connectWhenTrusted({
             // One synchronous step, so no request can see one fixed without the other.
             pin.set(r.fingerprint);
             target.origin = r.origin;
+            trace(`pinned ${r.origin}`);
             const appUrl = r.origin + '/';
             // The local explanation is now obsolete: show the ordinary waiting page for the
             // pinned daemon, once, before the probe (which keeps an existing local page).
@@ -77,6 +81,7 @@ export async function connectWhenTrusted({
         const key = `${r.state}\n${r.path}\n${r.reason}`;
         if (key !== shown) {
             shown = key;
+            trace(`${r.state}: ${r.reason} ${r.path}`);
             void win.loadURL(waitingPageUrl(null, r)).catch(() => {});
         }
         await sleep(retryMs);

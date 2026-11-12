@@ -23,8 +23,25 @@ own waiting page. A refused identity is named on that page with its path and the
 certificate is fixed for the app's lifetime; a new identity takes effect at the next launch.
 `--sm-data-dir <absolute path>` gives the data root when `data_dir` is relative.
 
+While the daemon may simply not be running, the waiting page says how to start it
+(`smctl start`); a refused identity gives its own explanation instead (operator ruling Q3).
+
+The shell writes one line to stderr, prefixed `station-manager-desktop:`, when its state changes:
+the discovery's `waiting:` or `refused:` reason and path, `pinned <origin>`, each finished page
+load (`loaded waiting page renderer <pid>` or `loaded app …`), a main-frame `load failed`, and a
+`renderer gone`. It carries paths, origins and reasons only, never config or page contents.
+
 The shell does not change how the browser works: until C2, the browser on 8080 still operates
 the station, and the desktop app is one more client of the same `smd`.
+
+## Installed and development runs (D1)
+
+The shell decides first whether it is an installed app (`src/mode.mjs`, from Electron's
+`app.isPackaged`, which is true when the runtime binary is renamed `station-manager-desktop`). An
+installed app ignores `SM_DESKTOP_SCENARIO`, `SM_DESKTOP_USERDATA` and the fake-media switch, and
+always takes the interactive path. The fixture harness and the test scenarios are imported only
+on the development path and are not shipped: ESLint refuses any `src/` import other than
+`electron`, `node:` built-ins and `./` siblings (`test/imports.test.mjs`).
 
 ## The window and session rules (A1)
 
@@ -65,7 +82,7 @@ npm run check:a1                        # A1 acceptance in Electron (xvfb-run -a
 npm run check:c1                        # C1 proof: the pinned TLS identity (needs openssl)
 npm run check:c1d-shell                 # C1d wiring: discovery, pin and waiting page, TLS fixtures
 SM_DESKTOP_SMD=../build/bin/smd npm run check:c1d   # C1d acceptance against a real, already-built smd
-npm run test:unit                       # identity discovery and connection logic, no Electron
+npm run test:unit                       # discovery, connection, mode, trace and page logic, no Electron
 npm run lint && npm run format:check
 ```
 

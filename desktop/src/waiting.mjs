@@ -18,6 +18,24 @@ export function escapeHtml(text) {
     );
 }
 
+// The waiting documents this shell generated, most recent last (W-0027 D1; codex-077): the trace
+// names a page the waiting page only when it is one of these exact documents, never by its
+// data: scheme. Bounded: a document is looked up when its load finishes, moments after it was
+// made, so the latest few suffice.
+const RECENT_WAITING = 32;
+const recentWaiting = new Set();
+
+function remember(url) {
+    recentWaiting.delete(url);
+    recentWaiting.add(url);
+    if (recentWaiting.size > RECENT_WAITING)
+        recentWaiting.delete(recentWaiting.values().next().value);
+    return url;
+}
+
+/** True only for an exact waiting document this shell generated recently. */
+export const isWaitingPage = (url) => recentWaiting.has(url);
+
 /** The waiting page. `detail` (W-0027 C1d, operator ruling Q2) is the identity discovery's
  *  { state, path, reason } before the pin is fixed: "waiting" for what smd's first run
  *  resolves by itself, "refused" for what needs the operator. Only that bounded, escaped local
@@ -30,6 +48,11 @@ export function waitingPageUrl(origin, detail = null) {
     const lead = refused
         ? 'Nothing from the daemon will be loaded until this is put right.'
         : 'Station Manager will open as soon as the daemon answers.';
+    // Operator ruling Q3 (a), W-0027 D1: while smd may simply not be running, say how to start
+    // it. Not on a refusal: starting smd does not repair an identity it must not be trusted with.
+    const start = refused
+        ? ''
+        : '<p data-sm-start>If the daemon is not running, start it with <code>smctl start</code>.</p>';
     const info = detail
         ? `<p data-sm-reason>${escapeHtml(detail.reason)}</p><p><small data-sm-path>${escapeHtml(detail.path)}</small></p>`
         : '';
@@ -46,9 +69,10 @@ export function waitingPageUrl(origin, detail = null) {
  <h1>${escapeHtml(title)}</h1>
  <p>${escapeHtml(lead)}</p>
  ${info}
+ ${start}
  <p><small>${escapeHtml(origin ?? '')}</small></p>
 </div></html>`;
-    return 'data:text/html;charset=utf-8,' + encodeURIComponent(html);
+    return remember('data:text/html;charset=utf-8,' + encodeURIComponent(html));
 }
 
 // The availability probe. It goes through the window's own session (`ses.fetch`), so it

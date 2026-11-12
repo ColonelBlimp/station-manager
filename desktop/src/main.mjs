@@ -1,4 +1,8 @@
-// Station Manager desktop shell (ADR 0102; W-0027). Development only: not released.
+// Station Manager desktop shell (ADR 0102; W-0027). Not yet released (D2-D6).
+//
+// An installed app (W-0027 D1) decides that first (src/mode.mjs): it ignores every development
+// selector and takes only the interactive path. The fixture harness and the test scenarios are
+// imported lazily, on the development path only, and are not shipped.
 //
 // Interactive runs load the local smd's UI over its pinned HTTPS listener (ADR 0103; W-0027
 // C1d): the shell finds smd's identity through config.json (src/discovery.mjs), trusts that one
@@ -10,25 +14,22 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { app, Menu, session, shell } from 'electron';
-import { startHarness } from '../harness/server.mjs';
 import { disableSpellchecker, hardenSession } from './hardening.mjs';
 import { parseArgs } from './daemon.mjs';
 import { launchTrusted } from './launch.mjs';
 import { installPin } from './pin.mjs';
 import { createMainWindow, externalOpener } from './window.mjs';
 import { loadWhenUp, returnToWaitingOnFailure } from './waiting.mjs';
+import { startupMode } from './mode.mjs';
 
-const scenario = process.env.SM_DESKTOP_SCENARIO ?? '';
-const automated = scenario !== '';
+// First, before the profile, any switch or the instance lock (W-0027 D1).
+const mode = startupMode({ isPackaged: app.isPackaged, env: process.env });
+const { scenario, automated } = mode;
 
-// Automated runs use a throwaway profile unless told to share one (the second-launch
-// check); interactive runs use the default profile.
-if (process.env.SM_DESKTOP_USERDATA) app.setPath('userData', process.env.SM_DESKTOP_USERDATA);
+if (mode.userData) app.setPath('userData', mode.userData);
 else if (automated) app.setPath('userData', fs.mkdtempSync(path.join(os.tmpdir(), 'sm-desktop-')));
 
-// Automated runs give Chromium a fake capture device, so a refused microphone request
-// is the permission policy's decision, never a missing device (codex-038).
-if (automated) app.commandLine.appendSwitch('use-fake-device-for-media-stream');
+if (mode.fakeMedia) app.commandLine.appendSwitch('use-fake-device-for-media-stream');
 
 if (!app.requestSingleInstanceLock()) {
     app.quit();
@@ -115,7 +116,9 @@ if (!app.requestSingleInstanceLock()) {
             // fixture. Neither is smd.
             let c1 = null;
             if (scenario === 'c1') c1 = await (await import('../test/scenario-c1.mjs')).setupC1();
-            const harness = c1 ? c1.genuine : await startHarness({ up: false });
+            const harness = c1
+                ? c1.genuine
+                : await (await import('../harness/server.mjs')).startHarness({ up: false });
             const origin = harness.origin;
             const appUrl = origin + '/';
 
