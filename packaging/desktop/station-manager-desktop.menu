@@ -1,0 +1,31 @@
+<!DOCTYPE Menu PUBLIC "-//freedesktop//DTD Menu 1.0//EN"
+ "http://www.freedesktop.org/standards/menu-spec/menu-1.0.dtd">
+<!--
+  Station Manager desktop: the Amateur Radio group of the applications menu.
+
+  Fedora defines no such group (measured on Fedora 44: no menu or directory file for it, and
+  no *-menus package for amateur radio), so this package adds it the way Fedora's own
+  *-menus packages do (astronomy-menus, electronics-menu): a file merged into the
+  applications menu from /etc/xdg/menus/applications-merged/.
+
+  The group includes every application in the HamRadio category, so others (WSJT-X, fldigi)
+  appear in it too. Only Station Manager's own entry is removed from Internet, by filename:
+  this package does not rearrange another package's entry (operator ruling 2026-11-12).
+  scripts/desktop-rpm-check.py holds the file to exactly this.
+-->
+<Menu>
+  <Name>Applications</Name>
+  <Menu>
+    <Name>Amateur Radio</Name>
+    <Directory>station-manager-amateur-radio.directory</Directory>
+    <Include>
+      <Category>HamRadio</Category>
+    </Include>
+  </Menu>
+  <Menu>
+    <Name>Internet</Name>
+    <Exclude>
+      <Filename>station-manager-desktop.desktop</Filename>
+    </Exclude>
+  </Menu>
+</Menu>

@@ -52,7 +52,12 @@ on the development path and are not shipped: ESLint refuses any `src/` import ot
   `station-manager-desktop`, with the app in `resources/app` (`src/`, `assets/` and a production
   `package.json`; no tests, harness or `node_modules`, and no Electron default app);
 - `/usr/bin/station-manager`, the command, a symlink to that binary;
-- the **Station Manager** desktop entry, the icons and the licences.
+- the **Station Manager** desktop entry, the icons and the licences;
+- the **Amateur Radio** group of the applications menu, with Station Manager in it: a merged
+  menu file (`/etc/xdg/menus/applications-merged/station-manager-desktop.menu`) and a
+  directory file. Fedora defines no such group, so the package adds it as Fedora's own
+  `*-menus` packages do. Other applications in the `HamRadio` category appear in it too; only
+  Station Manager's entry is removed from Internet.
 
 It requires exactly the `station-manager` version built from the same commit, and the system
 libraries the shipped binaries link against. It has no scriptlets: it never touches `smd` or a

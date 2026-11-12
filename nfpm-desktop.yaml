@@ -82,6 +82,21 @@ contents:
     file_info:
       mode: 0644
 
+  # The Amateur Radio group of the applications menu (operator, 2026-11-12). Fedora defines
+  # none, so the package adds it as Fedora's own *-menus packages do: a merged menu file (a
+  # config file, as theirs is: it lives in /etc) and a directory file. Every HamRadio
+  # application appears in the group; only this package's own entry is removed from Internet.
+  # Any desktop that builds its menu from /etc/xdg/menus picks it up; none needs a scriptlet.
+  - src: packaging/desktop/station-manager-desktop.menu
+    dst: /etc/xdg/menus/applications-merged/station-manager-desktop.menu
+    type: config
+    file_info:
+      mode: 0644
+  - src: packaging/desktop/station-manager-amateur-radio.directory
+    dst: /usr/share/desktop-directories/station-manager-amateur-radio.directory
+    file_info:
+      mode: 0644
+
   - src: desktop/assets/icon.png
     dst: /usr/share/icons/hicolor/256x256/apps/station-manager-desktop.png
     file_info:

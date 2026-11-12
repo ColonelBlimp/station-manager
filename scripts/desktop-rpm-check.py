@@ -5,7 +5,7 @@ Usage: python3 -I scripts/desktop-rpm-check.py <rpm> --version <rpm-version> --a
 
 The artifact itself is inspected: its header (name, version, arch, requirements, scriptlets),
 its file list with modes and owners, and its extracted contents (the production package.json,
-the desktop entry, the icon, and the libraries each shipped ELF file needs). Exit 0 with a
+the desktop entry, the menu group, the icon, and the libraries each shipped ELF file needs). Exit 0 with a
 summary, or 1 with one line per problem. Tests: scripts/desktop_rpm_check_test.py.
 """
 import argparse
@@ -16,6 +16,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import xml.etree.ElementTree as ET
 
 NAME = "station-manager-desktop"
 LIB = "/usr/lib/" + NAME
@@ -30,6 +31,15 @@ LICENCES = ["/usr/share/licenses/" + NAME + "/" + n
 EXECUTABLES = [BINARY, LIB + "/chrome-sandbox", LIB + "/chrome_crashpad_handler"]
 DESKTOP_KEYS = {"Name": "Station Manager", "Exec": "station-manager", "Icon": NAME,
                 "Terminal": "false", "StartupWMClass": NAME, "Type": "Application"}
+# The Amateur Radio menu group (operator, 2026-11-12). Fedora defines none (measured on Fedora
+# 44: no menu or directory file for it, and no *-menus package), so the package ships it the way
+# Fedora's own *-menus packages do: a merged menu file and a directory file.
+MENU_FILE = "/etc/xdg/menus/applications-merged/" + NAME + ".menu"
+DIRECTORY_NAME = "station-manager-amateur-radio.directory"
+DIRECTORY_FILE = "/usr/share/desktop-directories/" + DIRECTORY_NAME
+DIRECTORY_KEYS = {"Type": "Directory", "Name": "Amateur Radio", "Icon": NAME}
+GROUP = "Amateur Radio"
+GROUP_CATEGORY = "HamRadio"
 PKG_KEYS = {"name", "version", "description", "license", "type", "main"}
 
 
@@ -43,6 +53,68 @@ def _desktop_entry(text):
             k, v = line.split("=", 1)
             keys[k.strip()] = v.strip()
     return keys
+
+
+def _children(e):
+    """An element's children as (tag, text, element), ignoring comments."""
+    return [(c.tag, (c.text or "").strip(), c) for c in e if isinstance(c.tag, str)]
+
+
+def _rule(e):
+    """A rule element's contents as sorted (tag, text) pairs; nested rules are kept visible."""
+    return sorted((t, x if not len(c) else "(nested)") for t, x, c in _children(e))
+
+
+def _menu_problems(text):
+    """Every way the merged menu file differs from the one the package may ship.
+
+    Exactly: the group, including the category the desktop entry carries; and the removal of
+    Station Manager's own entry, by filename, from Internet. Removing by category would move
+    every ham-radio application (operator ruling 2026-11-12: "only Station Manager"), and any
+    other element would change a menu this package does not own.
+    """
+    try:
+        root = ET.fromstring(text or "")
+    except ET.ParseError as e:
+        return [f"menu: not well-formed XML ({e})"]
+    if root.tag != "Menu":
+        return [f"menu: the root element is <{root.tag}>, not <Menu>"]
+    out = []
+    menus = {}
+    for tag, value, e in _children(root):
+        if tag == "Name":
+            continue
+        if tag != "Menu":
+            out.append(f"menu: an element this package does not own: <{tag}>")
+            continue
+        name = next((x for t, x, _ in _children(e) if t == "Name"), "")
+        menus[name] = e
+    for name in sorted(set(menus) - {GROUP, "Internet"}):
+        out.append(f"menu: another menu is changed: {name!r}")
+
+    group = menus.get(GROUP)
+    if group is None:
+        out.append(f"menu: {GROUP!r} is not defined")
+    else:
+        parts = [(t, x) for t, x, _ in _children(group) if t not in ("Name", "Include")]
+        if parts != [("Directory", DIRECTORY_NAME)]:
+            out.append(f"menu: Directory and nothing else beside Name and Include is wanted in "
+                       f"{GROUP!r}; found {parts}")
+        includes = [_rule(e) for t, _, e in _children(group) if t == "Include"]
+        if includes != [[("Category", GROUP_CATEGORY)]]:
+            out.append(f"menu: Include must be exactly the category {GROUP_CATEGORY}; found {includes}")
+
+    internet = menus.get("Internet")
+    only = [("Filename", NAME + ".desktop")]
+    if internet is None:
+        out.append(f"menu: Internet has no rule removing {NAME}.desktop, so the application "
+                   f"would stay under Internet")
+    else:
+        rules = [(t, _rule(e)) for t, _, e in _children(internet) if t != "Name"]
+        if rules != [("Exclude", only)]:
+            out.append(f"menu: Internet must only exclude {NAME}.desktop by filename "
+                       f"(only Station Manager moves); found {rules}")
+    return out
 
 
 def problems(m, expect):
@@ -129,6 +201,9 @@ def problems(m, expect):
         kind = x["mode"] & 0o170000
         if x["user"] != "root" or x["group"] != "root":
             add(f"{p} is owned by {x['user']}:{x['group']}, not root:root")
+        if x.get("config") != (p == MENU_FILE):
+            add(f"{p} is {'' if x.get('config') else 'not '}a config file; "
+                f"only {MENU_FILE} is one (it lives in /etc)")
         if kind == 0o120000:
             continue
         if x["mode"] & 0o6000:
@@ -149,6 +224,21 @@ def problems(m, expect):
                 add(f"desktop entry {k}={keys.get(k)!r}, not {v!r}")
         if m["desktop_validate"].strip():
             add("desktop-file-validate: " + m["desktop_validate"].strip().splitlines()[0])
+        if GROUP_CATEGORY not in [c for c in keys.get("Categories", "").split(";") if c]:
+            add(f"desktop entry Categories={keys.get('Categories')!r} lacks {GROUP_CATEGORY}, "
+                f"the category the {GROUP} group includes")
+
+    # The Amateur Radio menu group.
+    for p in [MENU_FILE, DIRECTORY_FILE]:
+        if p not in files:
+            add(f"missing {p}")
+    if DIRECTORY_FILE in files:
+        keys = _desktop_entry(m.get("directory") or "")
+        for k, v in DIRECTORY_KEYS.items():
+            if keys.get(k) != v:
+                add(f"directory entry {k}={keys.get(k)!r}, not {v!r}")
+    if MENU_FILE in files:
+        out.extend(_menu_problems(m.get("menu")))
     for p in [ICON_PNG, ICON_SVG] + LICENCES:
         if p not in files:
             add(f"missing {p}")
@@ -191,11 +281,13 @@ def inspect(rpm):
         "scripts": _run("rpm", "-qp", "--scripts", rpm),
         "files": [], "needed": {}, "sonames": {},
         "package_json": None, "desktop": None, "desktop_validate": "", "icon_png_size": None,
+        "menu": None, "directory": None,
     }
-    for line in q("[%{FILEMODES}\t%{FILEUSERNAME}\t%{FILEGROUPNAME}\t%{FILELINKTOS}\t%{FILENAMES}\n]").splitlines():
-        mode, user, group, link, path = line.split("\t", 4)
+    # FILEFLAGS bit 0 is RPMFILE_CONFIG.
+    for line in q("[%{FILEMODES}\t%{FILEUSERNAME}\t%{FILEGROUPNAME}\t%{FILEFLAGS}\t%{FILELINKTOS}\t%{FILENAMES}\n]").splitlines():
+        mode, user, group, flags, link, path = line.split("\t", 5)
         m["files"].append({"path": path, "mode": int(mode) & 0xFFFF, "user": user, "group": group,
-                           "link": link})
+                           "link": link, "config": bool(int(flags) & 1)})
     with tempfile.TemporaryDirectory(prefix="sm-desktop-rpm-check-") as root:
         cpio = subprocess.Popen(["rpm2cpio", rpm], stdout=subprocess.PIPE)
         subprocess.run(["cpio", "-idm", "--quiet", "--no-absolute-filenames"], cwd=root,
@@ -224,6 +316,10 @@ def inspect(rpm):
             m["desktop_validate"] = (r.stdout + r.stderr) if (r.returncode or r.stdout.strip()) else ""
         if os.path.isfile(at(ICON_PNG)):
             m["icon_png_size"] = _png_size(at(ICON_PNG))
+        for key, path in (("menu", MENU_FILE), ("directory", DIRECTORY_FILE)):
+            if os.path.isfile(at(path)):
+                with open(at(path), encoding="utf-8") as fh:
+                    m[key] = fh.read()
     return m
 
 

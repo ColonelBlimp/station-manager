@@ -32,10 +32,38 @@ StartupWMClass=station-manager-desktop
 """
 PKG = {"name": "station-manager-desktop", "version": "2.0.0-alpha.5", "license": "GPL-3.0-only",
        "type": "module", "main": "src/main.mjs"}
+MENU_FILE = "/etc/xdg/menus/applications-merged/station-manager-desktop.menu"
+DIRECTORY_FILE = "/usr/share/desktop-directories/station-manager-amateur-radio.directory"
+MENU = """<!DOCTYPE Menu PUBLIC "-//freedesktop//DTD Menu 1.0//EN"
+ "http://www.freedesktop.org/standards/menu-spec/menu-1.0.dtd">
+<!-- a comment -->
+<Menu>
+  <Name>Applications</Name>
+  <Menu>
+    <Name>Amateur Radio</Name>
+    <Directory>station-manager-amateur-radio.directory</Directory>
+    <Include>
+      <Category>HamRadio</Category>
+    </Include>
+  </Menu>
+  <Menu>
+    <Name>Internet</Name>
+    <Exclude>
+      <Filename>station-manager-desktop.desktop</Filename>
+    </Exclude>
+  </Menu>
+</Menu>
+"""
+DIRECTORY = """[Desktop Entry]
+Type=Directory
+Name=Amateur Radio
+Icon=station-manager-desktop
+"""
 
 
-def f(path, mode=0o100644, link=""):
-    return {"path": path, "mode": mode, "user": "root", "group": "root", "link": link}
+def f(path, mode=0o100644, link="", config=False):
+    return {"path": path, "mode": mode, "user": "root", "group": "root", "link": link,
+            "config": config}
 
 
 def valid():
@@ -52,6 +80,8 @@ def valid():
         f(APP + "/package.json"),
         f(APP + "/assets/icon.png"),
         f("/usr/share/applications/station-manager-desktop.desktop"),
+        f(MENU_FILE, config=True),
+        f(DIRECTORY_FILE),
         f("/usr/share/icons/hicolor/256x256/apps/station-manager-desktop.png"),
         f("/usr/share/icons/hicolor/scalable/apps/station-manager-desktop.svg"),
         f("/usr/share/licenses/station-manager-desktop/COPYING"),
@@ -71,6 +101,8 @@ def valid():
         "package_json": json.dumps(PKG),
         "desktop": DESKTOP,
         "desktop_validate": "",
+        "menu": MENU,
+        "directory": DIRECTORY,
         "icon_png_size": (256, 256),
     }
 
@@ -211,6 +243,100 @@ class Check(unittest.TestCase):
         self.assertReported(m, "desktop-file-validate")
         m = without(valid(), "/usr/share/applications/station-manager-desktop.desktop")
         self.assertReported(m, ".desktop")
+
+    # The Amateur Radio menu group (operator, 2026-11-12). Fedora defines none, so the package
+    # ships it the way Fedora's own *-menus packages do: a merged menu file and a directory
+    # file. Only Station Manager's own entry is removed from Internet.
+
+    def test_menu_group_files(self):
+        for path in [MENU_FILE, DIRECTORY_FILE]:
+            self.assertReported(without(valid(), path), path)
+
+    def test_menu_file_is_the_packages_only_config_file(self):
+        m = valid()
+        by(m, MENU_FILE)["config"] = False
+        self.assertReported(m, "config")
+        m = valid()
+        by(m, DIRECTORY_FILE)["config"] = True
+        self.assertReported(m, "config")
+
+    def test_desktop_entry_is_in_the_category_the_group_includes(self):
+        for cats in ["Network;", "Network;Utility;", "Network;XHamRadio;"]:
+            m = valid()
+            m["desktop"] = m["desktop"].replace("Categories=Network;HamRadio;", "Categories=" + cats)
+            self.assertReported(m, "HamRadio")
+
+    def test_directory_entry(self):
+        for old, new, needle in [("Name=Amateur Radio", "Name=Ham", "Name"),
+                                 ("Type=Directory", "Type=Application", "Type"),
+                                 ("Icon=station-manager-desktop", "Icon=electron", "Icon")]:
+            m = valid()
+            m["directory"] = m["directory"].replace(old, new)
+            self.assertReported(m, "directory entry " + needle)
+        m = valid()
+        m["directory"] = None
+        self.assertReported(m, "directory entry")
+
+    def test_menu_defines_the_group(self):
+        for old, new, needle in [
+            ("<Name>Amateur Radio</Name>", "<Name>Ham Radio</Name>", "'Amateur Radio' is not defined"),
+            ("<Directory>station-manager-amateur-radio.directory</Directory>",
+             "<Directory>other.directory</Directory>", "Directory"),
+            ("<Directory>station-manager-amateur-radio.directory</Directory>", "", "Directory"),
+            ("<Category>HamRadio</Category>", "<Category>Network</Category>", "Include"),
+            ("<Category>HamRadio</Category>",
+             "<Category>HamRadio</Category><Category>Network</Category>", "Include"),
+            ("<Include>", "<Exclude>", "Include"),
+        ]:
+            m = valid()
+            m["menu"] = m["menu"].replace(old, new).replace(
+                "</Include>", "</Exclude>" if new == "<Exclude>" else "</Include>", 1)
+            self.assertReported(m, "menu: " + needle)
+
+    def test_menu_removes_only_station_manager_from_internet(self):
+        entry = "<Filename>station-manager-desktop.desktop</Filename>"
+        for new, why in [
+            ("<Category>HamRadio</Category>", "every ham-radio application"),
+            (entry + "<Filename>wsjtx.desktop</Filename>", "another application too"),
+            ("<Filename>wsjtx.desktop</Filename>", "another application instead"),
+            (entry + "<Category>Network</Category>", "a category as well"),
+            ("", "nothing"),
+        ]:
+            with self.subTest(why=why):
+                m = valid()
+                m["menu"] = m["menu"].replace(entry, new)
+                self.assertReported(m, "menu: Internet")
+        # No Internet rule at all: the application would stay under Internet.
+        m = valid()
+        start = m["menu"].index("  <Menu>\n    <Name>Internet</Name>")
+        m["menu"] = m["menu"][:start] + "</Menu>\n"
+        self.assertReported(m, "menu: Internet")
+        # An Include would ADD applications to Internet.
+        m = valid()
+        m["menu"] = m["menu"].replace("</Exclude>", "</Exclude><Include><All/></Include>")
+        self.assertReported(m, "menu: Internet")
+
+    def test_menu_touches_nothing_else(self):
+        other = ("  <Menu>\n    <Name>Multimedia</Name>\n    <Exclude><Category>HamRadio</Category>"
+                 "</Exclude>\n  </Menu>\n</Menu>\n")
+        m = valid()
+        m["menu"] = m["menu"][:m["menu"].rindex("</Menu>")] + other
+        self.assertReported(m, "menu: another menu")
+        m = valid()
+        m["menu"] = m["menu"].replace("<Name>Applications</Name>",
+                                      "<Name>Applications</Name><DefaultAppDirs/>")
+        self.assertReported(m, "menu: ")
+        # A nested menu inside the group is another menu too.
+        m = valid()
+        m["menu"] = m["menu"].replace("</Include>", "</Include><Menu><Name>More</Name></Menu>")
+        self.assertReported(m, "menu: ")
+
+    def test_menu_must_be_well_formed(self):
+        for text in [None, "", "<Menu><Name>Applications</Name>", "not xml",
+                     "<Other><Name>Applications</Name></Other>"]:
+            m = valid()
+            m["menu"] = text
+            self.assertReported(m, "menu: ")
 
     def test_icons_and_licences(self):
         for path in ["/usr/share/icons/hicolor/256x256/apps/station-manager-desktop.png",

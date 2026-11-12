@@ -1457,3 +1457,58 @@ it and start part 3").
 
   Part 3's CI evidence is complete. The clean Fedora guest acceptance remains, and is the
   operator's.
+
+### D1 addition: the Amateur Radio menu group (2026-11-12)
+
+**Operator (chat, after installing the desktop app on the station):** "Station Manager desktop
+should be added to the Amateur Radio Menu group - there is one alread defined in Fedora"; "It
+is defaulting to Internet". On the proposal below: "yes, build it — only Station Manager".
+
+- **What was measured first (Fedora 44, KDE Plasma, passive):**
+  - The menu (`/etc/xdg/menus/plasma-applications.menu`) has no `HamRadio` category and no
+    ham-radio menu. There is no such `.directory` file, and
+    `/etc/xdg/menus/applications-merged/` was empty.
+  - KDE's own builder (`kbuildsycoca6 --menutest`, temp cache and config) placed the entry
+    under `Internet/`: `Network` is its main category, and `HamRadio` only an additional one.
+  - Fedora's `wsjtx-3.0.1-1.fc44` (read from the package, not installed) has
+    `Categories=AudioVideo;Audio;HamRadio;` and no menu file; the same test placed it under
+    `Multimedia/`.
+  - The Fedora packages that ship a merged menu are astronomy-menus, electronics-menu,
+    games-menus, islamic-menus, multimedia-menus, security-menus, waydroid and wine-desktop.
+    None is for amateur radio.
+  - So Fedora defines no Amateur Radio group to join; the package has to bring it.
+- **What the package now ships,** following `astronomy-menus-1.0-34.fc44`:
+  - `/etc/xdg/menus/applications-merged/station-manager-desktop.menu`, a config file as
+    Fedora's is: an "Amateur Radio" menu that includes the `HamRadio` category, and the removal
+    of `station-manager-desktop.desktop`, by filename, from Internet.
+  - `/usr/share/desktop-directories/station-manager-amateur-radio.directory`: the group's name
+    and icon.
+  - No scriptlet: the desktop reads `/etc/xdg/menus` itself.
+- **Scope (operator ruling):** only Station Manager's own entry leaves Internet. Other
+  `HamRadio` applications appear in the group as well and keep their existing places; this
+  package does not rearrange another package's entry.
+- **`Categories=Network;HamRadio;` is unchanged.** `desktop-file-validate` prints a hint for
+  `HamRadio` without `Network` or `Audio`, and the content check fails on any validator output.
+- **The content check** (`scripts/desktop-rpm-check.py`, 24 tests now) requires:
+  - both files, and the menu file as the package's only config file;
+  - the directory entry's `Type`, `Name` and `Icon`;
+  - `HamRadio` among the desktop entry's categories, as a whole item;
+  - the menu file to hold exactly the group (its `Directory`, and an `Include` of exactly
+    `HamRadio`) and an Internet menu whose only rule excludes Station Manager's entry by
+    filename; no other menu, no other element, well-formed XML.
+- **Evidence:**
+  - RED: the eight new tests failed before the rules existed; the sixteen existing ones passed.
+  - Reversions M1 to M11 (and M6b), each one exact replacement in the check, each caught by
+    its test and restored byte for byte. M1, an Internet exclusion by category or of other
+    applications, is the operator's ruling.
+  - The built RPM passes the check: 96 files, the menu file flagged `c`, no scriptlets.
+  - KDE's menu test on the **extracted package** in temp dirs, with Fedora's `wsjtx.desktop`
+    and a `Network;HamRadio;` probe entry beside it:
+    `Amateur Radio/ station-manager-desktop.desktop` and nothing under Internet for it;
+    `wsjtx` under both Multimedia and Amateur Radio; the probe under both Internet and Amateur
+    Radio.
+- **Not tested:** desktops other than KDE Plasma. GNOME's overview has no category menu. The
+  file is the standard merged-menu mechanism, so a desktop that builds its menu from
+  `/etc/xdg/menus` should show the group; that is an inference, not a measurement.
+- **Cost of installing it:** the desktop RPM requires the exactly matching daemon version
+  (ruling Q4), so a rebuilt desktop RPM needs the daemon redeployed from the same tree.
