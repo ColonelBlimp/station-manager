@@ -20,7 +20,7 @@ Reserved for a defect that stops all other work (TX safety, data loss). None ope
 
 ## P1 — verified correctness, in order
 
-None open. W-0008 CC-5 closed: released in alpha.5, B1-01 waiver retired 2026-10-28.
+1. **W-0028 · SELECTED 2026-11-12 — [FT8/FT4 logging independent of enrichment](work/W-0028-ft8-logging-independent-of-enrichment.md).** Defect: a slow lookup can use up the completion job's deadline, so the contact is not stored. Fix: log at completion without waiting for a lookup.
 
 Conditional: alpha.2 Finding #7 (false TX alarm at bridge open, W-0011) becomes P1 once passively reproduced.
 W-0007's four findings (equal-version SM Cloud conflict, partial station baseline, concurrent QSO delete,

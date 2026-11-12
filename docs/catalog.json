@@ -392,6 +392,15 @@
       "summary": "W-0027 builds ADR 0102's Electron desktop host in small slices, each reviewed by the operator and Codex before the next: the shell in the repository, the UI's chrome for a windowed application, the daemon's authenticated channel and operating-client check, and packaging through a signed dnf repository; slice order awaits the operator; its ranking lives in the backlog."
     },
     {
+      "id": "work.w-0028",
+      "path": "docs/work/W-0028-ft8-logging-independent-of-enrichment.md",
+      "class": "work-item",
+      "audiences": ["operator", "contributor", "agent"],
+      "topics": ["ft8", "ft4", "logging", "enrichment"],
+      "scopes": ["cmd/smd/**", "internal/lookup/**", "internal/qsoservice/**"],
+      "summary": "W-0028 is the P1 defect fix that makes FT8/FT4 logging independent of enrichment: the completed-exchange job shares one deadline between the lookup and the write, so a slow lookup can stop a contact from being stored; per the operator's ruling the lookup starts with the ladder and completion logs at once with whatever has arrived."
+    },
+    {
       "id": "work.dogfood-inbox",
       "path": "docs/dogfood-inbox.md",
       "class": "work-item",
