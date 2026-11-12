@@ -63,8 +63,13 @@ stops the deadline from expiring, but it still delays logging, so the ruling rej
 - Use a provider held behind a barrier. Assert the contact and its upload-queue rows are stored
   **while the lookup is still blocked** (codex-092), then release it and confirm it is cleaned up.
   Never wait 30 s.
-- Reversion proof: put back the shared context and show the non-waiting assertion fails for that
-  reason.
+- **Two properties, two reversions (codex-093):**
+  - *Logging does not wait for the lookup:* the reversion puts back the synchronous
+    lookup-before-write. It must fail while the provider is held. Putting back only the shared
+    context would not, once the lookup no longer runs inline.
+  - *The write has its own context:* expire or cancel the lookup's context and prove the write
+    still commits. The reversion is the write inheriting that context.
+  - Each fails only against its own reversion.
 - Cover a ready result being included, and a stale or abandoned exchange's result being excluded.
 - Also cover enrichment success, enrichment error, and decode-loop cancellation.
 
