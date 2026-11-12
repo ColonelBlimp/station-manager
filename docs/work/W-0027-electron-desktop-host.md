@@ -976,3 +976,194 @@ operator's action.
   the app, because the shell refuses same-origin pop-out windows until the window set (A2).
 - **C1d accepted (operator, 2026-11-11): "yes, C1d accepted, commit it".** A1's fixture-only
   restriction is lifted: the desktop app loads the local smd's UI over the pinned listener.
+
+### D1 brief — the desktop app as an installable package (2026-11-11; revised after codex-074; proposed, for review before code)
+
+Started on the operator's direction ("yes, commit it and start the D1 brief"), after the ruling that
+the browser is not retired until a user can launch the desktop app (Rulings, 2026-11-11). D1
+delivers the shell package (ADR 0102 rulings 7-9); D2 (the repository and signing) follows. D1
+stays development-only until the later release gates (D2-D6).
+
+**Outcome the operator sees:** installing the desktop package puts **Station Manager** in the
+desktop's application menu with its icon. Choosing it opens the app on the local `smd`, or on the
+app's waiting page while `smd` is not running. There is no repository checkout, Node or `npm`.
+Removing the desktop package as documented leaves `smd` and the browser working. Nearest
+confusable outcome: a package that installs files but cannot be launched from the menu, one that
+starts but runs the test fixtures, or one whose removal takes `smd` with it.
+
+**What exists today (read and measured for this brief):**
+- The daemon RPM is built by `nfpm` from `nfpm.yaml` (`scripts/release-rpm.sh`, the public path;
+  `scripts/dev-rpm.sh`, the private keyed path). It has no desktop file and no scriptlets; `smd`
+  is a systemd user service.
+- The shell runs from a checkout. `desktop/node_modules/electron/dist` is Electron 44.9.3 (284 MB
+  unpacked), pinned by `desktop/package-lock.json`. Its `install.js` passes the bundled
+  `checksums.json` to `@electron/get`, which verifies the downloaded archive by SHA-256, unless
+  `electron_use_remote_checksums` is set. An existing `dist` is not re-verified. The app is
+  `desktop/src`, `assets` and `package.json`, with no runtime npm dependencies.
+- **`src/main.mjs` statically imports `../harness/server.mjs`** (the test fixture harness) and
+  switches to test modes on `SM_DESKTOP_SCENARIO`. Before anything else it takes
+  `SM_DESKTOP_USERDATA` as the profile and a fake-media switch. A package without the harness
+  would fail to start.
+- **`app.isPackaged` depends on the executable's name** (codex-074; reproduced by Claude). The same
+  runtime with an app in `resources/app` prints `isPackaged=false` when the binary is named
+  `electron`, and `true` when it is renamed `station-manager-desktop`. A wrapper script does not
+  change this.
+- **Measured on this host (Fedora 44, this machine's configuration):**
+  - The ELF files shipped in `dist` are `electron`, `chrome_crashpad_handler`, `chrome-sandbox`,
+    `libffmpeg.so`, `libvk_swiftshader.so` and `libvulkan.so.1`.
+  - Their libraries resolve to 76 system packages, with none missing: alsa-lib atk at-spi2-atk
+    at-spi2-core avahi-libs bzip2-libs cairo cairo-gobject cups-libs dbus-libs expat fontconfig
+    freetype fribidi gdk-pixbuf2 glib2 glibc glycin-libs gmp gnutls graphite2 gtk3 harfbuzz
+    json-glib keyutils-libs krb5-libs lcms2 libblkid libbrotli libcloudproviders libcom_err
+    libdatrie libdrm libepoxy libffi libgcc libidn2 libmount libpng libseccomp libselinux libtasn1
+    libthai libtinysparql libunistring libwayland-client libwayland-cursor libwayland-egl libX11
+    libXau libxcb libXcomposite libXcursor libXdamage libXext libXfixes libXi libXinerama
+    libxkbcommon libxml2 libXrandr libXrender mesa-libgbm nettle nspr nss nss-util openssl-libs
+    p11-kit pango pcre2 pixman sqlite-libs systemd-libs xz-libs zlib-ng-compat. This is
+    supporting evidence from a populated workstation, not acceptance: runtime-loaded libraries
+    are not visible to `ldd`.
+  - `chrome-sandbox` is not setuid (`-rwxr-xr-x`); `user.max_user_namespaces` is 123510; the
+    automated checks run with sandboxed renderers. This holds for this host's configuration only,
+    not for Fedora in general.
+
+**Proposed design:**
+1. **A second package, `station-manager-desktop`** (amd64), built by `nfpm` from a new
+   `nfpm-desktop.yaml` by `scripts/desktop-rpm.sh` (Task `rpm:desktop`). There is no new
+   packaging tool. The shell holds no secret, so there is one public build path and no private
+   marker. The build uses a clean `npm ci`, refuses checksum or source overrides
+   (`electron_use_remote_checksums`, mirrors), and records the Electron version and the archive's
+   SHA-256.
+2. **Layout** (root-owned, modes preserved, absolute paths throughout):
+   - `/usr/lib/station-manager-desktop/`: Electron's `dist`, **with the runtime binary itself
+     named `station-manager-desktop`** (so `app.isPackaged` is true), and the app in
+     `resources/app/` (`src/`, `assets/`, a production `package.json`). **No `test/`, no
+     `harness/`, no `node_modules`.**
+   - `/usr/bin/<command>` (Q1): a symlink to, or `exec` of, that binary by absolute path.
+   - `/usr/share/applications/<id>.desktop`: `Name=Station Manager`, the icon, `Categories`, no
+     `Terminal`, and a `StartupWMClass` matching the window's actual class, checked in the guest.
+   - `/usr/share/icons/hicolor/{256x256/apps/*.png, scalable/apps/*.svg}`, from the SPA's
+     `logo.svg`.
+   - `/usr/share/licenses/station-manager-desktop/`: Electron's `LICENSE` and
+     `LICENSES.chromium.html`.
+3. **Production mode:** the first thing `main.mjs` decides is whether it is packaged. If so,
+   `SM_DESKTOP_SCENARIO`, `SM_DESKTOP_USERDATA` and the fake-media switch are ignored before the
+   profile is set, any switch is applied or the instance lock is taken. Every harness and test
+   import is lazy, reached only on the development path. A packaged app given `a1`, `c1`, `c1d`,
+   `c1d-shell` or `second` takes the ordinary path. The interactive path (`launchTrusted`) is
+   unchanged.
+4. **Dependencies:** `Requires: station-manager` with the version contract of Q4. The system
+   packages are declared from the measured list above, then validated on a clean Fedora guest by
+   launching the installed app (RPM headers inspected).
+5. **Removal (codex-074):** `rpm -e station-manager-desktop` removes only the shell. With
+   `dnf remove`, DNF may also remove `station-manager` if it was pulled in only as a dependency
+   (its default `clean_requirements_on_remove`, an inference from DNF's documentation, to be
+   tested in the guest). The documented install is therefore both packages by name
+   (`dnf install station-manager station-manager-desktop`), so both are user-installed. The
+   documented removal of the desktop alone is `dnf remove station-manager-desktop`, which keeps a
+   user-installed `smd`. No scriptlet touches a user service, and no global DNF setting is
+   changed. `rpm -e station-manager` with the desktop installed is refused by the dependency;
+   `dnf remove station-manager` would offer to remove the desktop too, which is DNF's documented
+   behaviour and is stated in the install guide.
+6. **The sandbox:** shipped as measured, with `chrome-sandbox` not setuid and renderers sandboxed
+   through user namespaces. The app is **never** run with `--no-sandbox`. Where namespaces are
+   denied, it fails to start. **The failure must be visible for a menu launch with no terminal:**
+   the guest test denies namespace creation, records where the error appears (for example the
+   user journal), and the operator rules whether that is enough.
+7. **A start-up trace:** the shell writes one line to stderr when its discovery state changes
+   ("waiting: smd has not created its identity yet <path>", "pinned <origin>"), with paths and
+   reasons only and never config contents. It also writes one line from the main window's actual
+   `did-finish-load`, classifying its current URL as the local waiting page (a bounded label,
+   never the `data:` URL or HTML) with the renderer's process ID from that same `webContents`,
+   and one when a load fails or the renderer is gone. That proves the page loaded, not its
+   visual or textual correctness, which the page tests and the guest check cover (codex-076). The trace is a diagnostic, not proof on its own (codex-075). Whether a
+   menu launch's stderr reaches the user journal is a guest observation, not assumed: the guest
+   test records where it lands and the command that retrieves it.
+8. **The version:** SM's own version, computed once for both packages through the existing
+   `scripts/version.sh` conversion, with the RPM version and release contract stated (Q4). Both
+   packages are built from the same commit.
+9. **CI:**
+   - builds the RPM and checks its contents: no `test/` or `harness/`; the binary named
+     `station-manager-desktop`; the licences, desktop file and icons; `desktop-file-validate`
+     clean;
+   - runs a **production smoke check** of the staged artifact. It runs from an unrelated working
+     directory, with no checkout path and no Node on `PATH`, with synthetic `config.json` and data
+     and no daemon. It runs once for each development selector, `SM_DESKTOP_SCENARIO` set to
+     `a1`, `c1`, `c1d`, `c1d-shell` and `second`, each with `SM_DESKTOP_USERDATA=<dir>`
+     (codex-075; `second` matters because its development branch exits early).
+   - The smoke check asserts, for each run:
+     - the trace reports waiting, and that the waiting page finished loading, with no load
+       failure or lost renderer in the settle window;
+     - the renderer the trace names is, by external `/proc` inspection, a live `--type=renderer`
+       descendant of this launch (intermediate processes allowed); a missing, vanished,
+       unrelated or uninspectable process fails, never skips;
+     - that renderer shows, by external `/proc` inspection, seccomp filter mode (`Seccomp: 2`)
+       and user and PID namespaces different from the main process's: observed namespace
+       isolation and filter mode for that renderer only, not the filter's rules or Chromium's
+       full sandbox policy (codex-076);
+     - the process keeps running (not a test exit); the synthetic config is unchanged; and
+       nothing is created in the hostile profile directory.
+   - Each run has an overall deadline, and the harness owns and reaps every process it starts;
+     the settle window is bounded.
+   - **Reversion proofs,** in an isolated review copy of the staged artifact, never the shipped
+     one: a broken waiting-page load fails the page check; `sandbox: false` and `--no-sandbox`
+     each fail the sandbox check **on the CI runner itself** (seccomp can be inherited from the
+     environment, so a host-only proof is not enough). Measured on this host in a scratch probe (2026-11-12): a
+     sandboxed renderer shows `Seccomp: 2` and its own user and PID namespaces; with
+     `--no-sandbox`, or `sandbox: false`, it shows `Seccomp: 0` and the host's namespaces.
+   - The A1 checks of the production window options (`sandbox: true`,
+     `contextIsolation: true`, `nodeIntegration: false`) stay.
+   - `ELECTRON_FORCE_IS_PACKAGED` is never set. The A1, C1 and C1d checks stay on the development
+     path.
+
+**Acceptance** (CI's contents and smoke checks, then a clean Fedora guest, as in earlier acceptance
+lanes; never the station until the operator chooses):
+- **Install:** `dnf install station-manager station-manager-desktop` succeeds with no manual step.
+  The menu shows **Station Manager** with its icon, and the window matches its desktop entry.
+- **Launch:** with `smd` stopped, the waiting page (Q3); starting `smd` opens the workspace. A
+  second launch raises the first. The launcher works from an unrelated directory with no Node
+  installed.
+- **Hostile environment:** `SM_DESKTOP_SCENARIO` and `SM_DESKTOP_USERDATA` set in the session do
+  not change the installed app.
+- **Removal:**
+  - `dnf remove station-manager-desktop` with `smd` installed by name: `smd` and the browser keep
+    working;
+  - the same with `smd` pulled in only as a dependency: the observed outcome is recorded against
+    the install guide's wording;
+  - `rpm -e station-manager` with the desktop installed: refused.
+- **Sandbox:** the renderers are sandboxed with no setuid helper and no `--no-sandbox`. With
+  namespace creation denied, the app does not run unsandboxed, and where its error appears is
+  recorded.
+- **Dependencies:** the RPM's `Requires` are inspected, and the app runs on a clean guest that has
+  only what they pull in.
+- **Upgrade:** upgrading both packages while the app runs keeps the window running, and the new
+  code applies at the app's next start. This proves only D1's part; D6 owns editing,
+  detached-window and lazy-asset compatibility.
+- **Package:** the file list matches the layout exactly. The size is measured and recorded.
+
+**Questions for the operator (not decided here); recommendations from Claude and Codex
+(codex-074) agree:**
+- **Q1. The command.** **Ruled 2026-11-12: `station-manager`** (not `sm-desktop`); the menu
+  name is "Station Manager".
+- **Q2. Autostart of the desktop window at login** (`smd`'s own start-up, its systemd user
+  service, is unchanged). **Ruled 2026-11-12: no**; the window opens only from the menu or the
+  command ("launcher only", ADR 0102 ruling 7). The package installs no autostart entry.
+- **Q3. When `smd` is not running.** **Ruled 2026-11-12: (a).**
+  - (a) Show `smctl start` guidance on the waiting page when the daemon does not answer, keeping
+    C1d's identity-refusal explanations, since an unavailable endpoint does not prove `smd` is
+    stopped (recommended);
+  - (b) the app starts the user service;
+  - (c) only "waiting".
+- **Q4. The version contract.** **Ruled 2026-11-12: exact matching versions during alpha**,
+  computed once for both packages from the same commit (not a minimum version).
+- **Q5. Where Electron comes from.** **Ruled 2026-11-12: the lockfile-pinned npm install**, with
+  its SHA-256 artifact check documented and overrides refused (not a separate download).
+
+**Not in D1:**
+- the dnf repository and signing (D2);
+- the security-update routine and support check (D3);
+- the Chromium notices review (D4);
+- the CSP and further hardening (D5);
+- the full in-place upgrade acceptance (D6);
+- window placement (A4).
+
+No package scriptlet restarts or otherwise touches the operating daemon.
