@@ -75,7 +75,8 @@ The daemon owns the **operating session**:
 - **Membership:** an explicit association, written in the same transaction as the QSO by the live
   logging paths only.
 - **Controls:** New session, and Continue from a list of previous sessions for the current logbook.
-  A successful archive switch or default-logbook change closes the session and opens a new one.
+  A default-logbook change closes the session when it takes effect; an archive switch closes it
+  when the switch is requested (§4, O9 ruled 2026-11-12). Either way a new one opens.
   Sessions that end with no members are discarded; deleting sessions with members is not in the
   first slice.
 - **Consumers:** the Session panel in every window, the Map, session email and export, and FT8
@@ -96,6 +97,8 @@ After the design exchange (claude-078 to claude-085, codex-041 to codex-043), th
 5. The Session panel offers New session and Continue from a list of previous sessions for the
    current logbook, most recent first.
 6. A successful archive switch or default-logbook change closes the session and starts a new one.
+   (Refined for archive switches on 2026-11-12, §4: the close happens when the switch is
+   requested, whether or not the switch then succeeds.)
 7. Deleting sessions that have contacts is not in the first slice.
 
 ### 1. Identity and record
@@ -205,7 +208,11 @@ After the design exchange (claude-078 to claude-085, codex-041 to codex-043), th
     never treated as a clean exit.
 - **While an operating app is attached and no session is open** (after a default-logbook change or
   an archive switch, §4), the daemon opens a new session at once. This is the same rule, so there is
-  no state in which the running app has no session, apart from the recovery question.
+  no state in which the running app has no session, apart from the recovery question and the
+  closing phase of an archive switch (§4), when the daemon opens none until it exits or the
+  switch fails.
+- **An arrival after an archive switch is never a recovery** (§4): a session still open in the
+  served archive is closed first, and a new one opens without the question.
 - **One session per app lifetime at start:** initialization and its retries are idempotent; a
   retried start never opens a second session.
 
@@ -296,18 +303,78 @@ itself; the boundary is the change **taking effect**.
   the current session and open a new one - simple for now. If something else is needed will deal
   with it when there is a need."
   - Each archive holds its own sessions and QSOs; nothing crosses archives.
-  - **The close is written when the switch is requested:** in the departing archive's file,
-    before the restart is requested, with `close_reason` `archive_switched` and the generation
-    advanced (an empty session is discarded, as at every close). If that write fails, the switch
-    is not requested, so a broken database is reported rather than switched away from.
-  - **Then the ordinary rule applies (§3):** whichever archive the restarted daemon serves (the
-    target, or the departing one after a failed activation or a fallback) has no session open
-    for the attached app, so it opens a new one.
-  - **Accepted cost:** a switch that fails still ends the sitting in the departing archive. Its
-    contacts stay where they are, and Continue from the list brings the closed session back.
-    A power loss after the close leaves the session closed; the next start opens a new one.
-  - **Returning to an archive** later opens a new session there; Continue from the list brings an
-    old one back. Nothing is continued silently.
+  - **The order of a switch request** (`Activate`, `internal/archive/activate.go`):
+    1. **Validation and preflight**, unchanged: an invalid target, a pending default change, a
+       missing restart port or a failed identity check is refused before anything is sealed or
+       closed, so a refusal never ends the sitting.
+    2. **Admission seals:** FT8 TX and the rig, as today, then the **live Phone/CW entry gate**
+       (`api.LiveEntryGate`, today taken only by a default change, ADR 0097; operator ruling
+       2026-11-12: "Refuse, as recommended — like the default change"). Taking it waits
+       for every already admitted Phone/CW submit to finish; each commits into the open session
+       before the close. A submit arriving after it is refused with the switch's own code and
+       "nothing was logged — log it again once the page reloads", as for a default change.
+    3. **The FT8 completion drain:** the switch then waits for every already earned FT8
+       completion logging job (`launchFt8QsoLog`, tracked on `qsoLogWG`, each bounded by the
+       existing `ft8QsoLogTimeout`, `cmd/smd/main.go:81`) to finish; each commits into the open
+       session before the close. With TX sealed no new completion can start, and the
+       implementation must prove that no job launched before the seal escapes the wait. A
+       switch requested just after an FT8 contact therefore waits for that contact's logging.
+       How long that takes has not been measured. Under the operator's ruling of 2026-11-12
+       (`docs/dogfood-inbox.md`: FT8/FT4 logging never waits on enrichment), it is only the
+       write once that is built. A finished job is not proof the contact was stored: a job can
+       end with a failed write, and a context deadline is cooperative, not a forced stop.
+    4. **The close,** in the departing archive's file: `close_reason` `archive_switched`, the
+       generation advanced, an empty session discarded. If it fails, every seal is released and
+       the switch is not requested, so a broken database is reported rather than switched away
+       from. The session is still open and the sitting continues.
+    5. **The pending intent** (`PendingQsoArchiveID`, in `config.json`) and **the restart
+       request**, as today. These are a different durability boundary from the archive file
+       (`internal/config/doc.go`), so the close and the intent are not one transaction. If the
+       intent cannot be recorded or the restart request fails, the seals are released as today;
+       the close stands, the closing phase ends, and the ordinary rule (§3) opens one new session
+       in the departing archive. A retried switch closes that session in turn; it is discarded if
+       nothing was logged in it, so retries do not accumulate sessions.
+  - **The closing phase** runs from the close until the process exits or the switch fails
+    (step 5). Because both live paths were drained before the close, no contact can join a
+    session in it, so it creates no session. In it:
+    - the daemon opens no session for the attached app;
+    - **New** and **Continue** are refused with a distinct switch-in-progress code, changing
+      nothing; the window redraws when the page reloads;
+    - **an exit report** is acknowledged without change (the session is already closed), so the
+      app can exit cleanly; the next start then finds no open session and opens a new one.
+    - The safety net (§2) is unchanged: a contact stored here through a path this ADR does not
+      know of would still be logged in a new session, then handled by the ordinary rules (§3),
+      including recovery. Such a path is a defect for the tests below to catch.
+  - **The arrival:** at every start that processes a pending activation, whether it is applied or
+    falls back to the departing archive, a session still open in the served archive is closed with
+    `archive_switched` (discarded if empty) before the app is served, and the ordinary rule (§3)
+    opens a new one without the recovery question. That covers a remnant left in the target by an
+    earlier crash. A switch never relies on the arriving archive holding no open session.
+  - **Ownership:** only the served archive's sessions are live. Nothing reads or changes the
+    sessions of an archive that is not served; they are acted on only when it is next served.
+  - **Accepted cost:** a switch that fails after its close still ends the sitting in the
+    departing archive. Its contacts stay where they are, and Continue from the list brings the
+    closed session back. A power loss after the close and before the intent is durably recorded
+    (including an uncertain `config.json` write that did not survive) leaves the session closed
+    and nothing open, because the drains left no closing-phase session; the next start opens a
+    new one without a question.
+  - **Returning to an archive** later is an arrival, so it opens a new session there. Continue
+    from the list brings an old one back. Nothing is continued silently.
+  - **Required tests:**
+    - a Phone/CW submit crossing the seal: admitted before it, logged in the session being
+      closed; after it, refused and nothing logged;
+    - an FT8 completion job running when the switch is requested: the close waits for it, and the
+      contact is **stored** (the QSO row and its upload-queue rows committed) in the closed
+      session; the job reaching the end of the wait is not enough;
+    - no completion launched before the TX seal escapes the drain;
+    - power loss after the close and before the intent, and the same with an uncertain
+      `config.json` write that did not survive: the next start opens a new session without the
+      recovery question, and the earlier session stays closed with its contacts;
+    - a restart-request failure with the app attached: seals released, the phase ended, one new
+      session in the departing archive; a retry does not leave an empty session behind;
+    - a close failure: nothing requested, the session still open;
+    - New, Continue and an exit report during the closing phase;
+    - an arrival with a remnant in the target: closed, a new one opened, no recovery question.
   - **An active contest** in the departed archive keeps its record (ADR 0101); contest mode is
     independent of sessions (§9).
 
