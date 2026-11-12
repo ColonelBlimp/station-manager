@@ -340,3 +340,8 @@ implementation authorisation; the operator's decisions are marked under each ite
      chain stay in `smd.log`, as the archive routes already promise.
    - **Impact:** low; it is not a secret.
    - **Acceptance:** no file path in the default-change error bodies; the path still logged.
+- [2026-11-12] FT4/FT8 "Tx 1 disabled" contest callers (RSGB FT4 series). Operator: "I want to support this for the RSGB FT4 contesting." The 2026 RSGB FT4 rules say to use standard FT4 (not the contest formats) and allow disabling Tx 1, since grids are not needed. Code reading (agent, 2026-11-12):
+   - **Calling CQ (the gap):** a caller with Tx 1 disabled answers our CQ with a bare report (`US THEM -12`). We list and pick only grid answers (`internal/ft8/caller_sequencer.go:588` `collectAnswerersLocked`; `:665` the auto pick, both `pm.kind != msgGrid`), so such callers are silently ignored.
+   - **Answering a CQ:** we always open with Tx 1 (`THEM US GRID`; `internal/ft8/sequence.go` `NewExchange`, `txCalling`). There is no option to open with a report. This is allowed by the rules ("may disable"), but costs a cycle.
+   - **Wanted:** (1) accept a report-first answer to our CQ, listing it and replying `R-report`; (2) optionally, a "skip Tx 1" setting when answering. A sequencer change under `internal/ft8/AGENTS.md` (rungs, final-rung policy, logging with RST_RCVD from their first report and no grid).
+   - **Acceptance:** in a run, a report-first caller is listed and worked to a logged QSO, with no grid and both reports; with the setting on, answering a CQ opens with our report.
