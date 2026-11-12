@@ -1182,7 +1182,7 @@ Started on the operator's direction ("yes, commit it and start D1"), after the b
    the CI runner (brief item 9).
 Then the clean Fedora guest acceptance, which needs the operator.
 
-**Part 1 (built, not committed):**
+**Part 1 (committed 152f7b4b on direction; the clean-room review found nothing):**
 - `src/mode.mjs` decides first, from `app.isPackaged`: an installed app ignores
   `SM_DESKTOP_SCENARIO`, `SM_DESKTOP_USERDATA` and fake media; only a strict `false` is
   development. `src/main.mjs` applies it before the profile, any switch or the instance lock, and
@@ -1240,3 +1240,100 @@ Then the clean Fedora guest acceptance, which needs the operator.
 - **Not yet in part 1:** a hardened probe. The scratch probe hung when R10 removed the renderer
   line, until `timeout` reaped it (no process was left). Part 3's harness needs the overall
   deadline and the owned-process cleanup that codex-076 asks for.
+
+**Part 2 (built, not committed): the package.** Started on direction ("yes, commit it and start
+part 2").
+- **Measured first, on the scratch staging (this host):**
+  - the shipped ELF files' direct `NEEDED` libraries: 34 sonames, one of them (`libffmpeg.so`)
+    shipped by Electron. All 33 others resolve to Fedora 44 packages (`rpm -q --whatprovides`):
+    glibc, glib2, gtk3, nss, nspr, mesa-libgbm, the X11 and AT-SPI libraries and others.
+  - a `/usr/bin` **symlink** launcher keeps the app installed: a hostile `a1` is ignored and no
+    hostile profile is made.
+  - under Xvfb, the visible main window's `WM_CLASS` is `station-manager-desktop` whether it
+    is launched through the symlink or directly. The launcher's name appears only on an
+    unmapped 10x10 leader window. Wayland's app id is left to the guest.
+  - Fedora refreshes the desktop-entry and icon caches itself (`rpm -q --filetriggers`:
+    `desktop-file-utils` and the icon theme), so the package needs no scriptlet for them.
+  - Electron 44 has **no install script**: `install.js` downloads on first use. The build runs it
+    explicitly.
+- **`scripts/desktop-rpm.sh`** (Task `rpm:desktop`):
+  - It refuses Electron source, checksum, platform and cache overrides by pattern
+    (codex-079): any environment variable whose name contains `electron`, case-insensitively
+    (the downloader reads `ELECTRON_*`, `electron_*`, `npm_config_electron_*`,
+    `NPM_CONFIG_ELECTRON_*` and `npm_package_config_electron_*` in several spellings), plus
+    `npm_config_platform`, `npm_config_arch` and `force_no_cache`; and any npm configuration
+    key naming `electron`, `platform` or `arch`.
+  - It runs a clean `npm ci --ignore-scripts` of the lockfile (which has no install scripts) in
+    a temporary directory, then Electron's `install.js` with only `PATH`, an empty `HOME` and a
+    fresh private cache in its environment, so an input the refusal does not name still cannot
+    reach the downloader, and the archive is always downloaded and verified.
+  - It asserts the archive's SHA-256 against `checksums.json` and records it in
+    `build/desktop/electron-source.txt`. That is the installer's own trust source, so it is an
+    explicit assertion on the archive used, not independent provenance (codex-079).
+  - It stages the runtime renamed, with Electron's default app removed (a broken app must fail,
+    not open Electron's demo), and the app with a production `package.json` carrying SM's
+    version.
+  - It packages with `nfpm-desktop.yaml`.
+- **`nfpm-desktop.yaml`:**
+  - the layout of the brief;
+  - the desktop entry `station-manager-desktop.desktop`
+    (`packaging/desktop/`, `Exec=station-manager`, `StartupWMClass=station-manager-desktop`,
+    `Categories=Network;HamRadio;`);
+  - the icons, the SPA's `logo.svg` and the shell's 256x256 `icon.png`;
+  - the licences: SM's `COPYING`, `LICENSE.electron` and `LICENSES.chromium.html`;
+  - no scriptlets;
+  - `Requires: station-manager = <version>-1` (Q4).
+- **Library requirements as sonames, a refinement of the brief** (it named packages): the 33
+  `NEEDED` sonames as `soname()(64bit)` requirements, which is what rpmbuild would generate and
+  is not tied to Fedora's package names. Libraries Chromium loads at run time are still the
+  guest's to find.
+- **`scripts/desktop-rpm-check.py`** inspects the built RPM itself: the header, the file list
+  with modes and owners, and the extracted package.json, desktop entry, icon and each ELF
+  file's `NEEDED`. It requires:
+  - name, arch and version, and exactly one `station-manager = V-R` requirement;
+  - library requirements equal to the shipped binaries' `NEEDED`, minus what it ships;
+  - no scriptlet;
+  - the renamed binary, no `electron` and no default app; the launcher symlink;
+  - under `resources/app` only an allowlist (`package.json`, `src/*.mjs` equal to
+    `desktop/src`, `assets/*`), and a production `package.json` with only six keys;
+  - root ownership; nothing setuid, setgid or group/world-writable; the helpers executable;
+  - the desktop entry's keys, and `desktop-file-validate` clean;
+  - the icons (the PNG 256x256) and the licences.
+- **It caught a real defect:** nfpm flattens a plain directory source, so `locales/`, `src/`
+  and `assets/` had all landed in one directory. `type: tree` fixed it, and the allowlist then
+  admits only the `src` and `assets` directory entries.
+- **Result:** `task rpm:desktop` passes, `station-manager-desktop-<v>-1.x86_64`: 94 files,
+  119 MiB, 33 library requirements; 84 s with the download. The RPM unpacked into the
+  scratchpad and launched through its own symlink ran installed: the hostile `second` selector
+  was ignored, the waiting page loaded in a sandboxed renderer, the app stayed alive, no hostile
+  profile was made and the config was unchanged. It was not installed on this machine.
+- **Reversion proofs:**
+  - The checker's 16 unit tests: C1-C10 each remove one rule (the exact daemon requirement,
+    the library comparison, the bundled exclusion, scriptlets, the unrenamed binary, the
+    allowlist, setuid, the desktop keys, the directory entries, the package.json keys). Each
+    fails its test. Restored and verified.
+  - The artifact, repacked by nfpm from a scratch copy of the stage: unchanged passes. Each of
+    these fails the check, naming the fault:
+    - A1, the harness shipped;
+    - A2, the binary not renamed;
+    - A3, `station-manager >= V`;
+    - A4, a library dropped;
+    - A5, `chrome-sandbox` setuid;
+    - A6, the default app kept;
+    - A7, the development `package.json`.
+  - The build guard, offline (`scripts/desktop_rpm_guard_test.py`, 5 tests; `npm ci` is a stub
+    that writes a fake Electron package, so nothing is downloaded and the stage is untouched):
+    35 override spellings and 7 npm configuration keys are each refused before `npm ci`; the
+    downloader sees only `PATH`, `HOME` and the cache, even with `NODE_OPTIONS`, `HTTPS_PROXY`
+    and an unnamed variable set; an archive without the pinned SHA-256 is refused before
+    staging. Before the fix, 24 cases failed, including codex-079's
+    `npm_package_config_electron_mirror` and `npm_config_electron_custom_filename`. Reversions,
+    each failing and restored: R1 the inherited environment; R2 a prefix-only pattern; R3 no
+    npm configuration scan; R4 `npm_config_platform` dropped; R5 a case-sensitive match; R6 the
+    SHA-256 assertion disabled.
+- **Wiring:** Task `rpm:desktop` (the checker's and the guard's tests, the build, the check); `ci-local.sh`
+  runs it after the desktop scenarios; CI runs it after the desktop scenarios, installing
+  `rpm`, `cpio`, `binutils` and `desktop-file-utils` and the pinned nfpm v2.47.0.
+- **Not in part 2:** `docs/install.md` is unchanged, because nothing is published before D2; the
+  documented `dnf install station-manager station-manager-desktop` goes there when there is a
+  repository. The production smoke check is part 3. The guest acceptance is the operator's.

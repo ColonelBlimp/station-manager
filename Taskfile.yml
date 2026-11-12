@@ -186,6 +186,22 @@ tasks:
     cmds:
       - scripts/smcloud-rpm.sh
 
+  rpm:desktop:
+    desc: |
+      Build and check the desktop app RPM (W-0027 D1) →
+      build/release/station-manager-desktop.x86_64.rpm. One public build path (the shell
+      holds no secret): a clean npm ci of desktop/package-lock.json in a temporary
+      directory, a fresh Electron download verified against its pinned SHA-256, the runtime
+      renamed station-manager-desktop, the app in resources/app without tests or harness.
+      Same version as the daemon RPM built from the same commit (operator ruling Q4). Then
+      scripts/desktop-rpm-check.py checks the artifact's contents. Needs node, npm, nfpm,
+      rpm, cpio, readelf, desktop-file-validate and network. Development only until D2-D6.
+    cmds:
+      - python3 -I scripts/desktop_rpm_check_test.py
+      - python3 -I scripts/desktop_rpm_guard_test.py
+      - scripts/desktop-rpm.sh
+      - sh -c '. scripts/version.sh; V=$(sm_git_version); python3 -I scripts/desktop-rpm-check.py build/release/station-manager-desktop.x86_64.rpm --version "$(sm_rpm_version "$V")" --app-version "$V"'
+
   rpm:dev:
     desc: |
       Build a development RPM ready for local install. This is the PRIVATE

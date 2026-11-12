@@ -166,6 +166,25 @@ jobs:
           xvfb-run -a npm run check:c1
           xvfb-run -a npm run check:c1d-shell
 
+      # W-0027 D1: the desktop app RPM. nfpm is pinned; rpm, cpio, binutils and
+      # desktop-file-utils read the artifact back. The build downloads Electron afresh and
+      # verifies its pinned SHA-256; the check inspects the RPM itself (header, file list,
+      # modes, extracted contents). A shallow checkout gives a SHA-only version, which is
+      # enough: the check compares the package against the version computed here.
+      - name: Desktop app RPM (build and content check)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q rpm cpio binutils desktop-file-utils
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          python3 -I scripts/desktop_rpm_check_test.py
+          python3 -I scripts/desktop_rpm_guard_test.py
+          scripts/desktop-rpm.sh
+          . scripts/version.sh
+          V=$(sm_git_version)
+          python3 -I scripts/desktop-rpm-check.py build/release/station-manager-desktop.x86_64.rpm \
+            --version "$(sm_rpm_version "$V")" --app-version "$V"
+
       - name: App SPA build (produces dist/ for daemon embed)
         working-directory: frontend/app
         run: npm run build

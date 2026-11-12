@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Station Manager
+GenericName=Amateur Radio Station
+Comment=Operate and log your amateur radio station through the local daemon
+Exec=station-manager
+Icon=station-manager-desktop
+Terminal=false
+Categories=Network;HamRadio;
+StartupWMClass=station-manager-desktop

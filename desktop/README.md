@@ -43,6 +43,24 @@ always takes the interactive path. The fixture harness and the test scenarios ar
 on the development path and are not shipped: ESLint refuses any `src/` import other than
 `electron`, `node:` built-ins and `./` siblings (`test/imports.test.mjs`).
 
+## The installable package (D1)
+
+`task rpm:desktop` builds `build/release/station-manager-desktop.x86_64.rpm` and checks it
+(`scripts/desktop-rpm.sh`, `nfpm-desktop.yaml`, `scripts/desktop-rpm-check.py`). It installs:
+
+- `/usr/lib/station-manager-desktop/`: Electron's runtime, its binary renamed
+  `station-manager-desktop`, with the app in `resources/app` (`src/`, `assets/` and a production
+  `package.json`; no tests, harness or `node_modules`, and no Electron default app);
+- `/usr/bin/station-manager`, the command, a symlink to that binary;
+- the **Station Manager** desktop entry, the icons and the licences.
+
+It requires exactly the `station-manager` version built from the same commit, and the system
+libraries the shipped binaries link against. It has no scriptlets: it never touches `smd` or a
+user service, and installs no autostart. Electron comes from the lockfile-pinned npm install, a
+fresh download verified against its pinned SHA-256. Source and checksum overrides are refused,
+and the downloader runs with only `PATH`, an empty `HOME` and its private cache.
+The package is development only until the repository, signing and release gates (D2-D6).
+
 ## The window and session rules (A1)
 
 The automated A1 and C1 checks use the built-in fixture harness (`harness/server.mjs`), never

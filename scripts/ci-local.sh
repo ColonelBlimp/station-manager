@@ -122,6 +122,8 @@ if [ -n "${DISPLAY:-}" ]; then
 else
     ( cd desktop && xvfb-run -a npm run check:c1d-shell )
 fi
+step "Desktop: the RPM (W-0027 D1): checker tests, build, content check"
+task rpm:desktop
 
 # The generated manual is not committed (only manual/public/.gitkeep is), so —
 # exactly as hosted CI does before its Go gate — build it here so the daemon

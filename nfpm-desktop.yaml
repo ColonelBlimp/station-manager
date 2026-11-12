@@ -1,0 +1,110 @@
+# yaml-language-server: $schema=https://nfpm.goreleaser.com/schema.json
+#
+# Station Manager desktop app RPM (W-0027 D1; ADR 0102 rulings 7-9). Build it with
+# scripts/desktop-rpm.sh (task rpm:desktop), which stages build/desktop/stage/ from a clean,
+# checksum-verified `npm ci` and sets VERSION; check it with scripts/desktop-rpm-check.py.
+#
+# The Electron runtime lives in /usr/lib/station-manager-desktop with its binary renamed
+# station-manager-desktop, so Electron reports the app as installed (app.isPackaged) and the
+# shell ignores its development selectors (desktop/src/mode.mjs). The app is resources/app:
+# src/, assets/ and a production package.json; no tests, harness or node_modules.
+
+name: station-manager-desktop
+arch: amd64
+platform: linux
+version: "${VERSION}"
+release: "1"
+maintainer: "ColonelBlimp"
+description: "Station Manager desktop app: the operator's window onto the local smd daemon (Electron)"
+homepage: "https://github.com/ColonelBlimp/station-manager"
+license: "GPL-3.0-only"
+
+# Operator ruling Q4 (2026-11-12): exactly the same version as the daemon during alpha, both
+# built from the same commit. nfpm's RPM release defaults to 1 for both packages.
+#
+# The libraries: exactly the sonames the shipped ELF files need (readelf NEEDED), minus
+# libffmpeg.so, which Electron ships. nfpm generates no automatic requirements, so they are
+# declared here; desktop-rpm-check.py fails if this list and the built binaries ever differ
+# (an Electron upgrade must update it). Libraries Chromium loads at run time are not visible
+# here; the clean-guest acceptance covers them.
+depends:
+  - "station-manager = ${VERSION}-1"
+  - "ld-linux-x86-64.so.2()(64bit)"
+  - "libasound.so.2()(64bit)"
+  - "libatk-1.0.so.0()(64bit)"
+  - "libatk-bridge-2.0.so.0()(64bit)"
+  - "libatspi.so.0()(64bit)"
+  - "libcairo.so.2()(64bit)"
+  - "libc.so.6()(64bit)"
+  - "libcups.so.2()(64bit)"
+  - "libdbus-1.so.3()(64bit)"
+  - "libdl.so.2()(64bit)"
+  - "libexpat.so.1()(64bit)"
+  - "libgbm.so.1()(64bit)"
+  - "libgcc_s.so.1()(64bit)"
+  - "libgio-2.0.so.0()(64bit)"
+  - "libglib-2.0.so.0()(64bit)"
+  - "libgobject-2.0.so.0()(64bit)"
+  - "libgtk-3.so.0()(64bit)"
+  - "libm.so.6()(64bit)"
+  - "libnspr4.so()(64bit)"
+  - "libnss3.so()(64bit)"
+  - "libnssutil3.so()(64bit)"
+  - "libpango-1.0.so.0()(64bit)"
+  - "libpthread.so.0()(64bit)"
+  - "libsmime3.so()(64bit)"
+  - "libudev.so.1()(64bit)"
+  - "libX11.so.6()(64bit)"
+  - "libxcb.so.1()(64bit)"
+  - "libXcomposite.so.1()(64bit)"
+  - "libXdamage.so.1()(64bit)"
+  - "libXext.so.6()(64bit)"
+  - "libXfixes.so.3()(64bit)"
+  - "libxkbcommon.so.0()(64bit)"
+  - "libXrandr.so.2()(64bit)"
+
+contents:
+  # Electron's dist with the runtime renamed, and the app in resources/app (staged).
+  # type: tree keeps the directory structure (a plain directory source is flattened, which the
+  # content check caught: locales/, resources/app/src/ and assets/ all landed in one directory).
+  - src: build/desktop/stage/lib/
+    dst: /usr/lib/station-manager-desktop/
+    type: tree
+
+  # The command (operator ruling Q1). A symlink: the visible window's class stays
+  # station-manager-desktop, and the app stays installed, whichever path launches it.
+  - src: /usr/lib/station-manager-desktop/station-manager-desktop
+    dst: /usr/bin/station-manager
+    type: symlink
+
+  - src: packaging/desktop/station-manager-desktop.desktop
+    dst: /usr/share/applications/station-manager-desktop.desktop
+    file_info:
+      mode: 0644
+
+  - src: desktop/assets/icon.png
+    dst: /usr/share/icons/hicolor/256x256/apps/station-manager-desktop.png
+    file_info:
+      mode: 0644
+  - src: frontend/app/public/logo.svg
+    dst: /usr/share/icons/hicolor/scalable/apps/station-manager-desktop.svg
+    file_info:
+      mode: 0644
+
+  - src: LICENSE
+    dst: /usr/share/licenses/station-manager-desktop/COPYING
+    file_info:
+      mode: 0644
+  - src: build/desktop/stage/LICENSE.electron
+    dst: /usr/share/licenses/station-manager-desktop/LICENSE.electron
+    file_info:
+      mode: 0644
+  - src: build/desktop/stage/LICENSES.chromium.html
+    dst: /usr/share/licenses/station-manager-desktop/LICENSES.chromium.html
+    file_info:
+      mode: 0644
+
+# No scriptlets: nothing restarts or touches the operating daemon or a user service, and
+# autostart at login is not installed (operator ruling Q2). The desktop-entry and icon caches are
+# refreshed by Fedora's own file triggers on /usr/share/applications and /usr/share/icons/hicolor
+# (desktop-file-utils and the icon theme's, measured with rpm -q --filetriggers on Fedora 44).
