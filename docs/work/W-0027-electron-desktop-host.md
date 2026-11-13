@@ -1844,3 +1844,311 @@ careful removal would leave. Nothing was assessed inside Electron.
   unauthenticated client can still operate or keep FT8 running".
 - **Next:** C2's brief, for review by the operator and Codex before any code. Not started; it
   waits for the operator's direction.
+
+### C2 brief — the operating-client check (2026-11-13; reviewed, the operator's questions ruled)
+
+Started on the operator's direction ("commit the docs and start the C2 brief"). It is a design
+for review by the operator and Codex before any code. Where it proposes a default, a name or a
+policy, that is a proposal: the questions at the end are the operator's to rule.
+
+**Outcome the operator sees.** With the check switched on, the desktop app works exactly as it
+does today, and a client without the app's credential is refused on every route and every
+stream, bar the one named exception: a browser at the old address shows a short notice, and
+nothing else. A process of the operator's own user that reads the credential is still inside
+the accepted limit, and which connection counts as the operator's presence is C4's to define.
+With the check off, nothing changes from today.
+
+**Nearest confusable outcome:** the browser UI stops working, while an unauthenticated client
+can still call the API, or hold an FT8 stream open and keep TX armed.
+
+**What is already ruled.**
+- Operating requires the desktop app; `smd` checks a per-install secret the app presents. Its
+  limit is accepted: it keeps out other users and machines, not other processes of the same
+  user (ADR 0102 ruling 1).
+- C2 builds no view-only class: one default-deny check with a short explicit exception list
+  (ADR 0102, "Update 2026-11-13").
+- The credential is added by the shell's main process, as a request header, only to requests
+  for the pinned origin. It is sent only inside an authenticated connection, never reaches page
+  script and never leaves the machine (ADR 0103 point 7 and its requirements).
+- The browser path is not retired until a user can install and launch the desktop app
+  (2026-11-11).
+- Once C2 is on, an app port that cannot be bound, or an unusable identity, is a start-up
+  error; before that it is only reported (ADR 0103 point 2). Unconfirmed durability stays
+  report-only in both states.
+- Presence is its own rule and its own slice (C4). The request guards for archive, default and
+  session generation stay (ADR 0100 §5). The daemon submitter keeps its own, narrower
+  credential (ADR 0014).
+
+**Ruled on this brief (operator, chat, 2026-11-13).**
+- "I don't want to have code in the base to cater for a browser - too much complexity. Direct
+  access by any client without the secret, or a second+ client is refused."
+- On the four questions below: "2 - agreed" (the tools); "3 - a notice can be good" (what a
+  browser shows); "4 - yes" (the health check is open).
+- On the switch (question 1): "a - temporary switch, later removed". Off by default now, on at
+  the operator's station once C2 is accepted there, and deleted with its off state when others
+  can install the desktop app.
+- On a Unix-socket main listener with the check on: "1 - yes". It is refused as TCP is: the
+  health check and the notice only.
+- On what "a second client" means (question 5): "1 - A". Reading A: no second user interface;
+  a process of the operator's user that holds the credential, such as the ruled tools, is not
+  what is refused.
+
+**What exists today (read for this brief).**
+- **One wrapping point.** The main listener's handler is built once
+  (`internal/api/server.go:252`): security headers, request log, drain gate, concurrency limit,
+  panic recovery, `requireSameOrigin`, then the router for `/v1` and the non-API surfaces (the
+  SPA, the manual, optional pprof). The app listener serves that same handler (`BindApp`,
+  `server.go:710`). A mark on the connection tells the origin guard which listener a request
+  arrived on (`csrf.go:40`, `requireAppOrigin`); the check can use the same mark.
+- **Routes:** 77 declared by literal method and path, plus two WebSocket twins; three SSE
+  streams and the two WebSockets hold a connection (the inventory above).
+- **The identity** (`internal/desktopid`): the directory `desktop-identity` under the working
+  directory, mode `0700`, holding exactly `key.pem` and `cert.pem`. It is validated on every
+  use, including each path component above it. An unexpected file is refused. It is created as
+  one unit and never repaired or replaced silently.
+- **The shell** (`desktop/src`): discovers the identity, pins the certificate
+  (`pin.mjs`, `setCertificateVerifyProc`), and reaches `smd` only through the window's session.
+  Its availability probe is `GET /v1/version` through that session (`waiting.mjs:86`).
+  `/v1/version` carries archive identifiers, so it is not public data.
+- **`GET /v1/healthz`** reports three words: an overall status, whether the database answers,
+  and whether logging is degraded (`handler_health.go`). No station data.
+- **Other clients of the API today:** the Vite development proxy (`/v1` to 8080);
+  `scripts/ukeicc-cabrillo.py --from-daemon`; `scripts/tune-duration-probe.sh`; `cmd/loadgen`.
+  `scripts/rollback-drill.sh` drives scratch daemons over a Unix socket.
+
+**Proposed design.**
+
+1. **The credential.**
+   - 32 random bytes from the system's generator, base64url-encoded, in one file.
+   - It lives in its own directory beside the identity, `desktop-credential/` (mode `0700`,
+     file `0600`). It cannot go inside `desktop-identity`: that directory admits exactly two
+     files, and identities already published must stay valid.
+   - It gets the identity's discipline, by the same code where that can be shared without
+     copying: the same ownership, mode and path-ancestor checks on every use; creation as one
+     unit with the same sync barriers; never repaired or replaced silently; an error that names
+     the path and never the value. Independent random bytes: it is not derived from the
+     certificate or its fingerprint, which identify the server and are public to any client.
+     No general secret store is built.
+   - `smd` creates it at start whenever it is missing, **whether or not the check is on**, so
+     switching the check on later needs nothing from the app.
+   - **Replacement is deliberate:** delete the directory, and the next `smd` start makes a new
+     one. A running app keeps the old value, is refused, and shows the daemon as unavailable
+     until it is restarted. That is the identity's own rule.
+
+2. **Presenting it (the shell).**
+   - **Order at start:** the credential, the origin and the pin are established, and the
+     header hook installed, before the first probe or navigation. A credential that does not
+     exist yet keeps discovery waiting and retrying, as a missing identity does. An unsafe or
+     malformed one is reported on the waiting page; nothing is sent.
+   - The main process adds one request header (proposed name: `X-SM-Operating-Credential`) in
+     the session's `webRequest.onBeforeSendHeaders`, for requests to the pinned origin only:
+     its exact scheme, host and port, and the `wss` partner of that origin. Any header of that
+     name already on the request, in any letter case, is replaced, so exactly one value goes.
+   - Electron uses only the last listener registered for an event, so this hook has one owner.
+     The request blocker in `hardening.mjs` is a different event and stays as it is.
+   - It must cover every kind of request the app makes: the page and its assets, `fetch`, the
+     probe, the manual, the SSE streams and the WebSocket handshakes, and a reconnect after an
+     earlier success. It must not go to another port, to a plain-HTTP downgrade of the origin,
+     or along a redirect that leaves the origin. That coverage is to be **proven by test**,
+     not assumed from Electron's documentation.
+   - **In a loaded workspace,** a refusal for the credential (after a deliberate replacement,
+     say) is shown as a diagnostic that keeps the operator's drafts; the app adopts a new
+     credential when it is restarted. That the SPA needs no change for this is a goal to
+     verify, not something this brief has established.
+
+3. **The check (`smd`).**
+   - One middleware at the one wrapping point, after the Host and origin guard and before the
+     router. So it stands in front of `/v1`, the SPA, the manual and pprof alike, and in front
+     of every stream handler: a refused subscription never reaches the code that counts a
+     subscriber or asks for audio capture, and a WebSocket is refused before it can be
+     hijacked. The existing origin, draining and request-context guards are kept.
+   - **Default deny.** A request passes only if it arrived on the app listener and carries
+     exactly one credential header whose value matches, compared in constant time. Which
+     listener it arrived on is read from the server's own mark on the connection
+     (`appConnKey`), never from anything the client sends.
+   - A listener or handler added later needs the same boundary; a test proves the assembly.
+   - **Exception list (ruled): `GET /v1/healthz`, on either listener.** Nothing else.
+     `/v1/version` is not an exception: the shell's probe goes through the session, so it
+     carries the credential.
+   - **Refusal:** `403` with a stable code (proposed: `desktop_app_required`) and no detail.
+   - **The notice (ruled: "a notice can be good").** A request for a page on the main listener
+     gets one short static notice that Station Manager is operated from the desktop app. That
+     is the whole of what the daemon does for a browser: one fixed response, with no data, no
+     script and no route of its own to maintain.
+   - **Logging:** one line per refusal with the listener, the method and the path, and whether
+     a credential was present. Never its value, and never the expected one.
+
+4. **Where the credential is accepted: only on the app listener.**
+   - It gives every client one authenticated endpoint and no plain-HTTP fallback. With the
+     check on, the main listener serves the health check and the notice, and refuses a request
+     even when it carries a valid credential.
+   - That rule does not by itself keep the credential from an impostor: a client that has
+     already sent it to a counterfeit listener has disclosed it. What prevents disclosure is the
+     client authenticating `smd` **before** it sends anything, as the shell does with its pin
+     and as each tool must (point 6).
+   - **Transports and states, stated in full:**
+
+     | Main listener | Check off | Check on |
+     |---|---|---|
+     | TCP (today's default, 8080) | Serves the UI and API as today | Bound; serves `GET /v1/healthz` and the notice only |
+     | Unix socket (`server.protocol=unix`) | Serves the API as today, to whoever the socket's permissions admit | **Ruled (2026-11-13):** the same as TCP. This is a restriction of its own, not a consequence of the TCP argument: an owner-private socket has no impostor problem |
+     | App listener (8443, TLS) | Serves the UI and API; a credential is ignored | Serves a request that carries the credential |
+
+   - Keeping a socket bound is not keeping its API usable: with the check on, the main listener
+     answers two things. Scratch daemons, the rollback drill (which uses a Unix socket) and
+     headless or daemon-only use run with the check off until they have a design of their own.
+   - This brief does not choose a one-listener design or remove a transport.
+
+5. **The switch.**
+   - One configuration key (proposed: `server.require_desktop_app`, a boolean, in
+     `docs/v2-design/config.md` in the same change). **Ruled: off by default, and
+     temporary** (question 1, outcome (a)). The name is still a proposal.
+   - It is read at start and takes effect at a restart; it is not changed under a running
+     daemon.
+   - **Off:** today's behaviour on both listeners; the credential is created, and ignored.
+   - **On:** the check applies, and ADR 0103's rule takes effect: an app port that cannot be
+     bound, an unusable identity or an unusable credential is a start-up error. There is no
+     silent fall back to off.
+   - `smd` reports the state at every start, in the log and as a Station Event, so a station
+     running without the check is visible.
+
+6. **Tools and the development loop (ruled: "2 - agreed").**
+   - The Cabrillo reader and the tune probe keep working with the check on. Each uses the app
+     listener and sends the header from `desktop-credential/`. Both files it reads are readable
+     only by the operator's user, which is the limit ADR 0102 accepts.
+   - **Each tool verifies the server before it sends the credential, and how is to be
+     specified and tested, not assumed.** `curl --cacert` and a Python `ssl` context with the
+     certificate as their only trust anchor are CA verification. That is not automatically the
+     shell's rule, which pins the exact certificate and does not enforce its dates. The part
+     states the intended verification for each tool and tests it against an impostor.
+   - No insecure or plain-HTTP fallback, and the credential is not forwarded on a redirect.
+   - The credential stays out of URLs, command-line arguments, traces and error text. A tool
+     reads it from the file and passes it as a header by a means that does not show in the
+     process list.
+   - Development (the Vite proxy), load generation and scratch daemons run with the check off.
+     That is a configuration choice visible in the start report, not an exemption in the code.
+
+7. **A second client (ruled: reading A).** The operator: "a second+ client is refused", and,
+   asked which of two readings was meant, "1 - A".
+   - **What is ruled: no second user interface.** The supported product has one: the
+     installed desktop app. This design gives that without more machinery: only the app's shell
+     adds the credential; the app is single-instance, so a second launch raises the running
+     window (`desktop/src/main.mjs`); another user cannot read the credential; and a browser
+     has none.
+   - **What that is not:** a guarantee enforced by `smd` that only the app connects. The daemon
+     cannot tell the app from another program of the operator's own user that reads the
+     credential and presents it. The ruled tools are such programs, and one could be a user
+     interface. That is inside the accepted limit, and no machinery is added to exclude it.
+   - **Not built: one connected client at a time, whoever it is** (reading B). It would have
+     needed a per-start identity beside the credential and a rule for when the first client
+     counts as gone, and it would have refused the operator's own tools while the app runs.
+     "Which connection is the operator's" stays with C4.
+
+**What C2 does not do.**
+- **Presence (C4).** After C2 an unauthenticated client can no longer hold an FT8 stream. An
+  authenticated one that is not the operator's window still could, for example a tool. Naming
+  the one operating subscription, and what its loss does, is C4.
+- Reload and asset compatibility (C5); the daemon submitter (ADR 0014); remote or view-only
+  access (deferred); removing either listener.
+
+**Acceptance criteria.**
+1. Check on: the desktop app loads and operates as today (the UI, every stream, logging, FT8).
+2. Check on: for **every declared route** except the health check, a request without the
+   credential is refused with the check's own code, on both listeners. The same holds for a
+   wrong credential, an empty one and a repeated header. The exception is exactly
+   `GET /v1/healthz`, which answers as it does today on both. A page request on the main
+   listener gets the notice, which is a refusal: it is not a route into the SPA or the API.
+3. Check on: a refused `/v1/ft8/events` subscription adds no subscriber and asks for no
+   capture. With the desktop app away from FT8, an unauthenticated client cannot stop the
+   linger from disarming TX.
+4. Check on: a valid credential presented on the main listener is refused.
+5. The credential is sent to the pinned origin only: never to another origin, never to an
+   impostor on the app port (C1's acceptance, extended), and it is not readable from page
+   script.
+6. A credential directory or file with unsafe ownership or mode, or a replaceable ancestor, is
+   refused by `smd` and by the shell, with the path named and the value never printed.
+7. Check off: every behaviour is as today, including the browser as an operating client.
+8. Check on, and the app port, the identity or the credential unusable: `smd` does not start,
+   and says why. Check off: it starts and reports it.
+9. The request guards still refuse an action from an old archive or default context.
+10. The Cabrillo reader and the tune probe work with the check on.
+11. A second launch of the desktop app raises the running window and does not become a second
+    client; another user's process cannot read the credential.
+
+**Evidence planned.** Tests first, each with a reversion proof that fails for its own reason.
+- **`smd`:** integration tests on a real server with both listeners in temporary directories.
+  - A test enumerates the declared routes and holds each to criterion 2, so a route added
+    later is covered without being listed by hand. It includes the routes a literal search
+    misses: the default-change routes registered by a helper, the WebSocket paths built from
+    constants, and the rig, FT8 and profiling surfaces that exist only when enabled.
+  - Each request is otherwise acceptable: a valid Host and Origin, a daemon serving normally.
+    The test asserts the check's own refusal code and that nothing ran behind it: no handler,
+    no subscriber, no capture demand. A refusal by another guard is not evidence the check ran.
+  - The exception and the notice are tested too, not only the protected routes.
+- **The credential unit:** the identity's own cases: creation boundaries and partial
+  publication, two starts creating at once, unconfirmed durability, unsafe modes and owners, a
+  replaceable ancestor, a malformed file, and refusal without repair.
+- **The shell:** scenario tests against the fixture harness.
+  - One per kind of request: navigation, asset, `fetch`, probe, SSE, WebSocket, and a
+    reconnect.
+  - Requests that must carry no header: an impostor on the app port, a foreign origin, another
+    port, a plain-HTTP downgrade, and a redirect off the origin.
+  - The credential's life: first creation while the app waits, an unsafe or malformed file,
+    a restart with the same credential, a deliberate replacement, and adoption at restart.
+- **The tools:** each shown to refuse an impostor before sending anything, and to work against
+  the real listener.
+- **The station:** the operator switches the check on and operates; a browser and a `curl`
+  without the credential are shown refused.
+
+**Proposed parts, each reviewed before the next.**
+- **C2a, `smd`:** the credential unit, the check, the switch (off), the start report, the
+  configuration reference, and the tests above.
+- **C2b, the shell:** discovery of the credential, the header, and the scenarios.
+- **C2c, around it:** the notice, the two tools, and `docs/install.md` and the manual where they
+  tell a reader to use a browser.
+- **C2d, switching it on** at the operator's station: the acceptance run, recorded here.
+- **After C2, not part of it: removing the switch** and its off state, when others can install
+  the desktop app (D2 to D6). It has its own brief, which first gives development, load
+  generation, scratch daemons, the rollback drill and headless use a supported route.
+
+**Questions for the operator.**
+1. **The switch and how long it lives. Ruled: "a - temporary switch, later removed".** The
+   three outcomes that were put, which earlier wording ran together:
+   - **(a) A temporary switch, later removed. Ruled.** Off by default in this release. You
+     switch it on at your station once C2 is accepted there. When others can install the
+     desktop app (D2 to D6), the switch and its off state are deleted, and the check is always
+     on. That applies your 2026-11-11 ruling, and it ends where your statement points: no
+     configuration in which a client without the secret is served. The removal is a later part
+     with its own brief, not part of C2: development, load generation, scratch daemons, the
+     rollback drill and headless use each need a supported route before the off state goes.
+   - **(b) A permanent switch whose default changes. Not chosen.** As (a), but when others can
+     install the app only the default becomes on; off stays a supported setting. Development
+     and the drill need no further design. A station can then always be set to serve any client
+     without the secret.
+   - **(c) No switch. Not chosen.** The check is always on from the release that ships C2. The parts
+     change: C2a and C2b ship together, since an always-on check locks out a shell that does
+     not yet send the credential; the routes named in (a) are designed first; criterion 7 and
+     the check-off half of criterion 8 fall away. That release retires the browser, so under
+     your 2026-11-11 ruling it waits until its users can install and launch the desktop app.
+   - The parts and criteria in this brief are written for (a), so the ruling changes none of
+     them. The removal is listed after C2d as work outside C2.
+2. **Which tools must keep working with the check on? Ruled: "2 - agreed".** The Cabrillo
+   reader and the tune probe keep working; loadgen and the Vite proxy run with the check off.
+3. **What a browser shows at the old address. Ruled: "3 - a notice can be good".** One short
+   static notice.
+4. **Is `GET /v1/healthz` open without the credential? Ruled: "4 - yes".**
+5. **What "a second client" means. Ruled: "1 - A"** (design point 7): no second user
+   interface.
+
+**Questions for Codex.**
+1. Is refusing a valid credential on the main listener (point 4) right, or does it cost more
+   than the capture risk it removes?
+2. Is a separate `desktop-credential/` directory the right home, given the identity
+   directory's two-file rule? Is there a reason to prefer a value derived from something the
+   shell already reads?
+3. Does one middleware at `server.go:252` really cover the app listener's handler and every
+   stream, including the hijacked WebSocket paths, or is there a registration that bypasses it?
+4. Is anything in ADR 0103's "C2 on" start-up rule in conflict with a switch that defaults to
+   off?
+5. On design point 7: is reading A a fair statement of what the design already gives, and is
+   there a second-client case it leaves open that does not need C4?
