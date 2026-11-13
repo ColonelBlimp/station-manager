@@ -14,6 +14,8 @@ replaces the earlier activity-gap design. That design, its rulings (U1–U3, P1�
 simplification review and its model comparison remain in the Git history up to `4a448c19`; *What
 changed on 2026-11-10* summarises what was superseded and what was kept. The session-email mark fix
 (inbox item 1) was independent of this ADR and has shipped (`c3826281`, W-0010 outcome 11).
+*Update 2026-11-13* records two later operator rulings that overtake parts of this text: no
+view-only browser client, and the retirement of Station Events. It changes no session rule.
 
 ## Context
 
@@ -176,7 +178,7 @@ After the design exchange (claude-078 to claude-085, codex-041 to codex-043), th
 
 - **The operating app** is the authenticated desktop app (ADR 0102; its authentication is W-0027
   C1/C2). Only it opens, closes or continues sessions. View-only clients, the Map and detached
-  panels never do.
+  panels never do. (No view-only client is built: *Update 2026-11-13*.)
 - **An app lifetime** runs from the app's start to its exit. Each lifetime has its own identity,
   presented with its authenticated connection, so the daemon can tell a reconnect of the same app
   from a new start, and an old app's late message from the current app's.
@@ -367,6 +369,7 @@ itself; the boundary is the change **taking effect**.
       authenticated operating subscription. C2 is not built. The operator (2026-11-13): "These
       situations is what partly prompted the switch from browser to desktop". Claude's reading
       of that, not an explicit ruling: no interim measure is planned and C2 settles it.
+      (Overtaken in part: the check now exists and is off by default; see *Update 2026-11-13*.)
     - Either way a switch never runs beside live FT8, and that does not depend on navigation:
       the FT8 seal in step 2 refuses while a sequence is active, a transmission is in flight or
       TX is armed (`SealTxAdmission`, `internal/ft8/servicetx.go`). It is the safety gate. So
@@ -460,7 +463,7 @@ itself; the boundary is the change **taking effect**.
 - **Answers are generation-checked.** A late or duplicated answer is refused as stale and the app
   redraws to the current state.
 - **One operating app owns the question.** The Map, detached panels and view-only clients never ask,
-  and never open a session.
+  and never open a session. (No view-only client is built: *Update 2026-11-13*.)
 
 ### 7. Consumers of the one membership
 
@@ -475,7 +478,8 @@ itself; the boundary is the change **taking effect**.
     even when it is new and empty: neither view falls back to an older session's rows. When no
     session is open (no operating app attached, for a view-only observer), show the latest closed
     session in the effective default logbook, clearly labelled Closed, or nothing if none exists.
-    Showing a closed session never continues it.
+    Showing a closed session never continues it. (The view-only observer is not built; what is left
+    of this fallback is in *Update 2026-11-13*.)
   - **First slice:** the Map follows this session automatically. Remove the last-N-hours selector
     from this view; do not apply a hidden time cutoff or inherit `sm-map-window`. Imports and
     unrelated contacts stay outside it even when their times fall within the session's intervals.
@@ -592,6 +596,58 @@ ruling).
     station-activity feature.
 - **ADR 0101 was revised to match** (2026-11-10, `d824755b`): contest mode no longer suspends or
   evaluates sessions, and it checks its own window end.
+
+## Update 2026-11-13
+
+Two operator rulings made after this ADR's last revision (2026-11-12) overtake parts of its text.
+Neither changes a session rule, an operator ruling above or an open question. The passages are
+left as they were written, each with a pointer here.
+
+### No view-only browser client
+
+**Operator rulings (chat, 2026-11-13):** "yes, drop view-only for C2", and "I don't want to have
+code in the base to cater for a browser - too much complexity. Direct access by any client without
+the secret, or a second+ client is refused." They are recorded in ADR 0102 (*Update 2026-11-13*,
+amending its ruling 1) and in W-0027 (the C2 brief).
+
+- **What exists now.** `smd` has the operating-client check (W-0027 C2a, `90db4857`): with
+  `server.require_desktop_app` on, it serves only the desktop app's listener, and only to a request
+  carrying the install's credential. The switch is temporary and off by default (operator ruling
+  2026-11-13). Switching it on at the operator's station is W-0027 C2d, which is not done.
+- **Where this ADR says "view-only clients" or "a view-only observer"** (§3 *App lifetimes*, §6,
+  §7's Map display rule): that class of client is not built. With the check on, the only clients
+  are the app's own windows and the operator's same-user tools, and none of them opens, closes or
+  continues a session except the operating app, as ruled.
+- **§7's Map display rule, the fallback.** "No operating app attached" can no longer be seen by
+  anyone once the check is on, because every view is a window of the app. What is left of "no
+  session is open" is the two short states §3 names: the recovery question, and the closing phase
+  of an archive switch. The rule for them is unchanged: show the latest closed session, labelled
+  Closed, or nothing. Whether those two states need the fallback at all is for the build brief,
+  not decided here (the operator agreed to leaving it there, chat, 2026-11-13).
+- **§4's "any other client of `/v1/ft8/events` is a subscriber today".** With the check on, a
+  client without the credential is refused on that route like any other, so a plain browser tab
+  can no longer hold an FT8 stream and keep a run alive. While the switch exists and is off, the
+  2026-11-12 text still describes the daemon. Which connection counts as the operator's presence,
+  and what its loss does, is W-0027 C4, which is not built. §4's sentence that ADR 0102 assigns the
+  remedy to C2 is therefore true only in part: C2 refuses the other clients, C4 defines presence.
+- **The dependency is unchanged:** sessions are built after the app's authentication (W-0027 C1,
+  C2 and C4; *Consequences*).
+
+### Station Events are to be retired
+
+**Operator (chat, 2026-11-13):** "Station Events are going to be retired for something more
+useful." Recorded in `docs/dogfood-inbox.md`; no replacement is designed, and `docs/backlog.md`
+still lists W-0020 at the time of writing.
+
+- **This design adds no Station Event.** The `operating_session.*` events ride the shell event
+  stream (`/v1/events` and its WebSocket twin, ADR 0099; §5), which is not Station Events and is
+  not part of that retirement.
+- **`session.terminated`** (*Context*) is the existing Station Events kind for the end of an FT8
+  contact. It stays unrelated to operating sessions and goes when Station Events go. The name
+  `operating_session` was chosen to avoid it (§1); that choice stands either way.
+- **The build must not record session lifecycle as Station Events** (agreed by the operator,
+  chat, 2026-11-13). If a durable record of session opens and closes is wanted beyond the session
+  table itself, it waits for whatever replaces Station Events.
 
 ## Open questions
 
@@ -713,7 +769,8 @@ Superseded by the operator's rulings; see *What changed on 2026-11-10*.
   (session exports), 0096 (contest occurrences: explicit membership), 0097 (default change at
   restart; its states), 0099 (event streams), 0101 (contest mode), 0102 (the desktop app; ruling 6
   amended).
-- W-0027 (Electron desktop host; C1, C2 and C4; the A2 prerequisite).
+- W-0027 (Electron desktop host; C1, C2 and C4; the A2 prerequisite; the C2 brief and its
+  rulings of 2026-11-13).
 - `docs/dogfood-inbox.md`, the triage of the 2026-11-06 notes: the cross-cutting daemon-session
   entry, item 1 (independent), item 2 (FT8 draft), item 5 (Map).
 - `frontend/app/src/lib/operate/session.svelte.ts`; `frontend/app/src/lib/map/mapData.svelte.ts`;
