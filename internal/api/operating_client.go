@@ -1,6 +1,7 @@
 package api
 
 import (
+	"io"
 	"net/http"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
@@ -13,7 +14,8 @@ import (
 // install's credential. Everything else is refused, on every route, page and stream alike,
 // because the check stands in front of the router. There is one exception, GET /v1/healthz,
 // and no view-only class. The main listener serves nothing else, a valid credential included
-// (operator rulings 2026-11-13; the Unix-socket form is refused as TCP is).
+// (operator rulings 2026-11-13; the Unix-socket form is refused as TCP is). A page asked of
+// the main listener is refused with a short fixed notice instead of the JSON refusal (C2c).
 //
 // What it keeps out is other users and other machines. A process of the operator's own user
 // that reads the credential file is inside the accepted limit, and which connection counts as
@@ -60,9 +62,31 @@ func (s *Server) requireOperatingClient(next http.Handler) http.Handler {
 			Str("listener", listener).Str("method", r.Method).Str("path", r.URL.Path).
 			Bool("credential_present", len(presented) > 0).
 			Msg("operating-client check: request refused")
+		if listener == "main" && isPageRequest(r) {
+			writeOperatingClientNotice(w, r)
+			return
+		}
 		s.writeError(w, http.StatusForbidden, "desktop_app_required",
 			"Station Manager is operated from its desktop app", op)
 	})
+}
+
+// isPageRequest reports whether a request asks for a page rather than the API: a GET or HEAD
+// outside the /v1 namespace, by the router's own division (isAPIPath).
+func isPageRequest(r *http.Request) bool {
+	return (r.Method == http.MethodGet || r.Method == http.MethodHead) && !isAPIPath(r.URL.Path)
+}
+
+// writeOperatingClientNotice refuses a page with the notice. It is never cached, so a browser
+// shows the application again as soon as the check is off.
+func writeOperatingClientNotice(w http.ResponseWriter, r *http.Request) {
+	h := w.Header()
+	h.Set("Content-Type", "text/html; charset=utf-8")
+	h.Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusForbidden)
+	if r.Method != http.MethodHead {
+		_, _ = io.WriteString(w, operatingClientNotice)
+	}
 }
 
 // operatingClientAdmitted is the rule with the check on: the health check, or the app
@@ -78,3 +102,16 @@ func (s *Server) operatingClientAdmitted(r *http.Request, presented []string) bo
 	matches := s.operatingCredential.Load()
 	return matches != nil && *matches != nil && (*matches)(presented[0])
 }
+
+// operatingClientNotice is the whole of what smd does for a browser with the check on (W-0027
+// C2c; operator ruling 2026-11-13: "a notice can be good"): one short, fixed page for a page
+// asked of the main listener. It carries no data and no script, loads nothing and links
+// nowhere, and has no route of its own. It is sent as a refusal.
+const operatingClientNotice = `<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Station Manager</title>
+<h1>Station Manager is operated from its desktop app</h1>
+<p>This address no longer serves Station Manager. Open the Station Manager desktop app instead.</p>
+</html>
+`

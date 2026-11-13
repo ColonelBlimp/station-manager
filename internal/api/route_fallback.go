@@ -26,7 +26,7 @@ const opRouteFallback errors.Op = "api.routeFallback"
 // and pprof 404s keep their existing behavior.
 func (s *Server) apiRouter(apiMux, mux *http.ServeMux) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if p := r.URL.Path; p != "/v1" && !strings.HasPrefix(p, "/v1/") {
+		if !isAPIPath(r.URL.Path) {
 			mux.ServeHTTP(w, r)
 			return
 		}
@@ -73,6 +73,12 @@ func (c *statusCapture) WriteHeader(status int) {
 }
 
 func (c *statusCapture) Write(b []byte) (int, error) { return len(b), nil }
+
+// isAPIPath reports whether a path belongs to the /v1 API namespace, which apiRouter sends to
+// the API's own mux; everything else is a page (the SPA, the manual, profiling).
+func isAPIPath(p string) bool {
+	return p == "/v1" || strings.HasPrefix(p, "/v1/")
+}
 
 // routeMux is a ServeMux that remembers every pattern registered on it. Every route is
 // declared through one, so the server can list them all (DeclaredRoutes): the ones built from

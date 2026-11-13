@@ -2359,3 +2359,138 @@ told.
 4. **A main-frame navigation refused by smd** would replace the page with smd's JSON refusal.
    The shell offers no reload and the SPA navigates in the page, so this is not reachable in
    normal use; it is not handled.
+
+### C2c — the notice, the tools and the documents (built 2026-11-13; uncommitted, awaiting review)
+
+Built on the operator's direction ("commit C2b and the inbox note, start C2c"). C2b is committed
+as `a1cc8128` and the inbox note as `d17c0308`. The check is still off by default and **is not
+to be switched on at the station before C2d**.
+
+**Incident during this part, 2026-11-13, 14:41:58 to 14:42:00 local.** The first run of the new
+test for `scripts/tune-duration-probe.sh` executed the script as it then was. Its default
+address was `127.0.0.1:8080`, the station's daemon, and the test answers the script's "THIS WILL
+TRANSMIT" prompt with `y`. The station's `smd.log` shows five `GET /v1/version` (200) and four
+`POST /v1/rig/tune`, each refused `503 rig_state_unknown`; there is no tune, key or TX line in
+the window. Nothing was keyed. No agreement for a rig command had been given: this broke the
+standing rule, and the daemon's refusal was the rig's state (the operator: "I never leave the rig
+on while you are coding!"), not a safeguard of the work.
+- **Cause:** a failing-first test run executes the code as it is, with its current defaults. The
+  old script's target was not read before the test ran it.
+- **Made safe:** the script has no address of its own (below), and the test passes an explicit
+  environment. My first safeguard was a check of the script's text; Codex showed it proves
+  nothing (codex-114: an address can be assembled so the text never shows it, and
+  `--sm-config` can point elsewhere). It is kept only as an early diagnostic.
+- **The boundary is now the kernel's** (`scripts/confined.py`). Before anything is executed, the
+  test process confines itself with Landlock so that it, its threads and every process it starts
+  can open **no TCP connection at all**. The domain cannot be left or widened. My first version
+  allowed "the fixture's ports"; Codex showed that is not a boundary either (codex-115: a
+  Landlock network rule names a port number, not an address or a socket, so an allowed port is
+  reachable at every address and for whoever listens on it later; I reproduced it with a
+  listener of my own on `127.0.0.2`). So nothing is allowed, and the probe is tested against a
+  recording stand-in for the client command instead of a listener.
+  The tests never run unconfined: without Landlock they stop with the reason. On entering, the
+  boundary is measured before anything else runs, with synthetic endpoints only and never a
+  station address: listeners of the process's own on `127.0.0.1` and `127.0.0.2` must each be
+  refused with a permission error although they are listening, from the test and from a child
+  process; a listener opened later is refused too; and at the end the run fails if anything
+  ever reached one. Codex's own counterexample (codex-114), run for real and aimed at those
+  endpoints, connects to nothing.
+  Limits: TCP only; a daemon's Unix socket is a file and is not covered. A rule added to the
+  helper for some other port would not be seen by a test (no test can know the port); the
+  helper has no code that adds a rule.
+- **Verified:** the station log's count of `/v1/rig/tune` lines was 391 after the incident and
+  is 391 after every later run, including the reversion proofs.
+- The operator was told at once and directed the work to continue.
+
+**What exists now.**
+- **The notice** (`internal/api/operating_client.go`): with the check on, a page asked of the
+  main listener (a `GET` or `HEAD` outside `/v1`) is refused `403` with one short fixed HTML
+  page, never cached. It has no script, link, style or data. The API, a mutation and the app
+  listener keep the JSON refusal. Check off: no notice.
+- **The tools' client** (`scripts/smd_client.py`, standard library only): finds the install as
+  `smd` and the desktop app do; validates the certificate and credential files the same way;
+  then verifies `smd` before sending anything, by the app's own rule: TLS 1.3 or later, and the
+  certificate presented must be `smd`'s, byte for byte. Dates are not enforced, as for the app's
+  pin (operator ruling 2026-11-10). It never follows a redirect and has no plain fallback. The
+  credential is never an argument, and no error or printed form carries it. As a command it
+  prints the HTTP status, `000` when `smd` was not reached.
+- **The Cabrillo reader** (`scripts/ukeicc-cabrillo.py`): `--from-daemon` with no address reads
+  the local install through that client; `--sm-config` names another install. An address is
+  still asked plainly; if `smd` refuses it for the check, the error says to drop the address.
+- **The tune probe** (`scripts/tune-duration-probe.sh`): asks only through the client. It has
+  no address and no default; `SM_CONFIG` names another install; a set `SM_HOST` stops it with
+  an explanation.
+- **Documents:** `docs/install.md` (the desktop app at first run; a section "Serving only the
+  desktop app"; the two new directories; a note on the plain `curl` examples),
+  `docs/v2-design/api-endpoints.md`, `docs/v2-design/config.md`.
+
+**Verification choice for the tools, stated as the brief asked.** The brief noted that
+`--cacert` or a Python trust anchor is CA verification, which enforces dates the app's pin does
+not. The tools use the pin itself instead: no certificate store, one byte-for-byte comparison
+after a TLS 1.3 handshake, which proves the listener holds the key (RFC 8446 section 4.4.3). A
+test shows an expired identity that is the pinned one is accepted, and an impostor is refused
+before any request is written.
+
+**Evidence.**
+- **The notice:** two new tests (nine page cases, the page's content, `HEAD`, four cases that
+  keep the JSON refusal, and check off), seen failing on behaviour before the implementation;
+  the route sweep now expects the notice for the page routes on the main listener.
+- **The client:** 23 tests: discovery and 14 unsafe modes or shapes, 10 malformed credentials,
+  bad config values, another user's files; the genuine listener (exactly one credential, the
+  body and type of a POST); an impostor, a plain-HTTP listener, TLS 1.2 and nothing listening,
+  each refused with no request and no credential sent; a redirect returned and never followed;
+  a path that names another host; the command line.
+- **The Cabrillo reader:** 34 tests (29 before): every page over the pinned listener with the
+  credential; an impostor; a refusal reported, not read as an empty log; `--sm-config`; the
+  plain address refused by the check.
+- **The tune probe:** 14 tests, with every TCP connection denied, against a recording stand-in
+  for the client command (a `python3` first on `PATH` that writes down its arguments and prints
+  a chosen status): the three confinement checks; a run asks for the version, the start and
+  the stop, in that order, through the client in the tree; declining the prompt sends no tune;
+  a daemon that was not reached is sent nothing more; a refused start is not a result;
+  `SM_CONFIG`; `SM_HOST`; nothing is executed unconfined; a script the text check cannot see
+  through still connects to nothing; and every command line the probe gives is one the
+  client's own parser takes and means the same by. What these no longer show is the probe and
+  the real client together over a socket: the two halves are proved separately and meet at
+  the command line.
+- **Against a real temporary `smd` with the check on** (`scripts/smd_tools_smd_test.py`; rig,
+  FT8 and evidence capture disabled): a plain client is refused and a page gets the notice; the
+  client is served; the command prints `200`; the Cabrillo reader reads the (empty) default
+  logbook. The tune probe is not executed here and no rig route is named, so this suite needs
+  a network and is not confined, like the desktop app's real-smd checks. The client's own
+  tests, which also have a network, name no rig route either.
+  The notice check was shown to fail against a binary built before the notice.
+- **Electron:** `check:c2b-smd` now also requires the notice for a page; it and `check:c1d`
+  pass.
+- **Reversion proofs: 36, every one caught,** in temporary copies, in parallel. None puts an
+  address into the probe. Six are of the confinement itself: executing without requiring it; a
+  `require()` that passes an unconfined process; never restricting (the run stops with "NOT
+  RUN" before any test); one port allowed again (the same); and two that also weaken the check
+  on entering, which the confinement's own tests and the exit check then catch. The four that
+  weaken the boundary run only the confinement's own tests, never the probe. Two more hold the
+  probe and the client to one command line.
+- **Gates:** `go build`, `go vet`, the `internal/api` and `cmd/smd` tests, the check's tests
+  under `-race`, `golangci-lint` (0 issues), the maintainability gate (0 regressions), desktop
+  lint and format, the four Python suites, `task docs:check`. CI and `scripts/ci-local.sh` run
+  the new suites.
+
+**Deviations and open points, for review.**
+1. **The manual has bounded changes, not a rewrite** (after codex-114, which pointed out that
+   the brief includes the manual and that the FT8 chapter's "use a second browser tab" advice
+   cannot work with the check on). The landing page and the First Run outline name the desktop
+   app; "More than one window" and the FT8 advice are qualified for the app and for a daemon
+   that serves only the app. The full pass stays in W-0018.
+2. **The tools are not in the RPM.** An RPM user with the check on has no shipped command-line
+   client; the plain `curl` examples in the install guide need the check off. That is part of
+   the later brief that removes the switch (headless and scripted use).
+3. **The notice's wording** and the install guide's new section are mine, not ruled.
+4. **Process:** the client and the tool tests were written before their code but could not
+   fail on behaviour until it existed, except where noted; the proofs are the evidence. The
+   tune probe's test must never again be run before the script it runs has been read.
+5. **The confinement needs Landlock with network rules** (Linux 6.7 or later). It is measured on
+   this machine; on CI it is unproven until the first run there, and a runner without it turns
+   the step red by design.
+6. **The probe is no longer run against a listener or a real `smd` by any test** (after
+   codex-115). That is the price of a boundary with nothing allowed. The probe's requests and
+   the client's transport are each tested; their joint is the command line, checked against the
+   client's parser.

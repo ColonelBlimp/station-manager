@@ -44,7 +44,9 @@ whose value is this install's operating credential: the whole content of
 `0700`, file `0600`, created by `smd` at every start in both states). Anything else gets **403
 `desktop_app_required`**, on every route, page and stream, on both listeners, before the
 router and before any stream admission. The browser listener (TCP or Unix socket) refuses even
-a valid credential. The one exception is `GET /v1/healthz`, which answers as usual on both
+a valid credential. A page asked of the browser listener (a `GET` or `HEAD` outside `/v1`) gets
+that 403 as a short fixed HTML notice with `Cache-Control: no-store` instead of the JSON
+envelope; it has no script, link or data. The one exception is `GET /v1/healthz`, which answers as usual on both
 listeners. The check runs after the Host and Origin guard, so a foreign Host is still **403
 `cross_origin`**. The header is removed before any handler runs. Each refusal writes one
 warning to `smd.log` with the listener, method, path and whether a credential was presented,

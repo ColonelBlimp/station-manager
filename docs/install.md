@@ -108,6 +108,11 @@ enablement above; `smctl` only handles the running state.
 
 Open `http://127.0.0.1:8080` in your browser.
 
+If you have installed the desktop app (the `station-manager-desktop` package), open
+**Station Manager** from your applications menu instead: it finds the daemon by itself.
+Once the daemon is set to serve only the desktop app (§6, "Serving only the desktop app"),
+the browser address shows a short notice and the app is the only way in.
+
 On a fresh install the daemon's `setup_complete` flag is `false`,
 and the SPA renders only a "Welcome to Station Manager" page with a
 single input field: **your callsign**. The main logging interface
@@ -157,6 +162,9 @@ are not in the RPM):
 ```
 curl -s http://127.0.0.1:8080/v1/hardware | jq
 ```
+
+(This plain request needs the daemon to serve more than the desktop app, which is the
+default; see §6, "Serving only the desktop app".)
 
 `serial_ports[].id` are the CAT port paths (each with a friendly `label` and
 VID:PID); `audio.capture` / `audio.playback` list the sound devices by `name`
@@ -439,6 +447,8 @@ no UI for creating additional logbooks; if you need one, hit
 | Database | `~/.local/share/station-manager/db/station-manager.db` |
 | Logs | `~/.local/share/station-manager/log/` |
 | Emailed-session ADIF archive | `~/.local/share/station-manager/exports/sent-adif/` |
+| The daemon's identity for the desktop app | `~/.local/share/station-manager/desktop-identity/` |
+| The desktop app's operating credential | `~/.local/share/station-manager/desktop-credential/` |
 
 Each time you email a session's QSOs from the logging app, a copy of
 the exact ADIF that was sent is archived under `exports/sent-adif/`
@@ -458,6 +468,37 @@ every operator-editable field is present, with sensible empty
 defaults or canonical public URLs (QRZ XML endpoint, hamnut endpoint,
 QRZ web-profile prefix) prefilled. Edit the fields you care about
 and restart the daemon.
+
+### Serving only the desktop app
+
+By default the daemon serves any program on this computer that asks: a browser, the desktop
+app, a script. It can instead serve only the Station Manager desktop app. This setting is off
+by default and is temporary: a later release makes it the only behaviour and removes the
+setting.
+
+To switch it on, add `"require_desktop_app": true` to the `server` block of `config.json` and
+restart the daemon (`smctl restart`). Check first that the desktop app opens the station: with
+the setting on, it is the only way in.
+
+With it on:
+
+- The desktop app works as before. It presents a secret that the daemon makes at every start
+  (`desktop-credential/credential`, readable only by you).
+- A browser at `http://127.0.0.1:8080` shows a short notice that Station Manager is operated
+  from its desktop app, and nothing else. Every other request without the secret is refused
+  (`403 desktop_app_required`). The health check `GET /v1/healthz` still answers.
+- The plain `curl` examples in this guide are refused. Run them with the setting off.
+- If the daemon cannot make or read the secret, cannot read its identity, or cannot open the
+  desktop app's port (8443 by default), it does not stay up, and `smd.log` says why.
+- From a source checkout, two tools go through the same door as the desktop app
+  (`scripts/smd_client.py`): `scripts/ukeicc-cabrillo.py --from-daemon` (with no address) and
+  `scripts/tune-duration-probe.sh`. They are not in the RPM.
+
+To replace the secret, stop the daemon, delete the `desktop-credential` directory and start
+the daemon. Then close the desktop app and open it again; until you do, it says the daemon no
+longer accepts it.
+
+To switch the setting off, remove the line (or set it to `false`) and restart the daemon.
 
 ---
 

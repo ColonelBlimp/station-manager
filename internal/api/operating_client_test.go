@@ -128,7 +128,12 @@ func TestOperatingClient_TheRule(t *testing.T) {
 				}
 				return
 			}
-			if w.Code != http.StatusForbidden || errorCode(t, w.Body.Bytes()) != refusedCode {
+			if tc.method == "GET" && !tc.app && !isAPIPath(tc.path) {
+				// A page asked of the main listener: refused with the notice (its own test).
+				if w.Code != http.StatusForbidden || w.Body.String() != operatingClientNotice {
+					t.Fatalf("refusal = %d %s; want 403 and the notice", w.Code, w.Body)
+				}
+			} else if w.Code != http.StatusForbidden || errorCode(t, w.Body.Bytes()) != refusedCode {
 				t.Fatalf("refusal = %d %s; want 403 %s", w.Code, w.Body, refusedCode)
 			}
 			if strings.Contains(w.Body.String(), good) {
@@ -315,8 +320,111 @@ func refusedByTheCheck(t *testing.T, c *http.Client, r *http.Request, what strin
 		return
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	// A page asked of the main listener is refused with the notice; everything else, and
+	// everything on the app listener, with the JSON refusal.
+	if r.URL.Scheme == "http" && r.Method == http.MethodGet && !isAPIPath(r.URL.Path) {
+		if string(body) != operatingClientNotice {
+			t.Errorf("%s: 403 %q; want 403 and the notice", what, strings.TrimSpace(string(body[:min(len(body), 60)])))
+		}
+		return
+	}
 	if code := errorCode(t, body); code != refusedCode {
 		t.Errorf("%s: 403 %s; want 403 %s", what, code, refusedCode)
+	}
+}
+
+// W-0027 C2c: what a browser at the old address gets with the check on (operator ruling
+// 2026-11-13: "a notice can be good"). One short, fixed page that says where Station Manager
+// is now. It is a refusal: nothing behind it runs, and it offers no way into the application
+// or the API.
+func TestOperatingClient_APageOnTheMainListenerGetsTheNotice(t *testing.T) {
+	const good = "the-good-credential"
+	srv := testServerWithCfg(t, func(cfg *config.Config) { cfg.Server.RequireDesktopApp = true })
+	srv.SetOperatingCredential(func(p string) bool { return p == good })
+	ask := func(method, path string, app bool, creds ...string) (*httptest.ResponseRecorder, bool) {
+		next := &stubNext{}
+		w := httptest.NewRecorder()
+		srv.requireOperatingClient(next).ServeHTTP(w, checkRequest(method, path, app, creds...))
+		return w, next.called
+	}
+
+	for _, c := range []struct {
+		name, method, path string
+		creds              []string
+	}{
+		{"the root", "GET", "/", nil},
+		{"a bookmarked view", "GET", "/operate", nil},
+		{"a deep link", "GET", "/logbook/3?x=1", nil},
+		{"the manual", "GET", "/manual/", nil},
+		{"the retired mount", "GET", "/app/", nil},
+		{"profiling", "GET", "/debug/pprof/", nil},
+		{"a path that is not the API although it starts like it", "GET", "/v1x", nil},
+		{"with a valid credential", "GET", "/", []string{good}},
+		{"with a wrong credential", "GET", "/", []string{"wrong"}},
+	} {
+		w, called := ask(c.method, c.path, false, c.creds...)
+		if called {
+			t.Fatalf("%s: the request went through to a handler", c.name)
+		}
+		if w.Code != http.StatusForbidden {
+			t.Errorf("%s: status %d; want 403: the notice is a refusal", c.name, w.Code)
+		}
+		if got := w.Header().Get("Content-Type"); got != "text/html; charset=utf-8" {
+			t.Errorf("%s: Content-Type %q; want text/html; charset=utf-8", c.name, got)
+		}
+		if got := w.Header().Get("Cache-Control"); got != "no-store" {
+			t.Errorf("%s: Cache-Control %q; want no-store, so a browser never keeps the notice", c.name, got)
+		}
+		if w.Body.String() != operatingClientNotice {
+			t.Errorf("%s: body %q; want the one fixed notice", c.name, w.Body.String())
+		}
+	}
+
+	// The page itself: it says where Station Manager is, and nothing in it loads, links or posts.
+	if !strings.Contains(operatingClientNotice, "desktop app") {
+		t.Errorf("the notice does not say Station Manager is in the desktop app: %s", operatingClientNotice)
+	}
+	lower := strings.ToLower(operatingClientNotice)
+	for _, forbidden := range []string{"<script", "<a ", "href", "src=", "<link", "<img", "<form", "<iframe", "<style", "http://", "https://", "/v1/"} {
+		if strings.Contains(lower, forbidden) {
+			t.Errorf("the notice contains %q: it must load nothing and lead nowhere", forbidden)
+		}
+	}
+	if len(operatingClientNotice) > 600 {
+		t.Errorf("the notice is %d bytes; it is meant to be short", len(operatingClientNotice))
+	}
+
+	// A HEAD for a page is refused the same way, without a body.
+	if w, called := ask("HEAD", "/", false); called || w.Code != http.StatusForbidden ||
+		w.Header().Get("Content-Type") != "text/html; charset=utf-8" || w.Body.Len() != 0 {
+		t.Errorf("HEAD /: %d %q, %d body bytes, through=%v; want 403, the notice's type, no body", w.Code, w.Header().Get("Content-Type"), w.Body.Len(), called)
+	}
+
+	// Everything else keeps the JSON refusal: the API, a mutation, and the app listener.
+	for _, c := range []struct {
+		name, method, path string
+		app                bool
+	}{
+		{"the API", "GET", "/v1/version", false},
+		{"the API root", "GET", "/v1", false},
+		{"a mutation of a page path", "POST", "/", false},
+		{"a page on the app listener without the credential", "GET", "/", true},
+	} {
+		w, called := ask(c.method, c.path, c.app)
+		if called || w.Code != http.StatusForbidden || errorCode(t, w.Body.Bytes()) != refusedCode {
+			t.Errorf("%s: %d %s, through=%v; want the JSON refusal", c.name, w.Code, w.Body, called)
+		}
+	}
+}
+
+// With the check off, the old address serves the application as before: no notice.
+func TestOperatingClient_NoNoticeWhenTheCheckIsOff(t *testing.T) {
+	srv := testServerWithCfg(t, nil)
+	next := &stubNext{}
+	w := httptest.NewRecorder()
+	srv.requireOperatingClient(next).ServeHTTP(w, checkRequest("GET", "/", false))
+	if !next.called || strings.Contains(w.Body.String(), "desktop app") {
+		t.Fatalf("check off: through=%v, body %q; want the request passed on untouched", next.called, w.Body)
 	}
 }
 

@@ -24,9 +24,21 @@
 
 set -uo pipefail
 
-HOST="${SM_HOST:-127.0.0.1:8080}" # 127.0.0.1, NOT localhost: the daemon binds
-                                  # IPv4-only, and localhost may resolve to ::1
-                                  # first and hang/refuse.
+# The daemon is asked through scripts/smd_client.py (W-0027 C2c): the LOCAL install's pinned
+# HTTPS listener, after verifying smd's own certificate, with the install's operating
+# credential. That works whether smd's operating-client check is on or off, and the
+# credential is never on a command line. There is no address to set and no default one: the
+# install is found as smd finds it (SM_WORKING_DIR, else the XDG data directory), or name
+# another install's config.json in SM_CONFIG.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -n "${SM_HOST:-}" ]]; then
+    printf 'SM_HOST is no longer used: the probe asks the local install through its pinned listener.\n' >&2
+    printf 'Unset it; to probe another install, set SM_CONFIG to its config.json (an absolute path).\n' >&2
+    exit 2
+fi
+smd() { # method path [--json body]; prints the HTTP status, 000 when smd was not reached
+    python3 -I "$HERE/smd_client.py" "$@" ${SM_CONFIG:+--sm-config "$SM_CONFIG"}
+}
 LOG="${SM_LOG:-$HOME/.local/share/station-manager/log/smd.log}"
 SETTLE="${SM_SETTLE:-8}" # seconds between trials, for the rig to return to RX
 
@@ -39,10 +51,7 @@ if [[ -z "$DURATION" ]]; then
 fi
 
 tune() { # $1 = "true" | "false"
-    curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
-        -X POST "http://${HOST}/v1/rig/tune" \
-        -H 'Content-Type: application/json' \
-        -d "{\"active\":${1}}"
+    smd POST /v1/rig/tune --json "{\"active\":${1}}"
 }
 
 # Count alarm lines so each trial can be judged by the DELTA, not by whatever
@@ -61,13 +70,13 @@ alarm_count() {
 }
 
 printf '=== tune-duration probe: %ss × %s ===\n' "$DURATION" "$REPEATS"
-printf 'daemon %s | log %s\n\n' "$HOST" "$LOG"
+printf 'daemon: the local install, over its pinned listener | log %s\n\n' "$LOG"
 
 # Reachability check first — no RF, just proves the plumbing. With the rig off
 # this returns 503, which is a perfectly good dry run.
-probe=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://${HOST}/v1/version")
+probe=$(smd GET /v1/version)
 if [[ "$probe" != "200" ]]; then
-    printf 'daemon not reachable at %s (got %s) — is smd running?\n' "$HOST" "$probe" >&2
+    printf 'daemon not reachable (got %s; the reason is above) — is smd running?\n' "$probe" >&2
     exit 1
 fi
 

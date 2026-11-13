@@ -125,7 +125,12 @@ const plainGet = (port, urlPath) =>
                 } catch {
                     /* not smd's error envelope */
                 }
-                resolve({ status: res.statusCode, code });
+                const html = (res.headers['content-type'] ?? '').startsWith('text/html');
+                resolve({
+                    status: res.statusCode,
+                    code,
+                    notice: html && body.includes('desktop app'),
+                });
             });
         });
         req.on('error', (e) => resolve({ status: 0, code: e.code ?? 'error' }));
@@ -272,6 +277,7 @@ export async function runC1d() {
                 plain.version.status === 403 &&
                     plain.version.code === 'desktop_app_required' &&
                     plain.page.status === 403 &&
+                    plain.page.notice && // a page gets the short notice, not the application
                     plain.health.status === 200,
                 JSON.stringify(plain)
             );

@@ -209,6 +209,11 @@ returns you to listening, still armed and ready for the next one.
 > tab away from the FT8 view ends the session — transmit disarms and a contact in
 > progress is abandoned. Open **Settings** in a second tab instead; a change to the
 > repeat cap takes effect at once, with no restart.
+>
+> **In the desktop app there is no second tab.** It has one window, and where the
+> daemon serves only the desktop app a browser tab shows a notice instead. Leaving
+> the FT8 view for Settings ends the session in the same way, so stop your run
+> first, change the setting, and start again.
 
 ## Calling CQ: choosing your slot
 

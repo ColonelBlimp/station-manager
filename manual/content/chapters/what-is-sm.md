@@ -21,7 +21,9 @@ SM has many other features besides logging to make Amateur Radio operating easie
 
 ## More than one window
 
-You can keep Station Manager open in several browser windows or tabs at once.
+The desktop app has one window. In a browser, you can keep Station Manager open in
+several windows or tabs at once, unless your daemon is set to serve only the desktop
+app: a browser then shows a short notice instead of Station Manager.
 Entries you are making — a QSO not yet logged, a confirmation, unsaved settings
 — belong to the window you make them in; other windows don't see them. What
 Station Manager has stored or is doing is shared. Switching archives discards

@@ -30,6 +30,14 @@ internal candidate.
 - alpha.5 Finding #1 (A2-06, 2026-10-24) — the First Run chapter is still a placeholder ("*Draft outline —
   content to be written.*"), so nothing in the manual says where Settings is or how the main screen is laid
   out; write the chapter's main-screen tour, Settings included.
+- W-0027 finding (2026-11-13) — the manual was written with the browser as the way in. C2c made
+  the bounded changes that the desktop app and `server.require_desktop_app` make necessary: the
+  landing page and the First Run outline name the desktop app; "More than one window" says the app
+  has one and that a browser shows a notice when the daemon serves only the app; the FT8 chapter's
+  "use a second browser tab" advice is qualified, since the app has no second tab until W-0027 A2.
+  Left for the full pass, when the desktop app is what users install (W-0027 D2 to D6): QSO
+  Archives ("in a browser tab"), CAT ("from the browser"), Station Events ("a browser reload"), and
+  a First Run chapter that starts from the app.
 - Standing pass — each dogfood session amends the chapters for the surfaces it touched; chapters touched so
   far: first-run, CAT, importing, logging. Chapters not yet walked: forwarding, FT8, my-station,
   session-log, troubleshooting, tuning, the appendices.

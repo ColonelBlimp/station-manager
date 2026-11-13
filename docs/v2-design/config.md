@@ -125,8 +125,9 @@ silently dropped. A key an older daemon wrote must be consumed by a migration.
   and the app listener stopping with an error later ends `smd`; off, each is only reported in
   `smd.log`. `smd` logs the check's state at every start. False
   is never written. An explicit `true` must be removed by hand before a build that does not
-  know the key starts (`docs/install.md` §7). Until the desktop app sends the credential
-  (W-0027 C2b), switching this on locks the app out as well; and
+  know the key starts (`docs/install.md` §7). The desktop app presents the credential (W-0027
+  C2b); a browser at the old address gets a short notice, and the repository's own tools go
+  through `scripts/smd_client.py` (C2c). `docs/install.md` §6 is the operator's description; and
 - `allow_insecure_network`, a file-only acknowledgement described in §5.1.
 
 ### 3.2 Identity, station, and QSL blocks

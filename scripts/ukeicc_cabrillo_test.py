@@ -4,8 +4,10 @@ import io
 import os
 import sys
 import unittest
+import unittest.mock
 from contextlib import redirect_stderr, redirect_stdout
 
+sys.dont_write_bytecode = True  # loading a sibling by path must not leave scripts/__pycache__
 _here = os.path.dirname(os.path.abspath(__file__))
 _spec = importlib.util.spec_from_file_location("cab", os.path.join(_here, "ukeicc-cabrillo.py"))
 cab = importlib.util.module_from_spec(_spec)
@@ -395,6 +397,118 @@ class FromDaemon(unittest.TestCase):
         with self.assertRaises(SystemExit):
             with redirect_stderr(io.StringIO()):
                 cab.main(["x.adi", "--from-daemon", "http://127.0.0.1:1", "-o", OUT] + ARGS)
+
+
+# --- W-0027 C2c: reading the daemon when its operating-client check is on ----------------
+# The local install is read over smd's pinned listener with the install's credential
+# (scripts/smd_client.py). Synthetic installs and identities, loopback fixtures; never smd.
+_hspec = importlib.util.spec_from_file_location("smd_client_test", os.path.join(_here, "smd_client_test.py"))
+fx = importlib.util.module_from_spec(_hspec)
+_hspec.loader.exec_module(fx)
+
+
+def tearDownModule():
+    fx.tearDownModule()
+
+
+def daemon_answer(pages, default_uuid="lb-uuid-1"):
+    """The same three routes as FakeDaemon, as an answer function for the TLS fixture."""
+    def answer(method, path):
+        if path == "/v1/version":
+            body = {"archive": {"default_logbook_uuid": default_uuid}}
+        elif path == "/v1/logbook":
+            body = [{"id": 1, "uuid": "lb-uuid-1"}]
+        elif path.startswith("/v1/logbook/1/qso"):
+            after = path.split("after=")[1].split("&")[0] if "after=" in path else ""
+            i = int(after or 0)
+            body = {"items": pages[i], "next_cursor": str(i + 1) if i + 1 < len(pages) else None}
+        else:
+            return 404, {}, b""
+        return 200, {"Content-Type": "application/json"}, json.dumps(body).encode()
+    return answer
+
+
+def run_local(env, *extra):
+    """--from-daemon with no address: the local install, found through env."""
+    if os.path.exists(OUT):
+        os.remove(OUT)
+    out, err = io.StringIO(), io.StringIO()
+    with unittest.mock.patch.dict(os.environ, env, clear=True), redirect_stdout(out), redirect_stderr(err):
+        code = cab.main(["--from-daemon", "-o", OUT] + list(extra) + ARGS)
+    lines = open(OUT, encoding="utf-8").read().splitlines() if os.path.exists(OUT) else []
+    for p in (OUT, OUT + ".issues.txt"):
+        if os.path.exists(p):
+            os.remove(p)
+    return code, lines, err.getvalue()
+
+
+class FromTheLocalDaemon(unittest.TestCase):
+    PAGES = [[qso_json("G4AAA", "2")], [qso_json("G4BBB", "1", srx="0")]]
+
+    def test_reads_every_page_over_the_pinned_listener_with_the_credential(self):
+        d = fx.Listener(fx.GENUINE, answer=daemon_answer(self.PAGES))
+        try:
+            code, lines, err = run_local(fx.install(d.port)["env"])
+        finally:
+            d.close()
+        self.assertEqual(code, 0, err)
+        self.assertEqual([l.split()[9] for l in qso_lines(lines)], ["G4BBB", "G4AAA"])
+        self.assertTrue(any("after=1" in r["path"] for r in d.requests))
+        self.assertTrue(d.requests and all(r["cred"] == [fx.CRED] for r in d.requests),
+                        "a request went without exactly one credential")
+        self.assertNotIn(fx.CRED, err)
+
+    def test_an_impostor_is_refused_and_nothing_is_written(self):
+        d = fx.Listener(fx.IMPOSTOR, answer=daemon_answer(self.PAGES))
+        try:
+            code, lines, err = run_local(fx.install(d.port)["env"])
+        finally:
+            d.close()
+        self.assertEqual((code, lines), (1, []))
+        self.assertIn("identity", err)
+        self.assertNotIn(fx.CRED, err)
+        self.assertEqual(d.requests, [])
+        self.assertFalse(d.saw_credential())
+
+    def test_a_daemon_that_refuses_the_credential_is_an_error_not_an_empty_log(self):
+        refusal = json.dumps({"code": "desktop_app_required", "message": "x", "op": "y"}).encode()
+        d = fx.Listener(fx.GENUINE, answer=lambda m, p: (403, {"Content-Type": "application/json"}, refusal))
+        try:
+            code, lines, err = run_local(fx.install(d.port)["env"])
+        finally:
+            d.close()
+        self.assertEqual((code, lines), (1, []))
+        self.assertIn("answered 403", err)
+
+    def test_another_install_is_named_with_sm_config(self):
+        d = fx.Listener(fx.GENUINE, answer=daemon_answer(self.PAGES))
+        try:
+            inst = fx.install(d.port)
+            code, lines, err = run_local({"HOME": "/nonexistent"}, "--sm-config", inst["config"])
+        finally:
+            d.close()
+        self.assertEqual(code, 0, err)
+        self.assertEqual(len(qso_lines(lines)), 2)
+
+    def test_a_plain_address_refused_by_the_check_says_what_to_do(self):
+        refusal = json.dumps({"code": "desktop_app_required", "message": "x", "op": "y"}).encode()
+        d = fx.Listener(None, answer=lambda m, p: (403, {"Content-Type": "application/json"}, refusal))
+        try:
+            if os.path.exists(OUT):
+                os.remove(OUT)
+            err = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(err):
+                code = cab.main(["--from-daemon", f"http://127.0.0.1:{d.port}", "-o", OUT] + ARGS)
+        finally:
+            d.close()
+            if os.path.exists(OUT + ".issues.txt"):
+                os.remove(OUT + ".issues.txt")
+        self.assertEqual(code, 1)
+        self.assertIn("--from-daemon", err.getvalue())
+        self.assertIn("without an address", err.getvalue())
+        self.assertFalse(os.path.exists(OUT))
+
+
 
 
 if __name__ == "__main__":

@@ -347,6 +347,13 @@ jobs:
           xvfb-run -a npm run check:c1d
           # W-0027 C2b: the same acceptance with smd's operating-client check on.
           xvfb-run -a npm run check:c2b-smd
+      # W-0027 C2c: the tools against that same binary with the check on, in a temporary
+      # working directory with the rig, FT8 and evidence capture disabled. The client and
+      # the Cabrillo reader only read; the tune probe is not executed here.
+      - name: The operator's tools against a real smd with the check on
+        env:
+          SM_DESKTOP_SMD: /tmp/smd
+        run: python3 -I scripts/smd_tools_smd_test.py
 
       - name: Build all cmd/ binaries (catcli, loadgen, etc.)
         run: go build ./cmd/...
@@ -380,3 +387,14 @@ jobs:
       # failed install never leaves the daemon stopped.
       - name: Deploy script (the daemon is never left stopped)
         run: python3 -I scripts/deploy_local_dev_test.py
+      # W-0027 C2c: the operator's own tools once smd's operating-client check is on. Each
+      # verifies smd before it sends the install's credential. Synthetic installs and
+      # identities, loopback fixtures that only record; no smd, no rig, nothing keyed. The
+      # probe's tests first deny themselves every TCP connection (scripts/confined.py,
+      # Landlock) and run the probe against a recording stand-in for the client command.
+      # Where the kernel cannot do that they do not run, and this step fails.
+      - name: The operator's tools (the verified client, the Cabrillo reader, the tune probe)
+        run: |
+          python3 -I scripts/smd_client_test.py
+          python3 -I scripts/ukeicc_cabrillo_test.py
+          python3 -I scripts/tune_probe_test.py
