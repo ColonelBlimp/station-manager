@@ -95,6 +95,9 @@ the shell trusts that one certificate and nothing else.**
    as the HTTP listener. The existing HTTP listener is unchanged at **8080**: the browser keeps
    operating the station until the operating-client check (C2) is switched on, and becomes the
    view-only listener afterwards (ADR 0102 ruling 1).
+   **Amended 2026-11-13:** ADR 0102's update of that date drops the view-only client (operator:
+   "yes, drop view-only for C2"). After C2 the HTTP listener is not a view-only listener; what
+   becomes of it, and of the tools that use it, is C2's design.
    - **If the app port cannot be bound** (operator ruling 2026-11-10): until C2 is switched on,
      `smd` starts anyway and reports it plainly, naming the port, in `smd.log` and as a Station
      Event, because the browser is still the operating client; once C2 is on, it is a start-up
@@ -255,6 +258,10 @@ Simpler (one listener), but plain-HTTP browsers would lose access during the tra
 view-only browser path would face a self-signed certificate. Rejected for now; a single listener can
 be revisited once browsers are view-only.
 
+(2026-11-13: ADR 0102's update of that date drops the view-only client, so the view-only reason
+above no longer constrains C2. The transition concern stands until the browser path is retired.
+That ruling does not choose a one-listener design or authorise removing either listener.)
+
 ## Consequences
 
 - **`smd`:** a key and certificate in the working directory, a second listener with its own
@@ -278,7 +285,8 @@ be revisited once browsers are view-only.
 
 ## Triggers to revisit
 
-- Browsers become view-only (C2 on): consider moving to one TLS listener.
+- Browsers become view-only (C2 on): consider moving to one TLS listener. (2026-11-13: browsers
+  stop being clients at all once C2 is on, ADR 0102's update; the same reconsideration applies.)
 - Electron changes the certificate-verification API or its coverage of WebSocket.
 - Remote operation becomes a requirement (ADR 0102 trigger): loopback pinning no longer suffices.
 

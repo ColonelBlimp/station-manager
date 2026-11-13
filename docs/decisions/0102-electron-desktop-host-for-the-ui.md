@@ -58,6 +58,8 @@ The operator's rulings (W-0026, 2026-11-09) define the experience:
    `smd` adds an **operating-client check** (a per-install secret the desktop app presents;
    operating routes refuse requests without it). Its stated limit is accepted: it keeps out other
    users and machines, not other processes of the same user.
+   **Amended 2026-11-13: no view-only browser client is built in C2; see "Update 2026-11-13"
+   below.**
 2. **Window set:** one main window (Operate, Logbook, Events, Settings as views), one Map window,
    one Manual window, and Rig Control and Session detachable into their own windows; each exists
    at most once, and asking again brings it forward. External links open in the default browser.
@@ -113,6 +115,47 @@ The operator's rulings (W-0026, 2026-11-09) define the experience:
    [ADR 0014](0014-upstream-forwarding-deferred.md) (a team or DXpedition server that receives
    QSOs from operating stations, deduplicates and does the final forwarding); it cannot operate
    a station. The topology itself stays deferred as ADR 0014 rules.
+
+### Update 2026-11-13: no view-only browser client in C2
+
+**Operator ruling (chat, 2026-11-13): "yes, drop view-only for C2".** It amends ruling 1. The
+rulings above are left as they were made; this is what changes.
+
+- **What is ruled.** C2 does not build a view-only class of client. The UI and the API are for
+  the desktop app: one default-deny check for the app's credential, with a short explicit list
+  of exceptions. A plain browser is not a supported client once C2 is on, for viewing or for
+  operating.
+- **Why.** A view-only class means sorting every route and event stream into view or operate,
+  and keeping it sorted. The daemon declares some eighty routes, and a number of them need a
+  judgment the method does not settle. That work buys local browser viewing, which has little use once
+  the app is installed, and remote viewing, which was off by default and is not built. The
+  operator's aim is that the desktop reduces what has to be supported. The evidence and the
+  inventory are in W-0027 ("C2 scope question" and "Inventory").
+- **What does not change.**
+  - Operating always requires the desktop app (ruling 1's core).
+  - The operating-client check and its stated limit: other users and machines are kept out,
+    not other processes of the same user.
+  - **Presence is still its own rule.** The credential says who is calling. The build must
+    still name the one operating subscription that is the operator's presence, and how its
+    loss stops and disarms through the guaranteed-stop controller (W-0027's C4).
+  - The request guards for archive, default and session generation (ADR 0100 §5).
+  - The daemon submitter of ADR 0014 keeps its own, narrower credential: QSO submission only,
+    never rig or TX control or operating presence. Dropping the view-only class does not give
+    that caller the operating credential.
+  - The earlier ruling on timing (2026-11-11): the browser path is not retired until a user
+    can install and launch the desktop app.
+- **What it supersedes in this ADR.** Where the text below speaks of the browser as a view-only
+  client, of "view-only enforcement", or of "the view-only route classification" as daemon
+  work, read: not built in C2. That is the first bullet under "Requirements the rulings carry",
+  the wording of the daemon-submitter bullet, the "Daemon work" line under Consequences, and
+  the closing sentence of "Stay in the browser".
+- **Deferred, with its trigger.** View-only or remote access is designed if and when it is
+  needed. "Remote operation becomes a requirement" under "Triggers to revisit" already names
+  it; a need for remote viewing alone is the same trigger.
+- **Left to C2's design, not ruled here:** what becomes of the plain-HTTP listener on 8080;
+  how the development loop and the tools that read the daemon over HTTP present the
+  credential; the exception list; and the acceptance evidence. C2 gets its own brief, reviewed
+  before anything is built.
 
 ## Requirements the rulings carry
 

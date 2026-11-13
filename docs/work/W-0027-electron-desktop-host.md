@@ -84,7 +84,8 @@ design before code.
 - C1: the authenticated channel, a design reviewed by Codex before code. The shell authenticates
   `smd`'s content and binds that authentication to every later request, stream and reconnect.
 - C2: the operating-client check. **Depends on D1** (operator ruling 2026-11-11): the browser is
-  not made view-only or removed until a user can launch the desktop app.
+  not made view-only or removed until a user can launch the desktop app. **Ruled 2026-11-13:
+  C2 builds no view-only class** (ADR 0102, "Update 2026-11-13"); C3 below is not built.
 - C3: the view-only route classification, leaving room for a daemon submitter whose credential
   grants QSO submission only.
 - C4: presence on the authenticated operating subscription, stopping and disarming through the
@@ -1649,7 +1650,7 @@ failed check), the deploy ends there and a running `smd` keeps running. It runs 
 - **Not test-first, said plainly:** the same-version test was written after the selection rule
   changed. V2 restores the old rule and that test fails.
 
-### C2 scope question: keep a view-only browser, or no browser client at all (2026-11-13, not ruled)
+### C2 scope question: keep a view-only browser, or no browser client at all (2026-11-13; ruled the same day, see "Ruling" below the inventory)
 
 **How it arose.** Working through the session design (ADR 0100 §4), it turned out that any
 other client of `/v1/ft8/events` keeps TX armed after the desktop app leaves FT8, a plain
@@ -1672,7 +1673,7 @@ ruling).
 
 - **A desktop-only C2 is worth considering.** The extra-subscriber case alone does not require
   removing the browser: C2 closes it either way. What a view-only class costs is the
-  classification: each route (`internal/api/server.go` registers about 66) and each event
+  classification: each route (some eighty are declared; the inventory below has the count) and each event
   stream sorted into view or operate, and kept sorted as routes are added. Dropping the class
   means that work is not built.
 - **It does not make presence automatic.** A per-install credential says who is calling. C2
@@ -1719,7 +1720,7 @@ not a large deletion of existing guards:
 | Per-tab Session list (`session.svelte.ts`, sessionStorage) | **Replace, then remove** | It owns the list today. It goes only when ADR 0100's daemon-owned session replaces it. |
 | Stream revival (`sse-reviving.ts`) | **No deletion shown** | The desktop runs the same SPA over the same transports; who may connect does not replace reconnecting after a network change. To be assessed in Electron. |
 | Subscriber-count presence | **Replace the admission rule, keep the rest** | C2 names which subscription is the operator's presence. The linger, the disarm and the capture lifecycle remain. |
-| The 8080 listener and browser compatibility | **Plausibly removable** | After its consumers move: the Vite proxy, the Cabrillo reader, loadgen and the tune probe. No broad unauthenticated loopback exemption in its place. |
+| Plain TCP on 8080 for the browser, and browser compatibility | **Plausibly removable** | After its consumers move: the Vite proxy, the Cabrillo reader, loadgen and the tune probe. No broad unauthenticated loopback exemption in its place. The API listener itself stays (see the inventory). |
 | The `beforeunload` hook (`lib/config/unsaved.ts`), the anchor download (`lib/api/session-export.ts`), the new-tab links (`lib/ui/Sidebar.svelte`) | **Conditional** | Each needs its planned host replacement first (close confirmation, native Save, the finite window roles). Dirty-state tracking, export generation and external links keep their purposes. |
 
 **C2's boundary, if it is desktop-only.**
@@ -1752,33 +1753,47 @@ Nothing here authorizes building C2 or removing anything.
 comments. Each row names the behaviour the code owns, what would have to replace it, and the
 evidence that would allow its removal.
 
+**Corrected 2026-11-13 after Codex's review (codex-106), each point verified in the source:**
+the route counts and the list of event streams; `POST /v1/contest-serial` (it allocates a
+serial, so it is a mutation); the listener rows (the generic listener is not browser code); and
+the `'storage'` listener (theme only). The conclusion is narrower as a result, not different.
+
 **1. Work that would not be built: the view-only classification.**
-- `internal/api` registers about 77 production routes by literal method and path: 36 `GET`
-  (four of them event streams: `/v1/events`, `/v1/ft8/events`, `/v1/rig/events`,
-  `/v1/station-events`), 36 `POST`, 2 `PUT`, 2 `PATCH`, 2 `DELETE`. Routes registered another
-  way would add to that.
-- A view-only class needs an entry and a test for each, and a judgment for those where the
-  method does not settle it. About ten of the latter:
+- **Counting method:** literal `Handle`/`HandleFunc` registrations with a method and a path in
+  the non-test files of `internal/api`. That finds 77: 35 `GET`, 36 `POST`, 2 `PUT`, 2 `PATCH`,
+  2 `DELETE`. Two more `GET` routes are built from constants, the WebSocket twins
+  `/v1/events/ws` and `/v1/rig/events/ws` (`stream_ws.go`). These are declared routes; fewer
+  are enabled in any one configuration (`/debug/pprof` is optional, and the rig and FT8 routes
+  depend on those subsystems).
+- **Event streams:** three by SSE (`/v1/events`, `/v1/ft8/events`, `/v1/rig/events`) and the
+  two WebSocket twins. `/v1/station-events` is not one: it returns a JSON list.
+- A view-only class needs each route classified, with coverage that the classification holds,
+  and a judgment where the method does not settle it. Some of the latter:
   - reads with side effects or demand: `GET /v1/ft8/events` (capture demand and presence),
     `GET /v1/rig/events`, `GET /v1/enrich/callsign` (upstream lookups on the station's
     accounts, and cache writes);
   - reads of sensitive or operational state: `GET /v1/config`, `GET /v1/hardware`,
     `GET /v1/evidence/status`, `GET /debug/pprof/*`;
-  - posts that only read or generate: `POST /v1/session/export`, `POST /v1/contest-serial`.
+  - a post that only generates: `POST /v1/session/export`.
+  - Not on that list: `POST /v1/contest-serial` allocates a serial
+    (`AllocateContestSerialWithContext`), and the number is consumed even if the contact is
+    never logged. It is a mutation.
 - With a desktop-only C2 this is one default-deny gate and a short exception list. The
-  operating-subscription rule is still needed either way.
+  operating-subscription rule is still needed either way. How many tests the classification
+  would have taken is not something this inventory measures.
 
 **2. Existing code, candidate by candidate.**
 
 | Candidate | Size | Behaviour it owns | Replacement needed | Evidence that allows removal | Verdict |
 |---|---|---|---|---|---|
-| The browser listener's bind (`Server.ListenAndServe`, tcp or Unix socket; `socket_path`) | about 40 lines, plus `cmd/smd/desktop_listener.go:54` | Serves the UI and API to anything on 8080 | The app listener (exists, 8443). A path for the tools below | The tools run against the app listener or their own path; the desktop installs and launches (D1 to D6) | **Removable later** |
-| The same-origin guard for that listener (`requireSameOrigin`, `hostAllowed`, `tcpBindHost`, `originAllowed` in `internal/api/csrf.go`) | about 95 of 246 lines; tests 169 lines, shared with the app guard | DNS-rebinding and cross-origin defence for a listener a browser can reach | `requireAppOrigin` stays for the app listener | The listener it guards is gone | **Removable with the listener** |
+| The API listener (`Server.ListenAndServe`; `server.protocol` `tcp` or `unix`, `socket_path`) | about 40 lines | The daemon's configured API transport, for any client. It is **not** browser code: the Unix-socket mode and the daemon-only deployment of ADR 0102 use it | n/a | n/a | **Stays.** The ruling retires the browser as a client, not this transport |
+| Plain TCP on 127.0.0.1:8080 as the default the browser reaches | a default and its validation in `internal/config`; not measured | Lets a browser, the Vite proxy and the tools reach the API with no credential | C2's transport decision, accounting for the local tools and headless use | C2's brief settles it, and the tools below work | **For C2 to decide; not counted** |
+| The same-origin guard for that listener (`requireSameOrigin`, `hostAllowed`, `tcpBindHost`, `originAllowed` in `internal/api/csrf.go`) | about 95 of 246 lines; tests 169 lines, shared with the app guard | DNS-rebinding and cross-origin defence wherever a browser can reach the listener; it already passes a Unix socket through | `requireAppOrigin` stays for the app listener | No browser-reachable TCP listener remains | **Stays until C2's transport decision** |
 | Consumers of 8080: the Vite proxy (`frontend/app/vite.config.ts`), `scripts/ukeicc-cabrillo.py` (331 lines), `cmd/loadgen` (484), `scripts/tune-duration-probe.sh` (134), the deploy script's port check | config and call sites only | Development and operator tools over HTTP | Each tool presents the credential or uses a named local path; no broad loopback exemption | Each tool shown working without 8080 | **To migrate, not delete** |
 | `beforeunload` warning (`lib/config/unsaved.ts`) | about 30 of 220 lines | Warns before a tab with unsaved settings is closed | The shell's close confirmation (ADR 0102 ruling 6) | The app asks before closing with unsaved settings | **Conditional** |
 | Anchor download (`lib/api/session-export.ts`) | about 10 of 111 lines | Saves an exported file through the browser | A native Save dialog from the shell | Export saved through the shell in the installed app | **Conditional** |
 | New-tab links (`target="_blank"`, 4 uses in 3 files) | a few lines | Opens the Manual and external links in another tab | The Manual window and the default-browser handler (the shell already routes `window.open`) | A2's Manual window exists | **Conditional** |
-| Cross-tab UI sync (`'storage'` listener in `lib/ui/state.svelte.ts`) | one listener | Keeps theme and rail width in step across tabs | Nothing, with one main window; A2's windows need a decision | A2's state-sharing rule | **Conditional** |
+| Cross-tab theme sync (`'storage'` listener in `lib/ui/state.svelte.ts`) | one listener | Keeps the theme in step in the Map, which opens in its own tab. Theme only | Whatever shares the theme with A2's Map and detached windows | A2's replacement keeps the theme in step | **Conditional; keep until then** |
 | Per-tab Session list (`lib/operate/session.svelte.ts`, sessionStorage) | 154 lines | The Session list and its persistence | ADR 0100's daemon-owned session | ADR 0100 built and accepted | **Replace, then remove** |
 | Subscriber presence and linger (`internal/ft8/service.go`, `onSubscriberAdded` to `onLingerExpired`) | about 100 lines | Capture demand, the grace, the unattended disarm | C2's rule for which subscription is the operator's | n/a | **Stays; the admission rule changes** |
 | Request guards (`internal/api/archive_guard.go`, 72 lines; `default_guard.go`, 150) | 222 lines | Refuse an action aimed at an archive or default the window does not show | n/a | n/a | **Stays** |
@@ -1791,18 +1806,41 @@ evidence that would allow its removal.
   the 8080 address), `docs/architecture.md`, `docs/ft8.md`, `docs/smcloud-deploy.md`, and seven
   manual chapters that mention the browser or the port.
 
-**3. The answer in numbers.**
-- Removable once its prerequisites are met: about 135 lines of daemon code (the browser bind
-  and its origin guard) and about 50 lines of SPA code, with their tests. That is of the order
-  of 200 lines against about 136,000 lines of non-test code.
+**3. The answer.**
+- **Direct removal in the candidates examined is small:** about 50 lines of SPA code, each
+  conditional on its host replacement. No daemon code is counted: the listener and its origin
+  guard serve the generic API transport, and what C2 does with plain TCP on 8080 is its own
+  decision.
 - Replaced by other planned work, not saved: 154 lines (the Session list).
-- Staying: about 600 lines that were on the earlier list (the guards, the revival rules, the
-  presence code).
-- **So retiring the browser does not shrink the codebase in any way that matters.** What a
-  desktop-only C2 buys is on the other side: about 77 route classifications, about ten
-  judgments and their tests that are never written, one kind of UI client to reason about,
-  and, eventually, one listener.
+- Staying: the request guards, the revival rules, the presence code and the listener.
+- **What a desktop-only C2 buys is on the other side:** the view-only classification of some
+  eighty declared routes is never written, with the judgments it needs, and there is one kind
+  of UI client to reason about.
+- Line counts show scale. They do not measure maintenance value, which lies in the behaviours,
+  failure paths and supported states that go.
 
 **Limits.** Counts are from text searches, so a route or a browser dependency registered in a
 way the searches do not match is missed. Sizes are of whole functions or files, not of what a
 careful removal would leave. Nothing was assessed inside Electron.
+
+### Ruling: C2 drops the view-only browser (2026-11-13)
+
+**Operator (chat):** "yes, drop view-only for C2", after the inventory above.
+
+- Recorded as a dated update in ADR 0102 (amending ruling 1) and a note in ADR 0103 (the HTTP
+  listener is not a view-only listener after C2). The original rulings are left as made.
+- **C2 is now:** one default-deny check for the desktop app's credential with a short explicit
+  exception list, covering the non-`/v1` surfaces too.
+- **C3, the view-only route classification, is not built.** The daemon submitter's separate,
+  narrower credential (ADR 0014) keeps its place.
+- **C4 stays as planned:** the rule naming the one operating subscription that is the
+  operator's presence. The credential alone does not provide it.
+- **Unchanged:** the 2026-11-11 timing ruling (no retirement of the browser path before the
+  desktop app can be installed and launched), the request guards, the stream revival rules and
+  the presence code.
+- **Not ruled, for C2's brief:** the fate of the 8080 listener; how the Vite proxy, the
+  Cabrillo reader, loadgen and the tune probe present the credential; the exception list; the
+  acceptance evidence, which must rule out "the browser UI stops working while an
+  unauthenticated client can still operate or keep FT8 running".
+- **Next:** C2's brief, for review by the operator and Codex before any code. Not started; it
+  waits for the operator's direction.
