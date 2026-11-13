@@ -7,6 +7,11 @@ date: 2026-10-22
 
 # 0094 — Retain Session lists per archive within each tab
 
+> **Update 2026-11-13:** [ADR 0100](0100-daemon-owned-operating-sessions-with-explicit-membership.md)
+> is accepted and supersedes this ADR in part: the per-archive Session lists stay, but they become
+> daemon-owned and shared by every window. ADR 0100 is not built. Until it is, this ADR still
+> describes the code.
+
 > **Update 2026-10-23:** B2-10 and B2-11 confirmed the failure against alpha.4, which is held.
 > These implementation rulings were settled (Codex, at the operator's request). The design is in
 > [W-0021](../work/W-0021-qso-archives.md), "alpha.4 hold: fix design".

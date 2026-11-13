@@ -1,13 +1,15 @@
 ---
 number: 0100
 title: Daemon-owned operating sessions with explicit membership
-status: Proposed
+status: Accepted
 date: 2026-11-06
 ---
 
 # 0100 — Daemon-owned operating sessions with explicit membership
 
-**Proposed (2026-11-06; revised 2026-11-10). Design only. Nothing is authorised or built.** The
+**Accepted (operator, chat, 2026-11-13: "I agreed to the proposed session design"). Proposed
+2026-11-06; revised 2026-11-10. Design only: nothing is built, and building it needs its own
+authorisation and a reviewed brief.** The
 2026-11-10 revision follows the operator's rulings on sessions in the Electron desktop app
 (ADR 0102, W-0027): a session follows the operating app's lifetime, with no inactivity expiry. It
 replaces the earlier activity-gap design. That design, its rulings (U1–U3, P1–P3), its
@@ -740,7 +742,8 @@ Superseded by the operator's rulings; see *What changed on 2026-11-10*.
   after FT8 stop, disarm and completion logging.
 - **ADR 0094 is superseded in part** when this is accepted: per-archive Session lists stay, but they
   are daemon-owned and shared by every window. ADR 0049 stays Rejected; this ADR records that its
-  trigger fired.
+  trigger fired. (Accepted 2026-11-13. ADR 0094 carries a dated note; it still describes the code
+  until this design is built.)
 - **The live-submit and FT8-sink transactions gain session work:** the default-change test, the
   rarely used safety-net open, and the association write. No session policy, prompt or external
   dependency blocks logging; a database failure rolls the QSO back atomically.
