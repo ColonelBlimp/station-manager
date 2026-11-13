@@ -350,3 +350,4 @@ implementation authorisation; the operator's decisions are marked under each ite
    - **Wanted:** start the lookup when the partner's call is known at the start of the ladder. At completion, use whatever has arrived and write at once, under its own context; never wait for a lookup at completion. Missing details are added later by editing or re-enriching the QSO.
    - **Acceptance:** with a lookup that hangs, a completed FT8/FT4 exchange is stored immediately without lookup details. With a lookup that finishes during the ladder, the stored QSO carries its details. A test whose enricher blocks until its context expires still finds the contact stored, and fails against today's shared context.
    - **Knock-on:** ADR 0100's archive-switch drain then waits only for the write, not a lookup.
+- [2026-11-13] FT8 answer mode indicates that it can be selected - the pointer changes - (when in a ladder), but nothing can actually be selected
