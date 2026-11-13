@@ -2259,3 +2259,103 @@ on the main listener with the check on gets the JSON refusal until C2c adds the 
    about 20 lines). The alternative was a source scan, which misses routes built from constants.
 4. **`internal/api` does not import `internal/desktopid`:** the server is handed a comparison
    function, so the package's import boundary is unchanged.
+
+### C2b — the shell presents the credential (built 2026-11-13; uncommitted, awaiting review)
+
+Built on the operator's direction ("commit C2a and start C2b"), test-first. C2a is committed as
+`90db4857`. With this part, the desktop app can pass the check; the check itself is still off
+by default and **is not to be switched on at the station before C2c and C2d**.
+
+**What exists now.**
+- **Finding it** (`desktop/src/discovery.mjs`): after the identity, the shell validates
+  `desktop-credential/` (the user's own, `0700`, not a symlink) and reads `credential` (the
+  user's own, exactly `0600`, a regular file, opened without following a symlink, checked on the
+  open descriptor before any byte is read). The content must be exactly the canonical 43
+  characters. No refusal quotes the file, and the value travels in an object that prints a
+  placeholder.
+- **Waiting and refusing.** No credential directory yet: the shell waits and says so, as for a
+  missing identity. An unsafe or malformed credential: the waiting page names the path and the
+  reason, titled as the credential, not the identity. In both cases nothing is pinned and
+  nothing is sent.
+- **Fixing it** (`desktop/src/daemon.mjs`): the pin, the origin and the credential are fixed in
+  one synchronous step, once, for the app's lifetime. Neither file is read again.
+- **Presenting it** (`desktop/src/credential.mjs`): one `onBeforeSendHeaders` hook, installed
+  before the window exists, adds `X-SM-Operating-Credential` to a request for the pinned
+  `https` origin or its `wss` partner, and to nothing else. Any header of that name already on
+  the request, in any letter case, is removed first.
+- **A refusal at the start** (`desktop/src/waiting.mjs`): the probe reads smd's error code. On
+  `desktop_app_required` the waiting page says the daemon did not accept this app, to close and
+  reopen it, and failing that to run `smctl restart`. It is shown once and the probe goes on.
+- **A refusal in a loaded workspace** (`watchRefusal`): a sign of refusal on the pinned origin
+  makes the main process ask smd itself; if smd confirms, the operator is told once, in a
+  native message box, and the page is not navigated, so nothing typed is lost. The signs are a
+  request that completes with `403`, whoever sent it, and a WebSocket that fails. The shell's
+  own probes carry a mark made in the main process at start (`probeUrl`, `isShellProbe`) and
+  never prompt the question.
+- **The SPA is unchanged.** The brief called that a goal to verify; it holds.
+
+**Evidence.**
+- **Unit tests:** 79 pass (was 55): the credential's discovery states, 20 unsafe or malformed
+  cases, the header rule (where it goes and 13 places it must not), the once-only holder, the
+  connection logic, both refusal pages, and the refusal watcher against a fake session.
+- **`check:c2b`, Electron against TLS fixtures, 35 checks:** nothing sent while the credential
+  is missing or unsafe; the probe, the page, an asset, a `fetch`, an event stream and a
+  WebSocket upgrade each carry it exactly once; a header the page supplies does not arrive;
+  the page's own request, document and timing entries do not hold the value; another port
+  serving the same certificate receives nothing, directly or by redirect; a plain-HTTP
+  downgrade and an impostor at the address are refused; a reconnect carries it; a replacement
+  under a loaded workspace is told once, with the page and a draft marker untouched and no file
+  read again; a window started before the new credential reaches the disk waits and says so; a
+  window started after presents the new one.
+- **`check:c2b-smd`, Electron against a real `smd` with the check on, 18 checks.** This is the
+  existing C1d acceptance, every phase unchanged: the real SPA loads its configured workspace,
+  `fetch`, `wss:` and EventSource work, a draft survives an impostor and a restart, fresh
+  windows pin and load. Two checks show the check was really on: a plain client of the browser
+  listener gets `403 desktop_app_required` for the API and the page and `200` for the health
+  check; and the credential smd made is the one the shell holds. `check:c1d`, the same with the
+  check off, passes with 17 checks, one of which shows the browser listener still serving.
+- **The other scenarios** (`check:a1`, `check:c1`, `check:c1d-shell`) pass; the last now has a
+  credential in its synthetic install, as every smd start makes one.
+- **Reversion proofs: 40, every one caught,** run in temporary copies of the repository, in
+  parallel, in 44 seconds; the working tree was not touched. One candidate was not a proof and
+  is dropped: with the explicit removal of a page's header disabled, Electron still delivered one
+  value, the shell's, because its header map ignores letter case. The removal is kept so the
+  rule does not depend on that; its proof is on the pure function.
+- **Gates:** desktop lint, format and unit tests; all six scenarios; the maintainability gate
+  (0 regressions); `task docs:check`. CI is wired for the two new checks (`ci.yml`,
+  `Taskfile.yml`, `scripts/ci-local.sh`).
+
+**Not run here, and why.** `task rpm:desktop` builds the RPM and would replace the built RPMs
+on disk. The staging step copies the whole of `desktop/src` (`scripts/desktop-rpm.sh`), and the
+content check compares the shipped sources with that directory, so the new file ships; the
+smoke check's own anchors in `waiting.mjs` are unchanged. `task ci:local` and CI run it.
+
+**Review finding, fixed (codex-112, P2).** As first built, the watcher acted only on a
+completed `403` that named a window. Codex measured, on this Electron, two refusals it missed:
+a refused WebSocket upgrade is reported as an error with no status, and a shared worker's
+request names no window. A workspace whose first refused request was one of those was never
+told.
+- **The fix:** any `403` on the pinned origin prompts the question, and so does a failed
+  WebSocket there. The shell's own probes are told apart by their mark, not by the missing
+  window. smd's answer still decides: a daemon that is simply down fails a WebSocket the same
+  way, and is not reported as a refusal.
+- **Tests, seen failing first:** three unit tests and a fourth for the mark. In Electron: a
+  shared worker's request as the only refused request, a WebSocket upgrade as the only one,
+  each told once with the page left alone; and a `403` of another kind, after which smd is
+  asked exactly once and nobody is told, which shows the question does not prompt itself.
+- **Proofs:** the two original defects put back, in the unit tests and in Electron, are each
+  caught; so is a probe that is not recognised.
+- **A cost to know:** while the daemon is down, each failed WebSocket reconnect of a loaded
+  page makes the shell ask once (one short probe at a time).
+
+**Open points, for review.**
+1. **The wording the operator sees** is mine, not ruled: the two waiting-page texts and the
+   message box ("The daemon no longer accepts this app").
+2. **An app newer than its daemon waits for a credential the daemon never makes.** The exact-
+   version pair (ADR 0102 Q4) rules this out for an installed pair; a development run against
+   an older installed daemon will wait, and the page says why.
+3. **The message box is told once per app lifetime.** After it, further refusals are silent
+   until the app is restarted, which is the only remedy.
+4. **A main-frame navigation refused by smd** would replace the page with smd's JSON refusal.
+   The shell offers no reload and the SPA navigates in the page, so this is not reachable in
+   normal use; it is not handled.

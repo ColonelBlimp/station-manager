@@ -3,9 +3,11 @@
 // Until the first valid identity, the shell knows no origin and no pin: the verifier rejects
 // everything, the request filter allows nothing on the network, and the window shows the local
 // waiting page with the discovery's state, path and reason (operator ruling Q2). At the first
-// valid read, the pin and the origin are fixed together, once, for the app's lifetime; the
-// identity is never read again, and a later TLS failure never re-pins. From then on the
-// existing pinned probe loads the application when smd answers.
+// valid read, the pin, the origin and the operating credential (W-0027 C2b) are fixed together,
+// once, for the app's lifetime; neither file is read again, and a later TLS failure or refusal
+// never re-pins or re-reads. From then on the pinned probe loads the application when smd
+// answers.
+import { onceCredential } from './credential.mjs';
 import { configPath, discover, recordingFs } from './discovery.mjs';
 import { trace as stderrTrace } from './trace.mjs';
 import { loadWhenUp, returnToWaitingOnFailure, waitingPageUrl } from './waiting.mjs';
@@ -32,14 +34,16 @@ export function parseArgs(argv) {
 }
 
 /**
- * Discover smd's identity and, at the first valid read, fix the pin and the origin and load the
- * application. `pin` is a oncePin(); `target.origin` is read by the session's request filter and
- * the window's navigation guards. Resolves with the discovery result once fixed, or undefined if
- * the window closes first.
+ * Discover smd's identity and credential and, at the first valid read, fix the pin, the origin and
+ * the credential and load the application. `pin` is a oncePin() and `cred` a onceCredential();
+ * `target.origin` is read by the session's request filter, its credential header and the window's
+ * navigation guards. Resolves with the discovery result once fixed, or undefined if the window
+ * closes first.
  */
 export async function connectWhenTrusted({
     win,
     pin,
+    cred = onceCredential(),
     target,
     args = {},
     env = process.env,
@@ -65,8 +69,9 @@ export async function connectWhenTrusted({
             ? discover({ configFile: where.path, explicitDataDir: args.dataDir }, fsb)
             : { ok: false, state: 'refused', path: args.config ?? '', reason: where.reason };
         if (r.ok) {
-            // One synchronous step, so no request can see one fixed without the other.
+            // One synchronous step, so no request can see one fixed without the others.
             pin.set(r.fingerprint);
+            cred.set(r.credential.reveal());
             target.origin = r.origin;
             trace(`pinned ${r.origin}`);
             const appUrl = r.origin + '/';

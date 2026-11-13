@@ -105,6 +105,26 @@ an impostor with another key. Every transport (page, `fetch`, `wss:`, EventSourc
 probe) is shown to work against the genuine one and to be refused by the impostor. The identities
 are generated per run with `openssl`; nothing touches `smd`.
 
+## The operating credential (C2b)
+
+`smd` makes a per-install operating credential at every start: `desktop-credential/credential`
+beside the identity, readable only by your user. The shell reads it once, with the identity
+(`src/discovery.mjs`), and its main process adds it as the `X-SM-Operating-Credential` header to
+requests for the pinned origin and nothing else (`src/credential.mjs`). Page script never holds
+it. With `smd`'s operating-client check on (`server.require_desktop_app`), this is what lets the
+app in; with it off, `smd` ignores the header.
+
+- Until the credential exists, or while its file is unsafe or malformed, the app shows its
+  waiting page with the path and the reason, and sends nothing. An `smd` older than the check
+  makes no credential, so this app waits for one.
+- The credential is fixed for the app's lifetime. If `smd` then refuses it (after a deliberate
+  replacement: delete the directory and restart `smd`), a loaded window says so once in a box of
+  its own and is left as it is, so nothing typed is lost; a window still waiting says the daemon
+  did not accept it. Close the app and open it again to adopt the new credential.
+
+`npm run check:c2b` proves this against TLS fixtures. `npm run check:c2b-smd` runs the C1d
+acceptance against a real `smd` with the check on.
+
 ## Commands
 
 ```sh
@@ -115,12 +135,14 @@ npm run check:a1                        # A1 acceptance in Electron (xvfb-run -a
 npm run check:c1                        # C1 proof: the pinned TLS identity (needs openssl)
 npm run check:c1d-shell                 # C1d wiring: discovery, pin and waiting page, TLS fixtures
 SM_DESKTOP_SMD=../build/bin/smd npm run check:c1d   # C1d acceptance against a real, already-built smd
+npm run check:c2b                       # C2b: the operating credential, TLS fixtures
+SM_DESKTOP_SMD=../build/bin/smd npm run check:c2b-smd   # the same acceptance, smd's check on
 npm run test:unit                       # discovery, connection, mode, trace and page logic, no Electron
 npm run lint && npm run format:check
 ```
 
-From the repository root, `task desktop:check` runs lint, format, the unit tests and the A1, C1
-and C1d-shell scenarios. `task desktop:check:c1d` builds the static `smd` (rebuilding the SPA)
-and runs the real-`smd` acceptance; to reuse a binary already built, run `check:c1d` directly as
-above. CI runs both, the latter after its SPA and daemon builds. Every check uses a temporary
+From the repository root, `task desktop:check` runs lint, format, the unit tests and the A1, C1,
+C1d-shell and C2b scenarios. `task desktop:check:c1d` builds the static `smd` (rebuilding the SPA)
+and runs the real-`smd` acceptance with the check off and then on; to reuse a binary already
+built, run `check:c1d` and `check:c2b-smd` directly as above. CI runs both, the latter after its SPA and daemon builds. Every check uses a temporary
 working directory, synthetic identities and free loopback ports; none touches the station.

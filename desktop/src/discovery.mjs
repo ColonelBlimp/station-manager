@@ -1,5 +1,7 @@
 // Finding and validating smd's desktop identity (ADR 0103 points 1 and 3, with its 2026-11-11
-// data_dir note; W-0027 C1d).
+// data_dir note; W-0027 C1d), and the operating credential beside it (ADR 0103 point 7; W-0027
+// C2b). The credential's value is handed on inside an object that never prints it, and no
+// refusal quotes the file.
 //
 // Read-only, in the main process, Linux-scoped. config.json is found by smd's own default rule
 // and read for two fields only, data_dir and server.app_port; nothing else from it is kept,
@@ -14,6 +16,9 @@ import { X509Certificate } from 'node:crypto';
 export const DEFAULT_APP_PORT = 8443;
 export const IDENTITY_DIR = 'desktop-identity';
 const CERT = 'cert.pem';
+export const CREDENTIAL_DIR = 'desktop-credential';
+const CREDENTIAL_FILE = 'credential';
+const CREDENTIAL_CHARS = 43; // 32 bytes in unpadded base64url, the whole file (smd's desktopid)
 
 /** smd's default config.json location (cmd/smd/main.go defaultConfigPath): an explicit path, else
  *  SM_WORKING_DIR, else the XDG data directory. Never the executable's directory. Returns
@@ -82,12 +87,16 @@ export function recordingFs({ onLstat, onData } = {}) {
 
 const waiting = (p, reason) => ({ ok: false, state: 'waiting', path: p, reason });
 const refused = (p, reason) => ({ ok: false, state: 'refused', path: p, reason });
+/** Marks a result as about the operating credential, so the waiting page can say so. */
+const aboutCredential = (r) => (r.ok ? r : { ...r, subject: 'credential' });
 const mode = (st) => (st.mode & 0o7777).toString(8).padStart(4, '0');
 
 /**
- * Find smd's identity. Returns { ok: true, configFile, dataRoot, port, origin, certPath,
- * fingerprint } or { ok: false, state: 'waiting' | 'refused', path, reason }. "waiting" is a
- * state that smd's first run resolves by itself; "refused" needs the operator.
+ * Find smd's identity and operating credential. Returns { ok: true, configFile, dataRoot, port,
+ * origin, certPath, fingerprint, credentialPath, credential } or { ok: false, state: 'waiting' |
+ * 'refused', path, reason }. "waiting" is a state that smd's start resolves by itself; "refused"
+ * needs the operator. Both must be valid before anything is returned: the shell never pins a
+ * daemon it could not then present itself to. `credential.reveal()` gives the value.
  */
 export function discover(
     { configFile, explicitDataDir, uid = process.geteuid(), ownerOf = (_p, st) => st.uid },
@@ -120,6 +129,15 @@ export function discover(
     const cert = readCertificate(certPath, uid, ownerOf, fsb);
     if (!cert.ok) return cert;
 
+    const credDir = path.join(resolved, CREDENTIAL_DIR);
+    const cdir = checkPrivateDir(credDir, uid, ownerOf, fsb, {
+        absent: 'smd has not created its operating credential yet (it does at each start)',
+    });
+    if (!cdir.ok) return aboutCredential(cdir);
+    const credentialPath = path.join(credDir, CREDENTIAL_FILE);
+    const cred = readCredential(credentialPath, uid, ownerOf, fsb);
+    if (!cred.ok) return aboutCredential(cred);
+
     return {
         ok: true,
         configFile,
@@ -128,7 +146,21 @@ export function discover(
         origin: new URL(`https://127.0.0.1:${port.port}`).origin,
         certPath,
         fingerprint: cert.fingerprint,
+        credentialPath,
+        credential: sealed(cred.value),
     };
+}
+
+/** A value that travels without being printed: JSON, string conversion and inspection all show
+ *  a placeholder. Only reveal() gives it. */
+function sealed(value) {
+    const shown = '[operating credential]';
+    return Object.freeze({
+        reveal: () => value,
+        toString: () => shown,
+        toJSON: () => shown,
+        [Symbol.for('nodejs.util.inspect.custom')]: () => shown,
+    });
 }
 
 function readConfig(configFile, uid, ownerOf, fsb) {
@@ -232,19 +264,62 @@ function checkAncestors(resolved, uid, ownerOf, fsb) {
 }
 
 function checkIdentityDir(idDir, uid, ownerOf, fsb) {
+    return checkPrivateDir(idDir, uid, ownerOf, fsb, {
+        absent: 'smd has not created its identity yet',
+    });
+}
+
+/** A directory smd publishes as one unit: the user's own, mode 0700, not a symlink. Absent, it
+ *  is something smd's start resolves, so the shell waits. */
+function checkPrivateDir(dir, uid, ownerOf, fsb, { absent }) {
     let st;
     try {
-        st = fsb.lstat(idDir);
+        st = fsb.lstat(dir);
     } catch (e) {
-        if (e.code === 'ENOENT') return waiting(idDir, 'smd has not created its identity yet');
-        return refused(idDir, `cannot be inspected (${e.code ?? 'error'})`);
+        if (e.code === 'ENOENT') return waiting(dir, absent);
+        return refused(dir, `cannot be inspected (${e.code ?? 'error'})`);
     }
-    if (st.isSymbolicLink()) return refused(idDir, 'is a symlink');
-    if (!st.isDirectory()) return refused(idDir, 'is not a directory');
-    const owner = ownerOf(idDir, st);
-    if (owner !== uid) return refused(idDir, `is owned by uid ${owner}, not ${uid}`);
-    if ((st.mode & 0o7777) !== 0o700) return refused(idDir, `must be mode 0700 (is ${mode(st)})`);
+    if (st.isSymbolicLink()) return refused(dir, 'is a symlink');
+    if (!st.isDirectory()) return refused(dir, 'is not a directory');
+    const owner = ownerOf(dir, st);
+    if (owner !== uid) return refused(dir, `is owned by uid ${owner}, not ${uid}`);
+    if ((st.mode & 0o7777) !== 0o700) return refused(dir, `must be mode 0700 (is ${mode(st)})`);
     return { ok: true };
+}
+
+/** The credential file: the user's own, mode exactly 0600, a regular file opened without
+ *  following a symlink, holding exactly the canonical text of 32 bytes. Owner and mode are
+ *  checked on the open descriptor before any byte is read, and no reason quotes the content. */
+function readCredential(file, uid, ownerOf, fsb) {
+    let r;
+    try {
+        r = fsb.read(file, {
+            accept: (st) => ownerOf(file, st) === uid && (st.mode & 0o7777) === 0o600,
+        });
+    } catch (e) {
+        if (e.code === 'ENOENT') return refused(file, 'is missing from a published credential');
+        if (e.code === 'ELOOP') return refused(file, 'is a symlink');
+        return refused(file, `cannot be read (${e.code ?? 'error'})`);
+    }
+    if (!r.st.isFile()) return refused(file, 'is not a regular file');
+    const owner = ownerOf(file, r.st);
+    if (owner !== uid) return refused(file, `is owned by uid ${owner}, not ${uid}`);
+    if ((r.st.mode & 0o7777) !== 0o600)
+        return refused(file, `must be mode 0600 (is ${mode(r.st)})`);
+    const text = r.data.toString('latin1');
+    // One secret has one text. The length is checked on the file's own characters, and
+    // decoding then re-encoding must give the same text back: that refuses anything outside the
+    // base64url alphabet (the decoder skips or translates it) and a final character whose
+    // unused bits are set.
+    const canonical =
+        text.length === CREDENTIAL_CHARS &&
+        Buffer.from(text, 'base64url').toString('base64url') === text;
+    if (!canonical)
+        return refused(
+            file,
+            `is not a valid credential: it must hold exactly ${CREDENTIAL_CHARS} base64url characters`
+        );
+    return { ok: true, value: text };
 }
 
 function readCertificate(certPath, uid, ownerOf, fsb) {

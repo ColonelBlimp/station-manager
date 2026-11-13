@@ -13,7 +13,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { app, Menu, session, shell } from 'electron';
+import { app, dialog, Menu, session, shell } from 'electron';
 import { disableSpellchecker, hardenSession } from './hardening.mjs';
 import { parseArgs } from './daemon.mjs';
 import { launchTrusted } from './launch.mjs';
@@ -74,6 +74,20 @@ if (!app.requestSingleInstanceLock()) {
                 const launched = launchTrusted({
                     args: parseArgs(process.argv),
                     openExternal: externalOpener((url) => void shell.openExternal(url)),
+                    // W-0027 C2b: said once, in a box of the shell's own. The page is left as
+                    // it is, so nothing the operator has typed is lost.
+                    onCredentialRefused: () => {
+                        if (!mainWindow) return;
+                        void dialog.showMessageBox(mainWindow, {
+                            type: 'warning',
+                            title: 'Station Manager',
+                            message: 'The daemon no longer accepts this app',
+                            detail:
+                                'Its operating credential has changed since Station Manager was opened, so the daemon is refusing this window.\n\n' +
+                                'What you have typed is still here. To reconnect, close Station Manager and open it again.',
+                            buttons: ['OK'],
+                        });
+                    },
                 });
                 mainWindow = launched.win;
                 mainWindow.on('closed', () => {
@@ -86,6 +100,32 @@ if (!app.requestSingleInstanceLock()) {
             // working directory with synthetic data and free loopback ports; never the station.
             if (scenario === 'c1d') {
                 const ok = await (await import('../test/scenario-c1d.mjs')).runC1d();
+                app.exit(ok ? 0 : 1);
+                return;
+            }
+            // C2b (W-0027): the operating credential, against a synthetic install and TLS
+            // fixtures only. The scenario launches further windows itself, each on a fresh
+            // session, to prove what a restart adopts.
+            if (scenario === 'c2b') {
+                const s = await (await import('../test/scenario-c2b.mjs')).setupC2b();
+                const launch = (partition) => {
+                    const refusals = [];
+                    const sent = [];
+                    const launched = launchTrusted({
+                        env: s.env,
+                        offscreen: true,
+                        partition,
+                        openExternal: externalOpener((url) => externalOpened.push(url)),
+                        retryMs: 300,
+                        onCredentialRefused: () => refusals.push(Date.now()),
+                        onCredentialRequest: (r) => sent.push(r),
+                    });
+                    return { ...launched, refusals, sent };
+                };
+                const first = launch(undefined);
+                mainWindow = first.win;
+                const ok = await s.run({ first, launch });
+                await s.cleanup();
                 app.exit(ok ? 0 : 1);
                 return;
             }

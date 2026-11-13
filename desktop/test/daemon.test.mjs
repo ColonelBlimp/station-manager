@@ -6,6 +6,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, test } from 'node:test';
+import { randomBytes } from 'node:crypto';
+import { onceCredential } from '../src/credential.mjs';
 import { connectWhenTrusted, parseArgs } from '../src/daemon.mjs';
 import { oncePin } from '../src/pin.mjs';
 import { makeIdentity } from './identity.mjs';
@@ -15,7 +17,7 @@ after(() => {
     for (const d of made) fs.rmSync(d, { recursive: true, force: true });
 });
 
-function install() {
+function install({ credential = true } = {}) {
     const base = fs.mkdtempSync(path.join(os.tmpdir(), 'sm-c1d-daemon-'));
     made.push(base);
     const wd = path.join(base, 'sm');
@@ -31,12 +33,31 @@ function install() {
         fs.writeFileSync(path.join(idDir, 'key.pem'), id.key, { mode: 0o600 });
         fs.writeFileSync(path.join(idDir, 'cert.pem'), id.cert, { mode: 0o644 });
     };
-    return { env: { SM_WORKING_DIR: wd, HOME: '/h' }, idDir, publish };
+    // The operating credential, as smd makes it at every start (W-0027 C2a). Tests of the
+    // credential's own states pass `credential: false` and publish it themselves.
+    const credDir = path.join(wd, 'desktop-credential');
+    const credFile = path.join(credDir, 'credential');
+    const value = randomBytes(32).toString('base64url');
+    const publishCredential = (fileMode = 0o600) => {
+        fs.mkdirSync(credDir, { mode: 0o700 });
+        fs.writeFileSync(credFile, value, { mode: fileMode });
+        fs.chmodSync(credFile, fileMode);
+    };
+    if (credential) publishCredential();
+    return {
+        env: { SM_WORKING_DIR: wd, HOME: '/h' },
+        idDir,
+        publish,
+        credDir,
+        credFile,
+        value,
+        publishCredential,
+    };
 }
 
 /** A fake window. `step()` runs once per discovery round (before each sleep), so a test can
  *  change the install between rounds; the window closes after `rounds` probes. */
-function fakeWindow({ rounds = 3 } = {}) {
+function fakeWindow({ rounds = 3, answer = null } = {}) {
     const loaded = [];
     let url = '';
     let probes = 0;
@@ -53,7 +74,9 @@ function fakeWindow({ rounds = 3 } = {}) {
             session: {
                 fetch: () => {
                     probes += 1;
-                    return Promise.reject(new Error('refused'));
+                    // `answer(n)` gives the nth probe's response; without it, no listener.
+                    const res = answer?.(probes);
+                    return res ? Promise.resolve(res) : Promise.reject(new Error('refused'));
                 },
             },
         },
@@ -210,4 +233,137 @@ test('a malformed option is traced as refused', async () => {
     assert.deepEqual(lines, [
         'refused: --sm-config needs a value: --sm-config <path> or --sm-config=<path>',
     ]);
+});
+
+// --- W-0027 C2b: the operating credential is fixed together with the pin and the origin ---
+
+test('no credential yet: the shell waits and fixes nothing; then all three are fixed together', async () => {
+    const inst = install({ credential: false });
+    inst.publish();
+    const { win, loaded } = fakeWindow({ rounds: 2 });
+    const pin = oncePin();
+    const cred = onceCredential();
+    const target = { origin: null };
+    const seen = [];
+    let rounds = 0;
+    await connectWhenTrusted({
+        win,
+        pin,
+        cred,
+        target,
+        env: inst.env,
+        retryMs: 20,
+        trace: () => {},
+        onDetail: (r) => {
+            rounds += 1;
+            // While the credential is missing, nothing at all is fixed.
+            seen.push({ state: r.state, pin: pin.get(), cred: cred.get(), origin: target.origin });
+            if (rounds === 2) inst.publishCredential();
+        },
+    });
+    assert.ok(seen.length >= 2, 'the shell never waited for the credential');
+    for (const s of seen) {
+        assert.deepEqual(s, { state: 'waiting', pin: null, cred: null, origin: null });
+    }
+    assert.ok(
+        loaded.some((u) => decodeURIComponent(u).includes('operating credential')),
+        'the waiting page never said what it was waiting for'
+    );
+    assert.ok(pin.get(), 'the pin was never fixed');
+    assert.equal(cred.get(), inst.value, 'the credential fixed is not the published one');
+    assert.equal(target.origin, 'https://127.0.0.1:9443');
+    for (const u of loaded) {
+        assert.ok(!decodeURIComponent(u).includes(inst.value), 'a page shows the credential');
+    }
+});
+
+test('an unsafe credential is refused on the waiting page, by path, and nothing is fixed', async () => {
+    const inst = install({ credential: false });
+    inst.publish();
+    inst.publishCredential(0o644);
+    const { win, loaded } = fakeWindow({ rounds: 1 });
+    const pin = oncePin();
+    const cred = onceCredential();
+    const target = { origin: null };
+    const lines = [];
+    let rounds = 0;
+    const done = connectWhenTrusted({
+        win,
+        pin,
+        cred,
+        target,
+        env: inst.env,
+        retryMs: 20,
+        trace: (l) => lines.push(l),
+        onDetail: () => {
+            rounds += 1;
+            if (rounds === 3) win.isDestroyed = () => true; // the operator closes the window
+        },
+    });
+    await done;
+    assert.equal(pin.get(), null);
+    assert.equal(cred.get(), null);
+    assert.equal(target.origin, null);
+    const last = lastPage(loaded);
+    assert.ok(last.includes('data-sm-state="refused"'), last);
+    assert.ok(last.includes('0600') && last.includes('desktop-credential'), last);
+    assert.ok(last.includes('operating credential'), 'the page does not say what is refused');
+    assert.ok(!last.includes('identity'), 'a credential refusal is described as an identity one');
+    for (const text of [...loaded.map((u) => decodeURIComponent(u)), ...lines]) {
+        assert.ok(!text.includes(inst.value), 'the credential is shown or traced');
+    }
+});
+
+const json = (status, body) =>
+    new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+
+test('the daemon refuses the credential: the waiting page says so, and it loads once accepted', async () => {
+    const inst = install();
+    inst.publish();
+    const { win, loaded } = fakeWindow({
+        rounds: 4,
+        answer: (n) =>
+            n < 3
+                ? json(403, { code: 'desktop_app_required', message: 'x', op: 'y' })
+                : json(200, { daemon: 'fixture' }),
+    });
+    await connectWhenTrusted({
+        win,
+        pin: oncePin(),
+        cred: onceCredential(),
+        target: { origin: null },
+        env: inst.env,
+        retryMs: 20,
+        trace: () => {},
+    });
+    const pages = loaded.map((u) => decodeURIComponent(u));
+    const refusal = pages.filter((p) => p.includes('data-sm-state="unaccepted"'));
+    assert.equal(refusal.length, 1, 'the refusal page is shown once, not on every probe');
+    assert.ok(refusal[0].includes('smctl restart'), refusal[0]);
+    assert.ok(!refusal[0].includes(inst.value));
+    assert.equal(loaded.at(-1), 'https://127.0.0.1:9443/', 'the application was not loaded');
+});
+
+test('another 403 is not the credential refusal: the shell keeps the ordinary waiting page', async () => {
+    const inst = install();
+    inst.publish();
+    const { win, loaded } = fakeWindow({
+        rounds: 2,
+        answer: () => json(403, { code: 'cross_origin', message: 'x', op: 'y' }),
+    });
+    await connectWhenTrusted({
+        win,
+        pin: oncePin(),
+        cred: onceCredential(),
+        target: { origin: null },
+        env: inst.env,
+        retryMs: 20,
+        trace: () => {},
+    });
+    const pages = loaded.map((u) => decodeURIComponent(u));
+    assert.ok(
+        !pages.some((p) => p.includes('unaccepted')),
+        'a foreign 403 was read as the refusal'
+    );
+    assert.ok(!loaded.includes('https://127.0.0.1:9443/'), 'the application was loaded on a 403');
 });

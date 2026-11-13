@@ -21,7 +21,14 @@
 //  7. the shell never opened key.pem; the verifier was asked only about 127.0.0.1.
 // A "fresh window" is a fresh session and window, not a restarted app process (codex-070).
 // PASSES only if every check holds. Run: SM_DESKTOP_SMD=<smd> npm run check:c1d.
+//
+// W-0027 C2b: the same acceptance with smd's operating-client check ON
+// (SM_DESKTOP_REQUIRE_APP=1; npm run check:c2b-smd). Every phase must then hold exactly as
+// with it off, which is the proof that the shell's credential satisfies the real check; and
+// the run shows the check was really on: a plain client of the browser listener is refused
+// everything but the health check.
 import fs from 'node:fs';
+import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -101,12 +108,38 @@ const WORKSPACE = `(() => { const f = document.querySelector('#lc-call');
     return !!f && !f.disabled && !f.readOnly && !document.querySelector('#setup-callsign'); })()`;
 const DRAFT = `document.querySelector('#lc-call')?.value ?? '<gone>'`;
 
+/** True when this run has smd's operating-client check on (W-0027 C2b). */
+const REQUIRE_APP = process.env.SM_DESKTOP_REQUIRE_APP === '1';
+
+/** A plain client of the browser listener, as a browser or a script without the credential
+ *  is: the status and smd's error code for one GET. */
+const plainGet = (port, urlPath) =>
+    new Promise((resolve) => {
+        const req = http.get({ host: '127.0.0.1', port, path: urlPath, timeout: 4000 }, (res) => {
+            let body = '';
+            res.on('data', (c) => (body += c));
+            res.on('end', () => {
+                let code = '';
+                try {
+                    code = JSON.parse(body).code ?? '';
+                } catch {
+                    /* not smd's error envelope */
+                }
+                resolve({ status: res.statusCode, code });
+            });
+        });
+        req.on('error', (e) => resolve({ status: 0, code: e.code ?? 'error' }));
+        req.on('timeout', () => req.destroy());
+    });
+
 function writeConfig(wd, data, browserPort, appPort) {
+    const server = { protocol: 'tcp', serve_spa: true, app_port: appPort };
+    if (REQUIRE_APP) server.require_desktop_app = true;
     const cfg = {
         version: 6,
         data_dir: data,
         socket_path: `127.0.0.1:${browserPort}`,
-        server: { protocol: 'tcp', serve_spa: true, app_port: appPort },
+        server,
         datastore: { driver: 'sqlite', path: path.join(data, 'db', 'station-manager.db') },
         setup_complete: true,
         logging_station: { station_callsign: 'N0CALL' }, // a placeholder, never a real station
@@ -140,6 +173,11 @@ function launchRecordingOrder(env, partition) {
     ses.webRequest.onBeforeRequest = (...a) => {
         order.push('filter');
         return filter(...a);
+    };
+    const header = ses.webRequest.onBeforeSendHeaders.bind(ses.webRequest);
+    ses.webRequest.onBeforeSendHeaders = (...a) => {
+        order.push('credential header');
+        return header(...a);
     };
     app.once('browser-window-created', () => order.push('window'));
     return { ...launch(env, partition), order };
@@ -222,6 +260,36 @@ export async function runC1d() {
             t2[0] === 'smd:string' && t2[1] === 'smd:connected' && t2[2] === 'smd:open',
             t2.join(' ')
         );
+        // The browser listener, asked by a plain client: this is what tells the two runs apart.
+        const plain = {
+            version: await plainGet(browserPort, '/v1/version'),
+            page: await plainGet(browserPort, '/'),
+            health: await plainGet(browserPort, '/v1/healthz'),
+        };
+        if (REQUIRE_APP) {
+            check(
+                'Check on: smd refuses a plain client of the browser listener everything but the health check',
+                plain.version.status === 403 &&
+                    plain.version.code === 'desktop_app_required' &&
+                    plain.page.status === 403 &&
+                    plain.health.status === 200,
+                JSON.stringify(plain)
+            );
+            check(
+                '…and smd made its operating credential beside the identity, which the shell holds',
+                fs.existsSync(path.join(data, 'desktop-credential', 'credential')) &&
+                    A.cred.get() ===
+                        fs.readFileSync(path.join(data, 'desktop-credential', 'credential'), 'utf8')
+            );
+        } else {
+            check(
+                'Check off: the browser listener still serves a plain client, as before',
+                plain.version.status === 200 &&
+                    plain.page.status === 200 &&
+                    plain.health.status === 200,
+                JSON.stringify(plain)
+            );
+        }
 
         // 3. A draft in the contact form's callsign field; smd replaced by an impostor.
         await js(
@@ -278,11 +346,13 @@ export async function runC1d() {
         windows.push(B);
         const at = (k) => B.order.indexOf(k);
         check(
-            'A fresh window installs the verifier and the request filter before the window exists',
+            'A fresh window installs the verifier, the request filter and the credential header before the window exists',
             at('verifier') >= 0 &&
                 at('filter') >= 0 &&
+                at('credential header') >= 0 &&
                 at('window') > at('verifier') &&
-                at('window') > at('filter'),
+                at('window') > at('filter') &&
+                at('window') > at('credential header'),
             B.order.join(' < ')
         );
         await until(() => B.pin.get() !== null, 'the fresh window to pin the existing identity');

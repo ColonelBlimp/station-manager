@@ -5,6 +5,7 @@
 // main process probes the origin and loads the application once it answers. A failed
 // load of the application later returns the window here.
 
+import { randomBytes } from 'node:crypto';
 import { onOrigin } from './hardening.mjs';
 
 const PROBE_TIMEOUT_MS = 800;
@@ -37,25 +38,42 @@ function remember(url) {
 export const isWaitingPage = (url) => recentWaiting.has(url);
 
 /** The waiting page. `detail` (W-0027 C1d, operator ruling Q2) is the identity discovery's
- *  { state, path, reason } before the pin is fixed: "waiting" for what smd's first run
- *  resolves by itself, "refused" for what needs the operator. Only that bounded, escaped local
- *  text is shown: no config contents, and the page itself reads no file and loads nothing. */
+ *  { state, path, reason } before the pin is fixed: "waiting" for what smd's start resolves by
+ *  itself, "refused" for what needs the operator (`subject: 'credential'` when it is the
+ *  operating credential's file, W-0027 C2b). After the pin, { state: 'unaccepted' } says the
+ *  daemon answered but refused this app's credential. Only that bounded, escaped local text is
+ *  shown: no config contents and never the credential, and the page itself reads no file and
+ *  loads nothing. */
 export function waitingPageUrl(origin, detail = null) {
     const refused = detail?.state === 'refused';
-    const title = refused
-        ? 'Station Manager cannot trust the daemon’s identity'
-        : 'Waiting for the Station Manager daemon';
-    const lead = refused
-        ? 'Nothing from the daemon will be loaded until this is put right.'
-        : 'Station Manager will open as soon as the daemon answers.';
+    const unaccepted = detail?.state === 'unaccepted';
+    let title = 'Waiting for the Station Manager daemon';
+    let lead = 'Station Manager will open as soon as the daemon answers.';
+    if (refused) {
+        title =
+            detail.subject === 'credential'
+                ? 'Station Manager cannot use its operating credential'
+                : 'Station Manager cannot trust the daemon’s identity';
+        lead = 'Nothing from the daemon will be loaded until this is put right.';
+    } else if (unaccepted) {
+        title = 'The daemon did not accept this app';
+        lead =
+            'Its operating credential is not the one this app holds. Close Station Manager and open it again.';
+    }
     // Operator ruling Q3 (a), W-0027 D1: while smd may simply not be running, say how to start
     // it. Not on a refusal: starting smd does not repair an identity it must not be trusted with.
-    const start = refused
-        ? ''
-        : '<p data-sm-start>If the daemon is not running, start it with <code>smctl start</code>.</p>';
-    const info = detail
-        ? `<p data-sm-reason>${escapeHtml(detail.reason)}</p><p><small data-sm-path>${escapeHtml(detail.path)}</small></p>`
-        : '';
+    // Not accepted: smd is running; if reopening the app does not help, restarting smd makes it
+    // read its credential again.
+    let start =
+        '<p data-sm-start>If the daemon is not running, start it with <code>smctl start</code>.</p>';
+    if (refused) start = '';
+    if (unaccepted)
+        start =
+            '<p data-sm-restart>If it still does not connect, restart the daemon with <code>smctl restart</code>.</p>';
+    const info =
+        detail && !unaccepted
+            ? `<p data-sm-reason>${escapeHtml(detail.reason)}</p><p><small data-sm-path>${escapeHtml(detail.path)}</small></p>`
+            : '';
     const html = `<!doctype html><html lang="en"><meta charset="utf-8">
 <title>Station Manager</title>
 <style>
@@ -80,38 +98,91 @@ export function waitingPageUrl(origin, detail = null) {
 // 6): with a pinned https origin, a listener without smd's key never counts as up. Over
 // plain http (A1's fixture) it says only that something answers. Redirects are refused, so
 // a replacement listener cannot send the probe to another origin (codex-038).
-async function originAnswers(ses, origin) {
+// The mark on every probe the shell itself sends (codex-112): a value made in this process at
+// start and known to no page. The refusal watcher recognises the shell's own requests by it
+// (isShellProbe) instead of by who Electron reports as the sender, which a shared worker's
+// request does not name either. smd ignores the parameter.
+const PROBE_PARAM = 'sm-probe';
+const PROBE_MARK = randomBytes(16).toString('hex');
+
+/** The address the shell probes: smd's version endpoint (ADR 0103 point 6; codex-068), marked. */
+export const probeUrl = (origin) => `${origin}/v1/version?${PROBE_PARAM}=${PROBE_MARK}`;
+
+/** True only for a request this shell's main process made as a probe. */
+export function isShellProbe(url) {
     try {
-        // ADR 0103 point 6: the pinned probe asks smd's version endpoint (codex-068).
-        const res = await ses.fetch(origin + '/v1/version', {
-            redirect: 'manual',
-            signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
-        });
-        return res.status === 200;
+        const u = new URL(url);
+        return u.pathname === '/v1/version' && u.searchParams.get(PROBE_PARAM) === PROBE_MARK;
     } catch {
         return false;
     }
 }
 
+async function originAnswers(ses, origin) {
+    try {
+        const res = await ses.fetch(probeUrl(origin), {
+            redirect: 'manual',
+            signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+        });
+        if (res.status === 200) return 'up';
+        if (res.status === 403 && (await refusalCode(res)) === CREDENTIAL_REFUSED)
+            return 'unaccepted';
+        return 'down';
+    } catch {
+        return 'down';
+    }
+}
+
+/** smd's refusal code for a client without its operating credential (internal/api). */
+export const CREDENTIAL_REFUSED = 'desktop_app_required';
+
+/** The `code` of smd's JSON error envelope, or '' for anything else. Never throws. */
+async function refusalCode(res) {
+    try {
+        const body = await res.json();
+        return typeof body?.code === 'string' ? body.code : '';
+    } catch {
+        return '';
+    }
+}
+
+/** True when smd, asked through the session, refuses this app's credential (W-0027 C2b). The
+ *  main process asks, so the answer does not depend on what a page reports. */
+export async function credentialRefused(ses, origin) {
+    return (await originAnswers(ses, origin)) === 'unaccepted';
+}
+
 /** Load url into win once origin answers, showing the waiting page meanwhile. One
  *  retry loop per window: a second call while one is waiting does not start another.
  *  `afterFailure` shows the waiting page and pauses before the first probe, so a load
- *  that keeps failing retries at the waiting pace instead of in a tight loop. */
+ *  that keeps failing retries at the waiting pace instead of in a tight loop. While smd
+ *  answers but refuses the credential, the page says so, once, and the loop goes on: the
+ *  credential is fixed for this app's lifetime, but the daemon may be restarted. */
 export async function loadWhenUp(win, url, origin, { afterFailure = false } = {}) {
     if (win.isDestroyed() || win.__smWaiting) return;
     win.__smWaiting = true;
+    let unacceptedShown = false;
     try {
         if (afterFailure) {
             void win.loadURL(waitingPageUrl(origin)).catch(() => {});
             await new Promise((r) => setTimeout(r, RETRY_MS));
         }
         while (!win.isDestroyed()) {
-            if (await originAnswers(win.webContents.session, origin)) {
+            const answer = await originAnswers(win.webContents.session, origin);
+            if (answer === 'up') {
                 if (!win.isDestroyed()) void win.loadURL(url).catch(() => {});
                 return;
             }
             if (win.isDestroyed()) return;
-            if (!win.webContents.getURL().startsWith('data:')) {
+            if (answer === 'unaccepted') {
+                if (!unacceptedShown) {
+                    unacceptedShown = true;
+                    void win
+                        .loadURL(waitingPageUrl(origin, { state: 'unaccepted' }))
+                        .catch(() => {});
+                }
+            } else if (unacceptedShown || !win.webContents.getURL().startsWith('data:')) {
+                unacceptedShown = false;
                 void win.loadURL(waitingPageUrl(origin)).catch(() => {});
             }
             await new Promise((r) => setTimeout(r, RETRY_MS));

@@ -14,6 +14,7 @@
 //     with another key is refused, the identity is never read again, and the genuine listener
 //     recovers.
 // PASSES only if every check holds. Run: npm run check:c1d-shell (xvfb-run -a without a display).
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -62,6 +63,13 @@ export async function setupC1dShell() {
         JSON.stringify({ server: { app_port: genuine.port } }),
         { mode: 0o600 }
     );
+    // The operating credential, as smd makes at every start (W-0027 C2a). This scenario is
+    // about the identity; the credential's own states are check:c2b's.
+    const credDir = path.join(wd, 'desktop-credential');
+    fs.mkdirSync(credDir, { mode: 0o700 });
+    fs.writeFileSync(path.join(credDir, 'credential'), randomBytes(32).toString('base64url'), {
+        mode: 0o600,
+    });
     const idDir = path.join(wd, 'desktop-identity');
     const writeIdentity = (id) => {
         fs.writeFileSync(path.join(idDir, 'key.pem'), id.key, { mode: 0o600 });
@@ -178,10 +186,10 @@ async function runScenario(ctx) {
         await sleep(2000);
         check(
             'The probe asks /v1/version: with / answering but /v1/version not ready, the shell keeps waiting',
-            genuine.requests.every((r) => r.url === '/v1/version') &&
+            genuine.requests.every((r) => new URL(r.url, 'http://x').pathname === '/v1/version') &&
                 (await tag()) === '' &&
                 (await js(main, `!!document.querySelector('[data-sm-waiting]')`)),
-            `requests: ${[...new Set(genuine.requests.map((r) => r.url))].join(' ')}`
+            `requests: ${[...new Set(genuine.requests.map((r) => new URL(r.url, 'http://x').pathname))].join(' ')}`
         );
         genuine.state.versionReady = true;
         await until(async () => (await tag()) === 'genuine', 'the genuine page to load');

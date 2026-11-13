@@ -165,6 +165,7 @@ jobs:
           xvfb-run -a npm run check:a1
           xvfb-run -a npm run check:c1
           xvfb-run -a npm run check:c1d-shell
+          xvfb-run -a npm run check:c2b
 
       # W-0027 D1: the desktop app RPM. nfpm is pinned; rpm, cpio, binutils and
       # desktop-file-utils read the artifact back. The build downloads Electron afresh and
@@ -344,6 +345,8 @@ jobs:
           trap 'sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns="$orig"' EXIT
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           xvfb-run -a npm run check:c1d
+          # W-0027 C2b: the same acceptance with smd's operating-client check on.
+          xvfb-run -a npm run check:c2b-smd
 
       - name: Build all cmd/ binaries (catcli, loadgen, etc.)
         run: go build ./cmd/...

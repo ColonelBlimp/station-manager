@@ -6,7 +6,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { X509Certificate } from 'node:crypto';
+import { randomBytes, X509Certificate } from 'node:crypto';
 import { after, test } from 'node:test';
 import { configPath, discover, recordingFs } from '../src/discovery.mjs';
 import { makeIdentity } from './identity.mjs';
@@ -26,9 +26,12 @@ after(() => {
     }
 });
 
-/** A synthetic install: <base>/sm/config.json and <dataRoot>/desktop-identity/{cert,key}.pem,
- *  laid out and permissioned as smd creates them. */
-function install({ config = {}, dataRoot = null, identity = true } = {}) {
+/** A synthetic operating credential: 43 base64url characters for 32 random bytes, as smd writes. */
+const makeCredential = () => randomBytes(32).toString('base64url');
+
+/** A synthetic install: <base>/sm/config.json, <dataRoot>/desktop-identity/{cert,key}.pem and
+ *  <dataRoot>/desktop-credential/credential, laid out and permissioned as smd creates them. */
+function install({ config = {}, dataRoot = null, identity = true, credential = true } = {}) {
     const base = tmp('sm-c1d-');
     const dir = path.join(base, 'sm');
     fs.mkdirSync(dir, { mode: 0o700 });
@@ -45,7 +48,25 @@ function install({ config = {}, dataRoot = null, identity = true } = {}) {
         fs.writeFileSync(path.join(idDir, 'cert.pem'), id.cert, { mode: 0o644 });
         cert = id.cert;
     }
-    return { base, dir, configFile, root, cert, idDir: path.join(root, 'desktop-identity') };
+    const credDir = path.join(root, 'desktop-credential');
+    const credFile = path.join(credDir, 'credential');
+    let cred = null;
+    if (credential) {
+        cred = makeCredential();
+        fs.mkdirSync(credDir, { mode: 0o700 });
+        fs.writeFileSync(credFile, cred, { mode: 0o600 });
+    }
+    return {
+        base,
+        dir,
+        configFile,
+        root,
+        cert,
+        idDir: path.join(root, 'desktop-identity'),
+        cred,
+        credDir,
+        credFile,
+    };
 }
 
 const fp = (pem) => new X509Certificate(pem).fingerprint256;
@@ -358,4 +379,153 @@ test('a FIFO in place of cert.pem is refused without blocking (child process, de
     assert.notEqual(r.signal, 'SIGTERM', 'discover blocked on the FIFO (killed at the deadline)');
     const got = JSON.parse(r.stdout);
     assertRefused(got, 'refused', 'cert.pem', /regular/);
+});
+
+// --- W-0027 C2b: the operating credential, beside the identity -------------------------
+
+test('the credential is found beside the identity, and is never printed with the result', () => {
+    const inst = install();
+    const { got, opened } = run(inst);
+    assert.equal(got.ok, true, JSON.stringify(got));
+    assert.equal(got.credential.reveal(), inst.cred);
+    assert.equal(got.credentialPath, inst.credFile);
+    for (const text of [JSON.stringify(got), String(got.credential), `${got.credential}`]) {
+        assert.ok(!text.includes(inst.cred), 'the result prints the credential');
+    }
+    assert.equal(opened.filter((p) => p === inst.credFile).length, 1, 'read once');
+});
+
+test('no credential yet waits, after a valid identity, and nothing is pinned', () => {
+    const { got, opened } = run(install({ credential: false }));
+    assertRefused(got, 'waiting', 'desktop-credential', /not created/);
+    assert.equal(got.fingerprint, undefined, 'a fingerprint was produced without a credential');
+    assert.ok(!opened.some((p) => p.endsWith('key.pem')));
+});
+
+test('an unsafe or malformed credential is refused, names the path, and is never quoted', () => {
+    const good = 'A'.repeat(43);
+    const cases = [
+        ['directory 0755', (i) => fs.chmodSync(i.credDir, 0o755), 'desktop-credential', /0700/],
+        ['directory 0710', (i) => fs.chmodSync(i.credDir, 0o710), 'desktop-credential', /0700/],
+        ['file 0640', (i) => fs.chmodSync(i.credFile, 0o640), 'credential', /0600/],
+        ['file 0604', (i) => fs.chmodSync(i.credFile, 0o604), 'credential', /0600/],
+        ['file 0700', (i) => fs.chmodSync(i.credFile, 0o700), 'credential', /0600/],
+        ['file missing', (i) => fs.rmSync(i.credFile), 'credential', /missing/],
+        [
+            'file a symlink',
+            (i) => {
+                const real = path.join(i.root, 'elsewhere');
+                fs.renameSync(i.credFile, real);
+                fs.symlinkSync(real, i.credFile);
+            },
+            'credential',
+            /symlink/,
+        ],
+        [
+            'directory a symlink',
+            (i) => {
+                const real = path.join(i.root, 'real-credential');
+                fs.renameSync(i.credDir, real);
+                fs.symlinkSync(real, i.credDir);
+            },
+            'desktop-credential',
+            /symlink/,
+        ],
+        [
+            'directory is a file',
+            (i) => {
+                fs.rmSync(i.credDir, { recursive: true });
+                fs.writeFileSync(i.credDir, 'x', { mode: 0o600 });
+            },
+            'desktop-credential',
+            /directory/,
+        ],
+        [
+            'file not a regular file',
+            (i) => {
+                fs.rmSync(i.credFile);
+                fs.mkdirSync(i.credFile, { mode: 0o700 });
+            },
+            'credential',
+            /regular/,
+        ],
+        ['empty', (i) => fs.writeFileSync(i.credFile, ''), 'credential', /43/],
+        ['one short', (i) => fs.writeFileSync(i.credFile, good.slice(1)), 'credential', /43/],
+        ['one long', (i) => fs.writeFileSync(i.credFile, good + 'A'), 'credential', /43/],
+        [
+            'a trailing newline',
+            (i) => fs.writeFileSync(i.credFile, good + '\n'),
+            'credential',
+            /43/,
+        ],
+        ['a space', (i) => fs.writeFileSync(i.credFile, ' ' + good.slice(1)), 'credential', /43/],
+        [
+            "standard '+'",
+            (i) => fs.writeFileSync(i.credFile, '+' + good.slice(1)),
+            'credential',
+            /43/,
+        ],
+        [
+            "standard '/'",
+            (i) => fs.writeFileSync(i.credFile, '/' + good.slice(1)),
+            'credential',
+            /43/,
+        ],
+        ['padding', (i) => fs.writeFileSync(i.credFile, good.slice(1) + '='), 'credential', /43/],
+        [
+            'non-canonical final bits',
+            (i) => fs.writeFileSync(i.credFile, good.slice(1) + 'B'),
+            'credential',
+            /43/,
+        ],
+        [
+            'a line break inside',
+            (i) => fs.writeFileSync(i.credFile, good.slice(0, 21) + '\n' + good.slice(0, 21)),
+            'credential',
+            /43/,
+        ],
+    ];
+    for (const [name, spoil, pathPart, reason] of cases) {
+        const inst = install();
+        spoil(inst);
+        const { got } = run(inst);
+        assertRefused(got, 'refused', pathPart, reason);
+        assert.equal(got.fingerprint, undefined, `${name}: a fingerprint was produced`);
+        assert.equal(got.credential, undefined, `${name}: a credential was produced`);
+        const text = JSON.stringify(got);
+        assert.ok(!text.includes(inst.cred), `${name}: the refusal quotes the credential`);
+        let present = '';
+        try {
+            present = fs.readFileSync(inst.credFile, 'utf8').trim();
+        } catch {
+            /* not a readable file in this case */
+        }
+        if (present.length >= 8)
+            assert.ok(!text.includes(present), `${name}: the refusal quotes the file`);
+    }
+});
+
+test('a credential or its directory owned by another user is refused', () => {
+    for (const foreign of ['desktop-credential', 'credential']) {
+        const inst = install();
+        const rec = recordingFs();
+        const got = discover(
+            {
+                configFile: inst.configFile,
+                ownerOf: (p, st) => (path.basename(p) === foreign ? st.uid + 4242 : st.uid),
+            },
+            rec.fs
+        );
+        assertRefused(got, 'refused', foreign, /owned by/);
+    }
+});
+
+test('the credential file is checked on the open descriptor before any byte is read', () => {
+    const inst = install();
+    fs.chmodSync(inst.credFile, 0o644);
+    const read = [];
+    const rec = recordingFs({ onData: (p) => read.push(p) });
+    const got = discover({ configFile: inst.configFile }, rec.fs);
+    assertRefused(got, 'refused', 'credential', /0600/);
+    assert.ok(!read.includes(inst.credFile), 'an unsafe credential file was read');
 });

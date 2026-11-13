@@ -15,7 +15,9 @@
         "check:c1": "SM_DESKTOP_SCENARIO=c1 electron .",
         "check:c1d-shell": "SM_DESKTOP_SCENARIO=c1d-shell electron .",
         "check:c1d": "SM_DESKTOP_SCENARIO=c1d electron .",
-        "test:unit": "node --test test/discovery.test.mjs test/daemon.test.mjs test/smd-process.test.mjs test/mode.test.mjs test/imports.test.mjs test/trace.test.mjs test/waiting.test.mjs",
+        "check:c2b": "SM_DESKTOP_SCENARIO=c2b electron .",
+        "check:c2b-smd": "SM_DESKTOP_SCENARIO=c1d SM_DESKTOP_REQUIRE_APP=1 electron .",
+        "test:unit": "node --test test/discovery.test.mjs test/daemon.test.mjs test/smd-process.test.mjs test/mode.test.mjs test/imports.test.mjs test/trace.test.mjs test/waiting.test.mjs test/credential.test.mjs",
         "lint": "eslint .",
         "format:check": "prettier --check .",
         "format": "prettier --write ."

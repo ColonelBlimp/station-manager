@@ -41,14 +41,54 @@ function wsFrame(text) {
 export async function startHarness({ up = true, tls = null, tag = 'fixture', port = 0 } = {}) {
     const requests = [];
     const upgrades = [];
-    const state = { versionReady: true };
+    // `requireCredential`, when set, makes the fixture answer as smd does with its
+    // operating-client check on (W-0027 C2): anything without exactly that one credential
+    // header gets 403 desktop_app_required.
+    // `forbid`, when set to a code, answers every request 403 with that code instead.
+    const state = { versionReady: true, requireCredential: null, forbid: null };
     const handshakes = { secure: 0, failed: 0 };
     const sockets = new Set();
     const marker = (url) => new URL(url, 'http://x').searchParams.get('m') ?? '';
+    // Every value of the operating-credential header on a request, in any letter case, so a
+    // test can tell none, one and two apart (Node's own view joins repeats).
+    const credentials = (req) => {
+        const out = [];
+        for (let i = 0; i < req.rawHeaders.length; i += 2) {
+            if (req.rawHeaders[i].toLowerCase() === 'x-sm-operating-credential')
+                out.push(req.rawHeaders[i + 1]);
+        }
+        return out;
+    };
+    const admitted = (cred) =>
+        state.requireCredential === null ||
+        (cred.length === 1 && cred[0] === state.requireCredential);
 
     const handler = (req, res) => {
-        requests.push({ method: req.method, url: req.url });
+        const cred = credentials(req);
+        requests.push({ method: req.method, url: req.url, cred });
         const path = new URL(req.url, 'http://x').pathname;
+        if (!admitted(cred)) {
+            res.writeHead(403, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ code: 'desktop_app_required', message: 'x', op: 'fixture' }));
+            return;
+        }
+        if (state.forbid) {
+            // A 403 of another kind, for every request: smd's own code for something else.
+            res.writeHead(403, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ code: state.forbid, message: 'x', op: 'fixture' }));
+            return;
+        }
+        if (req.method === 'GET' && path === '/asset.js') {
+            res.writeHead(200, { 'content-type': 'text/javascript' });
+            res.end(`window.__smAsset = ${JSON.stringify(marker(req.url))};`);
+            return;
+        }
+        if (req.method === 'GET' && path === '/redirect') {
+            // A redirect to wherever `to` says: a test's way off the origin.
+            res.writeHead(302, { location: new URL(req.url, 'http://x').searchParams.get('to') });
+            res.end();
+            return;
+        }
         if (req.method === 'GET' && (path === '/' || path === '/index.html')) {
             res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
             res.end(page(tag));
@@ -98,7 +138,12 @@ export async function startHarness({ up = true, tls = null, tag = 'fixture', por
     };
 
     const onUpgrade = (req, socket) => {
-        upgrades.push({ url: req.url });
+        const cred = credentials(req);
+        upgrades.push({ url: req.url, cred });
+        if (!admitted(cred)) {
+            socket.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');
+            return;
+        }
         const key = req.headers['sec-websocket-key'];
         if (!key || new URL(req.url, 'http://x').pathname !== '/ws') {
             socket.destroy();

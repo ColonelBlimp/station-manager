@@ -122,6 +122,12 @@ if [ -n "${DISPLAY:-}" ]; then
 else
     ( cd desktop && xvfb-run -a npm run check:c1d-shell )
 fi
+step "Desktop: C2b scenario (the operating credential, synthetic install, TLS fixtures)"
+if [ -n "${DISPLAY:-}" ]; then
+    ( cd desktop && npm run check:c2b )
+else
+    ( cd desktop && xvfb-run -a npm run check:c2b )
+fi
 step "Desktop: the RPM (W-0027 D1): tests, build, content check, production smoke and its reversions"
 task rpm:desktop
 
@@ -208,6 +214,12 @@ if [ -n "${DISPLAY:-}" ]; then
     ( cd desktop && SM_DESKTOP_SMD="$PWD/../build/bin/smd" npm run check:c1d )
 else
     ( cd desktop && SM_DESKTOP_SMD="$PWD/../build/bin/smd" xvfb-run -a npm run check:c1d )
+fi
+step "Desktop: C2b acceptance against a real smd with the operating-client check on"
+if [ -n "${DISPLAY:-}" ]; then
+    ( cd desktop && SM_DESKTOP_SMD="$PWD/../build/bin/smd" npm run check:c2b-smd )
+else
+    ( cd desktop && SM_DESKTOP_SMD="$PWD/../build/bin/smd" xvfb-run -a npm run check:c2b-smd )
 fi
 
 step "Go: build all cmd/ binaries"
