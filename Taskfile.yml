@@ -252,19 +252,21 @@ tasks:
   deploy:local:dev:
     desc: |
       One-command local-dogfood install or update: builds the dev RPM,
-      tries the install without installing (`rpm -U --test`, so a refusal
-      leaves smd running), stops the user-level smd daemon (if running),
-      reinstalls the RPM via `sudo rpm -Uvh --replacepkgs` (handles the
-      same-NVR case the "dev" version string forces), runs systemd
-      daemon-reload, and enables and starts smd (enable is idempotent; it
-      makes a first install start at login). A failed install restarts a
-      daemon that was running. Lingering stays your explicit choice. Final step checks systemctl is-active and
+      runs rpm's simulation of the install (`rpm -U --test`, so what it
+      refuses leaves smd running), stops the user-level smd daemon (if
+      running), reinstalls the RPM via `sudo rpm -Uvh --replacepkgs`
+      (handles the same-NVR case the "dev" version string forces), runs
+      systemd daemon-reload, and enables and starts smd (enable is
+      idempotent; it makes a first install start at login). However the
+      deploy ends after the stop (a failed install, Ctrl+C at the sudo
+      prompt), it tries to start a daemon that was running. Lingering stays your explicit choice. Final step checks systemctl is-active and
       points you at journalctl on failure. Sudo prompts for the
       package install only — systemctl commands run as your user.
       With station-manager-desktop installed, a deploy that changes the
-      version upgrades both packages in one step and needs the desktop RPM
-      of that version: run `task rpm:desktop` first (the deploy says so
-      before it builds or stops anything).
+      version upgrades both packages in one step. The deploy builds the
+      desktop RPM of that version if it is not already built (an Electron
+      download, a few minutes), and checks it either way, before it stops
+      anything; if that fails, smd keeps running.
       Defaults to the PocketFFT (CGO) backend so live FT8 capture + decode
       work out of the box (the pure-Go static build leaves FT8 idle —
       capture needs CGO). For the static CGO-free build instead, override

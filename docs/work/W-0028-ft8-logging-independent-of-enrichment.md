@@ -61,7 +61,39 @@ Consequences:
 4. An earned job survives decode-loop cancellation and is drained before shutdown.
 5. **Station test run (operator, 2026-11-12):** after the fix is complete, the operator deploys
    `smd`, installs the desktop app and operates FT8/FT4, briefly unplugging the Internet. Each
-   contact completed during the outage is logged at once, without lookup details.
+   contact completed during the outage is **stored** at once: in the logbook and the Session
+   panel, with a durable row. That is the criterion, not merely that the ladder finishes
+   (codex-099).
+   - Detail fields are not the marker of the outage (codex-100 and codex-101, correcting
+     claude-192). Offline, cached or already-returned details **may** still be there: the
+     pipeline can return cached rows (`internal/lookup/orchestrator.go`, `readCountry` and
+     `readStation`; the country cache is keyed by prefix, not by station), and this contact's
+     lookup is used only if it had answered when the completion took it
+     (`cmd/smd/ft8_lookups.go`, `take`). An unfinished or absent result adds nothing, and the
+     country is then "Unknown". Whatever the detail fields hold, durable storage of the contact
+     is the criterion.
+   - The daemon and desktop app with this fix are installed (the pair
+     `2.0.0~alpha.5.230.gecdbceb3-1`, 2026-11-12).
+   - **The run (operator, 2026-11-13):** an FT8 auto-work run on the installed pair, with the
+     Internet unplugged for a while ("I did the internet disconnect test - we're on an FT8 run
+     with 18 qsos"). What `smd.log` shows, read passively while the run continued (19
+     completions by then; callsigns not recorded here):
+     - 19 ladders completed, and each has its "QSO stored" and "ft8: completed QSO logged"
+       lines in the **same second** as its completion line. The log has one-second resolution.
+     - No "ft8: failed to log completed QSO" line.
+     - The network was unreachable for about a minute: lookup requests to the callsign provider
+       timed out, the SM Cloud destination was reported unreachable, and evidence sync entered
+       backoff and recovered about 50 seconds later.
+     - One ladder completed inside that minute and was stored in the same second. The next
+       contact was picked up inside it, so its lookup began with the network down; it was
+       stored in the same second as its completion too.
+     - The run kept its cadence of one contact a minute across the outage.
+     - Every logged line carries a country, including those two: details can be present
+       offline, as said above.
+   - **Limits of that evidence:** the outage was short, so one completion and one pick fell
+     inside it; the database rows and the upload queue were not inspected; a delay under one
+     second would not show in the log.
+   - **Verdict:** the operator's, not yet given.
 
 **Nearest confusable outcome:** a shorter lookup budget that still waits before the write. That
 stops the deadline from expiring, but it still delays logging, so the ruling rejects it.

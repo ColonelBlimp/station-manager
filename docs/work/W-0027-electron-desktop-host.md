@@ -1559,3 +1559,92 @@ packages can only change in one transaction. The operator installed both RPMs in
   daemon version needs `task rpm:desktop` first (about five minutes, and an Electron
   download). **D2 must carry the same rule to a public install:** the repository and
   `docs/install.md` upgrade the two packages together.
+
+### D1 addition: review of the menu group and the deploy fix, and two rulings (2026-11-13)
+
+**Operator rulings (chat, 2026-11-13),** on the two questions left by the deploy fix:
+"Whether the deploy should build the desktop RPM itself, and whether the exact-version rule
+should hold for development builds - yes, yes".
+1. The deploy builds the desktop RPM itself when the pair is needed.
+2. Ruling Q4 (the exact version) holds for development builds too.
+
+**Codex's review (codex-100) found two P2 defects in the committed work; both are fixed.**
+
+- **The menu check read only the last section of each name.** `_menu_problems` kept
+  `menus[name] = e`, so an earlier Internet section excluding `wsjtx.desktop`, followed by the
+  expected one, passed. A desktop combines sections of one name, so that file would have moved
+  another application: the "only Station Manager" guard did not hold. The shipped menu file was
+  correct; the defect was in the guard.
+  - Now a repeated section name is reported, and the whole file is compared with the one
+    shape the package may ship (`MENU_SHAPE`): tags, attributes, text and the text after each
+    element, comments and whitespace aside, in any order.
+  - The same class, found while fixing it: a second `<Name>` in a section, an attribute, stray
+    text and another root name all passed before.
+  - Tests: 26. Reversions N1 to N5, and N1+N2 together (the old behaviour), each caught.
+- **An interruption at the install step left the daemon stopped.** The restart added on
+  2026-11-12 ran only when `sudo rpm` returned a failure. Ctrl+C at the sudo prompt, or a
+  termination, ended the script by the signal with `smd` stopped.
+  - Now recovery has one owner, set before the stop: an `EXIT` trap, with `INT`, `TERM` and
+    `HUP` turned into exits. From the stop until the daemon has been started again, however
+    the script ends, it tries to start a daemon that was running; one that was not is left
+    alone.
+  - Bash runs a trap only after the foreground command has ended, so the package command is
+    never still replacing files when the daemon is started. A test holds the install open
+    after the termination and requires the start to come after its end.
+  - It is an attempt to get the station back, not a package rollback, and the script says so.
+    `kill -9` cannot be caught.
+- **Wording corrected, as Codex advised:** `rpm -U --test` is rpm's simulation. It finds a
+  missing dependency, a conflict or too little disk space before the stop; passing it does not
+  guarantee the real install succeeds.
+
+**Ruling 1, built: the deploy makes the pair itself.** With the desktop package installed and a
+deploy that changes the version, `scripts/deploy-local-dev.sh`:
+- builds the desktop RPM with `scripts/desktop-rpm.sh` (the Electron download), unless the one
+  on disk already has the deploy's version, and confirms the built RPM has that version;
+- runs the content check and the production smoke check on the RPM it will install, **whether
+  it was just built or found on disk** (codex-101, below).
+
+All of that happens before the daemon is built or stopped. If any step fails (no Internet, a
+failed check), the deploy ends there and a running `smd` keeps running. It runs the steps of
+`task rpm:desktop` that examine the artifact; the tests of those checks stay in CI.
+
+- **Tests** (`scripts/deploy_local_dev_test.py`, 17 at this point; 20 after codex-101, below): the interruption cases with the
+  daemon running and not running (Ctrl+C at the prompt; a termination during the install); a
+  failed final start; the desktop RPM built and checked before the stop; a failed build, check
+  or smoke run; a build of the wrong version; no build without a desktop package or a version
+  change, or when the RPM already matches. RED first: 10 failed on the committed script, with
+  the same signal exits Codex reported.
+- **Reversions,** each caught and restored: D1, D2, D6, D7 (kept from 2026-11-12); I1 to I5
+  (signals not handled; nothing owns the recovery; recovery for a daemon that was not running;
+  recovery still armed after a good start; recovery not waiting for the package command); B1
+  to B6 (no desktop build; no content check; no smoke check; a failed check ignored; a
+  wrong-version build accepted; a matching RPM rebuilt).
+- **The real script, guarded** (`sudo` and every `systemctl` call except `is-active` blocked by
+  stand-ins on PATH), on the station's own tree: it built the desktop RPM, passed the real
+  content check (96 files) and the real smoke check (5 launches), built the daemon RPM, and
+  rpm's simulation accepted the pair. It was stopped at the guard on `systemctl stop`, and the
+  recovery path then tried the start. `smd` stayed active throughout. The run's by-products
+  were put back: the operator's two RPMs (SHA-256 verified) and `frontend/app/dist/index.html`.
+- **Not exercised for real:** the stop, the paired install, and a recovery that actually starts
+  the daemon. The operator's next deploy is their first real run.
+
+**Codex's review of that revision (codex-101) found one more P2, fixed before commit.**
+- **A retry trusted an RPM that had failed its check.** The checks ran only when the deploy
+  built the desktop RPM. The build writes the file before it is checked, so a failed check left
+  a file of the right version behind. The next deploy found the version matching, skipped the
+  checks, and would have installed the rejected RPM.
+- **Now only an RPM this run has checked goes into the transaction** (`WITH_DESKTOP`). A
+  matching RPM on disk is not rebuilt, but it is checked like a new one.
+- **A second gap of the same kind, closed with it:** a deploy rebuilding the installed version
+  added any desktop RPM of that version on disk to the transaction, unchecked. That deploy does
+  not need the pair, so it now installs the daemon alone.
+- **Tests** (20 test methods): a failed content or smoke check, then a retry with the artifact and the
+  failure still there (nothing stopped, nothing installed), then a third run once the check
+  passes (installed without a rebuild); a matching RPM on disk checked before the stop, and
+  refused if it fails; the same-version case; HUP alongside TERM.
+- **Reversions** V1 to V3 and I6, with the earlier ones rerun: 19, each caught. Each changed
+  script is now also parse-checked (`bash -n`) before its tests run. My first V1 was a syntax
+  error, which fails every test and proves nothing; I replaced it with a valid restoration of
+  the reviewed behaviour, which fails exactly the two tests that describe it.
+- **Not test-first, said plainly:** the same-version test was written after the selection rule
+  changed. V2 restores the old rule and that test fails.

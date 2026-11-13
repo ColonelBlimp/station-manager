@@ -65,6 +65,32 @@ def _rule(e):
     return sorted((t, x if not len(c) else "(nested)") for t, x, c in _children(e))
 
 
+def _shape(e):
+    """An element as a comparable value: tag, attributes, text, the text after it, and its
+    children's shapes in a fixed order. Comments and surrounding whitespace are dropped."""
+    return (e.tag, tuple(sorted(e.attrib.items())), (e.text or "").strip(), (e.tail or "").strip(),
+            tuple(sorted(_shape(c) for c in e if isinstance(c.tag, str))))
+
+
+def _leaf(tag, text):
+    return (tag, (), text, "", ())
+
+
+def _node(tag, *children):
+    return (tag, (), "", "", tuple(sorted(children)))
+
+
+# The whole menu file, as the only shape the package may ship.
+MENU_SHAPE = _node(
+    "Menu",
+    _leaf("Name", "Applications"),
+    _node("Menu", _leaf("Name", GROUP), _leaf("Directory", DIRECTORY_NAME),
+          _node("Include", _leaf("Category", GROUP_CATEGORY))),
+    _node("Menu", _leaf("Name", "Internet"),
+          _node("Exclude", _leaf("Filename", NAME + ".desktop"))),
+)
+
+
 def _menu_problems(text):
     """Every way the merged menu file differs from the one the package may ship.
 
@@ -72,6 +98,12 @@ def _menu_problems(text):
     Station Manager's own entry, by filename, from Internet. Removing by category would move
     every ham-radio application (operator ruling 2026-11-12: "only Station Manager"), and any
     other element would change a menu this package does not own.
+
+    The specific findings below say what is wrong; the last word is the comparison of the
+    whole file with MENU_SHAPE. A desktop combines sections of one name and may read a
+    repeated name, an attribute or stray text its own way, so nothing this check does not
+    look at is allowed to be there (codex-100: a repeated Internet section was read as its
+    last occurrence only).
     """
     try:
         root = ET.fromstring(text or "")
@@ -81,6 +113,7 @@ def _menu_problems(text):
         return [f"menu: the root element is <{root.tag}>, not <Menu>"]
     out = []
     menus = {}
+    seen = {}
     for tag, value, e in _children(root):
         if tag == "Name":
             continue
@@ -88,7 +121,11 @@ def _menu_problems(text):
             out.append(f"menu: an element this package does not own: <{tag}>")
             continue
         name = next((x for t, x, _ in _children(e) if t == "Name"), "")
+        seen[name] = seen.get(name, 0) + 1
         menus[name] = e
+    for name in sorted(n for n, count in seen.items() if count > 1):
+        out.append(f"menu: {name!r} appears {seen[name]} times; a desktop combines them, so "
+                   f"each section may appear once")
     for name in sorted(set(menus) - {GROUP, "Internet"}):
         out.append(f"menu: another menu is changed: {name!r}")
 
@@ -114,6 +151,9 @@ def _menu_problems(text):
         if rules != [("Exclude", only)]:
             out.append(f"menu: Internet must only exclude {NAME}.desktop by filename "
                        f"(only Station Manager moves); found {rules}")
+    if not out and _shape(root) != MENU_SHAPE:
+        out.append("menu: the file is not exactly the shape the package may ship (a repeated "
+                   "name, an attribute or stray text)")
     return out
 
 

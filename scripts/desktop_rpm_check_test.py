@@ -331,6 +331,59 @@ class Check(unittest.TestCase):
         m["menu"] = m["menu"].replace("</Include>", "</Include><Menu><Name>More</Name></Menu>")
         self.assertReported(m, "menu: ")
 
+    def test_menu_sections_are_not_repeated(self):
+        # A desktop COMBINES sections of one name (menu spec, merge algorithm), so an earlier
+        # Internet section's rule applies as well as the expected one's (codex-100).
+        expected = "  <Menu>\n    <Name>Internet</Name>"
+        earlier = ("  <Menu>\n    <Name>Internet</Name>\n    <Exclude><Filename>wsjtx.desktop"
+                   "</Filename></Exclude>\n  </Menu>\n")
+        m = valid()
+        self.assertEqual(m["menu"].count(expected), 1)
+        m["menu"] = m["menu"].replace(expected, earlier + expected)
+        self.assertReported(m, "menu: 'Internet' appears 2 times")
+        # The same after the expected section, and for the group.
+        m = valid()
+        m["menu"] = m["menu"][:m["menu"].rindex("</Menu>")] + earlier + "</Menu>\n"
+        self.assertReported(m, "menu: 'Internet' appears 2 times")
+        group = "  <Menu>\n    <Name>Amateur Radio</Name>"
+        more = ("  <Menu>\n    <Name>Amateur Radio</Name>\n    <Include><Category>Network"
+                "</Category></Include>\n  </Menu>\n")
+        m = valid()
+        m["menu"] = m["menu"].replace(group, more + group)
+        self.assertReported(m, "menu: 'Amateur Radio' appears 2 times")
+
+    def test_menu_is_exactly_the_shape_shipped(self):
+        # Anything a desktop could read differently from this check is refused: a second name
+        # for a section, an attribute, stray text, a repeated root name.
+        for old, new, why in [
+            ("<Name>Internet</Name>", "<Name>Internet</Name><Name>Multimedia</Name>", "a second name"),
+            ("<Name>Amateur Radio</Name>", "<Name>Amateur Radio</Name><Name>Internet</Name>",
+             "a second name for the group"),
+            ("<Name>Applications</Name>", "<Name>Applications</Name><Name>Other</Name>",
+             "a second root name"),
+            ("<Name>Applications</Name>", "<Name>Other</Name>", "another root name"),
+            ("<Exclude>", '<Exclude foo="bar">', "an attribute"),
+            ("<Menu>\n  <Name>Applications</Name>", '<Menu foo="bar">\n  <Name>Applications</Name>',
+             "an attribute on the root"),
+            ("<Exclude>", "<Exclude>wsjtx.desktop", "stray text"),
+            ("</Exclude>", "</Exclude>stray", "stray text after an element"),
+            ("<Filename>station-manager-desktop.desktop</Filename>",
+             "<Filename>station-manager-desktop.desktop<Filename>wsjtx.desktop</Filename></Filename>",
+             "an element nested in a leaf"),
+        ]:
+            with self.subTest(why=why):
+                m = valid()
+                self.assertEqual(m["menu"].count(old), 1, old)
+                m["menu"] = m["menu"].replace(old, new)
+                self.assertReported(m, "menu: ")
+        # The order of the two sections, and comments and whitespace, do not matter.
+        m = valid()
+        text = m["menu"]
+        a, b = text.index("  <Menu>\n    <Name>Amateur Radio</Name>"), text.index("  <Menu>\n    <Name>Internet</Name>")
+        end = text.rindex("</Menu>")
+        m["menu"] = text[:a] + text[b:end] + "<!-- x -->\n" + text[a:b] + text[end:]
+        self.assertEqual(problems(m), [])
+
     def test_menu_must_be_well_formed(self):
         for text in [None, "", "<Menu><Name>Applications</Name>", "not xml",
                      "<Other><Name>Applications</Name></Other>"]:

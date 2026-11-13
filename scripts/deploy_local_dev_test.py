@@ -6,14 +6,16 @@ requires exactly the daemon version it was built with (ADR 0102 ruling Q4), so o
 installed the two packages can only be upgraded in one transaction.
 
 Nothing here touches the station: the script is copied into a temporary "repository" (it finds
-its root from its own location), the build is a stub that writes a fake RPM, and systemctl,
-sudo, rpm, ss and sleep are stand-ins first on PATH that record every call and keep their
-state in that directory. The stand-in rpm models the one rule that matters: an installed
-desktop package refuses a daemon of another version unless the desktop RPM of that version is
-in the same transaction.
+its root from its own location), the daemon and desktop builds and the desktop RPM's checks
+are stubs, and systemctl, sudo, rpm, ss and sleep are stand-ins first on PATH that record
+every call and keep their state in that directory. The stand-in rpm models the one rule that
+matters: an installed desktop package refuses a daemon of another version unless the desktop
+RPM of that version is in the same transaction. The script runs in its own session, so the
+signals the interruption tests send reach only it and its children.
 """
 import os
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -46,8 +48,24 @@ esac
 [ -f "$SM_T/active" ] && echo "LISTEN 0 4096 127.0.0.1:8080 0.0.0.0:*"
 exit 0
 ''',
+    # An interruption at the install step, when the file "interrupt" names one:
+    #   INT   Ctrl+C at the sudo prompt: the terminal signals the whole foreground group, and
+    #         the package command never runs.
+    #   TERM, HUP  the script alone is told to terminate (or loses its terminal) while the
+    #         install runs on to its end.
     "sudo": r'''#!/bin/sh
 echo "sudo $*" >> "$SM_T/calls.log"
+if [ -f "$SM_T/interrupt" ]; then
+  case "$(cat "$SM_T/interrupt")" in
+    INT) kill -INT 0; /usr/bin/sleep 5; exit 130 ;;
+    TERM|HUP)
+      kill -"$(cat "$SM_T/interrupt")" "$PPID"
+      /usr/bin/sleep 0.4   # the install is still running: recovery must wait for it
+      "$@"; rc=$?
+      echo "install-ended" >> "$SM_T/calls.log"
+      exit $rc ;;
+  esac
+fi
 exec "$@"
 ''',
     "sleep": "#!/bin/sh\nexit 0\n",
@@ -106,6 +124,23 @@ printf '%s\nstation-manager\n' "$SM_T_VERSION" > build/private/station-manager-d
 VERSION_STUB = r'''sm_git_version() { printf '%s' "$SM_T_VERSION"; }
 sm_rpm_version() { printf '%s' "$1"; }
 '''
+# The desktop build writes a desktop RPM of the build's version (or of "desktop-builds", when
+# that file names another), unless told to fail.
+DESKTOP_RPM_STUB = r'''#!/bin/sh
+echo "desktop-rpm" >> "$SM_T/calls.log"
+[ -f "$SM_T/desktop-build-fails" ] && { echo "error: the Electron download failed" >&2; exit 1; }
+v="$SM_T_VERSION"; [ -f "$SM_T/desktop-builds" ] && v=$(cat "$SM_T/desktop-builds")
+mkdir -p build/release
+printf '%s\nstation-manager-desktop\n' "$v" > build/release/station-manager-desktop.x86_64.rpm
+'''
+DESKTOP_CHECK_STUB = '''import os, sys
+name = os.path.basename(sys.argv[0])[:-3]
+with open(os.path.join(os.environ["SM_T"], "calls.log"), "a") as fh:
+    fh.write(name + " " + " ".join(sys.argv[1:]) + "\\n")
+if os.path.exists(os.path.join(os.environ["SM_T"], name + "-fails")):
+    print("FAIL " + name, file=sys.stderr)
+    sys.exit(1)
+'''
 
 
 class Deploy(unittest.TestCase):
@@ -120,6 +155,9 @@ class Deploy(unittest.TestCase):
         shutil.copy(SCRIPT, os.path.join(self.repo, "scripts", "deploy-local-dev.sh"))
         self._write(os.path.join(self.repo, "scripts", "dev-rpm.sh"), DEV_RPM_STUB)
         self._write(os.path.join(self.repo, "scripts", "version.sh"), VERSION_STUB)
+        self._write(os.path.join(self.repo, "scripts", "desktop-rpm.sh"), DESKTOP_RPM_STUB)
+        for name in ("desktop-rpm-check.py", "desktop-smoke.py"):
+            self._write(os.path.join(self.repo, "scripts", name), DESKTOP_CHECK_STUB)
         for name, body in STUBS.items():
             self._write(os.path.join(self.bin, name), body, executable=True)
 
@@ -149,16 +187,22 @@ class Deploy(unittest.TestCase):
     def deploy(self, version=NEW):
         env = dict(os.environ, PATH=self.bin + os.pathsep + os.environ["PATH"], SM_T=self.state,
                    SM_T_VERSION=version)
+        # Its own session: a signal sent to "the foreground group" stays inside it.
         return subprocess.run(["bash", os.path.join(self.repo, "scripts", "deploy-local-dev.sh")],
-                              env=env, capture_output=True, text=True, timeout=60)
+                              env=env, capture_output=True, text=True, timeout=60,
+                              start_new_session=True)
+
+    def _read(self, path):
+        if not os.path.exists(path):
+            return None
+        with open(path) as fh:
+            return fh.read()
 
     def calls(self):
-        path = os.path.join(self.state, "calls.log")
-        return open(path).read().splitlines() if os.path.exists(path) else []
+        return (self._read(os.path.join(self.state, "calls.log")) or "").splitlines()
 
     def installed(self, name):
-        path = os.path.join(self.state, "installed-" + name)
-        return open(path).read() if os.path.exists(path) else None
+        return self._read(os.path.join(self.state, "installed-" + name))
 
     def active(self):
         return os.path.exists(os.path.join(self.state, "active"))
@@ -167,6 +211,12 @@ class Deploy(unittest.TestCase):
         hits = [i for i, c in enumerate(calls) if needle in c]
         self.assertTrue(hits, f"no call containing {needle!r} in {calls}")
         return hits[0]
+
+    def assertStartedOnceCleanly(self, r):
+        """A deploy that succeeded started the daemon once and reported no recovery."""
+        self.assertEqual(sum("systemctl --user start smd" in c for c in self.calls()), 1, self.calls())
+        self.assertNotIn("error", r.stderr)
+        self.assertNotIn("restarted", r.stderr)
 
     def assertNeverStopped(self, r):
         self.assertFalse(any("systemctl --user stop" in c for c in self.calls()),
@@ -185,6 +235,7 @@ class Deploy(unittest.TestCase):
         self.assertNotIn(DESKTOP_RPM, calls[install])
         self.assertEqual(self.installed("station-manager"), NEW)
         self.assertTrue(self.active())
+        self.assertStartedOnceCleanly(r)
         # The same transaction was tried, without installing, before the daemon was stopped.
         self.assertLess(self.index(calls, "rpm -U --test --replacepkgs " + DAEMON_RPM),
                         self.index(calls, "systemctl --user stop smd"))
@@ -208,26 +259,127 @@ class Deploy(unittest.TestCase):
         self.assertIn(DESKTOP_RPM, calls[test])
         self.assertLess(test, self.index(calls, "systemctl --user stop smd"))
 
-    def test_no_desktop_rpm_is_refused_before_the_build_and_the_stop(self):
+    # The deploy builds the desktop RPM itself when the pair is needed (operator ruling
+    # 2026-11-13), checks it, and only then goes on. All of it before the stop.
+
+    def assertDesktopBuiltThenPairInstalled(self, r):
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        calls = self.calls()
+        order = [self.index(calls, n) for n in
+                 ("desktop-rpm", "desktop-rpm-check " + DESKTOP_RPM, "desktop-smoke " + DESKTOP_RPM,
+                  "rpm -U --test --replacepkgs", "systemctl --user stop smd", "sudo rpm -Uvh")]
+        self.assertEqual(order, sorted(order), calls)
+        self.assertEqual(calls.count("desktop-rpm"), 1)
+        check = calls[self.index(calls, "desktop-rpm-check")]
+        self.assertIn("--version " + NEW, check)
+        self.assertIn("--app-version " + NEW, check)
+        installs = [c for c in calls if c.startswith("sudo rpm -Uvh")]
+        self.assertEqual(len(installs), 1, calls)
+        self.assertIn(DAEMON_RPM, installs[0])
+        self.assertIn(DESKTOP_RPM, installs[0])
+        self.assertEqual((self.installed("station-manager"), self.installed("station-manager-desktop")),
+                         (NEW, NEW))
+        self.assertTrue(self.active())
+        self.assertStartedOnceCleanly(r)
+
+    def test_a_missing_desktop_rpm_is_built_and_checked_before_the_stop(self):
         self.given(daemon=OLD, desktop=OLD, active=True)
+        self.assertDesktopBuiltThenPairInstalled(self.deploy())
+
+    def test_a_desktop_rpm_of_another_version_is_rebuilt(self):
+        self.given(daemon=OLD, desktop=OLD, active=True, desktop_rpm=OLD)
+        self.assertDesktopBuiltThenPairInstalled(self.deploy())
+
+    def test_a_desktop_build_or_check_that_fails_stops_nothing(self):
+        for flag, step in (("desktop-build-fails", "desktop-rpm"),
+                           ("desktop-rpm-check-fails", "desktop-rpm-check"),
+                           ("desktop-smoke-fails", "desktop-smoke")):
+            with self.subTest(flag=flag):
+                self.setUp()
+                self.given(daemon=OLD, desktop=OLD, active=True)
+                self.flag(flag)
+                r = self.deploy()
+                self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+                self.assertTrue(any(c.startswith(step) for c in self.calls()), self.calls())
+                self.assertNotIn("dev-rpm", self.calls())
+                self.assertNeverStopped(r)
+                self.assertTrue(self.active())
+                self.assertIn("still running", r.stderr)
+                self.assertEqual(self.installed("station-manager"), OLD)
+
+    def test_a_retry_does_not_install_a_desktop_rpm_that_failed_its_check(self):
+        # codex-101. The build writes the RPM before it is checked, so a failed check leaves a
+        # file of the right version behind. Having the version is not having passed: the
+        # retry must check it again, and stop nothing while it still fails.
+        for flag in ("desktop-rpm-check-fails", "desktop-smoke-fails"):
+            with self.subTest(flag=flag):
+                self.setUp()
+                self.given(daemon=OLD, desktop=OLD, active=True)
+                self.flag(flag)
+                first = self.deploy()
+                self.assertEqual(first.returncode, 1, first.stdout + first.stderr)
+                self.assertEqual(self._read(os.path.join(self.repo, DESKTOP_RPM)).splitlines()[0], NEW,
+                                 "the rejected RPM of the new version is still on disk")
+                os.remove(os.path.join(self.state, "calls.log"))
+
+                retry = self.deploy()
+                self.assertEqual(retry.returncode, 1, retry.stdout + retry.stderr)
+                self.assertTrue(any(c.startswith(flag[:-len("-fails")]) for c in self.calls()),
+                                f"the retry did not run the failing check: {self.calls()}")
+                self.assertNotIn("desktop-rpm", self.calls())  # not rebuilt: it has the version
+                self.assertNeverStopped(retry)
+                self.assertTrue(self.active())
+                self.assertEqual((self.installed("station-manager"),
+                                  self.installed("station-manager-desktop")), (OLD, OLD))
+
+                # Once the check passes, the same file is installed without a rebuild.
+                os.remove(os.path.join(self.state, flag))
+                os.remove(os.path.join(self.state, "calls.log"))
+                third = self.deploy()
+                self.assertEqual(third.returncode, 0, third.stdout + third.stderr)
+                self.assertNotIn("desktop-rpm", self.calls())
+                self.assertEqual(self.installed("station-manager-desktop"), NEW)
+
+    def test_a_desktop_rpm_already_on_disk_is_checked_before_it_is_installed(self):
+        # A matching RPM is not rebuilt, but it is still checked, before the stop.
+        self.given(daemon=OLD, desktop=OLD, active=True, desktop_rpm=NEW)
+        r = self.deploy()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        calls = self.calls()
+        self.assertNotIn("desktop-rpm", calls)
+        order = [self.index(calls, n) for n in
+                 ("desktop-rpm-check " + DESKTOP_RPM, "desktop-smoke " + DESKTOP_RPM,
+                  "systemctl --user stop smd", "sudo rpm -Uvh")]
+        self.assertEqual(order, sorted(order), calls)
+        for flag in ("desktop-rpm-check-fails", "desktop-smoke-fails"):
+            with self.subTest(flag=flag):
+                self.setUp()
+                self.given(daemon=OLD, desktop=OLD, active=True, desktop_rpm=NEW)
+                self.flag(flag)
+                r = self.deploy()
+                self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+                self.assertNeverStopped(r)
+                self.assertTrue(self.active())
+                self.assertEqual(self.installed("station-manager-desktop"), OLD)
+
+    def test_a_desktop_build_of_the_wrong_version_stops_nothing(self):
+        self.given(daemon=OLD, desktop=OLD, active=True)
+        self.flag("desktop-builds", OLD)
         r = self.deploy()
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
-        self.assertNotIn("dev-rpm", self.calls())
         self.assertNeverStopped(r)
         self.assertTrue(self.active())
-        self.assertIn("task rpm:desktop", r.stderr)
         self.assertIn(NEW, r.stderr)
 
-    def test_a_desktop_rpm_of_another_version_is_refused_before_the_build_and_the_stop(self):
-        self.given(daemon=OLD, desktop=OLD, active=True, desktop_rpm=OLD)
-        r = self.deploy()
-        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
-        self.assertNotIn("dev-rpm", self.calls())
-        self.assertNeverStopped(r)
-        self.assertTrue(self.active())
-        self.assertIn("task rpm:desktop", r.stderr)
-        self.assertIn(OLD, r.stderr)
-        self.assertIn(NEW, r.stderr)
+    def test_no_desktop_build_without_a_desktop_package_or_a_version_change(self):
+        for given in (dict(daemon=OLD, active=True), dict(daemon=NEW, desktop=NEW, active=True),
+                      dict(daemon=OLD, desktop=OLD, active=True, desktop_rpm=NEW)):
+            with self.subTest(given=given):
+                self.setUp()
+                self.given(**given)
+                r = self.deploy()
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                self.assertNotIn("desktop-rpm", self.calls())
 
     def test_the_same_version_again_needs_no_desktop_rpm(self):
         # Rebuilding the commit already installed: the daemon alone satisfies the desktop package.
@@ -238,6 +390,20 @@ class Deploy(unittest.TestCase):
         self.assertEqual(len(install), 1)
         self.assertNotIn(DESKTOP_RPM, install[0])
         self.assertTrue(self.active())
+
+    def test_the_same_version_again_never_installs_an_unchecked_desktop_rpm(self):
+        # A desktop RPM of the installed version happens to be on disk. This deploy does not
+        # need the pair, so it checks nothing and installs the daemon alone: no desktop RPM goes
+        # into a transaction unless this run checked it (codex-101).
+        self.given(daemon=NEW, desktop=NEW, active=True, desktop_rpm=NEW)
+        r = self.deploy()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        calls = self.calls()
+        install = [c for c in calls if c.startswith("sudo rpm -Uvh")]
+        self.assertEqual(len(install), 1)
+        self.assertNotIn(DESKTOP_RPM, install[0])
+        self.assertNotIn(DESKTOP_RPM, calls[self.index(calls, "rpm -U --test")])
+        self.assertFalse(any(c.startswith("desktop-") for c in calls), calls)
 
     def test_a_refused_transaction_stops_nothing(self):
         # Whatever rpm's reason, it is found by the dry run: the daemon keeps running.
@@ -270,6 +436,66 @@ class Deploy(unittest.TestCase):
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertFalse(any("systemctl --user start" in c for c in self.calls()))
         self.assertFalse(self.active())
+
+    # Interruptions at the install step (codex-100). Ownership of the recovery starts before the
+    # stop, so any way the script ends tries to start a daemon that was running.
+
+    def test_ctrl_c_at_the_sudo_prompt_restarts_the_daemon_that_was_running(self):
+        self.given(daemon=OLD, active=True)
+        self.flag("interrupt", "INT")
+        r = self.deploy()
+        self.assertEqual(r.returncode, 130, r.stdout + r.stderr)
+        calls = self.calls()
+        self.assertLess(self.index(calls, "sudo rpm -Uvh"), self.index(calls, "systemctl --user start smd"))
+        self.assertFalse(any(c.startswith("rpm -Uvh") for c in calls), "the package command ran")
+        self.assertTrue(self.active(), "the station's daemon was left stopped")
+        self.assertEqual(self.installed("station-manager"), OLD)
+        self.assertIn("restarted", r.stderr)
+
+    def test_ctrl_c_does_not_start_a_daemon_that_was_not_running(self):
+        self.given(daemon=OLD, active=False)
+        self.flag("interrupt", "INT")
+        r = self.deploy()
+        self.assertEqual(r.returncode, 130, r.stdout + r.stderr)
+        self.assertFalse(any("systemctl --user start" in c for c in self.calls()))
+        self.assertFalse(self.active())
+
+    def test_a_termination_waits_for_the_install_then_restarts_the_daemon(self):
+        # The script is told to terminate, or loses its terminal, while the package command is
+        # still running. The daemon is started only after that command has ended, never while
+        # files are replaced.
+        for name, number in (("TERM", signal.SIGTERM), ("HUP", signal.SIGHUP)):
+            with self.subTest(signal=name):
+                self.setUp()
+                self.given(daemon=OLD, active=True)
+                self.flag("interrupt", name)
+                r = self.deploy()
+                self.assertEqual(r.returncode, 128 + number, r.stdout + r.stderr)
+                calls = self.calls()
+                self.assertLess(self.index(calls, "install-ended"),
+                                self.index(calls, "systemctl --user start smd"))
+                self.assertTrue(self.active(), "the station's daemon was left stopped")
+                self.assertEqual(self.installed("station-manager"), NEW)  # the install ran to its end
+
+    def test_a_termination_does_not_start_a_daemon_that_was_not_running(self):
+        for name, number in (("TERM", signal.SIGTERM), ("HUP", signal.SIGHUP)):
+            with self.subTest(signal=name):
+                self.setUp()
+                self.given(daemon=OLD, active=False)
+                self.flag("interrupt", name)
+                r = self.deploy()
+                self.assertEqual(r.returncode, 128 + number, r.stdout + r.stderr)
+                self.assertFalse(any("systemctl --user start" in c for c in self.calls()))
+                self.assertFalse(self.active())
+
+    def test_a_failed_final_start_is_reported_and_tried_once_more(self):
+        self.given(daemon=OLD, active=True)
+        self.flag("start-fails")
+        r = self.deploy()
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertEqual(sum("systemctl --user start smd" in c for c in self.calls()), 2)
+        self.assertIn("could NOT be restarted", r.stderr)
+        self.assertIn("journalctl", r.stderr)
 
     def test_a_first_install_works(self):
         self.given()
