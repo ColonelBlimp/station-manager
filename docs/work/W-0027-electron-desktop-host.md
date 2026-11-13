@@ -1648,3 +1648,99 @@ failed check), the deploy ends there and a running `smd` keeps running. It runs 
   the reviewed behaviour, which fails exactly the two tests that describe it.
 - **Not test-first, said plainly:** the same-version test was written after the selection rule
   changed. V2 restores the old rule and that test fails.
+
+### C2 scope question: keep a view-only browser, or no browser client at all (2026-11-13, not ruled)
+
+**How it arose.** Working through the session design (ADR 0100 §4), it turned out that any
+other client of `/v1/ft8/events` keeps TX armed after the desktop app leaves FT8, a plain
+browser tab being the likely one: the route has no operating-client check before C2. The
+operator: "These situations is what partly prompted the switch from browser to desktop"; then
+"you have just made the case to remove the ability to view via the browser? We need to
+simplify?"; and, more widely, "My current view of the codebase is that it is too complicated
+and this maintenance is more costly. The desktop should reduce complexity and with it reduce
+the maintaiability burden?"
+
+**What is accepted today.** ADR 0102 ruling 1 keeps the browser as a view-only client, off
+unless enabled in `config.json`; ADR 0103 makes 8080 "the view-only listener" once C2 is on.
+ADR 0102 lists the daemon work that costs: the operating-client check, **the view-only route
+classification** ("every log, config and operating mutation, not only RF commands or hidden
+buttons") and **the presence/subscription rule**.
+
+**The position after review** (Claude's proposal in claude-208 and claude-209, corrected by
+Codex in codex-103 to codex-105 and verified against the source; a recommendation, not a
+ruling).
+
+- **A desktop-only C2 is worth considering.** The extra-subscriber case alone does not require
+  removing the browser: C2 closes it either way. What a view-only class costs is the
+  classification: each route (`internal/api/server.go` registers about 66) and each event
+  stream sorted into view or operate, and kept sorted as routes are added. Dropping the class
+  means that work is not built.
+- **It does not make presence automatic.** A per-install credential says who is calling. C2
+  still has to name the one operating subscription that is the operator's presence, and its
+  loss and reconnect rules. An authenticated API call, a Map stream or a detached window must
+  not keep FT8 running merely by being authenticated. The linger, the disarm through the
+  guaranteed-stop path and the capture lifecycle stay.
+- **Given up:** viewing in a local browser (little use once the app is installed), and viewing
+  from another machine (ruling 1 has it off by default, and it is not built). ADR 0102 already
+  names "Remote operation becomes a requirement" as a trigger to revisit view-only access.
+  Nothing operating is lost: under the accepted design the browser cannot operate after C2.
+- **Still to be provided for:**
+  - the SPA development loop (`frontend/app/vite.config.ts` proxies `/v1` to 8080);
+  - the tools that read the daemon over HTTP (`scripts/ukeicc-cabrillo.py --from-daemon`,
+    `cmd/loadgen`, `scripts/tune-duration-probe.sh`), which remain API clients;
+  - the deploy script's port check;
+  - what becomes of the 8080 listener itself.
+- **The earlier ruling still gates it:** the browser path is not retired until the desktop app
+  can be installed and launched (D1's guest acceptance, and D2 to D6 for anyone but the
+  operator).
+
+**Does the desktop reduce complexity? Measured so far, it has added.**
+- From the `pre-w0027` tag to `420fef3f` (`git diff --numstat`): 14,798 lines added and 1,264
+  removed across 93 files. Leaving out docs, tests, harnesses and the lockfile: about 3,800
+  lines of code added and about 40 removed, by Claude's count. That includes the W-0028 fix, a
+  few hundred lines. Line counts show scale; the saving that matters is which behaviours,
+  failure paths and dependencies disappear.
+- It also added an operational coupling: the exact-version pair, and the deploy logic the
+  2026-11-12 incident showed was needed.
+- **What it adds for good:** an Electron runtime to keep current (ADR 0102's update targets),
+  the package pair, and the packaging checks and smoke harness.
+- **What it will not reduce:** the parts that are complicated for their own reasons (the FT8
+  sequencer and its invariants, archives and activation, forwarding). For scale, the tree holds
+  about 98,000 lines of Go and 38,500 of SPA code outside tests, about 205,000 lines of tests,
+  and 105 ADRs.
+
+**What retiring the browser does and does not let us remove.** The saving is mainly work not
+built (the view-only classification), plus the 8080 surface once its tools are moved. It is
+not a large deletion of existing guards:
+
+| Candidate | Verdict | Why |
+|---|---|---|
+| Archive and default request guards (`archive_guard.go`, `default_guard.go`) | **Stay** | They stop an action reaching an archive or default the window does not show. One window can still hold an old draft or send a delayed request across a restart; imported QSO UUIDs can repeat across archives. The app's credential says who is calling, not which archive, default or session generation the action belongs to. ADR 0100 §5 keeps them. |
+| Per-tab Session list (`session.svelte.ts`, sessionStorage) | **Replace, then remove** | It owns the list today. It goes only when ADR 0100's daemon-owned session replaces it. |
+| Stream revival (`sse-reviving.ts`) | **No deletion shown** | The desktop runs the same SPA over the same transports; who may connect does not replace reconnecting after a network change. To be assessed in Electron. |
+| Subscriber-count presence | **Replace the admission rule, keep the rest** | C2 names which subscription is the operator's presence. The linger, the disarm and the capture lifecycle remain. |
+| The 8080 listener and browser compatibility | **Plausibly removable** | After its consumers move: the Vite proxy, the Cabrillo reader, loadgen and the tune probe. No broad unauthenticated loopback exemption in its place. |
+| The `beforeunload` hook (`lib/config/unsaved.ts`), the anchor download (`lib/api/session-export.ts`), the new-tab links (`lib/ui/Sidebar.svelte`) | **Conditional** | Each needs its planned host replacement first (close confirmation, native Save, the finite window roles). Dirty-state tracking, export generation and external links keep their purposes. |
+
+**C2's boundary, if it is desktop-only.**
+- A default-deny check with a short explicit exception list, covering the non-`/v1` surfaces
+  too (the SPA assets, the manual, the optional `/debug/pprof`).
+- The same-user limit, server authentication and the reload rules are kept.
+- ADR 0102's future QSO-only daemon submitter is not given the full operating credential or
+  presence.
+- No general authorization framework.
+
+**Acceptance must rule out the nearest confusable outcome:** the browser UI stops working while
+an unauthenticated API or stream client can still operate, or keep FT8 running. So: a denied
+subscription adds no presence and no capture demand; an authorized operating stream still
+recovers safely; old-context actions are refused; the supported local tools and the desktop's
+install and launch path work. A structural check that every route is behind the gate helps, but
+does not prove those behaviours by itself.
+
+**Recommendation (Claude and Codex), for the operator's ruling:**
+1. Do a bounded inventory in this dossier before any saving is promised: for each candidate,
+   the behaviour it owns, what must replace it, and the evidence that allows its removal.
+2. Then rule on dropping view-only access. That changes ADR 0102 ruling 1 and ADR 0103's line
+   about the view-only listener; the ADRs are amended only on that ruling.
+
+Nothing here authorizes building C2 or removing anything.

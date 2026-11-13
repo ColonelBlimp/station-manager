@@ -334,6 +334,47 @@ itself; the boundary is the change **taking effect**.
        the close stands, the closing phase ends, and the ordinary rule (§3) opens one new session
        in the departing archive. A retried switch closes that session in turn; it is discarded if
        nothing was logged in it, so retries do not accumulate sessions.
+  - **What is already true before a switch can be asked for** (source reading, 2026-11-13; the
+    operator's question: "if I switch out of FT8 to Settings, does not the TX immediately
+    disable?"). Not immediately: the disarm **starts** five seconds after the last FT8
+    subscriber has gone, provided none has returned; in the desktop app there is no second FT8
+    view (below). Five seconds is the grace before the disarm begins, not a bound on when it
+    has finished: taking the locks and waiting for a transmission in flight to end come after
+    it (codex-103).
+    - Activation is offered only in Settings → Archives
+      (`frontend/app/src/lib/config/ArchivesSection.svelte`). The shell shows one main view at a
+      time (`App.svelte`), so opening Settings destroys the Operate view.
+    - The FT8 event stream is view-scoped: the FT8 view opens it on mount and closes it on
+      destroy (`Ft8View.svelte`, `stopFt8`).
+    - When the last `/v1/ft8/events` subscriber is gone, the daemon waits `captureLinger`, 5 s
+      (`internal/ft8/service.go:21`, `onSubscriberRemoved`). If none has returned, it disarms TX
+      (`disarmUnattended`), which aborts a transmission in flight and **abandons** the active
+      contact, and then releases the audio device (`onLingerExpired`, `disarmTx`). A return
+      within the five seconds changes nothing.
+    - **The desktop app has one FT8 view** (the operator, 2026-11-13: "with the new desktop,
+      there should be not other window or tab having FT8 open?"). Correct, by design and as
+      built: the app is single-instance and a second launch raises the running window
+      (`desktop/src/main.mjs`, `requestSingleInstanceLock`); it creates one window
+      (`desktop/src/window.mjs`); and ADR 0102 ruling 2's window set keeps Operate, and so the
+      FT8 view, in the one main window. The Map, Manual, Rig Control and Session windows of
+      W-0027 A2 are not the FT8 view, and each exists at most once. Only `Ft8View` opens the
+      stream in the SPA.
+    - **Any other client of `/v1/ft8/events` is a subscriber today**, a plain browser tab being
+      the likely one: `smd` still serves the UI to a browser on its own listener, and the route
+      has no operating-client check yet (`internal/api/server.go`; codex-103). Such a client
+      keeps a subscriber, so TX would stay armed and a run continue after the desktop app left
+      FT8. ADR 0102 assigns the remedy to W-0027 C2: presence becomes the desktop app's
+      authenticated operating subscription. C2 is not built. The operator (2026-11-13): "These
+      situations is what partly prompted the switch from browser to desktop". Claude's reading
+      of that, not an explicit ruling: no interim measure is planned and C2 settles it.
+    - Either way a switch never runs beside live FT8, and that does not depend on navigation:
+      the FT8 seal in step 2 refuses while a sequence is active, a transmission is in flight or
+      TX is armed (`SealTxAdmission`, `internal/ft8/servicetx.go`). It is the safety gate. So
+      an activation asked for before the disarm has finished, or while another client keeps
+      FT8 running, is refused as busy.
+    - An abandoned contact is not logged. A contact that had already completed is: its logging
+      job is what the drain in step 3 waits for.
+    - Not measured on the station.
   - **The closing phase** runs from the close until the process exits or the switch fails
     (step 5). Because both live paths were drained before the close, no contact can join a
     session in it, so it creates no session. In it:
