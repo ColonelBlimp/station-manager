@@ -18,8 +18,9 @@ profiling at `/debug/pprof/*`.
 ## Conventions
 
 **Transport / auth.** Single-operator, loopback-bound by default (`127.0.0.1:8080` TCP, or
-a Unix socket). No authentication — the trust boundary is the loopback interface. A
-non-loopback bind emits a startup warning.
+a Unix socket). No authentication by default — the trust boundary is the loopback interface
+— unless the operating-client check below is switched on. A non-loopback bind emits a startup
+warning.
 
 **Desktop app listener (ADR 0103; W-0027 C1c).** Beside that listener, smd serves the same
 handler chain, so the same routes and middleware, over HTTPS on `127.0.0.1:<server.app_port>`
@@ -31,8 +32,25 @@ port>` (an absent `Origin` is allowed, as on the browser listener); a WebSocket 
 `Origin` (scheme `https` from the TLS connection). On port 443 only, the portless forms browsers
 send, `127.0.0.1` and `https://127.0.0.1`, are the same address and are accepted. The browser
 listener's rules are unchanged.
-Until W-0027 C2, a refused identity, a busy port or a serve error only writes a warning to
-`smd.log`. The station keeps serving the browser listener, with no app listener.
+With the operating-client check off (the default), a refused identity, a busy port or a serve
+error only writes a warning to `smd.log`. The station keeps serving the browser listener, with
+no app listener.
+
+**Operating-client check (ADR 0102; W-0027 C2a).** Off by default and temporary
+(`server.require_desktop_app`, read at start). With it **on**, a request is served only if it
+arrived on the desktop app listener and carries exactly one `X-SM-Operating-Credential` header
+whose value is this install's operating credential: the whole content of
+`desktop-credential/credential` in the working directory (43 base64url characters; directory
+`0700`, file `0600`, created by `smd` at every start in both states). Anything else gets **403
+`desktop_app_required`**, on every route, page and stream, on both listeners, before the
+router and before any stream admission. The browser listener (TCP or Unix socket) refuses even
+a valid credential. The one exception is `GET /v1/healthz`, which answers as usual on both
+listeners. The check runs after the Host and Origin guard, so a foreign Host is still **403
+`cross_origin`**. The header is removed before any handler runs. Each refusal writes one
+warning to `smd.log` with the listener, method, path and whether a credential was presented,
+never a value. With the check on, an unusable credential, a refused identity or an app port
+that cannot be bound is a start-up error, and the app listener stopping with an error later
+ends `smd` (its service manager restarts it). With it off, the header is ignored.
 
 **Content negotiation.** JSON in/out except `POST /v1/qso`, which takes ADIF
 (`application/x-adif` / `text/plain` / empty).
@@ -46,7 +64,7 @@ carry only a generic message (the real cause is logged server-side). Some subsys
 **Middleware chain** (outermost first, `internal/api/limits.go`):
 `logRequests` → `limitConcurrent` (non-stream concurrent-request semaphore; over budget →
 **503 `server_busy`**; the SSE and WebSocket stream routes are exempt) → `recoverPanic` (panic → **500
-`internal_error`**) → mux. Body-reading endpoints cap at `Server.MaxBodyBytes`
+`internal_error`**) → the Host and Origin guard → the operating-client check → mux. Body-reading endpoints cap at `Server.MaxBodyBytes`
 (**413 `body_too_large`** / **400 `read_error`**); malformed JSON → **400 `invalid_json`**.
 `POST /v1/qso` additionally has a per-endpoint token bucket (**429 `rate_limited`**). The
 three SSE streams share one subscriber cap (**503 `server_busy`**).

@@ -108,6 +108,10 @@ the shell trusts that one certificate and nothing else.**
      without the app listener and reports it, naming the file, in `smd.log` and as a Station Event;
      once C2 is on, it is a start-up error. An identity published with **unconfirmed durability**
      is only reported, before and after C2, and the listener runs.
+   - **Added 2026-11-13 (W-0027 C2a; operator rulings of that date).** These reports are in
+     `smd.log` only: Station Events are to be retired, and C2 adds none. With C2 on, the app
+     listener stopping with an error after the start also ends `smd`, so its service manager
+     restarts it ("yes, end the daemon"); with C2 off that stays a report.
 3. **The pin.** At launch the shell finds the identity directory by the same canonical
    resolution `smd` uses: an explicit working directory, then `SM_WORKING_DIR`, then the packaged
    XDG default (`internal/utils/working_dir.go`). It never applies the daemon's

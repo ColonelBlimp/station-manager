@@ -573,6 +573,9 @@ that has no desktop app listener, remove `app_port` from the `server` block,
 or that build refuses the file. `scripts/rollback-drill.sh` does this for its
 scratch copy.
 
+`server.require_desktop_app` behaves the same way. It is absent unless you
+set it to `true`; remove it before you start a build that does not know it.
+
 Known: upgrading from 2.0.0-alpha.1 to alpha.2 with a `qrzcq` forwarder
 in the config (enabled or not) refuses to start with `type "qrzcq" does
 not support action "update"`, because alpha.1 wrote the old all-actions

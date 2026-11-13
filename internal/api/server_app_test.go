@@ -78,8 +78,13 @@ func (l twoListeners) appURL(path string) string {
 
 func startTwo(t *testing.T) twoListeners {
 	t.Helper()
-	srv := testServer(t)
-	l := twoListeners{srv: srv, id: identity(t), mainErr: make(chan error, 1), appErr: make(chan error, 1)}
+	return startTwoWith(t, testServer(t), identity(t))
+}
+
+// startTwoWith serves srv on both listeners, the app listener with id.
+func startTwoWith(t *testing.T, srv *Server, id desktopid.Identity) twoListeners {
+	t.Helper()
+	l := twoListeners{srv: srv, id: id, mainErr: make(chan error, 1), appErr: make(chan error, 1)}
 	// Each serve goroutine is waited for at cleanup: a server still logging when the next test
 	// builds its server races on zerolog's process-global time format, which every new logging
 	// service writes (internal/logging/service.go).

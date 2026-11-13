@@ -359,7 +359,7 @@ func (f *faultFS) SyncFile(path string) error {
 
 func (f *faultFS) SyncDir(dir string) error {
 	name := "sync parent"
-	if strings.HasPrefix(filepath.Base(dir), tmpPrefix) {
+	if b := filepath.Base(dir); strings.HasPrefix(b, tmpPrefix) || strings.HasPrefix(b, credTmpPrefix) {
 		name = "sync prepared dir"
 	}
 	if err := f.step(name); err != nil {

@@ -1243,22 +1243,61 @@ func (d *daemon) initHTTP() error {
 
 // startHTTP launches ListenAndServe on the daemon socket; a bind error lands on errCh, which run()'s
 // wait loop selects on (exactly as before). The desktop app's listener starts only once the
-// browser listener holds its port (codex-058), and its problems are reported, never fatal (C1c).
+// browser listener holds its port (codex-058).
+//
+// The operating-client check (W-0027 C2a) decides what a problem with the desktop app's side
+// does. Off, each is reported and never fatal (C1c). On, an unusable credential, a refused
+// identity, an app port that cannot be bound, or the app listener stopping with an error
+// later, ends the daemon: the error goes to errCh, the
+// path a failed browser bind already takes, so the daemon comes down in order and an archive
+// activation in flight is not blamed for it. Until it is down, nothing but the health check
+// is served: after a credential failure the server holds no credential; after an identity or
+// bind failure it holds one, but there is no app listener to present it on.
 func (d *daemon) startHTTP(ctx context.Context) error {
+	required := d.server.RequiresDesktopApp()
+	var fatal func(error)
+	if required {
+		fatal = d.failOperatingClientStart
+	}
+	loadOperatingCredential(d.server, desktopid.EnsureCredential, d.cfgSvc.WorkingDir(), required,
+		d.reportDesktopListener, d.failOperatingClientStart)
+	d.reportOperatingClientCheck(required)
 	go func() { d.errCh <- serveBrowser(d) }()
 	startAppAfterBrowser(ctx, d.server, desktopid.Ensure, d.cfgSvc.WorkingDir(),
-		d.cfg.Server.EffectiveAppPort(), d.reportDesktopListener)
+		d.cfg.Server.EffectiveAppPort(), d.reportDesktopListener, fatal)
 	return nil
 }
 
-// reportDesktopListener writes a desktop app listener problem to smd.log, and nowhere else
-// (operator ruling 2026-11-11): before C2 it never reaches errCh.
+// reportDesktopListener writes a desktop app listener or operating credential problem to
+// smd.log, and nowhere else (operator ruling 2026-11-11). It is never fatal.
 func (d *daemon) reportDesktopListener(msg string, err error) {
 	ev := d.logger.WarnWith()
 	if err != nil {
 		ev = ev.Err(err)
 	}
 	ev.Msg(msg)
+}
+
+// failOperatingClientStart ends a daemon the operating-client check does not allow to run: at
+// the start, or later if the app listener stops with an error. The reason is logged here,
+// because errCh holds one error and the first one wins.
+func (d *daemon) failOperatingClientStart(err error) {
+	d.logger.ErrorWith().Err(err).Msg("the station cannot serve the desktop app; smd is stopping")
+	select {
+	case d.errCh <- err:
+	default:
+	}
+}
+
+// reportOperatingClientCheck states the check's state at every start, so a station running
+// without it is visible in smd.log.
+func (d *daemon) reportOperatingClientCheck(required bool) {
+	ev := d.logger.InfoWith().Bool("require_desktop_app", required)
+	if required {
+		ev.Msg("operating-client check: on; only the desktop app is served, with this install's operating credential")
+		return
+	}
+	ev.Msg("operating-client check: off; any client that can reach a listener is served")
 }
 
 func (d *daemon) httpStopAccepting() {

@@ -597,6 +597,16 @@ type ServerConfig struct {
 	// so writing the default would stop a downgrade from starting.
 	AppPort int `json:"app_port,omitempty"`
 
+	// RequireDesktopApp switches on the operating-client check (ADR 0102 ruling 1; W-0027
+	// C2): a request is served only on the desktop app's listener and only with the
+	// per-install operating credential; GET /v1/healthz is the one exception. Off by
+	// default, and temporary (operator ruling 2026-11-13): the key and its off state are
+	// removed once others can install the desktop app. Read at start, so a change takes
+	// effect at a restart. On, an unusable credential, identity or app port stops the start.
+	// False is never written (omitempty), so a file that never set it still starts on a
+	// build that does not know the key.
+	RequireDesktopApp bool `json:"require_desktop_app,omitempty"`
+
 	// AllowInsecureNetwork acknowledges the deliberately-insecure posture of a
 	// non-loopback TCP listener (ST-3a — docs/reviews/internal-security-trust-boundary-audit.md).
 	// A TCP bind on any address that is not recognisably loopback — a specific

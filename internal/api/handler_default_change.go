@@ -35,7 +35,7 @@ var DefaultChangeRoutesReleased = true
 
 // registerDefaultChangeRoutes registers the default logbook's change at an
 // attended restart (ADR 0097), only when released.
-func (s *Server) registerDefaultChangeRoutes(apiMux *http.ServeMux) {
+func (s *Server) registerDefaultChangeRoutes(apiMux *routeMux) {
 	if !DefaultChangeRoutesReleased {
 		return
 	}

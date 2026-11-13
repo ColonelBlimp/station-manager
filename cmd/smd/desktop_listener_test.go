@@ -87,7 +87,7 @@ func waitSignal(t *testing.T, ch chan struct{}, what string) {
 
 func TestDesktopListener_StartsAndServes(t *testing.T) {
 	f, r := newFake(), newAppReports()
-	startDesktopListener(f, ensureReturning(desktopid.Durable, nil), "/wd", 8443, r.report)
+	startDesktopListener(f, ensureReturning(desktopid.Durable, nil), "/wd", 8443, r.report, nil)
 	waitSignal(t, f.served, "ServeApp")
 	if len(f.bound) != 1 || f.bound[0] != 8443 {
 		t.Fatalf("bound = %v, want [8443]", f.bound)
@@ -100,7 +100,7 @@ func TestDesktopListener_StartsAndServes(t *testing.T) {
 func TestDesktopListener_RefusedIdentity_NoListenerReported(t *testing.T) {
 	f, r := newFake(), newAppReports()
 	refusal := errors.New("desktopid.Load: /wd/desktop-identity/key.pem has mode 0644, want 0600")
-	startDesktopListener(f, ensureReturning(desktopid.Durable, refusal), "/wd", 8443, r.report)
+	startDesktopListener(f, ensureReturning(desktopid.Durable, refusal), "/wd", 8443, r.report, nil)
 	got := r.all()
 	if len(got) != 1 || !strings.Contains(got[0].msg, "identity") || got[0].err != refusal {
 		t.Fatalf("reports = %+v; want one naming the identity, carrying the refusal (which names the file)", got)
@@ -112,7 +112,7 @@ func TestDesktopListener_RefusedIdentity_NoListenerReported(t *testing.T) {
 
 func TestDesktopListener_UnconfirmedDurability_ReportedAndServes(t *testing.T) {
 	f, r := newFake(), newAppReports()
-	startDesktopListener(f, ensureReturning(desktopid.DurabilityUnconfirmed, nil), "/wd", 8443, r.report)
+	startDesktopListener(f, ensureReturning(desktopid.DurabilityUnconfirmed, nil), "/wd", 8443, r.report, nil)
 	waitSignal(t, f.served, "ServeApp")
 	got := r.all()
 	if len(got) != 1 || !strings.Contains(got[0].msg, "durab") {
@@ -123,7 +123,7 @@ func TestDesktopListener_UnconfirmedDurability_ReportedAndServes(t *testing.T) {
 func TestDesktopListener_BusyPort_ReportedNoServe(t *testing.T) {
 	f, r := newFake(), newAppReports()
 	f.bindErr = errors.New("listen tcp 127.0.0.1:8443: bind: address already in use")
-	startDesktopListener(f, ensureReturning(desktopid.Durable, nil), "/wd", 8443, r.report)
+	startDesktopListener(f, ensureReturning(desktopid.Durable, nil), "/wd", 8443, r.report, nil)
 	got := r.all()
 	if len(got) != 1 || !strings.Contains(got[0].msg, "8443") || got[0].err != f.bindErr {
 		t.Fatalf("reports = %+v; want one naming port 8443 with the bind error", got)
@@ -138,7 +138,7 @@ func TestDesktopListener_BusyPort_ReportedNoServe(t *testing.T) {
 func TestDesktopListener_ServeError_ReportedNotFatal(t *testing.T) {
 	f, r := newFake(), newAppReports()
 	f.serveErr = errors.New("api.ServeApp: accept failure")
-	startDesktopListener(f, ensureReturning(desktopid.Durable, nil), "/wd", 8443, r.report)
+	startDesktopListener(f, ensureReturning(desktopid.Durable, nil), "/wd", 8443, r.report, nil)
 	waitSignal(t, r.done, "the serve error report")
 	got := r.all()
 	if len(got) != 1 || got[0].err != f.serveErr {
@@ -356,7 +356,7 @@ func TestStartAppAfterBrowser_ACancelledStartNeverBindsTheApp(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		f := fakeStation{newFake(), fakeBrowserBind{done, true}}
-		startAppAfterBrowser(ctx, f, ensureReturning(desktopid.Durable, nil), "/wd", 8443, newAppReports().report)
+		startAppAfterBrowser(ctx, f, ensureReturning(desktopid.Durable, nil), "/wd", 8443, newAppReports().report, nil)
 		if len(f.bound) != 0 {
 			t.Fatalf("call %d: the app listener was bound although start-up was already cancelled", i)
 		}
@@ -367,7 +367,7 @@ func TestStartAppAfterBrowser_ACancelledStartNeverBindsTheApp(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	returned := make(chan struct{})
 	go func() {
-		startAppAfterBrowser(ctx, f, ensureReturning(desktopid.Durable, nil), "/wd", 8443, newAppReports().report)
+		startAppAfterBrowser(ctx, f, ensureReturning(desktopid.Durable, nil), "/wd", 8443, newAppReports().report, nil)
 		close(returned)
 	}()
 	cancel()
@@ -382,7 +382,7 @@ func TestStartAppAfterBrowser_BindsOnlyAfterTheBrowser(t *testing.T) {
 	done := make(chan struct{})
 	close(done)
 	f := fakeStation{newFake(), fakeBrowserBind{done, true}}
-	startAppAfterBrowser(context.Background(), f, ensureReturning(desktopid.Durable, nil), "/wd", 8443, newAppReports().report)
+	startAppAfterBrowser(context.Background(), f, ensureReturning(desktopid.Durable, nil), "/wd", 8443, newAppReports().report, nil)
 	waitSignal(t, f.served, "ServeApp")
 	if len(f.bound) != 1 {
 		t.Fatalf("bound = %v, want one bind after the browser's", f.bound)

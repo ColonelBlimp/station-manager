@@ -273,57 +273,90 @@ func ensureWith(root string, fs fsOps, now time.Time) (Identity, Durability, err
 	if err != nil {
 		return Identity{}, Durable, errors.New(op).WithErr(err)
 	}
-	root = real // from here on, only the resolved and checked path is used
-	dir := filepath.Join(root, DirName)
-	if _, err := os.Lstat(dir); !os.IsNotExist(err) {
-		id, lerr := loadAt(op, root) // exists (or unreadable): validate, never recreate
-		return id, Durable, lerr
-	}
-	// Creation is serialised by an exclusive lock, so a second creator never removes a
-	// first creator's directory in progress and never publishes over its result: under the
-	// lock it finds the published identity and loads it instead.
-	unlock, err := lockCreation(root)
+	// From here on, only the resolved and checked path is used.
+	durability, err := publishIfAbsent(op, real, identityUnit, fs, func() ([]unitFile, error) {
+		keyPEM, certPEM, gerr := generate(now)
+		if gerr != nil {
+			return nil, gerr
+		}
+		return []unitFile{{KeyName, keyPEM, 0o600}, {CertName, certPEM, 0o644}}, nil
+	})
 	if err != nil {
-		return Identity{}, Durable, errors.New(op).WithErr(err)
+		return Identity{}, Durable, err
 	}
-	defer unlock()
-	if _, err := os.Lstat(dir); !os.IsNotExist(err) {
-		id, lerr := loadAt(op, root)
-		return id, Durable, lerr
-	}
-	removeRemnants(root) // safe under the lock: no other creation is in progress
-
-	keyPEM, certPEM, err := generate(now)
-	if err != nil {
-		return Identity{}, Durable, errors.New(op).WithErr(err)
-	}
-	tmp, err := os.MkdirTemp(root, tmpPrefix) // created 0700
-	if err != nil {
-		return Identity{}, Durable, errors.New(op).WithErr(err)
-	}
-	if err := prepare(fs, tmp, keyPEM, certPEM); err != nil {
-		_ = os.RemoveAll(tmp)
-		return Identity{}, Durable, errors.New(op).WithMsg("the identity was not published").WithErr(err)
-	}
-	if err := fs.Rename(tmp, dir); err != nil {
-		_ = os.RemoveAll(tmp)
-		return Identity{}, Durable, errors.New(op).WithMsg("the identity was not published").WithErr(err)
-	}
-	durability := Durable
-	if err := fs.SyncDir(root); err != nil {
-		durability = DurabilityUnconfirmed // published and valid; only its durability is in doubt
-	}
-	id, err := loadAt(op, root)
+	id, err := loadAt(op, real) // existing or just published: validated, never recreated
 	return id, durability, err
 }
 
-// prepare writes and syncs both files, then syncs the prepared directory, in that order.
-func prepare(fs fsOps, tmp string, keyPEM, certPEM []byte) error {
-	for _, f := range []struct {
-		name string
-		data []byte
-		perm os.FileMode
-	}{{KeyName, keyPEM, 0o600}, {CertName, certPEM, 0o644}} {
+// unit is one protected directory this package publishes under the working directory: the
+// identity, and the operating credential beside it. Both are created by publishIfAbsent, so
+// they share one creation discipline rather than two copies of it.
+type unit struct {
+	dir       string // the published directory's name
+	tmpPrefix string // the prefix of its prepared, not yet published, directories
+	noun      string // what an error calls it
+}
+
+var identityUnit = unit{dir: DirName, tmpPrefix: tmpPrefix, noun: "identity"}
+
+// unitFile is one file of a unit, written with exactly this mode.
+type unitFile struct {
+	name string
+	data []byte
+	perm os.FileMode
+}
+
+// publishIfAbsent creates u under root, a path already resolved and checked by trustedRoot,
+// unless it is there already. It never validates, repairs or replaces what exists: the caller
+// loads the unit afterwards, whichever way it came to exist.
+//
+// Creation is serialised by an exclusive lock, so a second creator never removes a first
+// creator's directory in progress and never publishes over its result: under the lock it
+// finds the published unit and leaves it. The content is made only once creation is certain.
+// The unit is written and synced in a private temporary directory, published with a single
+// rename, and the parent synced. A failure before the rename publishes nothing; if only the
+// final sync fails, the unit is published with its durability unconfirmed.
+func publishIfAbsent(op errors.Op, root string, u unit, fs fsOps, content func() ([]unitFile, error)) (Durability, error) {
+	dir := filepath.Join(root, u.dir)
+	if _, err := os.Lstat(dir); !os.IsNotExist(err) {
+		return Durable, nil // exists (or unreadable): the caller validates it
+	}
+	unlock, err := lockCreation(root)
+	if err != nil {
+		return Durable, errors.New(op).WithErr(err)
+	}
+	defer unlock()
+	if _, err := os.Lstat(dir); !os.IsNotExist(err) {
+		return Durable, nil
+	}
+	removeRemnants(root, u.tmpPrefix) // safe under the lock: no other creation is in progress
+
+	files, err := content()
+	if err != nil {
+		return Durable, errors.New(op).WithErr(err)
+	}
+	tmp, err := os.MkdirTemp(root, u.tmpPrefix) // created 0700
+	if err != nil {
+		return Durable, errors.New(op).WithErr(err)
+	}
+	notPublished := "the " + u.noun + " was not published"
+	if err := prepare(fs, tmp, files); err != nil {
+		_ = os.RemoveAll(tmp)
+		return Durable, errors.New(op).WithMsg(notPublished).WithErr(err)
+	}
+	if err := fs.Rename(tmp, dir); err != nil {
+		_ = os.RemoveAll(tmp)
+		return Durable, errors.New(op).WithMsg(notPublished).WithErr(err)
+	}
+	if err := fs.SyncDir(root); err != nil {
+		return DurabilityUnconfirmed, nil // published and valid; only its durability is in doubt
+	}
+	return Durable, nil
+}
+
+// prepare writes and syncs each file, then syncs the prepared directory, in that order.
+func prepare(fs fsOps, tmp string, files []unitFile) error {
+	for _, f := range files {
 		p := filepath.Join(tmp, f.name)
 		if err := fs.WriteFile(p, f.data, f.perm); err != nil {
 			return err
@@ -335,7 +368,9 @@ func prepare(fs fsOps, tmp string, keyPEM, certPEM []byte) error {
 	return fs.SyncDir(tmp)
 }
 
-// lockFile is held, exclusively, for the whole of a creation.
+// lockFile is held, exclusively, for the whole of a creation. The identity and the operating
+// credential share it: each creation is brief, and one lock means neither can remove the
+// other's work in progress.
 const lockFile = ".desktop-identity.lock"
 
 // lockCreation takes the creation lock under root (an owner-only file, created if needed) and
@@ -380,10 +415,10 @@ func checkLock(path string, fi os.FileInfo) error {
 	return nil
 }
 
-// removeRemnants removes unpublished temporary directories this user left behind (a crash or
-// failure before the rename). It runs only under the creation lock, so it never removes a
-// creation in progress. Nothing else is touched.
-func removeRemnants(root string) {
+// removeRemnants removes one unit's unpublished temporary directories that this user left
+// behind (a crash or failure before the rename). It runs only under the creation lock, so it
+// never removes a creation in progress. Nothing else is touched.
+func removeRemnants(root, tmpPrefix string) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return

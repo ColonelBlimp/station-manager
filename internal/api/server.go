@@ -89,6 +89,12 @@ type Server struct {
 	limits          *loadLimiter
 	kit             *httpkit.Kit
 	protocol        string
+	// The operating-client check (W-0027 C2; operating_client.go). requireDesktopApp is
+	// fixed when the server is built; the matcher is set once, before serving.
+	requireDesktopApp   bool
+	operatingCredential atomic.Pointer[func(presented string) bool]
+	// declaredRoutes is every pattern registered at construction (DeclaredRoutes).
+	declaredRoutes []string
 	// ft8ApplyTestGap, when non-nil, runs ONCE between the config snapshot and
 	// the sequencer apply in applyCommittedFt8MaxRepeats — the deterministic
 	// interleaving point for the stale-apply race test (codex 2026-08-08 P2).
@@ -227,6 +233,7 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 		limits:                   newLoadLimiter(cfg.Server.MaxConcurrentRequests, cfg.Server.MaxEventSubscribers, cfg.Server.SubmitRatePerSec, cfg.Server.SubmitRateBurst),
 		kit:                      httpkit.New(logger, cfg.Server.MaxBodyBytes),
 		protocol:                 cfg.Server.Protocol,
+		requireDesktopApp:        cfg.Server.RequireDesktopApp,
 		defaultPageLimit:         cfg.Server.DefaultPageLimit,
 		maxPageLimit:             cfg.Server.MaxPageLimit,
 		maxContactHistoryResults: cfg.Server.MaxContactHistoryResults,
@@ -234,8 +241,9 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 		shutdownCh:               make(chan struct{}),
 	}
 
-	mux := http.NewServeMux()
+	mux := newRouteMux()
 	apiMux := s.registerRoutes(mux, cfg, logger, br, ft8Svc)
+	s.declaredRoutes = append(append([]string(nil), apiMux.patterns...), mux.patterns...)
 
 	// Middleware chain — outermost first:
 	//   securityHeaders   — browser-trust headers on EVERY response, incl. 403/500 (ST-2)
@@ -244,12 +252,15 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 	//   limitConcurrent   — non-SSE concurrent-request cap
 	//   recoverPanic      — panic safety net + structured panic log
 	//   requireSameOrigin — Host allowlist (all methods) + Origin (unsafe methods)
+	//   requireOperatingClient — the operating-client check (W-0027 C2): default deny
+	//                       when server.require_desktop_app is on; a pass-through when off.
+	//                       In front of the router, so of every route, page and stream
 	//   apiRouter         — dispatches /v1/* to apiMux (re-emitting unmatched-route
 	//                       404/405 as the JSON envelope, AW-4) and everything else to
 	//                       mux; both carry their own per-route middleware like
 	//                       limitSubmitRate / limitEventSubscribers
 	s.httpServer = &http.Server{
-		Handler: s.securityHeaders(s.logRequests(s.rejectWhenDraining(s.limitConcurrent(s.recoverPanic(s.requireSameOrigin(s.apiRouter(apiMux, mux))))))),
+		Handler: s.securityHeaders(s.logRequests(s.rejectWhenDraining(s.limitConcurrent(s.recoverPanic(s.requireSameOrigin(s.requireOperatingClient(s.apiRouter(apiMux.ServeMux, mux.ServeMux)))))))),
 		// net/http writes its own diagnostics — accept errors, TLS handshake
 		// failures, and panics on paths recoverPanic does not wrap — through
 		// ErrorLog. Left nil it falls back to log.Default(), i.e. stderr, so those
@@ -314,10 +325,10 @@ func (s *Server) notifyArchiveSummary() {
 	}
 }
 
-func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *logging.Service, br *bridge.Service, ft8Svc *ft8.Service) *http.ServeMux {
+func (s *Server) registerRoutes(mux *routeMux, cfg config.Config, logger *logging.Service, br *bridge.Service, ft8Svc *ft8.Service) *routeMux {
 	// apiMux owns the /v1/ namespace only — never the SPA catch-all — so its built-in
 	// 404/405 classification (and Allow header) stay accurate.
-	apiMux := http.NewServeMux()
+	apiMux := newRouteMux()
 
 	// QSO — POST /v1/qso carries the hottest per-endpoint cap (token
 	// bucket). See docs/v2-design/api.md §6 for the threat model.

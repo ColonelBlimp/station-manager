@@ -73,3 +73,29 @@ func (c *statusCapture) WriteHeader(status int) {
 }
 
 func (c *statusCapture) Write(b []byte) (int, error) { return len(b), nil }
+
+// routeMux is a ServeMux that remembers every pattern registered on it. Every route is
+// declared through one, so the server can list them all (DeclaredRoutes): the ones built from
+// constants, registered by a helper, or present only when a subsystem is enabled included.
+type routeMux struct {
+	*http.ServeMux
+	patterns []string
+}
+
+func newRouteMux() *routeMux { return &routeMux{ServeMux: http.NewServeMux()} }
+
+func (m *routeMux) Handle(pattern string, h http.Handler) {
+	m.patterns = append(m.patterns, pattern)
+	m.ServeMux.Handle(pattern, h)
+}
+
+func (m *routeMux) HandleFunc(pattern string, h func(http.ResponseWriter, *http.Request)) {
+	m.patterns = append(m.patterns, pattern)
+	m.ServeMux.HandleFunc(pattern, h)
+}
+
+// DeclaredRoutes lists the patterns of every route this server registered, API and pages
+// alike, as "METHOD /path". It is the inventory the operating-client check is tested against.
+func (s *Server) DeclaredRoutes() []string {
+	return append([]string(nil), s.declaredRoutes...)
+}

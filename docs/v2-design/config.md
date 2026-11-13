@@ -115,7 +115,18 @@ silently dropped. A key an older daemon wrote must be consumed by a migration.
   8443, with no setting that disables it. Its default is resolved, never written, because an older
   daemon refuses a key it does not know. An explicit value is kept by `config-downgrade`, so it must
   be removed by hand before an older build starts (`docs/install.md` §7). It binds only after
-  the browser listener holds its port. Restart-required; and
+  the browser listener holds its port. Restart-required;
+- `require_desktop_app`, default false: the switch for the operating-client check (ADR 0102;
+  W-0027 C2a; `api-endpoints.md`, Conventions). On, only the desktop app listener is served,
+  and only with this install's operating credential; `GET /v1/healthz` stays open. It is
+  temporary (operator ruling 2026-11-13): the key and its off state are removed once others can
+  install the desktop app. Read at start, so restart-required. On, an unusable operating
+  credential, a refused desktop identity or an app port that cannot be bound stops the start,
+  and the app listener stopping with an error later ends `smd`; off, each is only reported in
+  `smd.log`. `smd` logs the check's state at every start. False
+  is never written. An explicit `true` must be removed by hand before a build that does not
+  know the key starts (`docs/install.md` §7). Until the desktop app sends the credential
+  (W-0027 C2b), switching this on locks the app out as well; and
 - `allow_insecure_network`, a file-only acknowledgement described in §5.1.
 
 ### 3.2 Identity, station, and QSL blocks

@@ -2152,3 +2152,110 @@ can still call the API, or hold an FT8 stream open and keep TX armed.
    off?
 5. On design point 7: is reading A a fair statement of what the design already gives, and is
    there a second-client case it leaves open that does not need C4?
+
+### C2a — the daemon's side of the check (built 2026-11-13; uncommitted, awaiting review)
+
+Built on the operator's direction ("commit the brief and start C2a"), test-first. The switch is
+off by default, so an installed build behaves as before until it is switched on.
+**Do not switch it on yet:** the desktop app does not send the credential until C2b, so the check
+would lock the app out too.
+
+**What exists now.**
+- **The credential** (`internal/desktopid/credential.go`): `desktop-credential/credential` in the
+  working directory, directory `0700`, file `0600`. The file's whole content is the value: 43
+  base64url characters for 32 random bytes, no line break. It is validated on every use and
+  refused, never repaired. No error and no formatting of it prints the value; `smd` holds only a
+  constant-time comparison.
+- **Shared creation.** The identity's creation was factored into one function that both units
+  use (`publishIfAbsent` in `desktopid.go`): the same lock, the same sync barriers, the same
+  single rename. The identity's own tests were the characterisation and pass unchanged, bar one
+  test helper that now names either unit's prepared directory.
+- **The check** (`internal/api/operating_client.go`): one middleware after the Host and Origin
+  guard and before the router. On, it serves `GET /v1/healthz`, or a request from the app
+  listener with exactly one `X-SM-Operating-Credential` header that matches. Everything else is
+  `403 desktop_app_required`. The header is removed before any handler runs, in both states.
+- **The switch:** `server.require_desktop_app`, read when the server is built. False is never
+  written to the file.
+- **The start** (`cmd/smd`): the credential is made at every start, in both states. On, an
+  unusable credential, a refused identity or an app port that cannot be bound ends the start,
+  and so does the app listener stopping with an error later.
+  The error goes down the path a failed browser bind already takes, so the daemon stops in order
+  and an archive activation in flight is not blamed for it. Until it is down, nothing but the
+  health check is served. After a credential failure the server holds no credential. After an
+  identity or bind failure it holds one, but there is no app listener to present it on, and
+  the main listener refuses it. Off, each problem is only reported, as before.
+- **The start report:** one line in `smd.log` at every start saying whether the check is on.
+- **The route inventory:** every route is registered through a mux that records its pattern
+  (`DeclaredRoutes`), so the test sweeps the server's own list.
+- **References updated in the same change:** `docs/v2-design/config.md`,
+  `docs/v2-design/api-endpoints.md`, and the downgrade note in `docs/install.md`.
+
+**Not in C2a, by the brief's parts:** the shell sending the credential (C2b); the notice, the
+two tools and the user-facing documents (C2c); switching it on at the station (C2d). A browser
+on the main listener with the check on gets the JSON refusal until C2c adds the notice.
+
+**Evidence.**
+- **The credential unit:** 26 tests: creation and reuse; one credential per install; independence
+  from the identity, in either creation order; every refusal (missing, unexpected file, 11
+  malformed contents, modes, owners, symlinks, a replaceable ancestor), each naming the path,
+  changing nothing and never quoting the file; the creation barriers in order, each failing
+  barrier, unconfirmed durability; 8 concurrent creators; a creation in progress; publication
+  over an existing credential; a swapped alias.
+- **The check:** the rule against a stub handler (27 cases across on and off, both listeners, the
+  exception and its near misses, and a server with nothing loaded). Then the assembled server on
+  both real listeners with the rig, FT8, profiling, page and manual surfaces all registered:
+  **78 of the 79 declared routes, 7 requests each**, are refused with the check's own code; the
+  79th is the health check, tested for an unchanged answer. Each request has a valid Host and
+  Origin, so no other guard could have refused it. A refused FT8 subscription adds no
+  subscriber, and the same test shows an admitted one is counted. With the credential, a page, a
+  request, a mutation, an SSE stream and a WebSocket are served. Refusals are logged without any
+  value.
+- **The daemon:** through the real lifecycle graph, in temporary directories on free ports: the
+  check enforced with the install's own credential on both listeners (the main one a Unix
+  socket); each of the three start-up errors reaching the fatal path with its path or port
+  named; after a refused credential, a protected request refused on both listeners while the
+  start is ending; and the check off leaving every problem a report.
+- **Reversion proofs: 41, every one caught.** Each breaks one rule (a mode not checked, the
+  check out of the chain, the switch not read, a credential in the log, a start-up error only
+  reported, and so on) and a named test fails for it.
+  - The first run was serial and in the working tree, and took about an hour. Three of its 39
+    were not proofs: two hung (with the check removed, the sweep reached a served WebSocket and
+    waited on it until the ten-minute limit) and one did not compile.
+  - The sweep's helper now reports anything but a `403` without reading its body, so a failure
+    is prompt. Those three, and all 15 of the API server's, were then rerun in temporary copies
+    of the repository, in parallel: 16 of 16 caught in under a minute, the working tree
+    untouched.
+  - The serve-error ruling added two proofs; with it, all 11 of the daemon's were rerun the
+    same way: 11 of 11 caught in 25 seconds.
+  - The two proofs that remove the check run the real handlers behind it. The fixture's rig and
+    FT8 services are enabled but never started, so no rig command or audio capture is possible.
+- **Gates, on the final tree:** `go build ./...`, `go vet ./...`, `go test ./...`, the four
+  changed packages under `-race`, `golangci-lint` (0 issues), the maintainability gate (0
+  regressions), `task docs:check`.
+
+**Deviations and open points, for review.**
+1. **A Station Event at every start is not built. Closed by the operator, 2026-11-13:**
+   "Station Events are going to be retired for something more useful. If you look at the
+   current list of events, they are not useful in any way". The log line stands, and C2 adds
+   no Station Event. The station's list bears that out: seven events between 2026-10-21 and
+   2026-11-07 and none since; five are `tx.disarmed` (four with the cause `dial_moved`, which
+   a band change produces), one `forward.failed`, one `archive.activated`. What follows is the
+   reasoning as first written. The brief said the state is reported in the
+   log and as a Station Event. Only the log line is built. With the check off by default and
+   not usefully switchable until C2b, an event at every start would tell the operator something
+   they cannot act on, which two earlier rulings speak against (2026-09-13, false alarms;
+   2026-09-15, no unactionable instructions). The 2026-11-11 ruling also made the listener's
+   reports log-only. Whether and from which part the event appears is the operator's to rule.
+2. **A serve error on the app listener, with the check on. Ruled by the operator, 2026-11-13:**
+   "yes, end the daemon". Built the same day, test-first: with the check on, the app listener
+   stopping with an error ends `smd` by the same path as the start-up errors, and the bundled
+   unit's `Restart=on-failure` brings it back (five failures in 120 seconds stop the unit). A
+   clean stop is not an error; with the check off it stays a report. The point as first
+   written: it was only reported. ADR 0103
+   rules the bind and the identity; it does not rule a listener that fails later. The station
+   would then refuse every client until restarted. Whether that should end the daemon, so its
+   service manager restarts it, is the operator's to rule.
+3. **The route inventory is a small production change made for the test** (a recording mux,
+   about 20 lines). The alternative was a source scan, which misses routes built from constants.
+4. **`internal/api` does not import `internal/desktopid`:** the server is handed a comparison
+   function, so the package's import boundary is unchanged.
