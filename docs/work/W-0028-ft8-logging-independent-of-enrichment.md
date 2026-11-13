@@ -8,7 +8,8 @@ built and its code review is complete (codex-098):** a lookup starts when a cont
 the result only if it has already answered. The first version keyed the handoff by callsign;
 codex-095 found that a later contact with the same station reused the old result, so it is now
 keyed by a per-contact identity (claude-188, codex-096). Acceptance item 5, the operator's
-station test run, follows the deploy.
+station test run, was done and accepted on 2026-11-13. Criteria 1 to 4 rest on the reviewed
+tests (codex-098). Closing the dossier is the operator's decision.
 **Outcome:** a completed FT8/FT4 exchange is always stored at once, whatever the lookup
 services do. Enrichment that arrives during the exchange is used; enrichment that has not
 arrived is left for a later edit.
@@ -93,7 +94,8 @@ Consequences:
    - **Limits of that evidence:** the outage was short, so one completion and one pick fell
      inside it; the database rows and the upload queue were not inspected; a delay under one
      second would not show in the log.
-   - **Verdict:** the operator's, not yet given.
+   - **Verdict: accepted (operator, 2026-11-13).** Asked whether this run meets the offline
+     test or a longer outage is wanted first, the operator answered "1 - yes": it meets it.
 
 **Nearest confusable outcome:** a shorter lookup budget that still waits before the write. That
 stops the deadline from expiring, but it still delays logging, so the ruling rejects it.
