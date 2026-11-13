@@ -1744,3 +1744,65 @@ does not prove those behaviours by itself.
    about the view-only listener; the ADRs are amended only on that ruling.
 
 Nothing here authorizes building C2 or removing anything.
+
+### Inventory: what a desktop-only client lets us remove or leave unbuilt (2026-11-13)
+
+**Operator (chat):** "commit the docs and do the inventory". Read-only: measured in the tree at
+`50c04880` with `grep`, `wc` and `awk`; nothing was changed, built or run. Line counts include
+comments. Each row names the behaviour the code owns, what would have to replace it, and the
+evidence that would allow its removal.
+
+**1. Work that would not be built: the view-only classification.**
+- `internal/api` registers about 77 production routes by literal method and path: 36 `GET`
+  (four of them event streams: `/v1/events`, `/v1/ft8/events`, `/v1/rig/events`,
+  `/v1/station-events`), 36 `POST`, 2 `PUT`, 2 `PATCH`, 2 `DELETE`. Routes registered another
+  way would add to that.
+- A view-only class needs an entry and a test for each, and a judgment for those where the
+  method does not settle it. About ten of the latter:
+  - reads with side effects or demand: `GET /v1/ft8/events` (capture demand and presence),
+    `GET /v1/rig/events`, `GET /v1/enrich/callsign` (upstream lookups on the station's
+    accounts, and cache writes);
+  - reads of sensitive or operational state: `GET /v1/config`, `GET /v1/hardware`,
+    `GET /v1/evidence/status`, `GET /debug/pprof/*`;
+  - posts that only read or generate: `POST /v1/session/export`, `POST /v1/contest-serial`.
+- With a desktop-only C2 this is one default-deny gate and a short exception list. The
+  operating-subscription rule is still needed either way.
+
+**2. Existing code, candidate by candidate.**
+
+| Candidate | Size | Behaviour it owns | Replacement needed | Evidence that allows removal | Verdict |
+|---|---|---|---|---|---|
+| The browser listener's bind (`Server.ListenAndServe`, tcp or Unix socket; `socket_path`) | about 40 lines, plus `cmd/smd/desktop_listener.go:54` | Serves the UI and API to anything on 8080 | The app listener (exists, 8443). A path for the tools below | The tools run against the app listener or their own path; the desktop installs and launches (D1 to D6) | **Removable later** |
+| The same-origin guard for that listener (`requireSameOrigin`, `hostAllowed`, `tcpBindHost`, `originAllowed` in `internal/api/csrf.go`) | about 95 of 246 lines; tests 169 lines, shared with the app guard | DNS-rebinding and cross-origin defence for a listener a browser can reach | `requireAppOrigin` stays for the app listener | The listener it guards is gone | **Removable with the listener** |
+| Consumers of 8080: the Vite proxy (`frontend/app/vite.config.ts`), `scripts/ukeicc-cabrillo.py` (331 lines), `cmd/loadgen` (484), `scripts/tune-duration-probe.sh` (134), the deploy script's port check | config and call sites only | Development and operator tools over HTTP | Each tool presents the credential or uses a named local path; no broad loopback exemption | Each tool shown working without 8080 | **To migrate, not delete** |
+| `beforeunload` warning (`lib/config/unsaved.ts`) | about 30 of 220 lines | Warns before a tab with unsaved settings is closed | The shell's close confirmation (ADR 0102 ruling 6) | The app asks before closing with unsaved settings | **Conditional** |
+| Anchor download (`lib/api/session-export.ts`) | about 10 of 111 lines | Saves an exported file through the browser | A native Save dialog from the shell | Export saved through the shell in the installed app | **Conditional** |
+| New-tab links (`target="_blank"`, 4 uses in 3 files) | a few lines | Opens the Manual and external links in another tab | The Manual window and the default-browser handler (the shell already routes `window.open`) | A2's Manual window exists | **Conditional** |
+| Cross-tab UI sync (`'storage'` listener in `lib/ui/state.svelte.ts`) | one listener | Keeps theme and rail width in step across tabs | Nothing, with one main window; A2's windows need a decision | A2's state-sharing rule | **Conditional** |
+| Per-tab Session list (`lib/operate/session.svelte.ts`, sessionStorage) | 154 lines | The Session list and its persistence | ADR 0100's daemon-owned session | ADR 0100 built and accepted | **Replace, then remove** |
+| Subscriber presence and linger (`internal/ft8/service.go`, `onSubscriberAdded` to `onLingerExpired`) | about 100 lines | Capture demand, the grace, the unattended disarm | C2's rule for which subscription is the operator's | n/a | **Stays; the admission rule changes** |
+| Request guards (`internal/api/archive_guard.go`, 72 lines; `default_guard.go`, 150) | 222 lines | Refuse an action aimed at an archive or default the window does not show | n/a | n/a | **Stays** |
+| Stream revival (`lib/api/sse-reviving.ts`, 119 lines; `socket-reviving.ts`, 162) | 281 lines | Reopens a dead stream after a network or visibility change | n/a | An Electron assessment showing a case cannot occur | **Stays** |
+| Other window-local state (sessionStorage in `archiveStores`, `callsignStack`, `ft8`, `SessionTimer`; localStorage in 9 files) | 41 uses | Drafts, picks, panel and display preferences | n/a | n/a | **Stays** |
+
+- **Not found:** no service worker, no `BroadcastChannel` outside a test fixture, no
+  `window.open`. The tab-coordination machinery of ADR 0085 is already gone (ADR 0087).
+- **Documentation to revise if the browser path is retired:** `docs/install.md` (4 mentions of
+  the 8080 address), `docs/architecture.md`, `docs/ft8.md`, `docs/smcloud-deploy.md`, and seven
+  manual chapters that mention the browser or the port.
+
+**3. The answer in numbers.**
+- Removable once its prerequisites are met: about 135 lines of daemon code (the browser bind
+  and its origin guard) and about 50 lines of SPA code, with their tests. That is of the order
+  of 200 lines against about 136,000 lines of non-test code.
+- Replaced by other planned work, not saved: 154 lines (the Session list).
+- Staying: about 600 lines that were on the earlier list (the guards, the revival rules, the
+  presence code).
+- **So retiring the browser does not shrink the codebase in any way that matters.** What a
+  desktop-only C2 buys is on the other side: about 77 route classifications, about ten
+  judgments and their tests that are never written, one kind of UI client to reason about,
+  and, eventually, one listener.
+
+**Limits.** Counts are from text searches, so a route or a browser dependency registered in a
+way the searches do not match is missed. Sizes are of whole functions or files, not of what a
+careful removal would leave. Nothing was assessed inside Electron.
