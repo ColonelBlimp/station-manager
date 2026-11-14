@@ -355,3 +355,4 @@ implementation authorisation; the operator's decisions are marked under each ite
 - [2026-11-13] Station Events are going to be retired for something more useful. If you look at the current list of events, they are not useful in any way
    - **What the station's list held when this was logged (read-only look, 2026-11-13):** seven events between 2026-10-21 and 2026-11-07 and none since. Five are `tx.disarmed` (four with the cause `dial_moved`, which a band change produces; one `cat_lost`), one `forward.failed` with no outcome, one `archive.activated`. Of the eleven kinds in the catalogue, three have ever appeared. Nothing records a daemon start or stop, a failed deploy or a lookup outage.
    - **Standing:** `docs/backlog.md` still lists W-0020 (Station Events) as selected work. W-0027 C2 adds no Station Event (its dossier, C2a section).
+- [2026-11-14] scrollbars: [Image #1]
