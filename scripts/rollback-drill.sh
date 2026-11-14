@@ -292,6 +292,10 @@ PY
     rm -f "$outf"; exit 3
   elif [ "$rc" = 0 ]; then
     KNOWS=1
+  # The wording matched here is config-check's refusal as builds before 2026-11-14 print it. Only
+  # a build without server.app_port can give this answer, and every such build is older than that
+  # (the key arrived on 2026-11-11, a27adce7), so the later report wording ("config-check FAILED",
+  # "    - server.app_port") never has to match: a build that prints it knows the key and exits 0.
   elif [ "$rc" = 1 ] && grep -q 'has 1 unrecognised configuration key' "$outf" && grep -qx '  server.app_port' "$outf"; then
     KNOWS=0
   else

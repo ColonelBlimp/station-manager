@@ -90,7 +90,10 @@ func TestRunConfigCheck_RefusesUnconstructableForwarderWithoutValues(t *testing.
 }
 
 // PIN 3 — a file that passes all three stages exits 0 and states the parity and
-// its boundary: it does not claim the whole daemon would start.
+// its boundary: it does not claim the whole daemon would start. The report is a
+// short list, one fact per line (operator, 2026-11-14: the one long sentence
+// "is not easy to read"). The nearest confusable outcome is a tidy report that
+// drops the boundary, so both "Not checked" items are pinned.
 func TestRunConfigCheck_SuccessStatesParityAndBoundary(t *testing.T) {
 	p := writeCheckConfig(t, `{"version":3,"forwarders":[
 		{"name":"smcloud","type":"smcloud","enabled":true,
@@ -99,10 +102,103 @@ func TestRunConfigCheck_SuccessStatesParityAndBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("config-check refused a valid file: %v", err)
 	}
-	for _, want := range []string{"no unrecognised keys", "loads and validates", "1 enabled forwarder", "Not checked: databases, listeners"} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("output %q lacks %q", out, want)
+	want := "config-check: passed\n" +
+		"  File: " + p + "\n" +
+		"  Checked:\n" +
+		"    - no unrecognised keys\n" +
+		"    - the file loads and validates as startup would\n" +
+		"    - 1 enabled forwarder constructs (legacy entries)\n" +
+		"  Not checked:\n" +
+		"    - upload destinations: each archive holds its own, checked at startup\n" +
+		"    - databases, listeners and other runtime dependencies\n"
+	if out != want {
+		t.Fatalf("report:\n%s\nwant:\n%s", out, want)
+	}
+}
+
+// The count line says what it counted in plain words for none, one and several.
+// None is the ordinary case from config version 6.
+func TestRunConfigCheck_SuccessWordsTheForwarderCount(t *testing.T) {
+	// One entry per destination type, so "several" needs two types.
+	cloud := `{"name":"smcloud","type":"smcloud","enabled":true,"credentials":{"url":"https://cloud.example","token":"t"}}`
+	qrz := `{"name":"qrz","type":"qrz","enabled":true,"credentials":{"api_key":"k"}}`
+	for _, c := range []struct{ forwarders, want string }{
+		{``, "    - no forwarder is enabled, so none was constructed (legacy entries)\n"},
+		{cloud, "    - 1 enabled forwarder constructs (legacy entries)\n"},
+		{cloud + "," + qrz, "    - 2 enabled forwarders construct (legacy entries)\n"},
+	} {
+		out, err := runCheck(t, writeCheckConfig(t, `{"version":3,"forwarders":[`+c.forwarders+`]}`))
+		if err != nil {
+			t.Fatalf("config-check refused a valid file: %v", err)
 		}
+		if !strings.Contains(out, c.want) {
+			t.Fatalf("report %q lacks %q", out, c.want)
+		}
+	}
+}
+
+// Every line of a report is short enough to read at a glance, apart from the two
+// that carry text this command does not own: the path and the daemon's diagnostic.
+func TestRunConfigCheck_ReportsAreShortLines(t *testing.T) {
+	short := func(t *testing.T, text string) {
+		t.Helper()
+		for _, line := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
+			owned := !strings.HasPrefix(line, "  File: ") && !strings.HasPrefix(line, "  Reason: ")
+			if owned && len(line) > 80 {
+				t.Fatalf("line of %d characters: %q", len(line), line)
+			}
+		}
+	}
+	out, err := runCheck(t, writeCheckConfig(t, `{"version":3}`))
+	if err != nil {
+		t.Fatalf("config-check refused a valid file: %v", err)
+	}
+	short(t, out)
+	for _, body := range []string{
+		`{"version":3,"typo_key":true,"another_typo":1}`,
+		`{"version":3,"forwarders":[{"name":"qrzcq","type":"qrzcq","action_filter":["insert","update"]}]}`,
+		`{"version":3,"forwarders":[{"name":"smcloud","type":"smcloud","enabled":true,"credentials":{"url":"http://h.invalid:1","token":"t"}}]}`,
+	} {
+		_, err := runCheck(t, writeCheckConfig(t, body))
+		if err == nil {
+			t.Fatalf("config-check passed %s", body)
+		}
+		short(t, err.Error())
+	}
+}
+
+// A refusal reads like a pass: a verdict line, the file, then the reason on a
+// line of its own. The reason is the daemon's own diagnostic, unchanged.
+func TestRunConfigCheck_RefusalsAreReportsToo(t *testing.T) {
+	head := func(p string) string {
+		return "config-check FAILED: startup would refuse this file\n  File: " + p + "\n  Reason: "
+	}
+	p := writeCheckConfig(t, `{"version":3,"typo_key":true,"another_typo":1}`)
+	_, err := runCheck(t, p)
+	want := head(p) + "2 unrecognised configuration keys (values omitted):\n    - another_typo\n    - typo_key"
+	if err == nil || err.Error() != want {
+		t.Fatalf("unknown keys:\n%v\nwant:\n%s", err, want)
+	}
+	p = writeCheckConfig(t, `{"version":3,"only_typo":true}`)
+	_, err = runCheck(t, p)
+	want = head(p) + "1 unrecognised configuration key (values omitted):\n    - only_typo"
+	if err == nil || err.Error() != want {
+		t.Fatalf("one unknown key:\n%v\nwant:\n%s", err, want)
+	}
+	p = writeCheckConfig(t, `{"version":3,"forwarders":[
+		{"name":"qrzcq","type":"qrzcq","action_filter":["insert","update","delete"]}]}`)
+	_, err = runCheck(t, p)
+	want = head(p) + `invalid config (invalid_forwarder): forwarder "qrzcq": type "qrzcq" does not support action "update" (supports [insert])`
+	if err == nil || err.Error() != want {
+		t.Fatalf("validation:\n%v\nwant:\n%s", err, want)
+	}
+	p = writeCheckConfig(t, `{"version":3,"forwarders":[
+		{"name":"smcloud","type":"smcloud","enabled":true,
+		 "credentials":{"url":"http://canary-remote-host.invalid:8080","token":"CANARY-TOKEN-8f3a"}}]}`)
+	_, err = runCheck(t, p)
+	want = head(p) + `forwarder "smcloud" is enabled but its credentials are incomplete or invalid; check its settings (forwarder_unusable)`
+	if err == nil || err.Error() != want {
+		t.Fatalf("forwarder:\n%v\nwant:\n%s", err, want)
 	}
 }
 
