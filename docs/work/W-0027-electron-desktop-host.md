@@ -2153,7 +2153,7 @@ can still call the API, or hold an FT8 stream open and keep TX armed.
 5. On design point 7: is reading A a fair statement of what the design already gives, and is
    there a second-client case it leaves open that does not need C4?
 
-### C2a — the daemon's side of the check (built 2026-11-13; uncommitted, awaiting review)
+### C2a — the daemon's side of the check (built 2026-11-13; committed 90db4857)
 
 Built on the operator's direction ("commit the brief and start C2a"), test-first. The switch is
 off by default, so an installed build behaves as before until it is switched on.
@@ -2260,7 +2260,7 @@ on the main listener with the check on gets the JSON refusal until C2c adds the 
 4. **`internal/api` does not import `internal/desktopid`:** the server is handed a comparison
    function, so the package's import boundary is unchanged.
 
-### C2b — the shell presents the credential (built 2026-11-13; uncommitted, awaiting review)
+### C2b — the shell presents the credential (built 2026-11-13; committed a1cc8128)
 
 Built on the operator's direction ("commit C2a and start C2b"), test-first. C2a is committed as
 `90db4857`. With this part, the desktop app can pass the check; the check itself is still off
@@ -2360,7 +2360,7 @@ told.
    The shell offers no reload and the SPA navigates in the page, so this is not reachable in
    normal use; it is not handled.
 
-### C2c — the notice, the tools and the documents (built 2026-11-13; uncommitted, awaiting review)
+### C2c — the notice, the tools and the documents (built 2026-11-13; committed dfbd90b8)
 
 Built on the operator's direction ("commit C2b and the inbox note, start C2c"). C2b is committed
 as `a1cc8128` and the inbox note as `d17c0308`. The check is still off by default and **is not
