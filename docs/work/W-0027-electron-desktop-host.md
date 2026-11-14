@@ -2490,6 +2490,10 @@ before any request is written.
 5. **The confinement needs Landlock with network rules** (Linux 6.7 or later). It is measured on
    this machine; on CI it is unproven until the first run there, and a runner without it turns
    the step red by design.
+   **Update 2026-11-14: proved on the hosted runner.** CI run 43474487129 (on `df958caa`,
+   2026-11-13, completed: success) ran `python3 -I scripts/tune_probe_test.py` and its log shows
+   "Ran 14 tests" and "OK". The 14 include the three `Confinement` tests, and the file runs no
+   test where the confinement cannot be entered, so the runner has Landlock with network rules.
 6. **The probe is no longer run against a listener or a real `smd` by any test** (after
    codex-115). That is the price of a boundary with nothing allowed. The probe's requests and
    the client's transport are each tested; their joint is the command line, checked against the
