@@ -228,3 +228,79 @@ describe('SessionPanel callsign search', () => {
         expect(screen.queryByText(/No QSOs logged/)).toBeNull();
     });
 });
+
+/*
+  The Session list never scrolls sideways (operator, dogfood 2026-11-13).
+
+  Measured in the desktop app's Chromium (Electron 44), not here: jsdom lays
+  nothing out. Once the list is long enough to scroll down, the vertical
+  scrollbar takes 12px of the list's 630px (the w-2xl card less its padding and
+  border). The table has a fixed layout and a width of 100%, so it is wider than
+  that space only when the columns that state a width add up to more than it.
+  When all eight stated one they added up to 628px against the 618px left, and
+  the list scrolled sideways by 10px.
+
+  So what this pins is the arrangement that cannot overflow: Name and Country
+  state no width and share whatever is left, and the six that do state one leave
+  them room. The nearest wrong fix hides the sideways overflow instead, which
+  cuts the Country column off at the panel's edge.
+*/
+describe('SessionPanel list width', () => {
+    const LIST_WIDTH_WITH_SCROLLBAR = 618; // px, measured: 672 card - 40 padding - 2 border - 12 bar
+    const SPACING = 4; // px per Tailwind width unit (w-20 = 80px)
+
+    const header = (name: string): HTMLElement => screen.getByRole('columnheader', { name });
+    const statedWidth = (el: Element): number | null => {
+        const m = /(?:^|\s)w-(\d+)(?:\s|$)/.exec(el.className);
+        return m ? Number(m[1]) * SPACING : null;
+    };
+
+    beforeEach(() => {
+        addSessionQso({
+            callsign: 'W1ABC',
+            timeOn: '14:30:00',
+            band: '20m',
+            mode: 'FT8',
+            rstSent: '-15',
+            rstRcvd: '-18',
+            name: 'Alexandr Gazizovich Verylongname',
+            country: 'Bosnia-Herzegovina',
+            comment: '',
+        });
+        render(SessionPanel);
+    });
+
+    it('lays the table out by its header widths, as wide as the list', () => {
+        const table = screen.getByRole('table');
+        expect(table).toHaveClass('table-fixed', 'w-full');
+    });
+
+    it('lets Name and Country share the space the other columns leave', () => {
+        expect(statedWidth(header('Name'))).toBeNull();
+        expect(statedWidth(header('Country'))).toBeNull();
+    });
+
+    it('keeps the stated column widths within the list beside its scrollbar', () => {
+        const stated = screen
+            .getAllByRole('columnheader')
+            .map(statedWidth)
+            .filter((w): w is number => w !== null);
+        expect(stated).toHaveLength(6);
+        const total = stated.reduce((a, b) => a + b, 0);
+        // Name and Country get what is left; 100px each still reads.
+        expect(total).toBeLessThanOrEqual(LIST_WIDTH_WITH_SCROLLBAR - 200);
+    });
+
+    it('cuts a long name or country short with an ellipsis rather than widening the table', () => {
+        for (const text of ['Alexandr Gazizovich Verylongname', 'Bosnia-Herzegovina']) {
+            const cell = screen.getByText(text);
+            expect(cell).toHaveClass('overflow-hidden', 'text-nowrap', 'text-ellipsis');
+            expect(statedWidth(cell)).toBeNull();
+        }
+    });
+
+    it('does not hide sideways overflow, which would cut the last column off', () => {
+        const list = screen.getByRole('table').parentElement as HTMLElement;
+        expect(list.className).not.toMatch(/overflow-(x-)?(hidden|clip)/);
+    });
+});

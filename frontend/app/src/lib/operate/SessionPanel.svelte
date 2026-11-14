@@ -93,7 +93,12 @@
                 <!-- table-fixed: truncate on a td only works when column widths BIND —
                      auto layout grows cells to fit content and ignores w-* as a cap,
                      so long names/countries stretched the table instead of ellipsizing
-                     (dogfood 2026-07-18). Fixed layout takes widths from the th row. -->
+                     (dogfood 2026-07-18). Fixed layout takes widths from the th row.
+                     Name and Country state NO width: they share what the other six
+                     leave, so the table is exactly as wide as the list. With a width
+                     on all eight the columns added up to 628px, 10px more than the
+                     618px beside the vertical scrollbar, and the list scrolled
+                     sideways (dogfood 2026-11-13; measured in Electron 44). -->
                 <table class="w-full table-fixed">
                     <thead class="bg-surface sticky top-0 z-10">
                         <tr class="text-xs text-muted text-left font-medium">
@@ -105,8 +110,8 @@
                             <th class="w-14">Mode</th>
                             <th class="w-10">Sent</th>
                             <th class="w-10">Rcvd</th>
-                            <th class="w-32">Name</th>
-                            <th class="w-32">Country</th>
+                            <th>Name</th>
+                            <th>Country</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -131,10 +136,8 @@
                                 <td class="w-14">{q.mode}</td>
                                 <td class="tabular-nums">{q.rstSent}</td>
                                 <td class="tabular-nums">{q.rstRcvd}</td>
-                                <td class="w-32 overflow-hidden text-nowrap text-ellipsis"
-                                    >{q.name}</td
-                                >
-                                <td class="w-32 overflow-hidden text-nowrap text-ellipsis pl-1"
+                                <td class="overflow-hidden text-nowrap text-ellipsis">{q.name}</td>
+                                <td class="overflow-hidden text-nowrap text-ellipsis pl-1"
                                     >{q.country}</td
                                 >
                             </tr>
