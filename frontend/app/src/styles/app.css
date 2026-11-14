@@ -114,6 +114,38 @@ html[data-theme='dark'] {
     }
 }
 
+/* --- Scrollbars (app-wide) --------------------------------------------------
+   The desktop app is Chromium, whose own scrollbar is a wide, light track with
+   arrow buttons whatever the theme. The operator asked for the look the app had
+   in Firefox (2026-11-14): a narrow bar, no buttons, a rounded thumb drawn on
+   the surface itself. Chromium gives that only through these pseudo-elements,
+   written with no selector so every scroller gets them, the window's included.
+   Set NO scrollbar-width or scrollbar-color, here or in a component: with
+   either on an element Chromium ignores these rules and draws its own bar,
+   arrows and all (measured in Electron 44, Chromium 152; scrollbars.test.ts).
+   Firefox ignores these rules and keeps its own scrollbars. */
+::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+    background: transparent;
+}
+::-webkit-scrollbar-thumb {
+    /* The transparent border insets the thumb: 6px of colour in a 12px bar. */
+    border: 3px solid transparent;
+    border-radius: 9999px;
+    background-color: color-mix(in oklab, var(--color-muted) 50%, transparent);
+    background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+    background-color: color-mix(in oklab, var(--color-muted) 75%, transparent);
+}
+::-webkit-scrollbar-thumb:active {
+    background-color: var(--color-muted);
+}
+
 /* --- Left nav rail + collapse (full <-> icon rail) -------------------------
    --sidebar-w resizes both the fixed sidebar and the content offset; narrow
    hides labels and centres the icons. Driven by [data-nav] on <html>. */
