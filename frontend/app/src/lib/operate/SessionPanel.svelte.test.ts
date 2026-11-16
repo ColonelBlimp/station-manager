@@ -304,3 +304,68 @@ describe('SessionPanel list width', () => {
         expect(list.className).not.toMatch(/overflow-(x-)?(hidden|clip)/);
     });
 });
+
+/*
+  A long callsign stays in its own column (operator, 2026-11-16: "widen to 136 px
+  with the ellipsis backstop").
+
+  Measured in Electron 44: at the list's 14px medium weight, 13-character
+  callsigns drew between 113px and 133px (VP8/SP9ABC/MM, KH0/WA6MWM/MM) and ran
+  over the Band column, because the column was 108px and its cell neither
+  wrapped nor clipped. The column is now 136px. Anything wider still is cut
+  short with an ellipsis, in the cell and in the edit button inside it, and the
+  whole callsign is in the tooltip. jsdom lays nothing out, so these pin that
+  arrangement; the widths were measured separately.
+*/
+describe('SessionPanel long callsigns', () => {
+    const LONG = 'KH0/WA6MWM/MM';
+    const row = (uuid?: string) => ({
+        uuid,
+        callsign: LONG,
+        timeOn: '14:30:00',
+        band: '160m',
+        mode: 'FT8',
+        rstSent: '-15',
+        rstRcvd: '-18',
+        name: '',
+        country: '',
+        comment: '',
+    });
+    const CLIPPED = ['overflow-hidden', 'text-nowrap', 'text-ellipsis'];
+
+    it('gives the Callsign column 136px', () => {
+        addSessionQso(row('u-1'));
+        render(SessionPanel);
+        expect(screen.getByRole('columnheader', { name: 'Callsign' })).toHaveClass('w-34');
+    });
+
+    it('cuts an editable callsign short inside its cell, never over the next column', () => {
+        addSessionQso(row('u-1'));
+        render(SessionPanel);
+        const button = screen.getByRole('button', { name: LONG });
+        // The button is the box that overflows, so it is the one that must be
+        // held to the cell's width and clipped.
+        expect(button).toHaveClass('max-w-full', ...CLIPPED);
+        expect(button.closest('td')).toHaveClass(...CLIPPED);
+    });
+
+    it('cuts a plain-text callsign short too', () => {
+        addSessionQso(row(undefined));
+        render(SessionPanel);
+        expect(screen.getByText(LONG).closest('td')).toHaveClass(...CLIPPED);
+    });
+
+    it('keeps the whole callsign readable in the tooltip, with the edit hint', () => {
+        addSessionQso(row('u-1'));
+        render(SessionPanel);
+        const title = screen.getByRole('button', { name: LONG }).getAttribute('title') ?? '';
+        expect(title.startsWith(LONG)).toBe(true);
+        expect(title).toMatch(/edit this QSO/i);
+    });
+
+    it('keeps the whole callsign readable in the tooltip of a plain-text row', () => {
+        addSessionQso(row(undefined));
+        render(SessionPanel);
+        expect(screen.getByText(LONG).closest('td')).toHaveAttribute('title', LONG);
+    });
+});

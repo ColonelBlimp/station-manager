@@ -103,9 +103,10 @@
                     <thead class="bg-surface sticky top-0 z-10">
                         <tr class="text-xs text-muted text-left font-medium">
                             <th class="w-20">Time</th>
-                            <th class="w-27 overflow-x-hidden text-nowrap text-ellipsis"
-                                >Callsign</th
-                            >
+                            <!-- 136px: the widest 13-character callsigns measured drew 133px
+                                 at this weight (KH0/WA6MWM/MM); at the earlier 108px they ran
+                                 over Band (operator, 2026-11-16). -->
+                            <th class="w-34">Callsign</th>
                             <th class="w-12">Band</th>
                             <th class="w-14">Mode</th>
                             <th class="w-10">Sent</th>
@@ -118,12 +119,21 @@
                         {#each shownQsos as q (q.id)}
                             <tr class="border-b text-sm border-line-soft text-ink last:border-0">
                                 <td class="tabular-nums">{q.timeOn}</td>
-                                <td class="font-medium">
+                                <!-- The backstop for a callsign wider than its column: cut
+                                     short with an ellipsis, never drawn over Band, with the
+                                     whole callsign in the tooltip. The button is an inline
+                                     box of its own, so it is held to the cell's width and
+                                     clipped itself; align-bottom keeps the row's height, which
+                                     a clipped inline box would otherwise change. -->
+                                <td
+                                    class="overflow-hidden font-medium text-nowrap text-ellipsis"
+                                    title={q.callsign}
+                                >
                                     {#if q.uuid}
                                         <button
                                             type="button"
-                                            class="cursor-pointer hover:underline"
-                                            title="Edit this QSO (stays on this page — the FT8 run keeps going)"
+                                            class="max-w-full cursor-pointer overflow-hidden align-bottom text-nowrap text-ellipsis hover:underline"
+                                            title="{q.callsign} — edit this QSO (stays on this page; the FT8 run keeps going)"
                                             onclick={() => void sessionEdit.open(q)}
                                         >
                                             {q.callsign}
