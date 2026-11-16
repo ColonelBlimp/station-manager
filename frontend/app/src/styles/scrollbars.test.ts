@@ -52,3 +52,58 @@ describe('app-wide scrollbars', () => {
         expect(offenders).toEqual([]);
     });
 });
+
+// The two pages the app does not style (operator, 2026-11-16: "All scrollbars
+// should match"). The manual is one self-contained file and the desktop app's
+// waiting page loads nothing, so neither can share app.css: each carries its
+// own copy of the rules, with the theme's muted colour written out. This holds
+// the copies to the original. The manual has a light theme only; the waiting
+// page follows the system's light or dark setting.
+describe('the manual and the waiting page carry the same scrollbars', () => {
+    const repo = fileURLToPath(new URL('../../../../', here));
+    // Without comments or whitespace, and without the optional last semicolon of a
+    // rule, so each page may lay its copy out in its own way.
+    const squash = (text: string): string =>
+        withoutComments(text).replace(/\s+/g, '').replace(/;\}/g, '}');
+    const pages = {
+        manual: squash(readFileSync(`${repo}manual/layouts/index.html`, 'utf8')),
+        waiting: squash(readFileSync(`${repo}desktop/src/waiting.mjs`, 'utf8')),
+    };
+
+    // The theme's muted colour, as app.css states it: light first, then dark.
+    const muted = [...withoutComments(css).matchAll(/--color-muted:\s*([^;]+);/g)].map((m) =>
+        m[1].replace(/\s+/g, '')
+    );
+    const [light, dark] = muted;
+    const thumbs = (colour: string): string =>
+        '::-webkit-scrollbar-thumb{border:3pxsolidtransparent;border-radius:9999px;' +
+        `background-color:color-mix(inoklab,${colour}50%,transparent);background-clip:content-box}` +
+        `::-webkit-scrollbar-thumb:hover{background-color:color-mix(inoklab,${colour}75%,transparent)}` +
+        `::-webkit-scrollbar-thumb:active{background-color:${colour}}`;
+
+    it('reads a light and a dark muted colour from the theme', () => {
+        expect(muted).toHaveLength(2);
+        expect(light).not.toEqual(dark);
+    });
+
+    it.each(Object.entries(pages))('%s: the same bar, track and thumb shape', (_name, page) => {
+        expect(page).toContain('::-webkit-scrollbar{width:12px;height:12px}');
+        expect(page).toContain(
+            '::-webkit-scrollbar-track,::-webkit-scrollbar-corner{background:transparent}'
+        );
+        expect(page).toContain(thumbs(light));
+    });
+
+    it('waiting: the dark thumb under the system dark setting', () => {
+        expect(pages.waiting).toMatch(
+            new RegExp(
+                '@media\\(prefers-color-scheme:dark\\)\\{[^@]*' +
+                    thumbs(dark).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+            )
+        );
+    });
+
+    it.each(Object.entries(pages))('%s: no standard scrollbar property', (_name, page) => {
+        expect(page).not.toMatch(/scrollbar-(width|color):/);
+    });
+});

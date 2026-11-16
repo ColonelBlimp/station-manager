@@ -78,3 +78,22 @@ test('the shell\u2019s probe asks /v1/version and is recognised only by its own 
         assert.ok(!isShellProbe(other), other);
     }
 });
+
+// Operator, 2026-11-16: "All scrollbars should match". The waiting page loads nothing, so it
+// carries its own copy of the app's scrollbar rules; frontend/app/src/styles/scrollbars.test.ts
+// holds the copy to the app's. Here: every form of the page the shell generates has them.
+test('every form of the waiting page carries the scrollbar rules', () => {
+    const forms = [
+        waitingPageUrl('https://127.0.0.1:8443'),
+        waitingPageUrl(null, { state: 'waiting', path: '/p', reason: 'r' }),
+        waitingPageUrl(null, { state: 'refused', path: '/p', reason: 'r' }),
+        waitingPageUrl(null, { state: 'refused', subject: 'credential', path: '/p', reason: 'r' }),
+        waitingPageUrl('https://127.0.0.1:8443', { state: 'unaccepted' }),
+    ];
+    for (const u of forms) {
+        const p = page(u);
+        assert.ok(p.includes('::-webkit-scrollbar{width:12px;height:12px}'), p);
+        assert.ok(p.includes('::-webkit-scrollbar-thumb{'), p);
+        assert.ok(!/scrollbar-(width|color)\s*:/.test(p), 'a standard scrollbar property is set');
+    }
+});

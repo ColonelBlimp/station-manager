@@ -74,6 +74,10 @@ export function waitingPageUrl(origin, detail = null) {
         detail && !unaccepted
             ? `<p data-sm-reason>${escapeHtml(detail.reason)}</p><p><small data-sm-path>${escapeHtml(detail.path)}</small></p>`
             : '';
+    // The scrollbar rules are the app's (frontend/app/src/styles/app.css), copied because this
+    // page loads nothing; the two colours are the theme's muted grey, light and dark. They are
+    // held to the app's by frontend/app/src/styles/scrollbars.test.ts. Never set scrollbar-width
+    // or scrollbar-color here; with either, Chromium ignores these rules and draws its own bar.
     const html = `<!doctype html><html lang="en"><meta charset="utf-8">
 <title>Station Manager</title>
 <style>
@@ -82,6 +86,17 @@ export function waitingPageUrl(origin, detail = null) {
  @media (prefers-color-scheme:dark){body{background:#101828;color:#e7e9ee}}
  .box{text-align:center;max-width:32rem;padding:2rem}
  h1{font-size:1.1rem;margin:0 0 .5rem} p{margin:.25rem 0;opacity:.75} small{word-break:break-all}
+ ::-webkit-scrollbar{width:12px;height:12px}
+ ::-webkit-scrollbar-track,::-webkit-scrollbar-corner{background:transparent}
+ ::-webkit-scrollbar-thumb{border:3px solid transparent;border-radius:9999px;
+      background-color:color-mix(in oklab,oklch(55.1% 0.027 264.364) 50%,transparent);background-clip:content-box}
+ ::-webkit-scrollbar-thumb:hover{background-color:color-mix(in oklab,oklch(55.1% 0.027 264.364) 75%,transparent)}
+ ::-webkit-scrollbar-thumb:active{background-color:oklch(55.1% 0.027 264.364)}
+ @media (prefers-color-scheme:dark){
+  ::-webkit-scrollbar-thumb{border:3px solid transparent;border-radius:9999px;
+      background-color:color-mix(in oklab,#99a1af 50%,transparent);background-clip:content-box}
+  ::-webkit-scrollbar-thumb:hover{background-color:color-mix(in oklab,#99a1af 75%,transparent)}
+  ::-webkit-scrollbar-thumb:active{background-color:#99a1af}}
 </style>
 <div class="box" data-sm-waiting data-sm-state="${escapeHtml(detail?.state ?? 'waiting')}">
  <h1>${escapeHtml(title)}</h1>
