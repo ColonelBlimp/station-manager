@@ -2537,3 +2537,503 @@ evidence; that they came from `curl` is not something the log records.
   removal is the later brief named above.
 
 **Next:** C4 (presence). ADR 0100's build needs C2d, C4 and a brief.
+
+### C4 brief — the operator's presence (2026-11-17; ruled; reviewed, no blocking finding)
+
+Started on the operator's direction ("Start on C4"). It is a design for review by the operator
+and Codex before any code. Where it proposes a rule, a name or a value, that is a proposal: the
+questions at the end are the operator's to rule. They are ruled (below). Codex then reviewed
+the design (codex-124) and it was revised; the two points that changed after the rulings were
+put to the operator again and are ruled too. A second review (codex-125) changed three more
+things inside what had been accepted; they were put as questions 8 to 10 and are ruled too.
+A third review (codex-126) corrected the admission retry and the division of the parts, and
+showed a consequence of the always-accepted disarm, which was put as question 11 and is ruled.
+A fourth review (codex-127) found nothing blocking. Building C4a waits for the operator's
+direction.
+
+**Outcome the operator sees.** With the check on, FT8 and FT4 in the desktop app work as they do
+today: arm, call or answer, complete, log. Leaving the FT8 view, closing the app or losing it
+to a failure disarms TX and stops the run after the same short grace as today. Two things are
+new. Only the app's own FT8 view keeps TX armed: another program of the operator's that reads
+the FT8 stream no longer does. And an app that has just been started never finds TX armed or a
+run in progress from the start before it. With the check off, nothing changes from today.
+The rule is not FT8's alone: any scope in which the daemon can transmit by itself is held by
+presence in that scope, FT8 and FT4 being the only such scopes today (ruled below).
+
+**Nearest confusable outcome:** TX disarms when the app leaves in the ordinary case, exactly as
+it does today, while a stream held by some other program still keeps it armed, or a restarted
+app inherits an armed TX inside the grace.
+
+**What is already ruled.**
+- Closing the main window stops the FT8 run and disarms TX, and only the operating desktop app
+  counts as presence (ADR 0102 ruling 6).
+- The daemon must name the one subscription that carries the app's presence, and its loss
+  stops and disarms through the existing guaranteed-stop controller. The credential alone does
+  not define that. A normal close, an app or renderer failure and a reconnect stay distinct.
+  Presence is a connection signal, not proof that a person is at the desk (ADR 0102,
+  requirements; its "Update 2026-11-13").
+- Restoring the workspace never restores operation: no TX armed and no FT8 run at start
+  (ADR 0102, requirements).
+- The accepted limit: `smd` cannot tell the app from another program of the operator's own
+  user that reads the credential, and no machinery is added to exclude one (ADR 0102 ruling 1;
+  C2 brief, point 7).
+- Each app lifetime, from start to exit, has its own identity, presented with its
+  authenticated connection, so the daemon can tell a reconnect of the same app from a new
+  start (ADR 0100 §3, *App lifetimes*; Accepted 2026-11-13). ADR 0100's build depends on it.
+- FT8 sessions are operator-initiated; a decode is not a QSO (project rules).
+
+**Ruled on this brief (operator, chat, 2026-11-17).**
+- On question 2 (the scope of presence): "Scope, if we add RTTY and it is in unattended
+  operation, that scope (or any other scope) should be covered."
+  - **What that rules:** presence is not a rule for FT8 only. Any scope of operation in which
+    the daemon can transmit without the operator acting for each transmission must be held by
+    presence in that scope. FT8 and FT4 are the only such scopes built; RTTY is the operator's
+    example of one that may be added.
+  - **Claude's reading:** "scope" is the unit, so presence stays with each scope's own view,
+    as it is with the FT8 view today, and is not the app as a whole. Leaving the FT8 view for
+    Settings still disarms after the grace. Confirmed by the ruling that follows.
+  - **What it changes here:** design points 3 and 9, as now numbered, and the question of
+    where the per-scope logic lives. No RTTY operation is designed or built by C4.
+- On all six questions, after that revision: "1 - 6 accepted as is". So, as the brief stands:
+  1. the grace stays 5 s;
+  2. presence is per scope, with the scope's own view;
+  3. tune is left as it is: its own auto-off is its stop, and losing the app does not end it;
+  4. a new app start inside the grace disarms at once, with the cause `unattended`;
+  5. an arm needs presence, and is refused without it;
+  6. the app-lifetime identity is built here, in C4.
+  - On question 3 the brief put two outcomes and proposed neither in so many words; "as is"
+    is read as the brief's stated position, that C4 does not touch tune.
+  - The names (`X-SM-App-Lifetime`, `ft8_not_present`) and the form of the identity were
+    proposals in the brief and are accepted with it.
+- On the two points that changed after Codex's review (below), asked as "ruling 4's
+  mechanism" and "question 7": "1 - yes, 7 - inside internal/ft8". So:
+  - a new app start disarms at once through **admission at app start**, in any view (design
+    point 2), with its one new request and one new refusal;
+  - the per-scope presence logic is a helper **inside `internal/ft8`** until a second real
+    scope exists (design point 10, as now numbered).
+- On the three points that changed after Codex's second review (questions 8 to 10): "8 - yes,
+  9 - yes, 10 - yes". So:
+  - a replaced app is refused FT8 operation only, and a request with no lifetime cannot
+    operate FT8 at all (design point 3);
+  - a restarted daemon takes no lifetime without an admission, and the running app admits
+    again by itself (design point 2);
+  - an app left running across the C4 install cannot operate FT8 until it is restarted, and
+    is told so (design point 11). After Codex's third review this takes effect from C4a.
+- On question 11 (a stop is never refused): "11 - yes, keep it". A disarm is accepted from any
+  credentialed request, a replaced app's included, with the stated cost that such a disarm
+  arriving late ends what the new app is doing (design point 3).
+
+**Revised after Codex's review (codex-124, 2026-11-17).** Codex wrote before the six rulings
+and had not seen them.
+- **Its finding, which stands:** the brief's rule for a restarted app acted only when the new
+  app opened the FT8 stream, and only once the old app had no stream counted. Neither follows
+  from a restart: the new app may open on another view; `smd` may admit the new stream before
+  it sees the old one close; and the new FT8 view's profile claim is refused while the old arm
+  stands (`ClaimProfile`), so its stream may never open. Checked against the code and agreed.
+- **The change:** an admission step at app start, independent of the view (design point 2).
+  It replaces the old point 5. Ruling 4 is kept in substance and reaches further.
+- **Also changed:** the per-scope logic is proposed as a helper inside `internal/ft8`, not a
+  separate unit (point 9), and the synthetic second scope is dropped. Question 7 is new.
+- **Taken into the design and the evidence plan:** Codex's answers on the transmit paths, the
+  package boundary, the races, the check-off path and Electron's header hook.
+
+**Revised again after Codex's second review (codex-125, 2026-11-17).** Codex had the rulings
+this time and asked for none of them again. Its points, each checked and agreed:
+- **A retired lifetime could take admission back.** As written, a late or repeated admission
+  from the old app would have stopped the new one. Admission is now a read followed by an
+  admit against the generation that was read (design point 2).
+- **An old command could act under the new app's arm,** if it had passed the check at the
+  door before the replacement. The lifetime is now checked again inside the scope, where the
+  command takes effect, and a replacement seals before it stops (points 2 and 3).
+- **A restarted daemon** took the first lifetime it saw, which need not be the surviving
+  app's, and nothing made that app admit again. Now each daemon process is admitted to
+  afresh (point 2; question 9).
+- **Who is refused what** was unclear between "every route" and "any other subscription is
+  still served". Now only FT8 operation is refused (point 3; question 8).
+- **An app left running across the install** is still the old shell (ADR 0102 ruling 8). Its
+  behaviour is stated and tested (point 11; question 10).
+
+**Revised a third time after codex-126 (2026-11-17).** Each point checked and agreed:
+- **The stale-answer retry could undo the order.** A shell that was refused as stale read
+  again and admitted again, so a replaced app that was still running could take the station
+  back. Now a lifetime that has been replaced is remembered as retired and is refused for
+  good, and what the order does and does not promise is stated (point 2).
+- **C4a both accepted and refused the old shell.** Point 11 said it worked after C4a; the
+  parts said C4a refuses FT8 commands without the current lifetime. The parts were right and
+  point 11 is corrected: the old shell cannot operate FT8 from C4a on.
+- **More FT8 commands than the arm, the starts and the send change operation,** and several
+  reach the sequencer without the gate. C4a starts from an inventory of all of them (point 3).
+- **The daemon marker** is read when response headers arrive, and a differing marker is a
+  reason to ask the daemon, not proof of a restart (point 2).
+- **"Disarm can only stop" understated it:** a replaced app's late disarm can end the new
+  app's contact in progress. Stated in point 3, excepted in criterion 5, and put to the
+  operator as question 11.
+
+**Fourth review (codex-127, 2026-11-17): "No remaining blocking design findings in this
+revision."** It is agreement on the design, not a proof of behaviour and not a direction to
+build. Its answers add these constraints for C4a, each checked against the code:
+- **Retirement is recorded in the same step that publishes the replacement,** and a retired
+  answer ends the attempt in every admission path of the shell, the restarted-daemon path
+  included.
+- **"The one admitted last stands" is about who owns the station,** until a further admission
+  or a daemon restart. It does not promise that transmission continues: a disarm from anyone
+  still stops it (question 11).
+- **The gate is not taken twice.** The starts, the profile claim and abandon already hold
+  `seqGate`; the check goes inside that hold, or into a variant that is clearly the locked
+  one. The other commands commit under `txMu` or the sequencer's lock and are brought under
+  the gate at the service boundary, in the established order. The coordinator's own lock is
+  never held in an order that inverts a scope's.
+- **The inventory is of FT8 commands only.** Settings and its live configuration behaviour
+  stay served as ruled (question 8).
+- **The idle app:** the page opens its event stream once and never closes it
+  (`frontend/app/src/main.ts`, `openLogEvents`), and its retry does not wait for the window to
+  be visible (`socket-reviving.ts`). So a daemon restart the socket notices leads to a new
+  handshake. A frozen renderer, or a connection that has not yet signalled failure, tells the
+  shell nothing; the refusal of the next FT8 command is the other trigger. Nothing is polled.
+- **Still to be shown in C4a, not assumed:** that the main process sees a WebSocket
+  handshake's response headers, and the header after a renderer crash.
+
+**What exists today (read for this brief).**
+- **Presence is a count of FT8 streams.** Every `GET /v1/ft8/events` subscription adds one
+  (`internal/ft8/handler.go`, `Subscribe`; `profile_claim.go`, `SubscribeMode`). The same
+  count drives the audio capture device.
+- **It acts only on loss.** When the count reaches zero the daemon waits `captureLinger`, 5 s
+  (`service.go:21`). If no subscriber has returned it disarms TX with the cause `unattended`,
+  which aborts a transmission in flight, abandons the active contact and closes the output
+  device, and then it releases capture (`onLingerExpired`, `disarmTx`). A return inside the
+  5 s changes nothing.
+- **Arming does not ask for presence.** `armTx` checks the keyer, the rig's readiness, the
+  dial and the output device (`servicetx.go:148`), not the count. TX armed with no stream ever
+  opened is never disarmed by this rule, because nothing ever leaves.
+- **Whose stream it is, is not recorded.** With the check on, every subscriber holds the
+  credential; with it off, anyone who reaches the listener.
+- **In the app, the stream belongs to the FT8 view:** it opens when the view is shown and
+  closes when the view is left (`Ft8View.svelte`; ADR 0100 §4). The app is single-instance and
+  only that view opens the stream. A dead stream is revived only when it is seen to be dead,
+  never on a schedule (`frontend/app/src/lib/api/sse-reviving.ts`).
+- **The causes are already distinct in the record:** `operator`, `unattended`, `cat_lost`,
+  `shutdown`, `band_change`, `dial_moved` (`servicetx.go:317`). `unattended` is recorded as the
+  daemon ending an exchange (`sessionobserver.go`).
+- **The shell has one owner of request headers:** `desktop/src/credential.mjs` adds the
+  credential in `onBeforeSendHeaders`, to the pinned origin only. It has no lifetime identity.
+- **Tune is separate.** The tune carrier has its own guaranteed stop: a hard auto-off timer
+  and release when the rig disconnects (`internal/bridge/tune.go`). It shares the single-flight
+  claim with FT8 keying. Presence does not touch it today.
+
+**Proposed design** (revised after codex-124 and codex-125; what changed is listed above).
+
+1. **The app-lifetime identity (the shell).**
+   - At each start the shell's main process makes one random identity (16 bytes from the
+     system's generator, base64url). It is held in memory only and never written down. It is
+     a label, not a secret: the credential is what authenticates.
+   - It is presented as one request header (`X-SM-App-Lifetime`), added by the hook that
+     already adds the credential, under the same rules: only to the pinned origin, replacing
+     any header of that name already on the request, on every kind of request. There stays
+     one owner of that hook.
+   - Because it lives in the main process, a renderer reload or a renderer crash that is
+     reloaded keeps the identity; an app restart makes a new one. A second launch raises the
+     running app and so makes none.
+   - `smd` accepts a well-formed identity and refuses a malformed one (`400`). With the check
+     off it ignores the header, as it ignores the credential.
+
+2. **Admission (`smd` and the shell).** The start boundary codex-124 asked for, made ordered
+   and safe to repeat as codex-125 asked. It does not depend on which view the app opens.
+   - **What `smd` holds,** in memory, for one daemon process: the **current lifetime** and an
+     **admission generation**, a counter that goes up by one at each replacement. A daemon
+     that has just started has no current lifetime, generation zero, and nothing armed.
+   - **Two requests, both from the shell's main process** (proposed: `GET` and `POST
+     /v1/app/lifetime`). Both are answered for any request that passed the credential check,
+     whatever its lifetime.
+     - **Read:** the daemon's process marker (the one `/v1/version` already carries), the
+       generation, and whether the caller's lifetime is the current one.
+     - **Admit:** the caller sends back the marker and the generation it read.
+       - The caller is already current: success, nothing changes. A repeat, or a retry after
+         a lost answer, is therefore harmless.
+       - The caller has been replaced in this daemon process: refused for good (proposed:
+         `409 app_lifetime_retired`). `smd` remembers the lifetimes it has replaced, for as
+         long as the process runs.
+       - The marker or the generation is not the daemon's now: refused (proposed:
+         `409 app_admission_stale`). The current app is not touched.
+       - Otherwise the caller replaces the current lifetime (below) and the generation goes
+         up by one.
+   - **What the order promises, and what it does not** (codex-126, finding 1).
+     - Admissions are handled one at a time, and each succeeds only against the generation
+       it read. So successful admissions are in one order, and a request an earlier app had
+       already sent cannot succeed after a later admission.
+     - A lifetime that has been replaced never comes back: neither a repeat of its admission,
+       nor a retry after a lost answer, nor a fresh read can make it current again.
+     - It does **not** establish which of two shells was started later. A random label and a
+       read cannot. The supported app is single-instance, so two shells of one operator do
+       not run at once; if two did, the one admitted last would stand and the other would be
+       retired, whichever was started first.
+   - **The shell admits before it loads the workspace.**
+     - **Stale:** it reads again and admits again. This is what lets the running app get past
+       a dead app's admission that arrived late. Each repeat follows a definite answer; there
+       is no timer.
+     - **Retired:** the attempt ends. The app says that another start of Station Manager has
+       taken over and that it should be closed, and does not ask again.
+     - Any other failure is shown on the waiting page.
+     - Outside this step the shell does not ask for admission because something was refused.
+   - **Replacement, in this order, with no gap** (codex-125, finding 2):
+     1. **seal:** from this moment no new arm, start or send can be accepted for the old
+        lifetime, and its streams stop being presence, whether or not they have closed;
+     2. **stop:** every scope's operation is stopped by that scope's own stop path, with the
+        cause `unattended`, and the stop is waited for. A contact already earned still
+        finishes logging; nothing here waits for the old streams to close;
+     3. **publish:** the new lifetime becomes current, and the admit is answered.
+     Between 1 and 3 no lifetime is current, so the old one cannot arm again and the new one
+     cannot arm early.
+   - **Each daemon process is admitted to afresh** (codex-125, on a restarted daemon). The
+     shell keeps its lifetime across a daemon restart and admits again to the new process.
+     Until it has, the app reads and logs as before, and cannot operate FT8. `smd` never
+     takes a lifetime as current without an admission, and a new process has no retired
+     lifetimes.
+     - **How the shell learns of it:** `smd` puts its process marker on its responses to the
+       app (a header, proposed), and the main process reads it when the headers arrive, not
+       when the response ends, since a stream may never end. No listener owns that event
+       today; the owners of the other request events stay as they are.
+     - **A different marker is a reason to ask, not proof.** A late response from the old
+       process can arrive after the new one has been admitted to. So the shell then does the
+       read, and the read decides: admit only if this process has not admitted it.
+     - Only responses from the pinned origin count; attempts in progress are joined, not
+       repeated; and the admission requests' own responses start nothing.
+     - **An app that is silent learns nothing,** and nothing is polled. The workspace keeps
+       its event stream open in every view, and that stream's reconnection after a restart
+       is a response from the new process; so is the refusal of an FT8 command. That the
+       main process sees both is to be shown by test, not assumed.
+   - This is not ADR 0100's session attachment: nothing is stored, and no session is opened
+     or closed. ADR 0100's start and exit reports can be built on it.
+
+3. **Who is refused what** (codex-125, its first detail). With the check on:
+   - **Operating a scope needs the current lifetime.** Every FT8 command that can start,
+     resume or alter operation is accepted only when the request carries the current
+     lifetime. The check is made again **inside the scope, under the gate that a replacement
+     takes, held until the command has taken effect**, not only when the request arrives. So
+     a command of the old app that was already on its way cannot act under the new app's arm.
+     Refusal: `409 app_lifetime_not_current`.
+   - **Which commands, from an inventory, not from memory** (codex-126). Today's FT8 routes
+     that change state are fifteen: the profile claim, arm, send, the start of a contact and
+     of working a caller, the exchange path, abandon, stopping an auto-work run, skip, next,
+     and for Call CQ start, pick, bag, unbag and resume. Several reach the sequencer without
+     the gate a replacement would take (`NextAnswerer`, for one). C4a begins by listing each
+     route against the place its effect is committed, and puts the check under the gate
+     through that commit. A check that passes and then lets go before the scope acts is the
+     defect of codex-125 again.
+   - **Disarm is the one exception: it is always accepted,** from any credentialed request,
+     so that a stop is never refused. It starts no transmission. It is not without effect:
+     a disarm of the old app that arrives late ends whatever the new app is doing, an
+     unfinished contact included (a contact already earned is still logged). Ruled: kept
+     (question 11).
+   - **Nothing else is refused for its lifetime.** Reading, logging a contact, settings and
+     every stream are served as before, for the current lifetime, a retired one, or none. A
+     contact the old app was logging when it was replaced is still logged.
+   - **A request with no lifetime** (the operator's tools) can read and log; it cannot
+     operate FT8, and its streams are not presence.
+   - **A transmission already authorised** belongs to the arm it started under and ends with
+     it. It never passes to the new lifetime.
+
+4. **Scopes and their operating subscription (`smd`).**
+   - **A scope** is a kind of operation in which the daemon can transmit by itself once the
+     operator has started it. FT8 and FT4 are one scope, the only one built.
+   - **Each scope names one stream as its presence:** its own event stream, opened by its own
+     view. For FT8 that is `GET /v1/ft8/events`.
+   - With the check on, the operator's presence in a scope is an open subscription to that
+     stream whose request carried the lifetime that is current now. It is judged at the
+     moment it matters: a stream opened before its lifetime was admitted counts once it is,
+     and a stream of a replaced lifetime stops counting at once.
+   - With the check on, the count that drives audio capture decides capture only. It no
+     longer decides presence by itself.
+   - Points 5 to 7 are stated for FT8 and are the rule for every scope: read "arm" as
+     whatever lets that scope transmit by itself.
+
+5. **Presence is required to arm, not only missed when lost.** With the check on, a new arm
+   is accepted only from the current lifetime (point 3) and only while it has an operating
+   subscription open. Otherwise it is refused (`409 ft8_not_present`). The check and the arm
+   are one step under the gate that the stop paths take, so an arm cannot slip in beside a
+   stop.
+   - A run needs an arm: all seven sequenced starts pass `sessionTxGate`, and a manual send
+     reaches `startTransmission`, which refuses when TX is not armed (codex-124, answer 1).
+   - A repeated arm while already armed stays what it is today, accepted and changing
+     nothing. It does not extend the grace.
+
+6. **Loss.** When the current lifetime has had no operating subscription for the grace (5 s,
+   ruled), the daemon disarms with `unattended`, by the path it uses today. A return inside
+   the grace changes nothing. The decision at the end of the grace is tied to the arm it was
+   made for: a timer that fires late never disarms a later arm (codex-124, answer 3).
+
+7. **One stop path.** Every case above ends in the existing `disarmTx`: the transmission in
+   flight is aborted with PTT guaranteed down, the active contact is abandoned, and a contact
+   already complete is still logged (FT8 invariant 1). C4 adds no second way to key or unkey
+   and exposes no new TX command.
+
+8. **The three cases the ADR wants kept distinct.**
+   - **Reconnect:** the current lifetime returns inside the grace. Nothing changes.
+   - **Failure:** the app or its renderer dies, or the view's stream is lost. The grace runs,
+     then `unattended`. A restarted app is point 2: its admission stops what was running.
+   - **Normal close:** the app asks for the disarm itself, after the operator confirms, and
+     waits for it before it exits. That request exists today (`operator`); the confirmation
+     and the wait are A3, built on this.
+
+9. **With the check off,** nothing changes from today: any subscriber is presence, it acts on
+   loss only, an arm needs no presence, and the lifetime header and admission do nothing.
+   Today's code path is kept for it, and its behaviour is pinned by tests of its own. The off
+   state exists for development, load generation and scratch daemons, and goes with the
+   switch.
+
+10. **A later scope is covered by the same rule** (ruled: question 2, which requires the
+    coverage; how the code is shared is ruled in question 7).
+    - **What is already shared, by its nature:** the lifetime and admission belong to the
+      app, not to FT8. A replacement seals and stops every scope through a list of scope
+      boundaries, and a new scope adds its own to that list. That coordinator is handed the
+      scopes' boundaries; `internal/ft8` imports nothing of the API, the configuration or
+      session storage for it.
+    - **The per-scope part** (which streams are presence, the grace, the arm) is a focused
+      helper inside `internal/ft8`, with nothing of FT8 in its logic, and is moved out when a
+      second real scope exists (ruled: "7 - inside internal/ft8").
+    - **A new scope must:** have an event stream its view holds open; name it as the scope's
+      presence; require the current lifetime and presence for whatever lets it transmit by
+      itself; add its boundary to the coordinator's list; and end through the guaranteed-stop
+      controller. That list goes where a new scope's author will meet it, with the
+      references (C4b).
+    - **Stated once in the project rules.** `AGENTS.md` says today that the enforced presence
+      signal is an open FT8 event subscription. That sentence changes with C4b.
+
+11. **An app that was already running when C4 is installed** (codex-125, its second detail).
+    ADR 0102 ruling 8 lets a running app go on until the operator restarts it, and it is then
+    still the old shell: it sends no lifetime and asks for no admission.
+    - **From C4a on** it reads and logs as before, and it **cannot operate FT8** until it is
+      restarted: every FT8 command but disarm is refused, because it carries no lifetime. The
+      refusal says so in words the operator can act on (restart Station Manager). It is not
+      treated as the operating app, and not passed off as a tool that still works. (An
+      earlier wording here said it worked after C4a; that contradicted the parts.)
+    - Installing either part restarts `smd`, so no run survives the upgrade in any case.
+    - This is tested in C4a: a client that behaves as the old shell does, against the new
+      `smd`.
+
+**What C4 does not do.**
+- **It does not make presence proof of a person.** A frozen app whose connection is still open
+  is present. A Call-CQ or auto-work run still continues with nobody at the desk while the FT8
+  view is open.
+- **It does not exclude a determined program of the operator's own user.** One that reads the
+  credential and asks for admission as the shell does is inside the accepted limit, and can
+  take the station from the app. What changes is that this takes a deliberate act: a tool
+  that merely reads the FT8 stream no longer holds TX armed, and cannot operate FT8.
+- **Sessions.** ADR 0100's storage, its start and exit reports and the recovery question are
+  ADR 0100's build.
+- **The exit confirmation** and the wait for the disarm (A3); reload and asset compatibility
+  (C5); the window set (A2); tune (ruled: question 3).
+- **RTTY, or any other new scope.** None is designed here. C4 makes the rule ready for one.
+
+**Acceptance criteria.**
+1. Check on, app in the FT8 view: arm, call CQ or answer, complete and log, as today.
+2. Leaving the FT8 view, closing the app, or killing it: the disarm begins when the grace
+   ends; a return of the same app inside it keeps the arm and the run.
+3. A client that holds the credential and the FT8 stream but is not the app does not keep TX
+   armed once the app has left, and cannot arm or start FT8 by itself.
+4. A newly started app finds TX disarmed and no run before its workspace is shown: when it
+   opens on a view that is not FT8; when the old app's stream has not yet been seen to close;
+   and when its FT8 view asks for the other profile.
+5. Nothing of the old app starts or changes operation after the new one is admitted: a late
+   or repeated admission is refused and leaves the new app untouched; a replaced app that is
+   still running and asks again is refused for good; and an FT8 command of the old app that
+   was already on its way is refused even if the new app has armed meanwhile. The one
+   exception is a disarm, which stops the new app's operation (ruled: question 11).
+6. A contact the old app was logging when it was replaced is logged, once.
+7. A renderer reload inside the grace keeps the arm. After a daemon restart the running app
+   is admitted again by itself and can arm, without a reload.
+8. An app left running from before C4 reads and logs, cannot operate FT8, and is told to
+   restart.
+9. Every disarm above is logged with its cause.
+10. Check off: today's behaviour, pinned by tests of its own, the old suite included.
+
+**Evidence plan.** No live transmission, keyed test or rig command is part of building this.
+- **Admission** (`internal/api` and the coordinator): the read; a first admit; a repeat and a
+  retry after a lost answer; a replacement; a late duplicate; an earlier app's first admit
+  arriving after the newer one; two replacements at once; a retired lifetime that reads again
+  and asks again; a stale marker after a daemon restart; a malformed identity. The seal, stop
+  and publish order, with barriers: an old command paused before its scope call while the new
+  app is admitted, subscribes and arms, for each command in the inventory; and an old disarm
+  paused the same way, with its effect on the new app's contact and a contact already earned
+  still logged.
+- **`internal/ft8`,** with the fake keyer set to model a keyed rung, and a clock the test
+  controls. Each rule above, and the cases codex-124 names:
+  - at loss: a queued next-slot manual send, a keyed rung, and an auto-work run between
+    contacts; a completed contact still logged;
+  - races: a reconnect at the deadline; an arm against the last unsubscribe; a stop in
+    progress against a new arm; two streams of one lifetime; a late unsubscribe or a late
+    timer after a replacement; a stream evicted by the hub; a refused stream admission;
+    shutdown; and admission before the old handler has exited;
+  - an old stream that stays open stops being presence at the replacement;
+  - the existing lock order is kept, and no presence lock is held across a stop that waits
+    for a transmission to end or across a completion that needs it.
+- **`internal/api`:** the lifetime is read where the credential is and handed on before the
+  header is removed; every FT8 command is shown to carry it to the scope, by a sweep of the
+  FT8 routes; the other routes are shown not to refuse for it. The canonical references change
+  in the same commit (`docs/v2-design/api-endpoints.md`).
+- **Check off:** tests that pin today's rule, including an arm with no subscriber, any
+  subscriber keeping operation alive, and reconnect with capture down.
+- **The shell,** by scenario against the fixture harness: the header on every kind of request,
+  the FT8 stream and its automatic reconnect included; never to another origin; the same value
+  after a renderer reload and after a renderer crash that is reloaded; a new value after an
+  app restart; admission before the workspace loads. **The whole retry loop,** not only the
+  handler: a stale answer read and admitted again; a success whose answer was lost, followed
+  by another lifetime's replacement, ending as retired with no further attempt; the waiting
+  page on any other failure. **The marker:** seen on a page response, a stream and a WebSocket
+  handshake; a late response from the old process after admission to the new one; attempts
+  joined; no loop from the admission's own responses. Codex measured the reconnect and the reload
+  with the credential's header in Electron 44.9.3; its crash case did not complete, so that
+  one is unmeasured (codex-124, answer 5).
+- **The old shell:** a client with the credential and no lifetime, against the new `smd`.
+- **Electron against a real temporary `smd`** with the check on, rig disabled: admission; the
+  app's stream is presence; a plain credentialed client's stream is not; a daemon restart
+  under the running app.
+- **The station:** the operator's own acceptance, with the rig, by agreement for that occasion.
+
+**Proposed parts, each reviewed before the next.**
+- **C4a, the lifetime and admission, end to end:** the shell's identity, header and admission
+  steps; `smd`'s current lifetime, the two requests, the seal, stop and publish, and the
+  refusal of FT8 commands that do not carry the current lifetime, from the inventory of
+  point 3; and the old shell's refusal, its wording and its test (point 11). It delivers "a
+  new start never inherits" by itself. Both sides ship in one commit, because the installed
+  pair is always one version.
+- **C4b, presence in the scope:** the operating subscription, the arm's requirement, the loss
+  rule, the references and the project rule's sentence.
+- **C4c, the station:** the operator's acceptance, recorded here.
+
+**Questions for the operator. All ruled 2026-11-17:** "1 - 6 accepted as is"; "1 - yes, 7 -
+inside internal/ft8"; on the three things Codex's second review (codex-125) changed inside
+what "1 - yes" had accepted, "8 - yes, 9 - yes, 10 - yes"; and on question 11, from the third
+review, "11 - yes, keep it" (above).
+1. **The grace.** Ruled: 5 s.
+2. **Presence stays with the FT8 view.** Ruled: per scope, and every scope that can transmit
+   by itself is covered.
+3. **Tune.** Ruled: left as it is.
+4. **A new app start disarms at once, with the cause `unattended`,** by admission when the
+   app starts. Ruled.
+5. **Arming needs presence.** Ruled.
+6. **The lifetime identity is built here.** Ruled.
+7. **The per-scope helper lives inside `internal/ft8`.** Ruled.
+8. **What a replaced app is refused** (point 3). The brief you accepted refused it on every
+   route. Proposed now: only FT8 operation is refused; reading, logging and streams go on, so
+   that a contact being logged at that moment is not lost. And with the check on, a tool with
+   no lifetime cannot start or send FT8 at all, not only cannot arm. **Ruled: yes.**
+9. **A restarted daemon** (point 2). The brief you accepted let a fresh daemon take the first
+   lifetime it saw. Proposed now: it takes none without an admission, and the running app
+   admits again by itself when it sees the new daemon. **Ruled: yes.**
+10. **An app left running across the C4 install** (point 11) cannot operate FT8 until it is
+    restarted, and is told so. **Ruled: yes.**
+
+11. **A stop is never refused** (point 3). A disarm is accepted from any credentialed
+    request, a replaced app's included. The cost, which Codex showed: a replaced app's
+    disarm that arrives late ends what the new app is doing, an unfinished contact included.
+    It needs an old request to be held up across a whole app restart. Proposed: keep it,
+    because refusing a stop is the worse error. **Ruled: yes, keep it.**
+
+**Questions for Codex** (earlier ones answered in codex-124, codex-125 and codex-126; the
+answers are in the design).
+1. Does the retired set close finding 1 for the whole retry loop, and is "the one admitted
+   last stands" the right statement of what is promised when two shells run at once?
+2. Is anything missing from the inventory of fifteen routes, or is there state a command
+   changes that no single gate can cover without a lock order the package does not allow?
+3. Is the workspace's event stream a sound guarantee that an idle app learns of a new daemon,
+   or is there a state in which it is closed?
