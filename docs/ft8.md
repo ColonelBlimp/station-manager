@@ -1547,6 +1547,32 @@ was rejected (the 15 s cadence makes it frantic; the Arm-TX gate already provide
 the deliberate-consent safety). Off-ramps: stop after N unanswered repeats; never
 auto-start a fresh CQ cycle; abort on operator action; never auto-switch targets.
 
+**With the operating-client check on, presence is the desktop app's own FT8 view
+(W-0027 C4b, 2026-11-17).** The paragraph above is the rule with the check off. With
+it on, `server.require_desktop_app`:
+- **Whose stream counts:** only a `/v1/ft8/events` subscription made under the app
+  lifetime that is current (admitted at app start, W-0027 C4a). A stream that names
+  no lifetime, a tool's, is served and keeps audio capture open, but is not
+  presence. Neither is a stream of a lifetime that has been replaced.
+- **Arming needs it:** `POST /v1/ft8/tx/arm` is refused `409 ft8_not_present`
+  unless the current lifetime has its stream open at that moment. Before C4b an arm
+  never asked, so TX armed with no stream ever opened was never disarmed. An arm
+  that already stands is left as it is.
+- **Loss:** when the lifetime holding the arm has had no stream for the grace
+  (`captureLinger`, 5 s, ruled 2026-11-17), the daemon disarms as `unattended` by
+  `disarmTx`, exactly as above. A return inside the grace changes nothing. The
+  decision names the arm it was made for and is checked again under `seqGate`, so
+  a late one never ends a later arm.
+- **The capture count decides capture only.** `onLingerExpired` no longer disarms
+  in this state; `presence.go` does, for the app's stream alone.
+- **Still not proof of a person:** a frozen app whose connection is open is
+  present, and a run still continues with nobody at the desk while the FT8 view is
+  open.
+- The rule is written for any scope that can transmit by itself (ruled 2026-11-17:
+  RTTY, if added). `internal/ft8/presence.go` has nothing of FT8 in it and is moved
+  out when a second real scope exists; what a new scope must do is listed on
+  `operatingScope` in `internal/api/app_admission.go`.
+
 **Resolver + live QSO/sequencer state live daemon-side** (working assumption):
 auto needs it there, it is shared orchestration state (ADR 0004), and
 QSO-completion is daemon-side. The SPA is a thin sequencer view (show next

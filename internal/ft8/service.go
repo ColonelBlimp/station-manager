@@ -2,6 +2,7 @@ package ft8
 
 import (
 	"context"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -235,6 +236,16 @@ type Service struct {
 	ownershipRequired atomic.Bool
 	operatingLifetime string
 
+	// Presence in the scope (presence.go; W-0027 C4b): which app lifetimes have this
+	// scope's event stream open, and the grace for the one holding the arm. Used only
+	// when ownership is required. streamLifetime reads the lifetime a stream request
+	// carried; internal/api supplies it, since the request's lifetime is its to
+	// validate. armGen names each arm: it advances, under txMu, whenever TX becomes
+	// armed, so that a decision made for one arm is never applied to a later one.
+	presence       *operatorPresence
+	streamLifetime atomic.Pointer[func(*http.Request) string]
+	armGen         uint64
+
 	// seq is the manual sequencer (ADR 0031 step e3): one active answer-a-CQ
 	// exchange, driven per slot from decodeLoop, transmitting via seqTransmit.
 	// Created in newService; nil-safe via its own methods.
@@ -311,6 +322,9 @@ func newService(cfg types.Ft8Config, log logging.Logger, src captureSource) *Ser
 	}
 	initial := ProfileFT8
 	s.profileSnap.Store(&initial)
+	// The grace is the capture linger (operator ruling 2026-11-17, question 1: 5 s),
+	// read when a grace starts.
+	s.presence = newOperatorPresence(func() time.Duration { return captureLinger }, realAfter, s.onPresenceLost)
 	// The sequencer transmits via seqTransmit (current-slot late-dt) and fans its
 	// state out on the ft8-qso SSE; both reference s, so wire it after s exists.
 	s.seq = newSequencer(
@@ -522,7 +536,14 @@ func (s *Service) onLingerExpired() {
 	// action) is never delayed by releaseCaptureLocked's decode-log close, which can
 	// block on a stalled disk. disarmTx takes its own txMu and waits on an in-flight
 	// transmission to drain (txWg); idempotent — a no-op when TX isn't armed.
-	s.disarmTx(disarmUnattended)
+	//
+	// With ownership required (W-0027 C4b) this count decides CAPTURE only. Presence
+	// is the current app lifetime's own stream, judged by presence.go, which disarms
+	// by the same path when that is lost: a tool's stream keeps capture open here and
+	// must not keep TX armed, and the app's presence must not be ended by this count.
+	if !s.ownershipRequired.Load() {
+		s.disarmTx(disarmUnattended)
+	}
 
 	// Then release the capture device. Re-check under s.mu: a subscriber that
 	// reconnected during the disarm window keeps the session (skip the release);

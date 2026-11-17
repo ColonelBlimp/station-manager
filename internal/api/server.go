@@ -248,6 +248,9 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 	// replacement seals and stops it before the new lifetime is published.
 	if s.requireDesktopApp && ft8Svc != nil {
 		ft8Svc.RequireOperatingLifetime()
+		// The FT8 stream is the scope's presence (W-0027 C4b): its handler is told how
+		// to read the lifetime this server validated for the request.
+		ft8Svc.SetStreamLifetime(appLifetime)
 		s.admission.scopes = append(s.admission.scopes, ft8Svc)
 	}
 	apiMux := s.registerRoutes(mux, cfg, logger, br, ft8Svc)

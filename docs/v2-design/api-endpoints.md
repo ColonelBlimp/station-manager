@@ -72,6 +72,11 @@ check on, FT8 is operated only by the desktop app's **current lifetime**.
   it is a tool, or an app that was started before this was installed.
 - **What does not:** reading, logging, settings and every stream are served whatever lifetime
   a request carries, or none. A disarm is always accepted.
+- **Presence (W-0027 C4b).** The operator's presence in the FT8 scope is an open
+  `GET /v1/ft8/events` subscription made under the current lifetime. A stream that names no
+  lifetime, or another one, is served but is not presence. Arming needs it: **409
+  `ft8_not_present`** otherwise. When the lifetime holding the arm has had no such stream for
+  5 s, TX is disarmed with the cause `unattended`; a return inside the 5 s changes nothing.
 - **The process marker and the generation.** Every response served for the credential on the
   app listener carries `X-SM-Daemon-Instance`, the value `/v1/version` reports as this
   process's marker, and `X-SM-Admission-Generation`, the admission generation as it is now.
@@ -615,7 +620,7 @@ The station-global archive catalogue (`config.md` §3): the archive the daemon s
 - **Gating:** **Only when FT8 is enabled.** **Archive-guarded when `armed: true`** (arming admits TX); disarm never is.
 - **Request:** Body `{"armed": bool}` — `armed` is **required**: a missing boolean is a 400, never a silent disarm; unknown or duplicate keys are rejected (AW-2). Idempotent.
 - **Response:** **202 Accepted** (state confirmed via `ft8-tx` SSE).
-- **Errors:** 400 `invalid_json`/`missing_required_field`/`ft8_tx_bad_message`; 503 `ft8_tx_unavailable`/`rig_not_ready`/`rig_dial_unknown`; 409 `ft8_tx_not_armed`/`ft8_tx_in_flight`; 500 `ft8_tx_failed`.
+- **Errors:** 400 `invalid_json`/`missing_required_field`/`ft8_tx_bad_message`; 503 `ft8_tx_unavailable`/`rig_not_ready`/`rig_dial_unknown`; 409 `ft8_tx_not_armed`/`ft8_tx_in_flight`, and with the operating-client check on `app_lifetime_not_current` (the caller is not the admitted app) / `ft8_not_present` (the app's FT8 stream is not open; an arm that already stands is unaffected); 500 `ft8_tx_failed`.
 - **Notes:** Arming acquires the output device + builds the slot controller; disarming aborts any in-flight TX (PTT drops) + releases the device.
 
 ### `POST /v1/ft8/tx/send`

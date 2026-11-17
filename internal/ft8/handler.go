@@ -74,6 +74,21 @@ func (s *Service) onceUnsubscribe(unsub func()) func() {
 	}
 }
 
+// SetStreamLifetime gives the stream handler the way to read the app lifetime a request
+// carried (W-0027 C4b). internal/api supplies it: validating the lifetime is its work, and
+// this package takes no part of it. Called once at wiring, before Start; without it a
+// stream names no lifetime.
+func (s *Service) SetStreamLifetime(read func(*http.Request) string) {
+	s.streamLifetime.Store(&read)
+}
+
+func (s *Service) lifetimeOf(r *http.Request) string {
+	if read := s.streamLifetime.Load(); read != nil && *read != nil {
+		return (*read)(r)
+	}
+	return ""
+}
+
 // HTTPHandler returns the http.Handler serving `GET /v1/ft8/events`: the live
 // per-slot occupancy stream feeding the clear-offset picker. The api package
 // registers it on the daemon's mux when the FT8 subsystem is enabled (mirroring
@@ -119,7 +134,7 @@ func (s *Service) HTTPHandler(shutdownCh <-chan struct{}) http.Handler {
 		// view claims first, so this is never the primary explanation — an
 		// EventSource sees only an error here. Admitted BEFORE the 200 and the
 		// headers, which the refusal path must not have sent.
-		ch, unsub, err := s.SubscribeMode(r.URL.Query().Get("mode"))
+		ch, unsub, err := s.SubscribeModeAs(r.URL.Query().Get("mode"), s.lifetimeOf(r))
 		if err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusConflict)

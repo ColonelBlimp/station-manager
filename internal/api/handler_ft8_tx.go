@@ -82,6 +82,12 @@ func (s *Server) writeFt8TxError(w http.ResponseWriter, op errors.Op, err error)
 		// daemon restarts; nothing transmits or arms in this process again.
 		s.writeError(w, http.StatusConflict, "archive_switch_pending",
 			"an archive switch is pending; the daemon restarts shortly and transmit admission is sealed until then", op)
+	case stderr.Is(err, ft8.ErrNotPresent):
+		// W-0027 C4b: an arm needs the app's own FT8 event stream open. It is the
+		// operator's presence in the scope, and its loss disarms; so an arm asked for
+		// without it would be an arm nothing was holding.
+		s.writeError(w, http.StatusConflict, "ft8_not_present",
+			"TX can be enabled only while the FT8 view is connected; open the FT8 view and try again", op)
 	case stderr.Is(err, ft8.ErrTxUnavailable):
 		s.writeError(w, http.StatusServiceUnavailable, "ft8_tx_unavailable",
 			"FT8 transmit is unavailable (no rig keyer wired, or this build has no audio output)", op)

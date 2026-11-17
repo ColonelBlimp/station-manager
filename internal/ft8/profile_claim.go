@@ -214,6 +214,14 @@ func (s *Service) ClaimProfile(name string) (Profile, error) {
 // count and leave a stream labelled for the other lattice holding the capture
 // (ADR 0080). An empty mode admits unconditionally, like Subscribe.
 func (s *Service) SubscribeMode(mode string) (<-chan hubEvent, func(), error) {
+	return s.SubscribeModeAs(mode, "")
+}
+
+// SubscribeModeAs is SubscribeMode for a stream whose request carried an app lifetime
+// ("" for none). With ownership required, an admitted stream that names a lifetime is
+// that lifetime's presence in this scope for as long as it is open (W-0027 C4b); a
+// refused one is not. With ownership not required the lifetime is not recorded.
+func (s *Service) SubscribeModeAs(mode, lifetime string) (<-chan hubEvent, func(), error) {
 	const op errors.Op = "ft8.Service.SubscribeMode"
 	s.mu.Lock()
 	if mode != "" && !strings.EqualFold(mode, s.profile.Name) {
@@ -224,7 +232,12 @@ func (s *Service) SubscribeMode(mode string) (<-chan hubEvent, func(), error) {
 	ch, unsub := s.hub.subscribe() // s.mu → hub.mu is the established order (clearActivity)
 	s.onSubscriberAddedLocked()
 	s.mu.Unlock()
-	return ch, s.onceUnsubscribe(unsub), nil
+	leave := s.onceUnsubscribe(unsub)
+	if !s.ownershipRequired.Load() {
+		return ch, leave, nil
+	}
+	gone := s.presence.open(lifetime) // counts once however often it is called
+	return ch, func() { gone(); leave() }, nil
 }
 
 // captureProfileForTest reports the profile the live capture session was

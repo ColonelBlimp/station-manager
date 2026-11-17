@@ -96,6 +96,24 @@ func (s *Server) withAppLifetime(w http.ResponseWriter, r *http.Request, present
 }
 
 // operatingScope is a scope's boundary at a replacement: seal and stop, then publish.
+//
+// A scope is a kind of operation in which the daemon can transmit by itself once the
+// operator has started it. FT8 and FT4 are the one scope built. Every such scope is held
+// by the operator's presence in it (operator ruling 2026-11-17: "if we add RTTY and it is
+// in unattended operation, that scope (or any other scope) should be covered"). A NEW
+// SCOPE MUST:
+//
+//   - have an event stream that its own view holds open, and name it as its presence: a
+//     subscription made under the current app lifetime (internal/ft8/presence.go is the
+//     helper, with nothing of FT8 in it; move it out when the second scope is real);
+//   - accept whatever lets it transmit by itself only from the current lifetime and only
+//     while that lifetime is present, checked under the gate its own stop takes and held
+//     until the command has taken effect (internal/ft8/operating.go);
+//   - disarm, by its guaranteed-stop path and with the cause the daemon uses when nobody
+//     is attending, when the lifetime holding it has had no stream for the grace;
+//   - implement this interface and be added to the admission's scopes, so that a
+//     replacement stops it before the new lifetime is current;
+//   - say so in docs/v2-design/api-endpoints.md.
 type operatingScope interface {
 	RetireOperating()
 	PublishOperating(lifetime string)

@@ -84,6 +84,9 @@ func newOwnedService(t *testing.T, current string) *Service {
 	s.RequireOperatingLifetime()
 	if current != "" {
 		s.PublishOperating(current)
+		// These tests are about WHO may operate. Presence (C4b) is its own rule and has
+		// its own tests, so here the current lifetime simply has its stream open.
+		s.presence.open(current)
 	}
 	t.Cleanup(func() { _ = s.ArmTx(false) })
 	return s
@@ -189,6 +192,7 @@ func TestOperating_RetireStopsOperationAndSealsTheOldLifetime(t *testing.T) {
 	require.ErrorIs(t, s.OperatingAs(lifeB).ArmTx(true), ErrLifetimeNotCurrent, "the new lifetime armed before it was published")
 
 	s.PublishOperating(lifeB)
+	s.presence.open(lifeB)
 	b := s.OperatingAs(lifeB)
 	require.NoError(t, b.ArmTx(true))
 
@@ -218,6 +222,7 @@ func TestOperating_OldStartsRacingAReplacementNeverSurviveIt(t *testing.T) {
 		s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
 		s.RequireOperatingLifetime()
 		s.PublishOperating(lifeA)
+		s.presence.open(lifeA)
 		a := s.OperatingAs(lifeA)
 		require.NoError(t, a.ArmTx(true))
 
@@ -267,6 +272,7 @@ func TestOperating_AReplacementUndoesAnArmThatIsBeingMade(t *testing.T) {
 	s := newTxTestService(&fakeKeyer{}, player, nil)
 	s.RequireOperatingLifetime()
 	s.PublishOperating(lifeA)
+	s.presence.open(lifeA)
 	t.Cleanup(func() { _ = s.ArmTx(false) })
 
 	armed := make(chan error, 1)

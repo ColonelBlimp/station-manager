@@ -59,6 +59,10 @@ var (
 	ErrTxNotReady = stderrors.New("ft8: rig not ready to transmit")
 	// ErrTxNotArmed: a send was requested while disarmed.
 	ErrTxNotArmed = stderrors.New("ft8: transmit not armed")
+	// ErrNotPresent: an arm was asked for while the current app lifetime has no FT8
+	// event stream open (W-0027 C4b). Presence is required to arm, not only missed
+	// when it is lost.
+	ErrNotPresent = stderrors.New("ft8: the operator's FT8 view is not connected")
 	// ErrTxArmed: an archive activation found TX armed (armed but idle is busy,
 	// operator ruling 2026-09-22) — disarm first.
 	ErrTxArmed = stderrors.New("ft8: transmit is armed")
@@ -153,7 +157,55 @@ func (s *Service) armTxAs(who string, armed bool) error {
 		return err
 	}
 	defer release()
-	return s.armTx()
+	if !s.ownershipRequired.Load() {
+		return s.armTx()
+	}
+	// Presence is required to arm (W-0027 C4b), and the arm is then held for the
+	// lifetime that made it. Asked and made under the gate the stop paths take. An arm
+	// that already stands is left exactly as it is: accepted, as before C4, with no new
+	// hold, so a repeat cannot extend the grace.
+	before, armed := s.armState()
+	if armed {
+		return s.armTx()
+	}
+	if !s.presence.has(who) {
+		return errors.New(op).WithErr(ErrNotPresent)
+	}
+	if err := s.armTx(); err != nil {
+		return err
+	}
+	if now, armed := s.armState(); armed && now != before {
+		s.presence.hold(who, now)
+	}
+	return nil
+}
+
+// armState is the current arm's generation and whether TX is armed.
+func (s *Service) armState() (gen uint64, armed bool) {
+	s.txMu.Lock()
+	defer s.txMu.Unlock()
+	return s.armGen, s.txArmed
+}
+
+// onPresenceLost is the end of one grace for the arm `arm`, held by `lifetime`
+// (presence.go). The decision was made outside every lock and may have waited for this
+// gate, so it is checked again here, under the gate a new arm and a replacement take:
+// the loss must still stand, which means that same hold, that same grace, and the
+// lifetime still without a stream. Streams come and go without this gate, so the
+// app may have returned and left again while the decision waited: that is a new absence
+// with a grace of its own, and this decision is not for it (codex-134). Only then is TX
+// disarmed, as unattended, by the path every other stop takes. A late decision ends
+// nothing (codex-124, answer 3).
+func (s *Service) onPresenceLost(lifetime string, arm, grace uint64) {
+	s.seqGate.Lock()
+	defer s.seqGate.Unlock()
+	// One question settles it. The hold is taken and released under this gate, with the
+	// arm: so a loss that still stands for (lifetime, arm) means TX is armed and it is
+	// that arm, as well as that it is the same absence.
+	if !s.presence.lossStands(lifetime, arm, grace) {
+		return
+	}
+	s.disarmTxLocked(disarmUnattended)
 }
 
 func (s *Service) armTx() error {
@@ -219,6 +271,7 @@ func (s *Service) armTx() error {
 		s.writeTxLogLine()
 	}
 	s.txArmed = true
+	s.armGen++ // a new arm: decisions made for an earlier one no longer apply
 	s.txLastErr = ""
 	s.txDisarmCause = "" // the cause never outlives the disarm it explains
 	// An ARM is bound to a frequency exactly as a session is, pinned HERE — under
@@ -353,6 +406,8 @@ func (s *Service) disarmTx(cause string) {
 // commit in between and be killed for a move it was never subject to (codex P1 on
 // 6e974717) — the same class of bug as the round-8 unconditional abandon.
 func (s *Service) disarmTxLocked(cause string) {
+	// The hold on presence ends with the arm, whatever ended it (W-0027 C4b).
+	s.presence.release()
 	s.txMu.Lock()
 	if cause == disarmShutdown {
 		s.txClosed = true

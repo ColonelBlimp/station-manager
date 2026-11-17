@@ -3189,3 +3189,126 @@ of building it.**
    generation as it then was, for one. The read changes nothing and it ends there.
 7. **The retired dialog's wording** and the waiting page's are mine. The operator accepted
    the dialog as a deviation; the words themselves were not put to them.
+
+### C4b — presence in the scope (built 2026-11-17)
+
+Built on the operator's direction ("Start C4b"), from the brief above. With the check off
+nothing changes. With it on, an arm needs the desktop app's own FT8 view connected, and is
+held only while it is. **No rig, key or transmission was part of building it, and it has not
+run at the station.**
+
+**What exists now.**
+- **The helper** (`internal/ft8/presence.go`), with nothing of FT8 in it: it counts the open
+  subscriptions of each app lifetime, holds an arm for the lifetime that made it, runs the
+  grace while that lifetime has none open, and reports the loss naming the arm the decision
+  was made for. Its lock is a leaf. A return inside the grace ends the grace; a timer that
+  fires late, for a grace since ended or an arm since released, reports nothing.
+- **The arm** (`armTxAs`): under the gate, an arm that already stands is left as it is;
+  otherwise the current lifetime must have its stream open, or the arm is refused
+  (`ErrNotPresent`, `409 ft8_not_present`). A new arm is then held for that lifetime.
+- **The loss** (`onPresenceLost`): the decision names the arm and the grace it was made
+  for, and is checked again under `seqGate`, the gate a new arm and a replacement take: the
+  loss must still stand, which is that same hold, that same grace, and the lifetime still
+  without a stream. Then `disarmTxLocked(unattended)`, the path every other stop takes.
+  Every disarm, whatever its cause, ends the hold.
+  - **Found in review and fixed (codex-134).** The decision first named only the arm.
+    Streams come and go without the gate, so if the app returned and left again while a
+    decision waited for it, a new grace had begun for the same arm and the old decision
+    ended the arm before that grace had run. The decision now names its grace, and the
+    helper says whether that loss still stands (`lossStands`).
+- **The stream** (`SubscribeModeAs`, `SetStreamLifetime`): an admitted `/v1/ft8/events`
+  subscription that names a lifetime is that lifetime's presence while it is open.
+  `internal/api` gives the handler the way to read the lifetime it validated; the FT8 package
+  takes no part in validating it.
+- **The capture count decides capture only:** with ownership required `onLingerExpired` no
+  longer disarms. With it not required it disarms as before, by the same code as before.
+- **The grace** is the capture linger, 5 s, read when a grace starts (question 1).
+- **The references:** `docs/ft8.md`, `docs/v2-design/api-endpoints.md`, the package comment,
+  and the sentence in `AGENTS.md` naming the presence signal. What a new scope must do is
+  listed on `operatingScope` (`internal/api/app_admission.go`), which is the interface a new
+  scope has to implement.
+
+**Deviations and decisions of mine. Accepted by the operator 2026-11-17: "all three
+accepted".**
+1. **The checklist for a new scope is on the interface it must implement,** not in a document
+   of its own. The brief said only "where a new scope's author will meet it".
+2. **The app is unchanged.** It shows the daemon's own message for a refusal, so the two
+   wording (`ft8_not_present`: "TX can be enabled only while the FT8 view is connected; open
+   the FT8 view and try again") is mine. The operator accepted the deviation with that
+   wording before them.
+3. **The C4a tests now open the current lifetime's stream in their fixture.** They are about
+   who may operate; under C4b an arm needs presence too, and without it one of them waited
+   for ever on an arm that was refused.
+
+**Evidence.**
+- **The helper** (nine tests, a clock the test owns): the counts; the grace at the holder's
+  last close; a return inside it; only the holder's streams count; an arm held with no
+  stream; release; a late timer and a later arm; the grace read when it starts; and a loss
+  standing only for the grace it was decided in.
+- **The service** (fourteen tests): a decision that waited for the gate while the app
+  returned and left again, with its two controls, the gate held by the test so that no
+  timing decides the order; an arm refused with no stream, with a tool's, and with
+  another lifetime's; loss for the grace disarms as `unattended` while a tool's stream stays
+  open; a return inside the grace; a repeated arm neither refused nor extending the grace; a
+  disarm ends the hold; a late decision and a later arm, at the helper and again past it,
+  each part of the check on its own; a Call-CQ run and a queued
+  manual send stopped at the loss; a replacement, with the replaced lifetime's stream still
+  open and a stream opened before admission; the capture linger in both states; streams not
+  counted with ownership not required; a refused stream; the stream handler; and the
+  service's own grace on real timers.
+- **`internal/api`, over the real listeners** (two tests): an arm is refused for presence
+  with no stream, and with only a tool's and a never-admitted lifetime's stream open; it gets
+  past presence with the app's own stream open; and is refused again once that closes. With
+  the check off an arm asks for no stream.
+- **The at-loss cases the brief names beyond those** (a keyed rung, an auto-work run between
+  contacts, a contact already complete) are not tested again here. The loss ends in the same
+  `disarmTx` call, with the same cause, as the capture linger always made, and that call has
+  its own tests (`TestSequencer_AbandonsWhenDisarmedMidQso`,
+  `TestAutoWork_DisarmingTxStopsTheRun`,
+  `TestSessionObserver_UnattendedMidExchangeIsOneTerminationAndNoDisarmRow`,
+  `TestTransmitNext_PublishesAndCancelsOnDisarm`). C4b's own tests show that a loss reaches
+  that call with that cause.
+- **Reversion proofs: 24, every one caught,** each in its own temporary copy: after
+  codex-134, the waiting decision checked only against presence now, and a loss standing
+  whatever its grace, for another hold, and although the holder is back; and before it: an arm that
+  does not ask; any open stream counting; a stream with no lifetime counted; the loss
+  disarming nothing, and recorded as the operator's; a return not ending the grace; a late
+  timer taken for the pending grace; the decision not checked against its arm, and not
+  against presence returned; a repeated arm asked for presence; a disarm leaving the hold; a
+  new arm not held; the capture linger still disarming with ownership required, and never
+  disarming; a stream's lifetime never counted, and counted with ownership not required; the
+  handler ignoring the lifetime; the grace not the capture linger; the API not giving the
+  handler the lifetime; and the refusal having no code.
+  - **Two proofs passed at first, and two tests were made stronger for them.** A disarm
+    leaving the hold in place changed nothing the tests looked at: a test now requires that
+    no grace starts for an arm already disarmed. And the arm check in `onPresenceLost` was
+    hidden behind the presence check in the test that named it: the test now puts each
+    part of the check on its own.
+  - **A third passed after the fix, and showed two conditions that could not fail.** With
+    `lossStands` asking about the hold, the service's own "still armed" and "still that
+    arm" could not be false when it was true: the hold is taken and released under the same
+    gate as the arm. They are removed, and the one question is the whole check.
+- **Gates, on the final tree:** `gofmt`, `go vet ./...`, `internal/ft8` and `internal/api`
+  under `-race`, `golangci-lint` (0 issues), the maintainability gate (0 regressions),
+  `task docs:check`, the context gate (kernel 7826 of 8192 bytes, automatic 10058 of 10240).
+  `go test ./...` passed (67 packages) before the last tests were added and before the
+  fix of codex-134.
+- **Process:** the tests for the helper, the service and the API were written before the
+  code they test. The helper's and the service's first failed only by not compiling; the
+  API's were seen failing on behaviour (`ft8_tx_failed` where `ft8_not_present` was wanted).
+
+**Limits and open points.**
+1. **Not shown in Electron against a real `smd`.** The real-`smd` scenario runs with FT8
+   off, and turning it on there could open an audio device on this machine, which is a
+   hardware-dependent step. What is shown is each half: the app sends its lifetime on an
+   event stream and its reconnection (C4a's scenario, Electron 44.9.3), and `smd`, over its
+   real listeners with a real FT8 service, counts such a stream and no other. The two meet
+   first at the station.
+2. **The station has not run it.** With the check on there, an arm now needs the FT8 view
+   open in the app. That is how the app arms today.
+3. **Presence is still not proof of a person** (the brief): a frozen app whose connection is
+   open is present.
+4. **A stream opened and closed without ever arming costs nothing:** no hold, no timer.
+5. **Tune is untouched** (question 3).
+
+**Next:** C4c, the operator's station acceptance, recorded here.

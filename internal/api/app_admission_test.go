@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"go/ast"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/ft8"
@@ -566,3 +568,80 @@ func TestSource_Ft8CommandsAreCalledAsTheRequestsCaller(t *testing.T) {
 }
 
 var _ operatingScope = (*ft8.Service)(nil)
+
+// openFt8Stream opens the FT8 event stream as a lifetime ("" for none) and returns its
+// close. The stream is open, and counted, once its headers have arrived.
+func (l checked) openFt8Stream(t *testing.T, c *http.Client, lifetime string) (closeStream func()) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	r := l.acceptable(t, true, http.MethodGet, "/v1/ft8/events", l.cred).WithContext(ctx)
+	if lifetime != "" {
+		r.Header.Set(appLifetimeHeader, lifetime)
+	}
+	resp, err := (&http.Client{Transport: c.Transport}).Do(r) // no client timeout: a stream has no end
+	if err != nil {
+		cancel()
+		t.Fatalf("the FT8 stream as %q: %v", lifetime, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		cancel()
+		t.Fatalf("the FT8 stream as %q: %d", lifetime, resp.StatusCode)
+	}
+	return func() {
+		cancel()
+		_ = resp.Body.Close()
+	}
+}
+
+// armCode asks to arm TX as a lifetime and returns the refusal's code.
+func (l checked) armCode(t *testing.T, c *http.Client, lifetime string) string {
+	t.Helper()
+	_, body, _ := l.appDo(t, c, lifetime, http.MethodPost, "/v1/ft8/tx/arm", `{"armed":true}`)
+	return errorCode(t, body)
+}
+
+// Presence over the real listeners (W-0027 C4b): an arm needs the current lifetime's own
+// FT8 stream open. In this fixture nothing can key, so an arm that gets past presence is
+// refused next for having no transmitter (ft8_tx_unavailable): that is how the two are
+// told apart.
+func TestAppAdmission_AnArmNeedsTheCurrentLifetimesFt8StreamOpen(t *testing.T) {
+	const notPresent, pastPresence = "ft8_not_present", "ft8_tx_unavailable"
+	l := startChecked(t, true)
+	_, c := l.clients(t)
+	l.mustAdmit(t, c, lifeA)
+
+	if code := l.armCode(t, c, lifeA); code != notPresent {
+		t.Fatalf("an arm with no FT8 stream open: %s; want %s", code, notPresent)
+	}
+
+	closeTool := l.openFt8Stream(t, c, "") // a tool reading the stream, naming no lifetime
+	defer closeTool()
+	closeOther := l.openFt8Stream(t, c, lifeC) // a lifetime that was never admitted
+	defer closeOther()
+	if code := l.armCode(t, c, lifeA); code != notPresent {
+		t.Fatalf("an arm with only other callers' streams open: %s; want %s", code, notPresent)
+	}
+
+	closeApp := l.openFt8Stream(t, c, lifeA)
+	if code := l.armCode(t, c, lifeA); code != pastPresence {
+		t.Fatalf("an arm with the app's own stream open: %s; want %s (it got past presence)", code, pastPresence)
+	}
+
+	closeApp()
+	deadline := time.Now().Add(5 * time.Second)
+	for l.armCode(t, c, lifeA) != notPresent {
+		if time.Now().After(deadline) {
+			t.Fatal("the app's stream was closed and an arm is still not refused for presence")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// With the check off an arm asks for no stream, as before C4.
+func TestAppAdmission_OffAnArmNeedsNoStream(t *testing.T) {
+	l := startChecked(t, false)
+	_, c := l.clients(t)
+	if code := l.armCode(t, c, lifeA); code != "ft8_tx_unavailable" {
+		t.Fatalf("with the check off an arm with no stream: %s; want ft8_tx_unavailable", code)
+	}
+}
