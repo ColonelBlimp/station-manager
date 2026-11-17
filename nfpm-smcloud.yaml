@@ -10,6 +10,10 @@ name: smcloud
 arch: "${SMCLOUD_ARCH}"
 platform: linux
 version: "${VERSION}"
+# Taken exactly as given. Left to its default, nfpm reads a version made only of digits as
+# a number and pads it (7104471 became 7104471.0.0), which is the version of any build from a
+# checkout with no tags whose short hash has no letter (scripts/nfpm_version_test.py).
+version_schema: none
 maintainer: "ColonelBlimp"
 description: "SM Cloud — Station Manager QSO backup service (HTTP API over Postgres)"
 homepage: "https://github.com/ColonelBlimp/station-manager"

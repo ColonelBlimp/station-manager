@@ -203,6 +203,7 @@ tasks:
       desktop-file-validate, Xvfb, unprivileged user namespaces and network. Development only
       until D2-D6.
     cmds:
+      - python3 -I scripts/nfpm_version_test.py
       - python3 -I scripts/desktop_rpm_check_test.py
       - python3 -I scripts/desktop_rpm_guard_test.py
       - python3 -I scripts/desktop_smoke_test.py

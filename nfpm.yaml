@@ -16,6 +16,10 @@ name: station-manager
 arch: amd64
 platform: linux
 version: "${VERSION}"
+# Taken exactly as given. Left to its default, nfpm reads a version made only of digits as
+# a number and pads it (7104471 became 7104471.0.0), which is the version of any build from a
+# checkout with no tags whose short hash has no letter (scripts/nfpm_version_test.py).
+version_schema: none
 maintainer: "ColonelBlimp"
 description: "Amateur Radio QSO logger daemon (smd) — single-binary HTTP service serving an embedded browser SPA"
 homepage: "https://github.com/ColonelBlimp/station-manager"
