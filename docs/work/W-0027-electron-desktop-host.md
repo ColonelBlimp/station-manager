@@ -3037,3 +3037,154 @@ answers are in the design).
    changes that no single gate can cover without a lock order the package does not allow?
 3. Is the workspace's event stream a sound guarantee that an idle app learns of a new daemon,
    or is there a state in which it is closed?
+
+### C4a — the app lifetime and admission (built 2026-11-17)
+
+Built on the operator's direction ("commit the brief and start C4a"), from the brief above
+(committed `7104471c`). Both sides are in one change, as the brief says. With the check off
+nothing changes; with it on, the desktop app is admitted before it shows its workspace, and FT8
+is operated only by the admitted app. **Not deployed, and no rig, key or transmission was part
+of building it.**
+
+**What exists now.**
+- **The FT8 rule** (`internal/ft8/operating.go`): the app lifetime that may operate FT8 is held
+  under `seqGate`. Each of the eighteen service methods behind the fourteen gated routes now
+  takes its caller and asks, under that gate and held until it has taken effect, whether the
+  caller is the current lifetime. The nine that took no gate before take it only when
+  ownership is required. `RetireOperating` seals and stops in one hold of the gate, with the
+  cause `unattended`; `PublishOperating` names the new lifetime. A disarm is accepted from
+  anyone (question 11).
+- **Admission** (`internal/api/app_admission.go`): one current lifetime, an admission
+  generation and the lifetimes replaced in this process, behind one lock that is always taken
+  before a scope's. `GET` and `POST /v1/app/lifetime`. The check's middleware reads and
+  removes `X-SM-App-Lifetime`, refuses a malformed one, and puts the process marker on what it
+  serves for the credential on the app listener. Every FT8 handler reaches the scope as the
+  request's caller.
+- **The shell** (`desktop/src/admission.mjs`): the lifetime is made once per launch in the
+  main process and sent with the credential by the one existing hook. The app reads and admits
+  before the application is loaded; a stale answer is read again; a retired one ends the
+  attempt on a page that says so. A new listener, the only owner of `onHeadersReceived`,
+  reads the marker as headers arrive; a different marker makes the shell ask, and the read
+  decides.
+- **The reference:** `docs/v2-design/api-endpoints.md`, in this change.
+
+**Two defects found in review and fixed (codex-129 and codex-130, both in the shell).**
+1. **A newer daemon seen while an admission was in progress was forgotten.** The shell joined
+   the work in progress and kept no note of what it had seen meanwhile; if that attempt then
+   succeeded late or failed, an idle workspace stayed unadmitted to the newest process. Now
+   everything seen during an admission is kept, and if any of it differs from where the
+   admission settles, `smd` is asked. My first fix kept only the last thing seen, and
+   codex-130 showed that a late response from an older process then hid the newer one: the
+   order responses arrive in is not the order of the daemon's processes.
+2. **An app replaced within the same daemon process was never told.** Its responses carried
+   the same marker, so nothing made it ask. `smd` now puts the admission generation beside
+   the marker (`X-SM-Admission-Generation`); a changed generation makes the shell ask, and
+   `smd` answers that it is retired. It cannot take the station back by asking: a replaced
+   lifetime is refused for good. A refusal of some other kind, with nothing changed, asks
+   nothing and warns of nothing.
+
+**Deviations from the brief, for review.**
+1. **The profile claim is not gated** (the brief listed fifteen routes; fourteen are gated).
+   A claim changes the profile only on a daemon with no subscriber, no arm, no session and
+   nothing in flight (`ClaimProfile`), so it cannot start, resume or alter operation. And the
+   FT8 view sends it by itself when its stream returns, which after a daemon restart can be
+   before the app has been admitted again: gated, it would leave the view showing a refusal.
+2. **A start refused for its own content before the gate is refused for that,** whoever sent
+   it: the two Field Day starts check that the exchange is configured before they take the
+   gate, as they did.
+3. **The two type-4 starts now share one body** (`startT4As`). Adding the caller check took
+   them over the duplication limit; they differed only in the sequencer call.
+4. **The identity is held to one spelling:** 22 base64url characters whose last carries no
+   stray bits. Another spelling of the same bytes is refused, so two strings never name one
+   lifetime.
+5. **In a loaded workspace a retirement is said once, in a dialog;** at start the waiting
+   page says it. The brief named the page only.
+
+**Evidence.**
+- **`internal/ft8`** (twelve new tests): every gated command refused for no lifetime, another
+  lifetime and no current lifetime, and not refused for the current one; a refused command
+  changes nothing; the check-off path unchanged, including that the ungated commands take no
+  gate; a replacement stops and seals, and the old lifetime's commands do not act under the
+  new arm; an arm that is half made when the app is replaced is undone; the gate is held
+  until it is released; old starts racing a replacement never survive it; the disarm; the
+  claim; and two structural guards: every caller-taking method checks its caller or hands it
+  to one that does, and every command that takes the gate releases it only by `defer`.
+- **`internal/api`** (thirteen new tests, over the real listeners): read then admit; a
+  replaced lifetime refused for good, by a late duplicate and by a fresh read; a stale admit
+  refused and read again; another process's marker; four admits against one generation, one
+  winner; the identity's form; the marker on what the app is served and nowhere else; the
+  check off; the seal-stop-publish order against two recording scopes; a sweep of the
+  declared FT8 command routes, each with a body its handler accepts, refused for no lifetime,
+  a lifetime never admitted and a replaced one; the claim and the disarm; the restart wording;
+  and a structural guard that no handler calls an FT8 command except as the request's caller.
+- **The shell, unit** (twenty-two new tests): the admission loop against a model of the daemon's
+  rule, including a success whose answer was lost followed by another lifetime's replacement;
+  joined attempts; a marker seen during an admission, with that admission succeeding late and
+  failing, and with an older response arriving after it; a replacement within one daemon
+  process; the marker; the header rule; the retired
+  page.
+- **The shell, in Electron 44.9.3** (`npm run check:c4a`, 26 checks, fixture harness answering
+  as `smd` does): admission before the page; the lifetime on the page, an asset, a fetch, an
+  event stream and a WebSocket; a new daemon process admitted to again when its marker
+  arrives on a fetch, on a WebSocket handshake and on a stream's own reconnection, each alone
+  and with no navigation; a late marker; a renderer reload and a renderer crash that is
+  reloaded; a refusal of another kind; a second start, and the first window, still loaded,
+  told once and not navigated; the retired page; a stale admit; a failed read.
+  **Two things the brief left to be shown are shown:** the main process does see a WebSocket
+  handshake's response headers, and the header survives a renderer crash.
+- **Electron against a real temporary `smd`** (`task desktop:check:c1d`; rig, FT8 and
+  evidence capture disabled): check off, 18 checks, "nothing to be admitted to"; check on, 19
+  checks, "the app was admitted before its workspace loaded", generation 1. So the main
+  process's `POST` passes the app listener's origin guard.
+- **Unchanged checks:** `check:c1d-shell` 16 and `check:c2b` 35 pass.
+- **Reversion proofs: 49, every one caught,** each in its own temporary copy, in parallel;
+  the shared tree was not touched.
+  - **Go, 25:** the generation header missing, and the published generation never advanced
+    (both after codex-129); the caller never checked; a caller with no lifetime let through;
+    a replacement
+    that does not seal, and one that does not stop; the gate let go before the command acts,
+    and let go part-way by one command; a gated disarm; a command that forgets its caller; the
+    check-off path taking the gate; a gated claim; a handler calling the scope directly; no
+    retired set; the generation, and the process marker, not compared; publish before stop; a
+    repeat that replaces itself; a malformed identity and another spelling accepted; the
+    marker missing, and on every response; admission and ownership taking effect with the
+    check off; and no restart wording.
+  - **The shell, 24:** seventeen by unit test and seven by the Electron scenario, among them
+    the application loaded before admission, the app never admitted, the marker never watched,
+    a retired start loading the application, a failed admission loading it, and, after
+    codex-129 and codex-130, what was seen during an admission forgotten or dropped, only
+    the last thing seen kept, a changed generation ignored, the generation header not read,
+    and a retirement not said.
+  - **The first round was not clean, and that is why three tests exist.** A proof that the
+    gate was let go early passed: the test I had written for it used an arm, which `txMu`
+    also protects, so it could not show the gate was held. The direct test of the gate and
+    the `defer` guard were added for it. A second proof hung for ten minutes instead of
+    failing: the test failed while holding the gate and its own clean-up then waited on it.
+    Both tests now let the gate go before they fail.
+- **Gates, on the final tree:** `gofmt`, `go vet ./...`, `go test ./...` (67 packages),
+  `internal/ft8` and `internal/api` under `-race`, `golangci-lint` (0 issues), the
+  maintainability gate (0 regressions), desktop lint, format and 102 unit tests,
+  `task docs:check`, the context gate. `task ci:local` was not run.
+- **Process, stated as the brief asks:** the Go tests were written before the code they test
+  and were seen failing. The shell's first unit tests and its Electron scenario were written
+  after the shell's code and passed at their first run; for them the proofs are the evidence.
+  They did not find the two defects of codex-129, which is the cost of that order. The tests
+  for those fixes, and for codex-130's correction, were written first and seen failing.
+
+**Limits and open points.**
+1. **The station has not run it.** With the check on at the station, C4a changes what an
+   app left running across the install can do (design point 11): it must be restarted.
+2. **Presence is not built.** Until C4b, an arm still needs no FT8 view open, and its loss
+   is still judged by any stream. C4a alone gives "a new start never inherits" and "only the
+   admitted app operates FT8".
+3. **The at-loss cases of the brief's evidence plan belong to C4b:** a queued manual send, a
+   keyed rung and an auto-work run between contacts when presence is lost.
+4. **A completed contact at a replacement** rides on the existing invariant-1 tests of
+   `disarmTx`; C4a adds no test of its own for it.
+5. **The silence boundary stands** as the brief states it: a frozen renderer, or a connection
+   that has not signalled failure, tells the shell nothing of a new daemon. The same holds
+   for a replacement: a replaced app that makes no request is not told until it does.
+6. **One read more than is needed** follows an admission when a response that differs from
+   where it settles arrived during it, a second response from the new process with the
+   generation as it then was, for one. The read changes nothing and it ends there.
+7. **The retired dialog's wording** and the waiting page's are mine, not ruled.

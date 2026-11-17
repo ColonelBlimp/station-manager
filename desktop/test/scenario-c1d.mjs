@@ -271,7 +271,20 @@ export async function runC1d() {
             page: await plainGet(browserPort, '/'),
             health: await plainGet(browserPort, '/v1/healthz'),
         };
+        // W-0027 C4a: what smd itself says of this app's lifetime, asked through the session
+        // (so the request carries the credential and the lifetime, and is held to the pin).
+        const admission = await (
+            await A.win.webContents.session.fetch(`${A.target.origin}/v1/app/lifetime`)
+        ).json();
         if (REQUIRE_APP) {
+            check(
+                'Check on: the app was admitted before its workspace loaded; smd names its lifetime as the current one',
+                admission.required === true &&
+                    admission.current === true &&
+                    admission.generation === 1 &&
+                    /^[A-Za-z0-9_-]{21}[AQgw]$/.test(A.lifetime),
+                JSON.stringify(admission)
+            );
             check(
                 'Check on: smd refuses a plain client of the browser listener everything but the health check',
                 plain.version.status === 403 &&
@@ -288,6 +301,11 @@ export async function runC1d() {
                         fs.readFileSync(path.join(data, 'desktop-credential', 'credential'), 'utf8')
             );
         } else {
+            check(
+                'Check off: there is nothing to be admitted to, and the app loaded all the same',
+                admission.required === false && admission.current === false,
+                JSON.stringify(admission)
+            );
             check(
                 'Check off: the browser listener still serves a plain client, as before',
                 plain.version.status === 200 &&

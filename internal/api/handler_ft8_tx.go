@@ -43,7 +43,7 @@ func (s *Server) handleFt8TxArm(w http.ResponseWriter, r *http.Request) {
 	if *req.Armed && (!s.checkArchive(w, r, op, true) || !s.checkDefault(w, r, op)) {
 		return
 	}
-	if err := s.ft8.ArmTx(*req.Armed); err != nil {
+	if err := s.ft8As(r).ArmTx(*req.Armed); err != nil {
 		s.writeFt8TxError(w, op, err)
 		return
 	}
@@ -61,7 +61,7 @@ func (s *Server) handleFt8TxSend(w http.ResponseWriter, r *http.Request) {
 	if !s.readJSONBody(w, r, op, &req) {
 		return
 	}
-	if err := s.ft8.TransmitNext(req.Message, req.OffsetHz); err != nil {
+	if err := s.ft8As(r).TransmitNext(req.Message, req.OffsetHz); err != nil {
 		s.writeFt8TxError(w, op, err)
 		return
 	}
@@ -73,6 +73,9 @@ func (s *Server) handleFt8TxSend(w http.ResponseWriter, r *http.Request) {
 // conflicts with the current state; bad-message is a client error; anything else
 // is an internal failure.
 func (s *Server) writeFt8TxError(w http.ResponseWriter, op errors.Op, err error) {
+	if s.writeLifetimeRefusal(w, op, err) {
+		return
+	}
 	switch {
 	case stderr.Is(err, ft8.ErrArchiveSwitchPending):
 		// ADR 0071: an archive activation holds TX admission sealed until the

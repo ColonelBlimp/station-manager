@@ -37,7 +37,8 @@ export function parseArgs(argv) {
  * Discover smd's identity and credential and, at the first valid read, fix the pin, the origin and
  * the credential and load the application. `pin` is a oncePin() and `cred` a onceCredential();
  * `target.origin` is read by the session's request filter, its credential header and the window's
- * navigation guards. Resolves with the discovery result once fixed, or undefined if the window
+ * navigation guards. `admit` is the app's admission (W-0027 C4a), run before every load of the
+ * application. Resolves with the discovery result once fixed, or undefined if the window
  * closes first.
  */
 export async function connectWhenTrusted({
@@ -50,6 +51,7 @@ export async function connectWhenTrusted({
     fsb = recordingFs().fs,
     retryMs = RETRY_MS,
     onDetail,
+    admit,
     trace = stderrTrace,
 }) {
     let shown = '';
@@ -78,8 +80,8 @@ export async function connectWhenTrusted({
             // The local explanation is now obsolete: show the ordinary waiting page for the
             // pinned daemon, once, before the probe (which keeps an existing local page).
             void win.loadURL(waitingPageUrl(r.origin)).catch(() => {});
-            returnToWaitingOnFailure(win, appUrl, r.origin);
-            await loadWhenUp(win, appUrl, r.origin);
+            returnToWaitingOnFailure(win, appUrl, r.origin, { admit });
+            await loadWhenUp(win, appUrl, r.origin, { admit });
             return r;
         }
         onDetail?.(r);

@@ -47,6 +47,7 @@ export const isWaitingPage = (url) => recentWaiting.has(url);
 export function waitingPageUrl(origin, detail = null) {
     const refused = detail?.state === 'refused';
     const unaccepted = detail?.state === 'unaccepted';
+    const retired = detail?.state === 'retired';
     let title = 'Waiting for the Station Manager daemon';
     let lead = 'Station Manager will open as soon as the daemon answers.';
     if (refused) {
@@ -59,6 +60,11 @@ export function waitingPageUrl(origin, detail = null) {
         title = 'The daemon did not accept this app';
         lead =
             'Its operating credential is not the one this app holds. Close Station Manager and open it again.';
+    } else if (retired) {
+        // W-0027 C4a: the daemon has admitted a later start of the app, and this one stays out.
+        title = 'Another Station Manager has taken over';
+        lead =
+            'The daemon is being operated from a later start of Station Manager. Close this one.';
     }
     // Operator ruling Q3 (a), W-0027 D1: while smd may simply not be running, say how to start
     // it. Not on a refusal: starting smd does not repair an identity it must not be trusted with.
@@ -66,12 +72,12 @@ export function waitingPageUrl(origin, detail = null) {
     // read its credential again.
     let start =
         '<p data-sm-start>If the daemon is not running, start it with <code>smctl start</code>.</p>';
-    if (refused) start = '';
+    if (refused || retired) start = '';
     if (unaccepted)
         start =
             '<p data-sm-restart>If it still does not connect, restart the daemon with <code>smctl restart</code>.</p>';
     const info =
-        detail && !unaccepted
+        detail && !unaccepted && !retired
             ? `<p data-sm-reason>${escapeHtml(detail.reason)}</p><p><small data-sm-path>${escapeHtml(detail.path)}</small></p>`
             : '';
     // The scrollbar rules are the app's (frontend/app/src/styles/app.css), copied because this
@@ -172,8 +178,13 @@ export async function credentialRefused(ses, origin) {
  *  `afterFailure` shows the waiting page and pauses before the first probe, so a load
  *  that keeps failing retries at the waiting pace instead of in a tight loop. While smd
  *  answers but refuses the credential, the page says so, once, and the loop goes on: the
- *  credential is fixed for this app's lifetime, but the daemon may be restarted. */
-export async function loadWhenUp(win, url, origin, { afterFailure = false } = {}) {
+ *  credential is fixed for this app's lifetime, but the daemon may be restarted.
+ *
+ *  `admit` (W-0027 C4a) is the app's admission: it runs once smd answers and before the
+ *  application is loaded, so smd has stopped whatever an earlier start left running before
+ *  this one shows its workspace. Retired ends the loop on a page that says so; a failed
+ *  admission is tried again at the waiting pace. */
+export async function loadWhenUp(win, url, origin, { afterFailure = false, admit } = {}) {
     if (win.isDestroyed() || win.__smWaiting) return;
     win.__smWaiting = true;
     let unacceptedShown = false;
@@ -185,8 +196,20 @@ export async function loadWhenUp(win, url, origin, { afterFailure = false } = {}
         while (!win.isDestroyed()) {
             const answer = await originAnswers(win.webContents.session, origin);
             if (answer === 'up') {
-                if (!win.isDestroyed()) void win.loadURL(url).catch(() => {});
-                return;
+                const admitted = admit ? (await admit()).state : 'admitted';
+                if (win.isDestroyed()) return;
+                if (admitted === 'retired') {
+                    void win.loadURL(waitingPageUrl(origin, { state: 'retired' })).catch(() => {});
+                    return;
+                }
+                if (admitted !== 'failed') {
+                    void win.loadURL(url).catch(() => {});
+                    return;
+                }
+                // Not admitted and not refused for good: wait and ask again, as for a daemon
+                // that is not up.
+                await new Promise((r) => setTimeout(r, RETRY_MS));
+                continue;
             }
             if (win.isDestroyed()) return;
             if (answer === 'unaccepted') {
@@ -211,16 +234,16 @@ export async function loadWhenUp(win, url, origin, { afterFailure = false } = {}
  *  A redirect away from the origin is stopped before it is followed, so no error page or
  *  other address is ever shown (the request filter would cancel it anyway). Retries after a
  *  failure pause first, so a listener that keeps failing loads gets the waiting pace. */
-export function returnToWaitingOnFailure(win, appUrl, origin) {
+export function returnToWaitingOnFailure(win, appUrl, origin, { admit } = {}) {
     win.webContents.on('will-redirect', (e) => {
         if (!e.isMainFrame || onOrigin(e.url, origin)) return;
         e.preventDefault();
-        void loadWhenUp(win, appUrl, origin, { afterFailure: true });
+        void loadWhenUp(win, appUrl, origin, { afterFailure: true, admit });
     });
     win.webContents.on('did-fail-load', (_e, code, _desc, failedUrl, isMainFrame) => {
         if (!isMainFrame || code === -3 /* superseded or stopped (incl. the guard above) */) return;
         if (failedUrl.startsWith(origin + '/')) {
-            void loadWhenUp(win, appUrl, origin, { afterFailure: true });
+            void loadWhenUp(win, appUrl, origin, { afterFailure: true, admit });
         }
     });
 }

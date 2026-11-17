@@ -219,15 +219,15 @@ func (s *Server) handleFt8QsoStart(w http.ResponseWriter, r *http.Request) {
 	case "fd":
 		// ARRL Field Day: our class+section come from ft8.field_day config (read by
 		// the Service), not the client. theirGrid is still logged (bearing/enrichment).
-		err = s.ft8.StartQsoFd(ourCall, req.TheirCall, req.TheirGrid, req.TheirSnr, req.SlotUTC,
+		err = s.ft8As(r).StartQsoFd(ourCall, req.TheirCall, req.TheirGrid, req.TheirSnr, req.SlotUTC,
 			req.OffsetHz, req.OperatingFreqMHz, logbookID, req.AllowDuplicate)
 	case "type4":
 		// Reduced type-4 (nonstandard/compound call, ADR 0048): no grid/report on the
 		// wire, so we log the measured SNR as RST_SENT (like FD).
-		err = s.ft8.StartQsoT4(ourCall, req.TheirCall, req.TheirGrid, req.TheirSnr, req.SlotUTC,
+		err = s.ft8As(r).StartQsoT4(ourCall, req.TheirCall, req.TheirGrid, req.TheirSnr, req.SlotUTC,
 			req.OffsetHz, req.OperatingFreqMHz, logbookID, req.AllowDuplicate)
 	default:
-		err = s.ft8.StartQso(ourCall, ls.MyGridsquare, req.TheirCall, req.TheirGrid, req.SlotUTC,
+		err = s.ft8As(r).StartQso(ourCall, ls.MyGridsquare, req.TheirCall, req.TheirGrid, req.SlotUTC,
 			req.OffsetHz, req.OperatingFreqMHz, logbookID, req.AllowDuplicate, req.AnswerMode)
 	}
 	if err != nil {
@@ -329,7 +329,7 @@ func (s *Server) handleFt8CqStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.ft8.StartCallCq(ourCall, ls.MyGridsquare, req.OffsetHz, req.OperatingFreqMHz, req.AnswerMode, req.TxParity, logbookID, req.CqModifier); err != nil {
+	if err := s.ft8As(r).StartCallCq(ourCall, ls.MyGridsquare, req.OffsetHz, req.OperatingFreqMHz, req.AnswerMode, req.TxParity, logbookID, req.CqModifier); err != nil {
 		s.writeFt8QsoError(w, op, err)
 		return
 	}
@@ -361,7 +361,7 @@ func (s *Server) handleFt8CqPick(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "invalid_field_value", "call is required", op)
 		return
 	}
-	if err := s.ft8.PickAnswerer(req.Call); err != nil {
+	if err := s.ft8As(r).PickAnswerer(req.Call); err != nil {
 		s.writeFt8QsoError(w, op, err)
 		return
 	}
@@ -382,7 +382,7 @@ func (s *Server) handleFt8CqBag(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "invalid_field_value", "call is required", op)
 		return
 	}
-	if err := s.ft8.BagAnswerer(req.Call); err != nil {
+	if err := s.ft8As(r).BagAnswerer(req.Call); err != nil {
 		s.writeFt8QsoError(w, op, err)
 		return
 	}
@@ -400,7 +400,7 @@ func (s *Server) handleFt8CqUnbag(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "invalid_field_value", "call is required", op)
 		return
 	}
-	if err := s.ft8.UnbagAnswerer(req.Call); err != nil {
+	if err := s.ft8As(r).UnbagAnswerer(req.Call); err != nil {
 		s.writeFt8QsoError(w, op, err)
 		return
 	}
@@ -411,7 +411,7 @@ func (s *Server) handleFt8CqUnbag(w http.ResponseWriter, r *http.Request) {
 // drawer's Resume; the Stop control paused it).
 func (s *Server) handleFt8CqResume(w http.ResponseWriter, r *http.Request) {
 	const op errors.Op = "api.handleFt8CqResume"
-	if err := s.ft8.ResumeDrain(); err != nil {
+	if err := s.ft8As(r).ResumeDrain(); err != nil {
 		s.writeFt8QsoError(w, op, err)
 		return
 	}
@@ -521,14 +521,14 @@ func (s *Server) handleFt8QsoWork(w http.ResponseWriter, r *http.Request) {
 	switch mode {
 	case "fd":
 		// Field Day: their class+section came from the picked call; ours from config.
-		err = s.ft8.StartWorkCallerFd(ourCall, req.TheirCall, req.TheirGrid,
+		err = s.ft8As(r).StartWorkCallerFd(ourCall, req.TheirCall, req.TheirGrid,
 			req.TheirClass, req.TheirSection, req.TheirSnr, req.SlotUTC, req.OffsetHz, req.OperatingFreqMHz, logbookID, req.AllowDuplicate)
 	case "type4":
 		// Reduced type-4 (nonstandard/compound caller, ADR 0048): no report on the wire.
-		err = s.ft8.StartWorkCallerT4(ourCall, req.TheirCall, req.TheirGrid, req.TheirSnr, req.SlotUTC,
+		err = s.ft8As(r).StartWorkCallerT4(ourCall, req.TheirCall, req.TheirGrid, req.TheirSnr, req.SlotUTC,
 			req.OffsetHz, req.OperatingFreqMHz, logbookID, req.AllowDuplicate)
 	default:
-		err = s.ft8.StartWorkCaller(ourCall, req.TheirCall, req.TheirGrid, req.TheirSnr, req.SlotUTC,
+		err = s.ft8As(r).StartWorkCaller(ourCall, req.TheirCall, req.TheirGrid, req.TheirSnr, req.SlotUTC,
 			req.OffsetHz, req.OperatingFreqMHz, logbookID, req.AllowDuplicate, req.AnswerMode)
 	}
 	if err != nil {
@@ -558,7 +558,10 @@ func (s *Server) handleFt8QsoPath(w http.ResponseWriter, r *http.Request) {
 	if !s.readJSONBody(w, r, op, &req) {
 		return
 	}
-	s.ft8.SetExchangePath(req.Path)
+	if err := s.ft8As(r).SetExchangePath(req.Path); err != nil {
+		s.writeFt8QsoError(w, op, err)
+		return
+	}
 	w.WriteHeader(http.StatusAccepted)
 }
 
@@ -588,7 +591,7 @@ func (s *Server) handleFt8QsoSkip(w http.ResponseWriter, r *http.Request) {
 	if !*req.Armed && (!s.checkArchive(w, r, op, true) || !s.checkDefault(w, r, op)) {
 		return
 	}
-	if err := s.ft8.SetQsoSkip(*req.Armed); err != nil {
+	if err := s.ft8As(r).SetQsoSkip(*req.Armed); err != nil {
 		s.writeFt8QsoError(w, op, err)
 		return
 	}
@@ -604,9 +607,9 @@ func (s *Server) handleFt8QsoSkip(w http.ResponseWriter, r *http.Request) {
 // skip-shaped trigger would never fire. No body. 202 on success; 409 ft8_no_answerer
 // when no answerer is being worked (idle, merely calling CQ, or an answer/work session
 // whose Next is skip). The pending state comes back via the ft8-qso SSE (next_armed).
-func (s *Server) handleFt8QsoNext(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleFt8QsoNext(w http.ResponseWriter, r *http.Request) {
 	const op errors.Op = "api.handleFt8QsoNext"
-	if err := s.ft8.NextAnswerer(); err != nil {
+	if err := s.ft8As(r).NextAnswerer(); err != nil {
 		s.writeFt8QsoError(w, op, err)
 		return
 	}
@@ -615,20 +618,31 @@ func (s *Server) handleFt8QsoNext(w http.ResponseWriter, _ *http.Request) {
 
 // handleFt8QsoAbandon drops any active sequenced session — answer-a-CQ or Call-CQ.
 // Idempotent — abandoning when idle is a 202 no-op.
-func (s *Server) handleFt8QsoAbandon(w http.ResponseWriter, _ *http.Request) {
-	s.ft8.AbandonQso()
+func (s *Server) handleFt8QsoAbandon(w http.ResponseWriter, r *http.Request) {
+	const op errors.Op = "api.handleFt8QsoAbandon"
+	if err := s.ft8As(r).AbandonQso(); err != nil {
+		s.writeFt8QsoError(w, op, err)
+		return
+	}
 	w.WriteHeader(http.StatusAccepted)
 }
 
 // handleFt8AutoWorkStop disarms an armed auto-work run WITHOUT ending any active
 // contact — the Auto-work pill's click action (ADR 0065). Distinct from abandon,
 // which stops both. Idempotent — stopping a stopped run is a 202 no-op.
-func (s *Server) handleFt8AutoWorkStop(w http.ResponseWriter, _ *http.Request) {
-	s.ft8.StopAutoWorkRun()
+func (s *Server) handleFt8AutoWorkStop(w http.ResponseWriter, r *http.Request) {
+	const op errors.Op = "api.handleFt8AutoWorkStop"
+	if err := s.ft8As(r).StopAutoWorkRun(); err != nil {
+		s.writeFt8QsoError(w, op, err)
+		return
+	}
 	w.WriteHeader(http.StatusAccepted)
 }
 
 func (s *Server) writeFt8QsoError(w http.ResponseWriter, op errors.Op, err error) {
+	if s.writeLifetimeRefusal(w, op, err) {
+		return
+	}
 	switch {
 	case stderr.Is(err, ft8.ErrArchiveSwitchPending):
 		// ADR 0071: an archive activation holds TX admission sealed until the

@@ -166,6 +166,7 @@ jobs:
           xvfb-run -a npm run check:c1
           xvfb-run -a npm run check:c1d-shell
           xvfb-run -a npm run check:c2b
+          xvfb-run -a npm run check:c4a
 
       # W-0027 D1: the desktop app RPM. nfpm is pinned; rpm, cpio, binutils and
       # desktop-file-utils read the artifact back. The build downloads Electron afresh and

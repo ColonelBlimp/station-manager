@@ -58,6 +58,15 @@ test('the daemon did not accept the credential: restart the app, then the daemon
     assert.ok(p.includes('https://127.0.0.1:8443'));
 });
 
+// W-0027 C4a: the daemon has admitted a later start of the app.
+test('a retired app is told to close, with no advice to start or restart anything', () => {
+    const html = page(waitingPageUrl('https://127.0.0.1:8443', { state: 'retired' }));
+    assert.match(html, /data-sm-state="retired"/);
+    assert.match(html, /Another Station Manager has taken over/);
+    assert.match(html, /Close this one/);
+    assert.doesNotMatch(html, /data-sm-start|data-sm-restart|data-sm-reason|smctl/);
+});
+
 // codex-112: the shell's own probe is recognised by a mark only the main process knows, never
 // by who Electron says sent it.
 test('the shell\u2019s probe asks /v1/version and is recognised only by its own mark', () => {
@@ -89,6 +98,7 @@ test('every form of the waiting page carries the scrollbar rules', () => {
         waitingPageUrl(null, { state: 'refused', path: '/p', reason: 'r' }),
         waitingPageUrl(null, { state: 'refused', subject: 'credential', path: '/p', reason: 'r' }),
         waitingPageUrl('https://127.0.0.1:8443', { state: 'unaccepted' }),
+        waitingPageUrl('https://127.0.0.1:8443', { state: 'retired' }),
     ];
     for (const u of forms) {
         const p = page(u);

@@ -6,7 +6,12 @@
 // does discovery run, and the pin, the origin and the credential are fixed together at the first
 // valid identity and credential (src/daemon.mjs). The interactive app and the real-smd acceptance
 // (test/scenario-c1d.mjs) launch through this one function.
+//
+// The app lifetime (W-0027 C4a; src/admission.mjs) is made here, once per launch, and goes out
+// with the credential. The app is admitted with it before the application is loaded, and again
+// whenever smd's responses show a daemon process it has not been admitted to.
 import { session } from 'electron';
+import { admission, newLifetime, watchDaemon } from './admission.mjs';
 import { installCredential, onceCredential, watchRefusal } from './credential.mjs';
 import { connectWhenTrusted } from './daemon.mjs';
 import { recordingFs } from './discovery.mjs';
@@ -19,9 +24,10 @@ import { createMainWindow } from './window.mjs';
  * Launch one window. `partition` gives it its own session (its own verifier, pin and origin),
  * which only a test of a second, freshly started window needs. `onCredentialRefused` is called
  * once if smd refuses the credential in a loaded workspace; `onCredentialRequest` sees, for
- * tests, each request and whether the credential went with it. Returns the window and, for
+ * tests, each request and whether the credential went with it. `onRetired` is called once if
+ * smd has admitted a later start of the app in place of this one. Returns the window and, for
  * tests, the pin, the credential holder, the target origin, every file the discovery opened,
- * the verifier's decisions and the requests the filter blocked.
+ * the verifier's decisions, the requests the filter blocked, the app lifetime and its admission.
  */
 export function launchTrusted({
     env = process.env,
@@ -33,11 +39,13 @@ export function launchTrusted({
     onPermission,
     onCredentialRefused,
     onCredentialRequest,
+    onRetired,
 }) {
     const ses = partition ? session.fromPartition(partition) : session.defaultSession;
     const pin = oncePin();
     const cred = onceCredential();
     const target = { origin: null };
+    const lifetime = newLifetime();
     const rec = recordingFs();
     const decisions = [];
     const blocked = [];
@@ -53,8 +61,15 @@ export function launchTrusted({
     installCredential(ses, {
         origin: () => target.origin,
         credential: cred.get,
+        lifetime: () => lifetime,
         onRequest: onCredentialRequest,
     });
+    const admitted = admission({
+        ses,
+        origin: () => target.origin,
+        onRetired: () => onRetired?.(),
+    });
+    watchDaemon(ses, { origin: () => target.origin, onMarker: admitted.sawMarker });
     watchRefusal(ses, {
         origin: () => target.origin,
         isProbe: isShellProbe,
@@ -67,6 +82,26 @@ export function launchTrusted({
         openExternal,
         partition,
     });
-    void connectWhenTrusted({ win, pin, cred, target, args, env, fsb: rec.fs, retryMs });
-    return { win, pin, cred, target, opened: rec.opened, decisions, blocked };
+    void connectWhenTrusted({
+        win,
+        pin,
+        cred,
+        target,
+        args,
+        env,
+        fsb: rec.fs,
+        retryMs,
+        admit: admitted.admitNow,
+    });
+    return {
+        win,
+        pin,
+        cred,
+        target,
+        opened: rec.opened,
+        decisions,
+        blocked,
+        lifetime,
+        admission: admitted,
+    };
 }

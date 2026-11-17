@@ -229,6 +229,12 @@ type Service struct {
 	// goroutine, which takes only txMu).
 	seqGate sync.Mutex
 
+	// Operating ownership (operating.go; W-0027 C4a). ownershipRequired is set once
+	// at wiring, before Start. operatingLifetime is the app lifetime that may operate
+	// FT8, "" for none; guarded by seqGate, the gate a replacement takes.
+	ownershipRequired atomic.Bool
+	operatingLifetime string
+
 	// seq is the manual sequencer (ADR 0031 step e3): one active answer-a-CQ
 	// exchange, driven per slot from decodeLoop, transmitting via seqTransmit.
 	// Created in newService; nil-safe via its own methods.

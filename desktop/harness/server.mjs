@@ -45,7 +45,30 @@ export async function startHarness({ up = true, tls = null, tag = 'fixture', por
     // operating-client check on (W-0027 C2): anything without exactly that one credential
     // header gets 403 desktop_app_required.
     // `forbid`, when set to a code, answers every request 403 with that code instead.
-    const state = { versionReady: true, requireCredential: null, forbid: null };
+    // `admission` answers the app's admission as smd does (W-0027 C4a; internal/api
+    // app_admission.go): with `required` false, as with the check off, there is nothing to be
+    // admitted to; with it true the fixture keeps one current lifetime, a generation and the
+    // lifetimes it has replaced, and puts `instance`, its process marker, on what it serves.
+    // `holdAdmit`, when set, is awaited before an admit is answered, so a test can place
+    // another admission between a read and its admit.
+    const state = {
+        versionReady: true,
+        requireCredential: null,
+        forbid: null,
+        admission: {
+            required: false,
+            instance: `fixture-${tag}-1`,
+            generation: 0,
+            current: null,
+            retired: new Set(),
+            holdAdmit: null,
+            // failReads: answer that many reads with 500. oneOffMarker: put this marker,
+            // once, on the next response that is not an admission's, as a late response from
+            // an earlier process would carry.
+            failReads: 0,
+            oneOffMarker: null,
+        },
+    };
     const handshakes = { secure: 0, failed: 0 };
     const sockets = new Set();
     const marker = (url) => new URL(url, 'http://x').searchParams.get('m') ?? '';
@@ -62,10 +85,65 @@ export async function startHarness({ up = true, tls = null, tag = 'fixture', por
     const admitted = (cred) =>
         state.requireCredential === null ||
         (cred.length === 1 && cred[0] === state.requireCredential);
+    // Every value of the app-lifetime header on a request, as for the credential.
+    const lifetimes = (req) => {
+        const out = [];
+        for (let i = 0; i < req.rawHeaders.length; i += 2) {
+            if (req.rawHeaders[i].toLowerCase() === 'x-sm-app-lifetime')
+                out.push(req.rawHeaders[i + 1]);
+        }
+        return out;
+    };
+    /** Replace the current lifetime, as an admission does (also for a test, directly). */
+    const replaceLifetime = (lifetime) => {
+        const a = state.admission;
+        if (a.current) a.retired.add(a.current);
+        a.current = lifetime;
+        a.generation += 1;
+    };
+    const json = (res, status, body) => {
+        res.writeHead(status, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(body));
+    };
+    const admission = async (req, res, lifetime) => {
+        const a = state.admission;
+        if (req.method === 'GET') {
+            if (a.failReads > 0) {
+                a.failReads -= 1;
+                json(res, 500, { code: 'fixture_failure' });
+                return;
+            }
+            json(res, 200, {
+                required: a.required,
+                daemon_instance: a.instance,
+                generation: a.required ? a.generation : 0,
+                current: a.required && lifetime !== '' && lifetime === a.current,
+            });
+            return;
+        }
+        let raw = '';
+        for await (const chunk of req) raw += chunk;
+        if (a.holdAdmit) await a.holdAdmit();
+        let body = null;
+        try {
+            body = JSON.parse(raw);
+        } catch {
+            // answered below
+        }
+        if (!a.required) return json(res, 200, { required: false, daemon_instance: a.instance });
+        if (lifetime === '') return json(res, 400, { code: 'app_lifetime_required' });
+        if (lifetime === a.current) return json(res, 200, { current: true });
+        if (a.retired.has(lifetime)) return json(res, 409, { code: 'app_lifetime_retired' });
+        if (body?.daemon_instance !== a.instance || body?.generation !== a.generation)
+            return json(res, 409, { code: 'app_admission_stale' });
+        replaceLifetime(lifetime);
+        return json(res, 200, { current: true, generation: a.generation });
+    };
 
     const handler = (req, res) => {
         const cred = credentials(req);
-        requests.push({ method: req.method, url: req.url, cred });
+        const lifetime = lifetimes(req);
+        requests.push({ method: req.method, url: req.url, cred, lifetime });
         const path = new URL(req.url, 'http://x').pathname;
         if (!admitted(cred)) {
             res.writeHead(403, { 'content-type': 'application/json' });
@@ -76,6 +154,22 @@ export async function startHarness({ up = true, tls = null, tag = 'fixture', por
             // A 403 of another kind, for every request: smd's own code for something else.
             res.writeHead(403, { 'content-type': 'application/json' });
             res.end(JSON.stringify({ code: state.forbid, message: 'x', op: 'fixture' }));
+            return;
+        }
+        // As smd with its check on: this process's marker on everything it serves.
+        const isAdmission =
+            path === '/v1/app/lifetime' && (req.method === 'GET' || req.method === 'POST');
+        if (state.admission.required) {
+            let instance = state.admission.instance;
+            if (!isAdmission && state.admission.oneOffMarker !== null) {
+                instance = state.admission.oneOffMarker;
+                state.admission.oneOffMarker = null;
+            }
+            res.setHeader('X-Sm-Daemon-Instance', instance);
+            res.setHeader('X-Sm-Admission-Generation', String(state.admission.generation));
+        }
+        if (isAdmission) {
+            void admission(req, res, lifetime.length === 1 ? lifetime[0] : '');
             return;
         }
         if (req.method === 'GET' && path === '/asset.js') {
@@ -112,6 +206,12 @@ export async function startHarness({ up = true, tls = null, tag = 'fixture', por
             res.end();
             return;
         }
+        if (req.method === 'GET' && path === '/api/conflict') {
+            // A refusal of some other kind, as smd answers a command it cannot take now.
+            res.writeHead(409, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ code: 'ft8_tx_not_armed', message: 'x', op: 'fixture' }));
+            return;
+        }
         if (req.method === 'GET' && path === '/api/echo') {
             res.writeHead(200, { 'content-type': 'application/json' });
             res.end(JSON.stringify({ tag, m: marker(req.url) }));
@@ -139,7 +239,7 @@ export async function startHarness({ up = true, tls = null, tag = 'fixture', por
 
     const onUpgrade = (req, socket) => {
         const cred = credentials(req);
-        upgrades.push({ url: req.url, cred });
+        upgrades.push({ url: req.url, cred, lifetime: lifetimes(req) });
         if (!admitted(cred)) {
             socket.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');
             return;
@@ -155,6 +255,10 @@ export async function startHarness({ up = true, tls = null, tag = 'fixture', por
             .digest('base64');
         socket.write(
             'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n' +
+                (state.admission.required
+                    ? `X-Sm-Daemon-Instance: ${state.admission.instance}\r\n` +
+                      `X-Sm-Admission-Generation: ${state.admission.generation}\r\n`
+                    : '') +
                 `Sec-WebSocket-Accept: ${accept}\r\n\r\n`
         );
         socket.write(wsFrame(`${tag}:${marker(req.url)}`));
@@ -209,6 +313,7 @@ export async function startHarness({ up = true, tls = null, tag = 'fixture', por
         requests,
         upgrades,
         handshakes,
+        replaceLifetime,
         start: () => (server ? Promise.resolve() : listen()),
         stop: close,
     };

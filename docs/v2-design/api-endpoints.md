@@ -54,6 +54,31 @@ never a value. With the check on, an unusable credential, a refused identity or 
 that cannot be bound is a start-up error, and the app listener stopping with an error later
 ends `smd` (its service manager restarts it). With it off, the header is ignored.
 
+**App lifetime and admission (ADR 0102 ruling 6; W-0027 C4a).** With the operating-client
+check on, FT8 is operated only by the desktop app's **current lifetime**.
+- **The lifetime** is an identity the app's main process makes at each start (16 random bytes,
+  base64url, 22 characters) and sends on every request as one `X-SM-App-Lifetime` header. It
+  is a label, not a secret. More than one header, or a malformed one, is **400
+  `invalid_app_lifetime`**. The header is removed before any handler runs.
+- **Admission** makes a lifetime current: `GET` then `POST /v1/app/lifetime` (below). A new
+  `smd` process has no current lifetime and never takes one without an admission. A
+  replacement stops FT8 as unattended before the new lifetime is current, and the replaced
+  lifetime is refused for as long as that process runs.
+- **What needs the current lifetime:** every FT8 command but the profile claim and a disarm
+  (`armed: false`): arming, a send, the starts, the exchange path, abandon, the auto-work
+  stop, skip, next, and the Call-CQ pick, bag, unbag and resume. A request that carries no
+  lifetime, another lifetime, or any lifetime while none is current gets **409
+  `app_lifetime_not_current`**. A request with no lifetime is told to restart Station Manager:
+  it is a tool, or an app that was started before this was installed.
+- **What does not:** reading, logging, settings and every stream are served whatever lifetime
+  a request carries, or none. A disarm is always accepted.
+- **The process marker and the generation.** Every response served for the credential on the
+  app listener carries `X-SM-Daemon-Instance`, the value `/v1/version` reports as this
+  process's marker, and `X-SM-Admission-Generation`, the admission generation as it is now.
+  The app sees a daemon restart by the first and its own replacement by the second, asks
+  (`GET /v1/app/lifetime`), and is admitted again or told it is retired.
+- With the check off, the header is ignored and admission does nothing.
+
 **Content negotiation.** JSON in/out except `POST /v1/qso`, which takes ADIF
 (`application/x-adif` / `text/plain` / empty).
 
@@ -501,6 +526,17 @@ The station-global archive catalogue (`config.md` §3): the archive the daemon s
 
 ### `GET /v1/version`
 - **Purpose:** Daemon build / Go runtime / build environment / DB schema version / active archive. **Always-on.** **200** `{"daemon": string, "go": string, "env": "dev"|"release", "schema": {"version": uint64, "dirty": bool}?, "archive": {"id": uuid, "label": string, "ownership": "managed"|"legacy"|"external", "default_logbook_uuid": uuid?}?}` (always 200; `schema` omitted + warn-logged if the schema query fails; `archive` is the catalogue entry the daemon serves (ADR 0071) — identity, label and ownership only, never the file path — and is omitted before adoption). `default_logbook_uuid` is the default this process serves (ADR 0097 §4: not a pending change's target until the restart that applies it, and the applied one even if `config.json` could not be rewritten); omitted when no logbook is the default, and warn-logged and omitted if it cannot be read. `env` is `dev` for any source build (incl. `task run:smd`) and `release` only for a packaged binary (the RPM build stamps `-X …/internal/buildinfo.Env=release`); the app flags a `dev` daemon with a Sidebar DEV pill and a `DEV · ` tab-title prefix so it's distinguishable from the deployed one on the same `:8080`. Only the exact literal `dev` marks DEV — a missing or unexpected `env` is treated as `release`, so a release daemon is never falsely labelled. The Sidebar footer shows the running `daemon` build itself (not a source constant); an unreachable/malformed response reads "Version unavailable" and drops the marker.
+
+### `GET /v1/app/lifetime`
+- **Purpose:** The read half of the desktop app's admission (W-0027 C4a): this process's marker, the admission generation, and whether the caller's `X-SM-App-Lifetime` is the current one. **Always-on.**
+- **Response:** **200** `{"required": bool, "daemon_instance": string, "generation": uint64, "current": bool}`. `required` is false with the operating-client check off; `generation` is then 0 and `current` false. A request with no lifetime is never current.
+
+### `POST /v1/app/lifetime`
+- **Purpose:** Admit the caller's app lifetime against what it read. **Always-on.**
+- **Request:** Body `{"daemon_instance": string, "generation": uint64}`, both as read; `generation` is **required**; unknown or duplicate keys are rejected (AW-2). The lifetime is the request's `X-SM-App-Lifetime` header.
+- **Response:** **200** `{"required": true, "daemon_instance": string, "generation": uint64, "current": true}`. The caller is current: either it already was (nothing changes, so a repeat or a retry after a lost answer is harmless) or it has replaced the previous lifetime. A replacement stops FT8 first (the cause `unattended`), waits for a transmission in flight to end, then publishes the new lifetime and advances the generation. With the check off: **200** `{"required": false, …}` and nothing happens.
+- **Errors:** 400 `invalid_json` / `missing_required_field` / `app_lifetime_required` (no lifetime header); **409** `app_admission_stale` (the marker or generation is not this process's now: another admission landed since the read; read again; the current app is untouched) | `app_lifetime_retired` (this lifetime has been replaced in this process; it is refused for good).
+- **Notes:** Admissions are handled one at a time and each succeeds only against the generation it read, so a request an earlier app had already sent cannot succeed after a later admission. Nothing is stored: a restarted `smd` has no current lifetime and no retired ones.
 
 ### `POST /v1/restart`
 - **Purpose:** ATTENDED, operator-triggered graceful daemon restart — applies the "Requires a restart" config-apply changes (active rig, connection, mode mappings, serial overrides) without an on-box `systemctl`. The daemon runs its normal graceful shutdown (releasing the tune/FT8 carrier — TX-safe), then exits `ExitRestart` (3); systemd (`smd.service` `Restart=on-failure` + `RestartForceExitStatus=3`) respawns it ~`RestartSec` (5s) later and SSE clients auto-reconnect.

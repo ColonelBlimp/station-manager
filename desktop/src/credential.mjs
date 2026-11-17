@@ -10,8 +10,11 @@
 // replaced credential is adopted when the app is started again, as a replaced identity is.
 import { onOrigin } from './hardening.mjs';
 
+import { LIFETIME_HEADER } from './admission.mjs';
+
 export const CREDENTIAL_HEADER = 'X-SM-Operating-Credential';
 const LOWER = CREDENTIAL_HEADER.toLowerCase();
+const LIFETIME_LOWER = LIFETIME_HEADER.toLowerCase();
 
 /** A credential set exactly once. Before it is set, `get()` returns null, so nothing is sent; a
  *  second `set` throws. It never prints its value. */
@@ -38,17 +41,22 @@ function receives(url, origin) {
     return onOrigin(url, origin); // https or wss on exactly that host and port; never a downgrade
 }
 
-/** The headers a request goes out with. Any header of the credential's name already there, in
- *  any letter case, is removed, so a page can neither supply one nor make the shell send two;
- *  then the credential is added if, and only if, the request is for the pinned origin. Pure:
- *  `headers` is not modified. */
-export function credentialHeaders(headers, url, origin, value) {
+/** The headers a request goes out with. Any header of the credential's name or the app
+ *  lifetime's already there, in any letter case, is removed, so a page can neither supply one nor
+ *  make the shell send two; then the credential, and with it the lifetime (W-0027 C4a), is added
+ *  if, and only if, the request is for the pinned origin. Pure: `headers` is not modified. */
+export function credentialHeaders(headers, url, origin, value, lifetime) {
     const out = {};
     for (const [k, v] of Object.entries(headers ?? {})) {
-        if (k.toLowerCase() !== LOWER) out[k] = v;
+        const name = k.toLowerCase();
+        if (name !== LOWER && name !== LIFETIME_LOWER) out[k] = v;
     }
-    if (typeof value === 'string' && value !== '' && receives(url, origin))
+    if (typeof value === 'string' && value !== '' && receives(url, origin)) {
         out[CREDENTIAL_HEADER] = value;
+        // The app lifetime (admission.mjs) goes exactly where the credential goes, under the
+        // same rule: one value, the shell's, and never a page's.
+        if (typeof lifetime === 'string' && lifetime !== '') out[LIFETIME_HEADER] = lifetime;
+    }
     return out;
 }
 
@@ -56,15 +64,20 @@ export function credentialHeaders(headers, url, origin, value) {
  *  at each request (null until fixed). Electron keeps one listener per webRequest event, so this
  *  is the only owner of onBeforeSendHeaders; the request filter in hardening.mjs is a different
  *  event. `onRequest` sees, for tests, each request's URL and whether the credential went. */
-export function installCredential(ses, { origin, credential, onRequest }) {
+export function installCredential(ses, { origin, credential, lifetime, onRequest }) {
     ses.webRequest.onBeforeSendHeaders((details, callback) => {
         const requestHeaders = credentialHeaders(
             details.requestHeaders,
             details.url,
             origin(),
-            credential()
+            credential(),
+            lifetime?.()
         );
-        onRequest?.({ url: details.url, sent: CREDENTIAL_HEADER in requestHeaders });
+        onRequest?.({
+            url: details.url,
+            sent: CREDENTIAL_HEADER in requestHeaders,
+            lifetime: requestHeaders[LIFETIME_HEADER] ?? null,
+        });
         callback({ requestHeaders });
     });
 }

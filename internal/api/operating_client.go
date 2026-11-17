@@ -3,6 +3,7 @@ package api
 import (
 	"io"
 	"net/http"
+	"strconv"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 )
@@ -48,8 +49,27 @@ func (s *Server) requireOperatingClient(next http.Handler) http.Handler {
 		// diagnostic downstream is ever handed the credential.
 		presented := r.Header.Values(operatingCredentialHeader)
 		r.Header.Del(operatingCredentialHeader)
+		// The app lifetime (app_admission.go) is read here too and goes no further as a
+		// header: a handler is given the validated value, or nothing.
+		lifetimes := r.Header.Values(appLifetimeHeader)
+		r.Header.Del(appLifetimeHeader)
 
-		if !s.requireDesktopApp || s.operatingClientAdmitted(r, presented) {
+		if !s.requireDesktopApp {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if s.operatingClientAdmitted(r, presented) {
+			// Served for its credential, not as the open health check: it is the app, or a
+			// tool of the operator's. It gets this process's marker and admission
+			// generation, and its lifetime if it named one.
+			if isAppRequest(r) && len(presented) == 1 {
+				var ok bool
+				if r, ok = s.withAppLifetime(w, r, lifetimes); !ok {
+					return
+				}
+				w.Header().Set(daemonInstanceHeader, processInstance)
+				w.Header().Set(admissionGenerationHeader, strconv.FormatUint(s.admission.published.Load(), 10))
+			}
 			next.ServeHTTP(w, r)
 			return
 		}

@@ -240,3 +240,59 @@ test('the shell\u2019s own question never prompts another, whatever its answer',
     f.complete({ url: PROBE });
     assert.equal(f.asked.length, 1, 'the question prompted itself');
 });
+
+// W-0027 C4a: the app lifetime goes exactly where the credential goes, and only with it.
+const LIFETIME = 'L'.repeat(21) + 'A';
+const LIFETIME_NAME = 'X-SM-App-Lifetime';
+
+test('the app lifetime goes with the credential, to the pinned origin only', () => {
+    for (const url of [
+        ORIGIN + '/',
+        ORIGIN + '/v1/ft8/events',
+        'wss://127.0.0.1:8443/v1/events/ws',
+    ]) {
+        assert.deepEqual(credentialHeaders({}, url, ORIGIN, VALUE, LIFETIME), {
+            [CREDENTIAL_HEADER]: VALUE,
+            [LIFETIME_NAME]: LIFETIME,
+        });
+    }
+    for (const url of [
+        'http://127.0.0.1:8443/',
+        'https://127.0.0.1:8444/',
+        'https://localhost:8443/',
+        'https://example.invalid/',
+    ]) {
+        assert.deepEqual(credentialHeaders({}, url, ORIGIN, VALUE, LIFETIME), {}, url);
+    }
+    // No origin pinned yet, or no credential yet: nothing is sent, the lifetime included.
+    assert.deepEqual(credentialHeaders({}, ORIGIN + '/', null, VALUE, LIFETIME), {});
+    assert.deepEqual(credentialHeaders({}, ORIGIN + '/', ORIGIN, null, LIFETIME), {});
+    // No lifetime: the credential goes alone, as before C4a.
+    assert.deepEqual(credentialHeaders({}, ORIGIN + '/', ORIGIN, VALUE), {
+        [CREDENTIAL_HEADER]: VALUE,
+    });
+    assert.deepEqual(credentialHeaders({}, ORIGIN + '/', ORIGIN, VALUE, ''), {
+        [CREDENTIAL_HEADER]: VALUE,
+    });
+});
+
+test('a lifetime a page supplies is removed, in any letter case, wherever the request goes', () => {
+    const supplied = {
+        Accept: '*/*',
+        'X-SM-App-Lifetime': 'page',
+        'x-sm-app-lifetime': 'page-lower',
+        'X-Sm-App-Lifetime': 'page-mixed',
+    };
+    assert.deepEqual(credentialHeaders(supplied, ORIGIN + '/', ORIGIN, VALUE, LIFETIME), {
+        Accept: '*/*',
+        [CREDENTIAL_HEADER]: VALUE,
+        [LIFETIME_NAME]: LIFETIME,
+    });
+    assert.deepEqual(
+        credentialHeaders(supplied, 'https://example.invalid/', ORIGIN, VALUE, LIFETIME),
+        {
+            Accept: '*/*',
+        }
+    );
+    assert.equal(supplied['X-SM-App-Lifetime'], 'page', 'the input was modified');
+});

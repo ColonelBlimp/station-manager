@@ -47,7 +47,7 @@ func (s *Server) handleFt8Claim(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "missing_required_field", "mode is required", op)
 		return
 	}
-	p, err := s.ft8.ClaimProfile(req.Mode)
+	p, err := s.ft8As(r).ClaimProfile(req.Mode)
 	if err != nil {
 		s.writeFt8ClaimError(w, op, err)
 		return

@@ -88,6 +88,20 @@ if (!app.requestSingleInstanceLock()) {
                             buttons: ['OK'],
                         });
                     },
+                    // W-0027 C4a: the daemon has admitted a later start of the app. Said
+                    // once; this window can still read and log, and can no longer operate.
+                    onRetired: () => {
+                        if (!mainWindow) return;
+                        void dialog.showMessageBox(mainWindow, {
+                            type: 'warning',
+                            title: 'Station Manager',
+                            message: 'Another Station Manager has taken over',
+                            detail:
+                                'The daemon is being operated from a later start of Station Manager, so this window can no longer transmit.\n\n' +
+                                'What you have typed is still here. Close this window when you have finished with it.',
+                            buttons: ['OK'],
+                        });
+                    },
                 });
                 mainWindow = launched.win;
                 mainWindow.on('closed', () => {
@@ -121,6 +135,29 @@ if (!app.requestSingleInstanceLock()) {
                         onCredentialRequest: (r) => sent.push(r),
                     });
                     return { ...launched, refusals, sent };
+                };
+                const first = launch(undefined);
+                mainWindow = first.win;
+                const ok = await s.run({ first, launch });
+                await s.cleanup();
+                app.exit(ok ? 0 : 1);
+                return;
+            }
+            // C4a (W-0027): the app lifetime and its admission, against a synthetic install
+            // and a TLS fixture that answers as smd does with its check on.
+            if (scenario === 'c4a') {
+                const s = await (await import('../test/scenario-c4a.mjs')).setupC4a();
+                const launch = (partition) => {
+                    const retired = [];
+                    const launched = launchTrusted({
+                        env: s.env,
+                        offscreen: true,
+                        partition,
+                        openExternal: externalOpener((url) => externalOpened.push(url)),
+                        retryMs: 300,
+                        onRetired: () => retired.push(Date.now()),
+                    });
+                    return { ...launched, retired };
                 };
                 const first = launch(undefined);
                 mainWindow = first.win;

@@ -137,12 +137,23 @@ func (s *Service) SetTxKeyer(k TxKeyer) {
 // acquires the device and builds the slot controller. Disarming aborts any
 // in-flight transmission (PTT drops) and releases the device. Disarmed at
 // construction — nothing can transmit until the operator arms.
-func (s *Service) ArmTx(armed bool) error {
-	if armed {
-		return s.armTx()
+func (s *Service) ArmTx(armed bool) error { return s.armTxAs("", armed) }
+
+// armTxAs is ArmTx for a named caller (operating.go). A disarm is accepted from anyone
+// (operator ruling 2026-11-17, question 11): a stop is never refused. An arm is checked,
+// and made, under the gate a replacement takes.
+func (s *Service) armTxAs(who string, armed bool) error {
+	const op errors.Op = "ft8.Service.ArmTx"
+	if !armed {
+		s.disarmTx(disarmOperator)
+		return nil
 	}
-	s.disarmTx(disarmOperator)
-	return nil
+	release, err := s.operatorGate(op, who)
+	if err != nil {
+		return err
+	}
+	defer release()
+	return s.armTx()
 }
 
 func (s *Service) armTx() error {
@@ -487,7 +498,7 @@ func (s *Service) validateTxOffset(op errors.Op, offsetHz float64) error {
 // (it blocks up to a slot waiting for the boundary, then ~12.6 s of audio), and
 // its progress/outcome rides the ft8-tx SSE event. PTT is guaranteed down on
 // every path (controller deferred unkey + bridge auto-off).
-func (s *Service) TransmitNext(message string, offsetHz float64) error {
+func (s *Service) transmitNextAs(who string, message string, offsetHz float64) error {
 	const op errors.Op = "ft8.Service.TransmitNext"
 
 	// A manual send and a sequenced session must be mutually exclusive. They share
@@ -502,6 +513,9 @@ func (s *Service) TransmitNext(message string, offsetHz float64) error {
 	// under seqGate via fireOpening, so this nesting is the established order.)
 	s.seqGate.Lock()
 	defer s.seqGate.Unlock()
+	if err := s.operatorCheckLocked(op, who); err != nil {
+		return err
+	}
 	if s.admissionSealed() {
 		return errors.New(op).WithErr(ErrArchiveSwitchPending)
 	}
@@ -882,11 +896,14 @@ func (s *Service) dialState() (mhz float64, tracked, known bool) {
 // theirSlotUTC) and a clear offset. Requires TX **armed** — the sequencer keys
 // through the armed controller. ourCall/ourGrid are the station identity the api
 // layer resolved from config.
-func (s *Service) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64, allowDuplicate bool, answerMode string) error {
+func (s *Service) startQsoAs(who string, ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64, allowDuplicate bool, answerMode string) error {
 	const op errors.Op = "ft8.Service.StartQso"
 	// seqGate: armed-check + sequencer commit are atomic w.r.t. disarm (M3).
 	s.seqGate.Lock()
 	defer s.seqGate.Unlock()
+	if err := s.operatorCheckLocked(op, who); err != nil {
+		return err
+	}
 	// Validated under the gate the profile claim holds (see TransmitNext).
 	if err := s.validateTxOffset(op, offsetHz); err != nil {
 		return err
@@ -926,7 +943,7 @@ func (s *Service) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC 
 // (class + section) is daemon config (ft8.field_day), not client-supplied — mirroring
 // how StartCallCq reads the answer mode — and a missing identity is refused up front.
 // Requires TX armed, same as StartQso.
-func (s *Service) StartQsoFd(ourCall, theirCall, theirGrid string, theirSnr int, theirSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64, allowDuplicate bool) error {
+func (s *Service) startQsoFdAs(who string, ourCall, theirCall, theirGrid string, theirSnr int, theirSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64, allowDuplicate bool) error {
 	const op errors.Op = "ft8.Service.StartQsoFd"
 	var class, section string
 	if s.cfg.FieldDay != nil {
@@ -937,6 +954,9 @@ func (s *Service) StartQsoFd(ourCall, theirCall, theirGrid string, theirSnr int,
 	}
 	s.seqGate.Lock()
 	defer s.seqGate.Unlock()
+	if err := s.operatorCheckLocked(op, who); err != nil {
+		return err
+	}
 	// Validated under the gate the profile claim holds (see TransmitNext).
 	if err := s.validateTxOffset(op, offsetHz); err != nil {
 		return err
@@ -975,7 +995,7 @@ func (s *Service) effectiveAnswerMode(answerMode string) string {
 // ourCall/ourGrid are the station identity the api layer resolved from config;
 // offsetHz is our TX offset; dialFreqMHz is the rig dial for the logged QSO frequency;
 // cqModifier is the optional CQ token (see Sequencer.StartCallCq).
-func (s *Service) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz float64, answerMode, txParity string, logbookID int64, cqModifier string) error {
+func (s *Service) startCallCqAs(who string, ourCall, ourGrid string, offsetHz, dialFreqMHz float64, answerMode, txParity string, logbookID int64, cqModifier string) error {
 	const op errors.Op = "ft8.Service.StartCallCq"
 	// All three modes are implemented (operator_pick since ADR 0065 decision 3).
 	// The SESSION's carried mode wins (ADR 0066); empty or invalid falls back to
@@ -984,6 +1004,9 @@ func (s *Service) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz flo
 	// seqGate: armed-check + sequencer commit are atomic w.r.t. disarm (M3).
 	s.seqGate.Lock()
 	defer s.seqGate.Unlock()
+	if err := s.operatorCheckLocked(op, who); err != nil {
+		return err
+	}
 	// Validated under the gate the profile claim holds (see TransmitNext).
 	if err := s.validateTxOffset(op, offsetHz); err != nil {
 		return err
@@ -1013,11 +1036,14 @@ func (s *Service) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz flo
 // is our SNR of that signal (the report we send back). Requires TX **armed** — the
 // sequencer keys through the armed controller. ourCall is the station identity the
 // api layer resolved from config.
-func (s *Service) StartWorkCaller(ourCall, theirCall, theirGrid string, theirSnr int, theirSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64, allowDuplicate bool, answerMode string) error {
+func (s *Service) startWorkCallerAs(who string, ourCall, theirCall, theirGrid string, theirSnr int, theirSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64, allowDuplicate bool, answerMode string) error {
 	const op errors.Op = "ft8.Service.StartWorkCaller"
 	// seqGate: armed-check + sequencer commit are atomic w.r.t. disarm (M3).
 	s.seqGate.Lock()
 	defer s.seqGate.Unlock()
+	if err := s.operatorCheckLocked(op, who); err != nil {
+		return err
+	}
 	// Validated under the gate the profile claim holds (see TransmitNext).
 	if err := s.validateTxOffset(op, offsetHz); err != nil {
 		return err
@@ -1041,17 +1067,24 @@ func (s *Service) StartWorkCaller(ourCall, theirCall, theirGrid string, theirSnr
 // StopAutoWorkRun disarms an armed auto-work run without touching any active
 // contact (ADR 0065 — the Auto-work pill's click action). Idempotent; safe with
 // no sequencer (FT8 disabled) and in any session state.
-func (s *Service) StopAutoWorkRun() {
+func (s *Service) stopAutoWorkRunAs(who string) error {
+	const op errors.Op = "ft8.Service.StopAutoWorkRun"
+	release, err := s.operatorGate(op, who)
+	if err != nil {
+		return err
+	}
+	defer release()
 	if s.seq != nil {
 		s.seq.StopAutoWorkRun()
 	}
+	return nil
 }
 
 // StartWorkCallerFd begins working a station that called us with a Field Day exchange
 // (the FD twin of StartWorkCaller): the operator picked "<ourCall> <theirCall> <class>
 // <section>". theirClass/theirSection are parsed by the api layer from that decode; OUR
 // class/section come from ft8.field_day config (not client-supplied). Requires TX armed.
-func (s *Service) StartWorkCallerFd(ourCall, theirCall, theirGrid, theirClass, theirSection string, theirSnr int, theirSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64, allowDuplicate bool) error {
+func (s *Service) startWorkCallerFdAs(who string, ourCall, theirCall, theirGrid, theirClass, theirSection string, theirSnr int, theirSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64, allowDuplicate bool) error {
 	const op errors.Op = "ft8.Service.StartWorkCallerFd"
 	var class, section string
 	if s.cfg.FieldDay != nil {
@@ -1062,6 +1095,9 @@ func (s *Service) StartWorkCallerFd(ourCall, theirCall, theirGrid, theirClass, t
 	}
 	s.seqGate.Lock()
 	defer s.seqGate.Unlock()
+	if err := s.operatorCheckLocked(op, who); err != nil {
+		return err
+	}
 	// Validated under the gate the profile claim holds (see TransmitNext).
 	if err := s.validateTxOffset(op, offsetHz); err != nil {
 		return err
@@ -1087,10 +1123,21 @@ func (s *Service) StartWorkCallerFd(ourCall, theirCall, theirGrid, theirClass, t
 // standard grid/report ladder. theirSnr is our SNR of their CQ (logged as RST_SENT, since
 // type-4 exchanges no report on the air). Needs no config identity — our own call is
 // standard. Requires TX armed, same gating as StartQso.
-func (s *Service) StartQsoT4(ourCall, theirCall, theirGrid string, theirSnr int, theirSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64, allowDuplicate bool) error {
-	const op errors.Op = "ft8.Service.StartQsoT4"
+func (s *Service) startQsoT4As(who string, ourCall, theirCall, theirGrid string, theirSnr int, theirSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64, allowDuplicate bool) error {
+	return s.startT4As(who, "ft8.Service.StartQsoT4", offsetHz, logbookID, allowDuplicate, func(now time.Time) error {
+		return s.seq.StartQsoT4(ourCall, theirCall, theirGrid, theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, now)
+	})
+}
+
+// startT4As is what the two type-4 starts share: everything but the sequencer's own start,
+// which differs only in which rung opens the exchange. One body, so the gate, the caller
+// check and the staging cannot drift apart between them.
+func (s *Service) startT4As(who string, op errors.Op, offsetHz float64, logbookID int64, allowDuplicate bool, start func(now time.Time) error) error {
 	s.seqGate.Lock()
 	defer s.seqGate.Unlock()
+	if err := s.operatorCheckLocked(op, who); err != nil {
+		return err
+	}
 	// Validated under the gate the profile claim holds (see TransmitNext).
 	if err := s.validateTxOffset(op, offsetHz); err != nil {
 		return err
@@ -1103,7 +1150,7 @@ func (s *Service) StartQsoT4(ourCall, theirCall, theirGrid string, theirSnr int,
 	// Stage the arm-time logbook before the start (ADR 0055) — see StartQso.
 	s.seq.setPendingLogbook(logbookID)
 	s.seq.setPendingAllowDuplicate(allowDuplicate)
-	if err := s.seq.StartQsoT4(ourCall, theirCall, theirGrid, theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC()); err != nil {
+	if err := start(time.Now().UTC()); err != nil {
 		s.restoreExchangePath(prevPath, prevGen)
 		return err
 	}
@@ -1114,27 +1161,10 @@ func (s *Service) StartQsoT4(ourCall, theirCall, theirGrid string, theirSnr int,
 // type-4 twin of StartWorkCaller, ADR 0048): the operator picked a bare directed call
 // ("<ourCall> <theirCall>") whose sender's call is nonstandard. theirSnr is our SNR of it
 // (RST_SENT). Needs no config identity. Requires TX armed.
-func (s *Service) StartWorkCallerT4(ourCall, theirCall, theirGrid string, theirSnr int, theirSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64, allowDuplicate bool) error {
-	const op errors.Op = "ft8.Service.StartWorkCallerT4"
-	s.seqGate.Lock()
-	defer s.seqGate.Unlock()
-	// Validated under the gate the profile claim holds (see TransmitNext).
-	if err := s.validateTxOffset(op, offsetHz); err != nil {
-		return err
-	}
-	if err := s.sessionTxGate(op); err != nil {
-		return err
-	}
-	// Antenna path: consume before the start, restore on rejection — see StartQso.
-	prevPath, prevGen := s.consumeExchangePath()
-	// Stage the arm-time logbook before the start (ADR 0055) — see StartQso.
-	s.seq.setPendingLogbook(logbookID)
-	s.seq.setPendingAllowDuplicate(allowDuplicate)
-	if err := s.seq.StartWorkCallerT4(ourCall, theirCall, theirGrid, theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC()); err != nil {
-		s.restoreExchangePath(prevPath, prevGen)
-		return err
-	}
-	return nil
+func (s *Service) startWorkCallerT4As(who string, ourCall, theirCall, theirGrid string, theirSnr int, theirSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64, allowDuplicate bool) error {
+	return s.startT4As(who, "ft8.Service.StartWorkCallerT4", offsetHz, logbookID, allowDuplicate, func(now time.Time) error {
+		return s.seq.StartWorkCallerT4(ourCall, theirCall, theirGrid, theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, now)
+	})
 }
 
 // SetWorkedBefore injects the logbook view the runs consult before answering a
@@ -1186,12 +1216,19 @@ func (s *Service) SetDecodeSink(fn func(DecodeReport)) {
 // read once when the exchange completes. Defaults to short and resets to short
 // at the start of each new exchange, so a prior contact's "long" never carries
 // over.
-func (s *Service) SetExchangePath(path string) {
+func (s *Service) setExchangePathAs(who, path string) error {
+	const op errors.Op = "ft8.Service.SetExchangePath"
+	release, err := s.operatorGate(op, who)
+	if err != nil {
+		return err
+	}
+	defer release()
 	p := normalizeAntPath(path)
 	s.txMu.Lock()
 	s.exchPath = p
 	s.exchPathGen++ // any explicit selection invalidates a pending rejected-start restore
 	s.txMu.Unlock()
+	return nil
 }
 
 // SetMaxRepeats retunes the live unanswered-rung repeat cap (ft8.tx.max_repeats),
@@ -1466,7 +1503,13 @@ func (s *Service) restoreExchangePath(p string, gen uint64) {
 // SetQsoSkip arms/disarms skip-if-silent on the active sequenced session (the
 // deferred Next, daemon-side): armed, a silent cycle ends the session instead
 // of keying the repeat. Nil sequencer → ErrNoActiveQso (nothing to arm).
-func (s *Service) SetQsoSkip(armed bool) error {
+func (s *Service) setQsoSkipAs(who string, armed bool) error {
+	const op errors.Op = "ft8.Service.SetQsoSkip"
+	release, err := s.operatorGate(op, who)
+	if err != nil {
+		return err
+	}
+	defer release()
 	if s.seq == nil {
 		return ErrNoActiveQso
 	}
@@ -1481,7 +1524,13 @@ func (s *Service) SetQsoSkip(armed bool) error {
 // slot evaluation, so the rung already on the air simply finishes. That is deliberate
 // — nothing can be worked before the next slot boundary anyway, so cutting PTT here
 // would buy nothing and add a second cancellation path.
-func (s *Service) NextAnswerer() error {
+func (s *Service) nextAnswererAs(who string) error {
+	const op errors.Op = "ft8.Service.NextAnswerer"
+	release, err := s.operatorGate(op, who)
+	if err != nil {
+		return err
+	}
+	defer release()
 	if s.seq == nil {
 		return ErrNoAnswerer
 	}
@@ -1494,7 +1543,13 @@ func (s *Service) NextAnswerer() error {
 // to pick for). Like NextAnswerer this does NOT touch the transmitter — nothing
 // can be worked before the next slot boundary anyway, so the rung already on
 // the air simply finishes.
-func (s *Service) PickAnswerer(call string) error {
+func (s *Service) pickAnswererAs(who, call string) error {
+	const op errors.Op = "ft8.Service.PickAnswerer"
+	release, err := s.operatorGate(op, who)
+	if err != nil {
+		return err
+	}
+	defer release()
 	if s.seq == nil {
 		return ErrNoCqPickRun
 	}
@@ -1502,7 +1557,13 @@ func (s *Service) PickAnswerer(call string) error {
 }
 
 // BagAnswerer moves a listed pick-run caller into the queue (ADR 0067 slice B).
-func (s *Service) BagAnswerer(call string) error {
+func (s *Service) bagAnswererAs(who, call string) error {
+	const op errors.Op = "ft8.Service.BagAnswerer"
+	release, err := s.operatorGate(op, who)
+	if err != nil {
+		return err
+	}
+	defer release()
 	if s.seq == nil {
 		return ErrNoCqPickRun
 	}
@@ -1510,7 +1571,13 @@ func (s *Service) BagAnswerer(call string) error {
 }
 
 // UnbagAnswerer returns a bagged station to the listed set (ADR 0067 slice B).
-func (s *Service) UnbagAnswerer(call string) error {
+func (s *Service) unbagAnswererAs(who, call string) error {
+	const op errors.Op = "ft8.Service.UnbagAnswerer"
+	release, err := s.operatorGate(op, who)
+	if err != nil {
+		return err
+	}
+	defer release()
 	if s.seq == nil {
 		return ErrNoCqPickRun
 	}
@@ -1519,7 +1586,13 @@ func (s *Service) UnbagAnswerer(call string) error {
 
 // ResumeDrain continues a paused pick-queue drain (ADR 0067 slice B — the
 // drawer's Resume; Stop paused it via StopAutoWorkRun's pick branch).
-func (s *Service) ResumeDrain() error {
+func (s *Service) resumeDrainAs(who string) error {
+	const op errors.Op = "ft8.Service.ResumeDrain"
+	release, err := s.operatorGate(op, who)
+	if err != nil {
+		return err
+	}
+	defer release()
 	if s.seq == nil {
 		return ErrNoCqPickRun
 	}
@@ -1534,7 +1607,8 @@ func (s *Service) ResumeDrain() error {
 // the operator can call CQ or answer again. (disarmTx is the harder stop that
 // also closes the device.) The cancelled transmission's goroutine clears
 // txCancel/txInFlight and publishes the final ft8-tx state on its own path.
-func (s *Service) AbandonQso() {
+func (s *Service) abandonQsoAs(who string) error {
+	const op errors.Op = "ft8.Service.AbandonQso"
 	// seqGate: the abandonment + cancellation must be atomic w.r.t. a concurrent
 	// Start* — which commits its session, and can fire the opening transmission,
 	// under this SAME gate (see StartQso, where seq.StartQso publishes and may
@@ -1546,6 +1620,9 @@ func (s *Service) AbandonQso() {
 	// seqGate protocol. Order seqGate → txMu.
 	s.seqGate.Lock()
 	defer s.seqGate.Unlock()
+	if err := s.operatorCheckLocked(op, who); err != nil {
+		return err
+	}
 	// Bump the generation FIRST, then read txCancel under txMu second — the order
 	// the rung commit-gate in startTransmission relies on (review 2026-07-20 #1).
 	if s.seq != nil {
@@ -1557,6 +1634,7 @@ func (s *Service) AbandonQso() {
 	if cancel != nil {
 		cancel() // abort in-flight; the controller drops PTT on the cancel path
 	}
+	return nil
 }
 
 // publishTxState snapshots the current TX state under txMu and fans it out on

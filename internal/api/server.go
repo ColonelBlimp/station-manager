@@ -93,6 +93,8 @@ type Server struct {
 	// fixed when the server is built; the matcher is set once, before serving.
 	requireDesktopApp   bool
 	operatingCredential atomic.Pointer[func(presented string) bool]
+	// admission is the desktop app's current lifetime (W-0027 C4a; app_admission.go).
+	admission appAdmission
 	// declaredRoutes is every pattern registered at construction (DeclaredRoutes).
 	declaredRoutes []string
 	// ft8ApplyTestGap, when non-nil, runs ONCE between the config snapshot and
@@ -242,7 +244,14 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 	}
 
 	mux := newRouteMux()
+	// With the check on, FT8 is operated only by the admitted app lifetime, and a
+	// replacement seals and stops it before the new lifetime is published.
+	if s.requireDesktopApp && ft8Svc != nil {
+		ft8Svc.RequireOperatingLifetime()
+		s.admission.scopes = append(s.admission.scopes, ft8Svc)
+	}
 	apiMux := s.registerRoutes(mux, cfg, logger, br, ft8Svc)
+	s.registerAppAdmission(apiMux)
 	s.declaredRoutes = append(append([]string(nil), apiMux.patterns...), mux.patterns...)
 
 	// Middleware chain — outermost first:
