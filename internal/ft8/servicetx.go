@@ -897,7 +897,25 @@ func (s *Service) dialState() (mhz float64, tracked, known bool) {
 // through the armed controller. ourCall/ourGrid are the station identity the api
 // layer resolved from config.
 func (s *Service) startQsoAs(who string, ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64, allowDuplicate bool, answerMode string) error {
-	const op errors.Op = "ft8.Service.StartQso"
+	return s.startAnswerAs(who, "ft8.Service.StartQso", offsetHz, logbookID, allowDuplicate, answerMode, func(now time.Time) error {
+		return s.seq.StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC, offsetHz, dialFreqMHz, now)
+	})
+}
+
+// startQsoAddresseeAs begins an answer to the station a heard line was ADDRESSED TO
+// (operator, 2026-11-17: a DXpedition heard here only through the stations calling it).
+// heardSlotUTC is the slot the CALLER's line was heard in: it is the line whose age
+// counts, and the sequencer listens in the slots opposite it. Nothing of the addressee's
+// own is known, so no grid is passed. Otherwise it is StartQso, gates and staging alike.
+func (s *Service) startQsoAddresseeAs(who string, ourCall, ourGrid, theirCall, heardSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64, allowDuplicate bool, answerMode string) error {
+	return s.startAnswerAs(who, "ft8.Service.StartQsoAddressee", offsetHz, logbookID, allowDuplicate, answerMode, func(now time.Time) error {
+		return s.seq.StartQsoToAddressee(ourCall, ourGrid, theirCall, heardSlotUTC, offsetHz, dialFreqMHz, now)
+	})
+}
+
+// startAnswerAs is what the two standard answers share: everything but the sequencer's
+// own start. One body, so the gate, the caller check and the staging cannot drift apart.
+func (s *Service) startAnswerAs(who string, op errors.Op, offsetHz float64, logbookID int64, allowDuplicate bool, answerMode string, start func(now time.Time) error) error {
 	// seqGate: armed-check + sequencer commit are atomic w.r.t. disarm (M3).
 	s.seqGate.Lock()
 	defer s.seqGate.Unlock()
@@ -931,7 +949,7 @@ func (s *Service) startQsoAs(who string, ourCall, ourGrid, theirCall, theirGrid,
 	s.seq.setPendingLogbook(logbookID)
 	s.seq.setPendingAllowDuplicate(allowDuplicate)
 	s.seq.setPendingAnswerMode(s.effectiveAnswerMode(answerMode))
-	if err := s.seq.StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC()); err != nil {
+	if err := start(time.Now().UTC()); err != nil {
 		s.restoreExchangePath(prevPath, prevGen)
 		return err
 	}

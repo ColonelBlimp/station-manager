@@ -514,7 +514,7 @@ func TestSource_Ft8CommandsAreCalledAsTheRequestsCaller(t *testing.T) {
 	gated := map[string]bool{}
 	for _, m := range []string{
 		"ArmTx", "TransmitNext", "ClaimProfile",
-		"StartQso", "StartQsoFd", "StartQsoT4", "StartCallCq",
+		"StartQso", "StartQsoAddressee", "StartQsoFd", "StartQsoT4", "StartCallCq",
 		"StartWorkCaller", "StartWorkCallerFd", "StartWorkCallerT4",
 		"SetExchangePath", "AbandonQso", "StopAutoWorkRun", "SetQsoSkip",
 		"NextAnswerer", "PickAnswerer", "BagAnswerer", "UnbagAnswerer", "ResumeDrain",

@@ -31,12 +31,12 @@ import (
 	caller's parity and threw the age away. Enforcing where the fact already lives
 	costs one shared helper.
 
-	THE TABLE IS THE POINT. Six entry points parse a slot, and a guard applied to
+	THE TABLE IS THE POINT. Seven entry points parse a slot, and a guard applied to
 	the one that happened to bite is a guard the next path evades silently. They
 	are enumerated here rather than sampled:
 
-	    StartQso  StartQsoFd  StartQsoT4  StartWorkCaller  StartWorkCallerFd
-	    StartWorkCallerT4
+	    StartQso  StartQsoToAddressee  StartQsoFd  StartQsoT4  StartWorkCaller
+	    StartWorkCallerFd  StartWorkCallerT4
 
 	StartCallCq is deliberately absent and that is not an oversight: a CQ answers
 	no decode, takes no slot_utc, and has nothing to be stale about.
@@ -57,6 +57,9 @@ func staleDecodeEntryPoints() map[string]startFn {
 	return map[string]startFn{
 		"StartQso": func(s *Sequencer, slot string, now time.Time) error {
 			return s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42", slot, 1500, 14.074, now)
+		},
+		"StartQsoToAddressee": func(s *Sequencer, slot string, now time.Time) error {
+			return s.StartQsoToAddressee("G0XYZ", "IO91", "K1ABC", slot, 1500, 14.074, now)
 		},
 		"StartQsoFd": func(s *Sequencer, slot string, now time.Time) error {
 			return s.StartQsoFd("G0XYZ", "1D", "MDC", "K1ABC", "FN42", -12, slot, 1500, 14.074, now)

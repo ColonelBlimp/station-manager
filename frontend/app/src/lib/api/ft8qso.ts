@@ -85,13 +85,24 @@ async function postFt8Qso(
  *  logged as RST_SENT since FD exchanges no report. A 'type4' mode answers a
  *  NONSTANDARD/compound-call CQ with the reduced bare-calls→RR73→73 ladder (ADR 0048),
  *  also logging theirSnr as RST_SENT (no report on the wire). Omit for a standard answer. */
+/** The exchange an answer uses, from what the operator acted on. The addressee of a heard
+ *  line comes first: it is a standard answer and excludes the other two. Kept here, and
+ *  tested, because the app's entry file only passes it through. */
+export function ft8AnswerExchange(a: {
+    addressee?: boolean;
+    type4?: boolean;
+    fd: boolean;
+}): 'standard' | 'fd' | 'type4' | 'addressee' {
+    return a.addressee ? 'addressee' : a.type4 ? 'type4' : a.fd ? 'fd' : 'standard';
+}
+
 export function startFt8Qso(
     theirCall: string,
     theirGrid: string,
     slotUtc: string,
     offsetHz: number,
     operatingFreqMHz: number,
-    mode: 'standard' | 'fd' | 'type4' = 'standard',
+    mode: 'standard' | 'fd' | 'type4' | 'addressee' = 'standard',
     theirSnr?: number,
     allowDuplicate?: boolean,
     answerMode = '',
@@ -101,7 +112,12 @@ export function startFt8Qso(
         '/v1/ft8/qso/start',
         {
             their_call: theirCall,
-            their_grid: theirGrid,
+            // 'addressee' calls the station a heard line was ADDRESSED TO (2026-11-17):
+            // slot_utc stays the slot that line was heard in, so the daemon judges its age
+            // and listens in the opposite slots; and no grid goes, because the line's grid
+            // is its sender's.
+            their_grid: mode === 'addressee' ? '' : theirGrid,
+            ...(mode === 'addressee' ? { addressee: true } : {}),
             slot_utc: slotUtc,
             offset_hz: offsetHz,
             operating_freq_mhz: operatingFreqMHz,

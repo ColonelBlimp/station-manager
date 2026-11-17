@@ -165,6 +165,31 @@ export function parseSender(text: string): { call: string; grid: string } | null
     return { call: toks[1], grid };
 }
 
+/**
+ * parseAddressee returns the station a plain directed decode was sent TO — the
+ * first callsign of `<to> <from> <payload>` (e.g. VK9XY in `VK9XY ZL4KX R-07`) —
+ * or null.
+ *
+ * This is the "call the station being called" seam (operator, 2026-11-17). A
+ * DXpedition working a pile-up is often heard here only through the stations
+ * calling it, and parseSender offers only those callers. The addressee transmits
+ * in the slot OPPOSITE its caller's, which is all the daemon needs to place our
+ * call; nothing of the addressee's own (grid, report) is known or needed for the
+ * opening message.
+ *
+ * Only an ordinary callsign: a hashed token has no callsign to send, and a
+ * compound call takes the reduced type-4 exchange, which logs a report of a
+ * signal that, by definition here, was not heard. The second token must be the
+ * sender, a callsign or a hashed one, so a free-text line is never a call.
+ */
+export function parseAddressee(text: string): { call: string } | null {
+    const toks = text.trim().toUpperCase().split(/\s+/);
+    if (toks.length < 2 || toks[0] === 'CQ') return null;
+    if (!looksLikeCall(toks[0]) || isNonstandardCall(toks[0])) return null;
+    if (!looksLikeCall(toks[1]) && !/^<.+>$/.test(toks[1])) return null;
+    return { call: toks[0] };
+}
+
 const FD_CLASS = /^[0-9]{1,2}[A-F]$/;
 const FD_SECTION = /^[A-Z]{2,4}$/;
 

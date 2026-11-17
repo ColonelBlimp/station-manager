@@ -752,6 +752,10 @@ export interface Ft8AnswerArgs {
     /** Reduced type-4 (nonstandard/compound call) answer — bare-calls→RR73→73, no
      *  grid/report (ADR 0048). Mutually exclusive with fd. */
     type4?: boolean;
+    /** The station to call is the one the heard line was ADDRESSED TO, not its sender
+     *  (2026-11-17). slotUtc is still the slot the line was heard in. A standard answer
+     *  only: mutually exclusive with fd and type4, and theirGrid is ''. */
+    addressee?: boolean;
     /** Our SNR of their CQ — logged as RST_SENT for an FD or type-4 answer (neither
      *  exchanges a report). */
     theirSnr: number;

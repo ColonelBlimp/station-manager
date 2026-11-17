@@ -24,6 +24,7 @@
         parseCq,
         parseDirectedToMe,
         parseDirectedToMeFd,
+        parseAddressee,
         parseSender,
         isCqFd,
         isCqType4,
@@ -50,12 +51,23 @@
         // running a pile-up can go many minutes between CQs). null when the
         // sender isn't callable (hashed, or no parseable call).
         dx: { call: string; grid: string } | null;
+        // The station a plain line is addressed to, when it can be called (parseAddressee).
+        to: { call: string } | null;
     }
     interface SlotGroup {
         key: string;
         time: string;
         parity: string;
         decodes: DecodeRow[];
+    }
+
+    // A plain line as its first token (the addressee) and the rest (the sender and what
+    // it sent), so each callsign can be its own double-click target.
+    function lineHead(text: string): string {
+        return text.trim().split(/\s+/)[0] ?? '';
+    }
+    function lineRest(text: string): string {
+        return text.trim().split(/\s+/).slice(1).join(' ');
     }
 
     function clock(utc: string): string {
@@ -85,7 +97,11 @@
         const call = called?.call ?? cq?.call ?? '';
         const grid = called?.grid ?? cq?.grid ?? '';
         const dx = kind === '' ? parseSender(d.text) : null;
-        return { d, kind, call, bearing: bearingFor(grid), dx };
+        // The station a plain line is addressed to (operator, 2026-11-17): callable in its
+        // own right, though it was not heard on this line. Never ourselves.
+        const addressee = kind === '' ? parseAddressee(d.text) : null;
+        const to = addressee !== null && addressee.call !== me ? addressee : null;
+        return { d, kind, call, bearing: bearingFor(grid), dx, to };
     }
 
     // The Band Activity feed. Normally the newest-first decode list grouped by slot
@@ -405,6 +421,38 @@
     // the daemon sequencer (StartQso) is reused unchanged. Double-click, not
     // single: plain rows are dense non-actionable text, and starting a
     // transmission from them must be a deliberate gesture.
+    // Call the station a plain line is ADDRESSED TO (operator ruling 2026-11-17: each
+    // callsign on a plain line is its own double-click target, and a station that has
+    // not been decoded here may be called). The request names the slot THIS line was
+    // heard in and marks the addressee: the daemon judges freshness on the line that was
+    // actually heard, and listens in the slots opposite it, which are the addressee's
+    // (codex-132: shifting the slot here made a line still inside the limit read as
+    // stale). Nothing of the addressee's is known: no grid, and the report sent is
+    // measured when it answers.
+    async function onAddresseeDblClick(row: DecodeRow): Promise<void> {
+        if (row.kind !== '' || row.to === null || starting) return;
+        if (staleBlocked(row)) return;
+        const pre = txPreflight(row.to.call);
+        if (!pre) return;
+        starting = true;
+        const r = await answerCq({
+            theirCall: row.to.call,
+            theirGrid: '',
+            slotUtc: row.d.startUtc,
+            addressee: true,
+            offsetHz: pre.offset,
+            opFreqMHz: pre.opMHz,
+            fd: false,
+            type4: false,
+            theirSnr: 0,
+            allowDuplicate: pre.allowDuplicate,
+        });
+        if (!r.ok) {
+            starting = false;
+            toasts.error(r.message);
+        }
+    }
+
     async function onRowDblClick(row: DecodeRow): Promise<void> {
         if (row.kind !== '' || row.dx === null || starting) return;
         if (staleBlocked(row)) return;
@@ -632,7 +680,29 @@
                                                 : 'cursor-default'}"
                                             title={rowTitle(row, hover)}
                                             onclick={(e) => onRowClick(e, row)}>{row.d.text}</button
-                                        >{:else if row.dx !== null}<button
+                                        >{:else if row.to !== null}<button
+                                            type="button"
+                                            class="text-left {canStart
+                                                ? 'cursor-pointer hover:underline decoration-dotted'
+                                                : 'cursor-default'}"
+                                            title="Double-click to call {row.to.call} ({row.dx
+                                                ? `the station ${row.dx.call} is calling`
+                                                : 'the station being called'} — not heard on this line)"
+                                            ondblclick={() => onAddresseeDblClick(row)}
+                                            >{lineHead(row.d.text)}</button
+                                        >
+                                        {#if row.dx !== null}<button
+                                                type="button"
+                                                class="text-left {canStart
+                                                    ? 'cursor-pointer hover:underline decoration-dotted'
+                                                    : 'cursor-default'}"
+                                                title="Double-click to call {row.dx
+                                                    .call} (directed call — no CQ needed)"
+                                                ondblclick={() => onRowDblClick(row)}
+                                                >{lineRest(row.d.text)}</button
+                                            >{:else}{lineRest(
+                                                row.d.text
+                                            )}{/if}{:else if row.dx !== null}<button
                                             type="button"
                                             class="text-left {canStart
                                                 ? 'cursor-pointer hover:underline decoration-dotted'

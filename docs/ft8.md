@@ -1395,6 +1395,37 @@ read by the e2 resolver. Step (e) breaks into increments:
     not-worked-this-session), extracted as `txPreflight`. The ● "working now" row
     marker also lights on the worked station's plain transmissions (mid-exchange
     lines aren't addressed to us, so they'd otherwise lose the marker).
+  - **Calling the station a line is addressed to — double-click ITS callsign
+    (frontend/app, 2026-11-17).** A DXpedition working a pile-up is often heard here
+    only through the stations calling it: with `VK9XY ZL4KX R-07` on screen the
+    sender is ZL4KX, and the directed call above could call only ZL4KX (operator:
+    "it will not call the VK9XY"). **Ruled 2026-11-17:** each callsign on a plain
+    line is its own double-click target, and a station that has not been decoded
+    here may be called.
+    - **The gesture:** double-click the first callsign to call the addressee;
+      double-click the rest of the line to call the sender, as before. The hover
+      text names which station each calls. A single click is still inert.
+    - **The app** (`parseAddressee`, `utils/ft8Message.ts`) takes the first token
+      and offers it through the same `answerCq` action and the same guard chain
+      (`txPreflight`, the staleness rule), with `addressee: true` and the slot the
+      line was HEARD in.
+    - **The daemon** (`POST /v1/ft8/qso/start` with `addressee`;
+      `Sequencer.StartQsoToAddressee`): the heard line's age is the age that
+      counts, by the same three-minute rule as any start; the addressee transmits
+      in the slots OPPOSITE that line's, so those are the slots processed, and SM
+      transmits in the slot the callers use
+      (`internal/ft8/addressee_call_test.go`, both profiles).
+    - **Why the daemon flips the parity, not the app** (codex-132): a first form
+      sent the slot before the heard one. The daemon reads one timestamp for
+      both parity and freshness, so a line 2 m 55 s old was read as 3 m 10 s old
+      and refused although the app still offered it.
+    - **What is sent and logged:** the ordinary opening call with our grid; the
+      report is measured when the station answers; its grid is logged empty,
+      since it was never heard.
+    - **Not offered:** a hashed addressee (`<...>` has no callsign to send), a
+      compound one (the type-4 exchange logs a report of a signal that was not
+      heard), and our own callsign (a line addressed to us is a caller, worked as
+      one).
 - **e4 — QSO completion → log: SHIPPED 2026-06-10.** On the 73, the sequencer
   captures a `CompletedQso` and hands it to an **injected sink** (`SetQsoLogger`):
   `internal/ft8/qsolog.go`'s pure `BuildQso(c, station, logbookID, now)` assembles

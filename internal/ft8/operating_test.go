@@ -32,7 +32,7 @@ type operatingCommand struct {
 	call func(o Operating) error
 }
 
-// gatedCommands is every FT8 command the rule covers: eighteen service methods behind
+// gatedCommands is every FT8 command the rule covers: nineteen service methods behind
 // fourteen routes. The profile claim and the disarm are the two that are not gated.
 func gatedCommands() []operatingCommand {
 	const slot = "2026-06-10T14:30:00Z"
@@ -41,6 +41,9 @@ func gatedCommands() []operatingCommand {
 		{"send", func(o Operating) error { return o.TransmitNext("CQ G0XYZ IO91", 1500) }},
 		{"qso start", func(o Operating) error {
 			return o.StartQso("G0XYZ", "IO91", "K1ABC", "FN42", slot, 1500, 14.074, 1, false, "")
+		}},
+		{"qso start, addressee", func(o Operating) error {
+			return o.StartQsoAddressee("G0XYZ", "IO91", "VK9XY", slot, 1500, 14.074, 1, false, "")
 		}},
 		{"qso start fd", func(o Operating) error {
 			return o.StartQsoFd("G0XYZ", "K1ABC", "FN42", -10, slot, 1500, 14.074, 1, false)
@@ -524,7 +527,7 @@ func selectorCalls(fn *ast.FuncDecl) []*ast.CallExpr {
 // gatedCommandMethods names the Operating methods that are gated, one per service method.
 var gatedCommandMethods = []string{
 	"ArmTx", "TransmitNext",
-	"StartQso", "StartQsoFd", "StartQsoT4", "StartCallCq",
+	"StartQso", "StartQsoAddressee", "StartQsoFd", "StartQsoT4", "StartCallCq",
 	"StartWorkCaller", "StartWorkCallerFd", "StartWorkCallerT4",
 	"SetExchangePath", "AbandonQso", "StopAutoWorkRun", "SetQsoSkip",
 	"NextAnswerer", "PickAnswerer", "BagAnswerer", "UnbagAnswerer", "ResumeDrain",

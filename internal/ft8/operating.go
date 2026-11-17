@@ -120,6 +120,10 @@ func (o Operating) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC
 	return o.s.startQsoAs(o.who, ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC, offsetHz, dialFreqMHz, logbookID, allowDuplicate, answerMode)
 }
 
+func (o Operating) StartQsoAddressee(ourCall, ourGrid, theirCall, heardSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64, allowDuplicate bool, answerMode string) error {
+	return o.s.startQsoAddresseeAs(o.who, ourCall, ourGrid, theirCall, heardSlotUTC, offsetHz, dialFreqMHz, logbookID, allowDuplicate, answerMode)
+}
+
 func (o Operating) StartQsoFd(ourCall, theirCall, theirGrid string, theirSnr int, theirSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64, allowDuplicate bool) error {
 	return o.s.startQsoFdAs(o.who, ourCall, theirCall, theirGrid, theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, logbookID, allowDuplicate)
 }
@@ -164,6 +168,10 @@ func (s *Service) TransmitNext(message string, offsetHz float64) error {
 
 func (s *Service) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64, allowDuplicate bool, answerMode string) error {
 	return s.startQsoAs("", ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC, offsetHz, dialFreqMHz, logbookID, allowDuplicate, answerMode)
+}
+
+func (s *Service) StartQsoAddressee(ourCall, ourGrid, theirCall, heardSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64, allowDuplicate bool, answerMode string) error {
+	return s.startQsoAddresseeAs("", ourCall, ourGrid, theirCall, heardSlotUTC, offsetHz, dialFreqMHz, logbookID, allowDuplicate, answerMode)
 }
 
 func (s *Service) StartQsoFd(ourCall, theirCall, theirGrid string, theirSnr int, theirSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64, allowDuplicate bool) error {

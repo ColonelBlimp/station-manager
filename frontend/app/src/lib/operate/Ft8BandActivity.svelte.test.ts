@@ -150,8 +150,10 @@ describe('Ft8BandActivity renderer', () => {
         expect(screen.queryByText('14:30:30')).toBeNull();
 
         // The CQ (older slot) is floated ABOVE the newer plain exchange.
+        // A plain line is now two targets (its addressee, then the rest), so it is found
+        // by the sender's part of it.
         const cq = screen.getByText('CQ W1ABC FN42');
-        const plain = screen.getByText('PA3KUS DL1ABC -07');
+        const plain = screen.getByText('DL1ABC -07');
         expect(cq.compareDocumentPosition(plain) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
 
@@ -637,7 +639,7 @@ describe('Ft8BandActivity directed call (double-click a plain row)', () => {
         expect(got).toHaveLength(0);
     });
 
-    it('a hashed sender is not callable — the row stays plain text', () => {
+    it('a hashed sender is not callable — its part of the row stays plain text', () => {
         setFt8OperatorCall('7Q5MLV');
         armReady();
         render(Ft8BandActivity);
@@ -646,7 +648,25 @@ describe('Ft8BandActivity directed call (double-click a plain row)', () => {
         );
         flushSync();
 
-        expect(screen.getByText('K1ABC <T22TT> R-07')).toBeInTheDocument();
+        // Nothing offers to call the hashed sender. The addressee, K1ABC, is a real
+        // callsign and is offered in its own right (2026-11-17).
+        expect(screen.queryByTitle(/directed call — no CQ needed/)).toBeNull();
+        expect(screen.queryByTitle(/Double-click to call <T22TT>/)).toBeNull();
+        const to = screen.getByTitle(/^Double-click to call K1ABC \(the station being called/);
+        expect(to.closest('td')?.textContent?.replace(/\s+/g, ' ').trim()).toBe(
+            'K1ABC <T22TT> R-07'
+        );
+    });
+
+    it('a row with neither a callable sender nor a callable addressee stays plain text', () => {
+        setFt8OperatorCall('7Q5MLV');
+        armReady();
+        render(Ft8BandActivity);
+        ft8Link.onDecode(
+            decode('2026-07-09T14:30:00Z', [{ text: '<...> <T22TT> R-07', freq_hz: 1200, snr: -7 }])
+        );
+        flushSync();
+        expect(screen.getByText('<...> <T22TT> R-07')).toBeInTheDocument();
         expect(screen.queryByTitle(/Double-click to call/)).toBeNull();
     });
 
@@ -683,6 +703,187 @@ describe('Ft8BandActivity directed call (double-click a plain row)', () => {
         await flush();
         expect(got).toHaveLength(1);
         expect(got[0]).toMatchObject({ theirCall: 'T22TT' });
+    });
+});
+
+// Calling the station a line is ADDRESSED TO (operator, 2026-11-17: with only
+// `VK9XY ZL4KX R-07` on screen, "it will not call the VK9XY"; ruled the same day: each
+// callsign on a plain line is its own double-click target, and a station that has not been
+// decoded here may be called). The app names the slot the line was HEARD in and says the
+// station is its addressee; the daemon judges freshness on that line and listens in the
+// opposite slots (codex-132: shifting the slot here made a fresh line read as stale).
+describe('Ft8BandActivity call the station a line is addressed to', () => {
+    const TO = 'Double-click to call VK9XY (the station ZL4KX is calling — not heard on this line)';
+    const FROM = 'Double-click to call ZL4KX (directed call — no CQ needed)';
+
+    it('double-clicking the first callsign calls the addressee, naming the slot the line was heard in', async () => {
+        setFt8OperatorCall('7Q5MLV');
+        const got: Ft8AnswerArgs[] = [];
+        armReady({ answerCq: (a) => (got.push(a), okResult()) });
+        const slot = freshSlot('even'); // one reading of the clock (see the directed-call test)
+        render(Ft8BandActivity);
+        ft8Link.onDecode(decode(slot, [{ text: 'VK9XY ZL4KX R-07', freq_hz: 535, snr: -11 }]));
+        flushSync();
+
+        await fireEvent.dblClick(screen.getByTitle(TO));
+        await flush();
+
+        expect(got).toHaveLength(1);
+        expect(got[0]).toMatchObject({
+            theirCall: 'VK9XY',
+            theirGrid: '', // not heard: nothing of theirs is known
+            slotUtc: slot, // the heard line's own slot: its age is the age that counts
+            addressee: true, // the daemon listens in the slots opposite it
+            offsetHz: 1500,
+            fd: false,
+            type4: false,
+        });
+    });
+
+    it("the caller's grid on the line is the caller's: it is never logged as the addressee's", async () => {
+        setFt8OperatorCall('7Q5MLV');
+        const got: Ft8AnswerArgs[] = [];
+        armReady({ answerCq: (a) => (got.push(a), okResult()) });
+        render(Ft8BandActivity);
+        // A caller's opening line carries the CALLER's grid.
+        ft8Link.onDecode(
+            decode(freshSlot('even'), [{ text: 'VK9XY ZL4KX RE78', freq_hz: 535, snr: -11 }])
+        );
+        flushSync();
+        await fireEvent.dblClick(screen.getByTitle(TO));
+        await flush();
+        expect(got).toHaveLength(1);
+        expect(got[0]).toMatchObject({ theirCall: 'VK9XY', theirGrid: '' });
+    });
+
+    it('the rest of the line still calls its sender, in the slot it was heard in', async () => {
+        setFt8OperatorCall('7Q5MLV');
+        const got: Ft8AnswerArgs[] = [];
+        armReady({ answerCq: (a) => (got.push(a), okResult()) });
+        const slot = freshSlot('even');
+        render(Ft8BandActivity);
+        ft8Link.onDecode(decode(slot, [{ text: 'VK9XY ZL4KX R-07', freq_hz: 535, snr: -11 }]));
+        flushSync();
+
+        await fireEvent.dblClick(screen.getByTitle(FROM));
+        await flush();
+        expect(got).toHaveLength(1);
+        expect(got[0]).toMatchObject({ theirCall: 'ZL4KX', slotUtc: slot, theirSnr: -11 });
+        expect(got[0].addressee).toBeFalsy();
+    });
+
+    it('the line reads as it did: both callsigns and the payload, in order', () => {
+        setFt8OperatorCall('7Q5MLV');
+        armReady();
+        render(Ft8BandActivity);
+        ft8Link.onDecode(
+            decode(freshSlot('even'), [{ text: 'VK9XY ZL4KX R-07', freq_hz: 535, snr: -11 }])
+        );
+        flushSync();
+        const cell = screen.getByTitle(TO).closest('td');
+        expect(cell?.textContent?.replace(/\s+/g, ' ').trim()).toBe('VK9XY ZL4KX R-07');
+        expect(screen.getByTitle(TO).textContent).toBe('VK9XY');
+        expect(screen.getByTitle(FROM).textContent?.trim()).toBe('ZL4KX R-07');
+    });
+
+    it('on FT4 it is the same request: the heard slot, and the addressee marked', async () => {
+        setFt8OperatorCall('7Q5MLV');
+        const got: Ft8AnswerArgs[] = [];
+        armReady({ answerCq: (a) => (got.push(a), okResult()) });
+        ft8State.profile = 'FT4';
+        const slot = new Date(Math.floor(Date.now() / 7500) * 7500).toISOString();
+        render(Ft8BandActivity);
+        ft8Link.onDecode(decode(slot, [{ text: 'VK9XY ZL4KX R-07', freq_hz: 535, snr: -11 }]));
+        flushSync();
+
+        await fireEvent.dblClick(screen.getByTitle(TO));
+        await flush();
+        expect(got).toHaveLength(1);
+        expect(got[0]).toMatchObject({ theirCall: 'VK9XY', slotUtc: slot, addressee: true });
+    });
+
+    it('a single click on the addressee never transmits', async () => {
+        setFt8OperatorCall('7Q5MLV');
+        const got: Ft8AnswerArgs[] = [];
+        armReady({ answerCq: (a) => (got.push(a), okResult()) });
+        render(Ft8BandActivity);
+        ft8Link.onDecode(
+            decode(freshSlot('even'), [{ text: 'VK9XY ZL4KX R-07', freq_hz: 535, snr: -11 }])
+        );
+        flushSync();
+        await fireEvent.click(screen.getByTitle(TO));
+        await flush();
+        expect(got).toHaveLength(0);
+    });
+
+    it('the addressee is callable when the sender is hashed, and the sender is not', async () => {
+        setFt8OperatorCall('7Q5MLV');
+        const got: Ft8AnswerArgs[] = [];
+        armReady({ answerCq: (a) => (got.push(a), okResult()) });
+        render(Ft8BandActivity);
+        ft8Link.onDecode(
+            decode(freshSlot('even'), [{ text: 'VK9XY <...> RR73', freq_hz: 535, snr: -11 }])
+        );
+        flushSync();
+        await fireEvent.dblClick(
+            screen.getByTitle(
+                'Double-click to call VK9XY (the station being called — not heard on this line)'
+            )
+        );
+        await flush();
+        expect(got).toHaveLength(1);
+        expect(got[0]).toMatchObject({ theirCall: 'VK9XY', theirGrid: '' });
+        expect(screen.queryByTitle(/directed call — no CQ needed/)).toBeNull();
+    });
+
+    it('a hashed or compound addressee is not offered; the sender still is', () => {
+        setFt8OperatorCall('7Q5MLV');
+        armReady();
+        render(Ft8BandActivity);
+        ft8Link.onDecode(
+            decode(freshSlot('even'), [
+                { text: '<VK9XY> ZL4KX R-07', freq_hz: 535, snr: -11 },
+                { text: 'PJ4/NA2AA K1ABC -05', freq_hz: 900, snr: -3 },
+            ])
+        );
+        flushSync();
+        expect(screen.queryByTitle(/the station .* is calling/)).toBeNull();
+        expect(screen.getByTitle(FROM)).toBeInTheDocument();
+        expect(
+            screen.getByTitle('Double-click to call K1ABC (directed call — no CQ needed)')
+        ).toBeInTheDocument();
+    });
+
+    it("our own callsign is never offered: not on a caller's line, and not mid-exchange", () => {
+        setFt8OperatorCall('7Q5MLV');
+        armReady();
+        render(Ft8BandActivity);
+        ft8Link.onDecode(
+            decode(freshSlot('even'), [
+                { text: '7Q5MLV ZL4KX QF22', freq_hz: 535, snr: -11 }, // a caller: worked as one
+                { text: '7Q5MLV K1ABC R-07', freq_hz: 900, snr: -3 }, // mid-exchange: a plain row
+            ])
+        );
+        flushSync();
+        expect(screen.queryByTitle(/Double-click to call 7Q5MLV/)).toBeNull();
+        // The plain row's sender is still callable, and the row reads whole.
+        const from = screen.getByTitle('Double-click to call K1ABC (directed call — no CQ needed)');
+        expect(from.textContent).toBe('7Q5MLV K1ABC R-07');
+    });
+
+    it('the same guards apply: TX not enabled explains itself and sends nothing', async () => {
+        setFt8OperatorCall('7Q5MLV');
+        const got: Ft8AnswerArgs[] = [];
+        armReady({ answerCq: (a) => (got.push(a), okResult()) });
+        ft8State.tx.armed = false;
+        render(Ft8BandActivity);
+        ft8Link.onDecode(
+            decode(freshSlot('even'), [{ text: 'VK9XY ZL4KX R-07', freq_hz: 535, snr: -11 }])
+        );
+        flushSync();
+        await fireEvent.dblClick(screen.getByTitle(TO));
+        await flush();
+        expect(got).toHaveLength(0);
     });
 });
 

@@ -150,6 +150,42 @@ func TestHandleFt8QsoStart(t *testing.T) {
 	})
 }
 
+// The start may name the ADDRESSEE of a heard line as the station to call (operator,
+// 2026-11-17): `addressee: true` says slot_utc is the slot the CALLER's line was heard in.
+// It is a standard answer only; with a Field Day or type-4 exchange it is refused, since
+// both log a report of the other station's signal, which was not heard.
+func TestHandleFt8QsoStart_Addressee(t *testing.T) {
+	const base = `"their_call":"VK9XY","slot_utc":"2026-06-10T14:30:00Z","offset_hz":1500,"operating_freq_mhz":14.074,"addressee":true`
+
+	t.Run("a standard answer reaches the scope", func(t *testing.T) {
+		srv := ft8QsoTestServer(t, "G0TST")
+		w := postFt8Qso(t, srv, "/v1/ft8/qso/start", `{`+base+`}`, srv.handleFt8QsoStart)
+		// TX is not armed in this fixture, so the scope refuses: the request was valid
+		// and got that far.
+		if w.Code != http.StatusConflict || decodeErrCode(t, w) != "ft8_tx_not_armed" {
+			t.Fatalf("status=%d code=%q, want 409 ft8_tx_not_armed (body %s)", w.Code, decodeErrCode(t, w), w.Body.String())
+		}
+	})
+
+	for _, mode := range []string{"fd", "type4"} {
+		t.Run("refused with the "+mode+" exchange", func(t *testing.T) {
+			srv := ft8QsoTestServer(t, "G0TST")
+			w := postFt8Qso(t, srv, "/v1/ft8/qso/start", `{`+base+`,"mode":"`+mode+`"}`, srv.handleFt8QsoStart)
+			if w.Code != http.StatusBadRequest || decodeErrCode(t, w) != "invalid_field_value" {
+				t.Fatalf("status=%d code=%q, want 400 invalid_field_value (body %s)", w.Code, decodeErrCode(t, w), w.Body.String())
+			}
+		})
+	}
+
+	t.Run("a grid sent with it is refused: the line's grid is the caller's", func(t *testing.T) {
+		srv := ft8QsoTestServer(t, "G0TST")
+		w := postFt8Qso(t, srv, "/v1/ft8/qso/start", `{`+base+`,"their_grid":"RE78"}`, srv.handleFt8QsoStart)
+		if w.Code != http.StatusBadRequest || decodeErrCode(t, w) != "invalid_field_value" {
+			t.Fatalf("status=%d code=%q, want 400 invalid_field_value (body %s)", w.Code, decodeErrCode(t, w), w.Body.String())
+		}
+	})
+}
+
 func TestHandleFt8QsoWork(t *testing.T) {
 	t.Run("missing their_call", func(t *testing.T) {
 		srv := ft8QsoTestServer(t, "G0TST")

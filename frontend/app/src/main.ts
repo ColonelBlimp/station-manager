@@ -71,6 +71,7 @@ import { setFt8Enricher, setFt8Dupe } from './lib/operate/ft8Enrich.svelte';
 import { fetchContestDupe } from './lib/api/contest-dupe';
 import { armFt8Tx } from './lib/api/ft8tx';
 import {
+    ft8AnswerExchange,
     startFt8Qso,
     startFt8WorkCaller,
     startFt8Cq,
@@ -147,7 +148,7 @@ setFt8TxActions({
             a.slotUtc,
             a.offsetHz,
             a.opFreqMHz,
-            a.type4 ? 'type4' : a.fd ? 'fd' : 'standard',
+            ft8AnswerExchange(a),
             a.theirSnr,
             a.allowDuplicate,
             a.answerMode

@@ -149,6 +149,12 @@ type ft8QsoStartRequest struct {
 	// so an old client that still sends it is accepted; the strict decoder rejects any
 	// other unknown key. Deliberately unread.
 	AutoWork json.RawMessage `json:"auto_work,omitempty"`
+	// Addressee says the station to call is the one a heard line was ADDRESSED TO, and
+	// slot_utc is the slot that line, its CALLER's, was heard in (operator, 2026-11-17: a
+	// DXpedition heard only through the stations calling it). The daemon judges
+	// freshness on that line and listens in the slots opposite it. A standard answer
+	// only, and with no their_grid: the line's grid is the caller's.
+	Addressee bool `json:"addressee,omitempty"`
 }
 
 // handleFt8QsoStart begins a manual answer-a-CQ exchange (ADR 0031, step e3).
@@ -214,14 +220,24 @@ func (s *Server) handleFt8QsoStart(w http.ResponseWriter, r *http.Request) {
 			`mode must be one of "", "standard", "fd", or "type4"`, op)
 		return
 	}
+	if req.Addressee && (mode == "fd" || mode == "type4" || strings.TrimSpace(req.TheirGrid) != "") {
+		// Both exchanges log a report of the other station's signal, and the grid on a
+		// heard line is its sender's: none of that is known of a station not heard.
+		s.writeError(w, http.StatusBadRequest, "invalid_field_value",
+			"addressee is a standard answer with no their_grid", op)
+		return
+	}
 	var err error
-	switch mode {
-	case "fd":
+	switch {
+	case req.Addressee:
+		err = s.ft8As(r).StartQsoAddressee(ourCall, ls.MyGridsquare, req.TheirCall, req.SlotUTC,
+			req.OffsetHz, req.OperatingFreqMHz, logbookID, req.AllowDuplicate, req.AnswerMode)
+	case mode == "fd":
 		// ARRL Field Day: our class+section come from ft8.field_day config (read by
 		// the Service), not the client. theirGrid is still logged (bearing/enrichment).
 		err = s.ft8As(r).StartQsoFd(ourCall, req.TheirCall, req.TheirGrid, req.TheirSnr, req.SlotUTC,
 			req.OffsetHz, req.OperatingFreqMHz, logbookID, req.AllowDuplicate)
-	case "type4":
+	case mode == "type4":
 		// Reduced type-4 (nonstandard/compound call, ADR 0048): no grid/report on the
 		// wire, so we log the measured SNR as RST_SENT (like FD).
 		err = s.ft8As(r).StartQsoT4(ourCall, req.TheirCall, req.TheirGrid, req.TheirSnr, req.SlotUTC,

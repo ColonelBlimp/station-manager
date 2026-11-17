@@ -839,10 +839,32 @@ func parseFreshSlotUTC(theirSlotUTC string, now time.Time) (time.Time, error) {
 // opposite one). offsetHz is the operator-picked clear offset. Idempotency: only
 // one QSO at a time (ErrQsoInProgress).
 func (s *Sequencer) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC string, offsetHz, dialFreqMHz float64, now time.Time) error {
+	return s.startAnswer(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC, false, offsetHz, dialFreqMHz, now)
+}
+
+// StartQsoToAddressee begins an answer to the station a heard line was ADDRESSED TO
+// (operator, 2026-11-17): a DXpedition working a pile-up is often heard only through the
+// stations calling it. heardSlotUTC is the slot the CALLER's line was heard in.
+//
+//   - Its age is the age that counts: the same freshness rule as any start, on the line
+//     that was actually decoded (codex-132: picking the other parity must not change what
+//     "fresh" means).
+//   - The addressee transmits in the slots OPPOSITE that one, so those are the slots we
+//     process, and we transmit in the slot its callers use.
+//   - Nothing of the addressee's is known. No grid is recorded: the line carries the
+//     caller's, never theirs.
+func (s *Sequencer) StartQsoToAddressee(ourCall, ourGrid, theirCall, heardSlotUTC string, offsetHz, dialFreqMHz float64, now time.Time) error {
+	return s.startAnswer(ourCall, ourGrid, theirCall, "", heardSlotUTC, true, offsetHz, dialFreqMHz, now)
+}
+
+// startAnswer is the body of StartQso and StartQsoToAddressee. slotUTC is the slot of the
+// line the operator acted on; heardFromCaller says that line was sent by a station CALLING
+// theirCall, so theirCall's own slots are the opposite ones.
+func (s *Sequencer) startAnswer(ourCall, ourGrid, theirCall, theirGrid, slotUTC string, heardFromCaller bool, offsetHz, dialFreqMHz float64, now time.Time) error {
 	if offsetHz <= 0 {
 		return ErrNoOffset
 	}
-	t, err := parseFreshSlotUTC(theirSlotUTC, now)
+	t, err := parseFreshSlotUTC(slotUTC, now)
 	if err != nil {
 		return err
 	}
@@ -870,6 +892,9 @@ func (s *Sequencer) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUT
 	s.allowDuplicate = s.consumePendingAllowDuplicate() // one-shot: consumed + cleared with activation
 	s.ex = &ex
 	s.theirPeriod = s.profile.SlotRefFromTime(t).Period
+	if heardFromCaller {
+		s.theirPeriod = oppositePeriod(s.theirPeriod)
+	}
 	s.theirGrid = theirGrid
 	s.offsetHz = offsetHz
 	s.dialFreqMHz = dialFreqMHz
@@ -890,6 +915,7 @@ func (s *Sequencer) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUT
 	s.mu.Unlock()
 
 	s.log.InfoWith().Str("their_call", theirCall).Str("their_period", theirPeriod).
+		Bool("addressee_of_heard_line", heardFromCaller).
 		Float64("offset_hz", offsetHz).Msg("ft8 seq: answering CQ")
 	// Send the opening call this slot if we're already in our TX window — else the
 	// first rung waits for the next qualifying OnSlot (up to a full cycle late).

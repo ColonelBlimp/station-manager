@@ -4,7 +4,7 @@
 // must not (CQ lines route to parseCq; hashed senders have no known callsign).
 
 import { describe, it, expect } from 'vitest';
-import { parseSender } from './ft8Message';
+import { parseAddressee, parseSender } from './ft8Message';
 
 describe('parseSender', () => {
     it('extracts the sender from a report line (no grid)', () => {
@@ -77,5 +77,44 @@ describe('isCqType4', () => {
     });
     it('false for a non-CQ line', () => {
         expect(isCqType4('K1ABC PJ4/NA2AA RR73')).toBe(false);
+    });
+});
+
+// parseAddressee is the "call the station being called" seam (operator, 2026-11-17: with
+// only `VK9XY ZL4KX R-07` on screen, "it will not call the VK9XY"). The first callsign of a
+// plain line is who it was sent TO: a DXpedition working a pile-up is often heard here only
+// through the stations calling it.
+describe('parseAddressee', () => {
+    it('returns the station a plain line is addressed to', () => {
+        expect(parseAddressee('VK9XY ZL4KX R-07')).toEqual({ call: 'VK9XY' });
+        expect(parseAddressee('VK9XY ZL4KX RR73')).toEqual({ call: 'VK9XY' });
+        expect(parseAddressee('VK9XY ZL4KX RF73')).toEqual({ call: 'VK9XY' });
+        expect(parseAddressee('VK9XY ZL4KX')).toEqual({ call: 'VK9XY' });
+        expect(parseAddressee('  vk9xy zl4kx -11 ')).toEqual({ call: 'VK9XY' });
+    });
+
+    it('needs only the addressee to be a real callsign: the sender may be hashed', () => {
+        expect(parseAddressee('VK9XY <ZL4KX> -05')).toEqual({ call: 'VK9XY' });
+        expect(parseAddressee('VK9XY <...> RR73')).toEqual({ call: 'VK9XY' });
+    });
+
+    it('a portable or rover suffix is still an ordinary callsign', () => {
+        expect(parseAddressee('G3ABC/P K1ABC -05')).toEqual({ call: 'G3ABC/P' });
+    });
+
+    it('refuses what cannot be called this way', () => {
+        expect(parseAddressee('<VK9XY> ZL4KX -05')).toBeNull(); // hashed: no callsign to send
+        expect(parseAddressee('<...> ZL4KX -05')).toBeNull();
+        expect(parseAddressee('PJ4/NA2AA K1ABC -05')).toBeNull(); // compound: the short exchange
+        expect(parseAddressee('K1ABC/D W9XYZ RR73')).toBeNull();
+    });
+
+    it('is null for anything that is not a directed line', () => {
+        expect(parseAddressee('CQ VK9XY QH29')).toBeNull();
+        expect(parseAddressee('CQ DX VK9XY QH29')).toBeNull();
+        expect(parseAddressee('VK9XY')).toBeNull(); // nobody sent it
+        expect(parseAddressee('VK9XY 73')).toBeNull(); // the second token is not a sender
+        expect(parseAddressee('TNX BOB 73 GL')).toBeNull();
+        expect(parseAddressee('')).toBeNull();
     });
 });
