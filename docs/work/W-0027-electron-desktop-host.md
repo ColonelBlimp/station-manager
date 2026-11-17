@@ -2498,3 +2498,42 @@ before any request is written.
    codex-115). That is the price of a boundary with nothing allowed. The probe's requests and
    the client's transport are each tested; their joint is the command line, checked against the
    client's parser.
+
+### C2d — switched on at the station (accepted by the operator 2026-11-17)
+
+**The operator's verdict, 2026-11-17, in chat: "C2d accepted".** The operator switched the check
+on at their own station and has operated with it on since. Nothing here was done by an agent:
+what follows was read afterwards from the station's `smd.log` and from `rpm` and `systemctl`,
+without a request to the daemon.
+
+**What the station shows.**
+- **Switched on:** 2026-11-14 05:55:45 local, on the pair `2.0.0~alpha.5.245.gdf958caa-1`:
+  "operating-client check: on; only the desktop app is served, with this install's operating
+  credential". Every start since carries the same line: six more, through the operator's
+  deploys of the pairs `250.g22f83624`, `252.g202ad0df` and `254.g41d2546b`, the last start on
+  2026-11-17 05:59:57.
+- **Refused without the credential:** four requests, all on 2026-11-14, each logged
+  "operating-client check: request refused" with `credential_present: false`. A browser's
+  `GET /` and `GET /favicon.ico` on the main listener at 06:01:44, which the operator's
+  screenshot shows as the notice; then `GET /v1/version` on the main listener at 06:02:18 and
+  on the app listener at 06:02:42. The log does not name the client that sent the last two.
+- **Operated:** the operator's screenshot shows the desktop app in the Operate FT8 view with the
+  rig connected. With the check on, `smd` logged 129 completed FT8 contacts on 2026-11-14,
+  from 06:12:58 to 08:42:43 local.
+- **No error line** in `smd.log` from the switch-on to this entry.
+
+**Against the brief's station criterion** ("the operator switches the check on and operates; a
+browser and a `curl` without the credential are shown refused"): the switch-on, the operating and
+the browser are shown above. For `curl`, the two refused `GET /v1/version` requests are the
+evidence; that they came from `curl` is not something the log records.
+
+**Known with the check on, not part of this acceptance.**
+- **The manual cannot be opened from the desktop app** (operator, 2026-11-17: "The scrollbars on
+  the manual I cannot see as there is no manual link active"). The app's manual links ask for a
+  new window, and the shell denies every new window on its own origin until A2 (the window set).
+  A browser cannot reach the manual either, since it is refused. So the manual's scrollbars
+  (`d6ac8f5f`) are measured in Electron 44 but not seen at the station.
+- **The tools are not in the RPM** (C2c, open point 2), and the switch is still temporary: its
+  removal is the later brief named above.
+
+**Next:** C4 (presence). ADR 0100's build needs C2d, C4 and a brief.
