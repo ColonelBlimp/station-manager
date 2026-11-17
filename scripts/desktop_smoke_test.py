@@ -364,7 +364,10 @@ class KeepOnException(unittest.TestCase):
         def run(a, root, work):
             d = os.path.join(work, "review-1", smoke.LIB)
             os.makedirs(d)
-            b = os.path.join(d, "sleeper")
+            # The copy keeps the name `sleep`: where coreutils is one multi-call binary, the
+            # program is chosen by file name, and a copy under another name runs nothing
+            # ("coreutils: unknown program 'sleeper'", CI run 44016014454).
+            b = os.path.join(d, "sleep")
             shutil.copy2("/usr/bin/sleep", b)
             child.append(subprocess.Popen([b, "30"], start_new_session=True))
             return 0
