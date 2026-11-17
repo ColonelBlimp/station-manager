@@ -3038,7 +3038,7 @@ answers are in the design).
 3. Is the workspace's event stream a sound guarantee that an idle app learns of a new daemon,
    or is there a state in which it is closed?
 
-### C4a — the app lifetime and admission (built 2026-11-17)
+### C4a — the app lifetime and admission (built 2026-11-17; committed 93ae68d6)
 
 Built on the operator's direction ("commit the brief and start C4a"), from the brief above
 (committed `7104471c`). Both sides are in one change, as the brief says. With the check off
@@ -3083,7 +3083,7 @@ of building it.**
    lifetime is refused for good. A refusal of some other kind, with nothing changed, asks
    nothing and warns of nothing.
 
-**Deviations from the brief, for review.**
+**Deviations from the brief. Accepted by the operator 2026-11-17: "all five accepted".**
 1. **The profile claim is not gated** (the brief listed fifteen routes; fourteen are gated).
    A claim changes the profile only on a daemon with no subscriber, no arm, no session and
    nothing in flight (`ClaimProfile`), so it cannot start, resume or alter operation. And the
@@ -3187,4 +3187,5 @@ of building it.**
 6. **One read more than is needed** follows an admission when a response that differs from
    where it settles arrived during it, a second response from the new process with the
    generation as it then was, for one. The read changes nothing and it ends there.
-7. **The retired dialog's wording** and the waiting page's are mine, not ruled.
+7. **The retired dialog's wording** and the waiting page's are mine. The operator accepted
+   the dialog as a deviation; the words themselves were not put to them.
