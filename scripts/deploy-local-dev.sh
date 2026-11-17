@@ -48,7 +48,8 @@
 # transaction. When that pair is needed and
 # build/release/station-manager-desktop.x86_64.rpm does not have this deploy's
 # version, the script builds it (operator ruling 2026-11-13): the build
-# (scripts/desktop-rpm.sh, which downloads Electron), then the content check and
+# (scripts/desktop-rpm.sh, which downloads Electron when its pinned version is not
+# already kept in build/desktop/electron-cache), then the content check and
 # the production smoke check of the artifact. Those are the steps of
 # `task rpm:desktop` that examine the RPM; the tests of those checks run in CI.
 # A desktop RPM that already has the version is not rebuilt, but it is checked
@@ -191,7 +192,7 @@ EOF
         HAVE=$(desktop_rpm_version)
         if [ "$HAVE" != "$BUILD_VERSION" ]; then
             note "The desktop RPM on disk is ${HAVE:-missing}; building $BUILD_VERSION now."
-            step "Preflight  Build the desktop RPM (downloads Electron)"
+            step "Preflight  Build the desktop RPM (Electron is downloaded only when its pinned version is not kept)"
             bash scripts/desktop-rpm.sh || desktop_failed "the desktop RPM build failed (see above; it needs the Internet)."
             HAVE=$(desktop_rpm_version)
             if [ "$HAVE" != "$BUILD_VERSION" ]; then

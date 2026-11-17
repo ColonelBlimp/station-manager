@@ -64,9 +64,12 @@ libraries the shipped binaries link against. So once it is installed, the two pa
 upgraded together, in one transaction: on a development machine `task deploy:local:dev` does
 it. The deploy builds the desktop RPM of the new version if it is not already built, and checks
 it either way, before it stops `smd`. It has no scriptlets: it never touches `smd` or a
-user service, and installs no autostart. Electron comes from the lockfile-pinned npm install, a
-fresh download verified against its pinned SHA-256. Source and checksum overrides are refused,
-and the downloader runs with only `PATH`, an empty `HOME` and its private cache.
+user service, and installs no autostart. Electron comes from the lockfile-pinned npm install, its
+archive verified against its pinned SHA-256 at every build. The archive is kept in
+`build/desktop/electron-cache`, so it is downloaded once for each Electron version the lockfile
+pins, not at every build; a kept archive that does not match the pin is downloaded again.
+Source and checksum overrides are refused, and the downloader runs with only `PATH`, an empty
+`HOME` and that cache.
 The package is development only until the repository, signing and release gates (D2-D6).
 
 `scripts/desktop-smoke.py <rpm>` is the production smoke check. It unpacks the RPM and launches

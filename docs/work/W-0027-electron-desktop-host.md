@@ -3312,3 +3312,74 @@ accepted".**
 5. **Tune is untouched** (question 3).
 
 **Next:** C4c, the operator's station acceptance, recorded here.
+
+### D1 follow-up — the Electron archive is kept between builds (2026-11-17; built; all three decisions accepted)
+
+**The operator's report (chat, 2026-11-17):** `task deploy:local:dev` "downloads electron every
+time it is run. We should implement some for of check for a newer version/caching".
+
+**Cause.** By design, not by fault: `scripts/desktop-rpm.sh` gave Electron's downloader a new,
+empty cache in the build's temporary directory at every run (the D1 record above: "the archive
+is always downloaded and verified"). The desktop RPM must be rebuilt whenever the version
+changes, which is every commit, so every such deploy fetched the 118 MB archive again.
+
+**What a build does now.**
+- The downloader's cache is `build/desktop/electron-cache`, which outlives the build. The
+  archive is downloaded once for each Electron version the lockfile pins.
+- **"A newer version" is the lockfile's.** The version is pinned by
+  `desktop/package-lock.json`, and the archive's file name carries it, so a changed pin is
+  another file and is downloaded. Nothing asks the network whether a newer Electron exists:
+  moving the pin is a dependency upgrade, a change of its own.
+- **What is trusted is unchanged.** A kept archive is used only if it has the pinned SHA-256.
+  The pinned downloader (`@electron/get` 5.1.0) checks a cached archive against
+  `checksums.json`, and downloads again and replaces it if it does not match; the script's own
+  assertion on the archive stands behind that, as before. So a kept archive that is accepted
+  is, byte for byte, what a download would have been.
+- The script now requires exactly one archive of the pinned version in the cache. With a
+  cache that lasts, two could exist, and which one the downloader used cannot be told from
+  outside it; that is refused, with the directory to remove.
+- The build says which it is: "nothing to download", "not in the cache; downloading it", or
+  "the kept archive is not the pinned one; downloading it again".
+- `SM_DESKTOP_RUNTIME_CACHE` (an absolute path) puts the cache elsewhere. The tests need it.
+  It is not among the refused overrides because it cannot change which archive is accepted.
+- The downloader's environment is still exactly `PATH`, an empty `HOME` and the cache.
+
+**Measured.** In a temporary copy of the build's inputs, with the real npm and downloader:
+the first build downloaded and took 61 s; the second ran with no network at all
+(`unshare -rn`; a control `curl` in the same namespace failed to connect) and built the RPM in
+2.7 s, announcing "nothing to download".
+
+**Evidence.**
+- `desktop/test/runtime-cache.test.mjs` (4 tests) measures the library's behaviour the build
+  relies on, at the pinned version, with a stand-in for the network that counts its calls: a
+  matching cached archive is used with no download; one that does not match is downloaded
+  again and replaced; a download that is not the pinned archive is refused and not kept;
+  another version is another archive. These passed when written: they describe the library,
+  not a change of ours.
+- `scripts/desktop_rpm_guard_test.py`: 13 tests (5 as before, 8 new). The 8 new ones and one
+  of the old failed against the script as it was.
+- 7 reversion proofs of the script, each in its own temporary copy, all caught. One passed at
+  first: the "kept archive is used" test did not notice the downloader being handed a
+  different cache from the one the script had inspected. It now checks that.
+- `scripts/deploy_local_dev_test.py` (20), the desktop lint, format check and unit tests (106)
+  pass.
+
+**A fault of mine on the way.** The first failing run executed the old script in place. Two of
+the new tests got past its archive check, and it went on to its staging step, which emptied
+`build/desktop/stage` in this repository. That directory is intermediate output, cleared and
+refilled by every build, and the built RPM was not touched; but a test must not reach it. Each
+test now runs a copy of the script in a temporary repository of its own, so the script's
+stage, RPM and default cache are that copy's whatever the script does.
+
+**Decisions of mine, all accepted by the operator 2026-11-17 ("1 - build is fine"; "2 and 3
+accepted"):**
+1. The cache is in the repository's ignored `build/` directory, not the account's
+   `~/.cache`. Removing `build/` costs one download. **Ruled by the operator 2026-11-17:
+   "1 - build is fine".**
+2. No check for a newer Electron on the network (above).
+3. Earlier versions' archives are not removed: 118 MB each time the pin moves.
+
+**Limits.** The repository's own cache is empty until the next real build, so the next deploy
+that builds the desktop RPM downloads once more. CI's runner keeps no cache and downloads at
+every run, as before. `task rpm:desktop` was not run in the repository for this change (it
+would replace the deployed pair's RPM file with one of a `-dirty` version).

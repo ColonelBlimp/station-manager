@@ -169,9 +169,9 @@ jobs:
           xvfb-run -a npm run check:c4a
 
       # W-0027 D1: the desktop app RPM. nfpm is pinned; rpm, cpio, binutils and
-      # desktop-file-utils read the artifact back. The build downloads Electron afresh and
-      # verifies its pinned SHA-256; the check inspects the RPM itself (header, file list,
-      # modes, extracted contents). A shallow checkout gives a SHA-only version, which is
+      # desktop-file-utils read the artifact back. The build downloads Electron (the runner
+      # keeps no cache between runs) and verifies its pinned SHA-256; the check inspects the
+      # RPM itself (header, file list, modes, extracted contents). A shallow checkout gives a SHA-only version, which is
       # enough: the check compares the package against the version computed here.
       # W-0027 D1 part 3: the production smoke check launches the RPM's runtime (installed
       # mode) once per development selector, and proves on isolated review copies, on this

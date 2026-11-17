@@ -194,7 +194,8 @@ tasks:
       Build and check the desktop app RPM (W-0027 D1) →
       build/release/station-manager-desktop.x86_64.rpm. One public build path (the shell
       holds no secret): a clean npm ci of desktop/package-lock.json in a temporary
-      directory, a fresh Electron download verified against its pinned SHA-256, the runtime
+      directory, Electron's archive verified against its pinned SHA-256 (kept in
+      build/desktop/electron-cache, so it is downloaded once per pinned version), the runtime
       renamed station-manager-desktop, the app in resources/app without tests or harness.
       Same version as the daemon RPM built from the same commit (operator ruling Q4). Then
       scripts/desktop-rpm-check.py checks the artifact's contents, and scripts/desktop-smoke.py
@@ -269,7 +270,8 @@ tasks:
       With station-manager-desktop installed, a deploy that changes the
       version upgrades both packages in one step. The deploy builds the
       desktop RPM of that version if it is not already built (an Electron
-      download, a few minutes), and checks it either way, before it stops
+      download only when its pinned version is not kept from an earlier
+      build), and checks it either way, before it stops
       anything; if that fails, smd keeps running.
       Defaults to the PocketFFT (CGO) backend so live FT8 capture + decode
       work out of the box (the pure-Go static build leaves FT8 idle —
