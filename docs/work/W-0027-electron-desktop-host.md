@@ -3436,7 +3436,14 @@ nothing.
   missed the third reversion; with the bounded one, none of eight did. The third test's
   "nothing is logged" was not shown failing by any reversion; only its stop was. A Group B
   closing rung (our own RR73 still owed) is not covered here: by the standing rule it logs
-  only on success on the air, and that rule has its own tests.
+  only on success on the air, and that rule has its own tests. What the tests count is one
+  hand-over to the injected logger (`SetQsoLogger`), not a row committed to the database or
+  a forward; capture and decode, and the admission's HTTP path, are not in them (codex-144).
+- **After the commit (`b4c6f4b7`), its automatic review found one thing, P2, and it is
+  fixed:** the fixture waited for the closing 73 to be keyed, not for it to be playing, and
+  the controller keys before it plays, so the "keyed and playing" case depended on
+  scheduling. The fixture now waits for both. The three tests then passed 20 times under
+  `-race`, and the four reversions were caught 8 of 8 again.
 - **Gates:** `gofmt`, `go vet ./...`, `golangci-lint` (0 issues), the maintainability gate,
   `internal/ft8` and `internal/api` under `-race`, and `go test ./...` (67 packages).
 

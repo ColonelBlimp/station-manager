@@ -123,8 +123,10 @@ func (f *replacedContact) toTheirReport(t *testing.T) {
 func (f *replacedContact) theyRoger(t *testing.T) {
 	t.Helper()
 	f.their(90, "G0XYZ K1ABC RR73", -11)
-	require.Eventually(t, func() bool { return f.keyer.keys() > 0 }, 2*time.Second, 5*time.Millisecond,
-		"the fixture: the closing 73 must be keyed")
+	// Keyed AND playing: the controller keys first and plays after, so a wait for the key
+	// alone lets a replacement land before the play has begun (commit review of b4c6f4b7).
+	require.Eventually(t, func() bool { return f.keyer.keys() > 0 && f.player.plays() > 0 },
+		2*time.Second, 5*time.Millisecond, "the fixture: the closing 73 must be keyed and playing")
 	require.Contains(t, f.sentNow(), closingRung)
 }
 
