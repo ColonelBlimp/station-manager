@@ -112,6 +112,12 @@ design before code.
   the desktop app (D1: the shell package with its menu launcher, not `npm start` from a checkout).
   So C2's switch of the browser to view-only, and any removal of the browser path, depend on D1.
   Today the app runs only from a repository checkout (`cd desktop && npm start`).
+- **2026-11-18 (operator): "D1 - accepted. Electron in the right way forward, just from a Session
+  stand point it's the right choice."** D1 is accepted (record at the end of this dossier). The
+  second sentence is the operator's judgement of the direction after using the installed app
+  through C2 and C4: ADR 0102's choice stands, and the Session is the reason they name. ADR 0100
+  (the Session that follows the app's lifetime) is the design that sentence points at; its build
+  is not started.
 
 ## Open questions for the operator
 
@@ -3449,3 +3455,16 @@ nothing.
 
 **Verdict. Accepted by the operator 2026-11-18: "C4c accepted".** With it C4 is done: C4a
 (`93ae68d6`), C4b (`b50f74ee`) and this acceptance.
+
+### D1 — accepted by the operator (2026-11-18)
+
+**Accepted by the operator 2026-11-18: "D1 - accepted."** D1 is the desktop app as an
+installable package: `station-manager-desktop`, installed with the daemon as one pair, with
+its menu launcher. The operator has installed and run that pair at the station since
+2026-11-12, through C2d and C4c, most recently `2.0.0~alpha.5.265.g8e64d2ed-1`.
+
+**What this record does not hold.** The D1 brief's acceptance named a clean Fedora guest,
+and left some observations to it: the Wayland app id, where a denied namespace creation
+shows its error, and what reaches the user journal. The operator's acceptance is recorded as
+given. Whether a guest run was made, and what it showed, was not said, and nothing about it
+is recorded here. D2 to D6 are not part of D1 and are not started.
