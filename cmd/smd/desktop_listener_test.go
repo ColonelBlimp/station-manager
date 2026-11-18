@@ -150,7 +150,7 @@ func TestDesktopListener_ServeError_ReportedNotFatal(t *testing.T) {
 // certificate (the shell's pin, ADR 0103) and presenting cred.
 func pinnedVersion(t *testing.T, port int, want desktopid.Identity, cred string) (int, error) {
 	t.Helper()
-	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{
+	client := &http.Client{Timeout: 5 * time.Second, CheckRedirect: neverRedirect, Transport: &http.Transport{TLSClientConfig: &tls.Config{
 		MinVersion:         tls.VersionTLS13,
 		InsecureSkipVerify: true, // replaced by the pin below, as in the shell
 		VerifyConnection: func(cs tls.ConnectionState) error {

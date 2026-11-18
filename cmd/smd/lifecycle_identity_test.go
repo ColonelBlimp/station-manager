@@ -482,7 +482,7 @@ type callTarget struct {
 // mainTargetOf is the main listener: the unix socket, plain HTTP, nothing presented.
 func mainTargetOf(d *daemon) callTarget {
 	sock := d.cfgSvc.Snapshot().SocketPath
-	return callTarget{name: sock, base: "http://smd", client: &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{
+	return callTarget{name: sock, base: "http://smd", client: &http.Client{Timeout: 30 * time.Second, CheckRedirect: neverRedirect, Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, "unix", sock)
 		},
@@ -519,7 +519,7 @@ func appTarget(port int, id desktopid.Identity, cred string) callTarget {
 		name:    addr + " (the app listener)",
 		base:    "https://" + addr,
 		headers: map[string]string{"X-SM-Operating-Credential": cred},
-		client: &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{
+		client: &http.Client{Timeout: 30 * time.Second, CheckRedirect: neverRedirect, Transport: &http.Transport{TLSClientConfig: &tls.Config{
 			MinVersion:         tls.VersionTLS13,
 			InsecureSkipVerify: true, // replaced by the pin below, as in the shell
 			VerifyConnection: func(cs tls.ConnectionState) error {
@@ -531,6 +531,11 @@ func appTarget(port int, id desktopid.Identity, cred string) callTarget {
 		}}},
 	}
 }
+
+// neverRedirect makes a client return a redirect to its caller. Following one would send the
+// request again, with the credential, to wherever it points: a listener the pin never
+// checked, or one whose refusal reads as a dial that never connected (AC10).
+func neverRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 // callWhenListening is the one request loop behind apiCall and mainCall, and holds their
 // contract (apicall_test.go). resolve names the listener, or reports that the daemon has

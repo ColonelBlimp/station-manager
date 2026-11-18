@@ -51,7 +51,8 @@ func pinnedClient(t *testing.T, id desktopid.Identity, maxTLS uint16) *http.Clie
 	pool := x509.NewCertPool()
 	pool.AddCert(cert)
 	return &http.Client{
-		Timeout: 5 * time.Second,
+		Timeout:       5 * time.Second,
+		CheckRedirect: noRedirect,
 		Transport: &http.Transport{
 			TLSClientConfig:   &tls.Config{RootCAs: pool, MaxVersion: maxTLS},
 			DisableKeepAlives: true,

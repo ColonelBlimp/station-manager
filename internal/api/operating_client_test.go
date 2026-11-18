@@ -247,7 +247,6 @@ func (l checked) mainURL(path string) string { return "http://" + l.mainAddr + p
 // clients returns one client per listener; neither follows a redirect.
 func (l checked) clients(t *testing.T) (mainC, appC *http.Client) {
 	t.Helper()
-	noRedirect := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	appC = pinnedClient(t, l.id, 0)
 	appC.CheckRedirect = noRedirect
 	mainC = &http.Client{Timeout: 5 * time.Second, CheckRedirect: noRedirect,

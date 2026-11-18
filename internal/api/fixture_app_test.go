@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/ColonelBlimp/station-manager/internal/config"
@@ -151,6 +152,7 @@ func appSocket(t testing.TB, srv *Server, tune func(ts *httptest.Server)) *httpt
 		tune(ts)
 	}
 	ts.StartTLS()
+	ts.Client().CheckRedirect = noRedirect
 	t.Cleanup(ts.Close)
 	srv.appMu.Lock()
 	srv.appPort = ts.Listener.Addr().(*net.TCPAddr).Port
@@ -175,12 +177,18 @@ func appSocketPlain(t testing.TB, srv *Server, tune func(ts *httptest.Server)) *
 		tune(ts)
 	}
 	ts.Start()
+	ts.Client().CheckRedirect = noRedirect
 	t.Cleanup(ts.Close)
 	srv.appMu.Lock()
 	srv.appPort = ts.Listener.Addr().(*net.TCPAddr).Port
 	srv.appMu.Unlock()
 	return ts
 }
+
+// noRedirect makes a test client return a redirect to the test. A client that carries the
+// app's headers never follows one: it would answer for another endpoint and send the
+// request again wherever the redirect pointed.
+func noRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 // appHeaders puts the fixture app's credential and lifetime on a request's headers.
 func appHeaders(h http.Header) {
@@ -197,4 +205,42 @@ func appGet(t testing.TB, ts *httptest.Server, path string) (*http.Response, err
 	}
 	appHeaders(req.Header)
 	return ts.Client().Do(req)
+}
+
+// The app socket's client returns a redirect to the test and does not follow it (the commit
+// review of e414c6b7; codex-160). A followed redirect would answer for another endpoint, and
+// would send the request, with the app's headers, wherever it pointed. The retired /app
+// route is a real redirect to "/".
+func TestFixture_TheAppSocketClientReturnsARedirect(t *testing.T) {
+	for name, socket := range map[string]func(testing.TB, *Server, func(*httptest.Server)) *httptest.Server{
+		"appSocket":      appSocket,
+		"appSocketPlain": appSocketPlain,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var mu sync.Mutex
+			var served []string
+			srv := appTestServer(t, nil, nil)
+			chain := srv.httpServer.Handler
+			srv.httpServer.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				served = append(served, r.URL.Path)
+				mu.Unlock()
+				chain.ServeHTTP(w, r)
+			})
+			ts := socket(t, srv, nil)
+			resp, err := appGet(t, ts, "/app")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+			if resp.StatusCode != http.StatusMovedPermanently || resp.Header.Get("Location") != "/" {
+				t.Fatalf("GET /app = %d, Location %q; want the 301 to / itself", resp.StatusCode, resp.Header.Get("Location"))
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if len(served) != 1 || served[0] != "/app" {
+				t.Fatalf("requests served: %v; want /app alone, the redirect not followed", served)
+			}
+		})
+	}
 }

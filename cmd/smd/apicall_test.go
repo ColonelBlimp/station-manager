@@ -46,6 +46,10 @@ import (
          (postAggregate) keeps the same contract: an unpublished listener is
          waited for; a dropped response and a truncated body each fail promptly
          after exactly one received request (codex-158).
+     AC10 a redirect is returned to the caller and never followed: following
+         one would send the credential, and a POST again, to a listener the
+         pin never checked, and a refused redirect target would read as "never
+         connected" (commit review of e414c6b7).
 */
 
 // fatalTB records the helper's failure instead of failing the test, and
@@ -416,4 +420,71 @@ func TestAPICall_AC9_TheAggregatePostKeepsTheContract(t *testing.T) {
 			}
 		})
 	}
+}
+
+// redirectTo is a 307 to location: the method and body are kept by a client that follows it.
+func redirectTo(location string) func(net.Conn) {
+	return reply("HTTP/1.1 307 Temporary Redirect\r\nLocation: " + location + "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+}
+
+func TestAPICall_AC10_ARedirectIsReturnedNotFollowed(t *testing.T) {
+	t.Run("the app listener redirects to a plain listener", func(t *testing.T) {
+		d := apiCallDaemon(t)
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = ln.Close() })
+		plain := &rawServer{bodies: make(chan string, 16), credentials: make(chan string, 16)}
+		go plain.serve(ln, reply("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"))
+		id := testIdentity(t)
+		s, port := rawAppListener(t, id, redirectTo("http://"+ln.Addr().String()+"/v1/probe"))
+		res := runCall(t, func(tb testing.TB) (int, []byte) {
+			return callWhenListening(tb, d, "the app listener", func() (callTarget, bool) {
+				return appTarget(port, id, "the-install-credential"), true
+			}, http.MethodPost, "/v1/probe", `{"n":10}`, nil)
+		})
+		if res.failed != "" || res.code != http.StatusTemporaryRedirect {
+			t.Fatalf("result %+v; want the 307 itself returned to the caller", res)
+		}
+		if n := plain.received.Load(); n != 0 {
+			t.Fatalf("%d request(s) reached a listener the pin never checked (credential %q); want none", n, <-plain.credentials)
+		}
+		if n := s.received.Load(); n != 1 {
+			t.Fatalf("%d request(s) received by the app listener; want 1", n)
+		}
+	})
+	t.Run("the aggregate POST is redirected to a port that refuses", func(t *testing.T) {
+		gone, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		refused := gone.Addr().String()
+		_ = gone.Close()
+		id := testIdentity(t)
+		s, port := rawAppListener(t, id, redirectTo("http://"+refused+"/v1/smcloud/reconcile"))
+		start := time.Now()
+		res := postAggregate(func() (callTarget, bool) { return appTarget(port, id, "c"), true })
+		if res.err != nil || res.code != http.StatusTemporaryRedirect {
+			t.Fatalf("result %+v; want the 307 itself", res)
+		}
+		if n := s.received.Load(); n != 1 {
+			t.Fatalf("%d request(s) received; want exactly 1: a refused redirect target is not a dial that never connected", n)
+		}
+		if took := time.Since(start); took > 5*time.Second {
+			t.Fatalf("returned after %v; want at once", took)
+		}
+	})
+	t.Run("the main listener redirects", func(t *testing.T) {
+		d := apiCallDaemon(t)
+		s := serveRaw(t, d, 0, redirectTo("http://smd/v1/elsewhere"))
+		waitForSocket(t, d)
+		res := runAPICall(t, d, http.MethodPost, `{"n":10}`)
+		if res.failed != "" || res.code != http.StatusTemporaryRedirect {
+			t.Fatalf("result %+v; want the 307 itself returned to the caller", res)
+		}
+		if n := s.received.Load(); n != 1 {
+			t.Fatalf("%d request(s) received; want 1, the redirect not followed", n)
+		}
+	})
 }

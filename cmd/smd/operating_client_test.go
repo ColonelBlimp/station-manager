@@ -186,7 +186,7 @@ func TestDesktopListener_CheckOn_UnconfirmedDurabilityIsStillOnlyReported(t *tes
 // cred when it is not empty.
 func pinnedGet(t *testing.T, port int, id desktopid.Identity, path, cred string) (int, string) {
 	t.Helper()
-	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{
+	client := &http.Client{Timeout: 5 * time.Second, CheckRedirect: neverRedirect, Transport: &http.Transport{TLSClientConfig: &tls.Config{
 		MinVersion:         tls.VersionTLS13,
 		InsecureSkipVerify: true, // replaced by the pin below, as in the shell
 		VerifyConnection: func(cs tls.ConnectionState) error {

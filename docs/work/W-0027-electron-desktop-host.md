@@ -151,6 +151,14 @@ design before code.
 - **2026-11-18 (operator): "We'll verify all of this with Codex before we implement".**
   Nothing of C2e is implemented until Codex has verified the brief, part 1's measurement and
   the inventories. The rulings above settle what goes; they do not start the work.
+- **2026-11-18 (operator): "commit and push part 2, delete both tests in part 3".** The two
+  daemon tests that exist only for a station carrying on without its app listener
+  (`TestDesktopListener_ABusyAppPortNeverStopsTheStation`,
+  `TestDesktopListener_NeverTakesTheBrowserListenersPort`) are deleted in C2e part 3.
+- **2026-11-18 (operator): "commit and push the follow-up, remove the field".** The field is
+  `required` in the reply of `GET` and `POST /v1/app/lifetime`, which after C2e part 3 could
+  only say `true`: it is removed in part 3, with `api-endpoints.md`, and the shell stops
+  reading it. The follow-up is the redirect fix to the test clients (C2e part 2's section).
 
 ## Open questions for the operator
 
@@ -3771,7 +3779,7 @@ source.**
 - **Mixed test files are edited, not deleted:** a file that holds both a down-migration
   test and a test of restore, of a constraint or of a forward upgrade keeps the latter.
 
-### C2e part 2 — the tests moved onto the supported mode (built 2026-11-18; reviewed; committed on direction; no product behaviour changed)
+### C2e part 2 — the tests moved onto the supported mode (built 2026-11-18; reviewed; committed e414c6b7 on direction; no product behaviour changed)
 
 Part 2 of the C2e brief: every test that does not exist for the "off" state now runs as the
 desktop app does, so that part 3 can remove the switch without the suite depending on it.
@@ -3806,6 +3814,19 @@ including that a listener with another certificate is sent nothing. AC9 holds th
 POST of the reconcile tests to it: Codex found that helper still replaying a completed POST
 after a dropped response (codex-158, P2), reproduced it, and confirmed the fix against the
 same reproduction (codex-159).
+
+**The commit's automatic review (e414c6b7), one P2, fixed.** The test clients followed
+redirects. A redirect from the pinned app listener would have sent the request again, with
+the credential, to a listener the pin never checked; and a redirect to a port that refuses
+would have read as "a dial that never connected" and replayed the POST. Shown before the fix:
+the plain listener answered the redirected request, and the aggregate POST retried until its
+deadline. The clients now return a redirect to the caller (`neverRedirect`; AC10, three
+cases: the app listener, the aggregate POST, the main listener). No daemon test depended on
+following one. Test code only. Codex verified the fix and asked that the `internal/api`
+fixture clients match (codex-160): the app socket's client, its plain variant and the
+real-listener pinned client now return a redirect too, with one check through the real
+`/app` redirect (`TestFixture_TheAppSocketClientReturnsARedirect`), which failed before the
+change by answering 200 for `/`.
 
 **Two fixtures that are not what they look like, named in the code.** `appSocketPlain` is a
 plain socket with a modelled TLS state, for the one shutdown test whose connection double
