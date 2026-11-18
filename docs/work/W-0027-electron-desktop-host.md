@@ -3383,3 +3383,62 @@ accepted"):**
 that builds the desktop RPM downloads once more. CI's runner keeps no cache and downloads at
 every run, as before. `task rpm:desktop` was not run in the repository for this change (it
 would replace the deployed pair's RPM file with one of a `-dirty` version).
+
+### C4c — the station (2026-11-18; accepted by the operator)
+
+The operator ran C4b at the station on the installed pair `2.0.0~alpha.5.265.g8e64d2ed-1`,
+with the operating-client check on and the rig connected. The steps were the brief's
+criteria 1, 2, 4, 7 and 9 as things a person can do. What follows is what `smd.log` recorded
+(times local, 2026-11-18); the reading of the log is mine, the steps and the transmissions
+are the operator's. No request to the daemon and no rig command was made in reading it.
+
+| Step | What the operator did | In the log |
+|---|---|---|
+| 1 | normal operation | 07:30:07 armed, calling CQ; 07:31:58 and 07:32:58 `caller QSO complete (RR73 sent)`, `QSO stored`, `ft8: completed QSO logged`, one each |
+| 2 | left the FT8 view, back inside the grace | 07:09:53.717 the FT8 stream closes; 07:09:54.975 claimed again; no disarm |
+| 3 | left the FT8 view for longer | 07:10:06.204 the stream closes; 07:10:11.204 `ft8 tx: disarmed`, `cause=unattended`, 5.000 s later |
+| 4 | closed the app and stayed away | 07:20:35.572 the app's three streams close; 07:20:40.573 disarmed, `unattended`, 5.001 s later, with no app connected |
+| 5 | closed the app and started it again inside the grace | 07:07:43.544 closed, 07:07:47.698 disarmed `unattended` at the new start's admission, before its page was asked for (07:07:47.701); again at 07:10:23.904 and 07:10:26.154 |
+| 6 | restarted the daemon under the running app | 07:16:53 `shutdown signal received`, disarmed `cause=shutdown`, `smd starting`; 07:16:55.075 the app reads and is admitted again (200, 200) with no load of its page; 07:17:16.280 arm accepted |
+
+No request was refused, from the daemon's start that day to the last reading at 07:33 (no
+status of 400 or above). Every disarm carried its cause:
+`unattended` four times, `shutdown`, `operator`, and `band_change` twice. The log cannot tell
+a closed app from a killed one: both are three streams closing together.
+
+**The criteria that cannot be made by hand. Ruled by the operator 2026-11-18: "Write the
+test for 6, the rest accepted on tests".** That is criteria 3, 5, 8 and 10, and the first
+sentence of 7 (a renderer reload inside the grace), accepted on the tests named in C4a and
+C4b above. For 7, step 2 showed the daemon's half: a stream of the same lifetime that
+closes and returns inside the grace keeps the arm.
+
+**Criterion 6, the test the operator directed** (`internal/ft8/operating_contact_test.go`). C4a had none of its own (its limit 4). Three tests,
+through the service under the operating-client rule, its own sequencer and completion
+policy, the real single-flight transmission and its cancellation, and the injected log
+hand-over; only the waveform and the wait for a slot are left out:
+- the partner has rogered and our closing 73 is keyed and playing when the replacement
+  arrives: it is cut short, the rig is unkeyed, and the contact is logged once, in the
+  logbook and on the frequency of the exchange;
+- the 73 has played out and the contact is being handed to the log when the replacement
+  arrives: the replacement waits for the hand-over and the contact is logged once;
+- the partner has not rogered: nothing is logged, then or when the roger arrives under the
+  new app.
+In each, the partner's repeated RR73 under the new app's arm logs nothing more and sends
+nothing.
+- **They passed at their first run:** they test behaviour that was already there. The
+  evidence that they can fail is four reversions, each in its own temporary copy, eight runs
+  each, all caught every time: the stop abandoning the session before waiting for the
+  transmission (the earned contact is lost); a replacement that seals but does not stop; a
+  stop that does not wait for the transmission in flight; and the contact handed to the log
+  twice.
+- **Limits.** The second test's "the replacement waits" is a bounded look of 250 ms, not a
+  barrier: nothing observable says a stop is waiting. With an immediate look, one run in two
+  missed the third reversion; with the bounded one, none of eight did. The third test's
+  "nothing is logged" was not shown failing by any reversion; only its stop was. A Group B
+  closing rung (our own RR73 still owed) is not covered here: by the standing rule it logs
+  only on success on the air, and that rule has its own tests.
+- **Gates:** `gofmt`, `go vet ./...`, `golangci-lint` (0 issues), the maintainability gate,
+  `internal/ft8` and `internal/api` under `-race`, and `go test ./...` (67 packages).
+
+**Verdict. Accepted by the operator 2026-11-18: "C4c accepted".** With it C4 is done: C4a
+(`93ae68d6`), C4b (`b50f74ee`) and this acceptance.
