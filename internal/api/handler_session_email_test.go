@@ -26,7 +26,7 @@ import (
 // to "" to test the disabled path) to exercise the handler.
 func testServerWithMailer(t *testing.T, cfg types.SmtpConfig) *Server {
 	t.Helper()
-	srv := testServer(t)
+	srv := appTestServer(t, nil, nil)
 	srv.mailer = email.New(cfg, srv.logger)
 	return srv
 }

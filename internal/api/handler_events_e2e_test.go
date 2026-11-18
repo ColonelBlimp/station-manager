@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -76,14 +75,13 @@ func TestE2E_SSE_InsertFlow(t *testing.T) {
 	// Wrap the handler in a live TCP server so a real HTTP client
 	// can stream SSE frames. The internal httpServer.Handler is
 	// already fully wired (including panic recovery).
-	ts := httptest.NewServer(h.srv.httpServer.Handler)
-	defer ts.Close()
+	ts := appSocket(t, h.srv, nil)
 
 	// Open the SSE stream before POSTing so we don't miss the
 	// qso.stored/forward.succeeded events. Per the client contract
 	// documented in the events handler: "open stream first, then
 	// fetch state."
-	resp, err := http.Get(ts.URL + "/v1/events")
+	resp, err := appGet(t, ts, "/v1/events")
 	if err != nil {
 		t.Fatalf("open SSE: %v", err)
 	}
@@ -166,10 +164,9 @@ func TestE2E_SSE_UpdateAndDeleteFlow(t *testing.T) {
 	h := startE2E(t) // no forwarder → no forward.* events to interleave
 	defer h.shutdown()
 
-	ts := httptest.NewServer(h.srv.httpServer.Handler)
-	defer ts.Close()
+	ts := appSocket(t, h.srv, nil)
 
-	resp, err := http.Get(ts.URL + "/v1/events")
+	resp, err := appGet(t, ts, "/v1/events")
 	if err != nil {
 		t.Fatalf("open SSE: %v", err)
 	}
@@ -245,10 +242,9 @@ func TestE2E_SSE_FailureFlow(t *testing.T) {
 	h := startE2E(t, terminalCfg)
 	defer h.shutdown()
 
-	ts := httptest.NewServer(h.srv.httpServer.Handler)
-	defer ts.Close()
+	ts := appSocket(t, h.srv, nil)
 
-	resp, err := http.Get(ts.URL + "/v1/events")
+	resp, err := appGet(t, ts, "/v1/events")
 	if err != nil {
 		t.Fatalf("open SSE: %v", err)
 	}

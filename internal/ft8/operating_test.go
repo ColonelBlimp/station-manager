@@ -77,7 +77,7 @@ func gatedCommands() []operatingCommand {
 
 func newOwnedService(t *testing.T, current string) *Service {
 	t.Helper()
-	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+	s := newBareTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
 	// Configured, so the two Field Day starts reach the gate: a request that is refused
 	// for its own content before the gate is refused for that, whoever sent it.
 	s.cfg.FieldDay = &types.Ft8FieldDayConfig{Class: "1D", Section: "EMA"}
@@ -139,7 +139,7 @@ func TestOperating_ARefusedCommandChangesNothing(t *testing.T) {
 // With ownership not required (the check off), a command is accepted whoever asks, and
 // the commands that took no gate before C4 still take none.
 func TestOperating_NotRequired_NothingChanges(t *testing.T) {
-	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+	s := newBareTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
 	t.Cleanup(func() { _ = s.ArmTx(false) })
 
 	for _, c := range gatedCommands() {
@@ -157,8 +157,8 @@ func TestOperating_NotRequired_NothingChanges(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		s.SetExchangePath("long")
-		s.StopAutoWorkRun()
+		setExchangePath(t, s, "long")
+		stopAutoWorkRun(t, s)
 		_ = s.SetQsoSkip(true)
 		_ = s.NextAnswerer()
 		_ = s.PickAnswerer("K1ABC")

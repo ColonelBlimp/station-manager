@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
 	"database/sql"
 	"encoding/json"
 	stderr "errors"
@@ -13,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -22,6 +25,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/adif"
 	"github.com/ColonelBlimp/station-manager/internal/archive"
 	"github.com/ColonelBlimp/station-manager/internal/config"
+	"github.com/ColonelBlimp/station-manager/internal/desktopid"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding/smcloud"
 	"github.com/ColonelBlimp/station-manager/internal/lifecycle/orchestrator"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -425,18 +429,19 @@ func TestIdentityWire_SW5_ConstructionFailureStopsTheStart(t *testing.T) {
           targeting Home; one fingerprinted for the selector is held.
 */
 
-// apiCall sends one request to the generation's API over its unix socket
-// (started after ownerOnlySocketDir).
+// apiCall sends one request to the generation's API as the desktop app does (W-0027 C2e):
+// over the app listener, accepting only this install's desktop identity, with this
+// install's operating credential. Both are read from the daemon's working directory, where
+// the daemon itself made them. There is no fallback to the main listener.
 func apiCall(t testing.TB, d *daemon, method, path string) (int, []byte) {
 	t.Helper()
 	return apiCallBody(t, d, method, path, "")
 }
 
-// apiCallBody is apiCall with a JSON request body. It waits up to 15s for a
-// listener that is still binding, retrying only a dial that never connected;
-// once a request may have reached the daemon, a transport error fails rather
-// than sending it twice. Each attempt is a fresh request, bounded by the
-// client timeout.
+// apiCallBody is apiCall with a JSON request body. It waits up to 15s for a listener that
+// is still coming up, retrying only a dial that never connected; once a request may have
+// reached the daemon, a transport error fails rather than sending it twice. Each attempt is
+// a fresh request, bounded by the client timeout.
 func apiCallBody(t testing.TB, d *daemon, method, path, body string) (int, []byte) {
 	t.Helper()
 	return apiCallHeaders(t, d, method, path, body, nil)
@@ -445,48 +450,173 @@ func apiCallBody(t testing.TB, d *daemon, method, path, body string) (int, []byt
 // apiCallHeaders is apiCallBody with extra request headers.
 func apiCallHeaders(t testing.TB, d *daemon, method, path, body string, headers map[string]string) (int, []byte) {
 	t.Helper()
+	return callWhenListening(t, d, "the app listener", func() (callTarget, bool) { return appTargetOf(d) },
+		method, path, body, headers)
+}
+
+// mainCall sends one request to the generation's MAIN listener, its unix socket (started
+// after ownerOnlySocketDir). That listener serves the health check and refuses everything
+// else while the operating-client check is on (W-0027 C2), so this is for the tests of
+// that listener itself. An ordinary request to the daemon is apiCall.
+func mainCall(t testing.TB, d *daemon, method, path string) (int, []byte) {
+	t.Helper()
+	return mainCallBody(t, d, method, path, "")
+}
+
+// mainCallBody is mainCall with a JSON request body, under apiCallBody's contract.
+func mainCallBody(t testing.TB, d *daemon, method, path, body string) (int, []byte) {
+	t.Helper()
+	target := mainTargetOf(d)
+	return callWhenListening(t, d, target.name, func() (callTarget, bool) { return target, true },
+		method, path, body, nil)
+}
+
+// callTarget is one listener a test's request goes to.
+type callTarget struct {
+	name    string            // in failures
+	client  *http.Client      // reaches that listener and no other
+	base    string            // scheme and host
+	headers map[string]string // what the listener itself asks of every request
+}
+
+// mainTargetOf is the main listener: the unix socket, plain HTTP, nothing presented.
+func mainTargetOf(d *daemon) callTarget {
 	sock := d.cfgSvc.Snapshot().SocketPath
-	client := &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{
+	return callTarget{name: sock, base: "http://smd", client: &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, "unix", sock)
 		},
-	}}
+	}}}
+}
+
+// appTargetOf is the app listener, once the daemon has published all a request to it
+// needs: the bound port, the desktop identity and the operating credential.
+func appTargetOf(d *daemon) (callTarget, bool) {
+	if d.server == nil {
+		return callTarget{}, false
+	}
+	port := d.server.AppPort()
+	if port == 0 {
+		return callTarget{}, false
+	}
+	root := d.cfgSvc.WorkingDir()
+	id, err := desktopid.Load(root)
+	if err != nil {
+		return callTarget{}, false
+	}
+	cred, err := os.ReadFile(filepath.Join(root, desktopid.CredentialDirName, desktopid.CredentialFileName))
+	if err != nil {
+		return callTarget{}, false
+	}
+	return appTarget(port, id, string(cred)), true
+}
+
+// appTarget is the app listener on port: TLS accepting only id's certificate (the shell's
+// pin, ADR 0103), presenting cred.
+func appTarget(port int, id desktopid.Identity, cred string) callTarget {
+	addr := "127.0.0.1:" + strconv.Itoa(port)
+	return callTarget{
+		name:    addr + " (the app listener)",
+		base:    "https://" + addr,
+		headers: map[string]string{"X-SM-Operating-Credential": cred},
+		client: &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{
+			MinVersion:         tls.VersionTLS13,
+			InsecureSkipVerify: true, // replaced by the pin below, as in the shell
+			VerifyConnection: func(cs tls.ConnectionState) error {
+				if len(cs.PeerCertificates) == 0 || !bytes.Equal(cs.PeerCertificates[0].Raw, id.CertDER) {
+					return stderr.New("not smd's desktop identity")
+				}
+				return nil
+			},
+		}}},
+	}
+}
+
+// callWhenListening is the one request loop behind apiCall and mainCall, and holds their
+// contract (apicall_test.go). resolve names the listener, or reports that the daemon has
+// not published it yet; that and a dial that never connected are the only things waited
+// for and retried.
+func callWhenListening(t testing.TB, d *daemon, awaited string, resolve func() (callTarget, bool),
+	method, path, body string, headers map[string]string) (int, []byte) {
+	t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
+	var last error
 	for {
-		req, err := http.NewRequest(method, "http://smd"+path, strings.NewReader(body))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if body != "" {
-			req.Header.Set("Content-Type", "application/json")
-		}
-		for k, v := range headers {
-			req.Header.Set(k, v)
-		}
-		resp, err := client.Do(req)
-		if err == nil {
-			defer func() { _ = resp.Body.Close() }()
-			out, err := io.ReadAll(resp.Body)
-			if err != nil {
-				t.Fatalf("%s %s on %s: reading the response: %v", method, path, sock, err)
+		if target, ready := resolve(); ready {
+			awaited = target.name
+			code, out, err := target.do(method, path, body, headers)
+			if err == nil {
+				return code, out
 			}
-			return resp.StatusCode, out
-		}
-		if !notListening(err) {
-			t.Fatalf("%s %s on %s: %v (not retried: the daemon may have received it)", method, path, sock, err)
+			if !notListening(err) {
+				t.Fatalf("%s %s on %s: %v (not retried: the daemon may have received it)", method, path, awaited, err)
+			}
+			last = err
 		}
 		// A listener that fails to start reports why on errCh: name that
 		// failure instead of waiting out the deadline.
 		select {
 		case lerr := <-d.errCh:
-			t.Fatalf("the API listener on %s failed: %v", sock, lerr)
+			t.Fatalf("the API listener on %s failed: %v", awaited, lerr)
 		default:
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("the API on %s did not answer: %v", sock, err)
+			t.Fatalf("the API on %s did not answer: %v", awaited, last)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+}
+
+// do is one request to the target. A response whose body cannot be read in full is an
+// error, never a success. Only notListening says of an error that nothing was sent.
+func (c callTarget) do(method, path, body string, headers map[string]string) (int, []byte, error) {
+	defer c.client.CloseIdleConnections()
+	req, err := http.NewRequest(method, c.base+path, strings.NewReader(body))
+	if err != nil {
+		return 0, nil, err
+	}
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	for k, v := range c.headers {
+		req.Header.Set(k, v)
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	out, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, nil, fmt.Errorf("reading the response: %w", err)
+	}
+	return resp.StatusCode, out, nil
+}
+
+// admitTestApp admits one app lifetime to d as the shell's main process does (read the
+// admission state, then admit against it), and returns it. A request that operates FT8
+// carries it in X-Sm-App-Lifetime.
+func admitTestApp(t testing.TB, d *daemon) string {
+	t.Helper()
+	const lifetime = "TTTTTTTTTTTTTTTTTTTTTA" // 16 bytes, unpadded base64url
+	h := map[string]string{"X-Sm-App-Lifetime": lifetime}
+	code, body := apiCallHeaders(t, d, http.MethodGet, "/v1/app/lifetime", "", h)
+	var st struct {
+		Instance   string `json:"daemon_instance"`
+		Generation uint64 `json:"generation"`
+	}
+	if code != http.StatusOK || json.Unmarshal(body, &st) != nil || st.Instance == "" {
+		t.Fatalf("read the admission state: %d %s", code, body)
+	}
+	admit := fmt.Sprintf(`{"daemon_instance":%q,"generation":%d}`, st.Instance, st.Generation)
+	if code, body := apiCallHeaders(t, d, http.MethodPost, "/v1/app/lifetime", admit, h); code != http.StatusOK ||
+		!strings.Contains(string(body), `"current":true`) {
+		t.Fatalf("admit the test app: %d %s", code, body)
+	}
+	return lifetime
 }
 
 // notListening reports a dial that found no listener on the socket, either

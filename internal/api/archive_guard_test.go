@@ -44,8 +44,9 @@ func newGuardFixture(t *testing.T) guardFixture {
 	t.Cleanup(fake.close)
 	host, port := fake.hostPort()
 
-	srv := testServerWithFt8(t, nil, ft8.NewService(types.Ft8Config{Enabled: true}, &logging.Service{}, ""))
+	srv := testServerWithFt8(t, checkOn(nil), ft8.NewService(types.Ft8Config{Enabled: true}, &logging.Service{}, ""))
 	srv.SetServedArchive(guardServedArchive)
+	prepareApp(t, srv)
 	srv.mailer = email.New(types.SmtpConfig{
 		Enabled: true, Host: host, Port: port, From: "f@x", TimeoutSec: 5,
 	}, srv.logger)
@@ -88,7 +89,6 @@ var (
 // serveGuarded drives the REAL handler chain (mux and wrappers), as production does.
 func serveGuarded(srv *Server, method, path, contentType, body string, h guardHeader) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
-	req.Host = "127.0.0.1:8080" // loopback: passes the Host allowlist that wraps the mux
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
@@ -100,7 +100,7 @@ func serveGuarded(srv *Server, method, path, contentType, body string, h guardHe
 		req.Header.Set(defaultLogbookHeader, def)
 	}
 	w := httptest.NewRecorder()
-	srv.httpServer.Handler.ServeHTTP(w, req)
+	serveAsApp(srv, w, req) // as the app asks: the check stands in front of the mux
 	return w
 }
 
@@ -293,11 +293,10 @@ func TestArchiveGuard_StopControlsAreExempt(t *testing.T) {
 func TestArchiveGuard_RepeatedHeaderIsMalformed(t *testing.T) {
 	f := newGuardFixture(t)
 	req := httptest.NewRequest(http.MethodDelete, "/v1/qso/"+f.uuid, nil)
-	req.Host = "127.0.0.1:8080"
 	req.Header.Add(archiveIDHeader, guardServedArchive)
 	req.Header.Add(archiveIDHeader, guardStaleArchive)
 	w := httptest.NewRecorder()
-	f.srv.httpServer.Handler.ServeHTTP(w, req)
+	serveAsApp(f.srv, w, req)
 	wantGuardRefusal(t, w, http.StatusBadRequest, "invalid_field_value")
 	assertContestUntouched(t, f)
 }

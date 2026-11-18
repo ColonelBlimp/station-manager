@@ -60,6 +60,10 @@ func seedOrchestratedConfig(t *testing.T, mut func(*config.Config)) *config.Serv
 	cfg.SocketPath = filepath.Join(tmp, "smd.sock")
 	cfg.Server.AppPort = freeLoopbackPort(t) // never the station's 8443 (W-0027 C1c)
 	cfg.UserAgent = "station-manager-test/1.0"
+	// The daemon serves only the desktop app (W-0027 C2e), so the tests' own requests go
+	// over the app listener with this install's credential (apiCall). Set before the
+	// caller's changes, so a test of the off state can still say so until part 3.
+	cfg.Server.RequireDesktopApp = true
 	if mut != nil {
 		mut(&cfg)
 	}

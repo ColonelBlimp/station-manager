@@ -75,7 +75,11 @@ func TestDefaultGuard_SE1_AStaleTabAfterAnAppliedChange(t *testing.T) {
 	if code != http.StatusConflict || errCode(body) != "default_logbook_mismatch" {
 		t.Errorf("stale FT8 start = %d %s; want 409 default_logbook_mismatch", code, body)
 	}
-	code, body = apiCallHeaders(t, d, http.MethodPost, "/v1/ft8/cq/start", cqStartBody, f.liveHeaders(f.b))
+	// An FT8 command needs an admitted app lifetime (W-0027 C4a); the stale tab above is
+	// refused before that is asked.
+	fresh := f.liveHeaders(f.b)
+	fresh["X-Sm-App-Lifetime"] = admitTestApp(t, d)
+	code, body = apiCallHeaders(t, d, http.MethodPost, "/v1/ft8/cq/start", cqStartBody, fresh)
 	if code != http.StatusConflict || errCode(body) != "ft8_tx_not_armed" {
 		t.Errorf("fresh tab's FT8 start = %d %s; want the service's 409 ft8_tx_not_armed (TX was never armed)", code, body)
 	}

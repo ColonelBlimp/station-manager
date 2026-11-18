@@ -22,7 +22,7 @@ import (
 func ft8QsoTestServer(t *testing.T, callsign string) *Server {
 	t.Helper()
 	srv := testServer(t)
-	srv.ft8 = ft8.NewService(types.Ft8Config{Enabled: true}, &logging.Service{}, "")
+	srv.ft8 = ownFt8(t, ft8.NewService(types.Ft8Config{Enabled: true}, &logging.Service{}, ""))
 	if callsign != "" {
 		if _, err := srv.cfg.Update(func(c *config.Config) error {
 			c.LoggingStation.StationCallsign = callsign
@@ -38,7 +38,7 @@ func postFt8Qso(t *testing.T, srv *Server, path, body string, h http.HandlerFunc
 	t.Helper()
 	// Calls the handler directly: the start routes' default guard is middleware
 	// (requireDefault), exercised through the router in default_guard_test.go.
-	req := withServedArchive(httptest.NewRequest(http.MethodPost, path, strings.NewReader(body)))
+	req := asAdmittedApp(withServedArchive(httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))))
 	// Arm and skip-off check the default in the handler: name the server's
 	// default when it has one (never seeded here — several tests need none).
 	if _, def, err := srv.effectiveDefault(context.Background()); err == nil && def != "" {
@@ -385,12 +385,11 @@ func TestHandleFt8QsoAbandon(t *testing.T) {
 // With no keyer there is no session, so the reachable assertion is the refusal; that
 // it is ft8_no_answerer rather than 404/405 proves both the route and the mapping.
 func TestHandleFt8QsoNext_RouteIsWiredAndRefusesWithoutAnAnswerer(t *testing.T) {
-	srv := testServerWithFt8(t, nil, ft8.NewService(types.Ft8Config{Enabled: true}, &logging.Service{}, ""))
+	srv := appTestServer(t, nil, ft8.NewService(types.Ft8Config{Enabled: true}, &logging.Service{}, ""))
 	req := withLiveContext(t, srv, httptest.NewRequest(http.MethodPost, "/v1/ft8/qso/next", strings.NewReader(`{}`)))
 	req.Header.Set("Content-Type", "application/json")
-	req.Host = "127.0.0.1:8080" // loopback: satisfies requireSameOrigin, which wraps the mux
 	w := httptest.NewRecorder()
-	srv.httpServer.Handler.ServeHTTP(w, req)
+	serveAsApp(srv, w, req)
 
 	if w.Code != http.StatusConflict {
 		t.Fatalf("status=%d, want %d (body %s)", w.Code, http.StatusConflict, w.Body.String())
@@ -407,12 +406,11 @@ func TestHandleFt8QsoNext_RouteIsWiredAndRefusesWithoutAnAnswerer(t *testing.T) 
 // there is no run, so the reachable assertion is the ft8_no_cq_pick_run refusal —
 // which proves route, body parsing and mapping in one pass.
 func TestHandleFt8CqPick_RouteIsWiredAndRefusesWithoutARun(t *testing.T) {
-	srv := testServerWithFt8(t, nil, ft8.NewService(types.Ft8Config{Enabled: true}, &logging.Service{}, ""))
+	srv := appTestServer(t, nil, ft8.NewService(types.Ft8Config{Enabled: true}, &logging.Service{}, ""))
 	req := withLiveContext(t, srv, httptest.NewRequest(http.MethodPost, "/v1/ft8/cq/pick", strings.NewReader(`{"call":"DL9UW"}`)))
 	req.Header.Set("Content-Type", "application/json")
-	req.Host = "127.0.0.1:8080" // loopback: satisfies requireSameOrigin, which wraps the mux
 	w := httptest.NewRecorder()
-	srv.httpServer.Handler.ServeHTTP(w, req)
+	serveAsApp(srv, w, req)
 
 	if w.Code != http.StatusConflict {
 		t.Fatalf("status=%d, want %d (body %s)", w.Code, http.StatusConflict, w.Body.String())
@@ -425,12 +423,11 @@ func TestHandleFt8CqPick_RouteIsWiredAndRefusesWithoutARun(t *testing.T) {
 // A pop without a call names nothing to work — 400 before the service is asked,
 // matching the start handlers' invalid_field_value convention.
 func TestHandleFt8CqPick_MissingCallIs400(t *testing.T) {
-	srv := testServerWithFt8(t, nil, ft8.NewService(types.Ft8Config{Enabled: true}, &logging.Service{}, ""))
+	srv := appTestServer(t, nil, ft8.NewService(types.Ft8Config{Enabled: true}, &logging.Service{}, ""))
 	req := withLiveContext(t, srv, httptest.NewRequest(http.MethodPost, "/v1/ft8/cq/pick", strings.NewReader(`{}`)))
 	req.Header.Set("Content-Type", "application/json")
-	req.Host = "127.0.0.1:8080"
 	w := httptest.NewRecorder()
-	srv.httpServer.Handler.ServeHTTP(w, req)
+	serveAsApp(srv, w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d, want 400 (body %s)", w.Code, w.Body.String())

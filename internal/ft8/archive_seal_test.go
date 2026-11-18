@@ -61,7 +61,7 @@ func TestSealTxAdmission_RefusedWhileASessionIsActive(t *testing.T) {
 	t.Cleanup(func() { _ = s.ArmTx(false) })
 	require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", "", 1, ""))
 	require.True(t, s.seq.Active())
-	t.Cleanup(s.AbandonQso)
+	t.Cleanup(func() { abandonQso(t, s) })
 
 	require.ErrorIs(t, s.SealTxAdmission(), ErrQsoInProgress)
 	require.False(t, s.sealedNow(), "a refused seal is not left behind")

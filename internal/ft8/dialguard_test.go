@@ -253,7 +253,7 @@ func TestDialGuard_DisarmsTransmit(t *testing.T) {
 	require.NoError(t, s.ArmTx(true), "re-arming is all it takes")
 	require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.075, "", "", 1, ""),
 		"and then work continues on the new frequency")
-	s.AbandonQso()
+	abandonQso(t, s)
 }
 
 // Armed but idle is the same hazard with less warning: nothing on screen says the
@@ -491,7 +491,7 @@ func TestDialGuard_DoesNotEndASessionStartedAfterTheMove(t *testing.T) {
 
 	require.True(t, s.seq.Active(),
 		"this session began after that move and was never bound to 14.074")
-	s.AbandonQso()
+	abandonQso(t, s)
 }
 
 // --- 13: a knownness blink is not a move ------------------------------------

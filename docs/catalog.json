@@ -401,6 +401,15 @@
       "summary": "W-0028 is the P1 defect fix that makes FT8/FT4 logging independent of enrichment: the completed-exchange job shares one deadline between the lookup and the write, so a slow lookup can stop a contact from being stored; per the operator's ruling the lookup starts with the ladder and completion logs at once with whatever has arrived."
     },
     {
+      "id": "work.w-0029",
+      "path": "docs/work/W-0029-operating-sessions.md",
+      "class": "work-item",
+      "audiences": ["operator", "contributor", "agent"],
+      "topics": ["session", "desktop", "logging", "map"],
+      "scopes": ["internal/api/**", "internal/qsoservice/**", "frontend/app/**"],
+      "summary": "W-0029 builds ADR 0100: the operating session moves from each window into smd, opens with the desktop app and closes at its confirmed exit, with explicit membership written in the QSO's transaction and one authority for the Session panel, the Map, session email and export and the FT8 repeat hold; opened 2026-11-18 with its build brief drafted for review; its ranking lives in the backlog."
+    },
+    {
       "id": "work.dogfood-inbox",
       "path": "docs/dogfood-inbox.md",
       "class": "work-item",

@@ -27,11 +27,10 @@ func testSPAFS() fs.FS {
 // not a 302 to the retired /app/ mount. Driven through the full server handler so
 // the route registration itself is covered.
 func TestRootServesShell(t *testing.T) {
-	srv := testServer(t)
+	srv := appTestServer(t, nil, nil)
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Host = "127.0.0.1:8080" // loopback: the Host allowlist now covers safe methods too (ST-1)
 	w := httptest.NewRecorder()
-	srv.httpServer.Handler.ServeHTTP(w, req)
+	serveAsApp(srv, w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("GET /: status = %d, want 200 (%s)", w.Code, w.Body.String())
 	}
@@ -45,13 +44,12 @@ func TestRootServesShell(t *testing.T) {
 // /app/logbook were dropped when the app reached the canonical root (W-0003), so a
 // deep-link reload of any shell route returns index.html for client-side routing.
 func TestShellRoutesServeIndex(t *testing.T) {
-	srv := testServer(t)
+	srv := appTestServer(t, nil, nil)
 	for _, path := range []string{"/config", "/config/", "/logbook", "/logbook/", "/operate"} {
 		t.Run(path, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, path, nil)
-			req.Host = "127.0.0.1:8080" // loopback: satisfies the Host allowlist (ST-1)
 			w := httptest.NewRecorder()
-			srv.httpServer.Handler.ServeHTTP(w, req)
+			serveAsApp(srv, w, req)
 			if w.Code != http.StatusOK {
 				t.Fatalf("GET %s: status = %d, want 200 (shell route; %s)", path, w.Code, w.Body.String())
 			}
@@ -67,7 +65,7 @@ func TestShellRoutesServeIndex(t *testing.T) {
 // preserving the path suffix AND the query string. Registered only inside the
 // SPA-serving block.
 func TestAppPathsRedirectToRoot(t *testing.T) {
-	srv := testServer(t)
+	srv := appTestServer(t, nil, nil)
 	cases := []struct{ path, want string }{
 		{"/app", "/"},
 		{"/app/", "/"},
@@ -77,9 +75,8 @@ func TestAppPathsRedirectToRoot(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.path, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, c.path, nil)
-			req.Host = "127.0.0.1:8080"
 			w := httptest.NewRecorder()
-			srv.httpServer.Handler.ServeHTTP(w, req)
+			serveAsApp(srv, w, req)
 			if w.Code != http.StatusMovedPermanently {
 				t.Fatalf("GET %s: status = %d, want 301 (%s)", c.path, w.Code, w.Body.String())
 			}
@@ -122,16 +119,15 @@ func TestRedirectAppToRoot_LocalOnly(t *testing.T) {
 // block: with ServeSPA off (a headless Unix-socket deployment, no browser), every
 // browser-facing path is a plain 404 — not HTML, not a redirect.
 func TestSpaRoutesAbsentWhenSPADisabled(t *testing.T) {
-	srv := testServerWithCfg(t, func(cfg *config.Config) {
+	srv := appTestServer(t, func(cfg *config.Config) {
 		serve := false
 		cfg.Server.ServeSPA = &serve
-	})
+	}, nil)
 	for _, path := range []string{"/", "/config", "/logbook", "/operate", "/app", "/app/config"} {
 		t.Run(path, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, path, nil)
-			req.Host = "127.0.0.1:8080"
 			w := httptest.NewRecorder()
-			srv.httpServer.Handler.ServeHTTP(w, req)
+			serveAsApp(srv, w, req)
 			if w.Code != http.StatusNotFound {
 				t.Fatalf("GET %s with ServeSPA off: status = %d, want 404 (no SPA routes registered)", path, w.Code)
 			}

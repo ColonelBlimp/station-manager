@@ -3,6 +3,8 @@ package api
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -29,16 +31,23 @@ import (
 
 const wsEventsPath = "/v1/events/ws"
 
-// wsTestServer is a full api.Server (real middleware chain) behind httptest.
+// wsTestServer is a full api.Server (real middleware chain) on the app's TLS socket
+// (appSocket): the fixture app's daemon, whose event stream only the app reaches. The dial
+// helpers below present the app's credential and lifetime; each caller names its own Host
+// and Origin, so the tests of what the origin rule refuses keep their inputs.
 func wsTestServer(t *testing.T) (*Server, *httptest.Server) {
 	t.Helper()
-	srv := testServer(t)
-	ts := httptest.NewServer(srv.httpServer.Handler)
-	t.Cleanup(ts.Close)
-	return srv, ts
+	srv := appTestServer(t, nil, nil)
+	return srv, appSocket(t, srv, nil)
 }
 
-func hostOf(ts *httptest.Server) string { return strings.TrimPrefix(ts.URL, "http://") }
+func hostOf(ts *httptest.Server) string {
+	return strings.TrimPrefix(strings.TrimPrefix(ts.URL, "https://"), "http://")
+}
+
+// appOrigin is the app listener's own origin for ts: https on its address, whatever is on
+// the wire (appSocketPlain models the TLS state).
+func appOrigin(ts *httptest.Server) string { return "https://" + hostOf(ts) }
 
 func waitFor(t *testing.T, what string, within time.Duration, cond func() bool) {
 	t.Helper()
@@ -60,15 +69,27 @@ type rawWS struct {
 	br   *bufio.Reader
 }
 
-func rawDial(t *testing.T, addr, path, host, origin string) (*rawWS, *http.Response) {
+func rawDial(t *testing.T, ts *httptest.Server, path, host, origin string) (*rawWS, *http.Response) {
 	t.Helper()
-	c, err := net.Dial("tcp", addr)
+	// TLS to an app socket; plain TCP to a server that has none (appSocketPlain, and the
+	// tests that serve a stream from a private mux, outside the chain).
+	var c net.Conn
+	var err error
+	if cert := ts.Certificate(); cert != nil {
+		pool := x509.NewCertPool()
+		pool.AddCert(cert)
+		c, err = tls.Dial("tcp", ts.Listener.Addr().String(), &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12})
+	} else {
+		c, err = net.Dial("tcp", ts.Listener.Addr().String())
+	}
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
 	t.Cleanup(func() { _ = c.Close() })
 	req := "GET " + path + " HTTP/1.1\r\nHost: " + host + "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
-		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n"
+		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n" +
+		operatingCredentialHeader + ": " + testAppCredential + "\r\n" +
+		appLifetimeHeader + ": " + testAppLifetime + "\r\n"
 	if origin != "" {
 		req += "Origin: " + origin + "\r\n"
 	}
@@ -139,12 +160,30 @@ func closePayload(code int) []byte {
 	return binary.BigEndian.AppendUint16(nil, uint16(code))
 }
 
+// libDial dials with the server's own URL as the Origin: the app's origin on an app
+// socket, and the plain origin of a private mux served outside the chain.
 func libDial(t *testing.T, ts *httptest.Server, path string) *websocket.Conn {
+	t.Helper()
+	return libDialOrigin(t, ts, path, ts.URL)
+}
+
+// libDialOrigin is libDial with a named Origin, for appSocketPlain, whose URL is plain
+// while the origin it models is the app's (appOrigin).
+func libDialOrigin(t *testing.T, ts *httptest.Server, path, origin string) *websocket.Conn {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	c, resp, err := websocket.Dial(ctx, "ws://"+hostOf(ts)+path, &websocket.DialOptions{
-		HTTPHeader: http.Header{"Origin": []string{ts.URL}},
+	scheme := "wss://"
+	if strings.HasPrefix(ts.URL, "http://") { // appSocketPlain
+		scheme = "ws://"
+	}
+	c, resp, err := websocket.Dial(ctx, scheme+hostOf(ts)+path, &websocket.DialOptions{
+		HTTPClient: ts.Client(),
+		HTTPHeader: http.Header{
+			"Origin":                  []string{origin},
+			operatingCredentialHeader: []string{testAppCredential},
+			appLifetimeHeader:         []string{testAppLifetime},
+		},
 	})
 	if err != nil {
 		t.Fatalf("dial %s: %v (resp %v)", path, err, resp)
@@ -187,7 +226,7 @@ func libRead(t *testing.T, c *websocket.Conn) wsFrameJSON {
 // as "done" closes the transport before (or instead of) the close frame.
 func TestWSStream_PolicyCloseWaitsForCooperativePeer(t *testing.T) {
 	srv, ts := wsTestServer(t)
-	ws, resp := rawDial(t, hostOf(ts), wsEventsPath, hostOf(ts), ts.URL)
+	ws, resp := rawDial(t, ts, wsEventsPath, hostOf(ts), ts.URL)
 	if resp.StatusCode != http.StatusSwitchingProtocols {
 		t.Fatalf("handshake status %d, want 101", resp.StatusCode)
 	}
@@ -236,7 +275,7 @@ func TestWSStream_PolicyCloseWaitsForCooperativePeer(t *testing.T) {
 // keepalive, an eviction or a shutdown.
 func TestWSStream_DisconnectCleansUpWithoutOtherEvents(t *testing.T) {
 	srv, ts := wsTestServer(t)
-	ws, resp := rawDial(t, hostOf(ts), wsEventsPath, hostOf(ts), ts.URL)
+	ws, resp := rawDial(t, ts, wsEventsPath, hostOf(ts), ts.URL)
 	if resp.StatusCode != http.StatusSwitchingProtocols {
 		t.Fatalf("handshake status %d, want 101", resp.StatusCode)
 	}
@@ -272,6 +311,11 @@ func readOneText(ws *rawWS) (string, error) {
 // Admission: exact same origin (responsibility 1).
 // =====================================================================
 
+// The event stream is the app's, so the rule is the app listener's (W-0027 C2e; codex-156):
+// the Host is the literal app address and port, and the Origin is exactly https on it.
+// Every row presents the app's credential and lifetime, so a refusal is the origin rule's,
+// which the code asserts. The two rows that were accepted on the old browser listener, a
+// localhost name and the dev proxy's port, are refusals here: neither is the app's origin.
 func TestWSStream_OriginRule(t *testing.T) {
 	_, ts := wsTestServer(t)
 	addr := hostOf(ts)
@@ -280,25 +324,30 @@ func TestWSStream_OriginRule(t *testing.T) {
 		name, host, origin string
 		want               int
 	}{
-		{"same origin 127.0.0.1", addr, "http://" + addr, 101},
-		{"same origin localhost", "localhost:" + port, "http://localhost:" + port, 101},
-		{"dev proxy: Host and Origin both the dev port", "localhost:5176", "http://localhost:5176", 101},
+		{"the app's own origin", addr, "https://" + addr, 101},
+		{"localhost is not the app's address", "localhost:" + port, "https://localhost:" + port, 403},
+		{"the dev proxy's port is not the app's", "localhost:5176", "http://localhost:5176", 403},
 		{"missing Origin", addr, "", 403},
 		{"null Origin", addr, "null", 403},
-		{"malformed Origin", addr, "http://%zz", 403},
-		{"different scheme", addr, "https://" + addr, 403},
-		{"different port, same host", addr, "http://127.0.0.1:1", 403},
-		{"loopback alias is a different origin", addr, "http://localhost:" + port, 403},
-		{"foreign host", addr, "http://evil.example", 403},
-		{"Origin with a path", addr, "http://" + addr + "/x", 403},
-		{"Origin with userinfo", addr, "http://u@" + addr, 403},
+		{"malformed Origin", addr, "https://%zz", 403},
+		{"different scheme", addr, "http://" + addr, 403},
+		{"different port, same host", addr, "https://127.0.0.1:1", 403},
+		{"loopback alias is a different origin", addr, "https://localhost:" + port, 403},
+		{"foreign host", addr, "https://evil.example", 403},
+		{"Origin with a path", addr, "https://" + addr + "/x", 403},
+		{"Origin with userinfo", addr, "https://u@" + addr, 403},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ws, resp := rawDial(t, addr, wsEventsPath, tc.host, tc.origin)
+			ws, resp := rawDial(t, ts, wsEventsPath, tc.host, tc.origin)
 			defer ws.conn.Close()
 			if resp.StatusCode != tc.want {
 				t.Fatalf("status %d, want %d", resp.StatusCode, tc.want)
+			}
+			if tc.want == http.StatusForbidden {
+				if code := refusalCode(resp); code != "cross_origin" {
+					t.Fatalf("refused as %q, want cross_origin (the origin rule, not the check)", code)
+				}
 			}
 		})
 	}
@@ -372,7 +421,7 @@ func TestWSStream_WedgedPeerEndedByWriteDeadline(t *testing.T) {
 	sseWriteTimeout = 200 * time.Millisecond
 	t.Cleanup(func() { sseWriteTimeout = orig })
 	srv, ts := wsTestServer(t)
-	ws, resp := rawDial(t, hostOf(ts), wsEventsPath, hostOf(ts), ts.URL)
+	ws, resp := rawDial(t, ts, wsEventsPath, hostOf(ts), ts.URL)
 	if resp.StatusCode != http.StatusSwitchingProtocols {
 		t.Fatalf("status %d", resp.StatusCode)
 	}
@@ -402,15 +451,17 @@ type writeDone struct {
 // optionally, the accepted transports wrapped.
 func wsTestServerObserved(t *testing.T, wrap func(net.Conn) net.Conn) (*Server, *httptest.Server, <-chan writeDone) {
 	t.Helper()
-	srv := testServer(t)
+	srv := appTestServer(t, nil, nil)
 	done := make(chan writeDone, 16)
 	srv.wsWriteDone = func(name string, err error) { done <- writeDone{name, err} }
-	ts := httptest.NewUnstartedServer(srv.httpServer.Handler)
-	if wrap != nil {
-		ts.Listener = &wrapListener{Listener: ts.Listener, wrap: wrap}
+	if wrap == nil {
+		return srv, appSocket(t, srv, nil), done
 	}
-	ts.Start()
-	t.Cleanup(ts.Close)
+	// A wrap reads the server's plaintext writes, so it cannot sit under TLS: the plain
+	// socket with a modelled TLS state (appSocketPlain).
+	ts := appSocketPlain(t, srv, func(ts *httptest.Server) {
+		ts.Listener = &wrapListener{Listener: ts.Listener, wrap: wrap}
+	})
 	return srv, ts, done
 }
 
@@ -550,7 +601,7 @@ func TestWSStream_ShutdownDuringWriteInterrupts(t *testing.T) {
 		conns <- h
 		return h
 	})
-	c := libDial(t, ts, wsEventsPath)
+	c := libDialOrigin(t, ts, wsEventsPath, appOrigin(ts))
 	h := <-conns
 	_ = libRead(t, c) // the bytes are out ...
 	<-h.held          // ... and the server's write is still held
@@ -595,7 +646,7 @@ func TestWSStream_ShutdownDuringWriteInterrupts(t *testing.T) {
 // grace expiry and Shutdown still returns success, promptly.
 func TestWSStream_ShutdownForceClosesSilentPeerAtGrace(t *testing.T) {
 	srv, ts, done := wsTestServerObserved(t, nil)
-	ws, resp := rawDial(t, hostOf(ts), wsEventsPath, hostOf(ts), ts.URL)
+	ws, resp := rawDial(t, ts, wsEventsPath, hostOf(ts), ts.URL)
 	if resp.StatusCode != http.StatusSwitchingProtocols {
 		t.Fatalf("status %d", resp.StatusCode)
 	}
@@ -637,7 +688,7 @@ func TestWSStream_ShutdownDuringPolicyClose(t *testing.T) {
 	wsCloseGrace = 3 * time.Second // so the shutdown deadline is the earlier one
 	t.Cleanup(func() { wsCloseGrace = orig })
 	srv, ts := wsTestServer(t)
-	ws, resp := rawDial(t, hostOf(ts), wsEventsPath, hostOf(ts), ts.URL)
+	ws, resp := rawDial(t, ts, wsEventsPath, hostOf(ts), ts.URL)
 	if resp.StatusCode != http.StatusSwitchingProtocols {
 		t.Fatalf("status %d", resp.StatusCode)
 	}
@@ -673,7 +724,7 @@ func TestWSStream_ShutdownDuringPolicyClose(t *testing.T) {
 func TestWSStream_RegistrationAfterShutdownRefused(t *testing.T) {
 	srv, ts := wsTestServer(t)
 	srv.streams.beginShutdown(time.Time{})
-	ws, resp := rawDial(t, hostOf(ts), wsEventsPath, hostOf(ts), ts.URL)
+	ws, resp := rawDial(t, ts, wsEventsPath, hostOf(ts), ts.URL)
 	defer ws.conn.Close()
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("status %d, want 503 (no upgrade after shutdown began)", resp.StatusCode)
@@ -730,7 +781,7 @@ func TestWSStream_BootstrapHeldLockThenDisconnect(t *testing.T) {
 	})
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
-	ws, resp := rawDial(t, hostOf(ts), "/test/ws", hostOf(ts), ts.URL)
+	ws, resp := rawDial(t, ts, "/test/ws", hostOf(ts), ts.URL)
 	if resp.StatusCode != http.StatusSwitchingProtocols {
 		t.Fatalf("status %d", resp.StatusCode)
 	}
@@ -805,7 +856,7 @@ func TestWSStream_PanicAfterUpgradeClosesTransport(t *testing.T) {
 	})
 	ts := httptest.NewServer(srv.recoverPanic(mux))
 	defer ts.Close()
-	ws, resp := rawDial(t, hostOf(ts), "/test/ws", hostOf(ts), ts.URL)
+	ws, resp := rawDial(t, ts, "/test/ws", hostOf(ts), ts.URL)
 	if resp.StatusCode != http.StatusSwitchingProtocols {
 		t.Fatalf("status %d", resp.StatusCode)
 	}
@@ -852,20 +903,19 @@ func (b *lockedBuffer) String() string {
 func wsLogServer(t *testing.T, maxSubs int) (*Server, *httptest.Server, *lockedBuffer) {
 	t.Helper()
 	logs := &lockedBuffer{}
-	srv := testServerWithLogger(t, func(cfg *config.Config) {
+	srv := testServerWithLogger(t, checkOn(func(cfg *config.Config) {
 		if maxSubs > 0 {
 			cfg.Server.MaxEventSubscribers = maxSubs
 		}
-	}, nil, logging.NewForWriter(logs))
-	ts := httptest.NewServer(srv.httpServer.Handler)
-	t.Cleanup(ts.Close)
-	return srv, ts, logs
+	}), nil, logging.NewForWriter(logs))
+	prepareApp(t, srv)
+	return srv, appSocket(t, srv, nil), logs
 }
 
 func TestWSStream_RefusedOriginTakesNoSubscriberSlot(t *testing.T) {
 	_, ts, logs := wsLogServer(t, 0)
-	for _, origin := range []string{"", "null", "http://evil.example", "https://" + hostOf(ts)} {
-		ws, resp := rawDial(t, hostOf(ts), wsEventsPath, hostOf(ts), origin)
+	for _, origin := range []string{"", "null", "http://evil.example", "http://" + hostOf(ts)} {
+		ws, resp := rawDial(t, ts, wsEventsPath, hostOf(ts), origin)
 		_ = ws.conn.Close()
 		if resp.StatusCode != http.StatusForbidden {
 			t.Fatalf("origin %q: status %d, want 403", origin, resp.StatusCode)
@@ -882,12 +932,12 @@ func TestWSStream_RefusedOriginTakesNoSubscriberSlot(t *testing.T) {
 
 func TestWSStream_ValidUpgradesObeyTheSubscriberCap(t *testing.T) {
 	_, ts, logs := wsLogServer(t, 1)
-	first, resp := rawDial(t, hostOf(ts), wsEventsPath, hostOf(ts), ts.URL)
+	first, resp := rawDial(t, ts, wsEventsPath, hostOf(ts), ts.URL)
 	if resp.StatusCode != http.StatusSwitchingProtocols {
 		t.Fatalf("first upgrade: status %d, want 101", resp.StatusCode)
 	}
 	defer first.conn.Close()
-	second, resp := rawDial(t, hostOf(ts), wsEventsPath, hostOf(ts), ts.URL)
+	second, resp := rawDial(t, ts, wsEventsPath, hostOf(ts), ts.URL)
 	defer second.conn.Close()
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("second upgrade over the cap of 1: status %d, want 503", resp.StatusCode)

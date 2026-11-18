@@ -132,11 +132,10 @@ func TestSubmitQso_AnyExpectKeyIsReloadRequiredAndStoresNothing(t *testing.T) {
 }
 
 func TestSubmitAttribution_RouteIsGone(t *testing.T) {
-	srv := testServer(t)
+	srv := appTestServer(t, nil, nil)
 	req := httptest.NewRequest(http.MethodGet, "/v1/submit-attribution", nil)
-	req.Host = "127.0.0.1:8080" // loopback: passes the Host allowlist (ST-1) that wraps the mux
 	w := httptest.NewRecorder()
-	srv.httpServer.Handler.ServeHTTP(w, req)
+	serveAsApp(srv, w, req)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("GET /v1/submit-attribution: status = %d, want 404 (ADR 0087 removes it)", w.Code)
 	}

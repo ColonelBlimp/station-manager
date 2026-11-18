@@ -555,37 +555,40 @@ type postResult struct {
 	err  error
 }
 
-func socketClient(d *daemon) *http.Client {
-	sock := d.cfgSvc.Snapshot().SocketPath
-	return &http.Client{Timeout: 40 * time.Second, Transport: &http.Transport{
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, "unix", sock)
-		},
-	}}
-}
-
-// postAsync sends the aggregate from its own goroutine, once the API answers.
+// postAsync sends the aggregate as the app does, over the app listener, from its own
+// goroutine, once the API answers.
 func postAsync(d *daemon) <-chan postResult {
 	out := make(chan postResult, 1)
-	client := socketClient(d)
-	go func() {
-		deadline := time.Now().Add(15 * time.Second)
-		for {
-			resp, err := client.Post("http://smd/v1/smcloud/reconcile", "application/json", nil)
-			if err == nil {
-				body, _ := io.ReadAll(resp.Body)
-				_ = resp.Body.Close()
-				out <- postResult{code: resp.StatusCode, body: string(body)}
-				return
-			}
-			if time.Now().After(deadline) {
-				out <- postResult{err: err}
-				return
-			}
-			time.Sleep(50 * time.Millisecond)
-		}
-	}()
+	go func() { out <- postAggregate(func() (callTarget, bool) { return appTargetOf(d) }) }()
 	return out
+}
+
+// postAggregate sends the aggregate POST once, under the request helpers' contract
+// (apicall_test.go) without a testing.TB, since it runs off the test's goroutine: it waits
+// only while the listener is not published or a dial never connected. Any other failure is
+// returned at once and the POST is not sent again: the daemon may have received it
+// (codex-158).
+func postAggregate(resolve func() (callTarget, bool)) postResult {
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		err := stderr.New("the app listener is not published")
+		if target, ready := resolve(); ready {
+			target.client.Timeout = 40 * time.Second // an aggregate held across a stop
+			code, body, derr := target.do(http.MethodPost, "/v1/smcloud/reconcile", "",
+				map[string]string{"Content-Type": "application/json"})
+			if derr == nil {
+				return postResult{code: code, body: string(body)}
+			}
+			if !notListening(derr) {
+				return postResult{err: derr}
+			}
+			err = derr
+		}
+		if time.Now().After(deadline) {
+			return postResult{err: err}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 func awaitEntered(t *testing.T, c *setCloud, path string) {
@@ -603,8 +606,8 @@ func awaitEntered(t *testing.T, c *setCloud, path string) {
 	}
 }
 
-// awaitNotAccepting waits until the API's listener is closed: the stop has
-// begun.
+// awaitNotAccepting waits until the API's main listener is closed: the stop has
+// begun. It only dials; it sends nothing.
 func awaitNotAccepting(t *testing.T, d *daemon) {
 	t.Helper()
 	sock := d.cfgSvc.Snapshot().SocketPath

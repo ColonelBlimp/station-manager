@@ -19,13 +19,13 @@ import (
 func ft8TxTestServer(t *testing.T) *Server {
 	t.Helper()
 	srv := testServer(t)
-	srv.ft8 = ft8.NewService(types.Ft8Config{Enabled: true}, &logging.Service{}, "")
+	srv.ft8 = ownFt8(t, ft8.NewService(types.Ft8Config{Enabled: true}, &logging.Service{}, ""))
 	return srv
 }
 
 func postFt8Tx(t *testing.T, srv *Server, path, body string, h http.HandlerFunc) *httptest.ResponseRecorder {
 	t.Helper()
-	req := withLiveContext(t, srv, httptest.NewRequest(http.MethodPost, path, strings.NewReader(body)))
+	req := asAdmittedApp(withLiveContext(t, srv, httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	h(w, req)

@@ -70,33 +70,37 @@ func TestClaimProfile_RefusedWhileArmed(t *testing.T) {
 	require.Equal(t, "FT8", s.Profile().Name)
 }
 
-// Leaving FT8 mid-session and clicking FT4: the linger's unattended disarm is
-// what ends the session (invariant 5) — characterised here first — and until
-// it fires the claim is refused with the time it has left; afterwards it succeeds.
-func TestClaimProfile_MidLingerOfALiveSession_RefusedThenSucceeds(t *testing.T) {
+// Leaving FT8 mid-session and clicking FT4. The operator's FT8 stream closes; until the
+// grace has run the session is still live and the claim is refused with the time left;
+// when the grace ends, the loss of presence disarms as unattended, which ends the session
+// (invariant 5), and the claim succeeds. (Before W-0027 C4b the capture linger's own
+// disarm ended it; the outcome is the same and the rule that produces it is presence.)
+func TestClaimProfile_MidGraceOfALiveSession_RefusedThenSucceeds(t *testing.T) {
 	withShortLinger(t, 300*time.Millisecond)
-	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+	// Built on purpose: the operator's presence is a real FT8 stream, so that its close
+	// starts both the grace and the linger the claim's hint is read from.
+	s := newBareTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+	ownAbsent(s)
+	leave := stream(t, s, fixtureLife)
 	require.NoError(t, s.ArmTx(true))
+	t.Cleanup(func() { _ = s.ArmTx(false) })
 	require.NoError(t, s.StartCallCq("7Q5MLV", "KH78", 1500, 14.074, "operator_pick", "", 1, ""))
 	require.True(t, s.seq.Active())
 
-	// The operator was attending (a subscriber), then left: linger pending.
-	_, unsub := s.Subscribe()
-	unsub()
+	leave() // the operator left the FT8 view
 
 	_, err := s.ClaimProfile("ft4")
 	require.ErrorIs(t, err, ErrProfileSessionActive)
 	var ref *ProfileRefusal
-	require.True(t, stderrors.As(err, &ref), "a refusal inside the linger carries RetryAfter")
+	require.True(t, stderrors.As(err, &ref), "a refusal inside the grace carries RetryAfter")
 	require.Greater(t, ref.RetryAfter, time.Duration(0))
 	require.LessOrEqual(t, ref.RetryAfter, 300*time.Millisecond)
 	require.True(t, s.seq.Active(), "the claim itself never ends a session")
 	require.Equal(t, "FT8", s.Profile().Name)
 
-	// Characterisation of what leaving mid-session does today: the linger's
-	// unattended disarm ends the session.
 	require.Eventually(t, func() bool { return !s.seq.Active() }, 2*time.Second, 10*time.Millisecond,
-		"the unattended disarm at linger expiry ends the session")
+		"the loss of presence at the end of the grace must end the session")
+	require.Equal(t, disarmUnattended, s.disarmCauseNow())
 
 	p, err := s.ClaimProfile("ft4")
 	require.NoError(t, err)
@@ -319,6 +323,7 @@ func TestClaimProfile_ArmDuringClaim_SerialisesOnTheNewProfile(t *testing.T) {
 	src.stopEntered = make(chan struct{})
 	src.stopRelease = make(chan struct{})
 	s := newService(types.Ft8Config{Enabled: true, TX: &types.Ft8TXConfig{}}, logging.Noop(), src)
+	own(s)
 	player := newFakeTxPlayer()
 	s.newPlayer = func(string, int) (txPlayer, error) { return player, nil }
 	s.SetTxKeyer(&fakeKeyer{})
@@ -373,6 +378,7 @@ func TestRequests_ValidateUnderTheClaimedProfile(t *testing.T) {
 	src.stopEntered = make(chan struct{})
 	src.stopRelease = make(chan struct{})
 	s := newService(types.Ft8Config{Enabled: true, TX: &types.Ft8TXConfig{}}, logging.Noop(), src)
+	own(s)
 	s.newPlayer = func(string, int) (txPlayer, error) { return newFakeTxPlayer(), nil }
 	s.SetTxKeyer(&fakeKeyer{})
 	require.NoError(t, s.Initialize())

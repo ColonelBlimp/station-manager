@@ -27,9 +27,9 @@ func forwarderCfg(name, typ string, enabled bool, actions ...string) types.Forwa
 // contains the given entries.
 func serverWithForwarders(t *testing.T, fwds ...types.ForwarderConfig) *Server {
 	t.Helper()
-	return testServerWithCfg(t, func(cfg *config.Config) {
+	return appTestServer(t, func(cfg *config.Config) {
 		cfg.Forwarders = fwds
-	})
+	}, nil)
 }
 
 func TestSubmit_EnqueuesRowsForEnabledForwarders(t *testing.T) {

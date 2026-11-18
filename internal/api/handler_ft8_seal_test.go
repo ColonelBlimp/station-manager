@@ -14,7 +14,9 @@ import (
 // answers 409 archive_switch_pending — one code for the SPA to name the cause.
 func TestFt8Routes_SealedAdmissionIs409ArchiveSwitchPending(t *testing.T) {
 	ft8Svc := ft8.NewService(types.Ft8Config{Enabled: true}, logging.Noop(), t.TempDir())
-	srv := testServerWithFt8(t, func(c *config.Config) { c.LoggingStation.StationCallsign = "G0TST" }, ft8Svc)
+	// The app is admitted and present before the seal, so that what refuses each route below
+	// is the seal and nothing earlier.
+	srv := appTestServer(t, func(c *config.Config) { c.LoggingStation.StationCallsign = "G0TST" }, ft8Svc)
 	ensureDefaultLogbook(t, srv) // a configured daemon: arming names its default
 	if err := ft8Svc.SealTxAdmission(); err != nil {
 		t.Fatalf("seal: %v", err)

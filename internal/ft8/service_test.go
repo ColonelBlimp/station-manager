@@ -242,34 +242,37 @@ func TestCapture_ReleaseReacquiresIfSubscriberPresent(t *testing.T) {
 	require.Equal(t, 2, src.startCount(), "release re-acquires while a subscriber is present")
 }
 
-// TestCapture_DisarmsTxWhenLastSubscriberLeaves covers the attended-only rule:
-// TX must not stay armed after the operator's browser closes. Arming, then losing
-// the last /v1/ft8/events subscriber past the linger window, disarms TX — so a
-// reopened browser sees disarmed, not a stale armed state carried across sessions.
-func TestCapture_DisarmsTxWhenLastSubscriberLeaves(t *testing.T) {
+// TestCapture_DisarmsTxWhenTheOperatorsStreamLeaves covers the presence rule end to end
+// on a started service: TX must not stay armed after the app's FT8 view closes. Arming,
+// then losing the current lifetime's /v1/ft8/events stream for the grace, disarms TX as
+// unattended, so a reopened app sees disarmed, not an arm carried across. (Until W-0027
+// C4b the rule counted any subscriber; the outcome is kept, the rule is presence.)
+func TestCapture_DisarmsTxWhenTheOperatorsStreamLeaves(t *testing.T) {
 	withShortLinger(t, 10*time.Millisecond)
 	src := newFakeSource()
 	s := newService(types.Ft8Config{Enabled: true, TX: &types.Ft8TXConfig{}}, logging.Noop(), src)
 	s.newPlayer = func(string, int) (txPlayer, error) { return newFakeTxPlayer(), nil }
 	s.SetTxKeyer(&fakeKeyer{})
+	ownAbsent(s) // the operator's presence is the stream opened below, and only that
 	require.NoError(t, s.Initialize())
 	require.NoError(t, s.Start(context.Background()))
 	t.Cleanup(func() { _ = s.Stop() })
 
-	_, unsub := s.Subscribe() // FT8 view open → capture acquired
+	unsub := stream(t, s, fixtureLife) // the app's FT8 view open → capture acquired
 	require.Eventually(t, func() bool { return src.startCount() == 1 }, time.Second, 5*time.Millisecond)
 
 	require.NoError(t, s.ArmTx(true))
 	armed := func() bool { s.txMu.Lock(); defer s.txMu.Unlock(); return s.txArmed }
 	require.True(t, armed(), "TX should be armed after ArmTx")
 
-	unsub() // browser closes: last subscriber gone
+	unsub() // the app's FT8 view closes: the operator's stream is gone
 
 	require.Eventually(t, func() bool { return !armed() }, time.Second, 5*time.Millisecond,
-		"TX must be disarmed once the last subscriber leaves past the linger")
+		"TX must be disarmed once the operator's stream has been gone for the grace")
+	require.Equal(t, disarmUnattended, s.disarmCauseNow())
 }
 
-// TestCapture_DisarmsTxWhenLastSubscriberLeaves_CaptureDown is the attended-only
+// TestCapture_DisarmsTxWhenTheOperatorsStreamLeaves_CaptureDown is the presence
 // rule when capture is NOT running (2026-07-25 review). TX arms independently of
 // capture — armTx checks only keyer / TxReady / output device — so a rig with a
 // live CAT link but an unavailable INPUT device (missing, busy) arms fine while
@@ -280,18 +283,19 @@ func TestCapture_DisarmsTxWhenLastSubscriberLeaves(t *testing.T) {
 // operator closing the browser disarmed NOTHING: TX stayed armed unattended, and a
 // queued TransmitNext — which waits on the UTC boundary itself, not on the capture
 // scheduler — could key with nobody there. The disarm must not depend on capture.
-func TestCapture_DisarmsTxWhenLastSubscriberLeaves_CaptureDown(t *testing.T) {
+func TestCapture_DisarmsTxWhenTheOperatorsStreamLeaves_CaptureDown(t *testing.T) {
 	withShortLinger(t, 10*time.Millisecond)
 	// Capture acquisition fails → capturing stays false, subsystem idle (fail-soft).
 	src := &fakeSource{startErr: stderrors.New("no capture device")}
 	s := newService(types.Ft8Config{Enabled: true, TX: &types.Ft8TXConfig{}}, logging.Noop(), src)
 	s.newPlayer = func(string, int) (txPlayer, error) { return newFakeTxPlayer(), nil }
 	s.SetTxKeyer(&fakeKeyer{})
+	ownAbsent(s) // the operator's presence is the stream opened below, and only that
 	require.NoError(t, s.Initialize())
 	require.NoError(t, s.Start(context.Background()))
 	t.Cleanup(func() { _ = s.Stop() })
 
-	_, unsub := s.Subscribe()
+	unsub := stream(t, s, fixtureLife)
 	require.False(t, s.capturing, "precondition: capture must be down for this case")
 
 	// TX still arms — the output path is fine, only the input device is gone.
@@ -299,10 +303,11 @@ func TestCapture_DisarmsTxWhenLastSubscriberLeaves_CaptureDown(t *testing.T) {
 	armed := func() bool { s.txMu.Lock(); defer s.txMu.Unlock(); return s.txArmed }
 	require.True(t, armed(), "TX should arm even with capture down")
 
-	unsub() // browser closes: last subscriber gone, nobody attending
+	unsub() // the app's FT8 view closes: nobody attending
 
 	require.Eventually(t, func() bool { return !armed() }, time.Second, 5*time.Millisecond,
 		"TX must be disarmed when the operator leaves, even though capture was never running")
+	require.Equal(t, disarmUnattended, s.disarmCauseNow())
 }
 
 // TestCapture_Error_FailSoft covers the "enabled but capture won't start" case

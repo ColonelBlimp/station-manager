@@ -306,7 +306,7 @@ func TestPresence_TheCaptureLingerNoLongerDecidesPresence(t *testing.T) {
 	s.onLingerExpired()
 	require.True(t, s.armedNow(), "the capture linger disarmed although the lifetime is present")
 
-	off := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+	off := newBareTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil) // no operator: ownership not required
 	t.Cleanup(func() { _ = off.ArmTx(false) })
 	require.NoError(t, off.ArmTx(true), "not required: an arm with no subscriber at all")
 	off.onLingerExpired()
@@ -316,7 +316,7 @@ func TestPresence_TheCaptureLingerNoLongerDecidesPresence(t *testing.T) {
 
 // With ownership not required a stream's lifetime is not recorded and holds nothing.
 func TestPresence_NotRequired_StreamsAreNotCounted(t *testing.T) {
-	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+	s := newBareTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil) // no operator: ownership not required
 	t.Cleanup(func() { _ = s.ArmTx(false) })
 	closeA := stream(t, s, lifeA)
 	require.False(t, s.presence.has(lifeA))
@@ -383,7 +383,9 @@ func TestPresence_TheServicesOwnGraceIsTheCaptureLinger(t *testing.T) {
 	captureLinger = 40 * time.Millisecond
 	t.Cleanup(func() { captureLinger = saved })
 
-	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+	// Bare, then owned by lifeA here: the one stream this test opens must be the only
+	// presence there is, or its close would start no grace.
+	s := newBareTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
 	s.RequireOperatingLifetime()
 	s.PublishOperating(lifeA)
 	t.Cleanup(func() { _ = s.ArmTx(false) })

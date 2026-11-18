@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"net"
 	"net/http"
 	"testing"
 	"time"
@@ -30,19 +29,23 @@ func TestHTTPShutdown_SO6_ALiveRequestStillLetsEveryNodeDrain(t *testing.T) {
 		t.Fatalf("version = %d %s", code, body)
 	}
 
-	sock := d.cfgSvc.Snapshot().SocketPath
-	client := &http.Client{Transport: &http.Transport{
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, "unix", sock)
-		},
-	}}
+	// The live request is the app's: its event stream on the app listener.
+	target, ok := appTargetOf(d)
+	if !ok {
+		t.Fatal("the app listener is not published after it answered")
+	}
+	target.client.Timeout = 0 // a stream: bounded by ctx below, not by a whole-response timeout
+	defer target.client.CloseIdleConnections()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://smd/v1/events", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.base+"/v1/events", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := client.Do(req)
+	for k, v := range target.headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := target.client.Do(req)
 	if err != nil {
 		t.Fatalf("open the event stream: %v", err)
 	}

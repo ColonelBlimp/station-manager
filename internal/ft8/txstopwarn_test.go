@@ -40,6 +40,7 @@ func newTxLogTestService(player txPlayer) (*Service, *bytes.Buffer) {
 		logging.NewForWriter(buf), nil)
 	s.newPlayer = func(string, int) (txPlayer, error) { return player, nil }
 	s.SetTxKeyer(&fakeKeyer{})
+	own(s)
 	return s, buf
 }
 

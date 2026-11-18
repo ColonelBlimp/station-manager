@@ -44,10 +44,7 @@ func TestSessionEmail_SuccessOutlivesWriteTimeout(t *testing.T) {
 	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
 	uuid := submitTestQsoUUID(t, srv, lbID)
 
-	ts := httptest.NewUnstartedServer(srv.httpServer.Handler)
-	ts.Config.WriteTimeout = 1 * time.Second
-	ts.Start()
-	defer ts.Close()
+	ts := appSocket(t, srv, func(ts *httptest.Server) { ts.Config.WriteTimeout = 1 * time.Second })
 
 	body := `{"to":"manager@example.com","uuids":["` + uuid + `"]}`
 	req, err := http.NewRequest(http.MethodPost, ts.URL+"/v1/session/email", strings.NewReader(body))
@@ -55,7 +52,8 @@ func TestSessionEmail_SuccessOutlivesWriteTimeout(t *testing.T) {
 		t.Fatalf("build request: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Origin", ts.URL)
+	req.Header.Set("Origin", ts.URL) // the app listener's own origin
+	appHeaders(req.Header)
 	withServedArchive(req)
 
 	resp, err := ts.Client().Do(req)

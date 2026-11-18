@@ -274,7 +274,7 @@ func TestAbandonQso_SerializesThroughSeqGate(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		s.AbandonQso()
+		abandonQso(t, s)
 		close(done)
 	}()
 

@@ -35,13 +35,12 @@ func assertSecurityHeaders(t *testing.T, w *httptest.ResponseRecorder, where str
 // response. (W-0003 moved the app to the canonical root, so `/` is now a 200 document and
 // the 3xx probe is the permanent /app redirect instead of the old root redirect.)
 func TestSecurityHeaders_OnEveryResponse(t *testing.T) {
-	srv := testServer(t)
+	srv := appTestServer(t, nil, nil)
 
 	get := func(path string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
-		req.Host = "127.0.0.1:8080" // loopback: passes the Host allowlist (ST-1)
 		w := httptest.NewRecorder()
-		srv.httpServer.Handler.ServeHTTP(w, req)
+		serveAsApp(srv, w, req)
 		return w
 	}
 

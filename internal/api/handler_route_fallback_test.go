@@ -15,12 +15,11 @@ import (
 // JSON envelope: an unknown path is 404 not_found with NO Allow for any method; a real
 // method mismatch is 405 method_not_allowed carrying only the methods that work.
 func TestRouteFallback_UnmatchedV1RoutesReturnJSON(t *testing.T) {
-	srv := testServer(t)
+	srv := appTestServer(t, nil, nil)
 	serve := func(method, path string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(method, path, nil)
-		req.Host = "127.0.0.1:8080" // loopback: passes the Host allowlist (ST-1)
 		w := httptest.NewRecorder()
-		srv.httpServer.Handler.ServeHTTP(w, req)
+		serveAsApp(srv, w, req) // as the app asks: only it reaches the router
 		return w
 	}
 	wantEnvelope := func(t *testing.T, w *httptest.ResponseRecorder, status int, code string) {
@@ -81,14 +80,14 @@ func TestRouteFallback_UnmatchedV1RoutesReturnJSON(t *testing.T) {
 	t.Run("HEAD on an unknown /v1/ path is a 404 envelope with no body", func(t *testing.T) {
 		// A real server (not a recorder) so net/http's transport-level HEAD body-drop
 		// applies; the handler still writes the envelope, so the status/headers are the
-		// 404 contract while the body is empty. httptest serves on loopback, passing the
-		// Host allowlist.
-		ts := httptest.NewServer(srv.httpServer.Handler)
-		defer ts.Close()
+		// 404 contract while the body is empty. The socket is the app's (appSocket), and the
+		// request presents the app's credential and lifetime.
+		ts := appSocket(t, srv, nil)
 		req, err := http.NewRequest(http.MethodHead, ts.URL+"/v1/no-such-route", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
+		appHeaders(req.Header)
 		resp, err := ts.Client().Do(req)
 		if err != nil {
 			t.Fatal(err)

@@ -136,14 +136,14 @@ func (s *Service) SetTxKeyer(k TxKeyer) {
 	s.txMu.Unlock()
 }
 
-// ArmTx arms (true) or disarms (false) the FT8 transmit path. Idempotent.
+// armTxAs arms (true) or disarms (false) the FT8 transmit path for a named caller
+// (operating.go). Idempotent.
 // Arming requires a wired, ready keyer and an available output device; it
 // acquires the device and builds the slot controller. Disarming aborts any
 // in-flight transmission (PTT drops) and releases the device. Disarmed at
 // construction — nothing can transmit until the operator arms.
-func (s *Service) ArmTx(armed bool) error { return s.armTxAs("", armed) }
-
-// armTxAs is ArmTx for a named caller (operating.go). A disarm is accepted from anyone
+//
+// A disarm is accepted from anyone
 // (operator ruling 2026-11-17, question 11): a stop is never refused. An arm is checked,
 // and made, under the gate a replacement takes.
 func (s *Service) armTxAs(who string, armed bool) error {

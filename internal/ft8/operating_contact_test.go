@@ -45,7 +45,7 @@ func newReplacedContact(t *testing.T) *replacedContact {
 	t.Helper()
 	zeroTiming(t)
 	f := &replacedContact{keyer: &fakeKeyer{}, player: newFakeTxPlayer()}
-	s := newTxTestService(f.keyer, f.player, nil)
+	s := newBareTxTestService(f.keyer, f.player, nil)
 	f.s = s
 	s.RequireOperatingLifetime()
 	s.PublishOperating(lifeA)

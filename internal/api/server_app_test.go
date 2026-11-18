@@ -76,9 +76,13 @@ func (l twoListeners) appURL(path string) string {
 	return fmt.Sprintf("https://127.0.0.1:%d%s", l.appPort, path)
 }
 
+// startTwo serves the fixture app's daemon on both listeners: the check on, the fixture's
+// credential accepted and its lifetime admitted (appTestServer). A request that means to be
+// served presents them (appHeaders); a request that tests a guard presents them too, so
+// that what refuses it is the guard under test and not the check.
 func startTwo(t *testing.T) twoListeners {
 	t.Helper()
-	return startTwoWith(t, testServer(t), identity(t))
+	return startTwoWith(t, appTestServer(t, nil, nil), identity(t))
 }
 
 // startTwoWith serves srv on both listeners, the app listener with id.
@@ -169,8 +173,9 @@ func TestApp_RefusesAnotherCertificateAnOldTLSAndPlainHTTP(t *testing.T) {
 	}
 }
 
-// request sends method to the app listener with the given Host and Origin ("" = absent).
-func appRequest(t *testing.T, l twoListeners, method, path, host, origin string) int {
+// appRequest sends method to the app listener as the fixture app, with the given Host and
+// Origin ("" = absent), and returns the status and, for a refusal, its error code.
+func appRequest(t *testing.T, l twoListeners, method, path, host, origin string) (int, string) {
 	t.Helper()
 	req, err := http.NewRequest(method, l.appURL(path), strings.NewReader("{}"))
 	if err != nil {
@@ -183,12 +188,23 @@ func appRequest(t *testing.T, l twoListeners, method, path, host, origin string)
 		req.Header.Set("Origin", origin)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	appHeaders(req.Header)
 	resp, err := pinnedClient(t, l.id, 0).Do(req)
 	if err != nil {
 		t.Fatalf("%s %s: %v", method, path, err)
 	}
-	_ = resp.Body.Close()
-	return resp.StatusCode
+	defer resp.Body.Close()
+	return resp.StatusCode, refusalCode(resp)
+}
+
+// refusalCode is the error code of a JSON refusal, or "" for anything else.
+func refusalCode(resp *http.Response) string {
+	if resp.StatusCode < 400 {
+		return ""
+	}
+	var e ErrorResponse
+	_ = json.NewDecoder(resp.Body).Decode(&e)
+	return e.Code
 }
 
 func TestApp_HostAndOriginAreBoundToItsPort(t *testing.T) {
@@ -198,11 +214,13 @@ func TestApp_HostAndOriginAreBoundToItsPort(t *testing.T) {
 	other := fmt.Sprintf("127.0.0.1:%d", l.appPort+1)
 
 	// A wrong Host is refused for every method (the rebinding defence), even a read.
-	if got := appRequest(t, l, http.MethodGet, "/v1/healthz", other, ""); got != http.StatusForbidden {
-		t.Errorf("GET with Host %s = %d, want 403", other, got)
+	// The refusals here are the origin guard's (cross_origin), never the check's: every
+	// request presents the app's credential and lifetime.
+	if got, code := appRequest(t, l, http.MethodGet, "/v1/healthz", other, ""); got != http.StatusForbidden || code != "cross_origin" {
+		t.Errorf("GET with Host %s = %d %q, want 403 cross_origin", other, got, code)
 	}
-	if got := appRequest(t, l, http.MethodGet, "/v1/healthz", "localhost:"+fmt.Sprint(l.appPort), ""); got != http.StatusForbidden {
-		t.Errorf("GET with Host localhost = %d, want 403 (only 127.0.0.1:<app port>)", got)
+	if got, code := appRequest(t, l, http.MethodGet, "/v1/healthz", "localhost:"+fmt.Sprint(l.appPort), ""); got != http.StatusForbidden || code != "cross_origin" {
+		t.Errorf("GET with Host localhost = %d %q, want 403 cross_origin (only 127.0.0.1:<app port>)", got, code)
 	}
 	// Unsafe method: only the app's own Origin, or none (a non-browser client).
 	for _, c := range []struct {
@@ -216,9 +234,12 @@ func TestApp_HostAndOriginAreBoundToItsPort(t *testing.T) {
 		{"http://" + host, false},                                 // the wrong scheme
 		{fmt.Sprintf("https://localhost:%d", l.appPort), false},   // another loopback name
 	} {
-		got := appRequest(t, l, http.MethodPost, "/v1/notifications", host, c.origin)
+		got, code := appRequest(t, l, http.MethodPost, "/v1/notifications", host, c.origin)
 		if refused := got == http.StatusForbidden; refused == c.ok {
 			t.Errorf("POST with Origin %q = %d; want refused=%v", c.origin, got, !c.ok)
+		}
+		if !c.ok && code != "cross_origin" {
+			t.Errorf("POST with Origin %q refused as %q, want cross_origin", c.origin, code)
 		}
 	}
 }
@@ -226,7 +247,10 @@ func TestApp_HostAndOriginAreBoundToItsPort(t *testing.T) {
 func TestApp_TheBrowserListenerIsUnchanged(t *testing.T) {
 	// The HTTP listener still accepts any loopback Origin, the app's included: tightening it
 	// is a separate change (codex-056).
-	l := startTwo(t)
+	//
+	// EXPLICITLY WITH THE CHECK OFF (W-0027 C2e, codex-154): a served POST on the main
+	// listener exists only in that state, and this test goes with it in part 3.
+	l := startTwoWith(t, testServer(t), identity(t))
 	req, _ := http.NewRequest(http.MethodPost, "http://"+l.mainAddr+"/v1/notifications", strings.NewReader("{}"))
 	req.Header.Set("Origin", fmt.Sprintf("https://127.0.0.1:%d", l.appPort))
 	req.Header.Set("Content-Type", "application/json")
@@ -241,8 +265,9 @@ func TestApp_TheBrowserListenerIsUnchanged(t *testing.T) {
 }
 
 // upgrade attempts a WebSocket upgrade of the event stream on the app listener and returns
-// the HTTP status of the response.
-func upgrade(t *testing.T, l twoListeners, origin string) int {
+// the HTTP status of the response and, for a refusal, its error code. The handshake presents
+// the fixture app's credential and lifetime.
+func upgrade(t *testing.T, l twoListeners, origin string) (int, string) {
 	t.Helper()
 	cert, _ := x509.ParseCertificate(l.id.CertDER)
 	pool := x509.NewCertPool()
@@ -256,7 +281,9 @@ func upgrade(t *testing.T, l twoListeners, origin string) int {
 	req := "GET " + wsEventsRoute + " HTTP/1.1\r\n" +
 		fmt.Sprintf("Host: 127.0.0.1:%d\r\n", l.appPort) +
 		"Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\n" +
-		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
+		operatingCredentialHeader + ": " + testAppCredential + "\r\n" +
+		appLifetimeHeader + ": " + testAppLifetime + "\r\n"
 	if origin != "" {
 		req += "Origin: " + origin + "\r\n"
 	}
@@ -267,19 +294,20 @@ func upgrade(t *testing.T, l twoListeners, origin string) int {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return resp.StatusCode
+	defer resp.Body.Close()
+	return resp.StatusCode, refusalCode(resp)
 }
 
 func TestApp_AnUpgradeNeedsTheAppsOwnOrigin(t *testing.T) {
 	l := startTwo(t)
-	if got := upgrade(t, l, fmt.Sprintf("https://127.0.0.1:%d", l.appPort)); got != http.StatusSwitchingProtocols {
+	if got, _ := upgrade(t, l, fmt.Sprintf("https://127.0.0.1:%d", l.appPort)); got != http.StatusSwitchingProtocols {
 		t.Errorf("upgrade with the app's Origin = %d, want 101", got)
 	}
-	if got := upgrade(t, l, ""); got != http.StatusForbidden {
-		t.Errorf("upgrade without an Origin = %d, want 403 (absent Origin is allowed only for non-upgrade requests)", got)
+	if got, code := upgrade(t, l, ""); got != http.StatusForbidden || code != "cross_origin" {
+		t.Errorf("upgrade without an Origin = %d %q, want 403 cross_origin (absent Origin is allowed only for non-upgrade requests)", got, code)
 	}
-	if got := upgrade(t, l, "http://"+l.mainAddr); got != http.StatusForbidden {
-		t.Errorf("upgrade with the browser listener's Origin = %d, want 403", got)
+	if got, code := upgrade(t, l, "http://"+l.mainAddr); got != http.StatusForbidden || code != "cross_origin" {
+		t.Errorf("upgrade with the browser listener's Origin = %d %q, want 403 cross_origin", got, code)
 	}
 }
 
@@ -332,13 +360,18 @@ func TestApp_BindFailureIsReturnedNotFatal(t *testing.T) {
 	_ = srv.Shutdown(ctx)
 }
 
-func TestApp_OneStationBehindBothListeners(t *testing.T) {
+// The app reaches the station and the main listener does not (W-0027 C2e; codex-156). What
+// the app writes over its listener is in the station's own database; the same record asked
+// of the main listener is refused, because that listener serves no station data; and the
+// event stream is served over the app listener.
+func TestApp_TheAppReachesTheStationAndTheMainListenerDoesNot(t *testing.T) {
 	l := startTwo(t)
 	own := fmt.Sprintf("https://127.0.0.1:%d", l.appPort)
 	req, _ := http.NewRequest(http.MethodPost, l.appURL("/v1/logbook"),
 		strings.NewReader(`{"name":"Made through the app","callsign":"7Q5MLV"}`))
 	req.Header.Set("Origin", own)
 	req.Header.Set("Content-Type", "application/json")
+	appHeaders(req.Header)
 	resp, err := pinnedClient(t, l.id, 0).Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -351,20 +384,30 @@ func TestApp_OneStationBehindBothListeners(t *testing.T) {
 	if resp.StatusCode != http.StatusCreated || made.ID < 1 {
 		t.Fatalf("create through the app listener = %d (id %d), want 201", resp.StatusCode, made.ID)
 	}
+
+	// It is the station's own database the app wrote to.
+	lb, err := l.srv.db.FetchLogbookByIDWithContext(context.Background(), made.ID)
+	if err != nil || lb.Name != "Made through the app" {
+		t.Fatalf("the station's database does not hold the app's logbook: %+v (err=%v)", lb, err)
+	}
+
+	// The main listener serves none of it: the same record is refused there.
 	got, err := http.Get(fmt.Sprintf("http://%s/v1/logbook/%d", l.mainAddr, made.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
 	body, _ := io.ReadAll(got.Body)
 	_ = got.Body.Close()
-	if got.StatusCode != http.StatusOK || !strings.Contains(string(body), "Made through the app") {
-		t.Fatalf("the browser listener does not see the app's logbook: %d %s", got.StatusCode, body)
+	if got.StatusCode != http.StatusForbidden || !strings.Contains(string(body), "desktop_app_required") ||
+		strings.Contains(string(body), "Made through the app") {
+		t.Fatalf("the main listener answered a station read: %d %s, want 403 desktop_app_required", got.StatusCode, body)
 	}
 
-	// The SSE stream is served over the app listener too.
+	// The SSE stream is served over the app listener.
 	ctx, cancel := contextWithTimeout(3 * time.Second)
 	defer cancel()
 	sreq, _ := http.NewRequestWithContext(ctx, http.MethodGet, l.appURL("/v1/events"), nil)
+	appHeaders(sreq.Header)
 	sresp, err := pinnedClient(t, l.id, 0).Do(sreq)
 	if err != nil {
 		t.Fatalf("open the event stream on the app listener: %v", err)
@@ -454,7 +497,11 @@ func TestApp_AWebSocketDeliversTheStationsEvents(t *testing.T) {
 	own := fmt.Sprintf("https://127.0.0.1:%d", l.appPort)
 	c, resp, err := websocket.Dial(ctx, fmt.Sprintf("wss://127.0.0.1:%d%s", l.appPort, wsEventsPath), &websocket.DialOptions{
 		HTTPClient: pinnedClient(t, l.id, 0),
-		HTTPHeader: http.Header{"Origin": []string{own}},
+		HTTPHeader: http.Header{
+			"Origin":                  []string{own},
+			operatingCredentialHeader: []string{testAppCredential},
+			appLifetimeHeader:         []string{testAppLifetime},
+		},
 	})
 	if err != nil {
 		t.Fatalf("WebSocket on the app listener: %v (resp %v)", err, resp)
@@ -600,18 +647,21 @@ func TestApp_AppAddressForms(t *testing.T) {
 // through the real handler chain with the bound port set to 443, with no socket on 443 (tests
 // cannot bind it). The portless forms browsers send pass the guard; other forms are refused.
 func TestApp_Port443PortlessFormsThroughTheGuard(t *testing.T) {
-	srv := testServer(t)
+	srv := appTestServer(t, nil, nil)
 	srv.appMu.Lock()
 	srv.appPort = 443
 	srv.appMu.Unlock()
 	h := srv.httpServer.Handler
-	send := func(method, path, host, origin string, upgrade bool) int {
+	// Each request presents the app's credential and lifetime, and its own Host and Origin:
+	// a refusal below is the origin guard's, which the code asserts.
+	send := func(method, path, host, origin string, upgrade bool) (int, string) {
 		t.Helper()
 		req := httptest.NewRequest(method, "https://"+host+path, strings.NewReader("{}"))
 		req.Host = host
 		req.TLS = &tls.ConnectionState{Version: tls.VersionTLS13}
 		req = req.WithContext(context.WithValue(req.Context(), appConnKey{}, true))
 		req.Header.Set("Content-Type", "application/json")
+		appHeaders(req.Header)
 		if origin != "" {
 			req.Header.Set("Origin", origin)
 		}
@@ -623,7 +673,11 @@ func TestApp_Port443PortlessFormsThroughTheGuard(t *testing.T) {
 		}
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, req)
-		return w.Code
+		code := ""
+		if w.Code >= 400 {
+			code = decodeErrCode(t, w)
+		}
+		return w.Code, code
 	}
 	for _, c := range []struct {
 		name                 string
@@ -641,9 +695,12 @@ func TestApp_Port443PortlessFormsThroughTheGuard(t *testing.T) {
 		{"WebSocket, no Origin", http.MethodGet, wsEventsPath, "127.0.0.1", "", true, true},
 		{"WebSocket, http Origin", http.MethodGet, wsEventsPath, "127.0.0.1", "http://127.0.0.1", true, true},
 	} {
-		got := send(c.method, c.path, c.host, c.origin, c.upgrade)
+		got, code := send(c.method, c.path, c.host, c.origin, c.upgrade)
 		if refused := got == http.StatusForbidden; refused != c.wantRefused {
 			t.Errorf("%s: status %d, want refused=%v", c.name, got, c.wantRefused)
+		}
+		if c.wantRefused && code != "cross_origin" {
+			t.Errorf("%s: refused as %q, want cross_origin", c.name, code)
 		}
 	}
 }

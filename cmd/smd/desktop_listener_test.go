@@ -147,8 +147,8 @@ func TestDesktopListener_ServeError_ReportedNotFatal(t *testing.T) {
 }
 
 // pinnedVersion GETs /v1/version from the app listener on port, accepting only want's
-// certificate (the shell's pin, ADR 0103).
-func pinnedVersion(t *testing.T, port int, want desktopid.Identity) (int, error) {
+// certificate (the shell's pin, ADR 0103) and presenting cred.
+func pinnedVersion(t *testing.T, port int, want desktopid.Identity, cred string) (int, error) {
 	t.Helper()
 	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{
 		MinVersion:         tls.VersionTLS13,
@@ -161,7 +161,12 @@ func pinnedVersion(t *testing.T, port int, want desktopid.Identity) (int, error)
 		},
 	}}}
 	defer client.CloseIdleConnections()
-	resp, err := client.Get("https://127.0.0.1:" + strconv.Itoa(port) + "/v1/version")
+	req, err := http.NewRequest(http.MethodGet, "https://127.0.0.1:"+strconv.Itoa(port)+"/v1/version", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("X-SM-Operating-Credential", cred)
+	resp, err := client.Do(req)
 	if err != nil {
 		return 0, err
 	}
@@ -183,7 +188,7 @@ func TestDesktopListener_TheHTTPNodeServesTheAppWithItsIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the http node did not publish the desktop identity: %v", err)
 	}
-	if code, err := pinnedVersion(t, port, id); err != nil || code != http.StatusOK {
+	if code, err := pinnedVersion(t, port, id, publishedCredential(t, d.cfgSvc.WorkingDir())); err != nil || code != http.StatusOK {
 		t.Fatalf("pinned GET /v1/version = %d, %v; want 200", code, err)
 	}
 	stopGen(t, orch) // strict: the http node drains both listeners
@@ -203,12 +208,15 @@ func TestDesktopListener_ABusyAppPortNeverStopsTheStation(t *testing.T) {
 		c.SetupComplete = true
 		c.DefaultLogbookID = 1
 		c.Server.AppPort = port
+		// Only with the check off; with it on a busy app port ends the start
+		// (TestOperatingClient_CheckOn_ABusyAppPortEndsTheStart). Goes in C2e part 3.
+		c.Server.RequireDesktopApp = false
 	})
 	ownerOnlySocketDir(t, d)
 	if err := orch.Start(d.workerCtx); err != nil {
 		t.Fatalf("a busy app port stopped the station: %v", err)
 	}
-	if code, body := apiCall(t, d, http.MethodGet, "/v1/version"); code != http.StatusOK {
+	if code, body := mainCall(t, d, http.MethodGet, "/v1/version"); code != http.StatusOK {
 		t.Fatalf("browser listener: version = %d %s", code, body)
 	}
 	if got := d.server.AppPort(); got != 0 {
@@ -309,6 +317,9 @@ func TestDesktopListener_NeverTakesTheBrowserListenersPort(t *testing.T) {
 		c.Server.Protocol = "tcp"
 		c.SocketPath = "127.0.0.1:" + strconv.Itoa(port)
 		c.Server.AppPort = port
+		// A station that carries on without its app listener exists only with the check
+		// off; with it on the same clash ends the start. Decided in C2e part 3.
+		c.Server.RequireDesktopApp = false
 	})
 	real := serveBrowser
 	t.Cleanup(func() { serveBrowser = real })

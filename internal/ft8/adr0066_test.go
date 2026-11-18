@@ -131,7 +131,7 @@ func TestAdr0066_StagedModeDoesNotLeakBetweenStarts(t *testing.T) {
 	s.cfg.TX.CallerAnswerMode = types.Ft8CallerAnswerAutoFirst
 	startCqWithMode(t, s, types.Ft8CallerAnswerOperatorPick)
 	require.Equal(t, types.Ft8CallerAnswerOperatorPick, s.seq.statusForTest().AnswerMode)
-	s.AbandonQso()
+	abandonQso(t, s)
 	require.NoError(t, s.StartCallCq("G0XYZ", "IO91", 1500, 14.074, "", "", 1, ""))
 	require.Equal(t, types.Ft8CallerAnswerAutoFirst, s.seq.statusForTest().AnswerMode,
 		"the second start's empty mode must resolve to config, not inherit the first's")

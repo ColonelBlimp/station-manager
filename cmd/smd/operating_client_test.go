@@ -247,10 +247,10 @@ func TestOperatingClient_TheHTTPNodeEnforcesTheCheckWithThisInstallsCredential(t
 		t.Fatalf("the app listener with another credential: %d %s; want 403", code, body)
 	}
 	// The main listener (a Unix socket here, refused as TCP is) serves the health check only.
-	if code, body := apiCall(t, d, http.MethodGet, "/v1/version"); code != http.StatusForbidden || !strings.Contains(string(body), "desktop_app_required") {
+	if code, body := mainCall(t, d, http.MethodGet, "/v1/version"); code != http.StatusForbidden || !strings.Contains(string(body), "desktop_app_required") {
 		t.Fatalf("the main listener: version = %d %s; want 403 desktop_app_required", code, body)
 	}
-	if code, body := apiCall(t, d, http.MethodGet, "/v1/healthz"); code != http.StatusOK {
+	if code, body := mainCall(t, d, http.MethodGet, "/v1/healthz"); code != http.StatusOK {
 		t.Fatalf("the main listener: healthz = %d %s; want 200", code, body)
 	}
 	select {
@@ -278,7 +278,7 @@ func TestOperatingClient_OffTheCredentialIsStillMadeAndNothingAsksForIt(t *testi
 	if code, body := pinnedGet(t, d.server.AppPort(), id, "/v1/version", ""); code != http.StatusOK {
 		t.Fatalf("the app listener without a credential, check off: %d %s; want 200", code, body)
 	}
-	if code, body := apiCall(t, d, http.MethodGet, "/v1/version"); code != http.StatusOK {
+	if code, body := mainCall(t, d, http.MethodGet, "/v1/version"); code != http.StatusOK {
 		t.Fatalf("the main listener, check off: %d %s; want 200", code, body)
 	}
 	stopGen(t, orch)
@@ -359,7 +359,7 @@ func TestOperatingClient_CheckOn_ARefusedCredentialEndsTheStartAndServesNothing(
 	if err := orch.Start(d.workerCtx); err != nil {
 		t.Fatal(err)
 	}
-	if code, body := apiCall(t, d, http.MethodGet, "/v1/version"); code != http.StatusForbidden {
+	if code, body := mainCall(t, d, http.MethodGet, "/v1/version"); code != http.StatusForbidden {
 		t.Fatalf("the main listener: version = %d %s; want 403", code, body)
 	}
 	if port := d.server.AppPort(); port != 0 {
@@ -389,7 +389,7 @@ func TestOperatingClient_CheckOff_ARefusedCredentialNeverStopsTheStation(t *test
 	if err := orch.Start(d.workerCtx); err != nil {
 		t.Fatalf("a refused credential stopped the station with the check off: %v", err)
 	}
-	if code, body := apiCall(t, d, http.MethodGet, "/v1/version"); code != http.StatusOK {
+	if code, body := mainCall(t, d, http.MethodGet, "/v1/version"); code != http.StatusOK {
 		t.Fatalf("the main listener: version = %d %s; want 200", code, body)
 	}
 	select {

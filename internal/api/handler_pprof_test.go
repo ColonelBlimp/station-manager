@@ -14,9 +14,8 @@ import (
 func pprofProbe(t *testing.T, srv *Server, path string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, path, nil)
-	req.Host = "127.0.0.1:8080" // loopback: the Host allowlist now covers safe methods too (ST-1)
 	w := httptest.NewRecorder()
-	srv.httpServer.Handler.ServeHTTP(w, req)
+	serveAsApp(srv, w, req) // as the app asks: profiling is served to it and to nothing else
 	return w
 }
 
@@ -30,7 +29,7 @@ func pprofProbe(t *testing.T, srv *Server, path string) *httptest.ResponseRecord
 // leaking heap / goroutine state and offering a DoS surface via
 // /debug/pprof/profile?seconds=N.
 func TestPprof_DisabledByDefault(t *testing.T) {
-	srv := testServer(t) // EnableProfiling stays at its zero value (false)
+	srv := appTestServer(t, nil, nil) // EnableProfiling stays at its zero value (false)
 
 	w := pprofProbe(t, srv, "/debug/pprof/")
 	if w.Code != http.StatusNotFound {
@@ -51,7 +50,7 @@ func TestPprof_DisabledByDefault(t *testing.T) {
 // false. Catches any future code path that registers a subset of the
 // routes but forgets to gate them all.
 func TestPprof_DisabledRejectsAllSubroutes(t *testing.T) {
-	srv := testServer(t)
+	srv := appTestServer(t, nil, nil)
 
 	paths := []string{
 		"/debug/pprof/",
@@ -76,9 +75,9 @@ func TestPprof_DisabledRejectsAllSubroutes(t *testing.T) {
 // changes the wording, the dual-marker check still catches it via
 // the /debug/pprof/heap link.
 func TestPprof_EnabledMountsIndex(t *testing.T) {
-	srv := testServerWithCfg(t, func(cfg *config.Config) {
+	srv := appTestServer(t, func(cfg *config.Config) {
 		cfg.Server.EnableProfiling = true
-	})
+	}, nil)
 
 	w := pprofProbe(t, srv, "/debug/pprof/")
 	if w.Code != http.StatusOK {
@@ -96,9 +95,9 @@ func TestPprof_EnabledMountsIndex(t *testing.T) {
 // executable path — Content-Type is the cleanest discriminator from
 // the SPA's text/html fallthrough.
 func TestPprof_EnabledMountsCmdline(t *testing.T) {
-	srv := testServerWithCfg(t, func(cfg *config.Config) {
+	srv := appTestServer(t, func(cfg *config.Config) {
 		cfg.Server.EnableProfiling = true
-	})
+	}, nil)
 
 	w := pprofProbe(t, srv, "/debug/pprof/cmdline")
 	if w.Code != http.StatusOK {
@@ -116,9 +115,9 @@ func TestPprof_EnabledMountsCmdline(t *testing.T) {
 // Content-Type "application/octet-stream" is the gzipped pprof binary
 // format — distinct from the SPA's text/html fallthrough.
 func TestPprof_EnabledMountsHeapProfile(t *testing.T) {
-	srv := testServerWithCfg(t, func(cfg *config.Config) {
+	srv := appTestServer(t, func(cfg *config.Config) {
 		cfg.Server.EnableProfiling = true
-	})
+	}, nil)
 
 	w := pprofProbe(t, srv, "/debug/pprof/heap")
 	if w.Code != http.StatusOK {
@@ -139,17 +138,14 @@ func TestPprof_EnabledMountsHeapProfile(t *testing.T) {
 // mistake in either registration would silently fall through to the
 // SPA on that method.
 func TestPprof_EnabledMountsSymbolGetAndPost(t *testing.T) {
-	srv := testServerWithCfg(t, func(cfg *config.Config) {
+	srv := appTestServer(t, func(cfg *config.Config) {
 		cfg.Server.EnableProfiling = true
-	})
+	}, nil)
 
 	for _, method := range []string{http.MethodGet, http.MethodPost} {
 		req := httptest.NewRequest(method, "/debug/pprof/symbol", nil)
-		// `go tool pprof` reaches the daemon on loopback; httptest defaults Host to
-		// example.com, which the same-origin CSRF guard rejects for the POST.
-		req.Host = "127.0.0.1:8080"
 		w := httptest.NewRecorder()
-		srv.httpServer.Handler.ServeHTTP(w, req)
+		serveAsApp(srv, w, req)
 		if w.Code != http.StatusOK {
 			t.Errorf("%s /debug/pprof/symbol: status = %d, want 200", method, w.Code)
 		}

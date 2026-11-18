@@ -32,12 +32,12 @@ func TestHandleGetConfig_Ft8RunningFollowsTheServedRoutes(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ft8Svc := ft8.NewService(types.Ft8Config{Enabled: tc.svcEnabled}, logging.Noop(), t.TempDir())
-			srv := testServerWithFt8(t, func(c *config.Config) { c.Ft8.Enabled = tc.savedOn }, ft8Svc)
+			srv := appTestServer(t, func(c *config.Config) { c.Ft8.Enabled = tc.savedOn }, ft8Svc)
 
 			get := httptest.NewRequest(http.MethodGet, "/v1/config", nil)
 			get.Host = "127.0.0.1:8080"
 			w := httptest.NewRecorder()
-			srv.httpServer.Handler.ServeHTTP(w, get)
+			serveAsApp(srv, w, get)
 			if w.Code != http.StatusOK {
 				t.Fatalf("GET /v1/config = %d: %s", w.Code, w.Body.String())
 			}
@@ -62,7 +62,7 @@ func TestHandleGetConfig_Ft8RunningFollowsTheServedRoutes(t *testing.T) {
 			claim.Host = "127.0.0.1:8080"
 			claim.Header.Set("Content-Type", "application/json")
 			cw := httptest.NewRecorder()
-			srv.httpServer.Handler.ServeHTTP(cw, claim)
+			serveAsApp(srv, cw, claim)
 			if served := cw.Code != http.StatusNotFound; served != tc.wantRunning {
 				t.Fatalf("POST /v1/ft8/claim = %d (served %v), but ft8_running = %v", cw.Code, served, tc.wantRunning)
 			}

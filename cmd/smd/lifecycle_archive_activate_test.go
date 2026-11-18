@@ -26,6 +26,19 @@ func TestLifecycle_ArchiveActivationSealsAndRequestsTheRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("provision: %v", err)
 	}
+	// FT8's operator, established before the activation: an arm is checked for its caller
+	// and for that caller's stream before anything else, so without one the refusal below
+	// would be about ownership and would say nothing of the seal. FT8 is off in this
+	// daemon's config, so the stream starts no capture.
+	const operator = "AAAAAAAAAAAAAAAAAAAAAA"
+	d.ft8.RequireOperatingLifetime()
+	d.ft8.PublishOperating(operator)
+	_, leave, err := d.ft8.SubscribeModeAs("", operator)
+	if err != nil {
+		t.Fatalf("the operator's FT8 stream: %v", err)
+	}
+	t.Cleanup(leave)
+
 	out, err := d.archives.Activate(ctx, res.Entry.ID)
 	if err != nil {
 		t.Fatalf("activate: %v", err)
@@ -41,7 +54,7 @@ func TestLifecycle_ArchiveActivationSealsAndRequestsTheRestart(t *testing.T) {
 	if p := d.cfgSvc.Snapshot().PendingQsoArchiveID; p != res.Entry.ID {
 		t.Fatalf("pending = %q", p)
 	}
-	if err := d.ft8.ArmTx(true); !stderr.Is(err, ft8.ErrArchiveSwitchPending) {
+	if err := d.ft8.OperatingAs(operator).ArmTx(true); !stderr.Is(err, ft8.ErrArchiveSwitchPending) {
 		t.Fatalf("ArmTx after activation = %v, want the archive-switch refusal", err)
 	}
 	if err := d.bridge.SealTx(); err != nil {

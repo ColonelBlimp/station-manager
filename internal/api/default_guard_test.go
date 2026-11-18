@@ -103,7 +103,6 @@ func (f defaultFixture) headers() (absent, malformed, repeated, stale, current d
 // given default header.
 func serveDefault(f defaultFixture, op guardedOp, archive guardHeader, d defaultHeader) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(op.method, op.path(f.guardFixture), strings.NewReader(op.body(f.guardFixture)))
-	req.Host = "127.0.0.1:8080"
 	if op.contentType != "" {
 		req.Header.Set("Content-Type", op.contentType)
 	}
@@ -114,7 +113,7 @@ func serveDefault(f defaultFixture, op guardedOp, archive guardHeader, d default
 		req.Header.Add(defaultHeaderName, v)
 	}
 	w := httptest.NewRecorder()
-	f.srv.httpServer.Handler.ServeHTTP(w, req)
+	serveAsApp(f.srv, w, req)
 	return w
 }
 

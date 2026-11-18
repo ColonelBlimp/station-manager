@@ -14,12 +14,11 @@ import (
 // arrays and an audio.available flag, so the SPA can render an empty picker
 // rather than choke on null.
 func TestHandleHardware_OKAndShape(t *testing.T) {
-	srv := testServer(t)
+	srv := appTestServer(t, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/hardware", nil)
-	req.Host = "127.0.0.1:8080" // loopback: the Host allowlist now covers safe methods too (ST-1)
 	w := httptest.NewRecorder()
-	srv.httpServer.Handler.ServeHTTP(w, req)
+	serveAsApp(srv, w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%q", w.Code, w.Body.String())

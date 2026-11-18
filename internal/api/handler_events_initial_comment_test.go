@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -19,13 +18,13 @@ import (
 func TestEvents_FirstBodyBytesAreConnectedComment(t *testing.T) {
 	h := startE2E(t)
 	defer h.shutdown()
-	ts := httptest.NewServer(h.srv.httpServer.Handler)
-	defer ts.Close()
+	ts := appSocket(t, h.srv, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/v1/events", nil)
-	resp, err := http.DefaultClient.Do(req)
+	appHeaders(req.Header)
+	resp, err := ts.Client().Do(req)
 	if err != nil {
 		t.Fatalf("open SSE: %v", err)
 	}

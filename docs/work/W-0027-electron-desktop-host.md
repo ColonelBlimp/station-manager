@@ -118,6 +118,39 @@ design before code.
   through C2 and C4: ADR 0102's choice stands, and the Session is the reason they name. ADR 0100
   (the Session that follows the app's lifetime) is the design that sentence points at; its build
   is not started.
+- **2026-11-18 (operator): "W-0029 is fine, open the dossier".** ADR 0100's build has its own
+  dossier, [W-0029](W-0029-operating-sessions.md). A2 and the whole of A3 wait on it.
+- **2026-11-18 (operator): "If we are now planning to code-around a temporary feature, then
+  deal with the tmp feature first! You need to check we are not wasting more time on coding
+  and testing for features that we remove the next cycle - we are wasting time, effort and
+  money!"** The temporary feature is the operating-client switch,
+  `server.require_desktop_app`, ruled "a - temporary switch, later removed" on 2026-11-13
+  (C2 brief, question 1). Its removal is now the next work, ahead of W-0029's build. That
+  ruling placed the removal "when others can install the desktop app (D2 to D6)"; doing it
+  first means the next release serves only the desktop app. That consequence is put to the
+  operator with the removal's brief (C2e, at the end of this dossier) and is not assumed here.
+- **2026-11-18 (operator), on the check's permanence: "Yes. We need to work on permanence. We
+  don't care about backward compatibility with any other install. Assume that my install is
+  the ONLY install. If it breaks someone elses install, they will let us know and we'll deal
+  with it then. But there is only one other install I know of and we'll provide a migration
+  path for them when needed."** C2e is directed. Its question 3 (whether anyone else installs
+  a release before D2 to D6) is answered: no backward compatibility is owed to any existing
+  install other than the operator's, and the one other known install gets a migration path
+  when it is needed, not now.
+  - **Corrected by the operator the same day,** after I restated it as "your install is the
+    only one it is designed for": "not quite. All installs going forward, mine just happens
+    to be the only install." So the permanent check is the design for **every install from
+    here on**. What is dropped is compatibility with installs that already exist, of which
+    the operator's is the only one, bar the one other known.
+- **2026-11-18 (operator): "No, I don't use Vite"; "No, don't use the loadgenerator"; "Why
+  would I rollback to an older build? We have never done this so far?"; and then "Delete the
+  Cabrillo plain-HTTP mode and remove the downgrade tooling".** Four things leave with C2e:
+  the Vite dev server, `cmd/loadgen`, `ukeicc-cabrillo.py`'s plain-HTTP mode, and the
+  downgrade tooling. The last supersedes W-0021's ruling (e) of 2026-09-22, under which the
+  tooling and its drill were built.
+- **2026-11-18 (operator): "We'll verify all of this with Codex before we implement".**
+  Nothing of C2e is implemented until Codex has verified the brief, part 1's measurement and
+  the inventories. The rulings above settle what goes; they do not start the work.
 
 ## Open questions for the operator
 
@@ -3468,3 +3501,336 @@ and left some observations to it: the Wayland app id, where a denied namespace c
 shows its error, and what reaches the user journal. The operator's acceptance is recorded as
 given. Whether a guest run was made, and what it showed, was not said, and nothing about it
 is recorded here. D2 to D6 are not part of D1 and are not started.
+
+### C2e brief — the operating-client switch removed (2026-11-18; directed; questions 1 to 3 ruled; under review)
+
+Written on the operator's direction of 2026-11-18 (Rulings: "deal with the tmp feature
+first!"). It is a plan for review by the operator and Codex before any code. The switch is
+`server.require_desktop_app`, ruled "a - temporary switch, later removed" on 2026-11-13 (C2
+brief, question 1). W-0029's build waits for this.
+
+**Outcome the operator sees.** At the station, nothing: the check is already on there. In
+the product there is no setting, and no state of `smd`, in which a client without this
+install's credential is served. `config.json` loses the key. A first-time install serves
+only the desktop app from its first start.
+
+**Nearest confusable outcome.** The key is gone and the default behaves as "on", while a way
+to run `smd` unguarded survives under another name: a test hook reachable from the binary, an
+environment variable, or FT8's any-subscriber presence still compiled in and still tested.
+
+**What exists** (read 2026-11-18).
+- The key (`internal/config/config.go`), written only when true. Config version 6; a file
+  with an unknown key is refused after migrations (`config.go`), so a build that no longer
+  knows the key cannot simply ignore it: the station's file holds it.
+- Three places in `internal/api` read it (`server.go`, `operating_client.go`,
+  `app_admission.go`); the check wraps the whole handler chain (`server.go`).
+  `cmd/smd/desktop_listener.go` makes identity and port failures fatal only when it is on.
+- `internal/ft8` has `ownershipRequired`, read in six places. Off, any subscriber is
+  presence, the capture linger disarms, and no command asks who is calling.
+- What runs against an unguarded daemon today: the shared test fixtures (below), the Vite
+  dev proxy (`frontend/app/vite.config.ts`, to `localhost:8080`), `cmd/loadgen` (default
+  target 8080), and the rollback drill's scratch daemon on a Unix socket
+  (`scripts/rollback-drill.sh`), which the check refuses as it refuses TCP. Able to present
+  the credential already: `scripts/smd_client.py` and the tools built on it.
+- **A first measurement of the tests, with its limit.** Counting test functions:
+  `internal/ft8` 636, `internal/api` 645, `cmd/smd` 287; about 40, in five files, turn the
+  check on. Those totals do not show how many depend on the off state (codex-147). Closer:
+  in `internal/ft8`, 186 tests are in files that use only the sequencer fixture and 153 in
+  files that use neither fixture, and neither group touches ownership; 297 are in files that
+  build a service, through two shared fixtures (`newTxTestService`, `dialGuardService`). In
+  `internal/api`, the tests reach the handler chain at 71 `ServeHTTP` call sites and 12 test
+  servers. So the dependence is on a few shared fixtures, not on some 1,500 tests one by
+  one. How few is part 1's to measure.
+
+**Approach** (rewritten 2026-11-18 after the operator's rulings and codex-148; the earlier
+draft's downgrade rule, its credentialed drill and its FT8-first order are gone).
+- **Delete the off state; do not rename it.** `smd` applies the check always. FT8's
+  not-required behaviour is removed, not kept for tests.
+- **What is removed with it, all ruled:** the Vite dev server, `cmd/loadgen`,
+  `ukeicc-cabrillo.py`'s plain-HTTP mode, and the downgrade tooling. No replacement route is
+  built for any of them. Staying, and distinct from those: Vite's build and Vitest; the
+  Cabrillo script's local reader and its ADIF-file input; forward migrations; the refusal of
+  a config file newer than the build.
+- **The key goes by a config migration** to version 7 that drops it. There is no way back to
+  version 6.
+- **The safety outcomes outlive the mechanism.** Where a test of the old capture-linger rule
+  protects something that stays true under presence, the assertion is kept and moved, not
+  deleted with the mechanism (the list is in part 2).
+- **The protected surface keeps its two exceptions:** `GET /v1/healthz` and the fixed notice.
+
+**Parts, in the order of the goal. Every commit must leave a fresh install and the station's
+own file both working** (codex-148, finding 1).
+
+**Refocused 2026-11-18 by the operator:** "We seem to have switched over to a focus on
+downgrading - rollback. Our focus is security. Removing the switch from the config and
+defaulting to on always (required) so that only the local UI (Electron) can access the daemon
+functionality?" Yes: that is C2e. The order below puts it first. The downgrade tooling's
+removal is ruled and is not needed for it: a config migration step may be one-way (a step
+with no `down` is "refused by name", `internal/config/migrations.go`), so the key can go
+without touching that tooling. It follows the security change as a separate piece.
+
+1. **Measure and classify.** Done; recorded below.
+2. **The tests moved onto the supported mode; no product change.** The FT8 fixtures give a
+   service a current lifetime with its stream open; the API and `cmd/smd` helpers that go
+   through the handler chain present the credential as the app does; pure-logic tests are
+   left alone. The assertions that stay, each named with where it is covered afterwards:
+   - an evicted stream of the current lifetime ends its presence and TX is disarmed after
+     the grace, **through the real stream handler** (from
+     `TestFt8HubEviction_EvictedLastSubscriberStillDisarmsTx`; the present handler test
+     covers a cancelled request, not an eviction);
+   - the loss disarms when capture is down too (from
+     `TestCapture_DisarmsTxWhenLastSubscriberLeaves_CaptureDown`);
+   - a return inside the grace keeps the arm, including one that races the fired timer
+     (from the two hub-eviction reconnect tests, which would otherwise pass while testing
+     nothing);
+   - a profile claim refused during the grace succeeds once the arm has ended (from
+     `TestClaimProfile_MidLingerOfALiveSession_RefusedThenSucceeds`).
+   Removed outright: the tests that only pin the not-required mode.
+3. **The security change, as one commit: the check is always on.** FT8's ownership always
+   required; the API's lifetime, stream and scope wiring unconditional; the admission's off
+   path, the listener's non-fatal branches and the shell's `'not-required'` branch removed;
+   the key removed by a one-way version 7 migration; the tests of the off state deleted;
+   the three clients that only an unguarded daemon could serve removed with it (the Vite dev
+   server's task and proxy, `cmd/loadgen`, the Cabrillo script's plain-HTTP mode); and the
+   references changed in the same commit (`docs/v2-design/config.md`, `api-endpoints.md`,
+   `docs/install.md`, `docs/ft8.md`, the manual's two chapters, the project rule's "with the
+   operating-client check on"). These go together because FT8 requiring a lifetime with no
+   wiring to supply one cannot arm.
+
+**After the security change, and separate from it:** the downgrade tooling removed, to the
+caller boundary recorded below: the two commands, the drill, the config's way down, the
+schema's way down and the 22 SQLite down files, the rollback-only producer of
+`config.v5.json`, and the helpers nothing else reaches. Forward upgrades and their tests
+stay; no file the operator already has is deleted.
+
+**Evidence plan.** No transmission, keyed test or rig command. Part 2 is shown by the suite
+passing with the fixtures on the supported mode **while the off state still exists**, and
+by reversion proofs for the four kept assertions. Part 3 adds behaviour only in the
+migration, built test-first; its evidence is also one real-`smd` Electron scenario on a
+**fresh** temporary install (no key in its file) running every authentication and admission
+check, a search showing no reader of the key and no unguarded route remains, the whole
+suite and the hosted gate, and the station: the pair deployed, the file migrated, the app
+admitted and operating. The later removal of the downgrade tooling is a deletion: its
+evidence is a search showing nothing still names what went, and the suite green.
+
+**Not settled here.** The exact fixture change (part 2, from the trace). Whether the main
+listener keeps anything beyond the health check and the notice (listed in part 1; a later
+ruling). Whether the strip of deprecated forwarder fields still has a job on this install:
+the downgrade tooling's removal takes only its rollback copy and leaves the strip. ADR 0014's daemon submitter,
+deferred, is not touched.
+
+**Questions for the operator.** All four are closed: 1 (the Vite dev server), 2
+(`cmd/loadgen`) and 3 (other installs) are ruled, in the Rulings above; 4 (the downgrade
+rule) was withdrawn, and the wider question it became is ruled too ("remove the downgrade
+tooling").
+
+#### C2e part 1 — measured (2026-11-18; no code; the deletions below are proposals, not ruled)
+
+Two read-only searches made the inventory; they ran nothing. I checked the claims this
+section rests on at the lines named. Counts of tests are the searches' own, by matching call
+sites inside each test function; a test that reaches a helper only through another helper is
+missed, so they are lower bounds.
+
+**The switch in the product.**
+- `internal/config/config.go:608`, the key. It was added inside config version 6 with no
+  version bump, and nothing validates or defaults it.
+- `internal/api`: `server.go:249` turns on FT8's ownership, the stream's lifetime and the
+  admission's scope **only when the key is set**; `operating_client.go:57` passes every
+  request when it is not; `app_admission.go:206` and `:220` answer "not required".
+- `cmd/smd`: identity, port and credential failures are fatal only when it is set
+  (`desktop_listener.go`, `lifecycle_adapters.go:1257`).
+- `internal/ft8`: five reads of `ownershipRequired` (`operating.go:72`, `:89`,
+  `servicetx.go:160`, `service.go:544`, `profile_claim.go:236`). Off, no command asks who is
+  calling and takes no gate, an arm needs no presence, the capture linger disarms, and a
+  stream's lifetime is not recorded.
+- The shell has an off branch of its own: `desktop/src/admission.mjs:75` returns
+  `'not-required'`, with a fixture for it in the harness and an off run of the real-`smd`
+  scenario (`check:c1d`; `check:c2b-smd` is the on run).
+- **No production code calls a plain, no-lifetime FT8 command.** Every handler goes through
+  `ft8As(r)`. The plain commands in `internal/ft8/operating.go` are reached by tests only.
+
+**What a request needs to pass the check in a test, without a TLS listener:** the
+app-listener mark in its context (`appConnKey`, `server.go:717`), a credential the server
+was told to accept, one credential header, and the app listener's own Host. No shared helper
+presents all of them today.
+
+**The tests.**
+
+| Package | Build the thing under the check | Already run with it on | Exist only for the off state | Ride on shared fixtures |
+|---|---|---|---|---|
+| `internal/ft8` (636) | 207 build a service; 429 never do | 25 | 2, and half of a third; 6 more test behaviour that exists only when off (the last subscriber's disarm, three hub-eviction cases, a profile claim in mid-linger) | 174, through `newTxTestService` and its wrappers and direct `newService`; about 190 gated call sites in 82 tests |
+| `internal/api` (645) | 94 go through the whole handler chain, by about eight helpers; about 550 call a handler directly | 20 | 4 tests and 5 cases of a table | the 94 |
+| `cmd/smd` (287) | 22 ask a started daemon over its Unix socket with no credential | 3 | about 10 | the 22, through one request helper |
+| `internal/config` | | | 1 of its 2 | |
+
+Two of the six off-only FT8 tests would pass while testing nothing if the flag were simply
+set to true (a reconnect "keeps" an arm the linger no longer ends). Three plain commands
+(`SetExchangePath`, `AbandonQso`, `StopAutoWorkRun`) are gated but return nothing, so a
+plain call would silently do nothing.
+
+**Scripts, tasks and tools.**
+
+| What | Under the permanent check | Proposed |
+|---|---|---|
+| `scripts/smd_client.py`, `tune-duration-probe.sh`, `ukeicc-cabrillo.py` in its local mode, `ci-local.sh`, `deploy-local-dev.sh`, `dev-bootstrap.sh`, `reset-local-dev.sh`, `smctl.sh` | unaffected: the credential, the health check, or no request at all | nothing |
+| The Vite dev server (`task frontend:app:dev`, the proxy in `vite.config.ts`) | broken | deleted (ruled) |
+| `cmd/loadgen` and its references | broken | deleted (ruled) |
+| `ukeicc-cabrillo.py --from-daemon http://…` (a named address over plain HTTP) | broken | that mode deleted; the local mode stays |
+| `scripts/rollback-drill.sh` | broken, and by my reading of it **already broken against this station's file**: it copies `config.json` without touching the key, the station's has had the key true since C2d (2026-11-14), and its one request is `/v1/version` over the Unix socket, which the check refuses. Not run to confirm | removed with the downgrade tooling (ruled) |
+| `task run`, `task run:smd` | the daemon still runs; the dev loop they describe, pairing it with Vite, is gone | their text corrected, or the tasks removed, with the Vite task |
+
+**The key in `config.json`.** A removed key is refused as unknown unless a migration consumes
+it. The precedent is version 2 to 3, `delete(tx, "auto_work_callers")`
+(`internal/config/migrations.go:347`). So: version 7, one step that deletes the key. The
+station's file is migrated at the first start of the new build.
+
+**What the permanent check leaves unreachable on the main listener** (listed, not proposed
+for this change): the UI's pages and the manual (`spa.go`, `manual.go`), pprof, every `/v1`
+route but the health check, and the route fallback for that listener. They stay reachable
+on the app listener. The main listener still serves the health check and the notice.
+
+**Documents that describe the switch or the off state:** `AGENTS.md:31`, `docs/ft8.md`,
+`docs/install.md` ("Serving only the desktop app"), `docs/v2-design/config.md`,
+`docs/v2-design/api-endpoints.md` (eight places), `desktop/README.md`, and two manual
+chapters (`first-run.md`, `ft8.md`).
+
+**The deletions, with the standing of each** (the heading first read "Proposed deletions, for
+the operator's ruling"; items 4 and 5 are now ruled, and 1 to 3 follow from the directed
+permanence and are carried out as the brief's parts 2 and 3).
+1. The key, by the version 7 migration; every off branch in `internal/api`, `cmd/smd` and
+   `internal/ft8`; the shell's `'not-required'` branch, its fixture and the off run of the
+   scenario.
+2. The tests that exist only for the off state (the table's fourth column), and the six
+   FT8 tests of behaviour tied to the old linger are **not** simply deleted: the outcomes
+   that stay true under presence are kept and moved, as the brief's part 2 names them
+   (codex-148, finding 2).
+3. The plain FT8 commands leave the production file. Whether the tests keep them as
+   helpers that name the fixture's lifetime, or name it at each call, is part 2's choice.
+4. **Ruled:** the Vite dev server ("No, I don't use Vite"), `cmd/loadgen` ("No, don't use
+   the loadgenerator") and `ukeicc-cabrillo.py`'s plain-HTTP mode ("Delete the Cabrillo
+   plain-HTTP mode").
+5. The downgrade tooling. **Ruled 2026-11-18: "remove the downgrade tooling".** Its inventory
+   follows; it is to be verified by Codex before anything is deleted.
+
+**The downgrade tooling: an inventory for its removal** (read 2026-11-18; a first pass, with
+its open points named).
+
+- **Plainly the tooling:**
+  - `smd config-downgrade`: `cmd/smd/config_downgrade.go`, `config_downgrade_v6.go`, their two
+    test files, and its entry in the subcommand table (`cmd/smd/main.go:133-141`);
+  - `smd db-downgrade`: `cmd/smd/db_downgrade.go` and its test; the function it calls,
+    `DowngradeLogSchemaTo` (`internal/database/sqlite/downgrade.go`), and its test;
+  - `scripts/rollback-drill.sh` (408 lines);
+  - the config's way down: `DowngradeDocument` and the three `down` steps
+    (`internal/config/migrations.go`), with the tests of them (`migrate_v4_test.go`, parts of
+    `config_v6_test.go`);
+  - the live documents: the rollback text of `docs/install.md` and of
+    `docs/v2-design/config.md`.
+- **Entangled, each needing a decision before it is touched:**
+  1. **`cmd/smd/config_v6_strip.go:190` calls `DowngradeDocument`** outside any downgrade
+     command: at start, before it strips the deprecated forwarder fields, it writes a
+     once-only copy of the config in its version 5 shape (`config.v5.json`; ruling R3,
+     2026-10-06), "recovery material for a rollback that went wrong". That copy is rollback
+     material too. Whether the strip step and its copy still have a job on this install, now
+     that it is the only one, is not established here.
+  2. **The 22 `.down.sql` migration files** (19 for the log) are run by `db-downgrade` and by
+     eight test files that migrate down and up again. If they go, a new migration needs no
+     way down, which is where the recurring cost was. Whether the migration library accepts
+     a set with no down files is not verified.
+  3. **Those eight test files** would lose their down halves or be rewritten.
+- **Not the tooling, and staying:** the guard by which a build refuses a config file of a
+  newer version than it knows (`internal/config/config.go`). Unrelated uses of the word
+  (TLS, an `rpm` comment, the UI's response handling) were read and set aside.
+- **History, left as written:** W-0021, ADR 0082 and the acceptance reports. W-0021 gets a
+  dated pointer to this ruling when the removal is made.
+- **A rule that relaxes with it:** defaults such as `app_port` are "resolved, never written,
+  because an older daemon refuses a key it does not know". With no older daemon to start,
+  that constraint has no reader. Nothing is changed for it here.
+
+**Corrected and completed after Codex's verification (codex-148), each point checked in the
+source.**
+- **The migration library needs no down files.** Codex ran the pinned library on the
+  repository's up files alone, in memory: the log set fresh to 19, 14 to 19 and 18 to 19;
+  the reference set fresh to 3 and 1 to 3. That is Codex's proof, not mine.
+- **The 22 down files are SQLite's** (log and reference). `internal/cloud` has 8 of its own,
+  with separate tests; they are SM Cloud's and are not part of this removal.
+- **The rollback copy's chain:** `stripLegacyForwarderFieldsAfterSeed` calls
+  `ensureV5RecoveryCopy` (`cmd/smd/config_v6_strip.go:51`), which calls `v5RecoverySource`
+  and `DowngradeDocument`; the bytes it copies are captured at start (`configAtStart`,
+  `cmd/smd/main.go:263` to `lifecycle_adapters.go:85`). The tooling's removal takes the producer of the
+  copy and what only it used, and **keeps the strip** and the rule that the Home archive's
+  seed commits before it. A `config.v5.json` that already exists is left where it is.
+- **A helper chain the word "downgrade" did not find:** `config_downgrade_v6.go` calls
+  `archive.ReadHomeBindings`, which calls `HomeFile` and `sqlite.PeekDestinationBindings`.
+  `ReadHomeBindings` and `HomeFile` have no other production caller and go.
+  `PeekDestinationBindings` is also used by `cmd/smd/restore.go:281` and **stays**; of what
+  it returns, `CollapseTargets` and `IdentityStamped` (with `peekCollapseTargets` and
+  `peekIdentityStamped`) are read only by the path being removed, and go.
+- **`cmd/smd/provision_entry_test.go`** names the two subcommands in its routing cases
+  (`:73`, `:74`); those cases go, the file stays.
+- **Mixed test files are edited, not deleted:** a file that holds both a down-migration
+  test and a test of restore, of a constraint or of a forward upgrade keeps the latter.
+
+### C2e part 2 — the tests moved onto the supported mode (built 2026-11-18; reviewed; committed on direction; no product behaviour changed)
+
+Part 2 of the C2e brief: every test that does not exist for the "off" state now runs as the
+desktop app does, so that part 3 can remove the switch without the suite depending on it.
+Reviewed by Codex in three steps, each with its own gate (FT8: codex-153; API: codex-157;
+daemon: codex-159). Committed on the operator's direction ("commit and push part 2").
+
+**What was built.**
+- **`internal/ft8`.** The eighteen plain commands that named no app lifetime, and plain
+  `ArmTx`, left the production files (`operating.go`, `servicetx.go`); nothing in production
+  called them. The tests keep them as wrappers that name one fixture lifetime
+  (`fixture_owned_test.go`). The shared test service is owned and present; a test of "no
+  operator" builds the bare one. The four safety outcomes that had been tested through the
+  old linger are kept and now tested on presence: eviction through the real stream handler;
+  loss while capture is down; a return inside the grace; and a profile claim after the arm
+  ends.
+- **`internal/api`.** A fixture app (`fixture_app_test.go`): a valid lifetime, a credential,
+  the real admission, the app listener's mark and TLS state. Handler tests, the real-listener
+  tests and the WebSocket tests run through it. The WebSocket origin table is the app
+  listener's rule: only `https` on the app's own address and port is accepted. Refusals by
+  the origin guard are asserted by their code (`cross_origin`), so the check cannot stand in
+  for a broken guard. One test changed its claim: the app's write is found in the station's
+  database and the main listener refuses to serve it.
+- **`cmd/smd`.** The test daemon runs with the check on. An ordinary request (`apiCall`)
+  goes over the app listener, accepting only this install's certificate and presenting its
+  credential; a test of the main listener says so (`mainCall`). There is no fallback from one
+  to the other.
+
+**The request helpers' contract, kept and extended** (`cmd/smd/apicall_test.go`, AC1 to AC9):
+a listener not yet up is waited for; once a request may have reached the daemon it is never
+sent again; a response cut short is an error. AC6 to AC8 hold the app transport to it,
+including that a listener with another certificate is sent nothing. AC9 holds the aggregate
+POST of the reconcile tests to it: Codex found that helper still replaying a completed POST
+after a dropped response (codex-158, P2), reproduced it, and confirmed the fix against the
+same reproduction (codex-159).
+
+**Two fixtures that are not what they look like, named in the code.** `appSocketPlain` is a
+plain socket with a modelled TLS state, for the one shutdown test whose connection double
+must read the server's plaintext; it is no evidence about TLS or the origin rule's scheme.
+Three stream tests serve from a private mux outside the handler chain, as they did before.
+
+**Measured.** With part 3 simulated in a temporary copy (the check forced on, FT8 ownership
+forced required), the tests that fail are those of the off state and no others: 3 in
+`internal/ft8`, 6 in `internal/api`, 4 in `cmd/smd`. Before their steps the same simulation
+failed 78 in `internal/api` and 24 in `cmd/smd`.
+
+**Two daemon tests pinned to the off state, and their ruling.** The behaviour exists only
+there: a busy app port that does not stop the station
+(`TestDesktopListener_ABusyAppPortNeverStopsTheStation`) and the app listener never taking
+the main listener's port (`TestDesktopListener_NeverTakesTheBrowserListenersPort`). With the
+check on, both situations end the start, which the on-state tests cover. **Ruled by the
+operator, 2026-11-18: "delete both tests in part 3".**
+
+**Proofs.** Reversions in temporary copies, each confirmed applied: the four FT8 outcomes
+(the return inside the grace needs all three of its guards reverted to fail); the shared
+request loop retrying every error (AC2, AC7, AC8 fail); the aggregate POST retrying every
+error (AC9 fails); the certificate pin removed (AC8 fails); a body-read error discarded (AC3,
+AC9 fail). The API step changed assertions only where the
+supported rule differs, and Codex required no reversion proofs for it (codex-157).
+
+**Not shown by part 2.** Nothing about a real install: no product behaviour changed, and the
+station was not touched. The switch still exists and still defaults as before. The
+always-on state is simulated, not built; it is part 3.

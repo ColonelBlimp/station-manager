@@ -170,12 +170,11 @@ func TestListStationEvents_LimitBoundsAndValidates(t *testing.T) {
 
 // Ruling 4: GET /v1/notifications is retired at the router; the POST survives.
 func TestStationEvents_OldGetRouteIsRetiredAndThePostSurvives(t *testing.T) {
-	srv := testServer(t)
+	srv := appTestServer(t, nil, nil)
 	viaRouter := func(path string) int {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
-		req.Host = "127.0.0.1:8080" // loopback: passes the Host allowlist (ST-1) that wraps the mux
 		w := httptest.NewRecorder()
-		srv.httpServer.Handler.ServeHTTP(w, req)
+		serveAsApp(srv, w, req)
 		return w.Code
 	}
 	if code := viaRouter("/v1/station-events"); code != http.StatusOK {
@@ -186,10 +185,9 @@ func TestStationEvents_OldGetRouteIsRetiredAndThePostSurvives(t *testing.T) {
 	}
 	req := httptest.NewRequest(http.MethodPost, "/v1/notifications",
 		strings.NewReader(`{"kind":"export.adif_failed","count":1,"outcome":"server"}`))
-	req.Host = "127.0.0.1:8080"
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	srv.httpServer.Handler.ServeHTTP(w, req)
+	serveAsApp(srv, w, req)
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("POST /v1/notifications via the router: status = %d, want 204; body=%s", w.Code, w.Body.String())
 	}

@@ -261,8 +261,9 @@ func (c *stalledSSEClient) release() {
 	}
 }
 
-// F3 — THE TEARDOWN IS UNCHANGED: an evicted LAST subscriber still disarms TX
-// after the linger. The operator's explicit ruling, and the rule that must fail if
+// F3 — THE TEARDOWN IS UNCHANGED: an evicted stream of the operator's still disarms TX
+// after the grace. (W-0027 C2e: the stream is the current lifetime's, its loss is the
+// presence rule's, and the handler's own exit is still what ends it.) The operator's explicit ruling, and the rule that must fail if
 // someone later decides eviction should be exempt. TX running behind a dead
 // display is the outcome being refused.
 //
@@ -282,6 +283,10 @@ func TestFt8HubEviction_EvictedLastSubscriberStillDisarmsTx(t *testing.T) {
 	s := newService(types.Ft8Config{Enabled: true, TX: &types.Ft8TXConfig{}}, logging.Noop(), src)
 	s.newPlayer = func(string, int) (txPlayer, error) { return newFakeTxPlayer(), nil }
 	s.SetTxKeyer(&fakeKeyer{})
+	// The operator's presence is the stream the real handler opens below, and only that:
+	// the handler reads the request's lifetime as the daemon's own server gives it.
+	ownAbsent(s)
+	s.SetStreamLifetime(func(*http.Request) string { return fixtureLife })
 	require.NoError(t, s.Initialize())
 	require.NoError(t, s.Start(context.Background()))
 	t.Cleanup(func() { _ = s.Stop() })
@@ -297,6 +302,11 @@ func TestFt8HubEviction_EvictedLastSubscriberStillDisarmsTx(t *testing.T) {
 	// The real handler has subscribed and capture is up.
 	require.Eventually(t, func() bool { return src.startCount() == 1 }, 2*time.Second, 5*time.Millisecond,
 		"fixture: the SSE handler must have subscribed, or nothing below is exercised")
+	// BARRIER (codex-152): capture starts before the subscription records its lifetime
+	// (SubscribeModeAs), so a running capture does not yet mean the operator is present.
+	// Wait for the handler's own stream to count; arming before it does is refused.
+	require.Eventually(t, func() bool { return s.presence.has(fixtureLife) }, 2*time.Second, time.Millisecond,
+		"fixture: the handler's stream must be the operator's presence before TX is armed")
 	require.NoError(t, s.ArmTx(true))
 	armed := func() bool { s.txMu.Lock(); defer s.txMu.Unlock(); return s.txArmed }
 	require.True(t, armed(), "fixture: TX must be armed, or this rule proves nothing")
@@ -336,11 +346,18 @@ func TestFt8HubEviction_EvictedLastSubscriberStillDisarmsTx(t *testing.T) {
 	}
 
 	require.Eventually(t, func() bool { return !armed() }, 2*time.Second, 5*time.Millisecond,
-		"an evicted last subscriber must still disarm TX past the linger — the enforced "+
-			"proxy is a FUNCTIONING subscription, not an open tab")
+		"an evicted operator's stream must still disarm TX past the grace — the enforced "+
+			"proxy is a FUNCTIONING subscription, not an open view")
+	require.Equal(t, disarmUnattended, s.disarmCauseNow())
 }
 
-// F5 — THE RECONNECT-RACED-THE-TIMER GUARD. service.go:394 documents it: "the
+// F5 — THE RECONNECT-RACED-THE-TIMER GUARD OF THE LINGER, and a probe of the grace's
+// decision. The linger's callback now keeps only the capture; it is entered here with a
+// subscriber already present, which is the state it finds when it fired first and the
+// reconnect landed before it took the lock. For TX, the boundary is the presence rule's
+// (W-0027 C4b) and its evidence is TestPresence_AQueuedDecisionIsForOneAbsenceOnly; what
+// this test adds there is only the predicate probe marked below.
+// The linger's guard is the older one: service.go documents it: "the
 // subCount re-check makes it robust against a reconnect that raced the timer
 // (onSubscriberAdded stops the timer, but if it HAD ALREADY FIRED we still see the
 // new subscriber here and keep the session)."
@@ -360,25 +377,33 @@ func TestFt8HubEviction_ReconnectRacingTheFiredTimerKeepsTx(t *testing.T) {
 	s := newService(types.Ft8Config{Enabled: true, TX: &types.Ft8TXConfig{}}, logging.Noop(), src)
 	s.newPlayer = func(string, int) (txPlayer, error) { return newFakeTxPlayer(), nil }
 	s.SetTxKeyer(&fakeKeyer{})
+	ownAbsent(s) // the operator's presence is the stream opened below, and only that
 	require.NoError(t, s.Initialize())
 	require.NoError(t, s.Start(context.Background()))
 	t.Cleanup(func() { _ = s.Stop() })
 
-	_, unsub := s.Subscribe()
+	unsub := stream(t, s, fixtureLife)
 	t.Cleanup(unsub)
 	require.Eventually(t, func() bool { return src.startCount() == 1 }, time.Second, 5*time.Millisecond)
 	require.NoError(t, s.ArmTx(true))
 	armed := func() bool { s.txMu.Lock(); defer s.txMu.Unlock(); return s.txArmed }
 	require.True(t, armed(), "fixture: TX must be armed")
 
-	// The subscriber above IS the reconnect that landed while the callback was in
-	// flight. Entering the callback now models the timer having already fired.
-	s.onLingerExpired()
+	// A PROBE OF ONE PREDICATE, not the fired-timer sequence (codex-152). With the
+	// operator's stream open, a decision naming this arm and the CURRENT grace must do
+	// nothing: that isolates the decision's own look at open streams. It is not what a
+	// decision that really fired before a reconnect would carry (the reconnect moves the
+	// grace on, and that alone would stop it). The real sequence, an expiry queued at the
+	// gate, a reconnect, then the gate released, is
+	// TestPresence_AQueuedDecisionIsForOneAbsenceOnly.
+	s.onPresenceLost(fixtureLife, s.armGenNow(), s.presence.graceNow())
+	require.True(t, armed(), "a loss decision disarmed while the operator's stream is open")
 
-	require.True(t, armed(),
-		"onLingerExpired must not disarm when a subscriber is present — the timer fired "+
-			"but the operator came back before it looked, and Timer.Stop cannot help once "+
-			"the callback is already running")
+	// The linger's own guard, which still keeps the capture: with a subscriber present it
+	// releases nothing.
+	s.onLingerExpired()
+	require.True(t, armed())
+	require.Zero(t, src.stopCount(), "the linger released the capture under a present subscriber")
 }
 
 // F4 — ...AND A REAL RECONNECT INSIDE THE LINGER STILL PREVENTS IT. The other half,
@@ -389,33 +414,27 @@ func TestFt8HubEviction_ReconnectRacingTheFiredTimerKeepsTx(t *testing.T) {
 // skipping the linger entirely — would satisfy F3 while breaking every ordinary
 // browser reload.
 //
-// ITS PROOF NEEDS A DOUBLE REVERT, and that is a property of the code, not a
-// weakness in the rule — but read the correction below before drawing conclusions
-// from it. TWO mechanisms keep a reconnect from being torn down: onSubscriberAdded
-// stops the pending timer, and onLingerExpired re-checks subCount before
-// disarming. Removing either ALONE leaves THIS test green (measured — both single
-// reverts failed to challenge it); only removing both turns it red.
-//
-// CORRECTION, after review: that does NOT mean the two are interchangeable, and an
-// earlier version of this comment implied they were. They cover DIFFERENT
-// interleavings, and F4 can only ever reach the first. Its reconnect is immediate,
-// so Timer.Stop always wins and the subCount guard is never consulted. The guard
-// exists for the case where the timer had ALREADY FIRED before the reconnect
-// landed — service.go:394 says so — which Stop cannot help with, because the
-// callback is already running. **F5 covers that case and proves the guard on its
-// own.** So: do not read a green F4 after touching the guard as evidence the guard
-// is dead code; run F5.
+// ITS PROOF NEEDS A TRIPLE REVERT, and that is a property of the code, not a weakness in
+// the rule. Under presence (W-0027 C4b) three things keep a returning operator from being
+// torn down: a returning stream stops the pending grace; the grace's expiry looks again for
+// an open stream; and the decision, made outside every lock, asks once more before it
+// disarms (presence.go: open, expire, lossStands). Removing any one or two leaves THIS
+// test green (measured, C2e part 2); only removing all three turns it red. They cover
+// different interleavings, and this test's reconnect is immediate, so the first always
+// wins here. F5 enters the decision directly and proves the last on its own: do not read
+// a green F4 after touching one of them as evidence that it is dead code; run F5.
 func TestFt8HubEviction_ReconnectInsideLingerPreventsDisarm(t *testing.T) {
 	withShortLinger(t, 250*time.Millisecond)
 	src := newFakeSource()
 	s := newService(types.Ft8Config{Enabled: true, TX: &types.Ft8TXConfig{}}, logging.Noop(), src)
 	s.newPlayer = func(string, int) (txPlayer, error) { return newFakeTxPlayer(), nil }
 	s.SetTxKeyer(&fakeKeyer{})
+	ownAbsent(s) // the operator's presence is the streams opened below, and only those
 	require.NoError(t, s.Initialize())
 	require.NoError(t, s.Start(context.Background()))
 	t.Cleanup(func() { _ = s.Stop() })
 
-	_, unsub := s.Subscribe()
+	unsub := stream(t, s, fixtureLife)
 	require.Eventually(t, func() bool { return src.startCount() == 1 }, time.Second, 5*time.Millisecond)
 	require.NoError(t, s.ArmTx(true))
 	armed := func() bool { s.txMu.Lock(); defer s.txMu.Unlock(); return s.txArmed }
@@ -424,8 +443,8 @@ func TestFt8HubEviction_ReconnectInsideLingerPreventsDisarm(t *testing.T) {
 	overflowFt8Hub(s.hub)
 	unsub()
 
-	// The browser reconnects well inside the window.
-	_, unsub2 := s.Subscribe()
+	// The app's stream reconnects well inside the grace.
+	unsub2 := stream(t, s, fixtureLife)
 	t.Cleanup(unsub2)
 
 	// Past the point the teardown would have fired had it not been cancelled.

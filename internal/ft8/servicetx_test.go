@@ -122,7 +122,17 @@ func (p *fakeTxPlayer) plays() int  { p.mu.Lock(); defer p.mu.Unlock(); return p
 // exercise the TX gate + lifecycle, not capture, so base() falls back to
 // context.Background() and the transmit goroutine simply waits for the slot
 // boundary until disarm cancels it (no 15 s wait is ever awaited).
+//
+// The service is operated by fixtureLife with its one stream open (fixture_owned_test.go):
+// that is the state in which FT8 can be armed at all. newBareTxTestService is the same
+// service with no operator, for a test that builds another state on purpose.
 func newTxTestService(keyer TxKeyer, player txPlayer, playerErr error) *Service {
+	s := newBareTxTestService(keyer, player, playerErr)
+	own(s)
+	return s
+}
+
+func newBareTxTestService(keyer TxKeyer, player txPlayer, playerErr error) *Service {
 	s := newService(types.Ft8Config{Enabled: true, TX: &types.Ft8TXConfig{}}, logging.Noop(), nil)
 	s.newPlayer = func(string, int) (txPlayer, error) {
 		if playerErr != nil {
@@ -259,7 +269,7 @@ func TestStartWorkCaller_Gating(t *testing.T) {
 		require.NoError(t, s.ArmTx(true))
 		require.NoError(t, s.StartWorkCaller("7Q5MLV", "K1ABC", "FN42", -12, now, 1500, 14.074, 1, false, ""))
 		require.True(t, s.seq.Active(), "an armed work-a-caller start commits a session")
-		s.AbandonQso()
+		abandonQso(t, s)
 	})
 }
 
@@ -278,7 +288,7 @@ func TestTransmitNext_RefusedWhileSessionActive(t *testing.T) {
 	require.False(t, s.txInFlightNow(), "the caller's CQ has not keyed yet (next slot)")
 
 	require.ErrorIs(t, s.TransmitNext("CQ G0XYZ IO91", 1600), ErrQsoInProgress)
-	s.AbandonQso()
+	abandonQso(t, s)
 }
 
 // TestStartSession_RefusedWhileManualSendInFlight: the reverse exclusion. A manual
@@ -438,7 +448,7 @@ func TestAbandonQso_CancelsInFlightTransmission(t *testing.T) {
 	st := drainTxState(t, ch, func(st TxState) bool { return st.Transmitting })
 	require.True(t, st.Transmitting)
 
-	s.AbandonQso() // operator hits Abandon mid-transmission
+	abandonQso(t, s) // operator hits Abandon mid-transmission
 
 	inFlight := func() bool { s.txMu.Lock(); defer s.txMu.Unlock(); return s.txInFlight }
 	require.Eventually(t, func() bool { return !inFlight() }, time.Second, 5*time.Millisecond,
@@ -546,14 +556,14 @@ func TestStartQso_RejectedStartKeepsExchangePath(t *testing.T) {
 	// fireOpening declines to fire (no TX goroutine — deterministic test).
 	theirSlot := ProfileFT8.slotStart(time.Now().UTC()).Format(time.RFC3339)
 	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42", theirSlot, 1500, 14.074, 1, false, ""))
-	s.SetExchangePath("L") // operator picks long path for the ACTIVE exchange
+	setExchangePath(t, s, "L") // operator picks long path for the ACTIVE exchange
 
 	err := s.StartQso("G0XYZ", "IO91", "W1AW", "FN31", theirSlot, 1500, 14.074, 1, false, "")
 	require.Error(t, err, "second start while a QSO is active is rejected")
 	require.Equal(t, antPathLong, s.exchangePathForTest(),
 		"a rejected start must not reset the active exchange's path")
 
-	s.AbandonQso()
+	abandonQso(t, s)
 }
 
 // TestOnComplete_UsesStampThenResetsPath pins review 2026-07-20 #5 (caller-mode
@@ -565,7 +575,7 @@ func TestOnComplete_UsesStampThenResetsPath(t *testing.T) {
 	logged := make(chan CompletedQso, 1)
 	s.SetQsoLogger(func(_ context.Context, c CompletedQso) { logged <- c })
 
-	s.SetExchangePath("L")
+	setExchangePath(t, s, "L")
 	c := CompletedQso{TheirCall: "K1ABC"}
 	s.stampCompletionPath(&c) // taken at the successful final-rung boundary
 	s.seq.onComplete(c)
@@ -590,7 +600,7 @@ func TestOnComplete_StampSurvivesLivePathReset(t *testing.T) {
 	logged := make(chan CompletedQso, 1)
 	s.SetQsoLogger(func(_ context.Context, c CompletedQso) { logged <- c })
 
-	s.SetExchangePath("L")
+	setExchangePath(t, s, "L")
 	c := CompletedQso{TheirCall: "K1ABC"}
 	s.stampCompletionPath(&c) // final rung succeeds with the operator's long-path choice
 
@@ -620,8 +630,8 @@ func TestOnComplete_DoesNotClearNewerPathSelection(t *testing.T) {
 	old := CompletedQso{TheirCall: "K1ABC"}
 	s.stampCompletionPath(&old) // old contact used the default short path
 
-	s.consumeExchangePath() // accepted new-session start resets the live value
-	s.SetExchangePath("L")  // operator selects long path for the new contact
+	s.consumeExchangePath()    // accepted new-session start resets the live value
+	setExchangePath(t, s, "L") // operator selects long path for the new contact
 
 	s.seq.onComplete(old)
 	select {
@@ -642,11 +652,11 @@ func TestOnComplete_PerQsoStampsDoNotOverwrite(t *testing.T) {
 	logged := make(chan CompletedQso, 2)
 	s.SetQsoLogger(func(_ context.Context, c CompletedQso) { logged <- c })
 
-	s.SetExchangePath("L")
+	setExchangePath(t, s, "L")
 	first := CompletedQso{TheirCall: "K1ABC"}
 	s.stampCompletionPath(&first)
 
-	s.SetExchangePath("S")
+	setExchangePath(t, s, "S")
 	second := CompletedQso{TheirCall: "W1AW"}
 	s.stampCompletionPath(&second)
 
@@ -701,7 +711,7 @@ func TestCompletionRace_PreservesNewPathAndStatus(t *testing.T) {
 	epoch := time.Unix(0, 0).UTC()
 	require.NoError(t, s.seq.StartQso("G0XYZ", "IO91", "K1ABC", "FN42",
 		epoch.Format(time.RFC3339), 1500, 14.074, epoch))
-	s.SetExchangePath("L")
+	setExchangePath(t, s, "L")
 	driveTheir(s.seq, 30, []goft8.DecodedMessage{dm("CQ K1ABC FN42", -1)})
 	driveTheir(s.seq, 60, []goft8.DecodedMessage{dm("G0XYZ K1ABC -10", -12)})
 	driveTheir(s.seq, 90, []goft8.DecodedMessage{dm("G0XYZ K1ABC RR73", -11)})
@@ -724,7 +734,7 @@ func TestCompletionRace_PreservesNewPathAndStatus(t *testing.T) {
 	newSlot := ProfileFT8.slotStart(time.Now().UTC()).Format(time.RFC3339)
 	startErr := s.StartQso("G0XYZ", "IO91", "W1AW", "FN31", newSlot, 1600, 14.074, 2, false, "")
 	if startErr == nil {
-		s.SetExchangePath("L")
+		setExchangePath(t, s, "L")
 	}
 	close(release)
 	select {
@@ -760,7 +770,7 @@ func TestCompletionRace_PreservesNewPathAndStatus(t *testing.T) {
 func TestExchangePath_ConsumeAndRestore(t *testing.T) {
 	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
 
-	s.SetExchangePath("L")
+	setExchangePath(t, s, "L")
 	p, gen := s.consumeExchangePath()
 	require.Equal(t, antPathLong, p, "consume returns the choice")
 	require.Equal(t, antPathShort, s.exchangePathForTest(), "consume clears back to the default")
@@ -774,14 +784,14 @@ func TestExchangePath_ConsumeAndRestore(t *testing.T) {
 	// selection landing between consume and restore must WIN over the restore.
 	p3, gen3 := s.consumeExchangePath()
 	require.Equal(t, antPathLong, p3)
-	s.SetExchangePath("S") // operator's newer selection, mid-window
+	setExchangePath(t, s, "S") // operator's newer selection, mid-window
 	s.restoreExchangePath(antPathLong, gen3)
 	require.Equal(t, antPathShort, s.exchangePathForTest(),
 		"a stale long-path restore must not overwrite a newer selection")
 
-	s.SetExchangePath("L") // and a short-path restore is always a no-op
+	setExchangePath(t, s, "L") // and a short-path restore is always a no-op
 	_, gen4 := s.consumeExchangePath()
-	s.SetExchangePath("L")
+	setExchangePath(t, s, "L")
 	s.restoreExchangePath(antPathShort, gen4)
 	require.Equal(t, antPathLong, s.exchangePathForTest(),
 		"a short-path restore never clobbers a selection")
@@ -850,7 +860,7 @@ func TestSeqTransmit_RefusesWhenTheRigLeftTheSessionsDial(t *testing.T) {
 		require.NotErrorIs(t, s.seqTransmit("CQ 7Q5MLV IO91", 1500, 14.074, gen, nil),
 			ErrTxSuperseded, "a settled dial must not block the rung")
 		require.True(t, s.seq.Active(), "a matching dial leaves the session alone")
-		s.AbandonQso()
+		abandonQso(t, s)
 	})
 
 	t.Run("session started AFTER the QSY is left alone", func(t *testing.T) {
@@ -877,7 +887,7 @@ func TestSeqTransmit_RefusesWhenTheRigLeftTheSessionsDial(t *testing.T) {
 			ErrTxSuperseded, "this session was pinned to the new dial; nothing moved under it")
 		require.True(t, s.seq.Active(),
 			"a session started on the new dial must survive — killing it was the P1")
-		s.AbandonQso()
+		abandonQso(t, s)
 	})
 
 	t.Run("no CAT: the guard is inert, the keyer owns readiness", func(t *testing.T) {
@@ -890,7 +900,7 @@ func TestSeqTransmit_RefusesWhenTheRigLeftTheSessionsDial(t *testing.T) {
 
 		require.NotErrorIs(t, s.seqTransmit("K1ABC 7Q5MLV FN42", 1500, 14.074, gen, nil),
 			ErrTxSuperseded, "an unreadable dial must not become a new way to block TX")
-		s.AbandonQso()
+		abandonQso(t, s)
 	})
 }
 
@@ -1041,7 +1051,7 @@ func TestTransmitNext_RefusedWhenTheDialCannotBeRead(t *testing.T) {
 	s2 := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil) // no dial source
 	require.NoError(t, s2.ArmTx(true))
 	require.NotErrorIs(t, s2.TransmitNext("CQ 7Q5MLV IO91", 1500), ErrTxDialUnknown)
-	s2.AbandonQso()
+	abandonQso(t, s2)
 	_ = s2.ArmTx(false)
 }
 
@@ -1075,7 +1085,7 @@ func TestPreKeyDialCheck(t *testing.T) {
 		s.SetDialSource(func() (float64, bool) { return dial, true })
 		require.NoError(t, s.ArmTx(true))
 		require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", "", 1, ""))
-		s.AbandonQso()
+		abandonQso(t, s)
 
 		require.NoError(t, s.preKeyDialCheck(),
 			"still on the armed frequency — ending a session does not un-bind the arm")
@@ -1094,7 +1104,7 @@ func TestPreKeyDialCheck(t *testing.T) {
 
 		dial = 7.074
 		require.ErrorIs(t, s.preKeyDialCheck(), ErrTxSuperseded)
-		s.AbandonQso()
+		abandonQso(t, s)
 	})
 
 	t.Run("active session still on its dial: proceed", func(t *testing.T) {
@@ -1104,7 +1114,7 @@ func TestPreKeyDialCheck(t *testing.T) {
 		require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", "", 1, ""))
 
 		require.NoError(t, s.preKeyDialCheck())
-		s.AbandonQso()
+		abandonQso(t, s)
 	})
 }
 
@@ -1212,7 +1222,7 @@ func TestStartTransmission_DialRefusalRetiresTheSession(t *testing.T) {
 		case <-time.After(300 * time.Millisecond):
 		}
 		require.True(t, s.seq.Active(), "the session survives a transient transmit failure")
-		s.AbandonQso()
+		abandonQso(t, s)
 	})
 }
 
