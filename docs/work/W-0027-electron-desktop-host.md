@@ -178,6 +178,16 @@ design before code.
   (`vite preview`) is removed with part 3, as its dev server was. Part 3 is committed and
   pushed on this direction; the Fox notes (the inbox entry and the discussion record's
   pointer) are not in that commit.
+- **2026-11-19 (operator): "refusal, item 2 agreed".** Asked two things about the follow-up
+  to part 3's review (its section, below). One: a `config.json` whose main listener already
+  holds the desktop app's endpoint (`127.0.0.1` and the app's port) is **refused at load**,
+  not warned about. Two: a host name in `socket_path` (`localhost:8443`) is **not judged by
+  the validation** and is left to the bind, which stops the daemon with its own message if
+  the two collide.
+- **2026-11-19 (operator): "commit and push the follow-up and the Fox notes after CI".** The
+  follow-up to part 3's review is committed and pushed once the hosted run on 8cccbd09 has
+  given its verdict (a newer push cancels a running one), and the Fox notes go in their own
+  documents commit.
 
 ## Open questions for the operator
 
@@ -4005,3 +4015,41 @@ working tree.**
   after a registered type it has no entry of cannot seed an unseeded Home. The station's
   Home is seeded. **Closed by the operator, 2026-11-19 (Rulings): it cannot happen. There
   are no installs but the operator's, and the one other known is handled by hand.**
+
+**Committed 8cccbd09 on direction (2026-11-19: "README approved, remove preview, commit and
+push part 3") and pushed. Hosted run 44462965649 on it: success.** Its clean-room review gave
+two findings; the follow-up below was reviewed in the exchange (codex-166, codex-167) and is
+committed on direction ("commit and push the follow-up and the Fox notes after CI").
+- **[P1] "A listener conflict can take a working station offline on upgrade": the upgrade
+  case is closed by the ruling on other installs; the rule behind it was wrong and is
+  fixed.** The review's case is an existing install whose main listener sits on 8443 with
+  the check off, which is not owed compatibility. What it showed holds for any install from
+  here on: a `config.json` whose desktop app listener shares the main listener's port was
+  only a *warning* (`app_port_conflict`), so the file loaded and `smd config-check` passed,
+  and the daemon then stopped at the bind. The warning dated from when a failed app
+  listener was only reported ("reported until C2, fatal after", 2026-11-10); part 3 made
+  the failure fatal and left the warning behind. **Now a refusal:** the file is refused at
+  load, and so by `smd config-check`, with a message naming the port, `server.app_port` and
+  `socket_path`. (The two settings are file-only: the config API neither shows nor accepts
+  them.) Tests first and seen to fail (the two validation rows, and a load of each
+  conflicting file); a file with separate ports is the control.
+  - **Corrected in review (codex-166, P2): my first refusal compared only the port
+    numbers,** so it turned away files that do not conflict, such as a main listener on
+    `127.0.0.2:8443` or `[::1]:8443` beside the app's `127.0.0.1:8443`. The rule is now the
+    endpoint: the same port on `127.0.0.1` (also written `::ffff:127.0.0.1`) or on every
+    address (no host, `0.0.0.0`, `[::]`). The same port on any other address is no
+    conflict. A host name is not judged and is left to the bind, as is a port another
+    program holds. Measured on free ports before the change and held by a test that binds
+    each kind of address and requires the validation to agree with the second bind
+    (`TestAppPort_TheRuleAgreesWithARealBind`). Seen to fail both ways: the port-only rule
+    fails the other-address cases, and a rule that knows only `127.0.0.1` fails the
+    every-address cases. `docs/v2-design/config.md` said of the conflict "and
+  the station starts", which part 3 had made false and I had not corrected; corrected.
+- **[P2] "The v7 migration can change the configured default logbook ID": true of the
+  mechanism, no change.** A migrated document's numbers pass through `float64`, exact up to
+  2^53 and rounded above it, as in every step since version 1 to 2. Codex showed it through
+  the loader (codex-166): a version 6 file holding 9007199254740993 loads as …992, and the
+  same file at version 7 keeps it. Nothing in the code keeps the file's 64-bit integers
+  (`default_logbook_id`, the rig ids, `max_body_bytes`) under that size; it is left as it
+  is on the assumption that none is ever that large. I first wrote "not reachable", which
+  claimed more than that. The assumption is stated in a comment at `migrateDocument`.

@@ -304,9 +304,12 @@ Every loaded or API-mutated candidate is normalized, then passed to
 `internal/config/validate.go`; important operator-facing groups are:
 
 - listener protocol, positive HTTP limits, page-limit ordering, and network
-  posture; an `app_port` outside 0–65535 blocks, while one equal to the browser listener's TCP
-  port is only a warning (`app_port_conflict`): the app listener's bind then fails and is
-  reported, and the station starts;
+  posture; an `app_port` outside 0–65535 blocks, and so does a TCP main listener that already
+  holds the desktop app's endpoint, `127.0.0.1` and that port (`app_port_conflict`): the same
+  port on `127.0.0.1` or on every address (no host, `0.0.0.0`, `[::]`). The daemon serves only
+  the desktop app, so it could not stay up where its app listener cannot bind. The same port
+  number on another address (`127.0.0.2`, `[::1]`) is no conflict; a host name is not judged
+  here and is left to the bind;
 - unique positive rig IDs, known rig models, a `default_rig_id` that is `0` or resolves, and
   valid ADIF mode mappings;
 - registered and usable forwarders, lookup ordering/policy, SMTP, PSK Reporter,

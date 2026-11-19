@@ -451,6 +451,13 @@ func nestedString(doc map[string]any, keys ...string) string {
 // error (downgrade is not supported). A document already at the current version
 // is returned unchanged.
 func migrateDocument(data []byte) ([]byte, error) {
+	// Numbers pass through float64 here, as they have for every step since v1→v2: exact for
+	// any integer up to 2^53, and rounded above it. So a file below the head version that
+	// holds a larger integer loads with it rounded (a file at the head is returned as read).
+	// Nothing in the code keeps the file's 64-bit integers (default_logbook_id, the rig ids,
+	// max_body_bytes) under that size; it is left so on the assumption that none is ever
+	// that large: a row id counted from 1, ids an operator numbers, a byte limit
+	// (clean-room review of 8cccbd09, 2026-11-19).
 	var doc map[string]any
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("parsing config document: %w", err)

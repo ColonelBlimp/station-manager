@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"net/netip"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -846,7 +847,8 @@ func validateQsoArchives(cfg Config) []Finding {
 }
 
 // validateAppPort checks server.app_port (ADR 0103 point 2): an explicit value outside 1-65535
-// is refused like any invalid setting; sharing the browser listener's port is a warning.
+// is refused like any invalid setting, and so is a main listener that already holds the
+// desktop app's endpoint.
 func validateAppPort(cfg Config) []Finding {
 	s := cfg.Server
 	if s.AppPort < 0 || s.AppPort > 65535 {
@@ -857,13 +859,45 @@ func validateAppPort(cfg Config) []Finding {
 	if s.Protocol != "tcp" {
 		return nil
 	}
-	if _, p, err := net.SplitHostPort(cfg.SocketPath); err == nil && p == strconv.Itoa(s.EffectiveAppPort()) {
-		// A warning, not a refusal: before C2 nothing about the app listener stops the station
-		// (operator rulings 2026-11-10/11). The listener's bind then fails and is reported.
-		return []Finding{{Field: "server.app_port", Code: "app_port_conflict", Warning: true,
-			Message: fmt.Sprintf("server.app_port %d is the browser listener's port (%s); "+
-				"the desktop app listener will not start until it has its own",
-				s.EffectiveAppPort(), cfg.SocketPath)}}
+	if mainListenerHoldsAppEndpoint(cfg.SocketPath, s.EffectiveAppPort()) {
+		// A refusal. smd serves only the desktop app, so a daemon whose app listener cannot
+		// bind does not stay up (W-0027 C2e): the conflict is named here, at load and by
+		// `smd config-check`, and not left to a failed bind after the start. It was a warning
+		// while that failure was only reported (rulings 2026-11-10/11: "reported until C2,
+		// fatal after").
+		return []Finding{{Field: "server.app_port", Code: "app_port_conflict",
+			Message: fmt.Sprintf("server.app_port %d: the main listener (socket_path %s) already holds "+
+				"127.0.0.1:%d, where the desktop app's listener binds; smd serves only the desktop app "+
+				"and cannot start until the two are apart", s.EffectiveAppPort(), cfg.SocketPath,
+				s.EffectiveAppPort())}}
 	}
 	return nil
+}
+
+// mainListenerHoldsAppEndpoint reports whether a TCP main listener on socketPath is certain
+// to hold 127.0.0.1:appPort, the one endpoint the desktop app's listener binds (api.BindApp).
+// That is the same port on 127.0.0.1 itself, or on every address: no host, 0.0.0.0 or [::]
+// (Go listens on both families for each; measured, and held by
+// TestAppPort_TheRuleAgreesWithARealBind). The same port number on any other address is no
+// conflict (127.0.0.2 and [::1] both bind beside it), and a host name is not judged here:
+// what it resolves to is the bind's to find out, and a collision there stops the daemon
+// with the bind's own message. Nor is a port some other program holds; no check of the
+// file can know that.
+func mainListenerHoldsAppEndpoint(socketPath string, appPort int) bool {
+	host, port, err := net.SplitHostPort(socketPath)
+	if err != nil {
+		return false
+	}
+	if n, err := strconv.Atoi(port); err != nil || n != appPort {
+		return false
+	}
+	if host == "" {
+		return true
+	}
+	addr, err := netip.ParseAddr(host)
+	if err != nil {
+		return false
+	}
+	addr = addr.Unmap()
+	return addr.IsUnspecified() || addr == netip.AddrFrom4([4]byte{127, 0, 0, 1})
 }

@@ -7,6 +7,10 @@ package config
 
 import (
 	"encoding/json"
+	"net"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -54,23 +58,42 @@ func appPortFindings(cfg Config) []Finding {
 
 func TestAppPort_Validation(t *testing.T) {
 	for _, c := range []struct {
-		name   string
-		port   int
-		socket string
-		want   string // "" none, "fatal", "warning"
+		name     string
+		port     int
+		protocol string
+		socket   string
+		want     string // "" none, "fatal"
 	}{
-		{"absent (default)", 0, "127.0.0.1:8080", ""},
-		{"explicit valid", 9443, "127.0.0.1:8080", ""},
-		{"negative", -1, "127.0.0.1:8080", "fatal"},
-		{"above 65535", 70000, "127.0.0.1:8080", "fatal"},
-		// Sharing the browser listener's port never stops the station (the app listener's bind
-		// fails and is reported instead): a warning.
-		{"the browser listener's port", 8080, "127.0.0.1:8080", "warning"},
-		{"the default colliding with the browser listener", 0, "127.0.0.1:8443", "warning"},
+		{"absent (default)", 0, "tcp", "127.0.0.1:8080", ""},
+		{"explicit valid", 9443, "tcp", "127.0.0.1:8080", ""},
+		{"negative", -1, "tcp", "127.0.0.1:8080", "fatal"},
+		{"above 65535", 70000, "tcp", "127.0.0.1:8080", "fatal"},
+		// A main listener that already holds the desktop app's endpoint (127.0.0.1 and the
+		// port) is refused. smd serves only the desktop app, so a daemon whose app listener
+		// cannot bind does not stay up (W-0027 C2e): the conflict is named at load, and by
+		// `smd config-check`, not left to the bind. It was a warning while the app listener's
+		// failure was only reported.
+		{"the main listener's address and port", 8080, "tcp", "127.0.0.1:8080", "fatal"},
+		{"the default colliding with the main listener", 0, "tcp", "127.0.0.1:8443", "fatal"},
+		{"127.0.0.1 written as an IPv4-mapped address", 0, "tcp", "[::ffff:127.0.0.1]:8443", "fatal"},
+		{"every address, no host", 0, "tcp", ":8443", "fatal"},
+		{"every address, 0.0.0.0", 0, "tcp", "0.0.0.0:8443", "fatal"},
+		{"every address, [::]", 0, "tcp", "[::]:8443", "fatal"},
+		// The same port number on an address that is not the app's is no conflict: both bind.
+		{"another IPv4 loopback address", 0, "tcp", "127.0.0.2:8443", ""},
+		{"the IPv6 loopback address", 0, "tcp", "[::1]:8443", ""},
+		{"an explicit port on another address", 9443, "tcp", "127.0.0.2:9443", ""},
+		// A host name's address is known only when it is resolved: left to the bind, which
+		// stops the daemon with its own message if the two do collide.
+		{"a host name", 0, "tcp", "localhost:8443", ""},
+		// A Unix-socket main listener holds no TCP port at all.
+		{"a Unix-socket main listener", 0, "unix", "/run/user/1000/smd-8443.sock", ""},
+		{"a Unix-socket path that looks like an address", 0, "unix", "127.0.0.1:8443", ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			cfg := DefaultConfig(t.TempDir())
 			cfg.Server.AppPort = c.port
+			cfg.Server.Protocol = c.protocol
 			cfg.SocketPath = c.socket
 			got := appPortFindings(cfg)
 			switch {
@@ -79,9 +102,92 @@ func TestAppPort_Validation(t *testing.T) {
 			case c.want != "" && len(got) != 1:
 				t.Fatalf("findings = %+v, want one %s", got, c.want)
 			case c.want == "fatal" && got[0].Warning:
-				t.Errorf("an out-of-range app port is only a warning: %+v", got[0])
-			case c.want == "warning" && !got[0].Warning:
-				t.Errorf("a port shared with the browser listener stops the station: %+v", got[0])
+				t.Errorf("an app port the daemon cannot start on is only a warning: %+v", got[0])
+			}
+		})
+	}
+}
+
+// The conflict stops the load itself, with a message that names the port and both settings,
+// so the operator reads the cause in the refusal and not in a failed bind after the start.
+func TestAppPort_AFileThatSharesThePortIsRefusedAtLoad(t *testing.T) {
+	for name, body := range map[string]string{
+		"the default app port": `{"version":7,"socket_path":"127.0.0.1:8443","server":{"protocol":"tcp"}}`,
+		"an explicit app port": `{"version":7,"socket_path":"127.0.0.1:8080","server":{"protocol":"tcp","app_port":8080}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Load(path)
+			if err == nil {
+				t.Fatal("a file whose desktop app listener shares the main listener's port was loaded")
+			}
+			for _, want := range []string{"app_port_conflict", "server.app_port", "socket_path"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal does not name %q: %v", want, err)
+				}
+			}
+		})
+	}
+}
+
+// Files with no conflict load: separate ports, and the same port number on an address
+// that is not the desktop app's (review, 2026-11-19: the refusal first compared only the
+// port numbers and turned these away).
+func TestAppPort_FilesWithNoConflictLoad(t *testing.T) {
+	for name, body := range map[string]string{
+		"separate ports":                 `{"version":7,"socket_path":"127.0.0.1:8080","server":{"protocol":"tcp","app_port":8443}}`,
+		"the same port on 127.0.0.2":     `{"version":7,"socket_path":"127.0.0.2:8443","server":{"protocol":"tcp","app_port":8443}}`,
+		"the same port on the IPv6 loop": `{"version":7,"socket_path":"[::1]:8443","server":{"protocol":"tcp"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(path); err != nil {
+				t.Fatalf("a file with no listener conflict was refused: %v", err)
+			}
+		})
+	}
+}
+
+// The rule against the operating system, on free ports: a main listener is bound on each
+// kind of address, then 127.0.0.1 with the same port, as api.BindApp binds the desktop
+// app's listener. Where the second bind is refused the validation must refuse too, and
+// where it binds the validation must not. Nothing is served and every listener is closed
+// at once. An address this machine cannot bind (no IPv6, say) is skipped, not passed.
+func TestAppPort_TheRuleAgreesWithARealBind(t *testing.T) {
+	for _, host := range []string{"127.0.0.1", "::ffff:127.0.0.1", "", "0.0.0.0", "::", "127.0.0.2", "::1"} {
+		t.Run("main listener on "+strconv.Quote(host), func(t *testing.T) {
+			probe, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			port := probe.Addr().(*net.TCPAddr).Port
+			_ = probe.Close()
+			socket := net.JoinHostPort(host, strconv.Itoa(port))
+			mainListener, err := net.Listen("tcp", socket)
+			if err != nil {
+				t.Skipf("this machine cannot bind %s: %v", socket, err)
+			}
+			defer func() { _ = mainListener.Close() }()
+			app, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+			bound := err == nil
+			if bound {
+				_ = app.Close()
+			}
+
+			cfg := DefaultConfig(t.TempDir())
+			cfg.Server.Protocol = "tcp"
+			cfg.Server.AppPort = port
+			cfg.SocketPath = socket
+			refused := len(appPortFindings(cfg)) == 1
+			if refused == bound {
+				t.Fatalf("with the main listener on %s the app's bind on 127.0.0.1 succeeded=%v (%v), "+
+					"but the validation refused=%v", socket, bound, err, refused)
 			}
 		})
 	}
