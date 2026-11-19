@@ -366,9 +366,13 @@ async function runScenario(ctx) {
             toPlainSelf.startsWith('refused:') &&
                 genuine.handshakes.failed === plainBefore &&
                 outcomesSince(genuine, connectionsBefore).every((o) => o === 'secure') &&
+                // The fixture's records do settle in this runtime: without one settled
+                // record, a window with no connection in it would prove nothing.
+                outcomesSince(genuine, 0).includes('secure') &&
                 reqFor(genuine, 'm=rg1').length === 0,
             `${toPlainSelf}; failed handshakes ${plainBefore} -> ${genuine.handshakes.failed}; ` +
-                `connections accepted meanwhile: ${JSON.stringify(outcomesSince(genuine, connectionsBefore))}`
+                `connections accepted meanwhile: ${JSON.stringify(outcomesSince(genuine, connectionsBefore))}; ` +
+                `all since the start: ${JSON.stringify(outcomesSince(genuine, 0))}`
         );
         const stays = [
             await redirected(main, '/api/echo?m=rk1'),

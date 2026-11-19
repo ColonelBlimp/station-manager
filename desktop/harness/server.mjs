@@ -76,10 +76,17 @@ export async function startHarness({ up = true, tls = null, tag = 'fixture', por
     // which is what an idle or plain connection stays at. A test reads the records made
     // during its own window, so a handshake that an earlier connection completes meanwhile
     // cannot stand in for a new connection that began none.
+    //
+    // A record is found through the raw socket under the TLS one (`_parent`, which Node sets
+    // but does not document), not through the peer's port: a client that closes before any
+    // handshake gets a TLS error on a socket that no longer has a port, and its record would
+    // stay unsettled while the failed count rose (clean-room review of 92002312). If
+    // `_parent` were ever missing, no record would settle and every reading would be 'none',
+    // which fails a test rather than passing it.
     const connections = [];
-    const byPeer = new Map();
-    const settle = (socket, outcome) => {
-        const c = byPeer.get(socket?.remotePort);
+    const byRawSocket = new WeakMap();
+    const settle = (tlsSocket, outcome) => {
+        const c = byRawSocket.get(tlsSocket?._parent);
         if (c && c.outcome === null) c.outcome = outcome;
     };
     const sockets = new Set();
@@ -287,13 +294,9 @@ export async function startHarness({ up = true, tls = null, tag = 'fixture', por
                 accepts.count += 1;
                 const record = { outcome: null };
                 connections.push(record);
-                const peer = s.remotePort;
-                byPeer.set(peer, record);
+                byRawSocket.set(s, record);
                 sockets.add(s);
-                s.on('close', () => {
-                    sockets.delete(s);
-                    if (byPeer.get(peer) === record) byPeer.delete(peer);
-                });
+                s.on('close', () => sockets.delete(s));
             });
             if (tls) {
                 server.on('secureConnection', (t) => {

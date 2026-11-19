@@ -4363,3 +4363,29 @@ checks by Claude, no request made to the daemon:
   scenario, not by anything read here). The installed build is ahead of what is pushed:
   36f6861d is not on the remote, and the hosted run on 99c9c840 had not finished when this
   was written.
+
+**The per-connection check is committed 92002312, locally, not pushed** (operator: "commit").
+The hosted run 44498126643 on 99c9c840 finished with success (read from the run: its one
+job, the releasability gate, completed with success); it does not cover the two later local
+commits. The clean-room review of 92002312 gave one finding.
+- **[P3] "A TLS error emitted on close goes unrecorded for that connection": true, fixed
+  (the fixture and the scenario; uncommitted).** The fixture found a connection's record by
+  the peer's port. A client that closes before any handshake gets a TLS error on a socket
+  that no longer has a port, so the failed count rose while the record stayed unsettled and
+  read `none`. The check still refused that connection; only its diagnostic disagreed with
+  the count. The record is now found through the raw socket under the TLS one (`_parent`,
+  which Node sets but does not document; the fixture's comment says so). Because an
+  undocumented field could be missing in another runtime, the scenario's check also
+  requires that at least one record has settled to `secure` since the start: without that,
+  a window with no connection in it would prove nothing.
+  *Reproduced with the fixture alone:* connect, close before any TLS; before the fix
+  "failed 0 -> 1; record `["none"]`", after it `["failed"]`. The masking case, a plain-HTTP
+  request and a TLS connection read as before (`["none"]`, `["failed"]`, `["secure"]`).
+  After it: lint, format, 111 unit tests; A1, C1, C1d-shell, C4a; C1d against a scratch
+  build of `smd`; C2b 4 runs of 4, the check reporting "connections accepted meanwhile: [];
+  all since the start: `["secure","secure","secure","secure","secure"]`", which shows the
+  records settle in the scenario's own runtime (Electron's).
+- Codex (codex-175) checked both the committed check and this follow-up as it stood in the
+  working tree: with a connection injected in the scenario itself, the per-connection check
+  fails the run where the total-based one passed all 39; the follow-up records `failed` for
+  the closed-before-TLS case. Its agreement is not the operator's approval.
