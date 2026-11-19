@@ -4053,3 +4053,68 @@ committed on direction ("commit and push the follow-up and the Fox notes after C
   (`default_logbook_id`, the rig ids, `max_body_bytes`) under that size; it is left as it
   is on the assumption that none is ever that large. I first wrote "not reachable", which
   claimed more than that. The assumption is stated in a comment at `migrateDocument`.
+
+**The follow-up is committed d3d3476e and pushed, with the Fox notes as a7e44f45 (documents
+only), on direction (2026-11-19). Hosted run 44466913122 on a7e44f45: success.** The
+clean-room review of d3d3476e gave one finding.
+- **[P2] "TCP service names bypass the load-time conflict check": true, and left to the
+  bind; a comment, a test row and one sentence of `config.md`, uncommitted.** A
+  `socket_path` of `127.0.0.1:http-alt` with `server.app_port` 8080 loads (measured), and
+  where the system's services table gives `http-alt` as 8080 the daemon then stops at the
+  bind. It is the host-name case over again: which port a service name means is not in the
+  file, and the operator's ruling on host names ("item 2 agreed") was to keep such
+  look-ups out of the validation and leave them to the bind. Applying that ruling to a
+  service name is my reading, not a ruling in those words.
+  - **Operator, 2026-11-19, not yet a ruling: "I would go with refusing any non-numeric
+    port, but let's wait for Codex, then I'll decided".** Nothing is built for it. Measured
+    for that decision: today the validation does not look at `socket_path`'s port at all.
+    Under `tcp`, a service name, an empty port, `0`, `99999` and `-1` all pass it.
+  - **Operator, 2026-11-19, after Codex's review (codex-168), not yet a ruling: "I agree
+    about the port range, but wonder if 1024-65535 as the lower ports are usually reserved
+    for other services?"** Measured for that question: on this machine an ordinary user may
+    not bind a port below 1024 (`net.ipv4.ip_unprivileged_port_start = 1024`, the Linux
+    default), and `smd` runs as a user service with no capability granted
+    (`packaging/smd.service`). So a main listener below 1024 fails at the bind with
+    "permission denied" unless an administrator has lowered that setting. The same holds
+    for `server.app_port`, whose accepted range today is 1 to 65535.
+  - **Operator, 2026-11-19, the ruling: "approved, leave explicit 0 as the default".** What
+    was approved (put in chat after codex-169): under `server.protocol` `tcp`,
+    `socket_path` must be host:port with a plain decimal port from 1024 to 65535, and a
+    service name, an empty or missing port, a signed number, zero and anything out of range
+    are refused at load; `server.app_port` left out or 0 still means the default 8443, and
+    a value that is given must be from 1024 to 65535; the conflict refusal stays. An
+    explicit `"app_port": 0` keeps meaning the default.
+  - **Built on that ruling (2026-11-19; uncommitted; for review).** It replaces "left to
+    the bind" above: a service-name port is now refused with every other port that is not
+    a plain number in range.
+    - `validateMainListenerAddress`: under `tcp`, `socket_path` must split as host:port,
+      the port must be ASCII digits and from 1024 to 65535; the finding is
+      `invalid_field_value` on `socket_path` and says which of four things is wrong. It
+      runs before the exposure check, so that `127.0.0.1` with no port is refused as a
+      malformed address and not explained as a network exposure. The host is not judged.
+    - `validateAppPort`: a given value outside 1024 to 65535 is refused, under a
+      Unix-socket main listener too (the app's listener is always TCP); 0 stays the
+      default.
+    - Tests first, seen to fail against the committed code
+      (`internal/config/listener_ports_test.go`, and new rows in `app_port_test.go`):
+      1023 and 65536 refused and 1024 and 65535 accepted for both settings; zero, an empty
+      port, no port, a service name, signs, a space, non-ASCII digits, an unbracketed IPv6
+      address and more digits than an integer holds, each refused on `socket_path` as the
+      first blocking finding; a host name with a numeric port and Unix-socket paths
+      accepted; the same through `Load`; the app port left out and an explicit 0 both
+      giving 8443. Proof of the ordering by overlay: with the rule moved after the
+      exposure check, the no-port and not-an-address cases fail on "the first blocking
+      finding".
+    - `docs/v2-design/config.md` states the range as Station Manager's supported range,
+      not as a claim about every system (codex-169).
+    - *Not changed:* the pinned client (`scripts/smd_client.py`) and the desktop shell
+      still accept any port from 1 to 65535 when they read `app_port`. A daemon does not
+      start on a value below 1024, but a reader can still meet one: the file can be edited
+      while a daemon is running (codex-170). Aligning the readers' range and message is
+      separate work.
+    - Reviewed in the exchange: codex-170 closed it with no blocking finding.
+    - **Committed and pushed on direction (operator, 2026-11-19: "commit and push the port
+      rules").**
+    - Gates: the whole Go suite (66 packages), lint, vet, the maintainability gate and the
+      document gates pass; a temporary `smd` built from this tree started and served the
+      operator's tools test (4 tests).

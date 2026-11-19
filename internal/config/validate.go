@@ -136,6 +136,10 @@ func validateServer(cfg Config) []Finding {
 				"server.socket_path explicitly, or set $XDG_RUNTIME_DIR / $XDG_STATE_HOME / $HOME"})
 	}
 
+	// Before the exposure check below, so that an address that is not one is refused as
+	// that, and not explained as a network exposure.
+	out = append(out, validateMainListenerAddress(cfg)...)
+
 	// Positive-required integer knobs. Each maps a config path to its value; the
 	// loop keeps the rule list readable and the messages uniform.
 	type posRule struct {
@@ -846,15 +850,61 @@ func validateQsoArchives(cfg Config) []Finding {
 	return out
 }
 
-// validateAppPort checks server.app_port (ADR 0103 point 2): an explicit value outside 1-65535
-// is refused like any invalid setting, and so is a main listener that already holds the
-// desktop app's endpoint.
+// The ports smd's two listeners may be given (operator ruling 2026-11-19): 1024 is where an
+// ordinary user may bind on a stock Linux system, and smd runs as a user service. This is
+// Station Manager's supported range, not a claim about every system: an administrator can
+// move that boundary, and the range does not follow it.
+const (
+	minListenerPort = 1024
+	maxListenerPort = 65535
+)
+
+// validateMainListenerAddress checks socket_path when the main listener is TCP: host:port
+// with a plain decimal port in the supported range. A service name, an empty or missing
+// port, a sign and zero are refused with the rest: zero and an empty port ask the system to
+// choose a port that nothing would then report, and a service name's port is in the
+// system's tables, not in the file. The host is not judged: a name is allowed, and what it
+// resolves to is the bind's to find out. A Unix-socket path is not an address.
+func validateMainListenerAddress(cfg Config) []Finding {
+	if cfg.Server.Protocol != "tcp" {
+		return nil
+	}
+	refuse := func(why string) []Finding {
+		return []Finding{{Field: "socket_path", Code: "invalid_field_value",
+			Message: fmt.Sprintf("socket_path %q %s; with server.protocol \"tcp\" it must be host:port "+
+				"with a port number from %d to %d (for example 127.0.0.1:8080)",
+				cfg.SocketPath, why, minListenerPort, maxListenerPort)}}
+	}
+	_, port, err := net.SplitHostPort(cfg.SocketPath)
+	if err != nil {
+		return refuse("is not host:port")
+	}
+	if port == "" {
+		return refuse("has no port")
+	}
+	for _, r := range port {
+		if r < '0' || r > '9' {
+			return refuse("has a port that is not a plain number")
+		}
+	}
+	// Digits only, so the one error left is a number too large to hold: out of range.
+	if n, err := strconv.Atoi(port); err != nil || n < minListenerPort || n > maxListenerPort {
+		return refuse("has a port outside the supported range")
+	}
+	return nil
+}
+
+// validateAppPort checks server.app_port (ADR 0103 point 2). Zero is how a value left out
+// is stored and means the default (EffectiveAppPort); it never asks the system to choose a
+// port. A value that is given must be in the supported range, whatever the main listener
+// is: the desktop app's listener is always TCP. A main listener that already holds the
+// desktop app's endpoint is refused too.
 func validateAppPort(cfg Config) []Finding {
 	s := cfg.Server
-	if s.AppPort < 0 || s.AppPort > 65535 {
+	if s.AppPort != 0 && (s.AppPort < minListenerPort || s.AppPort > maxListenerPort) {
 		return []Finding{{Field: "server.app_port", Code: "invalid_field_value",
-			Message: fmt.Sprintf("server.app_port must be between 1 and 65535 (got %d); "+
-				"leave it out for the default %d", s.AppPort, defaultAppPort)}}
+			Message: fmt.Sprintf("server.app_port must be between %d and %d (got %d); "+
+				"leave it out for the default %d", minListenerPort, maxListenerPort, s.AppPort, defaultAppPort)}}
 	}
 	if s.Protocol != "tcp" {
 		return nil
@@ -881,8 +931,11 @@ func validateAppPort(cfg Config) []Finding {
 // TestAppPort_TheRuleAgreesWithARealBind). The same port number on any other address is no
 // conflict (127.0.0.2 and [::1] both bind beside it), and a host name is not judged here:
 // what it resolves to is the bind's to find out, and a collision there stops the daemon
-// with the bind's own message. Nor is a port some other program holds; no check of the
-// file can know that.
+// with the bind's own message. A port written as a service name (127.0.0.1:http-alt) is
+// no conflict here either, and need not be: validateMainListenerAddress refuses it, with
+// every other port that is not a plain number in range (clean-room review of d3d3476e and
+// the operator's ruling of 2026-11-19). Nor is a port some other program holds judged; no
+// check of the file can know that.
 func mainListenerHoldsAppEndpoint(socketPath string, appPort int) bool {
 	host, port, err := net.SplitHostPort(socketPath)
 	if err != nil {

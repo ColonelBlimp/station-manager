@@ -69,7 +69,7 @@ configuration.
 | `version` | `int` | Schema version; currently `7`. |
 | `data_dir` | `string` | Root for database, logs, caches, and other daemon state. |
 | `useragent` | `string` | Shared outbound HTTP User-Agent; first-run startup supplies `station-manager/<build-version>` when absent. |
-| `socket_path` | `string` | TCP address or Unix-socket path selected by `server.protocol`. |
+| `socket_path` | `string` | TCP address or Unix-socket path selected by `server.protocol`. A TCP address is `host:port` with a plain decimal port from 1024 to 65535 (§5). |
 | `server` | `ServerConfig` | Listener, HTTP limits/timeouts, embedded-SPA, profiling, and insecure-network acknowledgement. |
 | `datastore` | `types.DatastoreConfig` | SQLite options, pool, and context timeouts. `path` is the QSO file only until adoption (ADR 0071): once the catalogue below names an active archive, that entry selects the file (a managed archive's path derives from its id; a legacy or external entry records the path) and `datastore.path` is no longer consulted for it. The reference and evidence databases are station-global under `<data_dir>/db`, or frozen where an old external layout already created them beside the QSO file. |
 | `logging` | `types.LoggingConfig` | Daemon logging and rotation. |
@@ -112,7 +112,8 @@ silently dropped. A key an older daemon wrote must be consumed by a migration.
 - `serve_spa`, whose absent default is true for TCP and false for Unix sockets;
 - `enable_profiling`, default false;
 - `app_port`, the desktop app's HTTPS listener port on `127.0.0.1` (ADR 0103), absent default
-  8443, with no setting that disables it. Its default is resolved, never written. It binds only
+  8443, with no setting that disables it. Its default is resolved, never written. Left out and
+  `0` both mean that default; a value that is given is from 1024 to 65535 (§5). It binds only
   after the browser listener holds its port. `smd` serves only the desktop app, so a port that
   cannot be bound stops the start. Restart-required;
 - no switch for the operating-client check (ADR 0102; `api-endpoints.md`, Conventions): it is
@@ -304,12 +305,20 @@ Every loaded or API-mutated candidate is normalized, then passed to
 `internal/config/validate.go`; important operator-facing groups are:
 
 - listener protocol, positive HTTP limits, page-limit ordering, and network
-  posture; an `app_port` outside 0–65535 blocks, and so does a TCP main listener that already
-  holds the desktop app's endpoint, `127.0.0.1` and that port (`app_port_conflict`): the same
-  port on `127.0.0.1` or on every address (no host, `0.0.0.0`, `[::]`). The daemon serves only
-  the desktop app, so it could not stay up where its app listener cannot bind. The same port
-  number on another address (`127.0.0.2`, `[::1]`) is no conflict; a host name is not judged
-  here and is left to the bind;
+  posture;
+- the two listeners' ports. Station Manager's supported range is 1024 to 65535: `smd` runs as
+  a user service, and 1024 is where an ordinary user may bind on a stock Linux system (an
+  administrator can move that boundary; the range does not follow it). With `server.protocol`
+  `tcp`, `socket_path` must be `host:port` with a plain decimal port in that range: a service
+  name, an empty or missing port, a sign, `0` and anything out of range block
+  (`invalid_field_value` on `socket_path`). The host is not judged; a host name is allowed and
+  is resolved at the bind. A Unix-socket path is outside the rule. A given `app_port` outside
+  the range blocks; left out or `0` it is the default 8443;
+- a TCP main listener that already holds the desktop app's endpoint, `127.0.0.1` and the app's
+  port (`app_port_conflict`): the same port on `127.0.0.1` or on every address (no host,
+  `0.0.0.0`, `[::]`). The daemon serves only the desktop app, so it could not stay up where
+  its app listener cannot bind. The same port number on another address (`127.0.0.2`,
+  `[::1]`) is no conflict; a host name is not judged here and is left to the bind;
 - unique positive rig IDs, known rig models, a `default_rig_id` that is `0` or resolves, and
   valid ADIF mode mappings;
 - registered and usable forwarders, lookup ordering/policy, SMTP, PSK Reporter,

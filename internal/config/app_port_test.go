@@ -68,6 +68,14 @@ func TestAppPort_Validation(t *testing.T) {
 		{"explicit valid", 9443, "tcp", "127.0.0.1:8080", ""},
 		{"negative", -1, "tcp", "127.0.0.1:8080", "fatal"},
 		{"above 65535", 70000, "tcp", "127.0.0.1:8080", "fatal"},
+		// A given value is from 1024 to 65535 (operator ruling 2026-11-19): below 1024 an
+		// ordinary user cannot bind on a stock system. The listener is TCP whatever the main
+		// listener is, so the range holds under a Unix-socket main listener too.
+		{"one below the range", 1023, "tcp", "127.0.0.1:8080", "fatal"},
+		{"the lowest port", 1024, "tcp", "127.0.0.1:8080", ""},
+		{"the highest port", 65535, "tcp", "127.0.0.1:8080", ""},
+		{"one above the range", 65536, "tcp", "127.0.0.1:8080", "fatal"},
+		{"a low port under a Unix-socket main listener", 80, "unix", "/run/user/1000/smd.sock", "fatal"},
 		// A main listener that already holds the desktop app's endpoint (127.0.0.1 and the
 		// port) is refused. smd serves only the desktop app, so a daemon whose app listener
 		// cannot bind does not stay up (W-0027 C2e): the conflict is named at load, and by
@@ -86,6 +94,9 @@ func TestAppPort_Validation(t *testing.T) {
 		// A host name's address is known only when it is resolved: left to the bind, which
 		// stops the daemon with its own message if the two do collide.
 		{"a host name", 0, "tcp", "localhost:8443", ""},
+		// A port written as a service name is no conflict finding either: socket_path's own
+		// rule refuses it before any port is compared (listener_ports_test.go).
+		{"a port written as a service name", 8080, "tcp", "127.0.0.1:http-alt", ""},
 		// A Unix-socket main listener holds no TCP port at all.
 		{"a Unix-socket main listener", 0, "unix", "/run/user/1000/smd-8443.sock", ""},
 		{"a Unix-socket path that looks like an address", 0, "unix", "127.0.0.1:8443", ""},
