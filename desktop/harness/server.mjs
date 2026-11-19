@@ -68,6 +68,9 @@ export async function startHarness({ up = true, tls = null, tag = 'fixture', por
         },
     };
     const handshakes = { secure: 0, failed: 0 };
+    // Every TCP connection accepted, whatever came of it: a test of "no contact at all" counts
+    // these, since a connection can be made and dropped with no handshake and no request.
+    const accepts = { count: 0 };
     const sockets = new Set();
     const marker = (url) => new URL(url, 'http://x').searchParams.get('m') ?? '';
     // Every value of the operating-credential header on a request, in any letter case, so a
@@ -172,8 +175,14 @@ export async function startHarness({ up = true, tls = null, tag = 'fixture', por
             return;
         }
         if (req.method === 'GET' && path === '/redirect') {
-            // A redirect to wherever `to` says: a test's way off the origin.
-            res.writeHead(302, { location: new URL(req.url, 'http://x').searchParams.get('to') });
+            // A redirect to wherever `to` says: a test's way off the origin. `status` is the
+            // redirect's status (302 unless given), `hdr` the header's spelling, and `to2` a
+            // second Location header, for a response that names two addresses.
+            const q = new URL(req.url, 'http://x').searchParams;
+            const name = q.get('hdr') ?? 'location';
+            const headers = [name, String(q.get('to'))];
+            if (q.has('to2')) headers.push(name, String(q.get('to2')));
+            res.writeHead(Number(q.get('status') ?? 302), headers);
             res.end();
             return;
         }
@@ -264,6 +273,7 @@ export async function startHarness({ up = true, tls = null, tag = 'fixture', por
                 : http.createServer(handler);
             server.on('upgrade', onUpgrade);
             server.on('connection', (s) => {
+                accepts.count += 1;
                 sockets.add(s);
                 s.on('close', () => sockets.delete(s));
             });
@@ -305,6 +315,7 @@ export async function startHarness({ up = true, tls = null, tag = 'fixture', por
         requests,
         upgrades,
         handshakes,
+        accepts,
         replaceLifetime,
         start: () => (server ? Promise.resolve() : listen()),
         stop: close,

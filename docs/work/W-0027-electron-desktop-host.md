@@ -204,6 +204,8 @@ design before code.
   committed and pushed. Two: the redirect path is fixed now. Three: the guarantee stays
   that an address other than the daemon's gets **no contact at all** from the app, not
   only no request and no credential.
+- **2026-11-19 (operator): "commit and push the redirect guard".** After Codex's review
+  closed with no blocking finding (codex-173, codex-174).
 
 ## Open questions for the operator
 
@@ -4223,3 +4225,92 @@ handshake and receives no request**, so no credential and nothing of the page re
   sent" (codex-172, which reproduced it: 6 of 20 trials, with a TCP accept each time).
   What opens it, and whether the shell can stop it before the connection, are not
   established. **Open; for the operator and Codex.**
+
+### The redirect guard (2026-11-19; built on the operator's direction; reviewed; committed and pushed on direction)
+
+**Operator, 2026-11-19: "commit and push 1, fix the redirect now, keep the stronger
+guarantee".** Item 1 is committed 90a7b830 and pushed (its clean-room review: no actionable
+findings). This section is item 2, held to item 3's guarantee: **an address other than the
+daemon's gets no contact at all from the app.**
+
+**Acceptance.** A redirect from the daemon's address to any other address is refused, the
+request fails, and no connection is opened to the address it names, not even TCP. A
+redirect that stays on the daemon's address is followed and carries the credential once.
+The nearest confusable outcome is what there was: the request fails and nothing is sent,
+but a connection was made.
+
+**What was read first.** The pinned Electron's own type definitions
+(`node_modules/electron/electron.d.ts`, 44.9.3): the response-header hook's answer may hold
+`cancel`, and its details give the status and the headers as lists. Electron's
+documentation and source for what a cancel does to a redirect are Codex's citations
+(codex-172), not read by me; the behaviour is measured below.
+
+**Tests first.**
+- *The rule* (`redirectsOffOrigin`, a pure function): the five statuses a redirect is
+  followed on and eight that are not; relative, absolute and query-only addresses that
+  stay; another port, another host, a downgrade, scheme-relative, another scheme and two
+  look-alike hosts that leave; the header in four spellings, as a string and as a list; a
+  Location that does not parse; two Locations (either off, both on but different, the same
+  twice, under two spellings); no Location; no origin pinned.
+- *The hook:* an off-origin redirect is answered exactly once with a cancel, the report is
+  told the two addresses, and the marker on that response is still read; a redirect within
+  the origin and an ordinary response pass unchanged.
+- Both failed against a stub that refuses nothing, on "301 to another port was let
+  through" and on the missing cancel.
+
+**The change.** `desktop/src/hardening.mjs`: `redirectsOffOrigin` and `redirectTarget`.
+`desktop/src/admission.mjs`: `watchDaemon`, still the one owner of the response-header
+hook, cancels such a redirect and otherwise answers as before; marker reading is unchanged.
+`desktop/src/launch.mjs`: the refusal is recorded with the blocked requests and logged as
+"shell: refused a redirect off the served origin". The request filter and the credential
+filter are untouched. What cannot be read as one address is refused. A redirect must keep
+the origin's own scheme: its WebSocket partner is for upgrades, not redirects.
+
+**The scenario (C2b), extended.** The fixture now counts TCP accepts, and its redirect
+route takes a status, a header spelling and a second Location. A third listener serves a
+certificate that is not the daemon's. New checks: twelve forms of redirect to the other
+port (five statuses, `LOCATION`, scheme-relative, two Locations either way round, a chain,
+plain HTTP, not an address), each refused, with **no accept** at the other port; none at
+the wrong-certificate port; no plain-HTTP attempt at the daemon's own port; and three
+redirects that stay (relative, absolute, a chain) followed with the credential once. The
+old check now counts accepts too. 39 checks.
+
+**Measured, by repetition** (the fault is intermittent, so one pass shows nothing):
+- *With the guard:* 20 runs of the whole scenario, 20 pass.
+- *Without it* (a temporary copy, the rule made to refuse nothing): 10 runs, **9 fail**,
+  always on the new redirect check, each time with accepts and no request. Once the
+  wrong-certificate port was reached as well: one accept, one failed handshake, no request.
+  So before the guard a redirect could also make the app try a handshake with a server
+  that is not the daemon; the pin refused it.
+- The two-Location forms are refused with no line from the shell's hook in the log. I take
+  it that Chromium refuses them itself before the hook; I have not established that.
+
+**Gates.** Desktop lint and format check; 108 unit tests; A1, C1 and C1d-shell; C1d against
+a temporary real `smd` built from this tree (19 checks: the daemon's own redirect within
+its address still works).
+
+**Review (codex-173): one P2, fixed. The new log line printed addresses in full.** It
+interpolated the redirect's source and target as they came, so a query, user-info, a path
+or a fragment could reach the log; the older "blocked a request" line beside it did the
+same. That the daemon chooses a redirect does not make its address free of data. I had
+named the full addresses to Codex as a point for its judgement and judged it wrongly
+myself.
+- *Now:* both lines name an address by its scheme, host and port only (`addressLabel` in
+  `trace.mjs`, with the module's one-line escaping and a length bound); a target that does
+  not parse is "[not an address]", and none or several is "[no single address]". The full
+  addresses stay in memory for the scenarios' own assertions and are not printed.
+- *Tests first, seen to fail* against line builders that printed the addresses as before:
+  the label; the blocked-request line; the refused-redirect line, with seven synthetic
+  markers (source query and path; target user, password, query, fragment and path), none
+  of which may appear. The hook's test also delivers such a laden redirect: still one
+  cancel, and the marker and the admission generation still read (that part passed
+  already and pins the behaviour; it was not one of the failing tests).
+- *After it:* 111 unit tests; A1, C1, C1d-shell; C2b 8 runs of 8; C1d against a temporary
+  real `smd`.
+
+**Not shown.** A redirect to a host off this machine (every target here is a loopback
+port). Any way Chromium might connect elsewhere that is not a followed redirect. Hosted CI.
+The installed app at the station: this reaches it with the next deploy.
+
+**Hosted run 44482773341 on 90a7b830 (the readers' range and the scenario's race fix):
+success.**

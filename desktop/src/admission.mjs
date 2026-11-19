@@ -26,7 +26,7 @@
 // finding 2). It never becomes a fresh attempt to take the station back: a replaced lifetime
 // is refused for good.
 import { randomBytes } from 'node:crypto';
-import { onOrigin } from './hardening.mjs';
+import { onOrigin, redirectTarget, redirectsOffOrigin } from './hardening.mjs';
 
 export const LIFETIME_HEADER = 'X-SM-App-Lifetime';
 export const MARKER_HEADER = 'x-sm-daemon-instance';
@@ -172,14 +172,27 @@ export function admission({ ses, origin, admitFn = admit, onRetired }) {
 }
 
 /**
- * Watch the markers on smd's responses. Electron keeps one listener per webRequest event: this
- * is the only owner of onHeadersReceived. It changes nothing in any response. Only the pinned
- * origin counts, and never the admission's own requests, so admitting starts no further asking.
+ * Watch smd's responses. Electron keeps one listener per webRequest event: this is the only
+ * owner of onHeadersReceived, so both of its jobs live here, and each response is answered
+ * exactly once.
+ *
+ * The markers: read from responses of the pinned origin, never from the admission's own
+ * requests, so admitting starts no further asking.
+ *
+ * Redirects: one that would leave the pinned origin is cancelled here, before it is followed
+ * (hardening.mjs, redirectsOffOrigin), and `onRedirectRefused(from, to)` is told. That is the
+ * one response this changes; every other is passed as it came. The marker on a refused
+ * redirect is still read: it came from smd.
  */
-export function watchDaemon(ses, { origin, onMarker }) {
+export function watchDaemon(ses, { origin, onMarker, onRedirectRefused }) {
     ses.webRequest.onHeadersReceived((details, callback) => {
-        callback({});
         const o = origin();
+        if (redirectsOffOrigin(details, o)) {
+            callback({ cancel: true });
+            onRedirectRefused?.(details.url, redirectTarget(details));
+        } else {
+            callback({});
+        }
         if (!o || !onOrigin(details.url, o) || isAdmissionRequest(details.url)) return;
         let marker;
         let generation;

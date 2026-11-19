@@ -17,6 +17,7 @@ import { connectWhenTrusted } from './daemon.mjs';
 import { recordingFs } from './discovery.mjs';
 import { hardenSession } from './hardening.mjs';
 import { installPin, oncePin } from './pin.mjs';
+import { blockedRequestLine, refusedRedirectLine } from './trace.mjs';
 import { credentialRefused, isShellProbe } from './waiting.mjs';
 import { createMainWindow } from './window.mjs';
 
@@ -54,7 +55,7 @@ export function launchTrusted({
         origin: () => target.origin,
         onBlocked: (url) => {
             blocked.push(url);
-            console.error(`shell: blocked a request outside the served origin: ${url}`);
+            console.error(blockedRequestLine(url));
         },
         onPermission,
     });
@@ -69,7 +70,14 @@ export function launchTrusted({
         origin: () => target.origin,
         onRetired: () => onRetired?.(),
     });
-    watchDaemon(ses, { origin: () => target.origin, onMarker: admitted.sawMarker });
+    watchDaemon(ses, {
+        origin: () => target.origin,
+        onMarker: admitted.sawMarker,
+        onRedirectRefused: (from, to) => {
+            blocked.push(to);
+            console.error(refusedRedirectLine(from, to));
+        },
+    });
     watchRefusal(ses, {
         origin: () => target.origin,
         isProbe: isShellProbe,

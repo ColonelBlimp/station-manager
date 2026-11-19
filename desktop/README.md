@@ -87,6 +87,9 @@ The automated A1 and C1 checks use the built-in fixture harness (`harness/server
 - renderers are sandboxed and context-isolated, with no Node and no `<webview>`;
 - requests reach only the served origin (others are cancelled), and a page can neither navigate
   away nor open windows;
+- a redirect that would leave the served origin is refused at the response, before it is
+  followed, so the address it names is never connected to; one that stays on the origin is
+  followed (the C2b check holds this: no TCP connection at a second and a third listener);
 - an external address goes to the default browser only when it is `https:`;
 - every Electron permission is denied by default (both handlers, and device access);
 - the main window's minimum size is 1024x640;

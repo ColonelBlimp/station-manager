@@ -3,7 +3,14 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { test } from 'node:test';
-import { pageLabel, traceLine, traceWindow } from '../src/trace.mjs';
+import {
+    addressLabel,
+    blockedRequestLine,
+    pageLabel,
+    refusedRedirectLine,
+    traceLine,
+    traceWindow,
+} from '../src/trace.mjs';
 import { waitingPageUrl } from '../src/waiting.mjs';
 
 const origin = 'https://127.0.0.1:8443';
@@ -102,4 +109,77 @@ test('the waiting-page memory is bounded; the latest documents are always recogn
         urls.push(waitingPageUrl(null, { state: 'waiting', path: `/p${i}`, reason: 'r' }));
     assert.equal(pageLabel(urls.at(-1), origin), 'waiting page');
     assert.equal(pageLabel(urls[0], origin), 'other', 'the memory is unbounded');
+});
+
+// The two diagnostics for what the shell refused (a request outside the origin, a redirect
+// off it) name an address by its scheme, host and port, and by nothing else of it. A
+// query, a path, user-info or a fragment can carry data, and the daemon choosing a redirect
+// does not make its address free of it (review, 2026-11-19).
+const SECRETS = [
+    'src-query-TOKEN',
+    'dst-USER',
+    'dst-PASSWORD',
+    'dst-query-TOKEN',
+    'dst-FRAGMENT',
+    'dst-PATH',
+    'src-PATH',
+];
+
+test('an address label is the scheme, host and port only', () => {
+    assert.equal(addressLabel('https://127.0.0.1:9999/a/b?x=1#f'), 'https://127.0.0.1:9999');
+    assert.equal(addressLabel('https://user:pw@example.invalid/p?q=1'), 'https://example.invalid');
+    assert.equal(addressLabel('http://127.0.0.1:8443/x'), 'http://127.0.0.1:8443');
+    assert.equal(addressLabel('wss://127.0.0.1:8443/v1/events/ws?t=1'), 'wss://127.0.0.1:8443');
+    // Relative to the address it came with, as a redirect is.
+    assert.equal(addressLabel('/app/?k=v', origin + '/redirect?to=x'), origin);
+    assert.equal(addressLabel('//example.invalid/x?k=v', origin + '/'), 'https://example.invalid');
+    // No host to name: the scheme alone. Not an address: a fixed label.
+    assert.equal(addressLabel('data:text/html,<p>dst-PATH</p>'), 'data:');
+    assert.equal(addressLabel('mailto:dst-USER@example.invalid'), 'mailto:');
+    assert.equal(addressLabel('https://[not-an-address/x?dst-query-TOKEN'), '[not an address]');
+    assert.equal(addressLabel('', undefined), '[not an address]');
+    assert.equal(addressLabel(undefined), '[not an address]');
+    // Bounded: a host of any length cannot make a line of any length.
+    assert.ok(addressLabel(`https://${'a'.repeat(500)}.invalid/`).length <= 120);
+});
+
+test('the blocked-request line names the origin asked for, and none of the address’s data', () => {
+    const line = blockedRequestLine(
+        'https://dst-USER:dst-PASSWORD@127.0.0.1:9999/dst-PATH?t=dst-query-TOKEN#dst-FRAGMENT'
+    );
+    assert.equal(
+        line,
+        'shell: blocked a request outside the served origin: https://127.0.0.1:9999'
+    );
+    for (const secret of SECRETS) assert.ok(!line.includes(secret), `${secret} is in: ${line}`);
+});
+
+test('the refused-redirect line names two origins, and none of either address’s data', () => {
+    const from = `${origin}/src-PATH?to=https%3A%2F%2F127.0.0.1%3A9999%2Fdst-PATH%3Ft%3Ddst-query-TOKEN&s=src-query-TOKEN`;
+    const to =
+        'https://dst-USER:dst-PASSWORD@127.0.0.1:9999/dst-PATH?t=dst-query-TOKEN#dst-FRAGMENT';
+    const line = refusedRedirectLine(from, to);
+    assert.equal(
+        line,
+        `shell: refused a redirect off the served origin: ${origin} -> https://127.0.0.1:9999`
+    );
+    for (const secret of SECRETS) assert.ok(!line.includes(secret), `${secret} is in: ${line}`);
+
+    // A target that is not one address has a fixed label, whatever it held.
+    assert.equal(
+        refusedRedirectLine(from, 'https://[not-an-address/dst-PATH?dst-query-TOKEN'),
+        `shell: refused a redirect off the served origin: ${origin} -> [not an address]`
+    );
+    assert.equal(
+        refusedRedirectLine(from, ''),
+        `shell: refused a redirect off the served origin: ${origin} -> [no single address]`
+    );
+    // A relative target is on the address it came from.
+    assert.equal(
+        refusedRedirectLine('http://127.0.0.1:8443/x', '/y?dst-query-TOKEN'),
+        'shell: refused a redirect off the served origin: http://127.0.0.1:8443 -> http://127.0.0.1:8443'
+    );
+    // One line, whatever the addresses hold.
+    const forged = refusedRedirectLine(from, 'https://127.0.0.1:9999/a\nshell: forged');
+    assert.equal(forged.split('\n').length, 1, JSON.stringify(forged));
 });

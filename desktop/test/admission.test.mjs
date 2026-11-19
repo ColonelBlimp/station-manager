@@ -11,6 +11,7 @@ import {
     newLifetime,
     watchDaemon,
 } from '../src/admission.mjs';
+import { redirectsOffOrigin } from '../src/hardening.mjs';
 
 const ORIGIN = 'https://127.0.0.1:8443';
 const json = (status, body) => ({ status, json: async () => body });
@@ -474,6 +475,171 @@ test('the marker is read from responses of the pinned origin only, and changes n
     deliver(ORIGIN + '/v1/version', {});
     deliver(ORIGIN + '/v1/version', undefined);
     assert.deepEqual(seen, [], 'a marker was taken from the wrong response');
+});
+
+// A redirect that leaves the pinned origin is refused at the response, before it is followed
+// (operator ruling 2026-11-19: no contact at all with any other address). The request filter
+// would cancel the redirected request, but the connection to the redirect's target was
+// sometimes made first: one TLS handshake, measured at a fixture (W-0027, C2b).
+test('a redirect is judged by where it leads: only one that stays on the pinned origin is followed', () => {
+    const at = (statusCode, location, url = ORIGIN + '/a/b?x=1', name = 'location') =>
+        redirectsOffOrigin(
+            {
+                url,
+                statusCode,
+                responseHeaders: location === undefined ? {} : { [name]: location },
+            },
+            ORIGIN
+        );
+    const elsewhere = 'https://127.0.0.1:9999/api/echo';
+
+    // Every status a redirect is followed on, and no other.
+    for (const status of [301, 302, 303, 307, 308]) {
+        assert.equal(at(status, [elsewhere]), true, `${status} to another port was let through`);
+        assert.equal(at(status, ['/app/']), false, `${status} within the origin was refused`);
+    }
+    for (const status of [200, 204, 300, 304, 305, 400, 403, 500]) {
+        assert.equal(at(status, [elsewhere]), false, `${status} is not a redirect to follow`);
+    }
+    assert.equal(at(undefined, [elsewhere]), false, 'no status: not a redirect');
+
+    // Within the origin: relative, absolute, and relative to the request's own address.
+    for (const stays of ['/', '/app/', 'c?y=2', '../c', '?only=query', '', ORIGIN + '/x', ORIGIN]) {
+        assert.equal(at(302, [stays]), false, `${JSON.stringify(stays)} stays on the origin`);
+    }
+    // Off it: another port, another host, another scheme (a downgrade too), scheme-relative.
+    for (const leaves of [
+        elsewhere,
+        'https://example.invalid/',
+        'http://127.0.0.1:8443/x',
+        '//example.invalid/x',
+        '//127.0.0.1:9999/x',
+        'ftp://127.0.0.1:8443/x',
+        'https://127.0.0.1:8443.example.invalid/x',
+        'https://127.0.0.1:8443@example.invalid/x',
+    ]) {
+        assert.equal(at(302, [leaves]), true, `${leaves} leaves the origin`);
+    }
+    // The header's name in any case; its value as a string or a list.
+    for (const name of ['location', 'Location', 'LOCATION', 'lOcAtIoN']) {
+        assert.equal(at(302, [elsewhere], undefined, name), true, `${name} was not read`);
+        assert.equal(at(302, elsewhere, undefined, name), true, `${name} as a string was not read`);
+    }
+    // What cannot be read as one address is refused, not guessed at.
+    assert.equal(at(302, ['https://[not-an-address']), true, 'a malformed Location was followed');
+    assert.equal(
+        at(302, ['/app/', elsewhere]),
+        true,
+        'a second Location off the origin was missed'
+    );
+    assert.equal(at(302, [elsewhere, '/app/']), true, 'a first Location off the origin was missed');
+    assert.equal(at(302, ['/app/', '/other/']), true, 'two different Locations were followed');
+    assert.equal(at(302, ['/app/', '/app/']), false, 'the same Location twice is one address');
+    assert.equal(
+        redirectsOffOrigin(
+            {
+                url: ORIGIN + '/',
+                statusCode: 302,
+                responseHeaders: { Location: ['/a'], location: ['/b'] },
+            },
+            ORIGIN
+        ),
+        true,
+        'two Locations under different spellings were followed'
+    );
+    // No Location: nothing to follow. No origin pinned: nothing is on it, and nothing is asked.
+    assert.equal(at(302, undefined), false);
+    assert.equal(at(302, []), false);
+    assert.equal(
+        redirectsOffOrigin(
+            { url: ORIGIN + '/', statusCode: 302, responseHeaders: undefined },
+            ORIGIN
+        ),
+        false
+    );
+    assert.equal(
+        redirectsOffOrigin(
+            { url: ORIGIN + '/', statusCode: 302, responseHeaders: { location: [elsewhere] } },
+            null
+        ),
+        false,
+        'with no origin pinned there is no redirect to judge'
+    );
+});
+
+test('the response hook refuses a redirect off the origin, once, and still reads its marker', () => {
+    let listener;
+    const ses = { webRequest: { onHeadersReceived: (fn) => (listener = fn) } };
+    const seen = [];
+    const refused = [];
+    watchDaemon(ses, {
+        origin: () => ORIGIN,
+        onMarker: (m) => seen.push(m),
+        onRedirectRefused: (from, to) => refused.push([from, to]),
+    });
+    const deliver = (details) => {
+        const answers = [];
+        listener(details, (a) => answers.push(a));
+        assert.equal(answers.length, 1, 'the response was answered more or less than once');
+        return answers[0];
+    };
+
+    const off = deliver({
+        url: ORIGIN + '/redirect',
+        statusCode: 302,
+        responseHeaders: { Location: ['https://127.0.0.1:9999/x'], [MARKER_HEADER]: ['p1'] },
+    });
+    assert.deepEqual(off, { cancel: true });
+    assert.deepEqual(refused, [[ORIGIN + '/redirect', 'https://127.0.0.1:9999/x']]);
+    assert.deepEqual(seen, ['p1'], 'the marker on a refused redirect was lost');
+
+    // Addresses that carry data are refused the same way; the marker and the admission
+    // generation on the response are still read. (What is printed of them is the trace's.)
+    const pairs = [];
+    watchDaemon(ses, {
+        origin: () => ORIGIN,
+        onMarker: (m, g) => pairs.push([m, g]),
+        onRedirectRefused: (from, to) => refused.push([from, to]),
+    });
+    const laden = deliver({
+        url: ORIGIN + '/redirect?to=x&s=src-query-TOKEN',
+        statusCode: 302,
+        responseHeaders: {
+            Location: ['https://u:p@127.0.0.1:9999/x?t=dst-query-TOKEN#frag'],
+            [MARKER_HEADER]: ['p1'],
+            'X-Sm-Admission-Generation': ['7'],
+        },
+    });
+    assert.deepEqual(laden, { cancel: true });
+    assert.deepEqual(pairs, [['p1', '7']], 'the marker or the generation was lost');
+    assert.equal(refused.length, 2);
+    refused.length = 1;
+    watchDaemon(ses, {
+        origin: () => ORIGIN,
+        onMarker: (m) => seen.push(m),
+        onRedirectRefused: (from, to) => refused.push([from, to]),
+    });
+
+    const within = deliver({
+        url: ORIGIN + '/app',
+        statusCode: 301,
+        responseHeaders: { Location: ['/app/'], [MARKER_HEADER]: ['p1'] },
+    });
+    assert.deepEqual(within, {}, 'a redirect within the origin was held or changed');
+    const ordinary = deliver({ url: ORIGIN + '/v1/version', statusCode: 200, responseHeaders: {} });
+    assert.deepEqual(ordinary, {});
+    assert.equal(refused.length, 1);
+
+    // Without the optional report the refusal is the same.
+    watchDaemon(ses, { origin: () => ORIGIN, onMarker: () => {} });
+    assert.deepEqual(
+        deliver({
+            url: ORIGIN + '/redirect',
+            statusCode: 307,
+            responseHeaders: { location: ['http://127.0.0.1:8443/x'] },
+        }),
+        { cancel: true }
+    );
 });
 
 test('the admission path is recognised, whatever its query', () => {

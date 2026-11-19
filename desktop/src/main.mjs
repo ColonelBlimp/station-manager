@@ -18,6 +18,7 @@ import { disableSpellchecker, hardenSession } from './hardening.mjs';
 import { parseArgs } from './daemon.mjs';
 import { launchTrusted } from './launch.mjs';
 import { installPin } from './pin.mjs';
+import { blockedRequestLine } from './trace.mjs';
 import { createMainWindow, externalOpener } from './window.mjs';
 import { loadWhenUp, returnToWaitingOnFailure } from './waiting.mjs';
 import { startupMode } from './mode.mjs';
@@ -215,7 +216,7 @@ if (!app.requestSingleInstanceLock()) {
                 },
                 onBlocked: (url) => {
                     blocked.push(url);
-                    console.error(`shell: blocked a request outside the served origin: ${url}`);
+                    console.error(blockedRequestLine(url));
                 },
                 onPermission: (a) => permissionAsks.push(a),
             });

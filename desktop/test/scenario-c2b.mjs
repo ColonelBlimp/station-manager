@@ -11,7 +11,9 @@
 //     fetch, an event stream and a WebSocket each carry the credential exactly once;
 //  4. a header a page supplies is replaced, and the page's own request never holds the value;
 //  5. it goes nowhere else: another port (with the same certificate), a redirect off the
-//     origin, a plain-HTTP downgrade, an impostor at the address; and a reconnect carries it;
+//     origin, a plain-HTTP downgrade, an impostor at the address; and a reconnect carries it.
+//     A redirect off the origin, in every form, opens no connection at all to its target,
+//     not even TCP (operator ruling 2026-11-19); one that stays on the origin is followed;
 //  6. the daemon replaces its credential: a loaded workspace is told once, is not navigated,
 //     keeps what was typed, and the shell reads nothing again;
 //  7. a window started before the new credential is on disk waits, refused, and says so; it
@@ -66,6 +68,8 @@ export async function setupC2b() {
     const impostor = await startHarness({ up: false, tls: I, tag: 'impostor', port: genuine.port });
     await genuine.start();
     const other = await startHarness({ up: true, tls: G, tag: 'other-port' });
+    // A third listener, on a port of its own, with a certificate that is not smd's.
+    const wrong = await startHarness({ up: true, tls: I, tag: 'wrong-certificate' });
     fs.writeFileSync(
         path.join(wd, 'config.json'),
         JSON.stringify({ server: { app_port: genuine.port } }),
@@ -83,14 +87,15 @@ export async function setupC2b() {
             await genuine.stop();
             await impostor.stop();
             await other.stop();
+            await wrong.stop();
             fs.rmSync(base, { recursive: true, force: true }); // exactly the path this run made
         },
-        run: (ctx) => runScenario({ ...ctx, genuine, impostor, other, credDir, credFile }),
+        run: (ctx) => runScenario({ ...ctx, genuine, impostor, other, wrong, credDir, credFile }),
     };
 }
 
 async function runScenario(ctx) {
-    const { first, launch, genuine, impostor, other, credDir, credFile } = ctx;
+    const { first, launch, genuine, impostor, other, wrong, credDir, credFile } = ctx;
     const checks = [];
     const check = (name, ok, detail = '') => checks.push({ name, ok: Boolean(ok), detail });
     const main = first.win;
@@ -130,6 +135,22 @@ async function runScenario(ctx) {
     const probes = (h) => h.requests.filter((r) => r.url.startsWith('/v1/version')).length;
     const sentTo = (h) => h.handshakes.secure + h.handshakes.failed + h.requests.length;
     const reqFor = (h, part) => h.requests.filter((r) => r.url.includes(part));
+    // Any contact at all with a listener: a TCP connection counts, whatever came of it.
+    const contact = (h) => h.accepts.count + sentTo(h);
+    const sawAt = (h) =>
+        JSON.stringify({
+            accepts: h.accepts.count,
+            handshakes: h.handshakes,
+            requests: h.requests.map(
+                (r) => `${r.method} ${r.url} (${r.cred.length} credential header(s))`
+            ),
+        });
+    // A fetch of the pinned origin's /redirect, which answers with a redirect to `to`.
+    const redirected = (win, to, extra = '') =>
+        js(
+            win,
+            `fetch('/redirect?to=' + encodeURIComponent(${JSON.stringify(to)}) + ${JSON.stringify(extra)}, { cache: 'no-store' }).then((r) => r.ok ? r.json().then((j) => j.tag + ':' + j.m) : 'status:' + r.status, (e) => 'refused:' + e.name)`
+        );
     const V1 = newCredential();
     const V2 = newCredential();
 
@@ -272,10 +293,7 @@ async function runScenario(ctx) {
             main,
             `fetch(${JSON.stringify(other.origin + '/api/echo?m=o1')}).then((r) => 'status:' + r.status, (e) => 'refused:' + e.name)`
         );
-        const viaRedirect = await js(
-            main,
-            `fetch('/redirect?to=' + encodeURIComponent(${JSON.stringify(other.origin + '/api/echo?m=o2')})).then((r) => 'status:' + r.status, (e) => 'refused:' + e.name)`
-        );
+        const viaRedirect = await redirected(main, other.origin + '/api/echo?m=o2');
         const downgrade = await js(
             main,
             `fetch(${JSON.stringify(genuine.origin.replace('https:', 'http:') + '/api/echo?m=d1')}).then((r) => 'status:' + r.status, (e) => 'refused:' + e.name)`
@@ -285,14 +303,78 @@ async function runScenario(ctx) {
             'Another port serving the same certificate receives nothing, directly or by redirect',
             elsewhere.startsWith('refused:') &&
                 viaRedirect.startsWith('refused:') &&
-                sentTo(other) === 0,
-            `${elsewhere} ${viaRedirect}; other listener saw ${sentTo(other)}: ` +
-                JSON.stringify({
-                    handshakes: other.handshakes,
-                    requests: other.requests.map(
-                        (r) => `${r.method} ${r.url} (${r.cred.length} credential header(s))`
-                    ),
-                })
+                contact(other) === 0,
+            `${elsewhere} ${viaRedirect}; other listener saw ${sawAt(other)}`
+        );
+
+        // A redirect off the origin in each form it can take. Every one is refused, and the
+        // address it names is never connected to. Before the shell refused these at the
+        // response, the redirected request was cancelled but a connection was sometimes made
+        // first (about one redirect in three), so the forms are many and each is its own try.
+        const forms = [];
+        const off = async (label, to, extra = '') =>
+            forms.push([label, await redirected(main, to, extra)]);
+        for (const status of [301, 302, 303, 307, 308])
+            await off(`${status}`, other.origin + `/api/echo?m=rs${status}`, `&status=${status}`);
+        await off('LOCATION', other.origin + '/api/echo?m=rc1', '&hdr=LOCATION');
+        await off('scheme-relative', `//127.0.0.1:${other.port}/api/echo?m=rr1`);
+        await off(
+            'two Locations, the second off',
+            '/api/echo?m=rd1',
+            '&to2=' + encodeURIComponent(other.origin + '/api/echo?m=rd2')
+        );
+        await off(
+            'two Locations, the first off',
+            other.origin + '/api/echo?m=rd3',
+            '&to2=' + encodeURIComponent('/api/echo?m=rd4')
+        );
+        await off(
+            'a chain',
+            '/redirect?to=' + encodeURIComponent(other.origin + '/api/echo?m=rh1')
+        );
+        await off(
+            'plain HTTP at the other port',
+            other.origin.replace('https:', 'http:') + '/api/echo?m=rp1'
+        );
+        await off('not an address', 'https://[not-an-address/api/echo?m=rm1');
+        const toWrong = await redirected(main, wrong.origin + '/api/echo?m=rw1');
+        const plainBefore = genuine.handshakes.failed;
+        const toPlainSelf = await redirected(
+            main,
+            genuine.origin.replace('https:', 'http:') + '/api/echo?m=rg1'
+        );
+        await sleep(700); // a connection made late would show by now
+        check(
+            'A redirect off the origin, in every form, is refused and opens no connection to the other port',
+            forms.every(([, r]) => r.startsWith('refused:')) && contact(other) === 0,
+            `${forms.map(([l, r]) => `${l}: ${r}`).join('; ')}; other listener saw ${sawAt(other)}`
+        );
+        check(
+            '…nor to a port serving another certificate',
+            toWrong.startsWith('refused:') && contact(wrong) === 0,
+            `${toWrong}; that listener saw ${sawAt(wrong)}`
+        );
+        check(
+            '…nor down to plain HTTP at the daemon’s own address',
+            toPlainSelf.startsWith('refused:') &&
+                genuine.handshakes.failed === plainBefore &&
+                reqFor(genuine, 'm=rg1').length === 0,
+            `${toPlainSelf}; failed handshakes ${plainBefore} -> ${genuine.handshakes.failed}`
+        );
+        const stays = [
+            await redirected(main, '/api/echo?m=rk1'),
+            await redirected(main, genuine.origin + '/api/echo?m=rk2'),
+            await redirected(main, '/redirect?to=' + encodeURIComponent('/api/echo?m=rk3')),
+        ];
+        const followed = ['m=rk1', 'm=rk2', 'm=rk3'].map((m) => reqFor(genuine, m));
+        check(
+            'A redirect that stays on the daemon’s address is followed, and carries the credential once',
+            stays.join(' ') === 'genuine:rk1 genuine:rk2 genuine:rk3' &&
+                followed.every(
+                    (rs) =>
+                        rs.length >= 1 && rs.every((r) => r.cred.length === 1 && r.cred[0] === V1)
+                ),
+            stays.join(' ')
         );
         const marked = first.sent.filter((r) => r.sent).map((r) => r.url);
         const wssPartner = genuine.origin.replace('https:', 'wss:') + '/';

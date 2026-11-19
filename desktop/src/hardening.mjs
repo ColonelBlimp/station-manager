@@ -59,3 +59,48 @@ export function hardenSession(ses, { origin, onAllowed, onBlocked, onPermission 
         callback({ cancel: true });
     });
 }
+
+// The statuses on which a redirect is followed; a Location on any other response is not one.
+const REDIRECT_STATUS = new Set([301, 302, 303, 307, 308]);
+
+/**
+ * True when a response is a redirect that would leave the served origin, so that it is
+ * refused at the response and never followed (operator ruling 2026-11-19: an address other
+ * than smd's gets no contact at all). onBeforeRequest above would cancel the redirected
+ * request, but by then the connection to its target could already be made: one TLS handshake
+ * with no request on it, about one time in three at a fixture (W-0027, C2b).
+ *
+ * `details` is what webRequest.onHeadersReceived gives: the request's url, the status and the
+ * response headers (names in any case, each value a string or a list). The Location is
+ * resolved against the request's own address, as the redirect would be. What cannot be read
+ * as one address is refused: a Location that does not parse, or two that differ.
+ */
+export function redirectsOffOrigin(details, origin) {
+    if (!origin || !REDIRECT_STATUS.has(details?.statusCode)) return false;
+    const targets = new Set();
+    for (const [name, value] of Object.entries(details.responseHeaders ?? {})) {
+        if (name.toLowerCase() !== 'location') continue;
+        for (const v of Array.isArray(value) ? value : [value]) targets.add(String(v));
+    }
+    if (targets.size === 0) return false;
+    if (targets.size > 1) return true;
+    const [location] = targets;
+    let to;
+    try {
+        to = new URL(location, details.url);
+    } catch {
+        return true;
+    }
+    // The origin's own scheme only: a redirect is not a WebSocket upgrade.
+    return !(to.protocol === new URL(origin).protocol && onOrigin(to.href, origin));
+}
+
+/** The one Location a response carries, for a report; '' when it has none or several. */
+export function redirectTarget(details) {
+    const found = [];
+    for (const [name, value] of Object.entries(details?.responseHeaders ?? {})) {
+        if (name.toLowerCase() !== 'location') continue;
+        for (const v of Array.isArray(value) ? value : [value]) found.push(String(v));
+    }
+    return new Set(found).size === 1 ? found[0] : '';
+}
