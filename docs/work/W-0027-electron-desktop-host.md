@@ -206,6 +206,9 @@ design before code.
   only no request and no credential.
 - **2026-11-19 (operator): "commit and push the redirect guard".** After Codex's review
   closed with no blocking finding (codex-173, codex-174).
+- **2026-11-19 (operator): "commit, but no push".** For the scenario's strengthened
+  downgrade check (the clean-room finding on 99c9c840): committed locally and not pushed,
+  so that the hosted run on 99c9c840 is not cancelled by a newer push.
 
 ## Open questions for the operator
 
@@ -4314,3 +4317,18 @@ The installed app at the station: this reaches it with the next deploy.
 
 **Hosted run 44482773341 on 90a7b830 (the readers' range and the scenario's race fix):
 success.**
+
+**The guard is committed 99c9c840 and pushed** (eleven paths; before it, lint, the format
+check, 111 unit tests and the four fixture scenarios). Its clean-room review gave one
+finding.
+- **[P3] "The same-port downgrade check can miss a TCP connection": true, fixed in the
+  scenario (committed locally on direction, not pushed).** The check that a redirect does not go down to plain HTTP at the
+  daemon's own address read the failed-handshake count and the requests, but not the
+  accepts, so a connection that was accepted and then stayed idle would have passed it.
+  The daemon's own port is in use throughout, so a bare count of accepts cannot be held to
+  zero there. The check now also holds the number of accepted connections that began no
+  TLS (accepts less completed and failed handshakes) to what it was before the redirect.
+  *That the measure sees what the review named,* shown with the fixture alone: an idle TCP
+  connection held for 700 ms gives 1 (one accept, no handshake); a plain-HTTP request gives
+  a failed handshake, which the check already read. The scenario then passed 6 runs of 6,
+  the check reporting "connections with no TLS 0 -> 0".

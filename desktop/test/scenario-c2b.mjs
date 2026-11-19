@@ -145,6 +145,10 @@ async function runScenario(ctx) {
                 (r) => `${r.method} ${r.url} (${r.cred.length} credential header(s))`
             ),
         });
+    // Connections a listener accepted that began no TLS at all: neither a completed nor a
+    // failed handshake. On the daemon's own port, which is in use throughout, this is what
+    // shows a plain or idle connection that the handshake counts and the requests would miss.
+    const silentAt = (h) => h.accepts.count - h.handshakes.secure - h.handshakes.failed;
     // A fetch of the pinned origin's /redirect, which answers with a redirect to `to`.
     const redirected = (win, to, extra = '') =>
         js(
@@ -339,6 +343,7 @@ async function runScenario(ctx) {
         await off('not an address', 'https://[not-an-address/api/echo?m=rm1');
         const toWrong = await redirected(main, wrong.origin + '/api/echo?m=rw1');
         const plainBefore = genuine.handshakes.failed;
+        const silentBefore = silentAt(genuine);
         const toPlainSelf = await redirected(
             main,
             genuine.origin.replace('https:', 'http:') + '/api/echo?m=rg1'
@@ -358,8 +363,10 @@ async function runScenario(ctx) {
             '…nor down to plain HTTP at the daemon’s own address',
             toPlainSelf.startsWith('refused:') &&
                 genuine.handshakes.failed === plainBefore &&
+                silentAt(genuine) === silentBefore &&
                 reqFor(genuine, 'm=rg1').length === 0,
-            `${toPlainSelf}; failed handshakes ${plainBefore} -> ${genuine.handshakes.failed}`
+            `${toPlainSelf}; failed handshakes ${plainBefore} -> ${genuine.handshakes.failed}; ` +
+                `connections with no TLS ${silentBefore} -> ${silentAt(genuine)}`
         );
         const stays = [
             await redirected(main, '/api/echo?m=rk1'),
