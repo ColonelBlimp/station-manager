@@ -32,7 +32,7 @@ var (
 )
 
 // windingDownRetry is the retry hint advertised while onLingerExpired's
-// teardown (unattended disarm, capture release) is still running after the
+// teardown (the capture release) is still running after the
 // linger timer itself has been consumed: the exact remaining time is unknown,
 // so the hint is a short re-claim interval rather than none at all.
 const windingDownRetry = 250 * time.Millisecond
@@ -218,9 +218,8 @@ func (s *Service) SubscribeMode(mode string) (<-chan hubEvent, func(), error) {
 }
 
 // SubscribeModeAs is SubscribeMode for a stream whose request carried an app lifetime
-// ("" for none). With ownership required, an admitted stream that names a lifetime is
-// that lifetime's presence in this scope for as long as it is open (W-0027 C4b); a
-// refused one is not. With ownership not required the lifetime is not recorded.
+// ("" for none). An admitted stream that names a lifetime is that lifetime's presence in
+// this scope for as long as it is open (W-0027 C4b); a refused one is not.
 func (s *Service) SubscribeModeAs(mode, lifetime string) (<-chan hubEvent, func(), error) {
 	const op errors.Op = "ft8.Service.SubscribeMode"
 	s.mu.Lock()
@@ -233,9 +232,6 @@ func (s *Service) SubscribeModeAs(mode, lifetime string) (<-chan hubEvent, func(
 	s.onSubscriberAddedLocked()
 	s.mu.Unlock()
 	leave := s.onceUnsubscribe(unsub)
-	if !s.ownershipRequired.Load() {
-		return ch, leave, nil
-	}
 	gone := s.presence.open(lifetime) // counts once however often it is called
 	return ch, func() { gone(); leave() }, nil
 }

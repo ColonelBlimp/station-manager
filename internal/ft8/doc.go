@@ -36,15 +36,12 @@
 // "Never unattended" would overstate it, and this comment said so until
 // 2026-07-30. A Call-CQ run works answerers, and an ADR 0059 auto-work run works
 // callers, until Abandon — with nobody at the desk. The one presence check that IS
-// enforced is the open view: Service.onLingerExpired disarms TX and abandons any
-// active QSO once the last /v1/ft8/events subscriber is gone past captureLinger.
-// Closing the browser stops a run; walking away does not.
-//
-// With the operating-client check on (W-0027 C4b) the open view that counts is the
-// desktop app's own: a /v1/ft8/events subscription made under the current app
-// lifetime. An arm needs it, and its loss for the same grace disarms by the same
-// path (presence.go, onPresenceLost); the subscriber count then decides audio
-// capture only. A tool's stream holds nothing.
+// enforced is the open view (W-0027 C4b): the desktop app's own, a /v1/ft8/events
+// subscription made under the current app lifetime. An arm needs it, and its loss
+// for the grace (captureLinger) disarms TX and abandons any active QSO
+// (presence.go, onPresenceLost). Closing the app stops a run; walking away does
+// not. The subscriber count decides audio capture only. A tool's stream holds
+// nothing.
 //
 //   - TxKeyer is the PTT seam: the package keys the rig WITHOUT importing
 //     internal/bridge (the bridge implements TxKeyer; injected like the capture

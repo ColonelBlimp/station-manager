@@ -18,9 +18,10 @@ profiling at `/debug/pprof/*`.
 ## Conventions
 
 **Transport / auth.** Single-operator, loopback-bound by default (`127.0.0.1:8080` TCP, or
-a Unix socket). No authentication by default — the trust boundary is the loopback interface
-— unless the operating-client check below is switched on. A non-loopback bind emits a startup
-warning.
+a Unix socket). Every request is subject to the operating-client check below: that listener
+serves only `GET /v1/healthz` and a fixed notice, and everything else is served on the desktop
+app listener to a request that carries this install's operating credential. A non-loopback
+bind emits a startup warning.
 
 **Desktop app listener (ADR 0103; W-0027 C1c).** Beside that listener, smd serves the same
 handler chain, so the same routes and middleware, over HTTPS on `127.0.0.1:<server.app_port>`
@@ -32,16 +33,16 @@ port>` (an absent `Origin` is allowed, as on the browser listener); a WebSocket 
 `Origin` (scheme `https` from the TLS connection). On port 443 only, the portless forms browsers
 send, `127.0.0.1` and `https://127.0.0.1`, are the same address and are accepted. The browser
 listener's rules are unchanged.
-With the operating-client check off (the default), a refused identity, a busy port or a serve
-error only writes a warning to `smd.log`. The station keeps serving the browser listener, with
-no app listener.
 
-**Operating-client check (ADR 0102; W-0027 C2a).** Off by default and temporary
-(`server.require_desktop_app`, read at start). With it **on**, a request is served only if it
+**Operating-client check (ADR 0102; W-0027 C2a; always on since C2e).** There is no setting
+that turns it off: config version 7 removed the temporary switch `server.require_desktop_app`.
+A request is served only if it
 arrived on the desktop app listener and carries exactly one `X-SM-Operating-Credential` header
 whose value is this install's operating credential: the whole content of
 `desktop-credential/credential` in the working directory (43 base64url characters; directory
-`0700`, file `0600`, created by `smd` at every start in both states). Anything else gets **403
+`0700`, file `0600`, created by `smd` at every start). The credential is what is checked: the
+desktop app presents it, and so can a program of the operator's own user that reads the file
+(`scripts/smd_client.py`); `smd` does not identify the program. Anything else gets **403
 `desktop_app_required`**, on every route, page and stream, on both listeners, before the
 router and before any stream admission. The browser listener (TCP or Unix socket) refuses even
 a valid credential. A page asked of the browser listener (a `GET` or `HEAD` outside `/v1`) gets
@@ -50,12 +51,12 @@ envelope; it has no script, link or data. The one exception is `GET /v1/healthz`
 listeners. The check runs after the Host and Origin guard, so a foreign Host is still **403
 `cross_origin`**. The header is removed before any handler runs. Each refusal writes one
 warning to `smd.log` with the listener, method, path and whether a credential was presented,
-never a value. With the check on, an unusable credential, a refused identity or an app port
+never a value. An unusable credential, a refused identity or an app port
 that cannot be bound is a start-up error, and the app listener stopping with an error later
-ends `smd` (its service manager restarts it). With it off, the header is ignored.
+ends `smd` (its service manager restarts it).
 
-**App lifetime and admission (ADR 0102 ruling 6; W-0027 C4a).** With the operating-client
-check on, FT8 is operated only by the desktop app's **current lifetime**.
+**App lifetime and admission (ADR 0102 ruling 6; W-0027 C4a).** FT8 is operated only by the
+desktop app's **current lifetime**.
 - **The lifetime** is an identity the app's main process makes at each start (16 random bytes,
   base64url, 22 characters) and sends on every request as one `X-SM-App-Lifetime` header. It
   is a label, not a secret. More than one header, or a malformed one, is **400
@@ -82,7 +83,6 @@ check on, FT8 is operated only by the desktop app's **current lifetime**.
   process's marker, and `X-SM-Admission-Generation`, the admission generation as it is now.
   The app sees a daemon restart by the first and its own replacement by the second, asks
   (`GET /v1/app/lifetime`), and is admitted again or told it is retired.
-- With the check off, the header is ignored and admission does nothing.
 
 **Content negotiation.** JSON in/out except `POST /v1/qso`, which takes ADIF
 (`application/x-adif` / `text/plain` / empty).
@@ -534,12 +534,12 @@ The station-global archive catalogue (`config.md` §3): the archive the daemon s
 
 ### `GET /v1/app/lifetime`
 - **Purpose:** The read half of the desktop app's admission (W-0027 C4a): this process's marker, the admission generation, and whether the caller's `X-SM-App-Lifetime` is the current one. **Always-on.**
-- **Response:** **200** `{"required": bool, "daemon_instance": string, "generation": uint64, "current": bool}`. `required` is false with the operating-client check off; `generation` is then 0 and `current` false. A request with no lifetime is never current.
+- **Response:** **200** `{"daemon_instance": string, "generation": uint64, "current": bool}`. A request with no lifetime is never current. (The reply had a `required` field while the check could be switched off; it was removed with the switch, W-0027 C2e.)
 
 ### `POST /v1/app/lifetime`
 - **Purpose:** Admit the caller's app lifetime against what it read. **Always-on.**
 - **Request:** Body `{"daemon_instance": string, "generation": uint64}`, both as read; `generation` is **required**; unknown or duplicate keys are rejected (AW-2). The lifetime is the request's `X-SM-App-Lifetime` header.
-- **Response:** **200** `{"required": true, "daemon_instance": string, "generation": uint64, "current": true}`. The caller is current: either it already was (nothing changes, so a repeat or a retry after a lost answer is harmless) or it has replaced the previous lifetime. A replacement stops FT8 first (the cause `unattended`), waits for a transmission in flight to end, then publishes the new lifetime and advances the generation. With the check off: **200** `{"required": false, …}` and nothing happens.
+- **Response:** **200** `{"daemon_instance": string, "generation": uint64, "current": true}`. The caller is current: either it already was (nothing changes, so a repeat or a retry after a lost answer is harmless) or it has replaced the previous lifetime. A replacement stops FT8 first (the cause `unattended`), waits for a transmission in flight to end, then publishes the new lifetime and advances the generation.
 - **Errors:** 400 `invalid_json` / `missing_required_field` / `app_lifetime_required` (no lifetime header); **409** `app_admission_stale` (the marker or generation is not this process's now: another admission landed since the read; read again; the current app is untouched) | `app_lifetime_retired` (this lifetime has been replaced in this process; it is refused for good).
 - **Notes:** Admissions are handled one at a time and each succeeds only against the generation it read, so a request an earlier app had already sent cannot succeed after a later admission. Nothing is stored: a restarted `smd` has no current lifetime and no retired ones.
 

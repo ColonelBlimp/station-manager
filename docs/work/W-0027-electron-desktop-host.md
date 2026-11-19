@@ -159,6 +159,25 @@ design before code.
   `required` in the reply of `GET` and `POST /v1/app/lifetime`, which after C2e part 3 could
   only say `true`: it is removed in part 3, with `api-endpoints.md`, and the shell stops
   reading it. The follow-up is the redirect fix to the test clients (C2e part 2's section).
+- **2026-11-18 (operator): "yes, start part 3".** C2e part 3 is built from that direction.
+- **2026-11-18 (operator): "a, and record the Fox lines in the appropriate entry".** Asked
+  how to deal with the finding that the one-way version 7 step breaks the config half of
+  the downgrade tooling (C2e part 3's section), with three options: (a) take that half out
+  in part 3, (b) keep version 6 and leave the key as a dead, ignored setting, (c) remove
+  all the downgrade tooling first. **(a) is ruled.** The database half (`smd db-downgrade`,
+  the SQLite down files) stays for the later, separate removal. The Fox lines are an FT8
+  matter recorded in `docs/dogfood-inbox.md` (2026-11-18), not part of this dossier.
+- **2026-11-19 (operator), on the account-name clash found in the review of part 3: "This
+  cannot happen. As discussed, assume THERE ARE NO INSTALLS BUT MINE, and the one we know
+  about will be handled manually".** It applies the ruling of 2026-11-18 above, which I had
+  not applied: the clash needs the first seeding of an older install's Home archive, the
+  operator's is seeded, and the one other known install is handled by hand. **Closed: no
+  fix, no inbox entry.**
+- **2026-11-19 (operator): "README approved, remove preview, commit and push part 3".** The
+  reworded first paragraph of `README.md` is approved. `frontend/app`'s `preview` script
+  (`vite preview`) is removed with part 3, as its dev server was. Part 3 is committed and
+  pushed on this direction; the Fox notes (the inbox entry and the discussion record's
+  pointer) are not in that commit.
 
 ## Open questions for the operator
 
@@ -3834,8 +3853,12 @@ must read the server's plaintext; it is no evidence about TLS or the origin rule
 Three stream tests serve from a private mux outside the handler chain, as they did before.
 
 **Measured.** With part 3 simulated in a temporary copy (the check forced on, FT8 ownership
-forced required), the tests that fail are those of the off state and no others: 3 in
-`internal/ft8`, 6 in `internal/api`, 4 in `cmd/smd`. Before their steps the same simulation
+forced required), 13 test functions fail: 3 in `internal/ft8`, 6 in `internal/api`, 4 in
+`cmd/smd`. **Corrected 2026-11-18 (codex-162):** this first read "the tests that fail are
+those of the off state and no others". A failing function is not one kind of test: one of
+the three in `internal/ft8` is mixed and fails only on its off half, and the simulation
+cannot see a test that never builds a server. Part 3's section lists what was deleted and
+what was edited, function by function. Before their steps the same simulation
 failed 78 in `internal/api` and 24 in `cmd/smd`.
 
 **Two daemon tests pinned to the off state, and their ruling.** The behaviour exists only
@@ -3855,3 +3878,130 @@ supported rule differs, and Codex required no reversion proofs for it (codex-157
 **Not shown by part 2.** Nothing about a real install: no product behaviour changed, and the
 station was not touched. The switch still exists and still defaults as before. The
 always-on state is simulated, not built; it is part 3.
+
+### C2e part 3 — the check is always on (built 2026-11-18; reviewed; committed and pushed on direction 2026-11-19)
+
+Built on the operator's direction ("yes, start part 3") from the plan verified by Codex
+(codex-162), and widened by the operator's ruling "(a)" after a finding made while
+building it.
+
+**What the operator sees.** `smd` has no setting and no state in which a client without
+this install's credential is served. `config.json` is rewritten once, at the first start, to
+version 7 without `server.require_desktop_app`. A first-time install serves only the desktop
+app from its first start. What is checked is the credential on the app's listener: the app
+presents it, and so can a program of the operator's own user that reads the file; nothing
+here shows that the daemon recognises an Electron executable. `GET /v1/healthz` and the
+fixed notice stay public.
+
+**One-way, stated because it is.** A version 7 file is refused by every older build, and
+this build has no config downgrade. The previous pair (265.g8e64d2ed) cannot start on the
+migrated file.
+
+**The finding that changed the scope.** The brief said the key could go "without touching
+that tooling". That was wrong. With the head at version 7 and no way down, the once-only
+`config.v5.json` could no longer be made from a file already at version 7, and the start-up
+strip of the deprecated forwarder fields waited for that copy for ever
+(`cmd/smd/config_v6_strip.go`). Codex reproduced it (codex-163). The station was not
+affected: its strip ran on 2026-10-10. Ruled (a): the config half of the downgrade tooling
+leaves in this part.
+
+**Built.**
+- **Config** (`internal/config`): `migrateV6toV7` deletes the key from a `server` block that
+  is an object, whatever it said; a number or an array is left for the typed load to refuse;
+  an absent or `null` block loads as before. The head is 7; the field is gone. Forward
+  migrations only: `DowngradeDocument`, the three `down` steps and the helpers only they
+  used (`CheckDocument`, `DocumentSchemaVersion`, `WriteDocument`) are removed.
+- **FT8** (`internal/ft8`): `ownershipRequired` and `RequireOperatingLifetime` removed; the
+  five readers lose their off branch; the capture linger no longer disarms. Presence is the
+  only disarm for a lost operator. `lingerWindingDown` stays: the capture release still
+  drops the lock while it drains.
+- **API** (`internal/api`): the check and the FT8 wiring unconditional (`ft8Svc != nil`
+  kept, codex-162); the admission's off paths gone; `required` gone from the reply of both
+  admission routes (ruled).
+- **Daemon** (`cmd/smd`): a refused identity, a busy app port, an unusable credential and a
+  later serve error always end the start or the daemon; the messages say "smd serves only
+  the desktop app, and …". The start-up strip takes no copy first; an existing
+  `config.v5.json`, or anything else under that name, is not read, changed or removed.
+  `smd config-downgrade` is removed, and **its name is kept as a refusal**: any argv that
+  names no subcommand starts the daemon, so without it `smd config-downgrade --to 5 --yes`
+  started one (seen in the entry-point test before the refusal was added).
+  `archive.ReadHomeBindings`, `HomeFile`, the two rollback-only peek fields and
+  `scripts/rollback-drill.sh` are removed; `PeekDestinationBindings` stays for restore.
+- **Shell** (`desktop/`): the `'not-required'` state is gone from `admission.mjs`; a reply
+  that claims `required: false` is not believed and the app admits all the same. The
+  harness's off mode is gone. `check:c2b-smd` and `SM_DESKTOP_REQUIRE_APP` are removed from
+  `package.json`, `Taskfile.yml`, `scripts/ci-local.sh` and CI; the real-`smd` scenario is
+  one run on a fresh version 7 file.
+- **The three clients:** the Vite dev server (task, script, proxy), `cmd/loadgen` (with its
+  lint exclusion and three baseline entries) and the Cabrillo script's address form of
+  `--from-daemon`.
+- **Documents:** `api-endpoints.md`, `config.md`, `install.md` (the desktop app is the way
+  in; there is no switch and no rollback), `docs/ft8.md`, `AGENTS.md`, `desktop/README.md`,
+  `DEVELOPING.md`, `frontend/app/README.md`, the top paragraph of `README.md`, and four
+  passages of the manual.
+
+**Behaviour that changed beyond the switch, each on purpose.**
+1. A file at version 7 with deprecated forwarder fields is stripped at its first start with
+   Home seeded; before, it never was.
+2. Two shapes that used to wait because no version 5 copy could be made of them are now
+   stripped like any other: an entry with no name, and evidence sync on with SM Cloud
+   disabled.
+3. Staging files that an interrupted copy left beside `config.v5.json` are no longer
+   removed by a later start, since no later start makes a copy. The station has none.
+4. `onLingerExpired` is one critical section.
+
+**Tests: what was deleted and what was edited** (each whole function read first).
+- *Deleted, off state only:* FT8 `TestOperating_NotRequired_NothingChanges`,
+  `TestPresence_NotRequired_StreamsAreNotCounted`. API `TestAppAdmission_OffDoesNothing`,
+  `TestAppAdmission_OffAnArmNeedsNoStream`, `TestOperatingClient_NoNoticeWhenTheCheckIsOff`,
+  `TestOperatingClient_OffChangesNothing`, `TestApp_TheBrowserListenerIsUnchanged`. Daemon
+  `TestOperatingClient_OffTheCredentialIsStillMadeAndNothingAsksForIt`,
+  `TestOperatingClient_CheckOff_ARefusedCredentialNeverStopsTheStation`, the two ruled by
+  the operator, and four function-level tests of "reported, never fatal", each with a twin
+  that asserts the same input as a start-up error.
+- *Edited, the supported half kept:* the mixed FT8 test (now
+  `TestPresence_TheCaptureLingerDoesNotDecidePresence`); `TestOperatingClient_TheRule` (22
+  rows kept); `TestOperatingClient_TheHealthCheckStaysOpen`, whose baseline is now the health
+  handler's own answer; the credential tests (one state). The check that a served request's
+  credential is not logged moved into the logging test.
+- *The downgrade path:* the config command's tests and the tests of the down steps are
+  deleted with them; their forward halves stay. The strip tests are edited, not deleted:
+  bindings and routes unchanged, another archive active strips nothing, a failed write is
+  retried, an existing copy is left byte for byte.
+- *The Cabrillo tests:* the plain-address class's assertions moved onto the pinned fixture.
+
+**Written first and seen to fail:** the version 7 migration tests; the strip with no copy
+(failed on "the stub account still holds name"); the refused command name (the daemon
+started); the shell's reply that claims no admission is required; the Cabrillo address.
+**Reversion proof in a temporary copy:** the migration step emptied, and the station-shaped
+file is refused as an unknown key.
+
+**Not shown by any of this.** A second install's upgrade. The station: the pair is not
+deployed; its file is still version 6 with the key. Nothing was transmitted.
+
+**Review of the built part 3 (codex-164, 2026-11-18): two P2 findings, both fixed in the
+working tree.**
+- *The install guide left the desktop app out.* `docs/install.md` installed and updated the
+  daemon's package only, while the same change makes the desktop app the only way in. The
+  guide now installs, updates and removes the two packages together, says that the desktop
+  package requires exactly the daemon's version, lists what each installs, and tells a
+  maintainer that `scripts/release.sh` builds the daemon's package only. Two sentences that
+  were false went with it: one of mine in §6 ("To switch the setting off ..."), and an older
+  one ("The post-install scriptlet prints the next steps"; neither package has a scriptlet).
+  *Measured:* the two packages accepted in one `rpm -U --test` transaction and the daemon
+  alone refused (D1, above). *Not measured:* the `dnf` commands as written, with two local
+  files, and the `dnf remove` of both.
+- *The version 5 first-start test never loaded its version 5 file.* It built the daemon on
+  the service that had seeded the fixture at the head version. It now builds it on what
+  `config.Load` returns for the file, as `run()` does. Proofs by build overlay, the tree
+  untouched: with the 5-to-6 step out of the registry the test fails at the load ("no config
+  migration registered from version 5") while the head-version test passes; with the strip
+  made a no-op both fail on "still holds name".
+- *Found on the way, not part 3, not fixed:* loaded through `config.Load`, the shared
+  fixture failed its first start: `UNIQUE constraint failed:
+  logbook_destination.forwarder_name`. The load adds a nameless default account for every
+  registered type the file has no entry of, a nameless account seeds under its type's name,
+  and the fixture names an account of another type "qrz". So a file that names an account
+  after a registered type it has no entry of cannot seed an unseeded Home. The station's
+  Home is seeded. **Closed by the operator, 2026-11-19 (Rulings): it cannot happen. There
+  are no installs but the operator's, and the one other known is handled by hand.**

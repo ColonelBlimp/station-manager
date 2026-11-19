@@ -18,7 +18,7 @@ root `/` (W-0003). The design is settled in two places:
 
 ```
 npm install
-npm run dev      # http://localhost:5176 (proxies /v1 → :8080)
+npm run build    # the bundle the daemon embeds; seen in the desktop app (there is no dev server)
 npm run check    # svelte-check
 npm run lint
 npm run test

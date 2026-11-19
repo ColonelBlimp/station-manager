@@ -256,12 +256,9 @@ task build:smd:static      # CGO-free static build — no FT8 capture (release s
 task run            # build + run the daemon on :8080 (stops the systemd smd first)
 ```
 
-For SPA development with hot-reload, run two terminals:
-
-```bash
-task run:smd          # terminal 1: daemon via `go run` (CGO-on, live FT8)
-task frontend:app:dev # terminal 2: Vite on :5176, proxies /v1/* to the daemon
-```
+There is no Vite dev server: `smd` serves only its desktop app, so a page served by another
+program cannot reach it. Build the SPA (`task frontend:app:build`) and see it in the desktop
+app. `task run:smd` runs the daemon through `go run` (CGO on, live FT8).
 
 Both `run` targets automatically stop a running user-level `smd` systemd unit
 first so they don't fight over `:8080` and the audio/serial ports. Restart it

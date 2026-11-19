@@ -31,7 +31,6 @@ func TestLifecycle_ArchiveActivationSealsAndRequestsTheRestart(t *testing.T) {
 	// would be about ownership and would say nothing of the seal. FT8 is off in this
 	// daemon's config, so the stream starts no capture.
 	const operator = "AAAAAAAAAAAAAAAAAAAAAA"
-	d.ft8.RequireOperatingLifetime()
 	d.ft8.PublishOperating(operator)
 	_, leave, err := d.ft8.SubscribeModeAs("", operator)
 	if err != nil {

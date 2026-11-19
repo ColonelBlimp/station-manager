@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """A client for the local smd that the operator's own tools use (W-0027 C2c).
 
-With smd's operating-client check on (server.require_desktop_app), smd serves only its pinned
-HTTPS listener, and only a request that carries this install's operating credential. This
+smd serves only its pinned HTTPS listener, and only a request that carries this install's
+operating credential (the operating-client check, always on since W-0027 C2e). This
 module is how a script of the operator's own user does that, the same way the desktop app does:
 
   - it finds the install as smd does: --sm-config, else SM_WORKING_DIR, else the XDG data
@@ -17,8 +17,6 @@ module is how a script of the operator's own user does that, the same way the de
     written;
   - it never follows a redirect, never falls back to plain HTTP, and no error it raises and
     nothing it prints contains the credential. The credential is never a command-line argument.
-
-It works whether the check is on or off: with it off, smd ignores the credential.
 
 As a command it sends one request and prints the HTTP status, as curl's %{http_code} does
 ("000" when no answer was had), for shell scripts:

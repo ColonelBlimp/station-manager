@@ -26,8 +26,7 @@ set -uo pipefail
 
 # The daemon is asked through scripts/smd_client.py (W-0027 C2c): the LOCAL install's pinned
 # HTTPS listener, after verifying smd's own certificate, with the install's operating
-# credential. That works whether smd's operating-client check is on or off, and the
-# credential is never on a command line. There is no address to set and no default one: the
+# credential, which is never on a command line. There is no address to set and no default one: the
 # install is found as smd finds it (SM_WORKING_DIR, else the XDG data directory), or name
 # another install's config.json in SM_CONFIG.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

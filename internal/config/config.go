@@ -593,19 +593,8 @@ type ServerConfig struct {
 
 	// AppPort is the desktop app listener's port (ADR 0103 point 2; W-0027 C1c): HTTPS with
 	// smd's own identity, always on 127.0.0.1. Zero means the default (EffectiveAppPort). It
-	// is a read/serve resolver, never filled in: an older smd refuses a key it does not know,
-	// so writing the default would stop a downgrade from starting.
+	// is a read/serve resolver, never filled in.
 	AppPort int `json:"app_port,omitempty"`
-
-	// RequireDesktopApp switches on the operating-client check (ADR 0102 ruling 1; W-0027
-	// C2): a request is served only on the desktop app's listener and only with the
-	// per-install operating credential; GET /v1/healthz is the one exception. Off by
-	// default, and temporary (operator ruling 2026-11-13): the key and its off state are
-	// removed once others can install the desktop app. Read at start, so a change takes
-	// effect at a restart. On, an unusable credential, identity or app port stops the start.
-	// False is never written (omitempty), so a file that never set it still starts on a
-	// build that does not know the key.
-	RequireDesktopApp bool `json:"require_desktop_app,omitempty"`
 
 	// AllowInsecureNetwork acknowledges the deliberately-insecure posture of a
 	// non-loopback TCP listener (ST-3a — docs/reviews/internal-security-trust-boundary-audit.md).
@@ -636,16 +625,6 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("reading config file: %w", err)
 	}
 	return loadDocument(path, data)
-}
-
-// CheckDocument runs a config document through everything Load does after
-// reading the file — migration, the unknown-key gate, defaults and validation —
-// without a file: the caller's bytes never leave memory. path names the file
-// the document would be (its directory resolves relative defaults; messages
-// cite it). Used to prove a v5 recovery copy would load (W-0021 5C, R3).
-func CheckDocument(path string, data []byte) error {
-	_, err := loadDocument(path, data)
-	return err
 }
 
 func loadDocument(path string, data []byte) (Config, error) {
@@ -859,15 +838,6 @@ func writeJSONDurable(path string, cfg Config, fs fsOps) (Durability, error) {
 		return Durable, fmt.Errorf("marshalling config: %w", err)
 	}
 	return writeBytesDurable(path, data, fs)
-}
-
-// WriteDocument writes an already-serialised config document with the same
-// crash-durable replacement and mode rules as WriteJSON. It exists for the
-// operations that must NOT re-marshal through the current typed Config — a
-// schema downgrade (`smd config-downgrade`) writes an OLDER shape, and the
-// typed struct would put the current keys straight back.
-func WriteDocument(path string, data []byte) (Durability, error) {
-	return writeBytesDurable(path, data, osFS{})
 }
 
 func writeBytesDurable(path string, data []byte, fs fsOps) (Durability, error) {
@@ -1373,9 +1343,9 @@ func applyDefaults(cfg *Config, baseDir string) {
 		cfg.Server.Protocol = "tcp"
 	}
 	if cfg.SocketPath == "" {
-		// Default address for each protocol. localhost-only TCP so
-		// the SPA's Vite dev proxy ("/v1" → http://localhost:8080)
-		// reaches a daemon out of the box; the unix path resolves to an
+		// Default address for each protocol. Loopback-only TCP for the
+		// main listener (the health check and the notice; W-0027 C2e);
+		// the unix path resolves to an
 		// owner-private runtime directory (ST-5) — NOT /tmp, which is
 		// world-writable and cannot be the authorization boundary.
 		if cfg.Server.Protocol == "tcp" {

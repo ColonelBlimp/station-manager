@@ -44,7 +44,7 @@ func newGuardFixture(t *testing.T) guardFixture {
 	t.Cleanup(fake.close)
 	host, port := fake.hostPort()
 
-	srv := testServerWithFt8(t, checkOn(nil), ft8.NewService(types.Ft8Config{Enabled: true}, &logging.Service{}, ""))
+	srv := testServerWithFt8(t, nil, ft8.NewService(types.Ft8Config{Enabled: true}, &logging.Service{}, ""))
 	srv.SetServedArchive(guardServedArchive)
 	prepareApp(t, srv)
 	srv.mailer = email.New(types.SmtpConfig{

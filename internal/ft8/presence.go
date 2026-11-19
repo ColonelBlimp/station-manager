@@ -9,8 +9,8 @@ import (
 //
 // A scope is a kind of operation in which the daemon can transmit by itself once the
 // operator has started it. It names one stream as its presence: its own event stream,
-// opened by its own view. With the operating-client check on, presence in the scope is an
-// open subscription to that stream made under the app lifetime that is current.
+// opened by its own view. Presence in the scope is an open subscription to that stream made
+// under the app lifetime that is current.
 //
 // THIS HELPER KNOWS NOTHING OF FT8 (operator ruling 2026-11-17, questions 2 and 7): it
 // lives here until a second real scope exists, and is moved out then. It answers two

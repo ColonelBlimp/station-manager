@@ -119,14 +119,6 @@
     {
       "language": "go",
       "metric": "cognitive-complexity",
-      "path": "cmd/loadgen/main.go",
-      "function": "main",
-      "direction": "maximum",
-      "value": 63
-    },
-    {
-      "language": "go",
-      "metric": "cognitive-complexity",
       "path": "cmd/smd/import.go",
       "function": "runImport",
       "direction": "maximum",
@@ -239,14 +231,6 @@
     {
       "language": "go",
       "metric": "cyclomatic-complexity",
-      "path": "cmd/loadgen/main.go",
-      "function": "main",
-      "direction": "maximum",
-      "value": 37
-    },
-    {
-      "language": "go",
-      "metric": "cyclomatic-complexity",
       "path": "cmd/smd/import.go",
       "function": "runImport",
       "direction": "maximum",
@@ -355,14 +339,6 @@
       "function": "(*Service).Update",
       "direction": "maximum",
       "value": 40
-    },
-    {
-      "language": "go",
-      "metric": "maintainability-index",
-      "path": "cmd/loadgen/main.go",
-      "function": "main",
-      "direction": "minimum",
-      "value": 14
     },
     {
       "language": "go",

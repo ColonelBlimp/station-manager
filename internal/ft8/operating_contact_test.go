@@ -47,7 +47,6 @@ func newReplacedContact(t *testing.T) *replacedContact {
 	f := &replacedContact{keyer: &fakeKeyer{}, player: newFakeTxPlayer()}
 	s := newBareTxTestService(f.keyer, f.player, nil)
 	f.s = s
-	s.RequireOperatingLifetime()
 	s.PublishOperating(lifeA)
 	s.presence.open(lifeA) // presence is C4b's rule, with its own tests: A's stream is open
 	t.Cleanup(func() { _ = s.ArmTx(false) })

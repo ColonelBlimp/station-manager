@@ -78,11 +78,6 @@ type daemon struct {
 
 	// DB paths derived once the log-DB node initialises (its Initialize sets DatabaseConfig.Path).
 	paths archive.Paths // resolved from the catalogue before the graph is built (ADR 0071)
-	// configAtStart is config.json exactly as it was on disk before startup
-	// persisted the migrated document (config v6, W-0021 5C ruling R3): the
-	// source of the one-time v5 recovery copy taken before the strip. An
-	// unreadable file leaves it nil; the copy then recovers from the v6 file.
-	configAtStart []byte
 	// activationFailure is set on a last-known-good generation: the pending
 	// candidate this start was asked to activate did not come up (startGenerations).
 	activationFailure *activationFailure
@@ -1245,26 +1240,21 @@ func (d *daemon) initHTTP() error {
 // wait loop selects on (exactly as before). The desktop app's listener starts only once the
 // browser listener holds its port (codex-058).
 //
-// The operating-client check (W-0027 C2a) decides what a problem with the desktop app's side
-// does. Off, each is reported and never fatal (C1c). On, an unusable credential, a refused
-// identity, an app port that cannot be bound, or the app listener stopping with an error
-// later, ends the daemon: the error goes to errCh, the
+// smd serves only the desktop app (W-0027 C2a, permanent since C2e), so a problem with the
+// desktop app's side ends the daemon: an unusable credential, a refused identity, an app port
+// that cannot be bound, or the app listener stopping with an error later. The error goes to
+// errCh, the
 // path a failed browser bind already takes, so the daemon comes down in order and an archive
 // activation in flight is not blamed for it. Until it is down, nothing but the health check
 // is served: after a credential failure the server holds no credential; after an identity or
 // bind failure it holds one, but there is no app listener to present it on.
 func (d *daemon) startHTTP(ctx context.Context) error {
-	required := d.server.RequiresDesktopApp()
-	var fatal func(error)
-	if required {
-		fatal = d.failOperatingClientStart
-	}
-	loadOperatingCredential(d.server, desktopid.EnsureCredential, d.cfgSvc.WorkingDir(), required,
+	loadOperatingCredential(d.server, desktopid.EnsureCredential, d.cfgSvc.WorkingDir(),
 		d.reportDesktopListener, d.failOperatingClientStart)
-	d.reportOperatingClientCheck(required)
+	d.logger.InfoWith().Msg("operating-client check: only the desktop app is served, with this install's operating credential")
 	go func() { d.errCh <- serveBrowser(d) }()
 	startAppAfterBrowser(ctx, d.server, desktopid.Ensure, d.cfgSvc.WorkingDir(),
-		d.cfg.Server.EffectiveAppPort(), d.reportDesktopListener, fatal)
+		d.cfg.Server.EffectiveAppPort(), d.reportDesktopListener, d.failOperatingClientStart)
 	return nil
 }
 
@@ -1278,7 +1268,7 @@ func (d *daemon) reportDesktopListener(msg string, err error) {
 	ev.Msg(msg)
 }
 
-// failOperatingClientStart ends a daemon the operating-client check does not allow to run: at
+// failOperatingClientStart ends a daemon that cannot serve the desktop app: at
 // the start, or later if the app listener stops with an error. The reason is logged here,
 // because errCh holds one error and the first one wins.
 func (d *daemon) failOperatingClientStart(err error) {
@@ -1287,17 +1277,6 @@ func (d *daemon) failOperatingClientStart(err error) {
 	case d.errCh <- err:
 	default:
 	}
-}
-
-// reportOperatingClientCheck states the check's state at every start, so a station running
-// without it is visible in smd.log.
-func (d *daemon) reportOperatingClientCheck(required bool) {
-	ev := d.logger.InfoWith().Bool("require_desktop_app", required)
-	if required {
-		ev.Msg("operating-client check: on; only the desktop app is served, with this install's operating credential")
-		return
-	}
-	ev.Msg("operating-client check: off; any client that can reach a listener is served")
 }
 
 func (d *daemon) httpStopAccepting() {

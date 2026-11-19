@@ -205,15 +205,10 @@ returns you to listening, still armed and ready for the next one.
 > boundaries, so there can be a short wait before your signal is sent. The **ON AIR**
 > indicator lights while you are actually transmitting.
 
-> **Changing settings during a session: use a second browser tab.** Switching this
-> tab away from the FT8 view ends the session — transmit disarms and a contact in
-> progress is abandoned. Open **Settings** in a second tab instead; a change to the
-> repeat cap takes effect at once, with no restart.
->
-> **In the desktop app there is no second tab.** It has one window, and where the
-> daemon serves only the desktop app a browser tab shows a notice instead. Leaving
-> the FT8 view for Settings ends the session in the same way, so stop your run
-> first, change the setting, and start again.
+> **Changing settings during a session: stop your run first.** The desktop app has
+> one window, and leaving the FT8 view for Settings ends the session — transmit
+> disarms and a contact in progress is abandoned. Stop your run, change the setting,
+> and start again; a change to the repeat cap needs no restart.
 
 ## Calling CQ: choosing your slot
 

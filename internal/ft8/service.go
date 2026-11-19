@@ -88,8 +88,8 @@ type Service struct {
 	// RetryAfter; meaningful only while lingerTimer != nil.
 	lingerDeadline time.Time
 	// lingerWindingDown is true from the moment onLingerExpired consumes the
-	// timer until its teardown (unattended disarm, capture release) completes,
-	// so a claim refused in that window still advertises a retry.
+	// timer until its teardown (the capture release) completes, so a claim
+	// refused in that window still advertises a retry.
 	lingerWindingDown bool
 
 	// hub fans each slot's decode + occupancy events out to /v1/ft8/events SSE
@@ -230,10 +230,9 @@ type Service struct {
 	// goroutine, which takes only txMu).
 	seqGate sync.Mutex
 
-	// Operating ownership (operating.go; W-0027 C4a). ownershipRequired is set once
-	// at wiring, before Start. operatingLifetime is the app lifetime that may operate
-	// FT8, "" for none; guarded by seqGate, the gate a replacement takes.
-	ownershipRequired atomic.Bool
+	// Operating ownership (operating.go; W-0027 C4a). operatingLifetime is the app
+	// lifetime that may operate FT8, "" for none; guarded by seqGate, the gate a
+	// replacement takes.
 	operatingLifetime string
 
 	// Presence in the scope (presence.go; W-0027 C4b): which app lifetimes have this
@@ -517,38 +516,11 @@ func (s *Service) onLingerExpired() {
 		s.lingerWindingDown = false
 		s.mu.Unlock()
 	}()
-	// No !s.capturing check (2026-07-25 review): the disarm below is the
-	// attended-only guarantee and must run even with capture already down —
-	// otherwise a session whose capture loop died (onCaptureLoopExit clears
-	// capturing without disarming) leaves TX armed once the operator leaves. The
-	// DEVICE release further down stays gated on capturing, which is the only
-	// part that genuinely depends on it. Stop() owns the stopped case (disarmTx(true)).
-	if s.subCount > 0 || s.stopped {
-		s.mu.Unlock()
-		return
-	}
-	s.mu.Unlock()
-
-	// Attended-only: the last /v1/ft8/events subscriber is gone past the linger
-	// window (the browser was closed, not briefly reloaded), so no operator is
-	// attending FT8 — TX must not stay armed across browser sessions. Disarm FIRST,
-	// and OUTSIDE s.mu, so dropping PTT + abandoning any active QSO (the safety
-	// action) is never delayed by releaseCaptureLocked's decode-log close, which can
-	// block on a stalled disk. disarmTx takes its own txMu and waits on an in-flight
-	// transmission to drain (txWg); idempotent — a no-op when TX isn't armed.
-	//
-	// With ownership required (W-0027 C4b) this count decides CAPTURE only. Presence
-	// is the current app lifetime's own stream, judged by presence.go, which disarms
-	// by the same path when that is lost: a tool's stream keeps capture open here and
-	// must not keep TX armed, and the app's presence must not be ended by this count.
-	if !s.ownershipRequired.Load() {
-		s.disarmTx(disarmUnattended)
-	}
-
-	// Then release the capture device. Re-check under s.mu: a subscriber that
-	// reconnected during the disarm window keeps the session (skip the release);
-	// it re-arms TX, consistent with attended-only.
-	s.mu.Lock()
+	// This count decides CAPTURE only (W-0027 C4b): it never disarms. Whether the
+	// operator is still there is presence, the current app lifetime's own stream,
+	// judged by presence.go, which disarms when that is lost, with capture up or
+	// down. A tool's stream keeps capture open here and must not keep TX armed, and
+	// the app's presence must not be ended by this count.
 	if s.subCount == 0 && !s.stopped && s.capturing {
 		s.releaseCaptureLocked()
 	}
@@ -646,8 +618,8 @@ func (s *Service) reconcileCat() {
 // Caller holds s.mu.
 func (s *Service) startCaptureLocked() {
 	// Already capturing — keep the live session, don't start a second (F1). A
-	// reconnect during a release's linger/disarm window (onLingerExpired clears
-	// lingerTimer, drops s.mu across disarmTx, ~13s) can drive subCount 0→1 with
+	// reconnect during a release's linger window (onLingerExpired clears
+	// lingerTimer, and the release drops s.mu while it drains) can drive subCount 0→1 with
 	// lingerTimer already nil and reach here while session 1 is still live.
 	// Starting a second session would orphan the first device+pump (malgoSource.
 	// Start overwrites its fields) and later deadlock the release drain. Keeping

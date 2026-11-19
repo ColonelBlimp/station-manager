@@ -14,7 +14,7 @@ import (
 
 // App admission (W-0027 C4a; ADR 0102 ruling 6; ADR 0100 §3, App lifetimes).
 //
-// With the operating-client check on, the desktop app's main process makes one random
+// The desktop app's main process makes one random
 // identity at each start, its app lifetime, and sends it on every request beside the
 // credential. Before it loads the workspace it is admitted: it reads this process's
 // marker and the admission generation, and then admits against what it read.
@@ -64,8 +64,7 @@ const (
 
 type appLifetimeKey struct{}
 
-// appLifetime is the request's validated app lifetime, or "" when it carried none, or
-// when the check is off and the header is ignored.
+// appLifetime is the request's validated app lifetime, or "" when it carried none.
 func appLifetime(r *http.Request) string {
 	v, _ := r.Context().Value(appLifetimeKey{}).(string)
 	return v
@@ -180,8 +179,6 @@ func (a *appAdmission) admit(lifetime, instance string, generation uint64) (uint
 }
 
 type appLifetimeState struct {
-	// Required is false with the check off: the app has nothing to be admitted to.
-	Required   bool   `json:"required"`
 	Instance   string `json:"daemon_instance"`
 	Generation uint64 `json:"generation"`
 	Current    bool   `json:"current"`
@@ -193,8 +190,7 @@ type appLifetimeAdmitRequest struct {
 }
 
 // registerAppAdmission declares the two admission routes. The desktop app's main process
-// reads, then admits its lifetime, before it loads the workspace. With the check off both
-// do nothing.
+// reads, then admits its lifetime, before it loads the workspace.
 func (s *Server) registerAppAdmission(apiMux *routeMux) {
 	apiMux.HandleFunc("GET /v1/app/lifetime", s.handleAppLifetimeRead)
 	apiMux.HandleFunc("POST /v1/app/lifetime", s.handleAppLifetimeAdmit)
@@ -203,10 +199,8 @@ func (s *Server) registerAppAdmission(apiMux *routeMux) {
 // handleAppLifetimeRead answers the read: this process's marker, the admission
 // generation, and whether the caller is the current lifetime.
 func (s *Server) handleAppLifetimeRead(w http.ResponseWriter, r *http.Request) {
-	st := appLifetimeState{Required: s.requireDesktopApp, Instance: processInstance}
-	if s.requireDesktopApp {
-		st.Generation, st.Current = s.admission.read(appLifetime(r))
-	}
+	st := appLifetimeState{Instance: processInstance}
+	st.Generation, st.Current = s.admission.read(appLifetime(r))
 	s.writeJSON(w, http.StatusOK, st)
 }
 
@@ -215,10 +209,6 @@ func (s *Server) handleAppLifetimeAdmit(w http.ResponseWriter, r *http.Request) 
 	const op errors.Op = "api.handleAppLifetimeAdmit"
 	var req appLifetimeAdmitRequest
 	if !s.readCommandJSON(w, r, op, &req) {
-		return
-	}
-	if !s.requireDesktopApp {
-		s.writeJSON(w, http.StatusOK, appLifetimeState{Instance: processInstance})
 		return
 	}
 	lifetime := appLifetime(r)
@@ -241,7 +231,7 @@ func (s *Server) handleAppLifetimeAdmit(w http.ResponseWriter, r *http.Request) 
 			"the admission state has changed since it was read; read it again", op)
 	default:
 		s.writeJSON(w, http.StatusOK, appLifetimeState{
-			Required: true, Instance: processInstance, Generation: generation, Current: true})
+			Instance: processInstance, Generation: generation, Current: true})
 	}
 }
 

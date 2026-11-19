@@ -13,12 +13,11 @@ daemon (GET /v1/logbook/{id}/qso, all pages; the daemon's default logbook
 unless --logbook names another), so the log does not depend on which window
 or session logged what. Read-only. Instead, LOG.adi reads an ADIF export.
 
-With no address, --from-daemon reads the local install the way the desktop app
-does (scripts/smd_client.py, W-0027 C2c): over smd's pinned HTTPS listener,
-after verifying smd's own certificate, with the install's operating credential.
-That works whether smd's operating-client check is on or off; --sm-config names
-another install's config.json. An address (--from-daemon http://127.0.0.1:8080)
-is asked plainly, as before, which smd refuses once the check is on.
+--from-daemon reads the local install the way the desktop app does
+(scripts/smd_client.py, W-0027 C2c): over smd's pinned HTTPS listener, after
+verifying smd's own certificate, with the install's operating credential.
+--sm-config names another install's config.json. It takes no address: smd
+serves nothing to a plain client (W-0027 C2e).
 
 A temporary tool for the 2026 UK/EI DX SSB event: a Cabrillo export in the
 product replaces it (W-0023).
@@ -61,8 +60,6 @@ import re
 import sys
 import json
 import tempfile
-import urllib.error
-import urllib.request
 
 SSB_SUBMODES = {"", "USB", "LSB"}
 BANDS = {"80m": (3500, 3800), "40m": (7000, 7200), "20m": (14000, 14350), "15m": (21000, 21450),
@@ -247,12 +244,11 @@ def convert(records, a):
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("adif", nargs="?", help="an ADIF export (or use --from-daemon)")
-    p.add_argument("--from-daemon", metavar="URL", nargs="?", const=LOCAL,
-                   help="read the contacts from the running daemon: with no address, the local install over "
-                        "its pinned listener with its operating credential; or a plain address such as "
-                        "http://127.0.0.1:8080")
-    p.add_argument("--sm-config", metavar="PATH", help="with --from-daemon and no address: config.json of "
-                                                       "another install (an absolute path)")
+    p.add_argument("--from-daemon", action="store_true",
+                   help="read the contacts from the running daemon: the local install, over its pinned "
+                        "listener with its operating credential")
+    p.add_argument("--sm-config", metavar="PATH", help="with --from-daemon: config.json of another install "
+                                                       "(an absolute path)")
     p.add_argument("--logbook", type=int, help="with --from-daemon: the logbook id (default: the daemon's default logbook)")
     p.add_argument("-o", "--output", required=True, help="the Cabrillo file; replaced only on success")
     p.add_argument("--contest", required=True, type=str.upper, choices=["UKEIDXSSB", "UKEIDXCW"])
@@ -262,17 +258,17 @@ def main(argv=None):
     p.add_argument("--assisted", required=True, choices=["ASSISTED", "NON-ASSISTED"])
     p.add_argument("--time", required=True, choices=["24-HOURS", "12-HOURS"])
     a = p.parse_args(argv)
-    if (a.adif is None) == (a.from_daemon is None):
-        p.error("give an ADIF file or --from-daemon, not both")
+    if (a.adif is None) != a.from_daemon:
+        p.error("give an ADIF file or --from-daemon, not both (--from-daemon takes no address)")
     try:
         if a.from_daemon:
-            records = fetch_daemon(a.from_daemon, a.logbook, a.sm_config)
+            records = fetch_daemon(a.logbook, a.sm_config)
         else:
             with open(a.adif, "rb") as f:
                 records = parse_adif(f.read())
     except DaemonError as e:
         return report(a.output, [f"could not read the contacts: {e}"], [], None)
-    except (urllib.error.URLError, OSError, ValueError) as e:
+    except (OSError, ValueError) as e:
         return report(a.output, [f"could not read the contacts: {e}"], [], None)
     except AdifError as e:
         return report(a.output, [str(e)], [], None)
@@ -303,9 +299,6 @@ def report(output, errors, notes, lines):
     return 0
 
 
-LOCAL = "<the local install>"  # --from-daemon with no address
-REFUSED = "desktop_app_required"  # smd's code for a client without its operating credential
-
 
 class DaemonError(Exception):
     """The daemon could not be read; the message is for the operator."""
@@ -323,61 +316,39 @@ def _smd_client():
     return module
 
 
-def _getter(base, sm_config=None):
-    """A function path -> parsed JSON, for the local install or for a plain address."""
-    if base == LOCAL:
-        sc = _smd_client()
+def _getter(sm_config=None):
+    """A function path -> parsed JSON, for the local install."""
+    sc = _smd_client()
+    try:
+        client = sc.local_client(sm_config)
+    except sc.ClientError as e:
+        raise DaemonError(str(e)) from None
+
+    def local(path):
         try:
-            client = sc.local_client(sm_config)
+            status, body = client.request("GET", path)
         except sc.ClientError as e:
             raise DaemonError(str(e)) from None
-
-        def local(path):
-            try:
-                status, body = client.request("GET", path)
-            except sc.ClientError as e:
-                raise DaemonError(str(e)) from None
-            if status != 200:
-                raise DaemonError(f"the daemon answered {status} for {path.split('?')[0]}")
-            return json.loads(body)
-        return local
-
-    def plain(path):
-        try:
-            with urllib.request.urlopen(base.rstrip("/") + path, timeout=30) as r:
-                return json.load(r)
-        except urllib.error.HTTPError as e:
-            code = ""
-            try:
-                code = json.load(e).get("code", "")
-            except (ValueError, AttributeError):
-                pass
-            finally:
-                e.close()
-            if e.code == 403 and code == REFUSED:
-                raise DaemonError("the daemon serves only the Station Manager desktop app and clients with "
-                                  "its operating credential: use --from-daemon without an address") from None
-            raise
-    return plain
+        if status != 200:
+            raise DaemonError(f"the daemon answered {status} for {path.split('?')[0]}")
+        return json.loads(body)
+    return local
 
 
-def fetch_daemon(base, logbook=None, sm_config=None):
+def fetch_daemon(logbook=None, sm_config=None):
     """Every QSO of the logbook as {ADIF FIELD: value} records, from the daemon's
     paged list (the default logbook unless one is named). Read-only."""
-    get = _getter(base, sm_config)
-
-    def _get(_base, path):
-        return get(path)
+    get = _getter(sm_config)
     if logbook is None:
-        default = (_get(base, "/v1/version").get("archive") or {}).get("default_logbook_uuid")
-        books = [b for b in _get(base, "/v1/logbook") if b.get("uuid") == default]
+        default = (get("/v1/version").get("archive") or {}).get("default_logbook_uuid")
+        books = [b for b in get("/v1/logbook") if b.get("uuid") == default]
         if not default or len(books) != 1:
             raise AdifError("the daemon reports no default logbook; name one with --logbook")
         logbook = books[0]["id"]
     records, after = [], None
     while True:
         path = f"/v1/logbook/{int(logbook)}/qso?limit=500" + (f"&after={after}" if after else "")
-        page = _get(base, path)
+        page = get(path)
         for item in page.get("items") or []:
             records.append({k.upper(): str(v) for k, v in item.items()
                             if v is not None and isinstance(v, (str, int, float))})

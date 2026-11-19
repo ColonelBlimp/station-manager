@@ -295,113 +295,10 @@ def qso_json(call, stx, **kw):
     return q
 
 
-class FakeDaemon:
-    """GET /v1/version, /v1/logbook and the paged /v1/logbook/{id}/qso."""
-
-    def __init__(self, pages, default_uuid="lb-uuid-1", logbooks=None):
-        self.pages, self.requests = pages, []
-        books = logbooks or [{"id": 1, "uuid": "lb-uuid-1"}, {"id": 2, "uuid": "lb-uuid-2"}]
-        owner = self
-
-        class H(http.server.BaseHTTPRequestHandler):
-            def log_message(self, *a):
-                pass
-
-            def do_GET(self):
-                owner.requests.append(self.path)
-                if self.path == "/v1/version":
-                    body = {"archive": {"default_logbook_uuid": default_uuid}}
-                elif self.path == "/v1/logbook":
-                    body = books
-                elif self.path.startswith("/v1/logbook/1/qso"):
-                    after = self.path.split("after=")[1].split("&")[0] if "after=" in self.path else ""
-                    i = int(after or 0)
-                    nxt = str(i + 1) if i + 1 < len(owner.pages) else None
-                    body = {"items": owner.pages[i], "next_cursor": nxt}
-                else:
-                    self.send_response(404)
-                    self.end_headers()
-                    return
-                data = json.dumps(body).encode()
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(data)
-
-        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
-        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
-
-    def close(self):
-        self.server.shutdown()
-        self.server.server_close()
-
-
-def run_daemon(daemon, *extra):
-    if os.path.exists(OUT):
-        os.remove(OUT)
-    out, err = io.StringIO(), io.StringIO()
-    with redirect_stdout(out), redirect_stderr(err):
-        code = cab.main(["--from-daemon", daemon.url, "-o", OUT] + list(extra) + ARGS)
-    lines = open(OUT, encoding="utf-8").read().splitlines() if os.path.exists(OUT) else []
-    if os.path.exists(OUT):
-        os.remove(OUT)
-    return code, lines, err.getvalue()
-
-
-class FromDaemon(unittest.TestCase):
-    """--from-daemon: every contact of the occurrence, whatever tab logged it."""
-
-    def test_reads_every_page_of_the_default_logbook_and_keeps_only_this_event(self):
-        d = FakeDaemon([
-            [qso_json("G4AAA", "2"), qso_json("K1ABC", "", contest_id=None, app_sm_contest_start=None)],
-            [qso_json("G4BBB", "1", srx="0"), qso_json("G4DRY", "1", app_sm_contest_start="20261030")],
-        ])
-        try:
-            code, lines, err = run_daemon(d)
-        finally:
-            d.close()
-        self.assertEqual(code, 0, err)
-        q = [l.split() for l in qso_lines(lines)]
-        self.assertEqual([x[9] for x in q], ["G4BBB", "G4AAA"])  # serial order, both pages
-        self.assertEqual(q[0][1], "14188")
-        self.assertEqual(q[0][11], "000")
-        self.assertIn("G4DRY", err)  # another occurrence: listed, left out
-        self.assertNotIn("K1ABC", err)  # not a contest contact: ignored
-        self.assertTrue(any("/v1/logbook/1/qso" in r for r in d.requests))
-        self.assertTrue(any("after=1" in r for r in d.requests))
-
-    def test_a_named_logbook_is_read_instead_of_the_default(self):
-        d = FakeDaemon([[qso_json("G4AAA", "1")]], default_uuid="lb-uuid-2")
-        try:
-            code, lines, err = run_daemon(d, "--logbook", "1")
-        finally:
-            d.close()
-        self.assertEqual(code, 0, err)
-        self.assertEqual(len(qso_lines(lines)), 1)
-
-    def test_an_unreachable_daemon_writes_nothing(self):
-        d = FakeDaemon([[qso_json("G4AAA", "1")]])
-        url = d.url
-        d.close()
-        out, err = io.StringIO(), io.StringIO()
-        if os.path.exists(OUT):
-            os.remove(OUT)
-        with redirect_stdout(out), redirect_stderr(err):
-            code = cab.main(["--from-daemon", url, "-o", OUT] + ARGS)
-        self.assertEqual(code, 1)
-        self.assertFalse(os.path.exists(OUT))
-        self.assertIn("ERROR", err.getvalue())
-
-    def test_a_file_and_the_daemon_together_are_refused(self):
-        with self.assertRaises(SystemExit):
-            with redirect_stderr(io.StringIO()):
-                cab.main(["x.adi", "--from-daemon", "http://127.0.0.1:1", "-o", OUT] + ARGS)
-
-
-# --- W-0027 C2c: reading the daemon when its operating-client check is on ----------------
+# --- --from-daemon: every contact of the occurrence, whatever window logged it -----------
 # The local install is read over smd's pinned listener with the install's credential
-# (scripts/smd_client.py). Synthetic installs and identities, loopback fixtures; never smd.
+# (scripts/smd_client.py; W-0027 C2c). It is the only way: smd serves nothing to a plain
+# address (C2e). Synthetic installs and identities, loopback fixtures; never smd.
 _hspec = importlib.util.spec_from_file_location("smd_client_test", os.path.join(_here, "smd_client_test.py"))
 fx = importlib.util.module_from_spec(_hspec)
 _hspec.loader.exec_module(fx)
@@ -412,7 +309,8 @@ def tearDownModule():
 
 
 def daemon_answer(pages, default_uuid="lb-uuid-1"):
-    """The same three routes as FakeDaemon, as an answer function for the TLS fixture."""
+    """GET /v1/version, /v1/logbook and the paged /v1/logbook/1/qso, as an answer function
+    for the TLS fixture."""
     def answer(method, path):
         if path == "/v1/version":
             body = {"archive": {"default_logbook_uuid": default_uuid}}
@@ -490,25 +388,63 @@ class FromTheLocalDaemon(unittest.TestCase):
         self.assertEqual(code, 0, err)
         self.assertEqual(len(qso_lines(lines)), 2)
 
-    def test_a_plain_address_refused_by_the_check_says_what_to_do(self):
-        refusal = json.dumps({"code": "desktop_app_required", "message": "x", "op": "y"}).encode()
-        d = fx.Listener(None, answer=lambda m, p: (403, {"Content-Type": "application/json"}, refusal))
+    def test_keeps_only_this_event_across_the_pages(self):
+        d = fx.Listener(fx.GENUINE, answer=daemon_answer([
+            [qso_json("G4AAA", "2"), qso_json("K1ABC", "", contest_id=None, app_sm_contest_start=None)],
+            [qso_json("G4BBB", "1", srx="0"), qso_json("G4DRY", "1", app_sm_contest_start="20261030")],
+        ]))
         try:
-            if os.path.exists(OUT):
-                os.remove(OUT)
-            err = io.StringIO()
-            with redirect_stdout(io.StringIO()), redirect_stderr(err):
-                code = cab.main(["--from-daemon", f"http://127.0.0.1:{d.port}", "-o", OUT] + ARGS)
+            code, lines, err = run_local(fx.install(d.port)["env"])
         finally:
             d.close()
-            if os.path.exists(OUT + ".issues.txt"):
-                os.remove(OUT + ".issues.txt")
-        self.assertEqual(code, 1)
-        self.assertIn("--from-daemon", err.getvalue())
-        self.assertIn("without an address", err.getvalue())
+        self.assertEqual(code, 0, err)
+        q = [l.split() for l in qso_lines(lines)]
+        self.assertEqual([x[9] for x in q], ["G4BBB", "G4AAA"])  # serial order, both pages
+        self.assertEqual(q[0][1], "14188")
+        self.assertEqual(q[0][11], "000")
+        self.assertIn("G4DRY", err)  # another occurrence: listed, left out
+        self.assertNotIn("K1ABC", err)  # not a contest contact: ignored
+        self.assertTrue(any("/v1/logbook/1/qso" in r["path"] for r in d.requests))
+
+    def test_a_named_logbook_is_read_instead_of_the_default(self):
+        # The default names a logbook this daemon does not list, so only --logbook finds one.
+        d = fx.Listener(fx.GENUINE, answer=daemon_answer([[qso_json("G4AAA", "1")]], default_uuid="lb-uuid-2"))
+        try:
+            env = fx.install(d.port)["env"]
+            unnamed = run_local(env)
+            code, lines, err = run_local(env, "--logbook", "1")
+        finally:
+            d.close()
+        self.assertEqual(unnamed[0], 1, "the fixture: without --logbook there is no default to read")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(len(qso_lines(lines)), 1)
+
+    def test_an_unreachable_daemon_writes_nothing(self):
+        d = fx.Listener(fx.GENUINE, answer=daemon_answer(self.PAGES))
+        env = fx.install(d.port)["env"]
+        d.close()
+        code, lines, err = run_local(env)
+        self.assertEqual((code, lines), (1, []))
+        self.assertIn("ERROR", err)
+
+    def test_a_file_and_the_daemon_together_are_refused(self):
+        with self.assertRaises(SystemExit):
+            with redirect_stderr(io.StringIO()):
+                cab.main(["x.adi", "--from-daemon", "-o", OUT] + ARGS)
+
+    def test_an_address_is_not_accepted(self):
+        # --from-daemon takes no address (W-0027 C2e): smd serves nothing to a plain client,
+        # so there is no address to give. One given is a second input, and is refused
+        # before anything is asked of it.
+        d = fx.Listener(None, answer=daemon_answer(self.PAGES))
+        try:
+            with self.assertRaises(SystemExit):
+                with redirect_stderr(io.StringIO()):
+                    cab.main(["--from-daemon", f"http://127.0.0.1:{d.port}", "-o", OUT] + ARGS)
+            self.assertEqual(d.requests, [], "the address was asked something")
+        finally:
+            d.close()
         self.assertFalse(os.path.exists(OUT))
-
-
 
 
 if __name__ == "__main__":

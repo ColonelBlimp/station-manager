@@ -157,9 +157,6 @@ func (s *Service) armTxAs(who string, armed bool) error {
 		return err
 	}
 	defer release()
-	if !s.ownershipRequired.Load() {
-		return s.armTx()
-	}
 	// Presence is required to arm (W-0027 C4b), and the arm is then held for the
 	// lifetime that made it. Asked and made under the gate the stop paths take. An arm
 	// that already stands is left exactly as it is: accepted, as before C4, with no new

@@ -18,9 +18,8 @@ const json = (status, body) => ({ status, json: async () => body });
 /** smd's admission rule (internal/api/app_admission.go), for one caller lifetime. `before`
  *  hooks run just before a request is answered, to place another app's admission between this
  *  one's read and its admit. */
-function model({ required = true, instance = 'proc-1' } = {}) {
+function model({ instance = 'proc-1' } = {}) {
     const m = {
-        required,
         instance,
         generation: 0,
         current: null,
@@ -43,7 +42,6 @@ function model({ required = true, instance = 'proc-1' } = {}) {
                     m.before[method].shift()?.();
                     if (method === 'GET') {
                         return json(200, {
-                            required: m.required,
                             daemon_instance: m.instance,
                             generation: m.generation,
                             current: lifetime === m.current,
@@ -101,13 +99,25 @@ test('a lifetime that is already current admits nothing again', async () => {
     assert.equal(m.generation, 1);
 });
 
-test('a daemon that serves any client is not admitted to', async () => {
-    const m = model({ required: false });
-    assert.deepEqual(await admit(m.ses('A'), ORIGIN), {
-        state: 'not-required',
+// smd has no state in which the app is not admitted (W-0027 C2e). A reply that claims one, as
+// a daemon older than that wrote with its check off, is not believed: the app admits anyway.
+test('a reply that says no admission is required is admitted to all the same', async () => {
+    const m = model();
+    const ses = m.ses('A');
+    const claiming = {
+        fetch: async (url, opts = {}) => {
+            const res = await ses.fetch(url, opts);
+            if ((opts.method ?? 'GET') !== 'GET') return res;
+            return json(res.status, { ...(await res.json()), required: false });
+        },
+    };
+    assert.deepEqual(await admit(claiming, ORIGIN), {
+        state: 'admitted',
         instance: 'proc-1',
+        generation: 1,
     });
-    assert.deepEqual(m.calls, ['GET']);
+    assert.deepEqual(m.calls, ['GET', 'POST']);
+    assert.equal(m.current, 'A');
 });
 
 test('a stale answer is read again and admitted again, and then stands', async () => {
@@ -168,8 +178,8 @@ test('anything else is a failure, and nothing is admitted', async () => {
         () => json(403, { code: 'desktop_app_required' }),
         () => json(404, {}),
         () => ({ status: 200, json: async () => Promise.reject(new Error('not JSON')) }),
-        () => json(200, { required: true, generation: 0, current: false }), // no marker
-        () => json(200, { required: true, daemon_instance: 'p', generation: 'x', current: false }),
+        () => json(200, { generation: 0, current: false }), // no marker
+        () => json(200, { daemon_instance: 'p', generation: 'x', current: false }),
         () => {
             throw new Error('nothing answers');
         },

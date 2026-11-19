@@ -28,8 +28,8 @@ rules and routing belong here; chronology, active-work detail, and subsystem exp
   without the operator's explicit agreement for that occasion. Prefer offline and passive evidence.
 - FT8 sessions are operator-initiated. The daemon may continue an operator-started run, but it does
   not begin one independently. Do not describe the system as "attended-only": the enforced presence
-  signal is an open FT8 event subscription (the desktop app's own, with the operating-client check
-  on), not proof that a person remains at the desk. A decode is not a QSO; only a completed exchange
+  signal is an open FT8 event subscription of the desktop app's current lifetime, not proof that a
+  person remains at the desk. A decode is not a QSO; only a completed exchange
   is.
 - `tx_on` and `tx_off` are never exposed through the generic command surface. Tune and FT8 keying
   share the single guaranteed-stop/single-flight controller; only that controller keys TX.

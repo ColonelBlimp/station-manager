@@ -3,27 +3,22 @@ package main
 // Config v6 at startup (W-0021 5C, ADR 0082 part 4; rulings R3, 2026-10-06).
 // Once the adopted Home archive's binding seed has committed, startup strips
 // the deprecated v5 fields — `name`, `enabled` and logbook-scoped credentials —
-// from config.json, file-first, after writing a once-only owner-only recovery
-// copy, config.v5.json.
+// from config.json, file-first. No copy of the file is taken first (W-0027 C2e;
+// operator ruling 2026-11-18, "remove the downgrade tooling"): the once-only
+// config.v5.json of earlier builds is no longer written, read or required, and
+// one an install already has is left exactly as it is.
 //
 //   T1  Home seeded → config.json holds station accounts only; bindings and
-//       routes are unchanged; config.v5.json is the v5 bytes from before
-//       startup's persist, 0600.
-//   T2  another archive active → nothing is stripped and no copy is written, and
-//       the log says the fields wait for Home (operator, 2026-10-06: the wait
-//       was silent). T2b: once stripped, a start with another archive active
-//       does not log it.
-//   T3  a failed copy defers the strip; startup still succeeds; the next start
-//       copies and strips. T3b: staging files an interrupted copy left behind
-//       (secret-bearing) never block a retry and are removed by it.
+//       routes are unchanged; no copy is made. From a file at the head version
+//       and from one an older build left at version 5.
+//   T2  another archive active → nothing is stripped, and the log says the
+//       fields wait for Home (operator, 2026-10-06: the wait was silent). T2b:
+//       once stripped, a start with another archive active does not log it.
 //   T4  a failed strip write leaves the file as it was; startup still succeeds;
-//       the next start strips. An existing copy is never overwritten.
-//   T5  with no v5 bytes from this start, the copy is rebuilt from the
-//       unstripped v6 file re-stamped as v5 — only when that validates as a
-//       complete v5 document; otherwise the strip is deferred.
-//   T6  the copy takes persistResolvedConfig's ClubLog scrub: `credentials.api`
-//       goes only when the build carries a nonblank injected key; the logbook
-//       credentials stay. Keyed and keyless builds, synthetic values.
+//       the next start strips. An existing config.v5.json, or anything else
+//       under that name, is never touched.
+//   T5  the two shapes that used to wait for a copy that v5 could not accept
+//       are stripped like any other.
 //   T7  a nameless account still seeds under its type's name, and the
 //       registry's default accounts carry no name or enabled state.
 
@@ -39,7 +34,6 @@ import (
 
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
-	"github.com/ColonelBlimp/station-manager/internal/forwarding/clublog"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding/smcloud"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding/stub"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -63,7 +57,7 @@ func stripFixture(t *testing.T) func(*config.Config) {
 	}
 }
 
-// asV5 re-stamps a written v6 config.json as version 5: what an upgrading
+// asV5 re-stamps a written config.json as version 5: what an upgrading
 // station's file held before this build first persisted it.
 func asV5(t *testing.T, path string) []byte {
 	t.Helper()
@@ -102,8 +96,8 @@ func diskForwarders(t *testing.T, path string) (int, []map[string]any) {
 func assertStripped(t *testing.T, label, path string) {
 	t.Helper()
 	v, fwds := diskForwarders(t, path)
-	if v != 6 {
-		t.Fatalf("%s: config.json version %d, want 6", label, v)
+	if v != config.CurrentSchemaVersion() {
+		t.Fatalf("%s: config.json version %d, want the head %d", label, v, config.CurrentSchemaVersion())
 	}
 	want := map[string]string{stub.Type: "mode", smcloud.Type: "token,url", "seedscope-test": "token,url"}
 	for _, f := range fwds {
@@ -152,10 +146,11 @@ func sortStrings(s []string) {
 	}
 }
 
-func TestConfigV6Strip_T1_HomeSeededStripsAfterTheCopy(t *testing.T) {
+func TestConfigV6Strip_T1_HomeSeededStripsAndMakesNoCopy(t *testing.T) {
 	d, orch := newOrchestratedDaemon(t, stripFixture(t))
-	v5 := asV5(t, d.cfgSvc.Path)
-	d.configAtStart = v5
+	if v, _ := diskForwarders(t, d.cfgSvc.Path); v != config.CurrentSchemaVersion() {
+		t.Fatalf("the fixture: config.json is version %d, want the head", v)
+	}
 	if err := orch.Start(d.workerCtx); err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -169,12 +164,49 @@ func TestConfigV6Strip_T1_HomeSeededStripsAfterTheCopy(t *testing.T) {
 	if routes := d.qso.DestinationRoutes(); len(routes) != 3 || routes[0].Config.Name != "qrz" || !routes[0].Config.Enabled {
 		t.Fatalf("T1: routes = %+v; want the seeded qrz binding enabled, routes unchanged by the strip", routes)
 	}
-	got, err := os.ReadFile(copyPath(d.cfgSvc))
-	if err != nil || string(got) != string(v5) {
-		t.Fatalf("T1: config.v5.json = %q (%v); want the v5 bytes from before startup's persist", got, err)
+	if _, err := os.Lstat(copyPath(d.cfgSvc)); !os.IsNotExist(err) {
+		t.Fatalf("T1: a recovery copy was made (stat err %v); want none", err)
 	}
-	if info, err := os.Stat(copyPath(d.cfgSvc)); err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("T1: config.v5.json mode = %v (%v); want 0600", info.Mode().Perm(), err)
+}
+
+// The same from a file an older build left at version 5: the load migrates it, the seed
+// commits, and it is stripped at this start with no copy.
+//
+// The daemon is built on what config.Load returns for that file, as run() builds it, and
+// not on the service that seeded the fixture: that one was made from a typed Config at the
+// head version and never read the file, so it would pass with the version 5 step missing
+// (review, 2026-11-18).
+func TestConfigV6Strip_T1b_AVersion5FileIsStrippedAtItsFirstStart(t *testing.T) {
+	fixture := stripFixture(t)
+	path := seedOrchestratedConfig(t, func(c *config.Config) {
+		fixture(c)
+		// The load adds a nameless default account for every registered type the file has
+		// no entry of, and a nameless account seeds under its type's name. The shared
+		// fixture names its stub account "qrz", which is the name the default qrz account
+		// seeds under, so this file's account is named as no type is.
+		c.Forwarders[0].Name = "station-stub"
+	}).Path
+	if err := os.WriteFile(path, asV5(t, path), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("T1b: loading the version 5 file: %v", err)
+	}
+	// The load migrates in memory only: the file is still the older build's.
+	if v, _ := diskForwarders(t, path); v != 5 {
+		t.Fatalf("the fixture: config.json is version %d after the load, want 5", v)
+	}
+	assertUnstripped(t, "T1b before the start", path)
+	cfgSvc := config.New(loaded)
+	cfgSvc.SetPath(path)
+	d, orch := buildOrchestratedDaemon(t, cfgSvc, cfgSvc.Snapshot())
+	if err := orch.Start(d.workerCtx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	assertStripped(t, "T1b", cfgSvc.Path)
+	if _, err := os.Lstat(copyPath(cfgSvc)); !os.IsNotExist(err) {
+		t.Fatalf("T1b: a recovery copy was made (stat err %v); want none", err)
 	}
 }
 
@@ -200,14 +232,10 @@ func TestConfigV6Strip_T2_AnotherArchiveActiveStripsNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = raw.Close()
-	d.configAtStart = asV5(t, d.cfgSvc.Path)
 	if err := orch.Start(d.workerCtx); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	assertUnstripped(t, "T2", d.cfgSvc.Path)
-	if _, err := os.Stat(copyPath(d.cfgSvc)); !os.IsNotExist(err) {
-		t.Fatalf("T2: a copy was written with no strip due (stat err %v)", err)
-	}
 	if n := waitLines(t, d); n != 1 {
 		t.Fatalf("T2: %d 'kept until Home' log line(s); want 1 naming the wait", n)
 	}
@@ -257,41 +285,10 @@ func TestConfigV6Strip_T2b_AlreadyStrippedWithAnotherArchiveActiveIsQuiet(t *tes
 	}
 }
 
-func TestConfigV6Strip_T3_FailedCopyDefersTheStrip(t *testing.T) {
-	cfgSvc := seedOrchestratedConfig(t, stripFixture(t))
-	v5 := asV5(t, cfgSvc.Path)
-	// Something that is not a file holds the copy's name: no copy can be
-	// confirmed, so none is written and nothing is stripped.
-	blocker := copyPath(cfgSvc)
-	if err := os.Mkdir(blocker, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	d, orch := buildOrchestratedDaemon(t, cfgSvc, cfgSvc.Snapshot())
-	d.configAtStart = v5
-	if err := orch.Start(d.workerCtx); err != nil {
-		t.Fatalf("T3: a failed copy must not fail the start: %v", err)
-	}
-	assertUnstripped(t, "T3", cfgSvc.Path)
-	orch.Shutdown(2*time.Second, nil)
-
-	if err := os.Remove(blocker); err != nil {
-		t.Fatal(err)
-	}
-	d2, orch2 := buildOrchestratedDaemon(t, cfgSvc, cfgSvc.Snapshot())
-	d2.configAtStart = v5
-	if err := orch2.Start(d2.workerCtx); err != nil {
-		t.Fatalf("T3: second start: %v", err)
-	}
-	assertStripped(t, "T3 retry", cfgSvc.Path)
-	if got, err := os.ReadFile(copyPath(cfgSvc)); err != nil || string(got) != string(v5) {
-		t.Fatalf("T3: the retried copy = %q (%v); want the v5 bytes", got, err)
-	}
-}
-
-func TestConfigV6Strip_T4_FailedStripWriteIsRetriedAndTheCopyKept(t *testing.T) {
+func TestConfigV6Strip_T4_FailedStripWriteIsRetriedAndAnExistingCopyIsLeftAlone(t *testing.T) {
 	cfgSvc := seedOrchestratedConfig(t, stripFixture(t))
 	dir := filepath.Dir(cfgSvc.Path)
-	// An existing copy is never overwritten.
+	// A copy an earlier build made is never read, changed or removed.
 	const earlier = `{"version":5,"earlier":"copy"}`
 	if err := os.WriteFile(copyPath(cfgSvc), []byte(earlier), 0o600); err != nil {
 		t.Fatal(err)
@@ -301,7 +298,6 @@ func TestConfigV6Strip_T4_FailedStripWriteIsRetriedAndTheCopyKept(t *testing.T) 
 	}
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
 	d, orch := buildOrchestratedDaemon(t, cfgSvc, cfgSvc.Snapshot())
-	d.configAtStart = asV5(t, cfgSvc.Path)
 	if err := orch.Start(d.workerCtx); err != nil {
 		t.Fatalf("T4: a failed strip write must not fail the start: %v", err)
 	}
@@ -317,86 +313,54 @@ func TestConfigV6Strip_T4_FailedStripWriteIsRetriedAndTheCopyKept(t *testing.T) 
 	}
 	assertStripped(t, "T4 retry", cfgSvc.Path)
 	if got, _ := os.ReadFile(copyPath(cfgSvc)); string(got) != earlier {
-		t.Fatalf("T4: the existing copy was overwritten: %q", got)
+		t.Fatalf("T4: the existing copy was changed: %q", got)
+	}
+	if info, err := os.Stat(copyPath(cfgSvc)); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("T4: the existing copy's mode changed: %v (%v)", info.Mode().Perm(), err)
 	}
 }
 
-func TestConfigV6Strip_T5_CopyRecoveredFromTheUnstrippedFileOrDeferred(t *testing.T) {
-	t.Run("recovered", func(t *testing.T) {
-		d, orch := newOrchestratedDaemon(t, stripFixture(t))
-		d.configAtStart = nil // this start read no v5 file: the on-disk v6 one is the source
-		if err := orch.Start(d.workerCtx); err != nil {
-			t.Fatalf("start: %v", err)
-		}
-		assertStripped(t, "T5", d.cfgSvc.Path)
-		got, err := os.ReadFile(copyPath(d.cfgSvc))
-		if err != nil {
-			t.Fatalf("T5: no copy: %v", err)
-		}
-		v, fwds := diskForwardersFromBytes(t, got)
-		if v != 5 || len(fwds) != 3 || fwds[1]["name"] != "smcloud" || !strings.Contains(string(got), "t1-book") {
-			t.Fatalf("T5: recovered copy = %s; want the unstripped file as v5", got)
-		}
-	})
-	t.Run("not representable: deferred", func(t *testing.T) {
-		fixture := stripFixture(t)
-		d, orch := newOrchestratedDaemon(t, func(c *config.Config) {
-			fixture(c)
-			c.Forwarders[0].Name = "" // a hand-edited entry v5 could not represent
-		})
-		d.configAtStart = nil
-		if err := orch.Start(d.workerCtx); err != nil {
-			t.Fatalf("start: %v", err)
-		}
-		assertUnstripped(t, "T5 deferred", d.cfgSvc.Path)
-		if _, err := os.Stat(copyPath(d.cfgSvc)); !os.IsNotExist(err) {
-			t.Fatalf("T5: a copy was written from a document v5 cannot represent (stat err %v)", err)
-		}
-	})
-}
-
-func diskForwardersFromBytes(t *testing.T, raw []byte) (int, []map[string]any) {
-	t.Helper()
-	var doc struct {
-		Version    int              `json:"version"`
-		Forwarders []map[string]any `json:"forwarders"`
-	}
-	if err := json.Unmarshal(raw, &doc); err != nil {
+// Whatever holds the copy's name, a directory here, is no obstacle and is left where it is:
+// the strip no longer asks about that name at all.
+func TestConfigV6Strip_T4b_SomethingElseUnderTheCopysNameIsNoObstacle(t *testing.T) {
+	cfgSvc := seedOrchestratedConfig(t, stripFixture(t))
+	if err := os.Mkdir(copyPath(cfgSvc), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	return doc.Version, doc.Forwarders
+	d, orch := buildOrchestratedDaemon(t, cfgSvc, cfgSvc.Snapshot())
+	if err := orch.Start(d.workerCtx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	assertStripped(t, "T4b", cfgSvc.Path)
+	if info, err := os.Lstat(copyPath(cfgSvc)); err != nil || !info.IsDir() {
+		t.Fatalf("T4b: the directory under the copy's name was disturbed (%v)", err)
+	}
 }
 
-func TestConfigV6Strip_T6_CopyTakesTheGuardedClubLogScrub(t *testing.T) {
-	withClubLog := func(c *config.Config) {
-		stripFixture(t)(c)
-		c.Forwarders = append(c.Forwarders, types.ForwarderConfig{Name: "clublog", Type: clublog.Type, Enabled: false,
-			Credentials: json.RawMessage(`{"api":"T6-LEGACY-APP-KEY","email":"t6@example.test","password":"T6-PASS","callsign":"T6CALL"}`)})
-	}
-	for _, c := range []struct {
-		name, injected string
-		wantAPI        bool
-	}{{"keyed build", "T6-INJECTED", false}, {"keyless build", "", true}} {
-		t.Run(c.name, func(t *testing.T) {
-			orig := clublog.InjectedAPIKey
-			clublog.InjectedAPIKey = c.injected
-			t.Cleanup(func() { clublog.InjectedAPIKey = orig })
-			d, orch := newOrchestratedDaemon(t, withClubLog)
-			d.configAtStart = asV5(t, d.cfgSvc.Path)
+// Two shapes used to wait: no version 5 copy could be made of them, so the strip was
+// deferred. With no copy to make, they are stripped like any other. The facts they hold
+// are in Home's bindings by then, which is the strip's one condition.
+func TestConfigV6Strip_T5_ShapesThatWaitedForACopyAreStripped(t *testing.T) {
+	for name, mutate := range map[string]func(*config.Config){
+		"an entry with no name, which v5 could not represent": func(c *config.Config) {
+			c.Forwarders[0].Name = ""
+		},
+		"evidence sync on with SM Cloud disabled, which v5 refused": func(c *config.Config) {
+			c.Evidence = types.EvidenceConfig{Capture: true, Sync: true, CapBytes: 524288000}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fixture := stripFixture(t)
+			d, orch := newOrchestratedDaemon(t, func(c *config.Config) {
+				fixture(c)
+				mutate(c)
+			})
 			if err := orch.Start(d.workerCtx); err != nil {
 				t.Fatalf("start: %v", err)
 			}
-			got, err := os.ReadFile(copyPath(d.cfgSvc))
-			if err != nil {
-				t.Fatalf("no copy: %v", err)
-			}
-			if has := strings.Contains(string(got), "T6-LEGACY-APP-KEY"); has != c.wantAPI {
-				t.Fatalf("T6 %s: copy holds credentials.api = %v, want %v", c.name, has, c.wantAPI)
-			}
-			for _, keep := range []string{"t6@example.test", "T6-PASS", "T6CALL"} {
-				if !strings.Contains(string(got), keep) {
-					t.Fatalf("T6 %s: the copy lost the logbook credential %q", c.name, keep)
-				}
+			assertStripped(t, "T5", d.cfgSvc.Path)
+			if _, err := os.Lstat(copyPath(d.cfgSvc)); !os.IsNotExist(err) {
+				t.Fatalf("T5: a recovery copy was made (stat err %v); want none", err)
 			}
 		})
 	}
@@ -411,78 +375,5 @@ func TestConfigV6Strip_T7_NamelessAccountsSeedUnderTheirType(t *testing.T) {
 		if fc.Name != "" || fc.Enabled {
 			t.Fatalf("T7: default account %q carries name %q / enabled %v; want neither", fc.Type, fc.Name, fc.Enabled)
 		}
-	}
-}
-
-func TestConfigV6Strip_T3b_InterruptedStagingNeverBlocksARetry(t *testing.T) {
-	cfgSvc := seedOrchestratedConfig(t, stripFixture(t))
-	v5 := asV5(t, cfgSvc.Path)
-	// What a crash mid-copy leaves: a staging file under the old fixed name and
-	// one under a unique name, both holding credentials.
-	leftovers := []string{copyPath(cfgSvc) + ".tmp", copyPath(cfgSvc) + ".123456.tmp"}
-	for _, p := range leftovers {
-		if err := os.WriteFile(p, []byte(`{"version":5,"token":"T3B-LEFTOVER"}`), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	d, orch := buildOrchestratedDaemon(t, cfgSvc, cfgSvc.Snapshot())
-	d.configAtStart = v5
-	if err := orch.Start(d.workerCtx); err != nil {
-		t.Fatalf("start: %v", err)
-	}
-	assertStripped(t, "T3b", cfgSvc.Path)
-	if got, err := os.ReadFile(copyPath(cfgSvc)); err != nil || string(got) != string(v5) {
-		t.Fatalf("T3b: the copy = %q (%v); want the v5 bytes", got, err)
-	}
-	for _, p := range leftovers {
-		if _, err := os.Stat(p); !os.IsNotExist(err) {
-			t.Fatalf("T3b: the interrupted staging file %s is still there (stat err %v)", filepath.Base(p), err)
-		}
-	}
-}
-
-// T8 (review 2026-10-06): the copy must be a document v5 ACCEPTS, and v5
-// requires an ENABLED SM Cloud entry while evidence.sync is on (v6 asks only
-// for a complete account, R4). With sync on and SM Cloud disabled no v5 copy
-// can be written without changing consent or a binding's state, so the strip
-// is deferred — from either source.
-func TestConfigV6Strip_T8_EvidenceSyncWithoutEnabledSmcloudDefers(t *testing.T) {
-	syncOn := func(c *config.Config) {
-		stripFixture(t)(c)
-		c.Evidence = types.EvidenceConfig{Capture: true, Sync: true, CapBytes: 524288000}
-	}
-	for _, src := range []string{"v5 bytes", "re-stamped v6"} {
-		t.Run(src, func(t *testing.T) {
-			d, orch := newOrchestratedDaemon(t, syncOn)
-			if src == "v5 bytes" {
-				d.configAtStart = asV5(t, d.cfgSvc.Path)
-			}
-			if err := orch.Start(d.workerCtx); err != nil {
-				t.Fatalf("start: %v", err)
-			}
-			assertUnstripped(t, "T8 "+src, d.cfgSvc.Path)
-			if _, err := os.Stat(copyPath(d.cfgSvc)); !os.IsNotExist(err) {
-				t.Fatalf("T8 %s: a copy v5 would refuse was written (stat err %v)", src, err)
-			}
-		})
-	}
-}
-
-// T9 (codex P2 on 25692f7a): the v5 check reads SM Cloud's credentials as v5
-// does — a tagged struct, whose keys encoding/json matches case-insensitively —
-// so an entry a v5 loader accepts is never refused here, and one it rejects is.
-func TestConfigV6Strip_T9_V5CheckDecodesCredentialsAsV5Does(t *testing.T) {
-	doc := func(creds string, enabled bool) []byte {
-		return []byte(`{"evidence":{"sync":true},"forwarders":[{"name":"cloud","type":"smcloud","enabled":` +
-			map[bool]string{true: "true", false: "false"}[enabled] + `,"credentials":` + creds + `}]}`)
-	}
-	if err := checkV5Compatible(doc(`{"URL":"https://t9.example.test","TOKEN":"T9"}`, true)); err != nil {
-		t.Fatalf("T9: upper-case keys v5 accepts were refused: %v", err)
-	}
-	if err := checkV5Compatible(doc(`{"url":"https://t9.example.test"}`, true)); err == nil {
-		t.Fatal("T9: an entry with no token, which v5 refuses for evidence sync, was accepted")
-	}
-	if err := checkV5Compatible(doc(`{"url":"https://t9.example.test","token":"T9"}`, false)); err == nil {
-		t.Fatal("T9: a disabled entry, which v5 refuses for evidence sync, was accepted")
 	}
 }

@@ -131,14 +131,25 @@ func main() {
 //	smd provision [flags]             → a cloud archive as a new managed archive (runProvision())
 //	smd config-check [--config p]     → read-only preflight: unknown keys, Load, forwarder construction (runConfigCheck())
 //	smd db-downgrade --to N --yes     → migrate the log schema DOWN for a rollback to an older build (runDBDowngrade())
-//	smd config-downgrade --to N --yes → rewrite config.json to an older schema for the same rollback (runConfigDowngrade())
+//	smd config-downgrade …            → refused: the command was removed (removedSubcommand)
 var subcommands = map[string]func([]string) error{
-	"import":           runImport,
-	"restore":          runRestore,
-	"provision":        runProvision,
-	"config-check":     runConfigCheck,
-	"db-downgrade":     runDBDowngrade,
-	"config-downgrade": runConfigDowngrade,
+	"import":       runImport,
+	"restore":      runRestore,
+	"provision":    runProvision,
+	"config-check": runConfigCheck,
+	"db-downgrade": runDBDowngrade,
+	// Removed (W-0027 C2e), and kept as a name: any argv that names no subcommand
+	// runs the daemon, so an old instruction that still calls this one must be
+	// refused, not start a daemon on the station's data.
+	"config-downgrade": removedSubcommand("config-downgrade",
+		"there is no rollback to a build older than config version 7"),
+}
+
+// removedSubcommand refuses a subcommand smd no longer has, saying why.
+func removedSubcommand(name, why string) func([]string) error {
+	return func([]string) error {
+		return fmt.Errorf("%s was removed: %s; nothing was changed", name, why)
+	}
 }
 
 // dispatchSubcommand runs argv's subcommand, if it names one, and returns its
@@ -260,7 +271,7 @@ func run() error {
 	// QSOs with the in-memory UA value, the operator just doesn't see
 	// it persisted in config.json. Stderr is the only available
 	// channel here (structured logger isn't built yet).
-	startupChanges, configAtStart, uerr := persistResolvedConfigKeepingOriginal(cfgSvc, cfgPath, cfg.UserAgent)
+	startupChanges, uerr := persistResolvedConfig(cfgSvc, cfg.UserAgent)
 	if uerr != nil {
 		_, _ = fmt.Fprintf(os.Stderr,
 			"smd: could not persist resolved config (UserAgent / ClubLog key scrub) to config.json: %v (continuing with in-memory values)\n",
@@ -280,7 +291,7 @@ func run() error {
 	// legacy teardown — the rollback already owns it (operator ruling, phase 3a). A failed pending
 	// candidate gets one more generation, on the last-known-good archive (startGenerations).
 	d, orch, err := startGenerations(cfgSvc, paths, func(p archive.Paths) (*daemon, *orchestrator.Orchestrator, error) {
-		return buildDaemon(cfgSvc, cfgPath, firstRunPath, startupChanges, configAtStart, p)
+		return buildDaemon(cfgSvc, cfgPath, firstRunPath, startupChanges, p)
 	})
 	if err != nil {
 		logStartupFailure(err) // pre-logger, or the rollback closed the logger; mirror to smd.log
@@ -567,15 +578,6 @@ func persistResolvedConfig(cfgSvc *config.Service, userAgent string) ([]config.F
 		}
 	}
 	return changes, nil
-}
-
-// persistResolvedConfigKeepingOriginal is persistResolvedConfig that first
-// keeps config.json's bytes as they stood before this start rewrote them —
-// the source of config v6's one-time v5 recovery copy (daemon.configAtStart).
-func persistResolvedConfigKeepingOriginal(cfgSvc *config.Service, cfgPath, userAgent string) ([]config.FieldChange, []byte, error) {
-	original, _ := os.ReadFile(cfgPath)
-	changes, err := persistResolvedConfig(cfgSvc, userAgent)
-	return changes, original, err
 }
 
 func stripCredentialKey(raw json.RawMessage, key string) (json.RawMessage, bool) {
@@ -1018,7 +1020,7 @@ func (k ft8Keyer) TxReady() bool                                { return k.b.TxR
 // is once-initialised by design), so a start that must fall back to another
 // archive builds everything again rather than re-driving a rolled-back graph.
 func buildDaemon(cfgSvc *config.Service, cfgPath, firstRunPath string, startupChanges []config.FieldChange,
-	configAtStart []byte, paths archive.Paths) (*daemon, *orchestrator.Orchestrator, error) {
+	paths archive.Paths) (*daemon, *orchestrator.Orchestrator, error) {
 	const op errors.Op = "smd.buildDaemon"
 	cfg := cfgSvc.Snapshot()
 	var err error
@@ -1108,7 +1110,6 @@ func buildDaemon(cfgSvc *config.Service, cfgPath, firstRunPath string, startupCh
 		cfgPath:        cfgPath,
 		firstRunPath:   firstRunPath,
 		startupChanges: startupChanges,
-		configAtStart:  configAtStart,
 		logger:         loggerSvc,
 		hub:            hub,
 		db:             dbSvc,

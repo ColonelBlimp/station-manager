@@ -49,7 +49,6 @@ func TestFixture_TheAppLifetimeIsOneTheParserAccepts(t *testing.T) {
 // (prepareApp).
 func ownFt8(t testing.TB, f *ft8.Service) *ft8.Service {
 	t.Helper()
-	f.RequireOperatingLifetime()
 	f.PublishOperating(testAppLifetime)
 	openFt8Stream(t, f)
 	return f
@@ -70,27 +69,13 @@ func asAdmittedApp(r *http.Request) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), appLifetimeKey{}, testAppLifetime))
 }
 
-// checkOn is a config mutation for a test server: the operating-client check on, then the
-// caller's own changes, so a fixture that means to run with it off can still say so.
-func checkOn(mutate func(cfg *config.Config)) func(cfg *config.Config) {
-	return func(cfg *config.Config) {
-		cfg.Server.RequireDesktopApp = true
-		if mutate != nil {
-			mutate(cfg)
-		}
-	}
-}
-
-// prepareApp makes a check-on server one the fixture app can ask in process: it accepts
+// prepareApp makes a server one the fixture app can ask in process: it accepts
 // the fixture's credential, has an app port, and has admitted the fixture's lifetime by
 // the admission's own read and admit, which publishes it to an FT8 service passed to New.
 // The app's FT8 stream is opened after that. Tests of the check and of the admission do
 // not use it: they start from an empty admission on real listeners.
 func prepareApp(t testing.TB, srv *Server) {
 	t.Helper()
-	if !srv.RequiresDesktopApp() {
-		t.Fatal("prepareApp: the server was not built with the check on (use checkOn)")
-	}
 	srv.SetOperatingCredential(func(presented string) bool { return presented == testAppCredential })
 	srv.appMu.Lock()
 	if srv.appPort == 0 {
@@ -127,11 +112,11 @@ func serveAsApp(srv *Server, w http.ResponseWriter, r *http.Request) {
 	srv.httpServer.Handler.ServeHTTP(w, asApp(srv, r))
 }
 
-// appTestServer is testServerWithFt8 as the fixture app's daemon: the check on, the caller's
+// appTestServer is testServerWithFt8 as the fixture app's daemon: the caller's
 // config changes after it, and the app prepared (prepareApp).
 func appTestServer(t *testing.T, mutate func(cfg *config.Config), ft8Svc *ft8.Service) *Server {
 	t.Helper()
-	srv := testServerWithFt8(t, checkOn(mutate), ft8Svc)
+	srv := testServerWithFt8(t, mutate, ft8Svc)
 	prepareApp(t, srv)
 	return srv
 }

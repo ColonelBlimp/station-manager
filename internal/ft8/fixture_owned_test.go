@@ -32,7 +32,6 @@ func own(s *Service) ownedFixture {
 // ownAbsent makes s a service whose current lifetime is fixtureLife and which has no
 // stream of it open: the state after the app's FT8 view has gone.
 func ownAbsent(s *Service) {
-	s.RequireOperatingLifetime()
 	s.PublishOperating(fixtureLife)
 }
 

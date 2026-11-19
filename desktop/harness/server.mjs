@@ -46,8 +46,7 @@ export async function startHarness({ up = true, tls = null, tag = 'fixture', por
     // header gets 403 desktop_app_required.
     // `forbid`, when set to a code, answers every request 403 with that code instead.
     // `admission` answers the app's admission as smd does (W-0027 C4a; internal/api
-    // app_admission.go): with `required` false, as with the check off, there is nothing to be
-    // admitted to; with it true the fixture keeps one current lifetime, a generation and the
+    // app_admission.go): the fixture keeps one current lifetime, a generation and the
     // lifetimes it has replaced, and puts `instance`, its process marker, on what it serves.
     // `holdAdmit`, when set, is awaited before an admit is answered, so a test can place
     // another admission between a read and its admit.
@@ -56,7 +55,6 @@ export async function startHarness({ up = true, tls = null, tag = 'fixture', por
         requireCredential: null,
         forbid: null,
         admission: {
-            required: false,
             instance: `fixture-${tag}-1`,
             generation: 0,
             current: null,
@@ -114,10 +112,9 @@ export async function startHarness({ up = true, tls = null, tag = 'fixture', por
                 return;
             }
             json(res, 200, {
-                required: a.required,
                 daemon_instance: a.instance,
-                generation: a.required ? a.generation : 0,
-                current: a.required && lifetime !== '' && lifetime === a.current,
+                generation: a.generation,
+                current: lifetime !== '' && lifetime === a.current,
             });
             return;
         }
@@ -130,7 +127,6 @@ export async function startHarness({ up = true, tls = null, tag = 'fixture', por
         } catch {
             // answered below
         }
-        if (!a.required) return json(res, 200, { required: false, daemon_instance: a.instance });
         if (lifetime === '') return json(res, 400, { code: 'app_lifetime_required' });
         if (lifetime === a.current) return json(res, 200, { current: true });
         if (a.retired.has(lifetime)) return json(res, 409, { code: 'app_lifetime_retired' });
@@ -156,18 +152,16 @@ export async function startHarness({ up = true, tls = null, tag = 'fixture', por
             res.end(JSON.stringify({ code: state.forbid, message: 'x', op: 'fixture' }));
             return;
         }
-        // As smd with its check on: this process's marker on everything it serves.
+        // As smd: this process's marker on everything it serves.
         const isAdmission =
             path === '/v1/app/lifetime' && (req.method === 'GET' || req.method === 'POST');
-        if (state.admission.required) {
-            let instance = state.admission.instance;
-            if (!isAdmission && state.admission.oneOffMarker !== null) {
-                instance = state.admission.oneOffMarker;
-                state.admission.oneOffMarker = null;
-            }
-            res.setHeader('X-Sm-Daemon-Instance', instance);
-            res.setHeader('X-Sm-Admission-Generation', String(state.admission.generation));
+        let instance = state.admission.instance;
+        if (!isAdmission && state.admission.oneOffMarker !== null) {
+            instance = state.admission.oneOffMarker;
+            state.admission.oneOffMarker = null;
         }
+        res.setHeader('X-Sm-Daemon-Instance', instance);
+        res.setHeader('X-Sm-Admission-Generation', String(state.admission.generation));
         if (isAdmission) {
             void admission(req, res, lifetime.length === 1 ? lifetime[0] : '');
             return;
@@ -255,10 +249,8 @@ export async function startHarness({ up = true, tls = null, tag = 'fixture', por
             .digest('base64');
         socket.write(
             'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n' +
-                (state.admission.required
-                    ? `X-Sm-Daemon-Instance: ${state.admission.instance}\r\n` +
-                      `X-Sm-Admission-Generation: ${state.admission.generation}\r\n`
-                    : '') +
+                `X-Sm-Daemon-Instance: ${state.admission.instance}\r\n` +
+                `X-Sm-Admission-Generation: ${state.admission.generation}\r\n` +
                 `Sec-WebSocket-Accept: ${accept}\r\n\r\n`
         );
         socket.write(wsFrame(`${tag}:${marker(req.url)}`));

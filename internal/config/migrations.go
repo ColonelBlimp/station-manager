@@ -11,7 +11,7 @@ import (
 // change alters the config shape. A config file with no `version` field is the
 // pre-versioning baseline — the catalogue-era shape, treated as v1. See
 // docs/v2-design/config.md §13.
-const currentConfigVersion = 6
+const currentConfigVersion = 7
 
 // CurrentSchemaVersion is the config schema version this build writes and
 // migrates up to — the public view of currentConfigVersion for callers (e.g.
@@ -19,6 +19,8 @@ const currentConfigVersion = 6
 func CurrentSchemaVersion() int { return currentConfigVersion }
 
 // migration upgrades a raw config JSON document from version `from` to `from+1`.
+// There is no way down: a build does not rewrite a file for an older one (operator
+// ruling 2026-11-18, W-0027 C2e), and a file newer than the build is refused.
 // Migrations operate on the decoded document (a map), NOT the typed Config, so a
 // migration can read keys that the current typed Config has since dropped (e.g. a
 // field moved into a per-rig block) before they're gone — that's what lets the
@@ -26,10 +28,6 @@ func CurrentSchemaVersion() int { return currentConfigVersion }
 type migration struct {
 	from  int
 	apply func(doc map[string]any) error
-	// down reverses apply (from+1 → from) for the rollback drill; nil means the
-	// step is one-way and a downgrade through it is refused by name. Only steps
-	// that ADD keys the older loader would refuse need one (v4 is the first).
-	down func(doc map[string]any) error
 }
 
 // migrations is the ordered registry, each step from→from+1.
@@ -53,110 +51,45 @@ type migration struct {
 //     `active_qso_archive_id`, `pending_qso_archive_id` and `qso_archives` become
 //     part of the shape. The step itself adds nothing — adoption at daemon start
 //     fills the catalogue from the file's own identity — so it only stamps the
-//     version. Its DOWN step removes the three keys, which is what lets a tagged
-//     older build (unknown keys refused, newer version refused) read the file.
+//     version.
 //   - v5→v6 (ADR 0082 part 4, W-0021 5C): a forwarder entry becomes the station
 //     ACCOUNT — `name`, `enabled` and logbook-scoped credentials are binding facts.
 //     The step adds nothing and keeps those keys KNOWN but deprecated, so a v5
 //     file loads unchanged; startup strips them only after the adopted Home
-//     archive's binding seed has committed. Its document down step can only
-//     stamp an UNSTRIPPED file: a stripped one no longer holds the v5 shape and
-//     needs `smd config-downgrade`, which rebuilds it from Home's bindings.
+//     archive's binding seed has committed.
+//   - v6→v7 (W-0027 C2e): `server.require_desktop_app`, the temporary switch for
+//     the operating-client check, is removed. The check is always on, so the key
+//     has no reader; the step deletes it, so that a file that held it is not
+//     refused as an unknown key.
 var migrations = []migration{
 	{from: 1, apply: migrateV1toV2},
 	{from: 2, apply: migrateV2toV3},
-	{from: 3, apply: migrateV3toV4, down: downgradeV4toV3},
-	{from: 4, apply: migrateV4toV5, down: downgradeV5toV4},
-	{from: 5, apply: migrateV5toV6, down: downgradeV6toV5},
+	{from: 3, apply: migrateV3toV4},
+	{from: 4, apply: migrateV4toV5},
+	{from: 5, apply: migrateV5toV6},
+	{from: 6, apply: migrateV6toV7},
+}
+
+// migrateV6toV7 removes server.require_desktop_app, whatever it said: the
+// operating-client check is always on. It deletes the key only from a server
+// block that is an object; any other value is left for the typed load to judge,
+// as before.
+func migrateV6toV7(doc map[string]any) error {
+	if server, ok := doc["server"].(map[string]any); ok {
+		delete(server, "require_desktop_app")
+	}
+	return nil
 }
 
 func migrateV5toV6(map[string]any) error { return nil }
 
-// downgradeV6toV5 stamps a v6 document as v5 only when every forwarder entry
-// still carries the v5 shape's required `name` — i.e. the file was never
-// stripped. A stripped entry is refused: what it lost lives in Home's bindings,
-// which only `smd config-downgrade` reads.
-func downgradeV6toV5(doc map[string]any) error {
-	entries, _ := doc["forwarders"].([]any)
-	for i, e := range entries {
-		m, _ := e.(map[string]any)
-		if name, _ := m["name"].(string); name == "" {
-			typ, _ := m["type"].(string)
-			return fmt.Errorf("forwarder[%d] (%s) is a v6 station account without the v5 name; "+
-				"run smd config-downgrade, which rebuilds the v5 entries from Home's destination bindings", i, typ)
-		}
-	}
-	return nil
-}
-
 // v4→v5 (W-0021 slice 2C): `qso_archives[].request_key`, the creation
 // idempotency key, becomes part of the shape. The step adds nothing — the
 // archive manager writes the key with the entry — so it only stamps the
-// version; its down step strips the key from every entry.
+// version.
 func migrateV4toV5(map[string]any) error { return nil }
 
-func downgradeV5toV4(doc map[string]any) error {
-	entries, _ := doc["qso_archives"].([]any)
-	for _, e := range entries {
-		if m, ok := e.(map[string]any); ok {
-			delete(m, "request_key")
-		}
-	}
-	return nil
-}
-
-// qsoArchiveCatalogueKeys are the v4 top-level keys the v3 loader refuses.
-var qsoArchiveCatalogueKeys = []string{"active_qso_archive_id", "pending_qso_archive_id", "qso_archives"}
-
 func migrateV3toV4(map[string]any) error { return nil }
-
-func downgradeV4toV3(doc map[string]any) error {
-	for _, k := range qsoArchiveCatalogueKeys {
-		delete(doc, k)
-	}
-	return nil
-}
-
-// DowngradeDocument rewrites a raw config document from its own version down
-// to `to`, applying each registered down step in turn (`smd config-downgrade`,
-// the rollback drill's config half). Refused, with nothing rewritten: a target
-// at or above the document's version; a document newer than this build knows;
-// and any step on the way that has no down migration — named, so the operator
-// knows which version is the floor. The result is stamped with `to`.
-func DowngradeDocument(data []byte, to int) ([]byte, error) {
-	var doc map[string]any
-	if err := json.Unmarshal(data, &doc); err != nil {
-		return nil, fmt.Errorf("parsing config document: %w", err)
-	}
-	from, err := documentVersion(doc)
-	if err != nil {
-		return nil, err
-	}
-	if from > currentConfigVersion {
-		return nil, fmt.Errorf("config version %d is newer than this Station Manager supports (max %d)", from, currentConfigVersion)
-	}
-	if to < 1 || to >= from {
-		return nil, fmt.Errorf("target version %d is not below the document's version %d (down only)", to, from)
-	}
-	// Check the whole path first so a refusal never leaves a half-downgraded doc.
-	for v := from - 1; v >= to; v-- {
-		m := migrationFrom(v)
-		if m == nil || m.down == nil {
-			return nil, fmt.Errorf("no down migration from version %d to %d; version %d is the lowest this build can write", v+1, v, v+1)
-		}
-	}
-	for v := from - 1; v >= to; v-- {
-		if err := migrationFrom(v).down(doc); err != nil {
-			return nil, fmt.Errorf("downgrading config v%d→v%d: %w", v+1, v, err)
-		}
-	}
-	doc["version"] = to
-	out, err := json.MarshalIndent(doc, "", "  ")
-	if err != nil {
-		return nil, fmt.Errorf("re-marshalling downgraded config: %w", err)
-	}
-	return out, nil
-}
 
 // migrateV1toV2 folds the global bridge.mode_mappings[driver] block (removed from
 // BridgeConfig in §10) into each rig's per-rig mode_mappings, keyed by rig literal
@@ -580,14 +513,4 @@ func migrationFrom(v int) *migration {
 		}
 	}
 	return nil
-}
-
-// DocumentSchemaVersion reports a raw config document's `version` (a missing
-// field is the version-1 baseline), for tooling that reports a transition.
-func DocumentSchemaVersion(data []byte) (int, error) {
-	var doc map[string]any
-	if err := json.Unmarshal(data, &doc); err != nil {
-		return 0, fmt.Errorf("parsing config document: %w", err)
-	}
-	return documentVersion(doc)
 }

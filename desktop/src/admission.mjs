@@ -58,8 +58,7 @@ async function body(res) {
 /**
  * Admit this app's lifetime to the smd at origin, through the window's session, so the request
  * carries the credential and the lifetime and is held to the pin. Resolves with
- * { state, instance, generation }: state is 'admitted', 'not-required' (smd serves any client),
- * 'retired' or 'failed'; instance is smd's process marker when it answered, and generation the
+ * { state, instance, generation }: state is 'admitted', 'retired' or 'failed'; instance is smd's process marker when it answered, and generation the
  * admission generation this lifetime is current at. Never throws.
  */
 export async function admit(ses, origin) {
@@ -72,7 +71,6 @@ export async function admit(ses, origin) {
             const st = await body(read);
             if (typeof st?.daemon_instance !== 'string') return { state: 'failed' };
             const instance = st.daemon_instance;
-            if (st.required === false) return { state: 'not-required', instance };
             if (!Number.isSafeInteger(st.generation)) return { state: 'failed' };
             if (st.current === true)
                 return { state: 'admitted', instance, generation: st.generation };
@@ -126,7 +124,7 @@ export function admission({ ses, origin, admitFn = admit, onRetired }) {
         (seen.generation !== undefined && generation !== null && seen.generation !== generation);
     const settle = (r) => {
         if (r.state === 'retired') retired = true;
-        if (r.state === 'admitted' || r.state === 'not-required') {
+        if (r.state === 'admitted') {
             instance = r.instance;
             generation = Number.isSafeInteger(r.generation) ? String(r.generation) : null;
         }

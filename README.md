@@ -8,7 +8,7 @@
 
 🌐 **[station-manager.org](https://station-manager.org)** · 📦 [Install guide](docs/install.md) · 📄 [GPL-3.0-only](#licence)
 
-Station Manager runs as a local daemon (`smd`, written in Go) that serves a browser UI (Svelte 5 + Vite). The daemon and the UI ship as a **single binary** — install it, point a browser at `localhost:8080`, and you have a logging station. No desktop application, no cloud account, and nothing phoning home.
+Station Manager runs as a local daemon (`smd`, written in Go) operated from its own desktop app (Electron). The UI (Svelte 5 + Vite) ships inside the daemon's **single binary** and is shown by the app; the daemon serves nothing else, so a browser at `localhost:8080` gets only a short notice. No cloud account, and nothing phoning home.
 
 > **Status: v2 alpha.** It is dogfooded daily from 7Q5MLV in Malawi and logs real contacts on
 > real hardware, but it is early software with one primary operator. Expect rough edges, and

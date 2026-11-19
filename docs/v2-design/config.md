@@ -66,7 +66,7 @@ configuration.
 
 | JSON key | Go shape | Ownership and purpose |
 |---|---|---|
-| `version` | `int` | Schema version; currently `6`. |
+| `version` | `int` | Schema version; currently `7`. |
 | `data_dir` | `string` | Root for database, logs, caches, and other daemon state. |
 | `useragent` | `string` | Shared outbound HTTP User-Agent; first-run startup supplies `station-manager/<build-version>` when absent. |
 | `socket_path` | `string` | TCP address or Unix-socket path selected by `server.protocol`. |
@@ -112,22 +112,15 @@ silently dropped. A key an older daemon wrote must be consumed by a migration.
 - `serve_spa`, whose absent default is true for TCP and false for Unix sockets;
 - `enable_profiling`, default false;
 - `app_port`, the desktop app's HTTPS listener port on `127.0.0.1` (ADR 0103), absent default
-  8443, with no setting that disables it. Its default is resolved, never written, because an older
-  daemon refuses a key it does not know. An explicit value is kept by `config-downgrade`, so it must
-  be removed by hand before an older build starts (`docs/install.md` §7). It binds only after
-  the browser listener holds its port. Restart-required;
-- `require_desktop_app`, default false: the switch for the operating-client check (ADR 0102;
-  W-0027 C2a; `api-endpoints.md`, Conventions). On, only the desktop app listener is served,
-  and only with this install's operating credential; `GET /v1/healthz` stays open. It is
-  temporary (operator ruling 2026-11-13): the key and its off state are removed once others can
-  install the desktop app. Read at start, so restart-required. On, an unusable operating
-  credential, a refused desktop identity or an app port that cannot be bound stops the start,
-  and the app listener stopping with an error later ends `smd`; off, each is only reported in
-  `smd.log`. `smd` logs the check's state at every start. False
-  is never written. An explicit `true` must be removed by hand before a build that does not
-  know the key starts (`docs/install.md` §7). The desktop app presents the credential (W-0027
-  C2b); a browser at the old address gets a short notice, and the repository's own tools go
-  through `scripts/smd_client.py` (C2c). `docs/install.md` §6 is the operator's description; and
+  8443, with no setting that disables it. Its default is resolved, never written. It binds only
+  after the browser listener holds its port. `smd` serves only the desktop app, so a port that
+  cannot be bound stops the start. Restart-required;
+- no switch for the operating-client check (ADR 0102; `api-endpoints.md`, Conventions): it is
+  always on. The temporary key `require_desktop_app` was removed at version 7 (§13.2); a
+  version 7 file that names it is refused as an unknown key. An unusable operating credential,
+  a refused desktop identity or an app port that cannot be bound stops the start, and the app
+  listener stopping with an error later ends `smd`. `docs/install.md` §6 is the operator's
+  description; and
 - `allow_insecure_network`, a file-only acknowledgement described in §5.1.
 
 ### 3.2 Identity, station, and QSL blocks
@@ -184,20 +177,11 @@ state (the binding seed names such an account after its type).
 
 **The strip.** Once the adopted Home archive's binding seed has committed, startup
 rewrites `config.json` file-first so each entry keeps only its station-account
-fields. Before the first strip it writes `config.v5.json` beside `config.json`
-once, owner-only (`0600`), never overwriting it: the version-5 document as read
-before startup persisted the migrated file, or — when that is not available — the
-still-unstripped version-6 file re-stamped as version 5. Either source is
-written only when a version-5 loader would accept it: every entry named,
-uniquely, and — while `evidence.sync` is on — an `smcloud` entry enabled with
-`url` and `token` (version 5 ties sync to the enabled forwarder; version 6 to
-the complete account). Nothing is changed to make it pass. It takes the same
-guarded ClubLog `credentials.api` scrub as startup persistence; it is staged
-under a unique name and linked into place, so a staging file an interrupted
-attempt left behind never blocks a retry and is removed once a copy stands. It is historical recovery
-material, never read back automatically, and not a lossless rollback after later
-edits. A copy that cannot be written defers the strip; a failed strip write
-leaves the file as it was; neither fails startup, and the next start retries.
+fields. No copy of the file is taken first (W-0027 C2e): earlier builds wrote a
+once-only `config.v5.json` beside `config.json` before the first strip, as recovery
+material for a rollback. It is no longer written, read or required, and one an
+install already has is left exactly as it is. A failed strip write leaves the file
+as it was and does not fail startup; the next start retries.
 Nothing is stripped while another archive is active; while the fields wait, each start logs `config v6: config.json keeps its deprecated forwarder fields until the Home archive is active`.
 
 `lookup.hamnut` is the country/prefix source. `lookup.chain` is the callsign
@@ -640,9 +624,10 @@ accepted through the API must also survive the next startup.
 
 ### 13.1 Version field and ordered registry
 
-The current schema version is `6`. A missing version is the version-`1` baseline.
-Migrations are registered and applied one version at a time. A step may also carry
-a down migration; only steps that add keys an older loader would refuse need one.
+The current schema version is `7`. A missing version is the version-`1` baseline.
+Migrations are registered and applied one version at a time, forward only. There
+are no down migrations: a build does not rewrite a file for an older one
+(operator ruling 2026-11-18, W-0027 C2e).
 
 ### 13.2 Raw-document migrations
 
@@ -679,36 +664,22 @@ schema-migration `config saved` record (reason `schema_version`) covers the rewr
 Version `3 -> 4` (ADR 0071, W-0021) makes the QSO archive catalogue part of the shape
 (`active_qso_archive_id`, `pending_qso_archive_id`, `qso_archives`, §3). The step adds
 nothing — the daemon's adoption at start fills the catalogue from the file's own
-identity — so it only stamps the version. It is the first step with a down migration:
-`4 -> 3` removes the three keys, which is what lets a tagged older build (unknown keys
-refused, newer version refused) read the file again during a rollback.
+identity — so it only stamps the version.
 
 Version `4 -> 5` (W-0021 slice 2C) adds `qso_archives[].request_key`, the creation
 request's idempotency key, so a retried create — through a restarted daemon too —
-returns the archive it already made. The step stamps only; `5 -> 4` strips the key
-from every entry.
+returns the archive it already made. The step stamps only.
 
 Version `5 -> 6` (ADR 0082 part 4, W-0021 5C) makes each forwarder entry a station
 account (§3.3). The step stamps only and keeps `name`, `enabled` and logbook-scoped
 keys known, so a version-5 file loads unchanged; startup strips them after Home's
-binding seed. Its document down step, `6 -> 5`, can only stamp an unstripped file.
-Once Home's seed has committed — stripped or not, since the bindings then own the
-fields — `smd config-downgrade --to 5` first rebuilds each entry from the adopted
-Home archive's bindings, read from its closed file and confirmed by its archive
-identity: the binding's state and per-logbook keys over the account. Before the
-seed the file still holds them and is stamped. It refuses, naming the destination
-and logbooks and writing nothing, when Home's live logbooks disagree on the state (an unbound logbook
-counts as off) or the bindings hold different credentials, and — without changing
-consent or a binding — when the result would hold `evidence.sync` on with no
-enabled `smcloud` entry, which every older loader refuses. It also refuses, writing
-nothing, while Home's file holds any binding born on SM Cloud identity (ADR 0092),
-enabled or not and a deleted logbook's included: version 5 has no such binding, and
-an entry rebuilt from it would upload by name. That is this command's own refusal,
-not the database downgrade's (below). The name is the one
-migration 0015 down renames the queue rows to, read with its own query over every
-binding (a deleted logbook's included); an account with no binding at all becomes a
-disabled entry named after its type. Run it before `smd db-downgrade`, which
-removes the bindings.
+binding seed (§3.3).
+
+Version `6 -> 7` (W-0027 C2e) removes `server.require_desktop_app`, the temporary
+switch for the operating-client check, which is always on. The step deletes the key
+from a `server` block that is an object, whatever the key said, so a file that held
+it is not refused as an unknown key. A `server` value that is not an object is left
+as it is for the typed load to refuse; an absent or `null` one loads as before.
 
 ### 13.3 Pipeline placement
 
@@ -720,7 +691,7 @@ write, and validates only the canonical current candidate.
 
 ### 13.4 Persistence and downgrade guard
 
-`Load` itself never writes. The in-memory value is current and carries version `6`.
+`Load` itself never writes. The in-memory value is current and carries version `7`.
 When the on-disk document was an older version, startup persists the migrated shape
 exactly once, under an explicit `schema_version` persistence reason (names the
 version, never a value); the next boot reads a current file and writes nothing. A
@@ -732,16 +703,13 @@ is on disk leaves the file's content and mtime untouched, so a quiet log means a
 quiet file. A legacy wider-than-`0600` file is still tightened as an explicit
 permission action even on such a no-op (§5.3).
 
-`smd config-downgrade --to <version> --yes [--config <path>]` is the one sanctioned
-downgrade: with the daemon stopped it rewrites the file through the registered down
-steps, refuses a target at or above the file's version or any step without a down
-migration (naming the floor), and writes with the same crash-durable replacement and
-mode rules as the daemon. From version `6` it reads the adopted Home archive's
-bindings first (§13.2). It pairs with `smd db-downgrade`, and runs FIRST (install
-guide §7).
+There is no config downgrade. `smd config-downgrade` was removed (W-0027 C2e); the
+name is kept only so that it is refused and can never start the daemon. A file an
+older build must read has to come from that build's own backup.
 
 Any future shape change must bump the version, add the next ordered migration, and
-test old shape, current shape, malformed input, idempotence, and downgrade refusal.
+test old shape, current shape, malformed input, idempotence, and the refusal of a
+newer file.
 A key removed from the structs but still written by older installs must be consumed
 by a migration (not merely ignored), so the unknown-key gate stays strict (ADR 0075).
 

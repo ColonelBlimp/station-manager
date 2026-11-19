@@ -1,8 +1,8 @@
 package api
 
-// W-0027 C2a: the operating-client check. With server.require_desktop_app on, a request is
-// served only if it arrived on the desktop app's listener and carries the per-install
-// operating credential; the one exception is GET /v1/healthz. With it off, nothing changes.
+// W-0027 C2a: the operating-client check, always on since C2e. A request is served only if
+// it arrived on the desktop app's listener and carries the per-install operating
+// credential; the one exception is GET /v1/healthz.
 
 import (
 	"bufio"
@@ -67,7 +67,6 @@ func TestOperatingClient_TheRule(t *testing.T) {
 	matches := func(p string) bool { return p == good }
 	type c struct {
 		name   string
-		on     bool
 		match  func(string) bool
 		method string
 		path   string
@@ -76,42 +75,36 @@ func TestOperatingClient_TheRule(t *testing.T) {
 		pass   bool
 	}
 	cases := []c{
-		// On: only the app listener with exactly the one right credential.
-		{"on, app, the credential", true, matches, "GET", "/v1/version", true, []string{good}, true},
-		{"on, app, the credential, a mutation", true, matches, "POST", "/v1/qso", true, []string{good}, true},
-		{"on, app, the credential, a page", true, matches, "GET", "/operate", true, []string{good}, true},
-		{"on, app, none", true, matches, "GET", "/v1/version", true, nil, false},
-		{"on, app, empty", true, matches, "GET", "/v1/version", true, []string{""}, false},
-		{"on, app, wrong", true, matches, "GET", "/v1/version", true, []string{"wrong"}, false},
-		{"on, app, repeated", true, matches, "GET", "/v1/version", true, []string{good, good}, false},
-		{"on, app, right then wrong", true, matches, "GET", "/v1/version", true, []string{good, "wrong"}, false},
-		{"on, app, a page, none", true, matches, "GET", "/operate", true, nil, false},
-		// On: the main listener serves nothing, a valid credential included (criterion 4).
-		{"on, main, the credential", true, matches, "GET", "/v1/version", false, []string{good}, false},
-		{"on, main, none", true, matches, "GET", "/v1/version", false, nil, false},
-		{"on, main, a page", true, matches, "GET", "/", false, nil, false},
-		// On: the one exception, exactly.
-		{"on, main, the health check", true, matches, "GET", "/v1/healthz", false, nil, true},
-		{"on, app, the health check, none", true, matches, "GET", "/v1/healthz", true, nil, true},
-		{"on, the health check by HEAD", true, matches, "HEAD", "/v1/healthz", false, nil, false},
-		{"on, the health check by POST", true, matches, "POST", "/v1/healthz", false, nil, false},
-		{"on, a path under the health check", true, matches, "GET", "/v1/healthz/", false, nil, false},
-		{"on, a path that only starts like it", true, matches, "GET", "/v1/healthzz", false, nil, false},
-		{"on, an unclean path to it", true, matches, "GET", "/v1/../v1/healthz", false, nil, false},
-		// On, with no credential loaded: nothing matches, an absent or empty header included.
-		{"on, nothing loaded, none", true, nil, "GET", "/v1/version", true, nil, false},
-		{"on, nothing loaded, empty", true, nil, "GET", "/v1/version", true, []string{""}, false},
-		{"on, nothing loaded, the health check", true, nil, "GET", "/v1/healthz", false, nil, true},
-		// Off: as today on both listeners; a credential is ignored.
-		{"off, main, none", false, matches, "POST", "/v1/qso", false, nil, true},
-		{"off, app, none", false, matches, "GET", "/v1/version", true, nil, true},
-		{"off, app, wrong", false, matches, "GET", "/v1/version", true, []string{"wrong"}, true},
-		{"off, main, the credential", false, matches, "GET", "/v1/version", false, []string{good}, true},
-		{"off, nothing loaded", false, nil, "GET", "/v1/version", false, nil, true},
+		// Only the app listener with exactly the one right credential.
+		{"app, the credential", matches, "GET", "/v1/version", true, []string{good}, true},
+		{"app, the credential, a mutation", matches, "POST", "/v1/qso", true, []string{good}, true},
+		{"app, the credential, a page", matches, "GET", "/operate", true, []string{good}, true},
+		{"app, none", matches, "GET", "/v1/version", true, nil, false},
+		{"app, empty", matches, "GET", "/v1/version", true, []string{""}, false},
+		{"app, wrong", matches, "GET", "/v1/version", true, []string{"wrong"}, false},
+		{"app, repeated", matches, "GET", "/v1/version", true, []string{good, good}, false},
+		{"app, right then wrong", matches, "GET", "/v1/version", true, []string{good, "wrong"}, false},
+		{"app, a page, none", matches, "GET", "/operate", true, nil, false},
+		// The main listener serves nothing, a valid credential included (criterion 4).
+		{"main, the credential", matches, "GET", "/v1/version", false, []string{good}, false},
+		{"main, none", matches, "GET", "/v1/version", false, nil, false},
+		{"main, a page", matches, "GET", "/", false, nil, false},
+		// The one exception, exactly.
+		{"main, the health check", matches, "GET", "/v1/healthz", false, nil, true},
+		{"app, the health check, none", matches, "GET", "/v1/healthz", true, nil, true},
+		{"the health check by HEAD", matches, "HEAD", "/v1/healthz", false, nil, false},
+		{"the health check by POST", matches, "POST", "/v1/healthz", false, nil, false},
+		{"a path under the health check", matches, "GET", "/v1/healthz/", false, nil, false},
+		{"a path that only starts like it", matches, "GET", "/v1/healthzz", false, nil, false},
+		{"an unclean path to it", matches, "GET", "/v1/../v1/healthz", false, nil, false},
+		// With no credential loaded: nothing matches, an absent or empty header included.
+		{"nothing loaded, none", nil, "GET", "/v1/version", true, nil, false},
+		{"nothing loaded, empty", nil, "GET", "/v1/version", true, []string{""}, false},
+		{"nothing loaded, the health check", nil, "GET", "/v1/healthz", false, nil, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			srv := testServerWithCfg(t, func(cfg *config.Config) { cfg.Server.RequireDesktopApp = tc.on })
+			srv := testServerWithCfg(t, nil)
 			if tc.match != nil {
 				srv.SetOperatingCredential(tc.match)
 			}
@@ -122,7 +115,7 @@ func TestOperatingClient_TheRule(t *testing.T) {
 				t.Fatalf("let through = %v, want %v (status %d, body %s)", next.called, tc.pass, w.Code, w.Body)
 			}
 			if tc.pass {
-				// Whatever was presented never travels on to a handler, in either state.
+				// Whatever was presented never travels on to a handler.
 				if got := next.header.Values(operatingCredentialHeader); len(got) != 0 {
 					t.Fatalf("the handler was handed the credential header: %d value(s)", len(got))
 				}
@@ -156,7 +149,7 @@ func errorCode(t *testing.T, body []byte) string {
 
 // The header is canonicalised by net/http, so any letter case a client sends is the one header.
 func TestOperatingClient_TheHeaderNameIsCaseInsensitive(t *testing.T) {
-	srv := testServerWithCfg(t, func(cfg *config.Config) { cfg.Server.RequireDesktopApp = true })
+	srv := testServerWithCfg(t, nil)
 	srv.SetOperatingCredential(func(p string) bool { return p == "good" })
 	for _, name := range []string{"x-sm-operating-credential", "X-SM-OPERATING-CREDENTIAL", "X-Sm-Operating-Credential"} {
 		r := checkRequest("GET", "/v1/version", true)
@@ -205,14 +198,13 @@ func (s *syncBuffer) String() string {
 }
 
 // startChecked serves a station with every optional surface registered (rig, FT8, profiling,
-// the SPA and the manual) on both listeners, with the check on or off and a real credential
-// loaded from a private working directory. The rig and FT8 services are enabled but never
+// the SPA and the manual) on both listeners, with a real credential loaded from a private
+// working directory. The rig and FT8 services are enabled but never
 // started: no hardware and no capture.
-func startChecked(t *testing.T, on bool) checked {
+func startChecked(t *testing.T) checked {
 	t.Helper()
 	logBuf := &syncBuffer{}
 	base := testServerWithLogger(t, func(cfg *config.Config) {
-		cfg.Server.RequireDesktopApp = on
 		cfg.Server.EnableProfiling = true
 		serve := true
 		cfg.Server.ServeSPA = &serve
@@ -332,13 +324,13 @@ func refusedByTheCheck(t *testing.T, c *http.Client, r *http.Request, what strin
 	}
 }
 
-// W-0027 C2c: what a browser at the old address gets with the check on (operator ruling
+// W-0027 C2c: what a browser at the old address gets (operator ruling
 // 2026-11-13: "a notice can be good"). One short, fixed page that says where Station Manager
 // is now. It is a refusal: nothing behind it runs, and it offers no way into the application
 // or the API.
 func TestOperatingClient_APageOnTheMainListenerGetsTheNotice(t *testing.T) {
 	const good = "the-good-credential"
-	srv := testServerWithCfg(t, func(cfg *config.Config) { cfg.Server.RequireDesktopApp = true })
+	srv := testServerWithCfg(t, nil)
 	srv.SetOperatingCredential(func(p string) bool { return p == good })
 	ask := func(method, path string, app bool, creds ...string) (*httptest.ResponseRecorder, bool) {
 		next := &stubNext{}
@@ -416,22 +408,11 @@ func TestOperatingClient_APageOnTheMainListenerGetsTheNotice(t *testing.T) {
 	}
 }
 
-// With the check off, the old address serves the application as before: no notice.
-func TestOperatingClient_NoNoticeWhenTheCheckIsOff(t *testing.T) {
-	srv := testServerWithCfg(t, nil)
-	next := &stubNext{}
-	w := httptest.NewRecorder()
-	srv.requireOperatingClient(next).ServeHTTP(w, checkRequest("GET", "/", false))
-	if !next.called || strings.Contains(w.Body.String(), "desktop app") {
-		t.Fatalf("check off: through=%v, body %q; want the request passed on untouched", next.called, w.Body)
-	}
-}
-
 // Criterion 2: every declared route, the ones a search of the source misses included, is
 // refused with the check's own code on both listeners unless the credential is presented on
 // the app listener; and criterion 4, a valid credential on the main listener is refused.
 func TestOperatingClient_EveryDeclaredRouteIsRefusedWithoutTheCredential(t *testing.T) {
-	l := startChecked(t, true)
+	l := startChecked(t)
 	mainC, appC := l.clients(t)
 	routes := l.srv.DeclaredRoutes()
 
@@ -495,50 +476,48 @@ func TestOperatingClient_EveryDeclaredRouteIsRefusedWithoutTheCredential(t *test
 	}
 }
 
-// The exception is exactly GET /v1/healthz, answering as it does with the check off.
+// The exception is exactly GET /v1/healthz, and the check changes nothing in its answer: on
+// either listener, with no credential, it is what the health handler itself writes.
 func TestOperatingClient_TheHealthCheckStaysOpen(t *testing.T) {
-	on, off := startChecked(t, true), startChecked(t, false)
-	get := func(l checked, app bool) (int, string) {
-		mainC, appC := l.clients(t)
+	on := startChecked(t)
+	direct := httptest.NewRecorder()
+	on.srv.handleHealthz(direct, httptest.NewRequest(http.MethodGet, "/v1/healthz", nil))
+	wantCode, wantBody := direct.Code, direct.Body.String()
+	if wantCode != http.StatusOK || wantBody == "" {
+		t.Fatalf("the health handler itself answers %d %q; the comparison has no baseline", wantCode, wantBody)
+	}
+	mainC, appC := on.clients(t)
+	for _, app := range []bool{false, true} {
 		c := mainC
 		if app {
 			c = appC
 		}
-		resp, err := c.Do(l.acceptable(t, app, "GET", "/v1/healthz"))
+		resp, err := c.Do(on.acceptable(t, app, "GET", "/v1/healthz"))
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer func() { _ = resp.Body.Close() }()
 		body, _ := io.ReadAll(resp.Body)
-		return resp.StatusCode, string(body)
-	}
-	for _, app := range []bool{false, true} {
-		wantCode, wantBody := get(off, app)
-		gotCode, gotBody := get(on, app)
-		if wantCode != http.StatusOK {
-			t.Fatalf("with the check off the health check answers %d; the comparison has no baseline", wantCode)
-		}
-		if gotCode != wantCode || gotBody != wantBody {
-			t.Errorf("app=%v: the health check answers %d %s with the check on; want it unchanged: %d %s",
-				app, gotCode, gotBody, wantCode, wantBody)
+		_ = resp.Body.Close()
+		if resp.StatusCode != wantCode || string(body) != wantBody {
+			t.Errorf("app=%v: the health check answers %d %s; want the handler's own answer: %d %s",
+				app, resp.StatusCode, body, wantCode, wantBody)
 		}
 	}
 	// Only GET: a HEAD (which the route would also answer) is refused. It has no body to read.
-	mainC, _ := on.clients(t)
 	resp, err := mainC.Do(on.acceptable(t, false, "HEAD", "/v1/healthz"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("HEAD /v1/healthz = %d with the check on; want 403", resp.StatusCode)
+		t.Fatalf("HEAD /v1/healthz = %d; want 403", resp.StatusCode)
 	}
 }
 
 // Criterion 1, at the server: with the credential, the app listener serves pages, requests,
 // a mutation, an SSE stream and a WebSocket.
 func TestOperatingClient_TheCredentialOnTheAppListenerIsServed(t *testing.T) {
-	l := startChecked(t, true)
+	l := startChecked(t)
 	_, appC := l.clients(t)
 
 	resp, err := appC.Do(l.acceptable(t, true, "GET", "/v1/version", l.cred))
@@ -622,7 +601,7 @@ func TestOperatingClient_TheCredentialOnTheAppListenerIsServed(t *testing.T) {
 // credential can do neither. The count is read through the profile claim, which refuses a
 // switch while any subscriber is connected.
 func TestOperatingClient_ARefusedFt8StreamAddsNoSubscriber(t *testing.T) {
-	l := startChecked(t, true)
+	l := startChecked(t)
 	mainC, appC := l.clients(t)
 
 	refusedByTheCheck(t, mainC, l.acceptable(t, false, "GET", "/v1/ft8/events"), "FT8 stream on the main listener")
@@ -652,7 +631,7 @@ func TestOperatingClient_ARefusedFt8StreamAddsNoSubscriber(t *testing.T) {
 // The other guards still run first: a foreign Host is answered by the origin guard, with its
 // own code and its own log line, not by the check.
 func TestOperatingClient_TheOriginGuardStillAnswersFirst(t *testing.T) {
-	l := startChecked(t, true)
+	l := startChecked(t)
 	mainC, _ := l.clients(t)
 	r := l.acceptable(t, false, "GET", "/v1/version")
 	r.Host = "attacker.example"
@@ -667,48 +646,22 @@ func TestOperatingClient_TheOriginGuardStillAnswersFirst(t *testing.T) {
 	}
 }
 
-// Criterion 7: with the check off, both listeners serve as today and a credential is ignored.
-func TestOperatingClient_OffChangesNothing(t *testing.T) {
-	l := startChecked(t, false)
-	mainC, appC := l.clients(t)
-	for _, tc := range []struct {
-		name  string
-		app   bool
-		creds []string
-	}{
-		{"main, no credential", false, nil},
-		{"main, a wrong credential", false, []string{wrongCredential}},
-		{"app, no credential", true, nil},
-		{"app, a wrong credential", true, []string{wrongCredential}},
-		{"app, the credential", true, []string{l.cred}},
-	} {
-		c := mainC
-		if tc.app {
-			c = appC
-		}
-		for _, path := range []string{"/v1/version", "/"} {
-			resp, err := c.Do(l.acceptable(t, tc.app, "GET", path, tc.creds...))
-			if err != nil {
-				t.Fatal(err)
-			}
-			_ = resp.Body.Close()
-			if resp.StatusCode != http.StatusOK {
-				t.Errorf("%s: GET %s = %d with the check off; want 200", tc.name, path, resp.StatusCode)
-			}
-		}
-	}
-	if log := l.log.String(); strings.Contains(log, wrongCredential) || strings.Contains(log, l.cred) {
-		t.Fatal("a credential was written to the log with the check off")
-	}
-}
-
 // A refusal writes one line: which listener, the method, the path and whether a credential
 // was presented. Never a value.
 func TestOperatingClient_ARefusalIsLoggedWithoutAnyCredential(t *testing.T) {
-	l := startChecked(t, true)
+	l := startChecked(t)
 	mainC, appC := l.clients(t)
 	refusedByTheCheck(t, mainC, l.acceptable(t, false, "GET", "/v1/qso/"+testServedArchive), "main")
 	refusedByTheCheck(t, appC, l.acceptable(t, true, "POST", "/v1/restart", wrongCredential), "app")
+	// A served request too: the credential it was served for is not written either.
+	served, err := appC.Do(l.acceptable(t, true, "GET", "/v1/version", l.cred))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = served.Body.Close()
+	if served.StatusCode != http.StatusOK {
+		t.Fatalf("the fixture: the app's own request = %d, want 200", served.StatusCode)
+	}
 
 	type line struct {
 		Level, Message, Listener, Method, Path string

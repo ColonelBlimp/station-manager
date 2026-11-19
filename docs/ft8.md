@@ -1532,24 +1532,24 @@ to be started deliberately; remaining at the rig is the operator's obligation un
 their licence, not a property the software checks (operator, 2026-07-27).
 
 **But one presence check IS enforced, and the phrase "nothing stops it" is wrong
-without it (found 2026-07-30, grepping the tree rather than trusting this
-paragraph): the FT8 VIEW must stay open.** When the last `/v1/ft8/events` subscriber
-goes away past `captureLinger`, `Service.onLingerExpired` calls `disarmTx(false)` —
-dropping PTT and abandoning any active QSO — and only then releases the capture
-device; the disarm is deliberately NOT gated on `capturing`, so it still runs when
-the capture loop has already died (`internal/ft8/service.go:398–429`, 2026-07-25
-review). The code calls this the "attended-only guarantee", which is where the
-over-broad word entered the docs: what it enforces is an open SSE subscription, not
-a human. **So the accurate statement has two halves** — walking away with the
-browser open does not stop a run; closing the browser stops it after the linger. A
-reconnect inside the linger window keeps the session and re-arms TX. Per-rung confirm
-was rejected (the 15 s cadence makes it frantic; the Arm-TX gate already provides
-the deliberate-consent safety). Off-ramps: stop after N unanswered repeats; never
-auto-start a fresh CQ cycle; abort on operator action; never auto-switch targets.
+without it: the desktop app's own FT8 VIEW must stay open (W-0027 C4b, 2026-11-17).**
+What it enforces is an open event stream of the current app lifetime, not a human.
+**So the accurate statement has two halves** — walking away with the app open on the
+FT8 view does not stop a run; closing the app, or leaving the FT8 view, stops it after
+the grace. Per-rung confirm was rejected (the 15 s cadence makes it frantic; the
+Arm-TX gate already provides the deliberate-consent safety). Off-ramps: stop after N
+unanswered repeats; never auto-start a fresh CQ cycle; abort on operator action; never
+auto-switch targets.
 
-**With the operating-client check on, presence is the desktop app's own FT8 view
-(W-0027 C4b, 2026-11-17).** The paragraph above is the rule with the check off. With
-it on, `server.require_desktop_app`:
+**History, so the code's comments make sense.** Until W-0027 C2e (2026-11-18) the
+daemon could also run with its operating-client check off, and the presence rule was
+then any `/v1/ft8/events` subscriber: when the last one had been gone for
+`captureLinger`, `Service.onLingerExpired` disarmed TX (found 2026-07-30; the code
+called it the "attended-only guarantee", which is where the over-broad word entered
+the docs). That state and that disarm are removed: the check is always on, and
+`onLingerExpired` releases audio capture and nothing else.
+
+**The rule:**
 - **Whose stream counts:** only a `/v1/ft8/events` subscription made under the app
   lifetime that is current (admitted at app start, W-0027 C4a). A stream that names
   no lifetime, a tool's, is served and keeps audio capture open, but is not
@@ -1563,8 +1563,8 @@ it on, `server.require_desktop_app`:
   `disarmTx`, exactly as above. A return inside the grace changes nothing. The
   decision names the arm it was made for and is checked again under `seqGate`, so
   a late one never ends a later arm.
-- **The capture count decides capture only.** `onLingerExpired` no longer disarms
-  in this state; `presence.go` does, for the app's stream alone.
+- **The capture count decides capture only.** `onLingerExpired` does not disarm;
+  `presence.go` does, for the app's stream alone.
 - **Still not proof of a person:** a frozen app whose connection is open is
   present, and a run still continues with nobody at the desk while the FT8 view is
   open.

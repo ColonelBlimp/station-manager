@@ -3,7 +3,7 @@ title: Station Manager — Operator Manual
 ---
 
 Station Manager (SM) is a ham radio logger. You start it once in the background
-and operate it from your web browser, or from the Station Manager desktop app —
+and operate it from the Station Manager desktop app —
 logging contacts, controlling your rig, running FT8, and forwarding your log to
 online services.
 

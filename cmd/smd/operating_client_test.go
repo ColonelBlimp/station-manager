@@ -1,8 +1,8 @@
 package main
 
-// W-0027 C2a: the daemon's side of the operating-client check. The credential is made at
-// every start. With server.require_desktop_app on, an unusable credential, identity or app
-// port ends the start with its reason; with it off, each is only reported, as before.
+// W-0027 C2a: the daemon's side of the operating-client check, always on since C2e. The
+// credential is made at every start. An unusable credential, identity or app port ends the
+// start with its reason.
 
 import (
 	"bytes"
@@ -63,22 +63,20 @@ func publishedCredential(t *testing.T, root string) string {
 	return string(b)
 }
 
-// The credential is created and handed to the server whether or not the check is on.
-func TestOperatingCredential_IsMadeAndHandedOverInEitherState(t *testing.T) {
-	for _, required := range []bool{false, true} {
-		root := privateRoot(t)
-		srv, r, f := &fakeCredentialServer{}, newAppReports(), &fatals{}
-		loadOperatingCredential(srv, desktopid.EnsureCredential, root, required, r.report, f.fatal)
-		value := publishedCredential(t, root)
-		if srv.matches == nil || !srv.matches(value) || srv.matches("not-"+value) {
-			t.Fatalf("required=%v: the server was not handed a test for exactly the published credential", required)
-		}
-		if got := r.all(); len(got) != 0 {
-			t.Fatalf("required=%v: a clean start reported %+v", required, got)
-		}
-		if got := f.all(); len(got) != 0 {
-			t.Fatalf("required=%v: a clean start was fatal: %v", required, got)
-		}
+// The credential is created and handed to the server at the start.
+func TestOperatingCredential_IsMadeAndHandedOver(t *testing.T) {
+	root := privateRoot(t)
+	srv, r, f := &fakeCredentialServer{}, newAppReports(), &fatals{}
+	loadOperatingCredential(srv, desktopid.EnsureCredential, root, r.report, f.fatal)
+	value := publishedCredential(t, root)
+	if srv.matches == nil || !srv.matches(value) || srv.matches("not-"+value) {
+		t.Fatal("the server was not handed a test for exactly the published credential")
+	}
+	if got := r.all(); len(got) != 0 {
+		t.Fatalf("a clean start reported %+v", got)
+	}
+	if got := f.all(); len(got) != 0 {
+		t.Fatalf("a clean start was fatal: %v", got)
 	}
 }
 
@@ -92,73 +90,62 @@ func credentialEnsureReturning(d desktopid.Durability, err error) func(string) (
 	}
 }
 
-func TestOperatingCredential_UnconfirmedDurabilityIsReportedAndUsedInEitherState(t *testing.T) {
-	for _, required := range []bool{false, true} {
-		root := privateRoot(t)
-		srv, r, f := &fakeCredentialServer{}, newAppReports(), &fatals{}
-		loadOperatingCredential(srv, credentialEnsureReturning(desktopid.DurabilityUnconfirmed, nil), root, required, r.report, f.fatal)
-		if srv.matches == nil || !srv.matches(publishedCredential(t, root)) {
-			t.Fatalf("required=%v: an unconfirmed credential was not used", required)
-		}
-		if got := r.all(); len(got) != 1 || !strings.Contains(got[0].msg, "durab") {
-			t.Fatalf("required=%v: reports = %+v; want one about unconfirmed durability", required, got)
-		}
-		if got := f.all(); len(got) != 0 {
-			t.Fatalf("required=%v: unconfirmed durability was fatal: %v", required, got)
-		}
+func TestOperatingCredential_UnconfirmedDurabilityIsReportedAndUsed(t *testing.T) {
+	root := privateRoot(t)
+	srv, r, f := &fakeCredentialServer{}, newAppReports(), &fatals{}
+	loadOperatingCredential(srv, credentialEnsureReturning(desktopid.DurabilityUnconfirmed, nil), root, r.report, f.fatal)
+	if srv.matches == nil || !srv.matches(publishedCredential(t, root)) {
+		t.Fatal("an unconfirmed credential was not used")
+	}
+	if got := r.all(); len(got) != 1 || !strings.Contains(got[0].msg, "durab") {
+		t.Fatalf("reports = %+v; want one about unconfirmed durability", got)
+	}
+	if got := f.all(); len(got) != 0 {
+		t.Fatalf("unconfirmed durability was fatal: %v", got)
 	}
 }
 
-func TestOperatingCredential_Refused(t *testing.T) {
+// A refused credential is a start-up error, and the server is handed nothing.
+func TestOperatingCredential_RefusedIsAStartUpError(t *testing.T) {
 	refusal := errors.New("desktopid.EnsureCredential: /wd/desktop-credential/credential has mode 0644, want 0600")
-	t.Run("check off: reported, the station starts", func(t *testing.T) {
-		srv, r, f := &fakeCredentialServer{}, newAppReports(), &fatals{}
-		loadOperatingCredential(srv, credentialEnsureReturning(desktopid.Durable, refusal), "/wd", false, r.report, f.fatal)
-		if got := r.all(); len(got) != 1 || !strings.Contains(got[0].msg, "credential") || got[0].err != refusal {
-			t.Fatalf("reports = %+v; want one naming the credential, carrying the refusal (which names the file)", got)
-		}
-		if got := f.all(); len(got) != 0 {
-			t.Fatalf("a refused credential was fatal with the check off: %v", got)
-		}
-		if srv.matches != nil {
-			t.Fatal("the server was handed a credential test although none was loaded")
-		}
-	})
-	t.Run("check on: a start-up error", func(t *testing.T) {
-		srv, r, f := &fakeCredentialServer{}, newAppReports(), &fatals{}
-		loadOperatingCredential(srv, credentialEnsureReturning(desktopid.Durable, refusal), "/wd", true, r.report, f.fatal)
-		got := f.all()
-		if len(got) != 1 || !errors.Is(got[0], refusal) || !strings.Contains(got[0].Error(), "require_desktop_app") {
-			t.Fatalf("fatal = %v; want one naming server.require_desktop_app and carrying the refusal", got)
-		}
-		if srv.matches != nil {
-			t.Fatal("the server was handed a credential test although none was loaded")
-		}
-	})
+	srv, r, f := &fakeCredentialServer{}, newAppReports(), &fatals{}
+	loadOperatingCredential(srv, credentialEnsureReturning(desktopid.Durable, refusal), "/wd", r.report, f.fatal)
+	got := f.all()
+	if len(got) != 1 || !errors.Is(got[0], refusal) || !strings.Contains(got[0].Error(), "operating credential is unusable") {
+		t.Fatalf("fatal = %v; want one saying the operating credential is unusable and carrying the refusal", got)
+	}
+	if srv.matches != nil {
+		t.Fatal("the server was handed a credential test although none was loaded")
+	}
 }
 
-// With the check on, the two ruled listener failures end the start (ADR 0103 point 2).
-func TestDesktopListener_CheckOn_RefusedIdentityIsFatal(t *testing.T) {
+// The two ruled listener failures end the start (ADR 0103 point 2).
+func TestDesktopListener_RefusedIdentityIsFatal(t *testing.T) {
 	fk, r, f := newFake(), newAppReports(), &fatals{}
 	refusal := errors.New("desktopid.Load: /wd/desktop-identity/key.pem has mode 0644, want 0600")
 	startDesktopListener(fk, ensureReturning(desktopid.Durable, refusal), "/wd", 8443, r.report, f.fatal)
 	got := f.all()
-	if len(got) != 1 || !errors.Is(got[0], refusal) || !strings.Contains(got[0].Error(), "require_desktop_app") {
-		t.Fatalf("fatal = %v; want one naming server.require_desktop_app and carrying the refusal", got)
+	if len(got) != 1 || !errors.Is(got[0], refusal) || !strings.Contains(got[0].Error(), "desktop identity was refused") {
+		t.Fatalf("fatal = %v; want one saying the desktop identity was refused and carrying the refusal", got)
+	}
+	if got := r.all(); len(got) != 0 {
+		t.Fatalf("a fatal refusal was also reported as a warning: %+v", got)
 	}
 	if len(fk.bound) != 0 {
 		t.Fatal("the app listener was bound despite a refused identity")
 	}
 }
 
-func TestDesktopListener_CheckOn_BusyPortIsFatal(t *testing.T) {
+func TestDesktopListener_BusyPortIsFatal(t *testing.T) {
 	fk, r, f := newFake(), newAppReports(), &fatals{}
 	fk.bindErr = errors.New("listen tcp 127.0.0.1:8443: bind: address already in use")
 	startDesktopListener(fk, ensureReturning(desktopid.Durable, nil), "/wd", 8443, r.report, f.fatal)
 	got := f.all()
-	if len(got) != 1 || !errors.Is(got[0], fk.bindErr) || !strings.Contains(got[0].Error(), "8443") ||
-		!strings.Contains(got[0].Error(), "require_desktop_app") {
-		t.Fatalf("fatal = %v; want one naming port 8443 and server.require_desktop_app with the bind error", got)
+	if len(got) != 1 || !errors.Is(got[0], fk.bindErr) || !strings.Contains(got[0].Error(), "port 8443 could not be bound") {
+		t.Fatalf("fatal = %v; want one naming port 8443 with the bind error", got)
+	}
+	if got := r.all(); len(got) != 0 {
+		t.Fatalf("a fatal bind failure was also reported as a warning: %+v", got)
 	}
 	select {
 	case <-fk.served:
@@ -167,8 +154,8 @@ func TestDesktopListener_CheckOn_BusyPortIsFatal(t *testing.T) {
 	}
 }
 
-// Unconfirmed durability of the identity stays a report in both states, and the listener runs.
-func TestDesktopListener_CheckOn_UnconfirmedDurabilityIsStillOnlyReported(t *testing.T) {
+// Unconfirmed durability of the identity is a report, and the listener runs.
+func TestDesktopListener_UnconfirmedDurabilityIsOnlyReported(t *testing.T) {
 	fk, r, f := newFake(), newAppReports(), &fatals{}
 	startDesktopListener(fk, ensureReturning(desktopid.DurabilityUnconfirmed, nil), "/wd", 8443, r.report, f.fatal)
 	waitSignal(t, fk.served, "ServeApp")
@@ -213,16 +200,13 @@ func pinnedGet(t *testing.T, port int, id desktopid.Identity, path, cred string)
 	return resp.StatusCode, string(body)
 }
 
-func checkedDaemonConfig(on bool) func(*config.Config) {
-	return func(c *config.Config) {
-		c.SetupComplete = true
-		c.DefaultLogbookID = 1
-		c.Server.RequireDesktopApp = on
-	}
+func setUpDaemonConfig(c *config.Config) {
+	c.SetupComplete = true
+	c.DefaultLogbookID = 1
 }
 
 func TestOperatingClient_TheHTTPNodeEnforcesTheCheckWithThisInstallsCredential(t *testing.T) {
-	d, orch := newOrchestratedDaemon(t, checkedDaemonConfig(true))
+	d, orch := newOrchestratedDaemon(t, setUpDaemonConfig)
 	ownerOnlySocketDir(t, d)
 	if err := orch.Start(d.workerCtx); err != nil {
 		t.Fatal(err)
@@ -255,31 +239,8 @@ func TestOperatingClient_TheHTTPNodeEnforcesTheCheckWithThisInstallsCredential(t
 	}
 	select {
 	case err := <-d.errCh:
-		t.Fatalf("a clean start with the check on reached errCh: %v", err)
+		t.Fatalf("a clean start reached errCh: %v", err)
 	case <-time.After(200 * time.Millisecond):
-	}
-	stopGen(t, orch)
-}
-
-// Check off: the credential is still made at start, and nothing asks for it.
-func TestOperatingClient_OffTheCredentialIsStillMadeAndNothingAsksForIt(t *testing.T) {
-	d, orch := newOrchestratedDaemon(t, checkedDaemonConfig(false))
-	ownerOnlySocketDir(t, d)
-	if err := orch.Start(d.workerCtx); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := desktopid.LoadCredential(d.cfgSvc.WorkingDir()); err != nil {
-		t.Fatalf("no usable credential after a start with the check off: %v", err)
-	}
-	id, err := desktopid.Load(d.cfgSvc.WorkingDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if code, body := pinnedGet(t, d.server.AppPort(), id, "/v1/version", ""); code != http.StatusOK {
-		t.Fatalf("the app listener without a credential, check off: %d %s; want 200", code, body)
-	}
-	if code, body := mainCall(t, d, http.MethodGet, "/v1/version"); code != http.StatusOK {
-		t.Fatalf("the main listener, check off: %d %s; want 200", code, body)
 	}
 	stopGen(t, orch)
 }
@@ -303,7 +264,7 @@ func wantFatal(t *testing.T, d *daemon, contains ...string) {
 	}
 }
 
-func TestOperatingClient_CheckOn_ABusyAppPortEndsTheStart(t *testing.T) {
+func TestOperatingClient_ABusyAppPortEndsTheStart(t *testing.T) {
 	busy, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -311,19 +272,19 @@ func TestOperatingClient_CheckOn_ABusyAppPortEndsTheStart(t *testing.T) {
 	defer func() { _ = busy.Close() }()
 	port := busy.Addr().(*net.TCPAddr).Port
 	d, orch := newOrchestratedDaemon(t, func(c *config.Config) {
-		checkedDaemonConfig(true)(c)
+		setUpDaemonConfig(c)
 		c.Server.AppPort = port
 	})
 	ownerOnlySocketDir(t, d)
 	if err := orch.Start(d.workerCtx); err != nil {
 		t.Fatal(err)
 	}
-	wantFatal(t, d, strconv.Itoa(port), "require_desktop_app")
+	wantFatal(t, d, strconv.Itoa(port), "could not be bound")
 	stopGen(t, orch)
 }
 
-func TestOperatingClient_CheckOn_ARefusedIdentityEndsTheStart(t *testing.T) {
-	d, orch := newOrchestratedDaemon(t, checkedDaemonConfig(true))
+func TestOperatingClient_ARefusedIdentityEndsTheStart(t *testing.T) {
+	d, orch := newOrchestratedDaemon(t, setUpDaemonConfig)
 	ownerOnlySocketDir(t, d)
 	if _, _, err := desktopid.Ensure(d.cfgSvc.WorkingDir()); err != nil {
 		t.Fatal(err)
@@ -335,17 +296,17 @@ func TestOperatingClient_CheckOn_ARefusedIdentityEndsTheStart(t *testing.T) {
 	if err := orch.Start(d.workerCtx); err != nil {
 		t.Fatal(err)
 	}
-	wantFatal(t, d, key, "require_desktop_app")
+	wantFatal(t, d, key, "desktop identity was refused")
 	if got := d.server.AppPort(); got != 0 {
 		t.Fatalf("an app listener started (port %d) on a refused identity", got)
 	}
 	stopGen(t, orch)
 }
 
-// A refused credential with the check on ends the start, and until the daemon is down the
-// server refuses everything but the health check: it never serves without a credential.
-func TestOperatingClient_CheckOn_ARefusedCredentialEndsTheStartAndServesNothing(t *testing.T) {
-	d, orch := newOrchestratedDaemon(t, checkedDaemonConfig(true))
+// A refused credential ends the start, and until the daemon is down the server refuses
+// everything but the health check: it never serves without a credential.
+func TestOperatingClient_ARefusedCredentialEndsTheStartAndServesNothing(t *testing.T) {
+	d, orch := newOrchestratedDaemon(t, setUpDaemonConfig)
 	ownerOnlySocketDir(t, d)
 	root := d.cfgSvc.WorkingDir()
 	if _, _, err := desktopid.EnsureCredential(root); err != nil {
@@ -371,56 +332,30 @@ func TestOperatingClient_CheckOn_ARefusedCredentialEndsTheStartAndServesNothing(
 			t.Fatalf("the app listener served the refused credential's value: %d %s", code, body)
 		}
 	}
-	wantFatal(t, d, file, "require_desktop_app")
+	wantFatal(t, d, file, "operating credential is unusable")
 	stopGen(t, orch)
 }
 
-// Check off: a refused credential never stops the station.
-func TestOperatingClient_CheckOff_ARefusedCredentialNeverStopsTheStation(t *testing.T) {
-	d, orch := newOrchestratedDaemon(t, checkedDaemonConfig(false))
-	ownerOnlySocketDir(t, d)
-	root := d.cfgSvc.WorkingDir()
-	if _, _, err := desktopid.EnsureCredential(root); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(filepath.Join(root, desktopid.CredentialDirName, desktopid.CredentialFileName), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := orch.Start(d.workerCtx); err != nil {
-		t.Fatalf("a refused credential stopped the station with the check off: %v", err)
-	}
-	if code, body := mainCall(t, d, http.MethodGet, "/v1/version"); code != http.StatusOK {
-		t.Fatalf("the main listener: version = %d %s; want 200", code, body)
-	}
-	select {
-	case err := <-d.errCh:
-		t.Fatalf("a refused credential reached errCh with the check off: %v", err)
-	case <-time.After(200 * time.Millisecond):
-	}
-	stopGen(t, orch)
-}
-
-// With the check on, the app listener is the only way in. If it stops with an error after
-// the start, the daemon ends, so its service manager restarts it (operator ruling
-// 2026-11-13: "yes, end the daemon"). With the check off it stays a report
-// (TestDesktopListener_ServeError_ReportedNotFatal).
-func TestDesktopListener_CheckOn_AServeErrorEndsTheDaemon(t *testing.T) {
+// The app listener is the only way in. If it stops with an error after the start, the
+// daemon ends, so its service manager restarts it (operator ruling 2026-11-13: "yes, end
+// the daemon").
+func TestDesktopListener_AServeErrorEndsTheDaemon(t *testing.T) {
 	fk, r := newFake(), newAppReports()
 	fk.serveErr = errors.New("api.ServeApp: accept failure")
 	got := make(chan error, 1)
 	startDesktopListener(fk, ensureReturning(desktopid.Durable, nil), "/wd", 8443, r.report, func(err error) { got <- err })
 	select {
 	case err := <-got:
-		if !errors.Is(err, fk.serveErr) || !strings.Contains(err.Error(), "require_desktop_app") {
-			t.Fatalf("fatal = %v; want one naming server.require_desktop_app and carrying the serve error", err)
+		if !errors.Is(err, fk.serveErr) || !strings.Contains(err.Error(), "stopped with an error") {
+			t.Fatalf("fatal = %v; want one saying the listener stopped with an error and carrying the serve error", err)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatalf("a serve error with the check on never reached the fatal path; reports = %+v", r.all())
+		t.Fatalf("a serve error never reached the fatal path; reports = %+v", r.all())
 	}
 }
 
-// A clean stop of the app listener is not an error in either state.
-func TestDesktopListener_CheckOn_ACleanStopIsNotFatal(t *testing.T) {
+// A clean stop of the app listener is not an error.
+func TestDesktopListener_ACleanStopIsNotFatal(t *testing.T) {
 	fk, r, f := newFake(), newAppReports(), &fatals{}
 	startDesktopListener(fk, ensureReturning(desktopid.Durable, nil), "/wd", 8443, r.report, f.fatal)
 	waitSignal(t, fk.served, "ServeApp")

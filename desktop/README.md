@@ -114,8 +114,7 @@ are generated per run with `openssl`; nothing touches `smd`.
 beside the identity, readable only by your user. The shell reads it once, with the identity
 (`src/discovery.mjs`), and its main process adds it as the `X-SM-Operating-Credential` header to
 requests for the pinned origin and nothing else (`src/credential.mjs`). Page script never holds
-it. With `smd`'s operating-client check on (`server.require_desktop_app`), this is what lets the
-app in; with it off, `smd` ignores the header.
+it. `smd`'s operating-client check is always on, and this is what lets the app in.
 
 - Until the credential exists, or while its file is unsafe or malformed, the app shows its
   waiting page with the path and the reason, and sends nothing. An `smd` older than the check
@@ -125,8 +124,8 @@ app in; with it off, `smd` ignores the header.
   its own and is left as it is, so nothing typed is lost; a window still waiting says the daemon
   did not accept it. Close the app and open it again to adopt the new credential.
 
-`npm run check:c2b` proves this against TLS fixtures. `npm run check:c2b-smd` runs the C1d
-acceptance against a real `smd` with the check on.
+`npm run check:c2b` proves this against TLS fixtures. `npm run check:c1d` proves it against a
+real `smd`, whose check is always on.
 
 ## Commands
 
@@ -139,13 +138,12 @@ npm run check:c1                        # C1 proof: the pinned TLS identity (nee
 npm run check:c1d-shell                 # C1d wiring: discovery, pin and waiting page, TLS fixtures
 SM_DESKTOP_SMD=../build/bin/smd npm run check:c1d   # C1d acceptance against a real, already-built smd
 npm run check:c2b                       # C2b: the operating credential, TLS fixtures
-SM_DESKTOP_SMD=../build/bin/smd npm run check:c2b-smd   # the same acceptance, smd's check on
 npm run test:unit                       # discovery, connection, mode, trace and page logic, no Electron
 npm run lint && npm run format:check
 ```
 
 From the repository root, `task desktop:check` runs lint, format, the unit tests and the A1, C1,
 C1d-shell and C2b scenarios. `task desktop:check:c1d` builds the static `smd` (rebuilding the SPA)
-and runs the real-`smd` acceptance with the check off and then on; to reuse a binary already
-built, run `check:c1d` and `check:c2b-smd` directly as above. CI runs both, the latter after its SPA and daemon builds. Every check uses a temporary
+and runs the real-`smd` acceptance; to reuse a binary already built, run `check:c1d` directly
+as above. CI runs it after its SPA and daemon builds. Every check uses a temporary
 working directory, synthetic identities and free loopback ports; none touches the station.

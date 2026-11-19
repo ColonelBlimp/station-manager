@@ -26,9 +26,9 @@ import (
 // streams move to WebSocket twins of their SSE handlers. FT8 stays on SSE: its
 // subscription is the FT8 presence signal and its lifetime must not change.
 //
-// The SSE endpoints stay for non-browser clients (cmd/loadgen) and the
-// documented API. These handlers are transport twins: same subscription, same
-// ": connected first" contract, same per-write bound, same slow-reader eviction.
+// The SSE endpoints stay for the documented API and the operator's own tools. These
+// handlers are transport twins: same subscription, same ": connected first" contract,
+// same per-write bound, same slow-reader eviction.
 //
 // What a hijacked connection changes, and how each is handled here:
 //   - Origin: a WebSocket is not covered by the browser's same-origin read

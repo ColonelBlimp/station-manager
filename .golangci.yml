@@ -119,9 +119,6 @@ linters:
       - path: cmd/smd/import\.go
         text: runImport
         linters: [gocognit, gocyclo, maintidx]
-      - path: cmd/loadgen/main\.go
-        text: \bmain\b
-        linters: [gocognit, gocyclo, maintidx]
 
       # Rig read loop and Call-CQ slot handler — the two highest in code that keys
       # the rig. Both are dispatch-shaped and heavily commented; neither is a

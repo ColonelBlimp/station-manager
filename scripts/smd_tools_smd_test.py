@@ -1,4 +1,4 @@
-"""The operator's tools against a REAL smd with its operating-client check on (W-0027 C2c).
+"""The operator's tools against a REAL smd and its operating-client check (W-0027 C2c).
 
     SM_DESKTOP_SMD=build/bin/smd python3 -I scripts/smd_tools_smd_test.py
 
@@ -69,10 +69,9 @@ class ToolsAgainstSmd(unittest.TestCase):
         os.mkdir(cls.wd, 0o700)
         cls.browser_port, cls.app_port = free_port(), free_port()
         cfg = {
-            "version": 6,
+            "version": 7,
             "socket_path": f"127.0.0.1:{cls.browser_port}",
-            "server": {"protocol": "tcp", "serve_spa": True, "app_port": cls.app_port,
-                       "require_desktop_app": True},
+            "server": {"protocol": "tcp", "serve_spa": True, "app_port": cls.app_port},
             "datastore": {"driver": "sqlite", "path": os.path.join(cls.wd, "db", "station-manager.db")},
             "setup_complete": True,
             "logging_station": {"station_callsign": "N0CALL"},  # a placeholder, never a real station

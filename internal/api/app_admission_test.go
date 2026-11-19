@@ -21,7 +21,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/ft8"
 )
 
-// App admission (W-0027 C4a). With the check on, the desktop app's main process tells smd
+// App admission (W-0027 C4a). The desktop app's main process tells smd
 // its lifetime before it loads the workspace: a read, then an admit against the
 // generation it read. Only the admitted lifetime operates FT8.
 
@@ -35,7 +35,6 @@ const (
 )
 
 type admissionState struct {
-	Required   bool   `json:"required"`
 	Instance   string `json:"daemon_instance"`
 	Generation uint64 `json:"generation"`
 	Current    bool   `json:"current"`
@@ -98,12 +97,12 @@ func (l checked) mustAdmit(t *testing.T, c *http.Client, lifetime string) {
 }
 
 func TestAppAdmission_ReadThenAdmit(t *testing.T) {
-	l := startChecked(t, true)
+	l := startChecked(t)
 	_, c := l.clients(t)
 
 	first := l.readAdmission(t, c, lifeA)
-	if !first.Required || first.Instance != processInstance || first.Generation != 0 || first.Current {
-		t.Fatalf("the first read: %+v; want required, this process, generation 0, not current", first)
+	if first.Instance != processInstance || first.Generation != 0 || first.Current {
+		t.Fatalf("the first read: %+v; want this process, generation 0, not current", first)
 	}
 	if status, code := l.admit(t, c, lifeA, first); status != http.StatusOK {
 		t.Fatalf("the first admit: %d %s", status, code)
@@ -132,7 +131,7 @@ func TestAppAdmission_ReadThenAdmit(t *testing.T) {
 // whether by a late duplicate, a retry of an admit whose answer was lost, or a fresh
 // read; and the current app is not touched by the attempt.
 func TestAppAdmission_AReplacedLifetimeIsRetiredForGood(t *testing.T) {
-	l := startChecked(t, true)
+	l := startChecked(t)
 	_, c := l.clients(t)
 
 	stale := l.readAdmission(t, c, lifeA)
@@ -156,7 +155,7 @@ func TestAppAdmission_AReplacedLifetimeIsRetiredForGood(t *testing.T) {
 // A lifetime that has never been admitted and reads before another's admit is stale, and
 // may read again: that is how the running app gets past a dead app's late admission.
 func TestAppAdmission_AStaleAdmitIsRefusedAndMayReadAgain(t *testing.T) {
-	l := startChecked(t, true)
+	l := startChecked(t)
 	_, c := l.clients(t)
 	l.mustAdmit(t, c, lifeA)
 
@@ -181,7 +180,7 @@ func TestAppAdmission_AStaleAdmitIsRefusedAndMayReadAgain(t *testing.T) {
 
 // A marker from another daemon process is stale whatever the generation.
 func TestAppAdmission_AnotherProcessMarkerIsStale(t *testing.T) {
-	l := startChecked(t, true)
+	l := startChecked(t)
 	_, c := l.clients(t)
 	read := l.readAdmission(t, c, lifeA)
 	read.Instance = "an-earlier-process"
@@ -195,7 +194,7 @@ func TestAppAdmission_AnotherProcessMarkerIsStale(t *testing.T) {
 
 // Two shells that read the same generation: exactly one replaces it.
 func TestAppAdmission_OneAdmitWinsAGeneration(t *testing.T) {
-	l := startChecked(t, true)
+	l := startChecked(t)
 	_, c := l.clients(t)
 	lifetimes := []string{lifeA, lifeB, lifeC, lifeD}
 	reads := make([]admissionState, len(lifetimes))
@@ -224,7 +223,7 @@ func TestAppAdmission_OneAdmitWinsAGeneration(t *testing.T) {
 }
 
 func TestAppAdmission_TheIdentityMustBeWellFormed(t *testing.T) {
-	l := startChecked(t, true)
+	l := startChecked(t)
 	_, c := l.clients(t)
 
 	for name, bad := range map[string]string{
@@ -265,7 +264,7 @@ func TestAppAdmission_TheIdentityMustBeWellFormed(t *testing.T) {
 // The daemon's process marker rides on what it serves to the app, so the app's main
 // process can see a restart; and a served request is never handed the lifetime header.
 func TestAppAdmission_TheMarkerIsOnResponsesToTheApp(t *testing.T) {
-	l := startChecked(t, true)
+	l := startChecked(t)
 	mainC, c := l.clients(t)
 
 	_, _, h := l.appDo(t, c, lifeA, http.MethodGet, "/v1/version", "")
@@ -309,31 +308,6 @@ func TestAppAdmission_TheMarkerIsOnResponsesToTheApp(t *testing.T) {
 	_ = resp.Body.Close()
 	if got := resp.Header.Get(daemonInstanceHeader); got != "" {
 		t.Errorf("the main listener's health check carries the marker %q", got)
-	}
-}
-
-// With the check off the header and admission do nothing.
-func TestAppAdmission_OffDoesNothing(t *testing.T) {
-	l := startChecked(t, false)
-	_, c := l.clients(t)
-
-	st := l.readAdmission(t, c, lifeA)
-	if st.Required || st.Current {
-		t.Fatalf("with the check off the read says %+v; want not required and not current", st)
-	}
-	if status, code := l.admit(t, c, lifeA, st); status != http.StatusOK {
-		t.Fatalf("with the check off an admit is refused: %d %s", status, code)
-	}
-	if st := l.readAdmission(t, c, lifeA); st.Current || st.Generation != 0 {
-		t.Fatalf("with the check off an admit took effect: %+v", st)
-	}
-	// A malformed identity is ignored, and FT8 asks nobody who they are.
-	if status, body, _ := l.appDo(t, c, "junk", http.MethodGet, "/v1/version", ""); status != http.StatusOK {
-		t.Fatalf("with the check off a malformed lifetime is refused: %d %s", status, body)
-	}
-	status, body, _ := l.appDo(t, c, "", http.MethodPost, "/v1/ft8/qso/next", `{}`)
-	if code := errorCode(t, body); code == "app_lifetime_not_current" {
-		t.Fatalf("with the check off an FT8 command asked for a lifetime: %d %s", status, code)
 	}
 }
 
@@ -410,7 +384,7 @@ const notCurrent = "app_lifetime_not_current"
 // shell from before C4), for a lifetime that was never admitted, and for one that has
 // been replaced; and not refused for that reason when the current app asks.
 func TestAppAdmission_EveryFt8CommandNeedsTheCurrentLifetime(t *testing.T) {
-	l := startChecked(t, true)
+	l := startChecked(t)
 	_, c := l.clients(t)
 	// A station callsign, so the starts get past their own validation and reach the scope.
 	if _, err := l.srv.cfg.Update(func(c *config.Config) error {
@@ -457,7 +431,7 @@ func TestAppAdmission_EveryFt8CommandNeedsTheCurrentLifetime(t *testing.T) {
 
 // The profile claim and the disarm are served whoever asks.
 func TestAppAdmission_TheClaimAndTheDisarmAreNotGated(t *testing.T) {
-	l := startChecked(t, true)
+	l := startChecked(t)
 	_, c := l.clients(t)
 	l.mustAdmit(t, c, lifeA)
 	l.mustAdmit(t, c, lifeB)
@@ -478,7 +452,7 @@ func TestAppAdmission_TheClaimAndTheDisarmAreNotGated(t *testing.T) {
 // left running across the install is the old shell (operator ruling 2026-11-17, question
 // 10), and it is told to restart.
 func TestAppAdmission_ACallerWithNoLifetimeIsToldToRestart(t *testing.T) {
-	l := startChecked(t, true)
+	l := startChecked(t)
 	_, c := l.clients(t)
 	l.mustAdmit(t, c, lifeB)
 
@@ -606,7 +580,7 @@ func (l checked) armCode(t *testing.T, c *http.Client, lifetime string) string {
 // told apart.
 func TestAppAdmission_AnArmNeedsTheCurrentLifetimesFt8StreamOpen(t *testing.T) {
 	const notPresent, pastPresence = "ft8_not_present", "ft8_tx_unavailable"
-	l := startChecked(t, true)
+	l := startChecked(t)
 	_, c := l.clients(t)
 	l.mustAdmit(t, c, lifeA)
 
@@ -634,14 +608,5 @@ func TestAppAdmission_AnArmNeedsTheCurrentLifetimesFt8StreamOpen(t *testing.T) {
 			t.Fatal("the app's stream was closed and an arm is still not refused for presence")
 		}
 		time.Sleep(10 * time.Millisecond)
-	}
-}
-
-// With the check off an arm asks for no stream, as before C4.
-func TestAppAdmission_OffAnArmNeedsNoStream(t *testing.T) {
-	l := startChecked(t, false)
-	_, c := l.clients(t)
-	if code := l.armCode(t, c, lifeA); code != "ft8_tx_unavailable" {
-		t.Fatalf("with the check off an arm with no stream: %s; want ft8_tx_unavailable", code)
 	}
 }

@@ -1,7 +1,6 @@
 package config
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -50,54 +49,6 @@ func TestMigrateV3toV4_StampsVersionAddsNoCatalogue(t *testing.T) {
 	}
 }
 
-func TestDowngradeDocument_V4toV3_StripsCatalogueKeepsTheRest(t *testing.T) {
-	out, err := DowngradeDocument([]byte(v4Doc), 3)
-	if err != nil {
-		t.Fatalf("downgrade 4→3: %v", err)
-	}
-	var m map[string]any
-	if err := json.Unmarshal(out, &m); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if v := m["version"]; v != float64(3) {
-		t.Fatalf("version after downgrade = %v, want 3", v)
-	}
-	for _, k := range []string{"active_qso_archive_id", "pending_qso_archive_id", "qso_archives"} {
-		if _, present := m[k]; present {
-			t.Errorf("%q survived the 4→3 down step; the v3 loader refuses it as unknown", k)
-		}
-	}
-	if m["default_logbook_id"] != float64(1) || m["data_dir"] != "/tmp/x" {
-		t.Errorf("4→3 disturbed keys it does not own: %v", m)
-	}
-	// The result is a document the v3 pipeline accepts: no unknown keys.
-	if unknown := unknownKeysInMigrated(out); len(unknown) != 0 {
-		t.Errorf("downgraded document still carries unknown keys: %v", unknown)
-	}
-}
-
-func TestDowngradeDocument_Refusals(t *testing.T) {
-	// At or above the document's version: nothing to do, refused rather than silently stamped.
-	for _, to := range []int{4, 5} {
-		if _, err := DowngradeDocument([]byte(v4Doc), to); err == nil {
-			t.Errorf("downgrade to %d accepted; want a refusal (target must be below the document's version)", to)
-		}
-	}
-	// v3→v2 has no down step: refused by name, never a partial rewrite.
-	_, err := DowngradeDocument([]byte(v4Doc), 2)
-	if err == nil || !strings.Contains(err.Error(), "3") {
-		t.Fatalf("downgrade to 2 = %v; want a refusal naming the version without a down step", err)
-	}
-	// A document newer than this build cannot be downgraded by it.
-	if _, err := DowngradeDocument([]byte(`{"version":9}`), 3); err == nil {
-		t.Error("a version-9 document was accepted for downgrade by a v4 build")
-	}
-	// Malformed input is a parse error, not a stamped file.
-	if _, err := DowngradeDocument([]byte(`{"version":4,`), 3); err == nil {
-		t.Error("malformed document accepted")
-	}
-}
-
 // Load round-trips the catalogue into the typed Config.
 func TestLoad_V4CatalogueRoundTrip(t *testing.T) {
 	p := writeTempConfig(t, v4Doc)
@@ -133,42 +84,15 @@ func writeTempConfig(t *testing.T, body string) string {
 }
 
 // v5 (W-0021 slice 2C review): `qso_archives[].request_key` makes archive
-// creation idempotent across restarts. 4→5 stamps only; 5→4 strips the key.
+// creation idempotent across restarts. 4→5 stamps only.
 const v5Doc = `{"version":5,"data_dir":"/tmp/x","setup_complete":true,"default_logbook_id":1,
 	"logging_station":{"station_callsign":"G4ABC"},
 	"qso_archives":[{"id":"019fd5c5-efcc-7193-be4f-1fee532ee316","label":"Contest","ownership":"managed","request_key":"req-1"}]}`
 
-func TestMigrateV4toV5_StampsOnly_DowngradeStripsRequestKey(t *testing.T) {
+func TestMigrateV4toV5_StampsOnly(t *testing.T) {
 	m := migratedMap(t, v4Doc)
 	if v := m["version"]; v != float64(CurrentSchemaVersion()) {
 		t.Fatalf("version after migration = %v, want %d", v, CurrentSchemaVersion())
-	}
-	out, err := DowngradeDocument([]byte(v5Doc), 4)
-	if err != nil {
-		t.Fatalf("downgrade 5→4: %v", err)
-	}
-	var d map[string]any
-	if err := json.Unmarshal(out, &d); err != nil {
-		t.Fatal(err)
-	}
-	entries := d["qso_archives"].([]any)
-	if e := entries[0].(map[string]any); e["request_key"] != nil {
-		t.Fatalf("request_key survived the 5→4 down step: %v", e)
-	}
-	if e := entries[0].(map[string]any); e["label"] != "Contest" {
-		t.Fatalf("5→4 disturbed the entry: %v", e)
-	}
-	// 5→3 chains both down steps.
-	out, err = DowngradeDocument([]byte(v5Doc), 3)
-	if err != nil {
-		t.Fatalf("downgrade 5→3: %v", err)
-	}
-	d = nil // a fresh map: Unmarshal into a non-nil map merges keys
-	if err := json.Unmarshal(out, &d); err != nil {
-		t.Fatal(err)
-	}
-	if _, present := d["qso_archives"]; present || d["version"] != float64(3) {
-		t.Fatalf("5→3 = %v; want no catalogue and version 3", d)
 	}
 	cfg, err := Load(writeTempConfig(t, v5Doc))
 	if err != nil || cfg.QsoArchives[0].RequestKey != "req-1" {

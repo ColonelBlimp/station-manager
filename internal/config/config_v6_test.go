@@ -31,8 +31,8 @@ func TestConfigV6_V5FileLoadsWithLegacyFieldsIntact(t *testing.T) {
 	if err != nil {
 		t.Fatalf("V1: load: %v", err)
 	}
-	if cfg.Version != 6 {
-		t.Fatalf("V1: in-memory version %d, want 6", cfg.Version)
+	if cfg.Version != CurrentSchemaVersion() {
+		t.Fatalf("V1: in-memory version %d, want the head %d", cfg.Version, CurrentSchemaVersion())
 	}
 	fc := cfg.Forwarders[0]
 	if fc.Name != "cloud-home" || !fc.Enabled || !strings.Contains(string(fc.Credentials), `"logbook":"v6-book"`) {
@@ -72,29 +72,5 @@ func TestConfigV6_StrippedEntryOmitsNameAndEnabled(t *testing.T) {
 	}
 	if _, ok := m["enabled"]; ok {
 		t.Fatalf("V3: a stripped entry writes enabled: %s", b)
-	}
-}
-
-func TestConfigV6_DocumentDownStampsUnstrippedRefusesStripped(t *testing.T) {
-	unstripped := strings.Replace(v5WithForwardersDoc, `"version":5`, `"version":6`, 1)
-	out, err := DowngradeDocument([]byte(unstripped), 5)
-	if err != nil {
-		t.Fatalf("V4: unstripped 6→5: %v", err)
-	}
-	var d map[string]any
-	if err := json.Unmarshal(out, &d); err != nil {
-		t.Fatal(err)
-	}
-	f := d["forwarders"].([]any)[0].(map[string]any)
-	if d["version"] != float64(5) || f["name"] != "cloud-home" || f["enabled"] != true {
-		t.Fatalf("V4: unstripped 6→5 = %v", d)
-	}
-
-	stripped := `{"version":6,"data_dir":"/tmp/x","forwarders":[{"type":"smcloud","credentials":{"url":"https://smc-v6.example.test","token":"V6-TOKEN-1"}}]}`
-	if _, err := DowngradeDocument([]byte(stripped), 5); err == nil || !strings.Contains(err.Error(), "smd config-downgrade") {
-		t.Fatalf("V4: a stripped file must need the data-aware downgrade: err = %v", err)
-	}
-	if _, err := DowngradeDocument([]byte(stripped), 4); err == nil {
-		t.Fatal("V4: a stripped file must not reach v4 through the document steps either")
 	}
 }

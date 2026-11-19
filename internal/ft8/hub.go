@@ -49,7 +49,7 @@ type hub struct {
 	// Audio-level meter: PULL delivery, never the subscriber buffers (review
 	// d22eff6b). At ~4 Hz the meter filled the 8-slot buffer within a ~2 s
 	// SSE write stall, after which the next event EVICTED the subscriber —
-	// and through the capture linger that can disarm TX mid-QSO. Latest-wins
+	// and an evicted app stream is lost presence, which can disarm TX mid-QSO. Latest-wins
 	// by construction: each SSE writer polls latestAudio on its own ticker
 	// (audioLevelEmitInterval) and emits on generation change, so a stalled
 	// reader just emits the newest value when it recovers. The 2026-08-01

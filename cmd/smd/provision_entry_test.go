@@ -16,8 +16,8 @@ import (
    main's own dispatch runs and no daemon can start.
 
      EP1 characterization of main before its switch is extracted: each
-         existing subcommand (import, restore, config-check, db-downgrade,
-         config-downgrade) is routed to its own flag set, and an unknown flag
+         existing subcommand (import, restore, config-check, db-downgrade)
+         is routed to its own flag set, and an unknown flag
          exits ExitError with "smd: " and that subcommand's usage; no
          subcommand, or the daemon's own flags, fall through to the daemon.
      EP2 `smd provision` reaches provisioning through main: an invalid
@@ -71,7 +71,6 @@ func TestEntryPoint_EP1_ExistingRoutesAndTheDaemonFallthrough(t *testing.T) {
 		{"restore", "usage: smd restore [flags]"},
 		{"config-check", "Usage of config-check:"},
 		{"db-downgrade", "usage: smd db-downgrade --to <version> --yes [--config <path>]"},
-		{"config-downgrade", "usage: smd config-downgrade --to <version> --yes [--config <path>]"},
 	} {
 		t.Run(c.sub, func(t *testing.T) {
 			code, stdout, stderr := runEntry(t, c.sub, "--zz-not-a-flag")
@@ -91,6 +90,24 @@ func TestEntryPoint_EP1_ExistingRoutesAndTheDaemonFallthrough(t *testing.T) {
 				t.Fatalf("smd %v: exit %d, stdout %q, stderr %q; want the daemon", args, code, stdout, stderr)
 			}
 		})
+	}
+}
+
+// `smd config-downgrade` was removed (W-0027 C2e). Any argv that names no subcommand runs
+// the daemon, so a removed name must stay a name: an old instruction or script that still
+// calls it is refused, and never starts a daemon on the station's data.
+func TestEntryPoint_EP1b_ARemovedSubcommandIsRefusedAndNeverStartsTheDaemon(t *testing.T) {
+	for _, args := range [][]string{
+		{"config-downgrade", "--to", "5", "--yes"},
+		{"config-downgrade"},
+	} {
+		code, stdout, stderr := runEntry(t, args...)
+		if code != ExitError || strings.Contains(stdout, entryMarker) {
+			t.Fatalf("smd %v: exit %d, stdout %q; want %d and no daemon", args, code, stdout, ExitError)
+		}
+		if !strings.Contains(stderr, "config-downgrade") || !strings.Contains(stderr, "removed") {
+			t.Fatalf("smd %v: stderr %q; want it to say the command was removed", args, stderr)
+		}
 	}
 }
 

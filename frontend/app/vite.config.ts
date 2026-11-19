@@ -10,19 +10,9 @@ export default defineConfig({
     // mount resolves both index.html and its bundle. See docs/v2-design/frontend-spa.md.
     base: '/',
     plugins: [svelte(), svelteTesting(), tailwindcss()],
-    server: {
-        // 5173 logging · 5174 config · 5175 logbook · 5176 app (avoid clashes so
-        // they can run side by side during the consolidation).
-        port: 5176,
-        proxy: {
-            // An object, not the string shorthand: Vite expands a string target to
-            // changeOrigin: true, which rewrites Host — and the daemon admits a
-            // stream WebSocket only when Origin equals Host exactly (ADR 0099 W1).
-            // ws: true proxies the /v1/events/ws and /v1/rig/events/ws upgrades;
-            // with rewriteWsOrigin left unset, Origin is forwarded unchanged.
-            '/v1': { target: 'http://localhost:8080', ws: true, changeOrigin: false },
-        },
-    },
+    // No dev server: smd serves only its desktop app (W-0027 C2e), so a page from a Vite
+    // dev server cannot reach it. Vite builds the bundle and runs Vitest; the built app is
+    // seen in the desktop app.
     build: {
         outDir: 'dist',
         emptyOutDir: true,

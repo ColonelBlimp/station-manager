@@ -22,11 +22,10 @@
 // A "fresh window" is a fresh session and window, not a restarted app process (codex-070).
 // PASSES only if every check holds. Run: SM_DESKTOP_SMD=<smd> npm run check:c1d.
 //
-// W-0027 C2b: the same acceptance with smd's operating-client check ON
-// (SM_DESKTOP_REQUIRE_APP=1; npm run check:c2b-smd). Every phase must then hold exactly as
-// with it off, which is the proof that the shell's credential satisfies the real check; and
-// the run shows the check was really on: a plain client of the browser listener is refused
-// everything but the health check.
+// W-0027 C2b and C2e: smd's operating-client check is always on, so this acceptance is also
+// the proof that the shell's credential satisfies the real check. The install it starts from
+// is a fresh one (a version 7 config with no switch in it), and the run shows the check: a
+// plain client of the browser listener is refused everything but the health check.
 import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
@@ -108,9 +107,6 @@ const WORKSPACE = `(() => { const f = document.querySelector('#lc-call');
     return !!f && !f.disabled && !f.readOnly && !document.querySelector('#setup-callsign'); })()`;
 const DRAFT = `document.querySelector('#lc-call')?.value ?? '<gone>'`;
 
-/** True when this run has smd's operating-client check on (W-0027 C2b). */
-const REQUIRE_APP = process.env.SM_DESKTOP_REQUIRE_APP === '1';
-
 /** A plain client of the browser listener, as a browser or a script without the credential
  *  is: the status and smd's error code for one GET. */
 const plainGet = (port, urlPath) =>
@@ -139,9 +135,8 @@ const plainGet = (port, urlPath) =>
 
 function writeConfig(wd, data, browserPort, appPort) {
     const server = { protocol: 'tcp', serve_spa: true, app_port: appPort };
-    if (REQUIRE_APP) server.require_desktop_app = true;
     const cfg = {
-        version: 6,
+        version: 7,
         data_dir: data,
         socket_path: `127.0.0.1:${browserPort}`,
         server,
@@ -276,44 +271,28 @@ export async function runC1d() {
         const admission = await (
             await A.win.webContents.session.fetch(`${A.target.origin}/v1/app/lifetime`)
         ).json();
-        if (REQUIRE_APP) {
-            check(
-                'Check on: the app was admitted before its workspace loaded; smd names its lifetime as the current one',
-                admission.required === true &&
-                    admission.current === true &&
-                    admission.generation === 1 &&
-                    /^[A-Za-z0-9_-]{21}[AQgw]$/.test(A.lifetime),
-                JSON.stringify(admission)
-            );
-            check(
-                'Check on: smd refuses a plain client of the browser listener everything but the health check',
-                plain.version.status === 403 &&
-                    plain.version.code === 'desktop_app_required' &&
-                    plain.page.status === 403 &&
-                    plain.page.notice && // a page gets the short notice, not the application
-                    plain.health.status === 200,
-                JSON.stringify(plain)
-            );
-            check(
-                '…and smd made its operating credential beside the identity, which the shell holds',
-                fs.existsSync(path.join(data, 'desktop-credential', 'credential')) &&
-                    A.cred.get() ===
-                        fs.readFileSync(path.join(data, 'desktop-credential', 'credential'), 'utf8')
-            );
-        } else {
-            check(
-                'Check off: there is nothing to be admitted to, and the app loaded all the same',
-                admission.required === false && admission.current === false,
-                JSON.stringify(admission)
-            );
-            check(
-                'Check off: the browser listener still serves a plain client, as before',
-                plain.version.status === 200 &&
-                    plain.page.status === 200 &&
-                    plain.health.status === 200,
-                JSON.stringify(plain)
-            );
-        }
+        check(
+            'The app was admitted before its workspace loaded; smd names its lifetime as the current one',
+            admission.current === true &&
+                admission.generation === 1 &&
+                /^[A-Za-z0-9_-]{21}[AQgw]$/.test(A.lifetime),
+            JSON.stringify(admission)
+        );
+        check(
+            'smd refuses a plain client of the browser listener everything but the health check',
+            plain.version.status === 403 &&
+                plain.version.code === 'desktop_app_required' &&
+                plain.page.status === 403 &&
+                plain.page.notice && // a page gets the short notice, not the application
+                plain.health.status === 200,
+            JSON.stringify(plain)
+        );
+        check(
+            '…and smd made its operating credential beside the identity, which the shell holds',
+            fs.existsSync(path.join(data, 'desktop-credential', 'credential')) &&
+                A.cred.get() ===
+                    fs.readFileSync(path.join(data, 'desktop-credential', 'credential'), 'utf8')
+        );
 
         // 3. A draft in the contact form's callsign field; smd replaced by an impostor.
         await js(

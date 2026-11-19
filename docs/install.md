@@ -15,25 +15,36 @@ support is on the roadmap but not yet packaged.
   roadmap but not yet packaged — see §9.)
 - Permission to run `sudo` for the install step. Everything after
   install runs as your normal user.
-- A web browser. The UI is the embedded Svelte SPA served by the
-  daemon — no separate desktop application to install.
+- The Station Manager desktop app (the `station-manager-desktop` package, the
+  same version as the daemon). The daemon serves only that app; a web browser
+  gets a short notice and nothing else (§6, "Serving only the desktop app").
 
 Station Manager is a single-user, single-machine daemon by design.
-It listens on `127.0.0.1:8080` (loopback only) and stores all state
-under your home directory. There is no system-wide service, no
+It listens on `127.0.0.1` only (port 8443 for the desktop app, port 8080 for
+its health check) and stores all state under your home directory. There is no system-wide service, no
 shared database, and no network exposure.
 
 ---
 
-## 2. Install the RPM
+## 2. Install the two RPMs
+
+Station Manager is two packages of the same version: the daemon (`station-manager`) and
+the desktop app (`station-manager-desktop`). Install them in one command:
 
 ```
-sudo dnf install /path/to/station-manager-<version>.x86_64.rpm
+sudo dnf install /path/to/station-manager-<version>.x86_64.rpm \
+                 /path/to/station-manager-desktop.x86_64.rpm
 ```
 
-The package installs three files:
+The desktop app's package requires exactly the daemon's version (the two are built from the
+same commit), so a pair whose versions differ is not installed. It puts the app under
+`/usr/lib/station-manager-desktop/`, the `station-manager` command in `/usr/bin`, and
+**Station Manager** in the applications menu, in an Amateur Radio group. What it holds and
+how it is built: [`desktop/README.md`](../desktop/README.md), "The installable package".
 
-- `/usr/bin/smd` — the daemon binary (the browser SPA is embedded
+The daemon's package installs:
+
+- `/usr/bin/smd` — the daemon binary (the desktop app's pages are embedded
   inside it). The shipped RPM is a **CGO + PocketFFT** build, so **live
   FT8 capture + decode work out of the box** (faster PocketFFT decode,
   plus the audio capture the CGO-free build can't do). It is dynamically
@@ -44,8 +55,9 @@ The package installs three files:
   for FT8 setup, and §9 for how the release is built.
 - `/usr/bin/smctl` — the start/stop control wrapper (see §3).
 - `/usr/lib/systemd/user/smd.service` — the systemd user unit.
+- `/usr/share/doc/station-manager/manual/` — the operator's manual.
 
-The post-install scriptlet prints the next steps. The OpenPGP
+Neither package starts or enables anything when it is installed: §3 is the next step. The OpenPGP
 warning on an unsigned local-build RPM is expected; signed builds
 will land when the CD pipeline does.
 
@@ -106,12 +118,9 @@ enablement above; `smctl` only handles the running state.
 
 ## 4. First-run setup (REQUIRED)
 
-Open `http://127.0.0.1:8080` in your browser.
-
-If you have installed the desktop app (the `station-manager-desktop` package), open
-**Station Manager** from your applications menu instead: it finds the daemon by itself.
-Once the daemon is set to serve only the desktop app (§6, "Serving only the desktop app"),
-the browser address shows a short notice and the app is the only way in.
+Open **Station Manager** from your applications menu (the `station-manager-desktop`
+package): it finds the daemon by itself. A browser at `http://127.0.0.1:8080` shows only a
+short notice that Station Manager is operated from its desktop app.
 
 On a fresh install the daemon's `setup_complete` flag is `false`,
 and the SPA renders only a "Welcome to Station Manager" page with a
@@ -155,16 +164,10 @@ logging-only station leaves the bridge disabled and enters frequency/mode by
 hand. There is no rig editor in the SPA yet (that's the future config app), so
 this is a `config.json` edit.
 
-**1. List the host's devices.** With the daemon running, ask it what hardware is
-present — no extra tools needed (the `ft8-capture-probe` / `catcli` dev tools
-are not in the RPM):
-
-```
-curl -s http://127.0.0.1:8080/v1/hardware | jq
-```
-
-(This plain request needs the daemon to serve more than the desktop app, which is the
-default; see §6, "Serving only the desktop app".)
+**1. List the host's devices.** With the daemon running, the app's Settings → Rigs lists
+the hardware the daemon sees (`GET /v1/hardware`) — no extra tools needed (the
+`ft8-capture-probe` / `catcli` dev tools are not in the RPM). A plain `curl` is refused:
+the daemon serves only the desktop app.
 
 `serial_ports[].id` are the CAT port paths (each with a friendly `label` and
 VID:PID); `audio.capture` / `audio.playback` list the sound devices by `name`
@@ -429,9 +432,8 @@ one first-run setup seeded from your callsign. To target a
 different existing logbook, pass `--logbook <id>`. The importer
 will not create a logbook for you; if `--logbook` points at a
 missing row, or no default is set and no flag is given, it fails
-loudly without writing anything. The consolidated app currently has
-no UI for creating additional logbooks; if you need one, hit
-`POST /v1/logbook` directly with `curl`.
+loudly without writing anything. Create another logbook in the app's
+Settings → Logbooks.
 
 ---
 
@@ -471,45 +473,44 @@ and restart the daemon.
 
 ### Serving only the desktop app
 
-By default the daemon serves any program on this computer that asks: a browser, the desktop
-app, a script. It can instead serve only the Station Manager desktop app. This setting is off
-by default and is temporary: a later release makes it the only behaviour and removes the
-setting.
+The daemon serves only the Station Manager desktop app. There is no setting for this: it
+was a switch (`server.require_desktop_app`) until config version 7, which removed it.
 
-To switch it on, add `"require_desktop_app": true` to the `server` block of `config.json` and
-restart the daemon (`smctl restart`). Check first that the desktop app opens the station: with
-the setting on, it is the only way in.
-
-With it on:
-
-- The desktop app works as before. It presents a secret that the daemon makes at every start
-  (`desktop-credential/credential`, readable only by you).
+- The desktop app presents a secret that the daemon makes at every start
+  (`desktop-credential/credential`, readable only by you). What the daemon checks is that
+  secret, on the desktop app's own port: a program of your own user that reads the file can
+  present it too.
 - A browser at `http://127.0.0.1:8080` shows a short notice that Station Manager is operated
   from its desktop app, and nothing else. Every other request without the secret is refused
   (`403 desktop_app_required`). The health check `GET /v1/healthz` still answers.
-- The plain `curl` examples in this guide are refused. Run them with the setting off.
+- A plain `curl` to the daemon is refused.
 - If the daemon cannot make or read the secret, cannot read its identity, or cannot open the
   desktop app's port (8443 by default), it does not stay up, and `smd.log` says why.
 - From a source checkout, two tools go through the same door as the desktop app
-  (`scripts/smd_client.py`): `scripts/ukeicc-cabrillo.py --from-daemon` (with no address) and
+  (`scripts/smd_client.py`): `scripts/ukeicc-cabrillo.py --from-daemon` and
   `scripts/tune-duration-probe.sh`. They are not in the RPM.
 
 To replace the secret, stop the daemon, delete the `desktop-credential` directory and start
 the daemon. Then close the desktop app and open it again; until you do, it says the daemon no
 longer accepts it.
 
-To switch the setting off, remove the line (or set it to `false`) and restart the daemon.
-
 ---
 
 ## 7. Update
 
 ```
-sudo dnf install /path/to/station-manager-<newer-version>.x86_64.rpm
+sudo dnf install /path/to/station-manager-<newer-version>.x86_64.rpm \
+                 /path/to/station-manager-desktop.x86_64.rpm
 smd config-check
 systemctl --user daemon-reload
 systemctl --user restart smd
 ```
+
+Both packages are updated in that one command, each at the new version. The desktop app
+requires exactly the daemon's version, so the daemon's package on its own is refused while
+the desktop app is installed, and so is a desktop package of another version. After the
+restart, close the desktop app if it is open and open it again, so that the new version of it
+is the one running.
 
 `smd config-check` runs the NEW binary against your live `config.json` while the
 old daemon is still serving: it reports unknown keys (paths only, values
@@ -535,68 +536,21 @@ database is no longer a full backup once a second archive exists. The
 databases run in WAL mode, so a plain file copy taken while the daemon
 runs is not necessarily consistent: stop the daemon first
 (`systemctl --user stop smd`), or take each database with SQLite's
-online backup (for example `sqlite3 <file> ".backup <copy>"`, or the
-same API `scripts/rollback-drill.sh` uses), never a live `cp`.
+online backup (for example `sqlite3 <file> ".backup <copy>"`), never a
+live `cp`.
 
-### Rolling back to an older build
+### There is no rollback to an older build
 
-Schema migrations only run upward at startup, and an older build cannot
-open a database whose schema is newer than the migrations it ships (its
-migration library refuses a version it does not know). To return to an
-older build after a newer one has migrated the file:
+An upgrade is one-way. At its first start a newer build rewrites `config.json` to its own
+config version and migrates the databases to its own schema, and an older build refuses
+both: a `config.json` with a newer `version` or a key it does not know, and a database at a
+schema it does not ship. The first start of this version rewrites `config.json` to version
+7. To run an older build again you need the files as that build left them, so take the
+backup described above before you upgrade.
 
-```
-systemctl --user stop smd
-smd config-downgrade --to <that build's config version> --yes
-smd db-downgrade --to <that build's schema version> --yes
-sudo dnf install /path/to/station-manager-<older-version>.x86_64.rpm
-systemctl --user start smd
-```
-
-**The order matters: `config-downgrade` first.** From config version 6 the
-forwarder entries in `config.json` are station accounts only; each
-destination's name, on/off state and per-logbook credentials live in the
-Home archive's destination bindings. `smd config-downgrade --to 5` rebuilds
-the version-5 entries from those bindings, reading Home's file (it checks the
-file is Home by its archive identity), so it must run while the bindings
-still exist — `smd db-downgrade` below log schema 14 removes them. It refuses,
-naming the destination and logbooks and writing nothing, when Home's bindings
-cannot become one version-5 entry per destination: one logbook on and another
-off (a logbook with no binding counts as off), or different credentials on
-different logbooks. It also refuses while evidence sync is on and the SM Cloud
-destination is off, because older builds require SM Cloud enabled for evidence
-sync; it never changes either for you. It also refuses while Home's file holds
-any binding born on SM Cloud identity (ADR 0092), enabled or not: version 5 has
-no such binding, and an entry rebuilt from one would upload by name. Make them agree in Settings → Forwarding
-(or turn evidence sync off), or restore
-`config.v5.json` — the copy of your version-5 `config.json` that the first
-version-6 start wrote beside it (owner-only, never overwritten). That copy is
-historical: settings saved since then are not in it.
-
-`smd db-downgrade` migrates the QSO database's log schema DOWN to the named
-version on the config's own database (`--config <path>` for another file),
-prints the transition, and refuses a target at or above the current version
-— it never migrates up. It also refuses a target below log schema 16 while
-any SM Cloud binding holds an adoption reservation or a recorded adoption
-(ADR 0091). That protects a cloud name the server may already have adopted;
-an older build would not enforce the protection, and releasing it is a
-manual recovery step. It refuses a target below 17 while any binding holds
-a confirmed adoption: schema 16 drops the record of which station account
-confirmed it, and a build at 16 would not hold uploads after the account
-changes. It refuses a target below 18 while any binding is born on SM Cloud
-identity (ADR 0092), disabled bindings and deleted logbooks' included: a build
-at 17 would treat it as a legacy binding and upload it by name. (Separately, an
-older daemon cannot open a database at a schema it does not know, which is why
-the database is downgraded at all.) Each down step drops what its migration added, so
-run it only with the daemon stopped and a copy of the database in hand; QSO,
-upload-queue and history rows are kept by every down migration shipped so
-far. The reference and evidence databases are station-global and are never
-touched. The older build's schema version is printed by that build's
-`GET /v1/version` (`schema.version`). `smd config-downgrade` does the same for
-`config.json`: an older build refuses a newer `version` and any key it does not
-know, so the file is rewritten to that build's config version through the
-registered down steps (the config reference §13 lists the versions and which
-steps can be reversed). Both commands print the transition they made.
+`smd config-downgrade` was removed; the name is refused and changes nothing.
+`smd db-downgrade` is still in this build and is being removed too; on its own it is not a
+way back.
 
 If the new version needs a file-only `config.json` key that the old
 daemon does not know (for example the SM Cloud `allow_insecure_http`
@@ -605,17 +559,6 @@ refuses to start on a key it does not recognise (ADR 0074, unknown-key
 rejection), so the old build would refuse the edited file if it were
 restarted. Stop the old daemon, add the key, install the new build, run
 `smd config-check`, then start.
-
-The same applies in reverse to `server.app_port`, the desktop app listener's
-port. Only an explicit value is ever in the file: the default (8443) is not
-written. `smd config-downgrade` keeps an explicit value, and it has no step
-at all between builds that share a config version. Before you start a build
-that has no desktop app listener, remove `app_port` from the `server` block,
-or that build refuses the file. `scripts/rollback-drill.sh` does this for its
-scratch copy.
-
-`server.require_desktop_app` behaves the same way. It is absent unless you
-set it to `true`; remove it before you start a build that does not know it.
 
 Known: upgrading from 2.0.0-alpha.1 to alpha.2 with a `qrzcq` forwarder
 in the config (enabled or not) refuses to start with `type "qrzcq" does
@@ -653,12 +596,8 @@ Two prerequisites:
 2. **Receive audio routed to a capture device** — typically the rig's
    USB audio codec, set on the rig profile (see "Connecting a rig (CAT)").
 
-List the available capture devices from the running daemon — no dev tools
-needed (`ft8-capture-probe` isn't in the RPM):
-
-```
-curl -s http://127.0.0.1:8080/v1/hardware | jq '.audio.capture'
-```
+The capture devices the daemon sees are listed in the app's Settings → Rigs (see
+"Connecting a rig (CAT)").
 
 Take the rig codec's `name`, set it as the active rig's `audio.rx`, and turn
 FT8 on in `config.json`:
@@ -736,7 +675,13 @@ may fail to start on the target. `release-rpm.sh` deliberately stays CGO-free by
 default so an accidental local build can't ship a glibc-broken binary; the
 container is what supplies the old-glibc baseline.
 
-Only an RPM is built today (RPM distros — decided 2026-06-20, first external
+`scripts/release.sh` builds the daemon's RPM only. The desktop app's RPM is built by
+`task rpm:desktop` ([`desktop/README.md`](../desktop/README.md), "The installable package"),
+which takes its version from Git and not from an argument. The two install together only
+when their versions are equal, so check both before handing them out:
+`rpm -qp --qf '%{NAME} %{VERSION}-%{RELEASE}\n' <each file>`.
+
+Only RPMs are built today (RPM distros — decided 2026-06-20, first external
 deploy). A portable tarball / `.deb` for Debian/Ubuntu isn't built yet; nfpm can
 emit them from the same `nfpm.yaml` when a non-RPM target appears.
 
@@ -749,7 +694,7 @@ while the unit file still exists), then remove the package:
 
 ```
 systemctl --user disable --now smd
-sudo dnf remove station-manager
+sudo dnf remove station-manager-desktop station-manager
 systemctl --user daemon-reload    # clear the removed unit from systemd's view
 ```
 

@@ -16,10 +16,9 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
-// Operating ownership (W-0027 C4a). The rule under test: with ownership required, an FT8
-// command that can start, resume or alter operation is accepted only from the lifetime
-// that is current, and the check is made under the gate a replacement takes. A disarm is
-// always accepted. With ownership not required, nothing changes from before C4.
+// Operating ownership (W-0027 C4a). The rule under test: an FT8 command that can start,
+// resume or alter operation is accepted only from the lifetime that is current, and the
+// check is made under the gate a replacement takes. A disarm is always accepted.
 
 const (
 	lifeA = "AAAAAAAAAAAAAAAAAAAAAA"
@@ -81,7 +80,6 @@ func newOwnedService(t *testing.T, current string) *Service {
 	// Configured, so the two Field Day starts reach the gate: a request that is refused
 	// for its own content before the gate is refused for that, whoever sent it.
 	s.cfg.FieldDay = &types.Ft8FieldDayConfig{Class: "1D", Section: "EMA"}
-	s.RequireOperatingLifetime()
 	if current != "" {
 		s.PublishOperating(current)
 		// These tests are about WHO may operate. Presence (C4b) is its own rule and has
@@ -136,43 +134,6 @@ func TestOperating_ARefusedCommandChangesNothing(t *testing.T) {
 	require.True(t, s.armedNow(), "a refused start disturbed the arm")
 }
 
-// With ownership not required (the check off), a command is accepted whoever asks, and
-// the commands that took no gate before C4 still take none.
-func TestOperating_NotRequired_NothingChanges(t *testing.T) {
-	s := newBareTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
-	t.Cleanup(func() { _ = s.ArmTx(false) })
-
-	for _, c := range gatedCommands() {
-		require.NotErrorIs(t, c.call(s.OperatingAs("")), ErrLifetimeNotCurrent, c.name)
-		require.NotErrorIs(t, c.call(s.OperatingAs(lifeB)), ErrLifetimeNotCurrent, c.name)
-	}
-	_ = s.ArmTx(false)
-	require.NoError(t, s.ArmTx(true), "the plain arm, with no subscriber and no lifetime")
-	require.True(t, s.armedNow())
-
-	// Held by the test: a command that took the gate would never return. Released by
-	// defer, so that a failure here ends the test instead of hanging its clean-up.
-	s.seqGate.Lock()
-	defer s.seqGate.Unlock()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		setExchangePath(t, s, "long")
-		stopAutoWorkRun(t, s)
-		_ = s.SetQsoSkip(true)
-		_ = s.NextAnswerer()
-		_ = s.PickAnswerer("K1ABC")
-		_ = s.BagAnswerer("K1ABC")
-		_ = s.UnbagAnswerer("K1ABC")
-		_ = s.ResumeDrain()
-	}()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("with ownership not required, a command that took no gate before C4 now waits on it")
-	}
-}
-
 // A replacement seals, stops, and only then publishes: the old lifetime's operation is
 // gone before the new one is current, and the old one can do nothing afterwards.
 func TestOperating_RetireStopsOperationAndSealsTheOldLifetime(t *testing.T) {
@@ -220,7 +181,6 @@ func TestOperating_RetireWithNothingRunning(t *testing.T) {
 func TestOperating_OldStartsRacingAReplacementNeverSurviveIt(t *testing.T) {
 	for i := 0; i < 200; i++ {
 		s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
-		s.RequireOperatingLifetime()
 		s.PublishOperating(lifeA)
 		s.presence.open(lifeA)
 		a := s.OperatingAs(lifeA)
@@ -270,7 +230,6 @@ func (p *heldInitPlayer) Init() error {
 func TestOperating_AReplacementUndoesAnArmThatIsBeingMade(t *testing.T) {
 	player := &heldInitPlayer{fakeTxPlayer: newFakeTxPlayer(), entered: make(chan struct{}), release: make(chan struct{})}
 	s := newTxTestService(&fakeKeyer{}, player, nil)
-	s.RequireOperatingLifetime()
 	s.PublishOperating(lifeA)
 	s.presence.open(lifeA)
 	t.Cleanup(func() { _ = s.ArmTx(false) })

@@ -77,7 +77,6 @@ export async function setupC4a() {
     const credential = randomBytes(32).toString('base64url');
     fs.writeFileSync(path.join(credDir, 'credential'), credential, { mode: 0o600 });
     genuine.state.requireCredential = credential;
-    genuine.state.admission.required = true;
     return {
         env: { SM_WORKING_DIR: wd, HOME: os.homedir() },
         cleanup: async () => {

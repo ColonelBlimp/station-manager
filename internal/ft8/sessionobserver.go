@@ -12,7 +12,7 @@ import "time"
 // Ruling 2 (2026-09-14) decides which boundary reports what: a partner
 // exchange in progress is terminated ONCE, at the sequencer's teardown
 // boundary; an idle automatic disarm is reported at the service boundary only
-// when no exchange is in progress; the routine unattended linger disarm —
+// when no exchange is in progress; the routine unattended disarm (presence lost) —
 // including an armed Call-CQ run waiting between contacts — is lifecycle and
 // reports nothing. Operator causes (abandon, stop, band change, shutdown)
 // report nothing.

@@ -456,7 +456,7 @@ func apiCallHeaders(t testing.TB, d *daemon, method, path, body string, headers 
 
 // mainCall sends one request to the generation's MAIN listener, its unix socket (started
 // after ownerOnlySocketDir). That listener serves the health check and refuses everything
-// else while the operating-client check is on (W-0027 C2), so this is for the tests of
+// else (the operating-client check, W-0027 C2), so this is for the tests of
 // that listener itself. An ordinary request to the daemon is apiCall.
 func mainCall(t testing.TB, d *daemon, method, path string) (int, []byte) {
 	t.Helper()

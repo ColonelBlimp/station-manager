@@ -77,7 +77,7 @@ func (l twoListeners) appURL(path string) string {
 	return fmt.Sprintf("https://127.0.0.1:%d%s", l.appPort, path)
 }
 
-// startTwo serves the fixture app's daemon on both listeners: the check on, the fixture's
+// startTwo serves the fixture app's daemon on both listeners: the fixture's
 // credential accepted and its lifetime admitted (appTestServer). A request that means to be
 // served presents them (appHeaders); a request that tests a guard presents them too, so
 // that what refuses it is the guard under test and not the check.
@@ -242,26 +242,6 @@ func TestApp_HostAndOriginAreBoundToItsPort(t *testing.T) {
 		if !c.ok && code != "cross_origin" {
 			t.Errorf("POST with Origin %q refused as %q, want cross_origin", c.origin, code)
 		}
-	}
-}
-
-func TestApp_TheBrowserListenerIsUnchanged(t *testing.T) {
-	// The HTTP listener still accepts any loopback Origin, the app's included: tightening it
-	// is a separate change (codex-056).
-	//
-	// EXPLICITLY WITH THE CHECK OFF (W-0027 C2e, codex-154): a served POST on the main
-	// listener exists only in that state, and this test goes with it in part 3.
-	l := startTwoWith(t, testServer(t), identity(t))
-	req, _ := http.NewRequest(http.MethodPost, "http://"+l.mainAddr+"/v1/notifications", strings.NewReader("{}"))
-	req.Header.Set("Origin", fmt.Sprintf("https://127.0.0.1:%d", l.appPort))
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = resp.Body.Close()
-	if resp.StatusCode == http.StatusForbidden {
-		t.Fatal("the browser listener changed: it now refuses a loopback Origin")
 	}
 }
 

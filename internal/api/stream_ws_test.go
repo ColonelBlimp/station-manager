@@ -903,11 +903,11 @@ func (b *lockedBuffer) String() string {
 func wsLogServer(t *testing.T, maxSubs int) (*Server, *httptest.Server, *lockedBuffer) {
 	t.Helper()
 	logs := &lockedBuffer{}
-	srv := testServerWithLogger(t, checkOn(func(cfg *config.Config) {
+	srv := testServerWithLogger(t, func(cfg *config.Config) {
 		if maxSubs > 0 {
 			cfg.Server.MaxEventSubscribers = maxSubs
 		}
-	}), nil, logging.NewForWriter(logs))
+	}, nil, logging.NewForWriter(logs))
 	prepareApp(t, srv)
 	return srv, appSocket(t, srv, nil), logs
 }

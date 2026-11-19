@@ -1,6 +1,6 @@
 """Tests for scripts/smd_client.py:  python3 -I scripts/smd_client_test.py
 
-W-0027 C2c: the client the operator's own tools use once smd's operating-client check is on.
+W-0027 C2c: the client the operator's own tools use to pass smd's operating-client check.
 Synthetic installs in temporary directories, synthetic identities made per run with openssl,
 and listeners on free loopback ports. Never smd, never the station.
 """

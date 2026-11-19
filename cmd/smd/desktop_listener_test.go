@@ -86,8 +86,8 @@ func waitSignal(t *testing.T, ch chan struct{}, what string) {
 }
 
 func TestDesktopListener_StartsAndServes(t *testing.T) {
-	f, r := newFake(), newAppReports()
-	startDesktopListener(f, ensureReturning(desktopid.Durable, nil), "/wd", 8443, r.report, nil)
+	f, r, fa := newFake(), newAppReports(), &fatals{}
+	startDesktopListener(f, ensureReturning(desktopid.Durable, nil), "/wd", 8443, r.report, fa.fatal)
 	waitSignal(t, f.served, "ServeApp")
 	if len(f.bound) != 1 || f.bound[0] != 8443 {
 		t.Fatalf("bound = %v, want [8443]", f.bound)
@@ -95,54 +95,8 @@ func TestDesktopListener_StartsAndServes(t *testing.T) {
 	if got := r.all(); len(got) != 0 {
 		t.Fatalf("a clean start reported %+v", got)
 	}
-}
-
-func TestDesktopListener_RefusedIdentity_NoListenerReported(t *testing.T) {
-	f, r := newFake(), newAppReports()
-	refusal := errors.New("desktopid.Load: /wd/desktop-identity/key.pem has mode 0644, want 0600")
-	startDesktopListener(f, ensureReturning(desktopid.Durable, refusal), "/wd", 8443, r.report, nil)
-	got := r.all()
-	if len(got) != 1 || !strings.Contains(got[0].msg, "identity") || got[0].err != refusal {
-		t.Fatalf("reports = %+v; want one naming the identity, carrying the refusal (which names the file)", got)
-	}
-	if len(f.bound) != 0 {
-		t.Fatal("the app listener was bound despite a refused identity")
-	}
-}
-
-func TestDesktopListener_UnconfirmedDurability_ReportedAndServes(t *testing.T) {
-	f, r := newFake(), newAppReports()
-	startDesktopListener(f, ensureReturning(desktopid.DurabilityUnconfirmed, nil), "/wd", 8443, r.report, nil)
-	waitSignal(t, f.served, "ServeApp")
-	got := r.all()
-	if len(got) != 1 || !strings.Contains(got[0].msg, "durab") {
-		t.Fatalf("reports = %+v; want one about unconfirmed durability", got)
-	}
-}
-
-func TestDesktopListener_BusyPort_ReportedNoServe(t *testing.T) {
-	f, r := newFake(), newAppReports()
-	f.bindErr = errors.New("listen tcp 127.0.0.1:8443: bind: address already in use")
-	startDesktopListener(f, ensureReturning(desktopid.Durable, nil), "/wd", 8443, r.report, nil)
-	got := r.all()
-	if len(got) != 1 || !strings.Contains(got[0].msg, "8443") || got[0].err != f.bindErr {
-		t.Fatalf("reports = %+v; want one naming port 8443 with the bind error", got)
-	}
-	select {
-	case <-f.served:
-		t.Fatal("ServeApp ran after a failed bind")
-	case <-time.After(100 * time.Millisecond):
-	}
-}
-
-func TestDesktopListener_ServeError_ReportedNotFatal(t *testing.T) {
-	f, r := newFake(), newAppReports()
-	f.serveErr = errors.New("api.ServeApp: accept failure")
-	startDesktopListener(f, ensureReturning(desktopid.Durable, nil), "/wd", 8443, r.report, nil)
-	waitSignal(t, r.done, "the serve error report")
-	got := r.all()
-	if len(got) != 1 || got[0].err != f.serveErr {
-		t.Fatalf("reports = %+v; want the serve error reported", got)
+	if got := fa.all(); len(got) != 0 {
+		t.Fatalf("a clean start was fatal: %v", got)
 	}
 }
 
@@ -195,39 +149,6 @@ func TestDesktopListener_TheHTTPNodeServesTheAppWithItsIdentity(t *testing.T) {
 	if _, err := net.DialTimeout("tcp", "127.0.0.1:"+strconv.Itoa(port), time.Second); err == nil {
 		t.Fatal("the app listener still accepts after the generation stopped")
 	}
-}
-
-func TestDesktopListener_ABusyAppPortNeverStopsTheStation(t *testing.T) {
-	busy, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = busy.Close() }()
-	port := busy.Addr().(*net.TCPAddr).Port
-	d, orch := newOrchestratedDaemon(t, func(c *config.Config) {
-		c.SetupComplete = true
-		c.DefaultLogbookID = 1
-		c.Server.AppPort = port
-		// Only with the check off; with it on a busy app port ends the start
-		// (TestOperatingClient_CheckOn_ABusyAppPortEndsTheStart). Goes in C2e part 3.
-		c.Server.RequireDesktopApp = false
-	})
-	ownerOnlySocketDir(t, d)
-	if err := orch.Start(d.workerCtx); err != nil {
-		t.Fatalf("a busy app port stopped the station: %v", err)
-	}
-	if code, body := mainCall(t, d, http.MethodGet, "/v1/version"); code != http.StatusOK {
-		t.Fatalf("browser listener: version = %d %s", code, body)
-	}
-	if got := d.server.AppPort(); got != 0 {
-		t.Fatalf("app listener port = %d, want none", got)
-	}
-	select {
-	case err := <-d.errCh:
-		t.Fatalf("a busy app port reached errCh: %v", err)
-	case <-time.After(200 * time.Millisecond):
-	}
-	stopGen(t, orch)
 }
 
 // A failed browser-listener bind stays fatal, as today, and no app listener starts to outlive it
@@ -306,52 +227,6 @@ func TestAfterBrowserBind(t *testing.T) {
 	}
 }
 
-// codex-058 P1: with the app port equal to the browser listener's (an accepted warning), the
-// app listener must never win the port. The browser's bind is held back for as long as the app
-// listener might bind first; the station must still start and serve the browser.
-func TestDesktopListener_NeverTakesTheBrowserListenersPort(t *testing.T) {
-	port := freeLoopbackPort(t)
-	d, orch := newOrchestratedDaemon(t, func(c *config.Config) {
-		c.SetupComplete = true
-		c.DefaultLogbookID = 1
-		c.Server.Protocol = "tcp"
-		c.SocketPath = "127.0.0.1:" + strconv.Itoa(port)
-		c.Server.AppPort = port
-		// A station that carries on without its app listener exists only with the check
-		// off; with it on the same clash ends the start. Decided in C2e part 3.
-		c.Server.RequireDesktopApp = false
-	})
-	real := serveBrowser
-	t.Cleanup(func() { serveBrowser = real })
-	serveBrowser = func(d *daemon) error {
-		// The app-first schedule: wait until the app listener has bound, or 500 ms.
-		for deadline := time.Now().Add(500 * time.Millisecond); time.Now().Before(deadline) && d.server.AppPort() == 0; {
-			time.Sleep(5 * time.Millisecond)
-		}
-		return real(d)
-	}
-	if err := orch.Start(d.workerCtx); err != nil {
-		t.Fatalf("the station did not start: %v", err)
-	}
-	select {
-	case err := <-d.errCh:
-		t.Fatalf("the browser listener failed (fatal): %v", err)
-	case <-time.After(700 * time.Millisecond):
-	}
-	resp, err := http.Get("http://127.0.0.1:" + strconv.Itoa(port) + "/v1/version")
-	if err != nil {
-		t.Fatalf("the browser listener does not serve: %v", err)
-	}
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("browser /v1/version = %d, want 200", resp.StatusCode)
-	}
-	if got := d.server.AppPort(); got != 0 {
-		t.Fatalf("the app listener holds port %d", got)
-	}
-	stopGen(t, orch)
-}
-
 // fakeStation is a browser listener plus the app listener's server, for the start decision.
 type fakeStation struct {
 	*fakeAppListener
@@ -367,7 +242,7 @@ func TestStartAppAfterBrowser_ACancelledStartNeverBindsTheApp(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		f := fakeStation{newFake(), fakeBrowserBind{done, true}}
-		startAppAfterBrowser(ctx, f, ensureReturning(desktopid.Durable, nil), "/wd", 8443, newAppReports().report, nil)
+		startAppAfterBrowser(ctx, f, ensureReturning(desktopid.Durable, nil), "/wd", 8443, newAppReports().report, func(error) {})
 		if len(f.bound) != 0 {
 			t.Fatalf("call %d: the app listener was bound although start-up was already cancelled", i)
 		}
@@ -378,7 +253,7 @@ func TestStartAppAfterBrowser_ACancelledStartNeverBindsTheApp(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	returned := make(chan struct{})
 	go func() {
-		startAppAfterBrowser(ctx, f, ensureReturning(desktopid.Durable, nil), "/wd", 8443, newAppReports().report, nil)
+		startAppAfterBrowser(ctx, f, ensureReturning(desktopid.Durable, nil), "/wd", 8443, newAppReports().report, func(error) {})
 		close(returned)
 	}()
 	cancel()
@@ -393,7 +268,7 @@ func TestStartAppAfterBrowser_BindsOnlyAfterTheBrowser(t *testing.T) {
 	done := make(chan struct{})
 	close(done)
 	f := fakeStation{newFake(), fakeBrowserBind{done, true}}
-	startAppAfterBrowser(context.Background(), f, ensureReturning(desktopid.Durable, nil), "/wd", 8443, newAppReports().report, nil)
+	startAppAfterBrowser(context.Background(), f, ensureReturning(desktopid.Durable, nil), "/wd", 8443, newAppReports().report, func(error) {})
 	waitSignal(t, f.served, "ServeApp")
 	if len(f.bound) != 1 {
 		t.Fatalf("bound = %v, want one bind after the browser's", f.bound)

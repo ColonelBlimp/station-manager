@@ -89,9 +89,8 @@ type Server struct {
 	limits          *loadLimiter
 	kit             *httpkit.Kit
 	protocol        string
-	// The operating-client check (W-0027 C2; operating_client.go). requireDesktopApp is
-	// fixed when the server is built; the matcher is set once, before serving.
-	requireDesktopApp   bool
+	// The operating-client check (W-0027 C2; operating_client.go), always applied. The
+	// matcher is set once, before serving.
 	operatingCredential atomic.Pointer[func(presented string) bool]
 	// admission is the desktop app's current lifetime (W-0027 C4a; app_admission.go).
 	admission appAdmission
@@ -235,7 +234,6 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 		limits:                   newLoadLimiter(cfg.Server.MaxConcurrentRequests, cfg.Server.MaxEventSubscribers, cfg.Server.SubmitRatePerSec, cfg.Server.SubmitRateBurst),
 		kit:                      httpkit.New(logger, cfg.Server.MaxBodyBytes),
 		protocol:                 cfg.Server.Protocol,
-		requireDesktopApp:        cfg.Server.RequireDesktopApp,
 		defaultPageLimit:         cfg.Server.DefaultPageLimit,
 		maxPageLimit:             cfg.Server.MaxPageLimit,
 		maxContactHistoryResults: cfg.Server.MaxContactHistoryResults,
@@ -244,10 +242,9 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 	}
 
 	mux := newRouteMux()
-	// With the check on, FT8 is operated only by the admitted app lifetime, and a
-	// replacement seals and stops it before the new lifetime is published.
-	if s.requireDesktopApp && ft8Svc != nil {
-		ft8Svc.RequireOperatingLifetime()
+	// FT8 is operated only by the admitted app lifetime, and a replacement seals and
+	// stops it before the new lifetime is published.
+	if ft8Svc != nil {
 		// The FT8 stream is the scope's presence (W-0027 C4b): its handler is told how
 		// to read the lifetime this server validated for the request.
 		ft8Svc.SetStreamLifetime(appLifetime)
@@ -264,9 +261,8 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 	//   limitConcurrent   — non-SSE concurrent-request cap
 	//   recoverPanic      — panic safety net + structured panic log
 	//   requireSameOrigin — Host allowlist (all methods) + Origin (unsafe methods)
-	//   requireOperatingClient — the operating-client check (W-0027 C2): default deny
-	//                       when server.require_desktop_app is on; a pass-through when off.
-	//                       In front of the router, so of every route, page and stream
+	//   requireOperatingClient — the operating-client check (W-0027 C2): default deny,
+	//                       always. In front of the router, so of every route, page and stream
 	//   apiRouter         — dispatches /v1/* to apiMux (re-emitting unmatched-route
 	//                       404/405 as the JSON envelope, AW-4) and everything else to
 	//                       mux; both carry their own per-route middleware like

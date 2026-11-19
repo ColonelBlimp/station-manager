@@ -10,7 +10,7 @@ import (
 // Operating ownership (W-0027 C4a; ADR 0102 ruling 6; ADR 0100 §3, App lifetimes).
 //
 // FT8 is a scope: an operation in which the daemon transmits by itself once the operator
-// has started it. With the operating-client check on, such a scope is operated only by
+// has started it. Such a scope is operated only by
 // the desktop app's current lifetime: the identity its main process made at start and was
 // admitted with (internal/api holds the admission; this package is handed the outcome).
 //
@@ -29,9 +29,6 @@ import (
 //     alter operation; and the FT8 view sends it by itself when a stream comes back, which
 //     after a daemon restart can be before the app has been admitted again.
 //
-// NOT REQUIRED means the check is off (server.require_desktop_app): no command asks who
-// is calling, and a command that took no gate before C4 takes none now.
-//
 // The per-scope presence rule (which streams hold an arm, and the grace) is C4b.
 
 // ErrLifetimeNotCurrent refuses an operating command whose caller is not the current app
@@ -42,10 +39,6 @@ var ErrLifetimeNotCurrent = stderrors.New("ft8: the caller is not the current ap
 // a tool, or a desktop app that was started before C4 and is still running. It is its own
 // error so that such a caller can be told what to do about it (restart the app).
 var ErrNoAppLifetime = fmt.Errorf("%w: the request names none", ErrLifetimeNotCurrent)
-
-// RequireOperatingLifetime turns the rule on. Called once at wiring, before Start, when
-// the daemon serves only the desktop app.
-func (s *Service) RequireOperatingLifetime() { s.ownershipRequired.Store(true) }
 
 // RetireOperating is the first two steps of a replacement, as one hold of the gate:
 // seal, so that no lifetime can operate, the outgoing one included; then stop, by the
@@ -69,9 +62,6 @@ func (s *Service) PublishOperating(lifetime string) {
 
 // operatorCheckLocked is the rule, for a command that already holds seqGate.
 func (s *Service) operatorCheckLocked(op errors.Op, who string) error {
-	if !s.ownershipRequired.Load() {
-		return nil
-	}
 	if who == "" {
 		return errors.New(op).WithErr(ErrNoAppLifetime)
 	}
@@ -83,12 +73,8 @@ func (s *Service) operatorCheckLocked(op errors.Op, who string) error {
 
 // operatorGate is the rule for a command that takes no gate of its own: it takes
 // seqGate, asks, and hands back the release, to be deferred so the gate is held until
-// the command has taken effect. When ownership is not required it takes nothing, so
-// those commands run exactly as they did before C4.
+// the command has taken effect.
 func (s *Service) operatorGate(op errors.Op, who string) (release func(), err error) {
-	if !s.ownershipRequired.Load() {
-		return func() {}, nil
-	}
 	s.seqGate.Lock()
 	if err := s.operatorCheckLocked(op, who); err != nil {
 		s.seqGate.Unlock()

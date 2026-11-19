@@ -215,17 +215,11 @@ if [ -n "${DISPLAY:-}" ]; then
 else
     ( cd desktop && SM_DESKTOP_SMD="$PWD/../build/bin/smd" xvfb-run -a npm run check:c1d )
 fi
-step "Desktop: C2b acceptance against a real smd with the operating-client check on"
-if [ -n "${DISPLAY:-}" ]; then
-    ( cd desktop && SM_DESKTOP_SMD="$PWD/../build/bin/smd" npm run check:c2b-smd )
-else
-    ( cd desktop && SM_DESKTOP_SMD="$PWD/../build/bin/smd" xvfb-run -a npm run check:c2b-smd )
-fi
 step "Tools: the verified client, the Cabrillo reader and the tune probe (fixtures only; nothing keyed)"
 python3 -I scripts/smd_client_test.py
 python3 -I scripts/ukeicc_cabrillo_test.py
 python3 -I scripts/tune_probe_test.py
-step "Tools: against a real smd with the operating-client check on (temporary directory, rig disabled, probe not run)"
+step "Tools: against a real smd (temporary directory, rig disabled, probe not run)"
 SM_DESKTOP_SMD="$PWD/build/bin/smd" python3 -I scripts/smd_tools_smd_test.py
 
 step "Go: build all cmd/ binaries"

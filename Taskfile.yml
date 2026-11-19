@@ -72,12 +72,6 @@ tasks:
     cmds:
       - sh -c 'if [ -f package-lock.json ]; then npm ci; else npm install; fi'
 
-  frontend:app:dev:
-    desc: Run the consolidated app SPA (ADR 0044) Vite dev server with HMR on :5176 (proxies /v1/* to daemon on :8080; runs alongside the other frontend:*:dev servers)
-    dir: frontend/app
-    cmds:
-      - npm run dev
-
   frontend:app:build:
     desc: Production build of the consolidated app SPA (ADR 0044); embedded by the daemon and served at /app/.
     dir: frontend/app
@@ -115,7 +109,6 @@ tasks:
     dir: desktop
     cmds:
       - sh -c 'if [ -n "$DISPLAY" ]; then SM_DESKTOP_SMD=../build/bin/smd npm run check:c1d; else SM_DESKTOP_SMD=../build/bin/smd xvfb-run -a npm run check:c1d; fi'
-      - sh -c 'if [ -n "$DISPLAY" ]; then SM_DESKTOP_SMD=../build/bin/smd npm run check:c2b-smd; else SM_DESKTOP_SMD=../build/bin/smd xvfb-run -a npm run check:c2b-smd; fi'
 
   frontend:build:all:
     desc: Build the embedded app SPA (the sole operator client). The build:smd* tasks depend on this so the daemon embeds a fresh bundle.
@@ -354,9 +347,7 @@ tasks:
 
   run:smd:
     desc: |
-      Run the daemon directly via `go run` for SPA development. Pair with
-      `task frontend:app:dev` in another terminal — Vite serves the app SPA on
-      :5176 and proxies /v1/* to this daemon. Uses SM_WORKING_DIR from .env.
+      Run the daemon directly via `go run`. Uses SM_WORKING_DIR from .env.
       CGO on, so live FT8 capture works without a deploy — the fast FT8
       iteration loop (no RPM). Automatically stops the systemd `smd` first so
       the two don't contend for :8080 / the audio + serial ports; restart the
