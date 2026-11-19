@@ -209,6 +209,13 @@ design before code.
 - **2026-11-19 (operator): "commit, but no push".** For the scenario's strengthened
   downgrade check (the clean-room finding on 99c9c840): committed locally and not pushed,
   so that the hosted run on 99c9c840 is not cancelled by a newer push.
+- **2026-11-19 (operator): "commit"**, then **"commit and push".** The two fixes to that
+  check that its clean-room reviews asked for: 92002312 committed locally, then 7adb5d48
+  committed and all three test commits pushed together.
+- **2026-11-19 (operator): "accepted, the rig was off, commit and push the dossier".** The
+  station's deploy of `2.0.0~alpha.5.281.g7adb5d48` is accepted (its record, at the end of
+  this dossier). The "rig went quiet" and "rig unreachable" warnings after the day's
+  deploys are the rig being switched off, on the operator's word.
 
 ## Open questions for the operator
 
@@ -4389,3 +4396,29 @@ commits. The clean-room review of 92002312 gave one finding.
   working tree: with a connection injected in the scenario itself, the per-connection check
   fails the run where the total-based one passed all 39; the follow-up records `failed` for
   the closed-before-TLS case. Its agreement is not the operator's approval.
+
+**The follow-up is committed 7adb5d48 and all three test commits are pushed** (operator:
+"commit and push"); `main` and the remote agree at 7adb5d48. Its clean-room review: no
+actionable findings. The hosted run 44515000943 on 7adb5d48 was in progress when this was
+written.
+
+**Deployed a third time by the operator (2026-11-19: "deployed"), from 7adb5d48.** Its
+product code is still 99c9c840's; the three commits since change tests and this dossier.
+Read-only checks by Claude, no request made to the daemon:
+- both packages are `2.0.0~alpha.5.281.g7adb5d48-1`;
+- the service is active and running since 13:28:28 CAT, no restarts; `127.0.0.1:8080` and
+  `127.0.0.1:8443` are held by that `smd` process;
+- `config.json` is version 7, mode 0600, with neither `require_desktop_app` nor `app_port`;
+- `smd.log`: the earlier process stopped cleanly at 13:28:21; from the start at 13:28:28,
+  the operating-client line and both listeners listening at 13:28:30, no error; the two
+  standing warnings, then "rig went quiet" at 13:28:35 and "rig unreachable" at 13:28:40,
+  5 and 10 seconds after the pipeline started, as after both earlier deploys (cause not
+  established; no rig command was sent to find out).
+- **Not shown:** the app itself, and the redirect guard in the installed app. The installed
+  build is the pushed head.
+
+**Accepted by the operator, 2026-11-19: "accepted, the rig was off, commit and push the
+dossier".** The deploy of `2.0.0~alpha.5.281.g7adb5d48` is accepted. The two rig warnings
+have their cause on the operator's word: the rig was off. The hosted run 44515000943 on
+7adb5d48 finished with success (read from the run: its one job, the releasability gate,
+completed with success), so the installed build is the pushed head and that head is green.
