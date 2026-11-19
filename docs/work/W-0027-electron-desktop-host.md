@@ -188,6 +188,15 @@ design before code.
   follow-up to part 3's review is committed and pushed once the hosted run on 8cccbd09 has
   given its verdict (a newer push cancels a running one), and the Fox notes go in their own
   documents commit.
+- **2026-11-19 (operator), the listeners' ports: "approved, leave explicit 0 as the
+  default"**, then **"commit and push the port rules".** Under `server.protocol` `tcp`,
+  `socket_path` must be host:port with a plain decimal port from 1024 to 65535; a given
+  `server.app_port` must be in the same range, and left out or 0 it is the default 8443.
+  The operator's words that led to it, and the build, are in the part 3 section's review
+  record. Committed 8e957293.
+- **2026-11-19 (operator): "accepted, commit and push the dossier".** C2e is accepted at
+  the station after the deploy of `2.0.0~alpha.5.275.g8e957293` (its section, at the end of
+  this dossier).
 
 ## Open questions for the operator
 
@@ -4112,9 +4121,42 @@ clean-room review of d3d3476e gave one finding.
       start on a value below 1024, but a reader can still meet one: the file can be edited
       while a daemon is running (codex-170). Aligning the readers' range and message is
       separate work.
-    - Reviewed in the exchange: codex-170 closed it with no blocking finding.
-    - **Committed and pushed on direction (operator, 2026-11-19: "commit and push the port
-      rules").**
     - Gates: the whole Go suite (66 packages), lint, vet, the maintainability gate and the
       document gates pass; a temporary `smd` built from this tree started and served the
       operator's tools test (4 tests).
+    - Reviewed in the exchange: codex-170 closed it with no blocking finding.
+    - **Committed and pushed on direction (operator, 2026-11-19: "commit and push the port
+      rules").**
+
+### C2e — at the station (2026-11-19; deployed and accepted by the operator)
+
+**The port rules are committed 8e957293 and pushed. Its clean-room review: no actionable
+findings. Hosted run 44470618763 on it: success.**
+
+**Deployed by the operator** with `task deploy:local:dev` (operator, 2026-11-19: "deployed,
+run the read-only checks"). Read-only checks by Claude, about a minute after the start; no
+request was made to the daemon and nothing was keyed:
+
+- *Packages:* `station-manager` and `station-manager-desktop` are both
+  `2.0.0~alpha.5.275.g8e957293-1` (before: `…265.g8e64d2ed-1`).
+- *Service:* active and running since 08:44:53 CAT, no restarts, result success.
+- *Listeners:* `127.0.0.1:8080` and `127.0.0.1:8443`, both held by that `smd` process.
+- *`config.json`* (key names and counts only): version 7; `server.require_desktop_app` is
+  gone; no forwarder entry holds `name` or `enabled`; mode 0600, rewritten at 08:44.
+  `config.v5.json` is untouched (10 October, 0600).
+- *`smd.log` since this start* (33 lines, all from `2.0.0-alpha.5-275-g8e957293`): "config
+  saved"; the databases opened and verified; **"operating-client check: only the desktop
+  app is served, with this install's operating credential"**; "HTTP server listening";
+  "desktop app listener listening (TLS, loopback)". No error. Four warnings: the two
+  standing ones (the serial-line notice; SM Cloud over plain HTTP), and "bridge: rig went
+  quiet" then "rig unreachable". The same two rig warnings followed this morning's 06:49
+  start of the previous build, so they are not from this deploy; that the rig is switched
+  off is my inference, not checked.
+
+**Not shown by these checks:** the desktop app opening and operating; the browser's notice;
+the refusal of a plain client; the rig; FT8. Those are the operator's to look at, or need
+requests to the station that I have not made.
+
+**Accepted by the operator, 2026-11-19: "accepted, commit and push the dossier".** C2e is
+done: the operating-client check is permanent and is what the station runs. What the
+operator looked at beyond the checks above is not recorded here.
