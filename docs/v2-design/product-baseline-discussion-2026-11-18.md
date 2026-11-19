@@ -131,6 +131,17 @@ levers are the race-detector step, which runs the whole Go suite in one go, and 
 step, which runs its scenarios one after another. Neither has been examined. This belongs
 with the review and minimisation phase above; nothing is scheduled by this note.
 
+## FT8 and FT4 adjustments: one seen at the station (added later the same day)
+
+Item 4 of the basic product is "FT8 and FT4 adjustments". One arrived the same afternoon:
+VK9XY was working as a Fox, and the operator had "never seen lines like that before". What
+the lines are, what the app and the daemon do with them today, and what is not established
+are in [the inbox](../dogfood-inbox.md), 2026-11-18, "a Fox's (DXpedition-mode) lines, to fix
+later", recorded on the operator's direction ("log it all to the inbox for fixing later").
+The short of it: the two-part line is cut off, cannot be clicked, and is ignored by the
+daemon, so an answer or a final roger that arrives only inside one does not advance or log
+the contact. Nothing is built or ranked by this note.
+
 ## What this record changes
 
 Nothing. No priority, no dossier and no standing note is changed by it. The work in hand when it
