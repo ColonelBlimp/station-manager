@@ -145,10 +145,12 @@ async function runScenario(ctx) {
                 (r) => `${r.method} ${r.url} (${r.cred.length} credential header(s))`
             ),
         });
-    // Connections a listener accepted that began no TLS at all: neither a completed nor a
-    // failed handshake. On the daemon's own port, which is in use throughout, this is what
-    // shows a plain or idle connection that the handshake counts and the requests would miss.
-    const silentAt = (h) => h.accepts.count - h.handshakes.secure - h.handshakes.failed;
+    // What became of each connection a listener accepted from the `since`-th on: 'secure',
+    // 'failed', or 'none' for one that began no TLS (idle, or plain). On the daemon's own
+    // port, which is in use throughout, the connections of a test's own window are judged
+    // one by one: a total taken before and after could be balanced by an earlier connection
+    // finishing its handshake meanwhile (clean-room review of 36f6861d).
+    const outcomesSince = (h, since) => h.connections.slice(since).map((c) => c.outcome ?? 'none');
     // A fetch of the pinned origin's /redirect, which answers with a redirect to `to`.
     const redirected = (win, to, extra = '') =>
         js(
@@ -343,7 +345,7 @@ async function runScenario(ctx) {
         await off('not an address', 'https://[not-an-address/api/echo?m=rm1');
         const toWrong = await redirected(main, wrong.origin + '/api/echo?m=rw1');
         const plainBefore = genuine.handshakes.failed;
-        const silentBefore = silentAt(genuine);
+        const connectionsBefore = genuine.connections.length;
         const toPlainSelf = await redirected(
             main,
             genuine.origin.replace('https:', 'http:') + '/api/echo?m=rg1'
@@ -363,10 +365,10 @@ async function runScenario(ctx) {
             '…nor down to plain HTTP at the daemon’s own address',
             toPlainSelf.startsWith('refused:') &&
                 genuine.handshakes.failed === plainBefore &&
-                silentAt(genuine) === silentBefore &&
+                outcomesSince(genuine, connectionsBefore).every((o) => o === 'secure') &&
                 reqFor(genuine, 'm=rg1').length === 0,
             `${toPlainSelf}; failed handshakes ${plainBefore} -> ${genuine.handshakes.failed}; ` +
-                `connections with no TLS ${silentBefore} -> ${silentAt(genuine)}`
+                `connections accepted meanwhile: ${JSON.stringify(outcomesSince(genuine, connectionsBefore))}`
         );
         const stays = [
             await redirected(main, '/api/echo?m=rk1'),

@@ -71,6 +71,17 @@ export async function startHarness({ up = true, tls = null, tag = 'fixture', por
     // Every TCP connection accepted, whatever came of it: a test of "no contact at all" counts
     // these, since a connection can be made and dropped with no handshake and no request.
     const accepts = { count: 0 };
+    // One record per accepted connection, in order, with what became of it: 'secure' (a
+    // completed TLS handshake), 'failed' (a refused one), or null while neither has happened,
+    // which is what an idle or plain connection stays at. A test reads the records made
+    // during its own window, so a handshake that an earlier connection completes meanwhile
+    // cannot stand in for a new connection that began none.
+    const connections = [];
+    const byPeer = new Map();
+    const settle = (socket, outcome) => {
+        const c = byPeer.get(socket?.remotePort);
+        if (c && c.outcome === null) c.outcome = outcome;
+    };
     const sockets = new Set();
     const marker = (url) => new URL(url, 'http://x').searchParams.get('m') ?? '';
     // Every value of the operating-credential header on a request, in any letter case, so a
@@ -274,12 +285,25 @@ export async function startHarness({ up = true, tls = null, tag = 'fixture', por
             server.on('upgrade', onUpgrade);
             server.on('connection', (s) => {
                 accepts.count += 1;
+                const record = { outcome: null };
+                connections.push(record);
+                const peer = s.remotePort;
+                byPeer.set(peer, record);
                 sockets.add(s);
-                s.on('close', () => sockets.delete(s));
+                s.on('close', () => {
+                    sockets.delete(s);
+                    if (byPeer.get(peer) === record) byPeer.delete(peer);
+                });
             });
             if (tls) {
-                server.on('secureConnection', () => (handshakes.secure += 1));
-                server.on('tlsClientError', () => (handshakes.failed += 1));
+                server.on('secureConnection', (t) => {
+                    handshakes.secure += 1;
+                    settle(t, 'secure');
+                });
+                server.on('tlsClientError', (_err, t) => {
+                    handshakes.failed += 1;
+                    settle(t, 'failed');
+                });
             }
             server.once('error', reject);
             server.listen(port, '127.0.0.1', () => {
@@ -316,6 +340,7 @@ export async function startHarness({ up = true, tls = null, tag = 'fixture', por
         upgrades,
         handshakes,
         accepts,
+        connections,
         replaceLifetime,
         start: () => (server ? Promise.resolve() : listen()),
         stop: close,

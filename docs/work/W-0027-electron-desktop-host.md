@@ -4332,3 +4332,34 @@ finding.
   connection held for 700 ms gives 1 (one accept, no handshake); a plain-HTTP request gives
   a failed handshake, which the check already read. The scenario then passed 6 runs of 6,
   the check reporting "connections with no TLS 0 -> 0".
+
+**The strengthened check is committed 36f6861d, locally, not pushed** (operator: "commit, but
+no push"). Its clean-room review gave one finding.
+- **[P2] "An earlier TLS handshake can mask a new idle connection": true, fixed (the
+  fixture and the scenario; uncommitted).** My fix compared a total (accepts less handshake
+  outcomes) before and after. A connection accepted before the window that finishes its
+  handshake during it lowers the total by one, which would hide one new idle connection;
+  the reverse gives a false failure. The fixture now keeps one record per accepted
+  connection with what became of it (`secure`, `failed`, or nothing yet), and the check
+  judges the connections accepted during its own window one by one: each must be `secure`.
+  *Reproduced with the fixture alone:* a connection accepted before the window completes
+  TLS inside it while a new one is opened and left idle; the old total reads 1 before and 1
+  after, and the window's own record reads `["none"]`. A plain-HTTP request reads
+  `["failed"]`, a TLS connection `["secure"]`. After it: 111 unit tests; A1, C1, C1d-shell,
+  C4a; C2b 8 runs of 8, the check reporting "connections accepted meanwhile: []".
+
+**Deployed again by the operator (2026-11-19: "deployed"), from the local commit 36f6861d.**
+Its product code is 99c9c840's; 36f6861d changes a test and this dossier only. Read-only
+checks by Claude, no request made to the daemon:
+- both packages are `2.0.0~alpha.5.279.g36f6861d-1`;
+- the service is active and running since 11:56:08 CAT, no restarts; `127.0.0.1:8080` and
+  `127.0.0.1:8443` are held by that `smd` process;
+- `config.json` is version 7, with neither `require_desktop_app` nor `app_port` in it;
+- `smd.log` since this start (55 lines, all from that version): the operating-client line,
+  both listeners listening, no error; the two standing warnings and the same two rig
+  warnings as before (cause not established).
+- **Not shown:** the app itself, and so the redirect guard in the installed app (no
+  redirect off the daemon's address is expected in ordinary use; the guard is held by the
+  scenario, not by anything read here). The installed build is ahead of what is pushed:
+  36f6861d is not on the remote, and the hosted run on 99c9c840 had not finished when this
+  was written.
