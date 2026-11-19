@@ -197,6 +197,13 @@ design before code.
 - **2026-11-19 (operator): "accepted, commit and push the dossier".** C2e is accepted at
   the station after the deploy of `2.0.0~alpha.5.275.g8e957293` (its section, at the end of
   this dossier).
+- **2026-11-19 (operator): "align them. I want to finish the security work and then move
+  on, not leave items dangling..."**, then, on the three questions that followed (its
+  section, at the end of this dossier): **"commit and push 1, fix the redirect now, keep
+  the stronger guarantee".** One: the readers' port range and the scenario's race fix are
+  committed and pushed. Two: the redirect path is fixed now. Three: the guarantee stays
+  that an address other than the daemon's gets **no contact at all** from the app, not
+  only no request and no credential.
 
 ## Open questions for the operator
 
@@ -4149,9 +4156,11 @@ request was made to the daemon and nothing was keyed:
   app is served, with this install's operating credential"**; "HTTP server listening";
   "desktop app listener listening (TLS, loopback)". No error. Four warnings: the two
   standing ones (the serial-line notice; SM Cloud over plain HTTP), and "bridge: rig went
-  quiet" then "rig unreachable". The same two rig warnings followed this morning's 06:49
-  start of the previous build, so they are not from this deploy; that the rig is switched
-  off is my inference, not checked.
+  quiet" then "rig unreachable". The same warning pattern was already observed after this
+  morning's 06:49 start of the previous build, so the pattern predates this deploy; its
+  cause has not been established (codex-171). That the rig is switched off is my
+  inference, not checked: the two messages report a window with no data and then the
+  strike limit, nothing more.
 
 **Not shown by these checks:** the desktop app opening and operating; the browser's notice;
 the refusal of a plain client; the rig; FT8. Those are the operator's to look at, or need
@@ -4160,3 +4169,57 @@ requests to the station that I have not made.
 **Accepted by the operator, 2026-11-19: "accepted, commit and push the dossier".** C2e is
 done: the operating-client check is permanent and is what the station runs. What the
 operator looked at beyond the checks above is not recorded here.
+
+### After the acceptance (2026-11-19): the readers' port range; a red hosted run and what it showed
+
+**The operator, 2026-11-19: "align them. I want to finish the security work and then move
+on, not leave items dangling..."** The desktop shell (`desktop/src/discovery.mjs`) and the
+pinned client (`scripts/smd_client.py`) read `server.app_port` for themselves and still
+accepted 1 to 65535. Both now hold the daemon's range, 1024 to 65535, with the same words;
+left out or 0 is still 8443. Tests first, seen to fail (1, 443, 1023 accepted; 65536
+refused with the old range in the message). Uncommitted, for review.
+
+**Hosted run 44475639670 on 3873ab6e (documents only) failed**, in the desktop credential
+scenario (C2b): "…neither window is navigated or told again, and a window that asked for
+nothing is told nothing — before any request 0,1,0". The code is that of 8e957293, whose
+run passed.
+
+- **Cause, established.** A diagnostic added to the check names the requests that reached
+  the fixture in the scenario's quiet time: `POST /v1/app/lifetime`, then the shell's
+  probe. Each window the scenario launches is a start of the app with a lifetime of its
+  own, and since part 3 the fixture always admits (before, its admission was off in this
+  scenario). So the scenario's two windows, started together, replaced one another's
+  lifetime; the replaced one asked `smd` about it on its next response; and when that
+  asking straddled the scenario's replacement of the credential, its second request was
+  refused and the window was told. **A fault of the scenario, introduced by my part 3
+  change to the fixture; the shell did what it is designed to do.** Reproduced locally: 5
+  of 12 runs of the committed scenario.
+- **Fix, in the scenario only (uncommitted).** The two windows are started in order, so
+  that it is always the first whose lifetime is replaced, and the scenario waits until
+  the fixture has that window's own admission request before it replaces the credential.
+  The diagnostic stays. After it: 24 runs, none failing on that check.
+- **The same commit passed on a re-run.** I re-ran the failed job (attempt 2 of run
+  44475639670): success, every step. So `3873ab6e` is green on its second attempt and red
+  on its first, with no change between them: the failure is intermittent, as the cause
+  above predicts.
+
+**A second intermittent failure, found while repeating the scenario, and not fixed.**
+"Another port serving the same certificate receives nothing, directly or by redirect" fails
+in about one run in three on this machine today: the other listener completes **one TLS
+handshake and receives no request**, so no credential and nothing of the page reaches it.
+- It follows the *redirect* case, not the direct one (measured in a temporary copy, 14
+  runs: after the direct fetch 0 every time; after the redirected fetch 1 in 4 runs). The
+  page asks the pinned origin for an address that answers with a redirect to the other
+  port; the shell blocks the redirected request and the fetch fails, as it should; but a
+  connection to the redirect's target is sometimes made first.
+- It is not from part 3 or from today's changes: the scenario at 4c7e739e, before part 3,
+  fails the same way in 5 of 12 runs here today. No hosted run I have read has shown it,
+  and I had not seen it on this machine before today (the machine was restarted this
+  morning on a newer kernel; whether that matters is not established). Why it shows now
+  is not established.
+- What it means, as far as established: a redirect sent by the pinned daemon can make the
+  app open a TLS connection to the address the redirect names. No HTTP request, and so no
+  credential, is sent on it; the handshake's own bytes are exchanged, so it is not "nothing
+  sent" (codex-172, which reproduced it: 6 of 20 trials, with a TCP accept each time).
+  What opens it, and whether the shell can stop it before the connection, are not
+  established. **Open; for the operator and Codex.**

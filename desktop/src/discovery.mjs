@@ -14,6 +14,11 @@ import path from 'node:path';
 import { X509Certificate } from 'node:crypto';
 
 export const DEFAULT_APP_PORT = 8443;
+// smd's own range for a given server.app_port (internal/config, operator ruling 2026-11-19):
+// smd refuses to start outside it, and the shell, which reads the file for itself, refuses
+// the same values with the same words.
+const MIN_APP_PORT = 1024;
+const MAX_APP_PORT = 65535;
 export const IDENTITY_DIR = 'desktop-identity';
 const CERT = 'cert.pem';
 export const CREDENTIAL_DIR = 'desktop-credential';
@@ -205,10 +210,10 @@ function appPort(configFile, doc) {
     }
     const p = server.app_port;
     if (p === undefined || p === 0) return { ok: true, port: DEFAULT_APP_PORT };
-    if (!Number.isInteger(p) || p < 1 || p > 65535) {
+    if (!Number.isInteger(p) || p < MIN_APP_PORT || p > MAX_APP_PORT) {
         return refused(
             configFile,
-            'server.app_port in config.json must be an integer from 1 to 65535'
+            `server.app_port in config.json must be an integer from ${MIN_APP_PORT} to ${MAX_APP_PORT}`
         );
     }
     return { ok: true, port: p };

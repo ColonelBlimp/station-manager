@@ -259,6 +259,21 @@ class Discovery(unittest.TestCase):
                 msg, _ = self.refused(None, "credential", cred=text)
                 self.assertIn("43", msg)
 
+    def test_the_app_port_is_in_smds_own_range(self):
+        # The range is smd's (internal/config, operator ruling 2026-11-19): a given port is from
+        # 1024 to 65535; left out or 0 it is the default. The client reads the file for itself,
+        # so it holds the same rule and says the same thing.
+        for port in (1024, 9443, 65535):
+            with self.subTest(port):
+                self.assertEqual(sc.discover(env=install(port)["env"]).port, port)
+        for name, server in (("left out", {}), ("an explicit 0", {"app_port": 0})):
+            with self.subTest(name):
+                self.assertEqual(sc.discover(env=install(config={"server": server})["env"]).port, 8443)
+        for port in (1, 443, 1023, 65536):
+            with self.subTest(port):
+                msg, _ = self.refused(None, "app_port", cfg={"server": {"app_port": port}})
+                self.assertIn("1024 to 65535", msg)
+
     def test_bad_config_values_are_refused(self):
         for name, cfg, names in [
             ("a port out of range", {"server": {"app_port": 70000}}, "app_port"),

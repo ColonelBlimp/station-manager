@@ -286,7 +286,13 @@ async function runScenario(ctx) {
             elsewhere.startsWith('refused:') &&
                 viaRedirect.startsWith('refused:') &&
                 sentTo(other) === 0,
-            `${elsewhere} ${viaRedirect}; other listener saw ${sentTo(other)}`
+            `${elsewhere} ${viaRedirect}; other listener saw ${sentTo(other)}: ` +
+                JSON.stringify({
+                    handshakes: other.handshakes,
+                    requests: other.requests.map(
+                        (r) => `${r.method} ${r.url} (${r.cred.length} credential header(s))`
+                    ),
+                })
         );
         const marked = first.sent.filter((r) => r.sent).map((r) => r.url);
         const wssPartner = genuine.origin.replace('https:', 'wss:') + '/';
@@ -415,19 +421,48 @@ async function runScenario(ctx) {
         // window the one request made is of one such kind.
         const V3 = newCredential();
         const viaShared = launch('c2b-shared-worker');
-        const viaSocket = launch('c2b-websocket');
         await until(
             async () => (await tag(viaShared.win)) === 'genuine',
             'the worker window to load'
         );
+        // Each launch is a start of the app with a lifetime of its own, and smd admits one at
+        // a time. So the socket window, started second, replaces the worker window's lifetime;
+        // the worker window learns of it from its next response and asks smd (admission.mjs),
+        // which is two requests of its own. The second, a POST, must have reached the fixture
+        // before the credential is replaced below, or it is what gets refused and the window
+        // is told before it has asked for anything. The fixture checks a request's credential
+        // as it records it, so the wait further down, for that POST in the record, is past
+        // the check; it does not wait for the answer to be read. Started together, either
+        // window could be the one replaced, and its asking could straddle the replacement
+        // (hosted run 44475639670).
+        const beforeSocket = genuine.requests.length;
+        const viaSocket = launch('c2b-websocket');
         await until(
             async () => (await tag(viaSocket.win)) === 'genuine',
             'the socket window to load'
         );
         const served = [await workerFetch(viaShared.win, 'sw2'), await socket(viaSocket.win, 'k2')];
+        await until(
+            () =>
+                genuine.requests
+                    .slice(beforeSocket)
+                    .some(
+                        (r) =>
+                            r.method === 'POST' &&
+                            r.url.startsWith('/v1/app/lifetime') &&
+                            r.lifetime[0] === viaShared.lifetime
+                    ),
+            'the worker window to have asked smd about its replaced lifetime'
+        );
+        const beforeV3 = genuine.requests.length;
         genuine.state.requireCredential = V3;
         await sleep(300);
         const quiet = [viaShared, viaSocket, third].map((l) => l.refusals.length).join(',');
+        // What reached the listener in that quiet time, by address only. The scenario asked
+        // for nothing, so anything here is a request a window made by itself, and it is what
+        // a count other than 0,0,0 came from (hosted run 44475639670 gave 0,1,0 and could
+        // not say which request it was).
+        const unasked = genuine.requests.slice(beforeV3).map((r) => `${r.method} ${r.url}`);
 
         const sharedRefused = await workerFetch(viaShared.win, 'sw3');
         await until(
@@ -463,7 +498,8 @@ async function runScenario(ctx) {
                 viaSocket.refusals.length === 1 &&
                 quiet === '0,0,0' &&
                 third.refusals.length === 0,
-            `before any request ${quiet}; third window told ${third.refusals.length}`
+            `before any request ${quiet} (unasked requests: ${JSON.stringify(unasked)}); ` +
+                `third window told ${third.refusals.length}`
         );
 
         let again = 'accepted';

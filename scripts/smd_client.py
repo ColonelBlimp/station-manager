@@ -38,6 +38,10 @@ import sys
 HEADER = "X-SM-Operating-Credential"
 HOST = "127.0.0.1"
 DEFAULT_APP_PORT = 8443
+# smd's own range for a given server.app_port (internal/config, operator ruling 2026-11-19):
+# smd refuses to start outside it, and this client, which reads the file for itself, refuses
+# the same values with the same words.
+MIN_APP_PORT, MAX_APP_PORT = 1024, 65535
 CREDENTIAL_CHARS = 43  # 32 bytes in unpadded base64url: the whole file (internal/desktopid)
 
 
@@ -153,8 +157,9 @@ def discover(config=None, env=None, uid=None):
     port = server.get("app_port", 0) if isinstance(server, dict) else None
     if port in (0, None) and isinstance(server, dict):
         port = DEFAULT_APP_PORT
-    if type(port) is not int or not 1 <= port <= 65535:
-        raise ClientError(f"server.app_port in {cfg_path} must be an integer from 1 to 65535")
+    if type(port) is not int or not MIN_APP_PORT <= port <= MAX_APP_PORT:
+        raise ClientError(
+            f"server.app_port in {cfg_path} must be an integer from {MIN_APP_PORT} to {MAX_APP_PORT}")
 
     data_dir = doc.get("data_dir", "")
     if data_dir == "":

@@ -124,15 +124,16 @@ test('the default layout: identity beside config.json, port 8443', () => {
     assert.ok(!opened.some((p) => p.endsWith('key.pem')), 'the shell opened key.pem');
 });
 
-test('an explicit app port, and 443 without its default port', () => {
-    assert.equal(
-        run(install({ config: { server: { app_port: 9443 } } })).got.origin,
-        'https://127.0.0.1:9443'
-    );
-    assert.equal(
-        run(install({ config: { server: { app_port: 443 } } })).got.origin,
-        'https://127.0.0.1'
-    );
+// The range is smd's own (internal/config, operator ruling 2026-11-19): a given port is from
+// 1024 to 65535, and left out or 0 it is the default. The shell reads the file for itself,
+// so it holds the same rule and says the same thing.
+test('an explicit app port: the ends of the range, and 0 for the default', () => {
+    for (const port of [1024, 9443, 65535]) {
+        const { got } = run(install({ config: { server: { app_port: port } } }));
+        assert.equal(got.ok, true, JSON.stringify(got));
+        assert.equal(got.port, port);
+        assert.equal(got.origin, `https://127.0.0.1:${port}`);
+    }
     assert.equal(run(install({ config: { server: { app_port: 0 } } })).got.port, 8443);
 });
 
@@ -140,6 +141,10 @@ test('an invalid app port is refused, never replaced by the default', () => {
     for (const bad of ['8443', -1, 70000, 1.5, null, true]) {
         const { got } = run(install({ config: { server: { app_port: bad } } }));
         assertRefused(got, 'refused', 'config.json', /server\.app_port/);
+    }
+    for (const outside of [1, 443, 1023, 65536]) {
+        const { got } = run(install({ config: { server: { app_port: outside } } }));
+        assertRefused(got, 'refused', 'config.json', /server\.app_port.*1024 to 65535/);
     }
     assertRefused(
         run(install({ config: { server: 'tcp' } })).got,
