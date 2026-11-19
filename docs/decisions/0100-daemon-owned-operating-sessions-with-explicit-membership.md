@@ -18,6 +18,9 @@ changed on 2026-11-10* summarises what was superseded and what was kept. The ses
 (inbox item 1) was independent of this ADR and has shipped (`c3826281`, W-0010 outcome 11).
 *Update 2026-11-13* records two later operator rulings that overtake parts of this text: no
 view-only browser client, and the retirement of Station Events. It changes no session rule.
+*Update 2026-11-19* records three rulings made on the build brief (W-0029): a third state in
+which a running app has no session, plain SQL in place of regenerated models, and the outcome
+of a daemon restart inside an exit.
 
 ## Context
 
@@ -650,6 +653,34 @@ still lists W-0020 at the time of writing.
 - **The build must not record session lifecycle as Station Events** (agreed by the operator,
   chat, 2026-11-13). If a durable record of session opens and closes is wanted beyond the session
   table itself, it waits for whatever replaces Station Events.
+
+## Update 2026-11-19
+
+Operator ruling (chat, 2026-11-19): "Accepted", said of the questions of the build brief in
+[W-0029](../work/W-0029-operating-sessions.md) after Codex's reviews of it. Three of them touch
+this text. The passages above are left as written.
+
+- **Setup pending: a third state with no session.** §3 names two states in which a running app
+  has no session, the recovery question and the closing phase of an archive switch. A first run
+  is a third: before setup is saved the archive has no default logbook, so there is nothing to
+  bind a session to, and the app must be admitted to reach the setup that creates one. In that
+  state the daemon opens no session and invents no logbook. The save that creates the default
+  logbook opens the first session for the current app lifetime, by §3's own rule for an attached
+  app with no session open. An absent default and an unreadable database are told apart; only
+  the first is this state.
+- **Plain SQL, not regenerated models.** *Consequences* names a sqlboiler regeneration. The new
+  tables are reached by plain SQL instead, as `contest_serial.go` already is, because the
+  session's writes are a few statements inside transactions others own. No generated file
+  changes.
+- **A daemon restart inside a confirmed exit.** If the daemon restarts after the operator has
+  confirmed the exit and before the exit is stored, **and the exiting lifetime still holds an
+  open session**, the app's exit report is refused: the restarted daemon has not admitted that
+  lifetime, and only an admitted lifetime changes a session. The app closes saying the close
+  was not confirmed, and the next start is §3's recovery: it asks Continue or New, or, for an
+  empty remnant, discards it without asking. An exiting lifetime that holds no open session is
+  not refused; its exit is recorded and acknowledged, and no session changes. This is §3's
+  unacknowledged exit, not a new outcome; the alternative weighed, the daemon completing the
+  close from its record of the holder, was not taken.
 
 ## Open questions
 

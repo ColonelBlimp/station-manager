@@ -216,6 +216,12 @@ design before code.
   station's deploy of `2.0.0~alpha.5.281.g7adb5d48` is accepted (its record, at the end of
   this dossier). The "rig went quiet" and "rig unreachable" warnings after the day's
   deploys are the rig being switched off, on the operator's word.
+- **2026-11-19 (operator): "Accepted".** Said of nine items listed for
+  [W-0029](W-0029-operating-sessions.md) (its Rulings hold the list). Two are this
+  dossier's: the database half of the downgrade tooling is removed **before** W-0029's
+  part 1, and the up migrations are **not folded** into one file; only the way down goes.
+  The plan is at the end of this dossier, for Codex's verification before anything is
+  deleted.
 
 ## Open questions for the operator
 
@@ -4422,3 +4428,118 @@ dossier".** The deploy of `2.0.0~alpha.5.281.g7adb5d48` is accepted. The two rig
 have their cause on the operator's word: the rig was off. The hosted run 44515000943 on
 7adb5d48 finished with success (read from the run: its one job, the releasability gate,
 completed with success), so the installed build is the pushed head and that head is green.
+
+### The database half of the downgrade tooling: the removal plan (2026-11-19; revised once after Codex's verification, codex-180; nothing deleted)
+
+Ruled: "remove the downgrade tooling" (2026-11-18), option (a) for its two halves, and on
+2026-11-19 that this half goes before W-0029's part 1 and that the up files are not folded
+(Rulings). The config half left with C2e. This plan is read from the tree on 2026-11-19; it
+replaces the first-pass inventory above for this half. Codex's verification (codex-180)
+found the inventory incomplete in two places and the test sorting too coarse; each point
+was checked in the source and is written in below. `scripts/rollback-drill.sh`, listed in
+the first pass, is already gone from the tree.
+
+**Outcome the operator sees.** `smd db-downgrade` is refused by name, says it was removed,
+changes nothing and starts nothing. A database at an older schema still comes up to the
+newest when it is opened. A new migration is one file, upward only.
+
+**Nearest confusable outcome.** `smd db-downgrade --to 18 --yes` **starts the daemon**: any
+argv that names no subcommand does (the reason `config-downgrade` is refused by name,
+`cmd/smd/main.go:144`). So the name is not just deleted from the table; it is refused as
+`config-downgrade` is.
+
+**Why not just leave the tooling and write no down step for 0020.** Measured by Codex and
+repeated by Claude (W-0029's return section): the library treats a missing down file as an
+empty step, so a step down "succeeds", records the lower version and leaves the newer
+tables; the next step up fails and leaves the file dirty.
+
+**What goes.**
+- `cmd/smd/db_downgrade.go` and `db_downgrade_test.go`; the `db-downgrade` entry of the
+  subcommand table becomes a refusal by name (`removedSubcommand`), the table's comment
+  (`cmd/smd/main.go:133`) says so, and its row in `provision_entry_test.go` moves from the
+  usage table to the removed-names test.
+- `internal/database/sqlite/downgrade.go` (`DowngradeLogSchemaTo` and its three refusal
+  helpers) and `downgrade_test.go`.
+- The 22 SQLite `.down.sql` files: 19 under `migrations/log`, 3 under `migrations/reference`.
+- One live comment that names the tooling: `internal/archive/bindings.go:714`.
+- The live text: `docs/install.md` ("`smd db-downgrade` is still in this build and is being
+  removed too").
+
+**What stays.** All 22 up files, **byte for byte**: the comments in 0015 and 0018 that
+describe the old way down stay as history (codex-180; this settles the first draft's
+question about 0018's comment). The guard by which a build refuses a
+`config.json` newer than it knows. SM Cloud's 8 down files and their tests
+(`internal/cloud`), which are not this tooling. History: W-0021, ADR 0082, the acceptance
+reports, left as written; W-0021 gets a dated pointer to the ruling.
+
+**The tests: three kinds, sorted function by function as the first step of the build.**
+Read so far: 17 functions call `DowngradeLogSchemaTo` (in `contest_serial_test.go`,
+`downgrade_test.go`, `identity_since_test.go`, `migration_adoption_confirmation_test.go`,
+`migration_adoption_reservation_test.go`, `migration_logbook_destination_test.go`,
+`migration_operator_event_archive_test.go`), and the test helper `migrateToVersion`
+(`service_test.go:227`, used in nine files) goes down as well as up
+(`TestMigrate0007_DownPreservesEveryPreExistingColumn`,
+`TestMigrate0008_DownDropsTableUpRestoresIt`,
+`TestMigrate0009_DownKeepsNotificationRowsAndDiscardsAlarmRows`).
+1. **An assertion about a down step or a downgrade refusal:** deleted with what it tests.
+2. **An assertion about an up step whose test reaches its starting version by going down
+   from the head** (for example `TestMigrate0015_UpgradesAFileAlreadyAt14`): kept, and its
+   start rebuilt by migrating a fresh file **up** to that version, which is how a real
+   older file got there.
+3. **A test holding both:** the upward assertions kept, the downward ones removed.
+- **The sorting is by assertion, not by a test's name (codex-180).** A test named "Down"
+  can hold upward proof. Named so far, each to be kept in its upward part:
+  `TestMigrate0013_..._DownDiscardsOnlyThem` (at the head, the two archive kinds accepted
+  as notifications and refused as alarms); `TestMigrate0009_DownKeeps...` (its tail: rows
+  surviving the way up, alarms accepted); `TestMigrate0009_RebuildKeepsTheIdHighWaterMark`
+  (an upward rebuild with an evicted high id); the 0006 and reference-0003 round trips
+  (their upward row-survival checks); for 0015, both schema-14 variants, the legacy-name
+  behaviour, the constraints and the AUTOINCREMENT proof; the partial-index and foreign-key
+  round trips (one is in `migration_origin_test.go`; the rest are found by the sorting).
+- **Two helpers the first draft missed.**
+  - `riMigrateTo` (`cmd/smd/restore_identity_test.go:808`) calls the library directly, so a
+    guard on the sqlite package's helper would not cover it. RI13 builds files at the
+    head and steps them **down** to 12 and 13 with it. Codex showed by overlay that with
+    the down files gone RI13 still passes while its fixture keeps the newer table: the
+    version marker moves and the schema does not. RI13 is kept; its files are built upward
+    from empty to 12 and 13 with fixtures of that version, keeping their archive and
+    logbook identities; it asserts the old table shape (no `logbook_destination` table)
+    before the read-only restore; and its no-migration and no-file-change assertions stay.
+  - `applyReferenceMigrationSteps` (`migration_reference_test.go:12`) is called with -1 in
+    `TestMigrate0003Reference_DownRoundTrips`. The reference set is part of this removal:
+    its upward row-survival check is kept on a real version-2 file.
+- **Every retained helper refuses to go down:** `migrateToVersion` and `riMigrateTo` (if it
+  remains) refuse a target below the file's version, and the two relative-step helpers
+  refuse a step that is not positive. Without that, once the down files are gone a test
+  that still steps down passes through an empty step and asserts on a schema that never
+  changed. This is the confusable outcome inside the test suite itself.
+- **Coverage is compared before and after by what is asserted,** not by a count of up steps
+  crossed: the fixture states and the surviving assertions on rows and values, constraints
+  and indexes, foreign keys and sequence state. The build's first step is that table,
+  function by function, put to Codex before any test is changed.
+
+**New tests, written first and seen to fail on their own assertion.**
+- `smd db-downgrade`, with and without flags, is refused naming the command as removed, and
+  no daemon starts (the shape of the `config-downgrade` test). Fails today: the command
+  runs.
+- The embedded migration sets hold no file that is not an up file. Fails today: 22 down
+  files. It is the assertion for the deletion, and it keeps a later migration from bringing
+  one back by habit.
+- A log file built at 5, at 14 and at 18 comes up to the head with rows kept. Passes today;
+  it is a characterization that must still pass afterwards, not a red test.
+
+**Reversion proofs,** in a temporary copy: removing the reserved name from the table makes
+the first test fail on the daemon marker, which is the confusable outcome itself (restoring
+the old entry alone would not compile, the function being gone); restoring one down file
+makes the second fail.
+
+**Gates.** `gofmt -l cmd internal`, `go vet ./...`, `golangci-lint`, the maintainability
+metrics, `go test ./... -count=1`, the docs and context checks. One commit, tests and
+deletion together.
+
+**Not part of this.** Folding the up files (ruled: not folded). Any new migration. The
+station: nothing is run there; the installed build changes only at the operator's next
+deploy, and its files are not touched by a build that has no way down.
+
+**Asked of Codex, and answered (codex-180).** (1) The inventory: two helpers were missing,
+now above. (2) The sorting: by assertion, now above. (3) The 0018 comment: left alone.
