@@ -541,7 +541,7 @@ The station-global archive catalogue (`config.md` §3): the archive the daemon s
 
 ### `GET /v1/app/lifetime`
 - **Purpose:** The read half of the desktop app's admission (W-0027 C4a): this process's marker, the admission generation, and whether the caller's `X-SM-App-Lifetime` is the current one. **Always-on.**
-- **Response:** **200** `{"daemon_instance": string, "generation": uint64, "current": bool}`. A request with no lifetime is never current. (The reply had a `required` field while the check could be switched off; it was removed with the switch, W-0027 C2e.)
+- **Response:** **200** `{"daemon_instance": string, "generation": uint64, "current": bool}`. A request with no lifetime is never current. After an admission answered **503** `operating_session_unavailable`, nobody reads as current until an admission succeeds, the lifetime the admission still holds included: the app then sends its admit, which completes what the failure left undone. (The reply had a `required` field while the check could be switched off; it was removed with the switch, W-0027 C2e.)
 
 ### `POST /v1/app/lifetime`
 - **Purpose:** Admit the caller's app lifetime against what it read. **Always-on.**

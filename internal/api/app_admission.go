@@ -160,10 +160,15 @@ type appAdmission struct {
 	published atomic.Uint64
 }
 
+// read answers the generation and whether the lifetime is current. While the
+// scopes are stopped after a failed session step, nobody reads as current, the
+// lifetime the admission still holds included: the app stops at a read that
+// says "current" and sends no admit (desktop/src/admission.mjs), and it is the
+// admit that completes what the failure left undone.
 func (a *appAdmission) read(lifetime string) (generation uint64, current bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.generation, lifetime != "" && lifetime == a.current
+	return a.generation, lifetime != "" && lifetime == a.current && !a.stopped
 }
 
 // admit applies the rule at the head of this file and returns the generation after it.

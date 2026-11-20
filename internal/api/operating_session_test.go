@@ -359,8 +359,11 @@ func TestOperatingSession_AFailedStepDoesNotAdmit(t *testing.T) {
 		if status, code := b.admitted(lifeB); status != http.StatusServiceUnavailable || code != "operating_session_unavailable" {
 			t.Fatalf("the replacement: %d %s; want 503 operating_session_unavailable", status, code)
 		}
-		if a, bb := b.readAdmission(t, b.c, lifeA), b.readAdmission(t, b.c, lifeB); !a.Current || bb.Current || a.Generation != 1 {
-			t.Fatalf("after the failure: A %+v, B %+v; want A still current at generation 1", a, bb)
+		// The admission still holds A, at generation 1, and has retired nobody;
+		// but with its scopes stopped A does not read as current, so its app
+		// sends the admit that repairs it.
+		if a, bb := b.readAdmission(t, b.c, lifeA), b.readAdmission(t, b.c, lifeB); a.Current || bb.Current || a.Generation != 1 {
+			t.Fatalf("after the failure: A %+v, B %+v; want neither reading as current, at generation 1", a, bb)
 		}
 		if st := b.file(lifeA); st.Open == nil || st.Open.ID != held.Session.ID || st.Generation != held.Generation {
 			t.Fatalf("the failure changed the file: %+v with %+v", st, st.Open)
@@ -551,5 +554,62 @@ func TestOperatingSession_TheReadIsOneSnapshotOfTheFileAndTheAdmission(t *testin
 		got.Session.ID != before.Session.ID || got.Session.HeldByYou != before.Session.HeldByYou {
 		t.Fatalf("the read returned %+v with %+v; want the whole state from before the close: %+v with %+v",
 			got, got.Session, before, before.Session)
+	}
+}
+
+// shellAdmits is the desktop app's own admission (desktop/src/admission.mjs,
+// admit): it reads, and if the read says it is current it stops there and
+// sends no admit. Only otherwise does it admit against what it read.
+func (b *sessionBed) shellAdmits(lifetime string) (status int, code string, posted bool) {
+	b.t.Helper()
+	read := b.readAdmission(b.t, b.c, lifetime)
+	if read.Current {
+		return http.StatusOK, "", false
+	}
+	status, code = b.admit(b.t, b.c, lifetime, read)
+	return status, code, true
+}
+
+// After a replacement failed, the earlier lifetime is still the one the
+// admission holds, but its scopes authorize nobody. Its read must not say
+// "current" then: the app stops at a read that says so and never sends the
+// admit that would repair it, and would believe itself admitted while FT8
+// refused its commands (the clean-room review of a8317035).
+func TestOperatingSession_AfterAFailedReplacementTheAppsOwnFlowRepairsIt(t *testing.T) {
+	b := newSessionBed(t, true)
+	b.mustBeAdmitted(lifeA)
+	held := b.view(lifeA)
+	restore := b.failSessionWrites()
+	if status, _ := b.admitted(lifeB); status != http.StatusServiceUnavailable {
+		t.Fatalf("the replacement: %d; want 503", status)
+	}
+	wantScopes(t, b, "after the failure", "retire", "publish "+lifeA, "retire")
+	if st := b.readAdmission(t, b.c, lifeA); st.Current || st.Generation != 1 {
+		t.Fatalf("the earlier lifetime reads %+v while its scopes are stopped; want not current, generation 1", st)
+	}
+
+	// While the file still fails, the app's flow does send its admit, and is told so.
+	if status, code, posted := b.shellAdmits(lifeA); !posted || status != http.StatusServiceUnavailable || code != "operating_session_unavailable" {
+		t.Fatalf("the app's flow while the file fails: %d %s, admit sent %v; want a 503 from an admit", status, code, posted)
+	}
+
+	restore()
+	if status, code, posted := b.shellAdmits(lifeA); !posted || status != http.StatusOK {
+		t.Fatalf("the app's flow after the fault is removed: %d %s, admit sent %v; want an admit that succeeds", status, code, posted)
+	}
+	wantScopes(t, b, "after the app's own flow", "retire", "publish "+lifeA, "retire", "publish "+lifeA)
+	if st := b.readAdmission(t, b.c, lifeA); !st.Current || st.Generation != 1 {
+		t.Fatalf("after the repair the lifetime reads %+v; want current at generation 1", st)
+	}
+	if v := b.view(lifeA); v.Session == nil || v.Session.ID != held.Session.ID || !v.Session.HeldByYou {
+		t.Fatalf("the repair changed the session: %+v with %+v", v, v.Session)
+	}
+	// Repaired, the flow stops at its read again and nothing more is published.
+	if _, _, posted := b.shellAdmits(lifeA); posted {
+		t.Fatal("the app's flow sent an admit though the lifetime reads current")
+	}
+	wantScopes(t, b, "after a further flow", "retire", "publish "+lifeA, "retire", "publish "+lifeA)
+	if status, code := b.admitted(lifeB); status != http.StatusOK {
+		t.Fatalf("a later replacement: %d %s", status, code)
 	}
 }

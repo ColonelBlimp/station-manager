@@ -9,8 +9,9 @@
 and committed with this text: a cheaper fixture for the session tests. **Part 2's acceptance
 criteria are at the end of this file; their six questions are ruled (2026-11-20) and Codex
 has no remaining objection to them (codex-194). Part 2's first slice, the start step in
-the admission, the read route and the event, is built and committed with this text (at the
-end of this file); setup's save and the exit report are not built.** The removal of the database half of
+the admission, the read route and the event, is committed (`a8317035`), with one fix from
+its clean-room review committed with this text (at the end of this file). Setup's save and
+the exit report are not built.** The removal of the database half of
 the downgrade tooling, which part 1 waited for, is committed (`0b21b2fb`, 2026-11-20; W-0027).
 **Part 1's acceptance criteria are written, their three questions ruled, and agreed with
 Codex after one round of corrections (2026-11-20).** The
@@ -1287,7 +1288,7 @@ lock, after the scopes are stopped and before the lifetime is published.
    | The failed admission was | Current lifetime | Admission generation | Retired | The file | Scopes |
    |---|---|---|---|---|---|
    | the first in this process | none, as before | unchanged | nothing | unchanged, session generation included | authorize nobody, as before |
-   | a replacement of A by B | A, as before | unchanged | nothing | unchanged | stopped: they authorize nobody, A included |
+   | a replacement of A by B | A is still the lifetime the admission holds, and is not retired; **its read says "not current"** while the scopes are stopped | unchanged | nothing | unchanged | stopped: they authorize nobody, A included |
    | a repeat by the current lifetime, completing an earlier failure | that lifetime, as before | unchanged | nothing | unchanged | still stopped |
 
    - **Recovery, once the file can be read and written:** B admits again and is admitted:
@@ -1511,7 +1512,7 @@ start node to part 3 as an explicit departure. On 5, the strict save is reasonab
 its repeat is shown to work (C5). On 6, reasonable with the three limits in G6. On each
 Codex and I recommend the same.
 
-### Part 2, first slice: the start step in the admission, the read route, the event (2026-11-20; built, committed with this record)
+### Part 2, first slice: the start step in the admission, the read route, the event (2026-11-20; committed `a8317035`)
 
 Groups A, B, D and F of part 2's criteria. Setup's save (C) is the next slice, then the
 exit report (E) with the order's forced cases (G). Built under the operator's direction of
@@ -1604,3 +1605,43 @@ nothing in part 2 seals the live-entry gate, so the gap Codex found is not open.
 
 **Not shown.** Nothing was run at the station. That publishing the scopes arms nothing is
 the scopes' existing contract; it is not asserted again here.
+
+### Part 2, first slice: a fix from its clean-room review (2026-11-20; built, committed with this record)
+
+**The finding (P2), which is right.** After a replacement fails on the session's record,
+the admission still holds the earlier lifetime A while FT8 authorizes nobody. The criteria
+(B4) promise that A's own admission then repairs it. But the desktop app does not send an
+admit when its read says it is current: it reads, and stops there
+(`desktop/src/admission.mjs`, `admit`). The read said "current" for A, so the app would
+have believed itself admitted while FT8 refused its commands. My recovery test sent the
+admit directly and so never met the app's read.
+
+**The fix.** While the scopes are stopped after a failed step, the read says "not current"
+for everyone, A included. A's app therefore sends its admit, which completes the step and
+publishes the scopes to it; after that its read says "current" again and the flow stops at
+the read as before. The admission's memory is as the criteria say: A is still held, nothing
+is retired, the generation has not moved. B4's table is reworded for it.
+
+**Seen.** A new test follows the app's own flow (read; admit only if the read does not say
+current) through a failed replacement. Before the fix it failed at once: "the earlier
+lifetime reads ... Current:true while its scopes are stopped". After it: while the file
+still fails the flow sends its admit and gets the 503; once the fault is removed the flow
+sends its admit, succeeds, and the scope records the publication to A; a further flow
+stops at the read and publishes nothing; a later replacement by B still works. One
+assertion of the earlier test, which required A to read as current after the failure, is
+changed to match. Gates rerun: the same set, 66 packages ok, the slice's tests under
+`-race`.
+
+**Two things Codex adds for the next slices (codex-197), taken.**
+- The read's "current" now also means the scopes are published. It is an answer for the
+  app, not the admission's own fact. Setup's save and the exit decide from the lifetime the
+  admission holds, under its lock, and must not take "reads as not current" for retired or
+  absent.
+- Nothing tells an app that is already loaded that a replacement failed: the marker and
+  generation on its responses are unchanged. The repair happens at its next admission
+  attempt, which is what the criteria promise.
+
+**How reachable it was.** A replacement happens because a new start of the app admits, and
+the app is single-instance, so the earlier app is normally gone and it is the new one that
+tries again; that path was already right. The fix is for the case the criteria name, the
+earlier lifetime returning.
