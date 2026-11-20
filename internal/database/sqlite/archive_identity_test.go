@@ -7,9 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
-	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
@@ -186,26 +184,9 @@ func testFileService(t *testing.T) (*Service, string) {
 // a test that needs a file at an older version builds it up from here.
 func testFileServiceWithoutMigrations(t *testing.T) (*Service, string) {
 	t.Helper()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "db", "log.db")
-	cfg := config.DefaultConfig(dir)
-	cfg.Datastore.Path = path
-	cfg.Logging.FileLogging = false
-	cfgSvc := config.New(cfg)
-	if err := cfgSvc.Initialize(); err != nil {
-		t.Fatalf("config init: %v", err)
-	}
-	logSvc := &logging.Service{ConfigService: cfgSvc, WorkingDir: cfgSvc.WorkingDir()}
-	if err := logSvc.Initialize(); err != nil {
-		t.Fatalf("logging init: %v", err)
-	}
-	svc := &Service{ConfigService: cfgSvc, LoggerService: logSvc}
-	if err := svc.Initialize(); err != nil {
-		t.Fatalf("sqlite init: %v", err)
-	}
-	svc.SetMigrationSets(MigrationSetLog)
-	if err := svc.Open(); err != nil {
-		t.Fatalf("sqlite open: %v", err)
+	svc, logSvc, path, err := openFileServiceIn(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = svc.Close(); _ = logSvc.Close() })
 	return svc, path

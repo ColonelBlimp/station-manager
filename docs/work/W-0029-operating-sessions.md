@@ -5,8 +5,10 @@
 "start the ADR 0100 brief"), reviewed by Codex in five rounds, and **its questions are ruled
 (operator, 2026-11-19: "Accepted")**. Part 1's first slice, the migration and the default epoch, is committed (`62218133`,
 2026-11-20), and so is its second, the transitions, the state read and the contention tests
-(`6f2b4e27`). Built and uncommitted: one fix to the second slice from its clean-room review
-(at the end of this file). The removal of the database half of
+(`6f2b4e27`), with two fixes from its reviews (`93a743f8`). **Part 1 is complete.** Built
+and committed with this text: a cheaper fixture for the session tests. **Part 2's acceptance
+criteria are at the end of this file; their six questions are ruled (2026-11-20) and Codex
+has no remaining objection to them (codex-194). Nothing of part 2 is built.** The removal of the database half of
 the downgrade tooling, which part 1 waited for, is committed (`0b21b2fb`, 2026-11-20; W-0027).
 **Part 1's acceptance criteria are written, their three questions ruled, and agreed with
 Codex after one round of corrections (2026-11-20).** The
@@ -101,6 +103,31 @@ next part starts.
   fixed, the build may start without a further direction. A disagreement, or a finding that
   changes one of these three rulings, comes back to the operator. The commit is still the
   operator's to direct.
+- **2026-11-20 (operator): "make the fixture change, then write part 2's criteria".** Both
+  are directed. No build of part 2 is.
+- **2026-11-20 (operator): "All six accepted, consensus is a go, commit and push".** Said
+  after Claude listed, in chat, the six questions at the end of part 2's acceptance
+  criteria with a recommendation for each. Each is ruled as recommended:
+  1. **The file cannot be read when the app starts:** the app is not admitted and stays on
+     its waiting page, FT8 left stopped, until an admission succeeds.
+  2. **The wait for unfinished FT8 logging at app start** is built with part 5, before
+     contacts join sessions, not in part 2.
+  3. **One event,** `operating_session.changed`, carrying the archive and the new
+     generation; windows read the state again.
+  4. **The default-epoch test at daemon start** is added with part 3, not in part 2.
+  5. **Setup's first save fails if it cannot open the session;** the save is made again.
+     Recording the default logbook in the archive file is a requirement of that save.
+  6. **An exit or an app start that meets a default change or an archive switch in
+     progress** is ordered against it, not refused, and leaves its seals alone. Two archive
+     operations still refuse each other; a daemon restart before the exit is stored still
+     leaves the close unconfirmed.
+  - **"Consensus is a go"** is now said of part 2 as it was of part 1. Claude's reading,
+    as before and not the operator's words: the build of part 2 may start once Codex and
+    Claude agree on the criteria as ruled, with every finding fixed; a disagreement, or a
+    finding that would change one of these six, comes back to the operator; commits stay
+    the operator's to direct.
+  - **"Commit and push"** is of the session tests' fixture, the two test fixes and this
+    dossier.
 
 The design's own rulings are in ADR 0100 and are not repeated here.
 
@@ -968,8 +995,9 @@ from the one before:
 - reading the state first, then writing after another connection has committed: refused
   with "database is locked (517)", SQLite's stale-snapshot refusal;
 - taking the writer's position first: the other connection's write is refused at once
-  with a busy limit of zero, refused after 301 ms with a limit of 300 ms, and goes through
-  once the holder has committed. Both writes are counted.
+  with a busy limit of zero, refused again with a limit of 300 ms (after 301 ms in one run
+  and 182 ms in another; the time is logged and not asserted), and goes through once the
+  holder has committed. Both writes are counted.
 
 **The forced cases, and why they were rebuilt (codex-187).** My first version started the
 second transaction, slept 150 ms and then looked. Codex showed, with a build overlay, that
@@ -1067,7 +1095,7 @@ to watch its busy handler), so the cases now stand where the busy handler stands
   loss was simulated.
 - Nothing was run at the station.
 
-### Part 1, second slice: a fix from its clean-room review (2026-11-20; built, uncommitted)
+### Part 1, second slice: two fixes from its reviews (2026-11-20; committed `93a743f8`)
 
 **The finding (P2), which is right.** The review of `6f2b4e27` read New and Continue and
 found that a recorded exit did not stop them. A lifetime at the recovery question holds no
@@ -1114,3 +1142,369 @@ already open keeps the holder it has.
 **What part 2 still owes.** This closes the case the file can see. A lifetime that is not
 current and has no recorded exit (one an archive switch or a daemon restart left behind)
 is still part 2's to refuse, by the admission.
+
+### The session tests' fixture (2026-11-20; built, committed with this record)
+
+On the operator's direction ("make the fixture change, then write part 2's criteria"),
+after both agents recommended it.
+
+**Why.** Hosted run 44688068888 took 755.6 s for `internal/database/sqlite` under the race
+detector, against 485.5 s before the second slice; the limit is 20 minutes for a test
+binary. Each session test built its own file and ran every log migration.
+
+**The change, to test code only.** One log database is migrated once by the real Service
+and closed, so its main file is the whole database (a template whose write-ahead file
+survives is refused). Its bytes are kept, and its scratch directory removed. Each session
+bed writes those bytes to a file of its own and opens it through the real Service. The
+migration tests, and every helper that stops at an older version, still run the
+migrations.
+
+**Codex's terms (codex-191), each met.**
+- Nothing a test can change is shared: `TestSessionBeds_ShareNothing` fills one bed and
+  finds a second empty, with its own archive identity and logbook uuids, the first bed
+  unchanged and the template's bytes unchanged.
+- The template is what the migrations make: `TestMigratedTemplate_IsWhatTheMigrationsMake`
+  compares a copy's schema with a file migrated in the test, and checks the head, not
+  dirty, and no row in any table a bed fills.
+- The contention tests are untouched: a real file, separate connections, the observed
+  refusals.
+- Both new tests bite, in a temporary copy since removed: every bed put on one file, the
+  first fails; a template with an index dropped, the second fails.
+- The same assertions pass, under the race detector too; no limit is raised and nothing is
+  run in parallel.
+
+**Measured here, under the race detector, before and after.**
+
+| | Before | After |
+|---|---|---|
+| the session tests | 48.1 s, 48.0 s | 9.6 s, 8.5 s (with the two new tests) |
+| the whole package | 224.5 s | 185.3 s, 183.6 s |
+
+- The hosted figure for the package with this change is not known until a run includes it.
+  Hosted times vary: the run on `93a743f8` took 571.9 s for the same package that took
+  755.6 s one commit earlier with fewer tests.
+- **What is left is not the session tests.** They now total about 7 s of the package's 184.
+  Of its 317 tests, 249 take 0.4 s or more under the race detector, each migrating a
+  database of its own in memory. Making those cheaper is a wider change, to tests this work
+  did not write; not started, and named here so it is not lost.
+
+**Two tests of mine made independent of timing, found while measuring.**
+- The busy-handler measurement asserted that a refusal under a 300 ms limit took at least
+  200 ms. In one whole-suite run it took 182 ms and the test failed. The assertion is
+  gone; the time is logged. That assertion was in `6f2b4e27` and `93a743f8` as pushed; the
+  hosted run on `93a743f8` happened to pass. I have not established why the wait was
+  shorter than its limit.
+- The snapshot test failed if fewer than fifteen reads ran beside its writes, which
+  depended on scheduling. The writer now goes on until the reader has made 200 reads, and
+  the reader until the writer has made 60 commits. With the state read made three separate
+  reads it still fails, five runs of five.
+
+**Gates, by exit code:** `gofmt`, `go vet`, `golangci-lint` (0 issues), the maintainability
+metrics, `go test ./... -count=1` twice (66 packages ok each time), the package under
+`-race -short`.
+
+### Part 2: acceptance criteria (2026-11-20; its six questions ruled; agreed with Codex, codex-194; nothing built)
+
+Codex's review (codex-192) found two gaps and asked for two things to be completed, each
+checked in the source and taken: the one order left out the default change and the
+activation, which exist today and seal the same gate an exit seals (G); setup's save was
+allowed to succeed with no session, a state nobody had ruled and nothing recovered from
+(C, question 5); what the admission is after a failed step, and what restores it, was not
+said (B4); and the exit lacked the cross-archive case and the evidence for its drain (E).
+Its next review (codex-193) accepted those and found that the repeat of a failed setup
+save, which the revision relied on, does not work when the configuration names a logbook
+id other than the one allocated; C5 and G6 are revised for it, and its last review
+(codex-194) has no remaining objection. Codex adds one caution for the build, taken: the
+three ways C5 names of recovering the earlier logbook are alternatives to assess against
+all three failure points, not each a complete answer; whichever is chosen must leave
+logbooks that were already there alone.
+
+On the operator's direction ("make the fixture change, then write part 2's criteria").
+Read against ADR 0100 §3 and §5, the brief's proposals A, C, D and H, part 1 as committed,
+and `internal/api/app_admission.go`, `live_entry.go`, `internal/events` and
+`cmd/smd/lifecycle_adapters.go` as they stand. "Proposed" marks what the ADR and the brief
+leave open. The questions at the end are the operator's.
+
+**What part 2 is.** The daemon begins to use the record of part 1:
+- the session's start step, inside the app's admission;
+- setup's save opening the first session;
+- one read route for the session state;
+- the exit report, with the brief's exit protocol;
+- the events;
+- the API reference.
+
+It has no membership (part 5), no New or Continue route (parts 4 and 6), no archive-switch
+work (part 3) and no change to the UI.
+
+**What the operator sees.** Nothing new in the workspace. Underneath, starting the app
+opens a session. No contact joins one yet, so every session is empty. The app sends no
+exit report until W-0027 A3, so each start finds the previous start's empty session,
+discards it and opens another; no question can be asked. **One thing can show:** the
+admission now reads the archive file. If the file cannot be read, the app stays on its
+waiting page instead of opening the workspace (ADR 0100 §3: an unreadable state is never
+treated as a clean exit). Today the admission cannot fail that way.
+
+**Nearest confusable outcome.** The read route reports a session and looks right, while
+the admission and the file disagree: a current lifetime with no session outside the named
+states; a session held by a lifetime that is not current; two sessions opened for one
+start; an exit acknowledged whose session stayed open. Every criterion is judged on the
+file's rows and the admission's state together, through the real routes.
+
+**A. A daemon restart.**
+1. An ordinary restart, on the same archive and the same default, changes no session row.
+   The same app, admitted again by the new process, holds the session it held (ADR 0100
+   §3). A restart that applies a default change is not this case: the admission's
+   default-epoch test then closes the session of the earlier default and opens one for the
+   new.
+2. A new process takes no lifetime as current, and gives no session to one, without an
+   admission.
+
+**B. The start step, inside the admission** (proposal A). It runs under the admission's
+lock, after the scopes are stopped and before the lifetime is published.
+1. **A recorded exit comes first.** A lifetime whose exit is recorded in the served file is
+   answered `app_lifetime_retired`, as a lifetime replaced in this process is today, before
+   any scope is stopped. The current app, its scopes and every session are untouched. This
+   holds across a daemon restart, which forgets the in-memory retirement.
+2. **Each row of the step's table, through the real route, read back from the file:**
+
+   | The file holds | The admission answers | Stored after |
+   |---|---|---|
+   | no default logbook | admitted | no session ("setup pending") |
+   | an open session held by this lifetime | admitted | nothing changes |
+   | an open session of another lifetime, with a member | admitted | nothing changes; this lifetime holds none ("recovery pending") |
+   | an open session of another lifetime, empty | admitted | that one removed, a new one held by this lifetime |
+   | no open session | admitted | a new one held by this lifetime |
+
+   The third row cannot arise at the station before part 5; it is tested with member rows
+   put in by the test.
+3. **Twice is once.** The same admission repeated, and a repeat after a lost answer, leave
+   what one leaves: never a second session.
+4. **If the step fails, the lifetime is not admitted** (proposed, question 1). The answer
+   is an error, not a success. What is true afterwards, in each case:
+
+   | The failed admission was | Current lifetime | Admission generation | Retired | The file | Scopes |
+   |---|---|---|---|---|---|
+   | the first in this process | none, as before | unchanged | nothing | unchanged, session generation included | authorize nobody, as before |
+   | a replacement of A by B | A, as before | unchanged | nothing | unchanged | stopped: they authorize nobody, A included |
+   | a repeat by the current lifetime, completing an earlier failure | that lifetime, as before | unchanged | nothing | unchanged | still stopped |
+
+   - **Recovery, once the file can be read and written:** B admits again and is admitted:
+     A is retired, B is current, the session step has run and the scopes are published to
+     B. Or, if it is A that returns, its admission must not answer success and leave the
+     scopes authorizing nobody: **an admission by the current lifetime completes whatever a
+     failed step left undone**, the session step and the scopes' publication, and changes
+     nothing when nothing was left undone. Today that repeat returns at once
+     (`app_admission.go`, `admit`); this is the one change to it.
+   - **Publishing is not arming.** After recovery TX is disarmed and stays so until the
+     operator arms it.
+5. **What the admission answers today is unchanged** for a repeat, a stale read and a
+   replaced lifetime: its existing tests pass as they are.
+
+**C. Setup's first save.**
+1. A save that answers success while a lifetime is current has left a session open for
+   that lifetime, bound to the new default logbook (question 5 is what happens when it
+   cannot).
+2. It takes the one order from the admission's lock and checks there that the lifetime is
+   still current and has no recorded exit. A save that meets a replacement or an exit
+   opens nothing for a lifetime that has gone.
+3. A save with no current lifetime opens nothing; the next admission opens the session.
+4. **If the session cannot be opened, the save does not succeed** (proposed, question 5).
+   The session is opened after the default logbook exists and is recorded in the file, and
+   before the configuration is committed. A failure there answers an error and setup is
+   not complete.
+5. **The save can be made again, by the same lifetime, and then completes.** No new
+   lifetime and no restart is needed. Three places it can fail after the logbook was made,
+   each tested for what is stored after the failure and after the repeat:
+   - recording the default in the archive file fails;
+   - the session open fails;
+   - the configuration commit fails (the session is then open and setup incomplete).
+
+   After the repeat in each: exactly one default logbook, the file's pointer on it, the
+   configuration naming it, setup complete, and one session held by the lifetime.
+   - **The fixture must have the configuration name a logbook id other than the one the
+     database allocates** (codex-193). Today's helper looks the logbook up by the id the
+     configuration names and inserts a new one when that id is absent
+     (`seedDefaultLogbook`); the configuration learns the allocated id only at its commit.
+     So after a failure before that commit, a repeat looks up the old id again, finds
+     nothing, and its insert of a second "Default" is refused as a duplicate name: Codex
+     reproduced it. With equal ids the repeat happens to work, which is what my first
+     reading saw.
+   - **The repeat must not find the logbook by the configured id alone, nor by its name
+     alone.** How the earlier logbook is recovered or undone is for the build to choose and
+     show: taking the file's own default pointer as the authority where it is set; making
+     the logbook and recording the pointer one transaction, so a failure leaves neither;
+     or removing the logbook just made when a later step fails. No operator decision is
+     needed to choose between them.
+
+**D. The read route.** `GET /v1/operating-session` (the name is proposed, with H).
+1. It returns one snapshot: the archive's identity, the generation, and the open session
+   if any: its identity, its logbook, when it opened, when the current sitting started,
+   whether it has contacts, and whether the caller's lifetime holds it. It names the
+   state for the caller: open, setup pending, recovery pending, or none.
+2. Proposed: it says "held by you", and does not give another lifetime's label.
+3. It changes nothing, whatever lifetime asks, or none: the file reads the same after.
+4. A failed read is an error. It is never an empty session (proposal F).
+
+**E. The exit report.** `POST /v1/operating-session/exit` (name proposed), naming the
+lifetime, the generation it expects and the archive. Nothing sends it until W-0027 A3; the
+tests do. **The archive is checked only for a current lifetime.** The route is not behind
+the guard that refuses every request naming another archive: a closing app whose archive
+was switched under it names the old one, and must still reach cases 1 and 7.
+1. **Its exit is already recorded:** acknowledged. Nothing changes and no scope is
+   stopped, whoever is current and whatever generation is named.
+2. **It is the current lifetime:**
+   - a wrong archive or a stale generation at the first check is refused, and nothing has
+     been sealed: the scopes and the live-entry gate are as they were;
+   - then every scope is sealed and stopped, and the live-entry gate sealed. A Phone/CW
+     submit admitted before the seal is stored; one arriving after is refused with the
+     gate's own code and nothing is logged;
+   - then the FT8 completion jobs already earned finish. None is cancelled, and none
+     launched before the seal escapes the wait. The tests read the stored QSO and its
+     upload rows: a job seen to finish is not a contact stored. A completion whose write
+     fails stores nothing and does not block the exit;
+   - then one commit: the exit recorded and, if it holds the open session, that session
+     closed (removed while sessions are empty). If it holds none, only the exit;
+   - then the lifetime is retired in the admission, the gate released, the event
+     published, and the answer given.
+3. **It is refused as stale at the commit** (the generation moved after the first check):
+   the gate is released and the lifetime published to its scopes again; the answer carries
+   the current generation. The same lifetime may repeat its exit at that generation,
+   without admitting again. This is the exit's exception only.
+4. **A failure or a cancellation before the commit:** the gate released, the lifetime
+   published to its scopes again, an error. The exit is not confirmed.
+5. **After the commit nothing restores operation under that lifetime.** A lost answer is
+   met by a repeat (case 1) or by "retired" at its next admission, across a daemon restart
+   too.
+6. **It is not current and holds the open session:** refused with a code of its own,
+   terminal. Nothing changes (operator ruling 2026-11-19, question 9).
+7. **It is not current and holds none:** recorded and acknowledged. No scope is stopped,
+   no gate sealed, no session changed.
+8. A late report from a replaced lifetime never closes the current lifetime's session.
+9. **The exit whose answer was lost, after the archive was switched** (the brief, C): an
+   exit commits in archive A and its answer is lost; a caller with no lifetime switches
+   the daemon to B; the closing app, which never admits again, repeats its exit, naming A.
+   In B it is not current and holds none: its exit is recorded in B's file and
+   acknowledged, and B's session and its holder are untouched. Tested through the real
+   route, with the old archive's header on the request.
+
+**F. The events,** on the shell's event stream.
+1. Proposed (question 3): one event, `operating_session.changed`, carrying the archive and
+   the new generation. A window that sees a generation above its own reads the state
+   again. No session detail travels in the event.
+2. One for each advance of the generation, in order, published after the commit.
+3. None for a transition that was rolled back, or that changed nothing.
+4. A refused control whose default-epoch test closed a session did advance the generation,
+   and is published.
+5. Nothing is recorded as a Station Event (ADR 0100, Update 2026-11-13). The UI does not
+   listen yet (part 6).
+
+**G. The one order.** The admission's lock, then a scope's gate, then the live-entry gate,
+then the writer's position in the file. An admission, an exit and setup's session open
+each start at the admission's lock. **A default change and an archive activation exist
+today, take seals of their own, and are part of this order now** (the brief lists both;
+codex-192). What is true in the source: a default change seals FT8, the rig and the
+live-entry gate under the archive manager's single flight, not the admission's lock; the
+live-entry gate is one closed flag, and its release reopens it whoever sealed it
+(`internal/api/live_entry.go`). So an exit that sealed a gate a default change had already
+sealed would, on finishing or failing, reopen live entry under the default change.
+1. An admission of a lifetime against its own exit, in both orders, through the real
+   handlers: it ends retired and holding no session.
+2. An admission of a second lifetime while the first's exit is between its seal and its
+   commit: the exit finishes first; the second is then admitted and gets a new session.
+3. Setup's save against a replacement: the session belongs to the lifetime that is current
+   when the step runs, or to none.
+4. Setup's save against an exit of the same lifetime, in both orders: a session opened is
+   closed by the exit that follows it; an exit first means the save opens nothing for it.
+5. **No operation releases another's seal.** A default change holds its seals, the time
+   after its restart request has returned included; an exit then seals, commits and
+   releases: live entry is still closed and TX admission still sealed. And the other
+   order: an exit is between its seal and its commit when a default change is asked for;
+   when the exit releases, the default change's seals hold. The same for the seals an
+   activation takes, and for the exit's failure path, which publishes the lifetime to its
+   scopes again: that must not undo a seal another operation holds.
+6. **They are ordered, not interleaved.** Proposed (question 6): an exit or an admission is never
+   refused because a default change or an activation is in flight; it is ordered against
+   it and takes effect without touching its seals. A default change or an activation asked
+   for while an exit, an admission or setup's open is under way waits for it. Three limits
+   on that, from Codex's review (codex-193):
+   - **Two archive operations still refuse each other as today,** the second also when the
+     first is itself waiting behind an exit. An exit and an admission are ordered with
+     them without becoming an archive operation; putting everything behind one blocking
+     lock would queue the second request and change its answer.
+   - **A seal kept after its request has returned is not waited for.** A default change
+     answers with live entry still closed until the restart; an exit in that time goes
+     ahead and releases only what it sealed itself (G5). Waiting for that seal to go would
+     be waiting for the restart.
+   - **"Not refused" is not a promise of an acknowledgement.** If the daemon restarts
+     before the exit is stored, the ruled answer still applies afterwards: a lifetime that
+     is not current and holds the open session is refused.
+7. These are forced by holding one at a seen point and observing the other shut out, as
+   part 1's contention tests now are. None sleeps and then looks.
+
+**H. What part 2 must not do, and the reference.** No member row is written. No New or
+Continue route. No session is closed or opened at an archive switch (part 3); the
+coordination with the existing default change and activation in G is in scope. No Station
+Event. No UI change.
+`docs/v2-design/api-endpoints.md` gains the two routes, the event and the codes in the
+same change.
+
+**Evidence.** Tests first, through the API test server and its real routes, with a clock
+the test sets. Reversion proofs in temporary copies. The usual gates. No transmission,
+keyed test or rig command: the scopes are stopped against the test keyer.
+
+**Proposed slices.** First the start step in the admission, setup's save, the read route
+and the event (A to D, F). Then the exit report (E) with the order's forced cases (G).
+
+**Left to later parts, named so they are not lost.**
+- The wait for earned completion work before a remnant is judged empty (the brief's row
+  for an empty remnant). Question 2. **Owed by part 5, and before membership reaches the
+  station:** deferring it is not leave to omit it.
+- The default-epoch test as a start node of its own (ADR 0100 §4). Question 4. **Owed by
+  part 3,** as a named temporary departure from the ADR.
+- A window's baseline: the event stream replays nothing, so a consumer reads the state on
+  connecting and on reconnecting, and compares generations only within the archive the
+  event names (part 6).
+- The list for Continue and the New and Continue routes (parts 4 and 6).
+- The shell sending the exit, and repeating it after a stale answer (W-0027 A3).
+
+**Questions for the operator. All six ruled 2026-11-20, each as recommended (Rulings,
+above).**
+1. **If the session cannot be opened at admission** (the file cannot be read or written): I
+   recommend the app is not admitted and stays on its waiting page, with FT8 left stopped,
+   and nothing else changed. The other choice is to admit it with no session and let the
+   workspace open, which hides a broken database behind a working screen.
+2. **The wait for FT8 completion work at admission.** The brief has the admission wait for
+   an earlier app's unfinished logging before it discards an empty session. Until part 5
+   no contact joins a session, so the wait cannot change anything. I recommend building it
+   with part 5, where it matters, and not now.
+3. **The event's shape.** I recommend one event that says "the session state changed, here
+   is the new generation", and windows read the state again. The other choice is a named
+   event for each kind of change, each carrying session details, which is more to keep
+   right and gives a window nothing the read does not.
+4. **The default-epoch test at daemon start.** ADR 0100 names a start node for it. Every
+   session transaction and the admission itself already run the test, so before part 3
+   the node would close a session only a moment earlier than the admission does. I
+   recommend adding it with part 3, whose arrival close needs a start node anyway.
+5. **If setup's save cannot open the session** (found by Codex; my first draft let the
+   save succeed without one). I recommend the save fails: it answers an error, setup is
+   not complete, and you save again, which reuses the logbook already made. Success then
+   always means a session is open. This also makes recording the default logbook in the
+   archive file a requirement of that save, where today a failure there is only logged.
+   The other choice is to let the save succeed and name a new state, "no session though
+   setup is done", with something that retries; I could not name a retry that does not
+   need a restart or a new start of the app.
+6. **An exit or an app start that meets a default change or an archive switch in
+   progress** (G6). Today a second archive operation is refused while one is in flight. I
+   recommend an exit and an app start are not refused that way: they are ordered against
+   it and leave its seals alone. A refused exit would leave the close unconfirmed, and once
+   contacts join sessions that brings the Continue-or-New question back at the next start
+   for no fault of yours. Two archive operations would still refuse each other as now. And
+   if the daemon restarts before the exit is stored, the close is still unconfirmed, as
+   you ruled on 2026-11-19.
+
+**Codex's recommendations (codex-192, codex-193), which are not rulings:** on 1 to 4, refuse
+the admission, once B4 says how it recovers; defer the completion wait only while
+membership is unwired; one event is enough, provided consumers read a baseline; defer the
+start node to part 3 as an explicit departure. On 5, the strict save is reasonable once
+its repeat is shown to work (C5). On 6, reasonable with the three limits in G6. On each
+Codex and I recommend the same.

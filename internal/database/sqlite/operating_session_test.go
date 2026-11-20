@@ -43,7 +43,7 @@ type sessBed struct {
 
 func newSessBed(t *testing.T, withDefault bool) *sessBed {
 	t.Helper()
-	svc, _ := testFileService(t)
+	svc, _ := testMigratedFileService(t)
 	ctx := context.Background()
 	b := &sessBed{t: t, svc: svc}
 	var err error
@@ -407,7 +407,7 @@ func TestOperatingSession_Open_SetupPendingAndUnreadableAreToldApart(t *testing.
 		b.unchanged("an open with a deleted default", func() { b.open(lifeA, 0, SessionSetupPending) })
 	})
 	t.Run("no identity row is an error, not setup pending", func(t *testing.T) {
-		svc, _ := testFileService(t)
+		svc, _ := testMigratedFileService(t)
 		_, got, err := svc.OpenOperatingSessionWithContext(context.Background(), lifeA, at(0))
 		if err == nil {
 			t.Fatalf("a file with no identity row answered %q; want an error", got)
@@ -1101,44 +1101,59 @@ func TestOperatingSession_TheGenerationOnlyClimbs(t *testing.T) {
 
 // While News commit on another connection, every state read must belong to
 // one generation: the session open at generation g was opened at minute g.
+// The writer goes on until the reader has read enough and the reader until the
+// writer has committed enough, so neither count depends on how the two happen
+// to be scheduled.
 func TestOperatingSession_TheStateReadIsOneSnapshot(t *testing.T) {
 	b := newSessBed(t, true)
 	st := b.open(lifeA, 1, SessionApplied) // generation 1, opened at minute 1
-	const rounds = 150
+	const wantReads, wantCommits = 200, 60
+	var commits, reads atomic.Int64
+	stop := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
 		g := st.Generation
-		for i := 0; i < rounds; i++ {
+		for {
+			select {
+			case <-stop:
+				done <- nil
+				return
+			default:
+			}
 			next, outcome, err := b.svc.NewOperatingSessionWithContext(context.Background(), lifeA, g, at(int(g)+1))
 			if err != nil || outcome != SessionApplied {
 				done <- fmt.Errorf("New at generation %d: outcome %q, err %v", g, outcome, err)
 				return
 			}
 			g = next.Generation
+			commits.Add(1)
 		}
-		done <- nil
 	}()
-	reads := 0
-	for {
+	deadline := time.Now().Add(enough)
+	for reads.Load() < wantReads || commits.Load() < wantCommits {
 		select {
 		case err := <-done:
-			if err != nil {
-				t.Fatal(err)
-			}
-			if reads < rounds/10 {
-				t.Fatalf("only %d reads ran beside %d transitions; the test proved little", reads, rounds)
-			}
-			return
+			t.Fatalf("the writer stopped early: %v", err)
 		default:
+		}
+		if time.Now().After(deadline) {
+			close(stop)
+			t.Fatalf("timed out after %d reads and %d commits", reads.Load(), commits.Load())
 		}
 		read, err := b.svc.OperatingSessionStateWithContext(context.Background(), lifeA)
 		if err != nil {
+			close(stop)
 			t.Fatalf("read: %v", err)
 		}
-		reads++
+		reads.Add(1)
 		if read.Open == nil || !read.Open.OpenedAt.Equal(at(int(read.Generation))) || !read.Open.IntervalStartedAt.Equal(at(int(read.Generation))) {
+			close(stop)
 			t.Fatalf("a read mixed two generations: generation %d with %+v", read.Generation, read.Open)
 		}
+	}
+	close(stop)
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 
