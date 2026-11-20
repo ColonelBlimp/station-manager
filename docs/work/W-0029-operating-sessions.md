@@ -10,8 +10,9 @@ and committed with this text: a cheaper fixture for the session tests. **Part 2'
 criteria are at the end of this file; their six questions are ruled (2026-11-20) and Codex
 has no remaining objection to them (codex-194). Part 2's first slice, the start step in
 the admission, the read route and the event, is committed (`a8317035`), with one fix from
-its clean-room review (`de4eb3fd`). The second slice, setup's save, is built and committed
-with this text (at the end of this file). The exit report is not built.** The removal of the database half of
+its clean-room review (`de4eb3fd`). The second slice, setup's save, is committed
+(`3f2f08aa`), with one fix from its clean-room review committed with this text (at the end
+of this file). The exit report is not built.** The removal of the database half of
 the downgrade tooling, which part 1 waited for, is committed (`0b21b2fb`, 2026-11-20; W-0027).
 **Part 1's acceptance criteria are written, their three questions ruled, and agreed with
 Codex after one round of corrections (2026-11-20).** The
@@ -1652,7 +1653,7 @@ the app is single-instance, so the earlier app is normally gone and it is the ne
 tries again; that path was already right. The fix is for the case the criteria name, the
 earlier lifetime returning.
 
-### Part 2, second slice: setup's first save opens the first session (2026-11-20; built, committed with this record)
+### Part 2, second slice: setup's first save opens the first session (2026-11-20; committed `3f2f08aa`)
 
 Group C of part 2's criteria, built under the operator's standing direction for part 2.
 
@@ -1732,3 +1733,52 @@ tested one after the other, not forced.
 
 **Not shown.** Nothing was run at the station. The real-daemon desktop scenario was not
 rerun for this slice: it does not perform setup's save.
+
+### Part 2, second slice: a fix from its clean-room review (2026-11-20; built, committed with this record)
+
+**The finding (P2), which is right about the mechanism.** After a setup save has made its
+logbook and before the configuration is committed, the configuration still names the old
+id. The delete route protects only the configured default, so the new logbook could be
+deleted: by a request landing between the save's logbook and its session open, or simply
+after a save that failed. The session open then finds no live default (503), and every
+repeat fails for good: the deleted row is skipped, and a second "Default" cannot be made
+because a logbook's name is unique among deleted rows too.
+
+**Checked:** `logbook.name` is `UNIQUE` with no exception for deleted rows
+(`0001_init.up.sql`); the delete handler compares only `cfg.DefaultLogbookID`.
+
+**How far it goes.** It needs the configuration to name an id other than the one
+allocated, which an ordinary first run does not (both are 1, and the configured default
+is refused already), and a delete of that logbook through the API during setup. The stuck
+state after a failed save was reachable before this slice too, by the old lookup. What the
+slice added is the 503 for a delete that lands inside the save.
+
+**The fix.** The logbook the archive file names as its default cannot be deleted. The
+refusal is a third condition in the one statement that deletes, beside "is live" and "has
+no live QSO", so no request can come between the check and the delete; the route answers
+it as it answers the configured default, 409 `default_logbook`. The file's pointer is the
+authority for the default (ADR 0071) and the configuration's id its projection; the two
+differ while a setup save is between making its logbook and committing its configuration,
+and after one that failed there. A file with no identity row has no default, and deletes
+as before.
+
+**Seen.** Two tests first, failing on the unchanged code: the storage delete of the
+file's default returned no error; the delete route answered 204 for the logbook a failed
+save had made. After the fix: the delete is refused and the logbook is live; the former
+default can be deleted once the default has moved, and the new default cannot; with no
+identity row a delete and a second delete behave as before; after a failed save the
+logbook cannot be deleted and the repeated save completes. The whole tree passes
+unchanged otherwise: no existing test deleted a file's default through this function.
+
+**Not closed by this.** A logbook's name stays taken by a deleted row. That is older
+than this work and reaches further than setup; it is not changed here. Codex and Claude
+both recommend it goes to the operator as a decision of its own (codex-200): whether a
+deleted logbook's name stays reserved or can be used again, and what a restore of the
+deleted one then meets.
+
+**Codex's review (codex-200: no blocking finding).** The statement is the right place for
+the rule, and it found no conflict with a default change or an activation, which move the
+pointer at a daemon start and delete nothing through this function. It removed only the
+new condition in its own overlay and saw both tests fail. Two wordings corrected at its
+request: the two ids differ during a save as well as after a failed one; and the delete's
+comments, which still spoke of two preconditions.

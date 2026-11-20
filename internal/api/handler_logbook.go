@@ -222,6 +222,13 @@ func (s *Server) deleteLogbook(w http.ResponseWriter, r *http.Request, op errors
 			s.writeError(w, http.StatusConflict, "has_qsos", "cannot delete a logbook that contains QSOs", op)
 			return
 		}
+		// The archive file names it as the default though the configuration,
+		// checked above, does not yet: the same refusal.
+		if stderr.Is(err, errors.ErrLogbookIsDefault) {
+			s.writeError(w, http.StatusConflict, "default_logbook",
+				"cannot delete the default logbook; set another default first", op)
+			return
+		}
 		s.writeServerError(w, op, err, "db_error", "database operation failed")
 		return
 	}

@@ -3,8 +3,10 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	stderr "errors"
 	"testing"
 
+	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
@@ -143,5 +145,60 @@ func TestDefaultEpoch_ARefusedWriteChangesNeitherValue(t *testing.T) {
 				t.Fatalf("the refusal left %d identity row(s)", n)
 			}
 		})
+	}
+}
+
+// The logbook the archive file names as its default cannot be deleted, by the
+// same statement that deletes: the file's pointer is the authority for the
+// default (ADR 0071), and the configuration's id is only its projection. After
+// a setup save that failed before its configuration commit, the configuration
+// does not yet name the logbook the file points at, so the caller's own check
+// of the configured id does not protect it (the clean-room review of 3f2f08aa).
+func TestDeleteLogbook_RefusesTheArchivesDefault(t *testing.T) {
+	ctx := context.Background()
+	svc, x, y := epochBed(t)
+	if err := svc.SetArchiveDefaultLogbookWithContext(ctx, x); err != nil {
+		t.Fatalf("set the default: %v", err)
+	}
+	live := func(id int64) bool {
+		t.Helper()
+		return countT(t, svc, `SELECT COUNT(*) FROM logbook WHERE id = ? AND deleted_at IS NULL`, id) == 1
+	}
+
+	if err := svc.DeleteLogbookByIDWithContext(ctx, x); !stderr.Is(err, errors.ErrLogbookIsDefault) {
+		t.Fatalf("deleting the file's default: %v; want ErrLogbookIsDefault", err)
+	}
+	if !live(x) {
+		t.Fatal("the file's default logbook was deleted")
+	}
+	if p, e := pointerAndEpoch(t, svc); p != x || e != 1 {
+		t.Fatalf("the refusal changed the pointer or the epoch: %d, %d", p, e)
+	}
+
+	// Once the default is another logbook, the first can go; the new default cannot.
+	if err := svc.SetArchiveDefaultLogbookWithContext(ctx, y); err != nil {
+		t.Fatalf("move the default: %v", err)
+	}
+	if err := svc.DeleteLogbookByIDWithContext(ctx, x); err != nil || live(x) {
+		t.Fatalf("deleting the former default: %v, still live %v", err, live(x))
+	}
+	if err := svc.DeleteLogbookByIDWithContext(ctx, y); !stderr.Is(err, errors.ErrLogbookIsDefault) || !live(y) {
+		t.Fatalf("deleting the new default: %v, live %v; want it refused", err, live(y))
+	}
+}
+
+// A file with no identity row has no default: its logbooks are deleted as before.
+func TestDeleteLogbook_WithNoArchiveIdentityIsAsBefore(t *testing.T) {
+	ctx := context.Background()
+	svc, _ := testFileService(t)
+	id, err := svc.InsertLogbookWithContext(ctx, types.Logbook{Name: "X", Callsign: "G4ABC"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.DeleteLogbookByIDWithContext(ctx, id); err != nil {
+		t.Fatalf("delete with no identity row: %v", err)
+	}
+	if err := svc.DeleteLogbookByIDWithContext(ctx, id); !stderr.Is(err, errors.ErrNotFound) {
+		t.Fatalf("a second delete: %v; want ErrNotFound", err)
 	}
 }

@@ -19,6 +19,11 @@ var ErrDuplicateName = stderr.New("duplicate name")
 // breaking the response shape.
 var ErrLogbookHasQsos = stderr.New("logbook contains QSOs")
 
+// ErrLogbookIsDefault signals an attempt to delete the logbook the archive
+// file names as its default. Handlers map it to 409 default_logbook, the same
+// answer as for the configured default.
+var ErrLogbookIsDefault = stderr.New("logbook is the archive's default")
+
 // ErrUploadReArmed signals that an upload-completion write (mark
 // success/failed/transient-retry) matched no row because a concurrent
 // operator edit re-armed the claimed row from 'in_progress' back to

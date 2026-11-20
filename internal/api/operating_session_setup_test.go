@@ -355,3 +355,40 @@ func TestSetupSave_ALateRefusalKeepsWhatWasStored_AndTheRepeatCompletes(t *testi
 		t.Fatal("the corrected save replaced the session the refused one opened")
 	}
 }
+
+// After a setup save that failed before the configuration was committed, the
+// configuration does not yet name the logbook the save made, so the delete
+// route's check of the configured default does not cover it. It must still be
+// refused: the archive file names it as the default, and if it were deleted the
+// repeated save could neither reuse it nor make another "Default", the name
+// being taken by the deleted row (the clean-room review of 3f2f08aa).
+func TestSetupSave_TheLogbookItMadeCannotBeDeletedBeforeTheRepeat(t *testing.T) {
+	b := newSetupBed(t, 42)
+	b.admit(lifeA)
+	b.exec(`CREATE TRIGGER injected_failure BEFORE UPDATE OF session_generation ON archive_metadata
+		BEGIN SELECT RAISE(ABORT, 'injected failure'); END`)
+	if status, code := b.save(); status != http.StatusServiceUnavailable {
+		t.Fatalf("the save: %d %s; want 503", status, code)
+	}
+	b.exec(`DROP TRIGGER injected_failure`)
+	made := b.stored().pointer
+	if made == 0 || int64(made) == b.srv.cfg.Snapshot().DefaultLogbookID {
+		t.Fatalf("the fixture: the file points at %d and the configuration names %d; want them to differ", made, b.srv.cfg.Snapshot().DefaultLogbookID)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/v1/logbook/1", nil)
+	req.SetPathValue("id", "1")
+	w := httptest.NewRecorder()
+	b.srv.handleDeleteLogbook(w, req)
+	if w.Code != http.StatusConflict || errorCode(t, w.Body.Bytes()) != "default_logbook" {
+		t.Fatalf("deleting the logbook the failed save made: %d %s; want 409 default_logbook", w.Code, w.Body.String())
+	}
+	if n := b.count(`SELECT COUNT(*) FROM logbook WHERE id = ? AND deleted_at IS NULL`, made); n != 1 {
+		t.Fatal("the logbook the failed save made was deleted")
+	}
+
+	if status, code := b.save(); status != http.StatusOK {
+		t.Fatalf("the repeated save: %d %s", status, code)
+	}
+	b.wantComplete(lifeA)
+}

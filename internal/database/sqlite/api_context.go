@@ -1812,9 +1812,10 @@ func (s *Service) DeleteLogbookByIDWithContext(ctx context.Context, id int64) er
 	ctx, cancel := s.ensureCtxTimeout(ctx)
 	defer cancel()
 
-	// One conditional statement carries BOTH preconditions — the logbook is
-	// live AND it holds no live QSOs — so the check cannot be outrun by a
-	// concurrent submit (2026-07-22 sqlite review, finding 2). The previous
+	// One conditional statement carries every precondition — the logbook is
+	// live, it holds no live QSOs, and (below) it is not the archive's default
+	// — so the check cannot be outrun by a concurrent submit (2026-07-22
+	// sqlite review, finding 2). The previous
 	// shape read those facts in separate statements and only then soft-
 	// deleted, leaving a window for the interleaving "delete preflight sees
 	// no QSOs → a submit commits a QSO → soft-delete lands", which orphans a
@@ -1828,12 +1829,22 @@ func (s *Service) DeleteLogbookByIDWithContext(ctx context.Context, id int64) er
 	// counts only LIVE QSOs, preserving the existing rule that a logbook
 	// whose QSOs are all soft-deleted may still be deleted.
 	//
+	// A THIRD precondition rides in the same statement: the logbook is not the
+	// one the archive file names as its default (ADR 0071: the file's pointer
+	// is the authority; the configuration's id is its projection). The caller
+	// checks the configured id, but the two differ while a setup save is between
+	// making its logbook and committing its configuration, and after one that
+	// failed there; and a check made in a separate statement could be outrun
+	// by the save's own transaction. A file with no
+	// identity row has no default, and the comparison is then true.
+	//
 	// deleted_at is stamped in UTC to match sqlboiler's generated soft-delete
 	// (boil's timestamp location defaults to UTC).
 	res, err := h.ExecContext(ctx, `
 		UPDATE logbook SET deleted_at = ?
 		WHERE id = ?
 		  AND deleted_at IS NULL
+		  AND id IS NOT (SELECT default_logbook_id FROM archive_metadata WHERE singleton = 1)
 		  AND NOT EXISTS (
 		      SELECT 1 FROM qso
 		      WHERE qso.logbook_id = logbook.id AND qso.deleted_at IS NULL
@@ -1849,15 +1860,17 @@ func (s *Service) DeleteLogbookByIDWithContext(ctx context.Context, id int64) er
 		return nil
 	}
 
-	// No row matched: one of the two preconditions failed. Re-read to report
+	// No row matched: one of the three preconditions failed. Re-read to report
 	// WHICH — this is diagnosis for the error message only, the mutation
-	// above was already all-or-nothing. A logbook that is no longer live
+	// above was already all-or-nothing, and these reads can see a later state
+	// than the one that refused it. A logbook that is no longer live
 	// (never existed, or already soft-deleted) is ErrNotFound, matching
 	// FindLogbook's deleted_at-filtered semantics; anything else means the
 	// QSO precondition is what blocked it. If a concurrent writer soft-
 	// deleted the last QSO between the two statements this reports the
 	// slightly-stale "has QSOs" — accurate for the moment the delete was
-	// attempted, and it keeps the caller's two-outcome contract intact.
+	// attempted. The caller gets one of three refusals: not found, the
+	// archive's default, or has QSOs.
 	var live bool
 	if err = h.QueryRowContext(ctx,
 		`SELECT EXISTS(SELECT 1 FROM logbook WHERE id = ? AND deleted_at IS NULL)`,
@@ -1866,6 +1879,15 @@ func (s *Service) DeleteLogbookByIDWithContext(ctx context.Context, id int64) er
 	}
 	if !live {
 		return errors.ErrNotFound
+	}
+	var isDefault bool
+	if err = h.QueryRowContext(ctx,
+		`SELECT ? IS (SELECT default_logbook_id FROM archive_metadata WHERE singleton = 1)`,
+		id).Scan(&isDefault); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("classifying logbook delete failure")
+	}
+	if isDefault {
+		return errors.New(op).WithErr(errors.ErrLogbookIsDefault)
 	}
 	return errors.New(op).WithErr(errors.ErrLogbookHasQsos)
 }
