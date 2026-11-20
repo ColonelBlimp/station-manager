@@ -266,6 +266,15 @@ func (c *sessionTx) exitRecorded(lifetime string) (bool, error) {
 	return n == 1, err
 }
 
+// retired is the first question of every control a lifetime asks for: a
+// lifetime whose exit is recorded acts no more, and touches no session. It
+// comes before the default-epoch test and the stale check. A New or a Continue
+// sent before the exit and arriving after it can name a generation that is
+// still current, since the exit of a lifetime holding no session moves none.
+func (c *sessionTx) retired(lifetime string) (bool, error) {
+	return c.exitRecorded(lifetime)
+}
+
 func (c *sessionTx) recordExit(lifetime string) error {
 	return c.one(`INSERT INTO operating_app_exit (app_lifetime, exited_at) VALUES (?, ?)`, lifetime, c.now)
 }
@@ -375,7 +384,7 @@ func (s *Service) OpenOperatingSessionWithContext(ctx context.Context, lifetime 
 		return OperatingSessionState{}, "", errors.New(op).WithMsg("the app lifetime is required")
 	}
 	return s.sessionControl(ctx, op, "open the operating session", lifetime, now, func(c *sessionTx) (SessionOutcome, error) {
-		if retired, err := c.exitRecorded(lifetime); err != nil || retired {
+		if retired, err := c.retired(lifetime); err != nil || retired {
 			return SessionRetired, err
 		}
 		h, o, err := c.start()
@@ -402,13 +411,20 @@ func (s *Service) OpenOperatingSessionWithContext(ctx context.Context, lifetime 
 // held by the lifetime (ADR 0100 §3, §8). Closing its own session is
 // new_session with a confirmed end; closing another lifetime's is the recovery
 // answer New, unconfirmed_exit with an unconfirmed end. With none open it
-// opens one. A generation that is not current is SessionStale.
+// opens one. A generation that is not current is SessionStale. A lifetime
+// whose exit is recorded is SessionRetired, before anything else.
+//
+// Whether the lifetime is the CURRENT one is the caller's to establish, under
+// its own admission order: this refuses only what the file itself records.
 func (s *Service) NewOperatingSessionWithContext(ctx context.Context, lifetime string, generation int64, now time.Time) (OperatingSessionState, SessionOutcome, error) {
 	const op errors.Op = "sqlite.Service.NewOperatingSessionWithContext"
 	if lifetime == "" {
 		return OperatingSessionState{}, "", errors.New(op).WithMsg("the app lifetime is required")
 	}
 	return s.sessionControl(ctx, op, "start a new operating session", lifetime, now, func(c *sessionTx) (SessionOutcome, error) {
+		if retired, err := c.retired(lifetime); err != nil || retired {
+			return SessionRetired, err
+		}
 		h, o, err := c.start()
 		switch {
 		case err != nil:
@@ -441,12 +457,19 @@ func (s *Service) NewOperatingSessionWithContext(ctx context.Context, lifetime s
 //     open again with a new interval and the file's current epoch.
 //   - Anything else is SessionIneligible; a closed session named while another
 //     lifetime's session awaits its answer is SessionRecoveryPending.
+//
+// A lifetime whose exit is recorded is SessionRetired, before anything else.
+// As for New, whether the lifetime is the current one is the caller's to
+// establish.
 func (s *Service) ContinueOperatingSessionWithContext(ctx context.Context, lifetime string, generation int64, sessionID string, now time.Time) (OperatingSessionState, SessionOutcome, error) {
 	const op errors.Op = "sqlite.Service.ContinueOperatingSessionWithContext"
 	if lifetime == "" || sessionID == "" {
 		return OperatingSessionState{}, "", errors.New(op).WithMsg("the app lifetime and the session are required")
 	}
 	return s.sessionControl(ctx, op, "continue an operating session", lifetime, now, func(c *sessionTx) (SessionOutcome, error) {
+		if retired, err := c.retired(lifetime); err != nil || retired {
+			return SessionRetired, err
+		}
 		h, o, err := c.start()
 		switch {
 		case err != nil:
@@ -570,7 +593,8 @@ func (c *sessionTx) exitNotCurrent(lifetime string) (SessionOutcome, error) {
 //
 // In order: the QSO's logbook must be the file's default, or nothing is done
 // and no session is touched; the default-epoch test; if no session is open, a
-// new one, held by holder ("" for none); the member row. It returns the
+// new one, held by holder ("" for none, and none if the holder's exit is
+// recorded); the member row. It returns the
 // session joined, "" when the QSO joins none. No session policy refuses it. An
 // error is a database failure, and the caller rolls the QSO back with it.
 func (s *Service) JoinOperatingSessionTx(ctx context.Context, tx *sql.Tx, qsoID int64, holder string, now time.Time) (string, error) {
@@ -589,6 +613,24 @@ func (s *Service) JoinOperatingSessionTx(ctx context.Context, tx *sql.Tx, qsoID 
 	return id, nil
 }
 
+// openForContact is the logging step's safety net: the session a contact opens
+// when none is open. A holder whose exit is recorded holds nothing, so the
+// session is then opened with no holder: no exit report could ever close an
+// interval given to a lifetime that has gone. The contact is stored either
+// way; this refuses nothing.
+func (c *sessionTx) openForContact(h sessionHead, holder string) (string, error) {
+	if holder != "" {
+		gone, err := c.retired(holder)
+		if err != nil {
+			return "", err
+		}
+		if gone {
+			holder = ""
+		}
+	}
+	return c.openNew(h, holder)
+}
+
 func (c *sessionTx) join(qsoID int64, holder string) (string, error) {
 	var isDefault bool
 	err := c.tx.QueryRowContext(c.ctx, `SELECT q.logbook_id IS (SELECT default_logbook_id FROM archive_metadata WHERE singleton = 1)
@@ -605,8 +647,8 @@ func (c *sessionTx) join(qsoID int64, holder string) (string, error) {
 	}
 	id := ""
 	if o != nil {
-		id = o.ID
-	} else if id, err = c.openNew(h, holder); err != nil {
+		id = o.ID // an open session keeps the holder it has
+	} else if id, err = c.openForContact(h, holder); err != nil {
 		return "", err
 	}
 	if err := c.one(`INSERT INTO operating_session_member (qso_id, session_id) VALUES (?, ?)`, qsoID, id); err != nil {

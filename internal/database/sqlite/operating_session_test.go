@@ -1344,3 +1344,121 @@ func TestOperatingSession_LoggingStep_ACloseAndOpenRollBackWithTheQSO(t *testing
 	}
 	b.invariants()
 }
+
+// ---- A lifetime whose exit is recorded acts no more ----
+
+// A lifetime at the recovery question exits: it holds no session, so its exit
+// is recorded and the generation does not move. A New or a Continue it sent
+// before, arriving after, names a generation that is still current. It must be
+// refused as retired and touch nothing: otherwise a session would be opened
+// for, or handed to, a lifetime that has gone, and no later exit report could
+// close it (the clean-room review of 6f2b4e27).
+func TestOperatingSession_ARecordedExitFencesNewAndContinue(t *testing.T) {
+	recoveryThenExit := func(t *testing.T) (*sessBed, OperatingSessionState) {
+		t.Helper()
+		b := newSessBed(t, true)
+		st := b.open(lifeA, 0, SessionApplied)
+		b.log(b.x, lifeA, 1)
+		b.open(lifeB, 10, SessionRecoveryPending)
+		after := b.exit(lifeB, st.Generation, true, 11, SessionExitRecorded)
+		if after.Generation != st.Generation {
+			t.Fatalf("the exit moved the generation to %d; the delayed control would be stale anyway and the test would prove nothing", after.Generation)
+		}
+		return b, st
+	}
+	t.Run("a delayed New", func(t *testing.T) {
+		b, st := recoveryThenExit(t)
+		b.unchanged("the New", func() {
+			got := b.newSession(lifeB, st.Generation, 12, SessionRetired)
+			if got.Open == nil || got.Open.ID != st.Open.ID || got.Open.Holder != lifeA || !got.ExitRecorded {
+				t.Fatalf("the refusal returned %+v with %+v; want the other lifetime's session, and the exit recorded", got, got.Open)
+			}
+		})
+	})
+	t.Run("a delayed Continue of the remnant", func(t *testing.T) {
+		b, st := recoveryThenExit(t)
+		b.unchanged("the Continue", func() { b.continueSession(lifeB, st.Generation, st.Open.ID, 12, SessionRetired) })
+	})
+	t.Run("retired comes before the default-epoch test", func(t *testing.T) {
+		b, st := recoveryThenExit(t)
+		b.setDefault(b.y) // the other lifetime's session is now of an earlier default
+		b.unchanged("the New", func() { b.newSession(lifeB, st.Generation, 12, SessionRetired) })
+		b.unchanged("the Continue", func() { b.continueSession(lifeB, st.Generation, st.Open.ID, 12, SessionRetired) })
+		if b.session(st.Open.ID).closedAt.Valid {
+			t.Fatal("a retired caller closed the other lifetime's session")
+		}
+	})
+	t.Run("after its own session was closed by its exit", func(t *testing.T) {
+		b := newSessBed(t, true)
+		st := b.open(lifeA, 0, SessionApplied)
+		b.log(b.x, lifeA, 1)
+		after := b.exit(lifeA, st.Generation, true, 10, SessionApplied)
+		b.unchanged("the New", func() { b.newSession(lifeA, after.Generation, 11, SessionRetired) })
+		b.unchanged("the Continue", func() { b.continueSession(lifeA, after.Generation, st.Open.ID, 11, SessionRetired) })
+	})
+}
+
+// The logging step's holder (codex-189). When the step must open a session, a
+// holder whose exit is recorded holds nothing: the session is opened with no
+// holder. The QSO, its upload row and its member row are stored as always; the
+// step refuses no contact for it. A session that is already open keeps the
+// holder it has.
+func TestOperatingSession_LoggingStep_AnExitedLifetimeHoldsNothing(t *testing.T) {
+	t.Run("no session is open", func(t *testing.T) {
+		b := newSessBed(t, true)
+		st := b.open(lifeA, 0, SessionApplied)
+		b.log(b.x, lifeA, 1)
+		after := b.exit(lifeA, st.Generation, true, 10, SessionApplied)
+
+		qso, joined := b.log(b.x, lifeA, 20)
+		now := b.state(lifeA)
+		if id := wantOpen(t, now, b.xUUID, "", 1, 20, 20, true); id != joined || now.Generation != after.Generation+1 {
+			t.Fatalf("joined %q, open %s, generation %d (want %d)", joined, id, now.Generation, after.Generation+1)
+		}
+		b.wantIntervals(joined, "1 open - 20 -")
+		if !reflect.DeepEqual(b.members(joined), []int64{qso}) || !b.stored(qso) {
+			t.Fatalf("members %v, stored %v", b.members(joined), b.stored(qso))
+		}
+	})
+	t.Run("the default-epoch test closed the session that was open", func(t *testing.T) {
+		b := newSessBed(t, true)
+		st := b.open(lifeB, 0, SessionApplied)
+		s0 := st.Open.ID
+		b.log(b.x, lifeB, 1)
+		b.exit(lifeA, 0, false, 2, SessionExitRecorded) // lifeA holds none; its exit is recorded
+		b.setDefault(b.y)
+
+		qso, joined := b.log(b.y, lifeA, 20)
+		b.wantClosed(s0, SessionClosedByDefault, 20)
+		b.wantIntervals(s0, "1 confirmed "+lifeB+" 0 20")
+		now := b.state(lifeA)
+		if id := wantOpen(t, now, b.yUUID, "", 2, 20, 20, true); id != joined || id == s0 || now.Generation != st.Generation+1 {
+			t.Fatalf("joined %q, open %s, generation %d (want %d)", joined, id, now.Generation, st.Generation+1)
+		}
+		b.wantIntervals(joined, "1 open - 20 -")
+		if !reflect.DeepEqual(b.members(joined), []int64{qso}) || !b.stored(qso) {
+			t.Fatalf("members %v, stored %v", b.members(joined), b.stored(qso))
+		}
+	})
+	t.Run("a session is open, held by another lifetime: it keeps its holder", func(t *testing.T) {
+		b := newSessBed(t, true)
+		st := b.open(lifeB, 0, SessionApplied)
+		s0 := st.Open.ID
+		b.exit(lifeA, 0, false, 1, SessionExitRecorded)
+		before := b.intervals(s0)
+
+		qso, joined := b.log(b.x, lifeA, 20)
+		if joined != s0 || !reflect.DeepEqual(b.members(s0), []int64{qso}) || !b.stored(qso) {
+			t.Fatalf("joined %q, members %v, stored %v; want the open session %s", joined, b.members(s0), b.stored(qso), s0)
+		}
+		if after := b.intervals(s0); !reflect.DeepEqual(before, after) || b.generation() != int(st.Generation) {
+			t.Fatalf("the open session's intervals %v became %v, generation %d (want %d)", before, after, b.generation(), st.Generation)
+		}
+	})
+	t.Run("a holder with no recorded exit holds the session the step opens", func(t *testing.T) {
+		b := newSessBed(t, true)
+		b.exit(lifeB, 0, false, 1, SessionExitRecorded) // another lifetime's exit must not matter
+		_, joined := b.log(b.x, lifeA, 20)
+		b.wantIntervals(joined, "1 open "+lifeA+" 20 -")
+	})
+}

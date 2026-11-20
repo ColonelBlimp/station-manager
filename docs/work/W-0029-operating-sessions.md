@@ -4,8 +4,9 @@
 [`docs/backlog.md`](../backlog.md). The build brief was drafted (operator, the same day:
 "start the ADR 0100 brief"), reviewed by Codex in five rounds, and **its questions are ruled
 (operator, 2026-11-19: "Accepted")**. Part 1's first slice, the migration and the default epoch, is committed (`62218133`,
-2026-11-20). Built and uncommitted: its second slice, the transitions, the state read and
-the contention tests (at the end of this file). The removal of the database half of
+2026-11-20), and so is its second, the transitions, the state read and the contention tests
+(`6f2b4e27`). Built and uncommitted: one fix to the second slice from its clean-room review
+(at the end of this file). The removal of the database half of
 the downgrade tooling, which part 1 waited for, is committed (`0b21b2fb`, 2026-11-20; W-0027).
 **Part 1's acceptance criteria are written, their three questions ruled, and agreed with
 Codex after one round of corrections (2026-11-20).** The
@@ -947,7 +948,7 @@ things, all added the same day:
 
 **Not shown.** Nothing was run at the station.
 
-### Part 1, second slice: the transitions, the read and the contention tests (2026-11-20; built, uncommitted)
+### Part 1, second slice: the transitions, the read and the contention tests (2026-11-20; committed `6f2b4e27`)
 
 Groups C to F of the criteria, built after the first slice was committed, under the same
 direction. Nothing in the daemon calls any of it (a search finds no caller outside the
@@ -1038,10 +1039,10 @@ to watch its busy handler), so the cases now stand where the busy handler stands
   already named above. It does not allow New or Continue to be replayed against a newly
   read generation (ADR 0100 §5). On every attempt the recorded exit still comes first, and
   the current-lifetime and holder checks and the terminal not-current answer still apply.
-- **New and Continue do not check who may act.** They consult neither the admission nor
-  the recorded exits. Part 2 must validate that the caller is the current lifetime, under
-  its one order from the admission's lock, before it calls them. The storage functions do
-  not establish that themselves.
+- **New and Continue do not check that the caller is current.** They know nothing of the
+  admission. Part 2 must validate that the caller is the current lifetime, under its one
+  order from the admission's lock, before it calls them. The storage functions refuse only
+  what the file records: a lifetime whose exit is recorded (the fix below).
 - **A cancelled request that is waiting for the writer's position is not interrupted at
   once.** Measured in my first version: a cancelled New had not returned 150 ms after its
   cancellation while the holder held, and returned "context canceled" once the holder
@@ -1065,3 +1066,51 @@ to watch its busy handler), so the cases now stand where the busy handler stands
   (the forced cases set the contender's busy limit through that path's own seam); no power
   loss was simulated.
 - Nothing was run at the station.
+
+### Part 1, second slice: a fix from its clean-room review (2026-11-20; built, uncommitted)
+
+**The finding (P2), which is right.** The review of `6f2b4e27` read New and Continue and
+found that a recorded exit did not stop them. A lifetime at the recovery question holds no
+session, so its exit is recorded without moving the generation. A New or a Continue it had
+sent before, arriving after, names a generation that is still current: New would close the
+other lifetime's session and open one for a lifetime that has gone, and Continue would hand
+that session to it. A repeat of the exit report is then answered "already recorded", so
+nothing would close the session.
+
+**Why it was there.** I had left recorded exits to part 2's current-lifetime check and
+written that down as a choice; Codex accepted it with the caller's precondition made
+explicit. The review, reading the code alone, shows the storage functions can refuse this
+themselves from what the file holds, in the same transaction as the generation check. That
+is the stronger place, and it costs one read.
+
+**The fix.** New and Continue ask first whether the caller's exit is recorded, as Open
+does, and answer "retired" before the default-epoch test and the stale check. A retired
+caller touches no session.
+
+**Seen.** The four new cases failed first on their own assertions: a delayed New and a
+delayed Continue after the exit were "applied"; with the default moved they were "stale"
+where "retired" is wanted, having closed the other lifetime's session on the way. With the
+fix all pass. With the check taken out of New, and then of Continue, in a temporary copy
+since removed, the cases for each fail again. The gates were rerun, by exit code: `gofmt`,
+`go vet`, `golangci-lint` (0 issues), the maintainability metrics, `go test ./... -count=1`
+(66 packages ok), and the session tests under `-race`.
+
+**The same gap in the logging step, found by Codex (codex-189, P2), and fixed with it.**
+The step's safety net gave the session it opens to whatever holder it was passed, an
+exited lifetime included: Codex reproduced a session open under a lifetime whose exit was
+recorded. Now, when the step must open a session, a holder whose exit is recorded holds
+nothing and the session is opened with no holder. That covers both ways the step opens one:
+none was open, and the default-epoch test closed the one that was. The QSO, its upload row
+and its member row are stored as always; the step refuses no contact for this. A session
+already open keeps the holder it has.
+- Four cases, the two that open a session seen to fail first with the exited lifetime as
+  holder; the other two are the neighbours that must not change (an open session keeps its
+  holder; a holder with no recorded exit still holds).
+- Reversion proofs, in a temporary copy since removed: the holder's check taken out, the
+  two opening cases fail; the step made to rewrite an open session's holder, the joining
+  case and an older test fail.
+- The gates were rerun afterwards, the same set, 66 packages ok.
+
+**What part 2 still owes.** This closes the case the file can see. A lifetime that is not
+current and has no recorded exit (one an archive switch or a daemon restart left behind)
+is still part 2's to refuse, by the admission.
