@@ -3,8 +3,9 @@
 **Status:** Opened 2026-11-18 (operator: "W-0029 is fine, open the dossier"); ranked in
 [`docs/backlog.md`](../backlog.md). The build brief was drafted (operator, the same day:
 "start the ADR 0100 brief"), reviewed by Codex in five rounds, and **its questions are ruled
-(operator, 2026-11-19: "Accepted")**. Built and uncommitted: part 1's first slice, the
-migration and the default epoch (2026-11-20, at the end of this file). The removal of the database half of
+(operator, 2026-11-19: "Accepted")**. Part 1's first slice, the migration and the default epoch, is committed (`62218133`,
+2026-11-20). Built and uncommitted: its second slice, the transitions, the state read and
+the contention tests (at the end of this file). The removal of the database half of
 the downgrade tooling, which part 1 waited for, is committed (`0b21b2fb`, 2026-11-20; W-0027).
 **Part 1's acceptance criteria are written, their three questions ruled, and agreed with
 Codex after one round of corrections (2026-11-20).** The
@@ -887,7 +888,7 @@ CREATE TABLE operating_app_exit (
    change end the sitting's interval as confirmed; an arrival that finds a session still
    open ends it as unconfirmed.
 
-### Part 1, first slice: the migration and the default epoch (2026-11-20; built, uncommitted)
+### Part 1, first slice: the migration and the default epoch (2026-11-20; committed `62218133`)
 
 **The go-ahead.** Codex agreed the revised criteria (codex-185: "The criteria are agreed for
 the build"), which was the condition of the operator's direction of the same day. Codex
@@ -945,3 +946,122 @@ things, all added the same day:
 - The gates were run again afterwards: the same eight, all by exit code, 66 packages ok.
 
 **Not shown.** Nothing was run at the station.
+
+### Part 1, second slice: the transitions, the read and the contention tests (2026-11-20; built, uncommitted)
+
+Groups C to F of the criteria, built after the first slice was committed, under the same
+direction. Nothing in the daemon calls any of it (a search finds no caller outside the
+file and its tests), so at the station it changes nothing.
+
+**Built.** `internal/database/sqlite/operating_session.go`: the state read; Open, New,
+Continue, the close for a switch and the exit, each one durable transaction that takes the
+writer's position with its first statement; and the logging step on the QSO's own
+transaction. A refusal is an outcome with the current state, never an error; an error is a
+database failure and nothing was stored. Each takes its instant from the caller, the
+session's identity included.
+
+**How the transitions are ordered (F7, measured).** A control's first statement is a write
+that changes nothing (`takeWriterPosition`), as the logging transaction's is its QSO row.
+The measurement is a test in the tree, on two connections of one file, each step following
+from the one before:
+- reading the state first, then writing after another connection has committed: refused
+  with "database is locked (517)", SQLite's stale-snapshot refusal;
+- taking the writer's position first: the other connection's write is refused at once
+  with a busy limit of zero, refused after 301 ms with a limit of 300 ms, and goes through
+  once the holder has committed. Both writes are counted.
+
+**The forced cases, and why they were rebuilt (codex-187).** My first version started the
+second transaction, slept 150 ms and then looked. Codex showed, with a build overlay, that
+such a case passes with the second transaction not yet begun: nothing in it proved the two
+overlapped. SQLite's own wait cannot be seen from outside (the pinned driver offers no way
+to watch its busy handler), so the cases now stand where the busy handler stands:
+- the contender runs on a connection whose busy limit is zero, so its first statement is
+  refused at once while the holder holds, and the test receives that refusal (SQLite's
+  busy error, not the stale-snapshot one);
+- only then does the test let the holder commit, and only after that commit does it have
+  the contender repeat the same statement in the same transaction, as the busy handler
+  would;
+- no case sleeps, and none passes unless the refusal was seen. A contender that is late is
+  only late.
+- **What this does not show:** a single call waiting inside SQLite and then going on. The
+  measurement above shows the handler waiting its limit and the next attempt succeeding;
+  the mixed run exercises the real handler without proving any two transactions
+  overlapped.
+
+**Seen.**
+- The first 27 transition tests were written against stubs and all failed on their own
+  assertions (an empty outcome where `applied` was wanted); with the code, all pass.
+- **The forced cases (F1 to F5)** pass: logging first and a New behind it; a New first and
+  logging behind it; a refused New cancelled before it can try again, which reports the
+  cancellation itself and stores nothing; a pointer change against a New and against
+  logging, both orders; an exit against an open of one lifetime, both orders. Each reads
+  the rows back.
+- **A database failure part-way through a control (codex-187)** stores nothing. A trigger
+  on the test's own file makes a later statement fail after earlier ones in the same
+  transaction: Continue's reopen after its close, and after its discard; its new interval
+  after both; the recovery Continue's new interval; the exit's close, and its discard,
+  after the exit row; New's new session after its close; the generation's advance after
+  everything; Open's new session after its discard; the close for a switch; a stale New
+  whose default-epoch close fails. Each returns the failure, not a refusal, and every
+  session, interval, member, recorded exit and both counters read as before.
+- The logging step's close-and-open rolls back with its QSO: the earlier session is open
+  as it was, and the QSO, its upload row and its member row are gone.
+- **The mixed run (F9):** 160 logging transactions and 60 News on six goroutines, nothing
+  held, about 100 ms, no failure, one New refused as stale; every QSO has one member row
+  and the generation ends at its start plus 60.
+- The session tests pass under `-race`, and the forced cases eight times over without it.
+- **Reversion proofs,** in temporary copies since removed, each change checked as applied
+  and the file restored and compared:
+  - **the writer's position made a read:** every forced case reports that the contender
+    "was not refused while the holder held", and where a New had read before the other
+    committed it then fails with "database is locked (517)". That is the unsafe order
+    established step by step, not a mechanism removed and a window hoped for;
+  - **a control that commits after a failure:** ten of the failure cases report "changed
+    the record", so the earlier writes were real and only the rollback removes them;
+  - the stale check removed; the discard inverted; the retired check removed; the logging
+    step's advance removed; the rebinding removed; the default-logbook guard removed; an
+    exit of a lifetime that is not current treated as current; an arrival's end confirmed;
+    the default-epoch test removed; the recovery New's end confirmed; Continue's
+    eligibility skipped; the recovery Continue's end confirmed; the exit not recorded with
+    its close: each fails at least one test;
+  - the state read made three separate reads: the snapshot test fails in five runs of
+    five ("a read mixed two generations").
+- **Gates, by exit code:** `gofmt`, `go vet`, `golangci-lint` (0 issues), the
+  maintainability metrics (0 regressions), `go test ./... -count=1` (66 packages ok).
+
+**For part 2 and W-0027 A3, found while building and agreed with Codex (codex-187).**
+- **An exit that races its own admission is refused as stale first.** The exit named the
+  generation from before the open, the open moved it, and the stale check comes before the
+  exit's own effect. The answer carries the new generation. **The closing app may repeat
+  that same lifetime's exit report at the generation returned, without admitting again.**
+  This is an exception for the exit only, beside the stale exit after a default change
+  already named above. It does not allow New or Continue to be replayed against a newly
+  read generation (ADR 0100 §5). On every attempt the recorded exit still comes first, and
+  the current-lifetime and holder checks and the terminal not-current answer still apply.
+- **New and Continue do not check who may act.** They consult neither the admission nor
+  the recorded exits. Part 2 must validate that the caller is the current lifetime, under
+  its one order from the admission's lock, before it calls them. The storage functions do
+  not establish that themselves.
+- **A cancelled request that is waiting for the writer's position is not interrupted at
+  once.** Measured in my first version: a cancelled New had not returned 150 ms after its
+  cancellation while the holder held, and returned "context canceled" once the holder
+  committed. Codex read the pinned driver and reports that its busy handler waits and
+  retries against the configured limit without looking at the context. That is a delay
+  seen, not a deadline proved: no test here shows a five-second bound. The existing limits
+  stay; nothing new is chosen.
+
+**Choices made where the criteria were silent (Codex: acceptable at this boundary).**
+- New with no session open opens one.
+- Continue naming the session the caller already holds is refused as ineligible.
+- A holder of "" is stored as no holder, for the logging step's safety net (part 5).
+- One seam for tests is in the code: `takeSessionWriterPosition`, the lock statement as a
+  function variable, which only the contention tests replace.
+
+**Not shown.**
+- The mixed run has no archive-switch close and never reaches the safety net: every
+  logging transaction there finds a session open. Both are covered one transaction at a
+  time and, for the safety net, in the forced pointer-change case.
+- That the controls are durable is shown only by their passing through the durable path
+  (the forced cases set the contender's busy limit through that path's own seam); no power
+  loss was simulated.
+- Nothing was run at the station.
