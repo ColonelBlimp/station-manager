@@ -75,6 +75,40 @@ func (m *Manager) OperationInFlight() string {
 	return m.op
 }
 
+// SetSessionOrder wires the order an app start, a confirmed exit of the app and
+// setup's first session each run in (the API's admission; ADR 0100 §3 and §4).
+// order blocks until none of those is under way, holds the order, and returns
+// its release.
+func (m *Manager) SetSessionOrder(order func() (release func())) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sessionOrder = order
+}
+
+// takeSessionOrder orders a default change or an activation with the app's
+// starts and exits (W-0029 part 2, G6): it waits for one under way, and holds
+// the order until the returned release, so none begins while this operation
+// takes its seals and records itself. The order is the outermost lock of all:
+// before m.mu, before any seal, before any write.
+//
+// It is called only by an operation that already HOLDS the single flight. That
+// is what keeps the answers of today: a second archive operation asked for
+// while this one waits here is refused at once, as in progress. It is not
+// queued behind an exit.
+//
+// What it does not wait for: the seals an accepted operation keeps until the
+// restart. Those are held after this order is released, and an exit or an app
+// start in that time goes ahead under them (each releases only its own).
+func (m *Manager) takeSessionOrder() (release func()) {
+	m.mu.Lock()
+	order := m.sessionOrder
+	m.mu.Unlock()
+	if order == nil {
+		return func() {}
+	}
+	return order()
+}
+
 // WithLogbookChange runs fn (a logbook deletion) under the single flight, so a
 // deletion never races a change of the default or an activation.
 func (m *Manager) WithLogbookChange(fn func() error) error {
@@ -111,7 +145,9 @@ func (m *Manager) SetDefaultChangeReport(report func() StartReport) {
 // restart that applies it (ADR 0097 §2), in order, each step refusing before
 // any later one runs:
 //
-//  1. the single flight, then any record that survives in config: an
+//  1. the single flight, then the app's session order (takeSessionOrder: an
+//     app start or exit under way finishes first, and none begins before
+//     this request returns), then any record that survives in config: an
 //     activation pending, a default change pending or unconfirmed;
 //  2. validation in the daemon: the believed default is the effective one
 //     (a stale tab is refused, never retargeted), the target is a live
@@ -131,6 +167,7 @@ func (m *Manager) RequestDefaultChange(ctx context.Context, req types.DefaultCha
 		return types.DefaultChangeAccepted{}, err
 	}
 	defer m.endOp()
+	defer m.takeSessionOrder()()
 	m.mu.Lock()
 	tx, rig, live, restart, db, activated := m.txSeal, m.rigSeal, m.liveSeal, m.restart, m.activeDB, m.activated
 	m.mu.Unlock()

@@ -1477,6 +1477,29 @@ read by the e2 resolver. Step (e) breaks into increments:
       database's own statement and transaction limits, so no lookup and no job deadline can
       cancel it. The sink still runs in a one-shot `safego` goroutine **off the FT8 decode
       loop**, tracked on `qsoLogWG` for the shutdown drain.
+    - **A confirmed exit of the app waits for earned contacts** (ADR 0100 §3;
+      `cmd/smd`, `drainFt8Completions`). A contact reaches its job from the transmission's
+      goroutine, which `RetireOperating` waits for, or from the decode loop when the
+      closing rung was refused before a transmission started. The decode loop's one call
+      into the sequencer is `Service.driveSequencer`, which marks the slot;
+      `AwaitCompletionHandover` waits for a marked slot, and the exit then waits for the
+      tracked jobs. `TestSource_TheSequencerSlotIsDrivenOnlyThroughTheMarkedCall` keeps
+      the call single.
+    - **A stop completes a contact that is earned and not yet completed** (invariant 1).
+      A Group A contact is earned in the slot that takes the partner's roger in, whether
+      or not our closing rung can go out in that slot: each Group A handler keeps the
+      contact's completion then (`Sequencer.earnLocked`, `contactFlags.earned`), before
+      any return that defers the rung (decoded too late into our slot, or the slot has
+      already carried a rung). Until the rung is admitted by the Service there is no
+      transmission for a disarm to wait for. The disarm's abandon
+      (`Sequencer.abandonForStop`) therefore completes a kept contact, as not transmitted,
+      before it retires the session: an app's exit or replacement, the operator's disarm,
+      the presence rule, a lost rig and a dial move alike. Exactly once is the
+      completion's own generation guard; each caller of the completion prepares a copy of
+      its own, so the one that logs hands over what it stamped. A Group B final rung
+      earns nothing until it has been on the air. The operator's Abandon does not
+      complete an earned contact: it discards it, as before. `earnedcontact_test.go` and
+      `operating_contact_test.go` hold the cases.
     - **Tests.** `contactidentity_test.go` (a probe in the shared sequencer harness checks
       the identity rules on every frame and completion any test produces),
       `partnersink_test.go`, `cmd/smd/ft8_lookups_test.go` and

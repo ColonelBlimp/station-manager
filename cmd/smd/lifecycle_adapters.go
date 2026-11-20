@@ -1226,7 +1226,13 @@ func (d *daemon) initHTTP() error {
 	// released (api.DefaultChangeRoutesReleased).
 	d.liveEntry = api.NewLiveEntryGate()
 	d.server.SetLiveEntryGate(d.liveEntry)
+	// A confirmed exit of the app waits for FT8 completion logging already
+	// earned before it closes the session (ADR 0100 §3).
+	d.server.SetCompletionDrain(d.drainFt8Completions)
 	d.archives.SetLiveEntrySeal(d.liveEntry)
+	// A default change and an activation are ordered with the app's starts
+	// and exits (W-0029 part 2, G6).
+	d.archives.SetSessionOrder(d.server.HoldSessionOrder)
 	d.archives.SetDefaultChangeReport(d.defaultChange.startReport)
 	d.server.SetDefaultChanger(d.archives)
 	if d.activeSummary != nil {
@@ -1290,4 +1296,16 @@ func (d *daemon) stopHTTP(ctx context.Context) error {
 		return nil
 	}
 	return d.server.Shutdown(ctx)
+}
+
+// drainFt8Completions waits for FT8 completion logging already earned, for a
+// caller that has stopped FT8 operation. In order: a contact the decode loop
+// earned in a slot still under way is handed to its job (a stop does not wait
+// for that hand-over; ft8.Service.AwaitCompletionHandover), then every tracked
+// job finishes: the same set shutdown drains (nodeQsoLog). It cancels none.
+func (d *daemon) drainFt8Completions() {
+	if d.ft8 != nil {
+		d.ft8.AwaitCompletionHandover()
+	}
+	d.qsoLogWG.Wait()
 }

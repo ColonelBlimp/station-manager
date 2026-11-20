@@ -127,6 +127,12 @@ func (s *Sequencer) finalRungDoneLocked(c CompletedQso, clear func(), sentMsg, u
 	gen := s.sessionGen
 	prepareComplete, onComplete := s.prepareComplete, s.onComplete
 	return func(ok bool) {
+		// A copy of its own for THIS invocation. The completion can be invoked by
+		// more than one caller at once (a stop, the slot whose rung was refused, a
+		// transmission's goroutine) and each stamps before the guard below decides
+		// which of them logs. With one contact shared between them the caller that
+		// logs handed over whatever the other had stamped meanwhile (codex-204).
+		c := c
 		// Stamp unconditionally. The stamp carries the operator's antenna
 		// selection onto the QSO, and a Group A contact logs even when the
 		// courtesy did not key — skipping the stamp there would silently
@@ -157,4 +163,57 @@ func (s *Sequencer) finalRungDoneLocked(c CompletedQso, clear func(), sentMsg, u
 			onComplete(c)
 		}
 	}
+}
+
+// earnLocked keeps the completion of a Group A contact from the slot that takes the
+// partner's roger in, and returns it. Caller holds s.mu. build makes the completion
+// (finalRungDoneLocked with the ladder's own snapshot and wording) and runs once per
+// contact: the handler calls this as soon as the ladder is on its closing rung,
+// BEFORE any return that defers that rung (decoded too late into our slot, or our
+// slot already carried a rung), and again where the rung is transmitted, which gets
+// the same completion. Earning is the protocol's fact, not the courtesy's: a contact
+// whose courtesy has not yet been attempted is owed to the log all the same.
+//
+// Only the three Group A ladders call it. A Group B final rung earns nothing until
+// it has been on the air.
+//
+// That is also what keeps a kept completion with its own contact. Each of the three
+// zeroes contactFlags and advances sessionGen where its session starts (startAnswer,
+// StartQsoT4, StartWorkCallerFd) and where it ends (retireSessionLocked,
+// abandonLocked). Call-CQ begins a contact inside a run without doing either
+// (commitCqContactLocked), so a ladder that begins its contacts that way must not
+// earn through here (codex-205).
+func (s *Sequencer) earnLocked(build func() func(ok bool)) func(ok bool) {
+	if s.contact.earned == nil {
+		s.contact.earned = build()
+	}
+	return s.contact.earned
+}
+
+// settleEarned completes a Group A contact that is earned and not yet completed,
+// for a stop that is about to abandon (invariant 1: a rogered contact is logged
+// whatever stops TX). The Service's disarm calls it AFTER it has waited for the
+// transmission in flight, so a closing rung that reached the air has already
+// completed through its own callback and this finds nothing. What it finds is a
+// closing rung that never reached the air: deferred to a later slot, or decided
+// and never admitted. It is logged as not transmitted.
+//
+// Exactly once is the callback's own generation guard: whichever of this call, the
+// slot's own failure branch and a transmission's goroutine runs first retires the
+// session, and the others refuse. The operator's Abandon does not come through
+// here: it discards the contact, as it always has.
+func (s *Sequencer) settleEarned() {
+	s.mu.Lock()
+	earned := s.contact.earned
+	s.mu.Unlock()
+	if earned != nil {
+		earned(false)
+	}
+}
+
+// abandonForStop is the abandon of the Service's disarm: an earned contact is
+// completed first, then whatever is left is abandoned with the stop's cause.
+func (s *Sequencer) abandonForStop(cause string) (terminated bool) {
+	s.settleEarned()
+	return s.abandonNamed("", cause)
 }

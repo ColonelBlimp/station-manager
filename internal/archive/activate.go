@@ -162,6 +162,9 @@ func (m *Manager) Activate(ctx context.Context, id string) (types.QsoArchiveActi
 		return types.QsoArchiveActivation{}, err
 	}
 	defer m.endOp()
+	// The app's session order, after the single flight and before m.mu
+	// (takeSessionOrder): an app start or exit under way finishes first.
+	defer m.takeSessionOrder()()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.activated {

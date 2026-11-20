@@ -188,3 +188,234 @@ func (s *Server) sessionResponse(st sqlite.OperatingSessionState, caller, curren
 	}
 	return resp
 }
+
+// ---- The exit report (ADR 0100 §3; W-0029 part 2, E) ----
+
+// The exit report's own codes.
+const (
+	// operatingSessionStale: the generation named is not the current one. The
+	// answer carries the current generation; the exit, and only the exit, may
+	// be repeated at it by the same lifetime without admitting again.
+	operatingSessionStale = "operating_session_stale"
+	// operatingSessionExitNotCurrent: the lifetime is not the current one and
+	// still holds the open session (the daemon restarted before its exit was
+	// stored). Terminal: the close is not confirmed, and the next start asks
+	// (operator ruling 2026-11-19).
+	operatingSessionExitNotCurrent = "operating_session_exit_not_current"
+)
+
+// SetCompletionDrain injects the wait for FT8 completion logging already
+// earned: cmd/smd's tracked completion jobs. A confirmed exit calls it after
+// it has stopped the scopes and sealed live entry, and before it commits, so a
+// contact that completed on the air is stored before its session closes. It
+// must not cancel anything. Nil when there is no FT8 subsystem.
+func (s *Server) SetCompletionDrain(drain func()) { s.completionDrain = drain }
+
+func (s *Server) registerOperatingSessionExit(apiMux *routeMux) {
+	// Not behind the archive guard: a closing app whose archive was switched
+	// under it names the archive it closed in, and must still be answered. The
+	// archive is checked for the current lifetime only (exitOperatingSession).
+	apiMux.HandleFunc("POST /v1/operating-session/exit", s.handleOperatingSessionExit)
+}
+
+type operatingSessionExitRequest struct {
+	Generation *int64 `json:"generation"`
+}
+
+type operatingSessionExitResponse struct {
+	Generation      int64 `json:"generation"`
+	AlreadyRecorded bool  `json:"already_recorded"`
+}
+
+// operatingSessionStaleResponse is the error envelope with the current
+// generation beside it.
+type operatingSessionStaleResponse struct {
+	Code       string    `json:"code"`
+	Message    string    `json:"message"`
+	Op         errors.Op `json:"op"`
+	Generation int64     `json:"generation"`
+}
+
+// exitResult is what the exit decided, for the handler to answer.
+type exitResult struct {
+	status          int // 0 for success
+	code, message   string
+	generation      int64
+	alreadyRecorded bool
+	cause           error // logged, never sent
+}
+
+func (s *Server) handleOperatingSessionExit(w http.ResponseWriter, r *http.Request) {
+	const op errors.Op = "api.handleOperatingSessionExit"
+	var req operatingSessionExitRequest
+	if !s.readCommandJSON(w, r, op, &req) {
+		return
+	}
+	lifetime := appLifetime(r)
+	if lifetime == "" {
+		s.writeError(w, http.StatusBadRequest, "app_lifetime_required",
+			"an exit names the app lifetime that is exiting", op)
+		return
+	}
+	if req.Generation == nil {
+		s.writeError(w, http.StatusBadRequest, "missing_required_field", "generation is required", op)
+		return
+	}
+	res := s.exitOperatingSession(r, lifetime, *req.Generation)
+	switch {
+	case res.status == 0:
+		s.writeJSON(w, http.StatusOK, operatingSessionExitResponse{Generation: res.generation, AlreadyRecorded: res.alreadyRecorded})
+	case res.code == operatingSessionStale:
+		s.writeJSON(w, res.status, operatingSessionStaleResponse{Code: res.code, Message: res.message, Op: op, Generation: res.generation})
+	default:
+		if res.cause != nil {
+			s.logger.ErrorWith().Err(res.cause).Msg("operating session: the exit could not be stored; it is not confirmed")
+		}
+		s.writeError(w, res.status, res.code, res.message, op)
+	}
+}
+
+func exitUnavailable(cause error) exitResult {
+	return exitResult{status: http.StatusServiceUnavailable, code: operatingSessionUnavailable,
+		message: "the exit could not be stored; the close is not confirmed", cause: cause}
+}
+
+func exitStale(generation int64) exitResult {
+	return exitResult{status: http.StatusConflict, code: operatingSessionStale, generation: generation,
+		message: "the session state has changed since this exit was sent; it may be sent again at the generation given"}
+}
+
+// exitOperatingSession decides an exit report, with the admission's order held
+// from start to finish, so it is ordered against every admission and every
+// other exit. Who may report an exit is decided from the lifetime the
+// admission HOLDS, not from what a read would say of it:
+//
+//  1. the exit is already recorded in the served file: acknowledged, nothing
+//     changes and nothing is stopped, whoever is current, whatever generation
+//     and archive are named;
+//  2. it is the held lifetime: exitCurrent;
+//  3. it is not, and holds the open session: refused for good;
+//  4. it is not, and holds none: recorded and acknowledged, nothing else.
+//
+// It does not follow the request's context: an exit the client gave up on must
+// not be left sealed, or half decided.
+func (s *Server) exitOperatingSession(r *http.Request, lifetime string, generation int64) exitResult {
+	a := &s.admission
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	ctx := context.Background()
+
+	st, err := s.db.OperatingSessionStateWithContext(ctx, lifetime)
+	if err != nil {
+		return exitUnavailable(err)
+	}
+	if st.ExitRecorded {
+		return exitResult{generation: st.Generation, alreadyRecorded: true}
+	}
+	if lifetime != a.current {
+		return s.exitNotCurrent(ctx, a, lifetime, generation)
+	}
+	// The held lifetime. A refusal here has sealed nothing.
+	if status, code, message := s.archiveRefusal(r, true); status != 0 {
+		return exitResult{status: status, code: code, message: message}
+	}
+	if generation != st.Generation {
+		return exitStale(st.Generation)
+	}
+	return s.exitCurrent(ctx, a, lifetime, generation)
+}
+
+// exitNotCurrent is the exit of a lifetime this process does not hold: the
+// archive was switched under a closing app, the daemon restarted, or a later
+// start replaced it. It changes no session and stops nothing.
+func (s *Server) exitNotCurrent(ctx context.Context, a *appAdmission, lifetime string, generation int64) exitResult {
+	st, outcome, err := s.db.RecordOperatingAppExitWithContext(ctx, lifetime, generation, false, s.sessionNow())
+	switch {
+	case err != nil:
+		return exitUnavailable(err)
+	case outcome == sqlite.SessionNotCurrent:
+		return exitResult{status: http.StatusConflict, code: operatingSessionExitNotCurrent,
+			message: "this start of Station Manager is not the current one and its session is still open; the close is not confirmed"}
+	}
+	a.retire(lifetime)
+	return exitResult{generation: st.Generation, alreadyRecorded: outcome == sqlite.SessionExitAlreadyRecorded}
+}
+
+// exitCurrent is the exit of the held lifetime, in the order an archive switch
+// uses (ADR 0100 §4): new work is excluded, what was earned is finished, and
+// only then is the exit stored.
+//
+//   - every scope is stopped, and live Phone/CW entry sealed with the exit's
+//     own seal, which waits for submits already admitted;
+//   - FT8 completion logging already earned finishes; none is cancelled;
+//   - one commit records the exit and, if the lifetime holds the open session,
+//     closes it;
+//   - the lifetime is retired, the exit's seal released, the change published.
+//
+// If the commit fails, or refuses the exit as stale, the seal is released and
+// the lifetime published to its scopes again: the exit is not confirmed, and
+// operation goes on. (Scopes a failed replacement had already stopped are left
+// stopped: the lifetime's own admission repairs that.) After the commit
+// nothing restores operation under it.
+func (s *Server) exitCurrent(ctx context.Context, a *appAdmission, lifetime string, generation int64) exitResult {
+	// The scopes may be stopped already: a replacement that failed leaves the
+	// held lifetime so until its own admission repairs it. A failed exit then
+	// gives back what it took and no more.
+	wasStopped := a.stopped
+	for _, sc := range a.scopes {
+		sc.RetireOperating()
+	}
+	a.stopped = true
+	if s.exitSeal != nil {
+		_ = s.exitSeal.Seal() // never refuses: it waits for what is already running
+	}
+	restore := func() {
+		if s.exitSeal != nil {
+			s.exitSeal.Release()
+		}
+		if wasStopped {
+			return
+		}
+		for _, sc := range a.scopes {
+			sc.PublishOperating(lifetime)
+		}
+		a.stopped = false
+	}
+	if s.completionDrain != nil {
+		s.completionDrain()
+	}
+	st, outcome, err := s.db.RecordOperatingAppExitWithContext(ctx, lifetime, generation, true, s.sessionNow())
+	switch {
+	case err != nil:
+		restore()
+		return exitUnavailable(err)
+	case outcome == sqlite.SessionStale:
+		restore()
+		s.publishSessionChange(st) // the default-epoch test may have closed a session
+		return exitStale(st.Generation)
+	case outcome != sqlite.SessionApplied && outcome != sqlite.SessionExitRecorded && outcome != sqlite.SessionExitAlreadyRecorded:
+		// No other outcome says the exit is stored. Nothing is retired on a
+		// word this code does not know.
+		restore()
+		return exitUnavailable(stderr.New("the exit's commit answered " + string(outcome)))
+	}
+	a.retire(lifetime)
+	a.current, a.stopped = "", false
+	if s.exitSeal != nil {
+		s.exitSeal.Release()
+	}
+	s.publishSessionChange(st)
+	return exitResult{generation: st.Generation, alreadyRecorded: outcome == sqlite.SessionExitAlreadyRecorded}
+}
+
+// HoldSessionOrder takes the order an app start, an exit report and setup's
+// first session each run in, and returns its release. It is for the archive
+// manager, which orders a change of the default logbook and an archive
+// activation with them (archive.Manager.SetSessionOrder; W-0029 part 2, G6):
+// while it is held none of those begins, and it is not given while one is
+// under way. The holder must take it before any seal and any write (the one
+// order: this, then a scope's gate, then the live-entry gate, then the file).
+func (s *Server) HoldSessionOrder() (release func()) {
+	s.admission.mu.Lock()
+	return s.admission.mu.Unlock
+}

@@ -101,6 +101,12 @@ type Server struct {
 	// of the file and its naming of the state: the point a test uses to show
 	// nothing can come between the two. Nil in production.
 	sessionReadGap func()
+	// completionDrain waits for FT8 completion logging already earned
+	// (SetCompletionDrain); nil when there is none to wait for.
+	completionDrain func()
+	// exitSeal is the exit report's own seal on the live-entry gate
+	// (SetLiveEntryGate); nil when there is no gate.
+	exitSeal *LiveEntrySeal
 	// declaredRoutes is every pattern registered at construction (DeclaredRoutes).
 	declaredRoutes []string
 	// ft8ApplyTestGap, when non-nil, runs ONCE between the config snapshot and
@@ -261,6 +267,7 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 	s.registerAppAdmission(apiMux)
 	s.admission.sessions = serverSessions{s}
 	s.registerOperatingSession(apiMux)
+	s.registerOperatingSessionExit(apiMux)
 	s.declaredRoutes = append(append([]string(nil), apiMux.patterns...), mux.patterns...)
 
 	// Middleware chain — outermost first:

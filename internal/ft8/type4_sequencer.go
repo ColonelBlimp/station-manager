@@ -116,6 +116,11 @@ func (s *Sequencer) onSlotAnsweringT4(ref SlotRef, msgs []goft8.DecodedMessage, 
 	if advanced {
 		s.contact.skipIfSilent = false // they came back — an armed skip no longer applies
 	}
+	// Their RR73 has been taken in: the contact is earned from this slot on,
+	// whether or not our 73 can go out in it (earnLocked).
+	if s.t4Ex.State == t4Confirming {
+		s.earnAnswerT4Locked()
+	}
 
 	msg, ok := s.t4Ex.TxMessage()
 	if !ok { // already done — clear defensively.
@@ -175,12 +180,7 @@ func (s *Sequencer) onSlotAnsweringT4(ref SlotRef, msgs []goft8.DecodedMessage, 
 	// once and record the QSO on either outcome.
 	var onDone func(bool)
 	if confirming {
-		onDone = s.finalRungDoneLocked(
-			s.completedQsoT4Locked(),
-			func() { s.t4Ex = nil },
-			"ft8 seq: type-4 QSO complete (73 sent)",
-			"ft8 seq: type-4 final 73 did not transmit; QSO logged anyway (partner already rogered)",
-		)
+		onDone = s.earnAnswerT4Locked()
 	}
 	s.mu.Unlock()
 
@@ -208,6 +208,19 @@ func (s *Sequencer) onSlotAnsweringT4(ref SlotRef, msgs []goft8.DecodedMessage, 
 		return
 	}
 	s.publishCurrent()
+}
+
+// earnAnswerT4Locked is earnLocked for the type-4 answer ladder. Caller holds s.mu
+// with the exchange on t4Confirming.
+func (s *Sequencer) earnAnswerT4Locked() func(ok bool) {
+	return s.earnLocked(func() func(bool) {
+		return s.finalRungDoneLocked(
+			s.completedQsoT4Locked(),
+			func() { s.t4Ex = nil },
+			"ft8 seq: type-4 QSO complete (73 sent)",
+			"ft8 seq: type-4 final 73 did not transmit; QSO logged anyway (partner already rogered)",
+		)
+	})
 }
 
 // StartWorkCallerT4 begins working a nonstandard station that called US (reduced type-4).

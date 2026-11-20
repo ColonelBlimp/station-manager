@@ -422,7 +422,7 @@ func (s *Service) disarmTxLocked(cause string) {
 		// Still abandon under the gate: a session could be active from a start
 		// that raced an earlier disarm; clear it now that armed is false.
 		if s.seq != nil {
-			s.seq.abandonNamed("", cause)
+			s.seq.abandonForStop(cause)
 		}
 		return
 	}
@@ -468,12 +468,20 @@ func (s *Service) disarmTxLocked(cause string) {
 
 	// Armed state is false (under the gate); abandon whatever survived the
 	// completion. A start blocked on seqGate will observe txArmed=false and refuse.
+	//
+	// The wait above covers a closing rung that was ADMITTED. One that was not has
+	// no transmission to wait for: it was deferred to a later slot, or it was
+	// decided and the slot is between the sequencer's lock and txMu, where with the
+	// arm gone it will be refused. Its contact is earned all the same, so
+	// abandonForStop completes it before it abandons (codex-203, codex-204);
+	// abandoning first would retire the generation its callback is guarded by, the
+	// same loss as the ordering above prevents.
 	// The abandon reports whether a PARTNER exchange ended: if so the sequencer
 	// boundary has recorded the termination, and this disarm records nothing
 	// more — one row per event (W-0020 ruling 2).
 	terminated := false
 	if s.seq != nil {
-		terminated = s.seq.abandonNamed("", cause)
+		terminated = s.seq.abandonForStop(cause)
 	}
 	if !terminated {
 		s.noteTxDisarmed(cause, disarmedAt)

@@ -230,6 +230,11 @@ type Service struct {
 	// goroutine, which takes only txMu).
 	seqGate sync.Mutex
 
+	// slotMu marks a slot as being driven through the sequencer (driveSequencer);
+	// AwaitCompletionHandover waits on it. Outermost: taken before seqGate, txMu
+	// and the sequencer's lock, and never by a holder of one of them.
+	slotMu sync.Mutex
+
 	// Operating ownership (operating.go; W-0027 C4a). operatingLifetime is the app
 	// lifetime that may operate FT8, "" for none; guarded by seqGate, the gate a
 	// replacement takes.
@@ -1104,7 +1109,7 @@ func (s *Service) decodeLoop(slots <-chan Slot, sessionTail func() (time.Time, i
 		// is safe to apply unconditionally: skipping one slot costs a session
 		// started meanwhile nothing but that slot.
 		if !dialMoved && !starved {
-			s.seq.OnSlot(ref, msgs, time.Now().UTC())
+			s.driveSequencer(ref, msgs, time.Now().UTC())
 		}
 
 		// Publish the decode feed every slot (empty on our TX slots) so the SPA's slot
@@ -1337,4 +1342,42 @@ func (s *Service) setCapturingLocked(live bool) {
 	if s.captureListener != nil {
 		s.captureListener(live)
 	}
+}
+
+// driveSequencer is the decode loop's one call into the sequencer for a slot, with the
+// slot marked as in progress for its whole length.
+//
+// It is marked because of where a completed contact is handed to its logging job. A
+// closing rung refused before any transmission starts (the rig not ready, the dial moved)
+// completes a Group A contact on THIS goroutine, and the hand-over runs after the
+// sequencer has released its lock (invariant 3 keeps the publish under that lock; the
+// hand-over is deliberately outside it). No stop waits for that: seqGate is not held here,
+// and txWg counts transmissions, of which there is none. AwaitCompletionHandover is the
+// wait.
+//
+// slotMu is taken before every other lock a slot takes (the sequencer's, txMu, and
+// seqGate by way of a dial refusal), and nothing that holds one of those takes it.
+func (s *Service) driveSequencer(ref SlotRef, msgs []goft8.DecodedMessage, now time.Time) {
+	s.slotMu.Lock()
+	defer s.slotMu.Unlock()
+	s.seq.OnSlot(ref, msgs, now)
+}
+
+// AwaitCompletionHandover returns when no slot is being driven: a contact the decode loop
+// earned in a slot already under way has by then been handed to its logging job, and so
+// is counted by whoever waits for those jobs.
+//
+// It is for a caller that has already stopped operation (RetireOperating): after that
+// stop no exchange is live and none can start, so no later slot hands a contact over, and
+// this wait covers the one slot that may have been in progress. RetireOperating itself
+// covers a contact handed over by a transmission, and one whose closing rung never
+// reached the air (Sequencer.abandonForStop hands that one over inside the stop).
+// Together they are the daemon's "FT8 completion logging already earned" before a
+// confirmed exit of the app (ADR 0100 §3).
+//
+// The caller must hold none of seqGate, txMu or the sequencer's lock: a slot takes them.
+func (s *Service) AwaitCompletionHandover() {
+	s.slotMu.Lock()
+	//nolint:staticcheck // SA2001: an empty critical section is the wait itself
+	s.slotMu.Unlock()
 }

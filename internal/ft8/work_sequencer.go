@@ -374,6 +374,11 @@ func (s *Sequencer) onSlotWorkingFd(ref SlotRef, msgs []goft8.DecodedMessage, no
 			break
 		}
 	}
+	// Their RR73 has been taken in: the contact is earned from this slot on,
+	// whether or not our RR73 can go out in it (earnLocked).
+	if s.fdWork.State == fdwRogering {
+		s.earnWorkFdLocked()
+	}
 
 	msg, ok := s.fdWork.TxMessage()
 	if !ok {
@@ -442,12 +447,7 @@ func (s *Sequencer) onSlotWorkingFd(ref SlotRef, msgs []goft8.DecodedMessage, no
 	// mirror of the standard work-a-caller ladder, which is Group B.)
 	var onDone func(bool)
 	if confirming {
-		onDone = s.finalRungDoneLocked(
-			s.completedFdWorkQsoLocked(),
-			func() { s.fdWork = nil },
-			"ft8 seq: working caller (FD) QSO complete (RR73 sent)",
-			"ft8 seq: working caller (FD) RR73 did not transmit; QSO logged anyway (partner already rogered)",
-		)
+		onDone = s.earnWorkFdLocked()
 	}
 	s.mu.Unlock()
 
@@ -473,6 +473,19 @@ func (s *Sequencer) onSlotWorkingFd(ref SlotRef, msgs []goft8.DecodedMessage, no
 		}
 	}
 	s.publishCurrent()
+}
+
+// earnWorkFdLocked is earnLocked for the Field Day work ladder. Caller holds s.mu
+// with the exchange on fdwRogering.
+func (s *Sequencer) earnWorkFdLocked() func(ok bool) {
+	return s.earnLocked(func() func(bool) {
+		return s.finalRungDoneLocked(
+			s.completedFdWorkQsoLocked(),
+			func() { s.fdWork = nil },
+			"ft8 seq: working caller (FD) QSO complete (RR73 sent)",
+			"ft8 seq: working caller (FD) RR73 did not transmit; QSO logged anyway (partner already rogered)",
+		)
+	})
 }
 
 // commitWorkCallerLocked activates a work-a-caller session. Caller holds s.mu and has

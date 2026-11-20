@@ -8,10 +8,19 @@ import "sync"
 // refused, writing nothing — and then waits for every submission already
 // admitted to finish, committed or failed. Release reopens it. A submission
 // naming another logbook is a deliberate operation and is never refused here.
+//
+// Seals are OWNED (W-0029 part 2, G5). More than one operation can need live
+// entry closed at once: a default change keeps its seal until the daemon
+// restarts, and a confirmed exit of the app seals for its own short time. Each
+// holder releases only what it sealed, and admission is open only while no
+// holder has a seal. The gate's own Seal and Release are one holder, the one
+// the archive manager uses for a default change and an activation; Owner makes
+// another.
 type LiveEntryGate struct {
 	mu       sync.Mutex
 	drained  *sync.Cond // signalled when inFlight reaches zero
-	closed   bool
+	held     int        // how many holders have a seal; admission is closed while it is not zero
+	own      bool       // the gate's own holder has a seal
 	inFlight int
 }
 
@@ -31,7 +40,7 @@ func (g *LiveEntryGate) Admit(live bool) (done func(), ok bool) {
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.closed {
+	if g.held > 0 {
 		return nil, false
 	}
 	g.inFlight++
@@ -48,31 +57,68 @@ func (g *LiveEntryGate) Admit(live bool) (done func(), ok bool) {
 	}, true
 }
 
-// Seal closes admission, then waits for every admitted live submission to
-// finish. It never refuses: what it waits for is already running.
-func (g *LiveEntryGate) Seal() error {
+// seal takes a holder's seal (a second one by the same holder adds nothing),
+// then waits for every admitted live submission to finish.
+func (g *LiveEntryGate) seal(holding *bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.closed = true
+	if !*holding {
+		*holding = true
+		g.held++
+	}
 	for g.inFlight > 0 {
 		g.drained.Wait()
 	}
+}
+
+// release gives up a holder's seal, if it has one. Admission reopens when the
+// last holder lets go.
+func (g *LiveEntryGate) release(holding *bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if *holding {
+		*holding = false
+		g.held--
+	}
+}
+
+// Seal closes admission for the gate's own holder, then waits for every
+// admitted live submission to finish. It never refuses: what it waits for is
+// already running.
+func (g *LiveEntryGate) Seal() error {
+	g.seal(&g.own)
 	return nil
 }
 
-// Release reopens admission.
-func (g *LiveEntryGate) Release() {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.closed = false
+// Release gives up the gate's own holder's seal. Admission stays closed while
+// another holder has one.
+func (g *LiveEntryGate) Release() { g.release(&g.own) }
+
+// LiveEntrySeal is one more holder's seal on a gate (LiveEntryGate.Owner).
+type LiveEntrySeal struct {
+	g       *LiveEntryGate
+	holding bool // guarded by g.mu
 }
 
-// Closed reports whether admission is closed: Seal has begun, whether it is
-// still draining or done.
+// Owner returns a new holder of this gate's seal.
+func (g *LiveEntryGate) Owner() *LiveEntrySeal { return &LiveEntrySeal{g: g} }
+
+// Seal closes admission for this holder, then waits for every admitted live
+// submission to finish.
+func (o *LiveEntrySeal) Seal() error {
+	o.g.seal(&o.holding)
+	return nil
+}
+
+// Release gives up this holder's seal, and no other's.
+func (o *LiveEntrySeal) Release() { o.g.release(&o.holding) }
+
+// Closed reports whether admission is closed: some holder's Seal has begun,
+// whether it is still draining or done.
 func (g *LiveEntryGate) Closed() bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return g.closed
+	return g.held > 0
 }
 
 // InFlight is the number of admitted live submissions not yet finished.

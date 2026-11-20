@@ -29,26 +29,34 @@ func (s *Server) SetServedArchive(id string) {
 // enforced. An unset served archive refuses every supplied header: nothing can
 // be proven to match it.
 func (s *Server) checkArchive(w http.ResponseWriter, r *http.Request, op errors.Op, required bool) bool {
-	values := r.Header.Values(archiveIDHeader)
-	if len(values) == 0 {
-		if !required {
-			return true
-		}
-		s.writeError(w, http.StatusBadRequest, "missing_required_field",
-			archiveIDHeader+" header is required: reload the page so it can confirm its archive", op)
-		return false
-	}
-	if len(values) > 1 || !utils.IsValidUUIDv7(values[0]) {
-		s.writeError(w, http.StatusBadRequest, "invalid_field_value",
-			archiveIDHeader+" must be one archive UUID", op)
-		return false
-	}
-	if s.servedArchiveID == "" || !strings.EqualFold(values[0], s.servedArchiveID) {
-		s.writeError(w, http.StatusConflict, "archive_mismatch",
-			"this page is bound to a different archive from the one the daemon now serves; nothing was done — the page must reload", op)
+	if status, code, message := s.archiveRefusal(r, required); status != 0 {
+		s.writeError(w, status, code, message, op)
 		return false
 	}
 	return true
+}
+
+// archiveRefusal is checkArchive's rule without a response: the status, code
+// and message of the refusal, or a zero status when the request passes. The
+// exit report uses it, since it applies the rule to one of its cases only
+// (operating_session.go).
+func (s *Server) archiveRefusal(r *http.Request, required bool) (status int, code, message string) {
+	values := r.Header.Values(archiveIDHeader)
+	if len(values) == 0 {
+		if !required {
+			return 0, "", ""
+		}
+		return http.StatusBadRequest, "missing_required_field",
+			archiveIDHeader + " header is required: reload the page so it can confirm its archive"
+	}
+	if len(values) > 1 || !utils.IsValidUUIDv7(values[0]) {
+		return http.StatusBadRequest, "invalid_field_value", archiveIDHeader + " must be one archive UUID"
+	}
+	if s.servedArchiveID == "" || !strings.EqualFold(values[0], s.servedArchiveID) {
+		return http.StatusConflict, "archive_mismatch",
+			"this page is bound to a different archive from the one the daemon now serves; nothing was done — the page must reload"
+	}
+	return 0, "", ""
 }
 
 // requireArchive guards a route whose every request acts on the archive or

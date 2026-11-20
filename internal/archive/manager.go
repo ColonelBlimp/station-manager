@@ -87,6 +87,10 @@ type Manager struct {
 	// once, never queued.
 	opMu sync.Mutex
 	op   string
+	// sessionOrder takes the app's session order (SetSessionOrder); nil until
+	// wired. A default change and an activation take it after the single
+	// flight (takeSessionOrder).
+	sessionOrder func() (release func())
 
 	// Bindings port (SetActiveBindings): the ACTIVE archive's database and the
 	// bindings this generation started with (ADR 0082, 5D). nil until the

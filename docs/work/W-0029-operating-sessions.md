@@ -12,8 +12,11 @@ has no remaining objection to them (codex-194). Part 2's first slice, the start 
 the admission, the read route and the event, is committed (`a8317035`), with one fix from
 its clean-room review (`de4eb3fd`). The second slice, setup's save, is committed
 (`3f2f08aa`), with one fix from its clean-room review (`e5058ed5`) and a correction to
-that fix's error reporting, committed with this text (at the end of this file). The exit
-report is not built.** The removal of the database half of
+that fix's error reporting (`806d5a09`). Built and uncommitted: the third slice, the exit report with the one
+order, and the fixes from Codex's two reviews of it (codex-203, codex-204; all at the end
+of this file). Codex's third reading closed both findings and has no remaining blocking
+objection to the slice (codex-205). Committing it is the operator's decision.
+With it part 2's criteria are built; what is not shown is listed there.** The removal of the database half of
 the downgrade tooling, which part 1 waited for, is committed (`0b21b2fb`, 2026-11-20; W-0027).
 **Part 1's acceptance criteria are written, their three questions ruled, and agreed with
 Codex after one round of corrections (2026-11-20).** The
@@ -133,6 +136,8 @@ next part starts.
     the operator's to direct.
   - **"Commit and push"** is of the session tests' fixture, the two test fixes and this
     dossier.
+- **2026-11-20 (operator): "build the exit report slice".** The third slice of part 2 is
+  directed: the exit report (E) with the order's cases (G).
 
 The design's own rulings are in ADR 0100 and are not repeated here.
 
@@ -1784,7 +1789,7 @@ new condition in its own overlay and saw both tests fail. Two wordings corrected
 request: the two ids differ during a save as well as after a failed one; and the delete's
 comments, which still spoke of two preconditions.
 
-### The delete's reported reason (2026-11-20; built, committed with this record)
+### The delete's reported reason (2026-11-20; committed `806d5a09`)
 
 **The finding (P3), from the clean-room review of `e5058ed5`, which is right.** The fix
 above added a third reason a delete can be refused. The reason was then looked for in
@@ -1821,3 +1826,424 @@ give-up answering "has QSOs" the second fails. Gates rerun: 66 packages ok.
 **Not shown.** A cancellation between tries is not tested here (Codex forced it in its
 overlay and saw the cancellation returned with nothing deleted). Three is a bound on work,
 not a measured figure.
+
+### Part 2, third slice: the exit report and the one order (2026-11-20; built, uncommitted)
+
+On the operator's direction ("build the exit report slice"). Groups E and G of part 2's
+criteria.
+
+**What changes at the station when this is deployed.** Nothing an operator sees: nothing
+sends an exit report until W-0027 A3. Two things do change underneath. A change of the
+default logbook or an archive activation now waits for an app start that is under way
+before it seals anything (an app start takes moments). And the FT8 decode loop takes one
+more lock around its call into the sequencer; nothing about keying, a rung or a completion
+changes. **Added by the review below:** a stop of FT8 (a disarm, a lost rig, a dial move,
+an app replaced) that lands in the instant between the partner's roger and our closing 73
+being admitted now logs that contact; before, it was lost.
+
+**Built.**
+- **Owned seals** (`internal/api/live_entry.go`). The gate counts its holders; each
+  releases only its own seal, and live entry is open only when none is held. The gate's
+  own `Seal` and `Release` are the holder the archive manager already uses; `Owner` makes
+  another, and the exit has one.
+- **The exit route** (`internal/api/operating_session.go`):
+  `POST /v1/operating-session/exit`, not behind the archive guard, with the admission's
+  order held from start to finish. In order: the exit already recorded in the file
+  (acknowledged; nothing stopped); the lifetime the admission holds (its archive and
+  generation checked with nothing sealed; then scopes stopped, live entry sealed with the
+  exit's own seal, the completion drain, one commit, the lifetime retired, the seal
+  released, the change published); not held and holding the open session (refused for
+  good); not held and holding none (recorded; nothing else). If the commit fails or
+  refuses the exit as stale, the seal is released and the lifetime published to its scopes
+  again; the stale answer carries the current generation.
+- **The FT8 completion wait** (`cmd/smd`, `drainFt8Completions`): first a contact the
+  decode loop earned in a slot still under way is handed to its job, then every tracked
+  job finishes. The first half is new in `internal/ft8`: the decode loop's one call into
+  the sequencer goes through `driveSequencer`, which marks the slot, and
+  `AwaitCompletionHandover` waits for a marked slot. See "The gap in FT8" below.
+- **The order with archive operations** (`internal/archive`): a default change and an
+  activation, having taken the single flight, take the admission's order
+  (`takeSessionOrder`) before the manager's lock, any seal and any write, and hold it
+  until the request returns. The API gives the order as `HoldSessionOrder`; `cmd/smd`
+  wires it.
+- `internal/api/archive_guard.go`: the guard's rule as a function that writes no response,
+  so the exit can apply it to one case.
+- The reference (`docs/v2-design/api-endpoints.md`: the route, its codes, and the order
+  on the default change and the activation) and the FT8 guide (`docs/ft8.md`).
+
+**The gap in FT8, found while building E.** E says of the completion jobs "none launched
+before the seal escapes the wait". Read in the source, then shown by a test: a completed
+contact is handed to its logging job from one of two goroutines. From the transmission's
+own, when the closing 73 played or was cut short; `RetireOperating` waits for that, and
+tests of W-0027 C4 show it. Or from the decode loop, when the closing 73 was refused
+before a transmission started (the rig not ready, the dial moved): a Group A contact is
+logged anyway, and the hand-over runs after the sequencer has released its lock. Nothing
+waited for that one. A stop landing in that gap returned with the hand-over still to
+come, and a wait for the jobs taken then found none: the contact would have been stored
+after the exit closed the session.
+- The test was written first and failed as the gap predicts: the stop returned with the
+  hand-over in progress, and a wait that does not wait returned with nothing logged.
+- The fix adds a lock and a wait. It changes no completion rule, no order inside the
+  sequencer and nothing about keying: the FT8 package's seven invariants are as they were,
+  and its whole test suite passes under `-race`.
+- A source test keeps the decode loop's call single: any mention of the sequencer's slot
+  handler outside `driveSequencer`, a call or a method value, fails it.
+- **An app start does not use this wait** (ruling 2 of part 2: the wait at an admission
+  is built with part 5). A replacement that lands in the same gap still returns before
+  the hand-over; the contact is stored, as it is today.
+
+**Seen.**
+- **Tests first.** The gate's tests against a gate with one shared flag: four of five
+  failed, Codex's counterexample among them. The exit's tests with no route: all failed
+  (404). The FT8 hand-over test against a wait that does not wait: failed. The two tests
+  of a default change and an activation asked for with an exit under way, before the
+  order existed: both failed, each operation answering 202 while the exit was held.
+- **Passing without having failed first, and why that is acceptable:** G1 to G4, G5 at
+  the daemon and "an exit during a default change is not refused". They test what the
+  admission's lock and the owned seals already gave. Each is shown able to fail by a
+  reversion proof below.
+- **What E's tests assert,** through the app listener: the current lifetime's exit closes
+  its session, records the exit, retires the lifetime and publishes one event, and a new
+  start is then admitted; the drain runs once, with the scopes stopped and live entry
+  sealed, before the commit; a refusal at the first check (another archive, no archive, an
+  older or a later generation) has stopped, sealed and drained nothing; a submit admitted
+  before the seal is waited for and one arriving after is refused; stale at the commit and
+  a failure before it both leave live entry open, the scopes published to the lifetime
+  again, the lifetime current and no exit recorded, and the stale one can be repeated at
+  the generation returned; an exit already recorded is acknowledged whatever is named,
+  after a restart too, and for a lifetime the admission still holds; not current and
+  holding the session is refused for good; not current and holding none is recorded with
+  nothing else touched, also when it names another archive.
+- **The completion wait, through a real daemon** (`cmd/smd`): the exit waits for a
+  tracked job the test alone releases, and is not stored meanwhile; a contact whose write
+  was held at the archive's write lock is stored, with its upload row, when the exit
+  answers; a completion whose write fails stores nothing and the exit still answers.
+- **G, forced.**
+  - G1: an admission of a lifetime with its own exit under way waits, then is refused as
+    retired; an exit with the lifetime's admission under way (held at the file's write
+    lock) waits, then succeeds. Either way: retired, no session.
+  - G2: a second lifetime's admission with the first's exit held between its seals and
+    its commit waits; the first's session is closed by its own exit (`app_closed`), and
+    the second gets a new one.
+  - G3: setup's save with the order held waits, opens nothing meanwhile, and its session
+    is for the lifetime held when the step runs.
+  - G4: a save then an exit: the exit closes the session the save opened. An exit under
+    way when the save arrives: the save waits and opens nothing for that lifetime.
+  - G5, through a real daemon and a real default change: after the change is accepted, an
+    exit that succeeds, an app start after it, and an exit that fails and gives operation
+    back each leave live entry closed and TX admission sealed (an arm by the current
+    lifetime is refused with the pending-change refusal, not for its caller).
+  - G6: a default change, and an activation, asked for with an exit held at its commit
+    take the single flight and wait, having sealed and recorded nothing; a second archive
+    operation asked for meanwhile is refused at once as in progress; when the exit is let
+    go it answers 200 and the waiting operation is then accepted. An exit asked for with
+    a default change in flight is not refused, and the change's seals hold afterwards.
+- **Through a real daemon binary:** the desktop scenario that starts a built `smd` passes
+  its 19 checks with the final build.
+- **Reversion proofs,** in temporary copies since removed, each change checked as applied
+  and the file restored and compared with the tree's.
+  - The exit, fourteen: the route behind the archive guard; a lifetime not held treated as
+    held; the archive unchecked; no first generation check; no live seal; the gate's
+    shared seal in place of the exit's own; the scopes not stopped; no drain; no restore
+    when stale; no restore on failure; the lifetime not retired; the seal kept after the
+    exit; no event. Thirteen failed at once. **One did not, and the test was missing:**
+    "already recorded" not checked first. For a lifetime that is not held the storage
+    function gives the same answer. The case that differs is a lifetime the admission
+    still holds whose exit the file records; a test of it now fails that change.
+  - FT8, four: the decode loop calling the sequencer directly; the slot not marked; the
+    wait not waiting; the call made through a method value. All failed.
+  - The order, eight: the exit letting go of the order in its drain; setup's step outside
+    the order; the order not held for the manager; the default change not ordered; the
+    activation not ordered; the order taken before the single flight (a second archive
+    operation then waits when it must be refused); the exit using the shared seal; the
+    exit's success also releasing the shared seal. All failed.
+  - The drain's wiring, two, three runs each: the jobs not waited for; the drain not
+    wired. The tracked-job test failed in all six runs. The earned-contact test failed in
+    two of six: it shows the rows are stored when the exit answers, and is not by itself
+    proof of the wait (without the wait the exit and the contact race for the write lock).
+- **Gates, by exit code:** `gofmt`, `go vet`, `golangci-lint` (0 issues), the
+  maintainability metrics (0 regressions), `go test ./... -count=1` (66 packages ok); the
+  new tests repeated under `-race` (API 8 times, daemon 4 times, FT8 20 times), and the
+  FT8 and archive packages whole under `-race`.
+
+**A defect of my own, found reading the finished change before review.** A failed exit
+gave the lifetime back to its scopes without asking whether the exit had stopped them.
+After a replacement that failed, the held lifetime's scopes are already stopped, and stay
+so until its own admission repairs it; a failed exit of that lifetime authorized FT8
+again without that repair. A test of it failed ("the scope saw ... publish" after the
+failed exit); the exit now gives back only what it took. In the same pass the commit's
+outcomes were made explicit: the lifetime is retired only on an outcome that says the
+exit is stored.
+
+**Named and NOT shown, each with why.**
+- **A bounded look stood in for "it is waiting"** in every forced case here (300 ms, or
+  250 ms in the FT8 test). *Replaced in the review below:* each waiter is now seen parked
+  at its lock.
+- **The FT8 hand-over through the real decode loop.** The test drives `driveSequencer`
+  itself, as the loop does, with the real service, sequencer and completion policy; the
+  loop's own goroutine and audio are not in it. The source test is what ties the loop to
+  that call.
+- **The exit's failure path against an activation's seals.** Shown against a default
+  change's (G5). An activation takes the same FT8 and rig seals by the same calls; it has
+  no live-entry seal. *Shown in the review below,* with the exit that succeeds.
+- **Stale at the commit, through a real daemon.** Shown through the API test server.
+- **G3 with a real replacement in flight.** The order is held by the test itself, in the
+  place a replacement holds it, and the admission's state changed as a replacement
+  changes it.
+- **A cancelled exit request.** The exit does not follow the request's context (a choice,
+  below), so a client that gives up does not interrupt it. *Tested in the review below.*
+- **The cancel, confirm and retry actions of a default change, and a logbook deletion,**
+  are not ordered with the admission. G6 names a default change and an activation asked
+  for; those other operations take no seal.
+
+**Choices made, for review.**
+- The admission's own generation does not move at an exit; the lifetime is retired and
+  nobody is current.
+- A stale answer is the error envelope with `generation` beside it.
+- The exit does not follow the request's context, as the admission's step does not.
+- An exit by a lifetime that is not held is remembered as retired in memory as well as in
+  the file.
+- "Already recorded" is answered first for every lifetime (E1: "nothing changes and no
+  scope is stopped, whoever is current"), a lifetime the admission still holds included.
+  That state cannot be reached in one process, where the commit and the retirement are
+  one step; if it were reached, the answer leaves that lifetime held.
+- Any caller the app listener accepts can have an exit recorded for a lifetime that was
+  never admitted (E7: not current and holding none is recorded). Each is one row.
+- A default change or an activation holds the admission's order for its whole request,
+  the wait for admitted live submits included. An app start in that time waits for the
+  request to answer.
+- The FT8 wait is a method of its own, used by the exit's drain only. (`RetireOperating`
+  was unchanged when this was written; the review below changes the stop it shares with
+  every disarm.)
+
+### Part 2, third slice: Codex's review and what it changed (2026-11-20; built, uncommitted)
+
+Codex reviewed the slice (codex-203) and did not close it: one blocking finding in FT8,
+three answers, and the forced cases still missing. Everything named is fixed here, in the
+same uncommitted change.
+
+**The finding: a stop could discard an earned contact before any wait could see it.**
+Checked in the source and reproduced by a test of my own before any fix. A Group A closing
+rung (our 73 after their RR73) is decided under the sequencer's lock, which builds the
+completion that will log the contact, and is admitted under the Service's lock a moment
+later. Between the two no transmission exists. A stop landing there (`disarmTxLocked`)
+found nothing in flight to wait for and abandoned the session, which retires its
+generation; the completion is guarded by that generation, so when the slot went on, was
+refused for want of an arm and called it, it refused itself. The contact was not logged.
+The wait added by this slice (`AwaitCompletionHandover`) is later and could not recover
+it. The loss predates this slice and was open to every stop that goes through the disarm:
+the operator's disarm, the presence rule, a lost rig, a dial move, shutdown, and an app
+replaced. The exit inherited it. Invariant 1 of `internal/ft8` already says such a contact
+is logged; the code did not keep it in this window.
+
+**The fix** (`internal/ft8`): the sequencer now carries the fact. When a Group A
+completion is built it is kept on the contact (`contactFlags.earned`), until it runs or
+the session is retired. (Codex's second review, below, showed that "when it is built" is
+too late; it is now kept from the slot that takes the roger in.) The disarm's abandon (`Sequencer.abandonForStop`) first runs a
+kept completion, as not transmitted, and then abandons what is left. Whichever of the
+stop, the slot's own failure branch and a transmission's goroutine runs it first retires
+the session; the others are refused by the generation guard, which is what makes it once.
+- Not taken: waiting for the slot inside the stop. A stop holds the gates a slot takes, so
+  that would reverse the lock order (Codex said so too); and it would let the closing 73
+  start keying after the stop had been asked for.
+- **No rule of keying changed:** nothing new can transmit; the arm is cleared before the
+  completion runs, and the test requires that the 73 is not keyed after the stop.
+- **The operator's Abandon is unchanged:** it discards the contact, as it did, and as
+  `TestSequencer_AbandonDuringFinal73SuppressesStaleCallback` requires. Whether an Abandon
+  pressed during our closing 73 should instead log the contact the partner already holds
+  is a question for the operator; it is not decided or changed here.
+- `docs/ft8.md` records the rule beside the exit's wait.
+
+**The missing forced cases, added.**
+- **G4, the save first, forced.** It was sequential. Now the save is held inside its
+  session step, with the order taken and no session yet opened; the exit is seen waiting
+  at the order; when the save is let go it opens the session and the exit that follows
+  closes it.
+- **G5 for an activation,** through the real daemon: after an activation is accepted, an
+  exit that succeeds, the app start after it, and an exit that fails and gives operation
+  back each leave the activation pending and TX admission sealed.
+- **An app's start that meets an exit at its admit,** not only at its read. The start is a
+  read and then an admit; the tests sent both after the exit had begun, so the start
+  waited at its read and the admit never met the exit. G1 and G2 now run both ways.
+- **A client that gives up** while its exit is under way: it gets no answer, the exit goes
+  on to its commit, and the repeat, which is seen waiting for it, is acknowledged as
+  already recorded; live entry is open again and the lifetime retired.
+
+**Seen waiting, in place of a timed look** (G7: "None sleeps and then looks"; Codex:
+"observable coordination rather than a timed look"). The Go runtime's goroutine dump gives
+each parked goroutine's wait reason and stack. A small test helper
+(`internal/testbarrier`, test code only) reads it: a test now waits until the other
+operation is seen parked at a mutex, or at a wait group, inside the function that takes
+the order for that operation, and fails at once if it answers instead. Every forced case
+of this slice uses it, in `internal/api`, `cmd/smd` and `internal/ft8` (and the one older
+FT8 test in the same file whose comment said nothing observable existed).
+- What it showed at once: the app start in G1 and G2 was waiting at its read. That is how
+  the missing admit case above was found.
+- What it rests on: the wording of the runtime's dump. If a Go release changes it, these
+  tests fail ("neither answered nor was seen waiting"). I wrote here that they cannot pass
+  wrongly; Codex's second review showed one way they could, closed in the next section.
+- What is still only a look: an operation the test itself is holding (at the archive's
+  write lock, or in a hook) is checked as unanswered without a wait. It is held by
+  construction.
+
+**Codex's three answers, and one correction of mine.**
+- The later gap in FT8 is as described and the slot's mark closes it; no lock cycle in
+  the mark's callers.
+- A default change and an activation keep the admission's order for the whole request.
+- The cases missing from the forced matrix: above.
+- **Correction:** claude-464 said a hung completion job is bounded by `ft8QsoLogTimeout`.
+  It is not: that limit is cooperative, and the write runs under a context that is not
+  cancelled, limited by the database's own limits. The exit's wait has no overall
+  deadline. None is proposed: a deadline could discard an earned contact. (The claim was
+  in the exchange only, not in the tree.)
+
+**Seen.**
+- **Tests first.** The FT8 test of the earlier boundary, with an exit or replacement and
+  with an operator's disarm, against the code as reviewed: both failed with no contact
+  logged, as Codex's reproduction did. Its neighbour, a stop at the same point with our
+  R-report held (the partner has not rogered), logs nothing before and after the fix.
+- **Passing without having failed first:** the four added forced cases and the cancelled
+  request. Each is shown able to fail below.
+- **Reversion proofs,** in temporary copies since removed, each change checked as applied
+  and the file restored and compared: fourteen, all failing for the reason claimed.
+  - FT8, six: the stop not completing an earned contact; the completion not kept; the
+    R-report rung treated as earned (the neighbour then fails: a contact not rogered is
+    logged); the operator's Abandon made to complete it (the older Abandon test fails);
+    the hand-over wait not waiting; the generation guard removed (the contact is logged
+    twice). The third was first written as "every rung is earned", which failed in the
+    fixture for another reason, and was narrowed.
+  - The order, in `internal/api`, three: setup's step outside the order (G3 and both
+    forced G4 cases fail); the exit letting go of the order in its drain; the exit not
+    taking the order.
+  - Through the daemon, four: the default change not ordered; the activation not
+    ordered; the drain not waiting for the tracked jobs; a lifetime published to FT8 also
+    lifting the archive's seal (both activation cases of G5 fail).
+  - The cancelled request, one, five runs: the exit made to follow its request. The
+    repeat is then a first exit, not an acknowledgement, in all five.
+- **Gates, by exit code, on the final tree:** `gofmt`, `go vet`, `golangci-lint` (0
+  issues), the maintainability metrics (0 regressions), `go test ./... -count=1` (67
+  packages ok, the helper's among them), the documentation and context checks; the new
+  and changed tests repeated under `-race` (API 8 times, daemon 4 times, FT8 20 times),
+  and the FT8, archive and helper packages whole under `-race`. The desktop scenario
+  against a daemon built from this tree passes its 19 checks. No transmission, keyed
+  test or rig command was made: the FT8 tests run against the test keyer.
+
+**Not shown.**
+- **The earlier boundary through the real exit route and a real daemon.** The pause is
+  made inside the FT8 service's own test fixture; the daemon's tests cannot reach that
+  point. What ties them: the exit calls `RetireOperating`, which the FT8 test calls, and
+  the daemon's tests show that a contact handed over is stored before the exit answers.
+- **The disarm of an already idle service** (not armed, nothing in flight) uses the same
+  call. No test reaches it with an earned contact pending: with the arm already gone, the
+  earlier disarm has settled it.
+- **The dump's wording on another Go release or platform.** Seen on go1.26.2,
+  linux/amd64, with and without the race detector.
+
+### Part 2, third slice: Codex's second review and what it changed (2026-11-20; built, uncommitted)
+
+Codex confirmed the first repair (codex-204: its own reproduction now passes) and kept the
+review open for two more things in FT8 and one qualification of the test helper. All
+three are fixed here, in the same uncommitted change.
+
+**A rogered contact was still lost if our closing rung had been deferred.** The first
+repair kept the completion from the moment it was built, and it was built only where the
+closing rung is transmitted. A handler takes the partner's roger in first and can then
+return without transmitting: the roger was decoded too late into our slot, or our slot had
+already carried a rung. The ladder is then on its closing rung with no completion kept,
+and a stop before the next slot discarded the contact. The same shape is in all three
+Group A ladders (answer a CQ, answer a type-4 CQ, work a Field Day caller).
+- **The fix:** the contact is earned in the slot that takes the roger in. Each Group A
+  handler keeps the completion as soon as its ladder is on the closing rung, before any
+  return that defers the rung (`Sequencer.earnLocked`), and the transmit site uses the
+  same completion. Transmit timing is unchanged: a deferred rung is still deferred, and
+  the control test shows it is still sent once in the next slot and logged once.
+- **Group B is untouched.** Its final rung earns nothing until it has been on the air; no
+  Group B handler calls the new function, and a test of all four Group B ladders, each
+  with its final rung deferred and then a stop, logs nothing.
+- The completion's snapshot of the contact is now taken at the roger and not a slot
+  later. Every field in it is fixed by then (the reports are final on the closing rung;
+  the rest is pinned at the start of the session or the contact).
+
+**Two callers of one completion shared the contact they stamp.** The completion stamps
+the antenna path and the session's frequency before its generation guard decides which
+caller logs. Since the first repair the stop can call it at the same moment as the slot
+whose rung was refused. Codex's race run reported the two touching one contact. It is
+more than a report: a test that makes the two overlap in a fixed order, with the live
+antenna path changing between their stamps, logged the contact with the path stamped by
+the caller that did NOT log it ("L" where "S" was live when the logging caller stamped).
+- **The fix:** each call of the completion works on a copy of its own.
+
+**The helper could accept the wrong waiter.** `Waiting` looked for any goroutine parked
+with the named function anywhere on its stack and never tied it to the operation the test
+was watching. Codex showed it: an unrelated goroutine parked there, the operation waiting
+somewhere else, and `Waiting` returned as if it had seen the operation. So my sentence in
+the last section, that these tests cannot pass wrongly, was false. The helper now
+enforces the condition under which the goroutine seen is the operation:
+- `Expect` is called before the operation is started and fails if anything is already
+  parked there;
+- `Waiting` requires exactly one goroutine parked there, and fails on two;
+- a goroutine counts only if the named function is the one that called the lock, not any
+  function further up its stack.
+- Codex's case is now a test of the helper, with the two-waiter case and the case where
+  nothing is seen at all. Every call site begins its watch before it starts the
+  operation.
+- **What it still does not identify,** and the package says so: a mutex's address, or a
+  request. A test must start only one operation that can take that lock in that function
+  between the watch and the wait, and the function must take one lock. The fixtures here
+  each have one server and one such operation.
+
+**Seen.**
+- **Failing first,** against the tree as Codex reviewed it: the deferred closing rung, for
+  each of the three Group A ladders and each of the two deferrals (six cases), and
+  through the service's real stop for an exit or replacement and for an operator's disarm
+  (two): all eight failed with no contact logged. The overlap test, in both orders: both
+  failed with the other caller's stamp logged. The control (no stop: sent once, logged
+  once) and the Group B test passed before and after.
+- **Reversion proofs,** in temporary copies since removed, each checked as applied and
+  restored: thirteen, all failing for the reason claimed.
+  - FT8, seven: the roger not earning the contact, once for each of the three ladders
+    (only that ladder's cases fail); one contact shared by the callers (both orders log
+    "L"); the stop not completing; the completion built and not kept; the R-report rung
+    earning the contact (the unrogered neighbour is then logged).
+  - The helper, three: a watch accepted with something already parked; two parked
+    goroutines accepted; any function on the stack counting.
+  - Three of the earlier order proofs, repeated with the stricter helper: the exit
+    letting go of the order in its drain (G1, G2 and the cancelled request fail); the
+    default change not ordered; the drain not waiting for the jobs.
+- **Not given a reversion proof:** the Group B test. No line of this change makes a Group
+  B rung earn; the proof would have to add code, not remove it. The nearest shown is the
+  R-report proof above, on a Group A ladder.
+
+- **Gates, by exit code, on the final tree:** `gofmt`, `go vet`, `golangci-lint` (0
+  issues), the maintainability metrics (0 regressions), `go test ./... -count=1` (67
+  packages ok), the documentation and context checks. Under `-race`: the FT8, archive and
+  helper packages whole, the FT8 earned and operating tests 30 times, the API cases 8
+  times, the daemon cases 4 times. The desktop scenario against a daemon built from this
+  tree passes its 19 checks. No transmission, keyed test or rig command was made.
+
+**Not shown, in addition to the last section's list.**
+- A slot time that does not parse, as a third deferral. The contact is earned before that
+  return too; no test forces it.
+- The deferred closing rung through the service for the type-4 and Field Day ladders.
+  Those two are tested at the sequencer, where the fix is, by the call the service's stop
+  makes (`abandonForStop`); the service-level test is of the standard answer.
+- A third caller overlapping: a transmission's goroutine with a stop. The disarm waits
+  for the transmission before it settles, so the two do not meet there.
+
+**Codex's third reading (codex-205, 2026-11-20): both findings closed, no remaining
+blocking objection to the slice.** Codex reran its three earlier diagnostics 30 times
+under `-race` (all pass) and challenged the permanent tests itself: removing one ladder's
+early earning fails exactly that ladder's two deferral cases; removing the private copy
+fails both stamp-order cases with "L" where "S" is expected. It found no further return
+between the roger and the kept completion, and accepted the helper's precondition for
+these fixtures as conditional observation, not an identity of a mutex or a request.
+- **One precision from that reading, checked in the code and recorded in `earnLocked`'s
+  comment.** A kept completion stays with its own contact because each of the three
+  Group A ladders zeroes the contact's flags and advances the generation where its
+  session starts and where it ends. That is not true of every contact start: Call-CQ
+  begins a contact inside a run without doing either (`commitCqContactLocked`). Call-CQ
+  is Group B and earns nothing, so it is not a counterexample; a ladder that begins its
+  contacts that way must not earn through `earnLocked`.
+- **Still the operator's, decided by nobody here:** committing and pushing the slice;
+  whether a deleted logbook's name stays reserved; whether an Abandon pressed during our
+  closing 73 should log the contact the partner has already rogered (today it discards).

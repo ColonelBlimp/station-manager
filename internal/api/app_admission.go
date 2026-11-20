@@ -208,10 +208,7 @@ func (a *appAdmission) admit(lifetime, instance string, generation uint64) (uint
 	}
 	a.stopped = false
 	if a.current != "" {
-		if a.retired == nil {
-			a.retired = map[string]struct{}{}
-		}
-		a.retired[a.current] = struct{}{}
+		a.retire(a.current)
 	}
 	a.current = lifetime
 	a.generation++
@@ -220,6 +217,15 @@ func (a *appAdmission) admit(lifetime, instance string, generation uint64) (uint
 		sc.PublishOperating(lifetime)
 	}
 	return a.generation, nil
+}
+
+// retire records in memory that a lifetime never comes back to this process.
+// The caller holds mu.
+func (a *appAdmission) retire(lifetime string) {
+	if a.retired == nil {
+		a.retired = map[string]struct{}{}
+	}
+	a.retired[lifetime] = struct{}{}
 }
 
 // complete is the admission of the lifetime that is already current. It changes

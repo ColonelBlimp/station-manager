@@ -482,6 +482,15 @@ type contactFlags struct {
 	// no other contact, even a later one with the same station. Per-contact by
 	// definition, hence here: zero again once the flags are reset.
 	id uint64
+	// earned is the completion of a GROUP A contact whose partner has rogered: the
+	// callback finalRungDoneLocked builds, kept from the slot that takes the roger
+	// in (earnLocked) until it runs or the session is retired. It is the fact "this
+	// contact is owed to the log", which a stop needs and could not otherwise know.
+	// With the closing rung deferred to a later slot, or decided and not yet
+	// admitted by the Service, there is no transmission for a stop to wait for; the
+	// stop used to retire the generation, and the contact was lost (codex-203,
+	// codex-204). settleEarned reads it.
+	earned func(ok bool)
 }
 
 // autoWorkState is an ACTIVE auto-work-callers run (ADR 0059) — a RUN, not a
@@ -1632,6 +1641,11 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 	if advanced {
 		s.contact.skipIfSilent = false // they came back — an armed skip no longer applies
 	}
+	// Their RRR/RR73 has been taken in: the contact is earned from this slot on,
+	// whether or not our 73 can go out in it (earnLocked).
+	if s.ex.State == txConfirming {
+		s.earnAnswerLocked()
+	}
 
 	msg, ok := s.ex.TxMessage()
 	if !ok { // exchange already done — shouldn't happen here; clear defensively.
@@ -1704,12 +1718,7 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 	// exchange is correct.
 	var onDone func(bool)
 	if confirming {
-		onDone = s.finalRungDoneLocked(
-			s.completedQsoLocked(),
-			func() { s.ex = nil },
-			"ft8 seq: QSO complete (73 sent)",
-			"ft8 seq: final 73 did not transmit; QSO logged anyway (partner already rogered)",
-		)
+		onDone = s.earnAnswerLocked()
 	}
 	s.mu.Unlock()
 
@@ -1753,6 +1762,19 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 	}
 	s.publishCurrent()
 	// Completion (confirming) is handled by onDone from the transmit goroutine.
+}
+
+// earnAnswerLocked is earnLocked for the standard answer ladder. Caller holds s.mu
+// with the exchange on txConfirming, where its report fields are final.
+func (s *Sequencer) earnAnswerLocked() func(ok bool) {
+	return s.earnLocked(func() func(bool) {
+		return s.finalRungDoneLocked(
+			s.completedQsoLocked(),
+			func() { s.ex = nil },
+			"ft8 seq: QSO complete (73 sent)",
+			"ft8 seq: final 73 did not transmit; QSO logged anyway (partner already rogered)",
+		)
+	})
 }
 
 // onSlotAnsweringFd drives an answer-a-CQ-FD exchange — the FD twin of

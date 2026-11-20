@@ -24,7 +24,14 @@ type DefaultChanger interface {
 func (s *Server) SetDefaultChanger(c DefaultChanger) { s.defaultChanger = c }
 
 // SetLiveEntryGate injects the live-entry gate POST /v1/qso admits through.
-func (s *Server) SetLiveEntryGate(g *LiveEntryGate) { s.liveEntry = g }
+// The exit report gets a seal of its own on the same gate (operating_session.go).
+func (s *Server) SetLiveEntryGate(g *LiveEntryGate) {
+	s.liveEntry = g
+	s.exitSeal = nil
+	if g != nil {
+		s.exitSeal = g.Owner()
+	}
+}
 
 // DefaultChangeRoutesReleased registers the /v1/default-logbook routes. It
 // stayed false until W-0024 slices 4 (the stale-tab guard) and 5 (the
