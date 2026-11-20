@@ -8,8 +8,12 @@ import (
 	"os"
 	"time"
 
+	"github.com/ColonelBlimp/station-manager/internal/database/sqlite/adapters"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
+	"github.com/aarondl/null/v8"
+	"github.com/aarondl/sqlboiler/v4/boil"
 )
 
 // ArchiveIdentity is the QSO file's own identity (ADR 0071, migration 0012):
@@ -151,6 +155,47 @@ func backfillLogbookUUIDs(ctx context.Context, tx *sql.Tx) error {
 const setDefaultPointerSQL = `UPDATE archive_metadata
 	SET default_epoch = default_epoch + (default_logbook_id IS NOT ?1), default_logbook_id = ?1
 	WHERE singleton = 1 AND EXISTS (SELECT 1 FROM logbook WHERE id = ?1%s)`
+
+// InsertArchiveDefaultLogbookWithContext creates a logbook and makes it the
+// file's default in ONE transaction: first-run setup's logbook (W-0029 part 2,
+// C5). Either both are stored or neither, so a failure to record the pointer
+// leaves no logbook behind for a repeated save to collide with. The identity is
+// minted here, as in InsertLogbookWithContext; a name already taken is
+// errors.ErrDuplicateName; a file with no archive identity is refused.
+func (s *Service) InsertArchiveDefaultLogbookWithContext(ctx context.Context, logbook types.Logbook) (int64, error) {
+	const op errors.Op = "sqlite.Service.InsertArchiveDefaultLogbookWithContext"
+	if err := checkService(op, s); err != nil {
+		return 0, err
+	}
+	model, err := adapters.LogbookTypeToModel(logbook)
+	if err != nil {
+		return 0, errors.New(op).WithErr(err)
+	}
+	model.UUID = null.StringFrom(utils.NewUUIDv7())
+	tx, cancel, err := s.BeginTxContext(ctx)
+	if err != nil {
+		return 0, errors.New(op).WithErr(err)
+	}
+	defer cancel()
+	defer func() { _ = tx.Rollback() }()
+	if err := model.Insert(ctx, tx, boil.Infer()); err != nil {
+		if isUniqueConstraintError(err) {
+			return 0, errors.New(op).WithErr(errors.ErrDuplicateName)
+		}
+		return 0, errors.New(op).WithErr(err).WithMsg("insert the default logbook")
+	}
+	res, err := tx.ExecContext(ctx, fmt.Sprintf(setDefaultPointerSQL, ""), model.ID)
+	if err != nil {
+		return 0, errors.New(op).WithErr(err).WithMsg("record the default logbook in the archive")
+	}
+	if n, err := checkedRowsAffected(op, res, "record the default logbook in the archive"); err != nil || n != 1 {
+		return 0, errors.New(op).WithErr(err).WithMsg("the file has no archive identity; the default logbook was not recorded")
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, errors.New(op).WithErr(err).WithMsg("commit the default logbook")
+	}
+	return model.ID, nil
+}
 
 // SetArchiveDefaultLogbookWithContext points the file's default logbook at an
 // existing row. It is the file-side half of every default_logbook_id write

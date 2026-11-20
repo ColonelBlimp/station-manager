@@ -10,8 +10,8 @@ and committed with this text: a cheaper fixture for the session tests. **Part 2'
 criteria are at the end of this file; their six questions are ruled (2026-11-20) and Codex
 has no remaining objection to them (codex-194). Part 2's first slice, the start step in
 the admission, the read route and the event, is committed (`a8317035`), with one fix from
-its clean-room review committed with this text (at the end of this file). Setup's save and
-the exit report are not built.** The removal of the database half of
+its clean-room review (`de4eb3fd`). The second slice, setup's save, is built and committed
+with this text (at the end of this file). The exit report is not built.** The removal of the database half of
 the downgrade tooling, which part 1 waited for, is committed (`0b21b2fb`, 2026-11-20; W-0027).
 **Part 1's acceptance criteria are written, their three questions ruled, and agreed with
 Codex after one round of corrections (2026-11-20).** The
@@ -1324,6 +1324,12 @@ lock, after the scopes are stopped and before the lifetime is published.
 
    After the repeat in each: exactly one default logbook, the file's pointer on it, the
    configuration naming it, setup complete, and one session held by the lifetime.
+   - **A fourth road to the third state (codex-198):** the configuration's last
+     validation, which runs after the logbook and the session are stored, refuses the save
+     with a 400. The file keeps the logbook, its pointer and the session; setup is
+     incomplete; the corrected save completes and keeps that session. The archive file and
+     the configuration are two stores: a save is not rolled back across both, and no
+     criterion here says it is.
    - **The fixture must have the configuration name a logbook id other than the one the
      database allocates** (codex-193). Today's helper looks the logbook up by the id the
      configuration names and inserts a new one when that id is absent
@@ -1606,7 +1612,7 @@ nothing in part 2 seals the live-entry gate, so the gap Codex found is not open.
 **Not shown.** Nothing was run at the station. That publishing the scopes arms nothing is
 the scopes' existing contract; it is not asserted again here.
 
-### Part 2, first slice: a fix from its clean-room review (2026-11-20; built, committed with this record)
+### Part 2, first slice: a fix from its clean-room review (2026-11-20; committed `de4eb3fd`)
 
 **The finding (P2), which is right.** After a replacement fails on the session's record,
 the admission still holds the earlier lifetime A while FT8 authorizes nobody. The criteria
@@ -1645,3 +1651,84 @@ changed to match. Gates rerun: the same set, 66 packages ok, the slice's tests u
 the app is single-instance, so the earlier app is normally gone and it is the new one that
 tries again; that path was already right. The fix is for the case the criteria name, the
 earlier lifetime returning.
+
+### Part 2, second slice: setup's first save opens the first session (2026-11-20; built, committed with this record)
+
+Group C of part 2's criteria, built under the operator's standing direction for part 2.
+
+**What changes for a new install.** The first save of setup now also opens the first
+session, for the app that is running. If the archive file cannot record the default
+logbook, or the session cannot be opened, that save fails with an error and setup is not
+complete; saving again completes it. Before, a failure to record the default logbook in
+the file was only logged and the save succeeded.
+
+**Built.**
+- `internal/database/sqlite/archive_identity.go`: `InsertArchiveDefaultLogbookWithContext`
+  makes a logbook and points the file's default at it in one transaction.
+- `internal/api/handler_config.go`: the save now finds its logbook in this order: the one
+  the archive file already points at; a logbook that was already there at the id the
+  configuration names (adopted as before, and recorded in the file, which is now
+  required); otherwise a new one, made and recorded together. Then it opens the session,
+  before the configuration is committed.
+- `internal/api/operating_session.go`: `openSessionAtSetup`, with the admission's order
+  held, for the lifetime the admission holds (not what a read would say of it); nothing
+  for nobody; nothing for a lifetime whose exit is recorded.
+- `docs/v2-design/api-endpoints.md`: the save's new step and its two failures.
+
+**How the repeat works, assessed against all three failure points (codex-194).** Two of
+the three mechanisms the criteria name are used, because neither is enough alone:
+- **the logbook and its pointer in one transaction** answers a failure to record the
+  pointer: nothing is left, so the repeat starts clean;
+- **the file's pointer as the authority** answers a failure of the session open and of the
+  configuration commit: the logbook and its pointer are stored, and the repeat finds the
+  logbook there whatever id the configuration still names.
+- A logbook that was already there is found by the configured id, as before, its callsign
+  checked, and nothing of it changed but the pointer naming it.
+
+**Seen.**
+- The tests first, against the unchanged save: the session cases failed with no session
+  stored; the three failure cases failed because the save answered 200, or stored no
+  session before the failed commit.
+- With the code, they pass, with every older test of the save unchanged and passing.
+- **The three failure points, each with the configuration naming logbook 42** while the
+  database allocates 1: after the failure the stored state is as the criteria say (nothing
+  at all; the logbook and pointer and no session; the logbook, pointer and session with
+  setup incomplete), and the repeated save ends with exactly one default logbook, the
+  pointer and the configuration on it, setup complete, and one session held by the
+  lifetime. After the commit failure the repeat keeps the session the first save opened.
+- **Reversion proofs,** in a temporary copy since removed, each change checked as applied
+  and the file restored and compared: no open at setup; a failed open ignored; the
+  pointer not consulted (the repeat then fails after a session failure and after a commit
+  failure); the logbook made and then recorded as two writes (the pointer failure then
+  leaves a logbook); a session opened for nobody; an adopted logbook not recorded. Each
+  fails its tests.
+- **Gates, by exit code:** `gofmt`, `go vet`, `golangci-lint` (0 issues), the
+  maintainability metrics (0 regressions), `go test ./... -count=1` (66 packages ok).
+
+**Choices made, for review.**
+- The save answers 500 `db_error` when the default cannot be recorded and 503
+  `operating_session_unavailable` when the session cannot be opened.
+- A save by a lifetime other than the one the admission holds still opens the session for
+  the held one: the session is the running app's, whoever sent the save.
+- If the open answers "setup pending" although the logbook was just recorded, the save
+  fails: there is nothing to bind a session to.
+
+**After Codex's review of the slice (codex-198: no blocking finding).** Codex repeated two
+of the reversions and tested the road I had named and not tested: a refusal by the
+configuration's last validation after the session was opened. Taken from it:
+- **A permanent test of that road,** `TestSetupSave_ALateRefusalKeepsWhatWasStored_...`: a
+  rig the save selects is removed between its first validation and its last, as a second
+  window could; the save answers 400 with the logbook, its pointer and the session stored
+  and setup incomplete; the corrected save completes and keeps the session. It passed when
+  written: it records behaviour, it did not change any.
+- The API reference lists the 503 among the save's errors and says the save is not
+  all-or-nothing across the archive file and the configuration.
+- `seedDefaultLogbook`'s opening comment, which still described the old lookup, is
+  rewritten.
+
+**Not built.** The exit report (E) and the order's forced cases (G), which include setup's
+save against a replacement and against an exit under contention; here those two are
+tested one after the other, not forced.
+
+**Not shown.** Nothing was run at the station. The real-daemon desktop scenario was not
+rerun for this slice: it does not perform setup's save.

@@ -12,7 +12,7 @@ import (
 )
 
 // Setup's first save creates the default logbook and records it in the archive
-// file (recordDefaultInArchive). That moves the file's default pointer from
+// file (seedDefaultLogbook). That moves the file's default pointer from
 // none to the new logbook, so the default epoch counts one move (ADR 0100 §4;
 // W-0029 part 1, B1). Read from the file as stored, through a second,
 // read-only connection to the test server's own database file. The server

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	stderr "errors"
 	"net/http"
 	"time"
 
@@ -48,15 +49,47 @@ func (ss serverSessions) exitRecorded(lifetime string) (bool, error) {
 // current. It does not follow the request's context: an admission the client
 // gave up on must not be left half done.
 func (ss serverSessions) start(lifetime string) error {
-	st, outcome, err := ss.s.db.OpenOperatingSessionWithContext(context.Background(), lifetime, ss.s.sessionNow())
-	if err != nil {
-		return err
-	}
-	ss.s.publishSessionChange(st)
-	if outcome == sqlite.SessionRetired {
+	outcome, err := ss.open(lifetime)
+	if err == nil && outcome == sqlite.SessionRetired {
 		return errLifetimeRetired
 	}
-	return nil
+	return err
+}
+
+// open is the session's start step, with what it did; an advance of the
+// generation is published.
+func (ss serverSessions) open(lifetime string) (sqlite.SessionOutcome, error) {
+	st, outcome, err := ss.s.db.OpenOperatingSessionWithContext(context.Background(), lifetime, ss.s.sessionNow())
+	if err != nil {
+		return "", err
+	}
+	ss.s.publishSessionChange(st)
+	return outcome, nil
+}
+
+// openSessionAtSetup opens the first session for the lifetime the admission
+// holds, when setup's first save has made and recorded the default logbook
+// (ADR 0100, Update 2026-11-19; W-0029 part 2, C). It runs with the admission's
+// order held, and decides from the lifetime held there, not from what a read
+// would say of it: a save that meets a replacement opens the session for the
+// new lifetime, and one that meets an exit opens none for a lifetime that has
+// gone. With nobody admitted it opens nothing; the next admission will.
+//
+// An error means the save must not succeed (operator ruling 2026-11-20): the
+// record could not be read or written, or the default logbook just recorded is
+// not there to bind a session to.
+func (s *Server) openSessionAtSetup() error {
+	var err error
+	s.admission.observe(func(held string) {
+		if held == "" {
+			return
+		}
+		var outcome sqlite.SessionOutcome
+		if outcome, err = (serverSessions{s}).open(held); err == nil && outcome == sqlite.SessionSetupPending {
+			err = stderr.New("the default logbook is not recorded in the archive file")
+		}
+	})
+	return err
 }
 
 func (s *Server) sessionNow() time.Time {

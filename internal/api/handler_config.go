@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	stderr "errors"
 	"fmt"
@@ -901,34 +902,52 @@ func (s *Server) logConfigSave(before, after config.Config, setupCompleted bool)
 	ev.Msg("config saved")
 }
 
-// seedDefaultLogbook ensures a logbook row exists at the configured
-// default_logbook_id. If a row already exists it is returned as-is
-// (idempotent — operator may have created one manually). Otherwise a
-// new row is inserted using the operator's just-set callsign. Returns
-// the resolved logbook ID — which equals defaultID on the existing
-// path and the newly-inserted ID otherwise.
+// seedDefaultLogbook resolves setup's default logbook and returns its id. In
+// order: the logbook the archive file already points at, if it is live (its id
+// may differ from defaultID); a logbook that already exists at defaultID, the
+// id the configuration names (the operator may have created one), which is
+// then recorded in the file; otherwise a new row, inserted with the operator's
+// just-set callsign and recorded in the file in the same transaction. An
+// existing logbook is returned as it is, never rewritten. The id returned is
+// what the configuration adopts at its commit.
 //
 // The "Default" name is intentionally generic: the operator can
 // rename it via the My Station card / future PUT /v1/logbook/{id}.
 // Description seeded with a hint so first-time operators know what
 // they're looking at when they open the logbook list.
+//
+// The archive file's own pointer is consulted first (W-0029 part 2, C5): an
+// earlier save that failed after making the logbook has recorded it there,
+// under an id the configuration may not name, since the configuration learns
+// that id only when it commits. Looking it up by the configured id alone would
+// miss it and try to make a second "Default".
 func (s *Server) seedDefaultLogbook(r *http.Request, defaultID int64, callsign string) (int64, error) {
-	if existing, err := s.db.FetchLogbookByIDWithContext(r.Context(), defaultID); err == nil {
-		// Reusing a pre-existing default row is fine ONLY when its callsign
-		// matches the callsign being set up — otherwise setup would adopt a
-		// default logbook that can never accept this operator's live submits
-		// (callsign_mismatch on every QSO). Surface it so the operator picks a
-		// clean default id or a matching callsign (review 2026-07-22 #1).
-		if !strings.EqualFold(strings.TrimSpace(existing.Callsign), strings.TrimSpace(callsign)) {
-			return 0, &setupLogbookMismatchError{existingCallsign: existing.Callsign}
-		}
-		s.recordDefaultInArchive(r, existing.ID)
-		return existing.ID, nil
-	} else if !stderr.Is(err, errors.ErrNotFound) {
+	ctx := r.Context()
+	// 1. The logbook the file already points at.
+	identity, err := s.db.ArchiveIdentityWithContext(ctx)
+	if err != nil {
 		return 0, err
 	}
-
-	id, err := s.db.InsertLogbookWithContext(r.Context(), types.Logbook{
+	if identity.DefaultLogbookID > 0 {
+		pointed, err := s.db.FetchLogbookByIDWithContext(ctx, identity.DefaultLogbookID)
+		switch {
+		case err == nil:
+			return s.adoptSetupLogbook(ctx, pointed, callsign, false)
+		case !stderr.Is(err, errors.ErrNotFound):
+			return 0, err
+		}
+	}
+	// 2. A logbook that was already there at the id the configuration names.
+	existing, err := s.db.FetchLogbookByIDWithContext(ctx, defaultID)
+	switch {
+	case err == nil:
+		return s.adoptSetupLogbook(ctx, existing, callsign, true)
+	case !stderr.Is(err, errors.ErrNotFound):
+		return 0, err
+	}
+	// 3. A new one, made and recorded in the file together: if the pointer
+	// cannot be recorded no logbook is left behind for the repeat to meet.
+	id, err := s.db.InsertArchiveDefaultLogbookWithContext(ctx, types.Logbook{
 		Name:        "Default",
 		Callsign:    callsign,
 		Description: "Default logbook (auto-created during first-run setup)",
@@ -936,24 +955,28 @@ func (s *Server) seedDefaultLogbook(r *http.Request, defaultID int64, callsign s
 	if err != nil {
 		return 0, err
 	}
-	s.recordDefaultInArchive(r, id)
+	s.notifyArchiveSummary()
 	return id, nil
 }
 
-// recordDefaultInArchive writes the default logbook into the archive file
-// (ADR 0071): the file keeps its own pointer and config's default_logbook_id is
-// a projection of it, so setup — the one PUT that sets the pointer — records it
-// here, BEFORE the config commit: if that commit then fails, the next start
-// projects the file's value into config. A failure is logged, not fatal:
-// adoption at the next start writes config's value into a file that has none.
-func (s *Server) recordDefaultInArchive(r *http.Request, logbookID int64) {
-	if err := s.db.SetArchiveDefaultLogbookWithContext(r.Context(), logbookID); err != nil {
-		s.logger.WarnWith().Err(err).Int64("default_logbook_id", logbookID).
-			Msg("config: the archive's default logbook could not be recorded; the next start reconciles it")
+// adoptSetupLogbook takes an existing logbook as setup's default. That is
+// right only when its callsign is the one being set up: otherwise setup would
+// adopt a default logbook that can never accept this operator's live submits
+// (callsign_mismatch on every QSO), so the mismatch is surfaced (review
+// 2026-07-22 #1). record writes it into the archive file as the default, which
+// this save requires (operator ruling 2026-11-20): a session is bound to the
+// logbook the file names.
+func (s *Server) adoptSetupLogbook(ctx context.Context, lb types.Logbook, callsign string, record bool) (int64, error) {
+	if !strings.EqualFold(strings.TrimSpace(lb.Callsign), strings.TrimSpace(callsign)) {
+		return 0, &setupLogbookMismatchError{existingCallsign: lb.Callsign}
 	}
-	// The archive summary marks the default logbook (ADR 0084), and setup may
-	// have created that logbook too: either way it is recounted.
-	s.notifyArchiveSummary()
+	if record {
+		if err := s.db.SetArchiveDefaultLogbookWithContext(ctx, lb.ID); err != nil {
+			return 0, err
+		}
+		s.notifyArchiveSummary()
+	}
+	return lb.ID, nil
 }
 
 // buildConfigResponse projects a Config snapshot into the wire shape.
@@ -1649,6 +1672,16 @@ func (s *Server) completeSetupDryRun(w http.ResponseWriter, r *http.Request, cur
 			return 0, true
 		}
 		s.writeServerError(w, op, err, "db_error", "failed to seed default logbook")
+		return 0, true
+	}
+	// The first session, for the lifetime the admission holds, before the
+	// configuration is committed. If it cannot be opened the save does not
+	// succeed; made again, it finds the logbook above and the session, if one
+	// was opened, already held.
+	if err := s.openSessionAtSetup(); err != nil {
+		s.logger.ErrorWith().Err(err).Msg("config: setup's first save could not open the operating session; setup is not complete")
+		s.writeError(w, http.StatusServiceUnavailable, operatingSessionUnavailable,
+			"the operating session could not be opened; setup is not complete, save again", op)
 		return 0, true
 	}
 	return id, false
