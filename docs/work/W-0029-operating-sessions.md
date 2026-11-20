@@ -8,7 +8,9 @@
 (`6f2b4e27`), with two fixes from its reviews (`93a743f8`). **Part 1 is complete.** Built
 and committed with this text: a cheaper fixture for the session tests. **Part 2's acceptance
 criteria are at the end of this file; their six questions are ruled (2026-11-20) and Codex
-has no remaining objection to them (codex-194). Nothing of part 2 is built.** The removal of the database half of
+has no remaining objection to them (codex-194). Part 2's first slice, the start step in
+the admission, the read route and the event, is built and committed with this text (at the
+end of this file); setup's save and the exit report are not built.** The removal of the database half of
 the downgrade tooling, which part 1 waited for, is committed (`0b21b2fb`, 2026-11-20; W-0027).
 **Part 1's acceptance criteria are written, their three questions ruled, and agreed with
 Codex after one round of corrections (2026-11-20).** The
@@ -1508,3 +1510,97 @@ membership is unwired; one event is enough, provided consumers read a baseline; 
 start node to part 3 as an explicit departure. On 5, the strict save is reasonable once
 its repeat is shown to work (C5). On 6, reasonable with the three limits in G6. On each
 Codex and I recommend the same.
+
+### Part 2, first slice: the start step in the admission, the read route, the event (2026-11-20; built, committed with this record)
+
+Groups A, B, D and F of part 2's criteria. Setup's save (C) is the next slice, then the
+exit report (E) with the order's forced cases (G). Built under the operator's direction of
+2026-11-20 ("consensus is a go"), after Codex's agreement on the criteria (codex-194).
+
+**What changes at the station when this is deployed.** Starting the app opens a session
+in the archive file; nothing shows it. With no contact joining one and no exit report yet,
+each start discards the previous start's empty session and opens another. If the archive
+file cannot be read or written when the app starts, the app stays on its waiting page.
+
+**Built.**
+- `internal/api/app_admission.go`: inside the admission, in this order: the caller is
+  already current (it completes anything a failed step left undone, and otherwise changes
+  nothing); retired in this process; **its exit is recorded in the file, refused as
+  retired before anything is stopped**; stale; the scopes stopped; **the session's start
+  step**; and only then the earlier lifetime retired, this one current, the scopes
+  published. A step that fails leaves the lifetime not admitted and the scopes stopped.
+- `internal/api/operating_session.go` (new): the start step through part 1's Open; the
+  one event; `GET /v1/operating-session`.
+- `internal/database/sqlite/operating_session.go`: the state now also says the file's
+  default logbook and whether the control that returned it advanced the generation.
+- `internal/events/events.go`: `operating_session.changed` and its payload.
+- `docs/v2-design/api-endpoints.md`: the admission's new step and its 503, the read route,
+  the event.
+
+**One change to the tests' fixture, none to the admission's existing tests.** The API test
+server now gives its database the archive identity row, as the daemon's start does before
+it binds a listener. Without it every admission in that package was refused (150 tests),
+which is the ruled behaviour for a record that cannot be read. With it, the admission's
+existing tests pass as written.
+
+**Seen.**
+- The ten new tests were written first, against a server with no session route and an
+  unchanged admission: all failed on their own assertions (a 404 for the route; a 200
+  where a 503 is wanted; no event).
+- With the code, they pass, as does the whole tree: 66 packages.
+- **Through the real daemon:** the desktop scenario that starts a built `smd` in a
+  temporary directory still passes all 19 checks, among them "the app was admitted before
+  its workspace loaded". No station file or port is used by it.
+- **Reversion proofs,** in temporary copies since removed, each change checked as applied
+  and the file restored and compared. Eight failed their tests at once: the durable
+  retirement check removed; a failed step admitting anyway; the current lifetime's repeat
+  repairing nothing; no start step; no event; a failed read answered as an empty session;
+  recovery pending reported as open; "held by you" true for anyone.
+  - **One did not, and the test was at fault:** publishing an event when nothing changed
+    passed, because the only unchanged admission in the test never reached the step. The
+    test now also admits the same lifetime after a restart and admits against another
+    lifetime's session with a contact, and requires no event from either; the change then
+    fails it ("an admission that found its own session published [2]").
+- **Gates, by exit code:** `gofmt`, `go vet`, `golangci-lint` (0 issues), the
+  maintainability metrics (0 regressions), `go test ./... -count=1` (66 packages ok), the
+  slice's tests under `-race`.
+
+**How a daemon restart is modelled in these tests.** The admission's in-memory state is
+cleared on the same server and file: no lifetime current, nothing retired, generation 0.
+A second process is not started. The real-daemon scenario above covers one true start.
+
+**Choices made, for review.**
+- The state the route names is decided from the file and the admission together: `open`
+  when the current lifetime holds the session or it is empty; `recovery_pending` when it
+  has contacts and its holder is not current. Between a daemon restart and the app's
+  admission, a session with contacts therefore reads `recovery_pending` for a moment. No
+  window reads before the app is admitted.
+- The start step and the durable retirement read do not follow the request's context: an
+  admission the client gave up on is not left half done.
+- A failed step is logged with the database's error text. That text holds no credential:
+  it names tables and constraints of the archive file.
+
+**After Codex's review of the slice (codex-195: the admission and the fixture pass; one P2
+in D).** The route read the file and then asked the admission who was current, as two
+separate looks. A close and retirement landing between them gave an answer that never
+existed: Codex forced it and got the old session, held by the caller, named "recovery
+pending".
+- **Fixed:** the file is read and the state named with the admission's order held across
+  both (`observe`), and the current lifetime seen there is handed to the code that names
+  the state. The route still changes nothing. A read now waits for an admission that is
+  under way.
+- **The forced case, written first:** at the point between the read and the naming, the
+  test tries to take the admission's lock. Before the fix it got it, performed the close
+  and the retirement there, and the route returned Codex's combination: the test failed on
+  both counts. After the fix the lock is held, nothing can come between, and the answer is
+  the whole state from before.
+- The admission's header comment, which still said no session is opened here, is
+  corrected.
+- Gates rerun: the same set, 66 packages ok, the slice's tests under `-race`.
+
+**Not built, and owed by the next slices.** Setup's save and its repeat (C). The exit
+report (E). The coordination with a default change and an activation (G): until then
+nothing in part 2 seals the live-entry gate, so the gap Codex found is not open.
+
+**Not shown.** Nothing was run at the station. That publishing the scopes arms nothing is
+the scopes' existing contract; it is not asserted again here.

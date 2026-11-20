@@ -94,6 +94,13 @@ type Server struct {
 	operatingCredential atomic.Pointer[func(presented string) bool]
 	// admission is the desktop app's current lifetime (W-0027 C4a; app_admission.go).
 	admission appAdmission
+	// sessionClock is the instant a session transition is recorded at; time.Now
+	// unless a test sets it (operating_session.go).
+	sessionClock func() time.Time
+	// sessionReadGap, when non-nil, runs between the session read route's read
+	// of the file and its naming of the state: the point a test uses to show
+	// nothing can come between the two. Nil in production.
+	sessionReadGap func()
 	// declaredRoutes is every pattern registered at construction (DeclaredRoutes).
 	declaredRoutes []string
 	// ft8ApplyTestGap, when non-nil, runs ONCE between the config snapshot and
@@ -252,6 +259,8 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 	}
 	apiMux := s.registerRoutes(mux, cfg, logger, br, ft8Svc)
 	s.registerAppAdmission(apiMux)
+	s.admission.sessions = serverSessions{s}
+	s.registerOperatingSession(apiMux)
 	s.declaredRoutes = append(append([]string(nil), apiMux.patterns...), mux.patterns...)
 
 	// Middleware chain — outermost first:

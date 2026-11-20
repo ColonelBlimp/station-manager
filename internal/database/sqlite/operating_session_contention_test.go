@@ -637,8 +637,14 @@ func TestSessionContention_AnExitAgainstAnOpenOfOneLifetime(t *testing.T) {
 // once, with nothing held and SQLite's own busy handler doing the waiting. No
 // transaction fails; every QSO has exactly one member row; a reader never
 // finds two open sessions; and the generation ends at its start plus the
-// number of state-changing commits. It does not show that any two of them
-// overlapped; the forced cases are the evidence for that.
+// number of state-changing commits.
+//
+// It is the test that fails if SQLite's busy handler does not wait: with the
+// service's busy limit set to zero, in a temporary copy, it failed five runs of
+// five with "database is locked (5)", on a logging transaction or a New. So its
+// transactions do meet each other's locks here, and they get through only
+// because the handler waits. Which two met, and in what order, it does not
+// show; the forced cases are the evidence for each order.
 func TestSessionContention_AMixedRun(t *testing.T) {
 	b := newSessBed(t, true)
 	st := b.open(lifeA, 0, SessionApplied)
@@ -832,7 +838,11 @@ func TestSessionContention_ReadingFirstIsRefused_WritingFirstExcludes(t *testing
 		}
 		// How long the handler waited is logged below and not asserted: 301 ms
 		// in one run and 182 ms in another, under a 300 ms limit. The refusal
-		// is the evidence; the duration is only a measurement.
+		// is the evidence; the duration is only a measurement. So this test
+		// alone does not tell a handler that waits from one that ignores its
+		// limit (the clean-room review of 29ee6b9e). The mixed run does: with
+		// a busy limit of zero on every connection it fails, five runs of
+		// five, on the first transaction that meets another's lock.
 		var g int
 		if err := txA.QueryRowContext(ctx, `SELECT session_generation FROM archive_metadata WHERE singleton = 1`).Scan(&g); err != nil {
 			t.Fatal(err)

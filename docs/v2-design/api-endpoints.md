@@ -141,6 +141,13 @@ subscription is the FT8 presence signal.
     closed after at most 1 s, capped by the remaining shutdown budget.
   - Graceful shutdown waits for every stream handler to end.
 
+**`operating_session.changed` (ADR 0100; W-0029 part 2).** Published on `/v1/events` once
+for each advance of the served archive's session generation, after its commit:
+`{"archive_id": string, "generation": int}`. It carries no session detail: a consumer reads
+`GET /v1/operating-session`. The stream replays nothing, so a consumer also reads on
+connecting and on reconnecting, and compares generations only within the archive the event
+names. A transition that was rolled back, or changed nothing, publishes nothing.
+
 **Event identity (AW-1).** The `qso.*` (`qso.stored`/`qso.updated`/`qso.deleted`) and
 `forward.*` (`forward.succeeded`/`forward.failed`) payloads on `/v1/events` carry
 **`qso_uuid`**, the canonical QSO identifier, alongside the daemon-local **`qso_id`**.
@@ -539,9 +546,19 @@ The station-global archive catalogue (`config.md` §3): the archive the daemon s
 ### `POST /v1/app/lifetime`
 - **Purpose:** Admit the caller's app lifetime against what it read. **Always-on.**
 - **Request:** Body `{"daemon_instance": string, "generation": uint64}`, both as read; `generation` is **required**; unknown or duplicate keys are rejected (AW-2). The lifetime is the request's `X-SM-App-Lifetime` header.
-- **Response:** **200** `{"daemon_instance": string, "generation": uint64, "current": true}`. The caller is current: either it already was (nothing changes, so a repeat or a retry after a lost answer is harmless) or it has replaced the previous lifetime. A replacement stops FT8 first (the cause `unattended`), waits for a transmission in flight to end, then publishes the new lifetime and advances the generation.
-- **Errors:** 400 `invalid_json` / `missing_required_field` / `app_lifetime_required` (no lifetime header); **409** `app_admission_stale` (the marker or generation is not this process's now: another admission landed since the read; read again; the current app is untouched) | `app_lifetime_retired` (this lifetime has been replaced in this process; it is refused for good).
-- **Notes:** Admissions are handled one at a time and each succeeds only against the generation it read, so a request an earlier app had already sent cannot succeed after a later admission. Nothing is stored: a restarted `smd` has no current lifetime and no retired ones.
+- **Response:** **200** `{"daemon_instance": string, "generation": uint64, "current": true}`. The caller is current: either it already was (nothing changes, so a repeat or a retry after a lost answer is harmless) or it has replaced the previous lifetime. A replacement stops FT8 first (the cause `unattended`), waits for a transmission in flight to end, runs the operating session's start step (below), then publishes the new lifetime and advances the generation.
+- **Errors:** 400 `invalid_json` / `missing_required_field` / `app_lifetime_required` (no lifetime header); **409** `app_admission_stale` (the marker or generation is not this process's now: another admission landed since the read; read again; the current app is untouched) | `app_lifetime_retired` (this lifetime has been replaced in this process, or the served archive records its exit; it is refused for good, before anything is stopped); **503** `operating_session_unavailable` (the operating session's record could not be read or written: the lifetime is **not** admitted, the admission generation has not moved, nothing is retired, and FT8, already stopped, stays stopped until an admission succeeds).
+- **The operating session's start step (ADR 0100 §3; W-0029 part 2).** A lifetime becomes current only with its session decided from the archive file: no default logbook, no session (setup pending); a session it already holds, nothing changes; another lifetime's session with contacts, nothing changes and the operator will be asked Continue or New (recovery pending); another lifetime's empty session is discarded and a new one opened; none open, one is opened. The same admission twice leaves what one leaves.
+- **Notes:** Admissions are handled one at a time and each succeeds only against the generation it read, so a request an earlier app had already sent cannot succeed after a later admission. The admission itself stores nothing: a restarted `smd` has no current lifetime and no in-memory retirements, and the same app admitted again holds the session it held. After a **503**, the current lifetime's own admission completes what the failure left undone (the session step and FT8's publication to it) once the record can be used; that authorizes FT8 and arms nothing.
+
+### `GET /v1/operating-session`
+- **Purpose:** The served archive's operating-session state, in one snapshot of the archive file and the admission together (ADR 0100; W-0029 part 2): the file is read and `state` named with the admission's order held, so a read waits for an admission that is under way and never mixes the state before a change with the state after it. It changes nothing, whatever lifetime asks, or none. **Always-on.**
+- **Response:** **200** `{"archive_id": string, "generation": int, "state": string, "session": object|null}`.
+  - `generation` is the archive's session generation: it advances on every change of session state and never returns to an earlier value.
+  - `state` is `open` (a session is open and the current lifetime holds it, or it is empty), `recovery_pending` (an open session with contacts is held by a lifetime that is not current), `setup_pending` (the archive has no default logbook) or `none`.
+  - `session`, when one is open: `{"id": UUIDv7, "logbook_uuid": string, "opened_at": RFC 3339 UTC, "sitting_started_at": RFC 3339 UTC, "has_contacts": bool, "held_by_you": bool}`. `held_by_you` is whether the caller's `X-SM-App-Lifetime` holds it; no other lifetime's label is given.
+- **Errors:** **503** `operating_session_unavailable` (the record could not be read). A failed read is never answered as an empty session.
+- **Notes:** No contact joins a session yet (W-0029 part 5), so `has_contacts` is false and a session that ends is discarded. The event `operating_session.changed` on `/v1/events` says when to read again.
 
 ### `POST /v1/restart`
 - **Purpose:** ATTENDED, operator-triggered graceful daemon restart — applies the "Requires a restart" config-apply changes (active rig, connection, mode mappings, serial overrides) without an on-box `systemctl`. The daemon runs its normal graceful shutdown (releasing the tune/FT8 carrier — TX-safe), then exits `ExitRestart` (3); systemd (`smd.service` `Restart=on-failure` + `RestartForceExitStatus=3`) respawns it ~`RestartSec` (5s) later and SSE clients auto-reconnect.

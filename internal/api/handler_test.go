@@ -223,6 +223,13 @@ func testServerWithLogger(
 		_ = dbSvc.Close()
 		_ = logSvc.Close()
 	})
+	// As the daemon is when it serves: adoption at start gives the archive file
+	// its identity row (cmd/smd, adoptArchive) before any listener is bound.
+	// The app's admission reads the operating session's record from that row
+	// (operating_session.go), and refuses to admit when it cannot.
+	if _, err := dbSvc.EnsureArchiveIdentityWithContext(context.Background(), 0); err != nil {
+		t.Fatalf("archive identity: %v", err)
+	}
 
 	hub := events.NewHub()
 	t.Cleanup(func() { hub.Close() })

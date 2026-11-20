@@ -14,6 +14,11 @@ const (
 	NameQsoDeleted       = "qso.deleted"
 	NameForwardSucceeded = "forward.succeeded"
 	NameForwardFailed    = "forward.failed"
+	// NameOperatingSessionChanged says the served archive's operating-session
+	// state has changed (ADR 0100; W-0029 part 2): the payload names the
+	// archive and the new session generation, and a window reads the state
+	// again. It carries no session detail.
+	NameOperatingSessionChanged = "operating_session.changed"
 )
 
 // Event is the envelope delivered to every subscriber.
@@ -30,6 +35,12 @@ type Event struct {
 	ID      int64
 	Name    string
 	Payload any
+}
+
+// OperatingSessionChangedPayload is the payload for NameOperatingSessionChanged.
+type OperatingSessionChangedPayload struct {
+	ArchiveID  string `json:"archive_id"`
+	Generation int64  `json:"generation"`
 }
 
 // QsoStoredPayload is the payload for NameQsoStored.

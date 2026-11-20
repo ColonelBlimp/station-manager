@@ -85,6 +85,13 @@ type OperatingSessionState struct {
 	Open *OperatingSession
 	// ExitRecorded is whether the lifetime the read named has a recorded exit.
 	ExitRecorded bool
+	// DefaultLogbookUUID is the file's live default logbook, "" when it has
+	// none (setup pending).
+	DefaultLogbookUUID string
+	// Advanced is true on the state a control returns when that control's
+	// transaction advanced the generation: session state changed, by the
+	// control or by the default-epoch test before it. A read leaves it false.
+	Advanced bool
 }
 
 // takeSessionWriterPosition is (*sessionTx).takeWriterPosition, as a variable
@@ -294,7 +301,7 @@ func (c *sessionTx) state(lifetime string) (OperatingSessionState, error) {
 	if err != nil {
 		return OperatingSessionState{}, err
 	}
-	st := OperatingSessionState{Generation: h.generation, DefaultEpoch: h.epoch}
+	st := OperatingSessionState{Generation: h.generation, DefaultEpoch: h.epoch, DefaultLogbookUUID: h.defaultUUID}
 	if st.Open, err = c.open(); err != nil {
 		return OperatingSessionState{}, err
 	}
@@ -356,6 +363,7 @@ func (s *Service) sessionControl(ctx context.Context, op errors.Op, what, lifeti
 			return err
 		}
 		st, err = c.state(lifetime)
+		st.Advanced = c.changed
 		return err
 	})
 	if err != nil {

@@ -36,9 +36,11 @@ import (
 // establish which of two shells was started later: a random label and a read cannot. The
 // app is single-instance, so two shells of one operator do not run at once.
 //
-// Nothing here is stored, and no session is opened or closed: this is not ADR 0100's
-// session attachment. A new daemon process has no current lifetime and no retired ones,
-// and never takes one as current without an admission.
+// The admission itself stores nothing. A new daemon process has no current lifetime and
+// none retired in memory, and never takes one as current without an admission. What IS
+// decided here from the archive file is the operating session (ADR 0100 §3; W-0029 part
+// 2; operating_session.go): a lifetime whose exit the file records is refused as retired,
+// and a lifetime becomes current only after the session's start step has run.
 //
 // Only operating a scope asks for the current lifetime (internal/ft8/operating.go).
 // Reading, logging, settings and every stream are served whatever lifetime a request
@@ -121,7 +123,20 @@ type operatingScope interface {
 var (
 	errAdmissionStale  = stderr.New("the admission was read against an earlier state")
 	errLifetimeRetired = stderr.New("the app lifetime has been replaced")
+	// errSessionUnavailable: the operating session's record could not be read or
+	// written, so the lifetime was not admitted (operator ruling 2026-11-20).
+	errSessionUnavailable = stderr.New("the operating session is unavailable")
 )
+
+// admissionSessions is what an admission needs of the operating session's
+// record (ADR 0100 §3; operating_session.go). Nil in a test of the admission
+// alone: then there is no session work.
+type admissionSessions interface {
+	// exitRecorded is whether the served archive records the lifetime's exit.
+	exitRecorded(lifetime string) (bool, error)
+	// start is the session's start step for a lifetime about to be current.
+	start(lifetime string) error
+}
 
 // appAdmission is the one current lifetime and the order of its replacements. mu is held
 // across a replacement, the scopes' stop included, and is taken before any scope's own
@@ -132,6 +147,12 @@ type appAdmission struct {
 	generation uint64
 	retired    map[string]struct{}
 	scopes     []operatingScope
+	// sessions is the operating session's record, consulted under mu.
+	sessions admissionSessions
+	// stopped is true while the scopes are stopped and published to nobody
+	// because a session step failed after they were stopped. The next admission
+	// that succeeds, the current lifetime's own included, publishes them.
+	stopped bool
 
 	// published is the generation as last published, for the response header. It is read
 	// without mu, so a request is never held up behind a replacement that is stopping a
@@ -150,9 +171,16 @@ func (a *appAdmission) admit(lifetime, instance string, generation uint64) (uint
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if lifetime == a.current {
-		return a.generation, nil
+		return a.generation, a.complete(lifetime)
 	}
 	if _, gone := a.retired[lifetime]; gone {
+		return a.generation, errLifetimeRetired
+	}
+	// A recorded exit comes before anything is stopped, as the in-memory
+	// retirement does: a lifetime that has exited touches neither the current
+	// app nor its scopes, in this process or after a restart of the daemon.
+	exited, readErr := a.exitRecorded(lifetime)
+	if exited {
 		return a.generation, errLifetimeRetired
 	}
 	if instance != processInstance || generation != a.generation {
@@ -163,6 +191,17 @@ func (a *appAdmission) admit(lifetime, instance string, generation uint64) (uint
 	for _, sc := range a.scopes {
 		sc.RetireOperating()
 	}
+	// The session's start step, before the lifetime is current. If the record
+	// cannot be read or written the lifetime is not admitted: nothing below
+	// happens, and the scopes stay stopped until an admission succeeds.
+	a.stopped = true
+	if readErr == nil {
+		readErr = a.startSession(lifetime)
+	}
+	if readErr != nil {
+		return a.generation, readErr
+	}
+	a.stopped = false
 	if a.current != "" {
 		if a.retired == nil {
 			a.retired = map[string]struct{}{}
@@ -176,6 +215,58 @@ func (a *appAdmission) admit(lifetime, instance string, generation uint64) (uint
 		sc.PublishOperating(lifetime)
 	}
 	return a.generation, nil
+}
+
+// complete is the admission of the lifetime that is already current. It changes
+// nothing, unless a failed step left the scopes stopped: then it runs the
+// session's step and publishes them to this lifetime, so a success never
+// leaves the scopes authorizing nobody. Publishing is not arming.
+func (a *appAdmission) complete(lifetime string) error {
+	if !a.stopped {
+		return nil
+	}
+	if err := a.startSession(lifetime); err != nil {
+		return err
+	}
+	a.stopped = false
+	for _, sc := range a.scopes {
+		sc.PublishOperating(lifetime)
+	}
+	return nil
+}
+
+func (a *appAdmission) exitRecorded(lifetime string) (bool, error) {
+	if a.sessions == nil {
+		return false, nil
+	}
+	exited, err := a.sessions.exitRecorded(lifetime)
+	if err != nil {
+		return false, stderr.Join(errSessionUnavailable, err)
+	}
+	return exited, nil
+}
+
+func (a *appAdmission) startSession(lifetime string) error {
+	if a.sessions == nil {
+		return nil
+	}
+	if err := a.sessions.start(lifetime); err != nil {
+		if stderr.Is(err, errLifetimeRetired) {
+			return err
+		}
+		return stderr.Join(errSessionUnavailable, err)
+	}
+	return nil
+}
+
+// observe runs fn with the admission's order held and the lifetime that is
+// current: what fn reads from the archive file and this lifetime are then one
+// snapshot, since every change of the session's record that the admission
+// orders takes the same lock. fn must not call back into the admission.
+func (a *appAdmission) observe(fn func(current string)) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	fn(a.current)
 }
 
 type appLifetimeState struct {
@@ -229,6 +320,10 @@ func (s *Server) handleAppLifetimeAdmit(w http.ResponseWriter, r *http.Request) 
 	case stderr.Is(err, errAdmissionStale):
 		s.writeError(w, http.StatusConflict, "app_admission_stale",
 			"the admission state has changed since it was read; read it again", op)
+	case stderr.Is(err, errSessionUnavailable):
+		s.logger.ErrorWith().Err(err).Msg("app admission: the operating session's record could not be read or written; the app is not admitted")
+		s.writeError(w, http.StatusServiceUnavailable, operatingSessionUnavailable,
+			"the operating session could not be opened; Station Manager is not ready", op)
 	default:
 		s.writeJSON(w, http.StatusOK, appLifetimeState{
 			Instance: processInstance, Generation: generation, Current: true})
