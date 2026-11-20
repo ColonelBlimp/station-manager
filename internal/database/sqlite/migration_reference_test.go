@@ -11,6 +11,9 @@ import (
 // fixed number of steps — the sibling of applyMigrationSteps (log set).
 func applyReferenceMigrationSteps(t *testing.T, svc *Service, steps int) {
 	t.Helper()
+	if steps <= 0 {
+		t.Fatalf("reference migrate steps(%d): up only; there is no way down", steps)
+	}
 	srcDriver, dbDriver, err := GetMigrationDrivers(svc.handle, MigrationSetReference)
 	if err != nil {
 		t.Fatalf("reference migration drivers: %v", err)
@@ -65,38 +68,32 @@ func TestMigrate0003Reference_WidensContactedStationCall(t *testing.T) {
 	}
 }
 
-// TestMigrate0003Reference_DownRoundTrips rolls 0003 back and re-applies it,
-// proving both directions parse, that the narrower CHECK is genuinely back in
-// force between the steps, and that the table rebuild preserves existing rows.
-func TestMigrate0003Reference_DownRoundTrips(t *testing.T) {
-	svc := testService(t) // at head (reference 0003)
+// TestMigrate0003Reference_AFileAt2KeepsItsRowsAndWidens crosses reference
+// 0003 on a reference set built up to 2, as that build left it: the narrower
+// CHECK is in force there, and the table rebuild keeps the row it holds.
+func TestMigrate0003Reference_AFileAt2KeepsItsRowsAndWidens(t *testing.T) {
+	svc := testServiceWithoutMigrations(t)
+	applyReferenceMigrationSteps(t, svc, 2) // 0001 and 0002
 
 	if err := insertContactedStation(svc, "G4ABC"); err != nil {
-		t.Fatalf("seed G4ABC: %v", err)
+		t.Fatalf("seed G4ABC at 2: %v", err)
 	}
-
-	rowSurvives := func(when string) {
-		t.Helper()
-		var n int
-		if err := svc.handle.QueryRow(
-			`SELECT COUNT(*) FROM contacted_station WHERE call = 'G4ABC'`).Scan(&n); err != nil {
-			t.Fatalf("count G4ABC %s: %v", when, err)
-		}
-		if n != 1 {
-			t.Errorf("G4ABC rows %s = %d, want 1 — the rebuild dropped data", when, n)
-		}
-	}
-
-	applyReferenceMigrationSteps(t, svc, -1) // revert 0003
-	rowSurvives("after 0003 down")
 	if err := insertContactedStation(svc, "A"+strings.Repeat("1", 31)); err == nil {
-		t.Fatalf("after 0003 down, a 32-char call should violate the restored CHECK(call <= 20)")
+		t.Fatalf("at 2, a 32-char call should violate CHECK(call <= 20); the fixture is not the older shape")
 	}
 
-	applyReferenceMigrationSteps(t, svc, 1) // re-apply 0003
-	rowSurvives("after 0003 re-applied")
+	applyReferenceMigrationSteps(t, svc, 1) // 0003
+
+	var n int
+	if err := svc.handle.QueryRow(
+		`SELECT COUNT(*) FROM contacted_station WHERE call = 'G4ABC' AND name = 'N' AND country = 'Test'`).Scan(&n); err != nil {
+		t.Fatalf("count G4ABC after 0003: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("G4ABC rows after 0003 = %d, want 1 — the rebuild dropped data", n)
+	}
 	if err := insertContactedStation(svc, "A"+strings.Repeat("1", 31)); err != nil {
-		t.Fatalf("after 0003 re-applied, a 32-char call should cache: %v", err)
+		t.Fatalf("after 0003, a 32-char call should cache: %v", err)
 	}
 }
 

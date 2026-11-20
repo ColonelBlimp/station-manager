@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -16,7 +17,7 @@ import (
    main's own dispatch runs and no daemon can start.
 
      EP1 characterization of main before its switch is extracted: each
-         existing subcommand (import, restore, config-check, db-downgrade)
+         existing subcommand (import, restore, config-check)
          is routed to its own flag set, and an unknown flag
          exits ExitError with "smd: " and that subcommand's usage; no
          subcommand, or the daemon's own flags, fall through to the daemon.
@@ -70,7 +71,6 @@ func TestEntryPoint_EP1_ExistingRoutesAndTheDaemonFallthrough(t *testing.T) {
 		{"import", "usage: smd import [flags] <file.adi>"},
 		{"restore", "usage: smd restore [flags]"},
 		{"config-check", "Usage of config-check:"},
-		{"db-downgrade", "usage: smd db-downgrade --to <version> --yes [--config <path>]"},
 	} {
 		t.Run(c.sub, func(t *testing.T) {
 			code, stdout, stderr := runEntry(t, c.sub, "--zz-not-a-flag")
@@ -93,20 +93,30 @@ func TestEntryPoint_EP1_ExistingRoutesAndTheDaemonFallthrough(t *testing.T) {
 	}
 }
 
-// `smd config-downgrade` was removed (W-0027 C2e). Any argv that names no subcommand runs
-// the daemon, so a removed name must stay a name: an old instruction or script that still
-// calls it is refused, and never starts a daemon on the station's data.
+// `smd config-downgrade` (W-0027 C2e) and `smd db-downgrade` (the database half of the
+// downgrade tooling) were removed. Any argv that names no subcommand runs the daemon, so a
+// removed name must stay a name: an old instruction or script that still calls it is
+// refused, and never starts a daemon on the station's data.
+//
+// The db-downgrade rows name a config file in a temporary directory: were the name ever a
+// command again, or the daemon's, it could not reach a real installation's files.
 func TestEntryPoint_EP1b_ARemovedSubcommandIsRefusedAndNeverStartsTheDaemon(t *testing.T) {
-	for _, args := range [][]string{
-		{"config-downgrade", "--to", "5", "--yes"},
-		{"config-downgrade"},
+	nowhere := filepath.Join(t.TempDir(), "config.json")
+	for _, c := range []struct {
+		name string
+		args []string
+	}{
+		{"config-downgrade", []string{"config-downgrade", "--to", "5", "--yes"}},
+		{"config-downgrade", []string{"config-downgrade"}},
+		{"db-downgrade", []string{"db-downgrade", "--to", "18", "--yes", "--config", nowhere}},
+		{"db-downgrade", []string{"db-downgrade", "--config", nowhere}},
 	} {
-		code, stdout, stderr := runEntry(t, args...)
+		code, stdout, stderr := runEntry(t, c.args...)
 		if code != ExitError || strings.Contains(stdout, entryMarker) {
-			t.Fatalf("smd %v: exit %d, stdout %q; want %d and no daemon", args, code, stdout, ExitError)
+			t.Fatalf("smd %v: exit %d, stdout %q; want %d and no daemon", c.args, code, stdout, ExitError)
 		}
-		if !strings.Contains(stderr, "config-downgrade") || !strings.Contains(stderr, "removed") {
-			t.Fatalf("smd %v: stderr %q; want it to say the command was removed", args, stderr)
+		if !strings.Contains(stderr, c.name) || !strings.Contains(stderr, "removed") {
+			t.Fatalf("smd %v: stderr %q; want it to say the command was removed", c.args, stderr)
 		}
 	}
 }

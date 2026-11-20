@@ -175,6 +175,17 @@ func TestPeekArchiveIdentity(t *testing.T) {
 // independent connection must read the file (PeekArchiveIdentity).
 func testFileService(t *testing.T) (*Service, string) {
 	t.Helper()
+	svc, path := testFileServiceWithoutMigrations(t)
+	if err := svc.Migrate(); err != nil {
+		t.Fatalf("sqlite migrate: %v", err)
+	}
+	return svc, path
+}
+
+// testFileServiceWithoutMigrations is testFileService before any migration:
+// a test that needs a file at an older version builds it up from here.
+func testFileServiceWithoutMigrations(t *testing.T) (*Service, string) {
+	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "db", "log.db")
 	cfg := config.DefaultConfig(dir)
@@ -195,9 +206,6 @@ func testFileService(t *testing.T) (*Service, string) {
 	svc.SetMigrationSets(MigrationSetLog)
 	if err := svc.Open(); err != nil {
 		t.Fatalf("sqlite open: %v", err)
-	}
-	if err := svc.Migrate(); err != nil {
-		t.Fatalf("sqlite migrate: %v", err)
 	}
 	t.Cleanup(func() { _ = svc.Close(); _ = logSvc.Close() })
 	return svc, path

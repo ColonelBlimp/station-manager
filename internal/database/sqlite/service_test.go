@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	stderr "errors"
+	"io/fs"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -219,11 +221,16 @@ func TestMigrate_SplitSetsIsolateTables(t *testing.T) {
 	}
 }
 
-// migrateToVersion migrates the log set to an ABSOLUTE version.
+// migrateToVersion migrates the log set UP to an ABSOLUTE version.
 //
 // Prefer this over applyMigrationSteps for characterization tests that target a
 // specific migration: relative steps silently retarget every time a new
 // migration lands (0007 did exactly that to the 0006 widen test, 2026-08-01).
+//
+// Up only. The sets hold no down files, and the library takes a missing down
+// file for an empty step: a target below the file's version would move the
+// version marker and leave the schema as it was, and a test would then assert
+// on a file that is not at the version it believes. So that is refused here.
 func migrateToVersion(t *testing.T, svc *Service, version uint) {
 	t.Helper()
 	srcDriver, dbDriver, err := GetMigrationDrivers(svc.handle, MigrationSetLog)
@@ -236,13 +243,49 @@ func migrateToVersion(t *testing.T, svc *Service, version uint) {
 	if err != nil {
 		t.Fatalf("migrate instance: %v", err)
 	}
-	if err := m.Migrate(version); err != nil {
+	current, _, err := m.Version()
+	if err != nil && !stderr.Is(err, migratepkg.ErrNilVersion) {
+		t.Fatalf("read the version before migrating to %d: %v", version, err)
+	}
+	if err == nil && version < current {
+		t.Fatalf("migrate to %d from %d: there is no way down; build the file up to %d instead (testServiceAtVersion)", version, current, version)
+	}
+	if err := m.Migrate(version); err != nil && !stderr.Is(err, migratepkg.ErrNoChange) {
 		t.Fatalf("migrate to %d: %v", version, err)
 	}
 }
 
+// testServiceAtVersion is a service whose log set was built UP from nothing to
+// the given version and no further: a file as a build of that version left it.
+// The reference set is not migrated; svc.Migrate() brings both to the head.
+func testServiceAtVersion(t *testing.T, version uint) *Service {
+	t.Helper()
+	svc := testServiceWithoutMigrations(t)
+	migrateToVersion(t, svc, version)
+	return svc
+}
+
+// logHead is the newest version in the embedded log set.
+func logHead(t *testing.T) int {
+	t.Helper()
+	entries, err := fs.ReadDir(migrationFiles, "migrations/"+MigrationSetLog)
+	if err != nil {
+		t.Fatalf("read the log set: %v", err)
+	}
+	head := 0
+	for _, e := range entries {
+		if v, err := strconv.Atoi(e.Name()[:4]); err == nil && v > head {
+			head = v
+		}
+	}
+	return head
+}
+
 func applyMigrationSteps(t *testing.T, svc *Service, steps int) {
 	t.Helper()
+	if steps <= 0 {
+		t.Fatalf("migrate steps(%d): up only; there is no way down", steps)
+	}
 	srcDriver, dbDriver, err := GetMigrationDrivers(svc.handle, MigrationSetLog)
 	if err != nil {
 		t.Fatalf("migration drivers: %v", err)
@@ -503,56 +546,6 @@ func TestMigrate_RelaxesRSTLengthFromVersion1(t *testing.T) {
 	}
 	if !foundBefore || !foundAfter {
 		t.Fatalf("expected both pre- and post-migration QSOs, found before=%v after=%v", foundBefore, foundAfter)
-	}
-}
-
-func TestMigrate_DownRestoresRSTLengthConstraint(t *testing.T) {
-	svc := testServiceWithoutMigrations(t)
-	if err := svc.Migrate(); err != nil {
-		t.Fatalf("sqlite migrate: %v", err)
-	}
-
-	logbookID, err := svc.InsertLogbookWithContext(context.Background(), types.Logbook{
-		Name:     "Test",
-		Callsign: "G4ABC",
-	})
-	if err != nil {
-		t.Fatalf("insert logbook: %v", err)
-	}
-
-	qso := validTestQso(logbookID, "M0CMC", "20m", "SSB", "20240615", "1253")
-	qsoID, err := svc.InsertQsoWithContext(context.Background(), qso)
-	if err != nil {
-		t.Fatalf("insert latest-schema qso: %v", err)
-	}
-	enqueueUpload(t, svc, qsoID, "qrz-main", "qrz", action.Insert)
-	insertQsoHistory(t, svc, qso.UUID, action.Update, source.API, []byte(`{"call":"M0CMC"}`))
-
-	// Down to version 1: past 0002 (relax_rst_length), so the strict pre-0002 RST
-	// constraint is restored. Named as an absolute version rather than a step
-	// count — the count used to need bumping with every new migration, which its
-	// own comment asked for and 0007 duly broke (2026-08-01).
-	migrateToVersion(t, svc, 1)
-
-	uploads, err := svc.FetchUploadsByQsoIDWithContext(context.Background(), qsoID)
-	if err != nil {
-		t.Fatalf("fetch preserved uploads after down migration: %v", err)
-	}
-	if len(uploads) != 1 {
-		t.Fatalf("preserved upload count after down migration = %d, want 1", len(uploads))
-	}
-	history, err := svc.FetchQsoHistoryByUUIDWithContext(context.Background(), qso.UUID)
-	if err != nil {
-		t.Fatalf("fetch preserved history after down migration: %v", err)
-	}
-	if len(history) != 1 {
-		t.Fatalf("preserved history count after down migration = %d, want 1", len(history))
-	}
-
-	wide := validTestQso(logbookID, "SP5VYF", "15m", "SSB", "20240722", "1637")
-	wide.QsoDetails.RstRcvd = "4657"
-	if _, err := svc.InsertQsoWithContext(context.Background(), wide); err == nil {
-		t.Fatal("insert with four-character RST_RCVD succeeded after down migration; want old constraint restored")
 	}
 }
 

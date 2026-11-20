@@ -803,11 +803,62 @@ func TestRestoreIdentity_RI12_ATargetChangedDuringTheFetch(t *testing.T) {
 	}
 }
 
-// riMigrateTo moves an archive file to a log schema version through the real
-// migration steps, read-write, leaving no sidecars behind.
-func riMigrateTo(t *testing.T, path string, version uint) {
+// riHomeAtSchema replaces the bed's Home file with one built UP to an older log
+// schema version, as a build of that version left it: the same logbooks and the
+// same archive identity, written in that version's shape. There is no way down,
+// so an older file cannot be made from a head one; and the migration library
+// takes a missing down file for an empty step, which would move only the version
+// marker. The file is left as a cleanly stopped daemon leaves it: no sidecars.
+func riHomeAtSchema(t *testing.T, b *riBed, version uint) {
 	t.Helper()
-	db, err := sql.Open(sqlite.SqliteDriver, "file:"+path)
+	type logbook struct {
+		id                      int64
+		name, callsign, uuid    string
+		description, modifiedAt sql.NullString
+	}
+	var (
+		logbooks    []logbook
+		archive     string
+		defaultLb   sql.NullInt64
+		heldQsos    int
+		readHomeErr error
+	)
+	func() {
+		db, err := sql.Open(sqlite.SqliteDriver, "file:"+b.home)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = db.Close() }()
+		rows, err := db.Query(`SELECT id, name, callsign, uuid, description, modified_at FROM logbook ORDER BY id`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var lb logbook
+			if err := rows.Scan(&lb.id, &lb.name, &lb.callsign, &lb.uuid, &lb.description, &lb.modifiedAt); err != nil {
+				t.Fatal(err)
+			}
+			logbooks = append(logbooks, lb)
+		}
+		readHomeErr = db.QueryRow(`SELECT archive_uuid, default_logbook_id FROM archive_metadata`).Scan(&archive, &defaultLb)
+		if err := db.QueryRow(`SELECT COUNT(*) FROM qso`).Scan(&heldQsos); err != nil {
+			t.Fatal(err)
+		}
+	}()
+	if readHomeErr != nil || len(logbooks) == 0 {
+		t.Fatalf("read the bed's Home before rebuilding it: %d logbook(s), identity %v", len(logbooks), readHomeErr)
+	}
+	if heldQsos != 0 {
+		t.Fatalf("the bed's Home holds %d QSO(s); rebuilding it at schema %d would lose them", heldQsos, version)
+	}
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if err := os.Remove(b.home + suffix); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+	}
+
+	db, err := sql.Open(sqlite.SqliteDriver, "file:"+b.home+"?_pragma=journal_mode(WAL)&_pragma=foreign_keys(on)")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -822,7 +873,16 @@ func riMigrateTo(t *testing.T, path string, version uint) {
 		t.Fatal(err)
 	}
 	if err := m.Migrate(version); err != nil {
-		t.Fatalf("migrate %s to %d: %v", path, version, err)
+		t.Fatalf("build %s up to %d: %v", b.home, version, err)
+	}
+	for _, lb := range logbooks {
+		if _, err := db.Exec(`INSERT INTO logbook (id, name, callsign, uuid, description, modified_at) VALUES (?, ?, ?, ?, ?, ?)`,
+			lb.id, lb.name, lb.callsign, lb.uuid, lb.description, lb.modifiedAt); err != nil {
+			t.Fatalf("write logbook %d at schema %d: %v", lb.id, version, err)
+		}
+	}
+	if _, err := db.Exec(`INSERT INTO archive_metadata (singleton, archive_uuid, default_logbook_id) VALUES (1, ?, ?)`, archive, defaultLb); err != nil {
+		t.Fatalf("write the identity at schema %d: %v", version, err)
 	}
 }
 
@@ -835,7 +895,18 @@ func TestRestoreIdentity_RI13_AnOlderSchemaResolvesWithoutMigrating(t *testing.T
 		t.Run(fmt.Sprintf("schema %d", version), func(t *testing.T) {
 			cloud := newFakeCloud(t, riRow(t, utils.NewUUIDv7(), 1, false))
 			b := newRIBed(t, cloud.srv.URL, archA)
-			riMigrateTo(t, b.home, version)
+			riHomeAtSchema(t, b, version)
+			// The file really is the older shape, not a head file with an older
+			// version number: no binding table, and the identity it was given.
+			if n := riCount(t, b.home, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'logbook_destination'`); n != 0 {
+				t.Fatalf("the Home at schema %d has a binding table; it is not the older shape", version)
+			}
+			if got := riLogbookUUID(t, b.home, 1); got != b.homeLb1 {
+				t.Fatalf("the rebuilt Home's logbook 1 is %s; want the bed's %s", got, b.homeLb1)
+			}
+			if n := riCount(t, b.home, `SELECT COUNT(*) FROM archive_metadata WHERE archive_uuid = '`+archA+`'`); n != 1 {
+				t.Fatalf("the rebuilt Home does not carry archive %s", archA)
+			}
 			before := treeState(t, b.tmp)
 			var err error
 			out := captureStderr(t, func() { err = runRestore([]string{"--config", b.cfgPath, "--dry-run"}) })

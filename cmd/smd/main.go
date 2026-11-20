@@ -130,17 +130,19 @@ func main() {
 //	smd restore [flags]               → SM Cloud restore (runRestore())
 //	smd provision [flags]             → a cloud archive as a new managed archive (runProvision())
 //	smd config-check [--config p]     → read-only preflight: unknown keys, Load, forwarder construction (runConfigCheck())
-//	smd db-downgrade --to N --yes     → migrate the log schema DOWN for a rollback to an older build (runDBDowngrade())
+//	smd db-downgrade …                → refused: the command was removed (removedSubcommand)
 //	smd config-downgrade …            → refused: the command was removed (removedSubcommand)
 var subcommands = map[string]func([]string) error{
 	"import":       runImport,
 	"restore":      runRestore,
 	"provision":    runProvision,
 	"config-check": runConfigCheck,
-	"db-downgrade": runDBDowngrade,
-	// Removed (W-0027 C2e), and kept as a name: any argv that names no subcommand
-	// runs the daemon, so an old instruction that still calls this one must be
-	// refused, not start a daemon on the station's data.
+	// Removed (W-0027: config-downgrade with C2e, db-downgrade with the rest of
+	// the downgrade tooling), and kept as names: any argv that names no
+	// subcommand runs the daemon, so an old instruction that still calls one of
+	// these must be refused, not start a daemon on the station's data.
+	"db-downgrade": removedSubcommand("db-downgrade",
+		"a database is migrated up only, and there is no rollback to an older build"),
 	"config-downgrade": removedSubcommand("config-downgrade",
 		"there is no rollback to a build older than config version 7"),
 }

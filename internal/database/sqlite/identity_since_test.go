@@ -13,8 +13,7 @@ import (
    F2, H1, 2026-10-10): a binding born on SM Cloud identity is marked
    permanently. No production caller stamps until commit 4.
 
-     MI1  0018 adds identity_since, NULL on every existing row; a downgrade to
-          17 with no stamp drops it and keeps everything else.
+     MI1  0018 adds identity_since, NULL on every existing row.
      MI2  the listing reads the stamp.
      MI3  a stamping save: the stamp lands in the save's one transaction; an
           existing stamp keeps its time; a disabled or non-SM-Cloud row, or a
@@ -25,9 +24,8 @@ import (
           a setting that did not take, and a cancelled context write nothing.
      MI4  never cleared: a disable, a credential edit and a re-enable without
           the flag keep it, to the second.
-     MI5  a downgrade below 18 is refused while any binding holds a stamp —
-          enabled, disabled, or a deleted logbook's — before any migration:
-          the schema stays 18 and clean.
+     MI5  removed with the downgrade (W-0027, 2026-11-19): it was the refusal
+          of a downgrade below 18 while any binding held a stamp.
      MI6  adoption exclusion at the write boundary: a stamped binding cannot
           be reserved or confirmed; a reserved one cannot be stamped. Both
           orderings.
@@ -44,7 +42,7 @@ func stampOf(t *testing.T, svc *Service, name string) (bool, string) {
 	return at.Valid, at.String
 }
 
-func TestMigrate0018_IdentitySince_UpAndDown(t *testing.T) {
+func TestMigrate0018_IdentitySince_Up(t *testing.T) {
 	svc := testService(t)
 	if v := schemaVersion(t, svc); v != 19 {
 		t.Fatalf("schema version = %d, want 19", v)
@@ -52,16 +50,6 @@ func TestMigrate0018_IdentitySince_UpAndDown(t *testing.T) {
 	seedSmcloudBinding(t, svc)
 	if n := countT(t, svc, `SELECT COUNT(*) FROM logbook_destination WHERE identity_since IS NULL`); n != 1 {
 		t.Fatalf("unstamped rows = %d, want 1", n)
-	}
-	execT(t, svc, `UPDATE logbook_destination SET adoption_reserved_at = datetime('now')`)
-	if _, err := svc.DowngradeLogSchemaTo(17); err != nil {
-		t.Fatalf("downgrade to 17 without a stamp: %v", err)
-	}
-	if n := countT(t, svc, `SELECT COUNT(*) FROM pragma_table_info('logbook_destination') WHERE name = 'identity_since'`); n != 0 {
-		t.Fatal("identity_since survived 0018's down step")
-	}
-	if n := countT(t, svc, `SELECT COUNT(*) FROM logbook_destination WHERE adoption_reserved_at IS NOT NULL AND forwarder_name = 'cloud'`); n != 1 {
-		t.Fatal("0018's down step lost the binding or its reservation")
 	}
 }
 
@@ -255,32 +243,6 @@ func TestIdentitySince_MI4_NeverCleared(t *testing.T) {
 		}
 		if _, at := stampOf(t, svc, "cloud"); at != stampedAt {
 			t.Fatalf("after %+v the stamp is %q; want %q", row, at, stampedAt)
-		}
-	}
-}
-
-func TestMigrate0018_Down_RefusesToEraseAStamp(t *testing.T) {
-	for name, mark := range map[string]string{
-		"enabled":  `UPDATE logbook_destination SET identity_since = datetime('now')`,
-		"disabled": `UPDATE logbook_destination SET enabled = 0, identity_since = datetime('now')`,
-		"a deleted logbook's": `UPDATE logbook_destination SET logbook_id = 2, identity_since = datetime('now');
-			UPDATE logbook SET deleted_at = datetime('now') WHERE id = 2`,
-	} {
-		for _, target := range []uint{17, 16} {
-			t.Run(name, func(t *testing.T) {
-				svc := testService(t)
-				seedSmcloudBinding(t, svc)
-				execT(t, svc, mark)
-				if _, err := svc.DowngradeLogSchemaTo(target); err == nil {
-					t.Fatalf("downgrade to %d succeeded; want it refused", target)
-				}
-				if v := schemaVersion(t, svc); v != 19 {
-					t.Fatalf("schema version = %d after a refused downgrade, want 19", v)
-				}
-				if n := countT(t, svc, `SELECT COUNT(*) FROM `+schemaMigrationsTable(MigrationSetLog)+` WHERE dirty = 1`); n != 0 {
-					t.Fatal("a refused downgrade left the schema dirty")
-				}
-			})
 		}
 	}
 }

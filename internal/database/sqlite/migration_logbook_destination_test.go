@@ -9,11 +9,10 @@ import (
 // Migrations 0014 + 0015 (ADR 0082, W-0021 5B): `logbook_destination` — one
 // binding per (logical logbook × destination type) — the one-time adoption
 // marker `archive_metadata.destination_bindings_seeded_at`, and (0015) the
-// `legacy_name` a seeded binding derives from. 0015's down step collapses
-// queue names to the recorded legacy name (else the default logbook's binding
-// name, else the lexicographically first) while the column still exists;
-// 0014's down then drops the table and the marker. QSO, queue and logbook rows
-// are otherwise untouched.
+// `legacy_name` a seeded binding derives from. The column existed for the way
+// down, which collapsed queue names to it; the way down was removed (W-0027,
+// 2026-11-19) and the column and its writes stay. A file at 14, in either of
+// the two shapes a build left, reaches the head with its bindings.
 
 func execT(t *testing.T, svc *Service, q string, args ...any) {
 	t.Helper()
@@ -83,42 +82,6 @@ func TestMigrate0014And0015_BindingTableMarkerAndLegacyName_Up(t *testing.T) {
 	}
 }
 
-func TestMigrate0015_Down_CollapsesQueueNamesToTheDefaultLogbookBinding_Then0014Drops(t *testing.T) {
-	svc := testService(t)
-	seedTwoLogbookQueue(t, svc, 1)
-	if _, err := svc.DowngradeLogSchemaTo(14); err != nil {
-		t.Fatalf("downgrade to 14: %v", err)
-	}
-	if n := countT(t, svc, `SELECT COUNT(*) FROM pragma_table_info('logbook_destination') WHERE name = 'legacy_name'`); n != 0 {
-		t.Fatal("legacy_name survived 0015's down step")
-	}
-	if n := countT(t, svc, `SELECT COUNT(*) FROM logbook_destination`); n != 2 {
-		t.Fatalf("bindings at 14 = %d, want 2 (the table survives until 0014's down)", n)
-	}
-	if _, err := svc.DowngradeLogSchemaTo(13); err != nil {
-		t.Fatalf("downgrade to 13: %v", err)
-	}
-	if v := schemaVersion(t, svc); v != 13 {
-		t.Fatalf("schema version = %d after the down steps, want 13", v)
-	}
-	if n := countT(t, svc, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'logbook_destination'`); n != 0 {
-		t.Fatal("logbook_destination survived the down step")
-	}
-	if n := countT(t, svc, `SELECT COUNT(*) FROM pragma_table_info('archive_metadata') WHERE name = 'destination_bindings_seeded_at'`); n != 0 {
-		t.Fatal("destination_bindings_seeded_at survived the down step")
-	}
-	// Both queue rows now carry the legacy name; nothing else about them moved.
-	if n := countT(t, svc, `SELECT COUNT(*) FROM qso_upload WHERE forwarder_name = 'qrz'`); n != 2 {
-		t.Fatalf("rows named qrz after the down step = %d, want 2", n)
-	}
-	if n := countT(t, svc, `SELECT COUNT(*) FROM qso_upload WHERE qso_id = 2 AND forwarder_name = 'qrz' AND status = 'pending' AND origin = 'live'`); n != 1 {
-		t.Fatal("the second logbook's row was not collapsed to qrz with its status and origin intact")
-	}
-	if n := countT(t, svc, `SELECT COUNT(*) FROM qso`); n != 2 {
-		t.Fatalf("qso rows = %d, want 2", n)
-	}
-}
-
 // seedNamedBindings: two logbooks (1, 2), one QSO each, a qrz binding per
 // logbook under the given names, and one queue row per QSO under its binding.
 func seedNamedBindings(t *testing.T, svc *Service, defaultLogbook any, name1, name2 string) {
@@ -137,85 +100,14 @@ func seedNamedBindings(t *testing.T, svc *Service, defaultLogbook any, name1, na
 	execT(t, svc, `INSERT INTO qso_upload (qso_id, forwarder_name, forwarder_type, action, status, origin) VALUES (2, ?, 'qrz', 'insert', 'pending', 'live')`, name2)
 }
 
-func namesOf(t *testing.T, svc *Service) (name1, name2 string) {
-	t.Helper()
-	if err := svc.handle.QueryRow(`SELECT forwarder_name FROM qso_upload WHERE qso_id = 1`).Scan(&name1); err != nil {
-		t.Fatal(err)
-	}
-	if err := svc.handle.QueryRow(`SELECT forwarder_name FROM qso_upload WHERE qso_id = 2`).Scan(&name2); err != nil {
-		t.Fatal(err)
-	}
-	return name1, name2
-}
-
-// The default logbook's binding name wins even when it is NOT the
-// lexicographic minimum: default = logbook 2 named "qrz.z", logbook 1 named
-// "qrz.a" → both rows end as "qrz.z".
-// Codex P2 on c3df0e12: the legacy config name is the ONLY name an older,
-// config-driven worker drains, and neither the current default logbook nor
-// sort order identifies it. The seed records it on every row it creates
-// (`legacy_name`); the down step collapses to that first.
-func TestMigrate0015_Down_CollapsesToTheRecordedLegacyNameBeforeAnyInference(t *testing.T) {
-	// No default logbook; the legacy name "station-qrz" sorts AFTER "qrz.<uuid>".
-	svc := testService(t)
-	seedNamedBindings(t, svc, nil, "station-qrz", "qrz.01920000-0000-7000-8000-00000000000b")
-	execT(t, svc, `UPDATE logbook_destination SET legacy_name = 'station-qrz'`)
-	if _, err := svc.DowngradeLogSchemaTo(14); err != nil {
-		t.Fatalf("downgrade to 14: %v", err)
-	}
-	if n1, n2 := namesOf(t, svc); n1 != "station-qrz" || n2 != "station-qrz" {
-		t.Fatalf("names after the down step = %q, %q; want the recorded legacy name for both", n1, n2)
-	}
-}
-
-// The default logbook CHANGED after the seed: logbook 2 is now the default,
-// yet the legacy name lives on logbook 1's row — the recorded name still wins.
-func TestMigrate0015_Down_RecordedLegacyNameWinsOverAChangedDefault(t *testing.T) {
-	svc := testService(t)
-	seedNamedBindings(t, svc, 2, "qrz", "qrz.01920000-0000-7000-8000-00000000000b")
-	execT(t, svc, `UPDATE logbook_destination SET legacy_name = 'qrz'`)
-	if _, err := svc.DowngradeLogSchemaTo(14); err != nil {
-		t.Fatalf("downgrade to 14: %v", err)
-	}
-	if n1, n2 := namesOf(t, svc); n1 != "qrz" || n2 != "qrz" {
-		t.Fatalf("names after the down step = %q, %q; want the recorded legacy name, not the new default's", n1, n2)
-	}
-}
-
-// Bindings that never had a legacy name (created after the seed, or in a new
-// archive) fall back to the ADR 0082 rule: the default logbook's binding name.
-func TestMigrate0015_Down_DefaultLogbookBindingWinsOverTheLexicographicMinimum(t *testing.T) {
-	svc := testService(t)
-	seedNamedBindings(t, svc, 2, "qrz.a", "qrz.z")
-	if _, err := svc.DowngradeLogSchemaTo(14); err != nil {
-		t.Fatalf("downgrade to 14: %v", err)
-	}
-	if n1, n2 := namesOf(t, svc); n1 != "qrz.z" || n2 != "qrz.z" {
-		t.Fatalf("names after the down step = %q, %q; want the default logbook's qrz.z for both", n1, n2)
-	}
-}
-
-// With no default-logbook binding the target is the lexicographically first
-// binding name — here logbook 2's "qrz.a", NOT the lowest logbook's "qrz.b".
-func TestMigrate0015_Down_CollapsesToTheFirstNameWithoutADefaultBinding(t *testing.T) {
-	svc := testService(t)
-	seedNamedBindings(t, svc, nil, "qrz.b", "qrz.a")
-	if _, err := svc.DowngradeLogSchemaTo(14); err != nil {
-		t.Fatalf("downgrade to 14: %v", err)
-	}
-	if n1, n2 := namesOf(t, svc); n1 != "qrz.a" || n2 != "qrz.a" {
-		t.Fatalf("names after the down step = %q, %q; want the lexicographically first qrz.a for both", n1, n2)
-	}
-}
-
 // Upgrade path (Codex P2 on b1231672): a file the 0014 build migrated — table
-// without legacy_name, marker present — reaches 15 through the ordinary
+// without legacy_name, marker present — reaches the head through the ordinary
 // Migrate() and gains the column; bindings it already holds list with an empty
-// LegacyName and collapse by the fallback rule.
+// LegacyName. The file is built up to 14, as that build left it.
 func TestMigrate0015_UpgradesAFileAlreadyAt14(t *testing.T) {
-	svc := testService(t)
-	if _, err := svc.DowngradeLogSchemaTo(14); err != nil {
-		t.Fatalf("downgrade to 14: %v", err)
+	svc := testServiceAtVersion(t, 14)
+	if n := countT(t, svc, `SELECT COUNT(*) FROM pragma_table_info('logbook_destination') WHERE name = 'legacy_name'`); n != 0 {
+		t.Fatal("the fixture at 14 already has legacy_name; it is not the 0014 build's shape")
 	}
 	seedNamedBindings(t, svc, 1, "qrz", "qrz.01920000-0000-7000-8000-00000000000b") // the parent's shape, no legacy_name
 	if err := svc.Migrate(); err != nil {
@@ -228,12 +120,6 @@ func TestMigrate0015_UpgradesAFileAlreadyAt14(t *testing.T) {
 	if err != nil || len(rows) != 2 || rows[0].LegacyName != "" {
 		t.Fatalf("rows after the upgrade = %+v (%v); want 2 with no legacy name", rows, err)
 	}
-	if _, err := svc.DowngradeLogSchemaTo(14); err != nil {
-		t.Fatalf("downgrade to 14: %v", err)
-	}
-	if n1, n2 := namesOf(t, svc); n1 != "qrz" || n2 != "qrz" {
-		t.Fatalf("names after the fallback collapse = %q, %q; want the default logbook's qrz", n1, n2)
-	}
 }
 
 // Upgrade path, second shape (Codex P1 on ea56170f): a file migrated by the
@@ -243,10 +129,7 @@ func TestMigrate0015_UpgradesAFileAlreadyAt14(t *testing.T) {
 // column's content from that shape is not carried (no real file of that shape
 // holds seeded bindings — that build wired no seed).
 func TestMigrate0015_UpgradesAFileAt14ThatAlreadyHasTheColumn(t *testing.T) {
-	svc := testService(t)
-	if _, err := svc.DowngradeLogSchemaTo(14); err != nil {
-		t.Fatalf("downgrade to 14: %v", err)
-	}
+	svc := testServiceAtVersion(t, 14)
 	execT(t, svc, `ALTER TABLE logbook_destination ADD COLUMN legacy_name TEXT`) // the b1231672 shape
 	seedNamedBindings(t, svc, 1, "qrz", "qrz.01920000-0000-7000-8000-00000000000b")
 	execT(t, svc, `UPDATE logbook_destination SET legacy_name = 'qrz'`)
@@ -258,7 +141,7 @@ func TestMigrate0015_UpgradesAFileAt14ThatAlreadyHasTheColumn(t *testing.T) {
 		t.Fatalf("migrate up from the column-bearing 14: %v", err)
 	}
 	if v := schemaVersion(t, svc); v != 19 {
-		t.Fatalf("schema version = %d, want 18 (the head, through 0018)", v)
+		t.Fatalf("schema version = %d, want 19 (the head)", v)
 	}
 	rows, err := svc.ListLogbookDestinationsWithContext(context.Background())
 	if err != nil || len(rows) != 2 || rows[0].ForwarderName != "qrz" || rows[1].ForwarderName != "qrz.01920000-0000-7000-8000-00000000000b" {

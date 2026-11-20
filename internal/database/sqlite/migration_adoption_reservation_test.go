@@ -10,10 +10,7 @@ import (
 
 // Migration 0016 (ADR 0091, W-0021 5F.3 commit 4a): the archive-local
 // reservation of an SM Cloud cloud name, `logbook_destination.
-// adoption_reserved_at`. Up adds it, NULL on every existing row. A downgrade
-// below 16 is refused, before any migration runs, while any binding holds a
-// reservation or an adoption: either would be erased. Without one it drops the
-// column and nothing else.
+// adoption_reserved_at`. Up adds it, NULL on every existing row.
 
 func seedSmcloudBinding(t *testing.T, svc *Service) {
 	t.Helper()
@@ -31,46 +28,6 @@ func TestMigrate0016_AdoptionReservation_Up(t *testing.T) {
 	seedSmcloudBinding(t, svc)
 	if n := countT(t, svc, `SELECT COUNT(*) FROM logbook_destination WHERE adoption_reserved_at IS NULL`); n != 1 {
 		t.Fatalf("unreserved rows = %d, want 1 (a new row is not reserved)", n)
-	}
-}
-
-func TestMigrate0016_Down_DropsTheColumnWhenNothingIsReserved(t *testing.T) {
-	svc := testService(t)
-	seedSmcloudBinding(t, svc)
-	if _, err := svc.DowngradeLogSchemaTo(15); err != nil {
-		t.Fatalf("downgrade to 15: %v", err)
-	}
-	if n := countT(t, svc, `SELECT COUNT(*) FROM pragma_table_info('logbook_destination') WHERE name = 'adoption_reserved_at'`); n != 0 {
-		t.Fatal("adoption_reserved_at survived 0016's down step")
-	}
-	if n := countT(t, svc, `SELECT COUNT(*) FROM logbook_destination WHERE forwarder_name = 'cloud' AND credentials = '{"logbook":"shack"}'`); n != 1 {
-		t.Fatal("the binding did not survive 0016's down step")
-	}
-}
-
-func TestMigrate0016_Down_RefusesToEraseAReservationOrAnAdoption(t *testing.T) {
-	for name, mark := range map[string]string{
-		"reserved": `UPDATE logbook_destination SET adoption_reserved_at = datetime('now')`,
-		"adopted":  `UPDATE logbook_destination SET remote_adopted_at = datetime('now')`,
-		"reserved on a deleted logbook": `UPDATE logbook_destination SET logbook_id = 2, adoption_reserved_at = datetime('now');
-			UPDATE logbook SET deleted_at = datetime('now') WHERE id = 2`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			svc := testService(t)
-			seedSmcloudBinding(t, svc)
-			execT(t, svc, mark)
-			for _, target := range []uint{15, 13} {
-				if _, err := svc.DowngradeLogSchemaTo(target); err == nil {
-					t.Fatalf("downgrade to %d succeeded; want it refused", target)
-				}
-				if v := schemaVersion(t, svc); v != 19 {
-					t.Fatalf("schema version = %d after a refused downgrade, want 19", v)
-				}
-				if n := countT(t, svc, `SELECT COUNT(*) FROM `+schemaMigrationsTable(MigrationSetLog)+` WHERE dirty = 1`); n != 0 {
-					t.Fatal("a refused downgrade left the schema dirty")
-				}
-			}
-		})
 	}
 }
 

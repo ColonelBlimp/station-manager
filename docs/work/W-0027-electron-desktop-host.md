@@ -222,6 +222,9 @@ design before code.
   part 1, and the up migrations are **not folded** into one file; only the way down goes.
   The plan is at the end of this dossier, for Codex's verification before anything is
   deleted.
+- **2026-11-19 (operator): "build the removal".** After Codex verified the plan
+  (codex-181). The build starts with the sorting table of the affected tests, which goes
+  to Codex before any test is changed.
 
 ## Open questions for the operator
 
@@ -4518,6 +4521,90 @@ Read so far: 17 functions call `DowngradeLogSchemaTo` (in `contest_serial_test.g
   and indexes, foreign keys and sequence state. The build's first step is that table,
   function by function, put to Codex before any test is changed.
 
+**The sorting table (2026-11-19; the build's first step, on the operator's "build the
+removal"; for Codex before any test is changed).** Every test function that moves a file's
+schema version was listed by script (the service it starts from and each move, in order)
+and then read: 39 functions, 33 in `internal/database/sqlite` and 6 in `cmd/smd`. Three
+tests that only go up (`TestMigrate0002Reference_...`, `TestMigrate0004_...`,
+`TestMigrate_RelaxesRSTLengthFromVersion1`) and two helpers in `cmd/smd` that only go up
+(`seedFailedUploads`, `seedStationQueue`) are not affected.
+
+- **A check made first, because every rebuilt fixture depends on it:** is a log file at
+  version N the same shape whether it got there upward from empty or downward from the
+  head? Measured by a throwaway overlay test over every N from 1 to 18, comparing the
+  stored definition of every table, index and trigger (comments stripped, whitespace,
+  quoting and case folded): **the same for 2 to 18; different at 1** (the `qso` table).
+  The fixtures to be rebuilt start at 5, 6, 7, 8, 9, 10, 11, 12, 13 and 14, so rebuilding
+  them upward does not change where any test starts. The one test that goes to 1 is of the
+  down step itself and is deleted.
+
+| Function | Today | What it asserts | Disposition |
+|---|---|---|---|
+| `TestMigrate0019_DownDropsTheCounter` | head, down to 18 | the down step drops the table | **Deleted** |
+| `TestDowngradeLogSchemaTo_*` (2; the file) | head, down | the downgrade and its refusals | **Deleted** with `downgrade.go` |
+| `TestMigrate0018_IdentitySince_UpAndDown` | head, down to 17 | at head a new binding is unstamped; then the down step drops the column and keeps the binding and its reservation | **Head assertions kept**, down part removed; renamed `_Up` |
+| `TestMigrate0018_Down_RefusesToEraseAStamp` | head, down refused | the refusal, the version unchanged, not dirty | **Deleted** |
+| `TestMigrate0017_AdoptionAccount_UpAndDown` | head, down to 16 | at head a new binding has no account; then the down step | **Head assertions kept**; renamed `_Up` |
+| `TestMigrate0017_Down_RefusesToEraseAConfirmation` | head, down refused | the refusal | **Deleted** |
+| `TestMigrate0016_Down_DropsTheColumnWhenNothingIsReserved` | head, down to 15 | the down step | **Deleted** (`TestMigrate0016_AdoptionReservation_Up` holds the head assertion already) |
+| `TestMigrate0016_Down_RefusesToEraseAReservationOrAnAdoption` | head, down refused | the refusal | **Deleted** |
+| `TestMigrate0015_Down_Collapses...` (5 functions) | head, down to 14 (one on to 13) | which name the queue rows collapse to **on the way down** | **Deleted**: each assertion is of the down step's rule. See the question below |
+| `TestMigrate0015_UpgradesAFileAlreadyAt14` | head, down to 14, seed, up, then down again | a file at 14 with bindings reaches the head, both rows listed with no legacy name; then the down collapse | **Kept**, its start built upward to 14; the trailing down and its assertion removed |
+| `TestMigrate0015_UpgradesAFileAt14ThatAlreadyHasTheColumn` | head, down to 14, add the column, seed, advance the sequence, up | both bindings kept, the unique constraint holds, the id sequence continues from 9 | **Kept whole**, its start built upward to 14 |
+| `TestMigrate0013_..._DownDiscardsOnlyThem` | head, down to 12 | at head the two archive kinds insert as notifications and are refused as alarms; then the down step discards them | **Head assertions kept**, down part removed; renamed |
+| `TestMigrate0012_DownDropsIdentityKeepsLogbooksAndQsos` | head, down to 11, up to 12 | the down step; then "up again is clean" with a logbook and a QSO in place | **Rebuilt as an upward test:** a file built to 11 holding a logbook and a QSO goes up; both rows kept, the logbook's uuid NULL, the name unchanged |
+| `TestMigrate0011_LeavesExistingFailedRowsUnclassified` | head, down to 10, seed, up to 11 | a failed row from before 0011 stays unclassified | **Kept whole**, start built upward to 10 |
+| `TestMigrate0011_DownDropsFailureClassWithoutLosingQueueRows` | head, down to 10 | the down step | **Deleted** |
+| `TestMigrate0010_BackfillsOnlyRecoverableSuccessOrder` | head, down to 9, seed, up to 10 | the backfill's three cases | **Kept whole**, start built upward to 9 |
+| `TestMigrate0010_DownDropsGenerationWithoutLosingQueueRows` | head, down to 9 | the down step | **Deleted** |
+| `TestMigrate0009_DownKeepsNotificationRowsAndDiscardsAlarmRows` | head, seed, down to 8, up to 12 | the down step; then, upward, the notification row survives with its detail and an alarm row inserts | **Rebuilt upward:** a file built to 8 holding a notification row (an alarm refused there, as the starting state) goes up; the row and its detail survive, an alarm inserts |
+| `TestMigrate0009_RebuildKeepsTheIdHighWaterMark` | head, insert and delete, down to 8, up to 12 | the id after the rebuild is 2, not 1 | **Kept**, rebuilt upward: built to 8, a row inserted and deleted there, up, the next id is 2 |
+| `TestMigrate0008_DownDropsTableUpRestoresIt` | head, down to 7, up to 12 | the table is there, gone, there again | **Rebuilt upward:** built to 7, the table absent; up, present |
+| `TestMigrate0007_ExistingRowsBecomeLegacyAndSurviveRetry` | head, down to 6, seed, up to 7 | origin becomes `legacy` and survives retry and orphan reset | **Kept whole**, start built upward to 6 |
+| `TestMigrate0007_PartialIndexesSurviveBothDirections` | head, down to 6, up to 12 | both partial indexes with their predicates at each point, the head included | **Kept upward:** at 6 (the starting state), straight after 0007, and at the head (codex-182: the head check is kept explicitly) |
+| `TestMigrate0007_ForeignKeysIntactBothDirections` | head with a row, down to 6, up to 12 | no foreign-key violation at each point, the head included | **Kept upward:** built to 6, a queue row seeded in that version's shape; checked there, straight after 0007, and at the head |
+| `TestMigrate0007_DownPreservesEveryPreExistingColumn` | head with every column set, down to 6 | the down rebuild keeps every column | **Replaced in the same change by its upward form** (codex-182): two rows at 6, every column of the first set to a value of its own, every nullable column of the second NULL; up through 0007; every value read back, timestamps included, and `origin` is `legacy` |
+| `TestMigrate0006_DownRoundTrips` | head, down to 5, up to 6 | the narrow limit is back at 5; the wide value stores at 6 | **Rebuilt upward:** built to 5, the wide value refused (the starting state); up to 6, it stores |
+| `TestMigrate_DownRestoresRSTLengthConstraint` | head with rows, down to 1 | the down step keeps uploads and history and restores the limit | **Deleted** (`TestMigrate_RelaxesRSTLengthFromVersion1` is the upward test and stays) |
+| `TestMigrate0003Reference_DownRoundTrips` | head with a row, one step down, one up | the narrow limit at 2; the row survives both ways; the wide value caches at 3 | **Rebuilt upward:** the reference set built to 2, a row seeded, the wide value refused; one step up, the row survives, the wide value caches |
+| `TestPeekDestinationBindings_ReadsLogbooksBelowTheBindingTable` | a head file with identity and two logbooks, down to 13, 12, 11 | what the peek reads from a file at each of those versions | **Kept whole**, each file built upward to its version and seeded in that version's shape (logbook uuids and the identity row at 12 and 13; neither at 11). Not a migration test: a reader's test whose fixture went down |
+| `TestRestoreIdentity_RI13_...` (`cmd/smd`) | a head bed, down to 13 and 12 | a dry-run restore at an older schema resolves, counts, asks the right requests, changes no file and leaves the version | **Kept whole**, files built upward with that version's fixtures and the same identities; plus the shape assertion codex-180 asked for (no binding table) |
+| `TestDBDowngrade_*` (3; the file, `cmd/smd`) | the command | the command | **Deleted** with it |
+| `TestEntryPoint_EP1_...` (`cmd/smd`) | routes | `db-downgrade` routed to its own flags | its `db-downgrade` row **removed** |
+| `TestEntryPoint_EP1b_...` (`cmd/smd`) | removed names | `config-downgrade` refused, no daemon | **gains** `db-downgrade`, with and without flags |
+
+- **Counted, as built:** 15 functions deleted outright (the five collapse tests, the two
+  of `downgrade_test.go`, and eight single ones), 3 more with the command; 3 keep their
+  head assertions and lose a down part; 16 are kept, rebuilt upward or replaced by their
+  upward form; 2 entry-point tests change a row. 39 in all.
+- **What changes for the better.** Sixteen tests start from a file really built at the
+  older version, where before they started from a head file brought down. Nine of them
+  (0006, 0008, 0009 twice, 0012, reference 0003, and 0007's indexes, foreign keys and
+  columns) become plain upward tests of their step.
+- **The shape comparison above is supporting evidence only** (codex-182): folding case
+  and quoting could hide a difference inside a string literal, and it says nothing of
+  rows. What counts is that each fixture is really built to its version and asserts its
+  own older shape before it is used.
+- **What is lost, by assertion.** Only assertions about a down step or a downgrade
+  refusal. No assertion about an up step, a head-state constraint, a row surviving the way
+  up, an index, a foreign key or a sequence is removed.
+- **Two questions inside the table, for Codex.**
+  1. **0015's five collapse tests.** codex-180 asked to keep "the legacy-name behavior".
+     I find one upward legacy-name assertion, and keep it: after the upgrade from 14, the
+     listed bindings have no legacy name. The collapse to a recorded legacy name happens
+     only in the down file. If Codex meant something of those five that I am reading as
+     downward, name it.
+  2. **0007's every-column test.** Its assertions are of the down rebuild. 0007's up step
+     is also a rebuild with an explicit column list, and no test today checks that it
+     keeps every column: the existing upward test reads `origin` only. I propose to turn
+     the test round instead of deleting it: a file built to 6 with every pre-0007 column
+     set, up, every column read back. That adds coverage the removal does not owe, on the
+     only direction left; the station's July files at 5 and 6 would cross it on a restore.
+     Say if that belongs in this commit or not at all.
+- **Not removed, and noted:** the `legacy_name` column and its writes stay. With the way
+  down gone nothing reads it but the listing. Removing it would be a new migration and is
+  not part of this.
+
 **New tests, written first and seen to fail on their own assertion.**
 - `smd db-downgrade`, with and without flags, is refused naming the command as removed, and
   no daemon starts (the shape of the `config-downgrade` test). Fails today: the command
@@ -4543,3 +4630,41 @@ deploy, and its files are not touched by a build that has no way down.
 
 **Asked of Codex, and answered (codex-180).** (1) The inventory: two helpers were missing,
 now above. (2) The sorting: by assertion, now above. (3) The 0018 comment: left alone.
+
+**Built (2026-11-19; uncommitted; on the operator's "build the removal", after Codex's
+word on the table, codex-182).** Codex's two answers were taken: the five 0015 collapse
+tests are deleted, and 0007's every-column test is replaced by its upward form in this
+change.
+
+- **Tests first, each seen to fail on its own assertion before the deletion:**
+  - `TestEntryPoint_EP1b_...` with two `db-downgrade` rows: failed with the command's own
+    error ("reading config file ... no such file") where it wants "removed". Its rows name a
+    config file in a temporary directory, so that neither the old command nor a daemon
+    could have reached a real installation while the test was red.
+  - `TestMigrationSets_HoldOnlyUpFiles`: failed naming all 22 down files.
+  - `TestMigrate_OlderFilesComeUpToTheHead` (files at 5, 14 and 18, a logbook and a QSO in
+    each): passed before and passes after, as a characterization should.
+- **The helpers refuse to go down** (`migrateToVersion`, `applyMigrationSteps`,
+  `applyReferenceMigrationSteps`); `riMigrateTo` is replaced by a builder that makes the
+  bed's Home upward at 12 or 13 with the same logbooks and identity. With the guards in and
+  the down files still present, exactly the sixteen helper-driven tests of the table
+  stopped at the guard, and no other: the guard finds what the table lists.
+- **The test changes as tabled,** then the deletion: `cmd/smd/db_downgrade.go` and its
+  test, `internal/database/sqlite/downgrade.go` and its test, the 22 down files.
+  `db-downgrade` is refused by name. The 22 up files are untouched, byte for byte.
+- **Every rebuilt fixture passed against the unchanged migration set first** (down files
+  still present), so the upward tests are not passing because of the deletion.
+- **Reversion proofs, in a temporary copy, each failing for its own reason:**
+  - the reserved name taken out of the table: EP1b fails with "exit 0, stdout
+    `ENTRY-HELPER: the daemon would start`": the confusable outcome itself;
+  - one down file put back: the up-only test fails naming it;
+  - 0007's rebuild made to drop `upstream_id`: the every-column test fails on row 41's
+    `upstream`; made to copy `created_at` into `modified_at`: it fails on both rows.
+- **Gates, by exit code:** `gofmt -l cmd internal` (nothing listed), `go vet ./...`,
+  `golangci-lint` (0 issues), the maintainability metrics (0 regressions),
+  `go test ./... -count=1` (66 packages ok), the docs and context checks.
+- **Documents:** `docs/install.md` (both commands removed; a database goes up only),
+  `docs/current.md` (Next), a dated pointer in W-0021.
+- **Not shown:** the station. Nothing was run there. Its files are untouched until the
+  operator next deploys, and a build with no way down changes none of them. RI13's
+  shape assertion was proved to bite by Codex's overlay run (codex-180), not rerun here.

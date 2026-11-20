@@ -47,22 +47,32 @@ func TestPeekDestinationBindings_CarriesIdentitySince(t *testing.T) {
 // target from the peek's logbooks. Schemas 12 and 13 already carry the archive
 // and logbook UUIDs but no binding table, so the logbooks must be read
 // whether the binding table exists or not. Below 12 there is no logbook UUID,
-// and the logbooks read with none.
+// and the logbooks read with none. Each file is built up to its version and
+// filled in that version's shape, as a build of that version left it.
 func TestPeekDestinationBindings_ReadsLogbooksBelowTheBindingTable(t *testing.T) {
 	for _, tc := range []struct {
 		version  uint
 		withUUID bool
 	}{{13, true}, {12, true}, {11, false}} {
 		t.Run(fmt.Sprintf("schema %d", tc.version), func(t *testing.T) {
-			svc, path := testFileService(t)
-			ctx := context.Background()
-			if _, err := svc.EnsureArchiveIdentityWithContext(ctx, 0); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := svc.handle.ExecContext(ctx, `INSERT INTO logbook (name, callsign, uuid) VALUES ('First', 'M0TEST', '019fd5c5-efcc-7193-be4f-1fee532ee3aa'), ('Second', 'M0TEST', '019fd5c5-efcc-7193-be4f-1fee532ee3ab')`); err != nil {
-				t.Fatal(err)
-			}
+			svc, path := testFileServiceWithoutMigrations(t)
 			migrateToVersion(t, svc, tc.version)
+			ctx := context.Background()
+			seed := []string{`INSERT INTO logbook (name, callsign) VALUES ('First', 'M0TEST'), ('Second', 'M0TEST')`}
+			if tc.withUUID { // 0012 brought the identity row and the logbook uuids
+				seed = []string{
+					`INSERT INTO archive_metadata (singleton, archive_uuid, default_logbook_id) VALUES (1, '019fd5c5-efcc-7193-be4f-1fee532ee3a0', NULL)`,
+					`INSERT INTO logbook (name, callsign, uuid) VALUES ('First', 'M0TEST', '019fd5c5-efcc-7193-be4f-1fee532ee3aa'), ('Second', 'M0TEST', '019fd5c5-efcc-7193-be4f-1fee532ee3ab')`,
+				}
+			}
+			for _, stmt := range seed {
+				if _, err := svc.handle.ExecContext(ctx, stmt); err != nil {
+					t.Fatalf("seed at schema %d: %v", tc.version, err)
+				}
+			}
+			if has, err := hasTable(svc.handle, "logbook_destination"); err != nil || has {
+				t.Fatalf("the fixture at schema %d has a binding table (%v); it is not the older shape", tc.version, err)
+			}
 			peek, err := PeekDestinationBindings(path)
 			if err != nil {
 				t.Fatalf("peek at schema %d: %v", tc.version, err)

@@ -79,8 +79,8 @@ func TestSeedLogbookDestinations_TwoLogbooks_NamesRenamesAndMarks(t *testing.T) 
 	if got := bindingKeys(rows); fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("bindings = %v\nwant %v", got, want)
 	}
-	// Every seeded row records the legacy name it derives from — the durable
-	// mapping the down migration and the config downgrade collapse to.
+	// Every seeded row records the legacy name it derives from. (It was the
+	// mapping the removed downgrades collapsed to; the seed still writes it.)
 	if n := countT(t, svc, `SELECT COUNT(*) FROM logbook_destination WHERE (destination = 'qrz' AND legacy_name = 'qrz') OR (destination = 'qrzcq' AND legacy_name = 'qrzcq')`); n != 4 {
 		t.Fatalf("rows carrying their legacy name = %d, want 4", n)
 	}

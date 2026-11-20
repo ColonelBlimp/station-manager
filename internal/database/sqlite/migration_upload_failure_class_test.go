@@ -31,8 +31,7 @@ func TestMigrate0011_AddsFailureClassAtHead(t *testing.T) {
 // stay NULL. The migration must not infer a class from last_error text, however
 // recognisable the prefix.
 func TestMigrate0011_LeavesExistingFailedRowsUnclassified(t *testing.T) {
-	svc := testService(t)
-	migrateToVersion(t, svc, 10)
+	svc := testServiceAtVersion(t, 10) // built up to 10, as that build left it
 	seedLogbookAndQsoRow(t, svc.handle)
 	if _, err := svc.handle.Exec(`
 		INSERT INTO qso_upload
@@ -63,34 +62,5 @@ func TestMigrate0011_RejectsUnknownClass(t *testing.T) {
 		VALUES (1, 'qrz', 'qrz', 'insert', 'failed', 'live', 'rejected')`)
 	if err == nil {
 		t.Fatal("insert with failure_class='rejected' succeeded, want CHECK violation")
-	}
-}
-
-func TestMigrate0011_DownDropsFailureClassWithoutLosingQueueRows(t *testing.T) {
-	svc := testService(t)
-	seedLogbookAndQsoRow(t, svc.handle)
-	if _, err := svc.handle.Exec(`
-		INSERT INTO qso_upload
-			(qso_id, forwarder_name, forwarder_type, action, status, origin, failure_class)
-		VALUES (1, 'qrz', 'qrz', 'insert', 'failed', 'live', 'auth')`); err != nil {
-		t.Fatalf("seed qso_upload: %v", err)
-	}
-
-	migrateToVersion(t, svc, 10)
-
-	var columns, rows int
-	if err := svc.handle.QueryRow(`
-		SELECT COUNT(*) FROM pragma_table_info('qso_upload')
-		WHERE name='failure_class'`).Scan(&columns); err != nil {
-		t.Fatalf("inspect columns after down: %v", err)
-	}
-	if columns != 0 {
-		t.Errorf("failure_class columns after down = %d, want 0", columns)
-	}
-	if err := svc.handle.QueryRow(`SELECT COUNT(*) FROM qso_upload WHERE status='failed'`).Scan(&rows); err != nil {
-		t.Fatalf("count queue rows after down: %v", err)
-	}
-	if rows != 1 {
-		t.Errorf("queue rows after down = %d, want 1", rows)
 	}
 }

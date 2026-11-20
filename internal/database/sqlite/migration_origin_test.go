@@ -116,16 +116,10 @@ func TestMigrate0007_OriginIsClosedAndHasNoDefault(t *testing.T) {
 // alone. Contract 2 governs the re-enqueue case separately: an explicit
 // re-enqueue REPLACES origin, so this asserts only the paths that must not.
 func TestMigrate0007_ExistingRowsBecomeLegacyAndSurviveRetry(t *testing.T) {
-	svc := testService(t)
+	// A file built up to v6, as that build left it: insert a row as v6 would
+	// have (no origin column), then go up through 0007.
+	svc := testServiceAtVersion(t, 6)
 	db := svc.handle
-
-	if v := schemaVersion(t, svc); v != 19 {
-		t.Fatalf("schema version = %d, want 19", v)
-	}
-
-	// Roll back to v6, insert a row as v6 would have (no origin column), then
-	// roll forward through 0007. Absolute targets stay honest as head advances.
-	migrateToVersion(t, svc, 6)
 	seedLogbookAndQsoRow(t, db)
 	if _, err := db.Exec(`INSERT INTO qso_upload (qso_id, forwarder_name, forwarder_type, action, status)
 		VALUES (1, 'qrz', 'qrz', 'insert', 'pending')`); err != nil {
@@ -201,16 +195,13 @@ func TestMigrate0007_UpdatingAMigratedRowStillAdvancesModifiedAt(t *testing.T) {
 	}
 }
 
-// Both partial indexes must exist after up AND after down. A rebuild that renames
-// the table without dropping them first leaves them attached to qso_upload_old,
-// where DROP TABLE takes them with it — silently, and only visible as a slow
-// claim query under load.
-func TestMigrate0007_PartialIndexesSurviveBothDirections(t *testing.T) {
-	svc := testService(t)
-
-	if v := schemaVersion(t, svc); v != 19 {
-		t.Fatalf("schema version = %d, want 19", v)
-	}
+// Both partial indexes must exist before and after the rebuild. A rebuild that
+// renames the table without dropping them first leaves them attached to
+// qso_upload_old, where DROP TABLE takes them with it — silently, and only
+// visible as a slow claim query under load. Checked on a file built up to v6,
+// straight after 0007, and at the head.
+func TestMigrate0007_PartialIndexesSurviveTheRebuild(t *testing.T) {
+	svc := testServiceAtVersion(t, 6)
 
 	assertIndexes := func(when string) {
 		t.Helper()
@@ -237,22 +228,28 @@ func TestMigrate0007_PartialIndexesSurviveBothDirections(t *testing.T) {
 		}
 	}
 
-	assertIndexes("after up")
-	migrateToVersion(t, svc, 6)
-	assertIndexes("after down")
-	migrateToVersion(t, svc, 12)
-	assertIndexes("after re-up")
-}
-
-// A rename-then-rebuild is where foreign keys are silently orphaned. Assert the
-// database agrees they are intact in both directions.
-func TestMigrate0007_ForeignKeysIntactBothDirections(t *testing.T) {
-	svc := testService(t)
-
+	assertIndexes("at 6, before the rebuild")
+	migrateToVersion(t, svc, 7)
+	assertIndexes("after 0007")
+	if err := svc.Migrate(); err != nil {
+		t.Fatalf("migrate to the head: %v", err)
+	}
 	if v := schemaVersion(t, svc); v != 19 {
 		t.Fatalf("schema version = %d, want 19", v)
 	}
-	seedUploadRow(t, svc, "qrz")
+	assertIndexes("at the head")
+}
+
+// A rename-then-rebuild is where foreign keys are silently orphaned. Assert the
+// database agrees they are intact with a queue row in place: on a file built up
+// to v6, straight after 0007, and at the head.
+func TestMigrate0007_ForeignKeysIntactAcrossTheRebuild(t *testing.T) {
+	svc := testServiceAtVersion(t, 6)
+	seedLogbookAndQsoRow(t, svc.handle)
+	if _, err := svc.handle.Exec(`INSERT INTO qso_upload (qso_id, forwarder_name, forwarder_type, action, status)
+		VALUES (1, 'qrz', 'stub', 'insert', 'pending')`); err != nil { // v6's shape: no origin column
+		t.Fatalf("seed pre-0007 upload row: %v", err)
+	}
 
 	check := func(when string) {
 		t.Helper()
@@ -264,78 +261,73 @@ func TestMigrate0007_ForeignKeysIntactBothDirections(t *testing.T) {
 		if rows.Next() {
 			t.Errorf("%s: PRAGMA foreign_key_check reported a violation", when)
 		}
+		var n int
+		if err := svc.handle.QueryRow(`SELECT COUNT(*) FROM qso_upload u JOIN qso q ON q.id = u.qso_id`).Scan(&n); err != nil || n != 1 {
+			t.Errorf("%s: queue rows joined to their QSO = %d (%v), want 1", when, n, err)
+		}
 	}
 
-	check("after up")
-	migrateToVersion(t, svc, 6)
-	check("after down")
-	migrateToVersion(t, svc, 12)
-	check("after re-up")
-}
-
-// Down-migration must preserve every pre-existing column. The rebuild copies an
-// explicit column list, which is exactly where a column is silently dropped.
-func TestMigrate0007_DownPreservesEveryPreExistingColumn(t *testing.T) {
-	svc := testService(t)
-	db := svc.handle
-	id := seedUploadRow(t, svc, "qrz")
-
-	if _, err := db.Exec(`UPDATE qso_upload SET
-		forwarder_type='qrz', action='update', status='uploaded', attempts=3,
-		last_attempt_at=111, next_attempt_at=222, last_error='boom', upstream_id='logid-9'
-		WHERE forwarder_name='qrz'`); err != nil {
-		t.Fatalf("populate every column: %v", err)
+	check("at 6, before the rebuild")
+	migrateToVersion(t, svc, 7)
+	check("after 0007")
+	if err := svc.Migrate(); err != nil {
+		t.Fatalf("migrate to the head: %v", err)
 	}
-
 	if v := schemaVersion(t, svc); v != 19 {
 		t.Fatalf("schema version = %d, want 19", v)
 	}
-	migrateToVersion(t, svc, 6) // crosses 0007 down (the rebuild under test)
+	check("at the head")
+}
 
-	var (
-		gotID, gotQsoID                              int64
-		createdAt, modifiedAt                        string
-		fwdName, fwdType, act, st, lastErr, upstream string
-		attempts, lastAt, nextAt                     int64
-	)
-	if err := db.QueryRow(`SELECT id, created_at, modified_at, qso_id, forwarder_name,
-		forwarder_type, action, status, attempts, last_attempt_at, next_attempt_at,
-		last_error, upstream_id
-		FROM qso_upload WHERE forwarder_name='qrz'`).
-		Scan(&gotID, &createdAt, &modifiedAt, &gotQsoID, &fwdName, &fwdType, &act, &st,
-			&attempts, &lastAt, &nextAt, &lastErr, &upstream); err != nil {
-		t.Fatalf("read back after down: %v", err)
+// The rebuild must preserve every pre-existing column. It copies an explicit
+// column list, which is exactly where a column is silently dropped. Two rows on
+// a file built up to v6: one with every column set to a value of its own, and
+// one with every nullable column NULL, so a column filled from another, from a
+// default or from nothing shows.
+func TestMigrate0007_UpPreservesEveryPreExistingColumn(t *testing.T) {
+	svc := testServiceAtVersion(t, 6)
+	db := svc.handle
+	seedLogbookAndQsoRow(t, db)
+	if _, err := db.Exec(`INSERT INTO qso_upload
+		(id, created_at, modified_at, qso_id, forwarder_name, forwarder_type, action, status,
+		 attempts, last_attempt_at, next_attempt_at, last_error, upstream_id)
+		VALUES (41, '2026-01-02 03:04:05', '2026-02-03 04:05:06', 1, 'qrz', 'qrz-type', 'update', 'uploaded',
+		        3, 111, 222, 'boom', 'logid-9'),
+		       (42, '2026-03-04 05:06:07', NULL, 1, 'clublog', 'clublog-type', 'delete', 'failed',
+		        0, NULL, 333, NULL, NULL)`); err != nil {
+		t.Fatalf("seed pre-0007 upload rows: %v", err)
 	}
 
-	// EVERY pre-0007 column, not a sample: the rebuild copies an explicit column
-	// list, and an omission there is silent data loss.
-	for _, c := range []struct{ name, got, want string }{
-		{"forwarder_name", fwdName, "qrz"},
-		{"forwarder_type", fwdType, "qrz"},
-		{"action", act, "update"},
-		{"status", st, "uploaded"},
-		{"last_error", lastErr, "boom"},
-		{"upstream_id", upstream, "logid-9"},
+	migrateToVersion(t, svc, 7)
+
+	type row struct {
+		createdAt, fwdName, fwdType, act, st, origin string
+		modifiedAt, lastErr, upstream                sql.NullString
+		qsoID, attempts, nextAt                      int64
+		lastAt                                       sql.NullInt64
+	}
+	str := func(v string) sql.NullString { return sql.NullString{String: v, Valid: true} }
+	for id, want := range map[int64]row{
+		41: {"2026-01-02 03:04:05", "qrz", "qrz-type", "update", "uploaded", "legacy",
+			str("2026-02-03 04:05:06"), str("boom"), str("logid-9"), 1, 3, 222, sql.NullInt64{Int64: 111, Valid: true}},
+		42: {"2026-03-04 05:06:07", "clublog", "clublog-type", "delete", "failed", "legacy",
+			sql.NullString{}, sql.NullString{}, sql.NullString{}, 1, 0, 333, sql.NullInt64{}},
 	} {
-		if c.got != c.want {
-			t.Errorf("down migration lost %s: got %q, want %q", c.name, c.got, c.want)
+		var got row
+		if err := db.QueryRow(`SELECT strftime('%Y-%m-%d %H:%M:%S', created_at), forwarder_name, forwarder_type,
+			action, status, origin, strftime('%Y-%m-%d %H:%M:%S', modified_at), last_error, upstream_id,
+			qso_id, attempts, next_attempt_at, last_attempt_at
+			FROM qso_upload WHERE id = ?`, id).
+			Scan(&got.createdAt, &got.fwdName, &got.fwdType, &got.act, &got.st, &got.origin,
+				&got.modifiedAt, &got.lastErr, &got.upstream, &got.qsoID, &got.attempts, &got.nextAt, &got.lastAt); err != nil {
+			t.Fatalf("read row %d back after 0007: %v", id, err)
+		}
+		if got != want {
+			t.Errorf("row %d after 0007:\n   got %+v\n  want %+v", id, got, want)
 		}
 	}
-	if gotID != id {
-		t.Errorf("down migration changed id: got %d, want %d", gotID, id)
-	}
-	if gotQsoID != 1 {
-		t.Errorf("down migration lost qso_id: got %d, want 1", gotQsoID)
-	}
-	if createdAt == "" {
-		t.Error("down migration lost created_at")
-	}
-	if modifiedAt == "" {
-		t.Error("down migration lost modified_at")
-	}
-	if attempts != 3 || lastAt != 111 || nextAt != 222 {
-		t.Errorf("down migration lost numeric columns: attempts=%d last=%d next=%d",
-			attempts, lastAt, nextAt)
+	if n := countT(t, svc, `SELECT COUNT(*) FROM qso_upload`); n != 2 {
+		t.Errorf("queue rows after 0007 = %d, want 2", n)
 	}
 }
 

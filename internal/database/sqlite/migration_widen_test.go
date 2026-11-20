@@ -49,22 +49,16 @@ func TestMigrate0006_WidensModeAndCall(t *testing.T) {
 	}
 }
 
-// TestMigrate0006_DownRoundTrips exercises the down migration: from head, roll 0006
-// back (restoring the <=10 / 1..20 ceilings) then re-apply it. Proves the down SQL
-// parses and rebuilds the three tables cleanly, and that the narrower CHECK is truly
-// back in force between the two steps.
-func TestMigrate0006_DownRoundTrips(t *testing.T) {
-	svc := testService(t) // at head; 0006 is no longer head, hence the absolute target below
-
-	// Roll back just 0006 — TO version 5, explicitly. Relative steps broke the
-	// moment 0007 landed (this read -1 and rolled back the wrong migration), and
-	// would break again on every future one; naming the target version does not.
-	migrateToVersion(t, svc, 5)
+// TestMigrate0006_WidensAFileAt5 crosses 0006 on a file built up to 5, as that
+// build left it: the narrower CHECK (mode <= 10) is in force there, and after
+// 0006 the same row stores.
+func TestMigrate0006_WidensAFileAt5(t *testing.T) {
+	svc := testServiceAtVersion(t, 5)
 
 	if _, err := svc.handle.Exec(`INSERT INTO logbook (id, callsign, name) VALUES (1, 'G4ABC', 'L')`); err != nil {
 		t.Fatalf("seed logbook: %v", err)
 	}
-	// DIGITALVOICE (12 chars) must be rejected again once 0006 is reverted.
+	// DIGITALVOICE (12 chars) is rejected before 0006.
 	_, err := svc.handle.Exec(`INSERT INTO qso
 		(uuid, call, band, mode, freq, qso_date, time_on, time_off,
 		 rst_sent, rst_rcvd, country, dedupe_key, logbook_id)
@@ -72,10 +66,10 @@ func TestMigrate0006_DownRoundTrips(t *testing.T) {
 		        7050000,'20250508','0845','0845','59','59','Test',?,1)`,
 		strings.Repeat("0", 64))
 	if err == nil {
-		t.Fatalf("after 0006 down, DIGITALVOICE MODE should violate the restored CHECK(mode <= 10)")
+		t.Fatalf("at 5, DIGITALVOICE MODE should violate CHECK(mode <= 10); the fixture is not the older shape")
 	}
 
-	// Re-apply 0006; DIGITALVOICE stores again.
+	// Apply 0006; DIGITALVOICE stores.
 	migrateToVersion(t, svc, 6)
 	if _, err := svc.handle.Exec(`INSERT INTO qso
 		(uuid, call, band, mode, freq, qso_date, time_on, time_off,
@@ -83,6 +77,6 @@ func TestMigrate0006_DownRoundTrips(t *testing.T) {
 		VALUES ('01920000-0000-7000-8000-000000000001','G4ABC','40m','DIGITALVOICE',
 		        7050000,'20250508','0845','0845','59','59','Test',?,1)`,
 		strings.Repeat("0", 64)); err != nil {
-		t.Fatalf("after 0006 re-applied, DIGITALVOICE should insert: %v", err)
+		t.Fatalf("after 0006, DIGITALVOICE should insert: %v", err)
 	}
 }

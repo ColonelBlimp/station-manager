@@ -11,8 +11,8 @@ import (
 // default logbook — and `logbook.uuid` gives each logical logbook a stable
 // identity for cross-file and cloud use. Both UUID columns are nullable at the
 // SQL level because SQLite cannot mint a UUIDv7: the daemon fills them, once,
-// after Migrate() (and mints on every runtime insert). The down step removes
-// both without touching a logbook or QSO row.
+// after Migrate() (and mints on every runtime insert). A file an older build
+// left crosses the migration without a logbook or QSO row touched.
 
 func TestMigrate0012_ArchiveMetadataAndLogbookUUIDAtHead(t *testing.T) {
 	svc := testService(t)
@@ -79,36 +79,46 @@ func TestMigrate0012_LogbookUUIDUniqueWhenPresentNullAllowed(t *testing.T) {
 	}
 }
 
-func TestMigrate0012_DownDropsIdentityKeepsLogbooksAndQsos(t *testing.T) {
-	svc := testService(t)
-	seedLogbookAndQsoRow(t, svc.handle)
-	if _, err := svc.handle.Exec(`UPDATE logbook SET uuid = '019fd5c5-efcc-7193-be4f-1fee532ee317' WHERE id = 1`); err != nil {
-		t.Fatalf("set logbook uuid: %v", err)
-	}
-	if _, err := svc.handle.Exec(`INSERT INTO archive_metadata (singleton, archive_uuid, default_logbook_id)
-		VALUES (1, '019fd5c5-efcc-7193-be4f-1fee532ee315', 1)`); err != nil {
-		t.Fatalf("seed identity: %v", err)
-	}
-
-	migrateToVersion(t, svc, 11)
-
+// A file an older build left at 11, holding a logbook and a QSO, crosses 0012
+// with both rows as they were: the identity table arrives empty and the
+// logbook's uuid is NULL until the daemon's backfill. The file is built up to
+// 11, as that build left it.
+func TestMigrate0012_AFileAt11KeepsItsLogbooksAndQsos(t *testing.T) {
+	svc := testServiceAtVersion(t, 11)
 	var n int
 	if err := svc.handle.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='archive_metadata'`).Scan(&n); err != nil || n != 0 {
-		t.Fatalf("archive_metadata tables after down = %d (%v), want 0", n, err)
+		t.Fatalf("archive_metadata tables at 11 = %d (%v), want 0: not the older shape", n, err)
 	}
 	if err := svc.handle.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('logbook') WHERE name='uuid'`).Scan(&n); err != nil || n != 0 {
-		t.Fatalf("logbook.uuid columns after down = %d (%v), want 0", n, err)
+		t.Fatalf("logbook.uuid columns at 11 = %d (%v), want 0: not the older shape", n, err)
 	}
-	var lb, q int
-	if err := svc.handle.QueryRow(`SELECT COUNT(*) FROM logbook`).Scan(&lb); err != nil || lb != 1 {
-		t.Fatalf("logbook rows after down = %d (%v), want 1", lb, err)
+	seedLogbookAndQsoRow(t, svc.handle)
+
+	for _, step := range []struct {
+		when string
+		up   func()
+	}{
+		{"after 0012", func() { migrateToVersion(t, svc, 12) }},
+		{"at the head", func() {
+			if err := svc.Migrate(); err != nil {
+				t.Fatalf("migrate to the head: %v", err)
+			}
+		}},
+	} {
+		step.up()
+		if err := svc.handle.QueryRow(`SELECT COUNT(*) FROM archive_metadata`).Scan(&n); err != nil || n != 0 {
+			t.Fatalf("%s: identity rows = %d (%v), want 0 (the migration invents none)", step.when, n, err)
+		}
+		var lb, q int
+		if err := svc.handle.QueryRow(`SELECT COUNT(*) FROM logbook`).Scan(&lb); err != nil || lb != 1 {
+			t.Fatalf("%s: logbook rows = %d (%v), want 1", step.when, lb, err)
+		}
+		if err := svc.handle.QueryRow(`SELECT COUNT(*) FROM qso WHERE call = 'G4ABC' AND logbook_id = 1`).Scan(&q); err != nil || q != 1 {
+			t.Fatalf("%s: qso rows = %d (%v), want 1", step.when, q, err)
+		}
+		var name, uuid sql.NullString
+		if err := svc.handle.QueryRow(`SELECT name, uuid FROM logbook WHERE id = 1`).Scan(&name, &uuid); err != nil || name.String != "L" || uuid.Valid {
+			t.Fatalf("%s: logbook row = name %v, uuid %v (%v); want L with no uuid", step.when, name, uuid, err)
+		}
 	}
-	if err := svc.handle.QueryRow(`SELECT COUNT(*) FROM qso`).Scan(&q); err != nil || q != 1 {
-		t.Fatalf("qso rows after down = %d (%v), want 1", q, err)
-	}
-	var name sql.NullString
-	if err := svc.handle.QueryRow(`SELECT name FROM logbook WHERE id = 1`).Scan(&name); err != nil || name.String != "L" {
-		t.Fatalf("logbook row changed across the down: %v %v", name, err)
-	}
-	migrateToVersion(t, svc, 12) // re-up through head is clean
 }

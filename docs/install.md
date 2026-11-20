@@ -548,9 +548,9 @@ schema it does not ship. The first start of this version rewrites `config.json` 
 7. To run an older build again you need the files as that build left them, so take the
 backup described above before you upgrade.
 
-`smd config-downgrade` was removed; the name is refused and changes nothing.
-`smd db-downgrade` is still in this build and is being removed too; on its own it is not a
-way back.
+`smd config-downgrade` and `smd db-downgrade` were removed; each name is refused and
+changes nothing. A database is migrated up only: a file an older build left is brought to
+the current schema when it is opened, and there is no step back.
 
 If the new version needs a file-only `config.json` key that the old
 daemon does not know (for example the SM Cloud `allow_insecure_http`

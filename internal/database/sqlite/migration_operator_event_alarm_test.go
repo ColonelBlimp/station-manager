@@ -15,10 +15,10 @@ import (
 //     must `alarm` + `forward.failed`;
 //   - the pair table is the one in internal/stationevents, enumerated in both
 //     directions so the Go vocabulary and the schema cannot drift apart;
-//   - the down-migration to 0008 preserves every `notification` row and
-//     deliberately discards `alarm` rows (they cannot exist under 0008's CHECKs);
+//   - a file at 0008 keeps every `notification` row across the rebuild, and
+//     `alarm` rows (which cannot exist under 0008's CHECKs) are admitted after it;
 //   - the rebuild carries the id high-water mark, so an evicted row's id is
-//     never reissued after a migration round-trip;
+//     never reissued after the migration;
 //   - the immutability trigger, the per-category index, the severity CHECK and
 //     the detail/build rules of 0008 survive the rebuild.
 
@@ -97,80 +97,75 @@ func TestMigrate0009_RebuildKeepsSeverityBuildDetailTriggerAndIndex(t *testing.T
 	}
 }
 
-// Down to 0008 keeps every notification row (with its detail) and discards the
-// alarm rows — the stated policy of the down file's header — and the 0008
-// CHECK is back in force; up restores the alarm pairs with the notification
-// rows intact.
-func TestMigrate0009_DownKeepsNotificationRowsAndDiscardsAlarmRows(t *testing.T) {
-	svc := testService(t)
+// A file at 0008 holds notification rows only: 0008's CHECK refuses an alarm.
+// Going up through 0009 keeps every notification row with its detail and
+// admits the alarm pairs. The file is built up to 8, as that build left it;
+// checked straight after 0009 and at the head.
+func TestMigrate0009_AFileAt8KeepsItsNotificationRowsAndGainsAlarms(t *testing.T) {
+	svc := testServiceAtVersion(t, 8)
+	if err := insertOperatorEvent(t, svc, "notification", "forward.failed", "warn", "v",
+		`{"qso_id":7,"forwarder":"qrz","action":"insert","attempts":5}`); err != nil {
+		t.Fatalf("seed notification row at 8: %v", err)
+	}
+	if err := insertOperatorEvent(t, svc, "alarm", "tx_alarm.raised", "error", "v", `{}`); err == nil {
+		t.Fatal("at 8 an alarm row inserted; the fixture is not 0008's closed CHECK")
+	}
+
+	kept := func(when string) {
+		t.Helper()
+		var n int
+		if err := svc.handle.QueryRow(`SELECT COUNT(*) FROM operator_event WHERE category = 'notification'`).Scan(&n); err != nil || n != 1 {
+			t.Errorf("%s: notification rows = %d (%v), want 1", when, n, err)
+		}
+		var detail string
+		if err := svc.handle.QueryRow(`SELECT detail FROM operator_event WHERE kind = 'forward.failed'`).Scan(&detail); err != nil {
+			t.Fatalf("%s: read detail: %v", when, err)
+		}
+		if !strings.Contains(detail, `"forwarder":"qrz"`) || !strings.Contains(detail, `"attempts":5`) {
+			t.Errorf("%s: notification detail not preserved: %s", when, detail)
+		}
+	}
+
+	migrateToVersion(t, svc, 9)
+	kept("after 0009")
+	if err := insertOperatorEvent(t, svc, "alarm", "tx_alarm.raised", "error", "v", `{"code":"tx_unconfirmed"}`); err != nil {
+		t.Errorf("after 0009: an alarm row must insert: %v", err)
+	}
+
+	if err := svc.Migrate(); err != nil {
+		t.Fatalf("migrate to the head: %v", err)
+	}
 	if v := schemaVersion(t, svc); v != 19 {
 		t.Fatalf("schema version = %d, want 19", v)
 	}
-	if err := insertOperatorEvent(t, svc, "notification", "forward.failed", "warn", "v",
-		`{"qso_id":7,"forwarder":"qrz","action":"insert","attempts":5}`); err != nil {
-		t.Fatalf("seed notification row: %v", err)
-	}
-	if err := insertOperatorEvent(t, svc, "alarm", "tx_alarm.raised", "error", "v", `{"code":"tx_unconfirmed"}`); err != nil {
-		t.Fatalf("seed alarm row: %v", err)
-	}
-
-	count := func(when, category string) int {
-		t.Helper()
-		var n int
-		if err := svc.handle.QueryRow(`SELECT COUNT(*) FROM operator_event WHERE category = ?`, category).Scan(&n); err != nil {
-			t.Fatalf("%s: count %s: %v", when, category, err)
-		}
-		return n
-	}
-
-	migrateToVersion(t, svc, 8) // crosses 0009 down → 0008's closed CHECKs
-	if n := count("after down", "notification"); n != 1 {
-		t.Errorf("after down: notification rows = %d, want 1 (preserved)", n)
-	}
-	if n := count("after down", "alarm"); n != 0 {
-		t.Errorf("after down: alarm rows = %d, want 0 (discarded by policy)", n)
-	}
-	var detail string
-	if err := svc.handle.QueryRow(`SELECT detail FROM operator_event WHERE category='notification'`).Scan(&detail); err != nil {
-		t.Fatalf("after down: read detail: %v", err)
-	}
-	if !strings.Contains(detail, `"forwarder":"qrz"`) {
-		t.Errorf("after down: notification detail not preserved: %s", detail)
-	}
-	if err := insertOperatorEvent(t, svc, "alarm", "tx_alarm.raised", "error", "v", `{}`); err == nil {
-		t.Error("after down: an alarm row must be refused by 0008's CHECK")
-	}
-
-	migrateToVersion(t, svc, 12) // re-up through head
-	if n := count("after re-up", "notification"); n != 1 {
-		t.Errorf("after re-up: notification rows = %d, want 1", n)
-	}
+	kept("at the head")
 	if err := insertOperatorEvent(t, svc, "alarm", "tx_alarm.cleared", "info", "v", `{}`); err != nil {
-		t.Errorf("after re-up: an alarm row must insert again: %v", err)
+		t.Errorf("at the head: an alarm row must insert: %v", err)
 	}
 }
 
 // The rebuild must carry AUTOINCREMENT's high-water mark. Without it an empty
 // table restarts at 1 and an id that retention already evicted is reissued —
-// and id is the monotonic arrival order both the ring and the SPA key on.
+// and id is the monotonic arrival order both the ring and the SPA key on. On a
+// file built up to 8: a row is written and evicted there, then 0009 rebuilds
+// the empty table.
 func TestMigrate0009_RebuildKeepsTheIdHighWaterMark(t *testing.T) {
-	svc := testService(t)
+	svc := testServiceAtVersion(t, 8)
 	if err := insertOperatorEvent(t, svc, "notification", "forward.failed", "warn", "v", `{}`); err != nil {
-		t.Fatalf("seed: %v", err)
+		t.Fatalf("seed at 8: %v", err)
 	}
 	if _, err := svc.handle.Exec(`DELETE FROM operator_event`); err != nil { // retention evicted it
 		t.Fatalf("evict: %v", err)
 	}
-	migrateToVersion(t, svc, 8)
-	migrateToVersion(t, svc, 12)
+	migrateToVersion(t, svc, 9)
 	if err := insertOperatorEvent(t, svc, "alarm", "tx_alarm.raised", "error", "v", `{}`); err != nil {
-		t.Fatalf("insert after round-trip: %v", err)
+		t.Fatalf("insert after the rebuild: %v", err)
 	}
 	var id int64
 	if err := svc.handle.QueryRow(`SELECT MAX(id) FROM operator_event`).Scan(&id); err != nil {
 		t.Fatalf("max id: %v", err)
 	}
 	if id != 2 {
-		t.Errorf("id after the round-trip = %d, want 2 — the rebuild reissued an evicted id", id)
+		t.Errorf("id after the rebuild = %d, want 2 — the rebuild reissued an evicted id", id)
 	}
 }

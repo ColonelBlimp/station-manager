@@ -141,15 +141,11 @@ func TestMigrate0008_OperatorEventHasPerCategoryIndex(t *testing.T) {
 	}
 }
 
-// The migration is reversible: down drops the table, up restores it. Doubles as
-// the in-suite reversion guard — a build that ships the table without the
-// migration, or a down that forgets it, fails here.
-func TestMigrate0008_DownDropsTableUpRestoresIt(t *testing.T) {
-	svc := testService(t)
-
-	if v := schemaVersion(t, svc); v != 19 {
-		t.Fatalf("schema version = %d, want 19", v)
-	}
+// 0008 is what creates the table: a file built up to 7 has none, and it is
+// there straight after 0008 and at the head. Doubles as the in-suite reversion
+// guard — a build that ships the table without the migration fails here.
+func TestMigrate0008_UpCreatesTheTable(t *testing.T) {
+	svc := testServiceAtVersion(t, 7)
 	assertTable := func(when string, want bool) {
 		t.Helper()
 		has, err := hasTable(svc.handle, "operator_event")
@@ -160,9 +156,14 @@ func TestMigrate0008_DownDropsTableUpRestoresIt(t *testing.T) {
 			t.Errorf("%s: operator_event present=%v, want %v", when, has, want)
 		}
 	}
-	assertTable("after up", true)
-	migrateToVersion(t, svc, 7) // crosses 0008 down (table dropped)
-	assertTable("after down", false)
-	migrateToVersion(t, svc, 12)
-	assertTable("after re-up", true)
+	assertTable("at 7", false)
+	migrateToVersion(t, svc, 8)
+	assertTable("after 0008", true)
+	if err := svc.Migrate(); err != nil {
+		t.Fatalf("migrate to the head: %v", err)
+	}
+	if v := schemaVersion(t, svc); v != 19 {
+		t.Fatalf("schema version = %d, want 19", v)
+	}
+	assertTable("at the head", true)
 }

@@ -28,8 +28,7 @@ func TestMigrate0010_AddsUpstreamIDGenerationAtHead(t *testing.T) {
 }
 
 func TestMigrate0010_BackfillsOnlyRecoverableSuccessOrder(t *testing.T) {
-	svc := testService(t)
-	migrateToVersion(t, svc, 9)
+	svc := testServiceAtVersion(t, 9) // built up to 9, as that build left it
 	seedLogbookAndQsoRow(t, svc.handle)
 
 	rows := []struct {
@@ -72,35 +71,5 @@ func TestMigrate0010_BackfillsOnlyRecoverableSuccessOrder(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("%s/%s generation = %+v, want %+v", tc.name, tc.action, got, tc.want)
 		}
-	}
-}
-
-func TestMigrate0010_DownDropsGenerationWithoutLosingQueueRows(t *testing.T) {
-	svc := testService(t)
-	seedLogbookAndQsoRow(t, svc.handle)
-	if _, err := svc.handle.Exec(`
-		INSERT INTO qso_upload
-			(qso_id, forwarder_name, forwarder_type, action, status, origin,
-			 upstream_id, upstream_id_generation)
-		VALUES (1, 'qrz', 'qrz', 'insert', 'uploaded', 'live', 'logid-1', 1)`); err != nil {
-		t.Fatalf("seed qso_upload: %v", err)
-	}
-
-	migrateToVersion(t, svc, 9)
-
-	var columns, rows int
-	if err := svc.handle.QueryRow(`
-		SELECT COUNT(*) FROM pragma_table_info('qso_upload')
-		WHERE name='upstream_id_generation'`).Scan(&columns); err != nil {
-		t.Fatalf("inspect columns after down: %v", err)
-	}
-	if columns != 0 {
-		t.Errorf("upstream_id_generation columns after down = %d, want 0", columns)
-	}
-	if err := svc.handle.QueryRow(`SELECT COUNT(*) FROM qso_upload WHERE upstream_id='logid-1'`).Scan(&rows); err != nil {
-		t.Fatalf("count queue rows after down: %v", err)
-	}
-	if rows != 1 {
-		t.Errorf("queue rows after down = %d, want 1", rows)
 	}
 }

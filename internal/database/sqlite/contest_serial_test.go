@@ -116,18 +116,6 @@ func TestAllocateContestSerial_RefusesBlankContestOrDraft(t *testing.T) {
 	}
 }
 
-func TestMigrate0019_DownDropsTheCounter(t *testing.T) {
-	svc := testService(t)
-	seedTwoLogbookFile(t, svc, 1, lbUUID2)
-	allocT(t, svc, 1, "UKEIDXSSB", "a")
-	if _, err := svc.DowngradeLogSchemaTo(18); err != nil {
-		t.Fatalf("downgrade to 18: %v", err)
-	}
-	if n := countT(t, svc, `SELECT count(*) FROM sqlite_master WHERE name = 'contest_serial_allocation'`); n != 0 {
-		t.Fatal("contest_serial survived the down step")
-	}
-}
-
 // A Sent # typed by hand (an override, or after a failed allocation) and saved
 // is a serial on air too: the next allocation goes above it, never repeats it.
 // Only this logbook's QSOs of this contest occurrence count.

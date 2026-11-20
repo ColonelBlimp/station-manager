@@ -711,7 +711,7 @@ func (m *Manager) Bindings(ctx context.Context, id string) (types.ArchiveBinding
 // same old blob and the last writer would restore the other's old value. A
 // process lock suffices because the running daemon is the only writer of the
 // open archive's bindings: the seed runs before HTTP serves, and the offline
-// commands (import, restore, db-downgrade) run with the daemon stopped.
+// commands (import, restore) run with the daemon stopped.
 func (m *Manager) ApplyBindings(ctx context.Context, id string, req types.ArchiveBindingsRequest) (types.ArchiveBindingsView, error) {
 	m.bindingsMu.Lock()
 	defer m.bindingsMu.Unlock()

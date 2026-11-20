@@ -11,16 +11,14 @@ import (
 // Migration 0017 (ADR 0091, W-0021 5F.3 commit 4b1): the account a confirmation
 // belongs to, `logbook_destination.remote_adopted_account` (an HMAC verifier
 // of the station account). It is written with remote_adopted_at in one durable
-// write. A downgrade below 17 is refused while any binding holds a
-// confirmation: a schema-16 build would upload by name without the
-// account-confirmation hold.
+// write.
 
 const (
 	accountA = "fp-account-a"
 	accountB = "fp-account-b"
 )
 
-func TestMigrate0017_AdoptionAccount_UpAndDown(t *testing.T) {
+func TestMigrate0017_AdoptionAccount_Up(t *testing.T) {
 	svc := testService(t)
 	if v := schemaVersion(t, svc); v != 19 {
 		t.Fatalf("schema version = %d, want 19", v)
@@ -28,41 +26,6 @@ func TestMigrate0017_AdoptionAccount_UpAndDown(t *testing.T) {
 	seedSmcloudBinding(t, svc)
 	if n := countT(t, svc, `SELECT COUNT(*) FROM logbook_destination WHERE remote_adopted_account IS NULL`); n != 1 {
 		t.Fatalf("rows without an account = %d, want 1", n)
-	}
-	execT(t, svc, `UPDATE logbook_destination SET adoption_reserved_at = datetime('now')`)
-	if _, err := svc.DowngradeLogSchemaTo(16); err != nil {
-		t.Fatalf("downgrade to 16 with a reservation and no confirmation: %v", err)
-	}
-	if n := countT(t, svc, `SELECT COUNT(*) FROM pragma_table_info('logbook_destination') WHERE name = 'remote_adopted_account'`); n != 0 {
-		t.Fatal("remote_adopted_account survived 0017's down step")
-	}
-	if n := countT(t, svc, `SELECT COUNT(*) FROM logbook_destination WHERE adoption_reserved_at IS NOT NULL`); n != 1 {
-		t.Fatal("0017's down step lost the reservation")
-	}
-}
-
-func TestMigrate0017_Down_RefusesToEraseAConfirmation(t *testing.T) {
-	for name, mark := range map[string]string{
-		"confirmed":                  `UPDATE logbook_destination SET adoption_reserved_at = datetime('now'), remote_adopted_at = datetime('now'), remote_adopted_account = 'fp'`,
-		"adopted without an account": `UPDATE logbook_destination SET adoption_reserved_at = datetime('now'), remote_adopted_at = datetime('now')`,
-		"confirmed, disabled":        `UPDATE logbook_destination SET enabled = 0, remote_adopted_at = datetime('now'), remote_adopted_account = 'fp'`,
-		"confirmed on a deleted logbook": `UPDATE logbook_destination SET logbook_id = 2, remote_adopted_at = datetime('now'), remote_adopted_account = 'fp';
-			UPDATE logbook SET deleted_at = datetime('now') WHERE id = 2`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			svc := testService(t)
-			seedSmcloudBinding(t, svc)
-			execT(t, svc, mark)
-			if _, err := svc.DowngradeLogSchemaTo(16); err == nil {
-				t.Fatal("downgrade to 16 succeeded; want it refused")
-			}
-			if v := schemaVersion(t, svc); v != 19 {
-				t.Fatalf("schema version = %d after a refused downgrade, want 19", v)
-			}
-			if n := countT(t, svc, `SELECT COUNT(*) FROM `+schemaMigrationsTable(MigrationSetLog)+` WHERE dirty = 1`); n != 0 {
-				t.Fatal("a refused downgrade left the schema dirty")
-			}
-		})
 	}
 }
 

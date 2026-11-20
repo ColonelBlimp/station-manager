@@ -1,6 +1,11 @@
 # W-0021 — First-class QSO archives (ADR 0071 programme)
 
 **Status:** Selected — slice 1 complete and drilled at schema 12 (2026-09-22)
+**2026-11-19:** the rollback path this dossier built and drilled (`DowngradeLogSchemaTo`,
+`smd db-downgrade`, the `.down.sql` files, the rollback drill) has been removed, under the
+operator's ruling of 2026-11-18, "remove the downgrade tooling"
+([W-0027](W-0027-electron-desktop-host.md), Rulings; it supersedes ruling (e) here).
+Migrations go up only. The text below is left as it was written.
 **Selected:** 2026-09-21 (operator: "Close outcome 9 and start the ADR 0071 archives")
 **Outcome:** The operator can create a physically separate QSO database for a contest, activate it
 through an attended restart, and later return to the home archive — with every archive and every
