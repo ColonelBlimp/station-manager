@@ -58,6 +58,19 @@ type hub struct {
 	lastAudio    *hubEvent
 	audioGen     uint64
 	audioSession uint64
+
+	// reportsHeld counts the stops of RF under way (holdEvictionReports). While it
+	// is not zero, publish keeps its eviction records in heldReports and writes
+	// nothing: the stop writes them once the transmission is cut.
+	reportsHeld int
+	heldReports []evictionReport
+}
+
+// evictionReport is what one publish has to say about the subscribers it evicted.
+type evictionReport struct {
+	evtName       string
+	before, after int
+	evicted       []evictedSubscriber
 }
 
 func newHub(logger logging.Logger) *hub {
@@ -98,8 +111,54 @@ func (h *hub) publish(evt hubEvent) {
 		}
 	}
 	logger, after := h.logger, len(h.subs)
+	held := h.reportsHeld > 0
+	if held && len(evicted) > 0 {
+		h.heldReports = append(h.heldReports, evictionReport{evt.name, before, after, evicted})
+	}
 	h.mu.Unlock()
-	logEvictions(logger, evt.name, before, after, evicted)
+	if !held {
+		logEvictions(logger, evt.name, before, after, evicted)
+	}
+}
+
+// holdEvictionReports is for a caller about to stop RF that must publish first.
+// Until release is called, publish delivers and evicts exactly as always and
+// writes no eviction record; release writes the records kept, in order.
+//
+// Why: the frame that ends a session is published BEFORE the transmission is cut
+// (the generation must move first, and the frame goes out in that lock hold;
+// invariant 3). An eviction record written inside that publish puts a log writer
+// between the operator's Abandon and the carrier going down (codex-208). The
+// delivery is not what waits: only its diagnostic is moved, past the cut.
+//
+// This does not make eviction logging asynchronous, which the note on logEvictions
+// declines for good reason. It is one caller's ordering: records are still written
+// by the goroutine that caused them, a few statements later. A publish from
+// another goroutine during the hold has its record written at the release too.
+//
+// release may be called more than once; only the first call counts. A hold never
+// released would silence the record for good, so a caller defers release as well
+// as calling it where the cut is made.
+func (h *hub) holdEvictionReports() (release func()) {
+	h.mu.Lock()
+	h.reportsHeld++
+	h.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			h.mu.Lock()
+			h.reportsHeld--
+			var reports []evictionReport
+			if h.reportsHeld == 0 {
+				reports, h.heldReports = h.heldReports, nil
+			}
+			logger := h.logger
+			h.mu.Unlock()
+			for _, r := range reports {
+				logEvictions(logger, r.evtName, r.before, r.after, r.evicted)
+			}
+		})
+	}
 }
 
 // subscribe registers a new subscriber, returning a receive-only channel and an

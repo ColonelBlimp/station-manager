@@ -213,7 +213,7 @@ func (s *Sequencer) onSlotAnsweringT4(ref SlotRef, msgs []goft8.DecodedMessage, 
 // earnAnswerT4Locked is earnLocked for the type-4 answer ladder. Caller holds s.mu
 // with the exchange on t4Confirming.
 func (s *Sequencer) earnAnswerT4Locked() func(ok bool) {
-	return s.earnLocked(func() func(bool) {
+	return s.earnLocked(func() earnedClaim {
 		return s.finalRungDoneLocked(
 			s.completedQsoT4Locked(),
 			func() { s.t4Ex = nil },

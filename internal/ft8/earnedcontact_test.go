@@ -77,6 +77,17 @@ var deferrals = []deferral{
 	}},
 }
 
+// stopsOfASession are the two calls that end a session from outside its own ladder: the
+// Service's disarm, and the operator's Abandon. Both log an earned contact (for the
+// Abandon, the operator's ruling of 2026-11-20; earnedabandon_test.go).
+var stopsOfASession = []struct {
+	name string
+	stop func(s *Sequencer)
+}{
+	{"a stop of TX", func(s *Sequencer) { s.abandonNamed("", disarmUnattended) }},
+	{"the operator's Abandon", func(s *Sequencer) { s.Abandon() }},
+}
+
 // rogerDeferred runs the ladder to the partner's roger, taken in by a slot that defers our
 // closing rung, and requires what the fixture claims: the exchange is live, the closing
 // rung has not been sent and nothing is logged.
@@ -99,19 +110,44 @@ func rogerDeferred(t *testing.T, l groupALadder, d deferral) (*Sequencer, *seqRe
 func TestEarned_AStopAfterADeferredClosingRungLogsTheContact(t *testing.T) {
 	for _, l := range groupALadders {
 		for _, d := range deferrals {
-			t.Run(l.name+": "+d.name, func(t *testing.T) {
-				s, r := rogerDeferred(t, l, d)
+			for _, by := range stopsOfASession {
+				t.Run(l.name+": "+d.name+": "+by.name, func(t *testing.T) {
+					s, r := rogerDeferred(t, l, d)
 
-				s.abandonForStop(disarmUnattended)
+					by.stop(s)
 
-				require.Len(t, r.completed, 1, "they had rogered: the stop logs the contact")
-				require.Equal(t, l.their, r.completed[0].TheirCall)
-				require.InDelta(t, 14.074, r.completed[0].DialFreqMHz, 1e-9)
-				require.False(t, s.Active(), "the stop ends the session")
+					require.Len(t, r.completed, 1, "they had rogered: the stop logs the contact")
+					require.Equal(t, l.their, r.completed[0].TheirCall)
+					require.InDelta(t, 14.074, r.completed[0].DialFreqMHz, 1e-9)
+					require.False(t, s.Active(), "the stop ends the session")
 
-				driveTheir(s, l.rogerAt+30, []goft8.DecodedMessage{dm(l.roger, -11)})
-				require.Len(t, r.completed, 1, "and never logs it twice")
-				require.Zero(t, countMsg(r.sentMsgs(), l.closing), "nothing is sent for it after the stop")
+					driveTheir(s, l.rogerAt+30, []goft8.DecodedMessage{dm(l.roger, -11)})
+					require.Len(t, r.completed, 1, "and never logs it twice")
+					require.Zero(t, countMsg(r.sentMsgs(), l.closing), "nothing is sent for it after the stop")
+				})
+			}
+		}
+	}
+}
+
+// The other side of that line, in the same three ladders: the stop comes before the
+// partner's roger. Nothing is logged, by either stop.
+func TestEarned_AStopBeforeTheRogerLogsNothing(t *testing.T) {
+	for _, l := range groupALadders {
+		for _, by := range stopsOfASession {
+			t.Run(l.name+": "+by.name, func(t *testing.T) {
+				r := &seqRecorder{asyncFail: true}
+				s := newTestSeq(r)
+				l.start(t, s)
+				l.toRoger(s)
+				require.True(t, s.Active(), "the fixture: the exchange is live")
+
+				by.stop(s)
+
+				require.Empty(t, r.completed, "they had not rogered: a stop must not log the contact")
+				require.False(t, s.Active())
+				driveTheir(s, l.rogerAt, []goft8.DecodedMessage{dm(l.roger, -11)})
+				require.Empty(t, r.completed, "the roger arriving after the stop logged the contact")
 			})
 		}
 	}
@@ -183,20 +219,22 @@ func TestEarned_AStopWithAGroupBFinalRungDeferredLogsNothing(t *testing.T) {
 		},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			r := &seqRecorder{}
-			s := newTestSeq(r)
-			tc.start(t, s)
-			tc.before(s)
-			driveTheirLate(s, tc.at, []goft8.DecodedMessage{tc.theirs})
-			require.True(t, s.Active(), "the fixture: the exchange is live")
-			require.Zero(t, countMsg(r.sentMsgs(), tc.final), "the fixture: the final rung was deferred")
+		for _, by := range stopsOfASession {
+			t.Run(tc.name+": "+by.name, func(t *testing.T) {
+				r := &seqRecorder{}
+				s := newTestSeq(r)
+				tc.start(t, s)
+				tc.before(s)
+				driveTheirLate(s, tc.at, []goft8.DecodedMessage{tc.theirs})
+				require.True(t, s.Active(), "the fixture: the exchange is live")
+				require.Zero(t, countMsg(r.sentMsgs(), tc.final), "the fixture: the final rung was deferred")
 
-			s.abandonForStop(disarmUnattended)
+				by.stop(s)
 
-			require.Empty(t, r.completed, "they never got our roger: a stop must not log the contact")
-			require.False(t, s.Active())
-		})
+				require.Empty(t, r.completed, "they never got our roger: a stop must not log the contact")
+				require.False(t, s.Active())
+			})
+		}
 	}
 }
 

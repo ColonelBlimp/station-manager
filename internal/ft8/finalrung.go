@@ -85,9 +85,11 @@ func (s *Sequencer) publishCurrent() {
 	s.publish(s.statusLocked())
 }
 
-// finalRungDoneLocked builds the completion callback for a GROUP A final rung: it
-// records the QSO whether or not the closing message reached the air, then ends
-// the session. Only the log line distinguishes the two outcomes.
+// finalRungDoneLocked builds the completion for a GROUP A final rung: it records
+// the QSO whether or not the closing message reached the air, then ends the
+// session. Only the log line distinguishes the two outcomes. What it returns is
+// the completion in its two steps (earnedClaim); a transmission is given the two
+// together (earnedClaim.complete).
 //
 // The caller holds s.mu (so the publish/complete hooks and the session generation
 // are read consistently) and passes clear, which releases that ladder's own
@@ -123,10 +125,10 @@ func (s *Sequencer) retireSessionLocked(clear func()) {
 	s.publish(s.terminalStatusLocked(reason))
 }
 
-func (s *Sequencer) finalRungDoneLocked(c CompletedQso, clear func(), sentMsg, unsentMsg string) func(bool) {
+func (s *Sequencer) finalRungDoneLocked(c CompletedQso, clear func(), sentMsg, unsentMsg string) earnedClaim {
 	gen := s.sessionGen
 	prepareComplete, onComplete := s.prepareComplete, s.onComplete
-	return func(ok bool) {
+	return func(ok bool, endReason string) (handOver func()) {
 		// A copy of its own for THIS invocation. The completion can be invoked by
 		// more than one caller at once (a stop, the slot whose rung was refused, a
 		// transmission's goroutine) and each stamps before the guard below decides
@@ -143,7 +145,14 @@ func (s *Sequencer) finalRungDoneLocked(c CompletedQso, clear func(), sentMsg, u
 		s.mu.Lock()
 		if s.sessionGen != gen { // superseded (abandon/disarm) — stale callback
 			s.mu.Unlock()
-			return
+			return nil
+		}
+		// The caller's reason for the session's end rides the terminal frame the
+		// retirement publishes. Set in the SAME lock hold that consumes it, so no
+		// other teardown can pick it up; a reason already staged wins, as it does
+		// in every abandon.
+		if endReason != "" && s.pendingEndReason == "" {
+			s.pendingEndReason = endReason
 		}
 		// Retire the session generation on completion, exactly as Abandon does.
 		// Group A completes on EITHER outcome, so unlike the old success-only path
@@ -154,14 +163,49 @@ func (s *Sequencer) finalRungDoneLocked(c CompletedQso, clear func(), sentMsg, u
 		// every forwarder. The gen check above now refuses it.
 		s.retireSessionLocked(clear)
 		s.mu.Unlock()
-		if ok {
-			s.log.InfoWith().Str("their_call", c.TheirCall).Msg(sentMsg)
-		} else {
-			s.log.WarnWith().Str("their_call", c.TheirCall).Msg(unsentMsg)
+		// Everything from here can be held up by someone else, a log writer or
+		// whoever takes the contact, so it is the hand-over's and not the claim's.
+		return func() {
+			if ok {
+				s.log.InfoWith().Str("their_call", c.TheirCall).Msg(sentMsg)
+			} else {
+				s.log.WarnWith().Str("their_call", c.TheirCall).Msg(unsentMsg)
+			}
+			if onComplete != nil {
+				onComplete(c)
+			}
 		}
-		if onComplete != nil {
-			onComplete(c)
-		}
+	}
+}
+
+// earnedClaim is a Group A contact's completion, in its two steps (codex-206).
+//
+// Calling it is the CLAIM: it stamps the contact and, if the contact's session is
+// still the live one, retires it. The generation moves, so a rung of that session
+// still queued can no longer be admitted, and the terminal frame is published
+// (carrying endReason when the caller gives one and none was staged). A claim does
+// nothing that someone else can hold up: it takes txMu for the stamp and the
+// sequencer's lock, and publishes to the hub. The hub does not wait on a
+// subscriber, but it does WRITE A RECORD for one it evicts, inside the publish: a
+// caller with a transmission to cut holds those records until the cut is made
+// (hub.holdEvictionReports, in the Service's Abandon; codex-208). Itself the claim
+// writes no log line and calls no consumer. It returns the HAND-OVER it then owes: the
+// completion's log line, and the call that gives the contact to the logging sink.
+// A claim that finds its session already over returns nil, and nothing is owed:
+// that is the exactly-once guard.
+//
+// The two are apart because a log writer, or whoever takes the contact, can hold
+// the hand-over up, and stopping RF must never wait on that (codex-206, codex-207).
+// A caller with a transmission to cut claims, cuts, and only then hands over
+// (abandonNamedThen). A caller with nothing to cut runs both at once (complete).
+// Add nothing to the claim that writes, waits or calls out.
+type earnedClaim func(ok bool, endReason string) (handOver func())
+
+// complete is the claim and its hand-over together: the completion callback a
+// transmission is given.
+func (c earnedClaim) complete(ok bool) {
+	if handOver := c(ok, ""); handOver != nil {
+		handOver()
 	}
 }
 
@@ -183,37 +227,67 @@ func (s *Sequencer) finalRungDoneLocked(c CompletedQso, clear func(), sentMsg, u
 // abandonLocked). Call-CQ begins a contact inside a run without doing either
 // (commitCqContactLocked), so a ladder that begins its contacts that way must not
 // earn through here (codex-205).
-func (s *Sequencer) earnLocked(build func() func(ok bool)) func(ok bool) {
+func (s *Sequencer) earnLocked(build func() earnedClaim) func(ok bool) {
 	if s.contact.earned == nil {
 		s.contact.earned = build()
 	}
-	return s.contact.earned
+	return s.contact.earned.complete
 }
 
-// settleEarned completes a Group A contact that is earned and not yet completed,
-// for a stop that is about to abandon (invariant 1: a rogered contact is logged
-// whatever stops TX). The Service's disarm calls it AFTER it has waited for the
-// transmission in flight, so a closing rung that reached the air has already
-// completed through its own callback and this finds nothing. What it finds is a
-// closing rung that never reached the air: deferred to a later slot, or decided
-// and never admitted. It is logged as not transmitted.
+// claimEarned claims a Group A contact that is earned and not yet completed, for
+// an abandon about to end its session (invariant 1: a rogered contact is logged
+// whatever stops it), and returns the hand-over owed, or nil. abandonNamedThen
+// calls it, for the disarm and for the operator's Abandon.
 //
-// Exactly once is the callback's own generation guard: whichever of this call, the
-// slot's own failure branch and a transmission's goroutine runs first retires the
-// session, and the others refuse. The operator's Abandon does not come through
-// here: it discards the contact, as it always has.
-func (s *Sequencer) settleEarned() {
+// The Service's disarm abandons AFTER it has waited for the transmission in flight,
+// so a closing rung that reached the air has already completed through its own
+// callback and this finds nothing. What it finds there is a closing rung that never
+// reached the air: deferred to a later slot, or decided and never admitted.
+//
+// The operator's Abandon abandons FIRST and cuts the transmission short afterwards
+// (the order the rung's commit gate relies on), so this may find the closing rung
+// on the air. The contact is claimed here, and the cut transmission's own callback,
+// arriving later, is refused.
+//
+// Either way it is logged as not transmitted. Exactly once is the claim's own
+// generation guard: whichever of this call, the slot's own failure branch and a
+// transmission's goroutine claims first retires the session, and the others get nil.
+//
+// The caller must hold neither s.mu nor txMu: the claim takes both, in turn.
+func (s *Sequencer) claimEarned(endReason string) (handOver func()) {
 	s.mu.Lock()
-	earned := s.contact.earned
+	claim := s.contact.earned
 	s.mu.Unlock()
-	if earned != nil {
-		earned(false)
+	if claim == nil {
+		return nil
 	}
+	return claim(false, endReason)
 }
 
-// abandonForStop is the abandon of the Service's disarm: an earned contact is
-// completed first, then whatever is left is abandoned with the stop's cause.
-func (s *Sequencer) abandonForStop(cause string) (terminated bool) {
-	s.settleEarned()
-	return s.abandonNamed("", cause)
+// endEarnedLocked is claimEarned for an abandon scoped to ONE generation, which has
+// just checked, under s.mu, that its generation is the live one. The caller holds
+// s.mu. With nothing earned it returns false and the lock is still held. With a
+// contact earned it RELEASES the lock, claims and hands over, and returns true: that
+// generation's session is over and the caller has nothing left to abandon.
+//
+// The kept claim read here belongs to the generation the caller checked: both are
+// read in one lock hold, and contactFlags die with their session. The claim guards
+// itself after the lock is let go, so a session that replaces this one in the gap
+// is not touched. An unscoped claimEarned BEFORE the generation check would let a
+// stale rung complete the replacement's contact (codex-206).
+//
+// Why it is needed: a rung is accepted a slot before it is keyed, and its refusal
+// can arrive after a later slot of the SAME session has taken the partner's roger
+// in. That earlier rung carries no completion of its own, so its scoped abandon
+// was the only thing that ran, and it discarded the contact.
+func (s *Sequencer) endEarnedLocked(endReason string) (ended bool) {
+	claim := s.contact.earned
+	if claim == nil {
+		return false
+	}
+	s.mu.Unlock()
+	if handOver := claim(false, endReason); handOver != nil {
+		handOver()
+	}
+	return true
 }

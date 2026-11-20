@@ -11,10 +11,10 @@ published events, and spots—not temporary implementation fields.
 
 1. **Log every rogered contact exactly once, on the session-pinned frequency, regardless of the
    closing rung.** Group A completion runs before session retirement even if the courtesy RR73/73
-   is refused, the rig disappears, or TX is disarmed. Retiring first invalidates the
-   generation-guarded completion callback. Never read the live dial at completion: a refused QSY
-   must not file the QSO on the new band. Observable: one QSO row and one `ft8-logged` event at the
-   session frequency.
+   is refused, the rig disappears, TX is disarmed, or the operator abandons. Retiring first
+   invalidates the generation-guarded completion callback. Never read the live dial at
+   completion: a refused QSY must not file the QSO on the new band. Observable: one QSO row and
+   one `ft8-logged` event at the session frequency.
 
 2. **Never key without positive frequency confirmation.** For a session rung, the confirmed dial
    must still equal the session dial. Unknown is refusal, not permission; `bridge.TxReady` alone
@@ -77,8 +77,8 @@ abstraction. Add a mode to:
 
 Maintain these structural rules:
 
-- Put per-contact state inside `contactFlags`, whose zeroing at every start, retirement, and
-  abandon resets it consistently. Keep longer-lived state outside: run state (`autoWork*`),
+- Put per-contact state inside `contactFlags`, whose zeroing at every session start, retirement,
+  and abandon resets it consistently. Keep longer-lived state outside: run state (`autoWork*`),
   retirement state (`confirmHold`), exclusion memory (`stalledCalls`/`stallCooloff`), and rig-slot
   state (`lastTxSlot`). Decide the lifetime before adding a field.
 - Every active mode has exactly its matching exchange pointer (`seqAnswering` with `ex`,

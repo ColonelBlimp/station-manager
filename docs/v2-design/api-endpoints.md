@@ -718,6 +718,7 @@ The station-global archive catalogue (`config.md` §3): the archive the daemon s
 
 ### `POST /v1/ft8/qso/abandon`
 - **Purpose:** Drop any active sequenced session (answer-a-CQ or Call-CQ). **Only when FT8 is enabled.** No body. **202 Accepted**, idempotent (no-op while idle). No error codes. **Never archive-guarded** (a stale tab can always stop).
+- **Notes:** A contact the partner has already rogered (a Group A exchange on its closing rung: answer-a-CQ, type-4 answer, Field Day work) is **logged** by the abandon, once, and its `ft8-logged` event follows; only our courtesy 73/RR73 is given up, cut short if it is on the air. Any other contact is dropped without logging. TX stays armed.
 
 ### `POST /v1/ft8/autowork/stop`
 - **Purpose:** Disarm an armed auto-work run **without ending any active contact** (ADR 0065 — the Auto-work pill's click action). Abandon stops run AND contact; this stops only the run. **Only when FT8 is enabled.** No body. **202 Accepted**, idempotent (stopping a stopped run publishes nothing). No error codes. **Never archive-guarded.**

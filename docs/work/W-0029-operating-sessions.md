@@ -12,10 +12,13 @@ has no remaining objection to them (codex-194). Part 2's first slice, the start 
 the admission, the read route and the event, is committed (`a8317035`), with one fix from
 its clean-room review (`de4eb3fd`). The second slice, setup's save, is committed
 (`3f2f08aa`), with one fix from its clean-room review (`e5058ed5`) and a correction to
-that fix's error reporting (`806d5a09`). Built and uncommitted: the third slice, the exit report with the one
-order, and the fixes from Codex's two reviews of it (codex-203, codex-204; all at the end
-of this file). Codex's third reading closed both findings and has no remaining blocking
-objection to the slice (codex-205). Committing it is the operator's decision.
+that fix's error reporting (`806d5a09`). The third slice, the exit report with the one
+order, is committed (`d49b0d4e`) with the fixes from Codex's two reviews of it (codex-203,
+codex-204; Codex's third reading, codex-205, had no remaining blocking objection). The
+commit after it makes the operator's Abandon log a contact the partner has rogered (ruled
+2026-11-20), with the findings of Codex's three reviews of that change fixed (codex-206,
+codex-207, codex-208; the last five sections of this file). Codex had not read the last
+of those fixes when the operator directed the commit.
 With it part 2's criteria are built; what is not shown is listed there.** The removal of the database half of
 the downgrade tooling, which part 1 waited for, is committed (`0b21b2fb`, 2026-11-20; W-0027).
 **Part 1's acceptance criteria are written, their three questions ruled, and agreed with
@@ -1827,7 +1830,7 @@ give-up answering "has QSOs" the second fails. Gates rerun: 66 packages ok.
 overlay and saw the cancellation returned with nothing deleted). Three is a bound on work,
 not a measured figure.
 
-### Part 2, third slice: the exit report and the one order (2026-11-20; built, uncommitted)
+### Part 2, third slice: the exit report and the one order (2026-11-20; committed `d49b0d4e`)
 
 On the operator's direction ("build the exit report slice"). Groups E and G of part 2's
 criteria.
@@ -2016,7 +2019,7 @@ exit is stored.
   was unchanged when this was written; the review below changes the stop it shares with
   every disarm.)
 
-### Part 2, third slice: Codex's review and what it changed (2026-11-20; built, uncommitted)
+### Part 2, third slice: Codex's review and what it changed (2026-11-20; committed `d49b0d4e`)
 
 Codex reviewed the slice (codex-203) and did not close it: one blocking finding in FT8,
 three answers, and the forced cases still missing. Everything named is fixed here, in the
@@ -2139,7 +2142,7 @@ FT8 test in the same file whose comment said nothing observable existed).
 - **The dump's wording on another Go release or platform.** Seen on go1.26.2,
   linux/amd64, with and without the race detector.
 
-### Part 2, third slice: Codex's second review and what it changed (2026-11-20; built, uncommitted)
+### Part 2, third slice: Codex's second review and what it changed (2026-11-20; committed `d49b0d4e`)
 
 Codex confirmed the first repair (codex-204: its own reproduction now passes) and kept the
 review open for two more things in FT8 and one qualification of the test helper. All
@@ -2247,3 +2250,278 @@ these fixtures as conditional observation, not an identity of a mutex or a reque
 - **Still the operator's, decided by nobody here:** committing and pushing the slice;
   whether a deleted logbook's name stays reserved; whether an Abandon pressed during our
   closing 73 should log the contact the partner has already rogered (today it discards).
+
+### Three rulings after the third slice's review (2026-11-20)
+
+Put to the operator with a recommendation each (Claude's; Codex had recommended no answer
+to the first two and had not seen the third). The operator, in chat:
+
+> 1. Recommended is approved
+> 2. Log it. If the remote station has a QSO, we need to have it our end.
+> 3. Recommended is approved
+
+**1. A deleted logbook's name becomes reusable. Approved; not built.** The recommendation
+approved was: make the name reusable, as its own piece of work outside this slice.
+- Today a delete marks the row and keeps it, and the name is unique across deleted rows
+  too, so creating or renaming to that name is refused with "a logbook with that name
+  already exists" when no such logbook is visible. Nothing restores a deleted logbook.
+- **Larger than "small", which is what Claude called it when recommending.** The rule is
+  written on the column (`name TEXT NOT NULL UNIQUE`, `0001_init.up.sql`). SQLite cannot
+  alter that in place: the change is a migration that rebuilds the `logbook` table, which
+  other tables refer to. It needs its own acceptance criteria and review before it is
+  built, and it is not ranked: `docs/backlog.md` owns that.
+
+**2. The operator's Abandon logs a contact the partner has rogered. Built, uncommitted.**
+- **What the operator sees.** Abandon still ends the contact, cuts a transmission on the
+  air short and leaves TX armed. If the partner had already rogered (a Group A exchange on
+  its closing rung: answer a CQ, answer a type-4 CQ, work a Field Day caller), the contact
+  is now logged, once, in whichever state our courtesy rung was: on the air, decided and
+  not yet admitted, or deferred to a later slot. Nothing is keyed for it afterwards, though
+  TX is armed. A contact the partner has not rogered is discarded, as before, and so is a
+  Group B contact whose final rung has not been on the air.
+- **The nearest confusable outcomes, each tested:** logged twice (the cut transmission's
+  own completion arrives after the abandon); the abandoned contact's late completion
+  ending the session the operator started next; the closing rung keyed after the abandon;
+  a contact short of the roger logged.
+- **The change.** The settle that the disarm's abandon made is now inside the one function
+  both callers share (`Sequencer.abandonNamed` calls `settleEarned`), so a third caller
+  cannot leave it out. `Sequencer.abandonForStop`, named in the two sections above, is
+  gone: the disarm calls `abandonNamed` again, as it did before this slice. The abandons
+  scoped to one generation are not changed: each is reached only after the rung's own
+  completion has run.
+- **Records changed with it:** invariant 1 in `internal/ft8/AGENTS.md` now names the
+  operator's Abandon; `docs/ft8.md`; the abandon entry in
+  `docs/v2-design/api-endpoints.md`.
+- **Failing first:** eleven cases against the code as reviewed, each failing with no
+  contact logged: three through the service's real Abandon (the closing rung on the air,
+  not yet admitted, deferred), six at the sequencer (three ladders, two deferrals), and
+  the test that used to require the discard, rewritten
+  (`TestSequencer_AbandonDuringFinal73LogsOnceAndTheStaleCallbackAddsNothing`; it now also
+  starts the next contact before the stale completion arrives). The not-earned neighbours
+  passed before and after.
+- **Reversion proofs,** in temporary copies since removed, each checked as applied and
+  restored: five, all failing for the reason claimed.
+  - The abandon not settling: every stop loses the contact, the disarm's cases included.
+  - The operator's Abandon alone bypassing the settle: only the Abandon cases fail.
+  - The completion's generation guard removed: an Abandon during the closing rung logs
+    the contact twice.
+  - The R-report rung earning: the contact not yet rogered is logged by the abandon.
+  - The commit gate ignoring the generation: the closing rung is admitted after the
+    abandon.
+- **Gates on the final tree, by exit code:** `gofmt`, `go vet`, `golangci-lint` (0
+  issues), maintainability (0 regressions), `go test ./... -count=1` (67 packages ok, 0
+  failed), `task docs:check`, the context check, `git diff --check`. Under `-race`: the
+  FT8 and helper packages whole, and the earned, operating and Abandon tests 30 times. The
+  desktop scenario against a daemon built from this tree passes its 19 checks. No
+  transmission, keyed test or rig command was made.
+- **Not shown.** The Abandon through the HTTP route and a real daemon (the tests call the
+  service's own Abandon, as the route does). An Abandon in an auto-work run with an earned
+  Field Day contact pending (the run's existing Abandon tests pass unchanged). The app's
+  display after such an Abandon: no front-end change was made or tested; the contact
+  arrives as any logged contact does.
+
+**3. One sentence in `internal/ft8/AGENTS.md` reworded. Done.** "every start" is now "every
+session start": a Call-CQ contact begun inside a run does not zero the per-contact flags.
+
+### The Abandon change: Codex's review and what it changed (2026-11-20)
+
+Codex reviewed the Abandon change (codex-206) and kept the review open for two findings.
+Both were right; each was reproduced by a failing test of Claude's before anything changed.
+It asked for no new ruling. It found no caller of the abandon holding a lock the claim
+takes, and no new way for an unrogered or Group B contact to be logged.
+
+**The Abandon waited for the log hand-over before it cut the transmission.** The first
+version logged the contact inside the sequencer's abandon, and the service cut the
+transmission only when that returned. Whoever takes the contact can hold the hand-over up,
+and the carrier then stayed up for as long. (The daemon's own sink launches a job and
+returns; Codex did not observe a prolonged carrier at a station. The defect is the order.)
+- **The fix: a completion now has two steps** (`earnedClaim`, `internal/ft8/finalrung.go`).
+  The claim stamps the contact and retires the session: state only. It returns the
+  hand-over it then owes, the call that gives the contact to the log. The abandon runs
+  them apart (`Sequencer.abandonNamedThen`): claim and end the session; cut the
+  transmission; hand over. A transmission's own completion runs the two together.
+- **Cutting first is not the fix.** The generation must move before the cut, or a rung
+  still queued is admitted after the abandon (the commit gate of 2026-07-20). A reversion
+  proof that cut first passed the whole package: nothing tested that order. A test now
+  forces it: the abandon is stopped where it stamps the contact, the closing rung is
+  admitted meanwhile, and the abandon must still cut it.
+
+**A late refusal of an earlier rung discarded a contact earned since.** A rung is accepted
+a slot before it is keyed, and the dial check beside the key can refuse it then. The
+service ends that rung's session through an abandon scoped to its generation. A rung
+before the closing one carries no completion of its own, and the generation does not move
+when a later slot takes the partner's roger in. So the refusal found the same generation,
+now with an earned contact, and discarded it. Claude's statement in the last section that
+each scoped abandon "is reached only after the rung's own completion has run" was wrong:
+true of the rung that asks, not of an earlier one. This loss is older than the Abandon
+change.
+- **The fix:** both scoped abandons (`AbandonIfCurrent`, `abandonNamedIfCurrent`) keep a
+  contact their own session has earned (`endEarnedLocked`): after the generation check,
+  never before it, so a stale rung cannot complete the contact of a session that replaced
+  its own. The session's last frame still carries the reason it ended (the claim takes the
+  reason and sets it in the lock hold that publishes it).
+- **Not raised for such an end:** the `session.terminated` alarm. The contact is in the
+  log; the same is already true when the closing rung itself is refused.
+
+**Names.** `settleEarned`, named in the last section, is now `claimEarned`.
+`Sequencer.AbandonThen(stopRF)` is the operator's Abandon for the service, which passes
+the cut.
+
+**Seen.**
+- **Failing first,** against the code as it stood: the closing rung still on the air with
+  the hand-over held (the transmission had not ended after two seconds; it ends at once
+  now, with the hand-over still held); the late refusal through the service's real
+  transmission, with no contact logged; both scoped abandons at the sequencer, for all
+  three ladders, with no contact logged.
+- **Passing before and after:** a scoped abandon of an earlier session leaves the next
+  session's earned contact alone, which then completes normally.
+- **Reversion proofs,** in temporary copies since removed, each checked as applied and
+  restored: six, all failing for the reason claimed.
+  - The hand-over before the cut: the carrier stays up while the hand-over is held.
+  - The cut before the session is retired: the rung admitted meanwhile plays on after the
+    abandon returns. (This one passed until its test was added.)
+  - `AbandonIfCurrent` not keeping the contact: the late refusal loses it.
+  - `abandonNamedIfCurrent` not keeping the contact: its three cases lose it.
+  - The claim before the generation check: an abandon of the earlier session logs the next
+    session's contact.
+  - The reason not carried: the last frame has no reason.
+- **Gates on the final tree, by exit code:** `gofmt`, `go vet`, `golangci-lint` (0
+  issues), maintainability (0 regressions), `go test ./... -count=1` (67 packages ok, 0
+  failed), `task docs:check`, the context check, `git diff --check`. Under `-race`: the
+  FT8 and helper packages whole, and the earned, operating and Abandon tests 30 times. The
+  desktop scenario against a daemon built from this tree passes its 19 checks. No
+  transmission, keyed test or rig command was made.
+
+**Not shown.**
+- `abandonNamedIfCurrent` reached with an earned contact through a real rung. Its call
+  sites are a rung's own synchronous failures, where Claude found no way to an earned
+  contact; it is tested by calling it.
+- The cut ordered before the retirement for a session with nothing earned. That order is
+  older than this change and is not changed by it; the new test needs the contact's stamp
+  as its stopping point.
+- The late refusal for the type-4 and Field Day ladders through the service (tested at the
+  sequencer), and a refusal for a moved dial as against an unknown one.
+- As before: the Abandon through the HTTP route and a real daemon; the app's display.
+
+### The Abandon change: Codex's second review and what it changed (2026-11-20)
+
+Codex closed the scoped-loss finding (codex-207): its diagnostics pass, and it found no
+third place where a generation is checked and a session ended without its earned contact
+being kept. It kept the cancellation finding open in one remaining form, which was right.
+
+**Log lines were still written before the transmission was cut.** The last section says the
+claim is "state only". It was not: it wrote the completion's log line before returning.
+The abandon's own teardown did the same with its "session abandoned" line and its
+termination note, and that one is older than this work: an ordinary Abandon, with nothing
+earned, has always written its line before the cut. The daemon's log writer is called
+directly, so a writer that is held up held the carrier up.
+- **The fix.** The claim writes nothing: its log line moved into the hand-over. The
+  teardown (`finishAbandonLocked`) now returns the report it owes, the log line and the
+  termination note, and the abandon makes that report after the cut. Before the cut there
+  is now only the stamp under the service's lock, the sequencer's lock, and the hub's
+  publish, which does not block.
+- **Checked by reading, for this finding not to return:** the functions that run before
+  the cut (`retireSessionLocked`, `abandonLocked`, the terminal status, the stamp) write no
+  log line and call no consumer. The publish reaches the partner sink only for a frame of
+  a live exchange, and the abandon's frame is terminal. The disarm writes no log line
+  before it cancels.
+
+**A wording corrected at Codex's request.** The last section says of a session ended by a
+refusal that "the contact is in the log". What is true is that it is earned and handed
+over for logging: the sink's later write to the database can fail.
+
+**Codex's answers to the other two questions.** No third scoped-loss site. No alarm for an
+earned exchange completed this way is consistent with the existing path, the terminal
+frame carrying the reason.
+
+**Seen.**
+- **Failing first,** with a real logger whose writer is held at the one line: the closing
+  rung still on the air at the completed contact's line; our R-report still on the air at
+  the abandoned session's line. Each ends at once now, with the writer still held.
+- **Reversion proofs,** in temporary copies since removed, each checked as applied and
+  restored: two, each failing its own test. The claim writing its line; the report made
+  before the cut.
+- **Gates on the final tree, by exit code:** `gofmt`, `go vet`, `golangci-lint` (0
+  issues), maintainability (0 regressions), `go test ./... -count=1` (67 packages ok, 0
+  failed), `task docs:check`, the context check, `git diff --check`. Under `-race`: the
+  FT8 and helper packages whole, and the earned, operating and Abandon tests 30 times. The
+  desktop scenario against a daemon built from this tree passes its 19 checks. No
+  transmission, keyed test or rig command was made.
+
+**Not shown.** The auto-work run's "run stopped" line held at the writer (it is in the same
+report, after the cut; no test holds it). The termination note held by its consumer (the
+operator's Abandon makes none; the disarm has no transmission left to cut when it makes
+one).
+
+### The Abandon change: Codex's third review and what it changed (2026-11-20)
+
+Codex confirmed the two log lines are now written after the cut (codex-208) and found one
+more write before it, which was right.
+
+**The hub wrote its eviction record before the cut.** The frame that ends a session is
+published before the transmission is cut, in the lock hold that retires the session, as
+invariant 3 requires. The hub does not wait on a subscriber, but for one whose buffer is
+full it ends the stream and writes a record, inside the publish. With a subscriber full at
+that moment and the log writer held up, the carrier stayed up. Claude's list in the last
+section, "read, so that this does not return", named the publish as non-blocking without
+reading the hub. Codex had relied on the same description and corrected it too.
+- **How narrow it is:** it needs a subscriber's buffer full at the moment of the Abandon
+  and a log writer that is held up. The hub's own note records 0 evictions in 15 days of
+  the live log. It is fixed because the stop of RF is the one place where the order is
+  owed, not because it has been seen.
+- **The fix.** The service's Abandon asks the hub to hold its eviction records
+  (`hub.holdEvictionReports`) and has them written once the cut is made. While held, the
+  hub delivers and evicts exactly as always; only the record waits. The hold is also
+  released when the Abandon returns, whatever happens, so it cannot silence the record
+  for good.
+- **Not changed:** eviction logging stays synchronous everywhere else, as the note on
+  `logEvictions` decided (codex P2 on 57619abe; the operator's reasoning in
+  `internal/events/hub_eviction_test.go`). This is one caller's ordering, not an
+  asynchronous path.
+
+**Seen.**
+- **Failing first,** with the service's real hub, a subscriber whose buffer is full and a
+  logger whose writer is held at the eviction record: the transmission still on the air,
+  for the closing rung with the contact earned and for our R-report with nothing earned.
+  Each ends at once now, with the writer still held.
+- **The hub's own tests:** held, a publish evicts and delivers and writes nothing; the
+  release writes the same record, once; a second release counts for nothing; after the
+  release the next eviction is written by its own publish; with two holds the records
+  wait for the last.
+- **Reversion proofs,** in temporary copies since removed, each checked as applied and
+  restored: five, all failing for the reason claimed. No hold in the Abandon; the records
+  written before the cut; held records dropped; the first of two releases writing; a hold
+  that never ends.
+- **Gates on the final tree, by exit code:** `gofmt`, `go vet`, `golangci-lint` (0
+  issues), maintainability (0 regressions), `go test ./... -count=1` (67 packages ok, 0
+  failed), `task docs:check`, the context check, `git diff --check`. Under `-race`: the
+  FT8 and helper packages whole, and the earned, operating, Abandon and eviction tests 30
+  times. The desktop scenario against a daemon built from this tree passes its 19 checks.
+  No transmission, keyed test or rig command was made.
+
+**Read this time, in full and not by search:** every function on the Abandon's path before
+the cut (the service's lifetime check, the stamp, `retireSessionLocked`, `abandonLocked`
+and what it calls, the terminal status, the hub's publish, the HTTP handler). Nothing else
+writes, waits or calls out.
+
+**Not shown, and one thing seen and left alone.**
+- What wraps the Abandon's HTTP route before its handler runs was not read.
+- The deferred release of the hold has no test that makes the Abandon fail part-way.
+- **Seen, older than this work, not changed:** the dial guard writes a log line before it
+  disarms (`onDialMoved`). The same held-up writer would hold that stop up. Whether every
+  stop is to be audited for this is not decided here; the note on `logEvictions` takes the
+  position that a stalled log destination belongs at the logging layer.
+
+### The operator's direction to stop and commit (2026-11-20)
+
+Claude put it to the operator that this was the third round on "nothing may be written
+before the transmission is cut", each finding a rarer case, and that the dial guard has
+the same pattern in older code. The operator, in chat:
+
+> Good call. Let's stop here. Commit and push
+
+- **Not done, by that direction:** no audit of the other stops of TX for a log line
+  written before they stop. The dial guard's line before its disarm stays as it is.
+- **Committed in two commits:** the slice as Codex closed it (`d49b0d4e`), then the
+  Abandon change with its three rounds of fixes. Codex had not yet answered claude-471
+  (the hub's eviction record) when the second was made.

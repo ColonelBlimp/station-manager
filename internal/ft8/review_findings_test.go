@@ -175,10 +175,13 @@ func TestSequencer_DeferredFinal73LogsOnSuccess(t *testing.T) {
 	require.Len(t, r.completed, 1, "logged on completion")
 }
 
-// Abandon while the final 73 is in flight bumps the generation, so the later
-// (now-stale) success callback must neither log nor publish over the new state
-// (review follow-up M1 — generation guard).
-func TestSequencer_AbandonDuringFinal73SuppressesStaleCallback(t *testing.T) {
+// Abandon while the final 73 is in flight. K1ABC has rogered, so the contact is earned
+// and the abandon logs it (the operator's ruling of 2026-11-20: "Log it. If the remote
+// station has a QSO, we need to have it our end"; until then the abandon discarded it).
+// The abandon also bumps the generation, so the 73's own callback, firing afterwards, is
+// stale: it must not log the contact a second time, and must not end or publish over the
+// session started in the meantime (review follow-up M1 — generation guard).
+func TestSequencer_AbandonDuringFinal73LogsOnceAndTheStaleCallbackAddsNothing(t *testing.T) {
 	r := &seqRecorder{deferOnDone: true}
 	s := newTestSeq(r)
 	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42",
@@ -191,12 +194,21 @@ func TestSequencer_AbandonDuringFinal73SuppressesStaleCallback(t *testing.T) {
 	require.ErrorIs(t, s.StartQso("G0XYZ", "IO91", "W2DEF", "EM12",
 		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()),
 		ErrQsoInProgress)
+	require.Empty(t, r.completed, "the fixture: nothing is logged while the 73 is in flight")
 
-	s.Abandon() // supersedes the session (bumps generation)
+	s.Abandon() // logs the earned contact and supersedes the session (bumps generation)
 	require.False(t, s.Active())
+	require.Len(t, r.completed, 1, "K1ABC had rogered: the abandon logs the contact")
+	require.Equal(t, "K1ABC", r.completed[0].TheirCall)
+
+	// The operator moves on to W2DEF before the cut 73's callback arrives.
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "W2DEF", "EM12",
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
 
 	r.fireOnDone(true) // the stale 73 callback finally fires
-	require.Empty(t, r.completed, "a superseded session's callback must not log (gen guard)")
+	require.Len(t, r.completed, 1, "a superseded session's callback must not log again (gen guard)")
+	require.True(t, s.Active(), "a superseded session's callback ended the session that replaced it")
+	require.Equal(t, "W2DEF", s.statusForTest().TheirCall, "the session that replaced it is no longer W2DEF's")
 }
 
 // --- M1: a session is not committed unless its opening message encodes -------

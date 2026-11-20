@@ -478,7 +478,7 @@ func (s *Sequencer) onSlotWorkingFd(ref SlotRef, msgs []goft8.DecodedMessage, no
 // earnWorkFdLocked is earnLocked for the Field Day work ladder. Caller holds s.mu
 // with the exchange on fdwRogering.
 func (s *Sequencer) earnWorkFdLocked() func(ok bool) {
-	return s.earnLocked(func() func(bool) {
+	return s.earnLocked(func() earnedClaim {
 		return s.finalRungDoneLocked(
 			s.completedFdWorkQsoLocked(),
 			func() { s.fdWork = nil },

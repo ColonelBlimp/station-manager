@@ -483,14 +483,14 @@ type contactFlags struct {
 	// definition, hence here: zero again once the flags are reset.
 	id uint64
 	// earned is the completion of a GROUP A contact whose partner has rogered: the
-	// callback finalRungDoneLocked builds, kept from the slot that takes the roger
+	// claim finalRungDoneLocked builds, kept from the slot that takes the roger
 	// in (earnLocked) until it runs or the session is retired. It is the fact "this
 	// contact is owed to the log", which a stop needs and could not otherwise know.
 	// With the closing rung deferred to a later slot, or decided and not yet
 	// admitted by the Service, there is no transmission for a stop to wait for; the
 	// stop used to retire the generation, and the contact was lost (codex-203,
-	// codex-204). settleEarned reads it.
-	earned func(ok bool)
+	// codex-204). claimEarned and endEarnedLocked read it.
+	earned earnedClaim
 }
 
 // autoWorkState is an ACTIVE auto-work-callers run (ADR 0059) — a RUN, not a
@@ -985,9 +985,18 @@ func (s *Sequencer) StartQsoFd(ourCall, ourClass, ourSection, theirCall, theirGr
 	return nil
 }
 
-// Abandon drops the active session — answering or calling CQ (operator action,
-// disarm, or off-ramp). Idempotent.
-func (s *Sequencer) Abandon() { s.abandonNamed("", causeOperator) }
+// Abandon ends the active session — answering or calling CQ — for the operator.
+// Idempotent. A contact the partner has already rogered is logged first, as every
+// stop logs it (abandonNamed; the operator's ruling of 2026-11-20: "Log it. If the
+// remote station has a QSO, we need to have it our end"). Anything short of that
+// is discarded.
+func (s *Sequencer) Abandon() { s.abandonNamedThen("", causeOperator, nil) }
+
+// AbandonThen is Abandon for a caller with a transmission to cut short. stopRF runs
+// once the session is retired, so that a rung still queued cannot be admitted, and
+// BEFORE an earned contact is handed to the log, so that stopping RF never waits on
+// the hand-over (abandonNamedThen).
+func (s *Sequencer) AbandonThen(stopRF func()) { s.abandonNamedThen("", causeOperator, stopRF) }
 
 // abandonNamed ends the session, naming what the OPERATOR sees (frameReason —
 // empty when they caused it) and what the LOG falls back to (logFallback).
@@ -1003,9 +1012,48 @@ func (s *Sequencer) Abandon() { s.abandonNamed("", causeOperator) }
 // The two carriers still diverge on purpose. The FRAME gets only a reason that
 // is NOT the operator's own doing; the LOG always gets something, because "" was
 // indistinguishable from a session that DIED — the defect this closes.
+//
+// An EARNED contact is claimed first (claimEarned; invariant 1), whoever asks: the
+// Service's disarm and the operator's Abandon both come through abandonNamedThen,
+// and neither may discard a contact the partner already holds. The claim retires
+// the session itself, so what follows then finds no exchange and reports none
+// abandoned; an armed auto-work run is still stopped. The claim is in the one
+// function both callers share, so that a third caller cannot forget it.
 func (s *Sequencer) abandonNamed(frameReason, logFallback string) (terminated bool) {
+	return s.abandonNamedThen(frameReason, logFallback, nil)
+}
+
+// abandonNamedThen is the abandon, in the order that keeps a stop a stop (codex-206):
+//
+//  1. claim an earned contact and end the session. Before the cut there is only
+//     this: the stamp under txMu, the sequencer's own lock, and the publish of
+//     the session's last frame. No log line and no call out to a consumer; the
+//     hub's record of a subscriber that frame evicts is the caller's to hold back
+//     (hub.holdEvictionReports). The generation has moved when it is done,
+//     whichever of the two moved it;
+//  2. stopRF, when the caller has a transmission to cut (the operator's Abandon;
+//     the disarm has already waited its transmission out);
+//  3. everything that can be held up by someone else: the abandon's log line and
+//     its termination note (report), then the claimed contact's log line and its
+//     hand-over for logging (handOver).
+//
+// Step 3 is last because a log writer, or whoever takes the contact, can hold it
+// up, and RF must not stay up for that (codex-206, codex-207). stopRF cannot be
+// first: cutting before the generation moves reopens the gap in which a queued
+// rung is admitted after the abandon (review 2026-07-20 #1). The caller must not
+// hold txMu: the claim stamps the contact under it.
+func (s *Sequencer) abandonNamedThen(frameReason, logFallback string, stopRF func()) (terminated bool) {
+	handOver := s.claimEarned(frameReason)
 	s.mu.Lock()
-	return s.finishAbandonLocked(frameReason, logFallback)
+	report := s.finishAbandonLocked(frameReason, logFallback)
+	if stopRF != nil {
+		stopRF()
+	}
+	terminated = report()
+	if handOver != nil {
+		handOver()
+	}
+	return terminated
 }
 
 // abandonNamedIfCurrent is abandonNamed scoped to ONE session generation: a no-op
@@ -1019,13 +1067,23 @@ func (s *Sequencer) abandonNamedIfCurrent(gen uint64, frameReason, logFallback s
 		s.mu.Unlock()
 		return // the session this rung belonged to is already gone
 	}
-	s.finishAbandonLocked(frameReason, logFallback)
+	if s.endEarnedLocked(frameReason) {
+		return // its contact was earned: handed over for logging, and the session ended with it
+	}
+	// No transmission to cut here, so the teardown's report is made at once.
+	s.finishAbandonLocked(frameReason, logFallback)()
 }
 
 // finishAbandonLocked performs the teardown. The CALLER holds s.mu; this releases
 // it (the terminal publish must happen while the lock still excludes a replacement
 // Start* — invariant 3).
-func (s *Sequencer) finishAbandonLocked(frameReason, logFallback string) (terminated bool) {
+//
+// It returns the REPORT it owes and has not made: the log line, and the note to the
+// Service that a partner exchange was terminated. The caller MUST call it. They are
+// apart from the teardown because a log writer can be held up, and a caller with a
+// transmission to cut must cut it first (abandonNamedThen; codex-207). What is done
+// here, before the lock is let go, is state and the publish of the last frame only.
+func (s *Sequencer) finishAbandonLocked(frameReason, logFallback string) (report func() (terminated bool)) {
 	// Read the partner BEFORE abandonLocked clears the exchange pointers: the
 	// line said a session ended and never which contact was lost, so four
 	// different operator actions produced one indistinguishable record
@@ -1052,21 +1110,24 @@ func (s *Sequencer) finishAbandonLocked(frameReason, logFallback string) (termin
 		s.publish(s.terminalStatusLocked(reason))
 	}
 	s.mu.Unlock()
-	if was {
-		// A staged reason wins over the call site's label — the precedence
-		// AbandonIfCurrent already applies, so the dial guard's explanation is not
-		// overwritten by whichever teardown path happened to run it.
-		cause := reason
-		if cause == "" {
-			cause = logFallback
+	return func() (terminated bool) {
+		if was {
+			// A staged reason wins over the call site's label — the precedence
+			// AbandonIfCurrent already applies, so the dial guard's explanation is not
+			// overwritten by whichever teardown path happened to run it.
+			cause := reason
+			if cause == "" {
+				cause = logFallback
+			}
+			s.log.InfoWith().Str("reason", cause).Str("their_call", call).
+				Msg("ft8 seq: session abandoned")
+			return s.noteTerminated(cause, call, rung, at)
 		}
-		s.log.InfoWith().Str("reason", cause).Str("their_call", call).
-			Msg("ft8 seq: session abandoned")
-		terminated = s.noteTerminated(cause, call, rung, at)
-	} else if hadRun {
-		s.log.InfoWith().Msg("ft8 seq: auto-work run stopped")
+		if hadRun {
+			s.log.InfoWith().Msg("ft8 seq: auto-work run stopped")
+		}
+		return false
 	}
-	return terminated
 }
 
 // noteTerminated reports a partner exchange's end to the Service (W-0020).
@@ -1235,6 +1296,12 @@ func (s *Sequencer) AbandonIfCurrent(gen uint64, reason string) bool {
 	if s.sessionGen != gen {
 		s.mu.Unlock()
 		return false
+	}
+	// A refusal that belongs to an EARLIER rung of this session can arrive after
+	// the partner's roger has been taken in: the contact is earned, and this ends
+	// the session by completing it, the reason on its last frame (codex-206).
+	if s.endEarnedLocked(reason) {
+		return true
 	}
 	call := s.partnerCallLocked() // before abandonLocked clears it (W-0020)
 	rung, at := s.statusModeLocked().State, time.Now()
@@ -1767,7 +1834,7 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 // earnAnswerLocked is earnLocked for the standard answer ladder. Caller holds s.mu
 // with the exchange on txConfirming, where its report fields are final.
 func (s *Sequencer) earnAnswerLocked() func(ok bool) {
-	return s.earnLocked(func() func(bool) {
+	return s.earnLocked(func() earnedClaim {
 		return s.finalRungDoneLocked(
 			s.completedQsoLocked(),
 			func() { s.ex = nil },

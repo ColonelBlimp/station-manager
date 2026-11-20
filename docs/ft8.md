@@ -1491,14 +1491,33 @@ read by the e2 resolver. Step (e) breaks into increments:
       contact's completion then (`Sequencer.earnLocked`, `contactFlags.earned`), before
       any return that defers the rung (decoded too late into our slot, or the slot has
       already carried a rung). Until the rung is admitted by the Service there is no
-      transmission for a disarm to wait for. The disarm's abandon
-      (`Sequencer.abandonForStop`) therefore completes a kept contact, as not transmitted,
-      before it retires the session: an app's exit or replacement, the operator's disarm,
-      the presence rule, a lost rig and a dial move alike. Exactly once is the
-      completion's own generation guard; each caller of the completion prepares a copy of
-      its own, so the one that logs hands over what it stamped. A Group B final rung
-      earns nothing until it has been on the air. The operator's Abandon does not
-      complete an earned contact: it discards it, as before. `earnedcontact_test.go` and
+      transmission for a disarm to wait for. The abandon that ends a session from
+      outside its ladder (`Sequencer.abandonNamedThen`, through `claimEarned`) therefore
+      completes a kept contact, as not transmitted, before it retires the session: an
+      app's exit or replacement, the operator's disarm, the presence rule, a lost rig
+      and a dial move alike. **The operator's Abandon does the same** (operator,
+      2026-11-20: "Log it. If the remote station has a QSO, we need to have it our
+      end"): it ends the contact, cuts a closing rung on the air short, leaves TX armed,
+      and logs the contact the partner has rogered. Short of their roger it discards the
+      contact, as before. **A completion has two steps** (`earnedClaim`): the claim, which
+      retires the session and does nothing anyone else can hold up (two short locks and
+      the hub's non-blocking publish; no log line, no call to a consumer), and the
+      hand-over, which writes the completion's log line and gives the contact to the
+      logging sink. The Abandon claims and ends the session, cuts the transmission, and
+      only then writes its log lines and hands over (`abandonNamedThen`), so stopping RF
+      waits on neither a log writer nor the sink; cutting first would let a queued rung
+      be admitted after the abandon. The session's last frame is published before the
+      cut, in the lock hold that retires it (invariant 3), and the hub writes a record
+      for a subscriber that frame evicts: the Abandon holds those records until the cut
+      is made (`hub.holdEvictionReports`). Delivery and eviction themselves do not wait. **An abandon scoped to one generation**
+      (`AbandonIfCurrent`, `abandonNamedIfCurrent`) keeps a contact its own session has
+      earned (`endEarnedLocked`, after the generation check, never before it): a rung is
+      accepted a slot before it is keyed, so an earlier rung's dial refusal can arrive
+      after the roger has been taken in. The session's last frame still carries the
+      reason. Exactly once is the claim's own generation guard; each caller of the
+      completion prepares a copy of its own, so the one that logs hands over what it
+      stamped. A Group B final rung earns nothing until it has been on the
+      air. `earnedcontact_test.go`, `earnedabandon_test.go` and
       `operating_contact_test.go` hold the cases.
     - **Tests.** `contactidentity_test.go` (a probe in the shared sequencer harness checks
       the identity rules on every frame and completion any test produces),

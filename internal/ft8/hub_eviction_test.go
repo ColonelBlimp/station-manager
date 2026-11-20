@@ -453,3 +453,75 @@ func TestFt8HubEviction_ReconnectInsideLingerPreventsDisarm(t *testing.T) {
 		"a reconnect inside the linger must cancel the teardown — this is the ordinary "+
 			"browser reload, and disarming through it would make FT8 unusable")
 }
+
+// A stop of RF holds the hub's eviction records until its transmission is cut
+// (holdEvictionReports; codex-208). Held, a publish evicts and delivers exactly as
+// always and writes nothing; the release writes the record, the same record, once.
+func TestFt8HubEviction_HeldRecordsAreWrittenAtTheRelease(t *testing.T) {
+	buf := &ft8LogBuf{}
+	h := newHub(logging.NewForWriter(buf))
+	slow, _ := h.subscribe()
+	quick, quickGone := h.subscribe()
+	for i := 0; i < subscriberBufferSize; i++ {
+		h.publish(hubEvent{name: EventDecode})
+		<-quick // the quick subscriber keeps up
+	}
+
+	release := h.holdEvictionReports()
+	h.publish(hubEvent{name: EventQso})
+
+	if n := len(ft8EvictionRecords(t, buf)); n != 0 {
+		t.Fatalf("eviction records written during the hold = %d, want 0", n)
+	}
+	if h.subscriberCount() != 1 {
+		t.Fatalf("subscribers during the hold = %d, want 1: the eviction itself must not wait", h.subscriberCount())
+	}
+	if evt := <-quick; evt.name != EventQso {
+		t.Fatalf("the quick subscriber got %q during the hold, want %q: delivery must not wait", evt.name, EventQso)
+	}
+	for range slow { // drained to its close: the slow subscriber's stream has ended
+	}
+
+	release()
+	got := ft8EvictionRecords(t, buf)
+	if len(got) != 1 {
+		t.Fatalf("eviction records after the release = %d, want exactly 1", len(got))
+	}
+	if ev, _ := got[0]["event"].(string); ev != EventQso {
+		t.Errorf("event = %q, want %q", ev, EventQso)
+	}
+	if d, _ := got[0]["queue_depth"].(float64); int(d) != subscriberBufferSize {
+		t.Errorf("queue_depth = %v, want %d: the record must be the one the publish made", got[0]["queue_depth"], subscriberBufferSize)
+	}
+
+	release() // a second call counts for nothing
+	if n := len(ft8EvictionRecords(t, buf)); n != 1 {
+		t.Fatalf("eviction records after a second release = %d, want 1", n)
+	}
+
+	// The hold is over: the next eviction is written by its own publish, as before.
+	quickGone()
+	_, _ = h.subscribe()
+	overflowFt8Hub(h)
+	if n := len(ft8EvictionRecords(t, buf)); n != 2 {
+		t.Fatalf("eviction records after the hold = %d, want 2: a released hold must not go on holding", n)
+	}
+}
+
+// Two stops at once: the records are written when the last of them releases.
+func TestFt8HubEviction_HeldRecordsWaitForTheLastHold(t *testing.T) {
+	buf := &ft8LogBuf{}
+	h := newHub(logging.NewForWriter(buf))
+	_, _ = h.subscribe()
+	first, second := h.holdEvictionReports(), h.holdEvictionReports()
+	overflowFt8Hub(h)
+
+	first()
+	if n := len(ft8EvictionRecords(t, buf)); n != 0 {
+		t.Fatalf("eviction records with one hold still open = %d, want 0", n)
+	}
+	second()
+	if n := len(ft8EvictionRecords(t, buf)); n != 1 {
+		t.Fatalf("eviction records after the last release = %d, want 1", n)
+	}
+}

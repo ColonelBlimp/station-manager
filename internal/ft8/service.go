@@ -1371,7 +1371,7 @@ func (s *Service) driveSequencer(ref SlotRef, msgs []goft8.DecodedMessage, now t
 // stop no exchange is live and none can start, so no later slot hands a contact over, and
 // this wait covers the one slot that may have been in progress. RetireOperating itself
 // covers a contact handed over by a transmission, and one whose closing rung never
-// reached the air (Sequencer.abandonForStop hands that one over inside the stop).
+// reached the air (the stop's abandon hands that one over: Sequencer.claimEarned).
 // Together they are the daemon's "FT8 completion logging already earned" before a
 // confirmed exit of the app (ADR 0100 §3).
 //

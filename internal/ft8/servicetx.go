@@ -422,7 +422,7 @@ func (s *Service) disarmTxLocked(cause string) {
 		// Still abandon under the gate: a session could be active from a start
 		// that raced an earlier disarm; clear it now that armed is false.
 		if s.seq != nil {
-			s.seq.abandonForStop(cause)
+			s.seq.abandonNamed("", cause)
 		}
 		return
 	}
@@ -472,8 +472,9 @@ func (s *Service) disarmTxLocked(cause string) {
 	// The wait above covers a closing rung that was ADMITTED. One that was not has
 	// no transmission to wait for: it was deferred to a later slot, or it was
 	// decided and the slot is between the sequencer's lock and txMu, where with the
-	// arm gone it will be refused. Its contact is earned all the same, so
-	// abandonForStop completes it before it abandons (codex-203, codex-204);
+	// arm gone it will be refused. Its contact is earned all the same, so the
+	// abandon completes it before it retires the session (Sequencer.abandonNamed,
+	// through claimEarned; codex-203, codex-204);
 	// abandoning first would retire the generation its callback is guarded by, the
 	// same loss as the ordering above prevents.
 	// The abandon reports whether a PARTNER exchange ended: if so the sequencer
@@ -481,7 +482,7 @@ func (s *Service) disarmTxLocked(cause string) {
 	// more — one row per event (W-0020 ruling 2).
 	terminated := false
 	if s.seq != nil {
-		terminated = s.seq.abandonForStop(cause)
+		terminated = s.seq.abandonNamed("", cause)
 	}
 	if !terminated {
 		s.noteTxDisarmed(cause, disarmedAt)
@@ -1685,6 +1686,10 @@ func (s *Service) resumeDrainAs(who string) error {
 // the operator can call CQ or answer again. (disarmTx is the harder stop that
 // also closes the device.) The cancelled transmission's goroutine clears
 // txCancel/txInFlight and publishes the final ft8-tx state on its own path.
+//
+// A contact the partner has already rogered is LOGGED, not dropped: they hold
+// the QSO, so we must (invariant 1; the operator's ruling of 2026-11-20). Only
+// our courtesy rung is given up. A contact short of their roger is discarded.
 func (s *Service) abandonQsoAs(who string) error {
 	const op errors.Op = "ft8.Service.AbandonQso"
 	// seqGate: the abandonment + cancellation must be atomic w.r.t. a concurrent
@@ -1703,15 +1708,34 @@ func (s *Service) abandonQsoAs(who string) error {
 	}
 	// Bump the generation FIRST, then read txCancel under txMu second — the order
 	// the rung commit-gate in startTransmission relies on (review 2026-07-20 #1).
-	if s.seq != nil {
-		s.seq.Abandon()
+	cut := func() {
+		s.txMu.Lock()
+		cancel := s.txCancel
+		s.txMu.Unlock()
+		if cancel != nil {
+			cancel() // abort in-flight; the controller drops PTT on the cancel path
+		}
 	}
-	s.txMu.Lock()
-	cancel := s.txCancel
-	s.txMu.Unlock()
-	if cancel != nil {
-		cancel() // abort in-flight; the controller drops PTT on the cancel path
+	if s.seq == nil {
+		cut()
+		return nil
 	}
+	// The sequencer runs cut between its two steps: after the session is retired
+	// (a rogered contact claimed with it, which bumps the generation as an abandon
+	// does), and before anything that someone else can hold up: its log lines, and
+	// the contact's hand-over for logging. The carrier must not wait for those
+	// (codex-206, codex-207). txMu is not held here: the claim takes it to stamp
+	// the contact.
+	//
+	// The session's last frame IS published before the cut, and the hub writes a
+	// record for a subscriber that frame evicts. Those records are kept until the
+	// cut is made (codex-208).
+	writeEvictionRecords := s.hub.holdEvictionReports()
+	defer writeEvictionRecords() // whatever happens, the hold does not outlive this call
+	s.seq.AbandonThen(func() {
+		cut()
+		writeEvictionRecords()
+	})
 	return nil
 }
 
