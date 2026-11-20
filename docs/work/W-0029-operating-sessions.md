@@ -11,8 +11,9 @@ criteria are at the end of this file; their six questions are ruled (2026-11-20)
 has no remaining objection to them (codex-194). Part 2's first slice, the start step in
 the admission, the read route and the event, is committed (`a8317035`), with one fix from
 its clean-room review (`de4eb3fd`). The second slice, setup's save, is committed
-(`3f2f08aa`), with one fix from its clean-room review committed with this text (at the end
-of this file). The exit report is not built.** The removal of the database half of
+(`3f2f08aa`), with one fix from its clean-room review (`e5058ed5`) and a correction to
+that fix's error reporting, committed with this text (at the end of this file). The exit
+report is not built.** The removal of the database half of
 the downgrade tooling, which part 1 waited for, is committed (`0b21b2fb`, 2026-11-20; W-0027).
 **Part 1's acceptance criteria are written, their three questions ruled, and agreed with
 Codex after one round of corrections (2026-11-20).** The
@@ -1734,7 +1735,7 @@ tested one after the other, not forced.
 **Not shown.** Nothing was run at the station. The real-daemon desktop scenario was not
 rerun for this slice: it does not perform setup's save.
 
-### Part 2, second slice: a fix from its clean-room review (2026-11-20; built, committed with this record)
+### Part 2, second slice: a fix from its clean-room review (2026-11-20; committed `e5058ed5`)
 
 **The finding (P2), which is right about the mechanism.** After a setup save has made its
 logbook and before the configuration is committed, the configuration still names the old
@@ -1782,3 +1783,41 @@ pointer at a daemon start and delete nothing through this function. It removed o
 new condition in its own overlay and saw both tests fail. Two wordings corrected at its
 request: the two ids differ during a save as well as after a failed one; and the delete's
 comments, which still spoke of two preconditions.
+
+### The delete's reported reason (2026-11-20; built, committed with this record)
+
+**The finding (P3), from the clean-room review of `e5058ed5`, which is right.** The fix
+above added a third reason a delete can be refused. The reason was then looked for in
+separate reads after the refused delete. If the default moved to another logbook between
+the two, none of the reads found a cause, and the function fell through to its last
+answer, "has QSOs", for a logbook that held none. The delete itself was never wrong; only
+the reason given.
+
+**The correction.** The three conditions are now read in one statement, so they are one
+snapshot. If none of them holds, the reason has gone since the delete was refused, and
+the delete is tried again; at most three times. A reason is reported only when it is true
+at the moment it is read. This also changes an older behaviour for the better: when a
+logbook's last QSO was deleted between the refused delete and its diagnosis, the function
+used to answer "has QSOs" (its comment called that slightly stale); it now deletes the
+logbook.
+
+**Seen.** A test forces the gap with a seam that runs after a refused delete and before
+the reason is read. Before the correction: the default moved away in the gap, and the
+delete returned "logbook contains QSOs"; the last QSO deleted in the gap, the same. After
+it: both logbooks are deleted. A third case holds the three lasting reasons to their own
+answers (the default, a logbook with a QSO, no such logbook), with nothing deleted and one
+refusal each. The whole tree passes: 66 packages, with lint and the maintainability
+metrics.
+
+**After Codex's review (codex-201: no blocking finding).** It asked that the retry's two
+ends stay tested in the repository, having forced them itself in an overlay. Added: the
+seam now also runs before each try, and a test brings the obstruction back before a try
+and takes it away after each refusal. With the obstruction absent at the third try the
+logbook is deleted at the third; with it back every time the delete gives up after three
+tries with an error that names none of the three reasons, and the logbook is live. In a
+temporary copy since removed: with two tries allowed the first case fails; with the
+give-up answering "has QSOs" the second fails. Gates rerun: 66 packages ok.
+
+**Not shown.** A cancellation between tries is not tested here (Codex forced it in its
+overlay and saw the cancellation returned with nothing deleted). Three is a bound on work,
+not a measured figure.

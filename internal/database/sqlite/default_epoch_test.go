@@ -202,3 +202,139 @@ func TestDeleteLogbook_WithNoArchiveIdentityIsAsBefore(t *testing.T) {
 		t.Fatalf("a second delete: %v; want ErrNotFound", err)
 	}
 }
+
+// When a delete is refused and the reason has gone by the time it is looked
+// for, the delete is tried again; it never reports a reason that was not true
+// (the clean-room review of e5058ed5: a default that moved away between the
+// refused delete and its diagnosis was reported as "has QSOs" for a logbook
+// that held none). The gap is forced with the delete's own seam.
+func TestDeleteLogbook_AReasonThatHasGoneIsNotReported(t *testing.T) {
+	ctx := context.Background()
+	// once runs fn after the first refused attempt, before its reason is read.
+	once := func(t *testing.T, fn func()) {
+		t.Helper()
+		logbookDeleteSeam = func(point string, attempt int) {
+			if point == "refused" && attempt == 1 {
+				fn()
+			}
+		}
+		t.Cleanup(func() { logbookDeleteSeam = nil })
+	}
+	live := func(t *testing.T, svc *Service, id int64) bool {
+		t.Helper()
+		return countT(t, svc, `SELECT COUNT(*) FROM logbook WHERE id = ? AND deleted_at IS NULL`, id) == 1
+	}
+
+	t.Run("the default moves away after the refusal", func(t *testing.T) {
+		svc, x, y := epochBed(t)
+		if err := svc.SetArchiveDefaultLogbookWithContext(ctx, x); err != nil {
+			t.Fatal(err)
+		}
+		once(t, func() {
+			if err := svc.SetArchiveDefaultLogbookWithContext(ctx, y); err != nil {
+				t.Errorf("move the default in the gap: %v", err)
+			}
+		})
+		if err := svc.DeleteLogbookByIDWithContext(ctx, x); err != nil {
+			t.Fatalf("the delete returned %v; the logbook held no QSO and was no longer the default, so it should be deleted", err)
+		}
+		if live(t, svc, x) {
+			t.Fatal("the logbook is still live")
+		}
+	})
+	t.Run("the last QSO is deleted after the refusal", func(t *testing.T) {
+		svc, x, _ := epochBed(t)
+		execT(t, svc, `INSERT INTO qso (uuid, call, band, mode, freq, qso_date, time_on, time_off, rst_sent, rst_rcvd, country, dedupe_key, logbook_id)
+			VALUES ('01920000-0000-7000-8000-00000000d001', 'G4ABC', '40m', 'SSB', 7050000, '20261120', '0915', '0915', '59', '59', 'Test', printf('%064d', 7), ?)`, x)
+		once(t, func() { execT(t, svc, `UPDATE qso SET deleted_at = datetime('now') WHERE logbook_id = ?`, x) })
+		if err := svc.DeleteLogbookByIDWithContext(ctx, x); err != nil || live(t, svc, x) {
+			t.Fatalf("the delete returned %v, live %v; its only QSO was gone, so it should be deleted", err, live(t, svc, x))
+		}
+	})
+	t.Run("a reason that stays is reported, each as itself", func(t *testing.T) {
+		svc, x, y := epochBed(t)
+		if err := svc.SetArchiveDefaultLogbookWithContext(ctx, x); err != nil {
+			t.Fatal(err)
+		}
+		execT(t, svc, `INSERT INTO qso (uuid, call, band, mode, freq, qso_date, time_on, time_off, rst_sent, rst_rcvd, country, dedupe_key, logbook_id)
+			VALUES ('01920000-0000-7000-8000-00000000d002', 'G4ABC', '40m', 'SSB', 7050000, '20261120', '0915', '0915', '59', '59', 'Test', printf('%064d', 8), ?)`, y)
+		calls := 0
+		logbookDeleteSeam = func(point string, _ int) {
+			if point == "refused" {
+				calls++
+			}
+		}
+		t.Cleanup(func() { logbookDeleteSeam = nil })
+		if err := svc.DeleteLogbookByIDWithContext(ctx, x); !stderr.Is(err, errors.ErrLogbookIsDefault) {
+			t.Fatalf("the default: %v", err)
+		}
+		if err := svc.DeleteLogbookByIDWithContext(ctx, y); !stderr.Is(err, errors.ErrLogbookHasQsos) {
+			t.Fatalf("a logbook with a QSO: %v", err)
+		}
+		if err := svc.DeleteLogbookByIDWithContext(ctx, 999); !stderr.Is(err, errors.ErrNotFound) {
+			t.Fatalf("no such logbook: %v", err)
+		}
+		if calls != 3 || !live(t, svc, x) || !live(t, svc, y) {
+			t.Fatalf("the seam ran %d time(s); x live %v, y live %v; want one refusal each and nothing deleted", calls, live(t, svc, x), live(t, svc, y))
+		}
+	})
+}
+
+// The retry's two ends (codex-201). A delete whose obstruction comes back
+// before each try and has gone again each time its reason is read: with the
+// obstruction absent at the third try the logbook is deleted; with it back
+// every time, the delete gives up after its third try with an error that
+// names no reason, and deletes nothing.
+func TestDeleteLogbook_TheRetryIsBounded(t *testing.T) {
+	ctx := context.Background()
+	// flapping makes x the file's default before each try up to and including
+	// obstructed, and moves the default to y after every refusal.
+	flapping := func(t *testing.T, svc *Service, x, y int64, obstructed int) (tries *int) {
+		t.Helper()
+		tries = new(int)
+		move := func(to int64) {
+			if err := svc.SetArchiveDefaultLogbookWithContext(ctx, to); err != nil {
+				t.Errorf("move the default to %d: %v", to, err)
+			}
+		}
+		logbookDeleteSeam = func(point string, attempt int) {
+			switch {
+			case point == "attempt":
+				*tries = attempt
+				if attempt <= obstructed {
+					move(x)
+				}
+			case point == "refused":
+				move(y)
+			}
+		}
+		t.Cleanup(func() { logbookDeleteSeam = nil })
+		return tries
+	}
+	live := func(t *testing.T, svc *Service, id int64) bool {
+		t.Helper()
+		return countT(t, svc, `SELECT COUNT(*) FROM logbook WHERE id = ? AND deleted_at IS NULL`, id) == 1
+	}
+
+	t.Run("the third try succeeds", func(t *testing.T) {
+		svc, x, y := epochBed(t)
+		tries := flapping(t, svc, x, y, 2)
+		if err := svc.DeleteLogbookByIDWithContext(ctx, x); err != nil {
+			t.Fatalf("the delete returned %v after %d tries; want it deleted at the third", err, *tries)
+		}
+		if *tries != 3 || live(t, svc, x) {
+			t.Fatalf("%d tries, live %v; want three tries and the logbook deleted", *tries, live(t, svc, x))
+		}
+	})
+	t.Run("three refusals with no reason left: an error, and nothing deleted", func(t *testing.T) {
+		svc, x, y := epochBed(t)
+		tries := flapping(t, svc, x, y, logbookDeleteAttempts)
+		err := svc.DeleteLogbookByIDWithContext(ctx, x)
+		if err == nil || stderr.Is(err, errors.ErrLogbookHasQsos) || stderr.Is(err, errors.ErrLogbookIsDefault) || stderr.Is(err, errors.ErrNotFound) {
+			t.Fatalf("the delete returned %v; want an error that names none of the three reasons", err)
+		}
+		if *tries != logbookDeleteAttempts || !live(t, svc, x) {
+			t.Fatalf("%d tries, live %v; want %d tries and the logbook still live", *tries, live(t, svc, x), logbookDeleteAttempts)
+		}
+	})
+}

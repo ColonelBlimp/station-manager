@@ -1794,6 +1794,19 @@ func (s *Service) InsertLogbookWithContext(ctx context.Context, logbook types.Lo
 	return model.ID, nil
 }
 
+// logbookDeleteSeam, when non-nil, runs at two points of
+// DeleteLogbookByIDWithContext, with the number of the attempt: "attempt",
+// before each try of the delete, and "refused", after a try affected no row and
+// before the reason is looked for. A test uses them to change the state in
+// between. Nil in production.
+var logbookDeleteSeam func(point string, attempt int)
+
+func logbookDeleteAt(point string, attempt int) {
+	if logbookDeleteSeam != nil {
+		logbookDeleteSeam(point, attempt)
+	}
+}
+
 func (s *Service) DeleteLogbookByIDWithContext(ctx context.Context, id int64) error {
 	const op errors.Op = "sqlite.Service.DeleteLogbookWithContext"
 	if err := checkService(op, s); err != nil {
@@ -1812,34 +1825,61 @@ func (s *Service) DeleteLogbookByIDWithContext(ctx context.Context, id int64) er
 	ctx, cancel := s.ensureCtxTimeout(ctx)
 	defer cancel()
 
-	// One conditional statement carries every precondition — the logbook is
-	// live, it holds no live QSOs, and (below) it is not the archive's default
-	// — so the check cannot be outrun by a concurrent submit (2026-07-22
-	// sqlite review, finding 2). The previous
-	// shape read those facts in separate statements and only then soft-
-	// deleted, leaving a window for the interleaving "delete preflight sees
-	// no QSOs → a submit commits a QSO → soft-delete lands", which orphans a
-	// live QSO under a deleted logbook. The FK is no help: ON DELETE RESTRICT
-	// fires on hard deletes only, and a soft-deleted parent still physically
-	// satisfies it. (The symmetric guard on the insert side lives in
-	// InsertQsoTx / InsertQsoWithContext.)
-	//
-	// NOT EXISTS matches .Exists() semantics — it short-circuits at the first
-	// hit via idx_qso_logbook_id rather than scanning the partition — and
-	// counts only LIVE QSOs, preserving the existing rule that a logbook
-	// whose QSOs are all soft-deleted may still be deleted.
-	//
-	// A THIRD precondition rides in the same statement: the logbook is not the
-	// one the archive file names as its default (ADR 0071: the file's pointer
-	// is the authority; the configuration's id is its projection). The caller
-	// checks the configured id, but the two differ while a setup save is between
-	// making its logbook and committing its configuration, and after one that
-	// failed there; and a check made in a separate statement could be outrun
-	// by the save's own transaction. A file with no
-	// identity row has no default, and the comparison is then true.
-	//
-	// deleted_at is stamped in UTC to match sqlboiler's generated soft-delete
-	// (boil's timestamp location defaults to UTC).
+	// A refused delete is diagnosed, and if the reason found for it no longer
+	// holds, the delete is tried again: a reason is only ever reported when it
+	// is true at the moment it is read. Three tries bound a state that keeps
+	// changing under the caller.
+	for attempt := 1; attempt <= logbookDeleteAttempts; attempt++ {
+		logbookDeleteAt("attempt", attempt)
+		deleted, err := deleteLogbookIfAllowed(ctx, h, id)
+		if err != nil {
+			return errors.New(op).WithErr(err).WithMsg("failed to delete logbook")
+		}
+		if deleted {
+			return nil
+		}
+		logbookDeleteAt("refused", attempt)
+		reason, err := logbookDeleteRefusal(ctx, h, id)
+		if err != nil {
+			return errors.New(op).WithErr(err).WithMsg("classifying logbook delete failure")
+		}
+		if stderr.Is(reason, errors.ErrNotFound) {
+			return reason // the bare sentinel, as before
+		}
+		if reason != nil {
+			return errors.New(op).WithErr(reason)
+		}
+	}
+	return errors.New(op).WithMsg("the logbook's state kept changing; it was not deleted")
+}
+
+// logbookDeleteAttempts bounds DeleteLogbookByIDWithContext's retries.
+const logbookDeleteAttempts = 3
+
+// deleteLogbookIfAllowed is the delete itself. One conditional statement
+// carries every precondition, so no check can be outrun by a concurrent write
+// (2026-07-22 sqlite review, finding 2):
+//
+//   - the logbook is live;
+//   - it holds no live QSOs. The previous shape read that in a separate
+//     statement and only then soft-deleted, leaving a window for "delete
+//     preflight sees no QSOs → a submit commits a QSO → soft-delete lands",
+//     which orphans a live QSO under a deleted logbook. The FK is no help: ON
+//     DELETE RESTRICT fires on hard deletes only, and a soft-deleted parent
+//     still physically satisfies it. (The symmetric guard on the insert side
+//     lives in InsertQsoTx / InsertQsoWithContext.) NOT EXISTS short-circuits
+//     at the first hit via idx_qso_logbook_id and counts only LIVE QSOs, so a
+//     logbook whose QSOs are all soft-deleted may still be deleted;
+//   - it is not the logbook the archive file names as its default (ADR 0071:
+//     the file's pointer is the authority; the configuration's id is its
+//     projection). The caller checks the configured id, but the two differ
+//     while a setup save is between making its logbook and committing its
+//     configuration, and after one that failed there. A file with no identity
+//     row has no default, and the comparison is then true.
+//
+// deleted_at is stamped in UTC to match sqlboiler's generated soft-delete
+// (boil's timestamp location defaults to UTC).
+func deleteLogbookIfAllowed(ctx context.Context, h *sql.DB, id int64) (bool, error) {
 	res, err := h.ExecContext(ctx, `
 		UPDATE logbook SET deleted_at = ?
 		WHERE id = ?
@@ -1850,46 +1890,39 @@ func (s *Service) DeleteLogbookByIDWithContext(ctx context.Context, id int64) er
 		      WHERE qso.logbook_id = logbook.id AND qso.deleted_at IS NULL
 		  )`, time.Now().UTC(), id)
 	if err != nil {
-		return errors.New(op).WithErr(err).WithMsg("failed to delete logbook")
+		return false, err
 	}
 	affected, err := res.RowsAffected()
-	if err != nil {
-		return errors.New(op).WithErr(err).WithMsg("rows affected by logbook delete")
-	}
-	if affected > 0 {
-		return nil
-	}
+	return affected > 0, err
+}
 
-	// No row matched: one of the three preconditions failed. Re-read to report
-	// WHICH — this is diagnosis for the error message only, the mutation
-	// above was already all-or-nothing, and these reads can see a later state
-	// than the one that refused it. A logbook that is no longer live
-	// (never existed, or already soft-deleted) is ErrNotFound, matching
-	// FindLogbook's deleted_at-filtered semantics; anything else means the
-	// QSO precondition is what blocked it. If a concurrent writer soft-
-	// deleted the last QSO between the two statements this reports the
-	// slightly-stale "has QSOs" — accurate for the moment the delete was
-	// attempted. The caller gets one of three refusals: not found, the
-	// archive's default, or has QSOs.
-	var live bool
-	if err = h.QueryRowContext(ctx,
-		`SELECT EXISTS(SELECT 1 FROM logbook WHERE id = ? AND deleted_at IS NULL)`,
-		id).Scan(&live); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("classifying logbook delete failure")
+// logbookDeleteRefusal says why a delete would be refused now, reading the
+// three preconditions in ONE statement so they are one snapshot: a logbook
+// that is not live (never existed, or already soft-deleted) is ErrNotFound,
+// matching FindLogbook's deleted_at-filtered semantics; then the archive's
+// default; then live QSOs. nil means none of them holds: the state changed
+// after the delete was refused, and the caller tries the delete again rather
+// than report a reason that is not true (the clean-room review of e5058ed5).
+// This is diagnosis for the error only; the delete statement is what protects
+// the row.
+func logbookDeleteRefusal(ctx context.Context, h *sql.DB, id int64) (error, error) {
+	var live, isDefault, hasQsos bool
+	err := h.QueryRowContext(ctx, `SELECT
+		EXISTS (SELECT 1 FROM logbook WHERE id = ?1 AND deleted_at IS NULL),
+		?1 IS (SELECT default_logbook_id FROM archive_metadata WHERE singleton = 1),
+		EXISTS (SELECT 1 FROM qso WHERE logbook_id = ?1 AND deleted_at IS NULL)`, id).
+		Scan(&live, &isDefault, &hasQsos)
+	switch {
+	case err != nil:
+		return nil, err
+	case !live:
+		return errors.ErrNotFound, nil
+	case isDefault:
+		return errors.ErrLogbookIsDefault, nil
+	case hasQsos:
+		return errors.ErrLogbookHasQsos, nil
 	}
-	if !live {
-		return errors.ErrNotFound
-	}
-	var isDefault bool
-	if err = h.QueryRowContext(ctx,
-		`SELECT ? IS (SELECT default_logbook_id FROM archive_metadata WHERE singleton = 1)`,
-		id).Scan(&isDefault); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("classifying logbook delete failure")
-	}
-	if isDefault {
-		return errors.New(op).WithErr(errors.ErrLogbookIsDefault)
-	}
-	return errors.New(op).WithErr(errors.ErrLogbookHasQsos)
+	return nil, nil
 }
 
 func (s *Service) UpdateLogbookWithContext(ctx context.Context, logbook types.Logbook) error {
