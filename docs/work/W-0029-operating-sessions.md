@@ -3,8 +3,11 @@
 **Status:** Opened 2026-11-18 (operator: "W-0029 is fine, open the dossier"); ranked in
 [`docs/backlog.md`](../backlog.md). The build brief was drafted (operator, the same day:
 "start the ADR 0100 brief"), reviewed by Codex in five rounds, and **its questions are ruled
-(operator, 2026-11-19: "Accepted")**. Nothing is built. Part 1 waits for the removal of the
-database half of the downgrade tooling (ruled; its plan is in W-0027). The
+(operator, 2026-11-19: "Accepted")**. Built and uncommitted: part 1's first slice, the
+migration and the default epoch (2026-11-20, at the end of this file). The removal of the database half of
+the downgrade tooling, which part 1 waited for, is committed (`0b21b2fb`, 2026-11-20; W-0027).
+**Part 1's acceptance criteria are written, their three questions ruled, and agreed with
+Codex after one round of corrections (2026-11-20).** The
 build waited for the removal of the operating-client switch (operator, 2026-11-18, below);
 that removal is done and accepted at the station (W-0027 C2e, 2026-11-19), and the operator
 has returned to this work (2026-11-19, below). Each part starts on the operator's direction,
@@ -81,6 +84,21 @@ next part starts.
      question.)
   9. **Folding the up migrations:** not folded. The up files stay; only the way down goes.
   No part is directed to be built by this.
+- **2026-11-20 (operator): "write part 1's acceptance criteria".** The criteria are directed,
+  for review by the operator and Codex. No build is.
+- **2026-11-20 (operator): "1. recommendation accepted 2. Yes 3. Yes But, let's wait for
+  Codex - consensus is a go".** Said of the three questions at the end of part 1's
+  acceptance criteria:
+  1. **Durable writes:** every session control (Open, New, Continue, the exit, the close at
+     a switch) is written the durable way; the logging step stays as durable as its QSO.
+  2. **The epoch counts from part 1,** so part 1 changes the three existing writers of the
+     default pointer.
+  3. **The interval-end table** in group D, as proposed.
+  Claude's reading of the last sentence, not the operator's words: part 1's build waits for
+  Codex's review of the criteria; once Codex and Claude agree on them, with every finding
+  fixed, the build may start without a further direction. A disagreement, or a finding that
+  changes one of these three rulings, comes back to the operator. The commit is still the
+  operator's to direct.
 
 The design's own rulings are in ADR 0100 and are not repeated here.
 
@@ -548,3 +566,382 @@ drafted; this is what has changed around it, read from the tree the same day.
   rewriting a version record is not a schema upgrade: older files would still need an
   explicit way up. Neither changes the recommendation, which Codex shares: keep the up
   files, remove the way down, and treat a fold as a separate change. Not ruled.
+
+### Part 1: acceptance criteria (2026-11-20; its questions ruled; revised after Codex's review; nothing built)
+
+Codex's review (codex-184) found six things, each checked in the tree and taken: a refusal
+and the default-epoch test's own close had to be told apart (C, D); F needed forced
+orderings and the contact's destination, not concurrent calls and counts; the schema lets
+through two states only the transitions can exclude, so D asserts them; the interval table's
+less obvious cases are written out; B's scope is held to what each pointer writer refuses
+today; and the local context gate failed on a stale capsule date (`docs/current.md`,
+reconciled the same day).
+
+On the operator's direction ("write part 1's acceptance criteria"). Read against ADR 0100
+(§1 to §5, §8 and its updates), the brief above and the tree at `0b21b2fb`. Where this
+section chooses a shape or a rule the ADR and the brief leave open, it says "proposed". The
+questions at the end are the operator's.
+
+**What part 1 is.** Log migration 0020, and the functions that change the session record.
+Each function is one transaction; the one for logging is a step inside the QSO's own
+transaction. Nothing in the daemon calls them, with the one exception in group B.
+
+**What the operator sees.** Nothing new. After the install the daemon starts, the live file
+and any archive file opened later come up to schema 20 with every existing row unchanged,
+and logging, FT8, a default change and an archive switch behave as before. No session
+exists at the station: part 1 writes no session row there.
+
+**Nearest confusable outcome.** Each function passes its own test on one connection, while
+two of them interleaved on a real file fail with "database is locked", leave two open
+sessions, or hand out a generation twice. So every criterion is judged on stored rows read
+back, and group F on a database file with competing connections.
+
+**A. The migration.**
+1. A file at 19 that holds logbooks, QSOs, upload rows, destination bindings and contest
+   serials comes up to 20 with all of those rows unchanged; the version reads 20 and is not
+   dirty. Files at 5, 14 and 18 do the same (the existing older-files test, at its new head).
+2. After 0020 a file holds no session, interval, member or recorded exit; the session
+   generation is 0 and the default epoch is 0. Existing contacts are in no session (ADR 0100
+   O6: no backfill).
+3. 0020 is an up file only (the up-only test already refuses anything else).
+4. A file built from version 1 and a file brought up from 19 have the same session tables.
+5. The stored record cannot hold, whatever code writes it: two open sessions in one file;
+   two open intervals in one session; a closed session without a reason, or a reason
+   without a closing time; a confirmed interval end without a time; a member row for a QSO
+   or a session that does not exist; one QSO in two sessions.
+6. The 24 comparisons with head 19 in 13 test files move to 20, and the whole tree's tests
+   pass (a head change also reaches `internal/api`'s version test).
+
+**B. The default epoch.** The one thing here that existing code runs: the two setters of
+the file's default pointer (`SetArchiveDefaultLogbookWithContext` and its durable twin,
+`internal/database/sqlite/archive_identity.go`).
+1. Every write by a setter that moves the pointer to a different logbook advances the
+   epoch by one in the same commit: the default change applied at start (X to Y), setup's
+   first save (none to X), and archive adoption.
+   - **Creating the identity row is not a change.** `EnsureArchiveIdentityWithContext` and
+     `WriteArchiveIdentityWithContext` insert the row, with or without a pointer; the epoch
+     starts at 0 either way. A later move from none to a logbook is a change and counts.
+2. A rewrite to the logbook already selected (Y to Y) leaves the epoch as it was.
+3. A write a setter refuses today changes neither value, and part 1 changes nothing about
+   what each refuses: the ordinary setter refuses a missing identity row and a logbook that
+   does not exist; the durable one also refuses a deleted logbook (codex-184: the two
+   differ, and the epoch work does not align them).
+4. X to Y to X moves the epoch twice.
+5. No stored state exists in which the pointer moved and the epoch did not. Shown by
+   reading both after each writer, and by a reversion proof with the advance removed.
+
+**C. The generation.**
+1. It is greater after every committed transaction that changes session state: an open, a
+   New, a Continue, each close, each discard.
+2. It is unchanged by a transaction that changes no session state: a read, a QSO joining
+   an open session, an exit recorded for a lifetime that holds no session, and a refusal
+   whose default-epoch test found nothing to close.
+   - **A refused control can still advance it** (codex-184; ADR 0100 §5): when the
+     default-epoch test closed a session in that transaction, the close is committed and
+     the generation advances once, although the control itself is refused. The refused
+     control contributes nothing of its own.
+3. It never returns to an earlier value, including after a discard removes a session's
+   row.
+4. Proposed: exactly one advance for each such transaction, however many steps it takes (a
+   New closes and opens; a logging step may close and open). ADR 0100 §5's example reads
+   this way (New at g gives g+1). Callers only compare for equality.
+5. Every state a function returns carries the generation it was committed at.
+
+**D. The transitions.** Each is all stored or nothing stored. Each takes its instant from
+the caller, as UTC; none reads the clock itself.
+
+- **After every completed transition,** read back: an open session has exactly one open
+  interval, and a closed session has none; no interval or member of another session has
+  changed. The schema alone does not exclude an open session with no interval or a closed
+  one with an open interval (Codex's probe, repeated here on SQLite 3.51.2), so the
+  transitions are what is tested.
+- **The order inside each.**
+  - New, Continue and the exit of a current lifetime: the default-epoch test, then the
+    stale check, then the action.
+  - Open: is L's exit recorded, first; only for a lifetime that is not retired, the
+    default-epoch test; then the table below. So "held by L, nothing changes" can never
+    leave a session of an earlier default open.
+  - An exit already recorded, and the exit of a lifetime that is not current: no
+    default-epoch test. They touch no session, whoever holds it.
+- **The default-epoch test.** An open session whose epoch differs from the file's is closed
+  with `logbook_changed`, whoever holds it. Its effect is the test's, not the control's: it
+  is committed even when the control is then refused (ADR 0100 §5: a refusal is not a
+  rollback).
+- **The stale check.** A control naming a generation other than the current one is refused
+  with its own code and returns the current state with its generation. The control writes
+  nothing of its own: no replacement session, no interval, no recorded exit.
+  - **The test for the two together:** a session at an old epoch, the file's epoch moved, a
+    control carrying the old generation. Stored after: the session closed with
+    `logbook_changed` (or removed, if it had no member row); the generation advanced once;
+    the control refused; nothing the control asked for. The same press repeated adds
+    nothing. A refusal with no such close changes nothing at all.
+- **Open, for a lifetime L** (proposal A's table):
+
+  | The file holds | Stored after |
+  |---|---|
+  | L's exit recorded | nothing changes; the answer is "retired" |
+  | no default logbook | nothing changes; the answer is "setup pending" |
+  | an open session held by L | nothing changes |
+  | an open session held by another lifetime, with any member row | nothing changes; the answer is "recovery pending"; L holds nothing |
+  | an open session held by another lifetime, with no member row | that session and its intervals are removed and a new one is open, held by L, in one commit |
+  | no open session | a new session: a UUIDv7 identity, the default logbook's UUID, the current epoch, the given instant, and one open interval held by L |
+
+  Run twice, it leaves what running it once leaves. A file that cannot be read is an
+  error, told apart from "setup pending".
+- **New, for L at generation g.**
+  - L holds the open session: it is closed with `new_session` and a new one is open, held
+    by L.
+  - Another lifetime holds it (the recovery answer New): it is closed with
+    `unconfirmed_exit` and a new one is open, held by L.
+- **Continue, for L at generation g, naming a session.**
+  - The named session is the open one held by another lifetime (the recovery answer
+    Continue): its identity and members are kept, its interrupted interval gets an
+    unconfirmed end, and a new interval held by L is open.
+  - The named session is closed, in this file, bound to the current default logbook, and
+    not the current one: the current session is closed with `continued_other`; the named
+    one is open again with a new interval held by L and the file's current epoch; its
+    identity, its earlier intervals and its earlier members are kept as they were. Anything else named is refused with its own
+    code and changes nothing; a failure leaves the current session open.
+  - ADR 0100 §8's own acceptance: continue S0 after X to Y to X, then run the logging
+    step: S0 stays open and receives the contact.
+  - Proposed: a closed session named while a remnant held by another lifetime is open is
+    refused. The question is answered first.
+- **Close for an archive switch** (at the request, and at an arrival): the open session,
+  whoever holds it, is closed with `archive_switched`. With none open, nothing changes.
+- **The exit of L,** given by the caller whether L is the current lifetime (brief, D):
+
+  | Case | Stored after |
+  |---|---|
+  | L's exit is already recorded | nothing changes, whatever generation is named; the answer is "already recorded" |
+  | L is current, the generation is stale | the exit is not recorded and no session changes by the exit |
+  | L is current and holds the open session | one commit: the exit recorded, the session closed with `app_closed`, the generation advanced |
+  | L is current and holds none | the exit recorded; no session changes by the exit; the generation does not move by it |
+  | L is not current and holds the open session | refused with its own code; nothing changes; the exit is not recorded |
+  | L is not current and holds none | the exit recorded; nothing else changes, whatever generation is named |
+
+  In the three rows for a current L the default-epoch test has run first. What it closed,
+  if anything, is its own effect, stored and counted as above; the row states the exit's.
+  If the test closed L's own session, the generation has moved and the exit is refused as
+  stale, by the second row. An exit of L and an open for L, in either order, end with L
+  recorded as exited and holding no open session.
+- **The logging step,** on the QSO's own transaction, after the QSO row is written:
+  the default-epoch test; then, if no session is open, a new one bound to the default
+  logbook and the current epoch; then the member row.
+  - It takes no generation and no policy refuses it. With a remnant awaiting its answer,
+    the contact joins the remnant.
+  - The session that receives the contact is bound to the QSO's own logbook, asserted on
+    the rows. Proposed: given a QSO whose logbook is not the file's default, the step
+    writes nothing and changes no session (ADR 0100 §2: such a submit never joins).
+  - If the QSO's transaction rolls back, nothing of the step is stored: no member row, no
+    session opened, no close, no generation moved.
+  - If a statement of the step fails, the step reports it and the caller's rollback
+    removes the QSO too (ADR 0100 §2: the existing reason not to log).
+- **Discarding.** Any close of a session with no member row removes the session and its
+  intervals instead of keeping them. A session whose only members are deleted QSOs is
+  kept.
+- **Interval ends** (proposed; ADR 0100 says it for the exit and the two recovery answers
+  only):
+
+  | Close | The open interval's end |
+  |---|---|
+  | `app_closed`, `new_session`, `continued_other` | confirmed, at the closing instant |
+  | `logbook_changed` | confirmed, at the recorded closing time (as §4 says of `closed_at`) |
+  | `archive_switched` at the request | confirmed, at the closing instant |
+  | `archive_switched` at an arrival | unconfirmed, no time: an open session found there is what a crash left |
+  | `unconfirmed_exit`, and the interval a recovery Continue interrupts | unconfirmed, no time |
+
+  - **Ruled 2026-11-20, and what follows from it (codex-184).** The reason decides, not the
+    holder. So a switch request, or the default-epoch test, that meets a remnant an earlier
+    crashed app left also ends its interval as confirmed, at the closing instant. That time
+    is when the daemon closed it, not when that app stopped; no crash time is recorded
+    anywhere. This qualifies ADR 0100 §1's "a crash leaves the open interval's end
+    unconfirmed", which holds for the arrival and the two recovery answers. Both cases are
+    tested. Neither can be reached from the app while the recovery question is showing; a
+    caller with no lifetime, or a default change already pending at a start, can.
+
+**E. One read.** The state: the generation, the epoch, the open session if any (identity,
+logbook, opening time, the open interval's start and holder, whether it has any member
+row), and whether a named lifetime's exit is recorded. It is one snapshot: every part
+belongs to the generation it is returned with, shown by reading while transitions commit
+on another connection. The list for Continue and the member rows are part 2's and part
+6's.
+
+**F. Contention** (ADR 0100 §2 requires the test). On a database file in a temporary
+directory, with the service's own connection settings. Calls that merely run at the same
+time can pass by running one after another, so each case below is forced: a barrier the
+test can see holds one transaction at a known point on its own physical connection while
+another, on a different connection, is started against it.
+1. **Logging first.** Logging holds the writer's position (its QSO row written, not
+   committed) when a New starts. The New waits, then proceeds. Stored after: the contact in
+   the session the New closed, which is therefore kept; the new session empty.
+2. **The control first.** A New holds the writer's position when logging starts. Logging
+   waits, then proceeds. Stored after: the contact in the new session.
+3. **A cancelled waiter.** A transaction waiting behind a holder is cancelled: it stores
+   nothing, the holder commits, and a third transaction then proceeds.
+4. **A pointer change crossing a session read:** against a control and against logging, in
+   both orders. The epoch test sees the change or does not, by the order, and never half
+   of it.
+5. **An exit of L against an open for L,** in both orders: exit then open gives "retired";
+   open then exit closes what the open made. Each answer is told apart from a database
+   failure.
+6. **In every case, read back:** which session holds the contact, that session's logbook,
+   its interval and holder, the generation, and the QSO with its upload rows. No case ends
+   in a busy, locked or snapshot error; a reader never finds two open sessions.
+7. **The mechanism is chosen by measurement,** and the numbers are recorded here. The
+   logging transaction already writes before it reads, for this reason
+   (`internal/database/sqlite/api_context.go`, `InsertQsoTx`). `durableTx` gives the
+   stronger commit, not the ordering: it begins as any transaction does.
+8. **The reversion proof forces the unsafe order:** a control made to read the mutable
+   state first, a competing write committed after that read, then the control's write. It
+   must reach the snapshot failure; taking the mechanism out without forcing that order
+   proves nothing. `-race` is run too, and is not evidence for this.
+9. A run of many mixed transactions without barriers is kept as a supplement: every QSO
+   has exactly one member row, and the generation ends at its start plus the number of
+   state-changing commits.
+10. No new time limit: a waiter waits within the existing busy and transaction limits.
+
+**G. What part 1 must not do.** No route, no event, no start node; no call from the
+admission, the logging paths, the archive switch or an exit. No generated model changes
+(plain SQL, ruled). No session row written at the station. Shown in review by a search for
+callers of the new functions, not by a guard in the tree.
+
+**Evidence.** Each criterion test-first, seen to fail on its own assertion. Reversion
+proofs in temporary copies: the epoch advance removed; the stale check removed; the
+discard inverted; the one-open-session constraint removed; the retired check removed; the
+contention mechanism removed. The usual gates. Nothing at the station, and no
+transmission, keyed test or rig command.
+
+**Proposed schema** (for review; the names are proposals):
+
+```sql
+ALTER TABLE archive_metadata ADD COLUMN session_generation INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE archive_metadata ADD COLUMN default_epoch      INTEGER NOT NULL DEFAULT 0;
+
+CREATE TABLE operating_session (
+    id            TEXT     NOT NULL PRIMARY KEY CHECK (length(id) = 36),
+    logbook_uuid  TEXT     NOT NULL,
+    default_epoch INTEGER  NOT NULL,
+    opened_at     DATETIME NOT NULL,
+    closed_at     DATETIME,
+    close_reason  TEXT,
+    CHECK ((closed_at IS NULL) = (close_reason IS NULL))
+);
+CREATE UNIQUE INDEX idx_operating_session_one_open
+    ON operating_session ((closed_at IS NULL)) WHERE closed_at IS NULL;
+
+CREATE TABLE operating_session_interval (
+    session_id   TEXT     NOT NULL REFERENCES operating_session (id) ON DELETE CASCADE,
+    seq          INTEGER  NOT NULL,
+    started_at   DATETIME NOT NULL,
+    ended_at     DATETIME,
+    end_state    TEXT     NOT NULL CHECK (end_state IN ('open', 'confirmed', 'unconfirmed')),
+    app_lifetime TEXT,
+    PRIMARY KEY (session_id, seq),
+    CHECK ((end_state = 'confirmed') = (ended_at IS NOT NULL))
+);
+CREATE UNIQUE INDEX idx_operating_session_interval_one_open
+    ON operating_session_interval (session_id) WHERE end_state = 'open';
+
+CREATE TABLE operating_session_member (
+    qso_id     INTEGER NOT NULL PRIMARY KEY REFERENCES qso (id),
+    session_id TEXT    NOT NULL REFERENCES operating_session (id)
+);
+CREATE INDEX idx_operating_session_member_session ON operating_session_member (session_id);
+
+CREATE TABLE operating_app_exit (
+    app_lifetime TEXT     NOT NULL PRIMARY KEY,
+    exited_at    DATETIME NOT NULL
+);
+```
+
+- The generation and the epoch sit on the file's one identity row, beside the pointer the
+  epoch counts.
+- The close reasons are checked in Go, not by a `CHECK`: a later reason (ADR 0100 names
+  `archive_restored` for the restore design) would otherwise need the table rebuilt.
+- QSOs are never removed from the file by the daemon (deletion sets `deleted_at`; read in
+  `internal/database/sqlite/api_context.go`), so a member row's reference to its QSO holds.
+- A recorded exit is one small row for each start of the app, and nothing removes them.
+
+**Left to later parts, named so they are not lost.**
+- Who holds a session the logging step opens when no app is current (part 5). In part 1
+  the caller passes the holder, which may be none.
+- The wait for completion work before a remnant is judged empty (part 2; it is not a
+  database matter).
+- The list for Continue and its ordering (part 2).
+- What a closing app does when its exit report is refused as stale because the
+  default-epoch test closed its session in that transaction (part 2 and W-0027 A3). It can
+  follow only a default change applied at a daemon start.
+
+**Questions for the operator. All three ruled 2026-11-20 as recommended (Rulings, above).**
+1. **Which session writes must survive a power cut once reported.** The file runs in a
+   mode where a committed write can be lost by a power cut. ADR 0100 §3 says a committed
+   clean close "is never reopened". I recommend: every control (Open, New, Continue, the
+   exit, the close at a switch) is written the durable way the tree already has
+   (`durableTx`), at the cost of one disk sync for each; the logging step stays as durable
+   as the QSO it rides with. Each loss the other way fails towards asking Continue or New,
+   not towards losing a contact.
+2. **The epoch counts from part 1.** That changes the three existing writers of the
+   default pointer, so part 1 is not strictly "called by nothing". I recommend it: an
+   epoch that missed a change cannot be repaired afterwards. The other choice is part 2.
+3. **The interval-end table in D,** where ADR 0100 is silent: a switch and a default
+   change end the sitting's interval as confirmed; an arrival that finds a session still
+   open ends it as unconfirmed.
+
+### Part 1, first slice: the migration and the default epoch (2026-11-20; built, uncommitted)
+
+**The go-ahead.** Codex agreed the revised criteria (codex-185: "The criteria are agreed for
+the build"), which was the condition of the operator's direction of the same day. Codex
+added one detail to the guard on a QSO outside the default logbook, taken for the slice
+that builds the logging step: the QSO's logbook is checked before any session change, in
+the QSO's own transaction after its row is written; a file with no session and a file
+whose session needs the default-epoch test are both tested, and the QSO and its upload
+rows are read back as stored.
+
+**Part 1 is built in slices, each for review.** This one is groups A and B. The
+transitions, the read and the contention tests (C to F) are the next; they need each other,
+since the measurement in F chooses how the transitions begin.
+
+**Built.**
+- `migrations/log/0020_operating_session.up.sql`: the proposed schema, unchanged.
+- The two pointer setters share one statement (`setDefaultPointerSQL`,
+  `internal/database/sqlite/archive_identity.go`): it advances the epoch when the pointer
+  names a different logbook than before and writes the pointer, together. What each setter
+  refuses is as it was.
+- The comparisons with head 19 moved to 20: 14 in the `sqlite` package's tests and the
+  version route's in `internal/api`. (This file said 24 in 13 files; that count took each
+  comparison and its message as two.)
+
+**Seen, in order.**
+- The new tests first, before the migration existed: every one failed, the schema tests on
+  "no such table" where they want a constraint failure, which their own assertion tells
+  apart. Two fixture mistakes of mine showed here and were fixed: a notification kind the
+  schema does not allow, and two in-memory services of one test sharing one database.
+- With the migration and no epoch code: the migration tests passed and the epoch tests
+  failed on their own assertion ("epoch 0; want 1").
+- With the statement: all pass. The whole tree then failed in one place, the version
+  route's test, on its own assertion, as the criteria said it would.
+- **Reversion proofs,** in a temporary copy since removed, each restored and compared:
+  the advance taken out (epoch 0, want 1); every write counted (a rewrite gives 3, want 2);
+  the one-open-session index taken out (a second open session accepted); the migration
+  made to change a QSO row (the row comparison fails).
+- **Gates, by exit code:** `gofmt`, `go vet`, `golangci-lint` (0 issues), the
+  maintainability metrics, `go test ./... -count=1` (66 packages ok), the documentation
+  check, the context gate, `git diff --check`.
+
+**After Codex's review of the slice (codex-186: no blocking finding).** It asked for three
+things, all added the same day:
+- **The two paths B1 names are now tested where they run,** reading the stored epoch
+  through a read-only connection to the test's own file, as the command tests already do.
+  Setup's first save moves the pointer from none to the new logbook and the epoch reads 1; a
+  second save leaves it (`internal/api/handler_config_default_epoch_test.go`). Adoption of
+  a file with no pointer reads 1 after the first start and after a second; a file that has
+  its pointer reads 0 (`cmd/smd/archive_adopt_test.go`). My earlier reason for leaving
+  them, that nothing outside the package could read the epoch, was wrong.
+- The zero start is asserted through `WriteArchiveIdentityWithContext` too, with and
+  without a pointer.
+- The refusal with no identity row is asserted for both setters.
+- **Reversion proof for the two new path tests,** in a second temporary copy, since
+  removed: with the advance taken out, both fail on "epoch 0; want ... 1".
+- The gates were run again afterwards: the same eight, all by exit code, 66 packages ok.
+
+**Not shown.** Nothing was run at the station.

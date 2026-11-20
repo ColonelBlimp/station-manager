@@ -219,6 +219,52 @@ func TestAdoptArchive_ProjectsDefaultLogbookFromTheFile(t *testing.T) {
 	}
 }
 
+// The default epoch at adoption (ADR 0100 §4; W-0029 part 1, B1), read from the
+// file as stored. A file with no pointer that learns config's default has had
+// its pointer moved, once: the epoch counts it, and a second start counts
+// nothing. A file that already has its pointer is not moved by adoption.
+func TestAdoptArchive_LearningConfigsDefaultCountsOneMoveOfThePointer(t *testing.T) {
+	ctx := context.Background()
+	const epoch = `SELECT default_epoch FROM archive_metadata WHERE singleton = 1`
+	const pointer = `SELECT COALESCE(default_logbook_id, 0) FROM archive_metadata WHERE singleton = 1`
+
+	t.Run("a file with no pointer", func(t *testing.T) {
+		db, logger, cfgSvc, path := adoptDeps(t, nil)
+		if err := ensureDefaultLogbook(ctx, db, cfgSvc, logger); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.EnsureArchiveIdentityWithContext(ctx, 0); err != nil {
+			t.Fatal(err)
+		}
+		if p, e := riCount(t, path, pointer), riCount(t, path, epoch); p != 0 || e != 0 {
+			t.Fatalf("before adoption: pointer %d, epoch %d; want none and 0", p, e)
+		}
+		for start := 1; start <= 2; start++ {
+			if err := adoptArchive(ctx, db, cfgSvc, logger, resolvedPaths(t, cfgSvc)); err != nil {
+				t.Fatalf("adopt, start %d: %v", start, err)
+			}
+			if p, e := riCount(t, path, pointer), riCount(t, path, epoch); p != 1 || e != 1 {
+				t.Fatalf("after start %d: pointer %d, epoch %d; want 1 and 1", start, p, e)
+			}
+		}
+	})
+	t.Run("a file that has its pointer", func(t *testing.T) {
+		db, logger, cfgSvc, path := adoptDeps(t, nil)
+		if err := ensureDefaultLogbook(ctx, db, cfgSvc, logger); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.EnsureArchiveIdentityWithContext(ctx, 1); err != nil {
+			t.Fatal(err)
+		}
+		if err := adoptArchive(ctx, db, cfgSvc, logger, resolvedPaths(t, cfgSvc)); err != nil {
+			t.Fatalf("adopt: %v", err)
+		}
+		if p, e := riCount(t, path, pointer), riCount(t, path, epoch); p != 1 || e != 0 {
+			t.Fatalf("pointer %d, epoch %d; want 1 and 0", p, e)
+		}
+	})
+}
+
 // A stale config default must not run the old self-heal before adoption can
 // project the file's authoritative default. The stale row is soft-deleted and
 // another live row already owns the name self-heal would try to insert.

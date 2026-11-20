@@ -20,8 +20,8 @@ const (
 
 func TestMigrate0017_AdoptionAccount_Up(t *testing.T) {
 	svc := testService(t)
-	if v := schemaVersion(t, svc); v != 19 {
-		t.Fatalf("schema version = %d, want 19", v)
+	if v := schemaVersion(t, svc); v != 20 {
+		t.Fatalf("schema version = %d, want 20", v)
 	}
 	seedSmcloudBinding(t, svc)
 	if n := countT(t, svc, `SELECT COUNT(*) FROM logbook_destination WHERE remote_adopted_account IS NULL`); n != 1 {

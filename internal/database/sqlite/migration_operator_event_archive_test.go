@@ -10,8 +10,8 @@ import (
 // admits the two archive outcomes, and only as notifications.
 func TestMigrate0013_ArchiveOutcomesAreNotificationKinds(t *testing.T) {
 	svc := testService(t)
-	if v := schemaVersion(t, svc); v != 19 {
-		t.Fatalf("schema version = %d, want 19", v)
+	if v := schemaVersion(t, svc); v != 20 {
+		t.Fatalf("schema version = %d, want 20", v)
 	}
 	for _, kind := range []string{stationevents.KindArchiveActivated, stationevents.KindArchiveActivationFailed} {
 		if err := insertOperatorEvent(t, svc, stationevents.CategoryNotification, kind, "info", "v", `{"archive_id":"x","label":"Drill"}`); err != nil {

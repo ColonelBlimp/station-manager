@@ -139,9 +139,23 @@ func backfillLogbookUUIDs(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
+// setDefaultPointerSQL moves the file's default pointer and counts the move:
+// default_epoch advances by one when the pointer names a different logbook
+// than before (none included), and stays when the same logbook is written
+// again (ADR 0100 §4: a rewrite of the selected default closes no session).
+// One statement, so the pointer and its epoch commit together or not at all.
+// The comparison reads the pointer as it was: SQLite evaluates every SET
+// expression before it assigns any (sqlite.org/lang_update.html), and
+// TestDefaultEpoch_AdvancesWithEveryMoveOfThePointer measures it.
+// The %s is the setter's own test of the target logbook.
+const setDefaultPointerSQL = `UPDATE archive_metadata
+	SET default_epoch = default_epoch + (default_logbook_id IS NOT ?1), default_logbook_id = ?1
+	WHERE singleton = 1 AND EXISTS (SELECT 1 FROM logbook WHERE id = ?1%s)`
+
 // SetArchiveDefaultLogbookWithContext points the file's default logbook at an
 // existing row. It is the file-side half of every default_logbook_id write
-// (the config field is a projection of this value).
+// (the config field is a projection of this value). A move advances the
+// file's default epoch (setDefaultPointerSQL).
 func (s *Service) SetArchiveDefaultLogbookWithContext(ctx context.Context, logbookID int64) error {
 	const op errors.Op = "sqlite.Service.SetArchiveDefaultLogbookWithContext"
 	if err := checkService(op, s); err != nil {
@@ -156,8 +170,7 @@ func (s *Service) SetArchiveDefaultLogbookWithContext(ctx context.Context, logbo
 	}
 	ctx, cancel := s.ensureCtxTimeout(ctx)
 	defer cancel()
-	res, err := h.ExecContext(ctx, `UPDATE archive_metadata SET default_logbook_id = ?
-		WHERE singleton = 1 AND EXISTS (SELECT 1 FROM logbook WHERE id = ?)`, logbookID, logbookID)
+	res, err := h.ExecContext(ctx, fmt.Sprintf(setDefaultPointerSQL, ""), logbookID)
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("set archive default logbook")
 	}
@@ -304,7 +317,8 @@ func (s *Service) CheckIntegrityWithContext(ctx context.Context) error {
 // default change applied at start (ADR 0097 §1), which must survive a power
 // loss before config forgets the change. Unlike SetArchiveDefaultLogbookWithContext
 // it refuses a soft-deleted logbook: deletion is a soft delete, which the
-// pointer's foreign key never sees. A refusal changes nothing.
+// pointer's foreign key never sees. A refusal changes nothing. A move advances
+// the file's default epoch in the same transaction (setDefaultPointerSQL).
 func (s *Service) SetArchiveDefaultLogbookDurablyWithContext(ctx context.Context, logbookID int64) error {
 	const op errors.Op = "sqlite.Service.SetArchiveDefaultLogbookDurablyWithContext"
 	if err := checkService(op, s); err != nil {
@@ -313,8 +327,8 @@ func (s *Service) SetArchiveDefaultLogbookDurablyWithContext(ctx context.Context
 	if logbookID < 1 {
 		return errors.New(op).WithMsg(errMsgInvalidId)
 	}
-	set, err := s.durableUpdate(ctx, op, "set the archive's default logbook", `UPDATE archive_metadata SET default_logbook_id = ?
-		WHERE singleton = 1 AND EXISTS (SELECT 1 FROM logbook WHERE id = ? AND deleted_at IS NULL)`, logbookID, logbookID)
+	set, err := s.durableUpdate(ctx, op, "set the archive's default logbook",
+		fmt.Sprintf(setDefaultPointerSQL, " AND deleted_at IS NULL"), logbookID)
 	if err != nil {
 		return err
 	}

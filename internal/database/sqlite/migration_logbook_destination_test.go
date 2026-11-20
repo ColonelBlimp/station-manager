@@ -52,8 +52,8 @@ func seedTwoLogbookQueue(t *testing.T, svc *Service, defaultLogbook any) {
 
 func TestMigrate0014And0015_BindingTableMarkerAndLegacyName_Up(t *testing.T) {
 	svc := testService(t)
-	if v := schemaVersion(t, svc); v != 19 {
-		t.Fatalf("schema version = %d, want 19", v)
+	if v := schemaVersion(t, svc); v != 20 {
+		t.Fatalf("schema version = %d, want 20", v)
 	}
 	seedTwoLogbookQueue(t, svc, 1)
 	// One binding per (logbook, destination); forwarder_name unique file-wide.
@@ -113,8 +113,8 @@ func TestMigrate0015_UpgradesAFileAlreadyAt14(t *testing.T) {
 	if err := svc.Migrate(); err != nil {
 		t.Fatalf("migrate up from 14: %v", err)
 	}
-	if v := schemaVersion(t, svc); v != 19 {
-		t.Fatalf("schema version = %d, want 19", v)
+	if v := schemaVersion(t, svc); v != 20 {
+		t.Fatalf("schema version = %d, want 20", v)
 	}
 	rows, err := svc.ListLogbookDestinationsWithContext(context.Background())
 	if err != nil || len(rows) != 2 || rows[0].LegacyName != "" {
@@ -140,8 +140,8 @@ func TestMigrate0015_UpgradesAFileAt14ThatAlreadyHasTheColumn(t *testing.T) {
 	if err := svc.Migrate(); err != nil {
 		t.Fatalf("migrate up from the column-bearing 14: %v", err)
 	}
-	if v := schemaVersion(t, svc); v != 19 {
-		t.Fatalf("schema version = %d, want 19 (the head)", v)
+	if v := schemaVersion(t, svc); v != 20 {
+		t.Fatalf("schema version = %d, want 20 (the head)", v)
 	}
 	rows, err := svc.ListLogbookDestinationsWithContext(context.Background())
 	if err != nil || len(rows) != 2 || rows[0].ForwarderName != "qrz" || rows[1].ForwarderName != "qrz.01920000-0000-7000-8000-00000000000b" {

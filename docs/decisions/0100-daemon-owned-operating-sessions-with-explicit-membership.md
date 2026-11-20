@@ -682,6 +682,27 @@ this text. The passages above are left as written.
   unacknowledged exit, not a new outcome; the alternative weighed, the daemon completing the
   close from its record of the holder, was not taken.
 
+## Update 2026-11-20
+
+Operator rulings (chat, 2026-11-20), said of the questions of part 1's acceptance criteria in
+[W-0029](../work/W-0029-operating-sessions.md). Two of them touch this text. The passages
+above are left as written.
+
+- **Which closes confirm an interval's end.** §1 and §3 say it for the exit and the two
+  recovery answers. For the rest the close reason decides, not the holder: `new_session`,
+  `continued_other`, `logbook_changed` and an archive switch at its request end the open
+  interval as confirmed, at the recorded closing time; an arrival that finds a session
+  still open ends it as unconfirmed, with no time. So a switch request or a default-change
+  test that meets a remnant left by a crashed app records a confirmed end at the time the
+  daemon closed it. That qualifies §1's "a crash leaves the open interval's end
+  unconfirmed", which holds for the arrival and the recovery answers. No crash time is
+  recorded anywhere.
+- **Session controls are written durably.** The archive file runs in a mode where a
+  committed write can be lost by a power cut. An open, New, Continue, the exit and the close
+  at a switch are each written so that they survive one once reported, which is what §3's
+  "a committed clean close is never reopened" needs. Membership is as durable as the QSO it
+  is stored with.
+
 ## Open questions
 
 **All settled (operator, 2026-11-12):** O9 ruled; O1, O2, O3 and O10 stay deferred, each with the
