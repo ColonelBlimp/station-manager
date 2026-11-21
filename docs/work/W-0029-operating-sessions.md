@@ -19,7 +19,11 @@ commit after it makes the operator's Abandon log a contact the partner has roger
 2026-11-20), with the findings of Codex's three reviews of that change fixed (codex-206,
 codex-207, codex-208; the last five sections of this file). Codex had not read the last
 of those fixes when the operator directed the commit.
-With it part 2's criteria are built; what is not shown is listed there.** The removal of the database half of
+The corrections that followed are committed too (`696c28f0`, `113375af`, `01c5c69a`).
+With it part 2's criteria are built; what is not shown is listed there. Part 3's acceptance
+criteria are written, at the end of this file (2026-11-21); two of its questions are ruled,
+the third is withdrawn and the fourth ruled, Codex agrees to the criteria (codex-215), and
+its build is directed (2026-11-21), the first slice first.** The removal of the database half of
 the downgrade tooling, which part 1 waited for, is committed (`0b21b2fb`, 2026-11-20; W-0027).
 **Part 1's acceptance criteria are written, their three questions ruled, and agreed with
 Codex after one round of corrections (2026-11-20).** The
@@ -141,6 +145,33 @@ next part starts.
     dossier.
 - **2026-11-20 (operator): "build the exit report slice".** The third slice of part 2 is
   directed: the exit report (E) with the order's cases (G).
+- **2026-11-21 (operator): "write part 3's acceptance criteria".** The criteria are directed,
+  for review by the operator and Codex. No build is.
+- **2026-11-21 (operator): "Both agreed."** Said after Claude listed, in chat, the two of
+  part 3's three questions that the revision after codex-212 had changed, with a
+  recommendation for each. Claude's reading, not the operator's words: "both" is those two,
+  each ruled as recommended; the third question was not put again and is not ruled.
+  1. **What a submit refused during a switch says:** 409 `archive_switch_pending`, "The
+     archive is being switched and the daemon is restarting. This attempt logged nothing.
+     After the page reloads, check which archive is active before you log the contact
+     again."
+  2. **A switch's wait for FT8 logging has no limit of its own.** Nothing bounds that wait
+     today, and none is added.
+  No build of part 3 is directed by this, and Codex had not yet agreed to the criteria.
+- **2026-11-21 (operator): "a".** Said of part 3's question 4, how far the arrival must
+  hold when `config.json` cannot be written reliably, put in chat with three choices.
+  **(a): the limit is accepted and named.** An arrival happens once, and exactly once,
+  through any single interruption. The chain in which one activation serves A, then B,
+  then A again is not covered; its worst result is a session carried on, or a
+  Continue-or-New question, where a new session was due. Not chosen: keeping the app on
+  its waiting page until the daemon has durably recorded how a switch attempt ended; and a
+  third durable record of the archive last served. No build is directed by this.
+- **2026-11-21 (operator): "commit and build".** Said after Codex agreed to part 3's
+  criteria (codex-215) and Claude offered two things: the commit of this dossier, and the
+  build of part 3's first slice. Claude's reading, not the operator's words: the commit is
+  of the dossier, without a push, which was not said; the build is of part 3, its first
+  slice first, each slice reviewed and committed on direction before the next, by the
+  working rules above.
 
 The design's own rulings are in ADR 0100 and are not repeated here.
 
@@ -2681,3 +2712,459 @@ line for W-0029's backlog row. Two small points taken: a test file's header stil
 the gate's own seal the activation's hold (corrected), and, for the name change's
 criteria, the rebuild preserves every *other* constraint, the name's uniqueness being the
 one replaced (corrected in W-0024's dossier). Committing remains the operator's decision.
+
+### Part 3: acceptance criteria (2026-11-21; questions 1, 2 and 4 ruled, 3 withdrawn; agreed with Codex, codex-215; nothing built)
+
+On the operator's direction ("write part 3's acceptance criteria"). Read against ADR 0100 §4
+and its updates of 2026-11-19 and 2026-11-20, the brief, parts 1 and 2 as committed, and
+`internal/archive/activate.go`, `cmd/smd/archive_adopt.go`, `cmd/smd/main.go`
+(`startGenerations`), `cmd/smd/lifecycle.go`, `internal/api/live_entry.go`,
+`internal/api/app_admission.go` and `internal/ft8/servicetx.go` (`SealTxAdmission`) as they
+stand. "Proposed" marks what the ADR and the brief leave open. The questions at the end are
+the operator's.
+
+**Revised after Codex's review (codex-212), which did not agree to the first draft.** Each
+point was checked in the source and taken:
+- **The arrival was not replayable.** The first draft let the pending selector in
+  `config.json` remember that an arrival was owed. A start that falls back clears that
+  selector before the generation that owes the arrival is built (`startGenerations`,
+  `recordActivationFailure`). And an arrival that could not be written was to be "logged,
+  and the admission runs the same tests": the admission runs the default-epoch test, not an
+  arrival, so it would have kept the old session. **A is rewritten:** the arrival is now a
+  test on what the served file holds, as the default-epoch test is.
+- **Closing a session in a candidate that then fails to start** changed a file the app was
+  never served. With the rewritten A no session of a candidate is closed before it is
+  served.
+- **C2 and G5 contradicted each other.** A deliberate submit to another logbook is admitted
+  past the gate and is stored in the departing archive, in the closing phase too. G5 now
+  forbids a live contact, not any row.
+- **The 30-second bound was false.** The logging job's context has that limit, and the
+  write deliberately does not inherit it (`cmd/smd/main.go`, the note on
+  `ft8QsoLogTimeout`; `lifecycle_adapters.go`). D6 and question 2 no longer claim a bound.
+- **Precision:** a refusal preserves the state before the request, whatever it was (B1); a
+  failed switch releases only its own seals (C6); a gate drains an admitted submit that
+  fails as well as one that commits (C1); and the state after a failed re-open is named and
+  its recovery required (F3).
+- **Question 1's wording** must not promise the retry lands in the archive asked for: the
+  start may fall back.
+
+**Revised again after codex-213,** which accepted those and found two sequences the second
+draft got wrong. The second draft made the arrival a counter in each archive file, advanced
+when an archive was left and when it was arrived at. Both sequences were checked in the
+source (`abortAfterPersist`, `startArchivePromote`, `ResolveEffective`) and are real:
+- a switch that failed with its selector left behind opens a new session at the counter's
+  current value, and a later start that falls back then finds nothing to distinguish it;
+- a promotion whose durability is uncertain can be undone by a power cut after the new
+  archive has served a session, and the replayed activation would advance the counter
+  again and close that session.
+A counter cannot tell a new activation from the same one processed again. **A is rewritten
+a second time: an activation has an identity,** and an arrival is the served file
+recording a different one from the activation in effect (A1 to A4). The request no longer
+writes anything of this to the departing file, and nothing is written to a candidate
+before it is served. The cost is a change to the configuration's schema as well as the
+log's. With it, question 3 falls away (below).
+
+**After codex-214,** which accepted that contract for both of its sequences and for the
+earlier points, and found two more things. Both were checked in the source and are right:
+- **A pending selector written before this change needs an identity that is the same on
+  every load.** The configuration's migration runs in memory at each start, and its write
+  can fail softly or not survive (`persistResolvedConfig`). An identity made afresh by the
+  migration could differ from one start to the next after the first had reached an archive
+  file. A1 now derives it.
+- **One activation can serve A, then B, then A again** when several configuration writes
+  are lost in a row, and the last arrival in A is then not seen: A's file already records
+  that activation. This is not repaired here. It is put to the operator as question 4,
+  with what it would cost to close.
+
+**Agreed with Codex (codex-215), within the limit the operator accepted.** Its design
+review is closed; the review of the build is still to come. Three things it asks the build
+to carry, taken:
+- **"Any single interruption" is shorthand** for the isolated cases of A13, each starting
+  from stores that agree. It is not a promise about a start that follows earlier failures
+  left unresolved: the excluded chain itself contains a power cut.
+- **What the tests must show, not argue:** the paired updates of the configuration; the
+  file's marker and its close in one transaction; a failed arrival followed by a
+  successful admission; the stable identity of an old selector; both replay controls with
+  sessions that have contacts and an unchanged app lifetime.
+- **The fixture for the accepted chain** asserts what does happen (the session carried on,
+  or the question asked) and that every QSO is still in the archive it was logged in. It
+  does not claim the boundary was repaired. When the behaviour's references are written,
+  the exception is recorded beside them; a wider exactly-once claim is not restored.
+
+**What part 3 is.** An archive switch ends the sitting in the archive being left, and the
+archive that comes up starts a new one:
+- at the switch request: live Phone / CW entry is closed, FT8 logging already earned is
+  waited for, and the open session is closed in the departing archive's file;
+- from that close until the daemon restarts or the switch fails, a **closing phase** in
+  which no session is opened;
+- when an archive becomes the served one: the **arrival**, by which a session still open
+  in it from an earlier visit is closed;
+- and, owed from part 2 by ruling: the default-epoch test as a step of every daemon start.
+
+It has no membership (part 5), no New or Continue route (parts 4 and 6), no restore (the
+backup and restore design) and no change to the UI. **It has one more log migration, 0021,
+and a change to the configuration's schema, 7 to 8, each up only** (A1, A2).
+
+**What is already there.** Part 1 built the close itself
+(`CloseOperatingSessionForSwitchWithContext`, for a request and for an arrival). Part 2
+put the activation in the one order with app starts and exits, and made live-entry seals
+owned. Today an activation seals FT8 and the rig and nothing else: it does not close live
+entry, wait for FT8 logging, or touch a session.
+
+**What the operator sees.**
+- **A Phone / CW contact submitted during a switch is refused,** nothing logged (ruled
+  2026-11-12). Its code and wording are question 1.
+- **A switch asked for just after an FT8 contact waits for that contact's logging** before
+  it answers. How long that is has not been measured, and nothing bounds it today
+  (question 2).
+- Nothing else. Every session is still empty (no contact joins one until part 5), so each
+  close discards its session and no start has a question to ask.
+
+**Nearest confusable outcome.** The switch succeeds and the new archive works, while the
+record is wrong underneath: the old sitting still open in the file that was left; a session
+opened during the closing phase; a session from an earlier visit to the target archive
+carried on as if it were this sitting; a live contact stored in the departing archive after
+its session was closed; or a refused switch that ended the sitting. Every criterion is
+judged on both files' rows and the admission's state together, through the real routes and
+a real daemon start.
+
+**A. The arrival: two durable identities compared, not an event to remember.**
+1. **Proposed: an activation has an identity.** The switch request writes a new one into
+   `config.json` with the pending selector. The start that processes the activation,
+   whether it applies it or falls back, records that identity in `config.json` as the
+   **activation in effect**, in the same write that makes the activation final or records
+   its failure. The default change already carries a request identity in that file in the
+   same way. The configuration's schema moves to 8.
+   - **A pending selector with no identity** (one written before this change) is processed
+     under an identity derived from the archive it names, the same on every load, so that
+     a migration that fails to persist cannot turn one activation into two (codex-214).
+     Tested with an old document loaded twice, its migrated form never persisted, and a
+     session served in between.
+   - **The fields that end an activation change together:** the selector and its identity
+     removed, the activation in effect set, and any failure recorded, in one update of the
+     configuration, so no reader sees some without the others. Memory may be newer than
+     the disk when that write fails; the sequences below allow for it.
+   - **No other save of the configuration changes these identities.** A settings save
+     carries them through untouched.
+2. **Each archive file records the activation under which it was last arrived at.** Log
+   migration 0021 adds that one value. It is empty in every file at the upgrade, as the
+   configuration's is, so the upgrade closes nothing.
+3. **The test.** The identity this process works under is the pending activation's when
+   the start is processing one, and otherwise the configuration's activation in effect. A
+   served file that records a different one has been arrived at: in one commit, a session
+   open in it is closed with `archive_switched`, whoever holds it, its open interval ended
+   unconfirmed with no time (operator ruling 2026-11-20), an empty one removed, and the
+   file's value set to the process's. Where this test and the default-epoch test would
+   both close a session, the reason is `archive_switched`.
+4. **Once for each activation, in each archive file.** The same activation processed
+   again in a file that already records it closes nothing. A session opened after an
+   arrival is not closed by a replay of that arrival. **The limit of this, accepted by the
+   operator (question 4, 2026-11-21):** it treats an activation as one visit to each
+   archive. The sequence in which one activation serves A, then B, then A again is not
+   covered.
+5. **Where the test runs:** in the step of every daemon start (A8), in the admission's
+   start step, and in the session's other transitions and the logging step. A read changes
+   nothing, as now (part 2, D3). So an arrival is derived from what the two stores hold;
+   no single run is load-bearing, and neither the process nor the selector has to
+   remember that it is owed.
+6. **No recovery question after an arrival.** The first app start then finds no open
+   session and is given a new one, even when the session closed had contacts (tested with
+   member rows the test puts in).
+7. **An ordinary start is not an arrival.** With no activation processed, the two values
+   agree and a start closes no session for this reason: the same app, admitted again,
+   holds the session it held (part 2, A1).
+8. **The step of every daemon start.** After the archive's database is open and the
+   activation, if any, has been made final or has failed, and before the HTTP server
+   serves: the arrival test, then the default-epoch test (part 2, question 4), read back
+   from the file with no app admitted. If it cannot be written it is logged and the start
+   goes on: the admission runs both tests, and does not admit an app while the file cannot
+   be read or written (ruled 2026-11-20). **An arrival that is owed is therefore never
+   skipped by an admission that succeeds.**
+9. **Nothing is written to an archive's file before it is served,** beyond the schema
+   migration every opened archive already receives. No session of a candidate that fails
+   to start is changed.
+10. **Returning is an arrival.** A to B and later B to A is a new activation with a new
+    identity: whatever is open in A is closed and a new session opened. Nothing is
+    continued silently.
+11. **Not claimed:** that a switch made outside an activation (the configuration edited
+    or restored by hand so that another archive is active) is an arrival. Only an
+    activation gets an identity; two files can record the same one.
+12. **Only the served archive's sessions are read or changed.**
+13. **The sequences that must hold,** each tested from the stores as it would leave them.
+    Unless said otherwise each ends the same way: the archive then served has no session
+    from before, and the first app start opens a new one with no question.
+    - **The start killed before the activation is final:** the selector and its identity
+      are still pending; the next start processes the same activation.
+    - **The write that makes it final fails:** the daemon falls back to the archive it
+      left, under the failed activation's identity, and the test closes whatever is open
+      there. The candidate's file is unchanged.
+    - **After the activation is final, a later step of the start fails:** the daemon
+      starts again on the archive now active, which is the candidate (`Resolve` reads the
+      promoted selector; codex-212), and the test closes its remnant.
+    - **After the activation is final, the daemon killed before the step of A8:** an
+      ordinary start; the configuration's activation in effect differs from the file's,
+      and the test closes the remnant.
+    - **The step of A8 unable to write, the file writable again later:** the admission
+      closes the remnant before it gives the app a session.
+    - **A promotion whose durability is uncertain, lost to a power cut after the archive
+      has served** (codex-213). B was arrived at, a session T opened there with contacts,
+      and the configuration then reverts to "A active, B pending" with the same identity.
+      The next start processes that activation again. B's file already records it: **T is
+      not closed.** With the same app lifetime, T's identity, the generation and its
+      interval are as they were.
+    - **A failed switch whose selector could not be withdrawn, then a later restart**
+      (codex-213). The request closed the session in A; the restart request failed and the
+      selector stayed (`pending_unclear`); a new session S2 opened in A (F2) and took
+      contacts. A later start processes the retained activation. **If it falls back to A,
+      S2 is closed by the test,** and the next app start gets a new session with no
+      question. If it is applied, B's remnant is closed, and S2 stays open in A until A is
+      next arrived at.
+    - **A fallback whose record could not be written to `config.json`:** the selector is
+      still on disk, so the next start processes the same activation. If it falls back
+      again, the candidate never having been served, a session U opened in A in between is
+      not closed again.
+    - **The same activation applied twice** (the promotion lost and repeated, the candidate
+      served both times): the session T opened in B in between is not closed again.
+    - **Not guaranteed, an accepted limit (question 4, ruled 2026-11-21): one activation
+      serving A, then B, then A** (codex-214). It is a fixture all the same, asserting
+      what does happen, so that the limit is seen and does not widen unnoticed.
+      The fallback's record cannot be written, so A serves a session U under X with the
+      selector still on disk; a later start applies X with uncertain durability, and B
+      serves; a power cut restores "A active, B pending, X"; B then fails and A is served
+      again. A's file already records X, so U is not closed: it is carried on, or the next
+      app start is asked Continue or New for it, where a new session was due. No contact
+      is lost or filed in the wrong archive.
+
+**B. The switch request, in order** (`POST /v1/qso-archives/{id}/activate`). Each step
+refuses or fails before the next begins.
+1. **A refusal changes nothing.** Every refusal of today is unchanged and comes before
+   anything is sealed or closed: a competing archive operation, an activation already
+   pending, a pending or unconfirmed default change, an unknown or already active
+   archive, no restart port, a failed identity check. After each, everything is as it was
+   before the request: the session or the absence of one, its generation, the
+   configuration's selector and identities, and every seal exactly as held before. The fixtures include states in which something
+   is already held or absent: a pending default change with its seals, a pending
+   activation with its seals, and setup pending with no session.
+2. **`tx_busy` changes nothing.** FT8 armed, a contact under way or a transmission in
+   flight, or the rig transmitting, refuses as today. The live-entry gate has not been
+   sealed by the switch and the session is untouched. The switch does not disarm FT8.
+3. **Then the live-entry gate** (C), **then the FT8 completion drain** (D), **then the
+   close** (E), **then the pending selector and the restart request**, as today.
+4. **A success** answers as today. Stored after it: no open session in the departing
+   file; the selector pending, with the activation's identity; FT8, the rig and live entry
+   sealed by the switch until the process exits.
+
+**C. Live Phone / CW entry at a switch.**
+1. The switch seals the gate after the FT8 and rig seals. Sealing waits for every submit
+   already admitted to finish. One that commits is stored before the close; one whose
+   write fails stores nothing and does not block the switch.
+2. A live submit arriving after the seal is refused and nothing is written (the QSO row
+   and its upload rows are read). **A deliberate submit to another logbook is not the
+   gate's to refuse,** as now: it is admitted and stored in the departing archive, in the
+   closing phase too. Both are tested.
+3. **The refusal says it is a switch** (question 1, ruled 2026-11-21): 409
+   `archive_switch_pending`, with the message ruled. It is the third reason at this
+   gate, beside the default change's and the exit's (`01c5c69a`), and it is decided in
+   the same hold of the gate's lock as the refusal.
+4. **Which answer when two hold the gate.** A switch and a default change cannot both
+   hold it: each refuses the other today, and that is unchanged. A switch and an exit can:
+   the switch's answer is given, as the default change's is, because a restart follows.
+5. **No holder releases another's seal** (part 2, G5), now including the switch's seal on
+   this gate: an exit that seals and releases while a switch holds leaves live entry
+   closed; a switch that fails and releases while an exit is mid-way leaves the exit's
+   seal.
+6. If a later step fails (D to the restart request), the switch releases its own seals,
+   this one among them. Live entry opens again only if no other holder has a seal.
+
+**D. The FT8 completion drain.**
+1. After the seals, the switch waits for FT8 completion logging already earned, by the
+   same wait the exit uses: first a contact the decode loop is still handing over in a
+   slot under way, then every logging job already launched. The FT8 seal is held
+   throughout, so nothing new can be earned.
+2. **Stored, not merely finished.** With a logging job held, the switch is seen waiting
+   and the session is still open; let go, the QSO row and its upload rows are in the
+   departing file, committed before the session's close. A job seen to end is not a
+   contact stored.
+3. **None escapes.** A contact earned before the FT8 seal, whose hand-over to its logging
+   job comes after the seal, is waited for: forced with a late hand-over from a slot under
+   way.
+4. A logging job whose write fails stores nothing and does not block the switch.
+5. None is cancelled by the switch.
+6. **No limit of the switch's own** (question 2, ruled 2026-11-21). Nothing bounds the
+   wait today: the job's 30-second context is not inherited by its write, which runs under
+   the database's own statement and transaction limits. Should a limit ever be wanted, its
+   expiry would have to refuse the switch before the close, release the switch's seals and
+   leave the logging running; never go on to the close or the restart, and never cancel
+   the contact's write.
+
+**E. The close.**
+1. One commit in the departing file: the open session closed with `archive_switched`, its
+   interval ended as confirmed at the recorded time (ruled 2026-11-20); the generation
+   advanced; an empty session removed. It is written the durable way (ruled 2026-11-20).
+   It does not touch the file's record of the activation it was arrived at under.
+2. It closes the session whoever holds it. A switch can be asked for by a caller with no
+   app lifetime.
+3. With no session open (setup pending, or a closing phase already begun and failed) it
+   changes nothing and the switch goes on.
+4. **If the close fails, nothing is requested.** The switch's seals are released (C6); no
+   selector is written; no restart is asked for; the answer is an error with a code of
+   its own. The session is still open and the sitting goes on.
+5. One `operating_session.changed` event for a close, after its commit, as part 2's
+   events are. None when no session changed.
+
+**F. A failure after the close.** The close stands (an accepted cost, O9).
+1. **The selector cannot be recorded, or the restart cannot be requested:** the answer is
+   today's (`activation_persist_failed`, `restart_failed`, `pending_unclear`); the switch's
+   seals are released (C6); the closing phase ends.
+2. **Then one new session in the departing archive** for the app that is current, by the
+   ordinary rule, before the switch answers. With no app current, none is opened, and the
+   next app start opens it.
+3. **If that open fails,** the switch's answer is still its own failure, and the
+   admission is left as a failed start step leaves it (part 2, B4): the scopes stopped,
+   authorizing nobody, and the app's read saying it is not current. The same app's next
+   admission opens the session and publishes its scopes. Tested through the real routes:
+   the read says not current; the admission succeeds; the read then shows the session.
+4. **Retries do not pile up sessions.** A switch asked for again closes the session just
+   opened; it is empty and is removed. After any number of failed switches there is one
+   open session and no closed empty ones.
+5. **An uncertain selector write** is a success, as today. Either truth is safe: if the
+   selector did not survive, the next start is an ordinary start (H1).
+6. **A selector that could not be withdrawn** (`pending_unclear`) is still an activation
+   waiting for the next start, as today. The session opened by F2 is an ordinary one until
+   then; what that start does with it is A13.
+
+**G. The closing phase:** from the close until the process exits or the switch fails.
+1. **No session is opened.** An app start in the phase is admitted, by the order ruled on
+   2026-11-20 (not refused), and is given none. So is a second app replacing the first.
+2. **The read route names the state.** Proposed: `archive_switching`, with no session and
+   the generation the close left. It is a fourth state with no session, beside none, setup
+   pending and recovery pending.
+3. **An exit report in the phase is acknowledged without change:** the exit is recorded,
+   no session changes, the app can close cleanly. It releases no seal the switch holds.
+4. **Setup's first save in the phase opens no session.** The next start's admission
+   opens it.
+5. **No live contact is stored in the departing archive in the phase.** A live Phone / CW
+   submit is refused (C2) and FT8 is sealed, so nothing that would join a session can be
+   stored there. A deliberate submit to another logbook still is (C2): it is not a live
+   contact and joins no session.
+6. **The phase ends** when the switch fails (F), and then only. A daemon that exits ends
+   it by ending.
+7. New and Continue must be refused in the phase with a code of their own, changing
+   nothing. Those routes do not exist yet; the requirement is owed by parts 4 and 6.
+
+**H. A power cut, or the daemon killed, at the request.** The next start is tested from
+the files as they would be left. (Interruptions of the start itself are A13.)
+1. **After the close and before the selector is durable** (including an uncertain write
+   that did not survive): an ordinary start on the departing archive. No session is open;
+   the app start opens a new one with no recovery question. The closed session stays
+   closed, with its contacts (tested with member rows).
+2. **After the selector is durable and before the restart:** the start processes the
+   activation (A).
+3. **A remnant in the target** (a session an earlier crash left open there): closed by the
+   test once the target is served, a new one opened, no question (A3, A6).
+
+**I. The one order** (part 2, G). The request already takes the order of app starts and
+exits; what part 3 adds is the close, the gate and the phase inside it. Forced by holding
+one at a seen point and observing the other parked, never by sleeping.
+1. **An exit against a switch,** both orders. Exit first: the switch waits, then finds no
+   session to close and goes on. Switch first: the exit waits, then is acknowledged in
+   the closing phase (G3). In both: one close of the session, by whichever came first; no
+   seal released by the other.
+2. **An app start against a switch,** both orders. Start first: its new session is the
+   one the switch closes. Switch first: the start is admitted into the closing phase and
+   opens nothing.
+3. **Setup's first save against a switch,** both orders: a session opened is closed by
+   the switch that follows; a save after the close opens nothing.
+4. **A default change against a switch:** each refuses the other, as today.
+5. **A live submit against the gate's seal,** both sides of it (C1, C2).
+
+**J. What part 3 must not do, and the reference.** No member row is written. No New or
+Continue route. No restore. No Station Event for a session. No UI change. The switch does
+not disarm FT8.
+`docs/v2-design/api-endpoints.md` gains, in the same change: the submit's new refusal (its
+conventions paragraph and its error list), the read route's new state, the activation's
+new failure code for a close that failed, and what an activation now waits for.
+`docs/v2-design/config.md` gains the two identities and the schema's version.
+
+**Evidence.** Tests first. The request and the phase through the API test server and its
+real routes, with a clock the test sets; the start step and the cases of A13 and H through
+the daemon's real start, with two archive files. Reversion proofs in temporary copies. The
+usual gates and the desktop scenario. No transmission, keyed test or rig command: FT8 is
+driven against the test keyer.
+- **One measurement, not a criterion:** how long an FT8 completion takes to store. It can
+  be read from timings the daemon already logs. Reading the station's log is read-only
+  and still needs the operator's agreement for the occasion.
+
+**Proposed slices.** First the two schema changes, the identity written at the request
+and at the start, the test and the start step (A, H2, H3). Then the rest of the request
+(B to F), the phase (G), H1 and the order (I). They are units of building and review.
+**Whether the first goes to the station alone is decided when it is built** (Codex,
+codex-212: the first draft's first slice was not ready for that). With the first alone a
+switch does not yet close the session it leaves; that session is closed when its archive
+is next arrived at, with its interval's end unconfirmed.
+
+**Left to later parts, named so they are not lost.**
+- **That a contact drained at a switch is a member of the session being closed,** for
+  Phone / CW and for FT8. Part 3 can show only that it is stored before the close. Owed by
+  part 5; a row count in part 3 does not prove it.
+- New and Continue refused in the closing phase (G7): parts 4 and 6.
+- The window that redraws when the state is `archive_switching`: part 6.
+- A restore treated as a switch (ruled 2026-11-12): the backup and restore design. With
+  A it is an activation with an identity of its own.
+
+**Questions for the operator. 1 and 2 ruled 2026-11-21, each as recommended ("Both
+agreed."; Rulings, above). 3 is withdrawn. 4 was ruled the same day: (a).**
+1. **What a submit refused during a switch says.** The 2026-11-12 ruling is "Refuse, as
+   recommended — like the default change". Since then the default change and the exit
+   each have their own code and words. Codex and I both recommend a third code, 409
+   `archive_switch_pending`. For the words I recommend: "The archive is being switched and
+   the daemon is restarting. This attempt logged nothing. After the page reloads, check
+   which archive is active before you log the contact again." The default change's "log
+   it again once the page reloads" would, after a switch, put the contact in another
+   archive without saying so; and the words must not promise it is the archive you asked
+   for, because the start can fall back (Codex's point). The other choice is to reuse the
+   default change's code and words.
+2. **How long a switch waits for FT8 logging.** Nothing limits that wait today. Codex and
+   I both recommend adding no limit: a limit could close the session and restart while a
+   contact is still being stored. What you would see in the worst case: the Activate
+   request in Settings waits, and the app's own 30-second request limit can pass first,
+   showing the outcome as unknown while the daemon is still waiting; that is not a failed
+   switch. If you want a limit, its expiry would refuse the switch and leave the logging
+   running (D6); the length would be yours to set. A third choice, refusing the switch as
+   busy whenever FT8 logging is in progress, departs from ADR 0100, which says the switch
+   waits.
+3. **Withdrawn (2026-11-21, after codex-213).** It asked what happens if the new
+   archive's file cannot be written while the switch is being completed, and I recommended
+   failing the activation and falling back. With the arrival rewritten, nothing is written
+   to that file before it is served, so there is no such step to fail. What is left is
+   already ruled: an app is not admitted while the file cannot be read or written, and
+   stays on its waiting page (2026-11-20). A candidate whose database cannot be opened or
+   migrated still fails and falls back, as today. Say so if you want this case treated
+   differently.
+
+4. **How far the arrival must hold when `config.json` cannot be written reliably** (from
+   codex-214). **Ruled 2026-11-21: (a).** As specified, an arrival happens once, and exactly once,
+   through any single interruption: a kill or a power cut at any point, a failed start, a
+   fallback, or one configuration write that fails or does not survive. What is not
+   covered is a chain of them: the daemon unable to record a fallback, then a switch
+   applied by a write that does not survive, then a power cut, then the new archive
+   failing to start. The worst that follows is a session carried on, or a Continue-or-New
+   question, where a new session was due. No contact is lost or misfiled, and nothing
+   reaches the rig. The choices:
+   - **(a) Accept that limit and name it.** I recommend this. Each review round has found
+     a rarer chain, and this one needs three or four separate faults in a row.
+   - **(b) Keep the app on its waiting page after a switch attempt until the daemon has
+     durably recorded how the attempt ended.** That closes the chain, because no session
+     can then open on a record that may be undone. The cost is yours to weigh: with a
+     `config.json` that cannot be written, the app could not operate after a switch
+     attempt, where today the daemon serves the archive it fell back to regardless.
+   - **(c) More mechanism:** a third durable record of which archive was last served, kept
+     outside `config.json`. It would mean another schema change and another round of
+     design and review, and I have not shown it closes every chain.
+
+**For the operator's eye, not a question.** Part 3 now changes two schemas, where the
+first draft changed none: the log's (migration 0021) and the configuration's (7 to 8). Both
+go up only, and a build older than this one will refuse the newer `config.json`, as ruled
+on 2026-11-18. I found no way to make an arrival happen exactly once across a failed
+start, a fallback and a lost configuration write without giving the activation an identity
+that both stores can hold; Codex's two reviews are why.
