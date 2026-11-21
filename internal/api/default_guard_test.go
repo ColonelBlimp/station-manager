@@ -571,3 +571,120 @@ func TestDefaultGuard_SubmitToAMissingLogbookIsNotFound(t *testing.T) {
 	}
 	assertNothingLogged(t, f)
 }
+
+// closingRefusal is what the operator reads when the app's exit refuses a submit (the
+// operator's ruling of 2026-11-21, in Codex's wording). The app shows it after
+// "QSO not logged: ".
+const closingRefusal = "The app is closing. This attempt logged nothing. If closing fails and the app stays open, retry the contact."
+
+// wantSubmitRefused pins a live submit refused by the seal, by which holder's answer.
+func wantSubmitRefused(t *testing.T, f defaultFixture, code string) {
+	t.Helper()
+	_, _, _, _, current := f.headers()
+	w := serveDefault(f, liveSubmit("submit to A", f.lbID), headerServed, current)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), `"code":"`+code+`"`) {
+		t.Fatalf("got %d %s; want 409 %s", w.Code, w.Body.String(), code)
+	}
+	if code == "operating_session_closing" && !strings.Contains(w.Body.String(), closingRefusal) {
+		t.Fatalf("got %s; want the message %q", w.Body.String(), closingRefusal)
+	}
+	if code == "default_change_pending" && !strings.Contains(w.Body.String(), "the daemon is restarting") {
+		t.Fatalf("got %s; want the default change's message", w.Body.String())
+	}
+	assertNothingLogged(t, f)
+}
+
+// wantSubmitLogged pins a live submit admitted and stored: A then holds the fixture's
+// QSO and this one.
+func wantSubmitLogged(t *testing.T, f defaultFixture) {
+	t.Helper()
+	_, _, _, _, current := f.headers()
+	w := serveDefault(f, liveSubmit("submit to A", f.lbID), headerServed, current)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("got %d %s; want 201", w.Code, w.Body.String())
+	}
+	if n := storedQsos(t, f.srv, f.lbID); n != 2 {
+		t.Fatalf("A holds %d; want 2", n)
+	}
+}
+
+// DG13. A live submit refused by the seal is told the reason that is true (the clean-room
+// review of d49b0d4e). Two holders can close live entry: a default change, after which
+// the daemon restarts and the page reloads; and the app's confirmed exit, after which
+// neither happens. An exit's refusal used to borrow the default change's answer.
+func TestDefaultGuard_ASealedSubmitIsToldWhichHolderRefusedIt(t *testing.T) {
+	sealed := func(t *testing.T) (defaultFixture, *LiveEntryGate, *LiveEntrySeal) {
+		f := newDefaultFixture(t)
+		gate := NewLiveEntryGate()
+		f.srv.SetLiveEntryGate(gate)
+		return f, gate, gate.Owner()
+	}
+	must := func(t *testing.T, err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Run("the exit alone: the app is closing", func(t *testing.T) {
+		f, _, exit := sealed(t)
+		must(t, exit.Seal())
+		wantSubmitRefused(t, f, "operating_session_closing")
+	})
+	t.Run("the default change alone: the daemon is restarting", func(t *testing.T) {
+		f, gate, _ := sealed(t)
+		must(t, gate.Seal())
+		wantSubmitRefused(t, f, "default_change_pending")
+	})
+	t.Run("both: the default change's answer, whichever sealed first", func(t *testing.T) {
+		f, gate, exit := sealed(t)
+		must(t, exit.Seal())
+		must(t, gate.Seal())
+		wantSubmitRefused(t, f, "default_change_pending")
+
+		g, gate2, exit2 := sealed(t)
+		must(t, gate2.Seal())
+		must(t, exit2.Seal())
+		wantSubmitRefused(t, g, "default_change_pending")
+	})
+	t.Run("both, then the exit lets go: the default change's answer stays", func(t *testing.T) {
+		f, gate, exit := sealed(t)
+		must(t, gate.Seal())
+		must(t, exit.Seal())
+		exit.Release()
+		wantSubmitRefused(t, f, "default_change_pending")
+	})
+	t.Run("both, then the default change lets go: the exit's answer is left", func(t *testing.T) {
+		f, gate, exit := sealed(t)
+		must(t, gate.Seal())
+		must(t, exit.Seal())
+		gate.Release()
+		wantSubmitRefused(t, f, "operating_session_closing")
+	})
+	t.Run("the exit seals twice and lets go once: live entry is open", func(t *testing.T) {
+		f, _, exit := sealed(t)
+		must(t, exit.Seal())
+		must(t, exit.Seal())
+		exit.Release()
+		wantSubmitLogged(t, f)
+	})
+	t.Run("after the last holder lets go a submit is logged", func(t *testing.T) {
+		f, gate, exit := sealed(t)
+		must(t, gate.Seal())
+		must(t, exit.Seal())
+		wantSubmitRefused(t, f, "default_change_pending")
+		gate.Release()
+		exit.Release()
+		exit.Release() // a second release by the same holder takes nothing more
+		wantSubmitLogged(t, f)
+	})
+	t.Run("a deliberate submit to another logbook is not the exit's to refuse", func(t *testing.T) {
+		f, _, exit := sealed(t)
+		lbC := createTestLogbook(t, f.srv, "Third", "G4ABC")
+		must(t, exit.Seal())
+		_, _, _, _, current := f.headers()
+		w := serveDefault(f, liveSubmit("submit to C", lbC), headerServed, current)
+		if w.Code != http.StatusCreated || storedQsos(t, f.srv, lbC) != 1 {
+			t.Fatalf("got %d %s; want 201 stored in C", w.Code, w.Body.String())
+		}
+	})
+}

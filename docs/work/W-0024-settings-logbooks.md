@@ -3,7 +3,9 @@
 **Status:** **Accepted 2026-11-06** — the station operator signed off on candidate `b2a16f5a`
 ([acceptance record](../reports/acceptance-W-0024-set-as-default.md), entry 34). U1, U5 and the
 keyed U6 cases were waived on the automated tests; the live exercises of U5 and keyed U6 are
-deferred; follow-ups O-a and O-b are open. The restart application and transition contract are
+deferred; follow-ups O-a and O-b are open (routed to W-0012), and one follow-up of this
+dossier's own is open and deferred: a deleted logbook's name becoming reusable (below). The
+restart application and transition contract are
 decided in [ADR 0097](../decisions/0097-change-the-default-logbook-at-an-attended-restart.md)
 (Accepted 2026-10-29). Set as default was released in `46a07d07`.
 **Selected:** 2026-10-29 (operator: "Let's do 3 first as it is prereq for the contesting work")
@@ -462,6 +464,37 @@ close before the commit:
   own ADR. This is the step a contest under another callsign depends on.
 - A header logbook switcher (ADR 0055 follow-up).
 - Descriptions for inactive archives (L5).
+
+## Open follow-up: a deleted logbook's name becomes reusable (approved; deferred)
+
+**Not built.** Raised during W-0029 part 2 (its dossier holds the exchange: "Three rulings
+after the third slice's review" and "Two recommendations awaiting the operator").
+
+- **Today.** Deleting a logbook marks its row and keeps it, and a name is unique across
+  deleted rows too. Creating or renaming to a deleted logbook's name is refused with "a
+  logbook with that name already exists" when no such logbook is visible. Nothing restores
+  a deleted logbook.
+- **Rulings.** The operator, 2026-11-20, on the recommendation to make the name reusable
+  as its own piece of work: "Recommended is approved". The operator, 2026-11-21, on the
+  recommendations that this dossier own it and that it wait while the session work
+  (W-0029) unblocks W-0027's A2 and A3: "go with recommendations". The wait is priority,
+  not a technical need: nothing makes the change depend on W-0029 finishing (Codex,
+  codex-210).
+- **Shape.** The rule is written on the column (`name TEXT NOT NULL UNIQUE`, log migration
+  0001). SQLite cannot alter that in place: the change is a migration, up only, that
+  rebuilds the `logbook` table with names unique among live rows only. Other tables refer
+  to `logbook`. It needs its own acceptance criteria and review before it is built.
+- **For those criteria** (Codex, codex-210; accepted by Claude; not yet ruled):
+  - create and rename can reuse a deleted logbook's name; two live logbooks still cannot
+    share a name;
+  - the new logbook has a new id and UUID, and the deleted row is not revived;
+  - every row, identity, reference, index, every other constraint and the id counter
+    survive the rebuild (the name's uniqueness is the one rule replaced, by uniqueness
+    among live rows); a failed migration rolls back; integrity is checked;
+  - name comparison is unchanged, and so are the forwarding bindings' name reservations;
+  - code as well as schema: provisioning checks the name across deleted rows itself
+    (`internal/database/sqlite/provisioned_logbook.go`); what it should do is to be
+    decided, not assumed.
 
 ## References
 

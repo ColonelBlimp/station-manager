@@ -271,10 +271,21 @@ func (s *Server) handleSubmitQso(w http.ResponseWriter, r *http.Request) {
 				"submit_failed", "QSO submit failed")
 			return
 		}
-		done, ok := s.liveEntry.Admit(live)
-		if !ok {
+		done, refused := s.liveEntry.Admit(live)
+		switch refused {
+		case LiveEntryDefaultChanging:
 			s.writeError(w, http.StatusConflict, "default_change_pending",
 				"the default logbook is changing and the daemon is restarting; nothing was logged — log it again once the page reloads", op)
+			return
+		case LiveEntryClosing:
+			// The app's confirmed exit holds the seal: no restart and no reload
+			// follow, so the default change's answer would not be true (the
+			// clean-room review of d49b0d4e). The wording is the operator's
+			// choice (2026-11-21); the app shows it after "QSO not logged: ".
+			// "This attempt" claims nothing about an earlier attempt whose
+			// outcome is unknown.
+			s.writeError(w, http.StatusConflict, "operating_session_closing",
+				"The app is closing. This attempt logged nothing. If closing fails and the app stays open, retry the contact.", op)
 			return
 		}
 		defer done()

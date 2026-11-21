@@ -93,6 +93,19 @@ describe('submitQso response decoding (F-03)', () => {
         expect((out as { code?: string }).code).toBe('invalid_adif');
     });
 
+    // The app's confirmed exit refuses a live submit with a code and a message of its
+    // own (operator's ruling 2026-11-21). They reach the caller unchanged: main.ts shows
+    // the message after "QSO not logged: " and the draft is kept.
+    it('409 operating_session_closing → validation with the daemon code and message', async () => {
+        const message =
+            'The app is closing. This attempt logged nothing. If closing fails and the app stays open, retry the contact.';
+        mockFetch(409, { code: 'operating_session_closing', message });
+        const out = await submitQso('<eor>', LIVE_LOGBOOK);
+        expect(out.kind).toBe('validation');
+        expect((out as { code?: string }).code).toBe('operating_session_closing');
+        expect((out as { message?: string }).message).toBe(message);
+    });
+
     it('5xx → server with the daemon code', async () => {
         mockFetch(500, { code: 'db_error', message: 'boom' });
         const out = await submitQso('<eor>', LIVE_LOGBOOK);

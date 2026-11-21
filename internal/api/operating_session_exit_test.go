@@ -227,8 +227,8 @@ func TestExit_TheLiveEntrySealWaitsForAdmittedSubmits(t *testing.T) {
 	b := newExitBed(t, true)
 	b.mustBeAdmitted(lifeA)
 	before := b.view(lifeA)
-	done, ok := b.gate.Admit(true) // a submit already admitted
-	if !ok {
+	done, refused := b.gate.Admit(true) // a submit already admitted
+	if refused != LiveEntryAdmitted {
 		t.Fatal("the gate refused a submit before any seal")
 	}
 	answer := make(chan exitAnswer, 1)
@@ -248,8 +248,8 @@ func TestExit_TheLiveEntrySealWaitsForAdmittedSubmits(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	if _, ok := b.gate.Admit(true); ok {
-		t.Fatal("a submit arriving after the seal was admitted")
+	if _, refused := b.gate.Admit(true); refused != LiveEntryClosing {
+		t.Fatalf("a submit arriving after the exit's seal got %v; want it refused as closing", refused)
 	}
 	select {
 	case a := <-answer:
@@ -513,7 +513,7 @@ func TestExit_NeverReleasesAnotherOperationsLiveEntrySeal(t *testing.T) {
 	}
 	stillSealed := func(t *testing.T, b *exitBed, when string) {
 		t.Helper()
-		if _, ok := b.gate.Admit(true); ok || !b.gate.Closed() {
+		if _, refused := b.gate.Admit(true); refused == LiveEntryAdmitted || !b.gate.Closed() {
 			t.Fatalf("%s live entry is open under the other operation's seal", when)
 		}
 	}

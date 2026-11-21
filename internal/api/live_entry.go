@@ -14,8 +14,9 @@ import "sync"
 // restarts, and a confirmed exit of the app seals for its own short time. Each
 // holder releases only what it sealed, and admission is open only while no
 // holder has a seal. The gate's own Seal and Release are one holder, the one
-// the archive manager uses for a default change and an activation; Owner makes
-// another.
+// the archive manager uses for a default change; Owner makes another, and the
+// one Owner there is belongs to the app's exit. (An archive activation seals
+// FT8 and the rig, not live entry.)
 type LiveEntryGate struct {
 	mu       sync.Mutex
 	drained  *sync.Cond // signalled when inFlight reaches zero
@@ -31,17 +32,41 @@ func NewLiveEntryGate() *LiveEntryGate {
 	return g
 }
 
-// Admit admits a submission; live says it names the effective default. ok is
-// false when a live one is refused because admission is closed; done must be
-// called when an admitted one finishes, however it ends.
-func (g *LiveEntryGate) Admit(live bool) (done func(), ok bool) {
+// LiveEntryRefusal says why a live submission was refused. The zero value is
+// "not refused".
+type LiveEntryRefusal int
+
+const (
+	// LiveEntryAdmitted: the submission was admitted.
+	LiveEntryAdmitted LiveEntryRefusal = iota
+	// LiveEntryDefaultChanging: the gate's own holder has a seal. A default
+	// change is pending, the daemon restarts and the page reloads.
+	LiveEntryDefaultChanging
+	// LiveEntryClosing: only an Owner has a seal, which is the app's confirmed
+	// exit closing its session. No restart and no reload follow.
+	LiveEntryClosing
+)
+
+// Admit admits a submission; live says it names the effective default. A live
+// one is refused while admission is closed, and refused says by which holder;
+// done must be called when an admitted one finishes, however it ends.
+//
+// The reason is decided in the same hold of the lock as the refusal. Looked up
+// afterwards it could describe a state a release had already changed, and a
+// refusal reports only a reason that is true. With both holders sealed the
+// default change's answer is given: the restart is the stronger outcome. A
+// second kind of Owner would need a reason of its own here.
+func (g *LiveEntryGate) Admit(live bool) (done func(), refused LiveEntryRefusal) {
 	if !live {
-		return func() {}, true
+		return func() {}, LiveEntryAdmitted
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.held > 0 {
-		return nil, false
+		if g.own {
+			return nil, LiveEntryDefaultChanging
+		}
+		return nil, LiveEntryClosing
 	}
 	g.inFlight++
 	var once sync.Once
@@ -54,7 +79,7 @@ func (g *LiveEntryGate) Admit(live bool) (done func(), ok bool) {
 				g.drained.Broadcast()
 			}
 		})
-	}, true
+	}, LiveEntryAdmitted
 }
 
 // seal takes a holder's seal (a second one by the same holder adds nothing),

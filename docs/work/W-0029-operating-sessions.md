@@ -2583,3 +2583,101 @@ Codex closed its last finding (the hub's eviction record) and read the lock-gap 
 **What the three commits do and do not establish** (Codex's scoping, accepted): the order
 inside the service's Abandon. Not a total deadline for a stop, and not protection from
 another holder of a lock that is itself stalled in I/O.
+
+### Two recommendations awaiting the operator (2026-11-21)
+
+The operator asked for Claude's recommendations on the two open items and for Codex's view
+of them (claude-476, codex-210). Claude and Codex agree on both. **Neither is decided.**
+
+**1. A QSO submit refused because the app is exiting** (the clean-room finding on
+`d49b0d4e`).
+- **Recommended by both:** a code of its own, 409 `operating_session_closing`, in place of
+  `default_change_pending`, whose message says the daemon is restarting. The existing
+  code keeps its name for a default change.
+- **Wording, the operator's to choose.** The app puts "QSO not logged: " in front of the
+  daemon's message and keeps the draft (Codex traced it: `lib/api/qso.ts`, `main.ts`,
+  `lib/operate/qso.svelte.ts`). Candidates:
+  - Claude: "Station Manager is closing, so nothing was logged. If it is still open, log
+    the contact again."
+  - Codex: "The app is closing. This attempt logged nothing. If closing fails and the app
+    stays open, retry the contact." ("This attempt" claims nothing about an earlier
+    attempt whose outcome is unknown.)
+- **Agreed shape:** the reason is decided inside the same lock hold as the refusal, not
+  looked up afterwards. With both holders, the default change's answer is given.
+- **Holders of this gate: two, not three.** A default change and an exit. Archive
+  activation seals FT8 and the rig, not live entry (`internal/archive/activate.go`);
+  comments that group it with this gate overstate its wiring (Codex's correction).
+- **Acceptance, from Codex:** each seal alone; both together; either release leaving the
+  other's reason; a double seal and release; nothing written on a refusal; live entry
+  admitted after the last release; the refusal shown through the app's own path. The API
+  reference changes in two places: its conventions paragraph and the submit's error list.
+
+**2. Where a deleted logbook's name becoming reusable is ranked** (approved 2026-11-20,
+not built).
+- **Recommended by both:** W-0024 (Settings → Logbooks) owns it, as an explicitly open
+  follow-up of an accepted dossier. Its priority is set only in `docs/backlog.md`.
+- **A correction to Claude's proposal:** O-a and O-b are routed to W-0012
+  (`docs/dogfood-inbox.md`), so this is not a third member of a W-0024 list.
+- **Timing is priority, not a technical need.** Claude proposed it after W-0029; Codex
+  agrees with deferring it while the session work unblocks A2 and A3, and notes that
+  nothing makes the migration depend on W-0029 finishing.
+- **For its criteria, from Codex:** create and rename reuse a deleted name; two live
+  logbooks still cannot share one; the new logbook has a new id and UUID, the deleted row
+  is not revived; every row, identity, reference, index, constraint and the id counter
+  survive the rebuild; a failed migration rolls back; name comparison and the forwarding
+  bindings' name reservations are unchanged. And code as well as schema: provisioning
+  checks the name across deleted rows itself (`provisioned_logbook.go`), and what it
+  should do is to be decided, not assumed.
+
+### The operator's rulings on the two, and what was built (2026-11-21)
+
+The operator, in chat, on the two recommendations above:
+
+> 1. Codex
+> 2. go with recommendations
+
+**1. The closing refusal: built.** "Codex" chose Codex's wording; the code was
+the one both recommended.
+- **What the operator sees.** A Phone / CW contact submitted while the app's confirmed
+  exit has live entry closed is refused with 409 `operating_session_closing`: "The app is
+  closing. This attempt logged nothing. If closing fails and the app stays open, retry the
+  contact." The app shows it after "QSO not logged: " and keeps the draft. A submit
+  refused by a change of the default is answered as before. With both holding the seal the
+  default change's answer is given. Nothing is written by a refused submit.
+- **The nearest confusable outcomes, each tested:** the exit's refusal borrowing the
+  default change's answer (the defect); the exit's answer given while a default change
+  also holds the seal; the wrong reason left after one holder lets go.
+- **The change.** `LiveEntryGate.Admit` returns which holder refused, decided in the same
+  hold of the lock as the refusal (`internal/api/live_entry.go`); the submit handler
+  answers by it (`handler_qso.go`). No front-end change: the app already carries the
+  daemon's code and message through.
+- **Failing first:** the exit alone, and both holders with the default change then letting
+  go, each answered `default_change_pending` against the code as it stood. The other six
+  cases passed before and after: the default change alone; both, in either order; both
+  then the exit letting go; a double seal and one release; a submit logged after the last
+  release; a deliberate submit to another logbook.
+- **Also tested:** the gate's own reason through every seal and release of both holders;
+  the app's submit call carrying the new code and message unchanged.
+- **Reversion proofs,** in temporary copies since removed, each checked as applied and
+  restored: three, all failing for the reason claimed. One answer for both holders; the
+  exit's answer winning when both hold; the handler giving the exit's refusal the default
+  change's code.
+- **Records changed with it:** `docs/v2-design/api-endpoints.md`, in its conventions
+  paragraph and in the submit's error list. A comment on the gate that grouped archive
+  activation with it is corrected: activation seals FT8 and the rig, not live entry.
+- **Not shown.** The refusal through a real exit and a real submit together (the exit's
+  own test shows its seal answers "closing" at the gate; the handler's test shows what
+  that answer becomes). The toast in a running app.
+
+**2. The name change: recorded, not built.** W-0024 owns it as an open follow-up, deferred
+while the session work unblocks A2 and A3; its record and the points for its criteria are
+in that dossier, and `docs/backlog.md` carries the deferral.
+
+**Codex's review of the closing refusal (codex-211, 2026-11-21): no blocking objection.**
+It found the holder rule sound for the two holders there are, the reason fixed in the same
+lock hold as the refusal, and the split coverage adequate; it applied three overlays of
+its own and each failed its intended assertion. It judged "parts 1 and 2 are built" a fair
+line for W-0029's backlog row. Two small points taken: a test file's header still called
+the gate's own seal the activation's hold (corrected), and, for the name change's
+criteria, the rebuild preserves every *other* constraint, the name's uniqueness being the
+one replaced (corrected in W-0024's dossier). Committing remains the operator's decision.
