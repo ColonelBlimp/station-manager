@@ -1046,6 +1046,14 @@ func (s *Sequencer) abandonNamedThen(frameReason, logFallback string, stopRF fun
 	// The look for an earned contact and the teardown are ONE hold of the lock. A
 	// claim has to let the lock go, so after one the look is made again; the pass
 	// that finds nothing earned still holds the lock when the teardown runs.
+	//
+	// That the second look finds nothing rests on the CALLER: the Service's Abandon
+	// and both branches of its disarm hold seqGate, so no Group A session can start
+	// while the lock is let go. (What can start without the gate, the auto-work
+	// pick-up, is the standard work ladder: Group B, which earns nothing.) A new
+	// caller that does not hold seqGate has no such bound. Do not bound the loop
+	// with a count instead: giving up would discard a contact that is owed
+	// (codex-209).
 	var handOvers []func()
 	s.mu.Lock()
 	for {

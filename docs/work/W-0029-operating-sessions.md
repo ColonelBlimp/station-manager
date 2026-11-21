@@ -2554,3 +2554,32 @@ then commit and push".
   decide.
 - **CI for `8f6f8cb4`:** success (run 44794759794), read from the completed run.
 - **Not done:** Codex has not answered claude-471 or claude-472.
+
+### Codex's reading of the three commits (codex-209, 2026-11-21)
+
+Codex closed its last finding (the hub's eviction record) and read the lock-gap fix of
+`696c28f0` as sound. Three qualifications, each checked in the code and accepted.
+
+- **The retry in the abandon is bounded by its callers, not by itself.** After a claim
+  the abandon looks again for an earned contact. That the second look finds nothing rests
+  on the service's Abandon and both branches of its disarm holding the start gate, so no
+  Group A session can start meanwhile; what can start without the gate, the auto-work
+  pick-up, is the standard work ladder, which earns nothing. A caller without the gate
+  has no such bound. Recorded in a comment on `abandonNamedThen`. A count as a bound is
+  refused there: giving up would discard a contact that is owed.
+- **The lock-gap fix has no regression test, and the wording for why is corrected.** The
+  last section says "nothing observable sits between two holds of a lock". A lost contact
+  is observable; what is missing is a deterministic barrier in that window, and the raced
+  test did not force it. Neither Codex nor Claude reproduced the old gap or ran a
+  reversion proof for that commit. The package passing is not coverage of it.
+- **One more write before the cut, outside the service: the HTTP request line.** With the
+  log level at debug, the request middleware writes "http request received" before the
+  handler runs (`internal/api/middleware.go`), so a held-up writer can keep a valid
+  Abandon from reaching the service at all. It is older than this work, off at the info
+  level, and outside the service ordering these commits repaired. **Left, with the dial
+  guard's line, by the operator's direction to stop** (2026-11-20); Codex recommends
+  keeping the two together for when wider work on logging is selected.
+
+**What the three commits do and do not establish** (Codex's scoping, accepted): the order
+inside the service's Abandon. Not a total deadline for a stop, and not protection from
+another holder of a lock that is itself stalled in I/O.
