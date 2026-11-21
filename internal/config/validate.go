@@ -847,6 +847,11 @@ func validateQsoArchives(cfg Config) []Finding {
 			bad(sel.field, fmt.Sprintf("%s %q does not name a catalogue entry", sel.field, sel.id))
 		}
 	}
+	// A pending activation's identity belongs to the pending selector: the two
+	// are written and removed together. One with no selector describes nothing.
+	if cfg.PendingQsoArchiveActivationID != "" && cfg.PendingQsoArchiveID == "" {
+		bad("pending_qso_archive_activation_id", "pending_qso_archive_activation_id is set with no pending_qso_archive_id")
+	}
 	return out
 }
 

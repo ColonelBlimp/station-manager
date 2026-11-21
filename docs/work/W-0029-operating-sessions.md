@@ -23,7 +23,9 @@ The corrections that followed are committed too (`696c28f0`, `113375af`, `01c5c6
 With it part 2's criteria are built; what is not shown is listed there. Part 3's acceptance
 criteria are written, at the end of this file (2026-11-21); two of its questions are ruled,
 the third is withdrawn and the fourth ruled, Codex agrees to the criteria (codex-215), and
-its build is directed (2026-11-21), the first slice first.** The removal of the database half of
+its build is directed (2026-11-21), the first slice first. That first slice, the arrival,
+is built and committed with this text (the last section of this file); Codex's review of
+it is closed (codex-217). The second slice's build is directed and not yet started.** The removal of the database half of
 the downgrade tooling, which part 1 waited for, is committed (`0b21b2fb`, 2026-11-20; W-0027).
 **Part 1's acceptance criteria are written, their three questions ruled, and agreed with
 Codex after one round of corrections (2026-11-20).** The
@@ -172,6 +174,9 @@ next part starts.
   of the dossier, without a push, which was not said; the build is of part 3, its first
   slice first, each slice reviewed and committed on direction before the next, by the
   working rules above.
+- **2026-11-21 (operator): "commit, push and move on with the build 2nd slice - we are way
+  behind...".** The first slice's commit and push, and the build of the second slice, are
+  directed.
 
 The design's own rulings are in ADR 0100 and are not repeated here.
 
@@ -3168,3 +3173,147 @@ go up only, and a build older than this one will refuse the newer `config.json`,
 on 2026-11-18. I found no way to make an arrival happen exactly once across a failed
 start, a fallback and a lost configuration write without giving the activation an identity
 that both stores can hold; Codex's two reviews are why.
+
+### Part 3, first slice: the arrival (2026-11-21; committed with this record)
+
+On the operator's direction ("commit and build"). Criteria A, H2 and H3: the two schema
+changes, the activation's identity at the request and at the start, the arrival test, and
+the step of every daemon start. The rest of the switch request (B to F), the closing phase
+(G), H1 and the order (I) are the second slice and are not built.
+
+**What the operator sees.** Nothing new on screen. Underneath, after a switch the archive
+that comes up no longer carries on a session left open in it by an earlier visit: that
+session is closed before the app is served, and the app start opens a new one with no
+question. **With this slice alone a switch does not yet close the session of the archive
+it leaves** (slice 2 does that); that session is closed when its archive is next arrived
+at, its interval's end unconfirmed.
+
+**What is built.**
+- **Log migration 0021:** `archive_metadata.arrived_activation`, the activation a file was
+  last arrived at under. Empty at the upgrade. The schema's head is 21.
+- **The configuration's schema, 7 to 8:** `pending_qso_archive_activation_id`, written and
+  removed with the pending selector, and `qso_archive_activation_id`, the activation in
+  effect. The step stamps only. A pending selector with no identity is processed under one
+  derived from the archive it names (`Config.PendingActivationIdentity`); one identity with
+  no selector is refused at load.
+- **The request** (`internal/archive/activate.go`): a new identity is written with the
+  selector in one update, and both are withdrawn together when the restart cannot be
+  requested. The activation in effect is not touched by a request.
+- **The start** (`cmd/smd/archive_adopt.go`, `endActivation`): the promotion and the record
+  of a failed candidate each move the pending identity into effect in the same update that
+  removes the selector.
+- **The test** (`internal/database/sqlite/operating_session.go`, `start`): when the process
+  has said which activation it serves the file under and the file records another, the
+  open session is closed with `archive_switched`, its interval's end unconfirmed, and the
+  file's value is set, in the same transaction. It comes before the default-epoch test. It
+  runs in the admission's start step, in New, Continue and the exit, and in the logging
+  step; a read does not run it. A process that has not said what it serves under (a tool
+  opening a file) tests nothing.
+- **The step of every start** (`operating-session`, a new lifecycle node after
+  `archive-promote` and before `http`): it reads the activation in effect, tells the
+  database, and runs both tests. A failure is logged and the start goes on.
+
+**A departure from the criteria's wording, for review.** Part 2's F2 says one
+`operating_session.changed` event for each advance of the generation. The start step can
+advance it and publishes none: it runs before the HTTP server serves, so no window can be
+listening, and a window reads the state when it connects. Nothing is lost by it; it is
+named so that it is a decision and not an omission. **Codex supports it** (codex-216): the
+rule is for transitions while the daemon is serving, and the API reference now says so. A
+later admission's own close, and every other change made while serving, is still
+published.
+
+**Seen.**
+- **Failing first:** the database tests against stubs with no arrival logic (nine of
+  eleven failed on their own assertions; the two that must pass with or without it
+  passed); the configuration tests (version, the derived identity, the stored identity,
+  the refused lone identity); the request's tests (no identity written); the daemon's
+  tests through its real start (the first run failed at the promotion, which did not yet
+  end the activation).
+- **Through the daemon's real start** (`cmd/smd/operating_session_arrival_test.go`, two
+  archive files, sessions with contacts), the sequences of A13. (As first written this
+  said "each sequence"; Codex's review, below, found one missing and one weaker than
+  claimed. Both are in the list now.)
+  - **a generation that fails after its activation was made final** starts again on the
+    candidate, the activation in effect surviving the failure: with the arrival already
+    written by the failed generation, and with it refused there and written by the next.
+    The remnant is closed once; the archive that was left is unchanged;
+  - an applied switch closes the remnant of the archive arrived at, and leaves the archive
+    that was left untouched;
+  - an ordinary start closes nothing;
+  - the same activation applied twice keeps the session opened in between, with a stored
+    identity and with a selector written before identities;
+  - a fallback under a retained selector closes the session of the archive fallen back
+    to, once: a second fallback under the same activation closes nothing more;
+  - a promotion that cannot be written falls back under the same activation, the
+    candidate's file unchanged, and the request is still on disk for the next start;
+  - a kill after the activation is final is still an arrival at the next start;
+  - a start that cannot write leaves the arrival to the admission, which is refused while
+    the file cannot be written and closes the remnant once it can;
+  - the default-epoch test runs at start;
+  - **the accepted limit:** one activation serving Home, Contest, then Home again carries
+    the session on, and no QSO is lost or moved. The test asserts that this is what
+    happens.
+- **Reversion proofs,** in temporary copies since removed, each checked as applied and
+  restored: thirteen, all failing for the reason claimed.
+  - The database, four: no arrival test; the arrival not recorded in the file; the
+    interval's end confirmed; a process that has said nothing testing anyway.
+  - The configuration, two: an old selector given no identity; a lone identity accepted.
+  - The request, two: no identity written; the identity left behind by a withdrawal.
+  - The start, five: the activation ended with nothing recorded in effect; a failure that
+    only clears the pair; the start step telling the database nothing; the start step
+    testing nothing; the session's node not before `http`.
+- **Gates on the final tree, by exit code:** `gofmt`, `go vet`, `golangci-lint` (0
+  issues), maintainability (0 regressions), `go test ./... -count=1` (67 packages ok, 0
+  failed), `task docs:check`, the context check, `git diff --check`. Under `-race`: the
+  database, configuration, archive and daemon packages whole. The desktop scenario against
+  a daemon built from this tree passes its 19 checks. No transmission, keyed test or rig
+  command was made. After the gates one line was restored to the promotion (it clears the
+  selector whatever it names, as before this change) and the daemon package rerun.
+
+**Codex's review of the slice (codex-216): no production defect found; two demonstrations
+incomplete and one test too weak. All three were right and are done; no production code
+changed.**
+- **A generation failing after its promotion was not forced.** The criteria name it (A13)
+  and the test that looked like it started a fresh, ordinary generation instead. It is
+  forced now with a lifecycle node of the test's own that starts after the promotion and
+  the session's step and fails, synchronously, in the first generation. The daemon's test
+  builder gained a hook for that; it is test code.
+- **The repeated-fallback control did not hold what was claimed.** The session whose
+  survival it proves had no contact, and the same app was not admitted again. It now has a
+  contact, the same lifetime is admitted after the second fallback and holds it unchanged,
+  and the comparison covers the interval's own sequence, start and holder and the
+  session's members, not only its end state. The applied-twice control compares the same.
+- **The settings-save test accepted a refusal.** For an ordinary save it now requires
+  success and the setting changed, as well as the identities untouched.
+- **Reversion proofs for these,** in temporary copies since removed, each checked as
+  applied and restored: three, all failing for the reason claimed. A late failure wiping
+  the activation in effect; a replay arriving again; every save refused.
+- **Codex's answers:** reading the activation in effect after the promotion or the
+  failure's record is sound in every generation; no session transition runs before the
+  start step today, which is a statement about today's callers and not leave for a later
+  one to rely on a process that has said nothing; the derived identity's form is
+  acceptable within the upgrade case it is for.
+- **Gates after these changes, by exit code:** `gofmt`, `go vet`, `golangci-lint` (0
+  issues), maintainability (0 regressions), `go test ./... -count=1` (67 packages ok, 0
+  failed), `task docs:check`, the context check, `git diff --check`; the daemon and API
+  packages under `-race`.
+- **Codex's second reading (codex-217): both findings closed, no new one.** It ran the
+  daemon's arrival tests under the race detector and judged the new test to cover the
+  boundary in both cases. The review of this slice is closed; it is not the end of part
+  3: the departure's close and the closing phase are the second slice.
+
+**Not shown.**
+- **A configuration write of uncertain durability, as such.** The tests leave
+  `config.json` as a lost write would leave it, by editing it; they do not make a
+  directory sync fail and then cut the power.
+- **`pending_unclear` through the real request.** The retained selector is written by the
+  fixture; the request's own test shows it keeps its identity.
+- **The API's admission after an arrival.** The daemon's tests call the database's start
+  step, which is what the admission calls (part 2's tests cover that call).
+- **A real restart by the service manager,** and anything at the station.
+- **The settings save's test did not fail first.** A save has never carried these fields;
+  the test guards that it stays so.
+
+**Records changed with it:** `docs/v2-design/config.md` (the two identities; the 7 to 8
+step); ADR 0100, *Update 2026-11-21* (the arrival's mechanism, the accepted limit, and the
+two rulings for the request, marked as not yet built).

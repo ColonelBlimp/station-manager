@@ -1,0 +1,11 @@
+-- The arrival at an archive (ADR 0100 §4; W-0029 part 3, criteria A).
+--
+-- An archive switch is an activation, and an activation has an identity, kept
+-- in config.json. This file records the activation it was last arrived at
+-- under. The daemon knows which activation it is working under; when a served
+-- file records another, it has been arrived at, and a session still open in it
+-- from an earlier visit is closed in the same transaction that sets this value.
+--
+-- It starts empty, as config.json's does, so the two agree at the upgrade and
+-- no session is closed by it. This migration writes no session row.
+ALTER TABLE archive_metadata ADD COLUMN arrived_activation TEXT NOT NULL DEFAULT '';

@@ -107,11 +107,16 @@ type sessionTx struct {
 	tx      *sql.Tx
 	now     time.Time
 	changed bool // session state changed: the generation advances once at the end
+	// served is the activation this process serves the file under, nil when
+	// nobody has said (Service.SetServedActivation): the arrival test of start.
+	served *string
 }
 
 // sessionHead is the archive-level state a transition starts from.
 type sessionHead struct {
 	generation, epoch int64
+	// arrived is the activation the file was last arrived at under.
+	arrived string
 	// defaultUUID is the uuid of the file's live default logbook, "" when the
 	// file has none (setup pending).
 	defaultUUID string
@@ -139,9 +144,9 @@ func (c *sessionTx) head() (sessionHead, error) {
 		id   sql.NullInt64
 		uuid sql.NullString
 	)
-	err := c.tx.QueryRowContext(c.ctx, `SELECT m.session_generation, m.default_epoch, l.id, l.uuid
+	err := c.tx.QueryRowContext(c.ctx, `SELECT m.session_generation, m.default_epoch, m.arrived_activation, l.id, l.uuid
 		FROM archive_metadata m LEFT JOIN logbook l ON l.id = m.default_logbook_id AND l.deleted_at IS NULL
-		WHERE m.singleton = 1`).Scan(&h.generation, &h.epoch, &id, &uuid)
+		WHERE m.singleton = 1`).Scan(&h.generation, &h.epoch, &h.arrived, &id, &uuid)
 	if stderr.Is(err, sql.ErrNoRows) {
 		return h, errors.ErrNotFound
 	}
@@ -181,18 +186,46 @@ func (c *sessionTx) open() (*OperatingSession, error) {
 	return &o, nil
 }
 
-// start reads what every transition acts on, and runs the default-epoch test
-// (ADR 0100 §4): an open session of an earlier default is closed with
-// logbook_changed, whoever holds it. The session returned is the one still
-// open afterwards.
+// start reads what every transition acts on, and runs the two tests that close
+// a session nobody asked to close (ADR 0100 §4), whoever holds it. The session
+// returned is the one still open afterwards.
+//
+// First the ARRIVAL (W-0029 part 3, A). The file records the activation it was
+// last arrived at under. When the process serves it under another, the file
+// has been arrived at: a session still open in it is from an earlier visit and
+// is closed with archive_switched, its interval's end unconfirmed (operator
+// ruling 2026-11-20), and the file's value is set, in this one transaction.
+// The same activation again finds the value already set and closes nothing, so
+// a session opened after an arrival is never closed by a replay of it. A
+// process that has not said what it serves under (served nil) tests nothing.
+//
+// Then the DEFAULT-EPOCH test: an open session of an earlier default is closed
+// with logbook_changed. Where both would close it, the reason is the switch.
+//
+// A read does not come through here and changes nothing.
 func (c *sessionTx) start() (sessionHead, *OperatingSession, error) {
 	h, err := c.head()
 	if err != nil {
 		return h, nil, err
 	}
 	o, err := c.open()
-	if err != nil || o == nil || o.DefaultEpoch == h.epoch {
-		return h, o, err
+	if err != nil {
+		return h, nil, err
+	}
+	if c.served != nil && *c.served != h.arrived {
+		if err := c.one(`UPDATE archive_metadata SET arrived_activation = ? WHERE singleton = 1`, *c.served); err != nil {
+			return h, nil, err
+		}
+		h.arrived = *c.served
+		if o != nil {
+			if err := c.close(o, SessionClosedBySwitch, false); err != nil {
+				return h, nil, err
+			}
+			o = nil
+		}
+	}
+	if o == nil || o.DefaultEpoch == h.epoch {
+		return h, o, nil
 	}
 	return h, nil, c.close(o, SessionClosedByDefault, true)
 }
@@ -351,7 +384,7 @@ func (s *Service) sessionControl(ctx context.Context, op errors.Op, what, lifeti
 		outcome SessionOutcome
 	)
 	err := s.durableTx(ctx, op, what, func(ctx context.Context, tx *sql.Tx) error {
-		c := &sessionTx{ctx: ctx, tx: tx, now: now.UTC()}
+		c := &sessionTx{ctx: ctx, tx: tx, now: now.UTC(), served: s.servedActivation.Load()}
 		if err := takeSessionWriterPosition(c); err != nil {
 			return err
 		}
@@ -613,7 +646,7 @@ func (s *Service) JoinOperatingSessionTx(ctx context.Context, tx *sql.Tx, qsoID 
 	if tx == nil {
 		return "", errors.New(op).WithMsg("the QSO's transaction is required")
 	}
-	c := &sessionTx{ctx: ctx, tx: tx, now: now.UTC()}
+	c := &sessionTx{ctx: ctx, tx: tx, now: now.UTC(), served: s.servedActivation.Load()}
 	id, err := c.join(qsoID, holder)
 	if err != nil {
 		return "", errors.New(op).WithErr(err).WithMsg("put the QSO into the operating session")
@@ -663,4 +696,27 @@ func (c *sessionTx) join(qsoID int64, holder string) (string, error) {
 		return "", err
 	}
 	return id, c.finish()
+}
+
+// SetServedActivation says which activation this process serves the file under
+// (ADR 0100 §4; W-0029 part 3, A): the pending activation's identity when the
+// daemon's start is processing one, and otherwise the activation in effect that
+// config.json records. Until it is called no arrival is tested for, which is
+// how a tool that opens a file without serving it leaves the sessions alone.
+func (s *Service) SetServedActivation(id string) { s.servedActivation.Store(&id) }
+
+// CheckOperatingSessionAtStartWithContext is the session's step of a daemon
+// start, before any app is served: the arrival test, then the default-epoch
+// test (ADR 0100 §4). It is SessionApplied when a session was closed.
+func (s *Service) CheckOperatingSessionAtStartWithContext(ctx context.Context, now time.Time) (OperatingSessionState, SessionOutcome, error) {
+	const op errors.Op = "sqlite.Service.CheckOperatingSessionAtStartWithContext"
+	return s.sessionControl(ctx, op, "test the operating session at start", "", now, func(c *sessionTx) (SessionOutcome, error) {
+		if _, _, err := c.start(); err != nil {
+			return "", err
+		}
+		if c.changed {
+			return SessionApplied, nil
+		}
+		return SessionUnchanged, nil
+	})
 }

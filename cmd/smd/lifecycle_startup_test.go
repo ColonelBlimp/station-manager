@@ -76,6 +76,11 @@ func seedOrchestratedConfig(t *testing.T, mut func(*config.Config)) *config.Serv
 	return cfgSvc
 }
 
+// afterRegisterForTest lets ONE test add a lifecycle node of its own to the daemons
+// built while it is set: a failure at a point where no production node fails. It is
+// nil for every other test. The tests of this package do not run in parallel.
+var afterRegisterForTest func(t *testing.T, c *iocdi.Container, o *orchestrator.Orchestrator)
+
 // buildOrchestratedDaemon is the test replica of buildDaemon: one generation
 // on `cfg` (a snapshot the caller chose) with the paths startLogDB resolves
 // lazily unless the caller sets them afterwards.
@@ -146,6 +151,9 @@ func buildOrchestratedDaemon(t *testing.T, cfgSvc *config.Service, cfg config.Co
 	orch, err := d.registerLifecycle(container)
 	if err != nil {
 		t.Fatalf("registerLifecycle: %v", err)
+	}
+	if afterRegisterForTest != nil {
+		afterRegisterForTest(t, container, orch)
 	}
 	t.Cleanup(func() {
 		workerCancel()

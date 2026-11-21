@@ -11,7 +11,7 @@ import (
 // change alters the config shape. A config file with no `version` field is the
 // pre-versioning baseline — the catalogue-era shape, treated as v1. See
 // docs/v2-design/config.md §13.
-const currentConfigVersion = 7
+const currentConfigVersion = 8
 
 // CurrentSchemaVersion is the config schema version this build writes and
 // migrates up to — the public view of currentConfigVersion for callers (e.g.
@@ -61,6 +61,13 @@ type migration struct {
 //     the operating-client check, is removed. The check is always on, so the key
 //     has no reader; the step deletes it, so that a file that held it is not
 //     refused as an unknown key.
+//   - v7→v8 (ADR 0100 §4, W-0029 part 3): an archive activation has an identity.
+//     `pending_qso_archive_activation_id` and `qso_archive_activation_id` become
+//     part of the shape. The step adds nothing: a pending selector that has no
+//     identity is given one derived from the archive it names, at use
+//     (Config.PendingActivationIdentity), and never by this step, because an
+//     identity made here would differ on each load of a file whose migrated form
+//     had not become durable.
 var migrations = []migration{
 	{from: 1, apply: migrateV1toV2},
 	{from: 2, apply: migrateV2toV3},
@@ -68,7 +75,11 @@ var migrations = []migration{
 	{from: 4, apply: migrateV4toV5},
 	{from: 5, apply: migrateV5toV6},
 	{from: 6, apply: migrateV6toV7},
+	{from: 7, apply: migrateV7toV8},
 }
+
+// migrateV7toV8 stamps only: the activation identities are new, optional keys.
+func migrateV7toV8(map[string]any) error { return nil }
 
 // migrateV6toV7 removes server.require_desktop_app, whatever it said: the
 // operating-client check is always on. It deletes the key only from a server

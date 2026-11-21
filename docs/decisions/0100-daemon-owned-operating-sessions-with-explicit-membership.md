@@ -703,6 +703,45 @@ above are left as written.
   "a committed clean close is never reopened" needs. Membership is as durable as the QSO it
   is stored with.
 
+## Update 2026-11-21
+
+Operator rulings (chat, 2026-11-21), said of the questions of part 3's acceptance criteria
+in [W-0029](../work/W-0029-operating-sessions.md), and one change of mechanism those
+criteria made after Codex's reviews (codex-212 to codex-215). They touch §4. The passages
+above are left as written.
+
+- **The arrival is two identities compared, not an event of one start.** §4 says "at every
+  start that processes a pending activation ... a session still open in the served archive
+  is closed". As an event that must be remembered, it could be lost: a start that falls back
+  clears the pending selector before the generation that owes the arrival is built, and the
+  admission tested no arrival. So an activation has an **identity**, written into
+  `config.json` with the pending selector by the switch request; the start that processes
+  it, applied or fallen back, records it there as the **activation in effect**; and each
+  archive file records the activation it was last arrived at under. A served file that
+  records another activation has been arrived at: in one transaction a session still open in
+  it is closed with `archive_switched`, its interval's end unconfirmed, and the file's value
+  is set. The test runs in a step of every start, before `http`, in the admission's start
+  step and in the session's other transitions and the logging step. Nothing is written to an
+  archive's file before it is served.
+- **How far it holds: an accepted limit** (the operator: "a", of three choices). An arrival
+  happens once, and exactly once, through any single interruption: a kill or a power cut at
+  any point, a failed start, a fallback, or one `config.json` write that fails or does not
+  survive. It does not hold through a chain in which one activation serves the departing
+  archive, then the target, then the departing archive again: the fallback's record cannot be
+  written, a later promotion does not survive, a power cut follows and the candidate then
+  fails. The archive fallen back to already records that activation, so the session opened
+  there at the first fallback is carried on, or the next app start is asked Continue or New
+  for it, where a new session was due. No contact is lost or filed in another archive. Not
+  chosen: refusing admission after a switch attempt until `config.json` durably records how
+  it ended; a third durable record of the archive last served.
+- **The default-epoch test at start** runs in the same step, after the arrival.
+- **Ruled for the request, not yet built:** a Phone/CW submit refused during a switch
+  answers 409 `archive_switch_pending` with words of its own ("... After the page reloads,
+  check which archive is active before you log the contact again."), not the default
+  change's, which §4 step 2 borrowed; and the wait for FT8 completion logging in step 3 has
+  no limit of the switch's own. Step 3's "each bounded by the existing `ft8QsoLogTimeout`"
+  is not a bound on the write: the write does not inherit that context.
+
 ## Open questions
 
 **All settled (operator, 2026-11-12):** O9 ruled; O1, O2, O3 and O10 stay deferred, each with the

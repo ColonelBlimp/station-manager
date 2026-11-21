@@ -220,6 +220,7 @@ func (d *daemon) registerLifecycle(c *iocdi.Container) (*orchestrator.Orchestrat
 			Stop: stopErr(d.drainWorkers), Rollback: rollbackVia(d.drainWorkers)},
 		{NodeID: nodeQsoLog, Stop: stopVoid(d.qsoLogWG.Wait)},
 		{NodeID: nodePromote, Start: d.startArchivePromote},
+		{NodeID: nodeSession, Start: d.startOperatingSession},
 		{NodeID: nodeHTTP, Initialize: d.initHTTP, Start: d.startHTTP,
 			PrepareStop: d.httpStopAccepting, Stop: d.stopHTTP},
 		{NodeID: nodeAdoption, Start: d.startAdoption, PrepareStop: d.adoptionPrepareStop,

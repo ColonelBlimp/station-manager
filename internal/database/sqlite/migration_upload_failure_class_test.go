@@ -10,8 +10,8 @@ import (
 // redacted provider text (W-0010 outcome 9, ruling 2026-09-20 (c)).
 func TestMigrate0011_AddsFailureClassAtHead(t *testing.T) {
 	svc := testService(t)
-	if v := schemaVersion(t, svc); v != 20 {
-		t.Fatalf("schema version = %d, want 20", v)
+	if v := schemaVersion(t, svc); v != 21 {
+		t.Fatalf("schema version = %d, want 21", v)
 	}
 
 	var count int

@@ -162,8 +162,8 @@ func TestMigrate0008_UpCreatesTheTable(t *testing.T) {
 	if err := svc.Migrate(); err != nil {
 		t.Fatalf("migrate to the head: %v", err)
 	}
-	if v := schemaVersion(t, svc); v != 20 {
-		t.Fatalf("schema version = %d, want 20", v)
+	if v := schemaVersion(t, svc); v != 21 {
+		t.Fatalf("schema version = %d, want 21", v)
 	}
 	assertTable("at the head", true)
 }

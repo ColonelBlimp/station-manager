@@ -7,6 +7,7 @@ import (
 
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/types"
+	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
 
 // Seal is a TX admission port (ADR 0071, W-0021 slice 3): the FT8 service's
@@ -216,8 +217,15 @@ func (m *Manager) Activate(ctx context.Context, id string) (types.QsoArchiveActi
 		}
 	}
 
+	// The activation's identity, written with the selector in ONE update (ADR
+	// 0100 §4; W-0029 part 3, A1). The start that processes this activation
+	// works under it and records it in the archive it serves, so the same
+	// activation processed again is recognised and a new one is not mistaken
+	// for it. The activation in effect is not touched here.
+	activation := utils.NewUUIDv7()
 	dur, err := m.cfg.Update(func(c *config.Config) error {
 		c.PendingQsoArchiveID = id
+		c.PendingQsoArchiveActivationID = activation
 		return nil
 	})
 	if err != nil {
@@ -246,6 +254,7 @@ func (m *Manager) abortAfterPersist(id string, cause error) error {
 	_, err := m.cfg.Update(func(c *config.Config) error {
 		if c.PendingQsoArchiveID == id {
 			c.PendingQsoArchiveID = ""
+			c.PendingQsoArchiveActivationID = "" // the two go together
 		}
 		return nil
 	})

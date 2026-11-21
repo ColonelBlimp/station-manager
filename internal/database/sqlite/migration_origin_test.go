@@ -234,8 +234,8 @@ func TestMigrate0007_PartialIndexesSurviveTheRebuild(t *testing.T) {
 	if err := svc.Migrate(); err != nil {
 		t.Fatalf("migrate to the head: %v", err)
 	}
-	if v := schemaVersion(t, svc); v != 20 {
-		t.Fatalf("schema version = %d, want 20", v)
+	if v := schemaVersion(t, svc); v != 21 {
+		t.Fatalf("schema version = %d, want 21", v)
 	}
 	assertIndexes("at the head")
 }
@@ -273,8 +273,8 @@ func TestMigrate0007_ForeignKeysIntactAcrossTheRebuild(t *testing.T) {
 	if err := svc.Migrate(); err != nil {
 		t.Fatalf("migrate to the head: %v", err)
 	}
-	if v := schemaVersion(t, svc); v != 20 {
-		t.Fatalf("schema version = %d, want 20", v)
+	if v := schemaVersion(t, svc); v != 21 {
+		t.Fatalf("schema version = %d, want 21", v)
 	}
 	check("at the head")
 }

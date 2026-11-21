@@ -44,8 +44,8 @@ func stampOf(t *testing.T, svc *Service, name string) (bool, string) {
 
 func TestMigrate0018_IdentitySince_Up(t *testing.T) {
 	svc := testService(t)
-	if v := schemaVersion(t, svc); v != 20 {
-		t.Fatalf("schema version = %d, want 20", v)
+	if v := schemaVersion(t, svc); v != 21 {
+		t.Fatalf("schema version = %d, want 21", v)
 	}
 	seedSmcloudBinding(t, svc)
 	if n := countT(t, svc, `SELECT COUNT(*) FROM logbook_destination WHERE identity_since IS NULL`); n != 1 {

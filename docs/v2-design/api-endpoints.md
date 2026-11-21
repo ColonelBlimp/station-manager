@@ -142,8 +142,10 @@ subscription is the FT8 presence signal.
   - Graceful shutdown waits for every stream handler to end.
 
 **`operating_session.changed` (ADR 0100; W-0029 part 2).** Published on `/v1/events` once
-for each advance of the served archive's session generation, after its commit:
-`{"archive_id": string, "generation": int}`. It carries no session detail: a consumer reads
+for each advance of the served archive's session generation made while the daemon is
+serving, after its commit: `{"archive_id": string, "generation": int}`. The daemon's start
+can close a session before the HTTP server is up (an archive arrived at, or an earlier
+default; W-0029 part 3); nothing can be listening then and no event is published for it. It carries no session detail: a consumer reads
 `GET /v1/operating-session`. The stream replays nothing, so a consumer also reads on
 connecting and on reconnecting, and compares generations only within the archive the event
 names. A transition that was rolled back, or changed nothing, publishes nothing.

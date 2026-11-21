@@ -42,8 +42,8 @@ func TestMigrateV6toV7_RemovesTheSwitchWhateverItSaid(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg, m := loadV7(t, `{"version":6,"data_dir":"/tmp/x","server":`+server+`}`)
-			if cfg.Version != 7 || m["version"] != float64(7) {
-				t.Fatalf("version: loaded %d, document %v; want 7", cfg.Version, m["version"])
+			if cfg.Version != 8 || m["version"] != float64(8) { // the head: the 7→8 step follows this one
+				t.Fatalf("version: loaded %d, document %v; want 8", cfg.Version, m["version"])
 			}
 			srv, ok := m["server"].(map[string]any)
 			if !ok {
@@ -74,8 +74,8 @@ func TestMigrateV6toV7_NoServerBlockIsLeftAlone(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg, m := loadV7(t, doc)
-			if cfg.Version != 7 || m["version"] != float64(7) {
-				t.Fatalf("version: loaded %d, document %v; want 7", cfg.Version, m["version"])
+			if cfg.Version != 8 || m["version"] != float64(8) { // the head: the 7→8 step follows this one
+				t.Fatalf("version: loaded %d, document %v; want 8", cfg.Version, m["version"])
 			}
 			if name == "absent" {
 				if _, has := m["server"]; has {
@@ -143,10 +143,10 @@ func TestMigrations_EveryVersionBelowTheHeadHasItsForwardStep(t *testing.T) {
 // An older file still reaches the head, through every step.
 func TestMigrateV6toV7_AVersion5FileReachesTheHead(t *testing.T) {
 	cfg, m := loadV7(t, v5Doc)
-	if cfg.Version != 7 || m["version"] != float64(7) {
-		t.Fatalf("version: loaded %d, document %v; want 7", cfg.Version, m["version"])
+	if cfg.Version != 8 || m["version"] != float64(8) {
+		t.Fatalf("version: loaded %d, document %v; want 8", cfg.Version, m["version"])
 	}
-	if CurrentSchemaVersion() != 7 {
-		t.Fatalf("CurrentSchemaVersion() = %d, want 7", CurrentSchemaVersion())
+	if CurrentSchemaVersion() != 8 {
+		t.Fatalf("CurrentSchemaVersion() = %d, want 8", CurrentSchemaVersion())
 	}
 }

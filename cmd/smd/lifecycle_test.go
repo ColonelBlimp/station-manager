@@ -202,6 +202,11 @@ func TestLifecycleGraph_StartOrderIsEdgeEnforced(t *testing.T) {
 		before(n, nodePromote)
 	}
 	before(nodePromote, nodeHTTP)
+	// ADR 0100 §4 (W-0029 part 3, A8): the session is tested after the activation
+	// is final and before any app can be admitted.
+	before(nodePromote, nodeSession)
+	before(nodeLogDB, nodeSession)
+	before(nodeSession, nodeHTTP)
 }
 
 // AC-G4: the drain graph carries only real producer/drain-safety edges.

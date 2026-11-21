@@ -149,6 +149,20 @@ type Config struct {
 	PendingQsoArchiveID string                   `json:"pending_qso_archive_id,omitempty"`
 	QsoArchives         []types.QsoArchiveConfig `json:"qso_archives,omitempty"`
 
+	// The identity of an archive activation (config v8; ADR 0100 §4, W-0029
+	// part 3). Server-managed, like the selectors: PUT /v1/config carries no
+	// field for either.
+	//
+	// PendingQsoArchiveActivationID is written with PendingQsoArchiveID by the
+	// switch request, and is removed with it. QsoArchiveActivationID is the
+	// ACTIVATION IN EFFECT: the start that processes a pending activation,
+	// whether it applies it or falls back, moves the pending identity here in
+	// the same update that removes the selector. Each archive file records the
+	// activation it was last arrived at under; the daemon compares the two to
+	// know that a file has been arrived at (PendingActivationIdentity).
+	QsoArchiveActivationID        string `json:"qso_archive_activation_id,omitempty"`
+	PendingQsoArchiveActivationID string `json:"pending_qso_archive_activation_id,omitempty"`
+
 	// DefaultLogbookChange is a change of the default logbook that takes
 	// effect at the next start (ADR 0097): a pending selector, or the tombstone
 	// a removal leaves until its removal is confirmed durable. Server-managed,
@@ -363,6 +377,28 @@ func rigNamed(rigs []types.RigConfig, name string) bool {
 
 // RigByID returns the catalogue entry with the given id, or nil if none.
 // QsoArchiveByID returns the catalogue entry with that id, or nil.
+// PendingActivationIdentity is the identity of the activation that is pending,
+// "" when none is. A selector written before config v8 has no stored identity:
+// it is given one DERIVED from the archive it names, so that every load of the
+// same document gives the same answer. The migration to v8 runs in memory at
+// each start and its write can fail to persist; an identity made afresh there
+// would let one activation be taken for two after the first had reached an
+// archive file (W-0029 part 3, A1; codex-214).
+func (c Config) PendingActivationIdentity() string {
+	switch {
+	case c.PendingQsoArchiveID == "":
+		return ""
+	case c.PendingQsoArchiveActivationID != "":
+		return c.PendingQsoArchiveActivationID
+	}
+	return legacyActivationPrefix + c.PendingQsoArchiveID
+}
+
+// legacyActivationPrefix marks an identity derived for a pending selector that
+// was written with none. It cannot collide with a stored identity, which is a
+// UUID.
+const legacyActivationPrefix = "selector-without-identity:"
+
 func (c Config) QsoArchiveByID(id string) *types.QsoArchiveConfig {
 	if id == "" {
 		return nil

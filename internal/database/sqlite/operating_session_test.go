@@ -103,7 +103,7 @@ func (b *sessBed) records() []string {
 		`SELECT 'interval', session_id, seq, started_at, ended_at, end_state, app_lifetime FROM operating_session_interval ORDER BY session_id, seq`,
 		`SELECT 'member', qso_id, session_id FROM operating_session_member ORDER BY qso_id`,
 		`SELECT 'exit', app_lifetime, exited_at FROM operating_app_exit ORDER BY app_lifetime`,
-		`SELECT 'counters', session_generation, default_epoch FROM archive_metadata`,
+		`SELECT 'counters', session_generation, default_epoch, arrived_activation FROM archive_metadata`,
 	} {
 		out = append(out, dumpQuery(b.t, b.svc, q)...)
 	}

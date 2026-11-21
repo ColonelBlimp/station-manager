@@ -140,12 +140,22 @@ func (d *daemon) startArchivePromote(context.Context) error {
 		return nil
 	}
 	id := d.paths.Entry.ID
+	// One update makes the activation final (ADR 0100 §4; W-0029 part 3, A1):
+	// the selector and its identity removed, the candidate active, and the
+	// activation's identity recorded as the one IN EFFECT. No reader sees some
+	// of these without the others. The archive now served is compared with the
+	// activation in effect, so that it is known to have been arrived at; the
+	// same activation processed again (this write lost, the start repeated)
+	// carries the same identity and is recognised.
 	dur, err := d.cfgSvc.Update(func(c *config.Config) error {
 		if e := c.QsoArchiveByID(id); e != nil {
 			e.LastActivationError = ""
 		}
+		endActivation(c, id)
 		c.ActiveQsoArchiveID = id
-		c.PendingQsoArchiveID = ""
+		// As before this change: nothing stays pending once a candidate is active,
+		// whatever the selector named.
+		c.PendingQsoArchiveID, c.PendingQsoArchiveActivationID = "", ""
 		return nil
 	})
 	if err != nil {
@@ -166,6 +176,60 @@ func (d *daemon) startArchivePromote(context.Context) error {
 	}
 	ev.Msg("archive: candidate activated (pending → active)")
 	return nil
+}
+
+// startOperatingSession is the `operating-session` lifecycle node (ADR 0100
+// §4; W-0029 part 3, A8): the session's step of every daemon start. It tells the
+// archive's database which activation this process serves it under, then runs
+// the two tests that close a session nobody asked to close, before any app is
+// served:
+//
+//   - the ARRIVAL: the file records the activation it was last arrived at
+//     under. If that is not the activation in effect, the archive has been
+//     arrived at, by an activation applied or by a fallback, and a session
+//     still open in it is closed with archive_switched;
+//   - the DEFAULT-EPOCH test: a session of an earlier default is closed.
+//
+// The activation in effect is read HERE, after archive-promote and after a
+// failed candidate's record: by then it names the activation this start
+// processed, whichever way it went, and otherwise the one already in effect.
+//
+// A failure is logged and the start goes on. Nothing is lost by that: the
+// admission's own step runs the same tests and does not admit an app while the
+// file cannot be read or written, so an arrival that is owed is never skipped
+// by an admission that succeeds. It is not a reason to refuse to serve: the
+// daemon has no better archive to offer.
+func (d *daemon) startOperatingSession(ctx context.Context) error {
+	if d.db == nil {
+		return nil
+	}
+	activation := d.cfgSvc.Snapshot().QsoArchiveActivationID
+	d.db.SetServedActivation(activation)
+	st, outcome, err := d.db.CheckOperatingSessionAtStartWithContext(ctx, time.Now())
+	switch {
+	case stderr.Is(err, errors.ErrNotFound):
+		return nil // a file with no archive identity has no session to test
+	case err != nil:
+		d.logger.WarnWith().Err(err).Msg("startup: the operating session could not be tested; the app's admission will test it")
+	case outcome == sqlite.SessionApplied:
+		d.logger.InfoWith().Int64("generation", st.Generation).
+			Msg("startup: a session left open by an earlier visit or an earlier default was closed")
+	}
+	return nil
+}
+
+// endActivation is what ends the pending activation of candidate, in the
+// caller's ONE update of config.json: its identity becomes the activation in
+// effect, and the selector and the identity are removed together. With nothing
+// pending for that candidate it changes nothing: a start that is not processing
+// an activation leaves the activation in effect alone.
+func endActivation(c *config.Config, candidate string) {
+	if c.PendingQsoArchiveID != candidate {
+		return
+	}
+	c.QsoArchiveActivationID = c.PendingActivationIdentity()
+	c.PendingQsoArchiveID = ""
+	c.PendingQsoArchiveActivationID = ""
 }
 
 // activationFailure names the pending candidate a start could not activate;
@@ -189,9 +253,13 @@ func recordActivationFailure(cfgSvc *config.Service, candidate types.QsoArchiveC
 		if e := c.QsoArchiveByID(candidate.ID); e != nil {
 			e.LastActivationError = archive.FailureCode(cause) // the code only; the chain is logged below
 		}
-		if c.PendingQsoArchiveID == candidate.ID {
-			c.PendingQsoArchiveID = ""
-		}
+		// The failed activation is still the one this start processed: the
+		// archive fallen back to is served under ITS identity, and a session
+		// open there is closed as an arrival closes it (ADR 0100 §4). Memory
+		// first, as the rest of this update: when the write fails the selector
+		// and its identity are still on disk, and the next start processes the
+		// same activation, which the file then already records.
+		endActivation(c, candidate.ID)
 		return nil
 	})
 	failure := fmt.Errorf("archive: activation of candidate %s (%q) failed: %w", candidate.ID, candidate.Label, cause)

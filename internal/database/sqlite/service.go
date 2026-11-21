@@ -35,6 +35,10 @@ type Service struct {
 	mu            sync.RWMutex
 	isInitialized atomic.Bool
 	isOpen        atomic.Bool
+
+	// servedActivation is the activation this process serves the file under
+	// (SetServedActivation); nil while nobody has said.
+	servedActivation atomic.Pointer[string]
 }
 
 // SetMigrationSets restricts this Service to the named migration sets
