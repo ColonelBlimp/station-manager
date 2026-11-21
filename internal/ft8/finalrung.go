@@ -234,38 +234,44 @@ func (s *Sequencer) earnLocked(build func() earnedClaim) func(ok bool) {
 	return s.contact.earned.complete
 }
 
-// claimEarned claims a Group A contact that is earned and not yet completed, for
-// an abandon about to end its session (invariant 1: a rogered contact is logged
-// whatever stops it), and returns the hand-over owed, or nil. abandonNamedThen
-// calls it, for the disarm and for the operator's Abandon.
+// claimEarnedLocked claims a Group A contact that is earned and not yet completed,
+// for an abandon about to end its session (invariant 1: a rogered contact is logged
+// whatever stops it). The caller holds s.mu.
 //
-// The Service's disarm abandons AFTER it has waited for the transmission in flight,
-// so a closing rung that reached the air has already completed through its own
-// callback and this finds nothing. What it finds there is a closing rung that never
-// reached the air: deferred to a later slot, or decided and never admitted.
+//   - Nothing earned: it returns (nil, false) and the lock is STILL HELD. The caller
+//     tears the session down in that same hold, so no slot can take a roger in
+//     between the look and the teardown.
+//   - A contact earned: it RELEASES the lock (the claim takes txMu and then s.mu,
+//     in that order), claims, and returns the hand-over owed, or nil if another
+//     caller claimed first, and true.
 //
+// The look and the teardown used to be two holds of the lock. A slot that took the
+// partner's roger in between them earned a contact the abandon then cleared,
+// unlogged (the clean-room reviews of d49b0d4e and 8f6f8cb4).
+//
+// Where it finds something. The Service's disarm abandons AFTER it has waited for
+// the transmission in flight, so a closing rung that reached the air has already
+// completed through its own callback; what is found there is a closing rung that
+// never reached the air: deferred to a later slot, or decided and never admitted.
 // The operator's Abandon abandons FIRST and cuts the transmission short afterwards
-// (the order the rung's commit gate relies on), so this may find the closing rung
-// on the air. The contact is claimed here, and the cut transmission's own callback,
+// (the order the rung's commit gate relies on), so it may find the closing rung on
+// the air: the contact is claimed here, and the cut transmission's own callback,
 // arriving later, is refused.
 //
 // Either way it is logged as not transmitted. Exactly once is the claim's own
 // generation guard: whichever of this call, the slot's own failure branch and a
 // transmission's goroutine claims first retires the session, and the others get nil.
-//
-// The caller must hold neither s.mu nor txMu: the claim takes both, in turn.
-func (s *Sequencer) claimEarned(endReason string) (handOver func()) {
-	s.mu.Lock()
+func (s *Sequencer) claimEarnedLocked(endReason string) (handOver func(), released bool) {
 	claim := s.contact.earned
-	s.mu.Unlock()
 	if claim == nil {
-		return nil
+		return nil, false
 	}
-	return claim(false, endReason)
+	s.mu.Unlock()
+	return claim(false, endReason), true
 }
 
-// endEarnedLocked is claimEarned for an abandon scoped to ONE generation, which has
-// just checked, under s.mu, that its generation is the live one. The caller holds
+// endEarnedLocked is claimEarnedLocked for an abandon scoped to ONE generation, which
+// has just checked, under s.mu, that its generation is the live one. The caller holds
 // s.mu. With nothing earned it returns false and the lock is still held. With a
 // contact earned it RELEASES the lock, claims and hands over, and returns true: that
 // generation's session is over and the caller has nothing left to abandon.
@@ -273,20 +279,19 @@ func (s *Sequencer) claimEarned(endReason string) (handOver func()) {
 // The kept claim read here belongs to the generation the caller checked: both are
 // read in one lock hold, and contactFlags die with their session. The claim guards
 // itself after the lock is let go, so a session that replaces this one in the gap
-// is not touched. An unscoped claimEarned BEFORE the generation check would let a
-// stale rung complete the replacement's contact (codex-206).
+// is not touched. A claim BEFORE the generation check would let a stale rung
+// complete the replacement's contact (codex-206).
 //
 // Why it is needed: a rung is accepted a slot before it is keyed, and its refusal
 // can arrive after a later slot of the SAME session has taken the partner's roger
 // in. That earlier rung carries no completion of its own, so its scoped abandon
 // was the only thing that ran, and it discarded the contact.
 func (s *Sequencer) endEarnedLocked(endReason string) (ended bool) {
-	claim := s.contact.earned
-	if claim == nil {
+	handOver, released := s.claimEarnedLocked(endReason)
+	if !released {
 		return false
 	}
-	s.mu.Unlock()
-	if handOver := claim(false, endReason); handOver != nil {
+	if handOver != nil {
 		handOver()
 	}
 	return true

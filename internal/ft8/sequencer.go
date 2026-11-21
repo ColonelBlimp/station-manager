@@ -489,7 +489,7 @@ type contactFlags struct {
 	// With the closing rung deferred to a later slot, or decided and not yet
 	// admitted by the Service, there is no transmission for a stop to wait for; the
 	// stop used to retire the generation, and the contact was lost (codex-203,
-	// codex-204). claimEarned and endEarnedLocked read it.
+	// codex-204). claimEarnedLocked reads it.
 	earned earnedClaim
 }
 
@@ -1013,7 +1013,7 @@ func (s *Sequencer) AbandonThen(stopRF func()) { s.abandonNamedThen("", causeOpe
 // is NOT the operator's own doing; the LOG always gets something, because "" was
 // indistinguishable from a session that DIED — the defect this closes.
 //
-// An EARNED contact is claimed first (claimEarned; invariant 1), whoever asks: the
+// An EARNED contact is claimed first (claimEarnedLocked; invariant 1), whoever asks: the
 // Service's disarm and the operator's Abandon both come through abandonNamedThen,
 // and neither may discard a contact the partner already holds. The claim retires
 // the session itself, so what follows then finds no exchange and reports none
@@ -1043,14 +1043,27 @@ func (s *Sequencer) abandonNamed(frameReason, logFallback string) (terminated bo
 // rung is admitted after the abandon (review 2026-07-20 #1). The caller must not
 // hold txMu: the claim stamps the contact under it.
 func (s *Sequencer) abandonNamedThen(frameReason, logFallback string, stopRF func()) (terminated bool) {
-	handOver := s.claimEarned(frameReason)
+	// The look for an earned contact and the teardown are ONE hold of the lock. A
+	// claim has to let the lock go, so after one the look is made again; the pass
+	// that finds nothing earned still holds the lock when the teardown runs.
+	var handOvers []func()
 	s.mu.Lock()
+	for {
+		handOver, released := s.claimEarnedLocked(frameReason)
+		if !released {
+			break
+		}
+		if handOver != nil {
+			handOvers = append(handOvers, handOver)
+		}
+		s.mu.Lock()
+	}
 	report := s.finishAbandonLocked(frameReason, logFallback)
 	if stopRF != nil {
 		stopRF()
 	}
 	terminated = report()
-	if handOver != nil {
+	for _, handOver := range handOvers {
 		handOver()
 	}
 	return terminated

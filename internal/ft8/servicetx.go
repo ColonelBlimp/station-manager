@@ -474,7 +474,7 @@ func (s *Service) disarmTxLocked(cause string) {
 	// decided and the slot is between the sequencer's lock and txMu, where with the
 	// arm gone it will be refused. Its contact is earned all the same, so the
 	// abandon completes it before it retires the session (Sequencer.abandonNamed,
-	// through claimEarned; codex-203, codex-204);
+	// through claimEarnedLocked; codex-203, codex-204);
 	// abandoning first would retire the generation its callback is guarded by, the
 	// same loss as the ordering above prevents.
 	// The abandon reports whether a PARTNER exchange ended: if so the sequencer

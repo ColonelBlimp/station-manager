@@ -1492,7 +1492,7 @@ read by the e2 resolver. Step (e) breaks into increments:
       any return that defers the rung (decoded too late into our slot, or the slot has
       already carried a rung). Until the rung is admitted by the Service there is no
       transmission for a disarm to wait for. The abandon that ends a session from
-      outside its ladder (`Sequencer.abandonNamedThen`, through `claimEarned`) therefore
+      outside its ladder (`Sequencer.abandonNamedThen`, through `claimEarnedLocked`) therefore
       completes a kept contact, as not transmitted, before it retires the session: an
       app's exit or replacement, the operator's disarm, the presence rule, a lost rig
       and a dial move alike. **The operator's Abandon does the same** (operator,

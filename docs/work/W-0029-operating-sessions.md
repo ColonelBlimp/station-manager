@@ -2525,3 +2525,32 @@ the same pattern in older code. The operator, in chat:
 - **Committed in two commits:** the slice as Codex closed it (`d49b0d4e`), then the
   Abandon change with its three rounds of fixes. Codex had not yet answered claude-471
   (the hub's eviction record) when the second was made.
+
+### After the two commits: the clean-room reviews (2026-11-20 and 2026-11-21)
+
+The automatic reviews of `d49b0d4e` and `8f6f8cb4` raised the same finding, and the first
+raised a second. A power cut at the station ended the session of 2026-11-20 with the fix
+built and its gates run; the next day the operator directed, in chat: "rerun the gates,
+then commit and push".
+
+- **[P1, both reviews] The stop looked for an earned contact in one hold of the
+  sequencer's lock and tore the session down in another.** A slot that took the partner's
+  roger in between the two earned a contact the stop then cleared, unlogged. Confirmed by
+  reading. **Fixed:** the look and the teardown are one
+  hold (`claimEarnedLocked`; `abandonNamedThen` looks again after a claim, and the pass
+  that finds nothing still holds the lock for the teardown).
+  - **No failing test.** Nothing observable sits between two holds of a lock. A test that
+    raced the slot against the stop hit the gap 0 times in 24,000 rounds and was not kept.
+  - **Gates on the fix, rerun 2026-11-21, by exit code:** `gofmt`, `go vet`,
+    `golangci-lint` (0 issues), maintainability (0 regressions), `go test ./... -count=1`
+    (67 packages ok, 0 failed), `task docs:check`, the context check, `git diff --check`;
+    under `-race` the FT8 and helper packages whole and the earned, operating, Abandon
+    and eviction tests 30 times. The desktop scenario against a daemon built from this
+    tree passes its 19 checks. No transmission, keyed test or rig command was made.
+- **[P2, `d49b0d4e`] A QSO submit refused by an exit's seal is told the wrong reason.**
+  It answers 409 `default_change_pending`, "the default logbook is changing and the daemon
+  is restarting". Confirmed by reading (`handler_qso.go`, `LiveEntryGate.Admit`). **Not
+  built:** the code and the wording for a submit refused by an exit are the operator's to
+  decide.
+- **CI for `8f6f8cb4`:** success (run 44794759794), read from the completed run.
+- **Not done:** Codex has not answered claude-471 or claude-472.
