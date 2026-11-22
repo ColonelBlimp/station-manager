@@ -577,6 +577,10 @@ func TestDefaultGuard_SubmitToAMissingLogbookIsNotFound(t *testing.T) {
 // "QSO not logged: ".
 const closingRefusal = "The app is closing. This attempt logged nothing. If closing fails and the app stays open, retry the contact."
 
+// switchRefusal is what the operator reads when an archive switch refuses a submit
+// (the operator's ruling of 2026-11-21). The app shows it after "QSO not logged: ".
+const switchRefusal = "The archive is being switched and the daemon is restarting. This attempt logged nothing. After the page reloads, check which archive is active before you log the contact again."
+
 // wantSubmitRefused pins a live submit refused by the seal, by which holder's answer.
 func wantSubmitRefused(t *testing.T, f defaultFixture, code string) {
 	t.Helper()
@@ -588,7 +592,10 @@ func wantSubmitRefused(t *testing.T, f defaultFixture, code string) {
 	if code == "operating_session_closing" && !strings.Contains(w.Body.String(), closingRefusal) {
 		t.Fatalf("got %s; want the message %q", w.Body.String(), closingRefusal)
 	}
-	if code == "default_change_pending" && !strings.Contains(w.Body.String(), "the daemon is restarting") {
+	if code == "archive_switch_pending" && !strings.Contains(w.Body.String(), switchRefusal) {
+		t.Fatalf("got %s; want the message %q", w.Body.String(), switchRefusal)
+	}
+	if code == "default_change_pending" && !strings.Contains(w.Body.String(), "the default logbook is changing") {
 		t.Fatalf("got %s; want the default change's message", w.Body.String())
 	}
 	assertNothingLogged(t, f)
@@ -681,6 +688,68 @@ func TestDefaultGuard_ASealedSubmitIsToldWhichHolderRefusedIt(t *testing.T) {
 		f, _, exit := sealed(t)
 		lbC := createTestLogbook(t, f.srv, "Third", "G4ABC")
 		must(t, exit.Seal())
+		_, _, _, _, current := f.headers()
+		w := serveDefault(f, liveSubmit("submit to C", lbC), headerServed, current)
+		if w.Code != http.StatusCreated || storedQsos(t, f.srv, lbC) != 1 {
+			t.Fatalf("got %d %s; want 201 stored in C", w.Code, w.Body.String())
+		}
+	})
+}
+
+// DG14. An archive switch closes live entry too (W-0029 part 3, C; ruled
+// 2026-11-12 and 2026-11-21). A live submit refused by its seal is told so, in
+// words of its own: after a switch the page reloads in another archive, or in
+// the same one if the switch falls back, so the default change's "log it again
+// once the page reloads" would not be safe to follow.
+func TestDefaultGuard_ASubmitRefusedByASwitchSaysSo(t *testing.T) {
+	sealed := func(t *testing.T) (defaultFixture, *LiveEntryGate, *LiveEntrySeal, *LiveEntrySeal) {
+		f := newDefaultFixture(t)
+		gate := NewLiveEntryGate()
+		f.srv.SetLiveEntryGate(gate)
+		return f, gate, gate.Owner(), gate.SwitchOwner()
+	}
+	must := func(t *testing.T, err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Run("the switch alone", func(t *testing.T) {
+		f, _, _, sw := sealed(t)
+		must(t, sw.Seal())
+		wantSubmitRefused(t, f, "archive_switch_pending")
+	})
+	t.Run("the switch and an exit: the switch's answer", func(t *testing.T) {
+		f, _, exit, sw := sealed(t)
+		must(t, exit.Seal())
+		must(t, sw.Seal())
+		wantSubmitRefused(t, f, "archive_switch_pending")
+	})
+	t.Run("the switch fails and lets go while an exit holds: the exit's answer is left", func(t *testing.T) {
+		f, _, exit, sw := sealed(t)
+		must(t, sw.Seal())
+		must(t, exit.Seal())
+		sw.Release()
+		wantSubmitRefused(t, f, "operating_session_closing")
+	})
+	t.Run("the exit lets go while the switch holds: live entry stays closed, by the switch", func(t *testing.T) {
+		f, _, exit, sw := sealed(t)
+		must(t, sw.Seal())
+		must(t, exit.Seal())
+		exit.Release()
+		wantSubmitRefused(t, f, "archive_switch_pending")
+	})
+	t.Run("the switch fails and lets go with nobody else holding: a submit is logged", func(t *testing.T) {
+		f, _, _, sw := sealed(t)
+		must(t, sw.Seal())
+		wantSubmitRefused(t, f, "archive_switch_pending")
+		sw.Release()
+		wantSubmitLogged(t, f)
+	})
+	t.Run("a deliberate submit to another logbook is not the switch's to refuse", func(t *testing.T) {
+		f, _, _, sw := sealed(t)
+		lbC := createTestLogbook(t, f.srv, "Third", "G4ABC")
+		must(t, sw.Seal())
 		_, _, _, _, current := f.headers()
 		w := serveDefault(f, liveSubmit("submit to C", lbC), headerServed, current)
 		if w.Code != http.StatusCreated || storedQsos(t, f.srv, lbC) != 1 {

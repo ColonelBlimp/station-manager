@@ -199,6 +199,29 @@ func (d *daemon) startArchivePromote(context.Context) error {
 // file cannot be read or written, so an arrival that is owed is never skipped
 // by an admission that succeeds. It is not a reason to refuse to serve: the
 // daemon has no better archive to offer.
+//
+// AN ACCEPTED LIMIT (raised by the clean-room review of b0c636ba; accepted by
+// the operator, 2026-11-22).
+// The arrival is decided from two records, config.json's activation in effect
+// and the file's, and holds through any single interruption. It is not proof
+// against a chain of lost writes. One such chain: a fallback stamps the archive
+// it fell back to with the new activation, durably, while BOTH of config.json's
+// writes for that activation (the request's selector and the fallback's record)
+// were renamed but not yet confirmed on disk, and the power is then cut.
+// config.json comes back as it was before the request, the file's stamp differs
+// from the activation in effect, and this step closes the session opened after
+// the fallback as archive_switched on a start that processed no switch. The cost
+// is one session closed early, shown as closed by a switch: no contact is lost
+// or moved, and the next app start opens a new session.
+//
+// The operator's ruling of 2026-11-21 (question 4, "a") accepts chains beyond a
+// single interruption and names one, Home to Contest to Home, whose worst
+// result is a session carried on. This chain is of the same kind with a
+// different result, and was put to the operator on its own and accepted (the
+// dossier, W-0029, rulings, 2026-11-22). What would close it was among the
+// choices not taken on question 4: admitting no app after a switch attempt
+// until its outcome is durably recorded, or a third durable record of the
+// archive last served.
 func (d *daemon) startOperatingSession(ctx context.Context) error {
 	if d.db == nil {
 		return nil

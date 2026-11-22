@@ -1231,6 +1231,10 @@ func (d *daemon) initHTTP() error {
 	// earned before it closes the session (ADR 0100 §3).
 	d.server.SetCompletionDrain(d.drainFt8Completions)
 	d.archives.SetLiveEntrySeal(d.liveEntry)
+	// An archive switch ends the sitting in the archive it leaves (ADR 0100
+	// §4; W-0029 part 3): its own seal on live entry, the same wait for FT8
+	// completions, the close, and the closing phase after it.
+	d.archives.SetSwitch(d.liveEntry.SwitchOwner(), d.server.SwitchSession())
 	// A default change and an activation are ordered with the app's starts
 	// and exits (W-0029 part 2, G6).
 	d.archives.SetSessionOrder(d.server.HoldSessionOrder)

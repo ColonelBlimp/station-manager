@@ -52,6 +52,9 @@ var archiveErrorStatus = map[string]int{
 	"activation_persist_failed": http.StatusInternalServerError,
 	"restart_failed":            http.StatusInternalServerError,
 	"pending_unclear":           http.StatusInternalServerError,
+	// The switch could not close the operating session in the archive it was
+	// leaving; nothing was requested (ADR 0100 §4).
+	"session_close_failed": http.StatusServiceUnavailable,
 	// Default logbook change (ADR 0097).
 	"default_stale":                         http.StatusConflict,
 	"default_target_unavailable":            http.StatusNotFound,

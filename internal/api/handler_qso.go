@@ -277,6 +277,15 @@ func (s *Server) handleSubmitQso(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusConflict, "default_change_pending",
 				"the default logbook is changing and the daemon is restarting; nothing was logged — log it again once the page reloads", op)
 			return
+		case LiveEntrySwitching:
+			// An archive switch holds the seal (W-0029 part 3, C; the operator's
+			// rulings of 2026-11-12 and 2026-11-21). The page will reload, but
+			// the archive it reloads in is the one asked for only if that archive
+			// starts: the words must not promise it, and must not tell the
+			// operator to log the contact again without looking.
+			s.writeError(w, http.StatusConflict, "archive_switch_pending",
+				"The archive is being switched and the daemon is restarting. This attempt logged nothing. After the page reloads, check which archive is active before you log the contact again.", op)
+			return
 		case LiveEntryClosing:
 			// The app's confirmed exit holds the seal: no restart and no reload
 			// follow, so the default change's answer would not be true (the

@@ -153,6 +153,10 @@ type appAdmission struct {
 	// because a session step failed after they were stopped. The next admission
 	// that succeeds, the current lifetime's own included, publishes them.
 	stopped bool
+	// closing is true in the closing phase of an archive switch (ADR 0100 §4):
+	// from the switch's close of the session until the switch fails or the
+	// process ends. No session is opened in it.
+	closing bool
 
 	// published is the generation as last published, for the response header. It is read
 	// without mu, so a request is never held up behind a replacement that is stopping a
@@ -257,8 +261,12 @@ func (a *appAdmission) exitRecorded(lifetime string) (bool, error) {
 	return exited, nil
 }
 
+// startSession is the session's start step. In the closing phase of an archive
+// switch it does nothing: the lifetime is admitted, by the order ruled on
+// 2026-11-20, and given no session (W-0029 part 3, G1). The start after the
+// restart, or the switch's own failure (SwitchSession.Failed), opens one.
 func (a *appAdmission) startSession(lifetime string) error {
-	if a.sessions == nil {
+	if a.sessions == nil || a.closing {
 		return nil
 	}
 	if err := a.sessions.start(lifetime); err != nil {

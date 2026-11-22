@@ -19,6 +19,34 @@ type Seal interface {
 	Release()
 }
 
+// SwitchSession is the operating session's part in an archive switch (ADR 0100
+// §4; W-0029 part 3). Activate calls it with the app's session order held
+// (takeSessionOrder), so an app start, an exit and setup's first save are each
+// wholly before the switch or wholly after it.
+type SwitchSession interface {
+	// Drain waits for FT8 completion logging already earned to finish: a
+	// contact the decode loop is still handing over, then every logging job
+	// already launched. It cancels nothing and has no limit of its own
+	// (operator ruling 2026-11-21).
+	Drain()
+	// Close closes the open session in the archive being left, and begins the
+	// closing phase, in which no session is opened. An error means nothing was
+	// closed and the phase has not begun.
+	Close() error
+	// Failed ends the closing phase for a switch that failed after its close.
+	// The close stands; a new session is opened for the app that is current.
+	Failed()
+}
+
+// SetSwitch wires what an archive switch does beyond sealing TX: its own seal
+// on live Phone / CW entry, and the operating session's part. nil for either
+// leaves that step out, as before part 3.
+func (m *Manager) SetSwitch(live Seal, session SwitchSession) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.switchLive, m.switchSession = live, session
+}
+
 // SetActivation wires the activation's ports: the two seals (nil = no such
 // subsystem) and the restart request (nil = this daemon has no service-manager
 // respawn, so activation is refused before anything is sealed or written).
@@ -217,6 +245,35 @@ func (m *Manager) Activate(ctx context.Context, id string) (types.QsoArchiveActi
 		}
 	}
 
+	// The switch's own steps (ADR 0100 §4; W-0029 part 3), each before the next
+	// and all before anything is requested:
+	//
+	//  1. live Phone / CW entry is sealed, which waits for every submit already
+	//     admitted: one that commits is stored before the close below;
+	//  2. FT8 completion logging already earned is waited for. With TX sealed
+	//     above nothing new can be earned;
+	//  3. the open session is closed in the archive being left.
+	//
+	// If the close fails nothing is requested: the seals are released, no
+	// selector is written and no restart asked for, so a database that cannot be
+	// written is reported and not switched away from. The sitting goes on.
+	//
+	// Both waits are made with m.mu held, as the FT8 and rig seals are taken:
+	// neither a submit nor a completion's logging comes to this manager, so
+	// what waits behind them is only another archive request.
+	if m.switchLive != nil {
+		_ = m.switchLive.Seal() // never refuses: it waits for what is already running
+	}
+	if m.switchSession != nil {
+		m.switchSession.Drain()
+		if err := m.switchSession.Close(); err != nil {
+			m.releaseSwitchSeals()
+			m.logger.ErrorWith().Err(err).Str("archive_id", id).Msg("archive: the operating session could not be closed; the archive was not switched")
+			return types.QsoArchiveActivation{}, &RequestError{Code: "session_close_failed",
+				Message: "the operating session could not be closed, so the archive was not switched; nothing was changed"}
+		}
+	}
+
 	// The activation's identity, written with the selector in ONE update (ADR
 	// 0100 §4; W-0029 part 3, A1). The start that processes this activation
 	// works under it and records it in the archive it serves, so the same
@@ -229,7 +286,7 @@ func (m *Manager) Activate(ctx context.Context, id string) (types.QsoArchiveActi
 		return nil
 	})
 	if err != nil {
-		m.releaseSeals()
+		m.endFailedSwitch()
 		return types.QsoArchiveActivation{}, &RequestError{Code: "activation_persist_failed", Message: "the activation could not be recorded in config.json: " + err.Error()}
 	}
 	if err := m.restart(); err != nil {
@@ -250,7 +307,7 @@ func (m *Manager) Activate(ctx context.Context, id string) (types.QsoArchiveActi
 // failed: clear it and release the seals; if the clear fails too, record the
 // diagnostic on the entry (memory at least) so the pending listing carries it.
 func (m *Manager) abortAfterPersist(id string, cause error) error {
-	defer m.releaseSeals()
+	defer m.endFailedSwitch()
 	_, err := m.cfg.Update(func(c *config.Config) error {
 		if c.PendingQsoArchiveID == id {
 			c.PendingQsoArchiveID = ""
@@ -271,6 +328,27 @@ func (m *Manager) abortAfterPersist(id string, cause error) error {
 	})
 	m.logger.ErrorWith().Err(cause).Str("archive_id", id).Str("clear_error", err.Error()).Msg("archive: restart request failed and pending could not be cleared; the next restart activates")
 	return &RequestError{Code: FailPendingUnclear, Message: FailureMessage(FailPendingUnclear)}
+}
+
+// releaseSwitchSeals gives back every seal a switch took, live entry's first.
+// Each holder releases only its own: live entry reopens only if no other holder
+// (a default change, an app's exit) still has a seal.
+func (m *Manager) releaseSwitchSeals() {
+	if m.switchLive != nil {
+		m.switchLive.Release()
+	}
+	m.releaseSeals()
+}
+
+// endFailedSwitch is the end of a switch that failed AFTER its close (ADR 0100
+// §4 step 5; W-0029 part 3, F). The close stands. The seals are released first,
+// and then the closing phase is ended, so that the new session it opens for the
+// current app finds live entry open.
+func (m *Manager) endFailedSwitch() {
+	m.releaseSwitchSeals()
+	if m.switchSession != nil {
+		m.switchSession.Failed()
+	}
 }
 
 func (m *Manager) releaseSeals() {

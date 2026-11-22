@@ -132,7 +132,10 @@ func (f *arrivalFixture) wantInEffect(want string) {
 
 func raw(t *testing.T, path string) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite", "file:"+path)
+	// It waits for a writer: some of its statements run while a generation of
+	// the daemon is starting on the same file, and without the wait one that
+	// met another start node's write failed at once as busy.
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		t.Fatal(err)
 	}

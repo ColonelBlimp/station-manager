@@ -35,6 +35,10 @@ const (
 	sessionStateNone            = "none"
 	sessionStateSetupPending    = "setup_pending"
 	sessionStateRecoveryPending = "recovery_pending"
+	// sessionStateArchiveSwitching: an archive switch has closed the session and
+	// the daemon is about to restart (the closing phase, ADR 0100 §4). No session
+	// is open and none is opened until the switch has failed or the process ended.
+	sessionStateArchiveSwitching = "archive_switching"
 )
 
 // serverSessions is the admission's view of the session record.
@@ -78,10 +82,13 @@ func (ss serverSessions) open(lifetime string) (sqlite.SessionOutcome, error) {
 // An error means the save must not succeed (operator ruling 2026-11-20): the
 // record could not be read or written, or the default logbook just recorded is
 // not there to bind a session to.
+//
+// In the closing phase of an archive switch it opens none, and the save
+// succeeds (W-0029 part 3, G4): the next start's admission opens the session.
 func (s *Server) openSessionAtSetup() error {
 	var err error
 	s.admission.observe(func(held string) {
-		if held == "" {
+		if held == "" || s.admission.closing {
 			return
 		}
 		var outcome sqlite.SessionOutcome
@@ -152,7 +159,7 @@ func (s *Server) handleOperatingSessionRead(w http.ResponseWriter, r *http.Reque
 		if s.sessionReadGap != nil {
 			s.sessionReadGap()
 		}
-		resp = s.sessionResponse(st, caller, current)
+		resp = s.sessionResponse(st, caller, current, s.admission.closing)
 	})
 	if err != nil {
 		s.logger.ErrorWith().Err(err).Msg("operating session: the state could not be read")
@@ -166,11 +173,16 @@ func (s *Server) handleOperatingSessionRead(w http.ResponseWriter, r *http.Reque
 // sessionResponse names the state: a session held by the current lifetime, or
 // an empty one, is open; one with contacts that another lifetime holds awaits
 // the operator's Continue or New. current is the admission's current lifetime
-// as observed with the file, by the caller.
-func (s *Server) sessionResponse(st sqlite.OperatingSessionState, caller, current string) operatingSessionResponse {
+// as observed with the file, by the caller, and closing whether an archive
+// switch is in its closing phase, observed in the same hold. That state comes
+// first: whatever else is true of the file, no session will be opened in it by
+// this process unless the switch fails.
+func (s *Server) sessionResponse(st sqlite.OperatingSessionState, caller, current string, closing bool) operatingSessionResponse {
 	resp := operatingSessionResponse{ArchiveID: s.servedArchiveID, Generation: st.Generation}
 	o := st.Open
 	switch {
+	case closing:
+		resp.State = sessionStateArchiveSwitching
 	case o == nil && st.DefaultLogbookUUID == "":
 		resp.State = sessionStateSetupPending
 	case o == nil:
@@ -319,6 +331,15 @@ func (s *Server) exitOperatingSession(r *http.Request, lifetime string, generati
 	if status, code, message := s.archiveRefusal(r, true); status != 0 {
 		return exitResult{status: status, code: code, message: message}
 	}
+	// In the closing phase of an archive switch the exit is acknowledged without
+	// change (W-0029 part 3, G3): the switch has closed the session, so there is
+	// none whose close a stale generation could confirm by mistake, and an app
+	// that has not yet heard of the close must still be able to close cleanly.
+	// The exit is recorded at the file's generation; it takes and releases only
+	// its own seal, never the switch's.
+	if a.closing {
+		generation = st.Generation
+	}
 	if generation != st.Generation {
 		return exitStale(st.Generation)
 	}
@@ -418,4 +439,73 @@ func (s *Server) exitCurrent(ctx context.Context, a *appAdmission, lifetime stri
 func (s *Server) HoldSessionOrder() (release func()) {
 	s.admission.mu.Lock()
 	return s.admission.mu.Unlock
+}
+
+// ---- An archive switch (ADR 0100 §4; W-0029 part 3) ----
+
+// SwitchSession is the operating session's part in an archive switch, for the
+// archive manager (archive.Manager.SetSwitch). The manager calls it with the
+// session order held (HoldSessionOrder), so each method is wholly before or
+// wholly after any app start, exit report, read and setup save, and none of
+// them takes the order itself.
+type SwitchSession struct{ s *Server }
+
+// SwitchSession returns the port.
+func (s *Server) SwitchSession() *SwitchSession { return &SwitchSession{s: s} }
+
+// Drain waits for FT8 completion logging already earned: the wait a confirmed
+// exit uses (SetCompletionDrain). The caller has sealed FT8, so nothing new is
+// earned while it waits. It cancels nothing and has no limit of its own
+// (operator ruling 2026-11-21).
+func (p *SwitchSession) Drain() {
+	if p.s.completionDrain != nil {
+		p.s.completionDrain()
+	}
+}
+
+// Close closes the open session in the archive being left, whoever holds it,
+// with its interval's end confirmed, and begins the closing phase: from here
+// until Failed, or the end of the process, no session is opened in this
+// archive. With no session open it changes nothing in the file and the phase
+// begins all the same. The change is published after its commit.
+//
+// An error means nothing was closed and the phase has not begun.
+func (p *SwitchSession) Close() error {
+	s := p.s
+	// Not a request's context: a close the client gave up on must not be left
+	// half decided, as an exit is not.
+	st, _, err := s.db.CloseOperatingSessionForSwitchWithContext(context.Background(), false, s.sessionNow())
+	if err != nil {
+		return err
+	}
+	s.admission.closing = true
+	s.publishSessionChange(st)
+	return nil
+}
+
+// Failed ends the closing phase of a switch that failed after its close. The
+// close stands. One new session is opened, by the ordinary rule, for the app
+// that is current, before the switch answers; with no app current none is, and
+// the next app start opens it.
+//
+// If the session cannot be opened the admission is left as a failed start step
+// leaves it (app_admission.go): the scopes stopped, authorizing nobody, and
+// the app's read saying it is not current, so that the app's own next
+// admission opens the session and publishes the scopes. Scopes an earlier
+// failed step had already stopped are in that state already, and are left to
+// the same repair.
+func (p *SwitchSession) Failed() {
+	s := p.s
+	a := &s.admission
+	a.closing = false
+	if a.current == "" || a.stopped {
+		return
+	}
+	if err := a.startSession(a.current); err != nil {
+		for _, sc := range a.scopes {
+			sc.RetireOperating()
+		}
+		a.stopped = true
+		s.logger.ErrorWith().Err(err).Msg("operating session: no session could be opened after a failed archive switch; the app's next admission opens it")
+	}
 }

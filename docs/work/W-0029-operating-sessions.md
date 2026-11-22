@@ -24,8 +24,12 @@ With it part 2's criteria are built; what is not shown is listed there. Part 3's
 criteria are written, at the end of this file (2026-11-21); two of its questions are ruled,
 the third is withdrawn and the fourth ruled, Codex agrees to the criteria (codex-215), and
 its build is directed (2026-11-21), the first slice first. That first slice, the arrival,
-is built and committed with this text (the last section of this file); Codex's review of
-it is closed (codex-217). The second slice's build is directed and not yet started.** The removal of the database half of
+is committed (`b0c636ba`); Codex's review of it is closed (codex-217). The second slice,
+the switch request and the closing phase, is built and committed with this text (the last
+section of this file). Codex found no defect in the switch path and asked for two
+follow-ups (codex-219): one is done; the other, a demonstration of the late hand-over
+through the daemon, is answered by a source check on the operator's decision, which Codex
+has not read. With it part 3's criteria are built; G7 is owed by parts 4 and 6.** The removal of the database half of
 the downgrade tooling, which part 1 waited for, is committed (`0b21b2fb`, 2026-11-20; W-0027).
 **Part 1's acceptance criteria are written, their three questions ruled, and agreed with
 Codex after one round of corrections (2026-11-20).** The
@@ -177,6 +181,36 @@ next part starts.
 - **2026-11-21 (operator): "commit, push and move on with the build 2nd slice - we are way
   behind...".** The first slice's commit and push, and the build of the second slice, are
   directed.
+- **2026-11-22 (operator): "Accepted".** Said of the clean-room review's finding on
+  `b0c636ba`, put in chat as a choice between accepting it and taking one of the two
+  choices passed over on question 4. After a fallback, if both of `config.json`'s writes
+  for that activation are lost to a power cut, the next start closes the session opened
+  after the fallback as `archive_switched`, though it processed no switch. No contact is
+  lost or moved. It is a second named chain beyond a single interruption, beside Home,
+  Contest, Home; nothing is built for it.
+- **2026-11-22 (operator): "It seems to me that the CI is really slowing down dev work. Is
+  there anyway to be a little more focused on the tests we run locally, and when we think
+  we have finished a step, then run the whole CI locally before the push?"** Adopted: the
+  named tests and the changed packages while building; the whole local gate
+  (`task ci:local`) once, when a step is thought finished, before the push.
+- **2026-11-22 (operator): "go with recommendations".** Said of five recommendations put
+  in chat for part 3's second slice.
+  1. **No method in `internal/ft8` for a test alone** (the operator had asked: "you want
+     to add the method purely for a test?"). `DriveSlotForTest`, its guard and the daemon
+     test that used it are removed; the drain's hand-over wait is pinned by a source check
+     in `cmd/smd` instead. This is weaker than the behavioural demonstration Codex asked
+     for (codex-219), and was put to the operator as such.
+  2. **The three decisions made in the build are approved:** a close that fails answers
+     `session_close_failed`, 503; an exit in the closing phase is acknowledged whatever
+     generation it names; the switch's two waits are made with the archive manager's lock
+     held.
+  3. **Commit and push of the second slice,** after the first item, with one
+     `task ci:local` first. Claude's reading, not the operator's words: this is the
+     direction to commit and push once that run passes, without another round with Codex.
+  4. **Part 3 goes to the station as a whole,** not its first slice alone. When is not
+     decided.
+  5. **The one measurement** (how long an FT8 completion takes to store) is left until
+     part 3 is at the station.
 
 The design's own rulings are in ADR 0100 and are not repeated here.
 
@@ -3317,3 +3351,206 @@ changed.**
 **Records changed with it:** `docs/v2-design/config.md` (the two identities; the 7 to 8
 step); ADR 0100, *Update 2026-11-21* (the arrival's mechanism, the accepted limit, and the
 two rulings for the request, marked as not yet built).
+
+### Part 3, first slice: its clean-room review (2026-11-21; one finding, accepted by the operator 2026-11-22)
+
+The clean-room review of `b0c636ba` raised one finding (P2): **one crash can close the
+departing archive's session falsely.** A fallback stamps the archive it fell back to with
+the new activation, durably. If both of `config.json`'s writes for that activation (the
+request's selector and the fallback's record) were renamed but not yet confirmed on disk
+when the power is cut, `config.json` comes back as it was before the request, the file's
+stamp differs from the activation in effect, and the next start closes the session opened
+after the fallback as `archive_switched`, though that start processed no switch.
+
+**Not fixed; accepted by the operator (2026-11-22: "Accepted"; the rulings list).** What
+follows is the state before that ruling, kept as it was put. The operator ruled on question 4 (2026-11-21, "a")
+that the arrival holds through any single interruption and that the limit beyond it is
+accepted and named. The chain named then was one activation serving Home, Contest and
+Home again, whose worst result is a session carried on or a Continue-or-New question.
+This sequence needs two configuration writes lost together with a file write kept, which
+is a chain of the same kind, **but its result is a different one: a session closed on an
+ordinary start.** Claude's reading is that the ruling's reasoning covers it; Codex
+supports classing it as another excluded chain and holds, rightly, that the ruling does
+not say so (codex-219). **Whether it is accepted is the operator's to say.** Its cost is
+one session closed early and shown as closed by a switch: no contact is lost or moved,
+and the next app start opens a new session. What would close it is among the choices not
+taken on question 4: admitting no app after a switch attempt until its outcome is
+durably recorded, or a third durable record of the archive last served. (As first written
+this section and the code's comment called it accepted, and said that only a commit
+across the two files could close it. Both were wrong; codex-219.) The sequence is stated
+in the code, at `startOperatingSession` (`cmd/smd/archive_adopt.go`), with the ruling. It has not been reproduced by a test. CI for `b0c636ba` passed (run
+44903934961).
+
+### Part 3, second slice: the switch request and the closing phase (2026-11-21 and 22; committed with this record)
+
+On the operator's direction ("commit, push and move on with the build 2nd slice"). Criteria
+B to G, H1 and I. With it part 3's criteria are built.
+
+**What the operator sees.** Switching the archive now ends the sitting in the archive
+being left: its session is closed, with its end confirmed, before the daemon restarts. A
+Phone or CW contact submitted while the switch is under way is refused in words of its
+own (the ruled message), and one already being stored when the switch began is stored
+first. An FT8 contact already earned is stored before the session closes. If the switch
+cannot close the session it does not switch, and says so; the sitting goes on. If it fails
+later, operation is given back with a new session and no question.
+
+**What is built.**
+- **The gate's third holder** (`internal/api/live_entry.go`): `SwitchOwner`, the switch's
+  own seal on live Phone / CW entry, and `LiveEntrySwitching`, decided in the same hold of
+  the gate's lock as the refusal. With more than one holder the answer is the default
+  change's, then the switch's, then the exit's. Each holder releases only its own.
+- **The submit's refusal** (`handler_qso.go`): 409 `archive_switch_pending`, the message as
+  ruled on 2026-11-21.
+- **The request** (`internal/archive/activate.go`): after today's refusals and the FT8 and
+  rig seals, in order: the switch's seal on live entry; the wait for FT8 completion
+  logging already earned; the close; then the selector and the restart request as before.
+  A close that fails releases every seal and requests nothing (`session_close_failed`,
+  503). A failure after the close (`activation_persist_failed`, `restart_failed`,
+  `pending_unclear`) releases the switch's seals and then ends the closing phase. The
+  manager reaches the session through a port (`SwitchSession`: `Drain`, `Close`, `Failed`),
+  so `internal/archive` still imports nothing of the API.
+- **The session's part** (`internal/api/operating_session.go`, `Server.SwitchSession`),
+  called with the admission's order held. `Drain` is the wait a confirmed exit uses.
+  `Close` closes the open session whoever holds it (`archive_switched`, the interval's end
+  confirmed), publishes the change, and begins the closing phase. `Failed` ends the phase
+  and opens one session for the app that is current; if that cannot be done the admission
+  is left as a failed start step leaves it, and the app's next admission repairs it.
+- **The closing phase** (`appAdmission.closing`): the start step opens nothing, so an app
+  start or a replacement is admitted and given none; setup's first save succeeds and opens
+  none; the read route answers `archive_switching`, named before any other state; the
+  current lifetime's exit is recorded and acknowledged whatever generation it names.
+- **Wiring** (`cmd/smd/lifecycle_adapters.go`): one line, `SetSwitch`.
+
+**Three decisions made in the build. The operator approved them on 2026-11-22** (the
+rulings list); they were put for review as follows.
+1. **The failed close's code is `session_close_failed`, 503.** The criteria ask for "a code
+   of its own"; `operating_session_unavailable` is the admission's and the exit's.
+2. **An exit in the closing phase does not answer `operating_session_stale`.** G3 says it
+   is acknowledged without change. The switch has closed the session, so there is none
+   whose close a stale generation could confirm by mistake, and an app that has not yet
+   heard of the close can still close cleanly.
+3. **Both waits are made with the archive manager's lock held,** as the FT8 and rig seals
+   already are. Neither a submit nor a completion's logging comes to the manager, so what
+   waits behind them is another archive request (the bindings, a provision).
+
+**Seen.**
+- **Failing first,** each on its own assertion: the gate's and the submit's tests against
+  a switch holder not yet told apart from the exit's (the answer was
+  `operating_session_closing`); the request's tests against a port that nothing called;
+  the session's tests against a port that did nothing. **The daemon's tests were written
+  after the wiring and passed at once;** what shows they test it is the reversion proofs
+  (the twentieth removes the wiring and ten of them fail).
+- **The gate and the submit** (`live_entry_owner_test.go`, `default_guard_test.go` DG14):
+  the switch alone; with an exit, either releasing first; with a default change; released
+  with nobody else holding, a submit is logged; a deliberate submit to another logbook is
+  never refused.
+- **The request** (`internal/archive/activate_switch_test.go`, the order read from a trace
+  of its ports): a success takes its steps in order, the selector written after the close
+  and before the restart, and keeps its seals; three refusals touch nothing; FT8 busy and
+  the rig busy leave live entry and the session alone; a close that fails requests
+  nothing and a later switch succeeds; each failure after the close releases the seals
+  and then ends the phase.
+- **The session's part** (`internal/api/operating_session_switch_test.go`): the close of a
+  session with a contact (after the drain, the interval confirmed, one event, the read
+  naming the phase), of an empty one, of a remnant with no app current, and with none
+  open; a close that fails changes nothing and begins no phase; in the phase a
+  replacement, a repeat and setup's save open nothing and an exit is acknowledged at a
+  generation from before the close, leaving the switch's seal; a failed switch opens one
+  session for the current app, none with nobody current, and three failed switches leave
+  one session; a failed re-open is repaired by the app's own flow through the real
+  routes.
+- **Through a real daemon** (`cmd/smd/operating_session_switch_test.go`):
+  - a success: the session closed and confirmed in the file, the selector with its
+    identity, the restart requested, the read `archive_switching`, a live submit refused
+    in the ruled words with nothing stored, a deliberate submit to another logbook
+    stored, TX admission sealed, an app start admitted with no session, its exit
+    acknowledged;
+  - refusals: under a pending default change its seals and the session are as they were;
+    under a pending activation a second changes nothing and a default change is refused;
+    with no session open none is made and nothing is sealed;
+  - the switch waits for an admitted live submit, which is stored before the close, and
+    refuses a later one; a live submit whose write fails does not block it;
+  - **the drain:** with an earned FT8 contact held at the archive's write lock the switch
+    is seen in the drain, the session still open and nothing requested; released, the QSO
+    and its upload row are stored and the session is closed. It waits for a tracked job
+    and cancels none. A completion whose write fails does not block it;
+  - a close that fails: 503 `session_close_failed`, nothing requested, the session open,
+    a live submit stored, TX admission not sealed, and a later switch accepted;
+  - a failure after the close (the selector cannot be recorded): the close stands with
+    its contact, one new session is open, live entry and TX admission are given back, and
+    two more failed switches leave two sessions in all;
+  - a failed re-open: the switch answers its own failure, the app reads as not current,
+    its admission is refused while the file fails and opens the session once it can;
+  - **H1:** the close committed and no selector written, the daemon stopped and started:
+    an ordinary start, the closed session kept with its contact, and the app start opens
+    a new one with no question;
+  - **the order,** each with one side held at a seen point and the other seen parked: an
+    exit first and the switch first; an app start first (the switch closes the session it
+    opened: two advances of the generation) and the switch first (the start waits and is
+    admitted into the phase).
+- **Setup's first save against a switch** (API level, I3): the save first, and the switch
+  first with the save seen parked.
+- **D3, the late hand-over,** by one test and one source check, and not by a
+  demonstration through the daemon's switch.
+  - In `internal/ft8` (`TestSealTxAdmission_AContactBeingHandedOverIsWaitedForAfterTheSeal`;
+    a test only, no FT8 code is changed): with a contact the sequencer earned still being
+    handed over by the decode loop, the seal is refused while TX is armed; disarmed, it is
+    taken; the hand-over wait after it is seen parked and returns only when the contact
+    has been handed over.
+  - **The gap Codex found (codex-219), and it was right:** every daemon test, the exit's
+    included, begins with the logging job already counted, so none reaches the drain's
+    first wait. With that wait removed from `drainFt8Completions` they all still pass.
+  - **How it was closed, and how it was not.** A daemon test was written that held a slot
+    open, saw the switch parked at the hand-over wait and then at the jobs' wait, and read
+    the QSO stored before the close. It needed the FT8 service's own lock, so it needed an
+    exported method in `internal/ft8` that existed for the test alone. **The operator
+    decided against that (2026-11-22), and the method, its guard and that test are
+    removed.** In their place `cmd/smd/completion_drain_source_test.go` pins the drain at
+    its source: the function is embedded and parsed, and its statements must be exactly
+    the hand-over wait and then the jobs' wait. It shows the wait is made and in what
+    order. It does not show a contact held at that wait and then stored.
+  - **Evidence obtained once, and evidence that remains.** The removed daemon test passed
+    on 2026-11-22, also under the race detector, and failed with the hand-over wait
+    removed (the switch answered 202 where it should have been waiting); Codex read it and
+    ran it (codex-220). That is a demonstration made once. It is not a regression test:
+    nothing in the suite repeats it. What remains in the suite is the FT8 test (a contact
+    the sequencer earned is handed over under the slot's mark and waited for), the
+    daemon's tests of the jobs' wait (the QSO and its upload row stored before the close)
+    and the source check that joins the two. Codex prefers this to the method
+    (codex-221, superseding its codex-220).
+- **Reversion proofs,** twenty-two, each in a temporary copy since removed, each checked as
+  applied, the tree's file unchanged: all fail for the reason claimed. The last is the
+  daemon's drain without its hand-over wait: only the source check fails. The gate (the
+  switch answering as the exit; its holder not told apart). The request (no live seal;
+  the close before the drain; a failed close going on; a failure not ending the phase;
+  the phase ended before the seals are released; the live seal not released; the old
+  release on a persist failure). The session's part (the phase not begun; the close not
+  published; the close as an arrival; a drain that does nothing; the start step running
+  in the phase; setup opening in the phase; a stale exit in the phase; a failure leaving
+  the phase; a failed re-open not stopping the scopes; the read not naming the phase; a
+  failure opening nothing). The wiring removed.
+- **Gates,** each by its exit code: `gofmt`, `go vet ./...`, `golangci-lint` (0 issues), the
+  maintainability gate (0 regressions), `go test ./...` (67 packages), the race detector
+  on `internal/api`, `internal/archive`, `cmd/smd` and `internal/ft8`, `task docs:check`,
+  the context check, `git diff --check`, and the desktop scenario (19 checks). No transmission, keyed test or rig command.
+- **The whole local gate, once, before the push** (the operator's direction of
+  2026-11-22): `task ci:local` on this slice's code as committed, exit code 0, "All CI
+  gates passed locally", 13 minutes. Only this record and `docs/current.md` were edited
+  after it began; the documentation gates were run again after those edits.
+
+**A flaw in the first slice's fixture, found by this slice's full run and fixed.**
+`TestArrival_AFailureAfterTheActivationIsFinalStartsAgainOnTheCandidate` failed once
+(`DROP TRIGGER refuse_close: database is locked`). Its raw connection had no busy wait,
+and that statement runs while a generation of the daemon is starting on the same file.
+That another start node's write met it is an inference from the error, not something
+observed. The connection now waits; the arrival tests then passed thirty runs in a row.
+`b0c636ba`'s own CI run did not meet it.
+
+**Not shown.**
+- G7 (New and Continue refused in the phase) is owed by parts 4 and 6: those routes do not
+  exist.
+- B1's fixture "setup pending with no session" is shown at the daemon with no session
+  open and a default present, and for the close itself at the API level with no default.
+- How long an FT8 completion takes to store (the criteria's one measurement) has not been
+  read from the station's log: that needs the operator's agreement for the occasion.
+- Nothing here has been run at the station.

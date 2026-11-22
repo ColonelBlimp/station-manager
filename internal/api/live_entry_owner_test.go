@@ -147,3 +147,49 @@ func TestLiveEntryGate_ARefusalNamesTheHolder(t *testing.T) {
 		done()
 	}
 }
+
+// An archive switch is the gate's third holder and has an answer of its own
+// (W-0029 part 3, C3 and C4; the operator's ruling of 2026-11-21). With an exit
+// also holding, the switch's answer is given: a restart follows. With a default
+// change also holding, the default change's is. Each release leaves the answer
+// of whoever still holds.
+func TestLiveEntryGate_ASwitchHasItsOwnAnswer(t *testing.T) {
+	g := NewLiveEntryGate()
+	exit, sw := g.Owner(), g.SwitchOwner()
+	want := func(when string, want LiveEntryRefusal) {
+		t.Helper()
+		if got := liveRefusal(g); got != want {
+			t.Fatalf("%s: a live submission got %v, want %v", when, got, want)
+		}
+	}
+	_ = sw.Seal()
+	want("the switch alone", LiveEntrySwitching)
+	_ = sw.Seal()
+	want("the switch, sealed twice", LiveEntrySwitching)
+
+	_ = exit.Seal()
+	want("the switch and an exit", LiveEntrySwitching)
+	sw.Release()
+	want("the switch has let go, the exit holds", LiveEntryClosing)
+	sw.Release()
+	want("the switch lets go a second time", LiveEntryClosing)
+	_ = sw.Seal()
+	exit.Release()
+	want("the exit has let go, the switch holds again", LiveEntrySwitching)
+
+	_ = g.Seal()
+	want("a default change as well", LiveEntryDefaultChanging)
+	g.Release()
+	want("the default change has let go", LiveEntrySwitching)
+
+	sw.Release()
+	want("the last holder has let go", LiveEntryAdmitted)
+
+	// A submission to another logbook is never the gate's to refuse.
+	_ = sw.Seal()
+	if done, refused := g.Admit(false); refused != LiveEntryAdmitted {
+		t.Fatalf("a deliberate submission got %v under the switch's seal, want admitted", refused)
+	} else {
+		done()
+	}
+}

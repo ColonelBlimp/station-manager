@@ -66,6 +66,10 @@ type Manager struct {
 	// liveSeal is the live Phone / CW entry seal (SetLiveEntrySeal); a default
 	// change takes it after the TX seals (ADR 0097).
 	liveSeal Seal
+	// switchLive and switchSession are an archive switch's own hold of live
+	// entry and the operating session's part in it (SetSwitch; ADR 0100 §4).
+	switchLive    Seal
+	switchSession SwitchSession
 	// defaultReport is this generation's start report of a default change
 	// (SetDefaultChangeReport); nil until wired.
 	defaultReport func() StartReport

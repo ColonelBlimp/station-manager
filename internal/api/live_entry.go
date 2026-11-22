@@ -13,16 +13,17 @@ import "sync"
 // entry closed at once: a default change keeps its seal until the daemon
 // restarts, and a confirmed exit of the app seals for its own short time. Each
 // holder releases only what it sealed, and admission is open only while no
-// holder has a seal. The gate's own Seal and Release are one holder, the one
-// the archive manager uses for a default change; Owner makes another, and the
-// one Owner there is belongs to the app's exit. (An archive activation seals
-// FT8 and the rig, not live entry.)
+// holder has a seal. There are three holders, and a refusal says which
+// (LiveEntryRefusal): the gate's own Seal and Release, which the archive
+// manager uses for a default change; SwitchOwner, for an archive switch
+// (W-0029 part 3, C); and Owner, which is the app's exit.
 type LiveEntryGate struct {
-	mu       sync.Mutex
-	drained  *sync.Cond // signalled when inFlight reaches zero
-	held     int        // how many holders have a seal; admission is closed while it is not zero
-	own      bool       // the gate's own holder has a seal
-	inFlight int
+	mu        sync.Mutex
+	drained   *sync.Cond // signalled when inFlight reaches zero
+	held      int        // how many holders have a seal; admission is closed while it is not zero
+	own       bool       // the gate's own holder has a seal: a default change
+	switching bool       // the switch's holder has a seal
+	inFlight  int
 }
 
 // NewLiveEntryGate returns an open gate.
@@ -45,6 +46,10 @@ const (
 	// LiveEntryClosing: only an Owner has a seal, which is the app's confirmed
 	// exit closing its session. No restart and no reload follow.
 	LiveEntryClosing
+	// LiveEntrySwitching: an archive switch has a seal (SwitchOwner), and no
+	// default change has. The daemon restarts, on the archive asked for or, if
+	// that fails to start, on the one it left.
+	LiveEntrySwitching
 )
 
 // Admit admits a submission; live says it names the effective default. A live
@@ -53,8 +58,10 @@ const (
 //
 // The reason is decided in the same hold of the lock as the refusal. Looked up
 // afterwards it could describe a state a release had already changed, and a
-// refusal reports only a reason that is true. With both holders sealed the
-// default change's answer is given: the restart is the stronger outcome. A
+// refusal reports only a reason that is true. The order when more than one
+// holder is sealed: a default change, then a switch, then the exit. A restart
+// follows the first two, so their answer is the one to act on; a default change
+// and a switch refuse each other and are not sealed together in practice. A
 // second kind of Owner would need a reason of its own here.
 func (g *LiveEntryGate) Admit(live bool) (done func(), refused LiveEntryRefusal) {
 	if !live {
@@ -63,8 +70,11 @@ func (g *LiveEntryGate) Admit(live bool) (done func(), refused LiveEntryRefusal)
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.held > 0 {
-		if g.own {
+		switch {
+		case g.own:
 			return nil, LiveEntryDefaultChanging
+		case g.switching:
+			return nil, LiveEntrySwitching
 		}
 		return nil, LiveEntryClosing
 	}
@@ -119,24 +129,32 @@ func (g *LiveEntryGate) Seal() error {
 // another holder has one.
 func (g *LiveEntryGate) Release() { g.release(&g.own) }
 
-// LiveEntrySeal is one more holder's seal on a gate (LiveEntryGate.Owner).
+// LiveEntrySeal is one more holder's seal on a gate (LiveEntryGate.Owner,
+// LiveEntryGate.SwitchOwner).
 type LiveEntrySeal struct {
 	g       *LiveEntryGate
-	holding bool // guarded by g.mu
+	holding *bool // whether this holder has its seal; guarded by g.mu
 }
 
-// Owner returns a new holder of this gate's seal.
-func (g *LiveEntryGate) Owner() *LiveEntrySeal { return &LiveEntrySeal{g: g} }
+// Owner returns a new holder of this gate's seal: the app's exit.
+func (g *LiveEntryGate) Owner() *LiveEntrySeal { return &LiveEntrySeal{g: g, holding: new(bool)} }
+
+// SwitchOwner returns the archive switch's holder of this gate's seal. There
+// is one: every call returns a holder of the same seal, as one archive switch
+// is in progress at a time.
+func (g *LiveEntryGate) SwitchOwner() *LiveEntrySeal {
+	return &LiveEntrySeal{g: g, holding: &g.switching}
+}
 
 // Seal closes admission for this holder, then waits for every admitted live
 // submission to finish.
 func (o *LiveEntrySeal) Seal() error {
-	o.g.seal(&o.holding)
+	o.g.seal(o.holding)
 	return nil
 }
 
 // Release gives up this holder's seal, and no other's.
-func (o *LiveEntrySeal) Release() { o.g.release(&o.holding) }
+func (o *LiveEntrySeal) Release() { o.g.release(o.holding) }
 
 // Closed reports whether admission is closed: some holder's Seal has begun,
 // whether it is still draining or done.
