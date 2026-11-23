@@ -1477,3 +1477,42 @@ func TestOperatingSession_LoggingStep_AnExitedLifetimeHoldsNothing(t *testing.T)
 		b.wantIntervals(joined, "1 open "+lifeA+" 20 -")
 	})
 }
+
+// ---- The contact count (W-0029 part 4, D) ----
+
+// The recovery question shows how many contacts the session has. The count
+// leaves out a contact that has since been deleted; whether the session has
+// members at all, which decides whether the question is asked, does not (ruled
+// 2026-11-10). A read and a control's returned state give the same count, each
+// from its own transaction.
+func TestOperatingSession_ContactCount_LeavesOutDeletedContacts(t *testing.T) {
+	b := newSessBed(t, true)
+	st := b.open(lifeA, 0, SessionApplied)
+	if st.Open.ContactCount != 0 || st.Open.HasMembers {
+		t.Fatalf("a new session = %+v; want no contacts", st.Open)
+	}
+	q1, _ := b.log(b.x, lifeA, 1)
+	b.log(b.x, lifeA, 2)
+	b.log(b.x, lifeA, 3)
+	if read := b.state(lifeA); read.Open.ContactCount != 3 || !read.Open.HasMembers {
+		t.Fatalf("after three contacts the read = %+v; want a count of 3", read.Open)
+	}
+
+	execT(t, b.svc, `UPDATE qso SET deleted_at = datetime('now') WHERE id = ?`, q1)
+	if read := b.state(lifeA); read.Open.ContactCount != 2 || !read.Open.HasMembers {
+		t.Fatalf("with one of three deleted the read = %+v; want a count of 2, still with members", read.Open)
+	}
+	// A control returns the count in its own state: here the recovery answer
+	// Continue, by another lifetime.
+	g := b.open(lifeB, 10, SessionRecoveryPending).Generation
+	if after := b.continueSession(lifeB, g, st.Open.ID, 11, SessionApplied); after.Open.ContactCount != 2 || after.Open.Holder != lifeB {
+		t.Fatalf("the state Continue returned = %+v; want a count of 2, held by %s", after.Open, lifeB)
+	}
+
+	// Every contact deleted: the count is 0 and the session still has members,
+	// so it is still asked about and never discarded.
+	execT(t, b.svc, `UPDATE qso SET deleted_at = datetime('now')`)
+	if read := b.state(lifeA); read.Open == nil || read.Open.ContactCount != 0 || !read.Open.HasMembers {
+		t.Fatalf("with every contact deleted the read = %+v; want a count of 0, still with members", read.Open)
+	}
+}

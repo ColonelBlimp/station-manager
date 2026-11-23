@@ -74,6 +74,11 @@ type OperatingSession struct {
 	// HasMembers is true when the session has any member row, a deleted
 	// QSO's included: such a session is never discarded.
 	HasMembers bool
+	// ContactCount is how many of its members are contacts that have not been
+	// deleted: what the operator is shown (W-0029 part 4, D). It can be 0 while
+	// HasMembers is true, and it is HasMembers that decides whether a session
+	// is empty.
+	ContactCount int
 }
 
 // OperatingSessionState is one snapshot of an archive's session state. Every
@@ -160,7 +165,9 @@ func (c *sessionTx) head() (sessionHead, error) {
 	return h, nil
 }
 
-// open reads the open session, nil when there is none.
+// open reads the open session, nil when there is none. It does not count the
+// session's contacts: the logging step reads through here for every contact,
+// and only a state that is shown needs the count (state).
 func (c *sessionTx) open() (*OperatingSession, error) {
 	var (
 		o       OperatingSession
@@ -337,6 +344,16 @@ func (c *sessionTx) state(lifetime string) (OperatingSessionState, error) {
 	st := OperatingSessionState{Generation: h.generation, DefaultEpoch: h.epoch, DefaultLogbookUUID: h.defaultUUID}
 	if st.Open, err = c.open(); err != nil {
 		return OperatingSessionState{}, err
+	}
+	if st.Open != nil {
+		// In this transaction, so of the same snapshot as the session it
+		// describes. A count that cannot be read fails the state: it is never
+		// given as 0.
+		err := c.tx.QueryRowContext(c.ctx, `SELECT COUNT(*) FROM operating_session_member m JOIN qso q ON q.id = m.qso_id
+			WHERE m.session_id = ? AND q.deleted_at IS NULL`, st.Open.ID).Scan(&st.Open.ContactCount)
+		if err != nil {
+			return OperatingSessionState{}, err
+		}
 	}
 	st.ExitRecorded, err = c.exitRecorded(lifetime)
 	return st, err

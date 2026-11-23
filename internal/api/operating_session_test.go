@@ -27,6 +27,7 @@ type sessionView struct {
 		OpenedAt         time.Time `json:"opened_at"`
 		SittingStartedAt time.Time `json:"sitting_started_at"`
 		HasContacts      bool      `json:"has_contacts"`
+		ContactCount     *int      `json:"contact_count"` // a pointer: a count left out is not a count of 0
 		HeldByYou        bool      `json:"held_by_you"`
 	} `json:"session"`
 }

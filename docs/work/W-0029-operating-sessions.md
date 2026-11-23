@@ -34,7 +34,9 @@ of that commit's clean-room review is fixed and committed with this text (the re
 reworded, 2026-11-23). Part 4's acceptance criteria are written, at the end of this file
 (2026-11-23), revised after Codex's review of them (codex-222); their four questions are
 ruled (2026-11-23); Codex supports the revision with no design finding remaining
-(codex-223); nothing of part 4 is built and its build is not yet directed.** The removal of the database half of
+(codex-223). Part 4's first slice, the daemon's side, is built and committed with this
+text (the last section of this file); Codex's review of its runtime is complete, with no defect found
+(codex-224). Its second, the screen, is not built.** The removal of the database half of
 the downgrade tooling, which part 1 waited for, is committed (`0b21b2fb`, 2026-11-20; W-0027).
 **Part 1's acceptance criteria are written, their three questions ruled, and agreed with
 Codex after one round of corrections (2026-11-20).** The
@@ -238,6 +240,9 @@ next part starts.
      says so and offers to try again, and does not show the workspace. It applies at the
      load only.
   No build is directed by this. Codex had not yet read the criteria as revised.
+- **2026-11-23 (operator): "commit, push and build part 4's first slice".** Said after
+  Codex supported the revised criteria (codex-223). The commit and push are of the reword
+  and the criteria (`36d42db7`); the build is of part 4's first slice, the daemon's side.
 
 The design's own rulings are in ADR 0100 and are not repeated here.
 
@@ -3919,3 +3924,147 @@ recommendations"; the rulings list).**
 **For the operator's eye, not a question.** The recovery question cannot be seen at the
 station until part 5, so that much of part 4 has no station acceptance on its own; the
 first time it can be seen there is with parts 5 and 6. The read gate can be seen at once.
+
+### Part 4, first slice: the two controls, the count and the order (2026-11-23; committed with this record)
+
+On the operator's direction ("commit, push and build part 4's first slice"). Criteria A to
+D, F and G: the daemon's side. The screen (E) and the desktop scenario are the second
+slice and are not built.
+
+**What the operator sees.** Nothing: no part of the app calls the new routes yet, and no
+contact joins a session until part 5. The daemon can now be told Continue or New.
+
+**What is built.**
+- **The contact count** (`internal/database/sqlite/operating_session.go`):
+  `OperatingSession.ContactCount`, the session's members whose QSO is not deleted, read
+  in `state` in the same transaction as the session it describes. `HasMembers` is
+  unchanged and still decides emptiness. The count is kept out of the read the logging
+  step makes for every contact.
+- **The two routes** (`internal/api/operating_session_control.go`, new):
+  `POST /v1/operating-session/new` and `POST /v1/operating-session/continue`, whole
+  (ruled 2026-11-23). Both sit behind the archive guard, are decided in
+  `answerOperatingSession` with the admission's order held from start to finish, and
+  call part 1's transactions unchanged. The state answered is the transaction's own,
+  named under the same hold.
+- **The read** (`internal/api/operating_session.go`): `contact_count` in the session.
+
+**The codes, as built.** `operating_session_stale` (409, with the current state beside
+the error fields as `operating_session`), `operating_session_ineligible`,
+`operating_session_recovery_pending`, `operating_session_setup_pending`,
+`operating_session_switching` (part 3's G7), 503 `operating_session_unavailable`; and for
+the caller `app_lifetime_required`, `app_lifetime_retired`, and one the criteria did not
+name: **`app_lifetime_not_current`** for a lifetime this process does not hold and has
+not retired (FT8's existing code for the same fact). **One difference from the criteria's
+wording, for review:** B8 said Continue naming an unknown session is ineligible. While a
+remnant awaits its answer, any session named other than the remnant is refused as
+`operating_session_recovery_pending`, a session that does not exist included: part 1's
+transaction decides it so, and the question is answered first either way.
+
+**Seen.**
+- **Failing first:** the database's count test against a field with no query behind it;
+  every route test against a daemon with no such route (404) and a read with no count.
+  The order tests and the daemon's were written after the routes and passed at once; the
+  reversion proofs are what show they test them.
+- **The count:** in the database (three contacts, one deleted, then all: 3, 2, 0, with
+  members throughout; the count in a control's returned state) and through the read
+  route (a mixed session; a remnant whose contacts were all deleted is still asked
+  about, showing 0). **A count that cannot be read is an error by construction, and not
+  by a test:** it is a statement of the state's own transaction, and its failure fails
+  the state. Nothing can make that one statement fail while the rest succeeds.
+- **The two recovery answers:** New (the remnant closed with `unconfirmed_exit`, its
+  sitting's end unconfirmed with no time, kept with its contact; one new session held by
+  the caller) and Continue (the same session, never closed, the interrupted sitting
+  unconfirmed, a new one the caller's). Each: the state answered equals the read after
+  it; one event; the scopes, the live-entry gate, the drain and the admission's
+  generation as they were.
+- **Who may answer:** no lifetime; a lifetime replaced in this process; one whose exit
+  the file records, after a daemon restart; one never admitted. Each refused for both
+  controls, nothing changed. **A held lifetime left stopped by a failed replacement
+  answers,** and the answer repairs nothing: the scopes stay stopped, the app still
+  reads as not current, and its own admission then repairs it without changing the
+  session.
+- **The archive guard and the body:** another archive's page, no archive named, no
+  generation, Continue with no session.
+- **The generation guard:** the same answer twice (applied once; the repeat is stale and
+  is given the first's state, held by the caller; nothing more published); two answers
+  at one generation; and B7 by fixture, for both controls: the remnant closed with
+  `logbook_changed`, committed and published once, the answer stale, the state returned
+  `none`.
+- **The refusals,** each changing nothing: ineligible (the session the caller holds; one
+  that does not exist); a closed session named while a remnant waits; New before setup;
+  both controls in a switch's closing phase. **A failure** (the file cannot be written):
+  503 for both, the question unchanged at its generation, and the same press then
+  applied.
+- **The routes whole:** New by the holder (a session with a contact kept, closed
+  `new_session`, its end confirmed; an empty one discarded); Continue of a closed
+  session (the current one closed `continued_other` and keeping its own contact; the
+  earlier one open again with its own).
+- **Restarts:** the question still stands at the file's generation; an answer whose
+  response was lost is found applied, with no second session; a confirmed exit after an
+  answer is an ordinary close.
+- **The order, forced** (`operating_session_answer_order_test.go`; one side held, the
+  other seen parked at the order): against an exit of the same app, both orders; against
+  a second app start, both orders; an answer against an answer. A held control is held
+  at the archive's write lock, inside the order, and the test sees the order taken
+  before it sends the other side.
+- **The setup-save boundary, as a before and an after, not a forced wait:** before the
+  default exists New is refused as setup pending; after the save has opened the first
+  session, a control carrying the earlier generation is stale and is given that
+  session.
+- **Through a real daemon** (`cmd/smd/operating_session_answer_test.go`), from a remnant
+  left by a real stop and start:
+  - against an archive switch, each way it can end: the answer first; the switch
+    succeeds (refused as switching); it fails before its close (the waiting answer
+    applied); it fails after its close (stale, given the session the switch opened,
+    held by this app); the same with that session not opened (stale, no session, the
+    app still not current);
+  - against a default change: the change in flight first (the answer waits and is then
+    applied; under the pending change a further New is applied too, and the change's
+    seals are as it left them); the answer first, then the change accepted.
+    **The second is sequential, not forced:** a default change touches no lock a held
+    answer could be seen at from outside the daemon. That a default change takes the
+    same order is part 2's G6.
+- **Reversion proofs,** fourteen, each in a temporary copy since removed, each checked as
+  applied, the tree's file unchanged: all fail for the reason claimed. The count (it
+  includes deleted contacts; it is not in the answer). Who may answer (a replaced
+  lifetime not refused as retired; a recorded exit not looked at; a lifetime not held
+  answering; a stopped held lifetime refused). The phase (answered in it). The answer
+  (no event; a stale refusal with no state; the state named for nobody; stale answered
+  as applied). The request (no archive needed; Continue needing no session). The order
+  (not held through the control).
+- **Checked while building,** by the practice ruled on 2026-11-22: the named tests, then
+  `internal/api`, `internal/database/sqlite` and `cmd/smd` in full, `gofmt` and `go vet`
+  on them, and the session tests of `internal/api` and `cmd/smd` under the race
+  detector.
+- **The whole local gate, once, before the push:** `task ci:local`, exit code 0, "All CI
+  gates passed locally", 11 minutes 42 seconds, on the tree as corrected for Codex's
+  review (codex-224; its review is closed, codex-225). A first run was stopped a minute
+  in so that those corrections were gated too. Only this line was added to this file
+  after the run began, and the first files of the second slice were added under
+  `frontend/app/src` after the page's own stage of the gate had passed; they are not part
+  of this commit.
+
+**A fault in my own test, found by the full package run and fixed.** One order case (an
+answer first, a second app start behind it) failed every time when run in the full
+package, though it had passed alone. The bed's usual request helper reads the default
+logbook from the database for a header the admission routes do not look at; that read
+did not return while the held control waited at the write lock, so the second start was
+never sent and never seen at the order. The case now sends that start as bare requests,
+and passed fifteen runs in a row.
+- **Why, by Codex's reading of the source (codex-224), which I checked:** this fixture
+  gives the server's database service one connection (`MaxOpenConns: 1`,
+  `internal/api/handler_test.go`). The held control has it pinned while it waits for the
+  write lock; the helper's read cannot begin; and the test releases the lock only once it
+  has seen the start at the order. Each waits for the other. When the helper won the
+  connection first the case passed, which is how it passed alone. Codex did not recreate
+  the failure; this is a reading, not a capture.
+- **What it does not show:** a read starved in the daemon. A read there can wait while
+  the pool is busy, as any does; the dead end here needed the test's own rule for
+  releasing the lock. No change to the pool or to the order follows from it.
+
+**Not shown.**
+- Anything of the screen (E), and the desktop scenario: the second slice.
+- A4's cases of when the question is and is not asked are part 2's and part 3's tests
+  (a clean start, an empty remnant, a first run, a session the lifetime holds, an
+  arrival); they are not repeated here.
+- Nothing has been run at the station.

@@ -120,6 +120,7 @@ func (s *Server) publishSessionChange(st sqlite.OperatingSessionState) {
 
 func (s *Server) registerOperatingSession(apiMux *routeMux) {
 	apiMux.HandleFunc("GET /v1/operating-session", s.handleOperatingSessionRead)
+	s.registerOperatingSessionControls(apiMux)
 }
 
 type operatingSessionResponse struct {
@@ -135,7 +136,10 @@ type operatingSessionBody struct {
 	OpenedAt         time.Time `json:"opened_at"`
 	SittingStartedAt time.Time `json:"sitting_started_at"`
 	HasContacts      bool      `json:"has_contacts"`
-	HeldByYou        bool      `json:"held_by_you"`
+	// ContactCount leaves out contacts deleted since; HasContacts does not
+	// (W-0029 part 4, D). It can be 0 while HasContacts is true.
+	ContactCount int  `json:"contact_count"`
+	HeldByYou    bool `json:"held_by_you"`
 }
 
 // handleOperatingSessionRead answers the served archive's session state in one
@@ -195,7 +199,7 @@ func (s *Server) sessionResponse(st sqlite.OperatingSessionState, caller, curren
 	if o != nil {
 		resp.Session = &operatingSessionBody{
 			ID: o.ID, LogbookUUID: o.LogbookUUID, OpenedAt: o.OpenedAt, SittingStartedAt: o.IntervalStartedAt,
-			HasContacts: o.HasMembers, HeldByYou: caller != "" && o.Holder == caller,
+			HasContacts: o.HasMembers, ContactCount: o.ContactCount, HeldByYou: caller != "" && o.Holder == caller,
 		}
 	}
 	return resp
