@@ -16,8 +16,11 @@ type OperatingState struct {
 	TxInFlight bool
 	// RunActive: a session is under way (an exchange, a Call-CQ run).
 	RunActive bool
-	// AutoWorkArmed: a run is live and waiting between contacts (ADR 0059, ADR
-	// 0067), with no exchange under way.
+	// AutoWorkArmed: an auto-work run is live (ADR 0059, ADR 0067). It means what
+	// the stream's auto_work_armed means (QsoStatus), and no less: it is true
+	// DURING a contact of the run as well as between contacts, so it does not by
+	// itself say "waiting". With RunActive false it is a run waiting between
+	// contacts, which is the one state none of the other three reports.
 	AutoWorkArmed bool
 }
 
@@ -49,8 +52,8 @@ func (s *Service) OperatingState() OperatingState {
 	return st
 }
 
-// operatingState reads, together, whether a session is under way and whether a
-// run is waiting between contacts.
+// operatingState reads, together, whether a session is under way and whether an
+// auto-work run is live (during a contact of it, or between contacts).
 func (s *Sequencer) operatingState() (active, autoWorkArmed bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

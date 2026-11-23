@@ -96,6 +96,23 @@ func TestOperatingState_ARunWaitingBetweenContacts(t *testing.T) {
 	require.True(t, st.WouldStop(), "a run waiting between contacts must count as something to stop")
 }
 
+// auto_work_armed says a run is live, as the stream's field of that name does: it
+// is true during a contact of the run too, and does not by itself say "waiting"
+// (the clean-room review of b86f9ca4 found the contract saying otherwise). It is
+// "waiting between contacts" only beside run_active false, shown above.
+func TestOperatingState_ALiveRunIsReportedDuringItsContactToo(t *testing.T) {
+	r := &seqRecorder{}
+	seq := newTestSeq(r)
+	seq.setPendingAnswerMode("operator_pick")
+	require.NoError(t, seq.StartWorkCaller("G0XYZ", "K1ABC", "FN42", -12,
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
+
+	active, live := seq.operatingState()
+	require.True(t, active, "fixture: the contact is under way")
+	require.True(t, live, "the run that the contact belongs to was not reported")
+	require.Equal(t, r.lastStatus().AutoWorkArmed, live, "the read and the stream disagree about the same run")
+}
+
 // The read is passive. Asked any number of times of a daemon that is armed and
 // running, it leaves the arm, the run, the subscribers, what the stream would
 // replay and the presence hold exactly as they were.

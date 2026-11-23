@@ -5188,3 +5188,25 @@ runs, the red-first order and the reversion proofs remain Claude's.
 (an armed service cannot be made from the API's tests: its keyer is the FT8 package's
 own; the states are shown in `internal/ft8`, and the answer's rule on the body the
 handler builds). No transmission, keyed test or rig command: fake keyer and player only.
+
+**Committed and pushed: `b86f9ca4`** "smd: the daemon says whether a stop would stop
+FT8" (operator, 2026-11-23: "commit and push"), after the whole local gate passed.
+
+**Clean-room review of `b86f9ca4`: one finding, P3, fixed; committed and pushed on the operator's direction ("commit and push").**
+- **The finding:** the contract said `auto_work_armed` is a run "waiting between
+  contacts, with no exchange under way", while the read returns the run's flag as it
+  is, and that flag is set when a contact of the run starts. So during such a contact
+  the answer is `run_active: true` and `auto_work_armed: true`. `would_stop` is right
+  either way. The finding is correct: the words were wrong, not the value.
+- **The fix is to the words.** The field now says what the stream's field of the same
+  name says (`QsoStatus.AutoWorkArmed`: "an auto-work-callers run is live"): true
+  during a contact of the run as well as between contacts, and "waiting between
+  contacts" only beside `run_active: false`. Changed in the struct's comment and in
+  the API reference. Making the field mean "waiting" instead was considered and not
+  done: one name would then carry two meanings, in the stream and in this read.
+- **Pinned:** `TestOperatingState_ALiveRunIsReportedDuringItsContactToo` (a contact
+  started in a pick run: both true, and equal to what the stream's last frame says).
+  Reversion proof in a temporary copy: with the flag reported only when idle, that
+  test fails.
+- **Gates:** `gofmt`, `golangci-lint` (0 issues), the maintainability metrics (0
+  regressions), `go test -race ./internal/ft8` in full.
