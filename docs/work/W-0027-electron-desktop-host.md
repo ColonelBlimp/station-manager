@@ -225,6 +225,12 @@ design before code.
 - **2026-11-19 (operator): "build the removal".** After Codex verified the plan
   (codex-181). The build starts with the sorting table of the affected tests, which goes
   to Codex before any test is changed.
+- **2026-11-23 (operator): "Elsewhere. commit and push, then A3".** A3 starts, with its
+  acceptance criteria first.
+- **2026-11-23 (operator): "go with recommendations, commit and push".** Said of A3's six
+  questions, after Codex's review of the criteria closed with no finding open (codex-237).
+  Each is ruled as recommended; they are set out under "A3: acceptance criteria" in the
+  Record, "Ruled".
 
 ## Open questions for the operator
 
@@ -4668,3 +4674,446 @@ change.
 - **Not shown:** the station. Nothing was run there. Its files are untouched until the
   operator next deploys, and a build with no way down changes none of them. RI13's
   shape assertion was proved to bite by Codex's overlay run (codex-180), not rerun here.
+
+### A3: acceptance criteria — closing the app (2026-11-23; revised after Codex's reviews, codex-232, codex-234, codex-235 and codex-236; Codex's review closed with no finding open, codex-237; its six questions ruled by the operator the same day; nothing built)
+
+On the operator's direction ("commit and push, then A3"), after W-0029 parts 1 to 4 went
+to the station. Read against ADR 0102 ruling 6 and its Consequences; ADR 0100 §3
+(Closing); the C4 brief's point 8 (a normal close) and its question 11; W-0029's brief,
+proposals C and D, and what it agreed for A3 with Codex (codex-178, codex-179,
+codex-187); and the code as it stands: `desktop/src/main.mjs`, `launch.mjs`,
+`admission.mjs`, `window.mjs`, `internal/api/operating_session.go` (the exit report),
+`internal/ft8/operating.go`, and the page's `lib/config/unsaved.ts`,
+`lib/operate/qso.svelte.ts` and `lib/operate/ft8.svelte.ts`. "Proposed" marks what those
+leave open. The questions at the end are the operator's.
+
+**Ruled (operator, 2026-11-23): "go with recommendations, commit and push".** Each of
+the six questions at the end is ruled as it was recommended there. Where the criteria
+say "proposed", or "if question 6 is answered (a)", read them as ruled so.
+1. **The daemon does not confirm the close:** the box of E, said once.
+2. **The wait:** 5 seconds for each request (the read of FT8's state, the disarm, the
+   read of the session's state, the exit report), and no other timer.
+3. **The words:** as proposed in question 3.
+4. **After an unconfirmed close:** Cancel returns to the window only when no exit
+   report was sent. Once one was sent there is no way back: the window is closed before
+   the box, which offers Try again and Close anyway, and the app stays running for it.
+5. **Closing while Settings is saving:** the question names it, with Close and Cancel.
+   The close is not refused.
+6. **FT8's state:** (a), the daemon's own read (section I), the one change A3 makes to
+   the daemon. When no valid answer can be had, the question carries the line "FT8's
+   state could not be read. If it is running, it will be stopped." The snapshot's race
+   (I5) is accepted as described. The page reports nothing about FT8.
+
+**What A3 is.** Closing the app becomes a confirmed exit. Today the window simply goes:
+the daemon notices the app's FT8 stream has gone and disarms after its grace
+(`unattended`), and nothing tells the daemon the sitting has ended. With A3 the app asks
+first when something would stop, stops FT8 itself, tells the daemon it is exiting, and
+waits for the daemon's acknowledgement before it goes.
+
+**What is already there.**
+- The daemon's exit report (`POST /v1/operating-session/exit`, W-0029 part 2), with every
+  answer A3 needs. Nothing sends it yet. For the current lifetime it also stops FT8,
+  seals contact entry and waits for completions already earned, under the daemon's one
+  order, before it closes the session (`exitCurrent`).
+- The disarm (`POST /v1/ft8/tx/arm`, `armed: false`), which the daemon records as the
+  operator's own.
+- The page's guard for unsaved Settings, which vetoes an unload.
+- The shell's admission, which today answers a daemon restart by admitting again.
+
+**A defect of today that A3 removes (an inference from Electron's documentation, not
+seen at the station).** The shell does not handle a vetoed unload. Electron's own
+declarations say "In Electron, returning any value other than `undefined` would cancel
+the close" (`desktop/node_modules/electron/electron.d.ts`, the `close` event), and no
+question is shown for it. So closing the window with unsaved Settings should today do
+nothing, without a word. H below replaces that with the one question.
+
+**What the operator sees.**
+- **Closing with nothing in progress:** the window closes, as now, a moment later: the
+  app has told the daemon and had its answer.
+- **Closing with something that would stop or be lost:** one question, naming it.
+  Cancel changes nothing. Close stops FT8, then closes.
+- **If the daemon does not confirm the close:** the app says so and does not vanish
+  silently (question 1).
+- **At the station today:** every session is empty until part 5, so a confirmed and an
+  unconfirmed close leave the same thing behind. What can be seen is the question, and
+  that FT8 is disarmed at once by the operator's own request, not after the grace.
+
+**Nearest confusable outcome.** The window closes at once and looks the same, while no
+exit was reported: once contacts join sessions (part 5), the next start would then ask
+Continue or New after every ordinary close. The others: a close that asks when nothing
+would stop; a Cancel that has already disarmed; a second question from the page after
+the shell's; a window left open, unable to close, after its lifetime was retired; a
+window that knows it has been replaced stopping the other app's FT8 (B2).
+
+**A. When the question is asked, and what it may say** (ADR 0102 ruling 6).
+1. **Asked** when, and only when, there is a reason (A5): one the page reports, or
+   FT8's state from whichever source question 6 selects, its "not known" rule
+   included. The reasons are gathered from both and shown in the one question. **Not
+   asked** otherwise. A close with nothing in progress is still a confirmed exit: B
+   and C run without a question.
+2. **It names each thing once,** and nothing that is not so. No instruction that cannot
+   be acted on.
+3. **Two answers: Close and Cancel.** Cancel changes nothing at all: nothing is
+   disarmed, no exit is reported, the admission carries on, drafts and unsaved edits
+   are as they were, and the window is as it was.
+4. **The page's word decides only whether to ask and which lines are shown; what a
+   close does never depends on it** (proposed; Codex agrees with the boundary,
+   codex-232). The page publishes its reasons as read-only attributes of their own on
+   its root element, separate from the binding marker (whose contract is pinned
+   elsewhere). The shell reads them with one fixed expression when a close is asked
+   for, and accepts only the values it knows; anything else is "not reported". The
+   renderer stays sandboxed with no preload and no new channel. A page that cannot be
+   read (the waiting page, a renderer that has gone) reports none of the page's own
+   reasons; it never means a step of the close is skipped. **It does not silence a
+   reason that is not the page's:** under question 6 (a), an app not known to be
+   retired, whose page cannot be read and whose daemon answers "armed", still asks
+   the FT8 question (codex-236).
+5. **The reasons, and where each comes from.**
+   - **FT8,** from the daemon's own word, never from the view's flags (the view clears
+     those when it is left: `stopFt8`) and never from the absence of a word. Three
+     values: *active* (TX armed or a run under way), *idle* (the daemon said neither),
+     *not known*. Where the word comes from is question 6. **A window that knows it
+     has been retired shows no FT8 line and reads no FT8 state:** it sends no disarm
+     (B2), so it must not say this close stops FT8, which may be another app's. If the
+     word is the daemon's own read (question 6, a), it is the snapshot of I below, and
+     a read that cannot be established is "not known", never "idle". If it is the page's FT8
+     stream, then "idle" and "active" hold only once **this connection** has delivered
+     the daemon's TX state and its run state, and everything else is "not known"
+     (codex-234): no stream opened since the page loaded, which includes a page reload
+     inside one lifetime, when an arm from before can still stand for the grace; a
+     stream connected whose state has not yet arrived (`onOpen` marks it connected
+     before any state frame); a replay that brought only one of the two; a reconnect,
+     to this process or another; the view left; the connection lost. **The daemon
+     replays those states only if it has them** (`hub.subscribe`: "if present"), so a
+     stream to a daemon that has had nothing to say stays "not known".
+   - **A contact being entered:** `draftInProgress()`, which does not count a report
+     left at its default as work.
+   - **A Log whose outcome is not known:** `logOutcomeUnknown()` (one in flight, or one
+     reported uncertain). Its line never says the contact is lost or unlogged: it may
+     already be stored.
+   - **Unsaved Settings:** `unsavedSections()`, named by section.
+   - **Settings being saved:** `savingSections()`. A write on its way cannot be
+     recalled, so the question cannot promise it is discarded or stored (question 5).
+     **A section is named once.** One that is being saved is usually still unsaved too,
+     until its answer comes (`general.svelte.ts`, `save`), and the form stays live
+     meanwhile. It is named as being saved, never also as "will be lost", and its line
+     covers what was changed after the save began (codex-234).
+6. **One close at a time.** A second close asked for while the question shows, or while
+   the close is under way, starts nothing more. Every ordinary way of closing the app
+   that the shell offers runs this one flow.
+
+**B. Stopping FT8, by the app itself.**
+1. After Close (or with no question), the shell sends the disarm, as the operator's own
+   request, and waits for the daemon's answer before anything else. The daemon's record
+   of why TX stopped says the operator, not `unattended`.
+2. **A window that knows it has been retired sends no disarm.** A disarm needs no
+   current lifetime (the operator's ruling on question 11: "11 - yes, keep it"), so one
+   sent by a window another start has replaced stops the other app's FT8. The shell
+   learns of its retirement only from an admission's answer, so this is what it can
+   promise: none is sent once the retirement is known. **A disarm already on its way
+   when the replacement happens still stops the other app.** That is the cost accepted
+   with question 11 (`internal/ft8/operating.go`), kept as it is; closing it would need
+   a change to the daemon's order, which A3 does not make.
+3. **Nothing armed:** the disarm changes nothing and the close goes on. **FT8 not
+   served:** the daemon has no such route then (it is registered only when FT8 is
+   enabled) and answers `404`; the shell takes exactly that answer as "nothing to stop"
+   and goes on. Any other refusal is B4.
+4. **The disarm cannot be sent or is refused:** the close does not go on to report an
+   exit as if FT8 had stopped. It is the unconfirmed close of E, in its first kind, and
+   the app says that stopping FT8 was not confirmed. (The daemon's own stop when the
+   app's stream goes is still there, after its grace.)
+5. **From the confirmation the page starts nothing new; what it had already sent is
+   the daemon's to decide** (two different things: codex-234).
+   - **Nothing new.** The window is hidden, and the shell refuses every request from
+     the page that is not a read, until the window goes or a Cancel of the first kind
+     (E1) gives it back. It is decided per request, so it covers what the page had
+     deferred and its own continuations, not only the operator's hands. The shell's own
+     requests (the disarm, the reads, the exit) are not the page's and still pass.
+     (Proposed mechanism: added to the shell's existing request filter in
+     `hardening.mjs`, whose restriction to the pinned origin stays as it is.) Refusing
+     a new request is no proof that one sent earlier was cancelled.
+   - **Already sent, and the exit is acknowledged:** the daemon's exit stops FT8 and
+     seals contact entry before the session closes, and waits for completions already
+     earned, so those are logged. Under its one order.
+   - **Already sent, and the exit is refused or fails:** the daemon stops nothing for
+     good. A failed or stale exit gives the lifetime its authority back (`exitCurrent`,
+     `restore`), and the terminal refusal retires nothing (`exitNotCurrent`). So a
+     request the page sent before the confirmation may still take effect, and the app
+     does not claim otherwise. What ends it is on the app's own side: in the second
+     kind the window is closed before the box is shown (E2), and Try again opens no
+     FT8 stream. Once the daemon has removed this lifetime's last FT8 subscription, no
+     arm can be *made* for it (`ft8_not_present`). An arm made while the stream was
+     still open ends as `unattended` when the daemon's grace runs out; a repeat of an
+     arm that already stands is accepted, changes nothing and does not extend the
+     grace (`TestPresence_ARepeatedArmChangesNothingAndDoesNotExtendTheGrace`). **The
+     grace starts when the daemon sees the subscription go, not when the window
+     closes,** so no time is promised from the window's closing (codex-235).
+
+**C. The exit report.**
+1. After the disarm is answered, the shell reads the session's state, then reports the
+   exit naming its lifetime, the generation it read and the archive it read. The
+   daemon's answer is the acknowledgement the close waits for.
+2. **Acknowledged** (`200`, whether or not `already_recorded`): the app goes.
+3. **Stale** (`operating_session_stale`): the exit, and only the exit, is sent again at
+   the generation returned, without admitting again (agreed for A3, codex-187).
+4. **Not current and still holding the session** (`operating_session_exit_not_current`):
+   terminal. The close was not confirmed. It is not repeated.
+5. **No answer, or `503`:** the close was not confirmed. No acknowledgement is made up.
+   **A request the shell gave up on is not one the daemon gave up on:** the daemon
+   decides an exit whatever becomes of the request (`exitOperatingSession` does not
+   follow the request's context), so an exit sent and not answered may be stored later.
+6. **A lost answer is safe to repeat:** an exit already recorded is acknowledged.
+7. **The limit of question 2 is per request, not for the whole close.** Admission work
+   settling (D3), a stale exit sent again, and the daemon's wait for completions all
+   add to it.
+
+**D. A closing app never admits again** (W-0029's brief, proposal C; codex-178,
+codex-179). A barrier, from the moment the close is confirmed.
+1. No new admission is launched: a daemon restart seen while closing starts none.
+2. The admission's loop and the markers it kept meanwhile start nothing.
+3. The exit report is sent only after admission work already issued has settled at the
+   shell. **That is not proof the daemon will not still apply it** (an admission the
+   shell timed out on may land later; codex-232), so the safety is the daemon's order,
+   and each late arrival has a named end:
+   - the admission lands before the exit: the exit closes what it opened;
+   - it lands after an acknowledged exit: refused as retired;
+   - it lands after the terminal answer of C4 (a restarted daemon): **the daemon admits
+     the lifetime and gives it the authority to operate** (the refusal retired
+     nothing; the admission publishes the lifetime to its scopes), and it holds its
+     session open. The barrier cannot prevent that, and ignoring the answer does not
+     undo it (codex-234). What the app guarantees is its own side: the window has
+     gone (E2), so it sends nothing new and holds no FT8 stream; B5 says what becomes
+     of a request sent earlier. The session is an unconfirmed exit and the next start
+     classifies it.
+   In none of them is a session closed that the exit did not close, and in none does
+   this app send a new operating request.
+4. An old admission's answer arriving after closing began restores nothing and starts
+   nothing.
+5. **A close that is cancelled at the question** (before it is confirmed) leaves
+   ordinary admission working: a daemon restart afterwards is answered as today.
+6. **The archive switched under a closing app** (the A to B case): the exit is recorded
+   in the archive now served, the app is never admitted there, and holds no session
+   there.
+
+**E. The close that was not confirmed** (questions 1 and 4; revised after codex-232
+and codex-234). The shell says so once, in a box of its own. What it offers depends on
+whether an exit report has been sent, because an exit that was sent may have been
+stored.
+1. **First kind: nothing of the exit was sent** (the disarm, or the read of the state,
+   failed). Offered: Try again, Close anyway, Cancel.
+   - **Cancel** shows the window again, lifts the barrier and lets ordinary admission
+     resume, so the app can operate, and the page's requests are let through again.
+     FT8 is as the daemon has it: a disarm that was answered stays; one that was sent
+     and not answered may still arrive and disarm later. That is a stop, and it is
+     said in the box.
+2. **Second kind: an exit report was sent and not acknowledged.** There is no way back
+   to the window (proposed; question 4). **The window is closed before the box is
+   shown,** and the box offers Try again and Close anyway.
+   - **Why no way back.** The exit may already be stored, or may be stored later, and
+     then this lifetime is retired for good; or it was refused, and the daemon still
+     counts the lifetime able to operate (B5, D3). A window kept open would have to be
+     held non-operating by the app alone, for as long as it stayed: its FT8 stream,
+     its Log, its shortcuts and whatever it had deferred. Closing it is the one state
+     that needs no such promise. No new lifetime is made to get round a retirement.
+   - **What is lost is what the operator was already asked about:** the question named
+     the entry and the unsaved edits, and Close was the answer.
+   - The terminal answer of C4 is of this kind, without Try again: trying again cannot
+     change it.
+   - **The app outlives its window for this box** (codex-235). Today the app quits
+     when its last window closes (`window-all-closed` in `desktop/src/main.mjs`). In
+     this state it does not: the main process and its authenticated session stay for
+     the box and for Try again, and the app quits on an acknowledgement or on the
+     final Close anyway. The box has no parent window. A second start of the app, or
+     another request to quit, while the box is up neither skips the box, nor shows a
+     second one, nor makes a new window that could operate.
+3. **Once an exit report has been sent, the close is of the second kind until it
+   ends,** whatever a later attempt fails at. A Try again that fails at its disarm or
+   its read does not make it the first kind again: the earlier exit is still out
+   there (codex-234).
+4. **Try again** runs B and C again from the start, under the same barrier.
+5. **Close anyway** ends the app and claims nothing. The daemon's own record is left
+   as it is: the session may already be closed, or may still be open, and the next
+   start treats whichever it finds as ADR 0100 says.
+6. **The box says what is known.** That the close could not be *confirmed*, never that
+   the daemon was not told; and when it was the disarm that failed, that stopping FT8
+   was not confirmed.
+
+**F. What a close is not.**
+1. **The operating system ending the app** (logout, shutdown, a kill): no question can
+   be asked and none is. It is the failure case of the C4 brief: the daemon stops FT8
+   after its grace, and the exit is unconfirmed.
+2. **A second start of the app** while one is open: unchanged (the first is shown).
+3. **The window's own reload:** there is no user reload (ADR 0102 ruling 6). No key and
+   no menu reloads the page; pinned by a check. A reload the page itself asks for (the
+   archive gate's, a changed daemon build's) is not a close and runs none of this, and
+   the page's own guards on navigation and reload are left as they are.
+
+**G. What A3 must not do, and the reference.** No change to the daemon: every route it
+uses exists. (One exception if question 6 is answered that way: the read of FT8's state in I,
+which changes nothing.) No new TX command. No session control. No window set (A2). No change to
+what a page reload does (C5).
+`docs/v2-design/api-endpoints.md` gains, in the same change: that the app now sends the
+exit report and the disarm at a close, and repeats a stale exit. `desktop/README.md`, if
+it describes closing.
+
+**H. The window goes** (codex-232, finding 4).
+1. **Exactly one question about loss.** After the shell's question is answered Close,
+   the page's veto of the unload asks nothing and stops nothing.
+2. **After an acknowledgement, at Close anyway, and before the box of the second kind,
+   the window closes.** A page that vetoes the unload cannot leave a window open whose
+   lifetime has been retired.
+3. **Only for that close.** The veto is overridden for the approved final close and at
+   no other time: Cancel at the question leaves drafts and unsaved edits exactly as
+   they were, with the page's guard in force.
+4. Shown in the real app against fixtures, with unsaved Settings: Cancel, Close, and
+   Close anyway.
+
+**I. The daemon's read of FT8's state** (only if question 6 is answered (a); reviewed
+as a design by Codex, codex-235).
+1. **Passive.** It subscribes to nothing, claims no profile, starts no capture, takes
+   no device, publishes no status, retires no session, waits for no completion and
+   calls no operating command. It needs no current lifetime and takes no admission
+   lock: it authorises nothing. The credential check of every route stays.
+2. **Live state, read together.** From the FT8 service's own state, not from the
+   stream's replay cache, under the order the package already uses (`seqGate`, then
+   `txMu`, then the sequencer's lock: `SealTxAdmission`). The locks are released
+   before the answer is written. None is held across the question, a wait or the
+   disarm.
+3. **What counts as something that would stop:** TX armed with nothing running; an
+   exchange under way; a Call-CQ run; a run waiting between contacts (auto-work
+   armed); a transmission in flight. Idle is none of those.
+4. **FT8 not served is an answer of its own,** given by a route that exists whether or
+   not FT8 is enabled. A missing route, a malformed answer, a failure or a wait that
+   runs out is "not known", never idle and never "not served".
+5. **It is one observation, not a guarantee.** An arm already sent before the close
+   can land after an idle answer and be stopped by the disarm without the question; a
+   run can end after a busy answer and before the question is read. Both are stated,
+   and the first is shown by a test that holds an arm until after the snapshot. A
+   stronger promise would need the daemon to hold FT8 while the operator is asked,
+   which is not proposed.
+6. The read lives in `internal/ft8`; the API calls it through the service it already
+   holds. `docs/v2-design/api-endpoints.md` gains the route in the same change. Tests:
+   each state of I3, idle, not served, and that the read changes nothing (no
+   subscriber, no capture, no publication).
+
+**Evidence.** Tests first.
+- **The close flow as a module of the shell,** with the session, the dialog and the
+  daemon given by the test: every answer of C; the barrier's points of D, each placed by
+  holding one request and releasing it, never by sleeping, including a request the
+  daemon applies after the shell has given up on it (an admission, and an exit); both
+  kinds of E and each choice; the window closed before the box of the second kind,
+  with the app still running, and a second start and a second quit while it is up; a
+  first exit that times out, then a Try again that fails at its disarm, still of the
+  second kind (E3); the known-retired window sending no disarm, reading no FT8 state
+  and showing no FT8 line; and, under question 6 (a), the reasons combined from both
+  sources, including a page that cannot be read beside a daemon that answers "armed".
+- **In the daemon's tests,** each where not already pinned: an arm or a submit between
+  a disarm and an acknowledged exit (B5); the terminal refusal, then an admission that
+  was held, then an arm, with the lifetime's FT8 stream open and with it removed (D3,
+  B5: made, then ended by the grace, driven from the removal of the subscription with
+  the test's clock; refused as not present). The grace and the repeated arm are pinned
+  today (`internal/ft8/presence_service_test.go`). The accepted cost of B2 is pinned today
+  (`TestOperating_DisarmIsAlwaysAccepted`, `internal/ft8/operating_test.go`: a replaced
+  lifetime's disarm ends the current one's run) and is left as it is.
+- **The page's reasons:** the page's own tests, each reason alone and together, and
+  none; a section both saving and unsaved named once; and, if FT8's word comes from the
+  page (question 6), each "not known" case of A5.
+- **Through the app's real quit wiring,** not the automated path, which is exempt from
+  quitting when the last window closes and so would hide this: the second kind's box
+  with no window, Try again, and the quit that follows.
+- **In the real app against fixtures** (the A1 harness): the question's two answers, the
+  order of the requests a close sends, a write the page attempts after the confirmation
+  refused and let through again after a Cancel of the first kind, H, and that no key
+  reloads.
+- **In the real app against a real `smd`:** a close with nothing in progress leaves the
+  exit recorded in the archive file and the session closed; a second start then meets no
+  open session. With a contact put into the session by the scenario (as the recovery
+  scenario does): a confirmed close, then a start that is not asked.
+- Named tests while building, reversion proofs once, the whole local gate once before the
+  push (ruled 2026-11-22). No transmission, keyed test or rig command: FT8 is off in the
+  scenarios' daemons, so the real-`smd` scenario also shows B3's `404`; a disarm that
+  finds something armed is shown against the fixture harness and in the module's tests,
+  never against a rig.
+
+**Proposed slices** (revised: codex-232, finding 6; if question 6 is answered (a),
+the daemon's read route is built first, on its own). The order of building is the close
+with no question first (B to E), then the question, the page's reasons, the final
+close of the window and the reload check (A, H, F3). **The new close is not wired to
+the window until both are built:** wired after the first alone, a close would stop a
+run or drop a draft with no question, against ADR 0102 ruling 6. Until then only the
+scenarios reach it. Once both are in, every ordinary close the daemon acknowledges is a
+confirmed exit; E remains, by design, an unconfirmed one.
+
+**Questions for the operator** (all six ruled as recommended, 2026-11-23; see "Ruled"
+at the head of this section).
+1. **When the daemon does not confirm the close, what should the app do?** I recommend
+   the box of E: say so once, with the choices of E1 and E2. The alternatives: close
+   anyway without saying (the next start then asks, once contacts join sessions); or
+   refuse to close until the daemon answers, which leaves no way to close the app while
+   the daemon is down.
+2. **How long does each request wait for the daemon before the close counts as not
+   confirmed?** I recommend the limit the shell already gives each admission request,
+   5 seconds, for the disarm, the read and the exit report each (and the read of FT8's
+   state, if question 6 is answered (a)), and no other timer. It is per request, not a
+   bound on the whole close (C7). It is a threshold, so it is
+   yours.
+3. **The words.** Proposed, for you to change; each must stay true to E6 and A5.
+   - The question. Title: "Close Station Manager?" Lines, each only when true: "FT8 will
+     be stopped and transmit disarmed." / "The contact you are entering will be
+     discarded." / "A contact was sent to be logged and its outcome is not known. It
+     may already be logged." / "Unsaved changes in Settings (*sections*) will be lost."
+     Buttons: "Close" and "Cancel".
+   - The unconfirmed close. Title: "The daemon did not confirm the close". Text, first
+     kind, when the disarm failed: "Station Manager could not confirm that FT8 was
+     stopped. The daemon stops it by itself shortly after this window goes." Otherwise:
+     "Station Manager could not confirm with the daemon that it is closing, so the
+     daemon may treat this sitting as interrupted." Buttons, first kind: "Try again",
+     "Close anyway", "Cancel". Second kind: "Try again", "Close anyway"; after the
+     terminal answer, "Close" alone.
+   - A section being saved (question 5): "Settings (*sections*) is still being saved.
+     Closing does not wait: the save may not complete, and anything changed since it
+     began will be lost."
+4. **After an unconfirmed close, may the app go back?** Only in the first kind, where
+   no exit was sent: Cancel returns to the window and the app operates again (Codex's
+   recommendation, codex-232, and mine). **In the second kind I recommend no way back:
+   the window closes and the box offers Try again and Close anyway (E2).** The other
+   choice keeps the window open for reading and copying what was typed. Codex has shown
+   what that costs (codex-234): the app alone would have to hold that window
+   non-operating for as long as it stayed, FT8 stream, Log and shortcuts included,
+   because the daemon may still count its lifetime able to operate. What it would save
+   is what you had already agreed to lose at the question.
+5. **Closing while Settings is saving.** I recommend the question names it truthfully
+   (the words in question 3) with Close and Cancel, so you can cancel and wait. The
+   other choice follows the page's rule for leaving Settings (ruled 2026-08-04: leaving
+   is refused while a section saves): the close is refused with a line saying so. I do
+   not recommend that here: a page that wrongly reports a save under way could then
+   keep the app from closing. Codex calls the exception coherent and does not choose.
+6. **Where FT8's state comes from, and what "not known" does.** The page knows it only
+   from its FT8 stream, and only once the daemon has said it on that connection. With
+   FT8 enabled and the FT8 view not open, the ordinary case, the page does not know.
+   - **(a) The shell asks the daemon** when a close is asked for: a small read-only
+     route, new, that says whether TX is armed or a run is under way (I). The answer
+     is the daemon's own, at that moment. Cost: one read route and one read of the FT8
+     service's state, in the daemon, which G otherwise leaves alone. **I recommend
+     this, and Codex supports it in principle** (codex-235). Two limits go with it.
+     *It is a snapshot* (I5): a run can start or end between the answer and the
+     disarm. *The read can fail* while the disarm that follows succeeds, so (a) needs
+     its own rule for "not known": **I recommend, as Codex does, the qualified line**
+     ("FT8's state could not be read. If it is running, it will be stopped."), which
+     appears whenever a valid answer cannot be established (I4): no answer, a missing
+     route or a malformed one. The other rules: stop there
+     and show the box of E's first kind; or go on without an FT8 line, accepting what
+     (c) accepts.
+   - **(b) The page's word, and "not known" asks:** "FT8 may still be running. It will
+     be stopped." Codex recommends this of the page-only choices. Its cost: at a
+     station with FT8 enabled it would ask at most closes when nothing is running.
+   - **(c) The page's word, and "not known" does not ask.** Its cost, to be accepted
+     in so many words: a run or an arm that still stands (inside the daemon's grace
+     after the view was left or the page reloaded, or held by a stream the page has
+     not yet heard from) is stopped by the close without the question. The disarm is
+     sent in every case.
+
+**For the operator's eye, not a question.** A close that asks nothing will take a moment
+longer than today, the time of three requests to the daemon on the same machine, or
+four if question 6 is answered (a). If the
+daemon is down, that moment is the limit of question 2 before the box of E appears.
