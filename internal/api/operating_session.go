@@ -174,9 +174,20 @@ func (s *Server) handleOperatingSessionRead(w http.ResponseWriter, r *http.Reque
 	s.writeJSON(w, http.StatusOK, resp)
 }
 
-// sessionResponse names the state: a session held by the current lifetime, or
-// an empty one, is open; one with contacts that another lifetime holds awaits
-// the operator's Continue or New. current is the admission's current lifetime
+// sessionResponse names the state FOR THE CALLER (W-0029 part 2, D1): a session
+// held by the current lifetime, or by the caller, or an empty one, is open; one
+// with contacts that another lifetime holds awaits the operator's Continue or
+// New.
+//
+// "Or by the caller" is what a daemon restart needs. A new process has no
+// current lifetime until the shell admits its own again, and the page's stream
+// reconnects and reads before that. The app that holds the session must not be
+// told it awaits an answer: admitting the same lifetime again changes nothing
+// in the file, so no generation advances and no event follows to correct a
+// question the page has drawn, and New pressed on that question would close the
+// session the running app holds (the clean-room review of 2c362c3d).
+//
+// current is the admission's current lifetime
 // as observed with the file, by the caller, and closing whether an archive
 // switch is in its closing phase, observed in the same hold. That state comes
 // first: whatever else is true of the file, no session will be opened in it by
@@ -191,7 +202,7 @@ func (s *Server) sessionResponse(st sqlite.OperatingSessionState, caller, curren
 		resp.State = sessionStateSetupPending
 	case o == nil:
 		resp.State = sessionStateNone
-	case o.HasMembers && o.Holder != current:
+	case o.HasMembers && o.Holder != current && (caller == "" || o.Holder != caller):
 		resp.State = sessionStateRecoveryPending
 	default:
 		resp.State = sessionStateOpen

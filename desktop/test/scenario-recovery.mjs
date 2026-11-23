@@ -12,7 +12,13 @@
 //  3. the first window goes without a confirmed exit, as after a crash or a power cut;
 //  4. the second start: what loads is the question, naming the session and its one contact,
 //     and nothing of the workspace;
-//  5. Continue: the workspace loads, and smd says this start now holds that same session.
+//  5. Continue: the workspace loads, and smd says this start now holds that same session;
+//  6. smd is stopped and started again under the running app. The page's stream reconnects
+//     and it reads the session again, possibly before the shell has admitted its lifetime to
+//     the new process: it must not be asked about the session it holds itself (the
+//     clean-room review of 2c362c3d). The scenario waits until it has SEEN the page consume a
+//     state answered by the restarted smd (the process's own marker tells the two apart), and
+//     fails if that never happens.
 // PASSES only if every check holds. Run: SM_DESKTOP_SMD=<smd> npm run check:recovery.
 import fs from 'node:fs';
 import net from 'node:net';
@@ -95,7 +101,57 @@ const WORKSPACE = `(() => { const f = document.querySelector('#lc-call');
     return !!f && !f.disabled && !f.readOnly && !!document.querySelector('.content-wrap'); })()`;
 const HEADING = `document.querySelector('h1')?.textContent?.trim() ?? ''`;
 const TEXT = `document.body.textContent.replace(/\\s+/g, ' ')`;
-const SESSION = `fetch('/v1/operating-session', { cache: 'no-store' }).then((r) => r.json())`;
+// The scenario's own query. It goes round the observer below, once that is installed.
+const SESSION = `(window.__smRealFetch ?? fetch)('/v1/operating-session', { cache: 'no-store' }).then((r) => r.json())`;
+// A passive observer of the page's own reads of the session (codex-228, codex-229). It wraps
+// the page's fetch and, for an answered read of the session, the response's json(): the page
+// reads the body through that (lib/api/_helpers.ts, readJsonBody), so a read is recorded when
+// the page has CONSUMED its state, not when a response merely became available. Each record
+// carries the daemon instance that answered it (smd's own marker on the response), so a read
+// answered by the process that was stopped cannot be taken for one from the process started
+// after it. It sends nothing. The scenario's own queries go through the fetch saved here
+// (window.__smRealFetch) and are never recorded.
+//
+// `hold` is a control (SM_RECOVERY_CONTROL=hold-consumption): the body of a read answered by
+// any instance but `before` is never given to the page. The page then has not consumed its
+// state, and the scenario must not get past its wait.
+const WATCH_SESSION_READS = (hold) => `(() => {
+    if (window.__smSession !== undefined) return true;
+    const real = window.fetch.bind(window);
+    window.__smRealFetch = real;
+    window.__smSession = { consumedFrom: [], before: null, hold: ${hold ? 'true' : 'false'} };
+    window.fetch = async (...args) => {
+        const response = await real(...args);
+        const url = typeof args[0] === 'string' ? args[0] : (args[0]?.url ?? '');
+        if (new URL(url, location.href).pathname !== '/v1/operating-session' || !response.ok) {
+            return response;
+        }
+        const instance = response.headers.get('x-sm-daemon-instance') ?? '';
+        const json = response.json.bind(response);
+        response.json = async () => {
+            const watch = window.__smSession;
+            if (watch.hold && watch.before !== null && instance !== watch.before) {
+                return new Promise(() => {}); // the control: the page never gets its state
+            }
+            const body = await json();
+            watch.consumedFrom.push(instance);
+            return body;
+        };
+        return response;
+    };
+    return true;
+})()`;
+// The daemon instance answering now, asked by the scenario itself.
+const INSTANCE = `(window.__smRealFetch ?? fetch)('/v1/operating-session', { cache: 'no-store' })
+    .then((r) => r.headers.get('x-sm-daemon-instance') ?? '')`;
+const NOTE_INSTANCE = (instance) =>
+    `(() => { window.__smSession.before = ${JSON.stringify(instance)}; return true; })()`;
+// Has the page consumed a session state answered by an instance other than the one noted?
+const CONSUMED_FROM_ANOTHER = `window.__smSession.consumedFrom.some(
+    (i) => i !== '' && i !== window.__smSession.before)`;
+// Once its body is consumed the page decodes and draws within the same turn of its loop; two
+// turns later it has.
+const SETTLED = `new Promise((r) => setTimeout(() => setTimeout(() => r(true), 50), 50))`;
 const press = (label) =>
     `(() => { const b = [...document.querySelectorAll('button')].find((x) => x.textContent.trim() === ${JSON.stringify(label)});
         if (!b) return false; b.click(); return true; })()`;
@@ -122,6 +178,9 @@ export async function runRecovery() {
     const windows = [];
     let base = null;
     let smd = null;
+    // A control, not a mode of the product: see WATCH_SESSION_READS. With it set the run
+    // must FAIL, at phase 6's wait.
+    const holdConsumption = process.env.SM_RECOVERY_CONTROL === 'hold-consumption';
 
     try {
         const bin = process.env.SM_DESKTOP_SMD;
@@ -243,6 +302,39 @@ export async function runRecovery() {
         check(
             '…and the question is gone',
             (await js(second.win, HEADING)) !== 'The last session is still open'
+        );
+
+        // 6. smd restarts under the running app, which holds a session with a contact.
+        // The scenario asks smd nothing after the restart until the page has consumed a state
+        // from the new process: a request of its own would make the shell admit early and
+        // hide the interval this phase is about. What it waits for is seen, not timed.
+        await js(second.win, WATCH_SESSION_READS(holdConsumption));
+        const instanceBefore = await js(second.win, INSTANCE);
+        await js(second.win, NOTE_INSTANCE(instanceBefore));
+        await smd.stop();
+        await smd.start();
+        await until(
+            () => js(second.win, CONSUMED_FROM_ANOTHER),
+            'the page to consume its own read of the session from the restarted smd',
+            30000
+        );
+        await js(second.win, SETTLED); // what that state drew
+        const afterRestart = {
+            heading: await js(second.win, HEADING),
+            workspace: await js(second.win, WORKSPACE),
+            session: await js(second.win, SESSION),
+        };
+        const instanceAfter = await js(second.win, INSTANCE);
+        check(
+            'After smd restarts under the running app the workspace stays: the app is not asked about the session it holds',
+            instanceBefore !== '' &&
+                instanceAfter !== '' &&
+                instanceAfter !== instanceBefore &&
+                afterRestart.heading !== 'The last session is still open' &&
+                afterRestart.workspace === true &&
+                afterRestart.session.session?.id === sessionId &&
+                afterRestart.session.generation === continued.generation,
+            JSON.stringify({ heading: afterRestart.heading, workspace: afterRestart.workspace })
         );
     } catch (e) {
         check('Scenario completed', false, e.message);

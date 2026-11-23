@@ -306,14 +306,80 @@ describe('the gate opens only for the archive the boot has proven', () => {
         expect(recoveryGate()).toBe('loading');
     });
 
-    it('once that archive is the one proven, the state already read is drawn at once, with no further read', async () => {
+    // The clean-room review of 2c362c3d: two reads overlap before the proof, the
+    // older state arriving last. Whatever was read before the proof is never
+    // what is drawn at it: the state is read then, so an obsolete question
+    // cannot be drawn and left standing.
+    it('at the proof the state is read afresh: an older answer that arrived last before it is not drawn', async () => {
         bound = null;
-        reads.push(ok(question(4)));
+        reads.push(ok(held(5)), ok(question(4))); // the newer state first, the older one last
         await readSessionState();
+        await readSessionState();
+        expect(recoveryGate()).toBe('loading');
         bound = HOME;
-        await sessionArchiveProven(); // no read is queued: one would throw
+        reads.push(ok(held(5))); // what the daemon holds now
+        await sessionArchiveProven();
+        expect(recoveryGate()).toBe(null);
+        expect(reads).toHaveLength(0); // the proof's own read was made
+    });
+
+    // codex-228: the order the test below this one did not cover. A read sent
+    // before the proof arrives after the proof but BEFORE the proof's own read
+    // has answered. It was sent with nothing proven: it draws nothing, whatever
+    // archive is bound by the time it returns, and it does not count as
+    // progress that would make the fresh read's failure obsolete.
+    it.each([
+        ['fails', failed, 'unreadable'],
+        ['succeeds', ok(held(5)), null],
+    ] as const)(
+        'a read sent before the proof, arriving after it and before the fresh read, draws nothing; the fresh read then %s',
+        async (_name, fresh, gate) => {
+            bound = null;
+            const early = deferred<SessionReadLike>();
+            reads.push(early.promise);
+            const earlyRead = readSessionState(); // the stream's read, sent with nothing proven
+            bound = HOME;
+            const load = deferred<SessionReadLike>();
+            reads.push(load.promise);
+            const proven = sessionArchiveProven(); // the load's own read, sent now
+            expect(recoveryGate()).toBe('loading');
+
+            early.resolve(ok(question(4))); // the old question, for the archive now proven
+            await earlyRead;
+            expect(recoveryGate()).toBe('loading');
+            expect(recovery.session).toBe(null);
+
+            load.resolve(fresh);
+            await proven;
+            expect(recoveryGate()).toBe(gate);
+        }
+    );
+
+    it('a read sent before the proof that fails after it does not hide what the fresh read then draws', async () => {
+        bound = null;
+        const early = deferred<SessionReadLike>();
+        reads.push(early.promise);
+        const earlyRead = readSessionState();
+        bound = HOME;
+        reads.push(ok(question(4)));
+        await sessionArchiveProven();
+        early.resolve(failed);
+        await earlyRead;
         expect(recoveryGate()).toBe('question');
-        expect(recovery.generation).toBe(4);
+    });
+
+    it('a read from before the proof that arrives after it cannot put an older question back', async () => {
+        bound = null;
+        const early = deferred<SessionReadLike>();
+        reads.push(early.promise);
+        const earlyRead = readSessionState();
+        bound = HOME;
+        reads.push(ok(held(5)));
+        await sessionArchiveProven();
+        expect(recoveryGate()).toBe(null);
+        early.resolve(ok(question(4)));
+        await earlyRead;
+        expect(recoveryGate()).toBe(null);
     });
 
     it('another archive is proven: the workspace is withheld until ITS state is read, and then it is the question', async () => {

@@ -24,12 +24,14 @@
         generation, within one archive: a read sent before an answer cannot put
         the old question back;
       - a state is drawn only for the archive the boot has PROVEN. One read
-        before that proof, or for another archive, is kept and not drawn: the
-        page stays as it was, and when the proof comes the kept state is drawn
-        if it is that archive's, and otherwise the state is read again with
-        the workspace still withheld. A read made in the background after the
-        proof is not enough: an earlier archive's "open" must never stand as
-        permission to show this archive's workspace (codex-226);
+        before that proof, or for another archive, is not drawn and is not
+        kept: the page stays as it was. A read SENT before the proof draws
+        nothing whenever it returns (codex-228). When the proof comes the state
+        is read then, with the workspace still withheld until it is known. An earlier
+        archive's "open" must never stand as permission to show this archive's
+        workspace (codex-226), and an answer that arrived before the proof may
+        be older than one that arrived before it (the clean-room review of
+        2c362c3d), so nothing from before the proof is drawn at it;
       - a read that fails takes away nothing that was drawn. It makes the
         page unreadable only when nothing has been drawn yet, or when an
         answer has just failed and what the daemon holds is not known; and
@@ -96,9 +98,6 @@ export const recovery: {
 let ports: RecoveryPorts | null = null;
 // The state last drawn: its archive and generation.
 let drawn: { archiveId: string; generation: number } | null = null;
-// The latest state that could not be drawn because its archive was not the one
-// proven (none was, or another is). sessionArchiveProven looks at it.
-let kept: SessionStateLike | null = null;
 // Counts the states drawn. A read notes it when it is sent: if it has moved by
 // the time that read fails, something authoritative has been drawn since, by a
 // later read or by an answer, and the failure is obsolete.
@@ -120,10 +119,7 @@ export function recoveryGate(): 'loading' | 'question' | 'unreadable' | null {
 // draw is the one rule (E5). It reports whether the state was drawn.
 function draw(state: SessionStateLike): boolean {
     const bound = ports?.archive() ?? null;
-    if (bound === null || state.archiveId !== bound) {
-        kept = state;
-        return false;
-    }
+    if (bound === null || state.archiveId !== bound) return false;
     if (
         drawn !== null &&
         drawn.archiveId === state.archiveId &&
@@ -133,7 +129,6 @@ function draw(state: SessionStateLike): boolean {
     }
     drawn = { archiveId: state.archiveId, generation: state.generation };
     draws++;
-    kept = null;
     recovery.generation = state.generation;
     if (state.state === 'recovery_pending' && state.session !== null) {
         recovery.status = 'question';
@@ -152,8 +147,15 @@ function draw(state: SessionStateLike): boolean {
 async function read(uncertain: boolean): Promise<void> {
     if (ports === null) return;
     const drawsWhenSent = draws;
+    // What a read may draw is decided by when it was SENT, not by what is bound
+    // when it returns (codex-228). One sent with no archive proven draws
+    // nothing, even if it comes back after the proof and for that very
+    // archive: it may be older than the read the proof itself sends, and
+    // drawing it would also make that read's failure look obsolete.
+    const sentFor = ports.archive();
     const out = await ports.read();
     if (out.kind === 'ok') {
+        if (sentFor === null || out.state.archiveId !== sentFor) return;
         if (draw(out.state) && !uncertain) recovery.error = '';
         return;
     }
@@ -178,15 +180,10 @@ export function readSessionState(): Promise<void> {
 /**
  * The boot has proven which archive the page is bound to (main.ts calls this
  * when the boot's bracket of identity reads has settled). Until now nothing has
- * been drawn. A state already read for that archive is drawn at once; otherwise
- * the state is read, and the workspace stays withheld until it is known.
+ * been drawn, and nothing read before now is used: the state is read, and the
+ * workspace stays withheld until it is known. This is the load's read.
  */
 export function sessionArchiveProven(): Promise<void> {
-    const bound = ports?.archive() ?? null;
-    if (bound !== null && kept !== null && kept.archiveId === bound && draw(kept)) {
-        recovery.error = '';
-        return Promise.resolve();
-    }
     return read(false);
 }
 
@@ -225,6 +222,5 @@ export function _resetRecoveryForTests(): void {
     recovery.error = '';
     ports = null;
     drawn = null;
-    kept = null;
     draws = 0;
 }

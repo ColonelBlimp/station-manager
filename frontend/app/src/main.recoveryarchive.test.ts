@@ -1,13 +1,15 @@
-// codex-226, finding 1, at the PRODUCTION BOUNDARY: the real main.ts, with the
-// load's early session read answered for one archive ("open": nothing to ask)
-// and the boot's bracket then proving ANOTHER, whose session needs its answer.
+// codex-226, finding 1, at the PRODUCTION BOUNDARY: the real main.ts, with a
+// session read made before the boot has proven its archive (the shell's stream
+// opens first, and that makes the page read) answered for one archive ("open":
+// nothing to ask), and the boot's bracket then proving ANOTHER, whose session
+// needs its answer.
 // That earlier answer must not stand as permission to show this archive's
 // workspace: from the proof until this archive's own state is read, nothing of
 // the workspace is shown and nothing of FT8 is asked for, though FT8 is the
 // view the page would restore. Then the question.
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { screen } from '@testing-library/svelte';
-import { installDaemon, FakeEventSource, type Daemon } from './test/mainHarness';
+import { installDaemon, shellStream, FakeEventSource, type Daemon } from './test/mainHarness';
 import { _setReloadForTests, archivesState } from './lib/config/archives.svelte';
 import { boundArchive, setBoundArchive } from './lib/api/archive-guard';
 import { recovery } from './lib/recovery.svelte';
@@ -28,6 +30,10 @@ const session = (id: string, heldByYou: boolean, contacts: number) => ({
 
 let release!: () => void;
 const held = new Promise<void>((r) => (release = r));
+// The boot's bracket is held at its config read until the early session read has
+// been answered, so that read is certainly made with no archive proven.
+let letBootGoOn!: () => void;
+const bootHeld = new Promise<void>((r) => (letBootGoOn = r));
 
 const daemon: Daemon = {
     version: {
@@ -43,9 +49,10 @@ const daemon: Daemon = {
         ft8_enabled: true,
         ft8_running: true,
     },
+    configHold: bootHeld,
     routes: {
         'GET /v1/operating-session': [
-            // The load's read, answered while the daemon still served the earlier archive.
+            // The early read, answered while the daemon still served the earlier archive.
             {
                 status: 200,
                 body: {
@@ -87,6 +94,14 @@ describe('main.ts: the early session read was for another archive than the one t
         window.history.replaceState({}, '', '/operate/ft8');
         document.body.innerHTML = '<div id="app"></div>';
         await import('./main');
+        // Nothing is proven yet. The shell's stream opens, and the page reads:
+        // the answer is the earlier archive's.
+        expect(boundArchive()).toBeNull();
+        shellStream().emit('open');
+        await vi.waitFor(() => expect(reads()).toBe(1));
+        await Promise.resolve();
+        expect(recovery.status).toBe('loading');
+        letBootGoOn();
         await vi.waitFor(() => expect(archivesState.verifying).toBe(false));
     });
     afterAll(() => {

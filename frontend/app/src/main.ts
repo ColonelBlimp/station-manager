@@ -724,11 +724,10 @@ function enrichmentExtras(call: string, myGrid: string) {
 // The recovery gate rides it too (ADR 0100 §6; W-0029 part 4, E8). The stream
 // replays nothing, so the session's state is read when the subscription opens
 // and at every reopening (onOpen fires at both), which finds a change made
-// while it was down; and again on each operating_session.changed. The read
-// just below is the load's own, sent early so that its answer is usually in
-// hand when the boot's bracket proves the archive; nothing is drawn before
-// that proof (sessionArchiveProven, above), and a state older than the one
-// shown is never drawn.
+// while it was down; and again on each operating_session.changed. The load's
+// own read is made when the boot's bracket has proven the archive
+// (sessionArchiveProven, above): nothing is drawn before that proof, nothing
+// read before it is used, and a state older than the one shown is never drawn.
 setRecoveryPorts({
     read: fetchOperatingSession,
     answer: answerOperatingSession,
@@ -744,7 +743,6 @@ openLogEvents({
         void verifyArchiveGeneration();
     },
 });
-void readSessionState();
 
 const target = document.getElementById('app');
 if (!target) {

@@ -624,3 +624,39 @@ func TestRecovery_ADaemonRestartLeavesTheQuestionOrTheAnswerAsItWas(t *testing.T
 		}
 	})
 }
+
+// After a daemon restart no lifetime is current until the shell admits its own
+// again. The page's stream reconnects first and reads in that interval. The
+// read must not tell the app that holds the session that the session awaits an
+// answer: admitting the same lifetime again changes nothing in the file, so no
+// generation advances and no event follows to correct a question once drawn,
+// and "Start a new session" pressed on it would close the session the running
+// app holds (the clean-room review of 2c362c3d). The state is named for the
+// caller (part 2, D1): a session the caller holds is open to it.
+func TestRecovery_ADaemonRestartDoesNotAskTheAppAboutItsOwnSession(t *testing.T) {
+	b := newExitBed(t, true)
+	b.mustBeAdmitted(lifeA)
+	held := b.view(lifeA)
+	b.contactN(held.Session.ID, 1)
+	b.restart() // a new process: nobody is current yet
+	read := b.sessionEvents()
+
+	v := b.view(lifeA)
+	if v.State != sessionStateOpen || v.Session == nil || v.Session.ID != held.Session.ID || !v.Session.HeldByYou {
+		t.Fatalf("before it is admitted again the holder reads %s (held by it: %v); want open: it is asked about its own session",
+			v.State, v.Session != nil && v.Session.HeldByYou)
+	}
+	// Anyone else is still told that a session awaits its answer.
+	for who, lifetime := range map[string]string{"another lifetime": lifeB, "a caller with no lifetime": ""} {
+		if w := b.view(lifetime); w.State != sessionStateRecoveryPending || w.Session == nil || w.Session.HeldByYou {
+			t.Fatalf("%s reads %s; want %s, not held by it", who, w.State, sessionStateRecoveryPending)
+		}
+	}
+
+	// The shell admits the same lifetime again: nothing changes and nothing is published.
+	b.mustBeAdmitted(lifeA)
+	sameState(t, "the holder's read after it is admitted again", b.view(lifeA), v)
+	if got := read(); len(got) != 0 || b.file(lifeA).Generation != held.Generation {
+		t.Fatalf("events %v, generation %d; want none and %d: nothing would ever have corrected a wrong reading", got, b.file(lifeA).Generation, held.Generation)
+	}
+}

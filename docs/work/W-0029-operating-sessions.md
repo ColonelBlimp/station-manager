@@ -37,9 +37,14 @@ ruled (2026-11-23); Codex supports the revision with no design finding remaining
 (codex-223). Part 4's first slice, the daemon's side, is built and committed with this
 text (the last section of this file); Codex's review of its runtime is complete, with no defect found
 (codex-224, codex-225), and it is committed (`3a7dab14`). Its second, the screen, is built
-and committed with this text (the last section of this file); Codex's review found two
-faults in its gate (codex-226), both fixed, and its review is closed (codex-227). With it
-part 4's criteria are built. Parts 3 and 4 are not at the station.** The removal of the database half of
+and committed (`2c362c3d`); Codex's review found two faults in its gate (codex-226), both
+fixed before the commit, and its review is closed (codex-227). **That commit's
+clean-room review then found two more (the last section of this file): both are fixed
+and committed with this text; Codex's review of the fixes found the page's one incomplete
+(codex-228), since corrected, and has closed the runtime findings (codex-229) and then
+the scenario's observer (codex-230): its review of the fixes is complete.** With it part
+4's criteria are built.
+Parts 3 and 4 are not at the station.** The removal of the database half of
 the downgrade tooling, which part 1 waited for, is committed (`0b21b2fb`, 2026-11-20; W-0027).
 **Part 1's acceptance criteria are written, their three questions ruled, and agreed with
 Codex after one round of corrections (2026-11-20).** The
@@ -255,6 +260,9 @@ next part starts.
   the one sentence of text on the unreadable screen; the tab's title "Session"; a
   question that is showing kept through a failed re-read). They were not ruled on one by
   one.
+- **2026-11-23 (operator): "commit and push"**, of the fixes for the two findings of the
+  clean-room review of `2c362c3d`, said after Codex closed its review of them
+  (codex-230).
 
 The design's own rulings are in ADR 0100 and are not repeated here.
 
@@ -4262,3 +4270,120 @@ right, both fixed.**
 - "New" in the real app: the scenario presses Continue. New is shown at the route (first
   slice) and in the gate's and the card's tests.
 - Anything at the station.
+
+### Part 4, second slice: its clean-room review, two findings, both fixed (2026-11-23; committed with this record)
+
+The second slice was committed and pushed as `2c362c3d` on the operator's direction. Its
+clean-room review raised two findings. Both are right. **Neither can occur at the station
+today:** each needs a session with contacts, which nothing writes before part 5, and
+parts 3 and 4 are not installed there.
+
+**1. (P1) A daemon restart could show a running app the recovery question about its own
+session.**
+- **What happened.** A new daemon process has no current lifetime until the shell admits
+  its own again. The page's stream reconnects first and the page reads the session. The
+  read named the state from the admission's current lifetime alone, so the app that held
+  the session was told `recovery_pending`, and the page put the question in place of the
+  workspace. Admitting the same lifetime again changes nothing in the file: no generation
+  advances and no event follows, so the question stayed. "Start a new session" pressed on
+  it would have closed the session the running app held.
+- **Where the fault was.** In the daemon's read, since part 2: its criteria say the state
+  is named "for the caller" (D1), and it was named for the current lifetime. Part 2's
+  record noted that a holder read `recovery_pending` "for a moment" after a restart;
+  nothing then acted on that reading. The page now does.
+- **Fixed in the daemon** (`sessionResponse`, `internal/api/operating_session.go`): a
+  session the caller holds is `open` to the caller. Any other caller, and one with no
+  lifetime, still reads `recovery_pending`.
+- **Shown.**
+  - `TestRecovery_ADaemonRestartDoesNotAskTheAppAboutItsOwnSession`: failing first (the
+    holder read `recovery_pending`, held by it). After: the holder reads `open`; another
+    lifetime and a caller with none read `recovery_pending`; the holder is admitted again
+    with the same state, the same generation and no event.
+  - **In the real app** (`check:recovery`, an eighth check): `smd` is stopped and started
+    under the running app, which holds a session with a contact; the workspace stays. The
+    scenario asks `smd` nothing in that interval, so the page's own reconnection is the
+    first thing answered, as in use. **Against a daemon with the fix reverted the same
+    check fails: the heading is the question and the workspace is gone.** (As first
+    written this check passed against that daemon too: a request of the scenario's own
+    made the shell admit early. It was corrected before it was relied on.)
+
+**2. (P2) A read that arrived last before the proof of the archive could be an older
+state, and was then drawn.**
+- **What happened.** The fix for Codex's first finding kept the latest state read before
+  the boot had proven its archive, and drew it at the proof without reading again. Two
+  reads can overlap before the proof (the load's, and one made when the stream opens);
+  "latest to arrive" was kept, with no comparison of generations. If the older one
+  arrived last, an obsolete question was drawn and no fresh read made.
+- **Fixed by removing what made it possible** (`lib/recovery.svelte.ts`, `main.ts`):
+  nothing read before the proof is kept or used. The load's read is made at the proof,
+  with the workspace withheld until it answers; the early read at the load is gone.
+  After the proof the generation rule orders every state drawn, as before.
+- **Shown.** In the gate's tests, failing first (the obsolete question was drawn): two
+  reads before the proof, the older arriving last, and at the proof the state is read
+  afresh; and a read from before the proof arriving after it cannot put an older
+  question back. The two production-boundary tests of codex-226 were reworked to fit:
+  the early read now comes from the stream opening while the boot's bracket is held.
+- **Decision 5 of the slice's record is superseded again:** the page makes no read at the
+  load before the proof.
+
+**Codex's review of these two fixes (codex-228): the daemon's is supported; the page's
+was incomplete, and the scenario's new check could pass without showing anything.**
+- **The page's fix was incomplete, and Codex reproduced it against the store.** With the
+  kept state gone, a read SENT before the proof could still be drawn if it came back after
+  the proof and before the proof's own read: `draw` looked at what was bound when a read
+  returned, not at when it was sent. An old question was then drawn, and the fresh read's
+  failure was discarded as obsolete because something had been drawn since.
+  - **Fixed:** a read notes the archive bound when it is sent. One sent with nothing
+    proven draws nothing, whenever it returns, and so does not count as progress.
+  - **Shown, failing first** (the old question was drawn): that order in the gate's
+    tests, with the fresh read then failing (the unreadable screen) and succeeding (the
+    workspace); and a pre-proof read that fails late does not hide what the fresh read
+    drew. **At the production boundary** (`main.recoverylate.test.ts`): the stream's read
+    is sent with nothing proven and held across the proof; it comes back as an old
+    question for the archive now proven, and nothing is drawn; the load's read then
+    fails, and the page says the session could not be read. With the rule reverted that
+    test and the gate's fail.
+- **The scenario's restart check waited six seconds and then looked.** Codex saw that it
+  could pass with the page never reconnecting: the old workspace is still on the screen.
+  - **Fixed:** the scenario now waits for something it sees. A passive observer in the
+    page counts the page's own session reads that were answered; it makes no request.
+    The scenario waits for one answered by the restarted `smd`, lets the page draw, and
+    only then looks, and only after that asks `smd` anything itself.
+  - **Shown, three runs:** against a daemon built from this tree it passes (8 checks);
+    against a daemon with the read's fix reverted the eighth check fails (the heading is
+    the question, the workspace is gone); and against a page built never to read when its
+    stream reopens the scenario fails ("timed out waiting for the page's own read"): the
+    false pass Codex described is closed.
+
+**Codex's next reading (codex-229): the runtime findings are closed; the scenario's
+observer still counted too early.** It counted a read when the response became available,
+and the page reads the body after that. Codex showed, with the observer's own code, a
+read counted while the page had consumed nothing; and that a count rising after the
+restart did not show which process had answered.
+- **Fixed in the scenario** (no production code): the observer now records a read when
+  the page's own reading of the body completes, with the daemon instance that answered
+  it (the marker `smd` puts on every response). The scenario notes the instance before it
+  stops `smd`, and waits for the page to have consumed a state from another. Its own
+  queries go round the observer.
+- **Shown, four runs.** Against a daemon built from this tree: passes (8 checks). **With
+  consumption held** (a control in the scenario, `SM_RECOVERY_CONTROL=hold-consumption`:
+  the body of a read answered by the restarted `smd` is never given to the page): fails,
+  timed out waiting for the page to consume it. Against a daemon with the read's fix
+  reverted: the eighth check fails, the heading is the question. Against a page built
+  never to read when its stream reopens: fails, the same timeout.
+
+**Seen after all of it.** `internal/api` in full; the page's lint, format check, type
+check and whole suite (202 files, 3,003 tests); the desktop shell's lint and format
+check; the desktop scenario as above. Hosted CI for `2c362c3d` passed (run 45126189509).
+- **The whole local gate, once, before the push,** after Codex closed its review of the
+  fixes (codex-230): `task ci:local`, exit code 0, "All CI gates passed locally", 11
+  minutes 47 seconds, with the recovery scenario at 8 checks and the C1d acceptance at 19.
+  Only this item was added to this file after the run began.
+
+**What this says about my own review.** Codex's review and mine both passed the first
+fault: it lies between the daemon's read (part 2) and the page that now acts on it, and
+neither of us traced a daemon restart through both. The second was introduced by my fix
+for Codex's first finding, and my fix for the second was itself incomplete (codex-228):
+the pattern this project has met before, three times in this one gate. A fix needs the
+scrutiny the original change had, and for this gate that means every order in which two
+reads and a proof can arrive.
