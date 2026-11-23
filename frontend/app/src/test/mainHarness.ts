@@ -36,15 +36,41 @@ export interface Sent {
     defaultLogbook: string | null;
 }
 
+export interface Route {
+    status: number;
+    body: unknown;
+    hold?: Promise<void>;
+}
+
 export interface Daemon {
     version: unknown;
     config: unknown;
     /** When set, GET /v1/config answers only once this settles. */
     configHold?: Promise<void>;
     /** Answers to other requests, by "METHOD url"; unlisted ones 404. An
-     *  answer with `hold` is sent only once that promise settles. */
-    routes: Record<string, { status: number; body: unknown; hold?: Promise<void> }>;
+     *  answer with `hold` is sent only once that promise settles. A list is a
+     *  sequence: each request takes the next answer, and the last one stays. */
+    routes: Record<string, Route | Route[]>;
     sent: Sent[];
+}
+
+/** The state of an ordinary start: a session open, held by this app. */
+function ordinarySession(d: Daemon): unknown {
+    const version = d.version as { archive?: { id?: string } } | null;
+    return {
+        archive_id: version?.archive?.id ?? '01a16a00-0000-7000-8000-000000000001',
+        generation: 1,
+        state: 'open',
+        session: {
+            id: '01a1f83c-da20-751f-80b7-ec9a3f1f9300',
+            logbook_uuid: '01a187bc-0173-7649-8ff3-71db8170c309',
+            opened_at: '2026-11-20T09:15:00Z',
+            sitting_started_at: '2026-11-20T09:15:00Z',
+            has_contacts: false,
+            contact_count: 0,
+            held_by_you: true,
+        },
+    };
 }
 
 function json(body: unknown, status = 200): Response {
@@ -76,9 +102,20 @@ export function installDaemon(d: Daemon): void {
                 if (d.configHold) return d.configHold.then(() => json(d.config));
                 return Promise.resolve(json(d.config));
             }
-            const r = d.routes[`${method} ${url.split('?')[0]}`];
+            const listed = d.routes[`${method} ${url.split('?')[0]}`];
+            const r = Array.isArray(listed)
+                ? listed.length > 1
+                    ? listed.shift()
+                    : listed[0]
+                : listed;
             if (r?.hold) return r.hold.then(() => json(r.body, r.status));
             if (r) return Promise.resolve(json(r.body, r.status));
+            // The session's state, which every load reads before it shows the
+            // workspace (W-0029 part 4): an ordinary start unless a test says
+            // otherwise in its routes.
+            if (method === 'GET' && url === '/v1/operating-session') {
+                return Promise.resolve(json(ordinarySession(d)));
+            }
             return Promise.resolve(json({ code: 'not_stubbed' }, 404));
         })
     );

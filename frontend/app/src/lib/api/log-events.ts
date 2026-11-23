@@ -48,6 +48,14 @@ export interface LogEventHandlers {
     /** Any of qso.stored / qso.updated / qso.deleted — consumers that only
      *  re-query don't care which mutation it was. */
     onQsoChanged: (event: string, payload: QsoEventPayload) => void;
+    /** operating_session.changed (ADR 0100; W-0029): the served archive's
+     *  session state changed. The event carries no session detail and the
+     *  stream replays nothing, so the consumer reads GET /v1/operating-session
+     *  here, and also on every open (onOpen fires at the first open and at each
+     *  reopening): a change made while the stream was down is found by that
+     *  read and by no event. The payload is not handed on: the read is what is
+     *  drawn, and its own archive and generation are what are compared. */
+    onSessionChanged?: () => void;
 }
 
 /**
@@ -88,6 +96,7 @@ function parse(data: unknown, label: string): QsoEventPayload | null {
 }
 
 const QSO_EVENTS: ReadonlySet<string> = new Set(['qso.stored', 'qso.updated', 'qso.deleted']);
+const SESSION_EVENT = 'operating_session.changed';
 
 const STREAM_PATH = '/v1/events/ws';
 
@@ -138,6 +147,10 @@ function connect(): SharedStream {
                 });
             },
             onFrame: (name, data) => {
+                if (name === SESSION_EVENT) {
+                    each((sub) => sub.handlers.onSessionChanged?.());
+                    return;
+                }
                 if (!QSO_EVENTS.has(name)) return; // forward.* etc.: not consumed here
                 const p = parse(data, name);
                 if (p !== null) each((sub) => sub.handlers.onQsoChanged(name, p));

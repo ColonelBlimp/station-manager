@@ -36,7 +36,10 @@ reworded, 2026-11-23). Part 4's acceptance criteria are written, at the end of t
 ruled (2026-11-23); Codex supports the revision with no design finding remaining
 (codex-223). Part 4's first slice, the daemon's side, is built and committed with this
 text (the last section of this file); Codex's review of its runtime is complete, with no defect found
-(codex-224). Its second, the screen, is not built.** The removal of the database half of
+(codex-224, codex-225), and it is committed (`3a7dab14`). Its second, the screen, is built
+and committed with this text (the last section of this file); Codex's review found two
+faults in its gate (codex-226), both fixed, and its review is closed (codex-227). With it
+part 4's criteria are built. Parts 3 and 4 are not at the station.** The removal of the database half of
 the downgrade tooling, which part 1 waited for, is committed (`0b21b2fb`, 2026-11-20; W-0027).
 **Part 1's acceptance criteria are written, their three questions ruled, and agreed with
 Codex after one round of corrections (2026-11-20).** The
@@ -243,6 +246,15 @@ next part starts.
 - **2026-11-23 (operator): "commit, push and build part 4's first slice".** Said after
   Codex supported the revised criteria (codex-223). The commit and push are of the reword
   and the criteria (`36d42db7`); the build is of part 4's first slice, the daemon's side.
+- **2026-11-23 (operator): "commit and push"**, of part 4's first slice (`3a7dab14`), and
+  then **"build the second slice"**, the screen.
+- **2026-11-23 (operator): "commit and push"**, of part 4's second slice, said after
+  Codex closed its review (codex-227) and after the slice's build choices had been put in
+  chat as standing unless changed. Claude's reading, not the operator's words: none was
+  changed, so they stand as built (the start time in UTC; "1 contact" in the singular;
+  the one sentence of text on the unreadable screen; the tab's title "Session"; a
+  question that is showing kept through a failed re-read). They were not ruled on one by
+  one.
 
 The design's own rulings are in ADR 0100 and are not repeated here.
 
@@ -4068,3 +4080,185 @@ and passed fifteen runs in a row.
   (a clean start, an empty remnant, a first run, a session the lifetime holds, an
   arrival); they are not repeated here.
 - Nothing has been run at the station.
+
+### Part 4, second slice: the screen, the read gate and the desktop scenario (2026-11-23; committed with this record)
+
+On the operator's direction ("build the second slice"). Criteria E, and the evidence the
+criteria proposed for what only Electron shows. With it part 4's criteria are built.
+The first slice is committed (`3a7dab14`); its clean-room review has no finding.
+
+**What the operator sees.**
+- **The recovery question** cannot appear at the station until part 5 (no contact joins a
+  session yet). When it can: one screen in place of the workspace, in the words ruled on
+  2026-11-23, with Continue and New and nothing else. The workspace opens after the
+  answer.
+- **At once, from the day it is installed** (ruled 2026-11-23, question 4): the main
+  window reads the session's state before it shows the workspace. If that read fails at
+  the load, it shows "The session could not be read" with "Try again", and not the
+  workspace.
+
+**What is built.**
+- **The page's client for the session** (`frontend/app/src/lib/api/operating-session.ts`):
+  the read, and the two answers through the archive guard. A read the page cannot
+  understand is an error, never an empty session. An answer is "applied" only with the
+  state the daemon returned; a stale refusal carries the state to redraw to.
+- **The gate** (`lib/recovery.svelte.ts`): four states (loading, question, unreadable,
+  clear) and the rules of E5 to E8: one rule draws every state; nothing older than the
+  state shown is drawn, by generation, within one archive; another archive's state is not
+  drawn; a failed read takes away nothing a successful read put there, and makes the page
+  unreadable only when nothing has been read or an answer has just failed; the page never
+  sends an answer again by itself.
+- **The card** (`lib/ui/RecoveryCard.svelte`): the question, and the screen for a session
+  that could not be read.
+- **The shell** (`App.svelte`): after the first-run gate and before the workspace. Until
+  the state has been read the page holds blank, as the first-run gate does. The
+  full-window map is neither asked nor gated.
+- **The stream** (`lib/api/log-events.ts`): `operating_session.changed` is handed to a
+  subscriber that asks for it.
+- **The boot** (`main.ts`): the read at the load; the proof of the archive, which is when
+  anything is first drawn; a read each time the shell's stream opens or reopens, and on
+  each event.
+- **The desktop scenario** (`desktop/test/scenario-recovery.mjs`, `npm run
+  check:recovery`), in the local gate and the hosted workflow beside the C1d acceptance.
+
+**Decisions made in the build, for review.** None was ruled on singly; they stand as
+built by the operator's direction to commit (the rulings list, 2026-11-23).
+1. **The session's start is shown in UTC, as "2026-11-20 09:15 UTC".** The criteria said
+   "times as the header shows them"; the header shows no date to follow. UTC is how
+   contacts are logged.
+2. **"1 contact", not "1 contacts".** The ruled text has "{n} contacts"; one is singular.
+3. **The words of the unreadable screen beyond its heading and its button** are mine:
+   "Station Manager could not read the operating session from the daemon, so the
+   workspace is not shown yet." The daemon's reason is shown under it.
+4. **A failed read does not take away a question that is showing,** as it does not take
+   away a workspace. The criteria spoke of the workspace only.
+5. **The page reads at the load without waiting for the stream to open,** and reads
+   again when it opens. Codex asked for the read once the subscription is established
+   (codex-222); both are done, so a page whose socket is slow is not blank meanwhile, and
+   the generation rule keeps the two reads in order.
+6. **A refusal that is not stale** (a retired lifetime, the closing phase) is treated as
+   a failure: its message is shown and the page reads again.
+7. **The tab's title reads "Session"** while the gate shows.
+
+**Seen.**
+- **Failing first:** the gate's rules (the store did not exist); the shell's gate (three
+  cases failed against a shell with no gate). **Not failing first:** the client's tests
+  and the card's were written before their code and run only after it; the boot tests and
+  the scenario were written after the wiring. The reversion proofs cover them.
+- **The client:** the read with and without a session; nine ways a read is an error
+  (503, no such route, not JSON, an unknown state, no generation, no archive, no count,
+  no start, recovery pending with no session) and an unreachable daemon; the two answers'
+  bodies and archive header; stale with and without a usable state; another refusal in
+  the daemon's words; a 503; nothing sent with no archive proven.
+- **The gate:** each state of E5; the read gate (a failed read; a retry into the
+  question and into the workspace; a workspace and a question each kept through a later
+  failed read; a later successful read drawn like any other); the answer (the generation
+  and session shown; a second press sends nothing; the three stale outcomes, B7's
+  included; a failure, then the read finding the question, the workspace, or failing
+  too); late results (a read from before an answer; a late failed read) and archives
+  (another archive's state; generations compared within one archive; no archive proven
+  yet).
+- **The card:** the ruled words; the two buttons and no link; one and zero contacts;
+  both buttons disabled in flight; a failed answer shown and pressable again; the
+  unreadable screen and its retry.
+- **The shell:** blank before the read; the question, the unreadable screen and the
+  workspace each in their state; setup first; the map never asked; the title.
+- **At the production boundary** (the real `main.ts`, the transport stubbed), from a page
+  that would restore its FT8 view:
+  - `main.recovery.test.ts`: the question is what loads, with the daemon's count; no
+    workspace, no rail; **no FT8 request and no FT8 stream**; the stream opening and the
+    event each make it read again; Continue is sent once for the proven archive; the
+    workspace then shows from the answer's own state with no further read; only then is
+    the FT8 view mounted; a read arriving afterwards with the old state does not put the
+    question back.
+  - `main.recoveryread.test.ts`: a daemon that answers 503 for the session: the
+    unreadable screen with the daemon's reason, no workspace, nothing of FT8; "Try again"
+    while it still fails; then the workspace once it can be read.
+- **In the real app against a real `smd`** (`check:recovery`, 7 checks, Electron under
+  Xvfb, a temporary directory and free ports): a first start is given a session and the
+  workspace; one contact is logged by `smd`'s route; **the scenario itself writes the one
+  member row** (nothing in `smd` does until part 5); the first window goes with no exit; a
+  second start loads the question, naming the session and "1 contact", with no contact
+  form and no rail; `smd` says recovery pending, not held by this start; Continue; the
+  workspace loads and `smd` says this start holds the same session, one generation on.
+- **Reversion proofs,** seventeen, each in a temporary copy of the page's sources since
+  removed, the tree's file unchanged: all fail for the reason claimed. The gate (an older
+  state drawn; another archive's drawn; a failed read at the load showing the workspace;
+  a failed read taking the workspace away; a second press sent; no read after a failed
+  answer; the wrong generation sent). The shell (the workspace before the read; the
+  question not replacing the workspace; the map asked). The boot (no read when the stream
+  opens; none on the event; none once the archive is proven). The stream (the event not
+  handed on). The client (stale reported as applied; an unknown state read). The card
+  ("1 contacts").
+- **Checked while building:** the page's lint, format check, type check (0 errors, 0
+  warnings) and its whole test suite (199 files, 2,990 tests); the desktop shell's lint,
+  format check and unit tests.
+- **The whole local gate, once, before the push,** after Codex's findings were fixed and
+  its review closed (codex-227): `task ci:local`, exit code 0, "All CI gates passed
+  locally", 11 minutes 39 seconds. In it: the maintainability gate with the rekeyed
+  entry (0 regressions), the C1d acceptance (19 checks) and the new recovery scenario
+  (7 checks). Only this item was added to this file after the run began.
+
+**Three existing things changed to fit the gate.**
+- `main.ftoffboot.test.ts` has its own stub of the daemon, which now answers the session
+  read; without it that test's page showed the unreadable screen, as ruled.
+- The boot tests' shared harness answers the session read as an ordinary start unless a
+  test says otherwise.
+- `quality/maintainability-baseline.json`: the line-keyed entry for `main.ts` moves from
+  line 575 to 578, three imports having been added above it.
+
+**Found while building, and what it means.** A boot test showed nothing after the gate
+went in: the test setup had already bound the page to one archive, the daemon in that
+test served another, and the load's read was (rightly) not drawn. In the real page
+nothing is bound when the load's read returns, so it is drawn; the read made once the
+boot has proven its archive is what covers the case, and is there for that reason.
+
+**Codex's review (codex-226): two findings, both reproduced by it against the store, both
+right, both fixed.**
+1. **A read made before the boot had proven its archive could open the workspace for
+   the wrong archive.** As first built, `draw` accepted a state while no archive was
+   bound. If that early answer was "open" for one archive and the boot then proved
+   another, whose session needed its answer, the workspace of the second was shown until
+   a background read came back, and stayed shown if that read failed. The archive
+   layer's own check did not catch it: both of its identity reads agreed. My reasoning
+   in the build ("the archive layer covers it") was wrong.
+   - **Fixed:** a state is drawn only for the archive the boot has proven. One read
+     before that, or for another archive, is kept and not drawn. When the proof comes
+     (`sessionArchiveProven`, called from the boot's bracket) the kept state is drawn at
+     once if it is that archive's; otherwise the state is read, with the workspace still
+     withheld, and a failure of that read is the unreadable screen.
+   - **Shown:** five cases in the gate's tests, and two at the production boundary
+     (`main.recoveryarchive.test.ts`, `main.recoveryarchivefail.test.ts`): the load's
+     read answered "open" for an earlier archive, the bracket proving another, that
+     archive's read held. In the interval: bound to the proven archive, no workspace, no
+     question, nothing of FT8 though FT8 is the view to restore. Released: the question;
+     or, failing: the unreadable screen. With the fix reverted both fail, the gate
+     reading "clear" where it must read "loading".
+2. **A failure that had been overtaken could take the workspace away.** After a failed
+   answer the buttons were enabled again while the page read what the daemon held. A
+   second press could then succeed and show the workspace, and the first read, failing
+   late, replaced it with the unreadable screen.
+   - **Fixed, two ways:** the buttons stay disabled until that read has settled, so no
+     answer is pressed on a state the page is still finding out about; and a read that
+     fails is acted on only if nothing has been drawn since it was sent, by a later read
+     or by an answer.
+   - **Shown:** in the gate's tests (no answer can be pressed while reconciling; a late
+     failure after a later read drew the workspace leaves it). Codex's own sequence, a
+     second answer during the first's reconciliation, can no longer be pressed; the
+     ordering rule that would cover it is shown through a read.
+- Three more reversion proofs for these (a state drawn before the proof; an obsolete
+  failure acted on; an answer pressable while reconciling): each fails for its reason.
+  Twenty in all for the slice.
+- After the fixes: the page's lint, format check, type check and whole suite (201
+  files, 2,998 tests); the desktop scenario again against a daemon rebuilt with the
+  corrected page (7 checks), and the C1d acceptance (19 checks).
+- **Decision 5 above is changed by this:** the page still reads at the load without
+  waiting for the stream, but that read draws nothing until the archive is proven.
+
+**Not shown.**
+- The read gate in the real app against a real `smd`: the scenario shows the question,
+  not a failed read. The failed read is shown at the production boundary with the
+  transport stubbed.
+- "New" in the real app: the scenario presses Continue. New is shown at the route (first
+  slice) and in the gate's and the card's tests.
+- Anything at the station.

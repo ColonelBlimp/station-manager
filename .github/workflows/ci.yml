@@ -347,6 +347,9 @@ jobs:
           trap 'sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns="$orig"' EXIT
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           xvfb-run -a npm run check:c1d
+          # W-0029 part 4: the recovery question, against that same binary, in a
+          # temporary working directory with synthetic data.
+          xvfb-run -a npm run check:recovery
       # W-0027 C2c: the tools against that same binary, in a temporary
       # working directory with the rig, FT8 and evidence capture disabled. The client and
       # the Cabrillo reader only read; the tune probe is not executed here.

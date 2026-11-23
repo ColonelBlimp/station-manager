@@ -44,6 +44,18 @@ function fakeFetch(input: RequestInfo | URL): Promise<Response> {
         return Promise.resolve(json({ daemon: '2.0.0-test', go: 'go1.26', env: 'release' }));
     }
     if (url === '/v1/logbook/1/count') return Promise.resolve(json({ count: 0 }));
+    // Every load reads the session before it shows the workspace (W-0029 part
+    // 4): an ordinary start, so the workspace this test looks at is shown.
+    if (url === '/v1/operating-session') {
+        return Promise.resolve(
+            json({
+                archive_id: '01a16a00-0000-7000-8000-000000000001',
+                generation: 1,
+                state: 'none',
+                session: null,
+            })
+        );
+    }
     return Promise.resolve(json({ error: 'not stubbed' }, 404));
 }
 

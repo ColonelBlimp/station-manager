@@ -7,6 +7,7 @@ import { render } from '@testing-library/svelte';
 import { flushSync } from 'svelte';
 import App from './App.svelte';
 import { setup, _resetSetupForTests } from './lib/setup.svelte';
+import { recovery, _resetRecoveryForTests } from './lib/recovery.svelte';
 import { navigate } from './lib/router.svelte';
 import { archivesState, _resetArchivesForTests } from './lib/config/archives.svelte';
 import { screen } from '@testing-library/svelte';
@@ -121,5 +122,87 @@ describe('ADR 0087 in the shell', () => {
         } finally {
             spies.restore();
         }
+    });
+});
+
+// W-0029 part 4, E1, E2 and E9: the recovery gate sits where the workspace
+// would be. Until the session's state has been read nothing of the workspace is
+// shown; a question or an unreadable state replaces it; setup comes first; and
+// the full-window map is never asked.
+describe('the recovery gate replaces the workspace', () => {
+    const workspace = (): Element | null => document.querySelector('.content-wrap');
+    const asked = (): HTMLElement | null =>
+        screen.queryByRole('heading', { name: 'The last session is still open' });
+    const unread = (): HTMLElement | null =>
+        screen.queryByRole('heading', { name: 'The session could not be read' });
+    const session = {
+        id: '01a1f83c-da20-751f-80b7-ec9a3f1f93f3',
+        openedAt: '2026-11-20T09:15:00Z',
+        contactCount: 3,
+    };
+
+    beforeEach(() => {
+        _resetSetupForTests();
+        _resetArchivesForTests();
+        _resetRecoveryForTests();
+        setup.status = 'complete';
+        navigate('operate');
+        document.title = '';
+    });
+
+    it('before the state has been read: neither the workspace nor a question', () => {
+        render(App);
+        flushSync();
+        expect(workspace()).toBeNull();
+        expect(asked()).toBeNull();
+        expect(unread()).toBeNull();
+    });
+
+    it('recovery pending: the question, and nothing of the workspace', () => {
+        recovery.status = 'question';
+        recovery.session = session;
+        render(App);
+        flushSync();
+        expect(asked()).not.toBeNull();
+        expect(workspace()).toBeNull();
+        expect(screen.queryByRole('navigation')).toBeNull();
+        expect(document.title).toBe('Session · Station Manager');
+    });
+
+    it('the state could not be read: the page says so, and shows no workspace', () => {
+        recovery.status = 'unreadable';
+        recovery.error = 'Cannot reach the daemon.';
+        render(App);
+        flushSync();
+        expect(unread()).not.toBeNull();
+        expect(workspace()).toBeNull();
+    });
+
+    it('any other state: the workspace, and no question', () => {
+        recovery.status = 'clear';
+        render(App);
+        flushSync();
+        expect(workspace()).not.toBeNull();
+        expect(asked()).toBeNull();
+        expect(document.title).toBe('Operate · Station Manager');
+    });
+
+    it('setup comes first: the first-run card, whatever the session read said', () => {
+        setup.status = 'needed';
+        recovery.status = 'unreadable';
+        render(App);
+        flushSync();
+        expect(screen.getByText(/Welcome to Station Manager/)).toBeInTheDocument();
+        expect(unread()).toBeNull();
+    });
+
+    it('the full-window map is never asked', () => {
+        recovery.status = 'question';
+        recovery.session = session;
+        navigate('map');
+        render(App);
+        flushSync();
+        expect(asked()).toBeNull();
+        navigate('operate');
     });
 });

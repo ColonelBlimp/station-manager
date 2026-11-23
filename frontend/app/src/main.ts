@@ -87,6 +87,9 @@ import {
 } from './lib/api/ft8qso';
 import { toasts } from './lib/ui/toasts.svelte';
 import { setup, setSetupSave } from './lib/setup.svelte';
+import { readSessionState, sessionArchiveProven, setRecoveryPorts } from './lib/recovery.svelte';
+import { answerOperatingSession, fetchOperatingSession } from './lib/api/operating-session';
+import { boundArchive } from './lib/api/archive-guard';
 import { setStationSaved } from './lib/config/station.svelte';
 import { setFt8PrefsSaved } from './lib/config/ft8.svelte';
 import { router, setModeChangeHook, setFtEnabled } from './lib/router.svelte';
@@ -524,7 +527,7 @@ void bootArchiveScoped(
     // The context's default must be the one the daemon names; an unreached
     // config holds no opinion.
     (c) => (c.configOk ? c.logbookUuid : null)
-);
+).then(() => void sessionArchiveProven()); // the gate opens only for the archive now proven: see below
 
 // First-run save (injected per ADR 0045 — the setup module never imports
 // lib/api): PUT the callsign, then re-fetch + re-wire the station context so
@@ -717,15 +720,31 @@ function enrichmentExtras(call: string, myGrid: string) {
 // build identity keeps its own transition on the rig stream (W-0004 AC3). Never
 // closed: it lives as long as the page. Placed after the line-keyed
 // maintainability baseline on purpose.
+//
+// The recovery gate rides it too (ADR 0100 §6; W-0029 part 4, E8). The stream
+// replays nothing, so the session's state is read when the subscription opens
+// and at every reopening (onOpen fires at both), which finds a change made
+// while it was down; and again on each operating_session.changed. The read
+// just below is the load's own, sent early so that its answer is usually in
+// hand when the boot's bracket proves the archive; nothing is drawn before
+// that proof (sessionArchiveProven, above), and a state older than the one
+// shown is never drawn.
+setRecoveryPorts({
+    read: fetchOperatingSession,
+    answer: answerOperatingSession,
+    archive: boundArchive,
+});
 openLogEvents({
-    onOpen: () => {},
+    onOpen: () => void readSessionState(),
     onTransportError: () => {},
     onQsoChanged: () => {},
+    onSessionChanged: () => void readSessionState(),
     onReconnect: () => {
         refreshLogbookCount();
         void verifyArchiveGeneration();
     },
 });
+void readSessionState();
 
 const target = document.getElementById('app');
 if (!target) {

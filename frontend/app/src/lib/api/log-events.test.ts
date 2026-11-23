@@ -166,6 +166,28 @@ describe('openLogEvents onReconnect', () => {
         close();
     });
 
+    // W-0029 part 4, E8: the session's event reaches a subscriber that asks for
+    // it, is not a QSO event, and is optional.
+    it('hands operating_session.changed to a subscriber that asks for it, and to no QSO handler', () => {
+        const { h, src, close } = open();
+        const onSessionChanged = vi.fn();
+        const closeAsker = openLogEvents({
+            onOpen: vi.fn(),
+            onTransportError: vi.fn(),
+            onQsoChanged: vi.fn(),
+            onSessionChanged,
+        });
+        src.emit('open');
+        src.emit('operating_session.changed', JSON.stringify({ archive_id: 'a', generation: 5 }));
+        expect(onSessionChanged).toHaveBeenCalledOnce();
+        expect(h.onQsoChanged).not.toHaveBeenCalled();
+        // A payload the page could not read is still a reason to read the state.
+        src.emit('operating_session.changed', JSON.stringify(null));
+        expect(onSessionChanged).toHaveBeenCalledTimes(2);
+        closeAsker();
+        close();
+    });
+
     it('drops a rejected qso.* payload with a warning and delivers the next valid one', () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         const { h, src, close } = open();

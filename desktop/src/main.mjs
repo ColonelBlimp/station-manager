@@ -118,6 +118,13 @@ if (!app.requestSingleInstanceLock()) {
                 app.exit(ok ? 0 : 1);
                 return;
             }
+            // W-0029 part 4: the recovery question, against a real smd (SM_DESKTOP_SMD), in a
+            // temporary working directory with synthetic data and free ports; never the station.
+            if (scenario === 'recovery') {
+                const ok = await (await import('../test/scenario-recovery.mjs')).runRecovery();
+                app.exit(ok ? 0 : 1);
+                return;
+            }
             // C2b (W-0027): the operating credential, against a synthetic install and TLS
             // fixtures only. The scenario launches further windows itself, each on a fresh
             // session, to prove what a restart adopts.

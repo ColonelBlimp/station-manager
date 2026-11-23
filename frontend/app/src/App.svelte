@@ -10,6 +10,8 @@
     import Toasts from './lib/ui/Toasts.svelte';
     import SetupCard from './lib/ui/SetupCard.svelte';
     import { setup, setupGateOpen } from './lib/setup.svelte';
+    import RecoveryCard from './lib/ui/RecoveryCard.svelte';
+    import { recoveryGate } from './lib/recovery.svelte';
     import Operate from './lib/operate/Operate.svelte';
     // Logbook and Settings are lazy (ADR 0044 code-splitting, AC6): each is its
     // own chunk, fetched only when the operator opens that view, so the eager
@@ -87,10 +89,21 @@
     // #8). isDevDaemon() is false until identity
     // loads and for any release or unavailable daemon, so the title stays the
     // neutral release form until proven dev.
+    // While the recovery gate owns the window the router still names a view, as
+    // it does under the first-run card: the title follows the gate instead.
     $effect(() => {
-        const view = setupGateOpen() ? 'Welcome' : titles[router.view];
+        let view = titles[router.view];
+        if (setupGateOpen()) view = 'Welcome';
+        else if (recoveryOwnsWindow()) view = 'Session';
         document.title = computeTitle(view, isDevDaemon());
     });
+
+    // The recovery gate (ADR 0100 §6; W-0029 part 4, E): the question, or the
+    // screen for a session that could not be read, in place of the workspace.
+    // The full-window map is never asked and never gated: it logs nothing.
+    function recoveryOwnsWindow(): boolean {
+        return router.view !== 'map' && recoveryGate() !== null && recoveryGate() !== 'loading';
+    }
 </script>
 
 <!-- First-run gate: every logbook-backed surface (map tab included) 404s
@@ -115,6 +128,17 @@
              recovery control must show here too (W-0024 slice 5b). -->
         <DefaultChangeBanner />
         <SetupCard />
+        <Toasts />
+    {:else if router.view !== 'map' && recoveryGate() === 'loading'}
+        <!-- The session's state has not been read on this load: hold blank, as
+             the first-run gate does, so the workspace is never shown ahead of a
+             question it would have to give way to. -->
+        <Toasts />
+    {:else if recoveryOwnsWindow()}
+        <!-- Nothing of the workspace: no rail, no header, no Settings (operator
+             ruling 2026-11-23). The FT8 view is not mounted, so this page opens
+             no FT8 event stream and has no presence in FT8. -->
+        <RecoveryCard />
         <Toasts />
     {:else if router.view === 'map'}
         <!-- Full-window, no shell chrome: the map opens in its OWN tab (second
