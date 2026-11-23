@@ -46,7 +46,7 @@ the scenario's observer (codex-230): its review of the fixes is complete. The cl
 review of `ef9b8968` found one more thing, in the desktop scenario and not in the
 product: corrected and committed with this text; Codex ran it and has closed its review (codex-231)
 (the last section).** With it part 4's criteria are built.
-Parts 3 and 4 are not at the station.** The removal of the database half of
+**Parts 1 to 4 are at the station since 2026-11-23** (the last section). The removal of the database half of
 the downgrade tooling, which part 1 waited for, is committed (`0b21b2fb`, 2026-11-20; W-0027).
 **Part 1's acceptance criteria are written, their three questions ruled, and agreed with
 Codex after one round of corrections (2026-11-20).** The
@@ -4441,3 +4441,35 @@ admitted before the read and one admission held. Hosted CI for `ef9b8968` passed
 running app's part. The held admission can outlast the shell's own five-second limit on
 an admission request, in which case that request fails when let go and the shell admits
 on the next response it sees: the scenario does not depend on which.
+
+### Parts 1 to 4 at the station (2026-11-23; the operator's deploy; committed with this record)
+
+The operator asked whether to deploy now or wait for A3. Claude recommended now, with a
+copy of the station's data taken first: nothing in parts 1 to 4 needs A3 (until contacts
+join sessions every session is empty and is discarded), it is the first run of any of
+W-0029 on the real install, and a later deploy is needed whatever is decided. The
+operator ran `task deploy:local:dev` and reported: **"deployed - no msg"**, the app
+opening on its workspace with no message.
+
+**What was there before, and what is there now.** Checked locally and read-only, with no
+request to the station's daemon.
+- Before: the daemon and the desktop app at `2.0.0~alpha.5.281.g7adb5d48`, the build of
+  2026-11-19, which held none of W-0029.
+- Now: both at `2.0.0~alpha.5.306.gd5b72a10`. `smd` active since 12:09:04 local time, with
+  no restart by the service manager since. `config.json` at version 8, with no pending
+  selector and no pending default change.
+
+**The way back, as it stands.**
+- Both packages of the earlier pair are kept under `build/private/` by their versioned
+  names, and `rpm` accepts reinstalling them together (simulated before the deploy).
+- **A copy of the station's data from before the deploy exists, by the operator's word.**
+  Claude found none under the name it had suggested
+  (`~/.local/share/station-manager.before-*`) and said so; the operator answered:
+  "Elsewhere." Where it is, and that it was taken with the daemon stopped, are not known
+  to this record. The migrations go up only, so that copy, with the two kept packages,
+  is the way back.
+
+**Not seen at the station.** An archive switch, and so the real restart by the service
+manager that no test covers. The daemon's log. The one measurement the criteria name (how
+long an FT8 completion takes to store). Each needs the operator's agreement for the
+occasion. Nothing was transmitted and no rig command was sent for this.
