@@ -40,10 +40,12 @@ text (the last section of this file); Codex's review of its runtime is complete,
 and committed (`2c362c3d`); Codex's review found two faults in its gate (codex-226), both
 fixed before the commit, and its review is closed (codex-227). **That commit's
 clean-room review then found two more (the last section of this file): both are fixed
-and committed with this text; Codex's review of the fixes found the page's one incomplete
+and committed (`ef9b8968`); Codex's review of the fixes found the page's one incomplete
 (codex-228), since corrected, and has closed the runtime findings (codex-229) and then
-the scenario's observer (codex-230): its review of the fixes is complete.** With it part
-4's criteria are built.
+the scenario's observer (codex-230): its review of the fixes is complete. The clean-room
+review of `ef9b8968` found one more thing, in the desktop scenario and not in the
+product: corrected and committed with this text; Codex ran it and has closed its review (codex-231)
+(the last section).** With it part 4's criteria are built.
 Parts 3 and 4 are not at the station.** The removal of the database half of
 the downgrade tooling, which part 1 waited for, is committed (`0b21b2fb`, 2026-11-20; W-0027).
 **Part 1's acceptance criteria are written, their three questions ruled, and agreed with
@@ -263,6 +265,9 @@ next part starts.
 - **2026-11-23 (operator): "commit and push"**, of the fixes for the two findings of the
   clean-room review of `2c362c3d`, said after Codex closed its review of them
   (codex-230).
+- **2026-11-23 (operator): "commit and push"**, of the correction to the desktop
+  scenario that the clean-room review of `ef9b8968` called for, said after Codex closed
+  its review of it (codex-231).
 
 The design's own rulings are in ADR 0100 and are not repeated here.
 
@@ -4387,3 +4392,52 @@ for Codex's first finding, and my fix for the second was itself incomplete (code
 the pattern this project has met before, three times in this one gate. A fix needs the
 scrutiny the original change had, and for this gate that means every order in which two
 reads and a proof can arrive.
+
+### The fixes' own clean-room review: the scenario's restart check depended on a race (2026-11-23; committed with this record)
+
+The fixes were committed and pushed as `ef9b8968` on the operator's direction (`task
+ci:local` exit code 0, 11 minutes 47 seconds). Its clean-room review raised one finding
+(P2), about the desktop scenario and not about the product, and it is right.
+
+**The finding.** The scenario's eighth check waits for the page to consume a session
+state from the restarted `smd`, then looks at the page. But the page's reconnecting
+stream is itself a response from the new process, and the shell admits its lifetime again
+as soon as it sees one. If that admission wins the race against the page's session read,
+a daemon with the fault answers "open" all the same, and the check passes with the fault
+present. Codex and I had both treated the three control runs as enough; in each of them
+the read happened to win.
+
+**Corrected in the scenario; no production code is changed.** The order is now made, not
+raced. The scenario holds the shell's admission requests, in the shell's own session
+object, from before `smd` is stopped until the page has consumed its read from the new
+process and drawn. Only then does it look at the page, and only then are the held
+requests let go. The check also requires that no admission was let through before the
+read. The page's own requests do not pass through what is held.
+
+**Shown.**
+- Against a daemon built from this tree: passes (8 checks), reporting one admission held
+  and none let through before the read.
+- Against a daemon with the read's fix reverted: **fails three runs in three,** each with
+  the question showing, one admission held and none let through. It no longer depends on
+  which request arrives first.
+- With the page's consumption held, and with a page built never to read when its stream
+  reopens: each fails, timed out, as before.
+
+**Codex's reading (codex-231): the finding is valid and the hold closes it; nothing is
+outstanding.** It ran the corrected scenario itself (8 checks, none admitted before the
+read, one admission held) and the held-consumption control (failed, as intended). It did
+not repeat the reverted-daemon runs or the page that never re-reads; those are my
+reports. It asks for no assertion that the shell is admitted again after the hold is
+let go, and notes the check must not be read as proof of that.
+
+**The whole local gate, once, before the push:** `task ci:local`, exit code 0, "All CI
+gates passed locally", 6 minutes 41 seconds (no Go source had changed, so much of the Go
+test pass was answered from its cache), with the recovery scenario at 8 checks, none
+admitted before the read and one admission held. Hosted CI for `ef9b8968` passed (run
+45141569383). Only this paragraph was added to this file after the run began.
+
+**What stays true.** The deterministic proof of the daemon's read is the Go test
+(`TestRecovery_ADaemonRestartDoesNotAskTheAppAboutItsOwnSession`); the scenario shows the
+running app's part. The held admission can outlast the shell's own five-second limit on
+an admission request, in which case that request fails when let go and the shell admits
+on the next response it sees: the scenario does not depend on which.

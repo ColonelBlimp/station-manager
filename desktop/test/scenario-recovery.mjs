@@ -16,9 +16,10 @@
 //  6. smd is stopped and started again under the running app. The page's stream reconnects
 //     and it reads the session again, possibly before the shell has admitted its lifetime to
 //     the new process: it must not be asked about the session it holds itself (the
-//     clean-room review of 2c362c3d). The scenario waits until it has SEEN the page consume a
-//     state answered by the restarted smd (the process's own marker tells the two apart), and
-//     fails if that never happens.
+//     clean-room review of 2c362c3d). The scenario holds the shell's admission until it has
+//     SEEN the page consume a state answered by the restarted smd (the process's own marker
+//     tells the two apart), so the page's read is certainly the earlier of the two, and it
+//     fails if the page never reads.
 // PASSES only if every check holds. Run: SM_DESKTOP_SMD=<smd> npm run check:recovery.
 import fs from 'node:fs';
 import net from 'node:net';
@@ -305,36 +306,76 @@ export async function runRecovery() {
         );
 
         // 6. smd restarts under the running app, which holds a session with a contact.
-        // The scenario asks smd nothing after the restart until the page has consumed a state
-        // from the new process: a request of its own would make the shell admit early and
-        // hide the interval this phase is about. What it waits for is seen, not timed.
-        await js(second.win, WATCH_SESSION_READS(holdConsumption));
-        const instanceBefore = await js(second.win, INSTANCE);
-        await js(second.win, NOTE_INSTANCE(instanceBefore));
-        await smd.stop();
-        await smd.start();
-        await until(
-            () => js(second.win, CONSUMED_FROM_ANOTHER),
-            'the page to consume its own read of the session from the restarted smd',
-            30000
-        );
-        await js(second.win, SETTLED); // what that state drew
-        const afterRestart = {
-            heading: await js(second.win, HEADING),
-            workspace: await js(second.win, WORKSPACE),
-            session: await js(second.win, SESSION),
+        //
+        // The interval this phase is about: the new process has no current lifetime until the
+        // shell admits its own again, and the page reads the session in that interval. Left
+        // alone the two race, and if the admission won, a daemon with the fault would answer
+        // "open" all the same and this check would pass with the fault present (the
+        // clean-room review of ef9b8968). So the order is MADE, not hoped for: the shell's
+        // admission requests are held here, in its own session object, until the page has
+        // consumed its read and drawn. Nothing of the shell's code is changed, and the page's
+        // requests do not go through this.
+        const shellSession = second.win.webContents.session;
+        const sendFromShell = shellSession.fetch.bind(shellSession);
+        const admissions = { holding: true, held: 0, letThrough: 0 };
+        let letAdmissionsGo;
+        const admissionsHeld = new Promise((r) => (letAdmissionsGo = r));
+        shellSession.fetch = (url, opts) => {
+            if (new URL(String(url)).pathname !== '/v1/app/lifetime') {
+                return sendFromShell(url, opts);
+            }
+            if (!admissions.holding) {
+                admissions.letThrough++;
+                return sendFromShell(url, opts);
+            }
+            admissions.held++;
+            return admissionsHeld.then(() => sendFromShell(url, opts));
         };
+        let afterRestart;
+        try {
+            // What the scenario waits for is seen, not timed, and it asks smd nothing itself
+            // until the page has consumed a state from the new process.
+            await js(second.win, WATCH_SESSION_READS(holdConsumption));
+            const before = await js(second.win, INSTANCE);
+            await js(second.win, NOTE_INSTANCE(before));
+            await smd.stop();
+            await smd.start();
+            await until(
+                () => js(second.win, CONSUMED_FROM_ANOTHER),
+                'the page to consume its own read of the session from the restarted smd',
+                30000
+            );
+            await js(second.win, SETTLED); // what that state drew
+            afterRestart = {
+                instanceBefore: before,
+                heading: await js(second.win, HEADING),
+                workspace: await js(second.win, WORKSPACE),
+                // No admission reached the new process before the page had read and drawn.
+                admittedBeforeTheRead: admissions.letThrough,
+                admissionsHeld: admissions.held,
+            };
+        } finally {
+            admissions.holding = false;
+            letAdmissionsGo();
+        }
+        afterRestart.session = await js(second.win, SESSION);
         const instanceAfter = await js(second.win, INSTANCE);
         check(
             'After smd restarts under the running app the workspace stays: the app is not asked about the session it holds',
-            instanceBefore !== '' &&
+            afterRestart.instanceBefore !== '' &&
                 instanceAfter !== '' &&
-                instanceAfter !== instanceBefore &&
+                instanceAfter !== afterRestart.instanceBefore &&
+                afterRestart.admittedBeforeTheRead === 0 &&
                 afterRestart.heading !== 'The last session is still open' &&
                 afterRestart.workspace === true &&
                 afterRestart.session.session?.id === sessionId &&
                 afterRestart.session.generation === continued.generation,
-            JSON.stringify({ heading: afterRestart.heading, workspace: afterRestart.workspace })
+            JSON.stringify({
+                heading: afterRestart.heading,
+                workspace: afterRestart.workspace,
+                admittedBeforeTheRead: afterRestart.admittedBeforeTheRead,
+                admissionsHeld: afterRestart.admissionsHeld,
+            })
         );
     } catch (e) {
         check('Scenario completed', false, e.message);
