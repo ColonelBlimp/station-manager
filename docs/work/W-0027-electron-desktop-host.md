@@ -5117,3 +5117,74 @@ at the head of this section).
 longer than today, the time of three requests to the daemon on the same machine, or
 four if question 6 is answered (a). If the
 daemon is down, that moment is the limit of question 2 before the box of E appears.
+
+### A3, first part — the daemon's read of FT8's state (built 2026-11-23; reviewed by Codex with no finding open, codex-238; committed and pushed on the operator's direction, "commit and push")
+
+Built on the operator's direction of A3 ("commit and push, then A3") and the ruling of
+question 6 as (a). It is section I of the criteria and nothing else: no part of the
+shell is touched, and nothing sends the new request yet.
+
+**What it is.** `GET /v1/ft8/state`. FT8 not served: `{"served": false}`. Served:
+`served`, `would_stop`, `tx_armed`, `tx_in_flight`, `run_active`, `auto_work_armed`,
+every field present. `would_stop` is the daemon's rule (any of the four), so the shell
+will read that one word and decide nothing from the parts.
+
+**Where.**
+- `internal/ft8/operatingstate.go`: `Service.OperatingState()`, read under `seqGate`,
+  then `txMu`, then the sequencer's lock, from the service's live state; and
+  `OperatingState.WouldStop()`. No existing method is changed.
+- `internal/api/handler_ft8_state.go`: the handler, the answer's shape and the route's
+  registration, beside the other small registrations in `New` and not inside the block
+  of routes that exist only when FT8 is enabled.
+- `docs/v2-design/api-endpoints.md`: the route.
+
+**Against section I.**
+1. *Passive:* `TestOperatingState_ChangesNothing` reads an armed, running service three
+   times and requires the arm and its generation, the run, the subscribers, the three
+   replay frames, the presence hold, the open streams and the operating lifetime all
+   exactly as before. No lifetime is asked for
+   (`TestFt8State_NeedsNoCurrentLifetimeButStillTheCredential`: another lifetime and no
+   lifetime are served; a wrong credential is not).
+2. *Live state, read together:* `TestOperatingState_IsReadUnderTheEstablishedOrder`
+   holds `txMu` and requires the read to be found holding `seqGate`, and not to answer
+   until `txMu` is released.
+3. *What would stop:* armed with nothing running; a manual send waiting for its slot; a
+   Call-CQ run; an exchange; a run waiting between contacts (the pick-run fixture of
+   ADR 0067, after its seeding contact), alone enough to count; idle is none.
+4. *Not served is its own answer:* through the whole handler chain, with no FT8
+   service and with one configured off: `200` and only `served: false`.
+5. *One observation:* `TestOperatingState_IsOneObservation` (an idle answer, then an
+   arm, which stands).
+6. *The reference* is updated in the same change.
+
+**Seen to fail first,** against empty stubs: every test but the idle one, each on its
+own assertion (the route's tests on `404`).
+
+**Reversion proofs,** each in its own temporary copy, each failing the named test:
+- `WouldStop` without the waiting run: the waiting-run test, and the API's rule test.
+- the read without `seqGate`: the order test.
+- the run read from the replay cache and not the sequencer: the run tests.
+- the route registered only when FT8 is enabled: the not-served test (`404`).
+- a served answer missing one field: both field tests.
+
+**Gates, by exit code:** `gofmt`; `go vet`; `golangci-lint` on the two packages (0
+issues); the maintainability metrics (0 regressions); `go test -race ./internal/ft8`
+and `go test ./internal/api`, both in full. The whole local gate (`task ci:local`), run
+once after the review closed: exit 0, "All CI gates passed locally."
+
+**Found while building.** The first placement of the route, inside `registerRoutes`,
+took that function below the maintainability floor it already sits on (index 19, policy
+20: the gate counts comment lines). It is registered from `New` by a helper of its own,
+as the session routes are.
+
+**Codex's review (codex-238): no finding open.** It confirmed the lock order adds no
+reverse edge, that the four flags cover section I's stop reasons, that the layered
+tests are enough for a handler this thin (no production seam is wanted only to arm a
+service from the API's tests), and that no further capture assertion is needed. It
+reran the FT8 tests with the race detector and the route's tests; the full-package
+runs, the red-first order and the reversion proofs remain Claude's.
+
+**Not done here:** the shell's use of the read; the armed states through the HTTP route
+(an armed service cannot be made from the API's tests: its keyer is the FT8 package's
+own; the states are shown in `internal/ft8`, and the answer's rule on the body the
+handler builds). No transmission, keyed test or rig command: fake keyer and player only.

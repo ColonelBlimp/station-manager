@@ -268,6 +268,7 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 	s.admission.sessions = serverSessions{s}
 	s.registerOperatingSession(apiMux)
 	s.registerOperatingSessionExit(apiMux)
+	s.registerFt8State(apiMux)
 	s.declaredRoutes = append(append([]string(nil), apiMux.patterns...), mux.patterns...)
 
 	// Middleware chain — outermost first:

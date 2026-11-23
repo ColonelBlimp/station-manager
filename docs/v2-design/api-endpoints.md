@@ -651,6 +651,12 @@ The station-global archive catalogue (`config.md` §3): the archive the daemon s
 - **Response:** **200** `{"mode": "FT8" | "FT4"}` — the active profile after the claim.
 - **Errors:** 400 `missing_required_field` / `ft8_profile_unknown`; 409 `ft8_profile_busy` | `ft8_tx_in_flight` | `ft8_session_active` | `ft8_tx_armed`. A 409 body carries `retry_after_ms` when the refusal is the linger of a session the operator just left (the unattended disarm at its expiry ends that session, after which the claim succeeds); the view re-claims when it elapses rather than polling.
 
+### `GET /v1/ft8/state`
+- **Purpose:** What FT8 is doing at this moment, for a caller that needs to know whether a stop would stop something. Built for the desktop app's close (W-0027 A3): it reads this when a close is asked for, so that its question says what the daemon knows. Nothing sends it yet.
+- **Gating:** **Always-on**, whether or not FT8 is enabled: "not served" is itself the answer, and a missing route must never be what says FT8 is off. It needs **no current lifetime** (it authorises nothing, and a closing app may no longer be current); the operating-client check applies as to every route.
+- **Response:** **200**. FT8 not served: `{"served": false}` and nothing else. Served: `{"served": true, "would_stop": bool, "tx_armed": bool, "tx_in_flight": bool, "run_active": bool, "auto_work_armed": bool}`, every field present. `would_stop` is the daemon's own rule (any of the four); a caller reads it and decides nothing from the parts. `tx_armed` is true with nothing running too. `tx_in_flight` includes a manual send waiting for its slot. `run_active` is a session under way (an exchange, a Call-CQ run). `auto_work_armed` is a run waiting between contacts.
+- **Notes:** **Passive.** It subscribes to nothing, claims no profile, starts no capture, takes no device, publishes no event and stops nothing. The parts are read together from the service's live state, never from the stream's replay cache. **It is one observation, not a hold:** an arm already sent can land after an idle answer, and a run can end after a busy one. A caller that must stop FT8 sends the disarm whatever this said. A caller must treat a missing route, a failure or an answer missing a field as "not known", never as idle and never as "not served".
+
 ### `GET /v1/ft8/events`
 - **Purpose:** FT8 subsystem SSE stream (served by `ft8.Service.HTTPHandler`).
 - **Gating:** **Only when FT8 is enabled.** Wrapped in `limitEventSubscribers`.
