@@ -578,8 +578,11 @@ func TestDefaultGuard_SubmitToAMissingLogbookIsNotFound(t *testing.T) {
 const closingRefusal = "The app is closing. This attempt logged nothing. If closing fails and the app stays open, retry the contact."
 
 // switchRefusal is what the operator reads when an archive switch refuses a submit
-// (the operator's ruling of 2026-11-21). The app shows it after "QSO not logged: ".
-const switchRefusal = "The archive is being switched and the daemon is restarting. This attempt logged nothing. After the page reloads, check which archive is active before you log the contact again."
+// (the operator's rulings of 2026-11-21 and 2026-11-23). The app shows it after
+// "QSO not logged: ". It promises neither a restart nor a reload: the refusal is
+// given while the switch is still under way, and a switch that then fails
+// restarts nothing.
+const switchRefusal = "The archive is being switched. This attempt logged nothing. Check which archive is active before you log the contact again."
 
 // wantSubmitRefused pins a live submit refused by the seal, by which holder's answer.
 func wantSubmitRefused(t *testing.T, f defaultFixture, code string) {
@@ -592,8 +595,11 @@ func wantSubmitRefused(t *testing.T, f defaultFixture, code string) {
 	if code == "operating_session_closing" && !strings.Contains(w.Body.String(), closingRefusal) {
 		t.Fatalf("got %s; want the message %q", w.Body.String(), closingRefusal)
 	}
-	if code == "archive_switch_pending" && !strings.Contains(w.Body.String(), switchRefusal) {
-		t.Fatalf("got %s; want the message %q", w.Body.String(), switchRefusal)
+	if code == "archive_switch_pending" && !strings.Contains(w.Body.String(), `"message":"`+switchRefusal+`"`) {
+		t.Fatalf("got %s; want exactly the message %q", w.Body.String(), switchRefusal)
+	}
+	if code == "archive_switch_pending" && (strings.Contains(w.Body.String(), "restart") || strings.Contains(w.Body.String(), "reload")) {
+		t.Fatalf("got %s; the switch's refusal must not promise a restart or a reload: a switch that fails gives neither", w.Body.String())
 	}
 	if code == "default_change_pending" && !strings.Contains(w.Body.String(), "the default logbook is changing") {
 		t.Fatalf("got %s; want the default change's message", w.Body.String())

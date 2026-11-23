@@ -29,7 +29,12 @@ the switch request and the closing phase, is built and committed with this text 
 section of this file). Codex found no defect in the switch path and asked for two
 follow-ups (codex-219): one is done; the other, a demonstration of the late hand-over
 through the daemon, is answered by a source check on the operator's decision, which Codex
-has not read. With it part 3's criteria are built; G7 is owed by parts 4 and 6.** The removal of the database half of
+has not read. With it part 3's criteria are built; G7 is owed by parts 4 and 6. A finding
+of that commit's clean-room review is fixed and committed with this text (the refusal
+reworded, 2026-11-23). Part 4's acceptance criteria are written, at the end of this file
+(2026-11-23), revised after Codex's review of them (codex-222); their four questions are
+ruled (2026-11-23); Codex supports the revision with no design finding remaining
+(codex-223); nothing of part 4 is built and its build is not yet directed.** The removal of the database half of
 the downgrade tooling, which part 1 waited for, is committed (`0b21b2fb`, 2026-11-20; W-0027).
 **Part 1's acceptance criteria are written, their three questions ruled, and agreed with
 Codex after one round of corrections (2026-11-20).** The
@@ -211,6 +216,28 @@ next part starts.
      decided.
   5. **The one measurement** (how long an FT8 completion takes to store) is left until
      part 3 is at the station.
+- **2026-11-23 (operator): "go with the reword, then write part 4's acceptance
+  criteria".** The reword is of what a submit refused during a switch says, ruled on
+  2026-11-21 (question 1 of part 3) and now changed. It was put with the clean-room
+  review's finding on `df655a2b` and one alternative, accepting the finding with a
+  comment. The message is now: "The archive is being switched. This attempt logged
+  nothing. Check which archive is active before you log the contact again." The code
+  (409 `archive_switch_pending`) is unchanged. The default change's refusal, which has
+  the same shape, was not asked for and is not changed.
+- **2026-11-23 (operator): "go with recommendations".** Said of part 4's four questions,
+  each ruled as recommended.
+  1. **The two answer routes are built whole:** New and Continue in all their uses, the
+     Session panel's included, not the recovery answers alone.
+  2. **The words on the recovery screen,** as proposed. Heading: "The last session is still
+     open". Text: "Station Manager did not close normally last time. The session that
+     started {date and time} has {n} contacts and was never closed." Buttons: "Continue
+     this session" and "Start a new session". Under them: "If you start a new one, the
+     earlier session is closed and kept, with its contacts."
+  3. **Nothing else is on that screen:** no Settings and no rail.
+  4. **The read gate at the page's load:** a page that cannot read the session's state
+     says so and offers to try again, and does not show the workspace. It applies at the
+     load only.
+  No build is directed by this. Codex had not yet read the criteria as revised.
 
 The design's own rulings are in ADR 0100 and are not repeated here.
 
@@ -3554,3 +3581,341 @@ observed. The connection now waits; the arrival tests then passed thirty runs in
 - How long an FT8 completion takes to store (the criteria's one measurement) has not been
   read from the station's log: that needs the operator's agreement for the occasion.
 - Nothing here has been run at the station.
+
+### Part 3, second slice: its clean-room review, and the refusal reworded (2026-11-23; committed with this record)
+
+The clean-room review of `df655a2b` raised one finding (P2), and it was right. A live
+submit refused by the switch was told "the daemon is restarting" and to act "after the
+page reloads". That answer is given from the moment the switch seals live entry, before
+its drain, its close and its selector. If the switch then fails (the close cannot be
+written, the selector cannot be recorded, or the restart cannot be requested) the seals
+are released and nothing restarts: the operator who was refused is left waiting for a
+reload that does not come. CI for `df655a2b` passed (run 44990005034).
+
+**Fixed, on the operator's decision (2026-11-23; the rulings list).** The message promises
+neither a restart nor a reload. It says what is true however the switch ends: nothing was
+logged, and the archive is to be looked at before the contact is logged again.
+
+- **Failing first:** the submit's test (DG14, `internal/api/default_guard_test.go`) and
+  the daemon's (`liveRefusedBySwitch`, used by five cases) were changed to the new words
+  and failed on the old ones. DG14 now requires the message exactly, and that it names
+  neither a restart nor a reload.
+- **Changed:** the message and its comment (`internal/api/handler_qso.go`), which now
+  states the three ways a switch can end; two comments in `live_entry.go` that said a
+  restart follows; `docs/v2-design/api-endpoints.md` (the submit's conventions paragraph
+  and its error list).
+- **Not changed:** ADR 0100's *Update 2026-11-21* quotes the first wording. It is a
+  record of that day and is left as it was; this dossier and the API reference carry the
+  current words.
+- **Seen:** the named tests in `internal/api` and `cmd/smd` pass, and `internal/api` in
+  full. The whole local gate, once, before the push: `task ci:local`, exit code 0, "All
+  CI gates passed locally", 11 minutes. Only this file was edited after it began; the
+  documentation gates were run again afterwards. Codex's review of the reword is complete
+  (codex-222).
+
+### Part 4: acceptance criteria (2026-11-23; its four questions ruled 2026-11-23; supported by Codex, codex-223; nothing built)
+
+On the operator's direction ("write part 4's acceptance criteria"). Read against ADR 0100
+§3 (the start of a lifetime, Recovery), §5 (several windows, the generation guard) and §6
+(the recovery question); the brief's part 4, proposals E and F, and its line that the
+wording of the question is put to the operator at this part; parts 1 to 3 as committed
+(`internal/database/sqlite/operating_session.go`, `internal/api/operating_session.go`,
+`internal/api/app_admission.go`); and `frontend/app/src/main.ts` as it boots today.
+"Proposed" marks what the ADR and the brief leave open. The questions at the end are the
+operator's.
+
+**Revised after Codex's review (codex-222),** which supported the shape, the whole routes
+(C), the held-lifetime rule (B1), the count (D) and the read gate (E2), and found four
+things wrong or missing. Each was checked against the code and is right.
+1. **The page's reads were under-specified** (E8): an event cannot recover a change made
+   while the stream was down, and nothing stopped a late read from putting an old
+   question back, or one archive's state from replacing another's.
+2. **A stale answer does not always return the question or a held session** (B6, E6): the
+   default-epoch test can close the remnant first, leaving no session open. Every state
+   an answer can return now has its outcome on the screen (E5).
+3. **The order against a switch covered only a switch that succeeds** (F3). Its two
+   failure ends are added, with an answer against an answer and the setup-save boundary.
+4. **"Nothing at the station until part 5" was too broad.** The question cannot appear
+   until then. The read gate (E2) is on from the day it is installed.
+
+**What part 4 is.** When the app did not close normally and left a session with contacts
+in it, the next start asks before it shows the workspace: continue that session, or start
+a new one. Part 4 builds the question and its two answers.
+
+**What is already there.** Part 1 built both answers as transactions in the archive file
+(`NewOperatingSessionWithContext`, `ContinueOperatingSessionWithContext`), with their
+tests. Part 2 made the start step leave such a session alone, and the read route name the
+state `recovery_pending`. No route gives an answer, and the page never reads the state.
+
+**What the operator sees.**
+- **At the station, the question cannot appear until part 5.** No contact joins a session
+  yet, so every session that ends is empty and is discarded, and no start has anything to
+  ask about. The tests put the member rows in themselves.
+- **One thing does change at the station at once** (E2, question 4): when the page loads
+  and cannot read the session's state, it says so and offers to try again, where today
+  it would show the workspace with the daemon marked as out of reach.
+- **Once it can appear:** after a crash, a power cut or a close the daemon never
+  acknowledged, the app opens on one screen instead of the workspace. It names the session
+  (when it started, how many contacts), says that Station Manager did not close normally,
+  and offers Continue and New. There is no third choice. The workspace opens after the
+  answer.
+
+**Nearest confusable outcome.** The app opens straight to the workspace with the earlier
+session silently carried on: it looks like a working app, and the next contact lands in a
+sitting the operator believes is over. The others: the question on a clean start; the
+question shown while the workspace is still reachable behind it; an answer that seems to
+work and is applied twice, or is applied to a session the screen did not show.
+
+**A. When the question is asked.**
+1. **Asked:** the app's lifetime is current, and the archive has an open session with at
+   least one member row held by another lifetime (the read route's `recovery_pending`).
+   The member test is the one ruled on 2026-11-10: a row counts even if its QSO has since
+   been deleted.
+2. **Not asked:** a clean start (the earlier exit was confirmed: no session open); an
+   empty remnant (discarded by the start step, part 2); an arrival after an archive switch
+   (the remnant is closed first, part 3, A6); a first run (setup pending); a session the
+   lifetime already holds (a reload, a daemon restart, the same app admitted again).
+3. **Asked again** at every start until it is answered. Closing the app while it is
+   unanswered resolves nothing (part 2, E: that exit is recorded and closes nothing).
+4. Each of 1 to 3 is shown from the files: the fixture is the archive as each case would
+   leave it, read through the real start step and the real read route.
+
+**B. The two answers, as routes.** Names proposed: `POST /v1/operating-session/new`, body
+`{generation}`; `POST /v1/operating-session/continue`, body `{generation, session_id}`.
+1. **Who may answer.** The lifetime the admission holds, decided under the admission's
+   order as the exit is, not from what a read would say. A request with no lifetime, a
+   lifetime that has been replaced, and one whose exit is recorded are each refused with
+   the code the admission already gives them, and change nothing.
+   - **A held lifetime whose scopes a failed step left stopped may answer.** The answer
+     is applied, and it repairs nothing: the scopes stay stopped, nothing is published to
+     them, the admission's generation is as it was, and the app's own admission is still
+     what repairs it (part 2, B4). Tested.
+   - The gate for a session control is this rule, not FT8's authorization of a scope.
+2. **The archive guard** applies (`X-SM-Archive-Id`, ADR 0100 §5): another archive's page
+   is refused before anything is read.
+3. **New, as the recovery answer:** the remnant is closed with `unconfirmed_exit`, its
+   interrupted interval's end unconfirmed with no time; it is kept, with its contacts. A
+   new session is open, held by the caller, bound to the default logbook. One commit.
+4. **Continue, as the recovery answer,** naming the remnant: its identity and its members
+   are kept; the interrupted interval's end is unconfirmed with no time; a new interval
+   held by the caller is open. The session was never closed, so it has no close reason.
+5. **The answer returns the state it left,** in the read route's shape, so the page draws
+   from the answer and does not read again. That state, the count included, is the
+   answer's own transaction's, taken under the admission's hold: no second read follows
+   the commit, so no database work stands between a committed answer and the building of
+   its response. Sending it can still fail: a response lost after the commit is E7 and
+   G2.
+6. **The generation guard (§5).** An answer at a generation that is not the current one is
+   refused as stale (`operating_session_stale`, 409), applies nothing, and returns the
+   current state. So: the same answer sent twice is applied once; a retry after a lost
+   response is refused and returns the state the first attempt produced; two different
+   answers at one generation, the first applied wins.
+7. **The default-epoch test comes first (§5).** A session it closes is committed and
+   published even when the answer is then refused as stale. One case at the route.
+   - **The state returned then has no session open** (`none`): the remnant is closed with
+     `logbook_changed` and the stale answer opened nothing.
+   - **It is reached only by a fixture today.** Every writer of the default runs at a
+     daemon start or at setup's first save, and neither can meet a remnant under a
+     running, admitted app. It is specified because the transaction does commit that
+     close.
+   - **Nothing more is built for it: it is handling of a state no sequence reaches today,
+     not a limit of the product** (Codex's description, codex-223, after reading the
+     default's writers, the start order and the admission; it found no sequence either).
+     Were it reached, the app would have no session until its next start, or from part 5
+     until its next contact (the safety net). The reason to build nothing is that it
+     cannot be reached. An opening there is possible, in the same transaction or after
+     it, and is not needed now.
+   - **Owed by a later change:** anything that lets the default's epoch move while the
+     daemon serves an admitted app must then keep §3's rule that a running app is not
+     left with no session.
+8. **Refusals with a code of their own, changing nothing** (names proposed): Continue
+   naming a session that is not eligible (`operating_session_ineligible`); Continue naming
+   a closed session while a remnant awaits its answer (`operating_session_recovery_pending`:
+   the question is answered first); New with no default logbook
+   (`operating_session_setup_pending`); either answer in the closing phase of an archive
+   switch (`operating_session_switching`; this is part 3's G7).
+9. **A failure** (the answer's transaction cannot be written) is 503
+   `operating_session_unavailable`. The transaction is rolled back: the remnant is still
+   open and the question still stands. With B5 no database step can fail after an answer
+   has changed something; a response that does not arrive is not this case (E7).
+10. **One `operating_session.changed` event** for each answer applied, after its commit.
+    None for a refusal that changed nothing.
+11. **An answer touches nothing else.** It does not arm TX, start, stop or resume an FT8
+    run, stop or publish an operating scope, release or take a seal, or move a contact.
+    Read from FT8's state and the scopes' record before and after.
+
+**C. The answers are the Session panel's controls too** (question 1). The two routes are
+built whole, as part 1 built the transactions: New by the lifetime that holds the session
+(`new_session`, the end confirmed), and Continue of a closed session of the default
+logbook (`continued_other`, the rebinding of §8). Part 6 then adds the controls and the
+list of sessions to choose from, and no restriction has to be taken out of the daemon.
+Nothing in the app calls either use before part 6. Tested at the route for both uses.
+
+**D. What the read route gains.** The question shows a contact count, and the read has only
+`has_contacts`. Proposed: `contact_count`, the session's members whose QSO is not deleted.
+`has_contacts` stays as it is (any member row), and it, not the count, decides whether the
+question is asked. **A named consequence:** a remnant whose every contact was deleted
+afterwards is asked about, showing 0 contacts. That follows the ruling of 2026-11-10 as
+written. The count is read state, not a transition. Tested with a session of mixed
+members (some deleted) and with one whose members are all deleted. A count that cannot be
+read is an error, never 0.
+
+**E. The screen.**
+1. **In place of the workspace.** While the state is `recovery_pending`, the main window's
+   page shows the question and nothing of the workspace: no Phone / CW entry, no FT8 view,
+   no rail, no Settings (question 3). The page opens no FT8 event stream while the
+   question shows, so this app has no presence in FT8 and cannot arm it.
+2. **The state is read before the workspace is shown,** on every load of the page,
+   whatever view the page would restore, an FT8 view included. A read that fails does not
+   show the workspace as if there were nothing to ask: the page says the session could
+   not be read and offers to try again (ADR 0100 §3: an unreadable state is never a clean
+   exit). No timer is invented for the retry.
+   - A failed read is never drawn as an empty session, and opens no FT8 event stream.
+   - A retry that succeeds shows what its state calls for (E5), not always the workspace.
+   - **The gate is at the load.** Once the workspace has been shown on this load, a later
+     read that fails does not take it away: the page keeps what it shows and reads again
+     at the next reconnection or event. That is for a read that fails. A later read that
+     succeeds and says recovery is pending is drawn by E5 like any other.
+3. **It names the session:** when it started, its contact count, and that Station Manager
+   did not close normally last time. Times as the header shows them.
+4. **Two buttons, Continue and New, and no "not now".** While an answer is in flight both
+   are disabled.
+5. **One rule draws every state,** whether it came from a read, an answer that was
+   applied or a stale refusal:
+
+   | State | The page shows |
+   |---|---|
+   | `recovery_pending` | the question, for the session and at the generation returned |
+   | `open` | the workspace |
+   | `setup_pending` | today's first-run gate, unchanged |
+   | `archive_switching` | what it shows today: the daemon's seals guard that phase (part 3) and the page's own switch flow owns the moment. No question |
+   | `none` | what it shows today, the workspace: no question stands. Two sources. A failed switch whose replacement session could not be opened (F3; reachable): the scopes are stopped, an answer leaves them so, and the app's own admission repairs it. And B7 (reached only by a fixture). From part 5 a contact logged then opens a session |
+
+6. **After a stale refusal** the page draws the state returned, by E5, and sends nothing
+   again by itself. So: the workspace, if the first attempt had been applied; the
+   question again at the new generation, if one still stands, which may be for another
+   session; the workspace with no question, in B7's case. The route test of B7 has its
+   twin in the page's tests.
+7. **After a failure** (no response, or 503) the page does not assume the answer was not
+   applied. It reads the state again and draws it; if that read fails, E2's screen. If
+   the question still stands the operator can press again, and that press carries the
+   generation shown, which is the first press's when nothing changed (§5).
+8. **The stream and the reads.** The page uses the shell event stream it already has and
+   the archive it is already bound to.
+   - It subscribes first and reads once the subscription is established, and it reads
+     again at every reconnection: the stream replays nothing, so a change made while it
+     was down is found by that read and by no event.
+   - An `operating_session.changed` event makes it read again and redraw. So a question
+     that no longer stands goes away without a reload.
+   - **It never draws a state older than the one it shows.** Generations are compared
+     within one archive: a read sent before an answer and arriving after it cannot put
+     the old question back.
+   - **A state for another archive is not drawn:** a response that belongs to the archive
+     the page was bound to before does not replace the current one's.
+   - Each of the four has its own case in the page's tests. No timer is added.
+9. **Setup comes first.** A first run has no session to ask about; today's first-run gate
+   is unchanged.
+10. **The header's clock is not changed by part 4.** It is the page's own until part 6,
+    which makes it read the open interval's start.
+
+**F. The one order** (part 2, G; part 3, I). An answer starts at the admission's order,
+like an app start, an exit, setup's first save, a default change and an archive switch.
+Forced by holding one at a seen point and observing the other parked, never by sleeping.
+1. **An answer against an exit of the same app,** both orders. The answer first: the exit
+   then closes the session the answer left to this app. The exit first: the answer is
+   refused, its lifetime retired; the remnant is still open for the next start to ask
+   about.
+2. **An answer against a second app start,** both orders. The answer first: the second
+   start meets a session held by another lifetime, and asks if it has contacts. The start
+   first: the first app's answer is refused, and the second app has the question.
+3. **An answer against an archive switch,** both orders, and each way the switch can end.
+   - The answer first: the switch closes what the answer left.
+   - The switch first, and it succeeds: the answer waits, then is refused in the closing
+     phase (B8).
+   - The switch first, and it fails before its close (a refusal, FT8 or the rig busy, a
+     close that cannot be written): the remnant and the generation are as they were, and
+     the waiting answer is applied.
+   - The switch first, and it fails after its close: the switch closed the remnant, ended
+     the phase and opened one session for the app (part 3, F2). The waiting answer is
+     stale and returns that session, open and held by this app: the workspace.
+   - The same, where that session could not be opened: the answer is stale and returns no
+     session; the scopes are stopped and stay so, and the app's own admission repairs it
+     (part 3, F3). The answer publishes nothing to a scope in any of these.
+4. **An answer against a default change,** both orders: the answer first, and the change
+   is then asked for and accepted as today; the change in flight first, and the answer
+   waits for it and is then applied. A change that is pending, accepted and awaiting its
+   restart, does not refuse an answer.
+5. **An answer against an answer:** New and Continue at one generation, from two requests.
+   The first applied wins; the other is stale and returns the state the first left.
+6. **Setup's first save:** before the default exists New is refused as setup pending
+   (B8); after the save has opened the first session, an answer carrying the earlier
+   generation is stale.
+7. Parts 2 and 3 already show these transitions and this order. What part 4 tests is the
+   new routes' place in it; the evidence for what is unchanged is not repeated.
+
+**G. Restarts.**
+1. **The daemon restarts while the question shows:** the remnant is still open; the app is
+   admitted again and the question still stands, at the generation the file holds.
+2. **The daemon restarts after an answer committed and before its response:** the app is
+   admitted again and reads a session it holds. No question, no second session.
+3. **The app is closed after Continue or New** by a confirmed exit: an ordinary close of
+   the session it holds (part 2, E).
+
+**H. What part 4 must not do, and the reference.** No member row is written. No list of
+closed sessions, no Session panel control, no change to the rail, the panel, the Map or
+the header's clock (part 6 and later). No wait for unfinished FT8 logging at app start
+(ruled for part 5). No change to the shell: the question is the page's (proposal E), and
+the shell's admission is as it is. No Station Event.
+`docs/v2-design/api-endpoints.md` gains, in the same change: the two routes, their bodies,
+answers and refusals; the read route's `contact_count`; and that `recovery_pending` is now
+acted on by the app.
+
+**Evidence.** Tests first.
+- **The routes:** through the API test server and its real routes, with a clock the test
+  sets, judged on the file's rows and the admission's state together; the order cases
+  with `internal/testbarrier`; the switch case through a real daemon, as part 3's are.
+- **The screen:** the page's own tests (`frontend/app`), with the daemon's answers given
+  by the test: each state of E5, each answer, the stale redraw in its three outcomes, the
+  failure, the four cases of E8, and the read gate (a failed read, then a retry that
+  succeeds into the question and into the workspace), from a Phone / CW view and from a
+  restored FT8 view.
+- **What only Electron shows** (the brief): proposed, one scenario in the desktop harness
+  against a real `smd`, on an archive file holding a remnant with a contact: the question
+  is what loads, the workspace is not; after Continue the workspace is.
+- Reversion proofs in temporary copies, once for the part. Named tests and the changed
+  packages while building; the whole local gate once, before the push (ruled 2026-11-22).
+  No transmission, keyed test or rig command.
+
+**Proposed slices.** First the daemon: the two routes, the read's count, the refusals and
+the order (A to D, F, G). Then the screen and the desktop scenario (E). Each reviewed and
+committed on direction before the next.
+
+**Questions for the operator. All four ruled 2026-11-23, each as recommended ("go with
+recommendations"; the rulings list).**
+1. **Build the two routes whole now (C), or the recovery answers only?** I recommend
+   whole. The transactions have covered both uses since part 1; a route limited to
+   recovery would need a refusal that part 6 then removes. Nothing in the app can reach
+   the other uses until part 6 adds the controls.
+2. **The words on the screen.** Proposed, for you to change:
+   - Heading: "The last session is still open"
+   - Text: "Station Manager did not close normally last time. The session that started
+     {date and time} has {n} contacts and was never closed."
+   - Buttons: "Continue this session" and "Start a new session"
+   - Under them: "If you start a new one, the earlier session is closed and kept, with
+     its contacts."
+3. **What else is on that screen?** I recommend nothing: no Settings and no rail, so
+   nothing can be logged or changed before the answer. The cost: an operator who wanted
+   to change a setting first has to answer first. Either answer is safe for that; neither
+   loses a contact.
+4. **The read gate at the page's load (E2).** It changes what you see at the station from
+   the day part 4 is installed: if the page loads and cannot read the session's state, it
+   shows "the session could not be read" with a button to try again, and not the
+   workspace. I recommend it: ADR 0100 says an unreadable state is never treated as a
+   clean exit, and once contacts join sessions a workspace shown on a failed read could
+   log into a sitting you believe is over. It applies at the load only; a workspace
+   already showing is not taken away by a later failed read. Codex supports it
+   (codex-222).
+
+**For the operator's eye, not a question.** The recovery question cannot be seen at the
+station until part 5, so that much of part 4 has no station acceptance on its own; the
+first time it can be seen there is with parts 5 and 6. The read gate can be seen at once.

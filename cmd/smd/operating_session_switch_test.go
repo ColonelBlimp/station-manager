@@ -97,7 +97,7 @@ func (b *orderBed) liveRefusedBySwitch(t *testing.T, when string) {
 	before := b.f.qsosIn(t, b.f.a)
 	code, body := b.f.submit(t, b.d, b.f.a, "1210")
 	if code != http.StatusConflict || !strings.Contains(string(body), `"archive_switch_pending"`) ||
-		!strings.Contains(string(body), "check which archive is active before you log the contact again") {
+		!strings.Contains(string(body), "The archive is being switched. This attempt logged nothing. Check which archive is active before you log the contact again.") {
 		t.Fatalf("%s a live submit = %d %s; want 409 archive_switch_pending in the ruled words", when, code, body)
 	}
 	if n := b.f.qsosIn(t, b.f.a); n != before {

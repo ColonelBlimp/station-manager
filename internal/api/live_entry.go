@@ -47,8 +47,9 @@ const (
 	// exit closing its session. No restart and no reload follow.
 	LiveEntryClosing
 	// LiveEntrySwitching: an archive switch has a seal (SwitchOwner), and no
-	// default change has. The daemon restarts, on the archive asked for or, if
-	// that fails to start, on the one it left.
+	// default change has. If the switch succeeds the daemon restarts, on the
+	// archive asked for or, if that fails to start, on the one it left. If the
+	// switch fails it releases its seal and nothing restarts.
 	LiveEntrySwitching
 )
 
@@ -60,7 +61,7 @@ const (
 // afterwards it could describe a state a release had already changed, and a
 // refusal reports only a reason that is true. The order when more than one
 // holder is sealed: a default change, then a switch, then the exit. A restart
-// follows the first two, so their answer is the one to act on; a default change
+// may follow the first two, so their answer is the one to act on; a default change
 // and a switch refuse each other and are not sealed together in practice. A
 // second kind of Owner would need a reason of its own here.
 func (g *LiveEntryGate) Admit(live bool) (done func(), refused LiveEntryRefusal) {

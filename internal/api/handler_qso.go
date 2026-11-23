@@ -279,12 +279,18 @@ func (s *Server) handleSubmitQso(w http.ResponseWriter, r *http.Request) {
 			return
 		case LiveEntrySwitching:
 			// An archive switch holds the seal (W-0029 part 3, C; the operator's
-			// rulings of 2026-11-12 and 2026-11-21). The page will reload, but
-			// the archive it reloads in is the one asked for only if that archive
-			// starts: the words must not promise it, and must not tell the
-			// operator to log the contact again without looking.
+			// rulings of 2026-11-12, 2026-11-21 and 2026-11-23). The words promise
+			// nothing about what follows, because this is answered while the
+			// switch is still under way and it can end three ways: the daemon
+			// restarts on the archive asked for; it restarts and falls back to the
+			// one it left; or the switch fails before any restart (its close, its
+			// selector or its restart request) and nothing reloads. A message that
+			// said "the daemon is restarting ... after the page reloads" left the
+			// operator waiting for a reload a failed switch never gives (the
+			// clean-room review of df655a2b). What is true in all three: nothing
+			// was logged, and the archive must be looked at before logging again.
 			s.writeError(w, http.StatusConflict, "archive_switch_pending",
-				"The archive is being switched and the daemon is restarting. This attempt logged nothing. After the page reloads, check which archive is active before you log the contact again.", op)
+				"The archive is being switched. This attempt logged nothing. Check which archive is active before you log the contact again.", op)
 			return
 		case LiveEntryClosing:
 			// The app's confirmed exit holds the seal: no restart and no reload
