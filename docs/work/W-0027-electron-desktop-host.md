@@ -5609,3 +5609,10 @@ The inbox entries, as written:
    - **So:** the page closes its stream and claims the other mode at once, as it always did; the daemon now learns of the close after the claim, not before. The order reversed with the move to the desktop app. Why it reversed is an inference, not measured: the desktop app reaches the daemon differently from the browser tab the earlier figures came from.
    - **The cure, chosen by the operator the same hour** ("If time is needed, this time is available while the slots are first decoded... nothing is displayed for 30s or 15s depending on the mode"): the page claims again quietly. A busy refusal with no time to retry gets up to 12 more claims, 250 ms apart (about three seconds; the two numbers are Claude's, inside the time the operator named, and his to change), with no banner; any other reason shows at once; a mode still busy after them shows the banner as before. In the working tree (`frontend/app/src/lib/operate/ft8.svelte.ts`, `QUIET_RECLAIMS`), not committed, not deployed. Claude's first recommendation (the claim names the stream it replaces, changing the daemon) is not built.
    - **Open:** the banner's sentence "If you have just switched, try again in a few seconds." now shows only after the page has already tried for three seconds, when something else holds the other mode; whether it should say so is the operator's. Not measured: why the desktop app reverses the order.
+
+**Committed and pushed `3c517e28`; its clean-room review, one finding, fixed.** A banner
+already showing from an earlier refusal (TX enabled, with a time to retry) stayed up, with its
+Disable TX button and an expired countdown, while a later claim was being repeated quietly
+(another client having taken the old mode meanwhile). The quiet path now takes the banner
+down first: its reason is no longer the daemon's. Test: "a banner already showing is taken
+down when a later claim turns quiet", seen to fail before the one-line change.

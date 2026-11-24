@@ -1517,6 +1517,10 @@ function noteClaimFailure(result: ClaimResult, mode: FtProfileName, gen: number)
         // re-claim below, so a stop or another start ends it.
         quietReclaimsLeft--;
         clearReclaim();
+        // A banner still up from an earlier refusal (a hinted "TX enabled", say) is no
+        // longer the daemon's reason: left showing, its stop button would act on a
+        // refusal that has been replaced (the clean-room review of 3c517e28).
+        ft8State.claimRefusal = null;
         reclaimTimer = setTimeout(() => {
             reclaimTimer = null;
             if (gen !== startGen) return;

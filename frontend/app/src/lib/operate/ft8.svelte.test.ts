@@ -865,6 +865,26 @@ describe('profile claim before subscribe (ADR 0080)', () => {
         expect(opened).toEqual(['ft8']);
     });
 
+    // The clean-room review of 3c517e28: a banner for TX enabled, with a time to retry,
+    // is showing; at that time the answer is busy with no time (another client has taken
+    // the old mode). The old banner, with its Disable TX button and an expired countdown,
+    // must not stay up over the quiet claims: its reason is no longer the daemon's.
+    it('a banner already showing is taken down when a later claim turns quiet', async () => {
+        const h = claimHarness(
+            [{ kind: 'refused', code: 'ft8_tx_armed', message: 'armed', retryAfterMs: 4000 }],
+            BUSY
+        );
+        await startFt8('ft4');
+        expect(ft8State.claimRefusal?.code).toBe('ft8_tx_armed');
+
+        await vi.advanceTimersByTimeAsync(4000);
+        expect(h.claims.length).toBe(2);
+        expect(ft8State.claimRefusal).toBeNull();
+
+        await vi.advanceTimersByTimeAsync(QUIET_RECLAIM_STEP_MS * QUIET_RECLAIMS);
+        expect(ft8State.claimRefusal).toMatchObject({ code: 'ft8_profile_busy', retryAt: 0 });
+    });
+
     it('a busy refusal that names a time to retry keeps its banner and its countdown', async () => {
         const h = claimHarness([{ ...BUSY, retryAfterMs: 4000 }], { kind: 'ok', mode: 'FT4' });
         await startFt8('ft4');

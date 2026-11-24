@@ -124,25 +124,26 @@
     // typed prefix MATCHED but hide-hashed removed must not be blamed on the
     // prefix — clearing the chip would then leave it hidden, unexplained). A
     // caller is never hidden, so never counted.
+    //
+    // A row hide-hashed removed is not counted or mentioned at all (operator,
+    // 2026-11-24, of "1 unidentifiable decode hidden (hide hashed calls).": "useless
+    // information", and "remove it. If the op wants to seen hashed decodes, they can
+    // switch it on in the config."). The cost, stated to him first: a slot whose only
+    // decode was hidden reads as a slot with none.
     const filterText = $derived(ft8State.bandFilter.trim().toUpperCase());
     const filtered = $derived.by<{
         rows: DecodeRow[];
         hiddenByFilter: number;
-        hiddenHashed: number;
     }>(() => {
         const me = ft8OperatorCall();
         const filter = filterText;
         const hideHashed = ft8HideHashed();
         let hiddenByFilter = 0;
-        let hiddenHashed = 0;
         const rows = ft8State.decodes
             .map((d) => classify(d, me))
             .filter((r) => {
                 if (r.kind === 'call') return true; // calling us — always show
-                if (hideHashed && r.d.text.includes('<...>')) {
-                    hiddenHashed++;
-                    return false;
-                }
+                if (hideHashed && r.d.text.includes('<...>')) return false;
                 const matches =
                     filter === '' ||
                     r.d.text
@@ -152,7 +153,7 @@
                 if (!matches) hiddenByFilter++;
                 return matches;
             });
-        return { rows, hiddenByFilter, hiddenHashed };
+        return { rows, hiddenByFilter };
     });
     // The empty state keys on VISIBLE rows, not on groups: cq_to_top always
     // yields one group, empty or not (codex 5cbc6be2 P2), so an all-filtered
@@ -593,14 +594,7 @@
     {#if nothingVisible}
         <div class="flex flex-1 items-center justify-center text-sm text-muted">
             {#if filterText !== '' && filtered.hiddenByFilter > 0}
-                No decodes match “{filterText}” — {filtered.hiddenByFilter} hidden by the filter{filtered.hiddenHashed >
-                0
-                    ? `, ${filtered.hiddenHashed} unidentifiable hidden`
-                    : ''}.
-            {:else if filtered.hiddenHashed > 0}
-                {filtered.hiddenHashed} unidentifiable decode{filtered.hiddenHashed === 1
-                    ? ''
-                    : 's'} hidden (hide hashed calls).
+                No decodes match “{filterText}” — {filtered.hiddenByFilter} hidden by the filter.
             {:else}
                 Decodes appear here as slots are received.
             {/if}

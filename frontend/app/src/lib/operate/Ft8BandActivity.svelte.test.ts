@@ -319,14 +319,42 @@ describe('Ft8BandActivity renderer', () => {
         const chip = screen.getByRole('status', { name: 'Active filter' });
         expect(chip).toHaveTextContent('Filter: W1');
         expect(chip).not.toHaveTextContent('hidden'); // the typed filter hid nothing
-        const empty = screen.getByText(/hidden/);
-        expect(empty).not.toHaveTextContent(/No decodes match/);
-        expect(empty).toHaveTextContent(/1 unidentifiable/);
+        expect(screen.queryByText(/No decodes match/)).toBeNull();
+    });
 
-        ft8State.bandFilter = '';
+    // Operator, 2026-11-24, of "1 unidentifiable decode hidden (hide hashed calls).":
+    // "useless information", and "remove it. If the op wants to seen hashed decodes, they
+    // can switch it on in the config." A row that hide-hashed removed is not shown and not
+    // counted anywhere; the panel reads as it does when nothing has been decoded.
+    it('a row hide-hashed removed is neither shown nor counted', () => {
+        setFt8OperatorCall('7Q5MLV');
+        setFt8DisplayPrefs({ hideHashedCalls: true });
+        render(Ft8BandActivity);
+        ft8Link.onDecode(decode('t1', [{ text: '<...> 4X5MZ R-02', freq_hz: 430, snr: -8 }]));
         flushSync();
-        expect(screen.queryByText('Decodes appear here as slots are received.')).toBeNull();
-        expect(screen.getByText(/1 unidentifiable/)).toBeInTheDocument();
+
+        expect(screen.getByText('Decodes appear here as slots are received.')).toBeInTheDocument();
+        expect(screen.queryByText(/unidentifiable/)).toBeNull();
+        expect(screen.queryByText(/hidden/)).toBeNull();
+        expect(screen.queryByRole('table')).toBeNull();
+    });
+
+    it('a typed filter that hides every row counts its own rows only, not the hashed ones', () => {
+        setFt8OperatorCall('7Q5MLV');
+        setFt8DisplayPrefs({ hideHashedCalls: true });
+        render(Ft8BandActivity);
+        ft8Link.onDecode(
+            decode('t1', [
+                { text: '<...> 4X5MZ R-02', freq_hz: 430, snr: -8 },
+                { text: 'CQ W1ABC FN42', freq_hz: 1200, snr: -8 },
+            ])
+        );
+        ft8State.bandFilter = 'ZS';
+        flushSync();
+
+        const empty = screen.getByText(/No decodes match/);
+        expect(empty).toHaveTextContent('No decodes match “ZS” — 1 hidden by the filter.');
+        expect(empty).not.toHaveTextContent(/unidentifiable/);
     });
 
     it('hide-hashed (config) drops <...> decodes but keeps identifiable ones', () => {

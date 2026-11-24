@@ -341,9 +341,11 @@ CAT-live re-tune is opt-out** via the daemon config `restore_rig_on_mode_switch`
   "No decodes match “ZS” — N hidden by the filter" instead of the quiet-band text, so an
   empty feed under a filter is never mistaken for a dead band (inbox 2026-09-12). Each
   hidden row is counted against the filter that removed it: the chip's count is the typed
-  prefix's own; rows hide-hashed removed are reported separately ("N unidentifiable
-  hidden"), also when hide-hashed alone empties the feed — a caller is never hidden, so
-  never counted. Hide-hashed with rows still showing keeps the tint as its only cue. A
+  prefix's own; rows hide-hashed removed are not counted or mentioned anywhere (operator,
+  2026-11-24: the line "N unidentifiable decodes hidden" told him nothing he could use;
+  whoever wants them switches hide-hashed off), so a slot whose only decode was hidden
+  reads as a slot with none — a caller is never hidden, so never counted. Hide-hashed
+  keeps the funnel's tint as its only cue. A
   station **calling you**
   (toMe) **always shows through** both filters, so you never miss a caller.
   - **typed filter** (`ft8State.bandFilter`): **token-prefix** — a decode shows when any

@@ -257,3 +257,25 @@ FT4. Nothing in the message tells the two stations apart, and a guess such as th
 offset is not attribution. `internal/ft8/sequence.go` now states the case at the field it
 concerns. **It is the operator's to change:** the stricter rule would be to read no combined
 message at all, which is where this work item started.
+
+## The line "N unidentifiable decodes hidden" is removed (2026-11-24, on the operator's direction)
+
+With "hide hashed calls" on, a panel emptied by it said "1 unidentifiable decode hidden (hide
+hashed calls)." The operator called it "useless information" in the morning. In the
+afternoon, on go-ft8 v0.10.0, it showed again on FT4, and the decode log showed why: 4X5MZ
+was answering 9H/VK4CJB, whose call is sent as a hash, before the daemon (restarted four
+minutes earlier) had heard 9H/VK4CJB in full. Fifteen seconds later the library resolved
+`<4X5MZ>` in 9H/VK4CJB's own message, so the FT4 history works; a hash for a call not yet
+heard is unreadable to any receiver.
+
+The operator's ruling: "remove it. If the op wants to seen hashed decodes, they can switch it
+on in the config. Either that or we add another config to hide this msg or not...". Removed
+outright, with no new setting. A row that hide-hashed removed is not shown and not counted,
+in the empty state or beside a typed filter's count
+(`frontend/app/src/lib/operate/Ft8BandActivity.svelte`; `docs/ft8.md`). The cost, put to him
+before he ruled: a slot whose only decode was hidden reads as a slot with none.
+
+The two inbox entries this settles, as written:
+
+- [2026-11-24] here is another bit of useless information: [Image #3] (FT4)
+- [2026-11-24] Diagnosis of the two captures above about "1 unidentifiable decode hidden (hide hashed calls)" on FT4 (Claude, from the station's decode log, read-only): the hidden line was a DXpedition combined message whose sender the decoder printed as `<...>`. The decoder library's FT4 side keeps no table of heard calls, so on FT4 a hashed call is never resolved; and with "hide hashed calls" on, the panel hides every such line and says only how many. Two things for triage: the message tells the operator nothing he can use (his words: "useless information"), and the W-0030 fix does not act on FT4 for the same reason (recorded in that dossier, with two ways to close it).
