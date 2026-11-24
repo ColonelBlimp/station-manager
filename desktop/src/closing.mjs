@@ -28,7 +28,7 @@
 //     app outlives its window until the box is answered: Try again or Close anyway. smd's
 //     terminal refusal (not current, still holding the session) is of this kind, with no Try
 //     again. Once an exit was sent the close stays of this kind, whatever a later attempt
-//     fails at.
+//     fails at, and Try again asks only for the acknowledgement: it sends no second disarm.
 import { randomBytes } from 'node:crypto';
 
 /** Ruled 2026-11-23: five seconds for each request of a close, and no other timer. It is a
@@ -261,7 +261,13 @@ export function closeFlow({
         }
 
         async function attempt() {
-            if (!admission.isRetired()) {
+            // No disarm from a window that knows it is retired, and none once an exit was
+            // sent: smd may have stored that exit, so this lifetime may be retired without
+            // knowing it, and a disarm needs no lifetime: it would stop whoever operates now
+            // (the clean-room review of ff653c6c). Nothing is lost by it. This close's own
+            // disarm was answered before its exit went out, the page has written nothing
+            // since, and an acknowledged exit stops FT8 for its own lifetime anyway.
+            if (!exitSent && !admission.isRetired()) {
                 const stop = await stopFt8(ses, origin(), { timeoutMs });
                 // Not on to the exit as if FT8 had stopped.
                 if (stop === 'failed') return { state: 'unconfirmed', disarmFailed: true };

@@ -5365,6 +5365,49 @@ or to decision 1 once its finding is fixed.
   the real app, the `before-quit` rule removed, and the last-window rule removed.
 - **Gates again:** 160 unit tests, all eight scenarios, `eslint`, `prettier --check`.
 
+**Committed and pushed: `ff653c6c`** "desktop: the app's close, built and held; not yet
+wired to the window" (operator, 2026-11-24: "commit and push"), after the whole local
+gate passed.
+
+**Hosted CI for `ff653c6c`: success** (run 45332471504), the first completed hosted run on `main` since `67258f26`'s failure; the runs between were cancelled by the pushes that followed them.
+
+**Clean-room review of `ff653c6c`: two findings, both right, both fixed; committed and pushed on the operator's direction (2026-11-24: "commit and push").** Codex checked both fixes and closed them as technical findings (codex-243).
+1. **P1: Try again, once an exit was sent, sent a fresh disarm that could stop another
+   app's FT8.** If the daemon had stored the exit, this lifetime was retired without
+   knowing it; a disarm needs no lifetime, so it stops whoever operates now. The
+   review's case needs another start of the app to take over while the box is up,
+   which the single-instance lock prevents for the installed app; but the criteria's
+   own rule (B2) is that a window that may have been replaced does not disarm, and here
+   nothing is gained by sending one.
+   - **Fixed:** once an exit report was sent, an attempt sends no disarm. It reads the
+     state and reports the exit, and that is all. Nothing is lost: this close's own
+     disarm was answered before its exit went out, the page has written nothing since,
+     and an acknowledged exit stops FT8 for its own lifetime.
+   - **This changes one line of the ruled criteria (E4, "Try again runs B and C again
+     from the start"):** in the second kind it now runs C only. The operator was told,
+     with the recommendation to keep the fix and "say so if you object", and then
+     directed "commit and push" without objecting. It stands unless he says otherwise.
+   - **Tests:** `closing.test.mjs`, "once an exit was sent, Try again sends no disarm";
+     the first kind's Try again still disarms; the scenario's retry is now two
+     requests, not three. The earlier test of a retry failing at its disarm in the
+     second kind is removed: that cannot happen now. The close staying second is still
+     shown by a retry that fails at its read.
+2. **P2: the scenario did not exercise the main process's handler for a second start
+   of the app, and that handler would show the hidden window during a close.** The
+   scenario's windows were never the main process's own, so its handler returned early
+   whatever the close had done. And under the first-kind box, where the window is
+   hidden and not gone, a second start would have shown it again: a page in front of
+   the operator that can no longer write.
+   - **Fixed:** while a close is under way a second start of the app shows nothing
+     (`main.mjs`). The scenario now hands each launch to the main process as the app's
+     own window and close, as the interactive path does, and sends a second start
+     under the first-kind box, requiring the window to stay hidden.
+- **Reversion proofs,** each in a temporary copy: the disarm sent again on a second-kind
+  retry (the module's test fails, and the real-app scenario fails); the second-start
+  rule removed (the scenario fails: the window is shown).
+- **Gates:** 160 unit tests, all eight scenarios, `eslint`, `prettier --check`. The
+  whole local gate (`task ci:local`) over the tree with these fixes: exit 0.
+
 **Not in this slice** (the second): the question and its words; the page's reasons; the
 read of FT8's state at a close; H with unsaved Settings; the check that no key reloads;
 the wiring to the window; and, with the wiring, the API reference's line that the app

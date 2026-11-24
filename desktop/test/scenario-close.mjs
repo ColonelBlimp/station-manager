@@ -22,8 +22,8 @@
 //  5. its close, under the app's own quit rule, with the exit's answer lost: the exit is
 //     stored and the app cannot know. The window is closed BEFORE the box, and the app is
 //     still running with no window. A second start of the app and a second close add
-//     nothing, and another request to quit does not end the app under the box. Try again:
-//     smd answers "already recorded", and the app quits by itself.
+//     nothing, and another request to quit does not end the app under the box. Try again
+//     sends no second disarm: smd answers "already recorded", and the app quits by itself.
 // PASSES only if every check holds. Run: SM_DESKTOP_SMD=<smd> npm run check:close.
 import fs from 'node:fs';
 import os from 'node:os';
@@ -94,7 +94,7 @@ function archive(data) {
     }
 }
 
-export async function runClose({ useInstalledQuitRule }) {
+export async function runClose({ adopt, useInstalledQuitRule }) {
     const checks = [];
     const check = (name, ok, detail = '') => checks.push({ name, ok: Boolean(ok), detail });
     const windows = [];
@@ -149,6 +149,7 @@ export async function runClose({ useInstalledQuitRule }) {
 
         // 1. The first start, and one contact in its session.
         const first = launch(null);
+        adopt(first); // the app's own window and close, to the main process's handlers
         await until(() => js(first.win, WORKSPACE), "the first start's workspace");
         const opened = await js(first.win, SESSION);
         const logged = await js(first.win, LOG_ONE);
@@ -179,6 +180,9 @@ export async function runClose({ useInstalledQuitRule }) {
             during.closing = first.admission.isClosing();
             during.read = await js(first.win, PAGE_READ);
             during.write = await js(first.win, PAGE_WRITE);
+            app.emit('second-instance'); // a second start of the app, under this box
+            await new Promise((r) => setTimeout(r, 200));
+            during.visibleAfterSecondStart = first.win.isVisible();
             return 'cancel';
         });
         const cancelled = await first.closing.close();
@@ -191,12 +195,13 @@ export async function runClose({ useInstalledQuitRule }) {
             JSON.stringify({ cancelled, sent: watch1.sent, boxes: first.boxes })
         );
         check(
-            'While that box is up the window is kept and hidden, the app is admitted nowhere new, and the page reads but cannot write',
+            'While that box is up the window is kept and hidden (a second start of the app does not show it), the app is admitted nowhere new, and the page reads but cannot write',
             during.destroyed === false &&
                 during.visible === false &&
                 during.closing === true &&
                 during.read === 200 &&
-                during.write === 'refused',
+                during.write === 'refused' &&
+                during.visibleAfterSecondStart === false,
             JSON.stringify(during)
         );
         const after = {
@@ -254,6 +259,7 @@ export async function runClose({ useInstalledQuitRule }) {
 
         // 4. The second start: no question about the session that was closed.
         const second = launch('close-second-start');
+        adopt(second);
         await until(() => js(second.win, WORKSPACE), "the second start's workspace");
         const reopened = await js(second.win, SESSION);
         check(
@@ -282,7 +288,7 @@ export async function runClose({ useInstalledQuitRule }) {
             events.push('will-quit');
             quitSeen();
         });
-        useInstalledQuitRule(second.closing);
+        useInstalledQuitRule();
         second.quit = () => app.quit();
         const watch2 = watchClose(second.win);
         watch2.next['/v1/operating-session/exit'] = 'lose-answer';
@@ -353,7 +359,7 @@ export async function runClose({ useInstalledQuitRule }) {
                         'POST /v1/ft8/tx/arm',
                         'GET /v1/operating-session',
                         'POST /v1/operating-session/exit',
-                        'POST /v1/ft8/tx/arm',
+                        // Try again: no second disarm once an exit was sent.
                         'GET /v1/operating-session',
                         'POST /v1/operating-session/exit',
                     ]) &&

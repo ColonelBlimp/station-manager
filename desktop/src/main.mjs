@@ -48,9 +48,16 @@ if (!app.requestSingleInstanceLock()) {
     const pinDecisions = [];
     const downloads = [];
 
+    // The close of the app's window (W-0027 A3), held here once a window is launched.
+    let closing = null;
+
     app.on('second-instance', () => {
         secondInstances.push(Date.now());
-        if (!mainWindow) return;
+        // While a close is under way a second start adds nothing: the window is hidden, or
+        // gone, and the box is what the operator answers. Showing the window again would
+        // put a page in front of the operator that can no longer write (the clean-room
+        // review of ff653c6c).
+        if (!mainWindow || closing?.holdsApp()) return;
         if (mainWindow.isMinimized()) mainWindow.restore();
         mainWindow.show();
         mainWindow.focus();
@@ -60,7 +67,6 @@ if (!app.requestSingleInstanceLock()) {
     // BEFORE its box, and the box must still be there to answer. The close itself quits the
     // app when it ends. An automated check keeps the app alive between its windows, except
     // where it says it wants the app's own rule (quitRule.asInstalled).
-    let closing = null;
     const quitRule = { asInstalled: !automated };
     app.on('window-all-closed', () => {
         if (quitRule.asInstalled && !closing?.holdsApp()) app.quit();
@@ -159,14 +165,23 @@ if (!app.requestSingleInstanceLock()) {
                 return;
             }
             // W-0027 A3: the app's close, against a real smd (SM_DESKTOP_SMD), in a temporary
-            // working directory with synthetic data and free ports; never the station. For its
-            // last step the scenario asks for the app's own quit rule, with the close it is
-            // running, so that what is checked is the rule above and not a copy of it.
+            // working directory with synthetic data and free ports; never the station. It
+            // hands each launch to the handlers above as the app's own, and for its last step
+            // asks for the app's own quit rule, so that what is checked is those handlers and
+            // not copies of them.
             if (scenario === 'close') {
                 const { runClose } = await import('../test/scenario-close.mjs');
                 const ok = await runClose({
-                    useInstalledQuitRule: (flow) => {
-                        closing = flow;
+                    // The launch the handlers above are to treat as the app's own: its
+                    // window and its close, as the interactive path sets them.
+                    adopt: (launched) => {
+                        mainWindow = launched.win;
+                        closing = launched.closing;
+                        launched.win.on('closed', () => {
+                            if (mainWindow === launched.win) mainWindow = null;
+                        });
+                    },
+                    useInstalledQuitRule: () => {
                         quitRule.asInstalled = true;
                     },
                 });

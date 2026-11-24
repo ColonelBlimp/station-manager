@@ -424,11 +424,11 @@ test('second kind, Try again: the exit already recorded is acknowledged and the 
     d.lose[EXIT] = 1;
     const f = flowOver(d, { answers: ['retry'] });
     assert.equal(await f.flow.close(), 'closed');
+    // No second disarm: see the next test.
     assert.deepEqual(d.sent(), [
         `POST ${DISARM}`,
         `GET ${SESSION}`,
         `POST ${EXIT}`,
-        `POST ${DISARM}`,
         `GET ${SESSION}`,
         `POST ${EXIT}`,
     ]);
@@ -436,22 +436,27 @@ test('second kind, Try again: the exit already recorded is acknowledged and the 
     assert.equal(f.boxes.length, 1);
 });
 
-test('once an exit was sent the close stays of the second kind, whatever a later attempt fails at', async () => {
+// The clean-room review of ff653c6c (P1). Once an exit was sent, smd may have stored it:
+// this lifetime may be retired, and cannot know. A disarm needs no lifetime, so one sent then
+// would stop whoever operates now. So Try again asks only for the acknowledgement. Nothing is
+// lost: this close's own disarm was answered before its exit went out, the page has written
+// nothing since, and an acknowledged exit stops FT8 for its own lifetime anyway.
+test('once an exit was sent, Try again sends no disarm: it may be another app’s FT8 by now', async () => {
     const d = daemon();
     d.on[EXIT].push(neverAnswers); // the first exit: given up on, and it may still be stored
-    const f = flowOver(d, { answers: ['retry', 'cancel'], timeoutMs: 20 });
-    d.on[DISARM].push(undefined, () => {
-        throw new Error('no answer'); // the retry fails at its disarm, before its own exit
-    });
-    assert.equal(await f.flow.close(), 'closed-unconfirmed');
-    assert.deepEqual(f.boxes, [
-        { kind: 'second', disarmFailed: false, terminal: false },
-        { kind: 'second', disarmFailed: true, terminal: false },
+    const f = flowOver(d, { answers: ['retry'], timeoutMs: 20 });
+    assert.equal(await f.flow.close(), 'closed');
+    assert.deepEqual(d.sent(), [
+        `POST ${DISARM}`,
+        `GET ${SESSION}`,
+        `POST ${EXIT}`,
+        `GET ${SESSION}`,
+        `POST ${EXIT}`,
     ]);
-    assert.ok(!f.log.includes('show') && !f.log.includes('barrier lifted'));
+    assert.deepEqual(f.boxes, [{ kind: 'second', disarmFailed: false, terminal: false }]);
 });
 
-test('…and so when the later attempt fails at its read of the state, having sent no exit of its own', async () => {
+test('once an exit was sent the close stays of the second kind, though a later attempt sends no exit of its own', async () => {
     const d = daemon();
     d.lose[EXIT] = 1; // the first exit is stored, and its answer lost
     d.on[SESSION].push(undefined, () => json(503, { code: 'operating_session_unavailable' }));
