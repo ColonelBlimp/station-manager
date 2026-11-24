@@ -244,3 +244,14 @@ session, before any plain message from it has been decoded, its hashed sender is
 station being worked would cover those first slots; reading a combined message that addresses
 us by a hashed call is now checkable with `CallsignHash`. Each changes attribution and wants
 its criteria first.
+
+**The clean-room review of the upgrade (`20d00a5d`), one finding, accepted with its reason in
+the code.** P2: on FT4 a combined message's sender is now printed as the most recently heard
+call with that 10-bit hash, so a message from another station whose call collides with the
+station being worked (one call in 1,024), and which rogers us, would be taken as our
+partner's and the contact logged. That is criterion 3's accepted cost ("a resolved call is
+the decoder's attribution … which this rule accepts"), true on FT8 since the fix and now on
+FT4. Nothing in the message tells the two stations apart, and a guess such as the audio
+offset is not attribution. `internal/ft8/sequence.go` now states the case at the field it
+concerns. **It is the operator's to change:** the stricter rule would be to read no combined
+message at all, which is where this work item started.

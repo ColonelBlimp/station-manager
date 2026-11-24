@@ -410,6 +410,17 @@ type combinedMessage struct {
 	// sender is the transmitting station: the call from the angle brackets. It is
 	// the DECODER's attribution (a short hash looked up among calls it has heard),
 	// which the rule below accepts. It is not proof of identity.
+	//
+	// THE ACCEPTED COST, stated once (W-0030 criterion 3; raised again by the
+	// clean-room review of 20d00a5d when FT4 gained the same history). The hash
+	// is ten bits, so one call in 1,024 shares it: a combined message from
+	// ANOTHER station whose call collides with the station being worked, and
+	// which rogers or reports to US, would be printed with our partner's call and
+	// taken as our partner's. Nothing in the message can tell the two apart; the
+	// decoder prints the most recently heard match. It needs a second station
+	// to be addressing us in this form at that moment. This is so on FT8 and,
+	// from go-ft8 v0.10.0, on FT4. A threshold or a guess (the audio offset,
+	// say) is not attribution and is not used to narrow it (the package's rule).
 	sender string
 	roger  message // to call1: exactly what "<call1> <sender> RR73" parses to
 	report message // to call2: exactly what "<call2> <sender> <report>" parses to
