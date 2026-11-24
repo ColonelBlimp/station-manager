@@ -105,7 +105,7 @@ func (e CallerExchange) TxMessage() (string, bool) {
 // No SNR parameter (unlike Exchange.Advance): our report was measured from their answer
 // at construction, so the caller never reads a fresh decode's SNR.
 func (e CallerExchange) Advance(text string) (CallerExchange, bool) {
-	m := parseMessage(text)
+	m := directedTo(text, e.OurCall) // a combined message's half for us counts as its plain form
 	if m.to != e.OurCall || m.from != e.TheirCall {
 		return e, false
 	}

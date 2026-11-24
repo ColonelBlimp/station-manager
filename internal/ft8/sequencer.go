@@ -1709,7 +1709,7 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 	var heard string
 	advanced := false
 	for _, m := range msgs {
-		if pm := parseMessage(m.Text); pm.to == s.ex.OurCall && pm.from == s.ex.TheirCall {
+		if pm := directedTo(m.Text, s.ex.OurCall); pm.to == s.ex.OurCall && pm.from == s.ex.TheirCall {
 			heard = m.Text
 		}
 		if next, ok := s.ex.Advance(m.Text, m.SNR); ok {

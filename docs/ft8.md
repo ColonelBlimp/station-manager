@@ -988,6 +988,28 @@ neither in the ladder nor in the encoder (go-ft8 v0.9.0 `EncodeStandardMessage` 
 compound/nonstandard own call goes out as a type-4 message that carries neither a token nor a grid
 (ADR 0048).
 
+**One message the sequencer reads and never sends: the DXpedition combined message** (fixed
+2026-11-24, after a contact the DX station had logged went unlogged here). A station working
+several callers at once sends a roger to one and a report to the next in a single transmission,
+which the decoder prints as `<call1> RR73; <call2> <SENDER> <report>`, the sender's own call hashed
+in angle brackets. Each half means exactly what its plain form means: `<us> RR73; …` from the
+station being worked is its roger to us, and `… ; <us> <SENDER> <report>` is its report to us.
+The rules (`parseCombined`, `directedTo` in `internal/ft8/sequence.go`):
+- **The sender must be resolved.** `<...>` is nobody: no roger, no report, no spot. A resolved call
+  is the decoder's attribution, a short hash looked up among calls it has heard; the sequencer
+  accepts it and does not call it proof.
+- **The whole shape or nothing,** and only the half addressed to us, from the station being
+  worked. Our call in both halves is taken as neither. The OTHER recipient may be hashed
+  (`<...>`, or a call in angle brackets): that half is often for a station this decoder never
+  resolved, and it must not cost us ours. A hashed recipient is never taken to be us.
+- **It never makes a caller** (the answerer list wants a grid reply), and Field Day and the type-4
+  ladder do not read it at all.
+- **What follows is the ordinary ladder:** our 73 once, and the contact logs whether or not that 73
+  reaches the air.
+- A reception spot of such a line names its resolved sender, with no grid.
+- The page offers no action on such a line (no "call this station"), and never presents either
+  recipient as its sender.
+
 The one editable message is the **CQ**, and in it one token — the **CQ modifier** (W-0011, shipped
 2026-09-12): `CQ [token] <call> [grid]`, e.g. `CQ AF 7Q5MLV KH78`, `CQ DX …`, `CQ TEST …`,
 `CQ 590 …`. The token is exactly three digits (000–999) or one to four letters A–Z — the two

@@ -183,7 +183,7 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		}
 	} else {
 		for _, m := range msgs {
-			if pm := parseMessage(m.Text); pm.to == s.ourCall && pm.from == s.caller.TheirCall {
+			if pm := directedTo(m.Text, s.ourCall); pm.to == s.ourCall && pm.from == s.caller.TheirCall {
 				heard = m.Text
 			}
 			if next, ok := s.caller.Advance(m.Text); ok {
@@ -819,7 +819,7 @@ func (s *Sequencer) resolveConfirmHoldLocked(msgs []goft8.DecodedMessage) string
 	}
 	asking := ""
 	for _, m := range msgs {
-		pm := parseMessage(m.Text)
+		pm := directedTo(m.Text, s.ourCall) // the same reader as the ladder's advance
 		if pm.from != h.call || pm.to != s.ourCall {
 			continue
 		}

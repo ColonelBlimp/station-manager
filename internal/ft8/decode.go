@@ -57,10 +57,10 @@ func dropOwnTransmissions(msgs []goft8.DecodedMessage, ownCall string) []goft8.D
 	}
 	out := make([]goft8.DecodedMessage, 0, len(msgs))
 	for _, m := range msgs {
-		// parseMessage upper-cases; from is the transmitting station (the second call
-		// of a directed message, the caller of a CQ) — empty for free text / hashed
-		// calls, which never match a non-empty ownCall and so pass through.
-		if parseMessage(m.Text).from == ownCall {
+		// The transmitting station: the second call of a directed message, the caller
+		// of a CQ, the resolved sender of a combined message. Empty for free text and
+		// unresolved hashes, which never match a non-empty ownCall and so pass through.
+		if transmitterOf(m.Text) == ownCall {
 			continue
 		}
 		out = append(out, m)

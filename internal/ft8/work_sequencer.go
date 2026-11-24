@@ -113,7 +113,7 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	var heard string
 	advanced := false
 	for _, m := range msgs {
-		if pm := parseMessage(m.Text); pm.to == s.ourCall && pm.from == s.caller.TheirCall {
+		if pm := directedTo(m.Text, s.ourCall); pm.to == s.ourCall && pm.from == s.caller.TheirCall {
 			heard = m.Text
 		}
 		if next, ok := s.caller.Advance(m.Text); ok {

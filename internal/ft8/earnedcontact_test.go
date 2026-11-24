@@ -42,6 +42,20 @@ var groupALadders = []groupALadder{
 		rogerAt: 90, roger: "G0XYZ K1ABC RR73", closing: "K1ABC G0XYZ 73",
 	},
 	{
+		// W-0030: the same ladder, its roger arriving inside a DXpedition combined
+		// message. Every earned-contact rule below holds for it as for the plain roger.
+		name: "answer a CQ, the roger combined", their: "K1ABC",
+		start: func(t *testing.T, s *Sequencer) {
+			require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42",
+				time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
+		},
+		toRoger: func(s *Sequencer) {
+			driveTheir(s, 30, []goft8.DecodedMessage{dm("CQ K1ABC FN42", -1)})
+			driveTheir(s, 60, []goft8.DecodedMessage{dm("W9XYZ RR73; G0XYZ <K1ABC> -10", -12)})
+		},
+		rogerAt: 90, roger: "G0XYZ RR73; W9XYZ <K1ABC> -05", closing: "K1ABC G0XYZ 73",
+	},
+	{
 		name: "work a caller, Field Day", their: "K7IOC",
 		start: func(t *testing.T, s *Sequencer) {
 			require.NoError(t, s.StartWorkCallerFd("G0XYZ", "1D", "DX", "K7IOC", "", "2A", "WWA", 2,

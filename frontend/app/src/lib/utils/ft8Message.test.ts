@@ -4,7 +4,7 @@
 // must not (CQ lines route to parseCq; hashed senders have no known callsign).
 
 import { describe, it, expect } from 'vitest';
-import { parseAddressee, parseSender } from './ft8Message';
+import { parseAddressee, parseCq, parseCqCall, parseDirectedToMe, parseSender } from './ft8Message';
 
 describe('parseSender', () => {
     it('extracts the sender from a report line (no grid)', () => {
@@ -116,5 +116,34 @@ describe('parseAddressee', () => {
         expect(parseAddressee('VK9XY 73')).toBeNull(); // the second token is not a sender
         expect(parseAddressee('TNX BOB 73 GL')).toBeNull();
         expect(parseAddressee('')).toBeNull();
+    });
+});
+
+// The DXpedition combined message, `<call1> RR73; <call2> <SENDER> <report>`: one line, a
+// roger to call1 and a report to call2 from a station whose own call is hashed. The daemon
+// reads its two halves (internal/ft8, parseCombined; operator's report 2026-11-24). The page
+// offers no action on such a line yet (ruled the same day), and above all must never present
+// either RECIPIENT as the station that sent it: a click would then call the wrong station.
+describe('a combined DXpedition line is nobody to call', () => {
+    const lines = [
+        'G0XYZ RR73; W9XYZ <K1ABC> -08', // the roger is ours
+        'W9XYZ RR73; G0XYZ <K1ABC> -08', // the report is ours
+        'W9XYZ RR73; N0CALL <K1ABC> -08', // neither is
+        'W9XYZ RR73; N0CALL <...> -08', // the sender is not resolved
+    ];
+
+    it('has no sender and no addressee to offer', () => {
+        for (const line of lines) {
+            expect(parseSender(line), line).toBeNull();
+            expect(parseAddressee(line), line).toBeNull();
+        }
+    });
+
+    it('is not a CQ and not a station calling us', () => {
+        for (const line of lines) {
+            expect(parseCq(line), line).toBeNull();
+            expect(parseCqCall(line), line).toBeNull();
+            expect(parseDirectedToMe(line, 'G0XYZ'), line).toBeNull();
+        }
     });
 });

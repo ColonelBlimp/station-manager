@@ -410,6 +410,15 @@
       "summary": "W-0029 builds ADR 0100: the operating session moves from each window into smd, opens with the desktop app and closes at its confirmed exit, with explicit membership written in the QSO's transaction and one authority for the Session panel, the Map, session email and export and the FT8 repeat hold; opened 2026-11-18 with its build brief drafted for review; its ranking lives in the backlog."
     },
     {
+      "id": "work.w-0030",
+      "path": "docs/work/W-0030-ft8-dxpedition-combined-message.md",
+      "class": "work-item",
+      "audiences": ["operator", "contributor", "agent"],
+      "topics": ["ft8", "ft4", "logging", "dxpedition"],
+      "scopes": ["internal/ft8/**", "frontend/app/**"],
+      "summary": "W-0030 is the defect fix that makes the FT8 sequencer read the DXpedition combined message (a roger to one caller and a report to the next in one transmission, the sender hashed): a contact the DX station had rogered and logged was abandoned here as no answer. It records the diagnosis from the station's logs, the ruled acceptance criteria and the fix."
+    },
+    {
       "id": "work.dogfood-inbox",
       "path": "docs/dogfood-inbox.md",
       "class": "work-item",

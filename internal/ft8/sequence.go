@@ -156,6 +156,11 @@ type message struct {
 // included); for a directed message it's the second call (grid only on a grid
 // reply). Reuses parseMessage so the spot view matches the sequencer's.
 func SpotFrom(text string) (call, grid string, ok bool) {
+	// A combined message is spotted once, as its resolved sender, with no grid:
+	// the line carries none (operator ruling 2026-11-24). Unresolved: no spot.
+	if c, isCombined := parseCombined(text); isCombined {
+		return c.sender, "", true
+	}
 	m := parseMessage(text)
 	if m.from == "" {
 		return "", "", false
@@ -327,7 +332,7 @@ func (e Exchange) TxMessage() (string, bool) {
 // recorded as the value we report back at rung 3. The ladder is followed
 // strictly — a partner skipping rungs simply does not advance us.
 func (e Exchange) Advance(text string, snr int) (Exchange, bool) {
-	m := parseMessage(text)
+	m := directedTo(text, e.OurCall) // a combined message's half for us counts as its plain form
 	if m.to != e.OurCall || m.from != e.TheirCall {
 		return e, false
 	}
@@ -386,3 +391,128 @@ func (e Exchange) Sent() Exchange {
 // ladder tests assert against; the lifecycle that actually logs is covered by the
 // sequencer tests.
 func (e Exchange) Done() bool { return e.State == txDone }
+
+// combinedMessage is the DXpedition message: one transmission with two directed
+// meanings, sent by a station that is working several callers at once. The
+// decoder (go-ft8, unpackDXpedition) renders it
+//
+//	<call1> RR73; <call2> <SENDER> <report>
+//
+// a roger to call1 and a report to call2. The sender's own call is carried as a
+// hash, printed in angle brackets when the decoder has resolved it and as "<...>"
+// when it has not.
+//
+// Until 2026-11-24 no reader here understood it: parseMessage wants a callsign
+// as the second word and finds "RR73;", so the whole line was nothing, and a
+// contact the DX station had rogered and logged was abandoned here as "no
+// answer" (operator's report; docs/dogfood-inbox.md).
+type combinedMessage struct {
+	// sender is the transmitting station: the call from the angle brackets. It is
+	// the DECODER's attribution (a short hash looked up among calls it has heard),
+	// which the rule below accepts. It is not proof of identity.
+	sender string
+	roger  message // to call1: exactly what "<call1> <sender> RR73" parses to
+	report message // to call2: exactly what "<call2> <sender> <report>" parses to
+}
+
+// parseCombined reads a combined message, or reports that the line is not one.
+// The WHOLE shape is checked before either half is taken: five words, the
+// literal "RR73;", two recipients, a RESOLVED sender in angle brackets and a
+// valid report. Anything else is not this message, and angle brackets are
+// stripped from no other kind of line.
+//
+//   - An unresolved sender ("<...>") is nobody. No heuristic stands in for it:
+//     not "the station we are working", not "the only DX on the band".
+//   - A recipient may be a hashed token, "<...>" or a call in angle brackets: the
+//     other half is often for a station whose call this decoder never resolved,
+//     and that must not cost us our own half. A hashed recipient is never us: its
+//     token is kept as printed, and no plain call equals it. (A station whose own
+//     call is compound works the type-4 ladder, which does not read this line.)
+//   - The same plain call as both recipients is ambiguous and is taken as
+//     neither. That is this parser's rule; the decoder does not forbid it.
+func parseCombined(text string) (combinedMessage, bool) {
+	toks := strings.Fields(strings.ToUpper(strings.TrimSpace(text)))
+	if len(toks) != 5 || toks[1] != "RR73;" {
+		return combinedMessage{}, false
+	}
+	to1, to2 := toks[0], toks[2]
+	if !combinedRecipient(to1) || !combinedRecipient(to2) {
+		return combinedMessage{}, false
+	}
+	if to1 == to2 && looksLikeCall(to1) {
+		return combinedMessage{}, false
+	}
+	sender, ok := hashedCall(toks[3])
+	if !ok || !looksLikeCall(sender) {
+		return combinedMessage{}, false
+	}
+	report, ok := parseReport(toks[4])
+	if !ok {
+		return combinedMessage{}, false
+	}
+	return combinedMessage{
+		sender: sender,
+		roger:  message{kind: msgRoger, to: to1, from: sender, rogerSignsOff: true},
+		report: message{kind: msgReport, to: to2, from: sender, report: report},
+	}, true
+}
+
+// hashedCall returns what stands between the angle brackets of a hashed token,
+// and false for anything that is not one. "<...>" yields "...", which is no call.
+func hashedCall(tok string) (string, bool) {
+	if len(tok) < 3 || tok[0] != '<' || tok[len(tok)-1] != '>' {
+		return "", false
+	}
+	return tok[1 : len(tok)-1], true
+}
+
+// combinedRecipient reports whether tok can stand as a recipient of a combined
+// message: a plain call, or a hashed token as the decoder prints one, which is
+// its unresolved placeholder "<...>" or a call in angle brackets. Angle brackets
+// alone do not make a recipient: "<HELLO>" and "<!!!>" are not this message
+// (codex-243).
+func combinedRecipient(tok string) bool {
+	if looksLikeCall(tok) {
+		return true
+	}
+	inner, hashed := hashedCall(tok)
+	return hashed && (inner == "..." || looksLikeCall(inner))
+}
+
+// directedTo reads what one decoded line says TO ourCall. For a plain line it is
+// parseMessage, unchanged. For a combined message it is the one half addressed
+// to us, and the zero message when neither is: never the first half by default.
+//
+// It is the single reader for every place that asks "what did the station we
+// are working say to us": a ladder's advance, its diagnostic "heard" line, and
+// the hold after a roger. They must agree, or a line could advance an exchange
+// that its own diagnostics say was never heard. The caller still checks the
+// sender against the station it is working.
+//
+// parseMessage itself is deliberately NOT taught the combined line: it has many
+// callers that mean "a line with one sender and one addressee" (the answerer
+// collectors, Field Day), and a combined line must never become a caller or a
+// Field Day exchange through it.
+func directedTo(text, ourCall string) message {
+	c, ok := parseCombined(text)
+	if !ok {
+		return parseMessage(text)
+	}
+	switch ourCall {
+	case c.roger.to:
+		return c.roger
+	case c.report.to:
+		return c.report
+	}
+	return message{}
+}
+
+// transmitterOf returns the station that transmitted a decoded line, or "" when
+// the line names none that is resolved: a plain message's sender, a CQ's
+// caller, a combined message's resolved sender.
+func transmitterOf(text string) string {
+	if c, ok := parseCombined(text); ok {
+		return c.sender
+	}
+	return parseMessage(text).from
+}
