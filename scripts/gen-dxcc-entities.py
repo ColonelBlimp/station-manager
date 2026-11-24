@@ -1,130 +1,93 @@
 #!/usr/bin/env python3
 """Generate internal/enums/dxcc/dxcc-entities.json.
 
-Builds the hamnut-aligned DXCC reference table the new-entity check needs:
-hamnut's `primaryDXCCPrefix` -> ADIF DXCC entity number. hamnut resolves a
-callsign to an entity but only emits the alpha prefix (e.g. "UA" vs "UA9" for
-European vs Asiatic Russia), never the numeric ADIF code; QSOs store the numeric
-code. This table bridges the two so the orchestrator can match by entity number
-instead of the (mismatching) country-name string.
+The table maps the primary prefix of a DXCC entity, AS HAMNUT WRITES IT in
+`primaryDXCCPrefix`, to the ADIF DXCC entity number. hamnut resolves a callsign
+to an entity and gives its prefix and name, never the number; QSOs store the
+number. The daemon fills the number from this table (internal/lookup), and the
+new-entity check matches by it.
 
-Provenance / how it's generated (so it's reproducible — KISS, embed-for-now):
-  - Seed = distinct (dxcc number, a sample callsign) pairs from a real log DB.
-    The numeric DXCC on each QSO is authoritative (ADIF import / QRZ enrichment).
-  - For each entity's sample call, query hamnut for its `primaryDXCCPrefix` +
-    `countryName`, pairing hamnut's exact vocabulary with the authoritative number.
+Source: the Amateur Radio Country Files' `cty.csv` (https://www.country-files.com/,
+Jim Reisert AD1C), which lists every entity with its primary prefix and its ADIF
+number. It is published under the MIT permission notice on that site's Copyright
+page; the notice is reproduced in this repository's NOTICE.
 
-The output covers the entities present in the seed log (every entity an operator
-has worked — i.e. every real new-entity false-positive case). Unmapped prefixes
-fall back to name-matching at runtime, so partial coverage is safe; extend by
-re-running against a richer log or via the operator override file.
+Why that file fits hamnut's vocabulary (checked 2026-11-24, W-0031):
+  - the 164 entries of the earlier table that name a prefix found in cty.csv all
+    carry the number cty.csv gives, with no exception;
+  - every one of the 174 primary prefixes hamnut had returned at the operator's
+    station is an entity of cty.csv.
+Two differences of spelling, both handled here and nowhere else:
+  - cty.csv marks an entity that is not a DXCC entity of its own with a leading
+    `*` (Sicily, Shetland, African Italy, ...). hamnut writes the prefix without
+    it. Such an entity carries its parent's ADIF number, as cty.csv gives it.
+  - cty.csv writes `3Y/b`, `FO/c`, `VP8/g` for an entity told apart by a suffix.
+    hamnut writes these with a horizontal ellipsis and in capitals: `3Y…B`,
+    `FO…C`, `GM…S` (seen for Bouvet, South Cook Islands, Glorioso Islands,
+    Clipperton Island and Shetland through the daemon's own lookup).
+
+The earlier version of this script built the table from one operator's log and a
+hamnut request for each entity in it, so it knew only the entities that operator
+had worked (166), and VK9X, VK9N and thirty-six other prefixes hamnut had since
+returned had no number. It read operator data; this one reads none.
 
 Usage:
-  scripts/gen-dxcc-entities.py [DB_PATH] > internal/enums/dxcc/dxcc-entities.json
-Default DB_PATH: ~/.local/share/station-manager/db/station-manager.db
+  scripts/gen-dxcc-entities.py CTY_CSV > internal/enums/dxcc/dxcc-entities.json
 """
 
+import csv
 import json
-import os
-import sqlite3
+import re
 import sys
-import time
-import urllib.parse
-import urllib.request
 
-HAMNUT = "https://api.hamnut.com/v1/call-signs/prefixes"
-DEFAULT_DB = os.path.expanduser(
-    "~/.local/share/station-manager/db/station-manager.db"
-)
+ELLIPSIS = "…"
 
 
-def seed_from_log(db_path):
-    """distinct dxcc number -> (sample callsign, stored country), from
-    non-deleted QSOs. The stored country is kept so a prefix collision can be
-    resolved by preferring the candidate whose stored name matches hamnut's
-    (which rejects log misfiles — e.g. a Colombian HK4 call mistakenly logged as
-    Dominican Republic)."""
-    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    con.execute("PRAGMA query_only=ON")
-    seed = {}
-    for ad, call in con.execute(
-        "SELECT additional_data, call FROM qso WHERE deleted_at IS NULL"
-    ):
-        try:
-            d = json.loads(ad) if ad else {}
-        except Exception:
-            d = {}
-        dx = str(d.get("dxcc", "")).strip()
-        if dx and dx not in seed and call:
-            seed[dx] = (call.strip(), str(d.get("country", "")).strip())
-    con.close()
-    return seed
+def hamnut_prefix(cty_prefix):
+    """The primary prefix as hamnut writes it."""
+    return cty_prefix.lstrip("*").replace("/", ELLIPSIS).upper()
 
 
-def hamnut(call):
-    url = f"{HAMNUT}?{urllib.parse.urlencode({'prefix': call})}"
-    req = urllib.request.Request(url, headers={"User-Agent": "sm-dxcc-gen"})
-    with urllib.request.urlopen(req, timeout=15) as r:
-        return json.load(r)
+def source_version(rows):
+    """cty.csv carries its version as a marker callsign, `=VER20261114`."""
+    for row in rows:
+        m = re.search(r"=VER(\d{8})", row[-1])
+        if m:
+            return m.group(1)
+    return ""
 
 
 def main():
-    db_path = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_DB
-    seed = seed_from_log(db_path)
-    print(f"seed: {len(seed)} entities from {db_path}", file=sys.stderr)
+    if len(sys.argv) != 2:
+        sys.exit(__doc__)
+    with open(sys.argv[1], encoding="utf-8", newline="") as f:
+        rows = [r for r in csv.reader(f) if len(r) >= 3]
 
-    # Resolve each entity at hamnut, collecting candidates per primary prefix.
-    # A prefix should be 1:1 with an entity; a collision means a log misfile (a
-    # call whose stored dxcc disagrees with hamnut's resolution).
-    candidates = {}  # prefix -> list of {dxcc, name, stored, namematch}
-    for dxcc, (call, stored) in sorted(seed.items(), key=lambda kv: int(kv[0])):
-        try:
-            r = hamnut(call)
-        except Exception as e:
-            print(f"  skip dxcc={dxcc} ({call}): {e}", file=sys.stderr)
-            continue
-        if not r.get("found"):
-            print(f"  skip dxcc={dxcc} ({call}): not found", file=sys.stderr)
-            continue
-        prefix = (r.get("primaryDXCCPrefix") or "").strip().upper()
-        name = (r.get("countryName") or "").strip()
-        if not prefix:
-            print(f"  skip dxcc={dxcc} ({call}): no prefix", file=sys.stderr)
-            continue
-        candidates.setdefault(prefix, []).append({
-            "dxcc": int(dxcc),
-            "name": name,
-            "namematch": stored.strip().lower() == name.lower(),
-        })
-        time.sleep(0.15)  # be polite to hamnut
+    entities = {}
+    for row in rows:
+        prefix, name, number = hamnut_prefix(row[0].strip()), row[1].strip(), int(row[2])
+        if not prefix or number <= 0:
+            sys.exit(f"unusable row: {row[:3]}")
+        if prefix in entities:
+            sys.exit(f"prefix twice: {prefix}")
+        entities[prefix] = {"prefix": prefix, "dxcc": number, "name": name}
 
-    # Resolve collisions: prefer the candidate whose log-stored country name
-    # matched hamnut's (rejects misfiles); otherwise the lowest dxcc.
-    by_prefix = {}
-    for prefix, cands in candidates.items():
-        if len(cands) > 1:
-            print(
-                f"  collision {prefix}: "
-                + ", ".join(f"{c['dxcc']}{'*' if c['namematch'] else ''}"
-                            for c in cands),
-                file=sys.stderr,
-            )
-        matched = [c for c in cands if c["namematch"]]
-        pick = min(matched or cands, key=lambda c: c["dxcc"])
-        by_prefix[prefix] = {"prefix": prefix, "dxcc": pick["dxcc"], "name": pick["name"]}
-
-    entities = sorted(by_prefix.values(), key=lambda e: e["dxcc"])
+    version = source_version(rows)
+    if not version:
+        sys.exit("no =VERyyyymmdd marker found: is this cty.csv?")
     out = {
         "version": "1",
         "comment": (
-            "hamnut primaryDXCCPrefix -> ADIF DXCC entity number. "
-            "Generated by scripts/gen-dxcc-entities.py (see its docstring). "
-            "Unmapped prefixes fall back to country-name matching at runtime."
+            "hamnut primaryDXCCPrefix -> ADIF DXCC entity number. Generated by "
+            "scripts/gen-dxcc-entities.py from the Amateur Radio Country Files' cty.csv, "
+            f"version {version} (https://www.country-files.com/; its permission notice is in "
+            "NOTICE). An entity that is not a DXCC entity of its own carries its parent's "
+            "number. Unmapped prefixes fall back to country-name matching at runtime."
         ),
-        "entities": entities,
+        "entities": sorted(entities.values(), key=lambda e: (e["dxcc"], e["prefix"])),
     }
-    print(f"generated: {len(entities)} entities", file=sys.stderr)
-    json.dump(out, sys.stdout, indent=2, ensure_ascii=False)
+    print(f"generated: {len(out['entities'])} entities from cty.csv {version}", file=sys.stderr)
+    json.dump(out, sys.stdout, indent=1, ensure_ascii=False)
     sys.stdout.write("\n")
 
 

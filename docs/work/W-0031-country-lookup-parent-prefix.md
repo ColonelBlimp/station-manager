@@ -219,3 +219,46 @@ before, and may be a parent block.
    is the policy Codex said would need its own decision (codex-252, point 3): the choice
    made here is that the provider's explicit verdict outlives a remembered answer, and it is
    the operator's to reverse.
+
+## The DXCC catalogue completed (2026-11-24; the second defect above)
+
+The operator: "fix the DXCC catalogue next", then "go ahead with cty.csv".
+
+**Why it was incomplete.** `scripts/gen-dxcc-entities.py` built it from one log: an entity
+the operator had worked, and a HamNut request for a callsign of that entity. So it held the
+166 entities worked by then, and a contact with any other got the right country and no DXCC
+number. At the station 38 primary prefixes HamNut had already returned had no number, among
+them Christmas Island, Norfolk Island, Jersey, Guernsey, Fiji, Pakistan and the Republic of
+the Congo (the inbox item of 2026-10-31, a contact saved without a DXCC entity).
+
+**The source now:** the Amateur Radio Country Files' `cty.csv` (version 20261114, 346
+entities), each with its primary prefix and its ADIF number. That it speaks HamNut's
+vocabulary was checked, not assumed:
+- of the 166 old entries, 164 name a prefix that is in `cty.csv`, and all 164 carry the
+  number `cty.csv` gives; none differs;
+- every one of the 174 primary prefixes HamNut had returned at the station is an entity of
+  `cty.csv`.
+
+**Two differences of spelling,** seen through the daemon's own lookup and handled in the
+generator alone:
+- `cty.csv` stars an entity that is not a DXCC entity of its own (Sicily, Shetland, African
+  Italy, Bear Island, European Turkey, the Vienna International Centre); HamNut writes the
+  prefix plain. Such an entity carries its parent's number.
+- `cty.csv` writes `3Y/b`; HamNut writes `3Y…B`, with a horizontal ellipsis and in
+  capitals (seen for Bouvet, South Cook Islands, Glorioso Islands, Clipperton Island and
+  Shetland). The old catalogue's one such entry, Bouvet, was already in that form.
+
+**What changed.** The catalogue has 346 entries: every old prefix is still there with its
+number unchanged, and 180 are new. The generator reads `cty.csv` and no longer reads a log
+or asks HamNut. The site's permission notice (MIT in form) is in `NOTICE`, and
+`docs/licensing.md` names the source.
+
+**Evidence.** Three tests in `internal/enums/dxcc/dxcc_test.go`: eight entities the old
+catalogue lacked, by number; the keys as HamNut writes them, with seven of the two special
+forms; the whole catalogue well formed and not smaller than the source. They failed
+against the old catalogue for those reasons.
+
+**What it does not do.** A contact already stored without a DXCC number is not changed.
+The operator's override file (`dxcc-entities.json` in the data directory) still wins over
+the embedded entries. The catalogue is as current as the `cty.csv` it was generated from;
+a new entity needs a regeneration.

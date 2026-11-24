@@ -115,6 +115,15 @@ GPLv2-only, CDDL, or proprietary dependency would be incompatible and is
 the thing to reject — the licence stays put. (Apache-2.0 is compatible
 with GPLv3, though not with GPLv2 — another reason SM is on v3.)
 
+**Bundled data.** One embedded table is generated from somebody else's
+data: the DXCC entity catalogue (`internal/enums/dxcc/dxcc-entities.json`),
+from the Amateur Radio Country Files' `cty.csv`
+(<https://www.country-files.com/>). That site publishes its files under an
+MIT-form permission notice, which is GPL-3.0-compatible and asks only that
+the notice travel with copies; it is reproduced in `NOTICE`. The table is
+regenerated with `scripts/gen-dxcc-entities.py` from a downloaded `cty.csv`;
+the file itself is not kept in this repository.
+
 ---
 
 ## 6. go-ft8 notices to carry

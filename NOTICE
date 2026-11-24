@@ -39,3 +39,33 @@ Bundled and linked third-party notices
 - All other Go and JavaScript dependencies are under permissive licences
   (MIT, BSD-2/3-Clause, Apache-2.0, ISC), each of which is compatible with
   GPL-3.0-only. Their licence texts ship with the respective modules.
+
+- The DXCC entity catalogue (`internal/enums/dxcc/dxcc-entities.json`) is
+  generated from the Amateur Radio Country Files' `cty.csv`
+  (https://www.country-files.com/, published by Jim Reisert AD1C): each
+  entity's primary prefix, name and ADIF DXCC number. That site's Copyright
+  page gives this notice for its files, reproduced here as it requires:
+
+      Copyright (c) 1994-
+
+      Permission is hereby granted, free of charge, to any person obtaining
+      a copy of this software and associated documentation files (the
+      "Software"), to deal in the Software without restriction, including
+      without limitation the rights to use, copy, modify, merge, publish,
+      distribute, sublicense, and/or sell copies of the Software, and to
+      permit persons to whom the Software is furnished to do so, subject to
+      the following conditions:
+
+      The above copyright notice and this permission notice shall be
+      included in all copies or substantial portions of the Software.
+
+      THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+      EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+      MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+      IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+      CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+      TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+      SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  The copyright line is as that page shows it (read 2026-11-24): the year it
+  begins, with no closing year and no holder's name beside it.
