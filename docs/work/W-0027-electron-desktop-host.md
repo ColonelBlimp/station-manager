@@ -5547,6 +5547,13 @@ the hiding of the window. What remains is the time the page's own answer takes t
 the shell. The test that pinned the two reads as simultaneous is replaced by one that
 holds the daemon's answer, types, and requires the question to name the contact.
 
+**The clean-room review of that fix (`21ed482a`), one finding, accepted with its reason in
+the code.** With the page read last, the daemon's word about FT8 is the older of the two, so
+an arm that lands while the page answers is disarmed by the close without the question.
+That is I5 as ruled (one observation; the disarm is sent whatever the read said). One read
+has to be the older, and a missed arm costs a disarm the operator was closing the app to
+get, where a missed entry costs what was typed. `closeConfirmation` states the choice.
+
 **Not shown, and why.** A real FT8 run or arm stopped by a close is not shown anywhere:
 it would need a rig or a keyed test. What is shown is the daemon's read in its own tests
 (the first part), the shell's use of each answer in the module's tests, and the two FT8

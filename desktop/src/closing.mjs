@@ -285,6 +285,14 @@ export function closeQuestion({ ft8, entry, unsaved, saving }) {
  * allows the dialog to attach itself to a parent window, making it modal"), or the hiding
  * of the window, which the close does at once when there is nothing to ask.
  *
+ * WHAT THAT ORDER COSTS, accepted (the clean-room review of 21ed482a). smd's word about FT8
+ * is older by the time the page has answered, so an arm that lands in between is disarmed by
+ * the close without the question. That is the criteria's I5 as it already stood: the read
+ * is one observation, and the disarm is sent whatever it said. One of the two reads has to
+ * be the older, and the page's is the one that must not be: a missed arm costs a disarm the
+ * operator was closing the app to get, and a missed entry costs what was typed. The page's
+ * answer is the last observation, not an atomic one: what it takes to reach the shell stays.
+ *
  * A window that knows it has been retired, and a lifetime smd was never asked to admit, read
  * no FT8 state and show no FT8 line: their close sends no disarm (closeFlow), so it must not
  * say that it stops FT8, which may be another app's.
