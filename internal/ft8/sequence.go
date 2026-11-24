@@ -437,17 +437,19 @@ type combinedMessage struct {
 //
 //   - A recipient may be a hashed token, "<...>" or a call in angle brackets: the
 //     other half is often for a station whose call this decoder never resolved,
-//     and that must not cost us our own half. A hashed recipient is never us: its
-//     token is kept as printed, and no plain call equals it.
+//     and that must not cost us our own half. A hashed recipient is never taken
+//     to be us: its token is kept as printed, and no plain call equals it.
 //
 //     A KNOWN LIMIT, kept on purpose (the clean-room review of 9acd5ce2 raised
-//     it). The decoder prints a recipient in angle brackets only when the message
-//     carries that call as a hash, which a sender does for a call that does not
-//     fit the 28-bit field: a compound call, or one with a suffix (go-ft8,
-//     unpack28WithHashes). A plain call such as this station's is carried in
-//     full, so it is never hashed by a conforming sender. An operator whose own
-//     call is compound or portable would be addressed as "<CALL> RR73; ..." and
-//     that half is NOT read here. Reading it means deciding that the decoder's
+//     it). What is supported is exactly this: a recipient printed WITHOUT
+//     angle brackets and equal to our call is us. A recipient printed in angle
+//     brackets is not matched, even when the decoder resolved it to our call:
+//     "<OURCALL> RR73; ..." is NOT read here. The decoder prints the brackets
+//     when the message carries that call as a hash (go-ft8, unpack28WithHashes);
+//     which calls another station's software chooses to send that way is not
+//     something this code can know, and nothing here claims it. The fault that
+//     was reported, our call in full, is the supported case. Reading the
+//     bracketed form means deciding that the decoder's
 //     resolution of a recipient hash is enough to say "that is us", and which
 //     ladder such a station is on (the type-4 ladder has its own parser and does
 //     not read this line at all). That is a decision for the operator, not a

@@ -115,12 +115,14 @@ and supports a hashed OTHER recipient. Two things remained.
 banner): two, recorded with the banner's note in the dogfood inbox.
 
 1. **P2, kept as a known limit, with the reason in the code:** a combined message that
-   addresses us by a HASHED call (`<OURCALL> RR73; …`) is not read as ours. The decoder prints
-   a recipient in angle brackets only when the sender hashed it, which a sender does for a
-   call that does not fit the message's 28-bit field: a compound call or one with a suffix. A
-   plain call such as this station's is carried in full. So this does not touch the reported
-   fault or this station as it operates today; it would touch an operator signing portable or
-   with a compound call. Reading that half means accepting the decoder's resolution of a
+   addresses us by a HASHED call (`<OURCALL> RR73; …`) is not read as ours. The boundary is
+   exactly this: a recipient printed without angle brackets and equal to our call is
+   supported; a recipient printed in angle brackets is not matched, even when the decoder
+   resolved it to our call. The reported fault, our call in full, is the supported case.
+   Which calls another station's software sends as a hash is not established here (an
+   earlier wording of this paragraph and of the code comment said a plain call is never
+   hashed by a conforming sender; the decoder's rendering code does not show that, and the
+   claim is withdrawn: Codex, codex-246 to codex-250). Reading that half means accepting the decoder's resolution of a
    recipient hash as "that is us", and settling which ladder such a station is on (the type-4
    ladder does not read this line at all). **Not covered by W-0030, and the operator's to
    decide.**
