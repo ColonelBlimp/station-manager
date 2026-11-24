@@ -388,25 +388,31 @@ func (s *Service) HasQsoForCountryWithContext(ctx context.Context, country strin
 	return exists, nil
 }
 
-// HasQsoForCountryLackingDxccWithContext returns true when at least one
-// non-deleted QSO row has `country = ?` and NO stored ADIF DXCC entity code.
+// HasQsoForEntityWithContext answers "has this entity been worked?" in ONE
+// statement: true when at least one non-deleted QSO row either carries the ADIF
+// DXCC entity code `dxcc`, or has `country = ?` and NO stored code.
 //
-// It answers one question for the new-entity check: was this entity worked by a
-// contact whose number was never known? The entity catalogue once held only the
-// entities already worked, so a first contact with any other was stored with
-// its country and no number. The check goes by number wherever the prefix has
-// one (HasQsoForDxccWithContext), and such a contact carries none to be found
-// by: without this it would read as a new entity though it has been worked (the
-// clean-room review of 1952d50a). A contact that DOES carry a number is not
-// matched here, whatever its country says: where a number was stored, the
-// number rules. An empty country returns (false, nil) without a query.
-func (s *Service) HasQsoForCountryLackingDxccWithContext(ctx context.Context, country string) (bool, error) {
-	const op errors.Op = "sqlite.Service.HasQsoForCountryLackingDxccWithContext"
+// The second half is for a contact whose number was never known when it was
+// logged. The entity catalogue once held only the entities already worked, so a
+// first contact with any other was stored with its country and no number, and
+// it cannot be found by number. A contact that DOES carry a number is matched
+// by that number alone, whatever its country says: where a number was stored,
+// the number rules.
+//
+// One statement on purpose (the clean-room review of fbab155f). Asked as two
+// queries, an edit that gave such a contact its number between them was seen by
+// neither (the first ran before it, the second excludes a row that has a
+// number), and the entity read as new with the contact in the log throughout.
+//
+// An empty code asks the country half alone, an empty country the number half
+// alone, and both empty return (false, nil) without a query.
+func (s *Service) HasQsoForEntityWithContext(ctx context.Context, dxcc, country string) (bool, error) {
+	const op errors.Op = "sqlite.Service.HasQsoForEntityWithContext"
 	if err := checkService(op, s); err != nil {
 		return false, err
 	}
-	country = strings.TrimSpace(country)
-	if country == "" {
+	dxcc, country = strings.TrimSpace(dxcc), strings.TrimSpace(country)
+	if dxcc == "" && country == "" {
 		return false, nil
 	}
 
@@ -418,12 +424,16 @@ func (s *Service) HasQsoForCountryLackingDxccWithContext(ctx context.Context, co
 	ctx, cancel := s.ensureCtxTimeout(ctx)
 	defer cancel()
 
+	// The empty-string guards keep an unasked half from matching: an empty code
+	// must not find rows whose code is empty, nor an empty country rows whose
+	// country is.
 	exists, err := models.Qsos(
-		models.QsoWhere.Country.EQ(country),
-		qm.Where("COALESCE(json_extract(additional_data, '$.dxcc'), '') = ''"),
+		qm.Where(`(? <> '' AND json_extract(additional_data, '$.dxcc') = ?)
+		       OR (? <> '' AND country = ? AND COALESCE(json_extract(additional_data, '$.dxcc'), '') = '')`,
+			dxcc, dxcc, country, country),
 	).Exists(ctx, h)
 	if err != nil {
-		return false, errors.New(op).WithErr(err).WithMsg("checking QSO existence by country without a DXCC code")
+		return false, errors.New(op).WithErr(err).WithMsg("checking QSO existence for a DXCC entity")
 	}
 	return exists, nil
 }

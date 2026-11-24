@@ -278,10 +278,11 @@ a new entity needs a regeneration.
    check to the country name, which found a contact stored with that country. With the
    number known, the check goes by number, and a contact stored earlier with its country
    and NO number (the very contacts the old catalogue left without one) is not found by it.
-   The check now also asks for a contact with that country that carries no number
-   (`HasQsoForCountryLackingDxccWithContext`). Where a number was stored, the number still
-   rules: a contact with the same country name and another entity's number does not count.
-   Three pipeline tests and one database test.
+   The check now also counts a contact with that country that carries no number. Where a
+   number was stored, the number still rules: a contact with the same country name and
+   another entity's number does not count. Three pipeline tests and one database test.
+   (First built as a second query, `HasQsoForCountryLackingDxccWithContext`; replaced the
+   same day by one statement, below.)
 
 **The contacts stored without a DXCC number, filled in on the operator's direction**
 ("Let's fill in the missing DXCC numbers", 2026-11-24). There were 31, with 26 callsigns.
@@ -293,3 +294,26 @@ HamNut's answers, on a second direction ("Yes, correct both from HamNut's answer
 went through `PATCH /v1/qso/{uuid}` and answered 200 with the values sent; the log file,
 read afterwards, holds no contact without a number. So at this station the fallback of
 point 2 has nothing left to find; it stays for any log that still has such contacts.
+
+## The clean-room review of those two fixes (`fbab155f`), two findings
+
+1. **P2, accepted, with the reason in the code** (`forgetCountry`). Two lookups of one
+   callsign that are out at once, one answered with a country and the other with a
+   rejection, are not put in the order they were asked: if the country was asked for first
+   and written last, it stays. Ordering them needs a record of the rejection to outlast it,
+   which is negative caching, and ADR 0017 declined that. It takes HamNut contradicting
+   itself about one callsign within the seconds two lookups overlap; what stays is an answer
+   it gave moments earlier, and the next refresh of that callsign removes it.
+2. **P2, fixed.** The new-entity check asked the log twice, by number and then by country
+   without a number. An edit that gave such a contact its number between the two was seen
+   by neither, and the entity read as new with the contact in the log throughout. It is now
+   one statement (`HasQsoForEntityWithContext`): a contact carrying the number, or one with
+   the country and no number. The database test covers ten cases, among them a stored
+   number ruling over a matching name and a deleted contact not counting. That an edit
+   between two reads can no longer hide a contact follows from there being one read; it is
+   not shown by a test of its own.
+
+**Where this stands.** The last three reviews have each found a narrower case than the one
+before: first a defect any operator would meet, then a race needing two refreshes of one
+callsign at once, then one needing HamNut to contradict itself within seconds. The first
+kind is fixed. The last is written down and accepted.

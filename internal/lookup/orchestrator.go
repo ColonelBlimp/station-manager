@@ -417,15 +417,13 @@ func (o *Orchestrator) enrich(ctx context.Context, callsign string, force bool) 
 	// new-entity is presentation, never load-bearing for logging.
 	if logDB := o.logCheckDB(); logDB != nil {
 		if code, ok := dxcc.DXCCForPrefix(c.data.DXCCPrefix); ok {
-			exists, hErr := logDB.HasQsoForDxccWithContext(ctx, code)
-			// A contact stored with this country and NO number is this entity
-			// worked before its number was known (the catalogue once held only
-			// the entities already worked). It cannot be found by number, so it
-			// is asked for by name, and only among contacts that carry no
-			// number: where one was stored, the number rules.
-			if hErr == nil && !exists {
-				exists, hErr = logDB.HasQsoForCountryLackingDxccWithContext(ctx, c.data.Name)
-			}
+			// By its number, or by a contact stored with this country and NO
+			// number: this entity worked before its number was known (the
+			// catalogue once held only the entities already worked). Where a
+			// number was stored, the number rules. One question to the log, in
+			// one statement, so that an edit between two reads cannot hide a
+			// contact from both.
+			exists, hErr := logDB.HasQsoForEntityWithContext(ctx, code, c.data.Name)
 			if hErr != nil {
 				o.warn("new-entity check (dxcc) failed", hErr)
 			} else {
@@ -646,6 +644,18 @@ func (o *Orchestrator) rememberCountry(ctx context.Context, callsign string, c t
 // (askedAt): an answer remembered since is newer, and survives. Two lookups of
 // one callsign can be out at once, and the rejection can be the one that lands
 // last (the clean-room review of 557cd26a).
+//
+// WHAT THIS DOES NOT ORDER, accepted (the clean-room review of fbab155f). Two
+// lookups of one callsign that are out at once, one answered with a country
+// and the other with a rejection, are not put in the order they were asked.
+// If the country was asked for first and is written last, it is newer than the
+// rejection by its stamp and stays, though the rejection was the later word.
+// Ordering them needs a record of the rejection to outlast it, which is
+// negative caching, and ADR 0017 declined that. The cost is bounded: it takes
+// the provider contradicting itself about one callsign within the seconds two
+// lookups overlap; what stays is an answer the provider gave moments earlier;
+// and the next refresh of that callsign removes it.
+//
 // The prefix table is left alone: a prefix row answers for other calls too, and
 // one callsign's verdict says nothing about them.
 func (o *Orchestrator) forgetCountry(ctx context.Context, callsign string, askedAt time.Time, what string) {

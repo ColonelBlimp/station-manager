@@ -56,12 +56,18 @@ func TestHasQsoForDxcc(t *testing.T) {
 	})
 }
 
-// A contact stored with its country and NO DXCC number is one whose number was
-// never known when it was logged (the entity catalogue once held only the
-// entities already worked). The new-entity check asks for exactly these when
-// the number finds nothing, so that such a contact still counts as its entity
-// worked (the clean-room review of 1952d50a).
-func TestHasQsoForCountryLackingDxcc(t *testing.T) {
+// Has this entity been worked? One question, asked in ONE statement: a contact
+// carrying the entity's number, or a contact with its country and NO number.
+//
+// The second half is for a contact whose number was never known when it was
+// logged (the entity catalogue once held only the entities already worked): it
+// cannot be found by number. Where a number was stored, the number rules.
+//
+// One statement, because it was two (the clean-room review of fbab155f): asked
+// one after the other, an edit that gave such a contact its number between them
+// was missed by both, and the entity read as new with the contact in the log
+// before and after.
+func TestHasQsoForEntity(t *testing.T) {
 	svc := testService(t)
 	ctx := context.Background()
 	lbID, err := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
@@ -81,24 +87,29 @@ func TestHasQsoForCountryLackingDxcc(t *testing.T) {
 	}
 	insert("TN8XX", "20261031", "Republic of the Congo", "") // logged without its number
 	insert("DL1ABC", "20261101", "Germany", "230")           // logged with it
+	insert("EA8XX", "20261103", "Spain", "29")               // its number says Canary Islands
 	gone := insert("VK9XA", "20261102", "Christmas Island", "")
 	execT(t, svc, `UPDATE qso SET deleted_at = datetime('now') WHERE id = ?`, gone)
 
 	for name, c := range map[string]struct {
-		country string
-		want    bool
+		dxcc, country string
+		want          bool
 	}{
-		"stored without a number":                {"Republic of the Congo", true},
-		"stored WITH a number is not this case":  {"Germany", false},
-		"a deleted contact does not count":       {"Christmas Island", false},
-		"a country never logged":                 {"Norfolk Island", false},
-		"an empty country matches nothing":       {"  ", false},
-		"the name is matched whole, not in part": {"Republic", false},
+		"by its number":                                       {"230", "Fed. Rep. of Germany", true},
+		"by its number, whatever the name":                    {"230", "", true},
+		"by its country, stored without a number":             {"412", "Republic of the Congo", true},
+		"a stored number rules over a matching name":          {"281", "Spain", false},
+		"the stored number finds it under another name":       {"29", "Canary Islands", true},
+		"a deleted contact does not count":                    {"35", "Christmas Island", false},
+		"never logged":                                        {"189", "Norfolk Island", false},
+		"the name is matched whole, not in part":              {"412", "Republic", false},
+		"no number and no country matches nothing":            {"  ", "  ", false},
+		"no number asked for: the country half still answers": {"", "Republic of the Congo", true},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got, err := svc.HasQsoForCountryLackingDxccWithContext(ctx, c.country)
+			got, err := svc.HasQsoForEntityWithContext(ctx, c.dxcc, c.country)
 			if err != nil || got != c.want {
-				t.Fatalf("%q = %v, %v; want %v", c.country, got, err, c.want)
+				t.Fatalf("(%q, %q) = %v, %v; want %v", c.dxcc, c.country, got, err, c.want)
 			}
 		})
 	}
