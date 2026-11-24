@@ -6,6 +6,9 @@
 //   granted here by name when a slice identifies it.
 // - Renderers reach only the served origin. Every other request is cancelled and
 //   reported; data: and blob: stay local to the page.
+// - While the app is closing, the page starts nothing new (W-0027 A3, B5): its writes on the
+//   served origin are refused, each one, from the moment the close is confirmed until the
+//   window goes or the close is cancelled. Its reads go on. The origin rule is not loosened.
 
 /** True when url belongs to the served origin: its own scheme or its WebSocket partner. */
 export function onOrigin(url, origin) {
@@ -32,10 +35,25 @@ export function disableSpellchecker(ses) {
     ses.setSpellCheckerLanguages([]);
 }
 
+// What a request may do without changing anything.
+const READS = new Set(['GET', 'HEAD']);
+
 /** `origin` is the served origin, or a function read on each request (W-0027 C1d: fixed once,
- *  together with the pin; null until then). */
-export function hardenSession(ses, { origin, onAllowed, onBlocked, onPermission }) {
+ *  together with the pin; null until then).
+ *
+ *  Returns the switch for a close, `{ refuse, allow }`. While refused, a request on the served
+ *  origin that is not a read is cancelled and `onWriteRefused(details)` told, unless it is the
+ *  shell's own: `isShellRequest(url)` recognises those by a mark only the main process knows.
+ *  Who Electron names as the sender is not asked: a worker's request names no window, and
+ *  would pass for the shell's (codex-112). It is decided per request, so it covers what the
+ *  page had deferred and its own continuations, not only the operator's hands. Refusing a new
+ *  request is no proof that one sent earlier was cancelled. */
+export function hardenSession(
+    ses,
+    { origin, onAllowed, onBlocked, onPermission, onWriteRefused, isShellRequest }
+) {
     const originOf = typeof origin === 'function' ? origin : () => origin;
+    let writesRefused = false;
     ses.setPermissionRequestHandler((_wc, permission, callback) => {
         onPermission?.({ kind: 'request', permission });
         callback(false);
@@ -50,14 +68,28 @@ export function hardenSession(ses, { origin, onAllowed, onBlocked, onPermission 
 
     ses.webRequest.onBeforeRequest((details, callback) => {
         const url = details.url;
-        if (onOrigin(url, originOf()) || url.startsWith('data:') || url.startsWith('blob:')) {
-            onAllowed?.(details);
-            callback({});
+        const local = url.startsWith('data:') || url.startsWith('blob:');
+        if (!local && !onOrigin(url, originOf())) {
+            onBlocked?.(url);
+            callback({ cancel: true });
             return;
         }
-        onBlocked?.(url);
-        callback({ cancel: true });
+        if (writesRefused && !local && !READS.has(details.method) && !isShellRequest?.(url)) {
+            onWriteRefused?.(details);
+            callback({ cancel: true });
+            return;
+        }
+        onAllowed?.(details);
+        callback({});
     });
+    return {
+        refuse: () => {
+            writesRefused = true;
+        },
+        allow: () => {
+            writesRefused = false;
+        },
+    };
 }
 
 // The statuses on which a redirect is followed; a Location on any other response is not one.

@@ -141,6 +141,7 @@ npm run check:c1                        # C1 proof: the pinned TLS identity (nee
 npm run check:c1d-shell                 # C1d wiring: discovery, pin and waiting page, TLS fixtures
 SM_DESKTOP_SMD=../build/bin/smd npm run check:c1d   # C1d acceptance against a real, already-built smd
 npm run check:c2b                       # C2b: the operating credential, TLS fixtures
+SM_DESKTOP_SMD=../build/bin/smd npm run check:close # A3: the app's close against a real, already-built smd
 npm run test:unit                       # discovery, connection, mode, trace and page logic, no Electron
 npm run lint && npm run format:check
 ```

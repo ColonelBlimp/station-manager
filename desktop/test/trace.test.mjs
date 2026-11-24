@@ -8,6 +8,7 @@ import {
     blockedRequestLine,
     pageLabel,
     refusedRedirectLine,
+    refusedWriteLine,
     traceLine,
     traceWindow,
 } from '../src/trace.mjs';
@@ -182,4 +183,14 @@ test('the refused-redirect line names two origins, and none of either address’
     // One line, whatever the addresses hold.
     const forged = refusedRedirectLine(from, 'https://127.0.0.1:9999/a\nshell: forged');
     assert.equal(forged.split('\n').length, 1, JSON.stringify(forged));
+});
+
+test('a write refused while closing is traced by its method alone, bounded and on one line', () => {
+    assert.equal(
+        refusedWriteLine('POST'),
+        'shell: refused a write from the page while closing: POST'
+    );
+    const forged = refusedWriteLine('POST\nstation-manager-desktop: pinned https://evil');
+    assert.ok(!forged.includes('\n'), 'a method cannot forge a second line');
+    assert.ok(forged.length <= 'shell: refused a write from the page while closing: '.length + 16);
 });

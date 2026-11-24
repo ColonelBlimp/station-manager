@@ -419,6 +419,39 @@ func TestExit_NotCurrentAndHoldsTheOpenSession_IsRefusedForGood(t *testing.T) {
 	}
 }
 
+// The terminal refusal retires nothing, so an admission of that lifetime that
+// was already on its way still lands: the daemon admits it and gives it the
+// authority to operate, holding its session. The closing app cannot prevent
+// that and does not claim to (W-0027 A3, D3; codex-234): what it guarantees is
+// its own side, a closed window with no FT8 stream, where an arm cannot be made
+// and one already made ends at the grace (internal/ft8, presence). This pins
+// the daemon's half, so that the app's account of it stays true.
+func TestExit_AfterTheTerminalRefusalALateAdmissionStillGivesTheLifetimeItsAuthority(t *testing.T) {
+	b := newExitBed(t, true)
+	b.mustBeAdmitted(lifeA)
+	before := b.view(lifeA)
+	b.contact(before.Session.ID)
+	b.restart()
+	if a := b.exitAs(lifeA, before.Generation, testServedArchive); a.code != "operating_session_exit_not_current" {
+		t.Fatalf("the exit: %+v; want the terminal refusal", a)
+	}
+
+	scopes := len(b.scopeEvents())
+	if status, code := b.admitted(lifeA); status != http.StatusOK {
+		t.Fatalf("the late admission: %d %s; want 200 (the refusal retired nothing)", status, code)
+	}
+	ev := b.scopeEvents()[scopes:]
+	if len(ev) == 0 || ev[len(ev)-1] != "publish "+lifeA {
+		t.Fatalf("the admission's scope events: %v; want them to end by publishing the lifetime", ev)
+	}
+	if v := b.view(lifeA); v.State != "open" || v.Session == nil || v.Session.ID != before.Session.ID || !v.Session.HeldByYou {
+		t.Fatalf("after the late admission the route says %+v with %+v; want the same session, held", v, v.Session)
+	}
+	if b.exitRecorded(lifeA) {
+		t.Fatal("an exit was recorded that was refused")
+	}
+}
+
 func TestExit_NotCurrentAndHoldsNone_IsRecordedAndTouchesNothingElse(t *testing.T) {
 	t.Run("a late report from a replaced lifetime", func(t *testing.T) {
 		b := newExitBed(t, true)

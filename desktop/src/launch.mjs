@@ -12,12 +12,13 @@
 // whenever smd's responses show a daemon process it has not been admitted to.
 import { session } from 'electron';
 import { admission, newLifetime, watchDaemon } from './admission.mjs';
+import { closeFlow, isCloseRequest } from './closing.mjs';
 import { installCredential, onceCredential, watchRefusal } from './credential.mjs';
 import { connectWhenTrusted } from './daemon.mjs';
 import { recordingFs } from './discovery.mjs';
 import { hardenSession } from './hardening.mjs';
 import { installPin, oncePin } from './pin.mjs';
-import { blockedRequestLine, refusedRedirectLine } from './trace.mjs';
+import { blockedRequestLine, refusedRedirectLine, refusedWriteLine } from './trace.mjs';
 import { credentialRefused, isShellProbe } from './waiting.mjs';
 import { createMainWindow } from './window.mjs';
 
@@ -29,6 +30,13 @@ import { createMainWindow } from './window.mjs';
  * smd has admitted a later start of the app in place of this one. Returns the window and, for
  * tests, the pin, the credential holder, the target origin, every file the discovery opened,
  * the verifier's decisions, the requests the filter blocked, the app lifetime and its admission.
+ *
+ * It also returns `closing`, the window's close (W-0027 A3; src/closing.mjs), made of this
+ * launch's own session, admission, request filter and window. `askUnconfirmed` shows the box
+ * for a close smd did not confirm and `quit` ends the app. NOTHING HERE RUNS IT: the window's
+ * own close is not wired to it until the question that goes before it is built (A3's second
+ * slice; ADR 0102 ruling 6 asks before a run is stopped or an entry lost). Only the test
+ * scenarios call `closing.close()`.
  */
 export function launchTrusted({
     env = process.env,
@@ -41,6 +49,8 @@ export function launchTrusted({
     onCredentialRefused,
     onCredentialRequest,
     onRetired,
+    askUnconfirmed,
+    quit,
 }) {
     const ses = partition ? session.fromPartition(partition) : session.defaultSession;
     const pin = oncePin();
@@ -51,13 +61,15 @@ export function launchTrusted({
     const decisions = [];
     const blocked = [];
     installPin(ses, { fingerprint: pin.get, onDecision: (d) => decisions.push(d) });
-    hardenSession(ses, {
+    const pageWrites = hardenSession(ses, {
         origin: () => target.origin,
         onBlocked: (url) => {
             blocked.push(url);
             console.error(blockedRequestLine(url));
         },
         onPermission,
+        isShellRequest: isCloseRequest,
+        onWriteRefused: (d) => console.error(refusedWriteLine(d.method)),
     });
     installCredential(ses, {
         origin: () => target.origin,
@@ -90,6 +102,22 @@ export function launchTrusted({
         openExternal,
         partition,
     });
+    const closing = closeFlow({
+        ses,
+        origin: () => target.origin,
+        admission: admitted,
+        window: {
+            hide: () => !win.isDestroyed() && win.hide(),
+            show: () => !win.isDestroyed() && win.show(),
+            // destroy(), not close(): the page's veto of an unload has no say in a close the
+            // operator has confirmed, and must not leave a window open whose lifetime is
+            // retired (A3, section H).
+            destroy: () => !win.isDestroyed() && win.destroy(),
+        },
+        pageWrites,
+        ask: (state) => askUnconfirmed(state),
+        quit: () => quit(),
+    });
     void connectWhenTrusted({
         win,
         pin,
@@ -111,5 +139,6 @@ export function launchTrusted({
         blocked,
         lifetime,
         admission: admitted,
+        closing,
     };
 }

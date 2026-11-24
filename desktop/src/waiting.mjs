@@ -196,6 +196,9 @@ export async function loadWhenUp(win, url, origin, { afterFailure = false, admit
         while (!win.isDestroyed()) {
             const answer = await originAnswers(win.webContents.session, origin);
             if (answer === 'up') {
+                // The window may have gone while the probe was out. An answer that comes
+                // back to no window starts nothing, an admission least of all (codex-239).
+                if (win.isDestroyed()) return;
                 const admitted = admit ? (await admit()).state : 'admitted';
                 if (win.isDestroyed()) return;
                 if (admitted === 'retired') {

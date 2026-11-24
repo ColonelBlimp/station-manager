@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { app, dialog, Menu, session, shell } from 'electron';
+import { unconfirmedBox } from './closing.mjs';
 import { disableSpellchecker, hardenSession } from './hardening.mjs';
 import { parseArgs } from './daemon.mjs';
 import { launchTrusted } from './launch.mjs';
@@ -54,9 +55,38 @@ if (!app.requestSingleInstanceLock()) {
         mainWindow.show();
         mainWindow.focus();
     });
+    // The close of the app's window (W-0027 A3). While one is under way the app outlives its
+    // window: a close smd did not confirm, once an exit report was sent, closes the window
+    // BEFORE its box, and the box must still be there to answer. The close itself quits the
+    // app when it ends. An automated check keeps the app alive between its windows, except
+    // where it says it wants the app's own rule (quitRule.asInstalled).
+    let closing = null;
+    const quitRule = { asInstalled: !automated };
     app.on('window-all-closed', () => {
-        if (!automated) app.quit();
+        if (quitRule.asInstalled && !closing?.holdsApp()) app.quit();
     });
+    // And no other request to quit ends the app under a close's box: only the close's own
+    // final quit goes through while one is under way (codex-239). What the operating system
+    // does to the process is not asked here and cannot be (a kill, the end of the session).
+    app.on('before-quit', (e) => {
+        if (closing && !closing.allowsQuit()) e.preventDefault();
+    });
+    // The box for a close smd did not confirm. It has no parent: the window is hidden, or
+    // already closed.
+    const askUnconfirmed = async (state) => {
+        const box = unconfirmedBox(state);
+        const { response } = await dialog.showMessageBox({
+            type: 'warning',
+            title: 'Station Manager',
+            message: box.message,
+            detail: box.detail,
+            buttons: box.buttons,
+            cancelId: box.cancelId,
+            defaultId: 0,
+            noLink: true,
+        });
+        return box.choices[response] ?? box.choices[box.cancelId];
+    };
 
     app.whenReady()
         .then(async () => {
@@ -103,8 +133,11 @@ if (!app.requestSingleInstanceLock()) {
                             buttons: ['OK'],
                         });
                     },
+                    askUnconfirmed,
+                    quit: () => app.quit(),
                 });
                 mainWindow = launched.win;
+                closing = launched.closing; // held, not yet run by anything (launch.mjs)
                 mainWindow.on('closed', () => {
                     mainWindow = null;
                 });
@@ -122,6 +155,21 @@ if (!app.requestSingleInstanceLock()) {
             // temporary working directory with synthetic data and free ports; never the station.
             if (scenario === 'recovery') {
                 const ok = await (await import('../test/scenario-recovery.mjs')).runRecovery();
+                app.exit(ok ? 0 : 1);
+                return;
+            }
+            // W-0027 A3: the app's close, against a real smd (SM_DESKTOP_SMD), in a temporary
+            // working directory with synthetic data and free ports; never the station. For its
+            // last step the scenario asks for the app's own quit rule, with the close it is
+            // running, so that what is checked is the rule above and not a copy of it.
+            if (scenario === 'close') {
+                const { runClose } = await import('../test/scenario-close.mjs');
+                const ok = await runClose({
+                    useInstalledQuitRule: (flow) => {
+                        closing = flow;
+                        quitRule.asInstalled = true;
+                    },
+                });
                 app.exit(ok ? 0 : 1);
                 return;
             }

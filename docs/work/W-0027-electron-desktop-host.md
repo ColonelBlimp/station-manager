@@ -5211,6 +5211,168 @@ FT8" (operator, 2026-11-23: "commit and push"), after the whole local gate passe
 - **Gates:** `gofmt`, `golangci-lint` (0 issues), the maintainability metrics (0
   regressions), `go test -race ./internal/ft8` in full.
 
+### A3, the shell's first slice — the close with no question (built 2026-11-23; Codex's two findings fixed 2026-11-24 and its review closed, codex-241; committed and pushed on the operator's direction, "commit and push"; not wired to the window)
+
+On the operator's direction ("build it"). Sections B, C, D and E of the criteria, with
+the app outliving its window. **Nothing an operator can reach has changed:** the window's
+own close is not wired to this flow, and stays so until the question that goes before
+it is built (the second slice). Only the test scenarios run it.
+
+**What is built.**
+- **`desktop/src/closing.mjs` (new): the close.** `closeFlow` runs the order of the
+  criteria: the barrier, the page's writes refused, the window hidden, then, once
+  admission work already issued has settled, the disarm, the read of the session's
+  state, and the exit report at the generation and archive read. Acknowledged: the
+  window is closed and the app quits. Otherwise the box, of the first kind (nothing of
+  the exit was sent: Try again, Close anyway, Cancel, which gives back the window, the
+  page's writes and ordinary admission) or the second (an exit was sent: the window is
+  closed before the box; Try again or Close anyway; after the terminal answer, Close
+  alone). Once an exit was sent the close stays of the second kind. One close at a
+  time. Each request has its own limit of 5 seconds.
+- **`desktop/src/admission.mjs`: the barrier.** `beginClosing` launches nothing more (by
+  a marker, by the waiting page's loop, or by work that settles), keeps the markers it
+  sees, and resolves when work already issued has settled. A retirement learnt
+  meanwhile is known to the close and not announced while closing. `endClosing` (a
+  first-kind Cancel) asks about what was seen and says a retirement learnt, once.
+- **`desktop/src/hardening.mjs`: the page's writes.** The request filter gains a switch.
+  While refused, a request on the served origin that is not a read is cancelled, each
+  one, unless it carries the mark of the shell's own close requests. The origin rule is
+  untouched.
+- **`desktop/src/launch.mjs`, `main.mjs`:** each launch builds its close from its own
+  session, admission, filter and window, and holds it. The main process has the box
+  (no parent window) and the rule that the app does not quit at its last window while a
+  close is under way.
+
+**Decided while building, for review. None changes what was ruled; each is the
+operator's to overrule.**
+1. **A lifetime the daemon was never asked to admit just closes,** with no request and
+   no box. The criteria did not have this case. Without it, an app started while the
+   daemon is down, and then closed, would wait 5 seconds and show "The daemon did not
+   confirm the close": a false alarm. Such a lifetime is unknown to the daemon: it
+   holds no session and can have armed nothing, and its disarm could only stop
+   somebody else. The test is strict: no admission was ever asked for. (That turns
+   true when one is asked for, before anything is sent, so a doubt falls on the side of
+   running the whole close: codex-239.) The barrier is entered all the same.
+2. **The shell's close requests carry a mark** (a value made in the process, known to
+   no page, as the waiting page's probe has), and the filter lets a write through by
+   that mark, not by who Electron names as the sender. A worker's request names no
+   window and would otherwise pass for the shell's (codex-112).
+3. **One sentence added to the first kind's box when the disarm failed,** which E1
+   requires and the ruled words did not contain: "If you cancel, the stop already sent
+   may still take effect."
+4. **Dismissing the box** (Esc, or its close button) is Cancel in the first kind and
+   Close anyway in the second, where there is nothing to cancel to.
+5. **Any answer to the exit that is not the acknowledgement, the stale answer with a
+   generation, or the terminal refusal** (`archive_mismatch`, a `400`, a `200` without
+   the acknowledgement's shape) is "not confirmed", second kind. Try again reads the
+   state afresh.
+6. **The window is closed with `destroy()`,** so the page's veto of an unload has no
+   say in a confirmed close (section H). H's own evidence, with unsaved Settings, is
+   the second slice's.
+
+**Evidence.**
+- **Seen to fail first:** the barrier's, the flow's and the filter's tests, each
+  against an empty stub.
+- **Unit tests** (`npm run test:unit`, 160 in all, with the four of the findings below):
+  `closing.test.mjs` (30 at first: every answer
+  of the disarm and of the exit; the order of a close; the wait for admission work;
+  the known-retired window, also when the retirement is learnt during that wait; both
+  kinds and each choice; the window closed before the second-kind box; the close
+  staying second when a retry fails at its disarm and at its read; the terminal answer;
+  one close at a time; the box's words), `admission.test.mjs` (8 new),
+  `hardening.test.mjs` (5), `trace.test.mjs` (1 new). Requests are held and released by
+  the test; the one real wait is a 20 ms limit on a request that never answers.
+- **In the real app against a real `smd`** (`npm run check:close`, 12 checks at first,
+  13 with the finding below; FT8 off,
+  temporary working directory, synthetic data): a disarm with no answer gives the
+  first kind; while its box is up the window is kept and hidden, the page reads and
+  cannot write; Cancel gives back the window, the writes and the admission, and smd
+  still says the start holds its session. The close again: disarm, read, exit, in that
+  order; the archive file holds the session closed as `app_closed` and the exit
+  recorded. The next start is not asked. Then, **under the app's own quit rule,** an
+  exit whose answer is lost: the window is closed before the box, the app is still
+  running with no window, smd had stored the exit; a second start of the app and a
+  second close add nothing; Try again is answered "already recorded" and the app quits
+  by itself.
+- **In the daemon's tests.** New:
+  `TestExit_AfterTheTerminalRefusalALateAdmissionStillGivesTheLifetimeItsAuthority`
+  (D3's third case, so the app's account of the daemon stays true). Already pinned and
+  left as they are: the acknowledged exit stops the scopes and seals live entry before
+  it drains (`TestExit_TheCurrentLifetimeClosesItsSessionAndIsRetired`,
+  `TestExit_TheLiveEntrySealWaitsForAdmittedSubmits`); an arm needs the stream and ends
+  at the grace (`internal/ft8/presence_service_test.go`).
+- **Reversion proofs,** each in its own temporary copy, all failing the test named for
+  the rule: fifteen on the modules (the retired window's disarm; the window before the
+  box; staying second; a failed disarm going on to the exit; the wait for admission
+  work; any `404` read as "not served"; the terminal answer retried; a stale answer
+  with no generation; the never-admitted lifetime; the marker kept while closing; an
+  admission launched while closing; markers lost when work settles; a retirement said
+  while closing; the shell recognised by sender; a write let through as a read), and
+  three in the real app (the quit rule; the filter's wiring; the barrier's wiring).
+- **What the proofs found.** Three did not bite at first. Two rules were each held by
+  a second guard, so two tests were missing (a retry failing at its read; a marker seen
+  while earlier work was out): added, and the proofs bite. And **the scenario could end
+  with no verdict:** with the quit rule broken on purpose the app quit under the box,
+  and the process exited 0 with nothing printed, which CI would have read as a pass.
+  The scenario now holds every quit until it has given its verdict; that proof now
+  ends "Close FAIL", exit 1. The run left one temporary directory behind, removed by
+  its recorded path; no process was left.
+- **Gates, by exit code:** the shell's `eslint`, `prettier --check` and unit tests; the
+  seven existing scenarios (A1, C1, C1d-shell, C2b, C4a, C1d, recovery), all PASS; `go
+  vet`, `golangci-lint`, the maintainability metrics and `go test ./internal/api` in
+  full. The whole local gate (`task ci:local`), run once after the review closed and
+  with the two findings' fixes in: exit 0, "All CI gates passed locally."
+- `check:close` is added to `scripts/ci-local.sh` and to the hosted workflow.
+  `scenario-recovery.mjs` changes only by exporting the helpers the new scenario
+  shares.
+
+**Codex's review (codex-239): two findings, both P2, both right, both fixed
+(2026-11-24).** The ordinary flow, the exit-sent state, the stale retry, the retired
+window and the filter were found sound, and Codex has no objection to decisions 2 to 6,
+or to decision 1 once its finding is fixed.
+1. **The never-asked close did not enter the barrier, and a start-up probe still out
+   could become that lifetime's first admission after the app had "closed".** The
+   waiting page's loop called the admission before it looked whether its window was
+   still there. Codex reproduced it with the real modules and a held probe.
+   - **Fixed in two places, each with its own test.** The close enters the barrier
+     first, whatever follows, so nothing is admitted after it (`closeFlow`). And the
+     loop looks at its window before it asks for an admission (`waiting.mjs`).
+   - **Tests:** a probe answered after the window has gone starts no admission and
+     loads nothing (`waiting.test.mjs`); after a never-asked close the barrier stands
+     and an admission asked for launches nothing; and Codex's whole sequence, with the
+     real admission, close and loop over one recorder: the probe held, the close, the
+     probe answered "up": nothing is asked of the daemon, no box, nothing loaded.
+2. **A second `close()` is not a second request to quit.** Nothing stopped an ordinary
+   quit of the app while the second-kind box was up: with no window left it would end
+   the process without the operator's answer. The scenario had only repeated the
+   close. Codex showed it with a real quit injected under the box.
+   - **Fixed:** while a close is under way, the app refuses every quit but the close's
+     own final one (`closeFlow.allowsQuit`, and a `before-quit` rule in `main.mjs`).
+     What the operating system does to the process is not asked and cannot be.
+   - **Tests:** the rule on the module, under each kind of box and after a cancelled
+     close; and in the real app the scenario now asks the app to quit while the box is
+     up and requires that the quit goes no further (13 checks).
+   - **For the operator's eye, and not shown:** what a log-out or a shutdown does while
+     that box is up has not been tried. The scenario shows an ordinary request to the
+     app to quit, and nothing about how the desktop session ends its programs. If such
+     a request reaches the app as an ordinary quit, this rule would refuse it like any
+     other, until the box is answered or the system ends the process. That is an
+     inference from how the rule is written, not an observation (codex-241), and no
+     experiment on the session is proposed here.
+- **Reversion proofs for the two fixes,** each in a temporary copy, all failing the test
+  named for the rule: the loop without its look at the window; the barrier lifted at
+  the never-asked close; every quit allowed; the close's own quit not marked; and, in
+  the real app, the `before-quit` rule removed, and the last-window rule removed.
+- **Gates again:** 160 unit tests, all eight scenarios, `eslint`, `prettier --check`.
+
+**Not in this slice** (the second): the question and its words; the page's reasons; the
+read of FT8's state at a close; H with unsaved Settings; the check that no key reloads;
+the wiring to the window; and, with the wiring, the API reference's line that the app
+now sends the exit report and the disarm.
+
+No transmission, keyed test or rig command: FT8 is off in every daemon these tests
+start, and no request was made to the station's daemon.
+
 ### Hosted CI red on `67258f26`: a timing fault in a stream test, not in the commit (2026-11-23; fixed, committed and pushed on its own on the operator's direction, 2026-11-24: "commit and push the CI fix")
 
 Recorded here because this is where the CI state of A3's commits is kept. It is not

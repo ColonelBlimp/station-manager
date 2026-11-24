@@ -67,6 +67,11 @@ export function addressLabel(url, base) {
 export const blockedRequestLine = (url) =>
     `shell: blocked a request outside the served origin: ${addressLabel(url)}`;
 
+/** The line for a write the page attempted while the app was closing (W-0027 A3). The method
+ *  only: the address of a write can carry data. */
+export const refusedWriteLine = (method) =>
+    `shell: refused a write from the page while closing: ${escaped(method).slice(0, 16)}`;
+
 /** The line for a redirect the shell refused: the origin it came from and the one it named.
  *  `to` is the response's one Location, or '' when it had none or several. */
 export const refusedRedirectLine = (from, to) =>

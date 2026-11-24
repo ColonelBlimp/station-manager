@@ -221,6 +221,12 @@ if [ -n "${DISPLAY:-}" ]; then
 else
     ( cd desktop && SM_DESKTOP_SMD="$PWD/../build/bin/smd" xvfb-run -a npm run check:recovery )
 fi
+step "Desktop: the app's close against a real smd (W-0027 A3; temporary working directory, synthetic data, FT8 off)"
+if [ -n "${DISPLAY:-}" ]; then
+    ( cd desktop && SM_DESKTOP_SMD="$PWD/../build/bin/smd" npm run check:close )
+else
+    ( cd desktop && SM_DESKTOP_SMD="$PWD/../build/bin/smd" xvfb-run -a npm run check:close )
+fi
 step "Tools: the verified client, the Cabrillo reader and the tune probe (fixtures only; nothing keyed)"
 python3 -I scripts/smd_client_test.py
 python3 -I scripts/ukeicc_cabrillo_test.py

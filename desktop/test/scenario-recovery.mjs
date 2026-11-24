@@ -30,8 +30,10 @@ import { launchTrusted } from '../src/launch.mjs';
 import { externalOpener } from '../src/window.mjs';
 import { managedProcess, releaseAfter } from './smd-process.mjs';
 
+// The page calls, the waits and the synthetic install below are exported for the scenario of
+// the app's close (scenario-close.mjs), which starts the same way.
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const js = (win, code, ms = 8000) =>
+export const js = (win, code, ms = 8000) =>
     Promise.race([
         win.webContents.executeJavaScript(code, true),
         new Promise((_r, reject) =>
@@ -39,7 +41,7 @@ const js = (win, code, ms = 8000) =>
         ),
     ]);
 
-async function until(pred, what, timeout = 20000) {
+export async function until(pred, what, timeout = 20000) {
     const end = Date.now() + timeout;
     while (Date.now() < end) {
         try {
@@ -53,7 +55,7 @@ async function until(pred, what, timeout = 20000) {
     throw new Error(`timed out waiting for ${what}`);
 }
 
-const freePort = () =>
+export const freePort = () =>
     new Promise((resolve, reject) => {
         const s = net.createServer();
         s.once('error', reject);
@@ -63,7 +65,7 @@ const freePort = () =>
         });
     });
 
-const answers = (port) => () =>
+export const answers = (port) => () =>
     new Promise((resolve) => {
         const s = net.connect(port, '127.0.0.1', () => {
             s.end();
@@ -72,7 +74,7 @@ const answers = (port) => () =>
         s.on('error', () => resolve(false));
     });
 
-function writeConfig(wd, data, browserPort, appPort) {
+export function writeConfig(wd, data, browserPort, appPort) {
     const cfg = {
         version: 7,
         data_dir: data,
@@ -98,12 +100,12 @@ const launch = (env, partition) =>
     });
 
 // In the page: what the page shows, and what smd says of the session to this start.
-const WORKSPACE = `(() => { const f = document.querySelector('#lc-call');
+export const WORKSPACE = `(() => { const f = document.querySelector('#lc-call');
     return !!f && !f.disabled && !f.readOnly && !!document.querySelector('.content-wrap'); })()`;
-const HEADING = `document.querySelector('h1')?.textContent?.trim() ?? ''`;
+export const HEADING = `document.querySelector('h1')?.textContent?.trim() ?? ''`;
 const TEXT = `document.body.textContent.replace(/\\s+/g, ' ')`;
 // The scenario's own query. It goes round the observer below, once that is installed.
-const SESSION = `(window.__smRealFetch ?? fetch)('/v1/operating-session', { cache: 'no-store' }).then((r) => r.json())`;
+export const SESSION = `(window.__smRealFetch ?? fetch)('/v1/operating-session', { cache: 'no-store' }).then((r) => r.json())`;
 // A passive observer of the page's own reads of the session (codex-228, codex-229). It wraps
 // the page's fetch and, for an answered read of the session, the response's json(): the page
 // reads the body through that (lib/api/_helpers.ts, readJsonBody), so a read is recorded when
@@ -157,7 +159,7 @@ const press = (label) =>
     `(() => { const b = [...document.querySelectorAll('button')].find((x) => x.textContent.trim() === ${JSON.stringify(label)});
         if (!b) return false; b.click(); return true; })()`;
 // One contact, logged by smd's own route as the page's submit would name it.
-const LOG_ONE = `(async () => {
+export const LOG_ONE = `(async () => {
     const version = await (await fetch('/v1/version', { cache: 'no-store' })).json();
     const config = await (await fetch('/v1/config', { cache: 'no-store' })).json();
     const adif = '<CALL:5>DL9UW<BAND:3>20m<MODE:3>SSB<FREQ:6>14.210<QSO_DATE:8>20261029<TIME_ON:4>1200<TIME_OFF:4>1200<RST_SENT:2>59<RST_RCVD:2>59<STATION_CALLSIGN:6>N0CALL<EOR>';

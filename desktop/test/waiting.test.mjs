@@ -2,7 +2,7 @@
 // to start it; an identity refusal keeps its own explanation and no start advice.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { isShellProbe, probeUrl, waitingPageUrl } from '../src/waiting.mjs';
+import { isShellProbe, loadWhenUp, probeUrl, waitingPageUrl } from '../src/waiting.mjs';
 
 const page = (u) => decodeURIComponent(u);
 const START = 'smctl start';
@@ -106,4 +106,35 @@ test('every form of the waiting page carries the scrollbar rules', () => {
         assert.ok(p.includes('::-webkit-scrollbar-thumb{'), p);
         assert.ok(!/scrollbar-(width|color)\s*:/.test(p), 'a standard scrollbar property is set');
     }
+});
+
+// codex-239, finding 1: the loop may be waiting for its probe when the window goes. An answer
+// that comes back to a window that is gone must start nothing: not an admission above all.
+test('a probe answered after the window has gone starts no admission and loads nothing', async () => {
+    let answer;
+    const loads = [];
+    const win = {
+        destroyed: false,
+        isDestroyed: () => win.destroyed,
+        loadURL: async (url) => void loads.push(url),
+        webContents: {
+            getURL: () => 'data:text/html,waiting',
+            session: { fetch: () => new Promise((res) => (answer = res)) },
+        },
+    };
+    let admissions = 0;
+    const loop = loadWhenUp(win, 'https://127.0.0.1:8443/', 'https://127.0.0.1:8443', {
+        admit: async () => {
+            admissions++;
+            return { state: 'admitted' };
+        },
+    });
+    await new Promise((r) => setImmediate(r));
+    assert.equal(typeof answer, 'function', 'fixture: the probe is out and held');
+
+    win.destroyed = true; // the window is closed while the probe is still out
+    answer({ status: 200, json: async () => ({}) });
+    await loop;
+    assert.equal(admissions, 0, 'an admission was started for a window that is gone');
+    assert.deepEqual(loads, []);
 });

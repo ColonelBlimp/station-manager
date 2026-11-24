@@ -102,8 +102,8 @@ export async function admit(ses, origin) {
 /**
  * The shell's admission, held for the app's lifetime. `admitNow()` admits and remembers the
  * process and generation it was admitted at; calls made while one is in progress join it. Once
- * retired it stays retired and asks no more. `sawMarker(marker, generation)` is told what each
- * response carried. `onRetired` is called once, and only when the retirement is learnt in a
+ * retired it stays retired and asks no more. While a close is under way it asks nothing
+ * (beginClosing). `sawMarker(marker, generation)` is told what each response carried. `onRetired` is called once, and only when the retirement is learnt in a
  * loaded workspace (through a response): at start the waiting page says it instead.
  */
 export function admission({ ses, origin, admitFn = admit, onRetired }) {
@@ -112,6 +112,9 @@ export function admission({ ses, origin, admitFn = admit, onRetired }) {
     let retired = false;
     let told = false;
     let pending = null;
+    let asked = false; // an admission was asked for at least once (set before any is sent)
+    let closing = false; // the barrier of a confirmed close (beginClosing)
+    let owedRetired = false; // a retirement learnt in a loaded workspace while closing
     // Everything responses carried while an admission was in progress. Joining that work must
     // not lose it (codex-129, finding 1): it is asked about when the work settles. All of it is
     // kept, not the last: the order responses arrive in is not the order of smd's processes,
@@ -132,11 +135,18 @@ export function admission({ ses, origin, admitFn = admit, onRetired }) {
     };
     const admitNow = () => {
         if (retired) return Promise.resolve({ state: 'retired', instance });
+        // A closing app launches nothing. The caller is told what it is told when smd cannot
+        // be asked: the waiting page's loop waits and comes back.
+        if (closing) return Promise.resolve({ state: 'failed' });
+        asked = true;
         pending ??= Promise.resolve()
             .then(() => admitFn(ses, origin()))
             .then(settle, () => ({ state: 'failed' }))
             .finally(() => {
                 pending = null;
+                // Closing: the markers are kept for a cancelled close (endClosing), and
+                // start nothing now.
+                if (closing) return;
                 const seen = [...seenMeanwhile.values()];
                 seenMeanwhile.clear();
                 if (!retired && instance !== null && seen.some(differs)) ask();
@@ -147,6 +157,12 @@ export function admission({ ses, origin, admitFn = admit, onRetired }) {
     const ask = () => {
         void admitNow().then((r) => {
             if (r.state !== 'retired' || told) return;
+            // Not while closing: the close knows (isRetired), and the operator is told only
+            // if the close is cancelled and the window comes back.
+            if (closing) {
+                owedRetired = true;
+                return;
+            }
             told = true;
             onRetired?.();
         });
@@ -154,6 +170,41 @@ export function admission({ ses, origin, admitFn = admit, onRetired }) {
     return {
         admitNow,
         isRetired: () => retired,
+        /** Whether an admission was ever asked for. It turns true when one is asked for,
+         *  before anything is sent, so it can say "asked" of a request that never left; it
+         *  never says "not asked" of one that did. A lifetime never asked for is one smd has
+         *  never heard of: it holds no session and can have armed nothing. */
+        everAsked: () => asked,
+        isClosing: () => closing,
+        /**
+         * The barrier (W-0027 A3, section D): from the moment a close is confirmed, this
+         * lifetime is never admitted again. No new admission is launched, by a marker, by
+         * the waiting page's loop or by the loop above; markers are kept and start nothing.
+         * Resolves when admission work already issued has settled here. That is not proof
+         * smd will not still apply it (a request given up on may land later): what makes a
+         * late admission safe is smd's own order, not this wait.
+         */
+        beginClosing() {
+            closing = true;
+            return (pending ?? Promise.resolve()).then(() => undefined);
+        },
+        /** A close that was cancelled before any exit report was sent: ordinary admission
+         *  resumes. What was seen while closing is asked about now, and a retirement learnt
+         *  meanwhile is said, once. */
+        endClosing() {
+            if (!closing) return;
+            closing = false;
+            if (retired) {
+                if (owedRetired && !told) {
+                    told = true;
+                    onRetired?.();
+                }
+                return;
+            }
+            const seen = [...seenMeanwhile.values()];
+            seenMeanwhile.clear();
+            if (instance !== null && seen.some(differs)) ask();
+        },
         /** What a response carried. A marker or a generation other than the one admitted at:
          *  ask smd, and let its answer decide. */
         sawMarker(marker, seenGeneration) {
@@ -162,7 +213,7 @@ export function admission({ ses, origin, admitFn = admit, onRetired }) {
                 marker,
                 generation: typeof seenGeneration === 'string' ? seenGeneration : undefined,
             };
-            if (pending) {
+            if (pending || closing) {
                 seenMeanwhile.set(`${seen.marker}\n${seen.generation ?? ''}`, seen);
                 return;
             }

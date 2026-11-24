@@ -648,3 +648,133 @@ test('the admission path is recognised, whatever its query', () => {
     assert.ok(!isAdmissionRequest(ORIGIN + '/v1/version'));
     assert.ok(!isAdmissionRequest('not a url'));
 });
+
+// ---- A closing app never admits again (W-0027 A3, section D; W-0029's brief, proposal C) ----
+
+/** An admission whose admit calls are counted and can each be held and answered by the test. */
+function heldAdmission(first = { state: 'admitted', instance: 'P1', generation: 1 }) {
+    const h = { asked: 0, held: [], retired: 0 };
+    h.a = admission({
+        ses: {},
+        origin: () => ORIGIN,
+        onRetired: () => h.retired++,
+        admitFn: () => {
+            h.asked++;
+            if (h.asked === 1) return Promise.resolve(first);
+            return new Promise((res) => h.held.push(res));
+        },
+    });
+    return h;
+}
+
+test('closing: a daemon restart seen while closing starts no admission', async () => {
+    const h = heldAdmission();
+    await h.a.admitNow();
+    await h.a.beginClosing();
+    h.a.sawMarker('P2', '0');
+    await settled();
+    assert.equal(h.asked, 1, 'an admission was launched while closing');
+    assert.equal(h.a.isClosing(), true);
+});
+
+test('closing: an admission asked for while closing launches nothing and is not admitted', async () => {
+    const h = heldAdmission();
+    await h.a.admitNow();
+    await h.a.beginClosing();
+    assert.deepEqual(await h.a.admitNow(), { state: 'failed' });
+    assert.equal(h.asked, 1);
+});
+
+test('closing: it waits for admission work already issued, and that work starts nothing more', async () => {
+    const h = heldAdmission();
+    await h.a.admitNow();
+    h.a.sawMarker('P2', '0'); // a restart seen before closing: an admission is issued
+    await settled();
+    assert.equal(h.asked, 2);
+
+    let waited = false;
+    const barrier = h.a.beginClosing().then(() => (waited = true));
+    h.a.sawMarker('P3', '0'); // and another process seen while that one is in progress
+    await settled();
+    assert.equal(waited, false, 'closing went on while an admission was still out');
+
+    h.held[0]({ state: 'admitted', instance: 'P2', generation: 1 });
+    await barrier;
+    await settled();
+    assert.equal(h.asked, 2, 'the markers kept meanwhile started another admission');
+});
+
+test('closing: a retirement learnt from work issued earlier is known, and not said while closing', async () => {
+    const h = heldAdmission();
+    await h.a.admitNow();
+    h.a.sawMarker('P1', '2'); // replaced within the same process: the shell asks
+    await settled();
+    const barrier = h.a.beginClosing();
+    h.held[0]({ state: 'retired', instance: 'P1' });
+    await barrier;
+    await settled();
+    assert.equal(h.a.isRetired(), true, 'the close must know it is retired (it sends no disarm)');
+    assert.equal(h.retired, 0, 'the retirement was announced while the app was closing');
+});
+
+test('closing cancelled: what was seen meanwhile is asked about, and admission works as before', async () => {
+    const h = heldAdmission();
+    await h.a.admitNow();
+    await h.a.beginClosing();
+    h.a.sawMarker('P2', '0');
+    await settled();
+    assert.equal(h.asked, 1);
+
+    h.a.endClosing();
+    await settled();
+    assert.equal(h.asked, 2, 'the restart seen while closing was never asked about');
+    h.held[0]({ state: 'admitted', instance: 'P2', generation: 1 });
+    await settled();
+    await settled();
+
+    h.a.sawMarker('P3', '0'); // and a restart afterwards is answered as it always was
+    await settled();
+    assert.equal(h.asked, 3);
+    assert.equal(h.a.isClosing(), false);
+});
+
+test('closing cancelled: a marker seen while earlier work was still out is kept, and asked about then', async () => {
+    const h = heldAdmission();
+    await h.a.admitNow();
+    h.a.sawMarker('P2', '0'); // an admission is issued
+    await settled();
+    const barrier = h.a.beginClosing();
+    h.a.sawMarker('P3', '0'); // a newer process, seen while that work is out and the app closing
+    h.held[0]({ state: 'admitted', instance: 'P2', generation: 1 });
+    await barrier;
+    await settled();
+    assert.equal(h.asked, 2);
+
+    h.a.endClosing();
+    await settled();
+    assert.equal(h.asked, 3, 'the newer process seen meanwhile was lost when the work settled');
+});
+
+test('closing cancelled: a retirement learnt while closing is then said, once', async () => {
+    const h = heldAdmission();
+    await h.a.admitNow();
+    h.a.sawMarker('P1', '2');
+    await settled();
+    const barrier = h.a.beginClosing();
+    h.held[0]({ state: 'retired', instance: 'P1' });
+    await barrier;
+    await settled();
+
+    h.a.endClosing();
+    h.a.endClosing();
+    await settled();
+    assert.equal(h.retired, 1);
+    assert.equal(h.asked, 2, 'a retired lifetime asked again');
+});
+
+test('closing: whether an admission was ever asked for is known', async () => {
+    const h = heldAdmission();
+    assert.equal(h.a.everAsked(), false);
+    await h.a.admitNow();
+    assert.equal(h.a.everAsked(), true);
+});
