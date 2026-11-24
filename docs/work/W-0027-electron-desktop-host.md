@@ -5210,3 +5210,34 @@ FT8" (operator, 2026-11-23: "commit and push"), after the whole local gate passe
   test fails.
 - **Gates:** `gofmt`, `golangci-lint` (0 issues), the maintainability metrics (0
   regressions), `go test -race ./internal/ft8` in full.
+
+### Hosted CI red on `67258f26`: a timing fault in a stream test, not in the commit (2026-11-23; fixed, committed and pushed on its own on the operator's direction, 2026-11-24: "commit and push the CI fix")
+
+Recorded here because this is where the CI state of A3's commits is kept. It is not
+part of A3 and is to be committed on its own.
+
+- **What failed.** Hosted run 45199094286, step "go test (race detector, -short)":
+  `TestWSStream_ShutdownDuringWriteInterrupts` (`internal/api/stream_ws_test.go`), "after
+  Shutdown returned: reader's read ended not observed". The run for `b86f9ca4`
+  (45197977972) was cancelled by the push that followed it, so neither of the two
+  commits has a green hosted run yet. Neither commit touches the stream or its tests.
+- **The cause is in the test's fixture.** It counted the reader's read as ended only when
+  it saw a read return after the transport was closed. A reader that has not yet begun
+  to read when the transport closes ends without ever reading it, and the fixture then
+  reports a failure with the daemon behaving correctly. **Shown, not assumed:** with
+  the reader's start delayed by 300 ms in a temporary copy, the test fails every time
+  with that exact message. That this is what happened on the runner is an inference:
+  the message is the same, and a loaded two-core runner under the race detector is
+  where a goroutine is scheduled late. It passed 400 times here.
+- **The fix is to the fixture only.** It now counts the reads on the transport, and the
+  test requires that none is left blocked when Shutdown has returned. The handler joins
+  its reader before it ends, so that is exact, and it does not depend on when the
+  reader was scheduled. No product code is changed.
+- **Proofs,** in temporary copies: with the delayed reader the fixed test passes; with
+  the handler made to end without closing or joining, and the transport left open, it
+  fails on the new check ("1 read(s) still blocked on the transport"). A first attempt
+  at that fault was caught earlier, by Shutdown itself timing out: the library's
+  `CloseNow` already waits for the reader, so a blocked read fails the test there too.
+- **Gates:** `gofmt`, `go vet`, `golangci-lint` (0 issues), the stream tests 20 times
+  with the race detector, and `go test -race -short ./internal/api` in full, as the
+  hosted step runs it.

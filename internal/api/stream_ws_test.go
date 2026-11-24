@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -481,22 +482,27 @@ func (l *wrapListener) Accept() (net.Conn, error) {
 // holdConn holds the server's "connected" write AFTER its bytes reach the
 // peer, until the transport is closed — an interruptible in-flight write.
 // Closing the transport releases the held write with an error. It also
-// reports when a read blocked on the transport returns after the close (the
-// SMD-owned reader is the only reader of a hijacked stream).
+// counts the reads now on the transport (the SMD-owned reader is the only
+// reader of a hijacked stream), so a test can say that none is left blocked.
+//
+// It counts reads in flight and does NOT wait to see one end after the close:
+// a reader that had not yet begun to read when the transport closed ends
+// without ever reading it, and a fixture that required "a read returned after
+// Close" then failed with the daemon behaving correctly (hosted run
+// 45199094286; reproduced by delaying the reader's start).
 type holdConn struct {
 	net.Conn
 	held          chan struct{} // the "connected" bytes are out; the write is now held
 	writeReleased chan struct{} // the held Write has returned
 	closed        chan struct{} // Close was called
-	readEnded     chan struct{} // a Read returned after Close
+	reading       atomic.Int32  // reads now in, or entering, the transport
 	heldOnce      sync.Once
 	closeOnce     sync.Once
-	readOnce      sync.Once
 }
 
 func newHoldConn(c net.Conn) *holdConn {
 	return &holdConn{Conn: c, held: make(chan struct{}), writeReleased: make(chan struct{}),
-		closed: make(chan struct{}), readEnded: make(chan struct{})}
+		closed: make(chan struct{})}
 }
 
 func (h *holdConn) Write(b []byte) (int, error) {
@@ -515,15 +521,9 @@ func (h *holdConn) Write(b []byte) (int, error) {
 }
 
 func (h *holdConn) Read(b []byte) (int, error) {
-	n, err := h.Conn.Read(b)
-	if err != nil {
-		select {
-		case <-h.closed:
-			h.readOnce.Do(func() { close(h.readEnded) })
-		default:
-		}
-	}
-	return n, err
+	h.reading.Add(1)
+	defer h.reading.Add(-1)
+	return h.Conn.Read(b)
 }
 
 func (h *holdConn) Close() error {
@@ -622,13 +622,17 @@ func TestWSStream_ShutdownDuringWriteInterrupts(t *testing.T) {
 	for what, ch := range map[string]chan struct{}{
 		"held write released": h.writeReleased,
 		"transport closed":    h.closed,
-		"reader's read ended": h.readEnded,
 	} {
 		select {
 		case <-ch:
 		default:
 			t.Fatalf("after Shutdown returned: %s not observed", what)
 		}
+	}
+	// The reader's read: the handler joins its reader before it ends, so when
+	// Shutdown has returned no read is left blocked on the transport.
+	if n := h.reading.Load(); n != 0 {
+		t.Fatalf("after Shutdown returned: %d read(s) still blocked on the transport", n)
 	}
 	if n := srv.streams.active(); n != 0 {
 		t.Fatalf("Shutdown returned success with %d stream handlers still active", n)
