@@ -6,7 +6,7 @@
             callsign:        string,
             country?:        Country (optional, omitempty)
             station?:        ContactedStation (optional, omitempty)
-            country_source:  "hamnut" | "country_table" | "none"
+            country_source:  "hamnut" | "country_table" | "country_prefix" | "none" | "not_found"
             station_source:  <provider name> | "contacted_station" | "none"
         }
       - 400 Bad Request → { code, message } (missing or invalid `call` param)
@@ -90,7 +90,11 @@ export interface EnrichmentResult {
     // a cold-miss upstream call, or "none". See review 2026-06-04 L2.
     // "not_found" (W-0012, 2026-11-02): HamNut was asked and explicitly does not
     // recognise the prefix; no country object accompanies it.
-    country_source: 'hamnut' | 'country_table' | 'none' | 'not_found';
+    // "country_prefix" (ADR 0104, 2026-11-24): HamNut could not be asked, and the
+    // country is the longest prefix the daemon's local table holds, which may be a
+    // parent block and not the callsign's own entity. Shown like any other country
+    // for now.
+    country_source: 'hamnut' | 'country_table' | 'country_prefix' | 'none' | 'not_found';
     /** Provider service name (e.g. "qrzlookupservice"), "contacted_station" (cache hit), or "none". */
     station_source: string;
 }

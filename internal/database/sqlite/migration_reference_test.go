@@ -45,7 +45,7 @@ func insertContactedStation(svc *Service, call string) error {
 // permanent cold miss (the write is best-effort, so nothing surfaced). Past 32
 // the CHECK still bites, so the guard is widened rather than removed.
 func TestMigrate0003Reference_WidensContactedStationCall(t *testing.T) {
-	svc := testService(t) // all sets at head, including reference 0003
+	svc := testService(t) // all sets at head, including reference 0003 and later
 
 	longCall := "A" + strings.Repeat("1", 31) // 32 chars, mirroring IsValidCallsign's ceiling
 	if len(longCall) != 32 {

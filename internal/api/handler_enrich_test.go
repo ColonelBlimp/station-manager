@@ -301,9 +301,7 @@ func TestEnrich_RefreshOmitted_UsesCacheAsBefore(t *testing.T) {
 		result: types.Country{Name: "England", Prefix: "M0"},
 	}
 	srv := testServerWithEnrichment(t, hamnut, nil)
-	if err := srv.db.UpsertCountry(types.Country{Name: "Cached", Prefix: "M0"}); err != nil {
-		t.Fatalf("seed cache: %v", err)
-	}
+	seedRememberedCountry(t, srv, "M0CMC", types.Country{Name: "Cached", Prefix: "M0"})
 
 	w := httptest.NewRecorder()
 	srv.handleEnrichCallsign(w, enrichRequest("M0CMC"))
@@ -333,9 +331,7 @@ func TestEnrich_RefreshNonTrueValues_TreatedAsDefault(t *testing.T) {
 				result: types.Country{Name: "England", Prefix: "M0"},
 			}
 			srv := testServerWithEnrichment(t, hamnut, nil)
-			if err := srv.db.UpsertCountry(types.Country{Name: "Cached", Prefix: "M0"}); err != nil {
-				t.Fatalf("seed cache: %v", err)
-			}
+			seedRememberedCountry(t, srv, "M0CMC", types.Country{Name: "Cached", Prefix: "M0"})
 			url := "/v1/enrich/callsign?call=M0CMC"
 			if v != "" {
 				url += "&refresh=" + v
@@ -358,3 +354,16 @@ type syntheticTransportError struct{}
 func (e *syntheticTransportError) Error() string { return "synthetic transport failure" }
 
 func errSyntheticTransport() error { return &syntheticTransportError{} }
+
+// seedRememberedCountry makes a country known locally for one callsign, as a
+// provider answer for it leaves things (W-0031): remembered for the callsign,
+// and held in the prefix table. The prefix row alone is no longer a cache hit.
+func seedRememberedCountry(t *testing.T, srv *Server, callsign string, c types.Country) {
+	t.Helper()
+	if err := srv.db.UpsertCountry(c); err != nil {
+		t.Fatalf("seed cache: %v", err)
+	}
+	if err := srv.db.UpsertCallsignCountryWithContext(context.Background(), callsign, c); err != nil {
+		t.Fatalf("seed callsign cache: %v", err)
+	}
+}

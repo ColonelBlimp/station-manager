@@ -341,8 +341,10 @@ func TestEnrich_ColdMiss_CarriesLastRefreshedAt(t *testing.T) {
 // U, R…) span multiple DXCC entities, so they must never become
 // longest-prefix cache keys — a cached 'U' → "European Russia" row misfiled
 // every Ukrainian call. The per-call result still reaches the caller (with
-// the H2 freshness stamp); the writeback is skipped quietly, so every new
-// call in the block pays a hamnut lookup instead of being served wrong data.
+// the H2 freshness stamp); the prefix writeback is skipped quietly, so every
+// new call in the block pays a hamnut lookup instead of being served wrong
+// data. The answer IS remembered for the callsign it was given for (W-0031),
+// so the same call asked again is local.
 func TestEnrich_ColdMiss_OneCharPrefix_ReturnsButNeverCaches(t *testing.T) {
 	db := newTestSqlite(t)
 	hamnut := &stubCountryProvider{
@@ -378,6 +380,17 @@ func TestEnrich_ColdMiss_OneCharPrefix_ReturnsButNeverCaches(t *testing.T) {
 	}
 	if hamnut.calls != 2 {
 		t.Errorf("hamnut calls = %d, want 2 (one per call, nothing cached)", hamnut.calls)
+	}
+
+	// The first call again: answered from what was remembered for it, with no
+	// third request and still no block row.
+	again := o.Enrich(context.Background(), "UA3ABC")
+	if again.CountrySource != lookup.SourceCountryTable || again.Country.Name != "European Russia" || hamnut.calls != 2 {
+		t.Errorf("the same call again: %q / %q, %d calls; want country_table / European Russia, 2 calls",
+			again.CountrySource, again.Country.Name, hamnut.calls)
+	}
+	if _, err := db.FetchCountryByPrefix("U"); err == nil {
+		t.Fatal("one-char prefix must not be cached")
 	}
 }
 
@@ -578,14 +591,12 @@ func TestEnrich_ColdStation_FreshCountry_MergesFromCache(t *testing.T) {
 	// (country is cached fresh), and the merge populates from the
 	// cached country value.
 	db := newTestSqlite(t)
-	if err := db.UpsertCountry(types.Country{
+	seedCountryFor(t, db, "M0CMC", types.Country{
 		Name:    "England",
 		Prefix:  "M0",
 		CQZone:  "14",
 		ITUZone: "27",
-	}); err != nil {
-		t.Fatalf("seed country: %v", err)
-	}
+	})
 
 	hamnut := &stubCountryProvider{name: "hamnut"} // should not be called
 	qrz := &stubCallsignProvider{
@@ -622,14 +633,12 @@ func TestEnrich_FreshStation_FreshCountry_MergeIsNoOp(t *testing.T) {
 	// fields on the station; merge sees same value on both sides and
 	// is a no-op. No upstream calls; no async refreshes.
 	db := newTestSqlite(t)
-	if err := db.UpsertCountry(types.Country{
+	seedCountryFor(t, db, "M0CMC", types.Country{
 		Name:    "England",
 		Prefix:  "M0",
 		CQZone:  "14",
 		ITUZone: "27",
-	}); err != nil {
-		t.Fatalf("seed country: %v", err)
-	}
+	})
 	if err := db.UpsertContactedStation(types.ContactedStation{
 		Call:    "M0CMC",
 		Name:    "Marc",
@@ -671,14 +680,12 @@ func TestEnrich_StaleStation_FreshCountry_AsyncRefreshReMerges(t *testing.T) {
 	// post-refresh row carries hamnut-truth country fields even
 	// though the chain returned the QRZ-bug values.
 	db := newTestSqlite(t)
-	if err := db.UpsertCountry(types.Country{
+	seedCountryFor(t, db, "M0CMC", types.Country{
 		Name:    "England",
 		Prefix:  "M0",
 		CQZone:  "14",
 		ITUZone: "27",
-	}); err != nil {
-		t.Fatalf("seed country: %v", err)
-	}
+	})
 	if err := db.UpsertContactedStation(types.ContactedStation{
 		Call: "M0CMC",
 		Name: "OldName",
@@ -936,12 +943,13 @@ func TestEnrich_ColdMiss_NonVerdictFailures_StayNone(t *testing.T) {
 }
 
 // A cache hit is a country result, never evidence of an unrecognised prefix:
-// the provider is not asked, so its verdict cannot leak in.
+// the provider is not asked, so its verdict cannot leak in. The hit is what was
+// remembered for the callsign (W-0031); a held prefix alone is not one, and
+// there the provider's verdict stands
+// (TestPerCallsign_TheProvidersNotRecognisedIsNotOverruledByAHeldPrefix).
 func TestEnrich_CacheHit_IsNeverNotFound(t *testing.T) {
 	db := newTestSqlite(t)
-	if err := db.UpsertCountry(types.Country{Name: "Finland", Prefix: "OH"}); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
+	seedCountryFor(t, db, "OH5RWW", types.Country{Name: "Finland", Prefix: "OH"})
 	hamnut := &stubCountryProvider{name: "hamnut", err: lookup.ErrPrefixNotRecognised}
 	o := &lookup.Orchestrator{DB: db, Country: hamnut, CountryTTL: time.Hour, Refresher: &syncRefresher{}}
 
@@ -986,13 +994,11 @@ func TestEnrich_ColdMiss_HamnutDisabledSentinel_TreatedAsNone(t *testing.T) {
 
 func TestEnrich_FreshHit_NoUpstreamCall(t *testing.T) {
 	db := newTestSqlite(t)
-	if err := db.UpsertCountry(types.Country{
+	seedCountryFor(t, db, "M0CMC", types.Country{
 		Name:   "England",
 		Prefix: "M0",
 		CQZone: "14",
-	}); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
+	})
 
 	hamnut := &stubCountryProvider{name: "hamnut"}
 	ref := &recordingRefresher{}
@@ -1027,12 +1033,10 @@ func TestEnrich_StaleHit_ServesStaleAndSchedulesRefresh(t *testing.T) {
 	// negative-now TTL of zero by setting TTL to 1ms and sleeping past
 	// it. (TTL <= 0 means "never stale" per isStale, so we use small-
 	// but-positive.)
-	if err := db.UpsertCountry(types.Country{
+	seedCountryFor(t, db, "M0CMC", types.Country{
 		Name:   "England",
 		Prefix: "M0",
-	}); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
+	})
 
 	hamnut := &stubCountryProvider{
 		name: "hamnut",
@@ -1199,13 +1203,11 @@ func (e *transportError) Error() string { return "synthetic transport failure" }
 // cache state the country layer landed in.
 func TestEnrich_FreshHit_LocalTimeRecomputed(t *testing.T) {
 	db := newTestSqlite(t)
-	if err := db.UpsertCountry(types.Country{
+	seedCountryFor(t, db, "7Q7EB", types.Country{
 		Name:       "Malawi",
 		Prefix:     "7Q",
 		TimeOffset: "2h 0m",
-	}); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
+	})
 
 	o := &lookup.Orchestrator{
 		DB:         db,
@@ -1725,4 +1727,19 @@ func TestEnrich_CanceledProviderErrorLogsDebugNotWarn(t *testing.T) {
 			t.Errorf("a deadline expiry is our own timeout firing — it must warn; log:\n%s", out)
 		}
 	})
+}
+
+// seedCountryFor makes a country known locally for one callsign, as a provider
+// answer for it leaves things: remembered for the callsign, and held in the
+// prefix table. Before W-0031 the prefix row alone counted as a local hit for
+// any call that began with it; now only what was remembered for the callsign
+// does.
+func seedCountryFor(t *testing.T, db *sqlsvc.Service, callsign string, c types.Country) {
+	t.Helper()
+	if err := db.UpsertCountry(c); err != nil {
+		t.Fatalf("seed country: %v", err)
+	}
+	if err := db.UpsertCallsignCountryWithContext(context.Background(), callsign, c); err != nil {
+		t.Fatalf("seed callsign country: %v", err)
+	}
 }

@@ -419,6 +419,15 @@
       "summary": "W-0030 is the defect fix that makes the FT8 sequencer read the DXpedition combined message (a roger to one caller and a report to the next in one transmission, the sender hashed): a contact the DX station had rogered and logged was abandoned here as no answer. It records the diagnosis from the station's logs, the ruled acceptance criteria and the fix."
     },
     {
+      "id": "work.w-0031",
+      "path": "docs/work/W-0031-country-lookup-parent-prefix.md",
+      "class": "work-item",
+      "audiences": ["operator", "contributor", "agent"],
+      "topics": ["enrichment", "lookup", "dxcc", "logging"],
+      "scopes": ["internal/lookup/**", "internal/database/sqlite/**", "internal/enums/dxcc/**"],
+      "summary": "W-0031 is the defect in the country lookup: it answers from the longest prefix already held in the local table, so a held parent block (VK, SV, CT) files the separate DXCC entities inside it (Christmas Island, Crete, Madeira) under the parent. It records the diagnosis, the contacts corrected, the draft criteria and the ways to fix it."
+    },
+    {
       "id": "work.dogfood-inbox",
       "path": "docs/dogfood-inbox.md",
       "class": "work-item",

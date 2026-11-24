@@ -35,7 +35,7 @@ const (
 // runtime query error.
 var coreTablesBySet = map[string][]string{
 	MigrationSetLog:       {"logbook", "qso", "qso_upload", "qso_history", "operator_event"},
-	MigrationSetReference: {"contacted_station", "country"},
+	MigrationSetReference: {"contacted_station", "country", "callsign_country"},
 }
 
 // allMigrationSets is the order sets run when a Service runs every domain

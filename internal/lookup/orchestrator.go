@@ -31,6 +31,11 @@ const (
 	// SourceCountryTable — the country fields came from the local
 	// country table (read-side cache hit, fresh or stale).
 	SourceCountryTable = "country_table"
+	// SourceCountryPrefix: the provider could not be asked, and the answer is
+	// the longest prefix the local country table holds. It may be a parent
+	// block and not the callsign's own entity (W-0031), so it is named apart
+	// from an answer the provider gave for the callsign.
+	SourceCountryPrefix = "country_prefix"
 	// SourceHamnut — the country fields came from a hamnut call (cold
 	// miss path).
 	SourceHamnut = "hamnut"
@@ -356,13 +361,9 @@ func (o *Orchestrator) enrich(ctx context.Context, callsign string, force bool) 
 	// the cache row is forgone.
 	now := time.Now()
 	if c.coldMiss && c.data.Prefix != "" && o.DB != nil {
-		if sqlsvc.IsCacheableCountryPrefix(c.data.Prefix) {
-			if werr := o.DB.UpsertCountryWithContext(ctx, c.data); werr != nil {
-				o.warn("country upsert failed", werr)
-			}
-		}
-		// Stamped even when the write is skipped — the response's freshness
-		// timestamp matches the cache-hit shape either way (H2).
+		o.rememberCountry(ctx, callsign, c.data, "cold miss")
+		// Stamped whatever was written — the response's freshness timestamp
+		// matches the cache-hit shape either way (H2).
 		c.data.LastRefreshedAt = now
 	}
 	if s.coldMiss && !IsEmpty(s.data) && o.DB != nil {
@@ -507,16 +508,21 @@ type stationReadResult struct {
 	staleHit bool
 }
 
-// readCountry runs the read half of the country layer — cache lookup
-// (longest-prefix match) and, on cold miss, a synchronous hamnut
-// call. Does NOT write back; that's Enrich's responsibility.
+// readCountry runs the read half of the country layer — what was remembered
+// for this exact callsign and, when nothing was, a synchronous hamnut call for
+// it. Does NOT write back; that's Enrich's responsibility.
 //
 // Branches:
 //
-//	fresh hit  → return cached, no flags set
-//	stale hit  → return cached, staleHit=true
+//	fresh hit  → what was remembered for the callsign, no flags set
+//	stale hit  → the same, staleHit=true
 //	cold miss  → block on hamnut; on success return + coldMiss=true
-//	cold miss  + hamnut down/disabled → return empty, source=none
+//	cold miss  + hamnut says "not recognised" → source=not_found
+//	cold miss  + hamnut down/disabled → the longest prefix the country
+//	             table holds, source=country_prefix; nothing held → none
+//
+// The country table's longest held prefix is never a cache hit (W-0031): a
+// held parent block would claim the entities inside it.
 //
 // When force is true, the cache lookup is skipped entirely — go
 // straight to hamnut and treat the result as a cold miss. This is
@@ -526,7 +532,9 @@ type stationReadResult struct {
 // cached row (the operator asked for fresh data).
 func (o *Orchestrator) readCountry(ctx context.Context, callsign string, force bool) countryReadResult {
 	if !force {
-		cached, err := o.DB.FetchCountryByCallsignWithContext(ctx, callsign)
+		// What the provider answered for THIS callsign, if it has been asked
+		// before. Exact, never a prefix (W-0031).
+		cached, err := o.DB.FetchCallsignCountryWithContext(ctx, callsign)
 		if err == nil {
 			if !o.isStale(cached.LastRefreshedAt, o.CountryTTL) {
 				return countryReadResult{data: cached, source: SourceCountryTable}
@@ -534,31 +542,83 @@ func (o *Orchestrator) readCountry(ctx context.Context, callsign string, force b
 			return countryReadResult{data: cached, source: SourceCountryTable, staleHit: true}
 		}
 		if !stderrs.Is(err, errors.ErrNotFound) {
-			o.warn("country fetch failed", err)
+			o.warn("callsign country fetch failed", err)
 			return countryReadResult{source: SourceNone}
 		}
 	}
 
+	// A callsign not asked about before is asked about now. The longest prefix
+	// the country table already holds is NOT an answer for it: that table cannot
+	// know which longer prefixes exist, so a held parent block (VK) would claim
+	// the separate entities inside it (VK9X) and the provider would never be
+	// asked. It is only what is left when the provider cannot be asked.
 	if o.Country == nil {
-		return countryReadResult{source: SourceNone}
+		return o.heldPrefix(ctx, callsign, force)
 	}
 	res, lerr := o.Country.LookupWithContext(ctx, callsign)
 	if lerr != nil {
-		// No row is written either way (ADR 0017 #9). Only the provider's
-		// explicit verdict is reported as not_found; a bare ErrNotFound (a
-		// 404), transport failure or cancellation could not ask, so none.
+		// Only the provider's explicit verdict is reported as not_found, and a
+		// held prefix does not overrule it. A bare ErrNotFound (a 404), a
+		// transport failure or a cancellation could not ask.
 		if stderrs.Is(lerr, ErrPrefixNotRecognised) {
 			return countryReadResult{source: SourceNotFound}
 		}
-		return countryReadResult{source: SourceNone}
+		return o.heldPrefix(ctx, callsign, force)
 	}
 	if res.Name == "Unknown" {
-		// Hamnut's "disabled" sentinel — treat as no-data so the
-		// SPA's countrySource reads "none" and we don't cache the
-		// sentinel.
-		return countryReadResult{source: SourceNone}
+		// Hamnut's "disabled" sentinel: it was not asked. Never cached.
+		return o.heldPrefix(ctx, callsign, force)
 	}
 	return countryReadResult{data: res, source: SourceHamnut, coldMiss: true}
+}
+
+// heldPrefix is what is left when the provider cannot be asked about a callsign:
+// the longest prefix the country table holds, named as such
+// (SourceCountryPrefix), because it may be a parent block and not the callsign's
+// own entity. Nothing is remembered for the callsign from it, so the provider is
+// asked again at the next lookup. A forced refresh gets nothing instead: the
+// operator asked for fresh data, and an old guess would pass for it.
+func (o *Orchestrator) heldPrefix(ctx context.Context, callsign string, force bool) countryReadResult {
+	if force {
+		return countryReadResult{source: SourceNone}
+	}
+	held, err := o.DB.FetchCountryByCallsignWithContext(ctx, callsign)
+	if err != nil {
+		if !stderrs.Is(err, errors.ErrNotFound) {
+			o.warn("country fetch failed", err)
+		}
+		return countryReadResult{source: SourceNone}
+	}
+	return countryReadResult{data: held, source: SourceCountryPrefix}
+}
+
+// rememberCountry stores a provider answer for a callsign: against the callsign
+// itself, always, and in the prefix table when the answer is a prefix that table
+// may hold. An entry the provider keeps for ONE callsign (its prefix IS the
+// callsign) is not a prefix and is never written there, where it would answer
+// for any longer call that begins with it. One-character block prefixes stay out
+// of it too (sqlite.IsCacheableCountryPrefix).
+func (o *Orchestrator) rememberCountry(ctx context.Context, callsign string, c types.Country, what string) {
+	if werr := o.DB.UpsertCallsignCountryWithContext(ctx, callsign, c); werr != nil {
+		o.warn(what+": remembering the callsign's country failed", werr)
+	}
+	if strings.EqualFold(strings.TrimSpace(c.Prefix), callsign) || !sqlsvc.IsCacheableCountryPrefix(c.Prefix) {
+		return
+	}
+	if werr := o.DB.UpsertCountryWithContext(ctx, c); werr != nil {
+		o.warn(what+": country upsert failed", werr)
+	}
+}
+
+// localCountry is the country a callsign has in local data alone, for a caller
+// that must not ask the provider: what was remembered for the callsign, else
+// the longest held prefix.
+func (o *Orchestrator) localCountry(ctx context.Context, callsign string) (types.Country, error) {
+	c, err := o.DB.FetchCallsignCountryWithContext(ctx, callsign)
+	if err == nil || !stderrs.Is(err, errors.ErrNotFound) {
+		return c, err
+	}
+	return o.DB.FetchCountryByCallsignWithContext(ctx, callsign)
 }
 
 // readStation runs the read half of the station layer — cache lookup
@@ -670,15 +730,13 @@ func (o *Orchestrator) scheduleCountryRefresh(callsign string) {
 			// again. ADR 0017 #7 implicit fall-through.
 			return
 		}
-		// The uncacheable-prefix skip mirrors the sync writeback: hamnut may
-		// return a one-char block prefix on a refresh even when the stale row's
-		// own prefix was longer; leave the stale row rather than warn per fire.
-		if res.Name == "Unknown" || !sqlsvc.IsCacheableCountryPrefix(res.Prefix) {
+		// The same write-back as the cold miss: the callsign's own answer is
+		// rewritten, and the prefix table only where the answer is a prefix it
+		// may hold.
+		if res.Name == "Unknown" || res.Prefix == "" {
 			return
 		}
-		if werr := o.DB.UpsertCountryWithContext(ctx, res); werr != nil {
-			o.warn("async country upsert failed", werr)
-		}
+		o.rememberCountry(ctx, strings.ToUpper(strings.TrimSpace(callsign)), res, "async refresh")
 	})
 }
 
@@ -702,7 +760,7 @@ func (o *Orchestrator) scheduleStationRefresh(callsign string) {
 		// trigger a hamnut call here — country has its own staleness
 		// path; the station refresh just consumes whatever's
 		// currently cached.
-		country, ferr := o.DB.FetchCountryByCallsignWithContext(ctx, callsign)
+		country, ferr := o.localCountry(ctx, callsign)
 		if ferr != nil && !stderrs.Is(ferr, errors.ErrNotFound) {
 			o.warn("async country fetch (during station refresh) failed", ferr)
 			// Fall through with empty country — merge becomes a no-op,
