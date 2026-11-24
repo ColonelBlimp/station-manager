@@ -12,7 +12,12 @@
 // whenever smd's responses show a daemon process it has not been admitted to.
 import { session } from 'electron';
 import { admission, newLifetime, watchDaemon } from './admission.mjs';
-import { closeFlow, isCloseRequest } from './closing.mjs';
+import {
+    PAGE_REASONS_EXPRESSION,
+    closeConfirmation,
+    closeFlow,
+    isCloseRequest,
+} from './closing.mjs';
 import { installCredential, onceCredential, watchRefusal } from './credential.mjs';
 import { connectWhenTrusted } from './daemon.mjs';
 import { recordingFs } from './discovery.mjs';
@@ -33,10 +38,14 @@ import { createMainWindow } from './window.mjs';
  *
  * It also returns `closing`, the window's close (W-0027 A3; src/closing.mjs), made of this
  * launch's own session, admission, request filter and window. `askUnconfirmed` shows the box
- * for a close smd did not confirm and `quit` ends the app. NOTHING HERE RUNS IT: the window's
- * own close is not wired to it until the question that goes before it is built (A3's second
- * slice; ADR 0102 ruling 6 asks before a run is stopped or an entry lost). Only the test
- * scenarios call `closing.close()`.
+ * for a close smd did not confirm and `quit` ends the app.
+ *
+ * `askClose` shows the question that goes before a close (ADR 0102 ruling 6 asks before a run
+ * is stopped or an entry lost). A LAUNCH GIVEN IT IS THE APP'S OWN WINDOW: its close, however
+ * it is asked for (the title bar, the window manager, a quit of the app, which closes its
+ * windows), runs that one flow and nothing else closes it. The two go together on purpose: a
+ * window whose close ran the flow with no question would stop a run or drop an entry unasked.
+ * A launch without it (the checks of other things) keeps a window that simply closes.
  */
 export function launchTrusted({
     env = process.env,
@@ -50,6 +59,7 @@ export function launchTrusted({
     onCredentialRequest,
     onRetired,
     askUnconfirmed,
+    askClose,
     quit,
 }) {
     const ses = partition ? session.fromPartition(partition) : session.defaultSession;
@@ -117,7 +127,30 @@ export function launchTrusted({
         pageWrites,
         ask: (state) => askUnconfirmed(state),
         quit: () => quit(),
+        ...(askClose
+            ? {
+                  confirm: closeConfirmation({
+                      ses,
+                      origin: () => target.origin,
+                      admission: admitted,
+                      // A window with no page to read reports nothing of its own.
+                      readPage: async () =>
+                          win.webContents.executeJavaScript(PAGE_REASONS_EXPRESSION),
+                      askQuestion: (question) => askClose(question, win),
+                  }),
+              }
+            : {}),
     });
+    if (askClose) {
+        // Electron emits `close` before the page's `beforeunload` (electron.d.ts: "It's
+        // emitted before the `beforeunload` and `unload` event of the DOM"), so the page's
+        // own veto of an unload is never asked: there is one question, the shell's. The
+        // flow ends the window with destroy(), which emits no `close`, so this runs once.
+        win.on('close', (e) => {
+            e.preventDefault();
+            void closing.close();
+        });
+    }
     void connectWhenTrusted({
         win,
         pin,

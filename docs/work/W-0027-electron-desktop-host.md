@@ -5446,3 +5446,104 @@ part of A3 and is to be committed on its own.
 - **Gates:** `gofmt`, `go vet`, `golangci-lint` (0 issues), the stream tests 20 times
   with the race detector, and `go test -race -short ./internal/api` in full, as the
   hosted step runs it.
+
+### A3, the shell's second slice — the question, and the window's own close (built 2026-11-24; committed and pushed the same day on the operator's direction, before Codex's review; not yet at the station)
+
+On the operator's direction ("commit and push, then A3", 2026-11-24). With this the new
+close is wired to the window: closing Station Manager is a confirmed exit, and it asks
+first when something would stop or be lost. Sections A, F3 and H of the criteria above,
+with G's reference lines.
+
+**What the operator will see after a deploy.**
+- **Closing with nothing in progress:** the window goes a moment later than today. Nothing
+  is asked.
+- **Closing with FT8 running or armed, a contact half entered, a log attempt not yet
+  answered, or Settings unsaved or saving:** one box, "Close Station Manager?", with one
+  line for each thing and the buttons Close and Cancel. Cancel changes nothing.
+- **If the daemon does not confirm:** the box of the first slice, said once.
+- **Closing with unsaved Settings no longer does nothing without a word** (the defect the
+  criteria name): it asks, and Close closes.
+
+**What was built.**
+- **The page reports what a close would lose** (`frontend/app/src/lib/closeReasons.ts`,
+  published from `App.svelte` beside the binding marker): three read-only attributes of
+  their own on the root element, `data-sm-close-entry` (empty, `draft` or `unknown`),
+  `data-sm-close-unsaved` and `data-sm-close-saving` (Settings sections by their tab
+  names). A log attempt whose outcome is not known is never also a draft to discard, and
+  a section being saved is never also unsaved: each thing is named once. The page says
+  nothing about FT8.
+- **The shell asks** (`desktop/src/closing.mjs`): `readFt8State` (the daemon's
+  `GET /v1/ft8/state`: active, idle, not served, or not known for anything that is not a
+  valid answer); `pageReasons` and `readPageReasons` (one fixed expression, only the
+  values the shell knows, each attribute by itself, anything else not reported, a page
+  that cannot be read reporting nothing); `closeQuestion` (the ruled words);
+  `closeConfirmation`, which reads both together and asks when there is any reason. A
+  window that knows it is retired, and a start of the app the daemon was never asked to
+  admit, read no FT8 state and show no FT8 line: their close sends no disarm.
+- **The window's own close runs the flow** (`desktop/src/launch.mjs`): a launch given the
+  question is the app's own window; its `close` is prevented and the one flow runs. The
+  page's veto of an unload is never asked, because Electron emits the window's `close`
+  before the page's `beforeunload` (`electron.d.ts`), and the flow ends the window with
+  `destroy()`. Launches without the question (the checks of other things) keep a window
+  that simply closes.
+- **The box** (`desktop/src/main.mjs`): over the window it is about; Cancel is the button
+  under Enter and under a dismissal.
+
+**Three choices made while building, for the operator to change.**
+1. **Cancel is the default button** of the question, so a key pressed without reading
+   does not stop a run or drop an entry. The other choice is Close as the default.
+2. **The read of the page waits the same 5 seconds** as each request to the daemon
+   (ruling 2 names the requests to the daemon; this applies its limit to one more
+   wait). A page that does not answer in that time reports nothing.
+3. **A contact whose log attempt is unanswered shows one line** ("A contact was sent to be
+   logged and its outcome is not known. It may already be logged."), not that line and
+   the "will be discarded" line together, though what was typed is still in the form.
+
+**Not established, and said so.** Whether a request from the operating system to end the
+app (a logout's signal) reaches this flow is not known: if Electron turns it into a quit
+of the app, the windows are closed and the flow runs; if the process is killed, nothing
+runs and the daemon's grace applies, as in F1. Nothing here depends on which.
+
+**Evidence.**
+- **The page:** `closeReasons.test.ts`, 11 tests: each reason alone, together and none;
+  a section both saving and unsaved named once; an unknown outcome not also a draft; the
+  binding marker left alone.
+- **The shell's module:** `desktop/test/closing-question.test.mjs`, 30 tests: every answer
+  of the state read, including thirteen that are not valid; the page's values and what is
+  not reported; the shell's list of sections compared with the page's own source file;
+  the words, line by line and together; the reasons gathered from both; a page that
+  cannot be read beside a daemon that answers "armed" (codex-236); the retired and the
+  never-admitted start; Cancel changing nothing (no barrier, no disarm, no exit); the
+  order of a confirmed close; the disarm sent whatever the read said; one close at a
+  time while the question shows.
+- **In the real app against a real `smd`** (`npm run check:close`, 18 checks, every close
+  asked for by closing the window): no key reloads and there is no menu; a callsign typed
+  into the real page makes the question name the contact and nothing else; a second
+  close while it shows adds nothing; Cancel changes nothing and the page's own veto is
+  never asked; a quit of the app with no close under way asks the same question, and
+  Cancel keeps the app (Electron's quit closes the windows first: `electron.d.ts`, "Try
+  to close all windows"); the order of the requests (`GET /v1/ft8/state`, the disarm,
+  the read, the exit); the page's write refused under the first-kind box and let through
+  after its Cancel; the window gone though its page vetoes an unload, at Close and at
+  Close anyway; a close with nothing to lose asking nothing; and the second kind as
+  before. FT8 is off in that `smd`, so the scenario answers the shell's read of FT8's
+  state in the daemon's place twice, once as armed and once with no valid answer, to
+  show the two FT8 lines in the real app. Nothing is armed anywhere and nothing is keyed.
+- **Reversion proofs, each in a temporary copy, each failing its named test:** a retired
+  window reading FT8's state; an invalid answer read as idle; an unknown section
+  accepted; a box with no answer taken as Close; the window's close not wired (the
+  scenario times out waiting for the question); the final close left to the page's veto
+  (the window stays); a section named twice; a draft named while its outcome is unknown.
+- **Gates:** the shell's lint, format and 190 unit tests; the page's lint, format,
+  `svelte-check` and whole suite (3,023 tests); the maintainability check.
+
+**Not shown, and why.** A real FT8 run or arm stopped by a close is not shown anywhere:
+it would need a rig or a keyed test. What is shown is the daemon's read in its own tests
+(the first part), the shell's use of each answer in the module's tests, and the two FT8
+lines in the real app from an answer given in the daemon's place. Unsaved Settings made
+by editing the real Settings page are not driven in the real app: the page's report of
+them is in its own tests, and the scenario's page vetoes its unload as that guard does.
+
+**Reference.** `docs/v2-design/api-endpoints.md` now says that the app sends the exit
+report, the disarm and the read of FT8's state at a close, and repeats a stale exit;
+`desktop/README.md` gains "Closing the app".

@@ -15,7 +15,14 @@
 //   4. acknowledged: the window is closed and the app quits.
 //
 // What a close does never depends on the page. Whether to ask first is another matter, and is
-// `confirm`'s (the question: the second slice of A3).
+// `confirm`'s.
+//
+// THE QUESTION (section A) is asked before any of that, when and only when something would
+// stop or be lost, and names each thing once: FT8, from smd's own read of its state at that
+// moment (GET /v1/ft8/state), never from a page; and what the page reports of its own, a
+// contact being entered, a log attempt whose outcome is not known, Settings unsaved or being
+// saved. The page's word decides only whether to ask and which lines are shown. Cancel
+// changes nothing at all: the question comes before the barrier.
 //
 // THE CLOSE THAT IS NOT CONFIRMED is said once, in a box, and is of two kinds, because an exit
 // that was sent may have been stored, or may yet be: smd decides an exit whatever becomes of
@@ -136,6 +143,166 @@ export async function reportExit(ses, origin, { timeoutMs = CLOSE_TIMEOUT_MS } =
     }
 }
 
+/**
+ * FT8's state, as smd says it at this moment (W-0027 A3, section I): 'active' (a stop would
+ * stop something), 'idle', 'not-served' (FT8 is not enabled: an answer of its own), or
+ * 'unknown' for anything that is not a valid answer: none, a missing route, a malformed one.
+ * "Not known" is never read as idle and never as "not served". It is one observation.
+ */
+export async function readFt8State(ses, origin, { timeoutMs = CLOSE_TIMEOUT_MS } = {}) {
+    const r = await ask(ses, closeUrl(origin, '/v1/ft8/state'), { timeoutMs });
+    const b = r?.body;
+    if (r?.status !== 200 || b === null || typeof b !== 'object' || Array.isArray(b)) {
+        return 'unknown';
+    }
+    if (b.served === false) return Object.keys(b).length === 1 ? 'not-served' : 'unknown';
+    if (b.served === true && typeof b.would_stop === 'boolean') {
+        return b.would_stop ? 'active' : 'idle';
+    }
+    return 'unknown';
+}
+
+/** The one fixed expression the shell evaluates in the page when a close is asked for: three
+ *  attributes of the close's own on the root element (frontend/app/src/lib/closeReasons.ts),
+ *  and nothing else of the page. */
+export const PAGE_REASONS_EXPRESSION =
+    "(() => { const e = document.documentElement; return ['data-sm-close-entry', 'data-sm-close-unsaved', 'data-sm-close-saving'].map((n) => e.getAttribute(n)); })()";
+
+/** The Settings sections a page may name, by their tabs (the page's own list, in its order:
+ *  frontend/app/src/lib/config/unsaved.ts; a test here reads that file and compares). */
+export const SETTINGS_SECTIONS = Object.freeze([
+    'Station',
+    'Logbooks',
+    'Rigs',
+    'FT8 / FT4',
+    'Forwarding',
+    'Email',
+    'Enrichment',
+    'General',
+    'Archives',
+]);
+
+const NO_PAGE_REASONS = () => ({ entry: '', unsaved: [], saving: [] });
+
+/** A list of sections as the page wrote it, or none if any part of it is not a section the
+ *  shell knows, named once. */
+function sectionsOf(value) {
+    if (typeof value !== 'string' || value === '') return [];
+    const labels = value.split('|');
+    const known = labels.every((l) => SETTINGS_SECTIONS.includes(l));
+    return known && new Set(labels).size === labels.length ? labels : [];
+}
+
+/**
+ * What the page reports a close would lose, from what the fixed expression returned. Only
+ * the values the shell knows are accepted, each attribute by itself; anything else is "not
+ * reported" and shows no line. A page that publishes nothing (the waiting page) reports
+ * nothing. A section being saved is named once, as being saved.
+ */
+export function pageReasons(raw) {
+    if (!Array.isArray(raw) || raw.length !== 3) return NO_PAGE_REASONS();
+    const saving = sectionsOf(raw[2]);
+    return {
+        entry: raw[0] === 'draft' || raw[0] === 'unknown' ? raw[0] : '',
+        unsaved: sectionsOf(raw[1]).filter((l) => !saving.includes(l)),
+        saving,
+    };
+}
+
+/**
+ * Read the page's reasons. `readPage` evaluates PAGE_REASONS_EXPRESSION in the window's
+ * page. A page that cannot be read, or does not answer within the limit, reports nothing: it
+ * never means a step of the close is skipped, and it silences no reason that is not its own.
+ */
+export async function readPageReasons(readPage, { timeoutMs = CLOSE_TIMEOUT_MS } = {}) {
+    let timer;
+    try {
+        const limit = new Promise((_res, reject) => {
+            timer = setTimeout(() => reject(new Error('the page did not answer')), timeoutMs);
+        });
+        return pageReasons(await Promise.race([Promise.resolve().then(readPage), limit]));
+    } catch {
+        return NO_PAGE_REASONS();
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+/** "Station, Email and General", as the page's own prompt lists sections. */
+function listOf(labels) {
+    if (labels.length <= 1) return labels[0] ?? '';
+    return `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`;
+}
+
+/**
+ * The question before a close (the words ruled 2026-11-23), or null when there is nothing to
+ * ask about. Each line is shown only when it is true, and each thing is named once. `ft8` is
+ * readFt8State's word, or 'none' when it was not read. The line for an unknown log outcome
+ * never says the contact is lost: it may already be stored. The line for a section being
+ * saved promises neither that the save completes nor that it does not.
+ */
+export function closeQuestion({ ft8, entry, unsaved, saving }) {
+    const lines = [];
+    if (ft8 === 'active') lines.push('FT8 will be stopped and transmit disarmed.');
+    if (ft8 === 'unknown') {
+        lines.push("FT8's state could not be read. If it is running, it will be stopped.");
+    }
+    if (entry === 'draft') lines.push('The contact you are entering will be discarded.');
+    if (entry === 'unknown') {
+        lines.push(
+            'A contact was sent to be logged and its outcome is not known. It may already be logged.'
+        );
+    }
+    if (unsaved.length > 0) {
+        lines.push(`Unsaved changes in Settings (${listOf(unsaved)}) will be lost.`);
+    }
+    if (saving.length > 0) {
+        lines.push(
+            `Settings (${listOf(saving)}) is still being saved. Closing does not wait: the save may not complete, and anything changed since it began will be lost.`
+        );
+    }
+    if (lines.length === 0) return null;
+    return {
+        message: 'Close Station Manager?',
+        detail: lines.join('\n\n'),
+        buttons: ['Close', 'Cancel'],
+        choices: ['close', 'cancel'],
+        cancelId: 1,
+    };
+}
+
+/**
+ * The `confirm` of a close: gathers the reasons from both sources, together, and asks the one
+ * question when there is any. Resolves true to go on with the close (nothing to ask, or the
+ * answer was Close), false for Cancel or for a question that gave no answer.
+ *
+ * A window that knows it has been retired, and a lifetime smd was never asked to admit, read
+ * no FT8 state and show no FT8 line: their close sends no disarm (closeFlow), so it must not
+ * say that it stops FT8, which may be another app's.
+ *
+ *   readPage     () => what PAGE_REASONS_EXPRESSION evaluates to in the window's page
+ *   askQuestion  (question) => 'close' | 'cancel': shows closeQuestion's box
+ */
+export function closeConfirmation({
+    ses,
+    origin,
+    admission,
+    readPage,
+    askQuestion,
+    timeoutMs = CLOSE_TIMEOUT_MS,
+}) {
+    return async () => {
+        const stopsFt8 = admission.everAsked() && !admission.isRetired();
+        const [ft8, page] = await Promise.all([
+            stopsFt8 ? readFt8State(ses, origin(), { timeoutMs }) : 'none',
+            readPageReasons(readPage, { timeoutMs }),
+        ]);
+        const question = closeQuestion({ ft8, ...page });
+        if (question === null) return true;
+        return (await askQuestion(question)) === 'close';
+    };
+}
+
 const TITLE = 'The daemon did not confirm the close';
 const NOT_CONFIRMED =
     'Station Manager could not confirm with the daemon that it is closing, so the daemon may treat this sitting as interrupted.';
@@ -191,7 +358,7 @@ export function unconfirmedBox({ kind, disarmFailed, terminal }) {
  *   pageWrites { refuse, allow }: the request filter's switch (hardening.mjs)
  *   ask        (state) => 'retry' | 'close' | 'cancel': shows unconfirmedBox(state)
  *   quit       ends the app
- *   confirm    () => boolean: the question, when something would stop (the second slice)
+ *   confirm    () => boolean: the question, when something would stop (closeConfirmation)
  */
 export function closeFlow({
     ses,

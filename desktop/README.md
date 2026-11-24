@@ -130,6 +130,22 @@ it. `smd`'s operating-client check is always on, and this is what lets the app i
 `npm run check:c2b` proves this against TLS fixtures. `npm run check:c1d` proves it against a
 real `smd`, whose check is always on.
 
+## Closing the app
+
+Closing the window is a confirmed exit (ADR 0102 ruling 6; W-0027 A3; `src/closing.mjs`).
+
+- **It asks first only when something would stop or be lost:** FT8 running or transmit armed
+  (the daemon's own word, read at that moment), a contact being entered, a log attempt whose
+  outcome is not known, Settings unsaved or still being saved. Cancel changes nothing.
+- **Then it stops FT8 itself, tells the daemon it is exiting, and waits for the answer** before
+  the window goes. With nothing in progress this takes a moment and asks nothing.
+- **If the daemon does not confirm,** the app says so once, with Try again and Close anyway. It
+  does not vanish silently. Each request waits 5 seconds.
+- There is no reload key and no menu. The operating system ending the app (a logout, a kill)
+  asks nothing: the daemon then stops FT8 by itself shortly afterwards.
+
+`npm run check:close` shows all of this in the real app against a real `smd`.
+
 ## Commands
 
 ```sh

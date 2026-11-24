@@ -33,6 +33,7 @@
     import { computeTitle } from './lib/ui/title';
     import { isDevDaemon } from './lib/ui/buildIdentity.svelte';
     import { publishBindingMarker } from './lib/config/bindingMarker.svelte';
+    import { publishCloseReasons } from './lib/closeReasons';
 
     // Ask before unsaved Settings edits are discarded. Installed from the SHELL,
     // not from Settings: Settings unmounts the moment the operator navigates
@@ -44,6 +45,10 @@
     // bound to, for passive observation by an acceptance driver. Observational
     // only — attributes written, nothing read back, no request made.
     $effect(() => publishBindingMarker(document.documentElement));
+
+    // What a close of the app would stop or lose (W-0027 A3): read by the desktop
+    // app for its one question. Attributes written, nothing read back.
+    $effect(() => publishCloseReasons(document.documentElement));
 
     // Reflect shell state onto <html> (drives the token swap + collapse rules)
     // and persist it. Initial attributes are set pre-mount in index.html, so

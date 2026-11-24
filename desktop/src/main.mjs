@@ -77,6 +77,25 @@ if (!app.requestSingleInstanceLock()) {
     app.on('before-quit', (e) => {
         if (closing && !closing.allowsQuit()) e.preventDefault();
     });
+    // The question before a close (closing.mjs, closeQuestion), over the window it is about.
+    // Cancel is the button under Enter and under a dismissal: a key pressed without reading
+    // must not stop a run or drop an entry.
+    const askClose = async (question, win) => {
+        const options = {
+            type: 'question',
+            title: 'Station Manager',
+            message: question.message,
+            detail: question.detail,
+            buttons: question.buttons,
+            cancelId: question.cancelId,
+            defaultId: question.cancelId,
+            noLink: true,
+        };
+        const { response } = await (win && !win.isDestroyed()
+            ? dialog.showMessageBox(win, options)
+            : dialog.showMessageBox(options));
+        return question.choices[response] ?? question.choices[question.cancelId];
+    };
     // The box for a close smd did not confirm. It has no parent: the window is hidden, or
     // already closed.
     const askUnconfirmed = async (state) => {
@@ -140,10 +159,11 @@ if (!app.requestSingleInstanceLock()) {
                         });
                     },
                     askUnconfirmed,
+                    askClose,
                     quit: () => app.quit(),
                 });
                 mainWindow = launched.win;
-                closing = launched.closing; // held, not yet run by anything (launch.mjs)
+                closing = launched.closing; // run by the window's own close (launch.mjs)
                 mainWindow.on('closed', () => {
                     mainWindow = null;
                 });
