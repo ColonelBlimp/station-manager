@@ -144,22 +144,24 @@ func DecodeFileProfile(p Profile, path string, enableOSD bool, log logging.Logge
 }
 
 // decoderCore is the per-profile go-ft8 decoder behind slotDecoder: FT8's
-// ft8.Decoder or FT4's ft4.Decoder, each scoped to one receiver stream. The
-// FT8 core is stateful across adjacent slots (hash table, A7 hints); the
-// v0.9.0 FT4 decoder is stateless by the library's own statement, so its
-// advance is a no-op in effect and reset merely rebuilds the instance — the
-// wrapper keeps the skip/reset contract identical for both so a later
-// stateful FT4 decoder slots in without touching the loop. The wrapper owns
-// the fail-soft, logging and skip/reset policy; the core owns only the
-// library call, so the two modes share one wrapper (ADR 0080).
+// ft8.Decoder or FT4's ft4.Decoder, each scoped to one receiver stream. Both
+// are stateful across slots: the FT8 core keeps a callsign hash table and A7
+// hints, and the FT4 core keeps the hash table (go-ft8 v0.10.0; until then it
+// kept nothing, and a hashed call on FT4 was always "<...>"). The wrapper
+// keeps the skip/reset contract identical for both, which is why FT4's
+// history arrived without touching the loop: skip keeps it, reset clears it.
+// Neither instance may be shared between receiver streams or called
+// concurrently. The wrapper owns the fail-soft, logging and skip/reset
+// policy; the core owns only the library call, so the two modes share one
+// wrapper (ADR 0080).
 type decoderCore interface {
 	// decodeChecked decodes one slot with the checked-input contract: a
 	// malformed slot returns a typed error (the library's DecodeInputError or
 	// DecoderOptionError) without advancing state.
 	decodeChecked(samples []int16) ([]goft8.DecodedMessage, decodeDiag, error)
 	// advance decodes one slot of silence to move a stream-scoped decoder across
-	// a physical slot SM refused to decode (see slotDecoder.skip); a no-op in
-	// effect for a stateless core.
+	// a physical slot SM refused to decode (see slotDecoder.skip). A silent
+	// slot keeps the hash history of both cores.
 	advance(zero []int16)
 }
 
@@ -196,11 +198,11 @@ func (c *ft8Core) decodeChecked(samples []int16) ([]goft8.DecodedMessage, decode
 
 func (c *ft8Core) advance(zero []int16) { c.dec.DecodeMessages(zero) }
 
-// ft4Core wraps go-ft8's FT4 decoder (v0.9.0: unassisted BP, no OSD, no AP,
-// and stateless — the library defers those). enableOSD is accepted for
-// signature symmetry and has no effect; the wrapper logs that once at
-// construction. advance still decodes a silent slot so the stream-scoped
-// contract holds unchanged if a later release retains state.
+// ft4Core wraps go-ft8's FT4 decoder: unassisted BP, no OSD and no AP (the
+// library defers those), with callsign hash history across the slots of its
+// stream since v0.10.0. enableOSD is accepted for signature symmetry and has
+// no effect; the wrapper logs that once at construction. advance decodes a
+// silent slot, which the library documents as keeping that history.
 type ft4Core struct{ dec *goft4.Decoder }
 
 func newFt4Core(bool) decoderCore { return &ft4Core{dec: goft4.NewDecoder()} }
@@ -224,7 +226,7 @@ func (c *ft4Core) advance(zero []int16) { c.dec.DecodeMessages(zero) }
 // one capture session's decode loop, on one profile. The FT8 core retains
 // callsign-hash and A7 hint state across adjacent slots (go-ft8's a7.go),
 // which is what lets a "<...>" hash reference resolve to a call heard two
-// slots earlier (the v0.9.0 FT4 core carries no such state yet); the
+// slots earlier, and the FT4 core retains the hash state too (v0.10.0); the
 // instance is NOT goroutine-safe, so it lives loop-local in decodeLoop (one
 // goroutine per capture session, sessions serialised by the Service).
 // Freshness has two mechanisms, and both are load-bearing: a fresh decoder per

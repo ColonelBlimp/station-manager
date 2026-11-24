@@ -998,6 +998,9 @@ several callers at once sends a roger to one and a report to the next in a singl
 which the decoder prints as `<call1> RR73; <call2> <SENDER> <report>`, the sender's own call hashed
 in angle brackets. Each half means exactly what its plain form means: `<us> RR73; …` from the
 station being worked is its roger to us, and `… ; <us> <SENDER> <report>` is its report to us.
+It is read on FT8 and on FT4. On FT4 that needed the decoder library to keep the calls it has
+heard, which it does from go-ft8 v0.10.0; with v0.9.0 an FT4 sender was always `<...>` and the
+message was never read there.
 The rules (`parseCombined`, `directedTo` in `internal/ft8/sequence.go`):
 - **The sender must be resolved.** `<...>` is nobody: no roger, no report, no spot. A resolved call
   is the decoder's attribution, a short hash looked up among calls it has heard; the sequencer

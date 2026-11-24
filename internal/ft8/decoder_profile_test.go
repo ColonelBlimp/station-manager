@@ -143,3 +143,58 @@ func BenchmarkDecodeSlotFT4(b *testing.B) {
 		}
 	}
 }
+
+// FT4 keeps callsign hash history across the slots of one receiver stream, as
+// FT8 does (go-ft8 v0.10.0: "Per-instance FT4 history for 10-, 12-, and 22-bit
+// callsign hashes"). W-0030 depends on it: a DXpedition's combined message
+// names its sender only by a hash, and is read only when that hash is resolved.
+// Until v0.10.0 the FT4 decoder kept nothing, so on FT4 it never was (found at
+// the station 2026-11-24: two contacts the other station had logged were lost).
+//
+// The fixture is FT8's (decodesplit_test.go): a call heard in full, then a
+// message that names it by its 12-bit hash. The control comes first: a fresh
+// decoder cannot resolve it, so a failure there means the fixture is wrong.
+func TestSlotDecoder_FT4_HashResolvesAcrossSlots(t *testing.T) {
+	teach := mixSlotOn(t, ProfileFT4, map[string]float64{hashTeachText: 1500})
+	ref := mixSlotOn(t, ProfileFT4, map[string]float64{hashRefText: 1500})
+
+	control := newSlotDecoder(ProfileFT4, true, logging.Noop())
+	got, ok := control.decode(ref)
+	require.True(t, ok)
+	require.Contains(t, textsOf(got), hashUnresolved, "fixture control: a fresh FT4 decoder cannot resolve the hash")
+
+	d := newSlotDecoder(ProfileFT4, true, logging.Noop())
+	got, ok = d.decode(teach)
+	require.True(t, ok)
+	require.Contains(t, textsOf(got), hashTeachText)
+	got, ok = d.decode(ref)
+	require.True(t, ok)
+	require.Contains(t, textsOf(got), hashResolved, "the call heard a slot earlier must resolve its hash on FT4")
+}
+
+// A slot SM refuses to decode (its own transmission) keeps the history: the
+// run path transmits every other slot, which is exactly where the station being
+// worked was heard in full one slot and names itself by hash two slots later.
+func TestSlotDecoder_FT4_SkipPreservesHashState(t *testing.T) {
+	d := newSlotDecoder(ProfileFT4, true, logging.Noop())
+	got, _ := d.decode(mixSlotOn(t, ProfileFT4, map[string]float64{hashTeachText: 1500}))
+	require.Contains(t, textsOf(got), hashTeachText)
+
+	d.skip() // our TX slot between them
+	got, _ = d.decode(mixSlotOn(t, ProfileFT4, map[string]float64{hashRefText: 1500}))
+	require.Contains(t, textsOf(got), hashResolved, "a skipped slot must not lose the history")
+}
+
+// A dial move clears it. The hash table is band-blind, so a call heard on the
+// old band must not resolve a hash on the new one: a collision would print a
+// valid-looking wrong call (review cd1757a7cda2 P1, now true of FT4 as well).
+func TestSlotDecoder_FT4_ResetClearsHashState(t *testing.T) {
+	d := newSlotDecoder(ProfileFT4, true, logging.Noop())
+	got, _ := d.decode(mixSlotOn(t, ProfileFT4, map[string]float64{hashTeachText: 1500}))
+	require.Contains(t, textsOf(got), hashTeachText)
+
+	d.reset() // a QSY
+	got, _ = d.decode(mixSlotOn(t, ProfileFT4, map[string]float64{hashRefText: 1500}))
+	require.Contains(t, textsOf(got), hashUnresolved, "a call heard before the dial moved must not resolve a hash after it")
+	require.NotContains(t, textsOf(got), hashResolved)
+}

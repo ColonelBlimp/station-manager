@@ -5,9 +5,9 @@ Reviewed by Codex in three rounds (codex-242, codex-243, codex-245), with no run
 open; committed and pushed the same day on the operator's direction, and **at the station
 since 2026-11-24** (the operator's deploy: both packages at `2.0.0~alpha.5.315.gb8ad8dba`, the
 daemon active, no error in its log since the start; checked locally and read-only). It has not
-yet met a combined message on the air. **It acts on FT8 only:** on FT4 the decoder never
-resolves a hashed sender, and that is to be closed in the decoder library (the operator's ruling,
-below). Closing the dossier is the operator's decision.
+yet met a combined message on the air. **On FT4 it acts from `go-ft8` v0.10.0,** whose FT4
+decoder keeps the calls it has heard (the last section below); with v0.9.0 an FT4 sender was
+never resolved. Closing the dossier is the operator's decision.
 **Outcome:** a contact that a station working several callers at once has rogered is logged
 here, as it is in that station's log.
 
@@ -204,3 +204,43 @@ this contact and the 20 m FT8 contact that began this work item to be added by h
 submitted on 2026-11-24 through `POST /v1/qso`, one record each, with times taken from the
 station's logs (the session's start, and the end of the slot that carried the first roger), and
 both were stored and forwarded. Nothing of FT8, the rig or TX was touched.
+
+### The FT4 gap closed by the decoder library (2026-11-24; `go-ft8` v0.10.0 taken, a change of its own)
+
+The operator, the same day: "new FT8 lib has landed 0.10". The release does what the
+recommendation asked (its `CHANGELOG.md` and `docs/CALLSIGN_HASH_HISTORY.md`): an `ft4.Decoder`
+keeps callsign hash history across the slots of its stream, with FT8's rules; both decoders can
+be seeded (`RememberCallsigns`); the hash and the fields of the combined message are exported
+(`ft8.CallsignHash`, `Payload77.DXpedition()`).
+
+**What the upgrade is here.** The version line in `go.mod`, with `go.sum`. No production code:
+`slotDecoder` already keeps one decoder per capture session in one goroutine, a skipped slot
+decodes silence (which the library documents as keeping the history) and a dial move builds a
+fresh decoder. Three comments in `internal/ft8/decode.go` that called the FT4 core stateless
+are brought up to date.
+
+**Shown by tests of its own** (`internal/ft8/decoder_profile_test.go`), with FT8's existing
+fixture, a call heard in full and then a message naming it by its 12-bit hash:
+- on FT4 the hash resolves in the slot after the call was heard, where a fresh decoder (the
+  control, asserted first) prints `<...>`;
+- a skipped slot, our own transmission, keeps the history;
+- a dial move clears it, so a call heard on one band never resolves a hash on another.
+The first two fail on v0.9.0 (`<...> PJ4/K1ABC RR73`) and pass on v0.10.0; the third fails
+when `reset()` no longer replaces the decoder.
+
+**What that does and does not show for criterion 3.** The missing fact was a resolved hashed
+call on FT4, and that is shown through this repository's own decoder wrapper. The readers of
+the combined message work on its text and do not know the mode. A combined message decoded
+from audio on FT4 is not made here: neither encoder in this repository can make one. The
+library's own tests cover it (`ft4/callsign_history_test.go`).
+
+**What the operator can expect on FT4.** A combined message is read once the station's call
+has been heard in full on that stream since the session began or the dial last moved, which
+is so for a station answered from its CQ or seen working others. In the first slots of a
+session, before any plain message from it has been decoded, its hashed sender is still
+`<...>`.
+
+**Not done, and for the operator to decide.** Seeding the history with our own call and the
+station being worked would cover those first slots; reading a combined message that addresses
+us by a hashed call is now checkable with `CallsignHash`. Each changes attribution and wants
+its criteria first.
