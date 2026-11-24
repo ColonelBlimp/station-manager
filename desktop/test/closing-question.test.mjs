@@ -365,15 +365,35 @@ test('a lifetime smd was never asked to admit reads no FT8 state either: its clo
     assert.deepEqual(d.calls, []);
 });
 
-test('FT8’s state and the page are read together: neither waits for the other', async () => {
+test('the page is read last: what is typed while smd’s answer is awaited is asked about', async () => {
+    // The window still takes input while FT8's state is read, for up to the limit. A page
+    // read before that answer would miss a contact typed meanwhile, and the close would
+    // then destroy the window without a word (the clean-room review of 88177082).
     let releaseState;
     const d = daemon(() => new Promise((r) => (releaseState = () => r(json(200, served(false))))));
-    const c = confirmationOver(d);
-    const done = c.confirm();
+    const c = { questions: [], pageReads: 0 };
+    let typed = false;
+    const confirm = closeConfirmation({
+        ses: d.ses,
+        origin: () => ORIGIN,
+        admission: { everAsked: () => true, isRetired: () => false },
+        readPage: async () => {
+            c.pageReads++;
+            return [typed ? 'draft' : '', '', ''];
+        },
+        askQuestion: async (q) => {
+            c.questions.push(q);
+            return 'cancel';
+        },
+    });
+    const done = confirm();
     await new Promise((r) => setImmediate(r));
-    assert.equal(c.pageReads, 1, 'the page was read while smd’s answer was still out');
+    assert.equal(c.pageReads, 0, 'the page was read before smd had answered');
+    typed = true; // the operator types a callsign while the read is out
     releaseState();
-    assert.equal(await done, true);
+    assert.equal(await done, false);
+    assert.equal(c.pageReads, 1);
+    assert.equal(c.questions[0].detail, 'The contact you are entering will be discarded.');
 });
 
 // ----------------------------------------------------------------- within the close itself

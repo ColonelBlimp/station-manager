@@ -5537,6 +5537,16 @@ runs and the daemon's grace applies, as in F1. Nothing here depends on which.
 - **Gates:** the shell's lint, format and 190 unit tests; the page's lint, format,
   `svelte-check` and whole suite (3,023 tests); the maintainability check.
 
+**The clean-room review of `88177082`, one finding, fixed.** The page and FT8's state were
+read together, and the window takes input until the close hides it. A contact typed while
+the daemon's answer was awaited, up to 5 seconds, was missed by a page already read, and the
+close then destroyed the window without a word. The page is now read last, after the
+daemon has answered: nothing awaits between the page's answer and either the question,
+which is modal over the window (`electron.d.ts`, `showMessageBox`: "making it modal"), or
+the hiding of the window. What remains is the time the page's own answer takes to reach
+the shell. The test that pinned the two reads as simultaneous is replaced by one that
+holds the daemon's answer, types, and requires the question to name the contact.
+
 **Not shown, and why.** A real FT8 run or arm stopped by a close is not shown anywhere:
 it would need a rig or a keyed test. What is shown is the daemon's read in its own tests
 (the first part), the shell's use of each answer in the module's tests, and the two FT8

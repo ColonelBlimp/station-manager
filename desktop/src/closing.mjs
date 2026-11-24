@@ -21,8 +21,9 @@
 // stop or be lost, and names each thing once: FT8, from smd's own read of its state at that
 // moment (GET /v1/ft8/state), never from a page; and what the page reports of its own, a
 // contact being entered, a log attempt whose outcome is not known, Settings unsaved or being
-// saved. The page's word decides only whether to ask and which lines are shown. Cancel
-// changes nothing at all: the question comes before the barrier.
+// saved. The page's word decides only whether to ask and which lines are shown, and it is
+// read last, so that nothing typed while smd was answering goes unasked. Cancel changes
+// nothing at all: the question comes before the barrier.
 //
 // THE CLOSE THAT IS NOT CONFIRMED is said once, in a box, and is of two kinds, because an exit
 // that was sent may have been stored, or may yet be: smd decides an exit whatever becomes of
@@ -272,9 +273,17 @@ export function closeQuestion({ ft8, entry, unsaved, saving }) {
 }
 
 /**
- * The `confirm` of a close: gathers the reasons from both sources, together, and asks the one
- * question when there is any. Resolves true to go on with the close (nothing to ask, or the
- * answer was Close), false for Cancel or for a question that gave no answer.
+ * The `confirm` of a close: gathers the reasons from both sources and asks the one question
+ * when there is any. Resolves true to go on with the close (nothing to ask, or the answer was
+ * Close), false for Cancel or for a question that gave no answer.
+ *
+ * THE PAGE IS READ LAST, after smd has answered about FT8. The window takes input until the
+ * close hides it, and smd's answer can take the whole limit: a page read before it would
+ * miss a contact typed meanwhile, and the close would destroy the window without a word
+ * (the clean-room review of 88177082). Read last, nothing awaits between the page's answer
+ * and either the question, which is modal over the window (Electron: "The `window` argument
+ * allows the dialog to attach itself to a parent window, making it modal"), or the hiding
+ * of the window, which the close does at once when there is nothing to ask.
  *
  * A window that knows it has been retired, and a lifetime smd was never asked to admit, read
  * no FT8 state and show no FT8 line: their close sends no disarm (closeFlow), so it must not
@@ -293,10 +302,8 @@ export function closeConfirmation({
 }) {
     return async () => {
         const stopsFt8 = admission.everAsked() && !admission.isRetired();
-        const [ft8, page] = await Promise.all([
-            stopsFt8 ? readFt8State(ses, origin(), { timeoutMs }) : 'none',
-            readPageReasons(readPage, { timeoutMs }),
-        ]);
+        const ft8 = stopsFt8 ? await readFt8State(ses, origin(), { timeoutMs }) : 'none';
+        const page = await readPageReasons(readPage, { timeoutMs });
         const question = closeQuestion({ ft8, ...page });
         if (question === null) return true;
         return (await askQuestion(question)) === 'close';
