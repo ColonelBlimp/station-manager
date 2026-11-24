@@ -12,7 +12,7 @@ describe('claimRefusalText', () => {
             'FT8 is still open, and only one of FT8 and FT4 can be open at a time.'
         );
         expect(claimRefusalText('ft8_tx_in_flight', 'FT4', 'x', false)).toBe(
-            'FT8 is transmitting, or about to. Disable TX to change to FT4.'
+            'FT8 is still busy with a transmission. Disable TX to change to FT4.'
         );
         expect(claimRefusalText('ft8_session_active', 'FT4', 'x', false)).toBe(
             'A contact or run is in progress on FT8. End it to change to FT4.'
@@ -64,6 +64,10 @@ describe('claimRefusalText', () => {
         const inFlight = claimRefusalText('ft8_tx_in_flight', 'FT4', 'x', false);
         expect(inFlight).not.toMatch(/when it has finished/);
         expect(inFlight).toMatch(/Disable TX/);
+        // A send that was cancelled before keying still holds the transmit slot for a
+        // moment: nothing is on the air and nothing will be (the clean-room review of
+        // 0e996b94), so the sentence does not say that anything is.
+        expect(inFlight).not.toMatch(/is transmitting|about to|in progress|on the air/);
     });
 
     it('keeps what it was given for a reason it does not know', () => {

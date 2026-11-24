@@ -195,3 +195,12 @@ it, and the hash check of the first way is not written. Until a library release 
 history is taken here (a dependency upgrade, a change of its own), a combined message on FT4
 is not read, and a contact on FT4 is logged only when the station also sends a plain roger in
 time. When that upgrade is made, criterion 3 is to be shown on FT4 by a test of its own.
+
+**The gap seen again the same morning, and the two contacts entered by hand.** At 07:03:45 and
+07:05:00 UTC on 17 m FT4 the station being worked rogered the operator twice in the combined
+form, sender `<...>`, and sent no plain roger. The daemon re-sent its report to the repeat cap
+of 6 and abandoned the session as `no_answer`; nothing was logged. The operator then asked for
+this contact and the 20 m FT8 contact that began this work item to be added by hand. Both were
+submitted on 2026-11-24 through `POST /v1/qso`, one record each, with times taken from the
+station's logs (the session's start, and the end of the slot that carried the first roger), and
+both were stored and forwarded. Nothing of FT8, the rig or TX was touched.

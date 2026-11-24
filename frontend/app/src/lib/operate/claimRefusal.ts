@@ -33,8 +33,11 @@ export function claimRefusalText(
             // Not "it can start when the transmission has finished": a manual send is in
             // flight while it still waits for its slot, and when it ends TX is still
             // enabled, which refuses the change in its turn. Disable TX is what unblocks
-            // it, and the banner offers that button (the same review).
-            return `${other} is transmitting, or about to. Disable TX to change to ${wanted}.`;
+            // it, and the banner offers that button (the same review). And not "is
+            // transmitting, or about to": a send cancelled before keying holds the slot
+            // until the transmit worker lets go, with nothing on the air and nothing to
+            // come (the clean-room review of 0e996b94).
+            return `${other} is still busy with a transmission. Disable TX to change to ${wanted}.`;
         case 'ft8_session_active':
             return `A contact or run is in progress on ${other}. End it to change to ${wanted}.`;
         case 'ft8_tx_armed':

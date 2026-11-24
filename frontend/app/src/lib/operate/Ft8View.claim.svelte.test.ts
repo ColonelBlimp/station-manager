@@ -35,7 +35,7 @@ type Daemon = { busy: boolean; inFlight: boolean; session: boolean; armed: boole
 // is what the banner must NOT show.
 const SHOWN: Record<string, string> = {
     ft8_profile_busy: 'FT8 is still open, and only one of FT8 and FT4 can be open at a time.',
-    ft8_tx_in_flight: 'FT8 is transmitting, or about to. Disable TX to change to FT4.',
+    ft8_tx_in_flight: 'FT8 is still busy with a transmission. Disable TX to change to FT4.',
     ft8_session_active: 'A contact or run is in progress on FT8. End it to change to FT4.',
     ft8_tx_armed: 'Transmit is enabled on FT8. Disable TX to change to FT4.',
 };
